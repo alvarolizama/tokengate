@@ -132,6 +132,7 @@ defmodule Tokengate.Logs do
   end
 
   defp clamp_limit(nil), do: @default_limit
+
   defp clamp_limit(limit) when is_integer(limit) and limit > 0 do
     min(limit, @max_limit)
   end
