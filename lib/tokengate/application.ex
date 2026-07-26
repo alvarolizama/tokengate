@@ -14,6 +14,8 @@ defmodule Tokengate.Application do
       {Phoenix.PubSub, name: Tokengate.PubSub},
       {Finch, name: Tokengate.Finch},
       {Oban, Application.fetch_env!(:tokengate, Oban)},
+      Tokengate.Routing.Supervisor,
+      Tokengate.Limits.Supervisor,
       TokengateWeb.Endpoint
     ]
 
