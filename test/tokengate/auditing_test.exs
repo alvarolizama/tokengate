@@ -131,7 +131,7 @@ defmodule Tokengate.AuditingTest do
       # ordering by checking that the most recently inserted log appears first.
       {:ok, _log1} = Auditing.audit(nil, "create", "thing", "1")
       {:ok, _log2} = Auditing.audit(nil, "create", "thing", "2")
-      {:ok, log3} = Auditing.audit(nil, "create", "thing", "3")
+      {:ok, _log3} = Auditing.audit(nil, "create", "thing", "3")
 
       logs = Auditing.list_audit_logs()
 

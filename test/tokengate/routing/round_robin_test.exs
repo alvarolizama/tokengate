@@ -10,7 +10,7 @@ defmodule Tokengate.Routing.RoundRobinTest do
   # asynchronously and could delete it while a subsequent test's concurrent
   # tasks are mid-flight. The table persists safely across tests.
 
-  defp ap(id, opts \\ []) do
+  defp ap(id, opts) do
     %AliasProvider{
       id: id,
       priority: Keyword.get(opts, :priority),

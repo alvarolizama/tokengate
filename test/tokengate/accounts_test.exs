@@ -23,7 +23,7 @@ defmodule Tokengate.AccountsTest do
     organization
   end
 
-  defp valid_team_attrs(organization, attrs \\ %{}) do
+  defp valid_team_attrs(organization, attrs) do
     Map.merge(
       %{
         "name" => "Platform Team",
@@ -42,7 +42,7 @@ defmodule Tokengate.AccountsTest do
     team
   end
 
-  defp valid_user_attrs(attrs \\ %{}) do
+  defp valid_user_attrs(attrs) do
     Map.merge(
       %{
         "email" => "user#{System.unique_integer([:positive])}@example.com",

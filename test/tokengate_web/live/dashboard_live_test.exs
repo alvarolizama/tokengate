@@ -8,7 +8,7 @@ defmodule TokengateWeb.DashboardLiveTest do
 
   defp unique, do: System.unique_integer([:positive])
 
-  defp register(role \\ "user") do
+  defp register(role) do
     u = unique()
 
     {:ok, user} =
@@ -30,7 +30,7 @@ defmodule TokengateWeb.DashboardLiveTest do
 
   # Builds org + team + member (+ api key) and returns the ids; optionally
   # inserts a request log for the member with the given cost.
-  defp team_with_log(opts \\ %{}) do
+  defp team_with_log(opts) do
     u = unique()
 
     {:ok, org} = Accounts.create_organization(%{name: "Org #{u}", slug: "org-#{u}"})
