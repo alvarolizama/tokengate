@@ -160,7 +160,10 @@ defmodule TokengateWeb.SubscriptionsLive do
 
   @doc "Active if status is active and end_date is nil or >= today"
   def sub_active?(%{status: "active", end_date: nil}), do: true
-  def sub_active?(%{status: "active", end_date: %Date{} = d}), do: Date.compare(d, Date.utc_today()) != :lt
+
+  def sub_active?(%{status: "active", end_date: %Date{} = d}),
+    do: Date.compare(d, Date.utc_today()) != :lt
+
   def sub_active?(_), do: false
 
   @doc "Format a date or nil"
@@ -171,4 +174,169 @@ defmodule TokengateWeb.SubscriptionsLive do
   def fmt_dec(nil), do: "—"
   def fmt_dec(%Decimal{} = d), do: Decimal.to_string(d)
   def fmt_dec(n), do: to_string(n)
+
+  ## Render ----------------------------------------------------------------
+
+  @impl true
+  def render(assigns) do
+    ~H"""
+    <Layouts.dashboard flash={@flash} current_scope={@current_user}>
+      <div class="space-y-6">
+        <.header>
+          Subscripciones
+          <:subtitle>Planes flat-rate contratados por provider</:subtitle>
+        </.header>
+
+        <%!-- Subscription form (create / edit) --%>
+        <div
+          :if={@form}
+          class="card bg-base-100 border border-base-300 shadow-sm"
+          id="subscription-form-card"
+        >
+          <div class="card-body">
+            <h2 class="text-base font-semibold mb-2">
+              {if @editing_subscription_id == :new,
+                do: "Nueva subscripción",
+                else: "Editar subscripción"}
+            </h2>
+            <.form for={@form} id="subscription-form" phx-submit="save_subscription">
+              <.input field={@form[:provider_id]} type="hidden" />
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <.input field={@form[:name]} type="text" label="Nombre" placeholder="OpenRouter Pro" />
+                <.input field={@form[:cost]} type="number" label="Costo (USD)" step="any" />
+                <.input
+                  field={@form[:billing_cycle]}
+                  type="select"
+                  label="Ciclo de facturación"
+                  options={billing_cycle_options()}
+                />
+                <.input field={@form[:start_date]} type="date" label="Inicio" />
+                <.input field={@form[:end_date]} type="date" label="Fin (opcional)" />
+                <.input field={@form[:billing_day]} type="number" label="Día de cobro" />
+              </div>
+              <div class="mt-3">
+                <.input
+                  field={@form[:status]}
+                  type="select"
+                  label="Estado"
+                  options={status_options()}
+                />
+              </div>
+              <div class="flex gap-2 mt-4">
+                <button type="submit" class="btn btn-primary btn-sm" id="save-subscription-btn">Guardar</button>
+                <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
+              </div>
+            </.form>
+          </div>
+        </div>
+
+        <div :if={@subs_empty?} class="text-center py-12 text-base-content/40" id="subs-empty">
+          <.icon name="hero-credit-card" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+          <p>No hay subscripciones todavía.</p>
+        </div>
+
+        <div class="space-y-4" id="providers-subs">
+          <div
+            :for={provider <- @providers}
+            id={"provider-subs-#{provider.id}"}
+            class="card bg-base-100 border border-base-300 shadow-sm"
+          >
+            <div class="card-body">
+              <div class="flex items-center justify-between">
+                <h3 class="font-semibold text-base-content">{provider.name}</h3>
+                <button
+                  phx-click="new_subscription"
+                  phx-value-provider_id={provider.id}
+                  class="btn btn-sm btn-ghost"
+                  id={"new-sub-#{provider.id}"}
+                >
+                  <.icon name="hero-plus" class="w-4 h-4" /> Nueva subscripción
+                </button>
+              </div>
+
+              <p :if={provider.subscriptions == []} class="text-sm text-base-content/40 mt-2">
+                Sin subscripciones.
+              </p>
+
+              <div :if={provider.subscriptions != []} class="overflow-x-auto mt-2">
+                <table class="table table-sm">
+                  <thead>
+                    <tr>
+                      <th>Nombre</th>
+                      <th>Costo</th>
+                      <th>Ciclo</th>
+                      <th>Inicio</th>
+                      <th>Fin</th>
+                      <th>Día cobro</th>
+                      <th>Estado</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr :for={sub <- provider.subscriptions} id={"sub-#{sub.id}"}>
+                      <td class="font-medium">{sub.name}</td>
+                      <td>${fmt_dec(sub.cost)}</td>
+                      <td class="capitalize">{sub.billing_cycle}</td>
+                      <td>{fmt_date(sub.start_date)}</td>
+                      <td>{fmt_date(sub.end_date)}</td>
+                      <td>{sub.billing_day || "—"}</td>
+                      <td>
+                        <span class={[
+                          "badge badge-sm",
+                          cond do
+                            sub_active?(sub) -> "badge-success"
+                            sub.status == "exhausted" -> "badge-warning"
+                            true -> "badge-ghost"
+                          end
+                        ]}>
+                          {cond do
+                            sub_active?(sub) -> "Activa"
+                            sub.status == "exhausted" -> "Agotada"
+                            sub.status == "cancelled" -> "Cancelada"
+                            true -> sub.status
+                          end}
+                        </span>
+                      </td>
+                      <td class="text-right">
+                        <div class="flex justify-end gap-1">
+                          <button
+                            phx-click="edit_subscription"
+                            phx-value-id={sub.id}
+                            class="btn btn-xs btn-ghost"
+                            id={"edit-sub-#{sub.id}"}
+                          >
+                            Editar
+                          </button>
+                          <button
+                            :if={sub.status == "active"}
+                            phx-click="mark_exhausted"
+                            phx-value-id={sub.id}
+                            class="btn btn-xs btn-ghost"
+                            id={"exhaust-sub-#{sub.id}"}
+                          >
+                            Agotar
+                          </button>
+                          <button
+                            :if={sub.status == "active"}
+                            phx-click="mark_cancelled"
+                            phx-value-id={sub.id}
+                            data-confirm="¿Cancelar esta subscripción?"
+                            class="btn btn-xs btn-ghost text-error"
+                            id={"cancel-sub-#{sub.id}"}
+                          >
+                            Cancelar
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </Layouts.dashboard>
+    """
+  end
 end
