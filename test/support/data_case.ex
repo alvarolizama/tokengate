@@ -29,6 +29,25 @@ defmodule Tokengate.DataCase do
 
   setup tags do
     Tokengate.DataCase.setup_sandbox(tags)
+
+    # Allow the Oban supervisor (started in the app tree) to use the
+    # sandboxed DB connection so assert_enqueued/drain_queue work in tests.
+    # Oban performs DB inserts/queries in its own process; without this
+    # allow, those queries can't see the test's sandbox transaction.
+    case Process.whereis(Tokengate.Supervisor) do
+      nil ->
+        :ok
+
+      sup ->
+        case Enum.find(Supervisor.which_children(sup), fn {mod, _, _, _} -> mod == Oban end) do
+          {Oban, oban_pid, _, _} ->
+            Ecto.Adapters.SQL.Sandbox.allow(Tokengate.Repo, self(), oban_pid)
+
+          _ ->
+            :ok
+        end
+    end
+
     :ok
   end
 

@@ -64,6 +64,20 @@ defmodule Tokengate.Providers do
   def get_credential!(id), do: Repo.get!(Credential, id)
   def get_credential(id), do: Repo.get(Credential, id)
 
+  @doc """
+  Returns the first active credential for `provider_id` (status "active",
+  ordered by inserted_at ASC). Returns nil when none is active.
+  """
+  def active_credential(provider_id) do
+    Repo.one(
+      from(c in Credential,
+        where: c.provider_id == ^provider_id and c.status == "active",
+        order_by: [asc: c.inserted_at],
+        limit: 1
+      )
+    )
+  end
+
   def create_credential(attrs) do
     %Credential{}
     |> Credential.changeset(attrs)
@@ -135,6 +149,18 @@ defmodule Tokengate.Providers do
 
   def get_model_alias!(id), do: Repo.get!(ModelAlias, id)
   def get_model_alias(id), do: Repo.get(ModelAlias, id)
+
+  @doc """
+  Returns the model alias with the given `name` scoped to `org_id`, or nil.
+  Alias names are unique per organization.
+  """
+  def get_alias_by_name(org_id, name) when is_binary(org_id) and is_binary(name) do
+    Repo.one(
+      from(ma in ModelAlias,
+        where: ma.organization_id == ^org_id and ma.name == ^name
+      )
+    )
+  end
 
   def create_model_alias(attrs) do
     %ModelAlias{}
@@ -238,6 +264,20 @@ defmodule Tokengate.Providers do
 
   def list_routing_rules_for_organization(org_id) do
     Repo.all(from(r in RoutingRule, where: r.organization_id == ^org_id))
+  end
+
+  @doc """
+  Returns enabled routing rules for `org_id`, ordered by priority ASC.
+  Preloads the target_alias so the caller can resolve the reroute target.
+  """
+  def list_enabled_rules_for_org(org_id) do
+    Repo.all(
+      from(r in RoutingRule,
+        where: r.organization_id == ^org_id and r.enabled == true,
+        order_by: [asc: r.priority],
+        preload: [:target_alias]
+      )
+    )
   end
 
   def get_routing_rule!(id), do: Repo.get!(RoutingRule, id)
