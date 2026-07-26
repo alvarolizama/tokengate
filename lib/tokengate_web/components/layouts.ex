@@ -23,7 +23,6 @@ defmodule TokengateWeb.Layouts do
       <Layouts.app flash={@flash}>
         <h1>Content</h1>
       </Layouts.app>
-
   """
   attr :flash, :map, required: true, doc: "the map of flash messages"
 
@@ -71,6 +70,163 @@ defmodule TokengateWeb.Layouts do
     <.flash_group flash={@flash} />
     """
   end
+
+  @doc """
+  Renders the dashboard (ops console) layout — a dark, premium sidebar +
+  topbar shell used by authenticated LiveViews (DashboardLive, future
+  admin LiveViews).
+
+  ## Examples
+
+      <Layouts.dashboard flash={@flash} current_scope={@current_user}>
+        <h1>Dashboard</h1>
+      </Layouts.dashboard>
+
+  `current_scope` should be the signed-in `%Tokengate.Accounts.User{}` (or
+  `nil` when unauthenticated — but authenticated live_sessions guard
+  against that, so we render defensively either way).
+  """
+  attr :flash, :map, required: true, doc: "the map of flash messages"
+
+  attr :current_scope, :map,
+    default: nil,
+    doc: "the signed-in user (Tokengate.Accounts.User)"
+
+  slot :inner_block, required: true
+
+  def dashboard(assigns) do
+    ~H"""
+    <div class="drawer lg:drawer-open min-h-screen bg-base-200">
+      <input id="dashboard-drawer" type="checkbox" class="drawer-toggle" />
+
+      <div class="drawer-content flex flex-col">
+        <.dashboard_topbar current_scope={@current_scope} />
+
+        <main class="flex-1 p-4 sm:p-6 lg:p-8">
+          {render_slot(@inner_block)}
+        </main>
+      </div>
+
+      <.dashboard_sidebar current_scope={@current_scope} />
+
+      <.flash_group flash={@flash} />
+    </div>
+    """
+  end
+
+  defp dashboard_topbar(assigns) do
+    ~H"""
+    <header class="sticky top-0 z-30 flex items-center gap-3 px-4 sm:px-6 lg:px-8 h-16 bg-base-100/80 backdrop-blur border-b border-base-300">
+      <label
+        for="dashboard-drawer"
+        class="btn btn-ghost btn-square btn-sm lg:hidden"
+        aria-label="Abrir menú"
+      >
+        <.icon name="hero-bars-3" class="w-5 h-5" />
+      </label>
+
+      <div class="flex-1" />
+
+      <div class="flex items-center gap-3">
+        <div class="hidden sm:flex flex-col items-end leading-tight">
+          <span class="text-sm font-medium text-base-content">{@current_scope && @current_scope.email}</span>
+          <span :if={@current_scope} class="text-xs text-base-content/50 uppercase tracking-wide">
+            {role_label(@current_scope.global_role)}
+          </span>
+        </div>
+
+        <div class="avatar avatar-placeholder">
+          <div class="bg-primary text-primary-content w-9 rounded-full">
+            <span class="text-sm font-semibold">{initials(@current_scope)}</span>
+          </div>
+        </div>
+
+        <.link
+          href={~p"/logout"}
+          method="delete"
+          class="btn btn-ghost btn-sm"
+          data-confirm="¿Cerrar sesión?"
+          id="logout-button"
+        >
+          <.icon name="hero-arrow-right-on-rectangle" class="w-5 h-5" />
+          <span class="hidden sm:inline">Salir</span>
+        </.link>
+      </div>
+    </header>
+    """
+  end
+
+  defp dashboard_sidebar(assigns) do
+    ~H"""
+    <aside class="drawer-side z-40">
+      <label for="dashboard-drawer" class="drawer-overlay" aria-label="Cerrar menú" />
+
+      <div class="min-h-full w-64 bg-base-100 border-r border-base-300 flex flex-col">
+        <div class="h-16 flex items-center gap-2 px-6 border-b border-base-300">
+          <a href={~p"/"} class="flex items-center gap-2">
+            <img src={~p"/images/logo.svg"} width="32" />
+            <span class="text-lg font-bold">Tokengate</span>
+          </a>
+        </div>
+
+        <nav class="flex-1 p-3 space-y-1">
+          <.sidebar_link href={~p"/dashboard"} label="Dashboard" icon="hero-chart-bar-square" />
+          <.sidebar_link href="#providers" label="Proveedores" icon="hero-server-stack" disabled />
+          <.sidebar_link href="#teams" label="Equipos" icon="hero-user-group" disabled />
+          <.sidebar_link href="#api-keys" label="API Keys" icon="hero-key" disabled />
+          <.sidebar_link href="#logs" label="Logs" icon="hero-document-text" disabled />
+        </nav>
+
+        <div class="p-3 border-t border-base-300">
+          <p class="text-xs text-base-content/40 px-3">
+            v{Application.spec(:tokengate, :vsn) |> to_string()}
+          </p>
+        </div>
+      </div>
+    </aside>
+    """
+  end
+
+  attr :href, :string, required: true
+  attr :label, :string, required: true
+  attr :icon, :string, required: true
+  attr :disabled, :boolean, default: false
+
+  defp sidebar_link(assigns) do
+    ~H"""
+    <.link
+      href={@href}
+      class={[
+        "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
+        @disabled && "text-base-content/30 cursor-not-allowed pointer-events-none",
+        not @disabled && "text-base-content/70 hover:bg-base-200 hover:text-base-content"
+      ]}
+    >
+      <.icon name={@icon} class="w-5 h-5 shrink-0" />
+      {@label}
+    </.link>
+    """
+  end
+
+  defp role_label("admin"), do: "Administrador"
+  defp role_label("user"), do: "Usuario"
+  defp role_label(other), do: String.capitalize(other || "")
+
+  defp initials(nil), do: "—"
+
+  defp initials(%{email: email}) when is_binary(email) do
+    case String.split(email, "@") do
+      [name | _] ->
+        name
+        |> String.slice(0, 2)
+        |> String.upcase()
+
+      _ ->
+        "—"
+    end
+  end
+
+  defp initials(_), do: "—"
 
   @doc """
   Shows the flash group with standard titles and content.

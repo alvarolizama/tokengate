@@ -8,6 +8,21 @@ defmodule TokengateWeb.Router do
     plug :put_root_layout, html: {TokengateWeb.Layouts, :root}
     plug :protect_from_forgery
     plug :put_secure_browser_headers
+    # Loads :current_user from the session so every browser request (including
+    # LiveView mounts) has access to the signed-in user.
+    plug TokengateWeb.Plugs.DashboardAuth, action: :fetch_current_user
+  end
+
+  # Browser routes that require an authenticated user. The
+  # :require_authenticated plug short-circuits with a redirect to /login
+  # when the visitor is not signed in.
+  pipeline :browser_auth do
+    plug TokengateWeb.Plugs.DashboardAuth, action: :require_authenticated
+  end
+
+  # Browser routes reserved for admins (global_role == "admin").
+  pipeline :browser_admin do
+    plug TokengateWeb.Plugs.DashboardAuth, action: :require_admin
   end
 
   pipeline :api do
@@ -23,6 +38,24 @@ defmodule TokengateWeb.Router do
     pipe_through :browser
 
     get "/", PageController, :home
+
+    # Session (login/logout). The login form is public; logout requires
+    # a session but the plug just clears it if absent, so we keep both
+    # in the plain :browser pipeline.
+    get "/login", SessionController, :new
+    post "/login", SessionController, :create
+    delete "/logout", SessionController, :delete
+  end
+
+  # Authenticated browser dashboard. The on_mount hook mirrors the plug
+  # for LiveView socket reconnects (where plugs don't run again).
+  scope "/", TokengateWeb do
+    pipe_through :browser
+
+    live_session :dashboard,
+      on_mount: [{TokengateWeb.UserAuth, :require_authenticated}] do
+      live "/dashboard", DashboardLive
+    end
   end
 
   # OpenAI-compatible proxy API — authenticated via bearer API key

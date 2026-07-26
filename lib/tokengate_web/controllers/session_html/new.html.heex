@@ -1,0 +1,56 @@
+<Layouts.app flash={@flash} current_scope={assigns[:current_user]}>
+  <div class="min-h-screen flex items-center justify-center px-4 py-12 bg-base-200">
+    <div class="w-full max-w-md">
+      <div class="text-center mb-8">
+        <a href="/" class="inline-flex items-center gap-2 mb-6">
+          <img src={~p"/images/logo.svg"} width="40" />
+          <span class="text-xl font-bold">Tokengate</span>
+        </a>
+        <h1 class="text-2xl font-bold text-base-content">Iniciar sesión</h1>
+        <p class="mt-2 text-sm text-base-content/60">
+          Accede al panel de control del proxy LLM.
+        </p>
+      </div>
+
+      <div class="card bg-base-100 shadow-lg border border-base-300">
+        <div class="card-body">
+          <.form
+            :let={f}
+            for={%{"email" => assigns[:email] || ""}}
+            action={~p"/login"}
+            method="post"
+            id="login-form"
+            class="space-y-4"
+          >
+            <.input
+              field={f[:email]}
+              type="email"
+              label="Correo electrónico"
+              placeholder="tu@empresa.com"
+              required="true"
+              autofocus="true"
+            />
+
+            <.input
+              field={f[:password]}
+              type="password"
+              label="Contraseña"
+              placeholder="••••••••"
+              required="true"
+            />
+
+            <div class="form-control mt-6">
+              <button type="submit" class="btn btn-primary w-full" id="login-submit">
+                <.icon name="hero-arrow-right-on-rectangle" class="w-5 h-5" /> Entrar
+              </button>
+            </div>
+          </.form>
+        </div>
+      </div>
+
+      <p class="text-center text-xs text-base-content/50 mt-6">
+        ¿Problemas para acceder? Contacta a tu administrador.
+      </p>
+    </div>
+  </div>
+</Layouts.app>

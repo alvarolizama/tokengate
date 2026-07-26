@@ -1,0 +1,220 @@
+<Layouts.dashboard flash={@flash} current_scope={@current_user}>
+  <div class="space-y-6">
+    <.header>
+      Dashboard
+      <:subtitle>
+        <span class="inline-flex items-center gap-2">
+          <.icon name="hero-funnel" class="w-4 h-4 text-base-content/50" />
+          {@scope_label}
+        </span>
+      </:subtitle>
+    </.header>
+
+    <%= if @loading do %>
+      <div class="flex items-center justify-center py-20">
+        <span class="loading loading-spinner loading-lg text-primary"></span>
+        <span class="ml-3 text-base-content/60">Cargando métricas…</span>
+      </div>
+    <% else %>
+      <%= if @metrics.requests_total == 0 do %>
+        <div id="empty-state" class="flex flex-col items-center justify-center py-20 text-center">
+          <div class="w-20 h-20 rounded-full bg-base-300 flex items-center justify-center mb-4">
+            <.icon name="hero-chart-bar" class="w-10 h-10 text-base-content/40" />
+          </div>
+          <h3 class="text-lg font-semibold text-base-content">Aún no hay requests</h3>
+          <p class="mt-2 text-sm text-base-content/60 max-w-md">
+            Manda tu primer request al proxy para ver métricas aquí.
+          </p>
+        </div>
+      <% else %>
+        <!-- Metric cards -->
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          <div
+            id="requests-card"
+            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+          >
+            <div class="card-body p-5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Requests (24h)
+                </span>
+                <span class={[
+                  "flex items-center justify-center w-9 h-9 rounded-lg",
+                  accent_bg("primary")
+                ]}>
+                  <.icon
+                    name="hero-arrow-trending-up"
+                    class={["w-5 h-5", accent_text("primary")]}
+                  />
+                </span>
+              </div>
+              <p class="mt-2 text-2xl font-bold text-base-content">
+                {format_number(@metrics.requests_total)}
+              </p>
+            </div>
+          </div>
+
+          <div
+            id="error-rate-card"
+            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+          >
+            <div class="card-body p-5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Tasa de error
+                </span>
+                <span class={[
+                  "flex items-center justify-center w-9 h-9 rounded-lg",
+                  accent_bg(if(@metrics.error_rate > 0.05, do: "error", else: "success"))
+                ]}>
+                  <.icon
+                    name="hero-exclamation-triangle"
+                    class={[
+                      "w-5 h-5",
+                      accent_text(if(@metrics.error_rate > 0.05, do: "error", else: "success"))
+                    ]}
+                  />
+                </span>
+              </div>
+              <p class="mt-2 text-2xl font-bold text-base-content">
+                {Float.round(@metrics.error_rate * 100, 2)}%
+              </p>
+            </div>
+          </div>
+
+          <div
+            id="cost-card"
+            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+          >
+            <div class="card-body p-5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Costo
+                </span>
+                <span class={[
+                  "flex items-center justify-center w-9 h-9 rounded-lg",
+                  accent_bg("accent")
+                ]}>
+                  <.icon name="hero-currency-dollar" class={["w-5 h-5", accent_text("accent")]} />
+                </span>
+              </div>
+              <p class="mt-2 text-2xl font-bold text-base-content">
+                ${format_decimal(@metrics.cost_usd)}
+              </p>
+            </div>
+          </div>
+
+          <div
+            id="savings-card"
+            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+          >
+            <div class="card-body p-5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Ahorros
+                </span>
+                <span class={[
+                  "flex items-center justify-center w-9 h-9 rounded-lg",
+                  accent_bg("success")
+                ]}>
+                  <.icon name="hero-banknotes" class={["w-5 h-5", accent_text("success")]} />
+                </span>
+              </div>
+              <p class="mt-2 text-2xl font-bold text-base-content">
+                ${format_decimal(@metrics.savings_usd)}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Tokens + latency -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <div class="card bg-base-100 border border-base-300 shadow-sm">
+            <div class="card-body">
+              <h2 class="card-title text-base">
+                <.icon name="hero-cpu-chip" class="w-5 h-5 text-base-content/60" /> Tokens
+              </h2>
+              <div class="grid grid-cols-2 gap-4 mt-2">
+                <div>
+                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Prompt</p>
+                  <p id="prompt-tokens" class="text-2xl font-semibold">
+                    {format_number(@metrics.prompt_tokens)}
+                  </p>
+                </div>
+                <div>
+                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Completion</p>
+                  <p id="completion-tokens" class="text-2xl font-semibold">
+                    {format_number(@metrics.completion_tokens)}
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card bg-base-100 border border-base-300 shadow-sm">
+            <div class="card-body">
+              <h2 class="card-title text-base">
+                <.icon name="hero-clock" class="w-5 h-5 text-base-content/60" /> Latencia
+              </h2>
+              <div class="grid grid-cols-2 gap-4 mt-2">
+                <div>
+                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Promedio</p>
+                  <p id="latency-avg" class="text-2xl font-semibold">
+                    {Float.round(@metrics.latency_avg_ms, 1)} ms
+                  </p>
+                </div>
+                <div>
+                  <p class="text-xs text-base-content/50 uppercase tracking-wide">P95</p>
+                  <p id="latency-p95" class="text-2xl font-semibold">
+                    {@metrics.latency_p95_ms} ms
+                  </p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Hourly cost chart (inline SVG bars, no JS libs) -->
+        <div id="hourly-chart" class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body">
+            <h2 class="card-title text-base">
+              <.icon name="hero-chart-bar" class="w-5 h-5 text-base-content/60" />
+              Costo por hora (24h)
+            </h2>
+
+            <%= if @hourly_series == [] or chart_max_cost(@hourly_series) == 0.0 do %>
+              <div class="h-40 flex items-center justify-center text-base-content/40 text-sm">
+                Sin datos para las últimas 24 horas.
+              </div>
+            <% else %>
+              <% max_cost = chart_max_cost(@hourly_series) %>
+              <% bar_count = max(length(@hourly_series), 1) %>
+              <% bar_width = max(380 / bar_count - 4, 2) %>
+              <svg viewBox="0 0 400 150" class="w-full h-40 mt-4" preserveAspectRatio="none">
+                <%= for {row, i} <- Enum.with_index(@hourly_series) do %>
+                  <% cost = Decimal.to_float(row.cost_usd) %>
+                  <% height = if max_cost > 0, do: max(cost / max_cost * 120, 1), else: 1 %>
+                  <% x = 10 + i * (bar_width + 4) %>
+                  <% y = 140 - height %>
+                  <rect
+                    x={x}
+                    y={y}
+                    width={bar_width}
+                    height={height}
+                    rx="2"
+                    class="fill-primary/70 hover:fill-primary transition-colors"
+                  >
+                    <title>
+                      {Calendar.strftime(row.hour, "%H:%M")} — ${Float.round(cost, 6)}
+                    </title>
+                  </rect>
+                <% end %>
+                <line x1="10" y1="140" x2="390" y2="140" class="stroke-base-300" stroke-width="1" />
+              </svg>
+            <% end %>
+          </div>
+        </div>
+      <% end %>
+    <% end %>
+  </div>
+</Layouts.dashboard>

@@ -144,6 +144,127 @@ defmodule Tokengate.Logs do
   # ---------------------------------------------------------------------------
 
   @doc """
+  Computes a cost summary over request logs for a specific team, joining
+  through `team_members`.
+
+  Returns the same shape as `cost_summary/1`:
+    * `:total_cost_usd`
+    * `:total_provider_cost_usd`
+    * `:total_savings_usd`
+    * `:total_estimated_cost_usd`
+    * `:total_prompt_tokens`
+    * `:total_completion_tokens`
+    * `:request_count`
+
+  ## Options
+
+    * `:from` — `inserted_at >= from` (DateTime)
+    * `:to`   — `inserted_at <= to` (DateTime)
+  """
+  def cost_summary_for_team(team_id, opts \\ %{}) do
+    from = Map.get(opts, :from)
+    to = Map.get(opts, :to)
+
+    query =
+      RequestLog
+      |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
+      |> where([rl, tm], tm.team_id == ^team_id)
+      |> maybe_team_from(from)
+      |> maybe_team_to(to)
+      |> select([rl], %{
+        total_cost_usd: fragment("COALESCE(SUM(cost_usd), 0)"),
+        total_provider_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
+        total_savings_usd: fragment("COALESCE(SUM(savings_usd), 0)"),
+        total_estimated_cost_usd: fragment("COALESCE(SUM(estimated_cost_usd), 0)"),
+        total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
+        total_completion_tokens: coalesce(sum(rl.completion_tokens), 0),
+        request_count: count(rl.id)
+      })
+
+    result = Repo.one(query)
+
+    %{
+      total_cost_usd: Decimal.new(to_string(result.total_cost_usd)),
+      total_provider_cost_usd: Decimal.new(to_string(result.total_provider_cost_usd)),
+      total_savings_usd: Decimal.new(to_string(result.total_savings_usd)),
+      total_estimated_cost_usd: Decimal.new(to_string(result.total_estimated_cost_usd)),
+      total_prompt_tokens: result.total_prompt_tokens,
+      total_completion_tokens: result.total_completion_tokens,
+      request_count: result.request_count
+    }
+  end
+
+  defp maybe_team_from(query, nil), do: query
+  defp maybe_team_from(query, from), do: where(query, [rl], rl.inserted_at >= ^from)
+
+  defp maybe_team_to(query, nil), do: query
+  defp maybe_team_to(query, to), do: where(query, [rl], rl.inserted_at <= ^to)
+
+  @doc """
+  Computes a cost summary over request logs for a specific set of team
+  members (by their ids).
+
+  Returns the same shape as `cost_summary/1`. Used by the dashboard for
+  the "user" scope (a user's own consumption across all their memberships).
+
+  ## Options
+
+    * `:from` — `inserted_at >= from` (DateTime)
+    * `:to`   — `inserted_at <= to` (DateTime)
+  """
+  def cost_summary_for_members(team_member_ids, opts \\ %{})
+
+  def cost_summary_for_members([], _opts) do
+    %{
+      total_cost_usd: Decimal.new(0),
+      total_provider_cost_usd: Decimal.new(0),
+      total_savings_usd: Decimal.new(0),
+      total_estimated_cost_usd: Decimal.new(0),
+      total_prompt_tokens: 0,
+      total_completion_tokens: 0,
+      request_count: 0
+    }
+  end
+
+  def cost_summary_for_members(team_member_ids, opts) when is_list(team_member_ids) do
+    from = Map.get(opts, :from)
+    to = Map.get(opts, :to)
+
+    query =
+      RequestLog
+      |> where([rl], rl.team_member_id in ^team_member_ids)
+      |> maybe_members_from(from)
+      |> maybe_members_to(to)
+      |> select([rl], %{
+        total_cost_usd: fragment("COALESCE(SUM(cost_usd), 0)"),
+        total_provider_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
+        total_savings_usd: fragment("COALESCE(SUM(savings_usd), 0)"),
+        total_estimated_cost_usd: fragment("COALESCE(SUM(estimated_cost_usd), 0)"),
+        total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
+        total_completion_tokens: coalesce(sum(rl.completion_tokens), 0),
+        request_count: count(rl.id)
+      })
+
+    result = Repo.one(query)
+
+    %{
+      total_cost_usd: Decimal.new(to_string(result.total_cost_usd)),
+      total_provider_cost_usd: Decimal.new(to_string(result.total_provider_cost_usd)),
+      total_savings_usd: Decimal.new(to_string(result.total_savings_usd)),
+      total_estimated_cost_usd: Decimal.new(to_string(result.total_estimated_cost_usd)),
+      total_prompt_tokens: result.total_prompt_tokens,
+      total_completion_tokens: result.total_completion_tokens,
+      request_count: result.request_count
+    }
+  end
+
+  defp maybe_members_from(query, nil), do: query
+  defp maybe_members_from(query, from), do: where(query, [rl], rl.inserted_at >= ^from)
+
+  defp maybe_members_to(query, nil), do: query
+  defp maybe_members_to(query, to), do: where(query, [rl], rl.inserted_at <= ^to)
+
+  @doc """
   Computes a cost summary over request logs matching the given filters.
 
   Returns a map with:
