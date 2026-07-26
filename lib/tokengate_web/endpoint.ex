@@ -29,12 +29,17 @@ defmodule TokengateWeb.Endpoint do
 
   # Code reloading can be explicitly enabled under the
   # :code_reloader configuration of your endpoint.
+  # Tidewave MCP must run before the body is parsed — it needs its own
+  # early code_reloading block (per Tidewave 0.8 requirements).
+  if code_reloading? do
+    plug Tidewave
+  end
+
   if code_reloading? do
     socket "/phoenix/live_reload/socket", Phoenix.LiveReloader.Socket
     plug Phoenix.LiveReloader
     plug Phoenix.CodeReloader
     plug Phoenix.Ecto.CheckRepoStatus, otp_app: :tokengate
-    plug Tidewave
   end
 
   plug Phoenix.LiveDashboard.RequestLogger,
