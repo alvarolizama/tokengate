@@ -102,19 +102,54 @@ defmodule Tokengate.Logs do
   defp apply_log_filters(query, filters) do
     query
     |> maybe_where(:team_member_id, filters)
+    |> maybe_where_member_ids(filters)
     |> maybe_where(:provider_id, filters)
     |> maybe_where(:model_alias_id, filters)
     |> maybe_where(:agent_type, filters)
     |> maybe_where(:status_code, filters)
+    |> maybe_status_class(filters)
+    |> maybe_model_search(filters)
     |> maybe_where(:streaming, filters)
     |> maybe_from(filters)
     |> maybe_to(filters)
+    |> maybe_before(filters)
   end
 
   defp maybe_where(query, field, filters) do
-    value = Map.get(filters, field) || Map.get(filters, to_string(field))
+    value = Map.get(filters, field)
+    value = if is_nil(value), do: Map.get(filters, to_string(field)), else: value
 
     if is_nil(value), do: query, else: where(query, [rl], field(rl, ^field) == ^value)
+  end
+
+  defp maybe_where_member_ids(query, filters) do
+    value = Map.get(filters, :team_member_ids) || Map.get(filters, "team_member_ids")
+
+    case value do
+      nil -> query
+      ids when is_list(ids) -> where(query, [rl], rl.team_member_id in ^ids)
+    end
+  end
+
+  defp maybe_status_class(query, filters) do
+    case Map.get(filters, :status_class) || Map.get(filters, "status_class") do
+      nil -> query
+      "" -> query
+      "2xx" -> where(query, [rl], rl.status_code >= 200 and rl.status_code < 300)
+      "4xx" -> where(query, [rl], rl.status_code >= 400 and rl.status_code < 500)
+      "5xx" -> where(query, [rl], rl.status_code >= 500 and rl.status_code < 600)
+      _ -> query
+    end
+  end
+
+  defp maybe_model_search(query, filters) do
+    case Map.get(filters, :model_search) || Map.get(filters, "model_search") do
+      nil -> query
+      "" -> query
+      search ->
+        pattern = "%#{search}%"
+        where(query, [rl], ilike(rl.model_requested, ^pattern) or ilike(rl.model_responded, ^pattern))
+    end
   end
 
   defp maybe_from(query, filters) do
@@ -128,6 +163,13 @@ defmodule Tokengate.Logs do
     case Map.get(filters, :to) || Map.get(filters, "to") do
       nil -> query
       to -> where(query, [rl], rl.inserted_at <= ^to)
+    end
+  end
+
+  defp maybe_before(query, filters) do
+    case Map.get(filters, :before) || Map.get(filters, "before") do
+      nil -> query
+      before -> where(query, [rl], rl.inserted_at < ^before)
     end
   end
 
