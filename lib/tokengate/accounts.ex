@@ -18,6 +18,9 @@ defmodule Tokengate.Accounts do
 
   def get_organization(id), do: Repo.get(Organization, id)
 
+  def get_organization_by_slug(slug) when is_binary(slug),
+    do: Repo.get_by(Organization, slug: slug)
+
   def create_organization(attrs) do
     %Organization{}
     |> Organization.changeset(attrs)
