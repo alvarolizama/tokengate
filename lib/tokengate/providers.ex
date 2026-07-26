@@ -218,6 +218,49 @@ defmodule Tokengate.Providers do
     |> Repo.all()
   end
 
+  @doc """
+  Returns ALL alias_providers for a model_alias (enabled and disabled),
+  preloading provider, subscription, and model_pricing. Ordered by priority
+  ASC with NULLS LAST, then by provider name.
+  """
+  def list_all_alias_providers(model_alias_id) when is_binary(model_alias_id) do
+    from(ap in AliasProvider,
+      where: ap.model_alias_id == ^model_alias_id,
+      order_by: [asc_nulls_last: ap.priority],
+      preload: [:provider, :subscription, :model_pricing]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Returns all alias_providers whose provider has billing_type == "pay_per_token",
+  preloading provider, model_alias, and model_pricing. Used by the pricing admin.
+  """
+  def list_pay_per_token_alias_providers do
+    from(ap in AliasProvider,
+      join: p in assoc(ap, :provider),
+      where: p.billing_type == "pay_per_token",
+      preload: [provider: p, model_alias: [:organization], model_pricing: :alias_provider],
+      order_by: [asc: p.name]
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Returns all alias_providers for a model_alias with provider and model_pricing
+  preloaded, including the model_alias association. Used by the pricing admin
+  when filtering by alias.
+  """
+  def list_alias_providers_for_pricing(model_alias_id) when is_binary(model_alias_id) do
+    from(ap in AliasProvider,
+      join: p in assoc(ap, :provider),
+      where: ap.model_alias_id == ^model_alias_id and p.billing_type == "pay_per_token",
+      preload: [provider: p, model_pricing: :alias_provider],
+      order_by: [asc_nulls_last: ap.priority]
+    )
+    |> Repo.all()
+  end
+
   # ---------------------------------------------------------------------------
   # Model Pricing
   # ---------------------------------------------------------------------------
@@ -340,6 +383,17 @@ defmodule Tokengate.Providers do
   def list_team_member_extra_aliases, do: Repo.all(TeamMemberExtraAlias)
 
   def get_team_member_extra_alias!(id), do: Repo.get!(TeamMemberExtraAlias, id)
+
+  @doc """
+  Returns model_alias ids granted as extra aliases to a specific team member.
+  """
+  def list_extra_alias_ids_for_member(team_member_id) do
+    from(tmea in TeamMemberExtraAlias,
+      where: tmea.team_member_id == ^team_member_id,
+      select: tmea.model_alias_id
+    )
+    |> Repo.all()
+  end
 
   @doc """
   Grants an extra model alias to an individual team member. Idempotent:
