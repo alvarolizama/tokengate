@@ -14,10 +14,23 @@ defmodule TokengateWeb.Router do
     plug :accepts, ["json"]
   end
 
+  pipeline :proxy_api do
+    plug :accepts, ["json"]
+    plug TokengateWeb.Plugs.ApiAuth
+  end
+
   scope "/", TokengateWeb do
     pipe_through :browser
 
     get "/", PageController, :home
+  end
+
+  # OpenAI-compatible proxy API — authenticated via bearer API key
+  scope "/v1", TokengateWeb do
+    pipe_through :proxy_api
+
+    get "/models", ProxyController, :models
+    post "/chat/completions", ProxyController, :chat_completions
   end
 
   # Other scopes may use custom stacks.

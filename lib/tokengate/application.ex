@@ -16,6 +16,7 @@ defmodule Tokengate.Application do
       {Oban, Application.fetch_env!(:tokengate, Oban)},
       Tokengate.Routing.Supervisor,
       Tokengate.Limits.Supervisor,
+      Tokengate.Budgets.Supervisor,
       Tokengate.Providers.SubscriptionManager,
       Tokengate.Metrics.Supervisor,
       TokengateWeb.Endpoint

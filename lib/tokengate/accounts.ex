@@ -240,7 +240,7 @@ defmodule Tokengate.Accounts do
       from tm in TeamMember,
         join: ak in assoc(tm, :api_key),
         where: ak.key_hash == ^key_hash and ak.status == "active",
-        preload: [:team, :user]
+        preload: [:team, :user, :api_key]
 
     case Repo.one(query) do
       %TeamMember{} = tm -> {:ok, tm}
