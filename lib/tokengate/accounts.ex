@@ -209,7 +209,28 @@ defmodule Tokengate.Accounts do
   end
 
   def delete_team_member(%TeamMember{} = team_member) do
-    Repo.delete(team_member)
+    alias Tokengate.Providers.TeamMemberExtraAlias
+
+    team_member = Repo.preload(team_member, :api_key)
+
+    Repo.transaction(fn ->
+      if team_member.api_key, do: Repo.delete!(team_member.api_key)
+
+      from(t in TeamMemberExtraAlias, where: t.team_member_id == ^team_member.id)
+      |> Repo.delete_all()
+
+      team_member
+      |> Ecto.Changeset.change()
+      |> Ecto.Changeset.foreign_key_constraint(:team_member_id,
+        name: "request_logs_team_member_id_fkey",
+        message: "el miembro tiene logs de uso y no se puede eliminar"
+      )
+      |> Repo.delete()
+      |> case do
+        {:ok, member} -> member
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
   end
 
   def change_team_member(%TeamMember{} = team_member, attrs \\ %{}) do

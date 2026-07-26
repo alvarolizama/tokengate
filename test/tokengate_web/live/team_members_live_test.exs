@@ -1,0 +1,369 @@
+defmodule TokengateWeb.TeamMembersLiveTest do
+  use TokengateWeb.ConnCase, async: false
+
+  import Phoenix.LiveViewTest
+
+  alias Tokengate.{Accounts, Providers}
+  alias Tokengate.Repo
+
+  defp unique, do: System.unique_integer([:positive])
+
+  defp register(role) do
+    u = unique()
+
+    {:ok, user} =
+      Accounts.register_user(%{
+        email: "members-#{u}@example.com",
+        name: "Members #{u}",
+        password: "password-secret-#{u}1",
+        global_role: role
+      })
+
+    %{user: user, password: "password-secret-#{u}1"}
+  end
+
+  defp login(conn, user, password) do
+    conn
+    |> post(~p"/login", %{email: user.email, password: password})
+    |> recycle()
+  end
+
+  # Builds org + team + model_alias. The "owner" user is a member of the team.
+  defp team_with_member(opts \\ %{}) do
+    u = unique()
+    role = Map.get(opts, :team_role, "user")
+
+    {:ok, org} = Accounts.create_organization(%{name: "Org #{u}", slug: "org-#{u}"})
+
+    {:ok, model_alias} =
+      Providers.create_model_alias(%{
+        organization_id: org.id,
+        name: "gpt-#{u}",
+        display_name: "GPT #{u}",
+        market_input_price_per_1m: Decimal.new("10.00"),
+        market_output_price_per_1m: Decimal.new("30.00"),
+        context_window: 128_000,
+        routing_strategy: "priority"
+      })
+
+    {:ok, team} = Accounts.create_team(%{organization_id: org.id, name: "Team #{u}"})
+
+    {:ok, owner} =
+      Accounts.register_user(%{
+        email: "owner-#{u}@example.com",
+        name: "Owner #{u}",
+        password: "password-secret-#{u}1"
+      })
+
+    {:ok, member, _token} =
+      Accounts.create_team_member(%{
+        user_id: owner.id,
+        team_id: team.id,
+        team_role: role
+      })
+
+    %{
+      org: org,
+      team: team,
+      model_alias: model_alias,
+      owner: owner,
+      member: member,
+      owner_password: "password-secret-#{u}1"
+    }
+  end
+
+  defp team_url(team), do: "/dashboard/teams/#{team.id}/members"
+
+  # --------------------------------------------------------------------------
+  # Access control
+  # --------------------------------------------------------------------------
+
+  test "unauthenticated visitors are redirected to /login", %{conn: conn} do
+    %{team: team} = team_with_member()
+    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, team_url(team))
+  end
+
+  test "plain user (no manager role) is denied access", %{conn: conn} do
+    %{team: team, owner: owner, owner_password: password} = team_with_member(%{team_role: "user"})
+
+    conn = login(conn, owner, password)
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, team_url(team))
+  end
+
+  test "manager of a different team is denied", %{conn: conn} do
+    # Team A — where the user is a manager
+    %{team: team_a, owner: manager, owner_password: password} =
+      team_with_member(%{team_role: "manager"})
+
+    # Team B — a different team
+    %{team: team_b} = team_with_member()
+
+    conn = login(conn, manager, password)
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, team_url(team_b))
+
+    _ = team_a
+  end
+
+  # --------------------------------------------------------------------------
+  # Admin access and render
+  # --------------------------------------------------------------------------
+
+  test "admin sees members of any team", %{conn: conn} do
+    %{team: team, owner: owner} = team_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, html} = live(conn, team_url(team))
+
+    assert html =~ "Miembros de #{team.name}"
+    assert html =~ owner.email
+    assert has_element?(view, "#add-member-form")
+  end
+
+  test "manager sees members of their team", %{conn: conn} do
+    %{team: team, owner: owner, owner_password: password} =
+      team_with_member(%{team_role: "manager"})
+
+    conn = login(conn, owner, password)
+    {:ok, _view, html} = live(conn, team_url(team))
+
+    assert html =~ "Miembros de #{team.name}"
+    assert html =~ owner.email
+  end
+
+  # --------------------------------------------------------------------------
+  # Add member
+  # --------------------------------------------------------------------------
+
+  test "admin adds a member by email", %{conn: conn} do
+    %{team: team} = team_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    # Register a separate user to add
+    %{user: new_user} = register("user")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, team_url(team))
+
+    html =
+      view
+      |> form("#add-member-form", %{
+        email: new_user.email,
+        team_role: "user"
+      })
+      |> render_submit()
+
+    assert html =~ "Miembro añadido"
+    assert html =~ new_user.email
+
+    # Verify the team_member + API key were created
+    member =
+      Repo.get_by(
+        Tokengate.Accounts.TeamMember,
+        user_id: new_user.id,
+        team_id: team.id
+      )
+
+    assert member != nil
+    assert member.team_role == "user"
+
+    api_key = Repo.get_by(Tokengate.Accounts.ApiKey, team_member_id: member.id)
+    assert api_key != nil
+    assert api_key.status == "active"
+  end
+
+  test "add member with non-existent email shows error", %{conn: conn} do
+    %{team: team} = team_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, team_url(team))
+
+    html =
+      view
+      |> form("#add-member-form", %{
+        email: "nonexistent@example.com",
+        team_role: "user"
+      })
+      |> render_submit()
+
+    assert html =~ "No existe un usuario con ese email"
+    assert has_element?(view, "#add-member-error")
+  end
+
+  # --------------------------------------------------------------------------
+  # Remove member
+  # --------------------------------------------------------------------------
+
+  test "admin removes a member", %{conn: conn} do
+    %{team: team, member: member} = team_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, team_url(team))
+
+    assert has_element?(view, "#remove-#{member.id}")
+
+    html = view |> element("#remove-#{member.id}") |> render_click()
+
+    assert html =~ "Miembro eliminado"
+    refute has_element?(view, "#remove-#{member.id}")
+
+    refute Repo.get(Tokengate.Accounts.TeamMember, member.id)
+  end
+
+  # --------------------------------------------------------------------------
+  # Change role
+  # --------------------------------------------------------------------------
+
+  test "admin changes a member's role", %{conn: conn} do
+    %{team: team, member: member} = team_with_member(%{team_role: "user"})
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, team_url(team))
+
+    # The role select should be present
+    assert has_element?(view, "#role-select-#{member.id}")
+
+    html =
+      view
+      |> element("#role-form-#{member.id}")
+      |> render_change(%{team_role: "manager"})
+
+    assert html =~ "Rol actualizado"
+
+    updated = Repo.get!(Tokengate.Accounts.TeamMember, member.id)
+    assert updated.team_role == "manager"
+  end
+
+  # --------------------------------------------------------------------------
+  # Overrides (extra_daily_budget_usd, extra_concurrency)
+  # --------------------------------------------------------------------------
+
+  test "admin edits and saves overrides", %{conn: conn} do
+    %{team: team, member: member} = team_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, team_url(team))
+
+    # Open the overrides form
+    view |> element("#edit-overrides-#{member.id}") |> render_click()
+    assert has_element?(view, "#override-form-#{member.id}")
+
+    html =
+      view
+      |> form("#override-form-#{member.id}", %{
+        overrides: %{
+          extra_daily_budget_usd: "5.50",
+          extra_concurrency: "3"
+        }
+      })
+      |> render_submit()
+
+    assert html =~ "Overrides actualizados"
+
+    updated = Repo.get!(Tokengate.Accounts.TeamMember, member.id)
+    assert Decimal.equal?(updated.extra_daily_budget_usd, Decimal.new("5.50"))
+    assert updated.extra_concurrency == 3
+  end
+
+  test "overrides can be cleared with empty values", %{conn: conn} do
+    %{team: team, member: member} = team_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    # Pre-set values
+    {:ok, _} =
+      Accounts.update_team_member(member, %{
+        extra_daily_budget_usd: Decimal.new("10.00"),
+        extra_concurrency: 5
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, team_url(team))
+
+    view |> element("#edit-overrides-#{member.id}") |> render_click()
+
+    html =
+      view
+      |> form("#override-form-#{member.id}", %{
+        overrides: %{
+          extra_daily_budget_usd: "",
+          extra_concurrency: ""
+        }
+      })
+      |> render_submit()
+
+    assert html =~ "Overrides actualizados"
+
+    updated = Repo.get!(Tokengate.Accounts.TeamMember, member.id)
+    assert updated.extra_daily_budget_usd == nil
+    assert updated.extra_concurrency == nil
+  end
+
+  # --------------------------------------------------------------------------
+  # Extra alias grants (per-member)
+  # --------------------------------------------------------------------------
+
+  test "admin toggles an extra alias grant on a member", %{conn: conn} do
+    %{team: team, member: member, model_alias: alias_} = team_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, team_url(team))
+
+    # The checkbox should be present and unchecked
+    assert has_element?(view, "#extra-alias-#{member.id}-#{alias_.id}")
+
+    # Grant the extra alias
+    html =
+      view
+      |> element("#extra-alias-#{member.id}-#{alias_.id}")
+      |> render_click()
+
+    assert html =~ "Aliases actualizados"
+
+    grant =
+      Repo.get_by(
+        Tokengate.Providers.TeamMemberExtraAlias,
+        team_member_id: member.id,
+        model_alias_id: alias_.id
+      )
+
+    assert grant != nil
+
+    # Revoke
+    html =
+      view
+      |> element("#extra-alias-#{member.id}-#{alias_.id}")
+      |> render_click()
+
+    assert html =~ "Aliases actualizados"
+
+    refute Repo.get_by(
+             Tokengate.Providers.TeamMemberExtraAlias,
+             team_member_id: member.id,
+             model_alias_id: alias_.id
+           )
+  end
+
+  # --------------------------------------------------------------------------
+  # Empty state
+  # --------------------------------------------------------------------------
+
+  test "team with no members shows empty state", %{conn: conn} do
+    u = unique()
+
+    {:ok, org} = Accounts.create_organization(%{name: "Org #{u}", slug: "org-#{u}"})
+    {:ok, team} = Accounts.create_team(%{organization_id: org.id, name: "Empty Team #{u}"})
+
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, html} = live(conn, team_url(team))
+
+    assert has_element?(view, "#members-empty")
+    assert html =~ "Este equipo no tiene miembros"
+  end
+end
