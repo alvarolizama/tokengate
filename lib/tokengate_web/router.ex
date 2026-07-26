@@ -55,6 +55,19 @@ defmodule TokengateWeb.Router do
     live_session :dashboard,
       on_mount: [{TokengateWeb.UserAuth, :require_authenticated}] do
       live "/dashboard", DashboardLive
+      live "/dashboard/teams", TeamsLive
+      live "/dashboard/teams/:id/members", TeamMembersLive
+      live "/dashboard/keys", ApiKeysLive
+      live "/dashboard/logs", LogsLive
+    end
+
+    live_session :admin,
+      on_mount: [{TokengateWeb.UserAuth, :require_admin}] do
+      live "/dashboard/providers", ProvidersLive
+      live "/dashboard/subscriptions", SubscriptionsLive
+      live "/dashboard/aliases", AliasesLive
+      live "/dashboard/pricing", PricingLive
+      live "/dashboard/routing-rules", RoutingRulesLive
     end
   end
 

@@ -171,10 +171,10 @@ defmodule TokengateWeb.Layouts do
 
         <nav class="flex-1 p-3 space-y-1">
           <.sidebar_link href={~p"/dashboard"} label="Dashboard" icon="hero-chart-bar-square" />
-          <.sidebar_link href="#providers" label="Proveedores" icon="hero-server-stack" disabled />
-          <.sidebar_link href="#teams" label="Equipos" icon="hero-user-group" disabled />
-          <.sidebar_link href="#api-keys" label="API Keys" icon="hero-key" disabled />
-          <.sidebar_link href="#logs" label="Logs" icon="hero-document-text" disabled />
+          <.sidebar_link href={~p"/dashboard/providers"} label="Proveedores" icon="hero-server-stack" />
+          <.sidebar_link href={~p"/dashboard/teams"} label="Equipos" icon="hero-user-group" />
+          <.sidebar_link href={~p"/dashboard/keys"} label="API Keys" icon="hero-key" />
+          <.sidebar_link href={~p"/dashboard/logs"} label="Logs" icon="hero-document-text" />
         </nav>
 
         <div class="p-3 border-t border-base-300">
