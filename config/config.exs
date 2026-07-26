@@ -75,6 +75,10 @@ config :tokengate, :circuit_breaker,
   threshold: 5,
   rate_limit_cooldown_ms: 5_000
 
+# Streaming: max wait for the provider's first token before falling back.
+# Nothing is sent to the client until the first chunk arrives.
+config :tokengate, :first_token_timeout_ms, 15_000
+
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 

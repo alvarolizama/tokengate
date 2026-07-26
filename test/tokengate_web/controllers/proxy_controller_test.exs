@@ -35,11 +35,15 @@ defmodule TokengateWeb.ProxyControllerTest do
         "down" in conn.path_info ->
           json(conn, 500, %{"error" => %{"message" => "provider exploded"}})
 
+        "slowstream" in conn.path_info ->
+          Process.sleep(300)
+          stream(conn)
+
         true ->
           payload = Jason.decode!(body)
 
           if payload["stream"] == true do
-            json(conn, 200, %{"note" => "streams tested in T5.2"})
+            stream(conn)
           else
             json(conn, 200, %{
               "id" => "chatcmpl-e2e",
@@ -51,6 +55,25 @@ defmodule TokengateWeb.ProxyControllerTest do
             })
           end
       end
+    end
+
+    defp stream(conn) do
+      conn =
+        conn
+        |> put_resp_content_type("text/event-stream")
+        |> send_chunked(200)
+
+      {:ok, conn} = chunk(conn, ~s(data: {"choices":[{"delta":{"content":"qué"}}]}\n\n))
+      {:ok, conn} = chunk(conn, ~s(data: {"choices":[{"delta":{"content":" onda"}}]}\n\n))
+
+      {:ok, conn} =
+        chunk(
+          conn,
+          ~s(data: {"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":2,"total_tokens":22}}\n\n)
+        )
+
+      {:ok, conn} = chunk(conn, "data: [DONE]\n\n")
+      conn
     end
 
     defp json(conn, status, map) do
@@ -334,5 +357,79 @@ defmodule TokengateWeb.ProxyControllerTest do
       |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
 
     assert json_response(conn, 200)
+  end
+
+  ## Streaming #################################################################
+
+  test "stream: SSE passthrough with usage cost injection and async log", %{conn: conn} do
+    %{token: token, alias: model_alias, member: member} = proxy_fixture()
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", Map.put(chat_body(model_alias.name), "stream", true))
+
+    assert conn.state == :chunked
+    assert get_resp_header(conn, "content-type") |> hd() =~ "text/event-stream"
+
+    body = response(conn, 200)
+    frames = body |> String.split("\n\n", trim: true)
+
+    # Content frames pass through, then the usage frame, then [DONE]
+    assert Enum.at(frames, 0) =~ ~s("content":"qué")
+    assert Enum.at(frames, 1) =~ ~s("content":" onda")
+    assert List.last(frames) == "data: [DONE]"
+
+    # The usage frame carries the injected cost dimensions
+    usage_frame = Enum.find(frames, &(&1 =~ "usage"))
+    usage_json = usage_frame |> String.trim_leading("data: ") |> Jason.decode!()
+    assert_in_delta usage_json["usage"]["estimated_cost_usd"], 0.00013, 0.0000001
+    assert_in_delta usage_json["usage"]["cost_usd"], 0.00007, 0.0000001
+
+    # stream_options.include_usage was requested from the provider
+    assert_receive {:provider_request, provider_payload}
+    assert provider_payload["stream_options"]["include_usage"] == true
+
+    # Log written with streaming: true
+    assert_enqueued(worker: WriteWorker)
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.team_member_id == ^member.id)
+    assert log.streaming == true
+    assert log.prompt_tokens == 20
+    assert log.completion_tokens == 2
+  end
+
+  test "stream: first-token timeout falls back and returns 503 with a single provider", %{
+    conn: conn
+  } do
+    previous = Application.get_env(:tokengate, :first_token_timeout_ms)
+    Application.put_env(:tokengate, :first_token_timeout_ms, 50)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:tokengate, :first_token_timeout_ms, previous),
+        else: Application.delete_env(:tokengate, :first_token_timeout_ms)
+    end)
+
+    u = unique()
+    %{token: token, alias: model_alias, org: org} = proxy_fixture()
+
+    # Repoint the provider at the slow stream endpoint
+    [alias_provider] = Providers.list_alias_providers(model_alias.id)
+
+    {:ok, _provider} =
+      Providers.update_provider(alias_provider.provider, %{
+        base_url: "http://localhost:#{@port}/slowstream"
+      })
+
+    _ = {u, org}
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", Map.put(chat_body(model_alias.name), "stream", true))
+
+    assert %{"error" => %{"type" => "service_unavailable"}} = json_response(conn, 503)
   end
 end

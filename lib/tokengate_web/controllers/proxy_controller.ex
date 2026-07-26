@@ -50,8 +50,15 @@ defmodule TokengateWeb.ProxyController do
          :ok <- acquire_limits(key_id, limits) do
       try do
         case route_and_check(member, payload, conn.assigns.api_key_hash, limits) do
-          {:ok, route} -> execute(conn, route, payload, member, @max_attempts, [])
-          {:error, error} -> render_proxy_error(conn, error)
+          {:ok, route} ->
+            if payload["stream"] == true do
+              execute_stream(conn, route, payload, member, @max_attempts, [])
+            else
+              execute(conn, route, payload, member, @max_attempts, [])
+            end
+
+          {:error, error} ->
+            render_proxy_error(conn, error)
         end
       after
         Limits.release(key_id)
@@ -151,6 +158,212 @@ defmodule TokengateWeb.ProxyController do
       {:error, error} ->
         render_proxy_error(conn, error)
     end
+  end
+
+  ## Streaming execution ########################################################
+
+  # SSE passthrough with first-token fallback: nothing is sent to the client
+  # until the provider's first chunk arrives. If it never does (timeout or
+  # error), the breaker records the failure and we fall back BEFORE committing
+  # to a 200 status. `stream_options: {include_usage: true}` is the single
+  # sanctioned payload mutation — the plan requires real usage for cost
+  # accounting, and it only affects the provider's own usage reporting.
+  defp execute_stream(conn, route, payload, member, attempts_left, exclude) do
+    provider = route.alias_provider.provider
+    payload = ensure_stream_options(payload)
+
+    case OpenAIAdapter.stream_chat_completion(provider, route.credential, payload,
+           receive_timeout: 120_000
+         ) do
+      {:ok, pid} ->
+        ref = Process.monitor(pid)
+
+        case await_first_chunk(pid, ref) do
+          {:ok, first_chunk} ->
+            Router.record_outcome(route, :success)
+
+            conn =
+              conn
+              |> put_resp_content_type("text/event-stream")
+              |> put_resp_header("cache-control", "no-cache")
+              |> send_chunked(200)
+
+            stream_loop(conn, pid, ref, first_chunk, route, member, payload, %{
+              usage: nil,
+              completion: "",
+              prompt_estimate: TokenEstimator.estimate_messages(payload["messages"] || []),
+              latency_start: System.monotonic_time(:millisecond)
+            })
+
+          {:error, reason} ->
+            Process.exit(pid, :kill)
+            Router.record_outcome(route, {:failure, breaker_reason(reason)})
+
+            if attempts_left > 1 do
+              retry_stream_with_fallback(conn, route, payload, member, attempts_left, exclude)
+            else
+              render_proxy_error(conn, {:upstream_error, reason, nil})
+            end
+        end
+    end
+  end
+
+  defp retry_stream_with_fallback(conn, route, payload, member, attempts_left, exclude) do
+    exclude = [route.credential.id | exclude]
+
+    request_context = %{
+      "messages" => payload["messages"] || [],
+      :api_key_hash => conn.assigns.api_key_hash,
+      :exclude_credential_ids => exclude
+    }
+
+    case Router.route(payload["model"], member, request_context) do
+      {:ok, new_route} ->
+        execute_stream(conn, new_route, payload, member, attempts_left - 1, exclude)
+
+      {:error, :no_available_provider} ->
+        render_proxy_error(conn, :all_providers_down)
+
+      {:error, error} ->
+        render_proxy_error(conn, error)
+    end
+  end
+
+  defp ensure_stream_options(payload) do
+    options = Map.get(payload, "stream_options", %{})
+    Map.put(payload, "stream_options", Map.put(options, "include_usage", true))
+  end
+
+  defp await_first_chunk(pid, ref) do
+    timeout = Application.get_env(:tokengate, :first_token_timeout_ms, 15_000)
+
+    receive do
+      {:sse_chunk, chunk} -> {:ok, chunk}
+      {:sse_done} -> {:error, :empty_stream}
+      {:sse_error, reason} -> {:error, stream_error_reason(reason)}
+      {:DOWN, ^ref, :process, ^pid, reason} -> {:error, stream_error_reason(reason)}
+    after
+      timeout -> {:error, :timeout}
+    end
+  end
+
+  defp stream_error_reason({reason, _status}), do: reason
+  defp stream_error_reason(reason) when is_atom(reason), do: reason
+  defp stream_error_reason(_), do: :server_error
+
+  defp stream_loop(conn, pid, ref, pending_chunk, route, member, payload, acc) do
+    case forward_stream_chunk(conn, pending_chunk, route, acc) do
+      {:ok, conn, acc} ->
+        receive do
+          {:sse_chunk, chunk} ->
+            stream_loop(conn, pid, ref, chunk, route, member, payload, acc)
+
+          {:sse_done} ->
+            finish_stream(conn, route, member, acc)
+
+          {:sse_error, _reason} ->
+            # Mid-stream failure: the 200 is already committed — close the
+            # stream and record what we have.
+            finish_stream(conn, route, member, acc)
+
+          {:DOWN, ^ref, :process, ^pid, _reason} ->
+            finish_stream(conn, route, member, acc)
+        end
+
+      {:client_gone, conn} ->
+        Process.exit(pid, :kill)
+        conn
+    end
+  end
+
+  # Forwards one chunk as an SSE frame. When the chunk carries the provider's
+  # final usage payload, the cost dimensions are injected before forwarding
+  # (same contract as the non-streaming response).
+  defp forward_stream_chunk(conn, chunk, route, acc) do
+    {chunk, acc} = maybe_capture_usage(chunk, route, acc)
+
+    case Plug.Conn.chunk(conn, "data: #{chunk}\n\n") do
+      {:ok, conn} -> {:ok, conn, acc}
+      {:error, _closed} -> {:client_gone, conn}
+    end
+  end
+
+  defp maybe_capture_usage(chunk, route, acc) do
+    case Jason.decode(chunk) do
+      {:ok, decoded} ->
+        case UsageNormalizer.from_openai_stream_chunk(decoded) do
+          nil ->
+            {chunk, %{acc | completion: acc.completion <> extract_delta_text(decoded)}}
+
+          usage ->
+            costs = stream_costs(route, usage)
+            injected = inject_usage_costs(decoded, usage, costs)
+            {Jason.encode!(injected), %{acc | usage: {usage, costs}}}
+        end
+
+      {:error, _} ->
+        {chunk, acc}
+    end
+  end
+
+  defp extract_delta_text(decoded) do
+    case get_in(decoded, ["choices", Access.at(0), "delta", "content"]) do
+      text when is_binary(text) -> text
+      _ -> ""
+    end
+  end
+
+  defp finish_stream(conn, route, member, acc) do
+    conn =
+      case Plug.Conn.chunk(conn, "data: [DONE]\n\n") do
+        {:ok, conn} -> conn
+        {:error, _closed} -> conn
+      end
+
+    latency_ms = System.monotonic_time(:millisecond) - acc.latency_start
+
+    {usage, costs} =
+      case acc.usage do
+        {usage, costs} ->
+          {usage, costs}
+
+        nil ->
+          # Provider sent no usage — fall back to the chars/4 heuristic over
+          # the accumulated completion so cost accounting still works.
+          usage = %{
+            prompt_tokens: acc.prompt_estimate,
+            completion_tokens: TokenEstimator.estimate_completion(acc.completion),
+            cache_read_tokens: 0,
+            cache_creation_tokens: 0
+          }
+
+          {usage, stream_costs(route, usage)}
+      end
+
+    Budgets.record_spend(member.id, costs.cost_usd)
+
+    Collector.record_request(%{
+      model_alias_id: route.model_alias.id,
+      provider_id: route.alias_provider.provider_id,
+      agent_type: conn.assigns.agent_type,
+      status: 200,
+      latency_ms: latency_ms,
+      prompt_tokens: usage.prompt_tokens,
+      completion_tokens: usage.completion_tokens,
+      cost_usd: costs.cost_usd,
+      savings_usd: costs.savings_usd,
+      streaming: true
+    })
+
+    enqueue_log(route, member, conn.assigns.agent_type, usage, costs, latency_ms, 200, true)
+
+    conn
+  end
+
+  defp stream_costs(route, usage) do
+    pricing = Providers.current_pricing(route.alias_provider.id)
+    billing_type = route.alias_provider.provider.billing_type
+    CostCalculator.breakdown(route.model_alias, pricing, billing_type, usage)
   end
 
   ## Success finalization #######################################################

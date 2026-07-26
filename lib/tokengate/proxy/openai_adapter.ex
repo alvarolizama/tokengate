@@ -100,7 +100,9 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
                 {:trailers, _trailers} ->
                   {:cont, acc}
               end
-            end, receive_timeout: receive_timeout)
+            end,
+            receive_timeout: receive_timeout
+          )
 
         case result do
           {:ok, %{status: status}} when is_integer(status) and status not in 200..299 ->
