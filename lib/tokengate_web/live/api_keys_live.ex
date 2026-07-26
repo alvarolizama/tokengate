@@ -215,8 +215,7 @@ defmodule TokengateWeb.ApiKeysLive do
                           class="btn btn-sm btn-primary"
                           id={"replace-#{membership.id}"}
                         >
-                          <.icon name="hero-arrow-path" class="w-4 h-4" />
-                          Reemplazar
+                          <.icon name="hero-arrow-path" class="w-4 h-4" /> Reemplazar
                         </button>
 
                         <%= if membership.api_key.status == "active" do %>
@@ -227,8 +226,7 @@ defmodule TokengateWeb.ApiKeysLive do
                             class="btn btn-sm btn-ghost text-error"
                             id={"revoke-#{membership.id}"}
                           >
-                            <.icon name="hero-no-symbol" class="w-4 h-4" />
-                            Revocar
+                            <.icon name="hero-no-symbol" class="w-4 h-4" /> Revocar
                           </button>
                         <% end %>
                       </div>

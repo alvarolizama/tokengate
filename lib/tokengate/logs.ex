@@ -144,11 +144,20 @@ defmodule Tokengate.Logs do
 
   defp maybe_model_search(query, filters) do
     case Map.get(filters, :model_search) || Map.get(filters, "model_search") do
-      nil -> query
-      "" -> query
+      nil ->
+        query
+
+      "" ->
+        query
+
       search ->
         pattern = "%#{search}%"
-        where(query, [rl], ilike(rl.model_requested, ^pattern) or ilike(rl.model_responded, ^pattern))
+
+        where(
+          query,
+          [rl],
+          ilike(rl.model_requested, ^pattern) or ilike(rl.model_responded, ^pattern)
+        )
     end
   end
 

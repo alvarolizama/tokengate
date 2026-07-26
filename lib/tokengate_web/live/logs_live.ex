@@ -58,7 +58,9 @@ defmodule TokengateWeb.LogsLive do
     list_filters = build_filters(socket, include_cursor: mode == :more)
 
     logs = Logs.list_logs(list_filters)
-    summary = Logs.cost_summary(build_filters(socket, include_limit: false, include_cursor: false))
+
+    summary =
+      Logs.cost_summary(build_filters(socket, include_limit: false, include_cursor: false))
 
     has_more = length(logs) == @page_size
 
@@ -222,8 +224,12 @@ defmodule TokengateWeb.LogsLive do
     end
   end
 
-  defp status_badge_class(status_code) when status_code >= 200 and status_code < 300, do: "badge-success"
-  defp status_badge_class(status_code) when status_code >= 400 and status_code < 500, do: "badge-warning"
+  defp status_badge_class(status_code) when status_code >= 200 and status_code < 300,
+    do: "badge-success"
+
+  defp status_badge_class(status_code) when status_code >= 400 and status_code < 500,
+    do: "badge-warning"
+
   defp status_badge_class(status_code) when status_code >= 500, do: "badge-error"
   defp status_badge_class(_), do: "badge-ghost"
 
@@ -285,7 +291,12 @@ defmodule TokengateWeb.LogsLive do
         </div>
 
         <%!-- Filter form --%>
-        <.form for={@form} id="logs-filter-form" phx-change="filter" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <.form
+          for={@form}
+          id="logs-filter-form"
+          phx-change="filter"
+          class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3"
+        >
           <.input
             field={@form[:agent_type]}
             type="text"
@@ -379,8 +390,7 @@ defmodule TokengateWeb.LogsLive do
             class="btn btn-primary btn-sm"
             id="load-more-btn"
           >
-            <.icon name="hero-chevron-down" class="w-4 h-4" />
-            Cargar más
+            <.icon name="hero-chevron-down" class="w-4 h-4" /> Cargar más
           </button>
         </div>
       </div>
