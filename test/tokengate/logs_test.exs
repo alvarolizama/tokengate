@@ -495,4 +495,68 @@ defmodule Tokengate.LogsTest do
       assert log.ttft_ms == 250
     end
   end
+
+  describe "realtime_summary/2" do
+    defp recent(seconds_ago) do
+      DateTime.utc_now()
+      |> DateTime.add(-seconds_ago, :second)
+      |> DateTime.truncate(:second)
+    end
+
+    test "counts only logs inside the rolling window" do
+      {log1, tm} = log_fixture(%{inserted_at: recent(30), latency_ms: 400})
+      {_log2, _} = log_fixture(%{inserted_at: recent(60), latency_ms: 600})
+      # 1 hour ago — outside the default 5-minute window
+      {_old, _} = log_fixture(%{inserted_at: recent(3600), latency_ms: 999})
+
+      summary = Logs.realtime_summary(%{team_member_id: tm.id})
+
+      assert summary.request_count == 1
+      assert summary.avg_latency_ms == 400.0
+
+      # unfiltered: 2 logs in window, 5 min window → 0.4 req/min
+      unfiltered = Logs.realtime_summary()
+      assert unfiltered.request_count >= 2
+      assert_in_delta unfiltered.req_per_min, unfiltered.request_count / 5, 0.01
+      assert log1.id
+    end
+
+    test "counts errors (status >= 400) and computes error rate" do
+      {_ok, tm} = log_fixture(%{inserted_at: recent(10), status_code: 200})
+      {_err, _} = log_fixture(%{inserted_at: recent(20), status_code: 500, team_member_id: tm.id})
+
+      summary = Logs.realtime_summary(%{team_member_id: tm.id})
+
+      assert summary.request_count == 2
+      assert summary.error_count == 1
+      assert summary.error_rate == 50.0
+    end
+
+    test "empty window returns zeros and nil latency" do
+      summary = Logs.realtime_summary(%{team_member_id: Ecto.UUID.generate()})
+
+      assert summary.request_count == 0
+      assert summary.req_per_min == 0.0
+      assert summary.error_count == 0
+      assert summary.error_rate == 0.0
+      assert summary.avg_latency_ms == nil
+    end
+
+    test "respects filters like status_class" do
+      {_ok, tm} = log_fixture(%{inserted_at: recent(10), status_code: 200})
+      {_err, _} = log_fixture(%{inserted_at: recent(20), status_code: 500, team_member_id: tm.id})
+
+      summary = Logs.realtime_summary(%{team_member_id: tm.id, status_class: "2xx"})
+
+      assert summary.request_count == 1
+      assert summary.error_count == 0
+    end
+
+    test "accepts a custom window in seconds" do
+      {_log, tm} = log_fixture(%{inserted_at: recent(600)})
+
+      assert Logs.realtime_summary(%{team_member_id: tm.id}, 300).request_count == 0
+      assert Logs.realtime_summary(%{team_member_id: tm.id}, 900).request_count == 1
+    end
+  end
 end

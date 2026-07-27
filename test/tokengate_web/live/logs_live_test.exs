@@ -177,4 +177,39 @@ defmodule TokengateWeb.LogsLiveTest do
 
     assert has_element?(view, "#logs-filter-form select[name='filter[model_search]']")
   end
+
+  ## Realtime KPI cards (rolling 5-minute window) ---------------------------------
+
+  test "KPI cards show rolling-window metrics, not lifetime totals", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{log: log} = member_with_log()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
+
+    assert has_element?(view, "#summary-req-per-min")
+    assert has_element?(view, "#summary-latency")
+    assert has_element?(view, "#summary-errors")
+    refute has_element?(view, "#summary-cost")
+    refute has_element?(view, "#summary-savings")
+
+    # member_with_log's log was inserted now → inside the window, 42ms latency
+    assert has_element?(view, "#summary-latency", "42")
+    # 1 request, no errors
+    assert has_element?(view, "#summary-errors", "0")
+    assert log.latency_ms == 42
+  end
+
+  test "KPI cards refresh periodically even without new logs", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    member_with_log()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
+
+    # Simulate a periodic tick — the view must re-query and stay consistent
+    send(view.pid, :refresh_summary)
+    html = render(view)
+    assert html =~ "summary-req-per-min"
+  end
 end

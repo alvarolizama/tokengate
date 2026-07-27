@@ -11,6 +11,7 @@ defmodule TokengateWeb.LogsLive do
   @pubsub Tokengate.PubSub
   @logs_topic "logs:new"
   @summary_refresh_interval_ms 2_000
+  @summary_tick_interval_ms 5_000
   @inflight_refresh_interval_ms 3_000
 
   @impl true
@@ -43,6 +44,10 @@ defmodule TokengateWeb.LogsLive do
       Phoenix.PubSub.subscribe(@pubsub, TokengateWeb.Presence.topic())
 
       send(self(), :refresh_inflight)
+
+      # Rolling-window KPIs decay with time (req/min drops even when no new
+      # logs arrive), so refresh them on a fixed tick, not only on new logs.
+      :timer.send_interval(@summary_tick_interval_ms, :refresh_summary)
 
       {:ok,
        socket
@@ -236,7 +241,7 @@ defmodule TokengateWeb.LogsLive do
 
   defp refresh_summary(socket) do
     summary =
-      Logs.cost_summary(build_filters(socket, include_limit: false, include_cursor: false))
+      Logs.realtime_summary(build_filters(socket, include_limit: false, include_cursor: false))
 
     socket |> assign(:summary, summary)
   end
@@ -274,7 +279,7 @@ defmodule TokengateWeb.LogsLive do
     logs = Logs.list_logs(list_filters)
 
     summary =
-      Logs.cost_summary(build_filters(socket, include_limit: false, include_cursor: false))
+      Logs.realtime_summary(build_filters(socket, include_limit: false, include_cursor: false))
 
     has_more = length(logs) == @page_size
 
@@ -381,12 +386,10 @@ defmodule TokengateWeb.LogsLive do
   defp empty_summary do
     %{
       request_count: 0,
-      total_cost_usd: Decimal.new(0),
-      total_savings_usd: Decimal.new(0),
-      total_provider_cost_usd: Decimal.new(0),
-      total_estimated_cost_usd: Decimal.new(0),
-      total_prompt_tokens: 0,
-      total_completion_tokens: 0
+      req_per_min: 0.0,
+      avg_latency_ms: nil,
+      error_count: 0,
+      error_rate: 0.0
     }
   end
 
@@ -572,13 +575,14 @@ defmodule TokengateWeb.LogsLive do
             <div class="card-body p-4">
               <div class="flex items-center justify-between">
                 <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Solicitudes
+                  Req/min
                 </p>
                 <.icon name="hero-arrow-trending-up" class="w-4 h-4 text-base-content/40" />
               </div>
-              <p class="mt-1 text-2xl font-bold text-base-content" id="summary-requests">
-                {@summary.request_count}
+              <p class="mt-1 text-2xl font-bold text-base-content" id="summary-req-per-min">
+                {@summary.req_per_min}
               </p>
+              <p class="text-xs text-base-content/40 mt-1">últimos 5 min</p>
             </div>
           </div>
 
@@ -586,13 +590,14 @@ defmodule TokengateWeb.LogsLive do
             <div class="card-body p-4">
               <div class="flex items-center justify-between">
                 <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Costo total
+                  Latencia prom
                 </p>
-                <.icon name="hero-currency-dollar" class="w-4 h-4 text-base-content/40" />
+                <.icon name="hero-clock" class="w-4 h-4 text-base-content/40" />
               </div>
-              <p class="mt-1 text-2xl font-bold text-base-content" id="summary-cost">
-                ${format_cost(@summary.total_cost_usd)}
+              <p class="mt-1 text-2xl font-bold text-base-content" id="summary-latency">
+                {if @summary.avg_latency_ms, do: "#{@summary.avg_latency_ms} ms", else: "—"}
               </p>
+              <p class="text-xs text-base-content/40 mt-1">últimos 5 min</p>
             </div>
           </div>
 
@@ -600,12 +605,21 @@ defmodule TokengateWeb.LogsLive do
             <div class="card-body p-4">
               <div class="flex items-center justify-between">
                 <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Ahorros
+                  Errores
                 </p>
-                <.icon name="hero-banknotes" class="w-4 h-4 text-base-content/40" />
+                <.icon name="hero-exclamation-triangle" class="w-4 h-4 text-base-content/40" />
               </div>
-              <p class="mt-1 text-2xl font-bold text-base-content" id="summary-savings">
-                ${format_cost(@summary.total_savings_usd)}
+              <p
+                class={[
+                  "mt-1 text-2xl font-bold",
+                  if(@summary.error_count > 0, do: "text-error", else: "text-base-content")
+                ]}
+                id="summary-errors"
+              >
+                {@summary.error_count}
+              </p>
+              <p class="text-xs text-base-content/40 mt-1">
+                {@summary.error_rate}% · últimos 5 min
               </p>
             </div>
           </div>

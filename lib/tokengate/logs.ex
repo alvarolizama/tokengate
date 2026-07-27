@@ -404,6 +404,55 @@ defmodule Tokengate.Logs do
     }
   end
 
+  @doc """
+  Rolling-window realtime summary for the live logs KPI strip.
+
+  Same filters as `cost_summary/1` (via `apply_log_filters/2`) plus a hard
+  `inserted_at >= now - window_seconds` cutoff, so the numbers always
+  describe *what is happening right now* instead of lifetime totals.
+
+  Returns a map with:
+
+    * `:request_count` — requests seen inside the window
+    * `:req_per_min` — `request_count / (window_seconds / 60)`, 1 decimal
+    * `:avg_latency_ms` — mean `latency_ms` over matched rows (`nil` when none)
+    * `:error_count` — rows with `status_code >= 400`
+    * `:error_rate` — percentage of errors over matched rows (0.0 when none)
+
+  `window_seconds` defaults to 300 (5 minutes).
+  """
+  def realtime_summary(filters \\ %{}, window_seconds \\ 300) do
+    cutoff =
+      DateTime.utc_now()
+      |> DateTime.add(-window_seconds, :second)
+      |> DateTime.truncate(:second)
+
+    result =
+      RequestLog
+      |> apply_log_filters(filters)
+      |> where([rl], rl.inserted_at >= ^cutoff)
+      |> select([rl], %{
+        request_count: count(rl.id),
+        error_count: fragment("COUNT(*) FILTER (WHERE status_code >= 400)"),
+        avg_latency_ms: fragment("AVG(latency_ms)")
+      })
+      |> Repo.one()
+
+    request_count = result.request_count
+    error_count = result.error_count
+
+    %{
+      request_count: request_count,
+      req_per_min: Float.round(request_count / (window_seconds / 60), 1),
+      avg_latency_ms: avg_to_float(result.avg_latency_ms),
+      error_count: error_count,
+      error_rate: error_rate(request_count, error_count)
+    }
+  end
+
+  defp error_rate(0, _errors), do: 0.0
+  defp error_rate(total, errors), do: Float.round(errors / total * 100, 1)
+
   defp avg_to_float(nil), do: nil
 
   defp avg_to_float(%Decimal{} = d) do
