@@ -22,28 +22,12 @@ defmodule Tokengate.Budgets.ManagerTest do
   # Fixtures — create FK parents via the REAL Accounts context.
   # ---------------------------------------------------------------------------
 
-  defp organization_fixture(attrs \\ %{}) do
-    {:ok, org} =
-      Accounts.create_organization(
-        Map.merge(
-          %{
-            "name" => "Acme Corp",
-            "slug" => "acme-#{System.unique_integer([:positive])}"
-          },
-          attrs
-        )
-      )
-
-    org
-  end
-
-  defp team_fixture(organization, attrs \\ %{}) do
+  defp team_fixture(attrs \\ %{}) do
     {:ok, team} =
       Accounts.create_team(
         Map.merge(
           %{
             "name" => "Platform Team",
-            "organization_id" => organization.id,
             "default_daily_budget_usd" => "100.00",
             "default_monthly_budget_usd" => "1000.00",
             "default_concurrency_limit" => 10,
@@ -73,11 +57,10 @@ defmodule Tokengate.Budgets.ManagerTest do
   end
 
   defp team_member_fixture(attrs \\ %{}) do
-    org = organization_fixture()
-    team = team_fixture(org)
+    team = team_fixture()
     user = user_fixture()
 
-    {:ok, team_member, _token} =
+    {:ok, team_member} =
       Accounts.create_team_member(
         Map.merge(
           %{

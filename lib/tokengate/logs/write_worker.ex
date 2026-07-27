@@ -23,7 +23,6 @@ defmodule Tokengate.Logs.WriteWorker do
       team_member_id: args["team_member_id"],
       provider_id: args["provider_id"],
       model_alias_id: args["model_alias_id"],
-      subscription_id: args["subscription_id"],
       model_requested: args["model_requested"],
       model_responded: args["model_responded"],
       agent_type: args["agent_type"] || "unknown",

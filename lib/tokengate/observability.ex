@@ -15,11 +15,6 @@ defmodule Tokengate.Observability do
   @doc "Returns all observability destinations."
   def list_destinations, do: Repo.all(Destination)
 
-  @doc "Returns all destinations for a given organization."
-  def list_destinations_for_org(organization_id) do
-    Repo.all(from d in Destination, where: d.organization_id == ^organization_id)
-  end
-
   @doc "Gets a single destination. Raises if not found."
   def get_destination!(id), do: Repo.get!(Destination, id)
 

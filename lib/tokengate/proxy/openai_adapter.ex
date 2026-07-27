@@ -3,8 +3,11 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   OpenAI-compatible provider adapter.
 
   Talks to any endpoint exposing the OpenAI Chat Completions surface:
-  `POST /v1/chat/completions` and `GET /v1/models`. The adapter is a thin
-  transport layer — the request payload is encoded and forwarded **exactly
+  `POST /chat/completions` and `GET /models`. The provider's `base_url`
+  must include the full API base path (e.g. `https://api.openai.com/v1`,
+  `https://openrouter.ai/api/v1`) — the adapter only appends the final
+  endpoint segment. The adapter is a thin transport layer — the request
+  payload is encoded and forwarded **exactly
   as received**. No system prompts are injected, no messages are modified,
   no fields are stripped or added. The only mutation the adapter performs
   is enforcing `stream: true` on the streaming path, because that flag is
@@ -232,11 +235,11 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   ## URL & header helpers #####################################################
 
   defp chat_completions_url(provider) do
-    base_url(provider) <> "/v1/chat/completions"
+    base_url(provider) <> "/chat/completions"
   end
 
   defp models_url(provider) do
-    base_url(provider) <> "/v1/models"
+    base_url(provider) <> "/models"
   end
 
   defp base_url(provider) do

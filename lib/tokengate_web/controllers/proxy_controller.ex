@@ -362,8 +362,7 @@ defmodule TokengateWeb.ProxyController do
 
   defp stream_costs(route, usage) do
     pricing = Providers.current_pricing(route.alias_provider.id)
-    billing_type = route.alias_provider.provider.billing_type
-    CostCalculator.breakdown(route.model_alias, pricing, billing_type, usage)
+    CostCalculator.breakdown(route.model_alias, pricing, usage)
   end
 
   ## Success finalization #######################################################
@@ -371,9 +370,8 @@ defmodule TokengateWeb.ProxyController do
   defp finalize_success(conn, route, body, latency_ms, member) do
     usage = UsageNormalizer.normalize(:openai, body) || fallback_usage(conn.body_params, body)
     pricing = Providers.current_pricing(route.alias_provider.id)
-    billing_type = route.alias_provider.provider.billing_type
 
-    costs = CostCalculator.breakdown(route.model_alias, pricing, billing_type, usage)
+    costs = CostCalculator.breakdown(route.model_alias, pricing, usage)
 
     # Hot-path state updates (ETS only)
     Budgets.record_spend(member.id, costs.cost_usd)
@@ -445,7 +443,6 @@ defmodule TokengateWeb.ProxyController do
       "team_member_id" => member.id,
       "provider_id" => route.alias_provider.provider_id,
       "model_alias_id" => route.model_alias.id,
-      "subscription_id" => route.alias_provider.subscription_id,
       "model_requested" => route.model_alias.name,
       "model_responded" => route.model_responded,
       "agent_type" => agent_type,

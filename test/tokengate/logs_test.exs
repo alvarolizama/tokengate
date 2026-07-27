@@ -8,26 +8,10 @@ defmodule Tokengate.LogsTest do
   # Fixtures — create FK parents via the REAL Accounts/Providers contexts.
   # ---------------------------------------------------------------------------
 
-  defp valid_organization_attrs(attrs) do
-    Map.merge(
-      %{
-        "name" => "Acme Corp",
-        "slug" => "acme-#{System.unique_integer([:positive])}"
-      },
-      attrs
-    )
-  end
-
-  defp organization_fixture(attrs \\ %{}) do
-    {:ok, organization} = Accounts.create_organization(valid_organization_attrs(attrs))
-    organization
-  end
-
-  defp valid_team_attrs(organization, attrs) do
+  defp valid_team_attrs(attrs) do
     Map.merge(
       %{
         "name" => "Platform Team",
-        "organization_id" => organization.id,
         "default_daily_budget_usd" => "100.00",
         "default_monthly_budget_usd" => "1000.00",
         "default_concurrency_limit" => 10,
@@ -37,8 +21,8 @@ defmodule Tokengate.LogsTest do
     )
   end
 
-  defp team_fixture(organization, attrs \\ %{}) do
-    {:ok, team} = Accounts.create_team(valid_team_attrs(organization, attrs))
+  defp team_fixture(attrs \\ %{}) do
+    {:ok, team} = Accounts.create_team(valid_team_attrs(attrs))
     team
   end
 
@@ -58,12 +42,11 @@ defmodule Tokengate.LogsTest do
     user
   end
 
-  defp team_member_fixture(organization \\ nil, attrs \\ %{}) do
-    organization = organization || organization_fixture()
-    team = team_fixture(organization)
+  defp team_member_fixture(attrs \\ %{}) do
+    team = team_fixture()
     user = user_fixture()
 
-    {:ok, team_member, _token} =
+    {:ok, team_member} =
       Accounts.create_team_member(
         Map.merge(
           %{
@@ -297,15 +280,14 @@ defmodule Tokengate.LogsTest do
 
   describe "list_logs_for_team/2" do
     test "returns logs entries for members of the specified team" do
-      org = organization_fixture()
-      team1 = team_fixture(org)
-      team2 = team_fixture(org, %{"name" => "Other Team"})
+      team1 = team_fixture()
+      team2 = team_fixture(%{"name" => "Other Team"})
 
       user1 = user_fixture()
       user2 = user_fixture()
 
-      {:ok, tm1, _} = Accounts.create_team_member(%{"user_id" => user1.id, "team_id" => team1.id})
-      {:ok, tm2, _} = Accounts.create_team_member(%{"user_id" => user2.id, "team_id" => team2.id})
+      {:ok, tm1} = Accounts.create_team_member(%{"user_id" => user1.id, "team_id" => team1.id})
+      {:ok, tm2} = Accounts.create_team_member(%{"user_id" => user2.id, "team_id" => team2.id})
 
       {:ok, _log1} =
         Logs.log_request(%{
@@ -333,11 +315,10 @@ defmodule Tokengate.LogsTest do
     end
 
     test "accepts additional filters" do
-      org = organization_fixture()
-      team = team_fixture(org)
+      team = team_fixture()
       user = user_fixture()
 
-      {:ok, tm, _} = Accounts.create_team_member(%{"user_id" => user.id, "team_id" => team.id})
+      {:ok, tm} = Accounts.create_team_member(%{"user_id" => user.id, "team_id" => team.id})
 
       {:ok, _} =
         Logs.log_request(%{

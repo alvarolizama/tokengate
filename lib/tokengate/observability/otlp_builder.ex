@@ -8,11 +8,11 @@ defmodule Tokengate.Observability.OtlpBuilder do
   Request logs **never** contain prompt or completion content, and neither do
   the OTLP spans built here — in any privacy mode.
 
-  The `privacy_mode` of the destination controls only two attributes:
+  The `privacy_mode` of the destination controls one attribute:
 
-    * `"full"` — includes `tokengate.team_member_id` and
-      `tokengate.subscription_id` attributes (still metadata; no content).
-    * `"metadata_only"` — omits those two attributes entirely.
+    * `"full"` — includes `tokengate.team_member_id` attribute (still
+      metadata; no content).
+    * `"metadata_only"` — omits that attribute entirely.
 
   All other attributes (model, token counts, costs, latency, status) are
   present in both modes.
@@ -157,15 +157,11 @@ defmodule Tokengate.Observability.OtlpBuilder do
   defp maybe_add_privacy_attrs(attrs, "full", request_log) do
     attrs ++
       [
-        kv("tokengate.team_member_id", to_string(request_log.team_member_id)),
-        kv("tokengate.subscription_id", maybe_uuid_string(request_log.subscription_id))
+        kv("tokengate.team_member_id", to_string(request_log.team_member_id))
       ]
   end
 
   defp maybe_add_privacy_attrs(attrs, _privacy_mode, _request_log), do: attrs
-
-  defp maybe_uuid_string(nil), do: nil
-  defp maybe_uuid_string(value), do: to_string(value)
 
   # ---------------------------------------------------------------------------
   # Status

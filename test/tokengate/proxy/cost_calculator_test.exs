@@ -78,25 +78,18 @@ defmodule Tokengate.Proxy.CostCalculatorTest do
     end
   end
 
-  describe "real_provider_cost/2" do
-    test "subscription is always zero" do
+  describe "real_provider_cost/1" do
+    test "nil returns zero" do
       assert Decimal.equal?(
-               CostCalculator.real_provider_cost("subscription", Decimal.new("99.99")),
+               CostCalculator.real_provider_cost(nil),
                Decimal.new(0)
              )
     end
 
-    test "pay_per_token passes through the priced cost" do
+    test "passes through the priced cost" do
       assert Decimal.equal?(
-               CostCalculator.real_provider_cost("pay_per_token", Decimal.new("1.5")),
+               CostCalculator.real_provider_cost(Decimal.new("1.5")),
                Decimal.new("1.5")
-             )
-    end
-
-    test "pay_per_token without pricing is zero" do
-      assert Decimal.equal?(
-               CostCalculator.real_provider_cost("pay_per_token", nil),
-               Decimal.new(0)
              )
     end
   end
@@ -110,9 +103,9 @@ defmodule Tokengate.Proxy.CostCalculatorTest do
     end
   end
 
-  describe "breakdown/4" do
-    test "pay_per_token provider: all four dimensions" do
-      result = CostCalculator.breakdown(@alias_gpt4o, @pricing, "pay_per_token", @usage)
+  describe "breakdown/3" do
+    test "all four dimensions" do
+      result = CostCalculator.breakdown(@alias_gpt4o, @pricing, @usage)
 
       # market: 1000*5/1M + 500*15/1M = 0.0125
       assert Decimal.equal?(result.estimated_cost_usd, Decimal.new("0.0125"))
@@ -122,11 +115,10 @@ defmodule Tokengate.Proxy.CostCalculatorTest do
       assert Decimal.equal?(result.savings_usd, Decimal.new("0.005"))
     end
 
-    test "subscription provider: provider_cost zero, savings equals estimated" do
-      result = CostCalculator.breakdown(@alias_gpt4o, nil, "subscription", @usage)
+    test "nil pricing falls back to market for cost_usd, zero for provider_cost" do
+      result = CostCalculator.breakdown(@alias_gpt4o, nil, @usage)
 
       assert Decimal.equal?(result.estimated_cost_usd, Decimal.new("0.0125"))
-      # cost_usd falls back to market so budget enforcement still works
       assert Decimal.equal?(result.cost_usd, Decimal.new("0.0125"))
       assert Decimal.equal?(result.provider_cost_usd, Decimal.new(0))
       assert Decimal.equal?(result.savings_usd, Decimal.new("0.0125"))

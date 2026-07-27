@@ -31,8 +31,7 @@ defmodule TokengateWeb.ApiKeysLiveTest do
     u = unique()
     role = Map.get(opts, :team_role, "user")
 
-    {:ok, org} = Accounts.create_organization(%{name: "Org #{u}", slug: "org-#{u}"})
-    {:ok, team} = Accounts.create_team(%{organization_id: org.id, name: "Team #{u}"})
+    {:ok, team} = Accounts.create_team(%{name: "Team #{u}"})
 
     {:ok, owner} =
       Accounts.register_user(%{
@@ -41,11 +40,12 @@ defmodule TokengateWeb.ApiKeysLiveTest do
         password: "password-secret-#{u}1"
       })
 
-    {:ok, member, token} =
+    {:ok, member} =
       Accounts.create_team_member(%{user_id: owner.id, team_id: team.id, team_role: role})
 
+    {:ok, _api_key, token} = Accounts.replace_api_key(member)
+
     %{
-      org: org,
       team: team,
       owner: owner,
       member: member,
@@ -58,83 +58,14 @@ defmodule TokengateWeb.ApiKeysLiveTest do
     assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/dashboard/keys")
   end
 
-  test "user sees their own key masked per team", %{conn: conn} do
-    %{team: team, owner: owner, member: member, owner_password: password} = team_with_member()
+  test "plain user sees redirect notice, not the managed section", %{conn: conn} do
+    %{owner: owner, owner_password: password} = team_with_member(%{team_role: "user"})
 
     conn = login(conn, owner, password)
     {:ok, view, html} = live(conn, ~p"/dashboard/keys")
 
-    assert html =~ "Tus claves"
-    assert html =~ team.name
-    assert has_element?(view, "#membership-#{member.id}")
-    # Never shows the full token, only the prefix
-    assert html =~ "••••"
-    refute html =~ "Sin clave"
-  end
-
-  test "user without teams sees the empty state", %{conn: conn} do
-    %{user: user, password: password} = register()
-
-    conn = login(conn, user, password)
-    {:ok, _view, html} = live(conn, ~p"/dashboard/keys")
-
-    assert html =~ "No perteneces a ningún equipo todavía."
-  end
-
-  test "replace_key generates a new token and shows it once", %{conn: conn} do
-    %{owner: owner, member: member, token: old_token, owner_password: password} =
-      team_with_member()
-
-    conn = login(conn, owner, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/keys")
-
-    html =
-      view
-      |> element("#replace-#{member.id}")
-      |> render_click()
-
-    assert html =~ "Nueva clave generada"
-    assert has_element?(view, "#new-token-alert")
-    assert has_element?(view, "#new-token-value")
-    refute html =~ old_token
-
-    # Dismissing hides the alert
-    view
-    |> element("#dismiss-token-btn")
-    |> render_click()
-
-    refute has_element?(view, "#new-token-alert")
-  end
-
-  test "revoke_key marks the key as revoked", %{conn: conn} do
-    %{owner: owner, member: member, owner_password: password} = team_with_member()
-
-    conn = login(conn, owner, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard/keys")
-
-    assert html =~ "Activa"
-
-    html =
-      view
-      |> element("#revoke-#{member.id}")
-      |> render_click()
-
-    assert html =~ "Revocada"
-    refute has_element?(view, "#revoke-#{member.id}")
-  end
-
-  test "user cannot revoke or replace another member's key", %{conn: conn} do
-    %{owner: owner, member: _member, owner_password: password} = team_with_member()
-    %{member: other_member} = team_with_member()
-
-    conn = login(conn, owner, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/keys")
-
-    html = render_click(view, "revoke_key", %{"id" => other_member.id})
-    assert html =~ "No autorizado."
-
-    html = render_click(view, "replace_key", %{"id" => other_member.id})
-    assert html =~ "No autorizado."
+    assert has_element?(view, "#not-manager-info")
+    refute has_element?(view, "#managed-keys-section")
   end
 
   test "manager sees the managed teams keys section", %{conn: conn} do
@@ -143,16 +74,33 @@ defmodule TokengateWeb.ApiKeysLiveTest do
     conn = login(conn, manager, password)
     {:ok, view, html} = live(conn, ~p"/dashboard/keys")
 
-    assert html =~ "Claves de equipos"
+    assert html =~ "Gestión de claves por equipo"
     assert has_element?(view, "#managed-keys-section")
   end
 
-  test "plain user does not see the managed teams section", %{conn: conn} do
-    %{owner: owner, owner_password: password} = team_with_member(%{team_role: "user"})
+  test "manager can revoke a team member's key", %{conn: conn} do
+    %{owner: manager, owner_password: password, member: member} =
+      team_with_member(%{team_role: "manager"})
 
-    conn = login(conn, owner, password)
+    conn = login(conn, manager, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/keys")
 
-    refute has_element?(view, "#managed-keys-section")
+    html = view |> element("#revoke-#{member.id}") |> render_click()
+    assert html =~ "Revocada"
+    refute has_element?(view, "#revoke-#{member.id}")
+  end
+
+  test "admin sees all teams", %{conn: conn} do
+    %{team: team, owner: owner, owner_password: password, member: member} =
+      team_with_member(%{team_role: "user"})
+
+    %{user: admin, password: admin_password} = register("admin")
+
+    conn = login(conn, admin, admin_password)
+    {:ok, view, html} = live(conn, ~p"/dashboard/keys")
+
+    assert html =~ team.name
+    assert has_element?(view, "#team-key-#{member.id}")
+    _ = owner
   end
 end

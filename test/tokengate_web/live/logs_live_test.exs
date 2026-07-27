@@ -31,8 +31,7 @@ defmodule TokengateWeb.LogsLiveTest do
     u = unique()
     role = Map.get(opts, :team_role, "user")
 
-    {:ok, org} = Accounts.create_organization(%{name: "Org #{u}", slug: "org-#{u}"})
-    {:ok, team} = Accounts.create_team(%{organization_id: org.id, name: "Team #{u}"})
+    {:ok, team} = Accounts.create_team(%{name: "Team #{u}"})
 
     {:ok, owner} =
       Accounts.register_user(%{
@@ -41,14 +40,13 @@ defmodule TokengateWeb.LogsLiveTest do
         password: "password-secret-#{u}1"
       })
 
-    {:ok, member, _token} =
+    {:ok, member} =
       Accounts.create_team_member(%{user_id: owner.id, team_id: team.id, team_role: role})
 
     {:ok, provider} =
       Providers.create_provider(%{
         name: "P #{u}",
-        base_url: "http://localhost:1",
-        billing_type: "pay_per_token"
+        base_url: "http://localhost:1"
       })
 
     for {status, agent, cost} <- Map.get(opts, :logs, [{200, "claude-code", "0.005"}]) do
@@ -57,7 +55,6 @@ defmodule TokengateWeb.LogsLiveTest do
           team_member_id: member.id,
           provider_id: provider.id,
           model_alias_id: nil,
-          subscription_id: nil,
           model_requested: "gpt-4o",
           model_responded: "gpt-4o",
           agent_type: agent,
@@ -74,7 +71,6 @@ defmodule TokengateWeb.LogsLiveTest do
     end
 
     %{
-      org: org,
       team: team,
       owner: owner,
       member: member,
@@ -130,7 +126,7 @@ defmodule TokengateWeb.LogsLiveTest do
         password: password
       })
 
-    {:ok, _membership, _token} =
+    {:ok, _membership} =
       Accounts.create_team_member(%{user_id: manager.id, team_id: team.id, team_role: "manager"})
 
     conn = login(conn, manager, password)

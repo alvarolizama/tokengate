@@ -1,13 +1,13 @@
-defmodule TokengateWeb.AliasesLive do
+defmodule TokengateWeb.ModelsLive do
   @moduledoc """
-  CRUD for model_aliases + per-alias alias_provider management.
+  CRUD for model_aliases + per-model alias_provider management.
 
-  Admins can create, edit, and delete aliases, and assign providers to each
-  alias (provider_model, priority/weight, subscription_id, enabled toggle).
+  Admins can create, edit, and delete models, and assign providers to each
+  model (provider_model, priority, enabled toggle).
   Managers and regular users see a read-only list.
 
-  Model aliases are organization-scoped. When creating, the admin picks
-  an organization from a select. All existing aliases are listed regardless
+  Models are organization-scoped. When creating, the admin picks
+  an organization from a select. All existing models are listed regardless
   of organization.
   """
 
@@ -15,9 +15,8 @@ defmodule TokengateWeb.AliasesLive do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Tokengate.Accounts
   alias Tokengate.Providers
-  alias Tokengate.Providers.{ModelAlias, AliasProvider, Provider, Subscription}
+  alias Tokengate.Providers.{ModelAlias, AliasProvider, Provider}
   alias Tokengate.Repo
 
   @impl true
@@ -27,7 +26,7 @@ defmodule TokengateWeb.AliasesLive do
 
     socket =
       socket
-      |> assign(:page_title, "Aliases · Tokengate")
+      |> assign(:page_title, "Modelos · Tokengate")
       |> assign(:is_admin, is_admin)
       |> assign(:form, nil)
       |> assign(:editing_alias_id, nil)
@@ -46,7 +45,7 @@ defmodule TokengateWeb.AliasesLive do
     aliases =
       from(ma in ModelAlias,
         left_join: aps in assoc(ma, :alias_providers),
-        preload: [alias_providers: {aps, [:provider, :subscription]}],
+        preload: [alias_providers: {aps, [:provider]}],
         order_by: [asc: ma.name]
       )
       |> Repo.all()
@@ -58,10 +57,7 @@ defmodule TokengateWeb.AliasesLive do
 
   defp assign_form_data(socket) do
     socket
-    |> assign(:organizations, Accounts.list_organizations())
     |> assign(:providers, Providers.list_providers())
-    |> assign(:subscriptions, Providers.list_subscriptions())
-    |> assign(:routing_strategies, ModelAlias.routing_strategies())
   end
 
   ## Events — alias CRUD ---------------------------------------------------
@@ -69,7 +65,7 @@ defmodule TokengateWeb.AliasesLive do
   @impl true
   def handle_event("new_alias", _params, socket) do
     if socket.assigns.is_admin do
-      changeset = Providers.change_model_alias(%ModelAlias{routing_strategy: "priority"})
+      changeset = Providers.change_model_alias(%ModelAlias{})
 
       {:noreply,
        socket
@@ -121,18 +117,18 @@ defmodule TokengateWeb.AliasesLive do
          put_flash(
            socket,
            :error,
-           "No se puede eliminar: el alias tiene proveedores asignados. Elimínalos primero."
+           "No se puede eliminar: el modelo tiene proveedores asignados. Elimínalos primero."
          )}
       else
         case Providers.delete_model_alias(alias_record) do
           {:ok, _} ->
             {:noreply,
              socket
-             |> put_flash(:info, "Alias eliminado.")
+             |> put_flash(:info, "Modelo eliminado.")
              |> load_aliases()}
 
           {:error, _} ->
-            {:noreply, put_flash(socket, :error, "No se pudo eliminar el alias.")}
+            {:noreply, put_flash(socket, :error, "No se pudo eliminar el modelo.")}
         end
       end
     else
@@ -238,7 +234,7 @@ defmodule TokengateWeb.AliasesLive do
       {:ok, _alias} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Alias creado.")
+         |> put_flash(:info, "Modelo creado.")
          |> assign(:form, nil)
          |> assign(:editing_alias_id, nil)
          |> load_aliases()}
@@ -255,7 +251,7 @@ defmodule TokengateWeb.AliasesLive do
       {:ok, _alias} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Alias actualizado.")
+         |> put_flash(:info, "Modelo actualizado.")
          |> assign(:form, nil)
          |> assign(:editing_alias_id, nil)
          |> load_aliases()}
@@ -274,7 +270,7 @@ defmodule TokengateWeb.AliasesLive do
       {:ok, _ap} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Proveedor asignado al alias.")
+         |> put_flash(:info, "Proveedor asignado al modelo.")
          |> assign(:provider_form, nil)
          |> assign(:editing_ap_id, nil)
          |> load_aliases()}
@@ -303,26 +299,9 @@ defmodule TokengateWeb.AliasesLive do
 
   ## Helpers ---------------------------------------------------------------
 
-  @doc "Routing strategy options for selects"
-  def routing_strategy_options do
-    [{"Prioridad", "priority"}, {"Round Robin", "round_robin"}]
-  end
-
-  @doc "Organization options for the select (id -> display)"
-  def organization_options(organizations) do
-    Enum.map(organizations, fn org -> {org.name, org.id} end)
-  end
-
   @doc "Provider options for the select (id -> display)"
   def provider_options(providers) do
-    Enum.map(providers, fn p -> {"#{p.name} (#{p.billing_type})", p.id} end)
-  end
-
-  @doc "Active subscriptions for a provider (for the subscription_id select)"
-  def subscription_options_for_provider(subscriptions, provider_id) do
-    subscriptions
-    |> Enum.filter(fn s -> s.provider_id == provider_id end)
-    |> Enum.map(fn s -> {"#{s.name} (#{s.status})", s.id} end)
+    Enum.map(providers, fn p -> {p.name, p.id} end)
   end
 
   @doc "Format a decimal for display"
@@ -334,18 +313,9 @@ defmodule TokengateWeb.AliasesLive do
   def alias_providers_for(%{alias_providers: aps}), do: aps
   def alias_providers_for(_), do: []
 
-  @doc "Strategy label in Spanish"
-  def strategy_label("priority"), do: "Prioridad"
-  def strategy_label("round_robin"), do: "Round Robin"
-  def strategy_label(_), do: "—"
-
   @doc "Provider name from preloaded provider"
   def provider_name(%{provider: %Provider{name: name}}), do: name
   def provider_name(_), do: "—"
-
-  @doc "Subscription name from preloaded subscription"
-  def subscription_name(%{subscription: %Subscription{name: name}}), do: name
-  def subscription_name(_), do: "—"
 
   @doc "Enabled badge class"
   def enabled_badge(true), do: "badge-success"
@@ -363,15 +333,15 @@ defmodule TokengateWeb.AliasesLive do
     <Layouts.dashboard flash={@flash} current_scope={@current_user}>
       <div class="space-y-6">
         <.header>
-          Aliases de Modelos
-          <:subtitle>Configura aliases de modelos y sus proveedores de routing</:subtitle>
+          Modelos
+          <:subtitle>Configura modelos y sus proveedores de routing</:subtitle>
           <:actions :if={@is_admin}>
             <button
               phx-click="new_alias"
               class="btn btn-primary btn-sm"
-              id="new-alias-btn"
+              id="new-model-btn"
             >
-              <.icon name="hero-plus" class="w-4 h-4" /> Nuevo Alias
+              <.icon name="hero-plus" class="w-4 h-4" /> Nuevo Modelo
             </button>
           </:actions>
         </.header>
@@ -384,7 +354,7 @@ defmodule TokengateWeb.AliasesLive do
             class="text-center py-12 text-base-content/40"
           >
             <.icon name="hero-cpu-chip" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-            <p>No hay aliases de modelos configurados.</p>
+            <p>No hay modelos configurados.</p>
           </div>
 
           <div :for={{id, model_alias} <- @streams.aliases} id={id} class="space-y-3">
@@ -396,9 +366,6 @@ defmodule TokengateWeb.AliasesLive do
                       <h3 class="font-semibold text-base-content truncate">
                         {model_alias.name}
                       </h3>
-                      <span class="badge badge-sm badge-outline">
-                        {strategy_label(model_alias.routing_strategy)}
-                      </span>
                       <span class="badge badge-sm badge-ghost">
                         {length(alias_providers_for(model_alias))} proveedores
                       </span>
@@ -432,7 +399,7 @@ defmodule TokengateWeb.AliasesLive do
                       <button
                         phx-click="delete_alias"
                         phx-value-id={model_alias.id}
-                        data-confirm="¿Eliminar este alias? Esta acción no se puede deshacer."
+                        data-confirm="¿Eliminar este modelo? Esta acción no se puede deshacer."
                         class="btn btn-sm btn-ghost text-error"
                         id={"delete-alias-#{model_alias.id}"}
                       >
@@ -474,8 +441,6 @@ defmodule TokengateWeb.AliasesLive do
                           <th>Proveedor</th>
                           <th>Modelo</th>
                           <th>Prioridad</th>
-                          <th>Peso</th>
-                          <th>Subscripción</th>
                           <th>Estado</th>
                           <%= if @is_admin do %>
                             <th>Acciones</th>
@@ -490,8 +455,6 @@ defmodule TokengateWeb.AliasesLive do
                           <td class="font-medium">{provider_name(ap)}</td>
                           <td><code class="text-sm">{ap.provider_model}</code></td>
                           <td>{ap.priority || "—"}</td>
-                          <td>{ap.weight || "—"}</td>
-                          <td>{subscription_name(ap)}</td>
                           <td>
                             <span class={["badge", "badge-sm", enabled_badge(ap.enabled)]}>
                               {enabled_label(ap.enabled)}
@@ -519,7 +482,7 @@ defmodule TokengateWeb.AliasesLive do
                                 <button
                                   phx-click="delete_alias_provider"
                                   phx-value-id={ap.id}
-                                  data-confirm="¿Eliminar este proveedor del alias?"
+                                  data-confirm="¿Eliminar este proveedor del modelo?"
                                   class="btn btn-xs btn-ghost text-error"
                                   id={"delete-ap-#{ap.id}"}
                                 >
@@ -544,20 +507,24 @@ defmodule TokengateWeb.AliasesLive do
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
             <div class="card-body p-6">
               <h2 class="text-lg font-semibold mb-4">
-                {if @editing_alias_id == :new, do: "Nuevo Alias", else: "Editar Alias"}
+                {if @editing_alias_id == :new, do: "Nuevo Modelo", else: "Editar Modelo"}
               </h2>
 
               <.form for={@form} id="alias-form" phx-submit="save_alias">
                 <.input
-                  field={@form[:organization_id]}
-                  type="select"
-                  label="Organización"
-                  options={organization_options(@organizations)}
-                  prompt="Selecciona una organización"
+                  field={@form[:name]}
+                  type="text"
+                  label="Nombre (identificador)"
                   required
+                  hint="Nombre interno del modelo, ej. gpt-4o. Debe ser único."
                 />
-                <.input field={@form[:name]} type="text" label="Nombre (identificador)" required />
-                <.input field={@form[:display_name]} type="text" label="Nombre para mostrar" required />
+                <.input
+                  field={@form[:display_name]}
+                  type="text"
+                  label="Nombre para mostrar"
+                  required
+                  hint="Nombre visible para los usuarios en /v1/models."
+                />
                 <div class="grid grid-cols-2 gap-3">
                   <.input
                     field={@form[:market_input_price_per_1m]}
@@ -565,6 +532,7 @@ defmodule TokengateWeb.AliasesLive do
                     label="Precio entrada /1M"
                     step="any"
                     required
+                    hint="Precio de referencia de mercado por 1M tokens de entrada."
                   />
                   <.input
                     field={@form[:market_output_price_per_1m]}
@@ -572,6 +540,7 @@ defmodule TokengateWeb.AliasesLive do
                     label="Precio salida /1M"
                     step="any"
                     required
+                    hint="Precio de referencia de mercado por 1M tokens de salida."
                   />
                 </div>
                 <.input
@@ -579,13 +548,7 @@ defmodule TokengateWeb.AliasesLive do
                   type="number"
                   label="Ventana de contexto (tokens)"
                   required
-                />
-                <.input
-                  field={@form[:routing_strategy]}
-                  type="select"
-                  label="Estrategia de routing"
-                  options={routing_strategy_options()}
-                  required
+                  hint="Tamaño máximo de contexto del modelo en tokens."
                 />
 
                 <div class="flex gap-2 mt-4 justify-end">
@@ -618,36 +581,29 @@ defmodule TokengateWeb.AliasesLive do
                   options={provider_options(@providers)}
                   prompt="Selecciona un proveedor"
                   required
+                  hint="Qué provider servirá este modelo."
                 />
                 <.input
                   field={@provider_form[:provider_model]}
                   type="text"
                   label="Modelo del proveedor"
                   required
+                  hint="Nombre del modelo en la API del provider, ej. gpt-4o-2024-08-06."
                 />
                 <div class="grid grid-cols-2 gap-3">
                   <.input
                     field={@provider_form[:priority]}
                     type="number"
                     label="Prioridad (menor = primero)"
-                  />
-                  <.input
-                    field={@provider_form[:weight]}
-                    type="number"
-                    label="Peso (round robin)"
+                    hint="Orden de preferencia. Menor número = se intenta primero."
                   />
                 </div>
-                <.input
-                  field={@provider_form[:subscription_id]}
-                  type="select"
-                  label="Subscripción (opcional, solo proveedores con suscripción)"
-                  options={subscription_options_for_provider(@subscriptions, nil)}
-                  prompt="Sin subscripción"
-                />
+
                 <.input
                   field={@provider_form[:enabled]}
                   type="checkbox"
                   label="Habilitado"
+                  hint="Si está apagado, este provider no recibe tráfico del alias."
                 />
 
                 <div class="flex gap-2 mt-4 justify-end">

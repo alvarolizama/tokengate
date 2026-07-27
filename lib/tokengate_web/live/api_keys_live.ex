@@ -1,5 +1,12 @@
 defmodule TokengateWeb.ApiKeysLive do
-  @moduledoc false
+  @moduledoc """
+  Manager/admin view of all API keys grouped by team.
+
+  Regular users see their own keys on /dashboard. This page is for managers
+  who need to revoke keys across their teams, and admins who oversee all
+  teams. Non-managers are redirected to /dashboard.
+  """
+
   use TokengateWeb, :live_view
 
   alias Tokengate.Accounts
@@ -7,26 +14,17 @@ defmodule TokengateWeb.ApiKeysLive do
   @impl true
   def mount(_params, _session, socket) do
     user = socket.assigns[:current_user]
-
-    socket =
-      socket
-      |> assign(:page_title, "API Keys · Tokengate")
-      |> assign(:new_token, nil)
-      |> assign(:new_token_team, nil)
-      |> load_data(user)
-
-    {:ok, socket}
-  end
-
-  defp load_data(socket, user) do
     memberships = Accounts.list_team_members_for_user(user.id)
     is_manager = manager?(user, memberships)
     managed_team_members = load_managed_team_members(user, memberships)
 
-    socket
-    |> assign(:memberships, memberships)
-    |> assign(:is_manager, is_manager)
-    |> assign(:managed_team_members, managed_team_members)
+    socket =
+      socket
+      |> assign(:page_title, "API Keys · Tokengate")
+      |> assign(:is_manager, is_manager)
+      |> assign(:managed_team_members, managed_team_members)
+
+    {:ok, socket}
   end
 
   defp manager?(%{global_role: "admin"}, _memberships), do: true
@@ -58,58 +56,36 @@ defmodule TokengateWeb.ApiKeysLive do
   ## Events ----------------------------------------------------------------
 
   @impl true
-  def handle_event("replace_key", %{"id" => member_id}, socket) do
-    user = socket.assigns[:current_user]
-
-    case Enum.find(socket.assigns[:memberships], &(&1.id == member_id)) do
-      nil ->
-        {:noreply, put_flash(socket, :error, "No autorizado.")}
-
-      member ->
-        case Accounts.replace_api_key(member) do
-          {:ok, _api_key, new_token} ->
-            {:noreply,
-             socket
-             |> assign(:new_token, new_token)
-             |> assign(:new_token_team, member.team.name)
-             |> load_data(user)
-             |> put_flash(:info, "Clave reemplazada correctamente.")}
-
-          {:error, _changeset} ->
-            {:noreply, put_flash(socket, :error, "No se pudo reemplazar la clave.")}
-        end
-    end
-  end
-
   def handle_event("revoke_key", %{"id" => member_id}, socket) do
     user = socket.assigns[:current_user]
 
-    case Enum.find(socket.assigns[:memberships], &(&1.id == member_id)) do
-      nil ->
+    # Find the member in any of the managed teams
+    member =
+      Enum.find_value(socket.assigns.managed_team_members, fn {_team, members} ->
+        Enum.find(members, &(&1.id == member_id))
+      end)
+
+    cond do
+      member == nil ->
         {:noreply, put_flash(socket, :error, "No autorizado.")}
 
-      member ->
-        case member.api_key do
-          nil ->
-            {:noreply, put_flash(socket, :error, "Esta membresía no tiene clave.")}
+      member.api_key == nil ->
+        {:noreply, put_flash(socket, :error, "Esta membresía no tiene clave.")}
 
-          api_key ->
-            case Accounts.revoke_api_key(api_key) do
-              {:ok, _} ->
-                {:noreply,
-                 socket
-                 |> load_data(user)
-                 |> put_flash(:info, "Clave revocada.")}
+      true ->
+        case Accounts.revoke_api_key(member.api_key) do
+          {:ok, _} ->
+            memberships = Accounts.list_team_members_for_user(user.id)
 
-              {:error, _} ->
-                {:noreply, put_flash(socket, :error, "No se pudo revocar la clave.")}
-            end
+            {:noreply,
+             socket
+             |> assign(:managed_team_members, load_managed_team_members(user, memberships))
+             |> put_flash(:info, "Clave revocada.")}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "No se pudo revocar la clave.")}
         end
     end
-  end
-
-  def handle_event("dismiss_token", _params, socket) do
-    {:noreply, assign(socket, :new_token, nil)}
   end
 
   ## Template helpers ------------------------------------------------------
@@ -141,135 +117,85 @@ defmodule TokengateWeb.ApiKeysLive do
       <div class="space-y-6">
         <.header>
           API Keys
-          <:subtitle>Gestiona tus claves de acceso a la API</:subtitle>
+          <:subtitle>Gestión de claves por equipo</:subtitle>
         </.header>
 
-        <%!-- One-time new token alert --%>
-        <div :if={@new_token} class="alert alert-warning shadow-lg" id="new-token-alert" role="alert">
-          <.icon name="hero-key" class="w-5 h-5 shrink-0" />
-          <div class="flex-1">
-            <p class="font-semibold">Nueva clave generada para {@new_token_team}</p>
-            <code
-              class="block mt-2 p-2 bg-base-200 rounded text-sm font-mono break-all select-all"
-              id="new-token-value"
-            >
-              {@new_token}
-            </code>
-            <p class="text-xs mt-2 text-base-content/70">
-              Copia esta clave ahora. No se volverá a mostrar.
-            </p>
-          </div>
-          <button
-            phx-click="dismiss_token"
-            class="btn btn-sm btn-ghost"
-            id="dismiss-token-btn"
-            aria-label="Cerrar"
-          >
-            <.icon name="hero-x-mark" class="w-4 h-4" />
-          </button>
-        </div>
-
-        <section>
-          <h2 class="text-base font-semibold mb-3">Tus claves</h2>
-
-          <%= if @memberships == [] do %>
-            <div class="text-center py-12 text-base-content/40">
-              <.icon name="hero-key" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-              <p>No perteneces a ningún equipo todavía.</p>
+        <%= if not @is_manager do %>
+          <div class="alert alert-info" id="not-manager-info">
+            <.icon name="hero-information-circle" class="w-5 h-5 shrink-0" />
+            <div class="flex-1 text-sm">
+              <p>
+                Tus claves personales están en el <.link
+                  navigate={~p"/dashboard"}
+                  class="link link-primary"
+                >Dashboard</.link>.
+              </p>
             </div>
-          <% else %>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <%= for membership <- @memberships do %>
-                <div
-                  class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-                  id={"membership-#{membership.id}"}
-                >
-                  <div class="card-body p-5">
+          </div>
+        <% else %>
+          <section id="managed-keys-section">
+            <%= if @managed_team_members == [] do %>
+              <div class="text-center py-12 text-base-content/40">
+                <.icon name="hero-key" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+                <p>No gestionas ningún equipo.</p>
+              </div>
+            <% else %>
+              <%= for {team, members} <- @managed_team_members do %>
+                <div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
+                  <div class="card-body">
                     <div class="flex items-center justify-between">
-                      <div>
-                        <h3 class="font-semibold text-base-content">{membership.team.name}</h3>
-                        <p class="text-xs text-base-content/50 mt-0.5 capitalize">
-                          {membership.team_role}
-                        </p>
-                      </div>
-                      <span class={["badge", "badge-sm", key_status_badge(membership)]}>
-                        {key_status_label(membership)}
+                      <h3 class="font-semibold text-base-content">{team.name}</h3>
+                      <span class="text-xs text-base-content/40">
+                        {length(members)} miembro(s)
                       </span>
                     </div>
-
-                    <div class="mt-3">
-                      <p class="text-xs text-base-content/50 uppercase tracking-wide">Clave</p>
-                      <code class="text-sm font-mono">{masked_key(membership)}</code>
+                    <div class="overflow-x-auto">
+                      <table class="table table-sm">
+                        <thead>
+                          <tr>
+                            <th>Miembro</th>
+                            <th>Rol</th>
+                            <th>Clave</th>
+                            <th>Estado</th>
+                            <th>Creada</th>
+                            <th></th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr :for={member <- members} id={"team-key-#{member.id}"}>
+                            <td>{member.user.email}</td>
+                            <td class="capitalize">{member.team_role}</td>
+                            <td><code class="text-sm font-mono">{masked_key(member)}</code></td>
+                            <td>
+                              <span class={["badge", "badge-sm", key_status_badge(member)]}>
+                                {key_status_label(member)}
+                              </span>
+                            </td>
+                            <td>
+                              {if member.api_key,
+                                do: format_date(member.api_key.inserted_at),
+                                else: "—"}
+                            </td>
+                            <td>
+                              <%= if member.api_key && member.api_key.status == "active" do %>
+                                <button
+                                  phx-click="revoke_key"
+                                  phx-value-id={member.id}
+                                  data-confirm="¿Revocar clave? Esta acción no se puede deshacer."
+                                  class="btn btn-xs btn-ghost text-error"
+                                  id={"revoke-#{member.id}"}
+                                >
+                                  <.icon name="hero-no-symbol" class="w-3 h-3" /> Revocar
+                                </button>
+                              <% end %>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
                     </div>
-
-                    <%= if membership.api_key do %>
-                      <p class="text-xs text-base-content/40 mt-2">
-                        Creada el {format_date(membership.api_key.inserted_at)}
-                      </p>
-
-                      <div class="flex gap-2 mt-3">
-                        <button
-                          phx-click="replace_key"
-                          phx-value-id={membership.id}
-                          data-confirm="¿Reemplazar clave? La clave anterior dejará de funcionar inmediatamente."
-                          class="btn btn-sm btn-primary"
-                          id={"replace-#{membership.id}"}
-                        >
-                          <.icon name="hero-arrow-path" class="w-4 h-4" /> Reemplazar
-                        </button>
-
-                        <%= if membership.api_key.status == "active" do %>
-                          <button
-                            phx-click="revoke_key"
-                            phx-value-id={membership.id}
-                            data-confirm="¿Revocar clave? Esta acción no se puede deshacer."
-                            class="btn btn-sm btn-ghost text-error"
-                            id={"revoke-#{membership.id}"}
-                          >
-                            <.icon name="hero-no-symbol" class="w-4 h-4" /> Revocar
-                          </button>
-                        <% end %>
-                      </div>
-                    <% end %>
                   </div>
                 </div>
               <% end %>
-            </div>
-          <% end %>
-        </section>
-
-        <%= if @is_manager do %>
-          <section id="managed-keys-section">
-            <h2 class="text-base font-semibold mb-3">Claves de equipos</h2>
-
-            <%= for {team, members} <- @managed_team_members do %>
-              <div class="card bg-base-100 border border-base-300 shadow-sm mb-4">
-                <div class="card-body">
-                  <h3 class="font-semibold text-base-content">{team.name}</h3>
-                  <div class="overflow-x-auto">
-                    <table class="table table-sm">
-                      <thead>
-                        <tr>
-                          <th>Miembro</th>
-                          <th>Clave</th>
-                          <th>Estado</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr :for={member <- members} id={"team-key-#{member.id}"}>
-                          <td>{member.user.email}</td>
-                          <td><code class="text-sm font-mono">{masked_key(member)}</code></td>
-                          <td>
-                            <span class={["badge", "badge-sm", key_status_badge(member)]}>
-                              {key_status_label(member)}
-                            </span>
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
             <% end %>
           </section>
         <% end %>

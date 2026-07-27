@@ -11,7 +11,6 @@ defmodule Tokengate.Accounts.Team do
   @foreign_key_type :binary_id
 
   schema "teams" do
-    belongs_to :organization, Tokengate.Accounts.Organization
     field :name, :string
     field :default_daily_budget_usd, :decimal
     field :default_monthly_budget_usd, :decimal
@@ -23,9 +22,9 @@ defmodule Tokengate.Accounts.Team do
     timestamps(type: :utc_datetime)
   end
 
-  @permitted ~w(name organization_id default_daily_budget_usd default_monthly_budget_usd
+  @permitted ~w(name default_daily_budget_usd default_monthly_budget_usd
                 default_concurrency_limit default_rpm_limit)a
-  @required ~w(name organization_id)a
+  @required ~w(name)a
 
   def changeset(team, attrs) do
     team
@@ -35,6 +34,5 @@ defmodule Tokengate.Accounts.Team do
     |> validate_number(:default_rpm_limit, greater_than: 0)
     |> validate_number(:default_daily_budget_usd, greater_than_or_equal_to: 0)
     |> validate_number(:default_monthly_budget_usd, greater_than_or_equal_to: 0)
-    |> assoc_constraint(:organization)
   end
 end

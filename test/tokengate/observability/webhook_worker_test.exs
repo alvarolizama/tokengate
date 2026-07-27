@@ -75,26 +75,10 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
   # Fixtures — real DB records via contexts
   # ---------------------------------------------------------------------------
 
-  defp organization_fixture(attrs \\ %{}) do
-    {:ok, org} =
-      Accounts.create_organization(
-        Map.merge(
-          %{
-            "name" => "Acme Corp",
-            "slug" => "acme-#{System.unique_integer([:positive])}"
-          },
-          attrs
-        )
-      )
-
-    org
-  end
-
-  defp team_fixture(organization) do
+  defp team_fixture do
     {:ok, team} =
       Accounts.create_team(%{
         "name" => "Platform Team",
-        "organization_id" => organization.id,
         "default_daily_budget_usd" => "100.00",
         "default_monthly_budget_usd" => "1000.00",
         "default_concurrency_limit" => 10,
@@ -115,26 +99,24 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
     user
   end
 
-  defp team_member_fixture(org \\ nil) do
-    org = org || organization_fixture()
-    team = team_fixture(org)
+  defp team_member_fixture do
+    team = team_fixture()
     user = user_fixture()
 
-    {:ok, team_member, _token} =
+    {:ok, team_member} =
       Accounts.create_team_member(%{
         "user_id" => user.id,
         "team_id" => team.id
       })
 
-    {team_member, org}
+    team_member
   end
 
-  defp destination_fixture(organization_id, url, attrs \\ %{}) do
+  defp destination_fixture(url, attrs \\ %{}) do
     {:ok, dest} =
       Observability.create_destination(
         Map.merge(
           %{
-            "organization_id" => organization_id,
             "name" => "OTLP Collector",
             "type" => "otlp_webhook",
             "url" => url,
@@ -191,9 +173,9 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
 
   describe "perform/1 — 200 success" do
     test "returns :ok on 2xx" do
-      {tm, org} = team_member_fixture()
+      tm = team_member_fixture()
       log = log_fixture(tm.id)
-      dest = destination_fixture(org.id, base_url())
+      dest = destination_fixture(base_url())
 
       job = %Oban.Job{
         args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
@@ -203,9 +185,9 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
     end
 
     test "sends valid OTLP payload" do
-      {tm, org} = team_member_fixture()
+      tm = team_member_fixture()
       log = log_fixture(tm.id)
-      dest = destination_fixture(org.id, base_url())
+      dest = destination_fixture(base_url())
 
       job = %Oban.Job{
         args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
@@ -224,9 +206,9 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
     end
 
     test "HMAC signature verifies against body" do
-      {tm, org} = team_member_fixture()
+      tm = team_member_fixture()
       log = log_fixture(tm.id)
-      dest = destination_fixture(org.id, base_url())
+      dest = destination_fixture(base_url())
 
       job = %Oban.Job{
         args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
@@ -248,11 +230,11 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
     end
 
     test "forwards custom destination headers" do
-      {tm, org} = team_member_fixture()
+      tm = team_member_fixture()
       log = log_fixture(tm.id)
 
       dest =
-        destination_fixture(org.id, base_url(), %{"headers" => %{"X-Custom-Header" => "my-value"}})
+        destination_fixture(base_url(), %{"headers" => %{"X-Custom-Header" => "my-value"}})
 
       job = %Oban.Job{
         args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
@@ -265,9 +247,9 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
     end
 
     test "content-type is application/json" do
-      {tm, org} = team_member_fixture()
+      tm = team_member_fixture()
       log = log_fixture(tm.id)
-      dest = destination_fixture(org.id, base_url())
+      dest = destination_fixture(base_url())
 
       job = %Oban.Job{
         args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
@@ -282,9 +264,9 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
 
   describe "perform/1 — retry semantics" do
     test "400 → {:discard, _}" do
-      {tm, org} = team_member_fixture()
+      tm = team_member_fixture()
       log = log_fixture(tm.id)
-      dest = destination_fixture(org.id, base_url("/bad"))
+      dest = destination_fixture(base_url("/bad"))
 
       job = %Oban.Job{
         args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
@@ -294,9 +276,9 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
     end
 
     test "500 → {:error, _}" do
-      {tm, org} = team_member_fixture()
+      tm = team_member_fixture()
       log = log_fixture(tm.id)
-      dest = destination_fixture(org.id, base_url("/broken"))
+      dest = destination_fixture(base_url("/broken"))
 
       job = %Oban.Job{
         args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
@@ -306,8 +288,8 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
     end
 
     test "nonexistent log ids → {:discard, _}" do
-      {_tm, org} = team_member_fixture()
-      dest = destination_fixture(org.id, base_url())
+      _tm = team_member_fixture()
+      dest = destination_fixture(base_url())
 
       # Use a valid UUID format that doesn't exist in the DB
       fake_id = Ecto.UUID.generate()
@@ -322,11 +304,11 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
 
   describe "dispatch/1" do
     test "enqueues one job per destination" do
-      {tm, org} = team_member_fixture()
+      tm = team_member_fixture()
       log = log_fixture(tm.id)
 
-      dest1 = destination_fixture(org.id, base_url(), %{"name" => "Collector 1"})
-      dest2 = destination_fixture(org.id, base_url(), %{"name" => "Collector 2"})
+      dest1 = destination_fixture(base_url(), %{"name" => "Collector 1"})
+      dest2 = destination_fixture(base_url(), %{"name" => "Collector 2"})
 
       assert {:ok, 2} = WebhookWorker.dispatch(log)
 
@@ -342,7 +324,7 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
     end
 
     test "returns {:ok, 0} when no destinations configured" do
-      {tm, _org} = team_member_fixture()
+      tm = team_member_fixture()
       log = log_fixture(tm.id)
 
       assert {:ok, 0} = WebhookWorker.dispatch(log)

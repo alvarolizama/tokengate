@@ -70,13 +70,11 @@ defmodule Tokengate.Proxy.CostCalculator do
   end
 
   @doc """
-  What is actually paid for the request: zero for subscription providers,
-  the priced cost for pay-per-token providers.
+  What is actually paid for the request: the priced cost.
   """
-  @spec real_provider_cost(String.t(), Decimal.t() | nil) :: Decimal.t()
-  def real_provider_cost("subscription", _priced_cost), do: Decimal.new(0)
-  def real_provider_cost(_billing_type, nil), do: Decimal.new(0)
-  def real_provider_cost(_billing_type, %Decimal{} = priced_cost), do: priced_cost
+  @spec real_provider_cost(Decimal.t() | nil) :: Decimal.t()
+  def real_provider_cost(nil), do: Decimal.new(0)
+  def real_provider_cost(%Decimal{} = priced_cost), do: priced_cost
 
   @doc """
   Savings versus market price: `estimated_cost_usd - provider_cost_usd`.
@@ -90,24 +88,24 @@ defmodule Tokengate.Proxy.CostCalculator do
   Full four-dimension breakdown for one request.
 
     * `model_alias` — map/struct with market prices
-    * `pricing` — model_pricing map/struct or nil (subscription providers)
-    * `billing_type` — "pay_per_token" | "subscription"
+    * `pricing` — model_pricing map/struct or nil
+    * `billing_type` — "pay_per_token"
     * `usage` — normalized usage map
 
   Returns `%{estimated_cost_usd, cost_usd, provider_cost_usd, savings_usd}`
   with Decimal values. `cost_usd` falls back to the market cost when the
   provider has no pricing row, so budget enforcement always has a value.
   """
-  @spec breakdown(map(), map() | nil, String.t(), usage()) :: %{
+  @spec breakdown(map(), map() | nil, usage()) :: %{
           estimated_cost_usd: Decimal.t(),
           cost_usd: Decimal.t(),
           provider_cost_usd: Decimal.t(),
           savings_usd: Decimal.t()
         }
-  def breakdown(model_alias, pricing, billing_type, usage) do
+  def breakdown(model_alias, pricing, usage) do
     estimated = market_cost(model_alias, usage)
     priced = provider_priced_cost(pricing, usage) || estimated
-    real = real_provider_cost(billing_type, provider_priced_cost(pricing, usage))
+    real = real_provider_cost(provider_priced_cost(pricing, usage))
 
     %{
       estimated_cost_usd: estimated,

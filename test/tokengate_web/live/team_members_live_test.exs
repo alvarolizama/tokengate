@@ -33,20 +33,16 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     u = unique()
     role = Map.get(opts, :team_role, "user")
 
-    {:ok, org} = Accounts.create_organization(%{name: "Org #{u}", slug: "org-#{u}"})
-
     {:ok, model_alias} =
       Providers.create_model_alias(%{
-        organization_id: org.id,
         name: "gpt-#{u}",
         display_name: "GPT #{u}",
         market_input_price_per_1m: Decimal.new("10.00"),
         market_output_price_per_1m: Decimal.new("30.00"),
-        context_window: 128_000,
-        routing_strategy: "priority"
+        context_window: 128_000
       })
 
-    {:ok, team} = Accounts.create_team(%{organization_id: org.id, name: "Team #{u}"})
+    {:ok, team} = Accounts.create_team(%{name: "Team #{u}"})
 
     {:ok, owner} =
       Accounts.register_user(%{
@@ -55,7 +51,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
         password: "password-secret-#{u}1"
       })
 
-    {:ok, member, _token} =
+    {:ok, member} =
       Accounts.create_team_member(%{
         user_id: owner.id,
         team_id: team.id,
@@ -63,7 +59,6 @@ defmodule TokengateWeb.TeamMembersLiveTest do
       })
 
     %{
-      org: org,
       team: team,
       model_alias: model_alias,
       owner: owner,
@@ -156,7 +151,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     assert html =~ "Miembro añadido"
     assert html =~ new_user.email
 
-    # Verify the team_member + API key were created
+    # Verify the team_member was created (no API key by default)
     member =
       Repo.get_by(
         Tokengate.Accounts.TeamMember,
@@ -168,8 +163,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     assert member.team_role == "user"
 
     api_key = Repo.get_by(Tokengate.Accounts.ApiKey, team_member_id: member.id)
-    assert api_key != nil
-    assert api_key.status == "active"
+    assert api_key == nil
   end
 
   test "add member with non-existent email shows error", %{conn: conn} do
@@ -262,7 +256,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
       })
       |> render_submit()
 
-    assert html =~ "Overrides actualizados"
+    assert html =~ "Extras actualizados"
 
     updated = Repo.get!(Tokengate.Accounts.TeamMember, member.id)
     assert Decimal.equal?(updated.extra_daily_budget_usd, Decimal.new("5.50"))
@@ -295,7 +289,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
       })
       |> render_submit()
 
-    assert html =~ "Overrides actualizados"
+    assert html =~ "Extras actualizados"
 
     updated = Repo.get!(Tokengate.Accounts.TeamMember, member.id)
     assert updated.extra_daily_budget_usd == nil
@@ -355,8 +349,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
   test "team with no members shows empty state", %{conn: conn} do
     u = unique()
 
-    {:ok, org} = Accounts.create_organization(%{name: "Org #{u}", slug: "org-#{u}"})
-    {:ok, team} = Accounts.create_team(%{organization_id: org.id, name: "Empty Team #{u}"})
+    {:ok, team} = Accounts.create_team(%{name: "Empty Team #{u}"})
 
     %{user: admin, password: password} = register("admin")
 

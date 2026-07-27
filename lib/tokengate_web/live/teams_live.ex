@@ -34,7 +34,6 @@ defmodule TokengateWeb.TeamsLive do
         |> assign(:page_title, "Equipos · Tokengate")
         |> assign(:form, nil)
         |> assign(:editing_team_id, nil)
-        |> assign(:organizations, Accounts.list_organizations())
         |> load_teams()
 
       {:ok, socket}
@@ -46,7 +45,7 @@ defmodule TokengateWeb.TeamsLive do
   defp load_teams(socket) do
     teams =
       from(t in Team,
-        preload: [:organization, :team_members],
+        preload: [:team_members],
         order_by: [asc: t.name]
       )
       |> Repo.all()
@@ -59,7 +58,7 @@ defmodule TokengateWeb.TeamsLive do
     aliases_by_org =
       from(ma in ModelAlias, order_by: [asc: ma.name])
       |> Repo.all()
-      |> Enum.group_by(& &1.organization_id)
+      |> Enum.group_by(fn _ma -> "all" end)
 
     socket
     |> stream(:teams, teams, reset: true)
@@ -110,6 +109,14 @@ defmodule TokengateWeb.TeamsLive do
          socket
          |> put_flash(:info, "Equipo eliminado.")
          |> load_teams()}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        msg =
+          changeset.errors
+          |> Enum.map(fn {field, {message, _}} -> "#{field} #{message}" end)
+          |> Enum.join(", ")
+
+        {:noreply, put_flash(socket, :error, "No se pudo eliminar: #{msg}")}
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, "No se pudo eliminar el equipo.")}
@@ -176,10 +183,6 @@ defmodule TokengateWeb.TeamsLive do
 
   ## Template helpers -----------------------------------------------------
 
-  def organization_options(organizations) do
-    Enum.map(organizations, &{&1.name, &1.id})
-  end
-
   def granted_alias_ids(granted_aliases, team_id) do
     Map.get(granted_aliases, team_id, [])
   end
@@ -211,35 +214,39 @@ defmodule TokengateWeb.TeamsLive do
               {if @editing_team_id == :new, do: "Nuevo equipo", else: "Editar equipo"}
             </h2>
             <.form for={@form} id="team-form" phx-submit="save_team">
-              <.input field={@form[:name]} type="text" label="Nombre" />
-              <%= if @editing_team_id == :new do %>
-                <.input
-                  field={@form[:organization_id]}
-                  type="select"
-                  label="Organización"
-                  options={organization_options(@organizations)}
-                  prompt="Selecciona una organización"
-                />
-              <% end %>
+              <.input
+                field={@form[:name]}
+                type="text"
+                label="Nombre"
+                hint="Nombre identificativo del equipo."
+              />
               <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <.input
                   field={@form[:default_daily_budget_usd]}
                   type="number"
                   label="Presupuesto diario (USD)"
                   step="any"
+                  hint="Presupuesto diario por miembro. Cada miembro puede tener un extra que se suma a este valor. Vacío = sin límite."
                 />
                 <.input
                   field={@form[:default_monthly_budget_usd]}
                   type="number"
                   label="Presupuesto mensual (USD)"
                   step="any"
+                  hint="Presupuesto mensual por miembro. Vacío = sin límite."
                 />
                 <.input
                   field={@form[:default_concurrency_limit]}
                   type="number"
                   label="Concurrencia"
+                  hint="Concurrencia por miembro. Cada miembro puede tener un extra que se suma a este valor."
                 />
-                <.input field={@form[:default_rpm_limit]} type="number" label="RPM" />
+                <.input
+                  field={@form[:default_rpm_limit]}
+                  type="number"
+                  label="RPM"
+                  hint="Requests por minuto por miembro."
+                />
               </div>
               <div class="flex gap-2 mt-3">
                 <button type="submit" class="btn btn-primary" id="save-team-btn">Guardar</button>
@@ -266,7 +273,7 @@ defmodule TokengateWeb.TeamsLive do
                 <div>
                   <h3 class="font-semibold text-base-content">{team.name}</h3>
                   <p class="text-xs text-base-content/50 mt-0.5">
-                    {team.organization.name} · {length(team.team_members)} miembros
+                    {length(team.team_members)} miembros
                   </p>
                 </div>
                 <div class="flex gap-2">
@@ -320,7 +327,7 @@ defmodule TokengateWeb.TeamsLive do
                 <h4 class="text-sm font-semibold mb-2">Aliases de modelos</h4>
                 <div class="flex flex-wrap gap-3" id={"aliases-#{team.id}"}>
                   <label
-                    :for={alias <- Map.get(@aliases_by_org, team.organization_id, [])}
+                    :for={alias <- Map.get(@aliases_by_org, "all", [])}
                     class="flex items-center gap-2 cursor-pointer text-sm"
                   >
                     <input
@@ -335,7 +342,7 @@ defmodule TokengateWeb.TeamsLive do
                     <span>{alias.name}</span>
                   </label>
                   <p
-                    :if={Map.get(@aliases_by_org, team.organization_id, []) == []}
+                    :if={Map.get(@aliases_by_org, "all", []) == []}
                     class="text-xs text-base-content/40"
                   >
                     No hay aliases disponibles para esta organización.

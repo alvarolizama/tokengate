@@ -2,10 +2,12 @@ defmodule Tokengate.Proxy.ProviderAdapter do
   @moduledoc """
   Behaviour for upstream LLM provider adapters.
 
-  TokenGate speaks the OpenAI-compatible API shape (`/v1/chat/completions`,
-  `/v1/models`) as its lingua franca. Every provider — OpenAI itself or any
+  TokenGate speaks the OpenAI-compatible API shape (`/chat/completions`,
+  `/models`) as its lingua franca. Every provider — OpenAI itself or any
   OpenAI-compatible endpoint — is reached through an adapter implementing
-  this behaviour. Today only `Tokengate.Proxy.OpenAIAdapter` exists; unknown
+  this behaviour. The provider's `base_url` must include the full API base
+  path (e.g. `https://api.openai.com/v1`, `https://openrouter.ai/api/v1`);
+  the adapter only appends the final endpoint segment. Today only `Tokengate.Proxy.OpenAIAdapter` exists; unknown
   adapter names fall back to it, because the OpenAI-compatible surface is
   the contract every upstream is expected to honour.
 

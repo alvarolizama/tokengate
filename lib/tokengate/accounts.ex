@@ -1,55 +1,18 @@
 defmodule Tokengate.Accounts do
   @moduledoc """
-  The Accounts context: organizations, teams, users, team members, and API keys.
+  The Accounts context: teams, users, team members, and API keys.
   """
 
   import Ecto.Query
 
   alias Tokengate.Repo
-  alias Tokengate.Accounts.{ApiKey, Organization, Team, TeamMember, User}
-
-  # ---------------------------------------------------------------------------
-  # Organizations
-  # ---------------------------------------------------------------------------
-
-  def list_organizations, do: Repo.all(Organization)
-
-  def get_organization!(id), do: Repo.get!(Organization, id)
-
-  def get_organization(id), do: Repo.get(Organization, id)
-
-  def get_organization_by_slug(slug) when is_binary(slug),
-    do: Repo.get_by(Organization, slug: slug)
-
-  def create_organization(attrs) do
-    %Organization{}
-    |> Organization.changeset(attrs)
-    |> Repo.insert()
-  end
-
-  def update_organization(%Organization{} = organization, attrs) do
-    organization
-    |> Organization.changeset(attrs)
-    |> Repo.update()
-  end
-
-  def delete_organization(%Organization{} = organization) do
-    Repo.delete(organization)
-  end
-
-  def change_organization(%Organization{} = organization, attrs \\ %{}) do
-    Organization.changeset(organization, attrs)
-  end
+  alias Tokengate.Accounts.{ApiKey, Team, TeamMember, User}
 
   # ---------------------------------------------------------------------------
   # Teams
   # ---------------------------------------------------------------------------
 
   def list_teams, do: Repo.all(Team)
-
-  def list_teams_for_organization(organization_id) do
-    Repo.all(from t in Team, where: t.organization_id == ^organization_id)
-  end
 
   def get_team!(id), do: Repo.get!(Team, id)
 
@@ -68,7 +31,43 @@ defmodule Tokengate.Accounts do
   end
 
   def delete_team(%Team{} = team) do
-    Repo.delete(team)
+    alias Tokengate.Providers.{TeamModelAlias, TeamMemberExtraAlias}
+
+    team = Repo.preload(team, team_members: :api_key)
+
+    Repo.transaction(fn ->
+      # Delete team_model_aliases (FK team_id)
+      from(t in TeamModelAlias, where: t.team_id == ^team.id)
+      |> Repo.delete_all()
+
+      # For each team_member: delete api_key, extra_aliases, then the member
+      for member <- team.team_members do
+        if member.api_key, do: Repo.delete!(member.api_key)
+
+        from(t in TeamMemberExtraAlias, where: t.team_member_id == ^member.id)
+        |> Repo.delete_all()
+
+        member
+        |> Ecto.Changeset.change()
+        |> Ecto.Changeset.foreign_key_constraint(:team_member_id,
+          name: "request_logs_team_member_id_fkey",
+          message: "el miembro tiene logs de uso y no se puede eliminar"
+        )
+        |> Repo.delete()
+        |> case do
+          {:ok, _} -> :ok
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end
+
+      # Finally delete the team itself
+      team
+      |> Repo.delete()
+      |> case do
+        {:ok, team} -> team
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
   end
 
   def change_team(%Team{} = team, attrs \\ %{}) do
@@ -171,35 +170,13 @@ defmodule Tokengate.Accounts do
   end
 
   @doc """
-  Creates a team member and atomically provisions an API key in the same
-  transaction. Returns `{:ok, team_member, api_key_token}` where the token
-  is the plaintext API key (returned only this once).
+  Creates a team member. No API key is generated automatically;
+  use `replace_api_key/1` or `generate_api_key/1` to provision one.
   """
   def create_team_member(attrs) do
-    {token, key_hash, key_prefix} = generate_api_key_material()
-
-    Ecto.Multi.new()
-    |> Ecto.Multi.insert(:team_member, fn _ ->
-      %TeamMember{}
-      |> TeamMember.changeset(attrs)
-    end)
-    |> Ecto.Multi.insert(:api_key, fn %{team_member: team_member} ->
-      %ApiKey{}
-      |> ApiKey.changeset(%{
-        team_member_id: team_member.id,
-        key_hash: key_hash,
-        key_prefix: key_prefix,
-        status: "active"
-      })
-    end)
-    |> Repo.transaction()
-    |> case do
-      {:ok, %{team_member: tm, api_key: _api_key}} ->
-        {:ok, tm, token}
-
-      {:error, _failed_op, changeset, _changes} ->
-        {:error, changeset}
-    end
+    %TeamMember{}
+    |> TeamMember.changeset(attrs)
+    |> Repo.insert()
   end
 
   def update_team_member(%TeamMember{} = team_member, attrs) do
@@ -284,36 +261,31 @@ defmodule Tokengate.Accounts do
 
     team_member = Repo.preload(team_member, [:api_key])
 
-    Ecto.Multi.new()
-    |> Ecto.Multi.update(:api_key, fn _ ->
-      # Mark the old key as revoked first (status transition), then in a
-      # separate step we issue the replacement. Because there is a unique
-      # constraint on team_member_id, we update the existing row in place
-      # rather than inserting a new one.
-      if team_member.api_key do
-        team_member.api_key
-        |> ApiKey.changeset(%{
-          "key_hash" => new_hash,
-          "key_prefix" => new_prefix,
-          "status" => "active"
-        })
-      else
-        %ApiKey{}
-        |> ApiKey.changeset(%{
-          "team_member_id" => team_member_id,
-          "key_hash" => new_hash,
-          "key_prefix" => new_prefix,
-          "status" => "active"
-        })
+    if team_member.api_key do
+      team_member.api_key
+      |> ApiKey.changeset(%{
+        "key_hash" => new_hash,
+        "key_prefix" => new_prefix,
+        "status" => "active"
+      })
+      |> Repo.update()
+      |> case do
+        {:ok, api_key} -> {:ok, api_key, new_token}
+        {:error, changeset} -> {:error, changeset}
       end
-    end)
-    |> Repo.transaction()
-    |> case do
-      {:ok, %{api_key: api_key}} ->
-        {:ok, api_key, new_token}
-
-      {:error, _failed_op, changeset, _changes} ->
-        {:error, changeset}
+    else
+      %ApiKey{}
+      |> ApiKey.changeset(%{
+        "team_member_id" => team_member_id,
+        "key_hash" => new_hash,
+        "key_prefix" => new_prefix,
+        "status" => "active"
+      })
+      |> Repo.insert()
+      |> case do
+        {:ok, api_key} -> {:ok, api_key, new_token}
+        {:error, changeset} -> {:error, changeset}
+      end
     end
   end
 

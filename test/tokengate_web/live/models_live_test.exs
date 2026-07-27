@@ -1,4 +1,4 @@
-defmodule TokengateWeb.AliasesLiveTest do
+defmodule TokengateWeb.ModelsLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
@@ -27,12 +27,6 @@ defmodule TokengateWeb.AliasesLiveTest do
     |> recycle()
   end
 
-  defp create_org do
-    u = unique()
-    {:ok, org} = Accounts.create_organization(%{name: "Org #{u}", slug: "org-#{u}"})
-    org
-  end
-
   defp create_provider(attrs \\ %{}) do
     u = unique()
 
@@ -41,8 +35,7 @@ defmodule TokengateWeb.AliasesLiveTest do
         Map.merge(
           %{
             name: "Provider #{u}",
-            base_url: "http://localhost:1",
-            billing_type: "pay_per_token"
+            base_url: "http://localhost:1"
           },
           attrs
         )
@@ -51,20 +44,18 @@ defmodule TokengateWeb.AliasesLiveTest do
     provider
   end
 
-  defp create_alias(org, attrs \\ %{}) do
+  defp create_alias(attrs \\ %{}) do
     u = unique()
 
     {:ok, alias_record} =
       Providers.create_model_alias(
         Map.merge(
           %{
-            organization_id: org.id,
             name: "alias-#{u}",
             display_name: "Alias #{u}",
             market_input_price_per_1m: "1.50",
             market_output_price_per_1m: "3.00",
-            context_window: 128_000,
-            routing_strategy: "priority"
+            context_window: 128_000
           },
           attrs
         )
@@ -96,34 +87,34 @@ defmodule TokengateWeb.AliasesLiveTest do
   # -- Permissions ----------------------------------------------------------
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
-    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/dashboard/aliases")
+    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/dashboard/models")
   end
 
   test "admin sees the create button", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
 
-    {:ok, view, html} = live(conn, ~p"/dashboard/aliases")
+    {:ok, view, html} = live(conn, ~p"/dashboard/models")
 
-    assert has_element?(view, "#new-alias-btn")
-    assert html =~ "Aliases de Modelos"
+    assert has_element?(view, "#new-model-btn")
+    assert html =~ "Modelos"
   end
 
   test "regular user sees read-only view without create button", %{conn: conn} do
     %{user: user, password: password} = register("user")
     conn = login(conn, user, password)
 
-    {:ok, view, html} = live(conn, ~p"/dashboard/aliases")
+    {:ok, view, html} = live(conn, ~p"/dashboard/models")
 
-    refute has_element?(view, "#new-alias-btn")
-    assert html =~ "Aliases de Modelos"
+    refute has_element?(view, "#new-model-btn")
+    assert html =~ "Modelos"
   end
 
   test "regular user cannot trigger new_alias event", %{conn: conn} do
     %{user: user, password: password} = register("user")
     conn = login(conn, user, password)
 
-    {:ok, view, _html} = live(conn, ~p"/dashboard/aliases")
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
 
     # Trigger the event directly — it should be blocked by the permission check
     view |> render_click("new_alias")
@@ -137,12 +128,11 @@ defmodule TokengateWeb.AliasesLiveTest do
 
   test "admin can create a new alias", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    org = create_org()
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/dashboard/aliases")
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
 
-    view |> element("#new-alias-btn") |> render_click()
+    view |> element("#new-model-btn") |> render_click()
 
     assert has_element?(view, "#alias-form")
 
@@ -150,28 +140,25 @@ defmodule TokengateWeb.AliasesLiveTest do
       view
       |> form("#alias-form", %{
         model_alias: %{
-          organization_id: org.id,
           name: "gpt-4o-test",
           display_name: "GPT-4o Test",
           market_input_price_per_1m: "2.50",
           market_output_price_per_1m: "5.00",
-          context_window: 128_000,
-          routing_strategy: "priority"
+          context_window: 128_000
         }
       })
       |> render_submit()
 
-    assert html =~ "Alias creado"
+    assert html =~ "Modelo creado"
     assert html =~ "gpt-4o-test"
   end
 
   test "admin can edit an existing alias", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    org = create_org()
-    alias_record = create_alias(org)
+    alias_record = create_alias()
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/dashboard/aliases")
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
 
     view |> element("#edit-alias-#{alias_record.id}") |> render_click()
 
@@ -181,47 +168,42 @@ defmodule TokengateWeb.AliasesLiveTest do
       view
       |> form("#alias-form", %{
         model_alias: %{
-          organization_id: org.id,
           name: alias_record.name,
           display_name: "Updated Display Name",
           market_input_price_per_1m: "9.99",
           market_output_price_per_1m: "19.99",
-          context_window: 200_000,
-          routing_strategy: "round_robin"
+          context_window: 200_000
         }
       })
       |> render_submit()
 
-    assert html =~ "Alias actualizado"
+    assert html =~ "Modelo actualizado"
     assert html =~ "Updated Display Name"
-    assert html =~ "Round Robin"
   end
 
   test "admin can delete an alias without providers", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    org = create_org()
-    alias_record = create_alias(org)
+    alias_record = create_alias()
     conn = login(conn, admin, password)
 
-    {:ok, view, html} = live(conn, ~p"/dashboard/aliases")
+    {:ok, view, html} = live(conn, ~p"/dashboard/models")
     assert html =~ alias_record.name
 
     view |> element("#delete-alias-#{alias_record.id}") |> render_click()
 
     html = render(view)
-    assert html =~ "Alias eliminado"
+    assert html =~ "Modelo eliminado"
     refute html =~ alias_record.name
   end
 
   test "admin cannot delete an alias with providers assigned", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    org = create_org()
     provider = create_provider()
-    alias_record = create_alias(org)
+    alias_record = create_alias()
     create_alias_provider(alias_record, provider)
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/dashboard/aliases")
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
 
     view |> element("#delete-alias-#{alias_record.id}") |> render_click()
 
@@ -233,12 +215,11 @@ defmodule TokengateWeb.AliasesLiveTest do
 
   test "admin can assign a provider to an alias", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    org = create_org()
     provider = create_provider()
-    alias_record = create_alias(org)
+    alias_record = create_alias()
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/dashboard/aliases")
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
 
     # The new_alias_provider button is inline in each alias card
     assert has_element?(view, "#new-ap-#{alias_record.id}")
@@ -265,13 +246,12 @@ defmodule TokengateWeb.AliasesLiveTest do
 
   test "admin can toggle alias_provider enabled state", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    org = create_org()
     provider = create_provider()
-    alias_record = create_alias(org)
+    alias_record = create_alias()
     ap = create_alias_provider(alias_record, provider)
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/dashboard/aliases")
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
 
     view |> element("#toggle-ap-#{ap.id}") |> render_click()
 
@@ -281,13 +261,12 @@ defmodule TokengateWeb.AliasesLiveTest do
 
   test "admin can delete an alias_provider", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    org = create_org()
     provider = create_provider()
-    alias_record = create_alias(org)
+    alias_record = create_alias()
     ap = create_alias_provider(alias_record, provider)
     conn = login(conn, admin, password)
 
-    {:ok, view, html} = live(conn, ~p"/dashboard/aliases")
+    {:ok, view, html} = live(conn, ~p"/dashboard/models")
     assert html =~ ap.provider_model
 
     view |> element("#delete-ap-#{ap.id}") |> render_click()
@@ -302,25 +281,24 @@ defmodule TokengateWeb.AliasesLiveTest do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
 
-    {:ok, _view, html} = live(conn, ~p"/dashboard/aliases")
+    {:ok, _view, html} = live(conn, ~p"/dashboard/models")
 
-    assert html =~ "No hay aliases de modelos configurados"
+    assert html =~ "No hay modelos configurados"
   end
 
   # -- Read-only view shows alias data -------------------------------------
 
   test "regular user can see aliases but not action buttons", %{conn: conn} do
     %{user: admin, password: admin_password} = register("admin")
-    org = create_org()
-    alias_record = create_alias(org)
+    alias_record = create_alias()
     conn = login(conn, admin, admin_password)
-    {:ok, _view, _html} = live(conn, ~p"/dashboard/aliases")
+    {:ok, _view, _html} = live(conn, ~p"/dashboard/models")
 
     # Now login as regular user
     %{user: user, password: password} = register("user")
     conn = login(Phoenix.ConnTest.build_conn(), user, password)
 
-    {:ok, view, html} = live(conn, ~p"/dashboard/aliases")
+    {:ok, view, html} = live(conn, ~p"/dashboard/models")
 
     assert html =~ alias_record.name
     refute has_element?(view, "#edit-alias-#{alias_record.id}")

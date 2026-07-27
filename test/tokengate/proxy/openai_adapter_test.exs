@@ -47,10 +47,10 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
         "bad" in conn.path_info ->
           json(conn, 400, %{"error" => "bad request"})
 
-        conn.request_path == "/v1/models" ->
+        conn.request_path == "/models" ->
           json(conn, 200, %{"data" => []})
 
-        conn.request_path == "/v1/chat/completions" ->
+        conn.request_path == "/chat/completions" ->
           chat(conn, body)
 
         true ->
@@ -112,7 +112,7 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
   end
 
   defp provider_to(marker) do
-    # The adapter appends /v1/chat/completions (or /v1/models) to base_url, so
+    # The adapter appends /chat/completions (or /models) to base_url, so
     # special routes are triggered by marker segments in the path: the plug
     # matches on conn.path_info containing the marker.
     %{base_url: "http://localhost:#{@port}#{marker}"}
@@ -166,7 +166,7 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
     end
 
     test "receive timeout classifies as :timeout", %{credential: credential} do
-      # /v1/slow sleeps 200ms; the adapter URL helper appends the path, so we
+      # /slow sleeps 200ms; the adapter URL helper appends the path, so we
       # exercise timeout via a provider pointing at the slow route directly.
       assert {:error, :timeout, nil} =
                OpenAIAdapter.chat_completion(

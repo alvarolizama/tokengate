@@ -1,6 +1,8 @@
 defmodule TokengateWeb.DashboardLive do
   @moduledoc """
-  Real-time metrics dashboard with role-scoped data.
+  Real-time metrics dashboard with role-scoped data, plus a personal
+  overview: API usage info, the user's own API keys (replace/revoke),
+  their teams with live budget spend.
 
   Scope is determined by the signed-in user's memberships:
 
@@ -23,6 +25,7 @@ defmodule TokengateWeb.DashboardLive do
   use TokengateWeb, :live_view
 
   alias Tokengate.Accounts
+  alias Tokengate.Budgets.Manager, as: Budgets
   alias Tokengate.Logs
   alias Tokengate.Metrics.Collector
   alias Tokengate.Metrics.Rollup
@@ -42,6 +45,9 @@ defmodule TokengateWeb.DashboardLive do
       |> assign(:metrics, empty_metrics())
       |> assign(:hourly_series, [])
       |> assign(:scope_label, scope_label_for(user))
+      |> assign(:new_token, nil)
+      |> assign(:new_token_team, nil)
+      |> load_personal_data(user)
 
     if connected?(socket) do
       Phoenix.PubSub.subscribe(@pubsub, @metrics_topic)
@@ -60,7 +66,93 @@ defmodule TokengateWeb.DashboardLive do
 
   def handle_info(_msg, socket), do: {:noreply, socket}
 
+  ## Events — API key management --------------------------------------------
+
+  @impl true
+  def handle_event("replace_key", %{"id" => member_id}, socket) do
+    user = socket.assigns[:current_user]
+
+    case Enum.find(socket.assigns[:memberships], &(&1.id == member_id)) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "No autorizado.")}
+
+      member ->
+        case Accounts.replace_api_key(member) do
+          {:ok, _api_key, new_token} ->
+            {:noreply,
+             socket
+             |> assign(:new_token, new_token)
+             |> assign(:new_token_team, member.team.name)
+             |> load_personal_data(user)
+             |> put_flash(:info, "Clave reemplazada correctamente.")}
+
+          {:error, _changeset} ->
+            {:noreply, put_flash(socket, :error, "No se pudo reemplazar la clave.")}
+        end
+    end
+  end
+
+  def handle_event("revoke_key", %{"id" => member_id}, socket) do
+    user = socket.assigns[:current_user]
+
+    case Enum.find(socket.assigns[:memberships], &(&1.id == member_id)) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "No autorizado.")}
+
+      member ->
+        case member.api_key do
+          nil ->
+            {:noreply, put_flash(socket, :error, "Esta membresía no tiene clave.")}
+
+          api_key ->
+            case Accounts.revoke_api_key(api_key) do
+              {:ok, _} ->
+                {:noreply,
+                 socket
+                 |> load_personal_data(user)
+                 |> put_flash(:info, "Clave revocada.")}
+
+              {:error, _} ->
+                {:noreply, put_flash(socket, :error, "No se pudo revocar la clave.")}
+            end
+        end
+    end
+  end
+
+  def handle_event("dismiss_token", _params, socket) do
+    {:noreply, assign(socket, :new_token, nil)}
+  end
+
   ## Data loading ---------------------------------------------------------
+
+  defp load_personal_data(socket, user) do
+    memberships = Accounts.list_team_members_for_user(user.id)
+
+    socket
+    |> assign(:memberships, memberships)
+    |> assign(:team_budgets, build_team_budgets(memberships))
+  end
+
+  # Build a list of %{team: team, daily_limit: Decimal, monthly_limit: Decimal,
+  # daily_spend: Decimal, monthly_spend: Decimal, members_count: integer}
+  # for each distinct team the user belongs to.
+  defp build_team_budgets(memberships) do
+    memberships
+    |> Enum.uniq_by(& &1.team_id)
+    |> Enum.map(fn membership ->
+      team = membership.team
+      limits = Accounts.effective_limits(membership)
+      spend = Budgets.spend(membership.id)
+
+      %{
+        team: team,
+        daily_limit: limits.daily_budget_usd,
+        monthly_limit: limits.monthly_budget_usd,
+        daily_spend: spend.daily_usd,
+        monthly_spend: spend.monthly_usd
+      }
+    end)
+  end
 
   # Admins: org-wide in-memory snapshot + org-wide hourly series.
   defp load_metrics(socket, %{global_role: "admin"} = _user) do
@@ -265,4 +357,44 @@ defmodule TokengateWeb.DashboardLive do
   def accent_text("error"), do: "text-error"
   def accent_text("accent"), do: "text-accent"
   def accent_text(_), do: "text-base-content"
+
+  ## Key helpers (from ApiKeysLive) ---------------------------------------
+
+  def masked_key(%{api_key: %{key_prefix: prefix}}) when is_binary(prefix) do
+    "#{prefix}••••"
+  end
+
+  def masked_key(_), do: "Sin clave"
+
+  def key_status_badge(%{api_key: %{status: "active"}}), do: "badge-success"
+  def key_status_badge(%{api_key: %{status: "revoked"}}), do: "badge-error"
+  def key_status_badge(_), do: "badge-ghost"
+
+  def key_status_label(%{api_key: %{status: "active"}}), do: "Activa"
+  def key_status_label(%{api_key: %{status: "revoked"}}), do: "Revocada"
+  def key_status_label(_), do: "Sin clave"
+
+  def format_date(datetime) do
+    Calendar.strftime(datetime, "%d/%m/%Y")
+  end
+
+  ## Budget helpers -------------------------------------------------------
+
+  def budget_pct(_spend, nil), do: nil
+
+  def budget_pct(spend, limit) do
+    spend = Decimal.to_float(spend)
+    limit = Decimal.to_float(limit)
+    if limit > 0, do: Float.round(spend / limit * 100, 1), else: 0.0
+  end
+
+  def budget_bar_class(pct) when is_number(pct) do
+    cond do
+      pct >= 90 -> "bg-error"
+      pct >= 70 -> "bg-warning"
+      true -> "bg-success"
+    end
+  end
+
+  def budget_bar_class(_), do: "bg-base-300"
 end

@@ -15,28 +15,12 @@ defmodule Tokengate.Metrics.RollupTest do
   # request_logs via Tokengate.Logs.log_request with explicit inserted_at.
   # ---------------------------------------------------------------------
 
-  defp organization_fixture(attrs \\ %{}) do
-    {:ok, organization} =
-      Accounts.create_organization(
-        Map.merge(
-          %{
-            "name" => "Acme Corp",
-            "slug" => "acme-#{System.unique_integer([:positive])}"
-          },
-          attrs
-        )
-      )
-
-    organization
-  end
-
-  defp team_fixture(organization, attrs \\ %{}) do
+  defp team_fixture(attrs \\ %{}) do
     {:ok, team} =
       Accounts.create_team(
         Map.merge(
           %{
             "name" => "Platform Team",
-            "organization_id" => organization.id,
             "default_daily_budget_usd" => "100.00",
             "default_monthly_budget_usd" => "1000.00",
             "default_concurrency_limit" => 10,
@@ -65,12 +49,11 @@ defmodule Tokengate.Metrics.RollupTest do
     user
   end
 
-  defp team_member_fixture(organization \\ nil, attrs \\ %{}) do
-    organization = organization || organization_fixture()
-    team = team_fixture(organization)
+  defp team_member_fixture(attrs \\ %{}) do
+    team = team_fixture()
     user = user_fixture()
 
-    {:ok, team_member, _token} =
+    {:ok, team_member} =
       Accounts.create_team_member(
         Map.merge(
           %{
@@ -170,9 +153,8 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "team filter excludes logs from other teams" do
-      org = organization_fixture()
-      {tm1, team1} = team_member_fixture(org)
-      {tm2, team2} = team_member_fixture(org, %{})
+      {tm1, team1} = team_member_fixture()
+      {tm2, team2} = team_member_fixture(%{})
 
       # Ensure distinct teams
       refute team1.id == team2.id
@@ -235,16 +217,15 @@ defmodule Tokengate.Metrics.RollupTest do
 
   describe "top_consumers/2" do
     test "returns team members ranked by total cost descending" do
-      org = organization_fixture()
-      team = team_fixture(org)
+      team = team_fixture()
 
       user1 = user_fixture()
       user2 = user_fixture()
       user3 = user_fixture()
 
-      {:ok, tm1, _} = Accounts.create_team_member(%{"user_id" => user1.id, "team_id" => team.id})
-      {:ok, tm2, _} = Accounts.create_team_member(%{"user_id" => user2.id, "team_id" => team.id})
-      {:ok, tm3, _} = Accounts.create_team_member(%{"user_id" => user3.id, "team_id" => team.id})
+      {:ok, tm1} = Accounts.create_team_member(%{"user_id" => user1.id, "team_id" => team.id})
+      {:ok, tm2} = Accounts.create_team_member(%{"user_id" => user2.id, "team_id" => team.id})
+      {:ok, tm3} = Accounts.create_team_member(%{"user_id" => user3.id, "team_id" => team.id})
 
       # tm1: $3.00 total across 2 logs
       log_request(tm1.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("1.000000")})
@@ -274,16 +255,14 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "respects limit" do
-      org = organization_fixture()
-      team = team_fixture(org)
+      team = team_fixture()
 
       # Create 3 members
       _tms =
         for i <- 1..3 do
           user = user_fixture()
 
-          {:ok, tm, _} =
-            Accounts.create_team_member(%{"user_id" => user.id, "team_id" => team.id})
+          {:ok, tm} = Accounts.create_team_member(%{"user_id" => user.id, "team_id" => team.id})
 
           log_request(tm.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("#{i}.000000")})
           tm
@@ -294,9 +273,8 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "excludes members from other teams" do
-      org = organization_fixture()
-      {tm1, team1} = team_member_fixture(org)
-      {tm2, _team2} = team_member_fixture(org)
+      {tm1, team1} = team_member_fixture()
+      {tm2, _team2} = team_member_fixture()
 
       log_request(tm1.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("1.000000")})
       log_request(tm2.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("5.000000")})
@@ -343,9 +321,8 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "team filter restricts to that team's logs" do
-      org = organization_fixture()
-      {tm1, team1} = team_member_fixture(org)
-      {tm2, _team2} = team_member_fixture(org)
+      {tm1, team1} = team_member_fixture()
+      {tm2, _team2} = team_member_fixture()
 
       log_request(tm1.id, ~U[2026-07-26 10:00:00Z], %{
         agent_type: "api",

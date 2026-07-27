@@ -96,12 +96,8 @@ defmodule TokengateWeb.ProxyControllerTest do
   defp proxy_fixture(opts \\ %{}) do
     u = unique()
 
-    {:ok, org} =
-      Accounts.create_organization(%{name: "Org #{u}", slug: "org-#{u}"})
-
     {:ok, team} =
       Accounts.create_team(%{
-        organization_id: org.id,
         name: "Team #{u}",
         default_daily_budget_usd: Map.get(opts, :daily_budget, "100.00"),
         default_rpm_limit: Map.get(opts, :rpm_limit, 600),
@@ -115,8 +111,10 @@ defmodule TokengateWeb.ProxyControllerTest do
         password: "password-#{u}-secret1"
       })
 
-    {:ok, member, token} =
+    {:ok, member} =
       Accounts.create_team_member(%{user_id: user.id, team_id: team.id, team_role: "user"})
+
+    {:ok, _api_key, token} = Accounts.replace_api_key(member)
 
     provider_url =
       case Map.get(opts, :down) do
@@ -127,8 +125,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     {:ok, provider} =
       Providers.create_provider(%{
         name: "Provider #{u}",
-        base_url: provider_url,
-        billing_type: "pay_per_token"
+        base_url: provider_url
       })
 
     {:ok, _credential} =
@@ -139,13 +136,11 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     {:ok, model_alias} =
       Providers.create_model_alias(%{
-        organization_id: org.id,
         name: "gpt-4o-#{u}",
         display_name: "GPT 4o",
         market_input_price_per_1m: "5.00",
         market_output_price_per_1m: "15.00",
-        context_window: 128_000,
-        routing_strategy: "priority"
+        context_window: 128_000
       })
 
     {:ok, _grant} = Providers.grant_alias_to_team(team.id, model_alias.id)
@@ -166,7 +161,7 @@ defmodule TokengateWeb.ProxyControllerTest do
         effective_from: DateTime.truncate(DateTime.utc_now(), :second)
       })
 
-    %{org: org, team: team, user: user, member: member, token: token, alias: model_alias}
+    %{team: team, user: user, member: member, token: token, alias: model_alias}
   end
 
   defp authed_conn(conn, token) do
@@ -198,7 +193,6 @@ defmodule TokengateWeb.ProxyControllerTest do
   test "GET /v1/models returns only accessible aliases with context_window", %{conn: conn} do
     %{token: token, alias: model_alias} = proxy_fixture()
 
-    # Another org's alias — must NOT appear
     other = proxy_fixture()
 
     conn =
@@ -320,14 +314,13 @@ defmodule TokengateWeb.ProxyControllerTest do
 
   test "fallback: first provider 500, second provider answers", %{conn: conn} do
     u = unique()
-    %{token: token, alias: model_alias, org: org} = proxy_fixture(%{down: true})
+    %{token: token, alias: model_alias} = proxy_fixture(%{down: true})
 
     # Second, healthy provider at lower priority (higher number)
     {:ok, provider2} =
       Providers.create_provider(%{
         name: "Healthy #{u}",
-        base_url: "http://localhost:#{@port}",
-        billing_type: "pay_per_token"
+        base_url: "http://localhost:#{@port}"
       })
 
     {:ok, _cred2} =
@@ -348,8 +341,6 @@ defmodule TokengateWeb.ProxyControllerTest do
         output_price_per_1m: "10.00",
         effective_from: DateTime.truncate(DateTime.utc_now(), :second)
       })
-
-    _ = org
 
     conn =
       conn
@@ -413,7 +404,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     end)
 
     u = unique()
-    %{token: token, alias: model_alias, org: org} = proxy_fixture()
+    %{token: token, alias: model_alias} = proxy_fixture()
 
     # Repoint the provider at the slow stream endpoint
     [alias_provider] = Providers.list_alias_providers(model_alias.id)
@@ -422,8 +413,6 @@ defmodule TokengateWeb.ProxyControllerTest do
       Providers.update_provider(alias_provider.provider, %{
         base_url: "http://localhost:#{@port}/slowstream"
       })
-
-    _ = {u, org}
 
     conn =
       conn

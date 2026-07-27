@@ -10,7 +10,7 @@ defmodule TokengateWeb.TeamMembersLive do
   Supports:
     - Add member by email (creates team_member + auto-generates API key).
     - Remove member.
-    - Per-member overrides: extra_daily_budget_usd, extra_concurrency,
+    - Per-member extras: extra_daily_budget_usd, extra_concurrency,
       extra_model_aliases (individual grants beyond team aliases).
     - Change team_role (manager/user).
   """
@@ -70,10 +70,9 @@ defmodule TokengateWeb.TeamMembersLive do
     team = socket.assigns.team
     members = Accounts.list_team_members_for_team(team.id)
 
-    # Get team's organization to filter available model aliases
+    # Get all available model aliases
     org_alias_ids =
       from(ma in ModelAlias,
-        where: ma.organization_id == ^team.organization_id,
         order_by: [asc: ma.name]
       )
       |> Repo.all()
@@ -117,10 +116,10 @@ defmodule TokengateWeb.TeamMembersLive do
                team_id: team.id,
                team_role: team_role
              }) do
-          {:ok, _member, _token} ->
+          {:ok, _member} ->
             {:noreply,
              socket
-             |> put_flash(:info, "Miembro añadido correctamente.")
+             |> put_flash(:info, "Miembro añadido. Genera su API key desde la sección API Keys.")
              |> assign(:add_member_error, nil)
              |> assign(:member_form, to_form(%{"email" => "", "team_role" => "user"}))
              |> load_data()}
@@ -202,12 +201,12 @@ defmodule TokengateWeb.TeamMembersLive do
         {:ok, _} ->
           {:noreply,
            socket
-           |> put_flash(:info, "Overrides actualizados.")
+           |> put_flash(:info, "Extras actualizados.")
            |> assign(:editing_member_id, nil)
            |> load_data()}
 
         {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudieron actualizar los overrides.")}
+          {:noreply, put_flash(socket, :error, "No se pudieron actualizar los extras.")}
       end
     end
   end
@@ -294,7 +293,7 @@ defmodule TokengateWeb.TeamMembersLive do
       <div class="space-y-6">
         <.header>
           Miembros de {@team.name}
-          <:subtitle>Añade miembros, gestiona roles y overrides</:subtitle>
+          <:subtitle>Añade miembros, gestiona roles y extras</:subtitle>
           <:actions>
             <.link navigate={~p"/dashboard/teams"} class="btn btn-ghost" id="back-to-teams">
               <.icon name="hero-arrow-left" class="w-4 h-4" /> Volver
@@ -400,7 +399,7 @@ defmodule TokengateWeb.TeamMembersLive do
                   class="btn btn-sm btn-ghost"
                   id={"edit-overrides-#{member.id}"}
                 >
-                  Overrides
+                  Extras
                 </button>
 
                 <button
@@ -416,7 +415,7 @@ defmodule TokengateWeb.TeamMembersLive do
 
               <%= if @editing_member_id == member.id do %>
                 <div class="mt-3 pt-3 border-t border-base-300" id={"overrides-form-#{member.id}"}>
-                  <h4 class="text-sm font-semibold mb-2">Overrides del miembro</h4>
+                  <h4 class="text-sm font-semibold mb-2">Extras del miembro</h4>
                   <.form
                     for={
                       to_form(%{

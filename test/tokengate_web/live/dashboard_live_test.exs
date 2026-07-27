@@ -33,8 +33,7 @@ defmodule TokengateWeb.DashboardLiveTest do
   defp team_with_log(opts) do
     u = unique()
 
-    {:ok, org} = Accounts.create_organization(%{name: "Org #{u}", slug: "org-#{u}"})
-    {:ok, team} = Accounts.create_team(%{organization_id: org.id, name: "Team #{u}"})
+    {:ok, team} = Accounts.create_team(%{name: "Team #{u}"})
 
     {:ok, owner} =
       Accounts.register_user(%{
@@ -43,15 +42,14 @@ defmodule TokengateWeb.DashboardLiveTest do
         password: "password-secret-#{u}1"
       })
 
-    {:ok, member, _token} =
+    {:ok, member} =
       Accounts.create_team_member(%{user_id: owner.id, team_id: team.id, team_role: "user"})
 
     if cost = Map.get(opts, :cost) do
       {:ok, provider} =
         Providers.create_provider(%{
           name: "P #{u}",
-          base_url: "http://localhost:1",
-          billing_type: "pay_per_token"
+          base_url: "http://localhost:1"
         })
 
       {:ok, _log} =
@@ -59,7 +57,6 @@ defmodule TokengateWeb.DashboardLiveTest do
           team_member_id: member.id,
           provider_id: provider.id,
           model_alias_id: nil,
-          subscription_id: nil,
           model_requested: "gpt-4o",
           model_responded: "gpt-4o",
           agent_type: "claude-code",
@@ -75,7 +72,28 @@ defmodule TokengateWeb.DashboardLiveTest do
         })
     end
 
-    %{org: org, team: team, owner: owner, member: member, owner_password: "password-secret-#{u}1"}
+    %{team: team, owner: owner, member: member, owner_password: "password-secret-#{u}1"}
+  end
+
+  defp team_with_member(opts \\ %{}) do
+    _u = unique()
+    role = Map.get(opts, :team_role, "user")
+
+    {:ok, team} = Accounts.create_team(%{name: "Team #{_u}"})
+
+    {:ok, owner} =
+      Accounts.register_user(%{
+        email: "owner-#{_u}@example.com",
+        name: "Owner #{_u}",
+        password: "password-secret-#{_u}1"
+      })
+
+    {:ok, member} =
+      Accounts.create_team_member(%{user_id: owner.id, team_id: team.id, team_role: role})
+
+    {:ok, _api_key, _token} = Accounts.replace_api_key(member)
+
+    %{team: team, owner: owner, member: member, owner_password: "password-secret-#{_u}1"}
   end
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
@@ -150,7 +168,7 @@ defmodule TokengateWeb.DashboardLiveTest do
         password: password
       })
 
-    {:ok, _membership, _token} =
+    {:ok, _membership} =
       Accounts.create_team_member(%{user_id: manager.id, team_id: team.id, team_role: "manager"})
 
     conn = login(conn, manager, password)
@@ -160,5 +178,84 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert html =~ ~s(id="cost-card")
     refute has_element?(view, "#empty-state")
     _ = Repo
+  end
+
+  ## Personal keys on dashboard --------------------------------------------
+
+  test "user sees their own API key on dashboard", %{conn: conn} do
+    %{team: team, owner: owner, member: member, owner_password: password} =
+      team_with_member(%{team_role: "user"})
+
+    conn = login(conn, owner, password)
+    {:ok, view, html} = live(conn, ~p"/dashboard")
+
+    assert html =~ "Tus claves"
+    assert html =~ team.name
+    assert has_element?(view, "#membership-#{member.id}")
+    assert html =~ "••••"
+  end
+
+  test "user can replace their key from dashboard", %{conn: conn} do
+    %{owner: owner, member: member, owner_password: password} =
+      team_with_member(%{team_role: "user"})
+
+    conn = login(conn, owner, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    html = view |> element("#replace-#{member.id}") |> render_click()
+
+    assert html =~ "Nueva clave generada"
+    assert has_element?(view, "#new-token-alert")
+    assert has_element?(view, "#new-token-value")
+  end
+
+  test "user can revoke their key from dashboard", %{conn: conn} do
+    %{owner: owner, member: member, owner_password: password} =
+      team_with_member(%{team_role: "user"})
+
+    conn = login(conn, owner, password)
+    {:ok, view, html} = live(conn, ~p"/dashboard")
+
+    assert html =~ "Activa"
+
+    html = view |> element("#revoke-#{member.id}") |> render_click()
+    assert html =~ "Revocada"
+    refute has_element?(view, "#revoke-#{member.id}")
+  end
+
+  test "user cannot revoke another member's key from dashboard", %{conn: conn} do
+    %{owner: owner, owner_password: password} = team_with_member(%{team_role: "user"})
+    %{member: other_member} = team_with_member(%{team_role: "user"})
+
+    conn = login(conn, owner, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    html = render_click(view, "revoke_key", %{"id" => other_member.id})
+    assert html =~ "No autorizado."
+  end
+
+  test "user without teams sees empty states on dashboard", %{conn: conn} do
+    %{user: user, password: password} = register("user")
+
+    conn = login(conn, user, password)
+    {:ok, _view, html} = live(conn, ~p"/dashboard")
+
+    assert html =~ "No perteneces a ningún equipo todavía."
+  end
+
+  ## Teams & budgets on dashboard ------------------------------------------
+
+  test "user sees their team budget with spend bars", %{conn: conn} do
+    %{team: team, owner: owner, member: member, owner_password: password} =
+      team_with_member(%{team_role: "user"})
+
+    conn = login(conn, owner, password)
+    {:ok, view, html} = live(conn, ~p"/dashboard")
+
+    assert html =~ "Tus equipos"
+    assert has_element?(view, "#team-budget-#{team.id}")
+    assert html =~ "Gasto diario"
+    assert html =~ "Gasto mensual"
+    _ = member
   end
 end

@@ -19,7 +19,6 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
     struct(
       %Destination{
         id: "dest-1",
-        organization_id: "org-1",
         name: "OTLP Collector",
         type: "otlp_webhook",
         url: "https://collector.example.com",
@@ -38,7 +37,6 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
         team_member_id: "tm-1",
         provider_id: "prov-1",
         model_alias_id: "alias-1",
-        subscription_id: "sub-1",
         model_requested: "gpt-4o",
         model_responded: "gpt-4o-2024-08-06",
         agent_type: "assistant",
@@ -274,30 +272,26 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
   # ---------------------------------------------------------------------------
 
   describe "build_span/2 — privacy modes" do
-    test "metadata_only omits team_member_id and subscription_id" do
+    test "metadata_only omits team_member_id" do
       span = single_span(request_log(), destination(privacy_mode: "metadata_only"))
 
       assert find_attr(span, "tokengate.team_member_id") == nil
-      assert find_attr(span, "tokengate.subscription_id") == nil
     end
 
-    test "full includes team_member_id and subscription_id" do
+    test "full includes team_member_id" do
       span = single_span(request_log(), destination(privacy_mode: "full"))
 
       tm_attr = find_attr(span, "tokengate.team_member_id")
-      sub_attr = find_attr(span, "tokengate.subscription_id")
 
       assert tm_attr != nil
       assert tm_attr.value.stringValue == "tm-1"
-      assert sub_attr != nil
-      assert sub_attr.value.stringValue == "sub-1"
     end
 
-    test "full mode does NOT add any content — same attr count + 2" do
+    test "full mode adds exactly 1 attribute versus metadata_only" do
       span_meta = single_span(request_log(), destination(privacy_mode: "metadata_only"))
       span_full = single_span(request_log(), destination(privacy_mode: "full"))
 
-      assert length(span_full.attributes) == length(span_meta.attributes) + 2
+      assert length(span_full.attributes) == length(span_meta.attributes) + 1
     end
   end
 

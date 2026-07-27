@@ -20,11 +20,13 @@ defmodule Tokengate.Routing.Router do
   granted to their team plus any extra aliases granted to them individually.
   Routing-rule reroute targets must *also* be accessible or the rule is skipped.
 
-  ## Strategy dispatch
+  ## Provider selection
 
-  The alias's `routing_strategy` ("priority" or "round_robin") selects the
-  strategy module. Strategies receive an `available?` predicate built from the
-  circuit breaker so they never call the breaker directly.
+  Priority-based selection with sticky routing: the first available
+  provider (by priority ASC) is chosen, and the same API key sticks to
+  the same provider to preserve prompt caches. Strategies receive an
+  `available?` predicate built from the circuit breaker so they never
+  call the breaker directly.
 
   ## Fallback / retry
 
@@ -35,10 +37,8 @@ defmodule Tokengate.Routing.Router do
   """
 
   alias Tokengate.Providers
-  alias Tokengate.Proxy.TokenEstimator
   alias Tokengate.Routing.CircuitBreakerManager
   alias Tokengate.Routing.Priority
-  alias Tokengate.Routing.RoundRobin
 
   @type route :: %{
           model_alias: Tokengate.Providers.ModelAlias.t(),
@@ -148,20 +148,9 @@ defmodule Tokengate.Routing.Router do
   # Internal: alias resolution + routing-rule evaluation
   # ---------------------------------------------------------------------------
 
-  defp route_alias(model_alias, team_member, accessible, request_context, breaker, exclude) do
-    org_id = org_id_for(team_member, model_alias)
-    messages = Map.get(request_context, "messages", [])
-
-    # Evaluate routing rules: first match reroutes to its target alias,
-    # which must also be in the accessible set.
-    resolved_alias =
-      case evaluate_routing_rules(org_id, accessible, messages) do
-        nil -> model_alias
-        target -> target
-      end
-
-    # Load enabled alias_providers for the (possibly rerouted) alias.
-    alias_providers = Providers.list_alias_providers(resolved_alias.id)
+  defp route_alias(model_alias, _team_member, _accessible, request_context, breaker, exclude) do
+    # Load enabled alias_providers for the alias.
+    alias_providers = Providers.list_alias_providers(model_alias.id)
 
     if alias_providers == [] do
       {:error, :no_providers_configured}
@@ -184,7 +173,7 @@ defmodule Tokengate.Routing.Router do
       if candidates == [] do
         {:error, :no_available_provider}
       else
-        select_and_build_route(resolved_alias, candidates, request_context, breaker)
+        select_and_build_route(model_alias, candidates, request_context, breaker)
       end
     end
   end
@@ -200,9 +189,7 @@ defmodule Tokengate.Routing.Router do
       available?: available?
     }
 
-    strategy = strategy_module(model_alias.routing_strategy)
-
-    case strategy.select(candidates, strategy_opts) do
+    case Priority.select(candidates, strategy_opts) do
       {:ok, alias_provider} ->
         credential = alias_provider.credential
 
@@ -220,110 +207,12 @@ defmodule Tokengate.Routing.Router do
   end
 
   # ---------------------------------------------------------------------------
-  # Routing-rule evaluation
-  # ---------------------------------------------------------------------------
-
-  defp evaluate_routing_rules(org_id, accessible, messages) do
-    rules = Providers.list_enabled_rules_for_org(org_id)
-    accessible_ids = MapSet.new(accessible, & &1.id)
-
-    Enum.find_value(rules, fn rule ->
-      target = rule.target_alias
-
-      # Target must be accessible; if not, skip the rule.
-      if target != nil and MapSet.member?(accessible_ids, target.id) do
-        if rule_matches?(rule.conditions, messages) do
-          target
-        else
-          nil
-        end
-      else
-        nil
-      end
-    end)
-  end
-
-  defp rule_matches?(conditions, messages) do
-    Enum.all?(conditions, fn
-      {"context_length", op_str} ->
-        context_length_matches?(op_str, messages)
-
-      {"has_images", expected} ->
-        has_images?(messages) == truthy?(expected)
-
-      {_unknown, _value} ->
-        true
-    end)
-  end
-
-  defp context_length_matches?(op_str, messages) do
-    with {op, n} <- parse_op(op_str) do
-      estimate =
-        if is_list(messages) and messages != [],
-          do: TokenEstimator.estimate_messages(messages),
-          else: 0
-
-      compare(estimate, op, n)
-    else
-      :error -> false
-    end
-  end
-
-  # Parses strings like "> 100000", "< 1000", ">= 50000".
-  defp parse_op(str) when is_binary(str) do
-    str = String.trim(str)
-
-    case str do
-      ">" <> rest -> parse_number(rest, :>)
-      "<" <> rest -> parse_number(rest, :<)
-      ">=" <> rest -> parse_number(rest, :>=)
-      "<=" <> rest -> parse_number(rest, :<=)
-      "==" <> rest -> parse_number(rest, :==)
-      _ -> :error
-    end
-  end
-
-  defp parse_number(rest, op) do
-    case Integer.parse(String.trim(rest)) do
-      {n, ""} -> {op, n}
-      _ -> :error
-    end
-  end
-
-  defp compare(left, :>, right), do: left > right
-  defp compare(left, :<, right), do: left < right
-  defp compare(left, :>=, right), do: left >= right
-  defp compare(left, :<=, right), do: left <= right
-  defp compare(left, :==, right), do: left == right
-
-  defp has_images?(messages) when is_list(messages) do
-    Enum.any?(messages, fn message ->
-      content = Map.get(message, "content")
-
-      is_list(content) and
-        Enum.any?(content, fn
-          %{"type" => "image_url"} -> true
-          _ -> false
-        end)
-    end)
-  end
-
-  defp has_images?(_), do: false
-
-  defp truthy?(true), do: true
-  defp truthy?("true"), do: true
-  defp truthy?(_), do: false
-
-  # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
 
   defp find_alias_by_name(accessible, name) do
     Enum.find(accessible, fn alias_ -> alias_.name == name end)
   end
-
-  defp strategy_module("priority"), do: Priority
-  defp strategy_module("round_robin"), do: RoundRobin
 
   defp maybe_preload_team(team_member) do
     # Reload the team association if it is not already a populated struct.
@@ -334,19 +223,6 @@ defmodule Tokengate.Routing.Router do
     else
       # force: true re-loads the association even if it was previously set to nil.
       Tokengate.Repo.preload(team_member, [:team], force: true)
-    end
-  end
-
-  defp org_id_for(team_member, model_alias) do
-    cond do
-      team_member.team != nil and team_member.team.organization_id != nil ->
-        team_member.team.organization_id
-
-      model_alias.organization_id != nil ->
-        model_alias.organization_id
-
-      true ->
-        nil
     end
   end
 

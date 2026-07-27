@@ -6,11 +6,9 @@ defmodule Tokengate.ProvidersTest do
   alias Tokengate.Providers.{
     Provider,
     Credential,
-    Subscription,
     ModelAlias,
     AliasProvider,
     ModelPricing,
-    RoutingRule,
     TeamModelAlias,
     TeamMemberExtraAlias
   }
@@ -20,27 +18,6 @@ defmodule Tokengate.ProvidersTest do
   # These avoid depending on Tokengate.Accounts.* modules which may not be
   # compiled when this subagent runs in isolation.
   # ---------------------------------------------------------------------------
-
-  defmodule TestOrg do
-    use Ecto.Schema
-    import Ecto.Changeset
-
-    @primary_key {:id, :binary_id, autogenerate: true}
-    @foreign_key_type :binary_id
-
-    schema "organizations" do
-      field :name, :string
-      field :slug, :string
-      field :cost_tracking_mode, :string, default: "value"
-      timestamps(type: :utc_datetime)
-    end
-
-    def changeset(org, attrs) do
-      org
-      |> cast(attrs, [:name, :slug, :cost_tracking_mode])
-      |> validate_required([:name, :slug])
-    end
-  end
 
   defmodule TestTeam do
     use Ecto.Schema
@@ -55,14 +32,13 @@ defmodule Tokengate.ProvidersTest do
       field :default_monthly_budget_usd, :decimal
       field :default_concurrency_limit, :integer, default: 5
       field :default_rpm_limit, :integer, default: 60
-      belongs_to :organization, TestOrg
       timestamps(type: :utc_datetime)
     end
 
     def changeset(team, attrs) do
       team
-      |> cast(attrs, [:name, :organization_id, :default_concurrency_limit, :default_rpm_limit])
-      |> validate_required([:name, :organization_id])
+      |> cast(attrs, [:name, :default_concurrency_limit, :default_rpm_limit])
+      |> validate_required([:name])
     end
   end
 
@@ -116,21 +92,10 @@ defmodule Tokengate.ProvidersTest do
   # Fixtures
   # ---------------------------------------------------------------------------
 
-  def org_fixture(attrs \\ %{}) do
-    {:ok, org} =
-      %TestOrg{}
-      |> TestOrg.changeset(Map.merge(%{name: "Acme Corp", slug: "acme-corp"}, attrs))
-      |> Repo.insert()
-
-    org
-  end
-
-  def team_fixture(org \\ nil, attrs \\ %{}) do
-    org = org || org_fixture()
-
+  def team_fixture(attrs \\ %{}) do
     {:ok, team} =
       %TestTeam{}
-      |> TestTeam.changeset(Map.merge(%{name: "Engineering", organization_id: org.id}, attrs))
+      |> TestTeam.changeset(Map.merge(%{name: "Engineering"}, attrs))
       |> Repo.insert()
 
     team
@@ -169,8 +134,8 @@ defmodule Tokengate.ProvidersTest do
       Enum.into(attrs, %{
         name: "OpenAI",
         base_url: "https://api.openai.com",
-        billing_type: "pay_per_token",
-        track_real_usage: false
+        track_real_usage: false,
+        status: "active"
       })
 
     {:ok, provider} = Providers.create_provider(attrs)
@@ -193,35 +158,16 @@ defmodule Tokengate.ProvidersTest do
     credential
   end
 
-  def subscription_fixture(provider \\ nil, attrs \\ %{}) do
-    provider = provider || provider_fixture()
+  def model_alias_fixture(attrs \\ %{}) do
+    unique = System.unique_integer([:positive])
 
     attrs =
       Enum.into(attrs, %{
-        provider_id: provider.id,
-        name: "Standard Plan",
-        cost: Decimal.new("100.00"),
-        billing_cycle: "monthly",
-        start_date: ~D[2026-01-01],
-        status: "active"
-      })
-
-    {:ok, subscription} = Providers.create_subscription(attrs)
-    subscription
-  end
-
-  def model_alias_fixture(org \\ nil, attrs \\ %{}) do
-    org = org || org_fixture()
-
-    attrs =
-      Enum.into(attrs, %{
-        organization_id: org.id,
-        name: "gpt-4",
+        name: "gpt-4-#{unique}",
         display_name: "GPT-4",
         market_input_price_per_1m: Decimal.new("10.00"),
         market_output_price_per_1m: Decimal.new("30.00"),
-        context_window: 128_000,
-        routing_strategy: "priority"
+        context_window: 128_000
       })
 
     {:ok, model_alias} = Providers.create_model_alias(attrs)
@@ -268,26 +214,13 @@ defmodule Tokengate.ProvidersTest do
       provider = provider_fixture()
       assert %Provider{} = provider
       assert provider.name == "OpenAI"
-      assert provider.billing_type == "pay_per_token"
       assert provider.track_real_usage == false
-    end
-
-    test "create_provider/1 with invalid billing_type" do
-      {:error, changeset} =
-        Providers.create_provider(%{
-          name: "Foo",
-          base_url: "https://foo.com",
-          billing_type: "invalid"
-        })
-
-      assert "is invalid" in errors_on(changeset).billing_type
     end
 
     test "create_provider/1 requires name and base_url" do
       {:error, changeset} = Providers.create_provider(%{})
       assert errors_on(changeset).name
       assert errors_on(changeset).base_url
-      assert errors_on(changeset).billing_type
     end
 
     test "list_providers/0 returns all providers" do
@@ -300,6 +233,31 @@ defmodule Tokengate.ProvidersTest do
       provider = provider_fixture()
       {:ok, updated} = Providers.update_provider(provider, %{track_real_usage: true})
       assert updated.track_real_usage == true
+    end
+
+    test "create_provider/1 defaults status to active" do
+      provider = provider_fixture()
+      assert provider.status == "active"
+    end
+
+    test "update_provider/2 toggles status" do
+      provider = provider_fixture()
+      {:ok, updated} = Providers.update_provider(provider, %{status: "disabled"})
+      assert updated.status == "disabled"
+
+      {:ok, updated} = Providers.update_provider(updated, %{status: "active"})
+      assert updated.status == "active"
+    end
+
+    test "create_provider/1 with invalid status" do
+      {:error, changeset} =
+        Providers.create_provider(%{
+          name: "Foo",
+          base_url: "https://foo.com",
+          status: "banned"
+        })
+
+      assert "is invalid" in errors_on(changeset).status
     end
 
     test "delete_provider/1 deletes the provider" do
@@ -340,88 +298,6 @@ defmodule Tokengate.ProvidersTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Subscription tests
-  # ---------------------------------------------------------------------------
-
-  describe "subscriptions" do
-    test "create_subscription/1 with valid attrs" do
-      subscription = subscription_fixture()
-      assert %Subscription{} = subscription
-      assert subscription.billing_cycle == "monthly"
-      assert subscription.status == "active"
-    end
-
-    test "create_subscription/1 with invalid billing_cycle" do
-      {:error, changeset} =
-        Providers.create_subscription(%{
-          provider_id: provider_fixture().id,
-          name: "X",
-          cost: Decimal.new("50"),
-          billing_cycle: "weekly",
-          start_date: ~D[2026-01-01],
-          status: "active"
-        })
-
-      assert "is invalid" in errors_on(changeset).billing_cycle
-    end
-
-    test "create_subscription/1 with invalid status" do
-      {:error, changeset} =
-        Providers.create_subscription(%{
-          provider_id: provider_fixture().id,
-          name: "X",
-          cost: Decimal.new("50"),
-          billing_cycle: "monthly",
-          start_date: ~D[2026-01-01],
-          status: "pending"
-        })
-
-      assert "is invalid" in errors_on(changeset).status
-    end
-
-    test "active_subscriptions/1 includes active with nil end_date" do
-      provider = provider_fixture()
-      sub = subscription_fixture(provider, %{end_date: nil})
-      active = Providers.active_subscriptions(provider.id)
-      assert length(active) == 1
-      assert hd(active).id == sub.id
-    end
-
-    test "active_subscriptions/1 includes active with future end_date" do
-      provider = provider_fixture()
-
-      sub =
-        subscription_fixture(provider, %{
-          end_date: Date.add(Date.utc_today(), 30)
-        })
-
-      active = Providers.active_subscriptions(provider.id)
-      assert length(active) == 1
-      assert hd(active).id == sub.id
-    end
-
-    test "active_subscriptions/1 excludes past end_date" do
-      provider = provider_fixture()
-
-      subscription_fixture(provider, %{
-        end_date: Date.add(Date.utc_today(), -1)
-      })
-
-      active = Providers.active_subscriptions(provider.id)
-      assert active == []
-    end
-
-    test "active_subscriptions/1 excludes cancelled/exhausted" do
-      provider = provider_fixture()
-
-      subscription_fixture(provider, %{status: "cancelled"})
-      subscription_fixture(provider, %{status: "exhausted"})
-
-      assert Providers.active_subscriptions(provider.id) == []
-    end
-  end
-
-  # ---------------------------------------------------------------------------
   # ModelAlias tests
   # ---------------------------------------------------------------------------
 
@@ -429,59 +305,32 @@ defmodule Tokengate.ProvidersTest do
     test "create_model_alias/1 with valid attrs" do
       alias_ = model_alias_fixture()
       assert %ModelAlias{} = alias_
-      assert alias_.routing_strategy == "priority"
+      assert alias_.name =~ "gpt-4"
     end
 
-    test "create_model_alias/1 with invalid routing_strategy" do
-      {:error, changeset} =
-        Providers.create_model_alias(%{
-          organization_id: org_fixture().id,
-          name: "x",
-          display_name: "X",
-          market_input_price_per_1m: Decimal.new("1"),
-          market_output_price_per_1m: Decimal.new("1"),
-          context_window: 1000,
-          routing_strategy: "random"
-        })
-
-      assert "is invalid" in errors_on(changeset).routing_strategy
-    end
-
-    test "unique constraint on organization_id + name" do
-      org = org_fixture()
-      model_alias_fixture(org)
+    test "unique constraint on name" do
+      model_alias_fixture(%{name: "gpt-4"})
 
       {:error, changeset} =
         Providers.create_model_alias(%{
-          organization_id: org.id,
           name: "gpt-4",
           display_name: "GPT-4",
           market_input_price_per_1m: Decimal.new("1"),
           market_output_price_per_1m: Decimal.new("1"),
-          context_window: 1000,
-          routing_strategy: "priority"
+          context_window: 1000
         })
 
       assert "has already been taken" in errors_on(changeset).name
     end
 
-    test "different orgs can have same alias name" do
-      org1 = org_fixture()
-      org2 = org_fixture(%{name: "Other", slug: "other"})
-      model_alias_fixture(org1)
+    test "get_alias_by_name/1 returns the alias by name" do
+      alias_ = model_alias_fixture(%{name: "unique-alias"})
 
-      {:ok, alias2} =
-        Providers.create_model_alias(%{
-          organization_id: org2.id,
-          name: "gpt-4",
-          display_name: "GPT-4",
-          market_input_price_per_1m: Decimal.new("1"),
-          market_output_price_per_1m: Decimal.new("1"),
-          context_window: 1000,
-          routing_strategy: "priority"
-        })
+      assert Providers.get_alias_by_name("unique-alias").id == alias_.id
+    end
 
-      assert alias2.name == "gpt-4"
+    test "get_alias_by_name/1 returns nil for unknown name" do
+      assert Providers.get_alias_by_name("nonexistent") == nil
     end
   end
 
@@ -515,15 +364,13 @@ defmodule Tokengate.ProvidersTest do
       assert ids == [ap1.id, ap5.id, ap_nil.id]
     end
 
-    test "list_alias_providers/1 preloads provider and subscription" do
+    test "list_alias_providers/1 preloads provider" do
       alias_ = model_alias_fixture()
       provider = provider_fixture()
-      sub = subscription_fixture(provider)
-      alias_provider_fixture(alias_, provider, %{subscription_id: sub.id})
+      alias_provider_fixture(alias_, provider)
 
       [result] = Providers.list_alias_providers(alias_.id)
       assert %Provider{} = result.provider
-      assert %Subscription{} = result.subscription
     end
   end
 
@@ -572,264 +419,39 @@ defmodule Tokengate.ProvidersTest do
   end
 
   # ---------------------------------------------------------------------------
-  # RoutingRule tests
-  # ---------------------------------------------------------------------------
-
-  describe "routing_rules" do
-    test "create_routing_rule/1 with valid attrs" do
-      org = org_fixture()
-      alias_ = model_alias_fixture(org)
-
-      {:ok, rule} =
-        Providers.create_routing_rule(%{
-          organization_id: org.id,
-          name: "Long context rule",
-          conditions: %{"context_length" => "> 100000", "has_images" => true},
-          target_alias_id: alias_.id,
-          priority: 1,
-          enabled: true
-        })
-
-      assert %RoutingRule{} = rule
-      assert rule.conditions["context_length"] == "> 100000"
-      assert rule.conditions["has_images"] == true
-    end
-
-    test "create_routing_rule/1 with default priority and enabled" do
-      org = org_fixture()
-      alias_ = model_alias_fixture(org)
-
-      {:ok, rule} =
-        Providers.create_routing_rule(%{
-          organization_id: org.id,
-          name: "Default rule",
-          conditions: %{},
-          target_alias_id: alias_.id
-        })
-
-      assert rule.priority == 1
-      assert rule.enabled == true
-    end
-
-    test "list_routing_rules_for_organization/1 filters by org" do
-      org1 = org_fixture()
-      org2 = org_fixture(%{name: "Other", slug: "other"})
-      alias1 = model_alias_fixture(org1)
-      alias2 = model_alias_fixture(org2, %{name: "claude"})
-
-      {:ok, _} =
-        Providers.create_routing_rule(%{
-          organization_id: org1.id,
-          name: "r1",
-          conditions: %{},
-          target_alias_id: alias1.id
-        })
-
-      {:ok, _} =
-        Providers.create_routing_rule(%{
-          organization_id: org2.id,
-          name: "r2",
-          conditions: %{},
-          target_alias_id: alias2.id
-        })
-
-      assert length(Providers.list_routing_rules_for_organization(org1.id)) == 1
-      assert length(Providers.list_routing_rules_for_organization(org2.id)) == 1
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # TeamModelAlias grant/revoke tests
+  # Team Model Aliases
   # ---------------------------------------------------------------------------
 
   describe "team_model_aliases" do
-    test "grant_alias_to_team/2 creates grant" do
-      org = org_fixture()
-      team = team_fixture(org)
-      alias_ = model_alias_fixture(org)
+    test "grant_alias_to_team/2 creates a grant" do
+      team = team_fixture()
+      alias_ = model_alias_fixture()
 
-      {:ok, tma} = Providers.grant_alias_to_team(team.id, alias_.id)
-      assert %TeamModelAlias{} = tma
-      assert tma.team_id == team.id
-      assert tma.model_alias_id == alias_.id
+      assert {:ok, _} = Providers.grant_alias_to_team(team.id, alias_.id)
     end
 
-    test "grant_alias_to_team/2 idempotent returns {:error, :already_granted}" do
-      org = org_fixture()
-      team = team_fixture(org)
-      alias_ = model_alias_fixture(org)
+    test "grant_alias_to_team/2 is idempotent (unique constraint)" do
+      team = team_fixture()
+      alias_ = model_alias_fixture()
 
       {:ok, _} = Providers.grant_alias_to_team(team.id, alias_.id)
-      {:error, :already_granted} = Providers.grant_alias_to_team(team.id, alias_.id)
+      {:error, changeset} = Providers.grant_alias_to_team(team.id, alias_.id)
+      assert "has already been taken" in errors_on(changeset).team_id
     end
 
     test "revoke_alias_from_team/2 removes grant" do
-      org = org_fixture()
-      team = team_fixture(org)
-      alias_ = model_alias_fixture(org)
+      team = team_fixture()
+      alias_ = model_alias_fixture()
 
       {:ok, _} = Providers.grant_alias_to_team(team.id, alias_.id)
-      {:ok, _} = Providers.revoke_alias_from_team(team.id, alias_.id)
-
-      assert Providers.list_team_model_aliases() == []
+      assert {:ok, _} = Providers.revoke_alias_from_team(team.id, alias_.id)
     end
 
-    test "revoke_alias_from_team/2 returns {:error, :not_found} when not granted" do
-      org = org_fixture()
-      team = team_fixture(org)
-      alias_ = model_alias_fixture(org)
+    test "revoke_alias_from_team/2 is idempotent (nil-safe)" do
+      team = team_fixture()
+      alias_ = model_alias_fixture()
 
-      {:error, :not_found} = Providers.revoke_alias_from_team(team.id, alias_.id)
-    end
-
-    test "unique constraint on team_id + model_alias_id" do
-      org = org_fixture()
-      team = team_fixture(org)
-      alias_ = model_alias_fixture(org)
-
-      {:ok, _} = Providers.grant_alias_to_team(team.id, alias_.id)
-
-      {:error, changeset} =
-        %TeamModelAlias{}
-        |> TeamModelAlias.changeset(%{team_id: team.id, model_alias_id: alias_.id})
-        |> Repo.insert()
-
-      assert "has already been taken" in errors_on(changeset).team_id
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # TeamMemberExtraAlias grant/revoke tests
-  # ---------------------------------------------------------------------------
-
-  describe "team_member_extra_aliases" do
-    test "grant_extra_alias/2 creates grant" do
-      org = org_fixture()
-      team = team_fixture(org)
-      member = team_member_fixture(team)
-      alias_ = model_alias_fixture(org)
-
-      {:ok, tmea} = Providers.grant_extra_alias(member.id, alias_.id)
-      assert %TeamMemberExtraAlias{} = tmea
-    end
-
-    test "grant_extra_alias/2 idempotent returns {:error, :already_granted}" do
-      org = org_fixture()
-      team = team_fixture(org)
-      member = team_member_fixture(team)
-      alias_ = model_alias_fixture(org)
-
-      {:ok, _} = Providers.grant_extra_alias(member.id, alias_.id)
-      {:error, :already_granted} = Providers.grant_extra_alias(member.id, alias_.id)
-    end
-
-    test "revoke_extra_alias/2 removes grant" do
-      org = org_fixture()
-      team = team_fixture(org)
-      member = team_member_fixture(team)
-      alias_ = model_alias_fixture(org)
-
-      {:ok, _} = Providers.grant_extra_alias(member.id, alias_.id)
-      {:ok, _} = Providers.revoke_extra_alias(member.id, alias_.id)
-      assert Providers.list_team_member_extra_aliases() == []
-    end
-
-    test "revoke_extra_alias/2 returns {:error, :not_found} when not granted" do
-      org = org_fixture()
-      team = team_fixture(org)
-      member = team_member_fixture(team)
-      alias_ = model_alias_fixture(org)
-
-      {:error, :not_found} = Providers.revoke_extra_alias(member.id, alias_.id)
-    end
-
-    test "unique constraint on team_member_id + model_alias_id" do
-      org = org_fixture()
-      team = team_fixture(org)
-      member = team_member_fixture(team)
-      alias_ = model_alias_fixture(org)
-
-      {:ok, _} = Providers.grant_extra_alias(member.id, alias_.id)
-
-      {:error, changeset} =
-        %TeamMemberExtraAlias{}
-        |> TeamMemberExtraAlias.changeset(%{
-          team_member_id: member.id,
-          model_alias_id: alias_.id
-        })
-        |> Repo.insert()
-
-      assert "has already been taken" in errors_on(changeset).team_member_id
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # list_accessible_aliases/1 tests
-  # ---------------------------------------------------------------------------
-
-  describe "list_accessible_aliases/1" do
-    test "returns team aliases" do
-      org = org_fixture()
-      team = team_fixture(org)
-      member = team_member_fixture(team)
-      alias1 = model_alias_fixture(org)
-      alias2 = model_alias_fixture(org, %{name: "claude-3", display_name: "Claude 3"})
-
-      {:ok, _} = Providers.grant_alias_to_team(team.id, alias1.id)
-      {:ok, _} = Providers.grant_alias_to_team(team.id, alias2.id)
-
-      # Reload member with team preloaded
-      member = Repo.preload(member, :team)
-
-      accessible = Providers.list_accessible_aliases(member)
-      ids = Enum.map(accessible, & &1.id) |> Enum.sort()
-      assert ids == Enum.sort([alias1.id, alias2.id])
-    end
-
-    test "returns extra aliases only granted to member" do
-      org = org_fixture()
-      team = team_fixture(org)
-      member = team_member_fixture(team)
-      alias1 = model_alias_fixture(org)
-      alias2 = model_alias_fixture(org, %{name: "claude-3", display_name: "Claude 3"})
-
-      # Only alias1 granted to team
-      {:ok, _} = Providers.grant_alias_to_team(team.id, alias1.id)
-      # alias2 granted as extra to member
-      {:ok, _} = Providers.grant_extra_alias(member.id, alias2.id)
-
-      member = Repo.preload(member, :team)
-
-      accessible = Providers.list_accessible_aliases(member)
-      ids = Enum.map(accessible, & &1.id) |> Enum.sort()
-      assert ids == Enum.sort([alias1.id, alias2.id])
-    end
-
-    test "union is distinct — no duplicates when alias granted both ways" do
-      org = org_fixture()
-      team = team_fixture(org)
-      member = team_member_fixture(team)
-      alias1 = model_alias_fixture(org)
-
-      # Granted to team AND as extra to member — should appear once
-      {:ok, _} = Providers.grant_alias_to_team(team.id, alias1.id)
-      {:ok, _} = Providers.grant_extra_alias(member.id, alias1.id)
-
-      member = Repo.preload(member, :team)
-
-      accessible = Providers.list_accessible_aliases(member)
-      assert length(accessible) == 1
-      assert hd(accessible).id == alias1.id
-    end
-
-    test "returns empty list when member has no grants" do
-      org = org_fixture()
-      team = team_fixture(org)
-      member = team_member_fixture(team)
-
-      member = Repo.preload(member, :team)
-
-      assert Providers.list_accessible_aliases(member) == []
+      assert {:ok, nil} = Providers.revoke_alias_from_team(team.id, alias_.id)
     end
   end
 end

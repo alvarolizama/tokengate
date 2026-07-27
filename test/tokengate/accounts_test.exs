@@ -2,32 +2,16 @@ defmodule Tokengate.AccountsTest do
   use Tokengate.DataCase, async: true
 
   alias Tokengate.Accounts
-  alias Tokengate.Accounts.{ApiKey, Organization, Team, TeamMember, User}
+  alias Tokengate.Accounts.{ApiKey, Team, TeamMember, User}
 
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
 
-  defp valid_organization_attrs(attrs \\ %{}) do
-    Map.merge(
-      %{
-        "name" => "Acme Corp",
-        "slug" => "acme-corp"
-      },
-      attrs
-    )
-  end
-
-  defp organization_fixture(attrs \\ %{}) do
-    {:ok, organization} = Accounts.create_organization(valid_organization_attrs(attrs))
-    organization
-  end
-
-  defp valid_team_attrs(organization, attrs) do
+  defp valid_team_attrs(attrs \\ %{}) do
     Map.merge(
       %{
         "name" => "Platform Team",
-        "organization_id" => organization.id,
         "default_daily_budget_usd" => "100.00",
         "default_monthly_budget_usd" => "1000.00",
         "default_concurrency_limit" => 10,
@@ -37,8 +21,8 @@ defmodule Tokengate.AccountsTest do
     )
   end
 
-  defp team_fixture(organization, attrs \\ %{}) do
-    {:ok, team} = Accounts.create_team(valid_team_attrs(organization, attrs))
+  defp team_fixture(attrs \\ %{}) do
+    {:ok, team} = Accounts.create_team(valid_team_attrs(attrs))
     team
   end
 
@@ -70,57 +54,13 @@ defmodule Tokengate.AccountsTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Organization changesets
-  # ---------------------------------------------------------------------------
-
-  describe "organization changesets" do
-    test "create_organization/1 with valid attrs succeeds" do
-      attrs = valid_organization_attrs()
-      assert {:ok, %Organization{} = org} = Accounts.create_organization(attrs)
-      assert org.name == "Acme Corp"
-      assert org.slug == "acme-corp"
-      assert org.cost_tracking_mode == "value"
-    end
-
-    test "create_organization/1 lowercases slug" do
-      attrs = valid_organization_attrs(%{"slug" => "  Acme-CORP  "})
-      assert {:ok, %Organization{} = org} = Accounts.create_organization(attrs)
-      assert org.slug == "acme-corp"
-    end
-
-    test "create_organization/1 requires name and slug" do
-      {:error, changeset} = Accounts.create_organization(%{})
-
-      assert "can't be blank" in errors_on(changeset).name
-      assert "can't be blank" in errors_on(changeset).slug
-    end
-
-    test "create_organization/1 enforces slug format" do
-      attrs = valid_organization_attrs(%{"slug" => "Invalid Slug!"})
-      assert {:error, changeset} = Accounts.create_organization(attrs)
-
-      assert "must contain only lowercase letters, numbers, and hyphens" in errors_on(changeset).slug
-    end
-
-    test "create_organization/1 enforces slug uniqueness" do
-      organization_fixture(%{"slug" => "acme-corp"})
-      attrs = valid_organization_attrs(%{"slug" => "acme-corp"})
-
-      assert {:error, changeset} = Accounts.create_organization(attrs)
-      assert "has already been taken" in errors_on(changeset).slug
-    end
-  end
-
-  # ---------------------------------------------------------------------------
   # Team changesets
   # ---------------------------------------------------------------------------
 
   describe "team changesets" do
     test "create_team/1 with valid attrs succeeds and applies defaults when omitted" do
-      org = organization_fixture()
-
       attrs =
-        valid_team_attrs(org, %{"default_concurrency_limit" => nil, "default_rpm_limit" => nil})
+        valid_team_attrs(%{"default_concurrency_limit" => nil, "default_rpm_limit" => nil})
 
       # remove from attrs to test DB default
       attrs = Map.delete(attrs, "default_concurrency_limit") |> Map.delete("default_rpm_limit")
@@ -129,19 +69,16 @@ defmodule Tokengate.AccountsTest do
       assert team.name == "Platform Team"
       assert team.default_concurrency_limit == 5
       assert team.default_rpm_limit == 60
-      assert team.organization_id == org.id
     end
 
-    test "create_team/1 requires name and organization_id" do
+    test "create_team/1 requires name" do
       {:error, changeset} = Accounts.create_team(%{})
 
       assert "can't be blank" in errors_on(changeset).name
-      assert "can't be blank" in errors_on(changeset).organization_id
     end
 
     test "create_team/1 validates concurrency/rpm greater than 0" do
-      org = organization_fixture()
-      attrs = valid_team_attrs(org, %{"default_concurrency_limit" => 0, "default_rpm_limit" => 0})
+      attrs = valid_team_attrs(%{"default_concurrency_limit" => 0, "default_rpm_limit" => 0})
       {:error, changeset} = Accounts.create_team(attrs)
 
       assert "must be greater than 0" in errors_on(changeset).default_concurrency_limit
@@ -149,10 +86,8 @@ defmodule Tokengate.AccountsTest do
     end
 
     test "create_team/1 allows nil budget" do
-      org = organization_fixture()
-
       attrs =
-        valid_team_attrs(org, %{
+        valid_team_attrs(%{
           "default_daily_budget_usd" => nil,
           "default_monthly_budget_usd" => nil
         })
@@ -161,20 +96,39 @@ defmodule Tokengate.AccountsTest do
       assert team.default_daily_budget_usd == nil
       assert team.default_monthly_budget_usd == nil
     end
+  end
 
-    test "rejects invalid organization reference" do
-      attrs =
-        %{
-          "name" => "Platform Team",
-          "organization_id" => Ecto.UUID.generate(),
-          "default_daily_budget_usd" => "100.00",
-          "default_monthly_budget_usd" => "1000.00",
-          "default_concurrency_limit" => 10,
-          "default_rpm_limit" => 120
-        }
+  describe "delete_team/1" do
+    test "deletes a team with no members" do
+      team = team_fixture()
 
-      assert {:error, changeset} = Accounts.create_team(attrs)
-      assert "does not exist" in errors_on(changeset).organization
+      assert {:ok, _} = Accounts.delete_team(team)
+      assert Accounts.get_team(team.id) == nil
+    end
+
+    test "deletes a team and cascades cleanup of members, api keys, and extra aliases" do
+      team = team_fixture()
+      user = user_fixture()
+
+      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+
+      assert {:ok, _} = Accounts.delete_team(team)
+      assert Accounts.get_team(team.id) == nil
+      assert Accounts.get_team_member(tm.id) == nil
+    end
+
+    test "deletes a team with multiple members" do
+      team = team_fixture()
+      user1 = user_fixture()
+      user2 = user_fixture(%{"email" => "user2#{System.unique_integer([:positive])}@example.com"})
+
+      {:ok, tm1} = Accounts.create_team_member(valid_team_member_attrs(user1, team))
+      {:ok, tm2} = Accounts.create_team_member(valid_team_member_attrs(user2, team))
+
+      assert {:ok, _} = Accounts.delete_team(team)
+      assert Accounts.get_team(team.id) == nil
+      assert Accounts.get_team_member(tm1.id) == nil
+      assert Accounts.get_team_member(tm2.id) == nil
     end
   end
 
@@ -262,13 +216,13 @@ defmodule Tokengate.AccountsTest do
 
   describe "create_team_member/1" do
     test "creates a team member and provisions an API key atomically, returns token once" do
-      org = organization_fixture()
-      team = team_fixture(org)
+      team = team_fixture()
       user = user_fixture()
 
       attrs = valid_team_member_attrs(user, team)
 
-      assert {:ok, %TeamMember{} = tm, token} = Accounts.create_team_member(attrs)
+      assert {:ok, %TeamMember{} = tm} = Accounts.create_team_member(attrs)
+      {:ok, _api_key, token} = Accounts.replace_api_key(tm)
       assert is_binary(token)
       assert String.starts_with?(token, "tg-")
 
@@ -281,21 +235,20 @@ defmodule Tokengate.AccountsTest do
     end
 
     test "token is verifiable via get_team_member_by_api_key/1" do
-      org = organization_fixture()
-      team = team_fixture(org)
+      team = team_fixture()
       user = user_fixture()
 
-      {:ok, _tm, token} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, _tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, _api_key, token} = Accounts.replace_api_key(_tm)
 
       assert {:ok, %TeamMember{}} = Accounts.get_team_member_by_api_key(token)
     end
 
     test "enforces unique (user_id, team_id)" do
-      org = organization_fixture()
-      team = team_fixture(org)
+      team = team_fixture()
       user = user_fixture()
 
-      {:ok, _tm, _token} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, _tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
 
       assert {:error, changeset} =
                Accounts.create_team_member(valid_team_member_attrs(user, team))
@@ -304,8 +257,7 @@ defmodule Tokengate.AccountsTest do
     end
 
     test "validates team_role and status inclusion" do
-      org = organization_fixture()
-      team = team_fixture(org)
+      team = team_fixture()
       user = user_fixture()
 
       attrs =
@@ -320,11 +272,11 @@ defmodule Tokengate.AccountsTest do
     end
 
     test "does not store the plaintext token; only the hash" do
-      org = organization_fixture()
-      team = team_fixture(org)
+      team = team_fixture()
       user = user_fixture()
 
-      {:ok, tm, token} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, _api_key, token} = Accounts.replace_api_key(tm)
       tm_loaded = Repo.preload(tm, [:api_key])
 
       refute tm_loaded.api_key.key_hash == token
@@ -350,11 +302,11 @@ defmodule Tokengate.AccountsTest do
     end
 
     test "get_team_member_by_api_key/1 preloads team and user" do
-      org = organization_fixture(%{"name" => "Lookup Org", "slug" => "lookup-org"})
-      team = team_fixture(org, %{"name" => "Lookup Team"})
+      team = team_fixture(%{"name" => "Lookup Team"})
       user = user_fixture(%{"name" => "Lookup User", "email" => "lookup@example.com"})
 
-      {:ok, _tm, token} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, _tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, _api_key, token} = Accounts.replace_api_key(_tm)
 
       assert {:ok, %TeamMember{team: %Team{}, user: %User{}}} =
                Accounts.get_team_member_by_api_key(token)
@@ -365,11 +317,11 @@ defmodule Tokengate.AccountsTest do
     end
 
     test "get_team_member_by_api_key/1 returns not_found for revoked key" do
-      org = organization_fixture()
-      team = team_fixture(org)
+      team = team_fixture()
       user = user_fixture()
 
-      {:ok, tm, token} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, _api_key, token} = Accounts.replace_api_key(tm)
 
       # Revoke the api key directly
       tm_loaded = Repo.preload(tm, [:api_key])
@@ -383,11 +335,11 @@ defmodule Tokengate.AccountsTest do
     end
 
     test "api_keys has unique index on team_member_id (one key per member)" do
-      org = organization_fixture()
-      team = team_fixture(org)
+      team = team_fixture()
       user = user_fixture()
 
-      {:ok, tm, _token} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, _api_key, _token} = Accounts.replace_api_key(tm)
       tm_loaded = Repo.preload(tm, [:api_key])
 
       # Attempt to insert a second api key for the same team_member directly
@@ -404,11 +356,11 @@ defmodule Tokengate.AccountsTest do
 
   describe "replace_api_key/1" do
     test "revokes the old key and issues a new one, returning new token" do
-      org = organization_fixture()
-      team = team_fixture(org)
+      team = team_fixture()
       user = user_fixture()
 
-      {:ok, tm, old_token} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, _old_key, old_token} = Accounts.replace_api_key(tm)
 
       assert {:ok, %ApiKey{} = new_key, new_token} = Accounts.replace_api_key(tm)
       assert new_token != old_token
@@ -423,11 +375,10 @@ defmodule Tokengate.AccountsTest do
     end
 
     test "old token is invalidated after replacement" do
-      org = organization_fixture()
-      team = team_fixture(org)
+      team = team_fixture()
       user = user_fixture()
 
-      {:ok, tm, _old_token} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
 
       {:ok, _new_key, _new_token} = Accounts.replace_api_key(tm)
 
@@ -445,11 +396,10 @@ defmodule Tokengate.AccountsTest do
 
   describe "effective_limits/1" do
     test "returns team defaults when no member extras are set" do
-      org = organization_fixture()
-      team = team_fixture(org)
+      team = team_fixture()
       user = user_fixture()
 
-      {:ok, tm, _token} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
 
       limits = Accounts.effective_limits(tm)
 
@@ -459,73 +409,57 @@ defmodule Tokengate.AccountsTest do
       assert limits.rpm_limit == 120
     end
 
-    test "adds member extras to team defaults" do
-      org = organization_fixture()
-      team = team_fixture(org)
+    test "adds extra_daily_budget_usd to team default" do
+      team = team_fixture()
       user = user_fixture()
 
-      {:ok, tm, _token} =
+      {:ok, tm} =
         Accounts.create_team_member(
-          valid_team_member_attrs(user, team, %{
-            "extra_daily_budget_usd" => "50.00",
-            "extra_concurrency" => 3
-          })
+          valid_team_member_attrs(user, team, %{"extra_daily_budget_usd" => "50.00"})
         )
 
       limits = Accounts.effective_limits(tm)
 
-      assert limits.daily_budget_usd == Decimal.add(Decimal.new("100.00"), Decimal.new("50.00"))
-      assert limits.concurrency_limit == 13
-      # monthly_budget has no extras
-      assert limits.monthly_budget_usd == Decimal.new("1000.00")
-      # rpm has no override
-      assert limits.rpm_limit == 120
+      assert limits.daily_budget_usd == Decimal.new("150.00")
     end
 
-    test "nil team default budget means no limit, even with extras applied" do
-      org = organization_fixture()
-
-      team =
-        team_fixture(org, %{
-          "default_daily_budget_usd" => nil,
-          "default_monthly_budget_usd" => nil
-        })
-
+    test "adds extra_concurrency to team default" do
+      team = team_fixture()
       user = user_fixture()
 
-      {:ok, tm, _token} =
+      {:ok, tm} =
         Accounts.create_team_member(
-          valid_team_member_attrs(user, team, %{
-            "extra_daily_budget_usd" => "50.00"
-          })
+          valid_team_member_attrs(user, team, %{"extra_concurrency" => 5})
         )
 
       limits = Accounts.effective_limits(tm)
 
-      assert limits.daily_budget_usd == Decimal.new("50.00")
-      assert limits.monthly_budget_usd == nil
+      assert limits.concurrency_limit == 15
     end
 
-    test "nil team default budget and nil extra both result in nil (unlimited)" do
-      org = organization_fixture()
-
-      team =
-        team_fixture(org, %{
-          "default_daily_budget_usd" => nil,
-          "default_monthly_budget_usd" => nil
-        })
-
+    test "nil team daily_budget_usd with nil extra → nil" do
+      team = team_fixture(%{"default_daily_budget_usd" => nil})
       user = user_fixture()
 
-      {:ok, tm, _token} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
 
       limits = Accounts.effective_limits(tm)
 
       assert limits.daily_budget_usd == nil
-      assert limits.monthly_budget_usd == nil
-      # concurrency/rpm have defaults; never nil
-      assert limits.concurrency_limit == 10
-      assert limits.rpm_limit == 120
+    end
+
+    test "nil team daily_budget_usd with extra → just the extra" do
+      team = team_fixture(%{"default_daily_budget_usd" => nil})
+      user = user_fixture()
+
+      {:ok, tm} =
+        Accounts.create_team_member(
+          valid_team_member_attrs(user, team, %{"extra_daily_budget_usd" => "25.00"})
+        )
+
+      limits = Accounts.effective_limits(tm)
+
+      assert limits.daily_budget_usd == Decimal.new("25.00")
     end
   end
 end

@@ -76,36 +76,26 @@ defmodule Tokengate.Observability.WebhookWorker do
   end
 
   @doc """
-  Resolves all observability destinations for the request log's organization
-  and enqueues one `WebhookWorker` job per destination.
-
-  The organization is resolved through the preload chain:
-  `team_member_id → team_member.team_id → team.organization_id`.
+  Resolves all observability destinations and enqueues one `WebhookWorker`
+  job per destination.
 
   Returns `{:ok, count}` where `count` is the number of jobs enqueued.
-  Returns `{:ok, 0}` if no destinations are configured for the org.
+  Returns `{:ok, 0}` if no destinations are configured.
   """
   @spec dispatch(RequestLog.t()) :: {:ok, non_neg_integer()}
-  def dispatch(%RequestLog{team_member_id: team_member_id, id: log_id} = _request_log)
-      when is_binary(team_member_id) do
-    case resolve_organization_id(team_member_id) do
-      nil ->
-        {:ok, 0}
+  def dispatch(%RequestLog{id: log_id} = _request_log) do
+    destinations = Tokengate.Observability.list_destinations()
 
-      organization_id ->
-        destinations = Tokengate.Observability.list_destinations_for_org(organization_id)
+    count =
+      Enum.reduce(destinations, 0, fn destination, acc ->
+        %{destination_id: destination.id, request_log_ids: [to_string(log_id)]}
+        |> __MODULE__.new()
+        |> Oban.insert!()
 
-        count =
-          Enum.reduce(destinations, 0, fn destination, acc ->
-            %{destination_id: destination.id, request_log_ids: [to_string(log_id)]}
-            |> __MODULE__.new()
-            |> Oban.insert!()
+        acc + 1
+      end)
 
-            acc + 1
-          end)
-
-        {:ok, count}
-    end
+    {:ok, count}
   end
 
   def dispatch(_request_log), do: {:ok, 0}
@@ -148,29 +138,5 @@ defmodule Tokengate.Observability.WebhookWorker do
     secret = Application.get_env(:tokengate, :webhook_secret, "tokengate-dev-secret")
     mac = :crypto.mac(:hmac, :sha256, secret, body)
     "sha256=" <> Base.encode16(mac, case: :lower)
-  end
-
-  # ---------------------------------------------------------------------------
-  # Organization resolution: team_member → team → organization_id
-  # ---------------------------------------------------------------------------
-
-  defp resolve_organization_id(team_member_id) do
-    Tokengate.Accounts.TeamMember
-    |> Repo.get(team_member_id)
-    |> case do
-      nil -> nil
-      team_member -> resolve_org_from_team(team_member.team_id)
-    end
-  end
-
-  defp resolve_org_from_team(nil), do: nil
-
-  defp resolve_org_from_team(team_id) do
-    Tokengate.Accounts.Team
-    |> Repo.get(team_id)
-    |> case do
-      nil -> nil
-      team -> team.organization_id
-    end
   end
 end

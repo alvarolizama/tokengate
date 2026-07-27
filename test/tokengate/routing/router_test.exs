@@ -23,25 +23,6 @@ defmodule Tokengate.Routing.RouterTest do
   # which may not be compiled in isolation.)
   # ---------------------------------------------------------------------------
 
-  defmodule TestOrg do
-    use Ecto.Schema
-    import Ecto.Changeset
-
-    @primary_key {:id, :binary_id, autogenerate: true}
-    @foreign_key_type :binary_id
-
-    schema "organizations" do
-      field :name, :string
-      field :slug, :string
-      field :cost_tracking_mode, :string, default: "value"
-      timestamps(type: :utc_datetime)
-    end
-
-    def changeset(org, attrs) do
-      org |> cast(attrs, [:name, :slug, :cost_tracking_mode]) |> validate_required([:name, :slug])
-    end
-  end
-
   defmodule TestTeam do
     use Ecto.Schema
     import Ecto.Changeset
@@ -55,14 +36,13 @@ defmodule Tokengate.Routing.RouterTest do
       field :default_monthly_budget_usd, :decimal
       field :default_concurrency_limit, :integer, default: 5
       field :default_rpm_limit, :integer, default: 60
-      belongs_to :organization, TestOrg
       timestamps(type: :utc_datetime)
     end
 
     def changeset(team, attrs) do
       team
-      |> cast(attrs, [:name, :organization_id, :default_concurrency_limit, :default_rpm_limit])
-      |> validate_required([:name, :organization_id])
+      |> cast(attrs, [:name, :default_concurrency_limit, :default_rpm_limit])
+      |> validate_required([:name])
     end
   end
 
@@ -116,21 +96,10 @@ defmodule Tokengate.Routing.RouterTest do
   # Fixtures
   # ---------------------------------------------------------------------------
 
-  defp org_fixture(attrs \\ %{}) do
-    unique = System.unique_integer([:positive])
-
-    {:ok, org} =
-      %TestOrg{}
-      |> TestOrg.changeset(Map.merge(%{name: "Org-#{unique}", slug: "org-#{unique}"}, attrs))
-      |> Repo.insert()
-
-    org
-  end
-
-  defp team_fixture(org, attrs \\ %{}) do
+  defp team_fixture(attrs \\ %{}) do
     {:ok, team} =
       %TestTeam{}
-      |> TestTeam.changeset(Map.merge(%{name: "Engineering", organization_id: org.id}, attrs))
+      |> TestTeam.changeset(Map.merge(%{name: "Engineering"}, attrs))
       |> Repo.insert()
 
     team
@@ -190,18 +159,16 @@ defmodule Tokengate.Routing.RouterTest do
     credential
   end
 
-  defp model_alias_fixture(org, attrs) do
+  defp model_alias_fixture(attrs) do
     unique = System.unique_integer([:positive])
 
     attrs =
       Enum.into(attrs, %{
-        organization_id: org.id,
         name: "model-#{unique}",
         display_name: "Model #{unique}",
         market_input_price_per_1m: Decimal.new("10.00"),
         market_output_price_per_1m: Decimal.new("30.00"),
-        context_window: 128_000,
-        routing_strategy: "priority"
+        context_window: 128_000
       })
 
     {:ok, model_alias} = Providers.create_model_alias(attrs)
@@ -221,15 +188,14 @@ defmodule Tokengate.Routing.RouterTest do
     ap
   end
 
-  # Builds a full routing fixture: org, team, member, alias (granted to team),
+  # Builds a full routing fixture: team, member, alias (granted to team),
   # provider + active credential, and an enabled alias_provider.
   defp full_setup(opts \\ []) do
-    org = org_fixture()
-    team = team_fixture(org)
+    team = team_fixture()
     member = team_member_fixture(team)
 
     alias_name = Keyword.get(opts, :alias_name, "gpt-4")
-    model_alias = model_alias_fixture(org, %{name: alias_name, display_name: alias_name})
+    model_alias = model_alias_fixture(%{name: alias_name, display_name: alias_name})
     {:ok, _} = Providers.grant_alias_to_team(team.id, model_alias.id)
 
     provider = provider_fixture()
@@ -244,7 +210,6 @@ defmodule Tokengate.Routing.RouterTest do
     member = Repo.preload(member, [:team])
 
     %{
-      org: org,
       team: team,
       member: member,
       model_alias: model_alias,
@@ -286,12 +251,11 @@ defmodule Tokengate.Routing.RouterTest do
 
   describe "access control" do
     test "returns model_not_found when alias is not accessible (no team grant)" do
-      org = org_fixture()
-      team = team_fixture(org)
+      team = team_fixture()
       member = team_member_fixture(team)
 
-      # Alias exists in the org but is NOT granted to the team.
-      model_alias = model_alias_fixture(org, %{name: "claude", display_name: "Claude"})
+      # Alias exists but is NOT granted to the team.
+      model_alias = model_alias_fixture(%{name: "claude", display_name: "Claude"})
 
       member = Repo.preload(member, [:team])
 
@@ -299,12 +263,11 @@ defmodule Tokengate.Routing.RouterTest do
     end
 
     test "extra alias grant makes an otherwise-unganted alias accessible" do
-      org = org_fixture()
-      team = team_fixture(org)
+      team = team_fixture()
       member = team_member_fixture(team)
 
       # Alias not granted to team...
-      model_alias = model_alias_fixture(org, %{name: "claude", display_name: "Claude"})
+      model_alias = model_alias_fixture(%{name: "claude", display_name: "Claude"})
       # ...but granted as an extra alias to the member directly.
       {:ok, _} = Providers.grant_extra_alias(member.id, model_alias.id)
 
@@ -330,153 +293,6 @@ defmodule Tokengate.Routing.RouterTest do
   # Routing rules
   # ---------------------------------------------------------------------------
 
-  describe "routing rules" do
-    test "context_length rule reroutes when estimate exceeds threshold" do
-      f = full_setup()
-
-      # A second alias to reroute to (must also be accessible).
-      target_alias =
-        model_alias_fixture(f.org, %{name: "long-context", display_name: "Long Context"})
-
-      {:ok, _} = Providers.grant_alias_to_team(f.team.id, target_alias.id)
-
-      target_provider = provider_fixture()
-      _target_credential = credential_fixture(target_provider, %{status: "active"})
-      alias_provider_fixture(target_alias, target_provider, %{provider_model: "gpt-4-128k"})
-
-      # Rule: when context_length > 100000, route to long-context alias.
-      {:ok, _} =
-        Providers.create_routing_rule(%{
-          organization_id: f.org.id,
-          name: "long context rule",
-          conditions: %{"context_length" => "> 100000"},
-          target_alias_id: target_alias.id,
-          priority: 1,
-          enabled: true
-        })
-
-      # Build messages that estimate to well over 100000 tokens (400_000 chars).
-      big_text = String.duplicate("a", 400_000)
-      messages = [%{"role" => "user", "content" => big_text}]
-
-      assert {:ok, route} = Router.route(f.model_alias.name, f.member, %{"messages" => messages})
-      assert route.model_alias.id == target_alias.id
-      assert route.model_responded == "gpt-4-128k"
-    end
-
-    test "context_length rule does not reroute when estimate is below threshold" do
-      f = full_setup()
-
-      target_alias = model_alias_fixture(f.org, %{name: "long-context", display_name: "Long"})
-      {:ok, _} = Providers.grant_alias_to_team(f.team.id, target_alias.id)
-      target_provider = provider_fixture()
-      _target_credential = credential_fixture(target_provider, %{status: "active"})
-      alias_provider_fixture(target_alias, target_provider)
-
-      {:ok, _} =
-        Providers.create_routing_rule(%{
-          organization_id: f.org.id,
-          name: "long context rule",
-          conditions: %{"context_length" => "> 100000"},
-          target_alias_id: target_alias.id,
-          priority: 1,
-          enabled: true
-        })
-
-      # Small message — under threshold.
-      messages = [%{"role" => "user", "content" => "hello"}]
-
-      assert {:ok, route} = Router.route(f.model_alias.name, f.member, %{"messages" => messages})
-      assert route.model_alias.id == f.model_alias.id
-    end
-
-    test "rule is skipped when target alias is not accessible" do
-      f = full_setup()
-
-      # Target alias exists but is NOT granted to the team / member.
-      target_alias = model_alias_fixture(f.org, %{name: "long-context", display_name: "Long"})
-      target_provider = provider_fixture()
-      _target_credential = credential_fixture(target_provider, %{status: "active"})
-      alias_provider_fixture(target_alias, target_provider)
-
-      {:ok, _} =
-        Providers.create_routing_rule(%{
-          organization_id: f.org.id,
-          name: "long context rule",
-          conditions: %{"context_length" => "> 100000"},
-          target_alias_id: target_alias.id,
-          priority: 1,
-          enabled: true
-        })
-
-      big_text = String.duplicate("a", 400_000)
-      messages = [%{"role" => "user", "content" => big_text}]
-
-      # Rule matches but target is inaccessible -> rule skipped -> original alias.
-      assert {:ok, route} = Router.route(f.model_alias.name, f.member, %{"messages" => messages})
-      assert route.model_alias.id == f.model_alias.id
-    end
-
-    test "has_images rule reroutes when messages contain image_url parts" do
-      f = full_setup()
-
-      target_alias = model_alias_fixture(f.org, %{name: "vision", display_name: "Vision"})
-      {:ok, _} = Providers.grant_alias_to_team(f.team.id, target_alias.id)
-      target_provider = provider_fixture()
-      _target_credential = credential_fixture(target_provider, %{status: "active"})
-      alias_provider_fixture(target_alias, target_provider, %{provider_model: "gpt-4-vision"})
-
-      {:ok, _} =
-        Providers.create_routing_rule(%{
-          organization_id: f.org.id,
-          name: "vision rule",
-          conditions: %{"has_images" => true},
-          target_alias_id: target_alias.id,
-          priority: 1,
-          enabled: true
-        })
-
-      messages = [
-        %{
-          "role" => "user",
-          "content" => [
-            %{"type" => "text", "text" => "What is this?"},
-            %{"type" => "image_url", "image_url" => %{"url" => "https://example.com/img.png"}}
-          ]
-        }
-      ]
-
-      assert {:ok, route} = Router.route(f.model_alias.name, f.member, %{"messages" => messages})
-      assert route.model_alias.id == target_alias.id
-      assert route.model_responded == "gpt-4-vision"
-    end
-
-    test "has_images rule does not reroute when no images present" do
-      f = full_setup()
-
-      target_alias = model_alias_fixture(f.org, %{name: "vision", display_name: "Vision"})
-      {:ok, _} = Providers.grant_alias_to_team(f.team.id, target_alias.id)
-      target_provider = provider_fixture()
-      _target_credential = credential_fixture(target_provider, %{status: "active"})
-      alias_provider_fixture(target_alias, target_provider)
-
-      {:ok, _} =
-        Providers.create_routing_rule(%{
-          organization_id: f.org.id,
-          name: "vision rule",
-          conditions: %{"has_images" => true},
-          target_alias_id: target_alias.id,
-          priority: 1,
-          enabled: true
-        })
-
-      messages = [%{"role" => "user", "content" => "just text, no images"}]
-
-      assert {:ok, route} = Router.route(f.model_alias.name, f.member, %{"messages" => messages})
-      assert route.model_alias.id == f.model_alias.id
-    end
-  end
-
   # ---------------------------------------------------------------------------
   # no_providers_configured / no active credential
   # ---------------------------------------------------------------------------
@@ -491,11 +307,10 @@ defmodule Tokengate.Routing.RouterTest do
     end
 
     test "alias_provider without active credential is dropped" do
-      org = org_fixture()
-      team = team_fixture(org)
+      team = team_fixture()
       member = team_member_fixture(team)
 
-      model_alias = model_alias_fixture(org, %{name: "gpt-4", display_name: "GPT-4"})
+      model_alias = model_alias_fixture(%{name: "gpt-4", display_name: "GPT-4"})
       {:ok, _} = Providers.grant_alias_to_team(team.id, model_alias.id)
 
       provider = provider_fixture()
@@ -530,42 +345,6 @@ defmodule Tokengate.Routing.RouterTest do
       # First provider has priority 1 (from full_setup default).
       assert {:ok, route} = Router.route(f.model_alias.name, f.member)
       assert route.alias_provider.priority == 1
-    end
-
-    test "round_robin strategy alternates across 2 providers over 4 calls" do
-      org = org_fixture()
-      team = team_fixture(org)
-      member = team_member_fixture(team)
-
-      model_alias =
-        model_alias_fixture(org, %{
-          name: "rr-model",
-          display_name: "RR Model",
-          routing_strategy: "round_robin"
-        })
-
-      {:ok, _} = Providers.grant_alias_to_team(team.id, model_alias.id)
-
-      provider1 = provider_fixture()
-      _cred1 = credential_fixture(provider1, %{status: "active"})
-      ap1 = alias_provider_fixture(model_alias, provider1, %{provider_model: "m1", priority: 1})
-
-      provider2 = provider_fixture()
-      _cred2 = credential_fixture(provider2, %{status: "active"})
-      ap2 = alias_provider_fixture(model_alias, provider2, %{provider_model: "m2", priority: 2})
-
-      member = Repo.preload(member, [:team])
-
-      results =
-        for _ <- 1..4 do
-          {:ok, route} = Router.route(model_alias.name, member)
-          route.alias_provider.id
-        end
-
-      # Over 4 calls with 2 providers, both should appear at least once.
-      unique = results |> Enum.uniq() |> MapSet.new()
-      assert MapSet.member?(unique, ap1.id)
-      assert MapSet.member?(unique, ap2.id)
     end
   end
 
@@ -668,15 +447,14 @@ defmodule Tokengate.Routing.RouterTest do
 
   describe "models_for/1" do
     test "returns only accessible aliases with correct shape" do
-      org = org_fixture()
-      team = team_fixture(org)
+      team = team_fixture()
       member = team_member_fixture(team)
 
       alias1 =
-        model_alias_fixture(org, %{name: "gpt-4", display_name: "GPT-4", context_window: 128_000})
+        model_alias_fixture(%{name: "gpt-4", display_name: "GPT-4", context_window: 128_000})
 
       _alias2 =
-        model_alias_fixture(org, %{
+        model_alias_fixture(%{
           name: "claude-3",
           display_name: "Claude 3",
           context_window: 200_000
@@ -700,15 +478,14 @@ defmodule Tokengate.Routing.RouterTest do
     end
 
     test "includes extra-alias grants" do
-      org = org_fixture()
-      team = team_fixture(org)
+      team = team_fixture()
       member = team_member_fixture(team)
 
       alias1 =
-        model_alias_fixture(org, %{name: "gpt-4", display_name: "GPT-4", context_window: 128_000})
+        model_alias_fixture(%{name: "gpt-4", display_name: "GPT-4", context_window: 128_000})
 
       alias2 =
-        model_alias_fixture(org, %{
+        model_alias_fixture(%{
           name: "claude-3",
           display_name: "Claude 3",
           context_window: 200_000

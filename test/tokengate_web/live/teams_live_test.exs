@@ -31,24 +31,19 @@ defmodule TokengateWeb.TeamsLiveTest do
   defp team_fixture(attrs \\ %{}) do
     u = unique()
 
-    {:ok, org} =
-      Accounts.create_organization(%{name: "Org #{u}", slug: "org-#{u}"})
-
     {:ok, model_alias} =
       Providers.create_model_alias(%{
-        organization_id: org.id,
         name: "gpt-#{u}",
         display_name: "GPT #{u}",
         market_input_price_per_1m: Decimal.new("10.00"),
         market_output_price_per_1m: Decimal.new("30.00"),
-        context_window: 128_000,
-        routing_strategy: "priority"
+        context_window: 128_000
       })
 
     {:ok, team} =
-      Accounts.create_team(Map.merge(%{organization_id: org.id, name: "Team #{u}"}, attrs))
+      Accounts.create_team(Map.merge(%{name: "Team #{u}"}, attrs))
 
-    %{org: org, team: team, model_alias: model_alias}
+    %{team: team, model_alias: model_alias}
   end
 
   # --------------------------------------------------------------------------
@@ -97,7 +92,7 @@ defmodule TokengateWeb.TeamsLiveTest do
   # --------------------------------------------------------------------------
 
   test "admin creates a team", %{conn: conn} do
-    %{org: org} = team_fixture()
+    team_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
@@ -111,7 +106,6 @@ defmodule TokengateWeb.TeamsLiveTest do
       |> form("#team-form", %{
         team: %{
           name: "Mi Nuevo Equipo",
-          organization_id: org.id,
           default_daily_budget_usd: "10.50",
           default_monthly_budget_usd: "300.00",
           default_concurrency_limit: 10,
@@ -126,7 +120,7 @@ defmodule TokengateWeb.TeamsLiveTest do
   end
 
   test "create with invalid params shows errors", %{conn: conn} do
-    %{org: org} = team_fixture()
+    team_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
@@ -138,8 +132,7 @@ defmodule TokengateWeb.TeamsLiveTest do
       view
       |> form("#team-form", %{
         team: %{
-          name: "",
-          organization_id: org.id
+          name: ""
         }
       })
       |> render_submit()

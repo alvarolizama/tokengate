@@ -183,6 +183,7 @@ defmodule TokengateWeb.CoreComponents do
   attr :multiple, :boolean, default: false, doc: "the multiple flag for select inputs"
   attr :class, :any, default: nil, doc: "the input class to use over defaults"
   attr :error_class, :any, default: nil, doc: "the input error class to use over defaults"
+  attr :hint, :string, default: nil, doc: "help text shown below the input"
 
   attr :rest, :global,
     include: ~w(accept autocomplete capture cols disabled form list max maxlength min minlength
@@ -234,6 +235,7 @@ defmodule TokengateWeb.CoreComponents do
         </span>
       </label>
       <.error :for={msg <- @errors}>{msg}</.error>
+      <p :if={@hint} class="text-xs text-base-content/50 mt-1">{@hint}</p>
     </div>
     """
   end
@@ -255,6 +257,7 @@ defmodule TokengateWeb.CoreComponents do
         </select>
       </label>
       <.error :for={msg <- @errors}>{msg}</.error>
+      <p :if={@hint} class="text-xs text-base-content/50 mt-1">{@hint}</p>
     </div>
     """
   end
@@ -275,6 +278,7 @@ defmodule TokengateWeb.CoreComponents do
         >{Phoenix.HTML.Form.normalize_value("textarea", @value)}</textarea>
       </label>
       <.error :for={msg <- @errors}>{msg}</.error>
+      <p :if={@hint} class="text-xs text-base-content/50 mt-1">{@hint}</p>
     </div>
     """
   end
@@ -298,6 +302,7 @@ defmodule TokengateWeb.CoreComponents do
         />
       </label>
       <.error :for={msg <- @errors}>{msg}</.error>
+      <p :if={@hint} class="text-xs text-base-content/50 mt-1">{@hint}</p>
     </div>
     """
   end

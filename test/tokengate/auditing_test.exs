@@ -25,16 +25,6 @@ defmodule Tokengate.AuditingTest do
     user
   end
 
-  defp org_fixture do
-    {:ok, org} =
-      Accounts.create_organization(%{
-        "name" => "Acme",
-        "slug" => "acme-#{System.unique_integer([:positive])}"
-      })
-
-    org
-  end
-
   # ---------------------------------------------------------------------------
   # audit/4
   # ---------------------------------------------------------------------------
@@ -42,10 +32,9 @@ defmodule Tokengate.AuditingTest do
   describe "audit/4" do
     test "records an audit log with a user struct" do
       user = user_fixture()
-      org = org_fixture()
 
       assert {:ok, %AuditLog{} = log} =
-               Auditing.audit(user, "create", "organization", org.id, %{
+               Auditing.audit(user, "create", "organization", "org-1", %{
                  name: "Acme",
                  slug: "acme"
                })
@@ -53,7 +42,7 @@ defmodule Tokengate.AuditingTest do
       assert log.user_id == user.id
       assert log.action == "create"
       assert log.entity_type == "organization"
-      assert log.entity_id == org.id
+      assert log.entity_id == "org-1"
       assert log.changes == %{name: "Acme", slug: "acme"}
       assert log.inserted_at
       # The schema should not have updated_at since we used timestamps(updated_at: false)

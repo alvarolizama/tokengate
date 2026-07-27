@@ -23,7 +23,6 @@ defmodule Tokengate.Routing.PriorityTest do
     %AliasProvider{
       id: id,
       priority: Keyword.get(opts, :priority),
-      weight: Keyword.get(opts, :weight),
       enabled: Keyword.get(opts, :enabled, true),
       provider_model: Keyword.get(opts, :provider_model, "model-#{id}"),
       model_alias_id: Keyword.get(opts, :model_alias_id, "alias-1")

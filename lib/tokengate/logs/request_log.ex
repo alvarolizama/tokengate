@@ -25,7 +25,6 @@ defmodule Tokengate.Logs.RequestLog do
     field :team_member_id, :binary_id
     field :provider_id, :binary_id
     field :model_alias_id, :binary_id
-    field :subscription_id, :binary_id
     field :model_requested, :string
     field :model_responded, :string
     field :agent_type, :string, default: "unknown"
@@ -40,7 +39,7 @@ defmodule Tokengate.Logs.RequestLog do
     field :streaming, :boolean, default: false
   end
 
-  @permitted ~w(team_member_id provider_id model_alias_id subscription_id
+  @permitted ~w(team_member_id provider_id model_alias_id
     model_requested model_responded agent_type status_code prompt_tokens
     completion_tokens cost_usd provider_cost_usd savings_usd estimated_cost_usd
     latency_ms streaming inserted_at)a

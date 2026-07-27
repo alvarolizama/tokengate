@@ -3,31 +3,14 @@ defmodule Tokengate.ObservabilityTest do
 
   alias Tokengate.Observability
   alias Tokengate.Observability.Destination
-  alias Tokengate.Accounts
 
   # ---------------------------------------------------------------------------
   # Fixtures
   # ---------------------------------------------------------------------------
 
-  defp organization_fixture(attrs \\ %{}) do
-    {:ok, organization} =
-      Accounts.create_organization(
-        Map.merge(
-          %{
-            "name" => "Acme Corp",
-            "slug" => "acme-#{System.unique_integer([:positive])}"
-          },
-          attrs
-        )
-      )
-
-    organization
-  end
-
-  defp valid_destination_attrs(organization, attrs \\ %{}) do
+  defp valid_destination_attrs(attrs \\ %{}) do
     Map.merge(
       %{
-        organization_id: organization.id,
         name: "Honeycomb",
         type: "otlp_webhook",
         url: "https://api.honeycomb.io",
@@ -38,11 +21,9 @@ defmodule Tokengate.ObservabilityTest do
     )
   end
 
-  defp destination_fixture(organization \\ nil, attrs \\ %{}) do
-    organization = organization || organization_fixture()
-
+  defp destination_fixture(attrs \\ %{}) do
     {:ok, destination} =
-      Observability.create_destination(valid_destination_attrs(organization, attrs))
+      Observability.create_destination(valid_destination_attrs(attrs))
 
     destination
   end
@@ -53,8 +34,7 @@ defmodule Tokengate.ObservabilityTest do
 
   describe "create_destination/1" do
     test "with valid attrs succeeds" do
-      org = organization_fixture()
-      attrs = valid_destination_attrs(org)
+      attrs = valid_destination_attrs()
 
       assert {:ok, %Destination{} = dest} = Observability.create_destination(attrs)
       assert dest.name == "Honeycomb"
@@ -62,15 +42,11 @@ defmodule Tokengate.ObservabilityTest do
       assert dest.url == "https://api.honeycomb.io"
       assert dest.headers == %{"X-Api-Key" => "secret"}
       assert dest.privacy_mode == "metadata_only"
-      assert dest.organization_id == org.id
     end
 
     test "applies defaults when type and privacy_mode omitted" do
-      org = organization_fixture()
-
       {:ok, dest} =
         Observability.create_destination(%{
-          organization_id: org.id,
           name: "Default Dest",
           type: "otlp_webhook",
           privacy_mode: "metadata_only"
@@ -81,11 +57,8 @@ defmodule Tokengate.ObservabilityTest do
     end
 
     test "validates type inclusion" do
-      org = organization_fixture()
-
       {:error, changeset} =
         Observability.create_destination(%{
-          organization_id: org.id,
           name: "Bad",
           type: "invalid_type",
           privacy_mode: "metadata_only"
@@ -95,11 +68,8 @@ defmodule Tokengate.ObservabilityTest do
     end
 
     test "validates privacy_mode inclusion" do
-      org = organization_fixture()
-
       {:error, changeset} =
         Observability.create_destination(%{
-          organization_id: org.id,
           name: "Bad",
           type: "otlp_webhook",
           privacy_mode: "leak_everything"
@@ -108,51 +78,24 @@ defmodule Tokengate.ObservabilityTest do
       assert "is invalid" in errors_on(changeset).privacy_mode
     end
 
-    test "requires organization_id, name, type, privacy_mode" do
+    test "requires name, type, privacy_mode" do
       {:error, changeset} = Observability.create_destination(%{})
 
-      assert errors_on(changeset).organization_id
       assert errors_on(changeset).name
       # type and privacy_mode have defaults, so they're never blank
-    end
-
-    test "validates foreign key on organization_id" do
-      {:error, changeset} =
-        Observability.create_destination(%{
-          organization_id: Ecto.UUID.generate(),
-          name: "Orphan",
-          type: "otlp_webhook",
-          privacy_mode: "metadata_only"
-        })
-
-      assert "does not exist" in errors_on(changeset).organization_id
     end
   end
 
   # ---------------------------------------------------------------------------
-  # list_destinations / list_destinations_for_org
+  # list_destinations
   # ---------------------------------------------------------------------------
 
-  describe "list_destinations/0 and list_destinations_for_org/1" do
+  describe "list_destinations/0" do
     test "list_destinations/0 returns all destinations" do
-      org1 = organization_fixture(%{"name" => "Org1", "slug" => "org1"})
-      org2 = organization_fixture(%{"name" => "Org2", "slug" => "org2"})
-      destination_fixture(org1)
-      destination_fixture(org2)
+      destination_fixture(%{name: "Dest1"})
+      destination_fixture(%{name: "Dest2"})
 
       assert length(Observability.list_destinations()) == 2
-    end
-
-    test "list_destinations_for_org/1 returns only destinations for that org" do
-      org1 = organization_fixture(%{"name" => "Org1", "slug" => "org1"})
-      org2 = organization_fixture(%{"name" => "Org2", "slug" => "org2"})
-      dest1 = destination_fixture(org1, %{name: "Dest1"})
-      destination_fixture(org2, %{name: "Dest2"})
-
-      results = Observability.list_destinations_for_org(org1.id)
-      assert length(results) == 1
-      assert hd(results).id == dest1.id
-      assert hd(results).name == "Dest1"
     end
   end
 

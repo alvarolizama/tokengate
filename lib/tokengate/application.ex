@@ -17,7 +17,6 @@ defmodule Tokengate.Application do
       Tokengate.Routing.Supervisor,
       Tokengate.Limits.Supervisor,
       Tokengate.Budgets.Supervisor,
-      Tokengate.Providers.SubscriptionManager,
       Tokengate.Metrics.Supervisor,
       TokengateWeb.Endpoint
     ]

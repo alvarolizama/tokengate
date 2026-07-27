@@ -63,7 +63,6 @@ defmodule Tokengate.MixProject do
       {:oban, "~> 2.19"},
       {:finch, "~> 0.19"},
       {:bcrypt_elixir, "~> 3.0"},
-      {:tidewave, "~> 0.5", only: :dev},
       {:telemetry_metrics, "~> 1.0"},
       {:telemetry_poller, "~> 1.0"},
       {:gettext, "~> 1.0"},

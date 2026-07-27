@@ -37,25 +37,19 @@ defmodule TokengateWeb.Layouts do
     <header class="navbar px-4 sm:px-6 lg:px-8">
       <div class="flex-1">
         <a href="/" class="flex-1 flex w-fit items-center gap-2">
-          <img src={~p"/images/logo.svg"} width="36" />
-          <span class="text-sm font-semibold">v{Application.spec(:phoenix, :vsn)}</span>
+          <img src={~p"/images/logo.svg"} width="36" alt="TokenGate" />
+          <span class="text-lg font-bold">TokenGate</span>
         </a>
       </div>
       <div class="flex-none">
         <ul class="flex flex-column px-1 space-x-4 items-center">
           <li>
-            <a href="https://phoenixframework.org/" class="btn btn-ghost">Website</a>
-          </li>
-          <li>
-            <a href="https://github.com/phoenixframework/phoenix" class="btn btn-ghost">GitHub</a>
-          </li>
-          <li>
             <.theme_toggle />
           </li>
           <li>
-            <a href="https://phoenix.hexdocs.pm/overview.html" class="btn btn-primary">
-              Get Started <span aria-hidden="true">&rarr;</span>
-            </a>
+            <.link href={~p"/login"} class="btn btn-primary gap-2">
+              Iniciar sesión <span aria-hidden="true">&rarr;</span>
+            </.link>
           </li>
         </ul>
       </div>
@@ -169,12 +163,35 @@ defmodule TokengateWeb.Layouts do
           </a>
         </div>
 
-        <nav class="flex-1 p-3 space-y-1">
+        <nav class="flex-1 p-3 space-y-4">
           <.sidebar_link href={~p"/dashboard"} label="Dashboard" icon="hero-chart-bar-square" />
-          <.sidebar_link href={~p"/dashboard/providers"} label="Proveedores" icon="hero-server-stack" />
-          <.sidebar_link href={~p"/dashboard/teams"} label="Equipos" icon="hero-user-group" />
-          <.sidebar_link href={~p"/dashboard/keys"} label="API Keys" icon="hero-key" />
-          <.sidebar_link href={~p"/dashboard/logs"} label="Logs" icon="hero-document-text" />
+
+          <div class="space-y-1">
+            <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
+              Configuración
+            </p>
+            <.sidebar_link href={~p"/dashboard/models"} label="Modelos" icon="hero-rectangle-stack" />
+            <.sidebar_link
+              href={~p"/dashboard/providers"}
+              label="Proveedores"
+              icon="hero-server-stack"
+            />
+          </div>
+
+          <div class="space-y-1">
+            <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
+              Acceso
+            </p>
+            <.sidebar_link href={~p"/dashboard/teams"} label="Equipos" icon="hero-user-group" />
+            <.sidebar_link href={~p"/dashboard/keys"} label="API Keys" icon="hero-key" />
+          </div>
+
+          <div class="space-y-1">
+            <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
+              Monitoreo
+            </p>
+            <.sidebar_link href={~p"/dashboard/logs"} label="Logs" icon="hero-document-text" />
+          </div>
         </nav>
 
         <div class="p-3 border-t border-base-300">
