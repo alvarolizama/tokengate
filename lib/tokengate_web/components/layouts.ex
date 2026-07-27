@@ -183,6 +183,7 @@ defmodule TokengateWeb.Layouts do
 
   defp topbar_indicators(assigns) do
     admin? = match?(%{global_role: "admin"}, assigns.current_scope)
+    my_budget = my_budget_summary(assigns.current_scope)
 
     assigns =
       assigns
@@ -192,9 +193,26 @@ defmodule TokengateWeb.Layouts do
       |> assign(:online, length(TokengateWeb.Presence.list_online()))
       |> assign(:inflight, Tokengate.Limits.Manager.total_inflight())
       |> assign(:admin?, admin?)
+      |> assign(:my_budget, my_budget)
 
     ~H"""
     <div class="hidden md:flex items-center gap-2" id="topbar-indicators">
+      <span
+        :if={@my_budget}
+        id="topbar-my-budget"
+        class={["badge badge-lg gap-1.5", my_budget_chip_class(@my_budget)]}
+        title={my_budget_title(@my_budget)}
+      >
+        <.icon name="hero-wallet" class="w-3.5 h-3.5" />
+        <span id="topbar-my-budget-daily">
+          H {my_budget_segment(@my_budget.daily_pct, @my_budget.daily_spend)}
+        </span>
+        <span class="opacity-40">·</span>
+        <span id="topbar-my-budget-monthly">
+          M {my_budget_segment(@my_budget.monthly_pct, @my_budget.monthly_spend)}
+        </span>
+      </span>
+
       <%= if @admin? do %>
         <.link
           navigate={~p"/dashboard/alerts"}
@@ -346,6 +364,82 @@ defmodule TokengateWeb.Layouts do
 
   defp admin?(%{global_role: "admin"}), do: true
   defp admin?(_), do: false
+
+  # --- Personal budget chip -------------------------------------------------
+  # Every user sees THEIR OWN daily/monthly consumption vs effective limits.
+  # A user may belong to several teams: the chip surfaces the membership
+  # closest to exhaustion and the tooltip notes how many more there are.
+
+  defp my_budget_summary(nil), do: nil
+
+  defp my_budget_summary(user) do
+    case Tokengate.Budgets.list_member_budgets_for_user(user.id) do
+      [] ->
+        nil
+
+      [single] ->
+        budget_summary(single, 0)
+
+      many ->
+        primary = Enum.max_by(many, &budget_severity/1)
+        budget_summary(primary, length(many) - 1)
+    end
+  end
+
+  # Ranks memberships by worst limit utilization so the chip surfaces the
+  # one closest to exhaustion; unlimited ones rank below any limited one
+  # and compare by raw daily spend.
+  defp budget_severity(b) do
+    worst = Enum.max([b.daily_pct || -1.0, b.monthly_pct || -1.0])
+    {worst, Decimal.to_float(b.daily_spend_usd)}
+  end
+
+  defp budget_summary(b, extra_count) do
+    worst_pct = Enum.max([b.daily_pct || 0.0, b.monthly_pct || 0.0])
+
+    %{
+      daily_spend: b.daily_spend_usd,
+      monthly_spend: b.monthly_spend_usd,
+      daily_limit: b.daily_limit_usd,
+      monthly_limit: b.monthly_limit_usd,
+      daily_pct: b.daily_pct,
+      monthly_pct: b.monthly_pct,
+      exhausted?: b.exhausted?,
+      warning?: worst_pct >= 80.0,
+      team_name: b.member.team && b.member.team.name,
+      extra_count: extra_count
+    }
+  end
+
+  defp my_budget_chip_class(%{exhausted?: true}), do: "badge-error"
+  defp my_budget_chip_class(%{warning?: true}), do: "badge-warning"
+  defp my_budget_chip_class(_), do: "badge-ghost"
+
+  # Chip segment: percentage of the limit when one exists, raw spend when
+  # the period is unlimited (exact amounts live in the tooltip).
+  defp my_budget_segment(nil, spend), do: "$#{fmt_money(spend)}"
+  defp my_budget_segment(pct, _spend), do: "#{round(pct)}%"
+
+  defp my_budget_title(b) do
+    daily = budget_period_title("Hoy", b.daily_spend, b.daily_limit, b.daily_pct)
+    monthly = budget_period_title("Mes", b.monthly_spend, b.monthly_limit, b.monthly_pct)
+    team = if b.team_name, do: " — #{b.team_name}", else: ""
+    extra = if b.extra_count > 0, do: " (+#{b.extra_count} más)", else: ""
+
+    daily <> " · " <> monthly <> team <> extra
+  end
+
+  defp budget_period_title(label, spend, nil, _pct),
+    do: "#{label}: $#{fmt_money(spend)} (sin límite)"
+
+  defp budget_period_title(label, spend, limit, pct),
+    do: "#{label}: $#{fmt_money(spend)} de $#{fmt_money(limit)} (#{pct}%)"
+
+  defp fmt_money(%Decimal{} = d) do
+    d
+    |> Decimal.round(4)
+    |> Decimal.to_string()
+  end
 
   defp initials(nil), do: "—"
 
