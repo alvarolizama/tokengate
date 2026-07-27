@@ -27,10 +27,9 @@ RUN mix local.hex --force && mix local.rebar --force
 ENV MIX_ENV=prod
 
 # force_ssl is compile-time (see config/prod.exs). For plain-HTTP deploys
-# (VPN tunnel, no TLS terminator) build with:
-#   docker build --build-arg DISABLE_FORCE_SSL=1 .
-# and set PHX_SCHEME=http at runtime.
-ARG DISABLE_FORCE_SSL=""
+# (VPN tunnel, no TLS terminator) we disable it here permanently.
+# To re-enable TLS, set this to "" and rebuild.
+ARG DISABLE_FORCE_SSL="1"
 ENV DISABLE_FORCE_SSL=${DISABLE_FORCE_SSL}
 
 # --- Dependencies (cached until mix.exs/mix.lock change) -------------------
