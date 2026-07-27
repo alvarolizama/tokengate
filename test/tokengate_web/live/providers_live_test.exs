@@ -73,13 +73,20 @@ defmodule TokengateWeb.ProvidersLiveTest do
     alias_record
   end
 
-  defp create_alias_provider(model_alias, provider) do
+  defp create_model_provider(model_alias, provider) do
     u = unique()
 
-    {:ok, ap} =
-      Providers.create_alias_provider(%{
-        model_alias_id: model_alias.id,
+    {:ok, credential} =
+      Providers.create_credential(%{
         provider_id: provider.id,
+        api_key_encrypted: "sk-#{u}",
+        status: "active"
+      })
+
+    {:ok, ap} =
+      Providers.create_model_provider(%{
+        model_alias_id: model_alias.id,
+        credential_id: credential.id,
         provider_model: "gpt-4o-#{u}",
         priority: 1,
         enabled: true
@@ -93,7 +100,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
       Providers.create_model_pricing(
         Map.merge(
           %{
-            alias_provider_id: ap.id,
+            model_provider_id: ap.id,
             input_price_per_1m: "2.50",
             output_price_per_1m: "5.00",
             effective_from: DateTime.utc_now() |> DateTime.truncate(:second)
@@ -190,7 +197,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     refute has_element?(view, "#edit-#{provider.id}")
   end
 
-  test "deleting a provider referenced by an alias_provider is blocked", %{conn: conn} do
+  test "deleting a provider referenced by an model_provider is blocked", %{conn: conn} do
     provider = create_provider()
 
     u = unique()
@@ -204,10 +211,17 @@ defmodule TokengateWeb.ProvidersLiveTest do
         market_output_price_per_1m: "15.0"
       })
 
-    {:ok, _ap} =
-      Providers.create_alias_provider(%{
-        model_alias_id: alias_.id,
+    {:ok, credential} =
+      Providers.create_credential(%{
         provider_id: provider.id,
+        api_key_encrypted: "sk-blocked",
+        status: "active"
+      })
+
+    {:ok, _ap} =
+      Providers.create_model_provider(%{
+        model_alias_id: alias_.id,
+        credential_id: credential.id,
         provider_model: "gpt-4o",
         priority: 1
       })
@@ -274,7 +288,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
     provider = create_provider()
     alias_record = create_alias()
-    ap = create_alias_provider(alias_record, provider)
+    ap = create_model_provider(alias_record, provider)
     conn = login(conn, admin, password)
 
     {:ok, view, _html} = live(conn, ~p"/dashboard/providers")
@@ -291,7 +305,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
       view
       |> form("#pricing-form", %{
         model_pricing: %{
-          alias_provider_id: ap.id,
+          model_provider_id: ap.id,
           input_price_per_1m: "3.50",
           output_price_per_1m: "7.00",
           effective_from: DateTime.utc_now() |> DateTime.to_iso8601()
@@ -307,7 +321,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
     provider = create_provider()
     alias_record = create_alias()
-    ap = create_alias_provider(alias_record, provider)
+    ap = create_model_provider(alias_record, provider)
     pricing = create_pricing(ap)
     conn = login(conn, admin, password)
 
@@ -323,7 +337,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
       view
       |> form("#pricing-form", %{
         model_pricing: %{
-          alias_provider_id: ap.id,
+          model_provider_id: ap.id,
           input_price_per_1m: "9.99",
           output_price_per_1m: "19.99",
           effective_from: DateTime.utc_now() |> DateTime.to_iso8601()
@@ -339,7 +353,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
     provider = create_provider()
     alias_record = create_alias()
-    ap = create_alias_provider(alias_record, provider)
+    ap = create_model_provider(alias_record, provider)
     pricing = create_pricing(ap)
     conn = login(conn, admin, password)
 
@@ -354,11 +368,11 @@ defmodule TokengateWeb.ProvidersLiveTest do
     refute html =~ "2.50"
   end
 
-  test "pricing panel shows alias_providers with their pricing tables", %{conn: conn} do
+  test "pricing panel shows model_providers with their pricing tables", %{conn: conn} do
     %{user: admin, password: password} = register_admin()
     provider = create_provider()
     alias_record = create_alias()
-    ap = create_alias_provider(alias_record, provider)
+    ap = create_model_provider(alias_record, provider)
     create_pricing(ap, %{input_price_per_1m: "1.25", output_price_per_1m: "2.50"})
 
     conn = login(conn, admin, password)

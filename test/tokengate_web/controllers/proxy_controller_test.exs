@@ -128,7 +128,7 @@ defmodule TokengateWeb.ProxyControllerTest do
         base_url: provider_url
       })
 
-    {:ok, _credential} =
+    {:ok, credential} =
       Providers.create_credential(%{
         provider_id: provider.id,
         api_key_encrypted: "sk-provider-#{u}"
@@ -145,17 +145,17 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     {:ok, _grant} = Providers.grant_alias_to_team(team.id, model_alias.id)
 
-    {:ok, alias_provider} =
-      Providers.create_alias_provider(%{
+    {:ok, model_provider} =
+      Providers.create_model_provider(%{
         model_alias_id: model_alias.id,
-        provider_id: provider.id,
+        credential_id: credential.id,
         provider_model: "gpt-4o-real-#{u}",
         priority: 1
       })
 
     {:ok, _pricing} =
       Providers.create_model_pricing(%{
-        alias_provider_id: alias_provider.id,
+        model_provider_id: model_provider.id,
         input_price_per_1m: "2.50",
         output_price_per_1m: "10.00",
         effective_from: DateTime.truncate(DateTime.utc_now(), :second)
@@ -323,20 +323,20 @@ defmodule TokengateWeb.ProxyControllerTest do
         base_url: "http://localhost:#{@port}"
       })
 
-    {:ok, _cred2} =
+    {:ok, cred2} =
       Providers.create_credential(%{provider_id: provider2.id, api_key_encrypted: "sk-healthy"})
 
     {:ok, ap2} =
-      Providers.create_alias_provider(%{
+      Providers.create_model_provider(%{
         model_alias_id: model_alias.id,
-        provider_id: provider2.id,
+        credential_id: cred2.id,
         provider_model: "gpt-4o-healthy",
         priority: 2
       })
 
     {:ok, _} =
       Providers.create_model_pricing(%{
-        alias_provider_id: ap2.id,
+        model_provider_id: ap2.id,
         input_price_per_1m: "2.50",
         output_price_per_1m: "10.00",
         effective_from: DateTime.truncate(DateTime.utc_now(), :second)
@@ -407,10 +407,10 @@ defmodule TokengateWeb.ProxyControllerTest do
     %{token: token, alias: model_alias} = proxy_fixture()
 
     # Repoint the provider at the slow stream endpoint
-    [alias_provider] = Providers.list_alias_providers(model_alias.id)
+    [model_provider] = Providers.list_model_providers(model_alias.id)
 
     {:ok, _provider} =
-      Providers.update_provider(alias_provider.provider, %{
+      Providers.update_provider(model_provider.credential.provider, %{
         base_url: "http://localhost:#{@port}/slowstream"
       })
 

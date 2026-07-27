@@ -7,7 +7,7 @@ defmodule Tokengate.ProvidersTest do
     Provider,
     Credential,
     ModelAlias,
-    AliasProvider,
+    ModelProvider,
     ModelPricing,
     TeamModelAlias,
     TeamMemberExtraAlias
@@ -174,28 +174,29 @@ defmodule Tokengate.ProvidersTest do
     model_alias
   end
 
-  def alias_provider_fixture(model_alias \\ nil, provider \\ nil, attrs \\ %{}) do
+  def model_provider_fixture(model_alias \\ nil, provider \\ nil, attrs \\ %{}) do
     model_alias = model_alias || model_alias_fixture()
     provider = provider || provider_fixture()
+    credential = credential_fixture(provider)
 
     attrs =
       Enum.into(attrs, %{
         model_alias_id: model_alias.id,
-        provider_id: provider.id,
+        credential_id: credential.id,
         provider_model: "gpt-4-turbo",
         enabled: true
       })
 
-    {:ok, alias_provider} = Providers.create_alias_provider(attrs)
-    alias_provider
+    {:ok, model_provider} = Providers.create_model_provider(attrs)
+    model_provider
   end
 
-  def model_pricing_fixture(alias_provider \\ nil, attrs \\ %{}) do
-    alias_provider = alias_provider || alias_provider_fixture()
+  def model_pricing_fixture(model_provider \\ nil, attrs \\ %{}) do
+    model_provider = model_provider || model_provider_fixture()
 
     attrs =
       Enum.into(attrs, %{
-        alias_provider_id: alias_provider.id,
+        model_provider_id: model_provider.id,
         input_price_per_1m: Decimal.new("10.00"),
         output_price_per_1m: Decimal.new("30.00"),
         effective_from: DateTime.utc_now() |> DateTime.truncate(:second)
@@ -335,42 +336,43 @@ defmodule Tokengate.ProvidersTest do
   end
 
   # ---------------------------------------------------------------------------
-  # AliasProvider tests
+  # ModelProvider tests
   # ---------------------------------------------------------------------------
 
-  describe "alias_providers" do
-    test "create_alias_provider/1 with valid attrs" do
-      ap = alias_provider_fixture()
-      assert %AliasProvider{} = ap
+  describe "model_providers" do
+    test "create_model_provider/1 with valid attrs" do
+      ap = model_provider_fixture()
+      assert %ModelProvider{} = ap
       assert ap.enabled == true
     end
 
-    test "list_alias_providers/1 returns enabled, ordered priority ASC NULLS LAST" do
+    test "list_model_providers/1 returns enabled, ordered priority ASC NULLS LAST" do
       alias_ = model_alias_fixture()
       provider = provider_fixture()
 
       # priority=5 (lower priority = runs later)
-      ap5 = alias_provider_fixture(alias_, provider, %{priority: 5})
+      ap5 = model_provider_fixture(alias_, provider, %{priority: 5})
       # no priority (nil) — should come last due to NULLS LAST
-      ap_nil = alias_provider_fixture(alias_, provider, %{priority: nil})
+      ap_nil = model_provider_fixture(alias_, provider, %{priority: nil})
       # priority=1 (highest priority — first)
-      ap1 = alias_provider_fixture(alias_, provider, %{priority: 1})
+      ap1 = model_provider_fixture(alias_, provider, %{priority: 1})
       # disabled — should be excluded
-      _disabled = alias_provider_fixture(alias_, provider, %{enabled: false})
+      _disabled = model_provider_fixture(alias_, provider, %{enabled: false})
 
-      result = Providers.list_alias_providers(alias_.id)
+      result = Providers.list_model_providers(alias_.id)
       ids = Enum.map(result, & &1.id)
 
       assert ids == [ap1.id, ap5.id, ap_nil.id]
     end
 
-    test "list_alias_providers/1 preloads provider" do
+    test "list_model_providers/1 preloads credential with provider" do
       alias_ = model_alias_fixture()
       provider = provider_fixture()
-      alias_provider_fixture(alias_, provider)
+      model_provider_fixture(alias_, provider)
 
-      [result] = Providers.list_alias_providers(alias_.id)
-      assert %Provider{} = result.provider
+      [result] = Providers.list_model_providers(alias_.id)
+      assert %Credential{} = result.credential
+      assert %Provider{} = result.credential.provider
     end
   end
 
@@ -386,29 +388,29 @@ defmodule Tokengate.ProvidersTest do
     end
 
     test "current_pricing/1 returns latest by effective_from" do
-      alias_provider = alias_provider_fixture()
+      model_provider = model_provider_fixture()
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
       old =
-        model_pricing_fixture(alias_provider, %{
+        model_pricing_fixture(model_provider, %{
           effective_from: DateTime.add(now, -86_400),
           input_price_per_1m: Decimal.new("5.00")
         })
 
       _new =
-        model_pricing_fixture(alias_provider, %{
+        model_pricing_fixture(model_provider, %{
           effective_from: now,
           input_price_per_1m: Decimal.new("10.00")
         })
 
-      result = Providers.current_pricing(alias_provider.id)
+      result = Providers.current_pricing(model_provider.id)
       assert result.id != old.id
       assert Decimal.equal?(result.input_price_per_1m, Decimal.new("10.00"))
     end
 
     test "current_pricing/1 returns nil when no pricing exists" do
-      alias_provider = alias_provider_fixture()
-      assert Providers.current_pricing(alias_provider.id) == nil
+      model_provider = model_provider_fixture()
+      assert Providers.current_pricing(model_provider.id) == nil
     end
 
     test "cache fields are nullable" do

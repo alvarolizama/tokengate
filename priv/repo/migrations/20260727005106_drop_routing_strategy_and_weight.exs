@@ -6,7 +6,7 @@ defmodule Tokengate.Repo.Migrations.DropRoutingStrategyAndWeight do
       remove :routing_strategy
     end
 
-    alter table(:alias_providers) do
+    alter table(:model_providers) do
       remove :weight
     end
   end
@@ -16,7 +16,7 @@ defmodule Tokengate.Repo.Migrations.DropRoutingStrategyAndWeight do
       add :routing_strategy, :string, null: false, default: "priority"
     end
 
-    alter table(:alias_providers) do
+    alter table(:model_providers) do
       add :weight, :integer
     end
   end

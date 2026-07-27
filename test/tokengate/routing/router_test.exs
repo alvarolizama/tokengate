@@ -175,21 +175,24 @@ defmodule Tokengate.Routing.RouterTest do
     model_alias
   end
 
-  defp alias_provider_fixture(model_alias, provider, attrs \\ %{}) do
+  defp model_provider_fixture(model_alias, provider, attrs \\ %{}) do
+    credential = Map.get_lazy(attrs, :credential, fn -> credential_fixture(provider, %{}) end)
+    attrs = Map.delete(attrs, :credential)
+
     attrs =
       Enum.into(attrs, %{
         model_alias_id: model_alias.id,
-        provider_id: provider.id,
+        credential_id: credential.id,
         provider_model: "upstream-model",
         enabled: true
       })
 
-    {:ok, ap} = Providers.create_alias_provider(attrs)
+    {:ok, ap} = Providers.create_model_provider(attrs)
     ap
   end
 
   # Builds a full routing fixture: team, member, alias (granted to team),
-  # provider + active credential, and an enabled alias_provider.
+  # provider + active credential, and an enabled model_provider.
   defp full_setup(opts \\ []) do
     team = team_fixture()
     member = team_member_fixture(team)
@@ -202,9 +205,10 @@ defmodule Tokengate.Routing.RouterTest do
     credential = credential_fixture(provider, %{status: "active"})
 
     ap =
-      alias_provider_fixture(model_alias, provider, %{
+      model_provider_fixture(model_alias, provider, %{
         provider_model: Keyword.get(opts, :provider_model, "gpt-4-turbo"),
-        priority: Keyword.get(opts, :priority, 1)
+        priority: Keyword.get(opts, :priority, 1),
+        credential: credential
       })
 
     member = Repo.preload(member, [:team])
@@ -215,7 +219,7 @@ defmodule Tokengate.Routing.RouterTest do
       model_alias: model_alias,
       provider: provider,
       credential: credential,
-      alias_provider: ap
+      model_provider: ap
     }
   end
 
@@ -230,7 +234,7 @@ defmodule Tokengate.Routing.RouterTest do
       assert {:ok, route} = Router.route(f.model_alias.name, f.member)
 
       assert route.model_alias.id == f.model_alias.id
-      assert route.alias_provider.id == f.alias_provider.id
+      assert route.model_provider.id == f.model_provider.id
       assert route.credential.id == f.credential.id
       assert route.model_responded == "gpt-4-turbo"
     end
@@ -272,8 +276,12 @@ defmodule Tokengate.Routing.RouterTest do
       {:ok, _} = Providers.grant_extra_alias(member.id, model_alias.id)
 
       provider = provider_fixture()
-      _credential = credential_fixture(provider, %{status: "active"})
-      alias_provider_fixture(model_alias, provider, %{provider_model: "claude-3"})
+      credential = credential_fixture(provider, %{status: "active"})
+
+      model_provider_fixture(model_alias, provider, %{
+        provider_model: "claude-3",
+        credential: credential
+      })
 
       member = Repo.preload(member, [:team])
 
@@ -298,15 +306,15 @@ defmodule Tokengate.Routing.RouterTest do
   # ---------------------------------------------------------------------------
 
   describe "provider / credential errors" do
-    test "returns no_providers_configured when alias has no enabled alias_providers" do
+    test "returns no_providers_configured when alias has no enabled model_providers" do
       f = full_setup()
       # Disable the only alias provider.
-      {:ok, _} = Providers.update_alias_provider(f.alias_provider, %{enabled: false})
+      {:ok, _} = Providers.update_model_provider(f.model_provider, %{enabled: false})
 
       assert {:error, :no_providers_configured} = Router.route(f.model_alias.name, f.member)
     end
 
-    test "alias_provider without active credential is dropped" do
+    test "model_provider without active credential is dropped" do
       team = team_fixture()
       member = team_member_fixture(team)
 
@@ -315,9 +323,9 @@ defmodule Tokengate.Routing.RouterTest do
 
       provider = provider_fixture()
       # Only a disabled credential.
-      _disabled_cred = credential_fixture(provider, %{status: "disabled"})
+      disabled_cred = credential_fixture(provider, %{status: "disabled"})
 
-      alias_provider_fixture(model_alias, provider)
+      model_provider_fixture(model_alias, provider, %{credential: disabled_cred})
 
       member = Repo.preload(member, [:team])
 
@@ -335,16 +343,17 @@ defmodule Tokengate.Routing.RouterTest do
 
       # Add a second, lower-priority provider.
       provider2 = provider_fixture()
-      _cred2 = credential_fixture(provider2, %{status: "active"})
+      cred2 = credential_fixture(provider2, %{status: "active"})
 
-      alias_provider_fixture(f.model_alias, provider2, %{
+      model_provider_fixture(f.model_alias, provider2, %{
         priority: 10,
-        provider_model: "gpt-4-backup"
+        provider_model: "gpt-4-backup",
+        credential: cred2
       })
 
       # First provider has priority 1 (from full_setup default).
       assert {:ok, route} = Router.route(f.model_alias.name, f.member)
-      assert route.alias_provider.priority == 1
+      assert route.model_provider.priority == 1
     end
   end
 
@@ -360,9 +369,10 @@ defmodule Tokengate.Routing.RouterTest do
       cred2 = credential_fixture(provider2, %{status: "active"})
 
       ap2 =
-        alias_provider_fixture(f.model_alias, provider2, %{
+        model_provider_fixture(f.model_alias, provider2, %{
           priority: 10,
-          provider_model: "backup-model"
+          provider_model: "backup-model",
+          credential: cred2
         })
 
       # First call: picks priority-1 provider (cred1).
@@ -376,7 +386,7 @@ defmodule Tokengate.Routing.RouterTest do
                })
 
       assert route2.credential.id == cred2.id
-      assert route2.alias_provider.id == ap2.id
+      assert route2.model_provider.id == ap2.id
     end
 
     test "exclude via opts keyword" do
@@ -384,7 +394,7 @@ defmodule Tokengate.Routing.RouterTest do
 
       provider2 = provider_fixture()
       cred2 = credential_fixture(provider2, %{status: "active"})
-      _ap2 = alias_provider_fixture(f.model_alias, provider2, %{priority: 10})
+      _ap2 = model_provider_fixture(f.model_alias, provider2, %{priority: 10, credential: cred2})
 
       assert {:ok, route} =
                Router.route(f.model_alias.name, f.member, %{},
@@ -399,7 +409,7 @@ defmodule Tokengate.Routing.RouterTest do
 
       provider2 = provider_fixture()
       cred2 = credential_fixture(provider2, %{status: "active"})
-      _ap2 = alias_provider_fixture(f.model_alias, provider2, %{priority: 10})
+      _ap2 = model_provider_fixture(f.model_alias, provider2, %{priority: 10, credential: cred2})
 
       assert {:error, :no_available_provider} =
                Router.route(f.model_alias.name, f.member, %{

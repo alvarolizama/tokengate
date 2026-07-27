@@ -19,6 +19,7 @@ defmodule Tokengate.Providers.Credential do
     field :status, :string, default: "active"
 
     belongs_to :provider, Tokengate.Providers.Provider
+    has_many :model_providers, Tokengate.Providers.ModelProvider
 
     timestamps(type: :utc_datetime)
   end

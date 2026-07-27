@@ -115,7 +115,7 @@ defmodule TokengateWeb.ProxyController do
   ## Provider execution with fallback ##########################################
 
   defp execute(conn, route, payload, member, attempts_left, exclude) do
-    provider = route.alias_provider.provider
+    provider = route.model_provider.credential.provider
 
     case OpenAIAdapter.chat_completion(provider, route.credential, payload) do
       {:ok, body, latency_ms} ->
@@ -169,7 +169,7 @@ defmodule TokengateWeb.ProxyController do
   # sanctioned payload mutation — the plan requires real usage for cost
   # accounting, and it only affects the provider's own usage reporting.
   defp execute_stream(conn, route, payload, member, attempts_left, exclude) do
-    provider = route.alias_provider.provider
+    provider = route.model_provider.credential.provider
     payload = ensure_stream_options(payload)
 
     case OpenAIAdapter.stream_chat_completion(provider, route.credential, payload,
@@ -344,7 +344,7 @@ defmodule TokengateWeb.ProxyController do
 
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
-      provider_id: route.alias_provider.provider_id,
+      provider_id: route.model_provider.credential.provider_id,
       agent_type: conn.assigns.agent_type,
       status: 200,
       latency_ms: latency_ms,
@@ -361,7 +361,7 @@ defmodule TokengateWeb.ProxyController do
   end
 
   defp stream_costs(route, usage) do
-    pricing = Providers.current_pricing(route.alias_provider.id)
+    pricing = Providers.current_pricing(route.model_provider.id)
     CostCalculator.breakdown(route.model_alias, pricing, usage)
   end
 
@@ -369,7 +369,7 @@ defmodule TokengateWeb.ProxyController do
 
   defp finalize_success(conn, route, body, latency_ms, member) do
     usage = UsageNormalizer.normalize(:openai, body) || fallback_usage(conn.body_params, body)
-    pricing = Providers.current_pricing(route.alias_provider.id)
+    pricing = Providers.current_pricing(route.model_provider.id)
 
     costs = CostCalculator.breakdown(route.model_alias, pricing, usage)
 
@@ -378,7 +378,7 @@ defmodule TokengateWeb.ProxyController do
 
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
-      provider_id: route.alias_provider.provider_id,
+      provider_id: route.model_provider.credential.provider_id,
       agent_type: conn.assigns.agent_type,
       status: 200,
       latency_ms: latency_ms,
@@ -441,7 +441,7 @@ defmodule TokengateWeb.ProxyController do
   defp enqueue_log(route, member, agent_type, usage, costs, latency_ms, status, streaming) do
     %{
       "team_member_id" => member.id,
-      "provider_id" => route.alias_provider.provider_id,
+      "provider_id" => route.model_provider.credential.provider_id,
       "model_alias_id" => route.model_alias.id,
       "model_requested" => route.model_alias.name,
       "model_responded" => route.model_responded,

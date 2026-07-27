@@ -2,7 +2,7 @@ defmodule Tokengate.Repo.Migrations.RemoveSubscriptions do
   use Ecto.Migration
 
   def up do
-    alter table(:alias_providers) do
+    alter table(:model_providers) do
       remove :subscription_id
     end
 
@@ -28,7 +28,7 @@ defmodule Tokengate.Repo.Migrations.RemoveSubscriptions do
 
     create index(:provider_subscriptions, [:provider_id])
 
-    alter table(:alias_providers) do
+    alter table(:model_providers) do
       add :subscription_id, references(:provider_subscriptions, type: :binary_id)
     end
 

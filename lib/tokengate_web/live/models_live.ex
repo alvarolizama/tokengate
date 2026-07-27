@@ -1,6 +1,6 @@
 defmodule TokengateWeb.ModelsLive do
   @moduledoc """
-  CRUD for model_aliases + per-model alias_provider management.
+  CRUD for model_aliases + per-model model_provider management.
 
   Admins can create, edit, and delete models, and assign providers to each
   model (provider_model, priority, enabled toggle).
@@ -16,7 +16,7 @@ defmodule TokengateWeb.ModelsLive do
   import Ecto.Query, only: [from: 2]
 
   alias Tokengate.Providers
-  alias Tokengate.Providers.{ModelAlias, AliasProvider, Provider}
+  alias Tokengate.Providers.{ModelAlias, ModelProvider, Provider}
   alias Tokengate.Repo
 
   @impl true
@@ -44,8 +44,8 @@ defmodule TokengateWeb.ModelsLive do
   defp load_aliases(socket) do
     aliases =
       from(ma in ModelAlias,
-        left_join: aps in assoc(ma, :alias_providers),
-        preload: [alias_providers: {aps, [:provider]}],
+        left_join: aps in assoc(ma, :model_providers),
+        preload: [model_providers: {aps, [credential: :provider]}],
         order_by: [asc: ma.name]
       )
       |> Repo.all()
@@ -56,8 +56,16 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   defp assign_form_data(socket) do
+    credentials =
+      from(c in Tokengate.Providers.Credential,
+        where: c.status == "active",
+        preload: [:provider],
+        order_by: [asc: c.inserted_at]
+      )
+      |> Repo.all()
+
     socket
-    |> assign(:providers, Providers.list_providers())
+    |> assign(:credentials_for_select, credentials)
   end
 
   ## Events — alias CRUD ---------------------------------------------------
@@ -110,7 +118,7 @@ defmodule TokengateWeb.ModelsLive do
       alias_record = Providers.get_model_alias!(alias_id)
 
       has_providers? =
-        Repo.exists?(from(ap in AliasProvider, where: ap.model_alias_id == ^alias_id))
+        Repo.exists?(from(ap in ModelProvider, where: ap.model_alias_id == ^alias_id))
 
       if has_providers? do
         {:noreply,
@@ -136,12 +144,12 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
-  ## Events — alias_provider management -------------------------------------
+  ## Events — model_provider management -------------------------------------
 
-  def handle_event("new_alias_provider", %{"alias_id" => alias_id}, socket) do
+  def handle_event("new_model_provider", %{"alias_id" => alias_id}, socket) do
     if socket.assigns.is_admin do
       changeset =
-        Providers.change_alias_provider(%AliasProvider{
+        Providers.change_model_provider(%ModelProvider{
           model_alias_id: alias_id,
           enabled: true
         })
@@ -149,48 +157,48 @@ defmodule TokengateWeb.ModelsLive do
       {:noreply,
        socket
        |> assign(:provider_form_alias_id, alias_id)
-       |> assign(:provider_form, to_form(changeset, as: :alias_provider))
+       |> assign(:provider_form, to_form(changeset, as: :model_provider))
        |> assign(:editing_ap_id, :new)}
     else
       {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
     end
   end
 
-  def handle_event("cancel_alias_provider", _params, socket) do
+  def handle_event("cancel_model_provider", _params, socket) do
     {:noreply,
      socket
      |> assign(:provider_form, nil)
      |> assign(:editing_ap_id, nil)}
   end
 
-  def handle_event("edit_alias_provider", %{"id" => ap_id}, socket) do
+  def handle_event("edit_model_provider", %{"id" => ap_id}, socket) do
     if socket.assigns.is_admin do
-      ap = Providers.get_alias_provider!(ap_id)
-      changeset = Providers.change_alias_provider(ap)
+      ap = Providers.get_model_provider!(ap_id)
+      changeset = Providers.change_model_provider(ap)
 
       {:noreply,
        socket
-       |> assign(:provider_form, to_form(changeset, as: :alias_provider))
+       |> assign(:provider_form, to_form(changeset, as: :model_provider))
        |> assign(:editing_ap_id, ap.id)}
     else
       {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
     end
   end
 
-  def handle_event("save_alias_provider", %{"alias_provider" => ap_params}, socket) do
+  def handle_event("save_model_provider", %{"model_provider" => ap_params}, socket) do
     if socket.assigns.is_admin do
-      save_alias_provider(socket, socket.assigns.editing_ap_id, ap_params)
+      save_model_provider(socket, socket.assigns.editing_ap_id, ap_params)
     else
       {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
     end
   end
 
-  def handle_event("toggle_alias_provider", %{"id" => ap_id}, socket) do
+  def handle_event("toggle_model_provider", %{"id" => ap_id}, socket) do
     if socket.assigns.is_admin do
-      ap = Providers.get_alias_provider!(ap_id)
+      ap = Providers.get_model_provider!(ap_id)
       new_enabled = !ap.enabled
 
-      case Providers.update_alias_provider(ap, %{enabled: new_enabled}) do
+      case Providers.update_model_provider(ap, %{enabled: new_enabled}) do
         {:ok, _} ->
           {:noreply,
            socket
@@ -208,11 +216,11 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
-  def handle_event("delete_alias_provider", %{"id" => ap_id}, socket) do
+  def handle_event("delete_model_provider", %{"id" => ap_id}, socket) do
     if socket.assigns.is_admin do
-      ap = Providers.get_alias_provider!(ap_id)
+      ap = Providers.get_model_provider!(ap_id)
 
-      case Providers.delete_alias_provider(ap) do
+      case Providers.delete_model_provider(ap) do
         {:ok, _} ->
           {:noreply,
            socket
@@ -261,12 +269,12 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
-  ## Private helpers — alias_provider save ---------------------------------
+  ## Private helpers — model_provider save ---------------------------------
 
-  defp save_alias_provider(socket, :new, ap_params) do
+  defp save_model_provider(socket, :new, ap_params) do
     ap_params = Map.put(ap_params, "model_alias_id", socket.assigns.provider_form_alias_id)
 
-    case Providers.create_alias_provider(ap_params) do
+    case Providers.create_model_provider(ap_params) do
       {:ok, _ap} ->
         {:noreply,
          socket
@@ -276,14 +284,14 @@ defmodule TokengateWeb.ModelsLive do
          |> load_aliases()}
 
       {:error, changeset} ->
-        {:noreply, assign(socket, :provider_form, to_form(changeset, as: :alias_provider))}
+        {:noreply, assign(socket, :provider_form, to_form(changeset, as: :model_provider))}
     end
   end
 
-  defp save_alias_provider(socket, ap_id, ap_params) when is_binary(ap_id) do
-    ap = Providers.get_alias_provider!(ap_id)
+  defp save_model_provider(socket, ap_id, ap_params) when is_binary(ap_id) do
+    ap = Providers.get_model_provider!(ap_id)
 
-    case Providers.update_alias_provider(ap, ap_params) do
+    case Providers.update_model_provider(ap, ap_params) do
       {:ok, _ap} ->
         {:noreply,
          socket
@@ -293,15 +301,29 @@ defmodule TokengateWeb.ModelsLive do
          |> load_aliases()}
 
       {:error, changeset} ->
-        {:noreply, assign(socket, :provider_form, to_form(changeset, as: :alias_provider))}
+        {:noreply, assign(socket, :provider_form, to_form(changeset, as: :model_provider))}
     end
   end
 
   ## Helpers ---------------------------------------------------------------
 
-  @doc "Provider options for the select (id -> display)"
-  def provider_options(providers) do
-    Enum.map(providers, fn p -> {p.name, p.id} end)
+  @doc "Credential options for the select (id -> display)"
+  def credential_options(credentials) do
+    Enum.map(credentials, fn c ->
+      {"#{c.provider.name} · #{mask_key(c.api_key_encrypted)}", c.id}
+    end)
+  end
+
+  @doc "Mask an api key for display: show only the last 4 chars."
+  def mask_key(nil), do: "—"
+  def mask_key(""), do: "—"
+  def mask_key(key) when byte_size(key) <= 4, do: "****"
+
+  def mask_key(key) do
+    len = String.length(key)
+
+    String.slice(key, len - 4, 4)
+    |> then(&"••••••#{&1}")
   end
 
   @doc "Format a decimal for display"
@@ -309,12 +331,12 @@ defmodule TokengateWeb.ModelsLive do
   def fmt_dec(%Decimal{} = d), do: Decimal.to_string(d)
   def fmt_dec(n), do: to_string(n)
 
-  @doc "Find alias_providers for a model_alias from the preloaded association"
-  def alias_providers_for(%{alias_providers: aps}), do: aps
-  def alias_providers_for(_), do: []
+  @doc "Find model_providers for a model_alias from the preloaded association"
+  def model_providers_for(%{model_providers: aps}), do: aps
+  def model_providers_for(_), do: []
 
-  @doc "Provider name from preloaded provider"
-  def provider_name(%{provider: %Provider{name: name}}), do: name
+  @doc "Provider name from preloaded credential"
+  def provider_name(%{credential: %{provider: %Provider{name: name}}}), do: name
   def provider_name(_), do: "—"
 
   @doc "Enabled badge class"
@@ -367,7 +389,7 @@ defmodule TokengateWeb.ModelsLive do
                         {model_alias.name}
                       </h3>
                       <span class="badge badge-sm badge-ghost">
-                        {length(alias_providers_for(model_alias))} proveedores
+                        {length(model_providers_for(model_alias))} proveedores
                       </span>
                     </div>
                     <p class="text-sm text-base-content/60 mt-1">{model_alias.display_name}</p>
@@ -417,7 +439,7 @@ defmodule TokengateWeb.ModelsLive do
                     </h4>
                     <%= if @is_admin do %>
                       <button
-                        phx-click="new_alias_provider"
+                        phx-click="new_model_provider"
                         phx-value-alias_id={model_alias.id}
                         class="btn btn-xs btn-primary"
                         id={"new-ap-#{model_alias.id}"}
@@ -428,13 +450,13 @@ defmodule TokengateWeb.ModelsLive do
                   </div>
 
                   <div
-                    :if={alias_providers_for(model_alias) == []}
+                    :if={model_providers_for(model_alias) == []}
                     class="text-sm text-base-content/40 py-2"
                   >
                     No hay proveedores asignados.
                   </div>
 
-                  <div :if={alias_providers_for(model_alias) != []} class="overflow-x-auto">
+                  <div :if={model_providers_for(model_alias) != []} class="overflow-x-auto">
                     <table class="table table-sm">
                       <thead>
                         <tr>
@@ -449,10 +471,17 @@ defmodule TokengateWeb.ModelsLive do
                       </thead>
                       <tbody>
                         <tr
-                          :for={ap <- alias_providers_for(model_alias)}
+                          :for={ap <- model_providers_for(model_alias)}
                           id={"alias-provider-#{ap.id}"}
                         >
-                          <td class="font-medium">{provider_name(ap)}</td>
+                          <td class="font-medium">
+                            {provider_name(ap)}
+                            <span class="text-xs text-base-content/40 ml-1">
+                              {if ap.credential,
+                                do: mask_key(ap.credential.api_key_encrypted),
+                                else: "—"}
+                            </span>
+                          </td>
                           <td><code class="text-sm">{ap.provider_model}</code></td>
                           <td>{ap.priority || "—"}</td>
                           <td>
@@ -464,7 +493,7 @@ defmodule TokengateWeb.ModelsLive do
                             <td>
                               <div class="flex gap-1">
                                 <button
-                                  phx-click="toggle_alias_provider"
+                                  phx-click="toggle_model_provider"
                                   phx-value-id={ap.id}
                                   class="btn btn-xs btn-ghost"
                                   id={"toggle-ap-#{ap.id}"}
@@ -472,7 +501,7 @@ defmodule TokengateWeb.ModelsLive do
                                   <.icon name="hero-arrow-path" class="w-3 h-3" />
                                 </button>
                                 <button
-                                  phx-click="edit_alias_provider"
+                                  phx-click="edit_model_provider"
                                   phx-value-id={ap.id}
                                   class="btn btn-xs btn-ghost"
                                   id={"edit-ap-#{ap.id}"}
@@ -480,7 +509,7 @@ defmodule TokengateWeb.ModelsLive do
                                   <.icon name="hero-pencil-square" class="w-3 h-3" />
                                 </button>
                                 <button
-                                  phx-click="delete_alias_provider"
+                                  phx-click="delete_model_provider"
                                   phx-value-id={ap.id}
                                   data-confirm="¿Eliminar este proveedor del modelo?"
                                   class="btn btn-xs btn-ghost text-error"
@@ -566,36 +595,42 @@ defmodule TokengateWeb.ModelsLive do
 
         <%!-- Alias provider form (new/edit) --%>
         <div :if={@provider_form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_alias_provider" />
+          <div class="absolute inset-0 bg-black/50" phx-click="cancel_model_provider" />
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
             <div class="card-body p-6">
               <h2 class="text-lg font-semibold mb-4">
                 {if @editing_ap_id == :new, do: "Asignar Proveedor", else: "Editar Proveedor"}
               </h2>
 
-              <.form for={@provider_form} id="alias-provider-form" phx-submit="save_alias_provider">
+              <.form
+                for={@provider_form}
+                id="alias-provider-form"
+                phx-submit="save_model_provider"
+                phx-change="provider_form_changed"
+              >
                 <.input
-                  field={@provider_form[:provider_id]}
+                  field={@provider_form[:credential_id]}
                   type="select"
-                  label="Proveedor"
-                  options={provider_options(@providers)}
-                  prompt="Selecciona un proveedor"
+                  label="Credencial (API Key)"
+                  options={credential_options(@credentials_for_select)}
+                  prompt="Selecciona una credencial"
                   required
-                  hint="Qué provider servirá este modelo."
+                  hint="La API key específica que servirá este modelo. Cada credencial tiene su propio circuit breaker y prioridad."
                 />
                 <.input
                   field={@provider_form[:provider_model]}
                   type="text"
                   label="Modelo del proveedor"
                   required
-                  hint="Nombre del modelo en la API del provider, ej. gpt-4o-2024-08-06."
+                  placeholder="ej. gpt-4o-2024-08-06"
+                  hint="Nombre del modelo en la API del provider, tal como aparece en su documentación."
                 />
                 <div class="grid grid-cols-2 gap-3">
                   <.input
                     field={@provider_form[:priority]}
                     type="number"
                     label="Prioridad (menor = primero)"
-                    hint="Orden de preferencia. Menor número = se intenta primero."
+                    hint="Orden de preferencia. Menor número = se intenta primero. Si cae, salta al siguiente."
                   />
                 </div>
 
@@ -603,11 +638,11 @@ defmodule TokengateWeb.ModelsLive do
                   field={@provider_form[:enabled]}
                   type="checkbox"
                   label="Habilitado"
-                  hint="Si está apagado, este provider no recibe tráfico del alias."
+                  hint="Si está apagado, este provider no recibe tráfico del modelo."
                 />
 
                 <div class="flex gap-2 mt-4 justify-end">
-                  <button type="button" phx-click="cancel_alias_provider" class="btn btn-ghost btn-sm">
+                  <button type="button" phx-click="cancel_model_provider" class="btn btn-ghost btn-sm">
                     Cancelar
                   </button>
                   <button type="submit" class="btn btn-primary btn-sm" id="save-ap-btn">

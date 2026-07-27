@@ -9,7 +9,7 @@ defmodule Tokengate.Proxy.CostCalculator do
       (model_alias `market_*_price_per_1m`). Computed pre-request with
       estimated tokens (budget check) and post-request with real tokens.
     * `cost_usd` — what this **specific provider charges** for the usage
-      (alias_provider `model_pricing`). Only meaningful for
+      (model_provider `model_pricing`). Only meaningful for
       `pay_per_token` providers.
     * `provider_cost_usd` — what you **actually pay**: `0` for
       subscription providers, `cost_usd` for pay-per-token.

@@ -19,7 +19,6 @@ defmodule Tokengate.Providers.Provider do
     field :status, :string, default: "active"
 
     has_many :credentials, Tokengate.Providers.Credential
-    has_many :alias_providers, Tokengate.Providers.AliasProvider
 
     timestamps(type: :utc_datetime)
   end

@@ -1,7 +1,7 @@
 defmodule Tokengate.Routing.PriorityTest do
   use ExUnit.Case, async: false
 
-  alias Tokengate.Providers.AliasProvider
+  alias Tokengate.Providers.ModelProvider
   alias Tokengate.Routing.Priority
   alias Tokengate.Routing.StickyTracker
 
@@ -20,7 +20,7 @@ defmodule Tokengate.Routing.PriorityTest do
   end
 
   defp ap(id, opts \\ []) do
-    %AliasProvider{
+    %ModelProvider{
       id: id,
       priority: Keyword.get(opts, :priority),
       enabled: Keyword.get(opts, :enabled, true),

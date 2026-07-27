@@ -4,10 +4,10 @@ defmodule TokengateWeb.ProvidersLive do
 
   Providers are global (not org-scoped). Each provider can carry multiple
   credentials (api_key_encrypted, max_rpm, max_concurrent, status) and
-  multiple alias_providers (model × provider), each with its own versioned
+  multiple model_providers (model × provider), each with its own versioned
   pricing entries.
 
-  Deleting a provider that is referenced by alias_providers is blocked
+  Deleting a provider that is referenced by model_providers is blocked
   with a friendly Spanish flash message.
   """
 
@@ -16,7 +16,7 @@ defmodule TokengateWeb.ProvidersLive do
   import Ecto.Query, only: [from: 2]
 
   alias Tokengate.Providers
-  alias Tokengate.Providers.{Provider, Credential, AliasProvider, ModelPricing}
+  alias Tokengate.Providers.{Provider, Credential, ModelProvider, ModelPricing}
   alias Tokengate.Repo
 
   @impl true
@@ -48,22 +48,28 @@ defmodule TokengateWeb.ProvidersLive do
       )
       |> Repo.all()
 
-    # Preload alias_providers with model_alias and model_pricing, grouped by provider_id
-    provider_ids = Enum.map(providers, & &1.id)
+    # Preload model_providers with credential (provider), model_alias and
+    # model_pricing, grouped by provider via credential
+    credential_ids =
+      providers
+      |> Enum.flat_map(& &1.credentials)
+      |> Enum.map(& &1.id)
 
-    alias_providers =
-      if provider_ids == [] do
+    model_providers =
+      if credential_ids == [] do
         []
       else
-        from(ap in AliasProvider,
-          where: ap.provider_id in ^provider_ids,
-          preload: [:model_alias, model_pricing: :alias_provider],
-          order_by: [asc: ap.provider_model]
+        from(mp in ModelProvider,
+          where: mp.credential_id in ^credential_ids,
+          preload: [:model_alias, credential: :provider, model_pricing: :model_provider],
+          order_by: [asc: mp.provider_model]
         )
         |> Repo.all()
       end
 
-    aps_by_provider = Enum.group_by(alias_providers, & &1.provider_id)
+    aps_by_provider =
+      model_providers
+      |> Enum.group_by(fn mp -> mp.credential.provider_id end)
 
     socket
     |> assign(:providers, providers)
@@ -108,7 +114,12 @@ defmodule TokengateWeb.ProvidersLive do
     provider = Providers.get_provider!(provider_id)
 
     referenced? =
-      Repo.exists?(from(ap in AliasProvider, where: ap.provider_id == ^provider_id))
+      Repo.exists?(
+        from(mp in ModelProvider,
+          join: c in assoc(mp, :credential),
+          where: c.provider_id == ^provider_id
+        )
+      )
 
     if referenced? do
       {:noreply,
@@ -230,11 +241,11 @@ defmodule TokengateWeb.ProvidersLive do
   end
 
   def handle_event("new_pricing", %{"ap_id" => ap_id}, socket) do
-    ap = get_alias_provider_with_preloads!(ap_id)
+    ap = get_model_provider_with_preloads!(ap_id)
 
     changeset =
       Providers.change_model_pricing(%ModelPricing{
-        alias_provider_id: ap_id,
+        model_provider_id: ap_id,
         effective_from: DateTime.utc_now() |> DateTime.truncate(:second)
       })
 
@@ -258,13 +269,13 @@ defmodule TokengateWeb.ProvidersLive do
   def handle_event("edit_pricing", %{"id" => pricing_id}, socket) do
     pricing = Providers.get_model_pricing!(pricing_id)
     changeset = Providers.change_model_pricing(pricing)
-    ap = get_alias_provider_with_preloads!(pricing.alias_provider_id)
+    ap = get_model_provider_with_preloads!(pricing.model_provider_id)
 
     {:noreply,
      socket
      |> assign(:pricing_form, to_form(changeset, as: :model_pricing))
      |> assign(:editing_pricing_id, pricing.id)
-     |> assign(:pricing_ap_id, pricing.alias_provider_id)
+     |> assign(:pricing_ap_id, pricing.model_provider_id)
      |> assign(:current_ap, ap)}
   end
 
@@ -361,10 +372,10 @@ defmodule TokengateWeb.ProvidersLive do
 
   ## Private helpers — data fetching -------------------------------------
 
-  defp get_alias_provider_with_preloads!(ap_id) do
-    from(ap in AliasProvider,
-      where: ap.id == ^ap_id,
-      preload: [:provider, :model_alias]
+  defp get_model_provider_with_preloads!(ap_id) do
+    from(mp in ModelProvider,
+      where: mp.id == ^ap_id,
+      preload: [:model_alias, credential: :provider]
     )
     |> Repo.one!()
   end
@@ -378,7 +389,7 @@ defmodule TokengateWeb.ProvidersLive do
   @doc "Alias providers for a provider (from the grouped map)."
   def aps_for(provider_id, aps_by_provider), do: Map.get(aps_by_provider, provider_id, [])
 
-  @doc "Pricing entries for an alias_provider (from preloaded association)."
+  @doc "Pricing entries for an model_provider (from preloaded association)."
   def pricing_entries(ap), do: ap.model_pricing || []
 
   @doc "Mask an api key for display: show only the last 4 chars."
@@ -409,7 +420,7 @@ defmodule TokengateWeb.ProvidersLive do
   def current_label(true), do: {"badge-success", "Actual"}
   def current_label(false), do: {"badge-ghost", "Histórico"}
 
-  @doc "Check if a pricing entry is the current (latest) one for its alias_provider."
+  @doc "Check if a pricing entry is the current (latest) one for its model_provider."
   def is_current?(pricing, ap) do
     entries = ap.model_pricing || []
 
@@ -804,7 +815,7 @@ defmodule TokengateWeb.ProvidersLive do
 
               <.form for={@pricing_form} id="pricing-form" phx-submit="save_pricing">
                 <.input
-                  field={@pricing_form[:alias_provider_id]}
+                  field={@pricing_form[:model_provider_id]}
                   type="hidden"
                 />
                 <div class="grid grid-cols-2 gap-3">

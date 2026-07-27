@@ -1,8 +1,12 @@
-defmodule Tokengate.Providers.AliasProvider do
+defmodule Tokengate.Providers.ModelProvider do
   @moduledoc """
-  Joins a ModelAlias to a Provider, specifying the actual model name
+  Joins a ModelAlias to a Credential, specifying the actual model name
   at the provider (`provider_model`), priority for routing, and
   enabled flag.
+
+  Each row pins a specific credential — allowing multiple credentials
+  from the same provider to serve the same model with different
+  priorities for fallback.
   """
 
   use Ecto.Schema
@@ -11,13 +15,13 @@ defmodule Tokengate.Providers.AliasProvider do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  schema "alias_providers" do
+  schema "model_providers" do
     field :provider_model, :string
     field :priority, :integer
     field :enabled, :boolean, default: true
 
     belongs_to :model_alias, Tokengate.Providers.ModelAlias
-    belongs_to :provider, Tokengate.Providers.Provider
+    belongs_to :credential, Tokengate.Providers.Credential
 
     has_many :model_pricing, Tokengate.Providers.ModelPricing
 
@@ -25,17 +29,17 @@ defmodule Tokengate.Providers.AliasProvider do
   end
 
   @doc false
-  def changeset(alias_provider, attrs) do
-    alias_provider
+  def changeset(model_provider, attrs) do
+    model_provider
     |> cast(attrs, [
       :model_alias_id,
-      :provider_id,
+      :credential_id,
       :provider_model,
       :priority,
       :enabled
     ])
-    |> validate_required([:model_alias_id, :provider_id, :provider_model, :enabled])
+    |> validate_required([:model_alias_id, :credential_id, :provider_model, :enabled])
     |> foreign_key_constraint(:model_alias_id)
-    |> foreign_key_constraint(:provider_id)
+    |> foreign_key_constraint(:credential_id)
   end
 end

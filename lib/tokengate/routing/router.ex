@@ -7,7 +7,7 @@ defmodule Tokengate.Routing.Router do
   ## Public API
 
     * `route/3`  – resolve a `model_requested` for a `team_member`, returning a
-      route map with the selected `alias_provider`, `credential`, and
+      route map with the selected `model_provider`, `credential`, and
       `model_responded` (the upstream model string).
     * `record_outcome/2` – record a success or failure against the selected
       credential's circuit breaker.
@@ -42,7 +42,7 @@ defmodule Tokengate.Routing.Router do
 
   @type route :: %{
           model_alias: Tokengate.Providers.ModelAlias.t(),
-          alias_provider: Tokengate.Providers.AliasProvider.t(),
+          model_provider: Tokengate.Providers.ModelProvider.t(),
           credential: Tokengate.Providers.Credential.t(),
           model_responded: String.t()
         }
@@ -149,25 +149,19 @@ defmodule Tokengate.Routing.Router do
   # ---------------------------------------------------------------------------
 
   defp route_alias(model_alias, _team_member, _accessible, request_context, breaker, exclude) do
-    # Load enabled alias_providers for the alias.
-    alias_providers = Providers.list_alias_providers(model_alias.id)
+    # Load enabled model_providers for the alias (with credential preloaded).
+    model_providers = Providers.list_model_providers(model_alias.id)
 
-    if alias_providers == [] do
+    if model_providers == [] do
       {:error, :no_providers_configured}
     else
-      # Attach the active credential to each alias_provider and drop those
-      # without one (or whose credential is excluded).
+      # Filter out candidates whose credential is excluded or disabled.
       candidates =
-        alias_providers
-        |> Enum.map(fn ap ->
-          credential = Providers.active_credential(ap.provider_id)
-          {ap, credential}
-        end)
-        |> Enum.filter(fn {_ap, credential} ->
-          credential != nil and credential.id not in exclude
-        end)
-        |> Enum.map(fn {ap, credential} ->
-          Map.put(ap, :credential, credential)
+        model_providers
+        |> Enum.filter(fn mp ->
+          mp.credential != nil and
+            mp.credential.status == "active" and
+            mp.credential.id not in exclude
         end)
 
       if candidates == [] do
@@ -190,15 +184,15 @@ defmodule Tokengate.Routing.Router do
     }
 
     case Priority.select(candidates, strategy_opts) do
-      {:ok, alias_provider} ->
-        credential = alias_provider.credential
+      {:ok, model_provider} ->
+        credential = model_provider.credential
 
         {:ok,
          %{
            model_alias: model_alias,
-           alias_provider: alias_provider,
+           model_provider: model_provider,
            credential: credential,
-           model_responded: alias_provider.provider_model
+           model_responded: model_provider.provider_model
          }}
 
       {:error, :no_available_provider} = error ->

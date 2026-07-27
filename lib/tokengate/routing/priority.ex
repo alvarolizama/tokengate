@@ -7,7 +7,7 @@ defmodule Tokengate.Routing.Priority do
     1. Sort candidates by priority ASC NULLS LAST (nil priority sorts last;
        the sort is stable so original order is preserved within ties).
     2. If `opts[:api_key_hash]` is present: look up the sticky entry in
-       `StickyTracker`. If the stuck `alias_provider_id` is among the
+       `StickyTracker`. If the stuck `model_provider_id` is among the
        candidates **and** satisfies `available?.(ap)`, return it immediately.
     3. Otherwise pick the first available candidate in priority order, stick
        to it (only when `opts[:api_key_hash]` is present), and return it.
@@ -20,7 +20,7 @@ defmodule Tokengate.Routing.Priority do
 
   @behaviour Tokengate.Routing.Strategy
 
-  alias Tokengate.Providers.AliasProvider
+  alias Tokengate.Providers.ModelProvider
   alias Tokengate.Routing.StickyTracker
 
   @impl true
@@ -59,7 +59,7 @@ defmodule Tokengate.Routing.Priority do
           nil ->
             pick_and_stick(sorted, api_key_hash, model_alias_id, available?)
 
-          %AliasProvider{} = ap ->
+          %ModelProvider{} = ap ->
             if available?.(ap) do
               {:ok, ap}
             else
@@ -77,7 +77,7 @@ defmodule Tokengate.Routing.Priority do
       nil ->
         {:error, :no_available_provider}
 
-      %AliasProvider{} = ap ->
+      %ModelProvider{} = ap ->
         sticky_put(api_key_hash, model_alias_id, ap.id)
         {:ok, ap}
     end
@@ -93,11 +93,11 @@ defmodule Tokengate.Routing.Priority do
     Enum.sort_by(candidates, &priority_value/1, &(&1 <= &2))
   end
 
-  defp priority_value(%AliasProvider{priority: nil}), do: @nil_sentinel
-  defp priority_value(%AliasProvider{priority: p}), do: p
+  defp priority_value(%ModelProvider{priority: nil}), do: @nil_sentinel
+  defp priority_value(%ModelProvider{priority: p}), do: p
 
   defp find_candidate(candidates, id) do
-    Enum.find(candidates, fn %AliasProvider{id: cid} -> cid == id end)
+    Enum.find(candidates, fn %ModelProvider{id: cid} -> cid == id end)
   end
 
   ## Safe StickyTracker wrappers -------------------------------------------
@@ -113,9 +113,9 @@ defmodule Tokengate.Routing.Priority do
     :exit, _ -> nil
   end
 
-  defp sticky_put(api_key_hash, model_alias_id, alias_provider_id) do
+  defp sticky_put(api_key_hash, model_alias_id, model_provider_id) do
     try do
-      StickyTracker.put(api_key_hash, model_alias_id, alias_provider_id)
+      StickyTracker.put(api_key_hash, model_alias_id, model_provider_id)
     catch
       :exit, _ -> :ok
     end

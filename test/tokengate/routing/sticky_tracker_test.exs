@@ -62,7 +62,7 @@ defmodule Tokengate.Routing.StickyTrackerTest do
   end
 
   describe "clear_all_for_provider/1" do
-    test "drops all stickies pointing at the given alias_provider_ids" do
+    test "drops all stickies pointing at the given model_provider_ids" do
       StickyTracker.put("key-a", "alias-1", "ap-1")
       StickyTracker.put("key-b", "alias-1", "ap-1")
       StickyTracker.put("key-c", "alias-2", "ap-2")
@@ -75,7 +75,7 @@ defmodule Tokengate.Routing.StickyTrackerTest do
       assert StickyTracker.get("key-c", "alias-2") == "ap-2"
     end
 
-    test "clears multiple alias_provider_ids at once" do
+    test "clears multiple model_provider_ids at once" do
       StickyTracker.put("key-a", "alias-1", "ap-1")
       StickyTracker.put("key-b", "alias-2", "ap-2")
       StickyTracker.put("key-c", "alias-3", "ap-3")

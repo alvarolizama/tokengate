@@ -17,7 +17,7 @@ defmodule Tokengate.Providers do
     Provider,
     Credential,
     ModelAlias,
-    AliasProvider,
+    ModelProvider,
     ModelPricing,
     TeamModelAlias,
     TeamMemberExtraAlias
@@ -129,79 +129,80 @@ defmodule Tokengate.Providers do
   # Alias Providers
   # ---------------------------------------------------------------------------
 
-  def list_alias_providers, do: Repo.all(AliasProvider)
+  def list_model_providers, do: Repo.all(ModelProvider)
 
-  def get_alias_provider!(id), do: Repo.get!(AliasProvider, id)
-  def get_alias_provider(id), do: Repo.get(AliasProvider, id)
+  def get_model_provider!(id), do: Repo.get!(ModelProvider, id)
+  def get_model_provider(id), do: Repo.get(ModelProvider, id)
 
-  def create_alias_provider(attrs) do
-    %AliasProvider{}
-    |> AliasProvider.changeset(attrs)
+  def create_model_provider(attrs) do
+    %ModelProvider{}
+    |> ModelProvider.changeset(attrs)
     |> Repo.insert()
   end
 
-  def update_alias_provider(%AliasProvider{} = alias_provider, attrs) do
-    alias_provider
-    |> AliasProvider.changeset(attrs)
+  def update_model_provider(%ModelProvider{} = model_provider, attrs) do
+    model_provider
+    |> ModelProvider.changeset(attrs)
     |> Repo.update()
   end
 
-  def delete_alias_provider(%AliasProvider{} = alias_provider), do: Repo.delete(alias_provider)
+  def delete_model_provider(%ModelProvider{} = model_provider), do: Repo.delete(model_provider)
 
-  def change_alias_provider(%AliasProvider{} = alias_provider, attrs \\ %{}),
-    do: AliasProvider.changeset(alias_provider, attrs)
+  def change_model_provider(%ModelProvider{} = model_provider, attrs \\ %{}),
+    do: ModelProvider.changeset(model_provider, attrs)
 
   @doc """
-  Returns enabled alias_providers for a model_alias, ordered by priority ASC
-  with NULLS LAST, preloading provider, and model_pricing.
+  Returns enabled model_providers for a model_alias, ordered by priority ASC
+  with NULLS LAST, preloading credential (with provider), and model_pricing.
   """
-  def list_alias_providers(model_alias_id) when is_binary(model_alias_id) do
-    from(ap in AliasProvider,
-      where: ap.model_alias_id == ^model_alias_id and ap.enabled == true,
-      order_by: [asc_nulls_last: ap.priority],
-      preload: [:provider, :model_pricing]
+  def list_model_providers(model_alias_id) when is_binary(model_alias_id) do
+    from(mp in ModelProvider,
+      where: mp.model_alias_id == ^model_alias_id and mp.enabled == true,
+      order_by: [asc_nulls_last: mp.priority],
+      preload: [:model_pricing, credential: :provider]
     )
     |> Repo.all()
   end
 
   @doc """
-  Returns ALL alias_providers for a model_alias (enabled and disabled),
-  preloading provider and model_pricing. Ordered by priority
-  ASC with NULLS LAST, then by provider name.
+  Returns ALL model_providers for a model_alias (enabled and disabled),
+  preloading credential (with provider) and model_pricing. Ordered by
+  priority ASC with NULLS LAST.
   """
-  def list_all_alias_providers(model_alias_id) when is_binary(model_alias_id) do
-    from(ap in AliasProvider,
-      where: ap.model_alias_id == ^model_alias_id,
-      order_by: [asc_nulls_last: ap.priority],
-      preload: [:provider, :model_pricing]
+  def list_all_model_providers(model_alias_id) when is_binary(model_alias_id) do
+    from(mp in ModelProvider,
+      where: mp.model_alias_id == ^model_alias_id,
+      order_by: [asc_nulls_last: mp.priority],
+      preload: [:model_pricing, credential: :provider]
     )
     |> Repo.all()
   end
 
   @doc """
-  Returns all alias_providers, preloading provider, model_alias, and
-  model_pricing. Used by the pricing admin.
+  Returns all model_providers, preloading credential (with provider),
+  model_alias, and model_pricing. Used by the pricing admin.
   """
-  def list_pay_per_token_alias_providers do
-    from(ap in AliasProvider,
-      join: p in assoc(ap, :provider),
-      preload: [provider: p, model_alias: [], model_pricing: :alias_provider],
+  def list_pay_per_token_model_providers do
+    from(mp in ModelProvider,
+      join: c in assoc(mp, :credential),
+      join: p in assoc(c, :provider),
+      preload: [credential: {c, provider: p}, model_alias: [], model_pricing: :model_provider],
       order_by: [asc: p.name]
     )
     |> Repo.all()
   end
 
   @doc """
-  Returns all alias_providers for a model_alias with provider and model_pricing
-  preloaded, including the model_alias association. Used by the pricing admin
-  when filtering by alias.
+  Returns all model_providers for a model_alias with credential (with provider)
+  and model_pricing preloaded, including the model_alias association.
   """
-  def list_alias_providers_for_pricing(model_alias_id) when is_binary(model_alias_id) do
-    from(ap in AliasProvider,
-      join: p in assoc(ap, :provider),
-      where: ap.model_alias_id == ^model_alias_id,
-      preload: [provider: p, model_pricing: :alias_provider],
-      order_by: [asc_nulls_last: ap.priority]
+  def list_model_providers_for_pricing(model_alias_id) when is_binary(model_alias_id) do
+    from(mp in ModelProvider,
+      join: c in assoc(mp, :credential),
+      join: p in assoc(c, :provider),
+      where: mp.model_alias_id == ^model_alias_id,
+      preload: [credential: {c, provider: p}, model_pricing: :model_provider],
+      order_by: [asc_nulls_last: mp.priority]
     )
     |> Repo.all()
   end
@@ -233,11 +234,11 @@ defmodule Tokengate.Providers do
     do: ModelPricing.changeset(model_pricing, attrs)
 
   @doc """
-  Returns the latest ModelPricing for an alias_provider by effective_from.
+  Returns the latest ModelPricing for an model_provider by effective_from.
   """
-  def current_pricing(alias_provider_id) do
+  def current_pricing(model_provider_id) do
     from(p in ModelPricing,
-      where: p.alias_provider_id == ^alias_provider_id,
+      where: p.model_provider_id == ^model_provider_id,
       order_by: [desc: p.effective_from],
       limit: 1
     )

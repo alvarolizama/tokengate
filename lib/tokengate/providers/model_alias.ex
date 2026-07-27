@@ -1,7 +1,7 @@
 defmodule Tokengate.Providers.ModelAlias do
   @moduledoc """
   A model alias is a logical model name that maps to one or more
-  provider-backed models (alias_providers).
+  provider-backed models (model_providers).
   """
 
   use Ecto.Schema
@@ -17,7 +17,7 @@ defmodule Tokengate.Providers.ModelAlias do
     field :market_output_price_per_1m, :decimal
     field :context_window, :integer
 
-    has_many :alias_providers, Tokengate.Providers.AliasProvider
+    has_many :model_providers, Tokengate.Providers.ModelProvider
 
     timestamps(type: :utc_datetime)
   end
