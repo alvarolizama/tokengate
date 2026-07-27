@@ -66,12 +66,9 @@ defmodule TokengateWeb.TeamsLive do
       |> Repo.all()
       |> Enum.group_by(fn _ma -> "all" end)
 
+    # Single query for all teams' destinations (avoids one query per team)
     destinations_by_team =
-      teams
-      |> Enum.map(fn team ->
-        {team.id, Observability.list_destinations(team.id)}
-      end)
-      |> Map.new()
+      Observability.list_destinations_for_teams(Enum.map(teams, & &1.id))
 
     socket
     |> stream(:teams, teams, reset: true)

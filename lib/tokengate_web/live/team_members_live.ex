@@ -192,24 +192,32 @@ defmodule TokengateWeb.TeamMembersLive do
     if member.team_id != socket.assigns.team.id do
       {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
     else
-      attrs =
-        %{
-          extra_daily_budget_usd: parse_decimal(override_params["extra_daily_budget_usd"]),
-          extra_monthly_budget_usd: parse_decimal(override_params["extra_monthly_budget_usd"]),
-          extra_concurrency: parse_integer(override_params["extra_concurrency"]),
-          extra_rpm: parse_integer(override_params["extra_rpm"])
+      with {:ok, daily} <- parse_decimal(override_params["extra_daily_budget_usd"]),
+           {:ok, monthly} <- parse_decimal(override_params["extra_monthly_budget_usd"]),
+           {:ok, concurrency} <- parse_integer(override_params["extra_concurrency"]),
+           {:ok, rpm} <- parse_integer(override_params["extra_rpm"]) do
+        attrs = %{
+          extra_daily_budget_usd: daily,
+          extra_monthly_budget_usd: monthly,
+          extra_concurrency: concurrency,
+          extra_rpm: rpm
         }
 
-      case Accounts.update_team_member(member, attrs) do
-        {:ok, _} ->
-          {:noreply,
-           socket
-           |> put_flash(:info, "Extras actualizados.")
-           |> assign(:editing_member_id, nil)
-           |> load_data()}
+        case Accounts.update_team_member(member, attrs) do
+          {:ok, _} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Extras actualizados.")
+             |> assign(:editing_member_id, nil)
+             |> load_data()}
 
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudieron actualizar los extras.")}
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "No se pudieron actualizar los extras.")}
+        end
+      else
+        :error ->
+          {:noreply,
+           put_flash(socket, :error, "Valores inválidos: revisa que sean números válidos.")}
       end
     end
   end
@@ -252,15 +260,31 @@ defmodule TokengateWeb.TeamMembersLive do
 
   ## Helpers --------------------------------------------------------------
 
-  defp parse_decimal(""), do: nil
-  defp parse_decimal(nil), do: nil
-  defp parse_decimal(value) when is_binary(value), do: Decimal.new(value)
-  defp parse_decimal(%Decimal{} = d), do: d
+  defp parse_decimal(""), do: {:ok, nil}
+  defp parse_decimal(nil), do: {:ok, nil}
+  defp parse_decimal(%Decimal{} = d), do: {:ok, d}
 
-  defp parse_integer(""), do: nil
-  defp parse_integer(nil), do: nil
-  defp parse_integer(value) when is_binary(value), do: String.to_integer(value)
-  defp parse_integer(value) when is_integer(value), do: value
+  defp parse_decimal(value) when is_binary(value) do
+    case Decimal.parse(value) do
+      {decimal, ""} -> {:ok, decimal}
+      _ -> :error
+    end
+  end
+
+  defp parse_decimal(_), do: :error
+
+  defp parse_integer(""), do: {:ok, nil}
+  defp parse_integer(nil), do: {:ok, nil}
+  defp parse_integer(value) when is_integer(value), do: {:ok, value}
+
+  defp parse_integer(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {int, ""} -> {:ok, int}
+      _ -> :error
+    end
+  end
+
+  defp parse_integer(_), do: :error
 
   defp format_changeset_errors(changeset) do
     errors =

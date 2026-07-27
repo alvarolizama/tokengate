@@ -65,6 +65,7 @@ defmodule TokengateWeb.DashboardLive do
       |> assign(:breakdown_team, [])
       |> assign(:active_breakdown, "model")
       |> assign(:scope_label, scope_label_for(user))
+      |> assign(:scope_member_ids, Accounts.scope_member_ids(user))
       |> assign(:new_token, nil)
       |> assign(:new_token_team, nil)
       |> load_personal_data(user)
@@ -422,13 +423,15 @@ defmodule TokengateWeb.DashboardLive do
 
   # Breakdowns
   defp load_breakdowns(socket, user, opts) do
-    breakdown_scope = breakdown_scope_for(user)
-    breakdown_model = Rollup.breakdown_by_model(breakdown_scope[:team_id], opts)
+    # Scoping: non-admin users only see consumption of their own scope
+    # (managed teams for managers, own memberships for regular users).
+    opts = Keyword.put(opts, :member_ids, socket.assigns[:scope_member_ids])
+    breakdown_model = Rollup.breakdown_by_model(nil, opts)
 
     socket
     |> assign(:breakdown_model, breakdown_model)
     |> assign(:top_models, top_model_rows(breakdown_model))
-    |> assign(:breakdown_member, load_member_breakdown(breakdown_scope, opts))
+    |> assign(:breakdown_member, Rollup.breakdown_by_member(nil, opts))
     |> assign(:breakdown_team, load_team_breakdown(user, opts))
   end
 
@@ -469,45 +472,6 @@ defmodule TokengateWeb.DashboardLive do
 
   defp usd_tooltip(value), do: "#{Float.round(value, 6)} USD"
   defp requests_tooltip(value), do: "#{trunc(value)} requests"
-
-  defp breakdown_scope_for(%{global_role: "admin"}) do
-    %{team_id: nil, manager_team_ids: nil, member_ids: nil}
-  end
-
-  defp breakdown_scope_for(%{global_role: "user"} = user) do
-    memberships = Accounts.list_team_members_for_user(user.id)
-
-    manager_team_ids =
-      memberships
-      |> Enum.filter(fn tm -> tm.team_role == "manager" end)
-      |> Enum.map(fn tm -> tm.team_id end)
-      |> Enum.uniq()
-
-    if manager_team_ids != [] do
-      %{team_id: nil, manager_team_ids: manager_team_ids, member_ids: nil}
-    else
-      %{team_id: nil, manager_team_ids: nil, member_ids: Enum.map(memberships, & &1.id)}
-    end
-  end
-
-  defp breakdown_scope_for(_), do: %{team_id: nil, manager_team_ids: nil, member_ids: nil}
-
-  # Member breakdown: admin=org-wide(nil), manager=per managed teams, user=own (filtered)
-  defp load_member_breakdown(%{manager_team_ids: ids}, _opts) when is_list(ids) and ids != [] do
-    Enum.flat_map(ids, fn team_id ->
-      Rollup.breakdown_by_member(team_id, [])
-    end)
-  end
-
-  defp load_member_breakdown(%{member_ids: ids}, opts) when is_list(ids) and ids != [] do
-    # User scope: fetch org-wide and filter to only the user's member ids.
-    Rollup.breakdown_by_member(nil, opts)
-    |> Enum.filter(fn row -> row.team_member_id in ids end)
-  end
-
-  defp load_member_breakdown(%{team_id: team_id}, opts) do
-    Rollup.breakdown_by_member(team_id, opts)
-  end
 
   # Team breakdown: only admin and manager
   defp load_team_breakdown(%{global_role: "admin"}, opts) do

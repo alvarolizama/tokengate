@@ -14,7 +14,6 @@ defmodule TokengateWeb.StatsExportController do
   use TokengateWeb, :controller
 
   alias Tokengate.Accounts
-  alias Tokengate.Logs
   alias Tokengate.Metrics.Rollup
 
   @periods %{"7d" => 168, "30d" => 720, "90d" => 2160}
@@ -75,7 +74,9 @@ defmodule TokengateWeb.StatsExportController do
   ## Models CSV -----------------------------------------------------------
 
   defp build_models_csv(user, model_id, opts) do
-    scope = scope_for(user)
+    # Scoping: non-admin users only export consumption of their own scope
+    # (managed teams for managers, own memberships for regular users).
+    opts = Keyword.put(opts, :member_ids, Accounts.scope_member_ids(user))
 
     rows =
       if model_id do
@@ -83,7 +84,7 @@ defmodule TokengateWeb.StatsExportController do
         Rollup.breakdown_by_provider_for_model(model_id, opts)
       else
         # Full table: all models
-        Rollup.breakdown_by_model(scope[:team_id], opts)
+        Rollup.breakdown_by_model(nil, opts)
       end
 
     header =
@@ -208,28 +209,6 @@ defmodule TokengateWeb.StatsExportController do
 
   ## Scoping helpers (mirror StatsLive) ----------------------------------
 
-  defp scope_for(%{global_role: "admin"}) do
-    %{team_id: nil, manager_team_ids: nil, member_ids: nil}
-  end
-
-  defp scope_for(%{global_role: "user"} = user) do
-    memberships = Accounts.list_team_members_for_user(user.id)
-
-    manager_team_ids =
-      memberships
-      |> Enum.filter(&(&1.team_role == "manager"))
-      |> Enum.map(& &1.team_id)
-      |> Enum.uniq()
-
-    if manager_team_ids != [] do
-      %{team_id: nil, manager_team_ids: manager_team_ids, member_ids: nil}
-    else
-      %{team_id: nil, manager_team_ids: nil, member_ids: Enum.map(memberships, & &1.id)}
-    end
-  end
-
-  defp scope_for(_), do: %{team_id: nil, manager_team_ids: nil, member_ids: nil}
-
   defp load_team_breakdown(%{global_role: "admin"}, opts) do
     Rollup.breakdown_by_team(opts)
   end
@@ -256,7 +235,4 @@ defmodule TokengateWeb.StatsExportController do
   defp parse_period(nil), do: "7d"
   defp parse_period(period) when period in ~w(7d 30d 90d), do: period
   defp parse_period(_), do: "7d"
-
-  # Suppress unused warnings for aliases used only in pattern matches
-  _ = &Logs.cost_summary/1
 end

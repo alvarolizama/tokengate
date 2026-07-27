@@ -41,6 +41,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:models, Providers.list_model_aliases())
       |> assign(:teams, scoped_teams(user))
       |> assign(:scope_label, scope_label_for(user))
+      |> assign(:scope_member_ids, Accounts.scope_member_ids(user))
       |> assign(:loading, true)
       |> assign(:metrics, empty_metrics())
       |> assign(:breakdown_model, [])
@@ -157,32 +158,34 @@ defmodule TokengateWeb.StatsLive do
   defp fetch_summary(_user, _opts), do: empty_summary()
 
   defp load_breakdowns(socket, :index, user, opts) do
-    scope = scope_for(user)
+    # Scoping: non-admin users only see consumption of their own scope
+    # (managed teams for managers, own memberships for regular users).
+    opts = Keyword.put(opts, :member_ids, socket.assigns[:scope_member_ids])
 
     socket
-    |> assign(:breakdown_model, Rollup.breakdown_by_model(scope[:team_id], opts))
-    |> assign(:breakdown_member, load_member_breakdown(scope, opts))
+    |> assign(:breakdown_model, Rollup.breakdown_by_model(nil, opts))
+    |> assign(:breakdown_member, Rollup.breakdown_by_member(nil, opts))
     |> assign(:breakdown_team, load_team_breakdown(user, opts))
-    |> assign(:top_errors, Rollup.top_errors(scope[:team_id], opts))
+    |> assign(:top_errors, Rollup.top_errors(nil, opts))
     |> assign(:provider_ranking, load_provider_ranking(user, opts))
-    |> assign(:hour_distribution, Rollup.usage_by_hour_of_day(scope[:team_id], opts))
-    |> assign(:busiest_hours, Rollup.busiest_hours(scope[:team_id], opts))
-    |> assign(:busiest_minutes, Rollup.busiest_minutes(scope[:team_id], opts))
+    |> assign(:hour_distribution, Rollup.usage_by_hour_of_day(nil, opts))
+    |> assign(:busiest_hours, Rollup.busiest_hours(nil, opts))
+    |> assign(:busiest_minutes, Rollup.busiest_minutes(nil, opts))
     |> assign(:peak_concurrency, load_peak_concurrency(user, opts))
   end
 
   defp load_breakdowns(socket, :models, user, opts) do
     model_id = socket.assigns[:model_filter]
-    scope = scope_for(user)
+    opts = Keyword.put(opts, :member_ids, socket.assigns[:scope_member_ids])
 
     base =
       socket
-      |> assign(:breakdown_model, Rollup.breakdown_by_model(scope[:team_id], opts))
+      |> assign(:breakdown_model, Rollup.breakdown_by_model(nil, opts))
 
     if model_id do
       base
       |> assign(:breakdown_provider, Rollup.breakdown_by_provider_for_model(model_id, opts))
-      |> assign(:breakdown_team, Rollup.breakdown_by_team_for_model(model_id, opts))
+      |> assign(:breakdown_team, load_team_breakdown_for_model(user, model_id, opts))
       |> assign(:breakdown_member, Rollup.breakdown_by_member_for_model(model_id, opts))
     else
       base
@@ -199,7 +202,9 @@ defmodule TokengateWeb.StatsLive do
       socket
       |> assign(:breakdown_team, load_team_breakdown(user, opts))
 
-    if team_id do
+    # Fail-closed: a crafted ?team_id= for a team the user doesn't manage
+    # shows empty drill-down tables instead of other teams' data.
+    if team_id && team_drilldown_allowed?(user, team_id) do
       base
       |> assign(:breakdown_member, Rollup.breakdown_by_member(team_id, opts))
       |> assign(:breakdown_model, Rollup.breakdown_by_model(team_id, opts))
@@ -212,62 +217,41 @@ defmodule TokengateWeb.StatsLive do
 
   ## Scoping helpers ------------------------------------------------------
 
-  defp scope_for(%{global_role: "admin"}) do
-    %{team_id: nil, manager_team_ids: nil, member_ids: nil}
-  end
-
-  defp scope_for(%{global_role: "user"} = user) do
-    memberships = Accounts.list_team_members_for_user(user.id)
-
-    manager_team_ids =
-      memberships
-      |> Enum.filter(&(&1.team_role == "manager"))
-      |> Enum.map(& &1.team_id)
-      |> Enum.uniq()
-
-    if manager_team_ids != [] do
-      %{team_id: nil, manager_team_ids: manager_team_ids, member_ids: nil}
-    else
-      %{team_id: nil, manager_team_ids: nil, member_ids: Enum.map(memberships, & &1.id)}
+  defp team_drilldown_allowed?(user, team_id) do
+    case Accounts.scope_team_ids(user) do
+      nil -> true
+      team_ids -> team_id in team_ids
     end
   end
 
-  defp scope_for(_), do: %{team_id: nil, manager_team_ids: nil, member_ids: nil}
+  # Team table for a model drill-down: admins see every team; managers only
+  # teams they manage; regular users don't see team-level data at all.
+  defp load_team_breakdown_for_model(user, model_id, opts) do
+    case Accounts.scope_team_ids(user) do
+      nil ->
+        Rollup.breakdown_by_team_for_model(model_id, opts)
 
-  defp scoped_teams(%{global_role: "admin"}) do
-    Accounts.list_teams()
-  end
+      [] ->
+        []
 
-  defp scoped_teams(%{global_role: "user"} = user) do
-    memberships = Accounts.list_team_members_for_user(user.id)
-
-    manager_team_ids =
-      memberships
-      |> Enum.filter(&(&1.team_role == "manager"))
-      |> Enum.map(& &1.team_id)
-      |> Enum.uniq()
-
-    if manager_team_ids != [] do
-      from(t in Tokengate.Accounts.Team, where: t.id in ^manager_team_ids)
-      |> Tokengate.Repo.all()
-    else
-      []
+      team_ids ->
+        Rollup.breakdown_by_team_for_model(model_id, opts)
+        |> Enum.filter(fn row -> row.team_id in team_ids end)
     end
   end
 
-  defp scoped_teams(_), do: []
+  defp scoped_teams(user) do
+    case Accounts.scope_team_ids(user) do
+      nil ->
+        Accounts.list_teams()
 
-  defp load_member_breakdown(%{manager_team_ids: ids}, _opts) when is_list(ids) and ids != [] do
-    Enum.flat_map(ids, fn team_id -> Rollup.breakdown_by_member(team_id, []) end)
-  end
+      [] ->
+        []
 
-  defp load_member_breakdown(%{member_ids: ids}, opts) when is_list(ids) and ids != [] do
-    Rollup.breakdown_by_member(nil, opts)
-    |> Enum.filter(fn row -> row.team_member_id in ids end)
-  end
-
-  defp load_member_breakdown(%{team_id: team_id}, opts) do
-    Rollup.breakdown_by_member(team_id, opts)
+      team_ids ->
+        from(t in Tokengate.Accounts.Team, where: t.id in ^team_ids)
+        |> Tokengate.Repo.all()
+    end
   end
 
   defp load_team_breakdown(%{global_role: "admin"}, opts) do
