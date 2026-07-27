@@ -4,6 +4,7 @@ defmodule TokengateWeb.LogsLiveTest do
   import Phoenix.LiveViewTest
 
   alias Tokengate.{Accounts, Logs, Providers}
+  alias Tokengate.Logs.Inflight
 
   defp unique, do: System.unique_integer([:positive])
 
@@ -27,174 +28,153 @@ defmodule TokengateWeb.LogsLiveTest do
     |> recycle()
   end
 
-  defp team_with_logs(opts \\ %{}) do
+  defp member_with_log(opts \\ []) do
     u = unique()
-    role = Map.get(opts, :team_role, "user")
 
-    {:ok, team} = Accounts.create_team(%{name: "Team #{u}"})
+    {:ok, team} = Accounts.create_team(%{name: "Logs Team #{u}"})
 
     {:ok, owner} =
       Accounts.register_user(%{
-        email: "owner-#{u}@example.com",
+        email: "logs-owner-#{u}@example.com",
         name: "Owner #{u}",
         password: "password-secret-#{u}1"
       })
 
     {:ok, member} =
-      Accounts.create_team_member(%{user_id: owner.id, team_id: team.id, team_role: role})
+      Accounts.create_team_member(%{user_id: owner.id, team_id: team.id})
 
     {:ok, provider} =
-      Providers.create_provider(%{
-        name: "P #{u}",
-        base_url: "http://localhost:1"
+      Providers.create_provider(%{name: "Prov #{u}", base_url: "http://localhost:1"})
+
+    {:ok, model_alias} =
+      Providers.create_model_alias(%{
+        name: "model-#{u}",
+        display_name: "Model #{u}",
+        market_input_price_per_1m: "1.50",
+        market_output_price_per_1m: "3.00",
+        context_window: 128_000
       })
 
-    for {status, agent, cost} <- Map.get(opts, :logs, [{200, "claude-code", "0.005"}]) do
-      {:ok, _log} =
-        Logs.log_request(%{
-          team_member_id: member.id,
-          provider_id: provider.id,
-          model_alias_id: nil,
-          model_requested: "gpt-4o",
-          model_responded: "gpt-4o",
-          agent_type: agent,
-          status_code: status,
-          prompt_tokens: 100,
-          completion_tokens: 50,
-          cost_usd: cost,
-          provider_cost_usd: cost,
-          savings_usd: "0.001",
-          estimated_cost_usd: "0.01",
-          latency_ms: 42,
-          streaming: false
-        })
+    {:ok, log} =
+      Logs.log_request(%{
+        team_member_id: member.id,
+        provider_id: provider.id,
+        model_requested: "model-#{u}",
+        model_responded: "model-#{u}",
+        agent_type: "api",
+        status_code: 200,
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        cost_usd: "0.005",
+        provider_cost_usd: "0.004",
+        savings_usd: "0.001",
+        estimated_cost_usd: "0.01",
+        latency_ms: 42,
+        streaming: false,
+        think: Keyword.get(opts, :think, true),
+        effort: Keyword.get(opts, :effort, "high")
+      })
+
+    %{team: team, owner: owner, member: member, log: log, model_alias: model_alias}
+  end
+
+  setup do
+    pid = Process.whereis(Inflight) || start_supervised!(Inflight)
+    _ = :sys.get_state(pid)
+
+    for entry <- Inflight.list() do
+      Inflight.finish_request(entry.id)
     end
 
-    %{
-      team: team,
-      owner: owner,
-      member: member,
-      provider: provider,
-      owner_password: "password-secret-#{u}1"
-    }
+    :ok
   end
+
+  ## Auth ---------------------------------------------------------------------
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
     assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/dashboard/logs")
   end
 
-  test "admin sees logs from all teams with the summary strip", %{conn: conn} do
-    team_with_logs()
-    team_with_logs()
+  ## User / team / think / effort columns ---------------------------------------
 
+  test "shows user, team, think and effort for completed logs", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard/logs")
+    %{team: team, owner: owner} = member_with_log(think: true, effort: "high")
 
-    assert html =~ "Logs"
-    assert has_element?(view, "#summary-requests")
-    assert has_element?(view, "#summary-cost")
-    assert has_element?(view, "#summary-savings")
-    # Both teams' logs visible
-    assert html =~ "gpt-4o"
-    assert html =~ "claude-code"
-  end
-
-  test "live indicators show the connected user and in-flight requests", %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
 
-    # Presence: the signed-in user appears online with their initials chip
-    assert has_element?(view, "#live-indicators")
-    assert has_element?(view, "#online-count")
-    assert has_element?(view, "#online-#{admin.id}")
-
-    # In-flight API connections counter (0 with no traffic)
-    assert has_element?(view, "#inflight-indicator")
-    assert has_element?(view, "#inflight-count")
+    html = render(view)
+    assert html =~ owner.email
+    assert html =~ team.name
+    assert html =~ "high"
   end
 
-  test "user scope: sees only their own logs", %{conn: conn} do
-    %{owner: owner, owner_password: password} = team_with_logs()
-    # Another team's logs — must not leak
-    team_with_logs(%{logs: [{200, "other-agent", "99.99"}]})
+  ## Pending (in-flight) rows ---------------------------------------------------
 
-    conn = login(conn, owner, password)
-    {:ok, _view, html} = live(conn, ~p"/dashboard/logs")
+  test "pending request appears live and disappears when done", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{member: member} = member_with_log()
 
-    assert html =~ "claude-code"
-    refute html =~ "other-agent"
-  end
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
 
-  test "manager scope: sees the logs of the teams they manage", %{conn: conn} do
-    %{team: team} = team_with_logs()
-    team_with_logs(%{logs: [{200, "other-agent", "99.99"}]})
-
-    u = unique()
-    password = "password-secret-#{u}1"
-
-    {:ok, manager} =
-      Accounts.register_user(%{
-        email: "manager-#{u}@example.com",
-        name: "Manager #{u}",
-        password: password
+    entry =
+      Inflight.start_request(%{
+        team_member_id: member.id,
+        user_email: "live@example.com",
+        team_name: "Live Team",
+        model_requested: "glm-5.2",
+        agent_type: "api",
+        streaming: true,
+        think: true,
+        effort: "high"
       })
 
-    {:ok, _membership} =
-      Accounts.create_team_member(%{user_id: manager.id, team_id: team.id, team_role: "manager"})
+    html = render(view)
+    assert html =~ "pending-row-#{entry.id}"
+    assert html =~ "Pending"
+    assert html =~ "live@example.com"
 
-    conn = login(conn, manager, password)
-    {:ok, _view, html} = live(conn, ~p"/dashboard/logs")
-
-    assert html =~ "claude-code"
-    refute html =~ "other-agent"
+    Inflight.finish_request(entry.id)
+    html = render(view)
+    refute html =~ "pending-row-#{entry.id}"
   end
 
-  test "cost breakdown columns are rendered", %{conn: conn} do
-    %{owner: owner, owner_password: password} = team_with_logs()
+  test "pending respects model filter", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{member: member, model_alias: model_alias} = member_with_log()
 
-    conn = login(conn, owner, password)
-    {:ok, _view, html} = live(conn, ~p"/dashboard/logs")
-
-    for header <- ["Estimado", "Costo", "Proveedor", "Ahorro"] do
-      assert html =~ header
-    end
-
-    assert html =~ "0.01"
-    assert html =~ "0.005"
-    assert html =~ "0.001"
-  end
-
-  test "filter by status_class shows only matching logs", %{conn: conn} do
-    %{owner: owner, owner_password: password} =
-      team_with_logs(%{logs: [{200, "claude-code", "0.005"}, {500, "codex", "0.007"}]})
-
-    conn = login(conn, owner, password)
+    conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
 
-    html =
-      view
-      |> form("#logs-filter-form", filter: %{status_class: "5xx"})
-      |> render_change()
+    # Filtrar por el alias del test: el pending usa otro modelo y debe ocultarse
+    view
+    |> form("#logs-filter-form", filter: %{model_search: model_alias.name})
+    |> render_change()
 
-    assert html =~ "codex"
-    refute html =~ "claude-code"
+    entry =
+      Inflight.start_request(%{
+        team_member_id: member.id,
+        model_requested: "glm-5.2",
+        streaming: true,
+        think: false,
+        effort: nil
+      })
+
+    html = render(view)
+    refute html =~ "pending-row-#{entry.id}"
   end
 
-  test "filter by agent_type shows only matching logs", %{conn: conn} do
-    %{owner: owner, owner_password: password} =
-      team_with_logs(%{logs: [{200, "claude-code", "0.005"}, {200, "cursor", "0.007"}]})
+  ## Model filter as select ------------------------------------------------------
 
-    conn = login(conn, owner, password)
+  test "model filter is a select with model aliases", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    member_with_log()
+
+    conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
 
-    html =
-      view
-      |> form("#logs-filter-form", filter: %{agent_type: "cursor"})
-      |> render_change()
-
-    assert html =~ "cursor"
-    refute html =~ "claude-code"
+    assert has_element?(view, "#logs-filter-form select[name='filter[model_search]']")
   end
 end

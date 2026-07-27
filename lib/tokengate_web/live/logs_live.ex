@@ -4,6 +4,8 @@ defmodule TokengateWeb.LogsLive do
 
   alias Tokengate.{Accounts, Logs}
   alias Tokengate.Limits.Manager, as: Limits
+  alias Tokengate.Logs.Inflight
+  alias Tokengate.Providers
 
   @page_size 50
   @pubsub Tokengate.PubSub
@@ -30,11 +32,14 @@ defmodule TokengateWeb.LogsLive do
       |> assign(:last_seen_at, DateTime.utc_now() |> DateTime.truncate(:second))
       |> assign(:online_users, [])
       |> assign(:api_inflight, 0)
+      |> assign(:pending, [])
+      |> assign(:model_options, model_options())
 
     socket = load_logs(socket, :reset)
 
     if connected?(socket) do
       Phoenix.PubSub.subscribe(@pubsub, @logs_topic)
+      Phoenix.PubSub.subscribe(@pubsub, Inflight.topic())
       Phoenix.PubSub.subscribe(@pubsub, TokengateWeb.Presence.topic())
 
       send(self(), :refresh_inflight)
@@ -42,7 +47,8 @@ defmodule TokengateWeb.LogsLive do
       {:ok,
        socket
        |> assign(:online_users, TokengateWeb.Presence.list_online())
-       |> assign(:api_inflight, Limits.total_inflight())}
+       |> assign(:api_inflight, Limits.total_inflight())
+       |> assign(:pending, visible_pending(socket.assigns))}
     else
       {:ok, socket}
     end
@@ -80,6 +86,19 @@ defmodule TokengateWeb.LogsLive do
   def handle_info(:refresh_inflight, socket) do
     Process.send_after(self(), :refresh_inflight, @inflight_refresh_interval_ms)
     {:noreply, assign(socket, :api_inflight, Limits.total_inflight())}
+  end
+
+  def handle_info({:inflight_started, entry}, socket) do
+    if pending_visible?(entry, socket.assigns) do
+      {:noreply, assign(socket, :pending, [entry | socket.assigns[:pending]])}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info({:inflight_done, id}, socket) do
+    pending = Enum.reject(socket.assigns[:pending], &(&1.id == id))
+    {:noreply, assign(socket, :pending, pending)}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -133,6 +152,48 @@ defmodule TokengateWeb.LogsLive do
   defp model_match?(log, search) do
     String.contains?(log.model_requested || "", search) or
       String.contains?(log.model_responded || "", search)
+  end
+
+  ## Pending (in-flight) visibility -------------------------------------------
+
+  # In-flight entries that pass scope + current filters. Status-class filter
+  # doesn't apply (pending has no status yet).
+  defp visible_pending(assigns) do
+    Inflight.list()
+    |> Enum.filter(&pending_visible?(&1, assigns))
+  end
+
+  defp pending_visible?(entry, assigns) do
+    filters = assigns[:filters]
+
+    in_scope =
+      case assigns[:scope_member_ids] do
+        nil -> true
+        ids -> entry.team_member_id in ids
+      end
+
+    agent = filters["agent_type"]
+    streaming = filters["streaming"]
+    model_search = filters["model_search"]
+
+    in_scope and
+      agent in ["", nil, entry.agent_type] and
+      streaming_match?(entry.streaming, streaming) and
+      pending_model_match?(entry, model_search) and
+      date_range_match?(entry.started_at, filters["from"], filters["to"])
+  end
+
+  defp pending_model_match?(_entry, ""), do: true
+  defp pending_model_match?(_entry, nil), do: true
+
+  defp pending_model_match?(entry, search) do
+    String.contains?(entry.model_requested || "", search)
+  end
+
+  defp model_options do
+    Providers.list_model_aliases()
+    |> Enum.map(fn alias_ -> {alias_.display_name || alias_.name, alias_.name} end)
+    |> Enum.sort_by(&elem(&1, 0))
   end
 
   defp date_range_match?(_dt, "", ""), do: true
@@ -343,6 +404,13 @@ defmodule TokengateWeb.LogsLive do
       |> assign(:filters, filter_params)
       |> assign(:form, to_form(filter_params, as: :filter))
       |> assign(:cursor, nil)
+      |> assign(
+        :pending,
+        visible_pending(%{
+          filters: filter_params,
+          scope_member_ids: socket.assigns[:scope_member_ids]
+        })
+      )
 
     {:noreply, load_logs(socket, :reset)}
   end
@@ -428,6 +496,21 @@ defmodule TokengateWeb.LogsLive do
 
   defp status_badge_class(status_code) when status_code >= 500, do: "badge-error"
   defp status_badge_class(_), do: "badge-ghost"
+
+  defp member_email(%{team_member: %{user: %{email: email}}}), do: email
+  defp member_email(_), do: "—"
+
+  defp member_team(%{team_member: %{team: %{name: name}}}), do: name
+  defp member_team(_), do: "—"
+
+  attr :value, :boolean, default: false
+
+  defp think_badge(assigns) do
+    ~H"""
+    <span :if={@value} class="badge badge-sm badge-info">✓</span>
+    <span :if={!@value} class="text-base-content/30">—</span>
+    """
+  end
 
   ## Render ----------------------------------------------------------------
 
@@ -557,8 +640,9 @@ defmodule TokengateWeb.LogsLive do
           />
           <.input
             field={@form[:model_search]}
-            type="text"
-            placeholder="gpt-4o"
+            type="select"
+            prompt="Todos"
+            options={@model_options}
             label="Modelo"
           />
           <.input
@@ -573,6 +657,55 @@ defmodule TokengateWeb.LogsLive do
           />
         </.form>
 
+        <%!-- Pending (in-flight) requests --%>
+        <div
+          :if={@pending != []}
+          class="card bg-base-100 border border-warning/40 shadow-sm"
+          id="pending-section"
+        >
+          <div class="card-body p-4">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="relative flex h-2.5 w-2.5">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-60"></span>
+                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-warning"></span>
+              </span>
+              <h3 class="text-sm font-semibold">En vuelo ahora ({length(@pending)})</h3>
+            </div>
+            <div class="overflow-x-auto">
+              <table class="table table-sm">
+                <thead>
+                  <tr>
+                    <th>Inicio</th>
+                    <th>Modelo</th>
+                    <th>Usuario</th>
+                    <th>Equipo</th>
+                    <th>Agente</th>
+                    <th>Think</th>
+                    <th>Effort</th>
+                    <th>Streaming</th>
+                    <th>Estado</th>
+                  </tr>
+                </thead>
+                <tbody id="pending-rows">
+                  <tr :for={entry <- @pending} id={"pending-row-#{entry.id}"}>
+                    <td class="whitespace-nowrap text-sm">{format_datetime(entry.started_at)}</td>
+                    <td class="text-sm">{entry.model_requested}</td>
+                    <td class="text-sm">{entry.user_email || "—"}</td>
+                    <td class="text-sm">{entry.team_name || "—"}</td>
+                    <td>
+                      <span class="badge badge-sm badge-ghost">{entry.agent_type || "api"}</span>
+                    </td>
+                    <td><.think_badge value={entry.think} /></td>
+                    <td class="text-sm">{entry.effort || "—"}</td>
+                    <td>{if entry.streaming, do: "Sí", else: "No"}</td>
+                    <td><span class="badge badge-sm badge-warning">Pending</span></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
         <%!-- Logs table --%>
         <div class="overflow-x-auto">
           <table class="table table-zebra">
@@ -580,8 +713,12 @@ defmodule TokengateWeb.LogsLive do
               <tr>
                 <th>Fecha</th>
                 <th>Modelo</th>
+                <th>Usuario</th>
+                <th>Equipo</th>
                 <th>Agente</th>
                 <th>Estado</th>
+                <th>Think</th>
+                <th>Effort</th>
                 <th class="text-right">Input</th>
                 <th class="text-right">Output</th>
                 <th class="text-right">TPS</th>
@@ -595,13 +732,15 @@ defmodule TokengateWeb.LogsLive do
             </thead>
             <tbody id="logs" phx-update="stream">
               <tr id="logs-empty" class="hidden only:table-row">
-                <td colspan="13" class="text-center py-8 text-base-content/40">
+                <td colspan="17" class="text-center py-8 text-base-content/40">
                   No hay logs que coincidan con los filtros.
                 </td>
               </tr>
               <tr :for={{id, log} <- @streams.logs} id={id}>
                 <td class="whitespace-nowrap text-sm">{format_datetime(log.inserted_at)}</td>
                 <td class="text-sm">{model_display(log.model_requested, log.model_responded)}</td>
+                <td class="text-sm">{member_email(log)}</td>
+                <td class="text-sm">{member_team(log)}</td>
                 <td>
                   <span class="badge badge-sm badge-ghost">{log.agent_type}</span>
                 </td>
@@ -610,6 +749,8 @@ defmodule TokengateWeb.LogsLive do
                     {log.status_code}
                   </span>
                 </td>
+                <td><.think_badge value={log.think} /></td>
+                <td class="text-sm">{log.effort || "—"}</td>
                 <td class="text-sm text-right tabular-nums">{format_number(log.prompt_tokens)}</td>
                 <td class="text-sm text-right tabular-nums">
                   {format_number(log.completion_tokens)}

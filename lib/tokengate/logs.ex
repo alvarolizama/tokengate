@@ -79,6 +79,7 @@ defmodule Tokengate.Logs do
     |> apply_log_filters(filters)
     |> order_by([rl], desc: rl.inserted_at)
     |> limit(^limit)
+    |> preload(team_member: [:user, :team])
     |> Repo.all()
   end
 

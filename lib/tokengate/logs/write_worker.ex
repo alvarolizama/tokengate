@@ -47,6 +47,7 @@ defmodule Tokengate.Logs.WriteWorker do
 
     case Logs.log_request(attrs) do
       {:ok, request_log} ->
+        request_log = Tokengate.Repo.preload(request_log, team_member: [:user, :team])
         _ = WebhookWorker.dispatch(request_log)
         broadcast_new_log(request_log)
         :ok
