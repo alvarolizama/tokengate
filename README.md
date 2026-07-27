@@ -1,6 +1,9 @@
-# TokenGate
+<div align="center">
+  <img src="priv/static/images/logo.svg" alt="TokenGate logo" width="96">
+  <h1>TokenGate</h1>
+</div>
 
-Gateway autohospedado para modelos de lenguaje (LLM). Proxy compatible con la API de OpenAI que enruta peticiones a múltiples proveedores con round-robin, fallback, circuit breaker, presupuestos, observabilidad y control de costos multi-dimensión.
+Gateway autohospedado para modelos de lenguaje (LLM). Proxy compatible con la API de OpenAI que enruta peticiones a múltiples proveedores con selección por prioridad y sticky routing, fallback, circuit breaker, presupuestos, observabilidad y control de costos multi-dimensión.
 
 ## Stack
 
@@ -23,10 +26,11 @@ Gateway autohospedado para modelos de lenguaje (LLM). Proxy compatible con la AP
 
 ### Enrutamiento inteligente
 
-- **Round-robin** entre proveedores equivalentes
-- **Fallback** automático ante errores
-- **Circuit breaker** por proveedor — abre tras N fallos, semi-abre para probar recuperación
-- **Sticky routing** — sesiones pegadas a un proveedor
+- **Selección por prioridad** — el primer proveedor disponible (prioridad ASC) gana
+- **Sticky routing** — la misma API key se pega al mismo proveedor (preserva prompt caches)
+- **Fallback** automático ante errores (hasta 3 intentos, excluyendo credenciales fallidas)
+- **Circuit breaker** por credencial — abre tras N fallos, semi-abre para probar recuperación
+- **Reglas de reroute** — por longitud de contexto o presencia de imágenes
 - **Prioridades** — orden de preferencia configurable por modelo
 
 ### Control de costos (4 dimensiones)
@@ -45,7 +49,7 @@ Soporta proveedores `pay_per_token` (pago por token) e `included` (suscripción/
 ### Gestión multi-tenant
 
 - **Equipos** → **Miembros** → **API keys**
-- **Roles**: `admin` (global) y `user` (por equipo)
+- **Roles**: `admin` (global) y `manager`/`user` (por equipo)
 - **Alias de modelos** — mapea `gpt-4` → proveedor+modelo real, con grants por equipo y por miembro
 - **Presupuestos y límites** por equipo y por miembro:
   - Gasto diario y mensual (USD)
@@ -205,9 +209,9 @@ El alias `gpt-4` se resuelve al proveedor y modelo configurado en el dashboard.
 lib/tokengate/
 ├── accounts/          # Users, teams, members, API keys
 ├── providers/         # Providers, credentials, aliases, pricing
-├── routing/           # Router, round-robin, circuit breaker, priorities
-├── limits/            # Budget tracking (BEAM :atomics)
-├── budgets/           # Spend queries (Postgres)
+├── routing/           # Router, prioridad + sticky, circuit breaker, reglas
+├── limits/            # Rate limits: RPM + concurrencia (ETS)
+├── budgets/           # Presupuestos diario/mensual (ETS + sync a Postgres)
 ├── logs/              # Request logs (async via Oban)
 ├── metrics/           # Rollup queries (dashboard stats)
 ├── observability/     # OTLP webhooks, destinations
@@ -315,4 +319,4 @@ Ver `config/runtime.exs` para la configuración de producción.
 
 ## Licencia
 
-Privado.
+[MIT](LICENSE).

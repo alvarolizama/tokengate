@@ -602,9 +602,35 @@ defmodule TokengateWeb.DashboardLive do
   def format_decimal(n) when is_number(n), do: to_string(n)
   def format_decimal(_), do: "0"
 
-  def format_number(n) when is_integer(n), do: Integer.to_string(n)
+  def format_number(n) when is_integer(n), do: with_thousands_separator(n)
   def format_number(n) when is_float(n), do: Float.to_string(n)
   def format_number(_), do: "0"
+
+  @doc "Compact notation for big counters: 32.7K, 1.2M, 3.4B."
+  def format_compact(n) when is_integer(n) and n >= 1_000_000_000,
+    do: "#{Float.round(n / 1_000_000_000, 1)}B"
+
+  def format_compact(n) when is_integer(n) and n >= 1_000_000,
+    do: "#{Float.round(n / 1_000_000, 1)}M"
+
+  def format_compact(n) when is_integer(n) and n >= 1_000,
+    do: "#{Float.round(n / 1_000, 1)}K"
+
+  def format_compact(n) when is_integer(n), do: Integer.to_string(n)
+  def format_compact(n) when is_float(n), do: format_compact(trunc(n))
+  def format_compact(_), do: "0"
+
+  defp with_thousands_separator(n) do
+    digits = Integer.to_string(abs(n))
+
+    grouped =
+      digits
+      |> String.reverse()
+      |> String.replace(~r/(\d{3})(?=\d)/, "\\1,")
+      |> String.reverse()
+
+    if n < 0, do: "-" <> grouped, else: grouped
+  end
 
   def format_tps(nil), do: "—"
   def format_tps(n) when is_float(n), do: Float.round(n, 1) |> Float.to_string()

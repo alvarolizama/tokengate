@@ -344,6 +344,20 @@ defmodule TokengateWeb.LogsLive do
 
   defp format_cost(nil), do: "—"
 
+  defp format_number(n) when is_integer(n) do
+    digits = Integer.to_string(abs(n))
+
+    grouped =
+      digits
+      |> String.reverse()
+      |> String.replace(~r/(\d{3})(?=\d)/, "\\1,")
+      |> String.reverse()
+
+    if n < 0, do: "-" <> grouped, else: grouped
+  end
+
+  defp format_number(_), do: "0"
+
   defp format_datetime(datetime) do
     Calendar.strftime(datetime, "%d/%m/%Y %H:%M:%S")
   end
@@ -511,8 +525,10 @@ defmodule TokengateWeb.LogsLive do
                     {log.status_code}
                   </span>
                 </td>
-                <td class="text-sm text-right tabular-nums">{log.prompt_tokens}</td>
-                <td class="text-sm text-right tabular-nums">{log.completion_tokens}</td>
+                <td class="text-sm text-right tabular-nums">{format_number(log.prompt_tokens)}</td>
+                <td class="text-sm text-right tabular-nums">
+                  {format_number(log.completion_tokens)}
+                </td>
                 <td class="text-sm text-right tabular-nums text-base-content/70">
                   {tps(log.completion_tokens, log.latency_ms)}
                 </td>

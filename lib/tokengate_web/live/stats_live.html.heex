@@ -159,15 +159,21 @@
                   </div>
                   <div class="mt-2 flex items-baseline gap-3">
                     <div>
-                      <p class="text-lg font-bold text-base-content">
-                        {format_number(@metrics.prompt_tokens)}
+                      <p
+                        class="text-lg font-bold text-base-content"
+                        title={format_number(@metrics.prompt_tokens)}
+                      >
+                        {format_compact(@metrics.prompt_tokens)}
                       </p>
                       <p class="text-xs text-base-content/50">in</p>
                     </div>
                     <span class="text-base-content/30">/</span>
                     <div>
-                      <p class="text-lg font-bold text-base-content">
-                        {format_number(@metrics.completion_tokens)}
+                      <p
+                        class="text-lg font-bold text-base-content"
+                        title={format_number(@metrics.completion_tokens)}
+                      >
+                        {format_compact(@metrics.completion_tokens)}
                       </p>
                       <p class="text-xs text-base-content/50">out</p>
                     </div>
@@ -414,8 +420,11 @@
                     class="card bg-base-100 border border-base-300 shadow-sm"
                   >
                     <div class="card-body p-5">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens in/out</span><p class="mt-2 text-lg font-bold">
-                        {format_number(@metrics.prompt_tokens)} / {format_number(
+                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens in/out</span><p
+                        class="mt-2 text-lg font-bold"
+                        title={"#{format_number(@metrics.prompt_tokens)} / #{format_number(@metrics.completion_tokens)}"}
+                      >
+                        {format_compact(@metrics.prompt_tokens)} / {format_compact(
                           @metrics.completion_tokens
                         )}
                       </p>
@@ -734,8 +743,11 @@
                     class="card bg-base-100 border border-base-300 shadow-sm"
                   >
                     <div class="card-body p-5">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens in/out</span><p class="mt-2 text-lg font-bold">
-                        {format_number(@metrics.prompt_tokens)} / {format_number(
+                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens in/out</span><p
+                        class="mt-2 text-lg font-bold"
+                        title={"#{format_number(@metrics.prompt_tokens)} / #{format_number(@metrics.completion_tokens)}"}
+                      >
+                        {format_compact(@metrics.prompt_tokens)} / {format_compact(
                           @metrics.completion_tokens
                         )}
                       </p>
