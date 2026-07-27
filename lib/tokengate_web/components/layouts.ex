@@ -165,8 +165,9 @@ defmodule TokengateWeb.Layouts do
 
         <nav class="flex-1 p-3 space-y-4">
           <.sidebar_link href={~p"/dashboard"} label="Dashboard" icon="hero-chart-bar-square" />
+          <.sidebar_link href={~p"/dashboard/stats"} label="Estadísticas" icon="hero-chart-pie" />
 
-          <div class="space-y-1">
+          <div :if={admin?(@current_scope)} class="space-y-1">
             <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
               Configuración
             </p>
@@ -176,6 +177,8 @@ defmodule TokengateWeb.Layouts do
               label="Proveedores"
               icon="hero-server-stack"
             />
+            <.sidebar_link href={~p"/dashboard/users"} label="Usuarios" icon="hero-users" />
+            <.sidebar_link href={~p"/dashboard/keys"} label="API Keys" icon="hero-key" />
           </div>
 
           <div class="space-y-1">
@@ -183,7 +186,6 @@ defmodule TokengateWeb.Layouts do
               Acceso
             </p>
             <.sidebar_link href={~p"/dashboard/teams"} label="Equipos" icon="hero-user-group" />
-            <.sidebar_link href={~p"/dashboard/keys"} label="API Keys" icon="hero-key" />
           </div>
 
           <div class="space-y-1">
@@ -228,6 +230,9 @@ defmodule TokengateWeb.Layouts do
   defp role_label("admin"), do: "Administrador"
   defp role_label("user"), do: "Usuario"
   defp role_label(other), do: String.capitalize(other || "")
+
+  defp admin?(%{global_role: "admin"}), do: true
+  defp admin?(_), do: false
 
   defp initials(nil), do: "—"
 

@@ -494,7 +494,7 @@ defmodule Tokengate.Metrics.RollupTest do
 
   describe "breakdown_by_team/1" do
     test "returns per-team aggregates ranked by cost" do
-      {tm1, team1} = team_member_fixture()
+      {tm1, _team1} = team_member_fixture()
       {tm2, _team2} = team_member_fixture()
 
       log_request(tm1.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("1.000000")})
@@ -511,6 +511,170 @@ defmodule Tokengate.Metrics.RollupTest do
     test "returns empty list when no logs match" do
       results = Rollup.breakdown_by_team(from: ~U[2026-07-01 00:00:00Z])
       assert results == []
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # breakdown_by_provider_for_model/2
+  # ---------------------------------------------------------------------
+
+  describe "breakdown_by_provider_for_model/2" do
+    test "groups by provider for a specific model" do
+      {tm, _team} = team_member_fixture()
+      ma = model_alias_fixture(%{"name" => "gpt-4o"})
+
+      {:ok, provider1} =
+        Providers.create_provider(%{name: "OpenAI", base_url: "http://localhost:1"})
+
+      {:ok, provider2} =
+        Providers.create_provider(%{name: "Azure", base_url: "http://localhost:2"})
+
+      log_request(tm.id, ~U[2026-07-26 10:00:00Z], %{
+        model_alias_id: ma.id,
+        provider_id: provider1.id,
+        cost_usd: Decimal.new("1.000000"),
+        provider_cost_usd: Decimal.new("0.800000"),
+        estimated_cost_usd: Decimal.new("1.000000"),
+        savings_usd: Decimal.new("0.200000"),
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        latency_ms: 1000
+      })
+
+      log_request(tm.id, ~U[2026-07-26 11:00:00Z], %{
+        model_alias_id: ma.id,
+        provider_id: provider2.id,
+        cost_usd: Decimal.new("2.000000"),
+        provider_cost_usd: Decimal.new("1.500000"),
+        estimated_cost_usd: Decimal.new("2.000000"),
+        savings_usd: Decimal.new("0.500000"),
+        prompt_tokens: 200,
+        completion_tokens: 100,
+        latency_ms: 1000
+      })
+
+      results = Rollup.breakdown_by_provider_for_model(ma.id, from: ~U[2026-07-01 00:00:00Z])
+
+      assert length(results) == 2
+      # Ranked by provider_cost descending — provider2 first
+      [first, second] = results
+      assert first.provider_name == "Azure"
+      assert first.request_count == 1
+      assert Decimal.equal?(first.provider_cost_usd, Decimal.new("1.500000"))
+      assert Decimal.equal?(first.estimated_cost_usd, Decimal.new("2.000000"))
+      assert Decimal.equal?(first.savings_usd, Decimal.new("0.500000"))
+
+      assert second.provider_name == "OpenAI"
+      assert Decimal.equal?(second.provider_cost_usd, Decimal.new("0.800000"))
+    end
+
+    test "returns empty list for nil model_alias_id" do
+      assert Rollup.breakdown_by_provider_for_model(nil) == []
+    end
+
+    test "excludes logs from other models" do
+      {tm, _team} = team_member_fixture()
+      ma1 = model_alias_fixture(%{"name" => "gpt-4o"})
+      ma2 = model_alias_fixture(%{"name" => "claude-3"})
+
+      {:ok, provider} =
+        Providers.create_provider(%{name: "OpenAI", base_url: "http://localhost:1"})
+
+      log_request(tm.id, ~U[2026-07-26 10:00:00Z], %{
+        model_alias_id: ma1.id,
+        provider_id: provider.id,
+        cost_usd: Decimal.new("1.000000")
+      })
+
+      log_request(tm.id, ~U[2026-07-26 11:00:00Z], %{
+        model_alias_id: ma2.id,
+        provider_id: provider.id,
+        cost_usd: Decimal.new("5.000000")
+      })
+
+      results = Rollup.breakdown_by_provider_for_model(ma1.id, from: ~U[2026-07-01 00:00:00Z])
+      assert length(results) == 1
+      assert hd(results).request_count == 1
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # breakdown_by_member_for_model/2
+  # ---------------------------------------------------------------------
+
+  describe "breakdown_by_member_for_model/2" do
+    test "groups by member for a specific model" do
+      team = team_fixture()
+
+      user1 = user_fixture(%{"email" => "alice@example.com"})
+      user2 = user_fixture(%{"email" => "bob@example.com"})
+
+      {:ok, tm1} = Accounts.create_team_member(%{"user_id" => user1.id, "team_id" => team.id})
+      {:ok, tm2} = Accounts.create_team_member(%{"user_id" => user2.id, "team_id" => team.id})
+
+      ma = model_alias_fixture(%{"name" => "gpt-4o"})
+
+      log_request(tm1.id, ~U[2026-07-26 10:00:00Z], %{
+        model_alias_id: ma.id,
+        cost_usd: Decimal.new("1.000000"),
+        provider_cost_usd: Decimal.new("0.800000")
+      })
+
+      log_request(tm2.id, ~U[2026-07-26 11:00:00Z], %{
+        model_alias_id: ma.id,
+        cost_usd: Decimal.new("5.000000"),
+        provider_cost_usd: Decimal.new("4.000000")
+      })
+
+      results = Rollup.breakdown_by_member_for_model(ma.id, from: ~U[2026-07-01 00:00:00Z])
+
+      assert length(results) == 2
+      [first, second] = results
+      # Ranked by provider_cost descending
+      assert first.user_email == "bob@example.com"
+      assert second.user_email == "alice@example.com"
+      assert first.team_name == team.name
+    end
+
+    test "returns empty list for nil model_alias_id" do
+      assert Rollup.breakdown_by_member_for_model(nil) == []
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # breakdown_by_team_for_model/2
+  # ---------------------------------------------------------------------
+
+  describe "breakdown_by_team_for_model/2" do
+    test "groups by team for a specific model" do
+      {tm1, _team1} = team_member_fixture()
+      {tm2, _team2} = team_member_fixture()
+
+      ma = model_alias_fixture(%{"name" => "gpt-4o"})
+
+      log_request(tm1.id, ~U[2026-07-26 10:00:00Z], %{
+        model_alias_id: ma.id,
+        cost_usd: Decimal.new("1.000000"),
+        provider_cost_usd: Decimal.new("0.800000")
+      })
+
+      log_request(tm2.id, ~U[2026-07-26 11:00:00Z], %{
+        model_alias_id: ma.id,
+        cost_usd: Decimal.new("5.000000"),
+        provider_cost_usd: Decimal.new("4.000000")
+      })
+
+      results = Rollup.breakdown_by_team_for_model(ma.id, from: ~U[2026-07-01 00:00:00Z])
+
+      assert length(results) == 2
+      [first, _] = results
+      # Ranked by provider_cost descending
+      assert Decimal.equal?(first.provider_cost_usd, Decimal.new("4.000000"))
+      assert first.team_name != nil
+    end
+
+    test "returns empty list for nil model_alias_id" do
+      assert Rollup.breakdown_by_team_for_model(nil) == []
     end
   end
 end

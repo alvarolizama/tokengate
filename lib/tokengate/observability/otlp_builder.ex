@@ -1,25 +1,17 @@
 defmodule Tokengate.Observability.OtlpBuilder do
-  @moduledoc """
+  @moduledoc ~S"""
   Builds OTLP/JSON (OTLP traces v1) payloads from `Tokengate.Logs.RequestLog`
   entries for export to observability destinations.
 
-  ## Privacy
+  Request logs never contain prompt or completion content, and neither do
+  the OTLP spans built here.
 
-  Request logs **never** contain prompt or completion content, and neither do
-  the OTLP spans built here — in any privacy mode.
-
-  The `privacy_mode` of the destination controls one attribute:
-
-    * `"full"` — includes `tokengate.team_member_id` attribute (still
-      metadata; no content).
-    * `"metadata_only"` — omits that attribute entirely.
-
-  All other attributes (model, token counts, costs, latency, status) are
-  present in both modes.
+  The `service.name` resource attribute is derived from the request log's
+  team member: `"#{team.name} - #{user.email}"`. When the team member
+  association is not loaded, it falls back to `"tokengate"`.
   """
 
   alias Tokengate.Logs.RequestLog
-  alias Tokengate.Observability.Destination
 
   @scope_name "tokengate"
   @span_name "tokengate.chat_completion"
@@ -46,31 +38,39 @@ defmodule Tokengate.Observability.OtlpBuilder do
         ]
       }
   """
-  @spec build_span(RequestLog.t(), Destination.t()) :: otlp_payload()
-  def build_span(request_log, destination) do
-    span = build_single_span(request_log, destination)
+  @spec build_span(RequestLog.t(), term()) :: otlp_payload()
+  def build_span(request_log, _destination) do
+    span = build_single_span(request_log)
+    identity = build_identity(request_log)
 
-    wrap_in_resource_spans([span])
+    wrap_in_resource_spans([span], identity)
   end
 
   @doc """
   Builds a batched OTLP/JSON payload from multiple request logs, grouping
   all spans into a single `scopeSpans` entry.
-  """
-  @spec build_payload([RequestLog.t()], Destination.t()) :: otlp_payload()
-  def build_payload(request_logs, destination) do
-    spans = Enum.map(request_logs, &build_single_span(&1, destination))
 
-    wrap_in_resource_spans(spans)
+  The `service.name` resource attribute uses the identity derived from the
+  first request log in the batch. All logs in a batch are expected to belong
+  to the same team.
+  """
+  @spec build_payload([RequestLog.t()], term()) :: otlp_payload()
+  def build_payload([], _destination) do
+    wrap_in_resource_spans([], "tokengate")
+  end
+
+  def build_payload([first | _] = request_logs, _destination) do
+    spans = Enum.map(request_logs, &build_single_span/1)
+    identity = build_identity(first)
+
+    wrap_in_resource_spans(spans, identity)
   end
 
   # ---------------------------------------------------------------------------
   # Span construction
   # ---------------------------------------------------------------------------
 
-  defp build_single_span(request_log, destination) do
-    privacy_mode = Map.get(destination, :privacy_mode) || "metadata_only"
-
+  defp build_single_span(request_log) do
     %{
       traceId: trace_id(request_log),
       spanId: span_id(request_log),
@@ -78,7 +78,7 @@ defmodule Tokengate.Observability.OtlpBuilder do
       kind: 2,
       startTimeUnixNano: start_time_nano(request_log),
       endTimeUnixNano: end_time_nano(request_log),
-      attributes: build_attributes(request_log, privacy_mode),
+      attributes: build_attributes(request_log),
       status: build_status(request_log)
     }
   end
@@ -132,36 +132,63 @@ defmodule Tokengate.Observability.OtlpBuilder do
   end
 
   # ---------------------------------------------------------------------------
+  # Identity (service.name / api_key_name)
+  # ---------------------------------------------------------------------------
+
+  @doc ~S"""
+  Builds the identity string used for `service.name` and
+  `trace.metadata.openrouter.api_key_name` from the request log's team member.
+
+  Format: `"#{team.name} - #{user.email}"`
+
+  Falls back to `"tokengate"` when the team member association is not loaded
+  or is nil.
+  """
+  @spec build_identity(RequestLog.t()) :: String.t()
+  def build_identity(%RequestLog{team_member: %Tokengate.Accounts.TeamMember{} = tm}) do
+    team = Map.get(tm, :team)
+    user = Map.get(tm, :user)
+
+    case {team, user} do
+      {%Tokengate.Accounts.Team{name: team_name}, %Tokengate.Accounts.User{email: email}}
+      when is_binary(team_name) and is_binary(email) ->
+        "#{team_name} - #{email}"
+
+      _ ->
+        "tokengate"
+    end
+  end
+
+  def build_identity(_request_log), do: "tokengate"
+
+  # ---------------------------------------------------------------------------
   # Attributes (OTLP keyvalue shape)
   # ---------------------------------------------------------------------------
 
-  defp build_attributes(request_log, privacy_mode) do
-    base_attrs = [
+  defp build_attributes(request_log) do
+    prompt_tokens = request_log.prompt_tokens || 0
+    completion_tokens = request_log.completion_tokens || 0
+    total_tokens = prompt_tokens + completion_tokens
+
+    [
       kv("gen_ai.request.model", request_log.model_requested),
       kv("gen_ai.response.model", request_log.model_responded),
-      kv_int("gen_ai.usage.prompt_tokens", request_log.prompt_tokens),
-      kv_int("gen_ai.usage.completion_tokens", request_log.completion_tokens),
       kv("gen_ai.system", "tokengate"),
-      kv("tokengate.agent.type", request_log.agent_type),
-      kv_double("tokengate.cost.estimated_usd", request_log.estimated_cost_usd),
+      kv_int("gen_ai.usage.prompt_tokens", prompt_tokens),
+      kv_int("gen_ai.usage.completion_tokens", completion_tokens),
+      kv_int("gen_ai.usage.total_tokens", total_tokens),
+      kv_double("gen_ai.usage.total_cost", request_log.provider_cost_usd),
+      kv("tokengate.cost.estimated_usd", request_log.estimated_cost_usd, :double),
       kv_double("tokengate.cost.usd", request_log.cost_usd),
       kv_double("tokengate.cost.provider_usd", request_log.provider_cost_usd),
       kv_double("tokengate.cost.savings_usd", request_log.savings_usd),
+      kv("tokengate.agent.type", request_log.agent_type),
       kv_bool("tokengate.streaming", request_log.streaming),
-      kv_int("http.status_code", request_log.status_code)
+      kv_int("http.status_code", request_log.status_code),
+      kv("tokengate.team_member_id", to_string(request_log.team_member_id)),
+      kv("trace.metadata.openrouter.api_key_name", build_identity(request_log))
     ]
-
-    maybe_add_privacy_attrs(base_attrs, privacy_mode, request_log)
   end
-
-  defp maybe_add_privacy_attrs(attrs, "full", request_log) do
-    attrs ++
-      [
-        kv("tokengate.team_member_id", to_string(request_log.team_member_id))
-      ]
-  end
-
-  defp maybe_add_privacy_attrs(attrs, _privacy_mode, _request_log), do: attrs
 
   # ---------------------------------------------------------------------------
   # Status
@@ -192,6 +219,10 @@ defmodule Tokengate.Observability.OtlpBuilder do
     %{key: key, value: %{stringValue: to_string(value)}}
   end
 
+  defp kv(key, %Decimal{} = value, :double) do
+    %{key: key, value: %{doubleValue: Decimal.to_float(value)}}
+  end
+
   defp kv_int(key, nil), do: %{key: key, value: %{intValue: 0}}
   defp kv_int(key, value) when is_integer(value), do: %{key: key, value: %{intValue: value}}
 
@@ -211,13 +242,13 @@ defmodule Tokengate.Observability.OtlpBuilder do
   # Resource spans wrapper
   # ---------------------------------------------------------------------------
 
-  defp wrap_in_resource_spans(spans) do
+  defp wrap_in_resource_spans(spans, identity) do
     %{
       resourceSpans: [
         %{
           resource: %{
             attributes: [
-              kv("service.name", "tokengate")
+              %{key: "service.name", value: %{stringValue: identity}}
             ]
           },
           scopeSpans: [

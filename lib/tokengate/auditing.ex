@@ -25,7 +25,7 @@ defmodule Tokengate.Auditing do
     * `user_or_nil` — a `%User{}` struct, a user_id string/uuid, or `nil`
       for system actions.
     * `action` — the action performed (e.g. `"create"`, `"update"`).
-    * `entity_type` — the type of entity (e.g. `"organization"`).
+    * `entity_type` — the type of entity (e.g. `"team"`).
     * `entity_id` — the stringified id of the entity.
     * `changes` — optional map of changes (defaults to `%{}`).
 

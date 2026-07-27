@@ -6,9 +6,9 @@ defmodule TokengateWeb.ModelsLive do
   model (provider_model, priority, enabled toggle).
   Managers and regular users see a read-only list.
 
-  Models are organization-scoped. When creating, the admin picks
-  an organization from a select. All existing models are listed regardless
-  of organization.
+  Models are global. Admins can create, edit, and delete models,
+  and assign providers to each model (provider_model, priority, enabled toggle).
+  Managers and regular users see a read-only list.
   """
 
   use TokengateWeb, :live_view

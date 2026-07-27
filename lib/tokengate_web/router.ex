@@ -45,6 +45,10 @@ defmodule TokengateWeb.Router do
     get "/login", SessionController, :new
     post "/login", SessionController, :create
     delete "/logout", SessionController, :delete
+
+    # Google OAuth — public routes (no auth required to start the flow).
+    get "/auth/google", OAuthController, :request
+    get "/auth/google/callback", OAuthController, :callback
   end
 
   # Authenticated browser dashboard. The on_mount hook mirrors the plug
@@ -55,17 +59,27 @@ defmodule TokengateWeb.Router do
     live_session :dashboard,
       on_mount: [{TokengateWeb.UserAuth, :require_authenticated}] do
       live "/dashboard", DashboardLive
+      live "/dashboard/stats", StatsLive, :index
+      live "/dashboard/stats/models", StatsLive, :models
+      live "/dashboard/stats/teams", StatsLive, :teams
       live "/dashboard/teams", TeamsLive
       live "/dashboard/teams/:id/members", TeamMembersLive
-      live "/dashboard/keys", ApiKeysLive
       live "/dashboard/logs", LogsLive
-      live "/dashboard/models", ModelsLive
     end
 
     live_session :admin,
       on_mount: [{TokengateWeb.UserAuth, :require_admin}] do
       live "/dashboard/providers", ProvidersLive
+      live "/dashboard/users", UsersLive
+      live "/dashboard/models", ModelsLive
+      live "/dashboard/keys", ApiKeysLive
     end
+  end
+
+  # CSV export — regular controller action (not LiveView) requiring auth.
+  scope "/dashboard/stats", TokengateWeb do
+    pipe_through [:browser, :browser_auth]
+    get "/export", StatsExportController, :export
   end
 
   # OpenAI-compatible proxy API — authenticated via bearer API key

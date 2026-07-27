@@ -109,10 +109,10 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
         "team_id" => team.id
       })
 
-    team_member
+    {team_member, team}
   end
 
-  defp destination_fixture(url, attrs \\ %{}) do
+  defp destination_fixture(url, team_id, attrs \\ %{}) do
     {:ok, dest} =
       Observability.create_destination(
         Map.merge(
@@ -120,7 +120,7 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
             "name" => "OTLP Collector",
             "type" => "otlp_webhook",
             "url" => url,
-            "privacy_mode" => "metadata_only"
+            "team_id" => team_id
           },
           attrs
         )
@@ -173,9 +173,9 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
 
   describe "perform/1 — 200 success" do
     test "returns :ok on 2xx" do
-      tm = team_member_fixture()
+      {tm, team} = team_member_fixture()
       log = log_fixture(tm.id)
-      dest = destination_fixture(base_url())
+      dest = destination_fixture(base_url(), team.id)
 
       job = %Oban.Job{
         args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
@@ -185,9 +185,9 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
     end
 
     test "sends valid OTLP payload" do
-      tm = team_member_fixture()
+      {tm, team} = team_member_fixture()
       log = log_fixture(tm.id)
-      dest = destination_fixture(base_url())
+      dest = destination_fixture(base_url(), team.id)
 
       job = %Oban.Job{
         args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
@@ -206,9 +206,9 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
     end
 
     test "HMAC signature verifies against body" do
-      tm = team_member_fixture()
+      {tm, team} = team_member_fixture()
       log = log_fixture(tm.id)
-      dest = destination_fixture(base_url())
+      dest = destination_fixture(base_url(), team.id)
 
       job = %Oban.Job{
         args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
@@ -230,11 +230,13 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
     end
 
     test "forwards custom destination headers" do
-      tm = team_member_fixture()
+      {tm, team} = team_member_fixture()
       log = log_fixture(tm.id)
 
       dest =
-        destination_fixture(base_url(), %{"headers" => %{"X-Custom-Header" => "my-value"}})
+        destination_fixture(base_url(), team.id, %{
+          "headers" => %{"X-Custom-Header" => "my-value"}
+        })
 
       job = %Oban.Job{
         args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
@@ -247,9 +249,9 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
     end
 
     test "content-type is application/json" do
-      tm = team_member_fixture()
+      {tm, team} = team_member_fixture()
       log = log_fixture(tm.id)
-      dest = destination_fixture(base_url())
+      dest = destination_fixture(base_url(), team.id)
 
       job = %Oban.Job{
         args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
@@ -264,9 +266,9 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
 
   describe "perform/1 — retry semantics" do
     test "400 → {:discard, _}" do
-      tm = team_member_fixture()
+      {tm, team} = team_member_fixture()
       log = log_fixture(tm.id)
-      dest = destination_fixture(base_url("/bad"))
+      dest = destination_fixture(base_url("/bad"), team.id)
 
       job = %Oban.Job{
         args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
@@ -276,9 +278,9 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
     end
 
     test "500 → {:error, _}" do
-      tm = team_member_fixture()
+      {tm, team} = team_member_fixture()
       log = log_fixture(tm.id)
-      dest = destination_fixture(base_url("/broken"))
+      dest = destination_fixture(base_url("/broken"), team.id)
 
       job = %Oban.Job{
         args: %{"destination_id" => dest.id, "request_log_ids" => [to_string(log.id)]}
@@ -288,8 +290,8 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
     end
 
     test "nonexistent log ids → {:discard, _}" do
-      _tm = team_member_fixture()
-      dest = destination_fixture(base_url())
+      {_tm, team} = team_member_fixture()
+      dest = destination_fixture(base_url(), team.id)
 
       # Use a valid UUID format that doesn't exist in the DB
       fake_id = Ecto.UUID.generate()
@@ -303,12 +305,12 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
   # ---------------------------------------------------------------------------
 
   describe "dispatch/1" do
-    test "enqueues one job per destination" do
-      tm = team_member_fixture()
+    test "enqueues one job per destination for the team" do
+      {tm, team} = team_member_fixture()
       log = log_fixture(tm.id)
 
-      dest1 = destination_fixture(base_url(), %{"name" => "Collector 1"})
-      dest2 = destination_fixture(base_url(), %{"name" => "Collector 2"})
+      dest1 = destination_fixture(base_url(), team.id, %{"name" => "Collector 1"})
+      dest2 = destination_fixture(base_url(), team.id, %{"name" => "Collector 2"})
 
       assert {:ok, 2} = WebhookWorker.dispatch(log)
 
@@ -323,15 +325,36 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
       )
     end
 
-    test "returns {:ok, 0} when no destinations configured" do
-      tm = team_member_fixture()
+    test "returns {:ok, 0} when no destinations configured for team" do
+      {tm, _team} = team_member_fixture()
       log = log_fixture(tm.id)
 
       assert {:ok, 0} = WebhookWorker.dispatch(log)
     end
 
+    test "only enqueues destinations for the log's team, not other teams" do
+      {tm1, team1} = team_member_fixture()
+      {_tm2, team2} = team_member_fixture()
+
+      log = log_fixture(tm1.id)
+
+      # Destination for team1 (should be enqueued)
+      dest_team1 = destination_fixture(base_url(), team1.id, %{"name" => "Team 1 Collector"})
+
+      # Destination for team2 (should NOT be enqueued)
+      destination_fixture(base_url(), team2.id, %{"name" => "Team 2 Collector"})
+
+      # Only the team1 destination should be enqueued
+      assert {:ok, 1} = WebhookWorker.dispatch(log)
+
+      assert_enqueued(
+        worker: WebhookWorker,
+        args: %{"destination_id" => dest_team1.id, "request_log_ids" => [to_string(log.id)]}
+      )
+    end
+
     test "handles nil team_member_id gracefully" do
-      log = %Tokengate.Logs.RequestLog{team_member_id: nil}
+      log = %Tokengate.Logs.RequestLog{id: Ecto.UUID.generate(), team_member_id: nil}
       assert {:ok, 0} = WebhookWorker.dispatch(log)
     end
   end

@@ -68,6 +68,22 @@ if config_env() == :prod do
     ],
     secret_key_base: secret_key_base
 
+  config :tokengate,
+         :webhook_secret,
+         System.get_env("WEBHOOK_SECRET") || raise("WEBHOOK_SECRET is missing")
+
+  # Google OAuth (optional — leave env vars empty to disable Google login)
+  config :tokengate, :google_oauth,
+    client_id: System.get_env("GOOGLE_OAUTH_CLIENT_ID"),
+    client_secret: System.get_env("GOOGLE_OAUTH_CLIENT_SECRET"),
+    redirect_uri:
+      System.get_env("GOOGLE_OAUTH_REDIRECT_URI") ||
+        "https://#{host}/auth/google/callback",
+    allowed_domains:
+      (System.get_env("GOOGLE_OAUTH_ALLOWED_DOMAINS") || "")
+      |> String.split(",", trim: true)
+      |> Enum.map(&String.trim/1)
+
   # ## SSL Support
   #
   # To get SSL working, you will need to add the `https` key

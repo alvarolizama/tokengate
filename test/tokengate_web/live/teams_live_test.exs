@@ -256,4 +256,24 @@ defmodule TokengateWeb.TeamsLiveTest do
 
     assert has_element?(view, "#members-link-#{team.id}")
   end
+
+  # --------------------------------------------------------------------------
+  # Webhooks
+  # --------------------------------------------------------------------------
+
+  test "clicking new_webhook shows the form", %{conn: conn} do
+    %{team: team} = team_fixture()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/teams")
+
+    assert has_element?(view, "#new-webhook-#{team.id}")
+
+    view
+    |> element("#new-webhook-#{team.id}")
+    |> render_click()
+
+    assert has_element?(view, "#destination-form-#{team.id}")
+  end
 end

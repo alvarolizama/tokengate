@@ -2,11 +2,14 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
   @moduledoc """
   Tests for `Tokengate.Observability.OtlpBuilder` — OTLP/JSON span shape,
   attribute values, deterministic IDs, nano timestamps, streaming names,
-  status codes, privacy modes, and batch payloads.
+  status codes, identity strings, and batch payloads.
   """
 
   use ExUnit.Case, async: true
 
+  alias Tokengate.Accounts.Team
+  alias Tokengate.Accounts.TeamMember
+  alias Tokengate.Accounts.User
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Observability.Destination
   alias Tokengate.Observability.OtlpBuilder
@@ -22,8 +25,20 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
         name: "OTLP Collector",
         type: "otlp_webhook",
         url: "https://collector.example.com",
-        headers: %{},
-        privacy_mode: "metadata_only"
+        headers: %{}
+      },
+      attrs
+    )
+  end
+
+  defp team_member(attrs \\ %{}) do
+    struct(
+      %TeamMember{
+        id: "tm-1",
+        team_id: "team-1",
+        user_id: "user-1",
+        team: %Team{id: "team-1", name: "Engineering"},
+        user: %User{id: "user-1", email: "alvaro@gobravo.io"}
       },
       attrs
     )
@@ -52,6 +67,10 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
       },
       attrs
     )
+  end
+
+  defp request_log_with_team_member(attrs \\ %{}) do
+    request_log(Map.merge(%{team_member: team_member()}, attrs))
   end
 
   # ---------------------------------------------------------------------------
@@ -131,6 +150,12 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
       assert find_attr(span, "gen_ai.usage.completion_tokens").value.intValue == 75
     end
 
+    test "gen_ai.usage.total_tokens is prompt + completion" do
+      span = single_span()
+      attr = find_attr(span, "gen_ai.usage.total_tokens")
+      assert attr.value.intValue == 225
+    end
+
     test "gen_ai.system is 'tokengate'" do
       span = single_span()
       assert find_attr(span, "gen_ai.system").value.stringValue == "tokengate"
@@ -150,6 +175,12 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
       assert find_attr(span, "tokengate.cost.savings_usd").value.doubleValue == 0.00234
     end
 
+    test "gen_ai.usage.total_cost from provider_cost_usd" do
+      span = single_span()
+      attr = find_attr(span, "gen_ai.usage.total_cost")
+      assert attr.value.doubleValue == 0.01
+    end
+
     test "streaming as boolValue" do
       span = single_span()
       assert find_attr(span, "tokengate.streaming").value.boolValue == false
@@ -158,6 +189,50 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
     test "http.status_code as intValue" do
       span = single_span()
       assert find_attr(span, "http.status_code").value.intValue == 200
+    end
+
+    test "tokengate.team_member_id always present" do
+      span = single_span()
+      attr = find_attr(span, "tokengate.team_member_id")
+      assert attr != nil
+      assert attr.value.stringValue == "tm-1"
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Identity (service.name / trace.metadata.openrouter.api_key_name)
+  # ---------------------------------------------------------------------------
+
+  describe "build_span/2 — identity" do
+    test "service.name is 'Team - email' when team_member is loaded" do
+      log = request_log_with_team_member()
+      payload = OtlpBuilder.build_span(log, destination())
+      rs = hd(payload.resourceSpans)
+
+      service_attr = Enum.find(rs.resource.attributes, fn a -> a.key == "service.name" end)
+      assert service_attr.value.stringValue == "Engineering - alvaro@gobravo.io"
+    end
+
+    test "trace.metadata.openrouter.api_key_name is 'Team - email'" do
+      log = request_log_with_team_member()
+      span = single_span(log)
+
+      attr = find_attr(span, "trace.metadata.openrouter.api_key_name")
+      assert attr.value.stringValue == "Engineering - alvaro@gobravo.io"
+    end
+
+    test "service.name falls back to 'tokengate' when team_member not loaded" do
+      payload = OtlpBuilder.build_span(request_log(), destination())
+      rs = hd(payload.resourceSpans)
+
+      service_attr = Enum.find(rs.resource.attributes, fn a -> a.key == "service.name" end)
+      assert service_attr.value.stringValue == "tokengate"
+    end
+
+    test "trace.metadata.openrouter.api_key_name falls back to 'tokengate'" do
+      span = single_span(request_log())
+      attr = find_attr(span, "trace.metadata.openrouter.api_key_name")
+      assert attr.value.stringValue == "tokengate"
     end
   end
 
@@ -264,34 +339,6 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
     test "nil status_code → error" do
       span = single_span(request_log(status_code: nil))
       assert span.status.code == 2
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # Privacy modes
-  # ---------------------------------------------------------------------------
-
-  describe "build_span/2 — privacy modes" do
-    test "metadata_only omits team_member_id" do
-      span = single_span(request_log(), destination(privacy_mode: "metadata_only"))
-
-      assert find_attr(span, "tokengate.team_member_id") == nil
-    end
-
-    test "full includes team_member_id" do
-      span = single_span(request_log(), destination(privacy_mode: "full"))
-
-      tm_attr = find_attr(span, "tokengate.team_member_id")
-
-      assert tm_attr != nil
-      assert tm_attr.value.stringValue == "tm-1"
-    end
-
-    test "full mode adds exactly 1 attribute versus metadata_only" do
-      span_meta = single_span(request_log(), destination(privacy_mode: "metadata_only"))
-      span_full = single_span(request_log(), destination(privacy_mode: "full"))
-
-      assert length(span_full.attributes) == length(span_meta.attributes) + 1
     end
   end
 

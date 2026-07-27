@@ -49,6 +49,13 @@ defmodule TokengateWeb.SessionController do
         |> put_flash(:info, "Sesión iniciada.")
         |> redirect(to: "/dashboard")
 
+      {:error, :suspended} ->
+        conn
+        |> put_flash(:error, "Tu cuenta está suspendida. Contacta al administrador.")
+        |> assign(:email, email)
+        |> assign(:page_title, "Iniciar sesión · Tokengate")
+        |> render(:new)
+
       {:error, :unauthorized} ->
         conn
         |> put_flash(:error, "Credenciales inválidas.")

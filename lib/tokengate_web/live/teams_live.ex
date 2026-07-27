@@ -1,12 +1,13 @@
 defmodule TokengateWeb.TeamsLive do
   @moduledoc """
-  Admin-only CRUD for teams + per-team model alias grants.
+  Admin-only CRUD for teams + per-team model alias grants + observability webhooks.
 
   Only admins (global_role == "admin") can access this page. Non-admins
   are redirected to /dashboard with an error flash.
 
   Teams carry default budgets and limits applied to all members. Model
   aliases can be granted per-team via the team_model_aliases join table.
+  Observability destinations (webhooks) are managed per-team.
   """
 
   use TokengateWeb, :live_view
@@ -15,6 +16,8 @@ defmodule TokengateWeb.TeamsLive do
 
   alias Tokengate.Accounts
   alias Tokengate.Accounts.Team
+  alias Tokengate.Observability
+  alias Tokengate.Observability.Destination
   alias Tokengate.Providers
   alias Tokengate.Providers.{ModelAlias, TeamModelAlias}
   alias Tokengate.Repo
@@ -34,6 +37,9 @@ defmodule TokengateWeb.TeamsLive do
         |> assign(:page_title, "Equipos · Tokengate")
         |> assign(:form, nil)
         |> assign(:editing_team_id, nil)
+        |> assign(:webhook_form, nil)
+        |> assign(:editing_webhook_team_id, nil)
+        |> assign(:editing_webhook_id, nil)
         |> load_teams()
 
       {:ok, socket}
@@ -60,11 +66,19 @@ defmodule TokengateWeb.TeamsLive do
       |> Repo.all()
       |> Enum.group_by(fn _ma -> "all" end)
 
+    destinations_by_team =
+      teams
+      |> Enum.map(fn team ->
+        {team.id, Observability.list_destinations(team.id)}
+      end)
+      |> Map.new()
+
     socket
     |> stream(:teams, teams, reset: true)
     |> assign(:teams_empty?, teams == [])
     |> assign(:granted_aliases, granted_aliases)
     |> assign(:aliases_by_org, aliases_by_org)
+    |> assign(:destinations_by_team, destinations_by_team)
   end
 
   ## Events — team CRUD ---------------------------------------------------
@@ -147,6 +161,104 @@ defmodule TokengateWeb.TeamsLive do
     end
   end
 
+  ## Events — webhook CRUD -----------------------------------------------
+
+  def handle_event("new_webhook", params, socket) do
+    team_id = params["team-id"] || params["team_id"]
+    changeset = Observability.change_destination(%Destination{})
+
+    {:noreply,
+     socket
+     |> assign(:webhook_form, to_form(changeset, as: :destination))
+     |> assign(:editing_webhook_team_id, team_id)
+     |> assign(:editing_webhook_id, :new)
+     |> load_teams()}
+  end
+
+  def handle_event("edit_webhook", params, socket) do
+    team_id = params["team-id"] || params["team_id"]
+    webhook_id = params["webhook-id"] || params["webhook_id"]
+    destination = Observability.get_destination!(webhook_id)
+    changeset = Observability.change_destination(destination)
+
+    {:noreply,
+     socket
+     |> assign(:webhook_form, to_form(changeset, as: :destination))
+     |> assign(:editing_webhook_team_id, team_id)
+     |> assign(:editing_webhook_id, webhook_id)
+     |> load_teams()}
+  end
+
+  def handle_event("cancel_webhook", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:webhook_form, nil)
+     |> assign(:editing_webhook_team_id, nil)
+     |> assign(:editing_webhook_id, nil)
+     |> load_teams()}
+  end
+
+  def handle_event("save_webhook", %{"destination" => destination_params}, socket) do
+    team_id = socket.assigns.editing_webhook_team_id
+    editing_id = socket.assigns.editing_webhook_id
+
+    # Parse headers from JSON string if present
+    destination_params =
+      Map.update(destination_params, "headers", %{}, fn
+        headers when is_map(headers) ->
+          headers
+
+        headers when is_binary(headers) and headers != "" ->
+          case Jason.decode(headers) do
+            {:ok, parsed} -> parsed
+            {:error, _} -> %{"_raw" => headers}
+          end
+
+        _ ->
+          %{}
+      end)
+
+    destination_params = Map.put(destination_params, "team_id", team_id)
+
+    result =
+      if editing_id == :new do
+        Observability.create_destination(destination_params)
+      else
+        destination = Observability.get_destination!(editing_id)
+        Observability.update_destination(destination, destination_params)
+      end
+
+    case result do
+      {:ok, _destination} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Webhook guardado.")
+         |> assign(:webhook_form, nil)
+         |> assign(:editing_webhook_team_id, nil)
+         |> assign(:editing_webhook_id, nil)
+         |> load_teams()}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
+        {:noreply, assign(socket, :webhook_form, to_form(changeset, as: :destination))}
+    end
+  end
+
+  def handle_event("delete_webhook", params, socket) do
+    webhook_id = params["webhook-id"] || params["webhook_id"]
+    destination = Observability.get_destination!(webhook_id)
+
+    case Observability.delete_destination(destination) do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Webhook eliminado.")
+         |> load_teams()}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "No se pudo eliminar el webhook.")}
+    end
+  end
+
   ## Private helpers — save ----------------------------------------------
 
   defp save_team(socket, :new, team_params) do
@@ -191,6 +303,17 @@ defmodule TokengateWeb.TeamsLive do
   def format_decimal(nil), do: "—"
   def format_decimal(value), do: to_string(value)
 
+  def headers_to_string(%{} = headers) when map_size(headers) == 0, do: ""
+
+  def headers_to_string(%{} = headers) do
+    case Map.get(headers, "_raw") do
+      nil -> Jason.encode!(headers, pretty: true)
+      raw -> raw
+    end
+  end
+
+  def headers_to_string(_), do: ""
+
   ## Render ----------------------------------------------------------------
 
   @impl true
@@ -200,7 +323,7 @@ defmodule TokengateWeb.TeamsLive do
       <div class="space-y-6">
         <.header>
           Equipos
-          <:subtitle>Gestiona equipos, presupuestos y aliases de modelos</:subtitle>
+          <:subtitle>Gestiona equipos, presupuestos, aliases de modelos y webhooks</:subtitle>
           <:actions>
             <.button phx-click="new_team" id="new-team-btn">
               <.icon name="hero-plus" class="w-4 h-4" /> Nuevo equipo
@@ -266,7 +389,7 @@ defmodule TokengateWeb.TeamsLive do
           <div
             :for={{id, team} <- @streams.teams}
             id={id}
-            class="card bg-base-100 border border-base-300 shadow-sm mb-4"
+            class="card bg-base-100 border border-base-300 shadow-sm mb-4 transition-shadow hover:shadow-md"
           >
             <div class="card-body">
               <div class="flex items-start justify-between">
@@ -345,8 +468,129 @@ defmodule TokengateWeb.TeamsLive do
                     :if={Map.get(@aliases_by_org, "all", []) == []}
                     class="text-xs text-base-content/40"
                   >
-                    No hay aliases disponibles para esta organización.
+                    No hay aliases disponibles.
                   </p>
+                </div>
+              </div>
+
+              <!-- Webhooks section -->
+              <div class="mt-4 pt-4 border-t border-base-300">
+                <div class="flex items-center justify-between mb-3">
+                  <h4 class="text-sm font-semibold flex items-center gap-1.5">
+                    <.icon name="hero-bell-alert" class="w-4 h-4 opacity-70" />
+                    Webhooks de observabilidad
+                  </h4>
+                  <button
+                    :if={@editing_webhook_team_id != team.id or @webhook_form == nil}
+                    phx-click="new_webhook"
+                    phx-value-team-id={team.id}
+                    class="btn btn-xs btn-ghost gap-1 transition-colors hover:text-primary"
+                    id={"new-webhook-#{team.id}"}
+                  >
+                    <.icon name="hero-plus" class="w-3.5 h-3.5" /> Agregar webhook
+                  </button>
+                </div>
+
+                <!-- Destination list -->
+                <div
+                  :if={@editing_webhook_team_id != team.id or @webhook_form == nil}
+                  id={"webhooks-list-#{team.id}"}
+                >
+                  <div
+                    :for={destination <- Map.get(@destinations_by_team, team.id, [])}
+                    class="flex items-center justify-between gap-3 py-2 px-3 rounded-lg bg-base-200/50 hover:bg-base-200 transition-colors mb-2"
+                    id={"webhook-#{destination.id}"}
+                  >
+                    <div class="flex items-center gap-3 min-w-0">
+                      <span class="badge badge-sm badge-primary/20 border-primary/30 text-primary">
+                        {destination.type}
+                      </span>
+                      <div class="min-w-0">
+                        <p class="text-sm font-medium truncate">{destination.name}</p>
+                        <p class="text-xs text-base-content/40 truncate">{destination.url}</p>
+                      </div>
+                    </div>
+                    <div class="flex gap-1 shrink-0">
+                      <button
+                        phx-click="edit_webhook"
+                        phx-value-team-id={team.id}
+                        phx-value-webhook-id={destination.id}
+                        class="btn btn-xs btn-ghost"
+                        id={"edit-webhook-#{destination.id}"}
+                        title="Editar webhook"
+                      >
+                        <.icon name="hero-pencil" class="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        phx-click="delete_webhook"
+                        phx-value-webhook-id={destination.id}
+                        class="btn btn-xs btn-ghost text-error"
+                        id={"delete-webhook-#{destination.id}"}
+                        data-confirm="¿Eliminar webhook? Esta acción no se puede deshacer."
+                        title="Eliminar webhook"
+                      >
+                        <.icon name="hero-trash" class="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  <div
+                    :if={Map.get(@destinations_by_team, team.id, []) == []}
+                    class="text-center py-6 text-base-content/40"
+                    id={"webhooks-empty-#{team.id}"}
+                  >
+                    <.icon name="hero-bell-slash" class="w-8 h-8 mx-auto mb-1.5 opacity-40" />
+                    <p class="text-xs">No hay webhooks configurados para este equipo.</p>
+                  </div>
+                </div>
+
+                <!-- Webhook form -->
+                <div
+                  :if={@editing_webhook_team_id == team.id and @webhook_form}
+                  id={"webhook-form-#{team.id}"}
+                >
+                  <.form
+                    for={@webhook_form}
+                    id={"destination-form-#{team.id}"}
+                    phx-submit="save_webhook"
+                  >
+                    <.input
+                      field={@webhook_form[:name]}
+                      type="text"
+                      label="Nombre"
+                      hint="Nombre identificativo del webhook. Ej.: «Datadog - Producción»."
+                    />
+                    <.input
+                      field={@webhook_form[:url]}
+                      type="text"
+                      label="URL"
+                      hint="Endpoint HTTPS donde se enviarán los datos de telemetría (formato OTLP)."
+                    />
+                    <.input
+                      field={@webhook_form[:headers]}
+                      type="textarea"
+                      label="Cabeceras (JSON)"
+                      placeholder='{"Authorization": "Bearer xxx"}'
+                      hint="Cabeceras HTTP adicionales en formato JSON. Dejalo vacio si no necesitas cabeceras extra."
+                    />
+                    <div class="flex gap-2 mt-3">
+                      <button
+                        type="submit"
+                        class="btn btn-primary btn-sm"
+                        id={"save-webhook-#{team.id}"}
+                      >
+                        <.icon name="hero-check" class="w-4 h-4" /> Guardar webhook
+                      </button>
+                      <button
+                        type="button"
+                        phx-click="cancel_webhook"
+                        class="btn btn-ghost btn-sm"
+                        id={"cancel-webhook-#{team.id}"}
+                      >
+                        Cancelar
+                      </button>
+                    </div>
+                  </.form>
                 </div>
               </div>
             </div>

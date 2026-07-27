@@ -96,7 +96,7 @@ defmodule Tokengate.Accounts do
 
   def update_user(%User{} = user, attrs) do
     user
-    |> User.changeset(attrs)
+    |> User.admin_update_changeset(attrs)
     |> Repo.update()
   end
 
@@ -119,15 +119,124 @@ defmodule Tokengate.Accounts do
   end
 
   @doc """
+  Admin-creates a user: sets email, name, password, global_role.
+  Validates password complexity. Returns `{:ok, user}` or `{:error, changeset}`.
+  """
+  def admin_create_user(attrs) do
+    %User{}
+    |> User.admin_create_changeset(attrs)
+    |> Repo.insert()
+  end
+
+  @doc """
+  Admin-updates a user profile (name, global_role, status). Does NOT
+  touch password — use `reset_user_password/2` for that.
+  """
+  def admin_update_user(%User{} = user, attrs) do
+    user
+    |> User.admin_update_changeset(attrs)
+    |> Repo.update()
+  end
+
+  @doc """
+  Resets a user's password (admin action). Validates password complexity.
+  """
+  def reset_user_password(%User{} = user, attrs) do
+    user
+    |> User.reset_password_changeset(attrs)
+    |> Repo.update()
+  end
+
+  @doc """
+  Finds a user by their Google ID.
+  """
+  def get_user_by_google_id(google_id) when is_binary(google_id) do
+    Repo.get_by(User, google_id: google_id)
+  end
+
+  @doc """
+  Finds or creates a user from Google OAuth data.
+
+  Flow:
+    1. Look up by google_id — if found and active, return {:ok, user}.
+    2. Look up by email — if found and active, link google_id and return {:ok, user}.
+    3. If no user exists, return {:error, :not_found} (no auto-registration
+       unless domain is in the allowlist, handled by the caller).
+
+  Suspended users are rejected with {:error, :suspended}.
+  """
+  def find_or_create_from_google(%{
+        google_id: google_id,
+        email: email,
+        name: name,
+        avatar_url: avatar_url
+      }) do
+    normalized_email = String.downcase(String.trim(email))
+
+    case get_user_by_google_id(google_id) do
+      %User{status: "active"} = user ->
+        {:ok, user}
+
+      %User{status: "suspended"} ->
+        {:error, :suspended}
+
+      nil ->
+        case get_user_by_email(normalized_email) do
+          %User{status: "active"} = user ->
+            user
+            |> User.google_oauth_changeset(%{
+              google_id: google_id,
+              name: name || user.name,
+              avatar_url: avatar_url
+            })
+            |> Repo.update()
+
+          %User{status: "suspended"} ->
+            {:error, :suspended}
+
+          nil ->
+            {:error, :not_found}
+        end
+    end
+  end
+
+  @doc """
+  Creates a new user from Google OAuth data (auto-registration).
+  Called by the OAuth controller when the domain is in the allowlist.
+  """
+  def create_from_google(%{
+        google_id: google_id,
+        email: email,
+        name: name,
+        avatar_url: avatar_url
+      }) do
+    %User{}
+    |> User.google_oauth_changeset(%{
+      email: email,
+      name: name,
+      google_id: google_id,
+      avatar_url: avatar_url,
+      global_role: "user",
+      status: "active"
+    })
+    |> Repo.insert()
+  end
+
+  @doc """
   Authenticates a user by email and password.
 
-  Returns `{:ok, user}` on success or `{:error, :unauthorized}` on failure.
+  Returns `{:ok, user}` on success, `{:error, :unauthorized}` on bad credentials,
+  or `{:error, :suspended}` when the account is suspended.
+
   Uses `no_user_verify/1` to remain timing-safe when the email is unknown.
   """
   def authenticate_user(email, password) when is_binary(email) and is_binary(password) do
     normalized = String.downcase(email)
 
     case Repo.get_by(User, email: normalized) do
+      %User{status: "suspended"} ->
+        {:error, :suspended}
+
       %User{password_hash: hash} = user when is_binary(hash) ->
         if Bcrypt.verify_pass(password, hash) do
           {:ok, user}

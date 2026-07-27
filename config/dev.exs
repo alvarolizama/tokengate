@@ -90,3 +90,14 @@ config :phoenix_live_view,
 
 # Disable swoosh api client as it is only required for production adapters.
 config :swoosh, :api_client, false
+
+# Webhook HMAC secret for development
+config :tokengate, :webhook_secret, "tokengate-dev-secret"
+
+# Google OAuth (leave empty to disable Google login in dev)
+config :tokengate, :google_oauth,
+  client_id: System.get_env("GOOGLE_OAUTH_CLIENT_ID"),
+  client_secret: System.get_env("GOOGLE_OAUTH_CLIENT_SECRET"),
+  redirect_uri:
+    System.get_env("GOOGLE_OAUTH_REDIRECT_URI", "http://localhost:4000/auth/google/callback"),
+  allowed_domains: ["tokengate.local"]

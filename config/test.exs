@@ -42,3 +42,13 @@ config :phoenix_live_view,
 # Sort query params output of verified routes for robust url comparisons
 config :phoenix,
   sort_verified_routes_query_params: true
+
+# Webhook HMAC secret for tests
+config :tokengate, :webhook_secret, "tokengate-test-secret"
+
+# Google OAuth — dummy config for tests (no real requests)
+config :tokengate, :google_oauth,
+  client_id: "test-client-id",
+  client_secret: "test-client-secret",
+  redirect_uri: "http://localhost:4002/auth/google/callback",
+  allowed_domains: []

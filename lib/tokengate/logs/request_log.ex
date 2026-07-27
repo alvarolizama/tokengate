@@ -22,7 +22,6 @@ defmodule Tokengate.Logs.RequestLog do
     field :id, :binary_id, primary_key: true, autogenerate: true
     field :inserted_at, :utc_datetime, primary_key: true
 
-    field :team_member_id, :binary_id
     field :provider_id, :binary_id
     field :model_alias_id, :binary_id
     field :model_requested, :string
@@ -37,6 +36,11 @@ defmodule Tokengate.Logs.RequestLog do
     field :estimated_cost_usd, :decimal
     field :latency_ms, :integer
     field :streaming, :boolean, default: false
+
+    belongs_to :team_member, Tokengate.Accounts.TeamMember,
+      references: :id,
+      foreign_key: :team_member_id,
+      type: :binary_id
   end
 
   @permitted ~w(team_member_id provider_id model_alias_id

@@ -28,28 +28,6 @@
       </div>
     </div>
 
-    <%!-- API usage info --%>
-    <div class="alert alert-info" id="api-usage-info">
-      <.icon name="hero-information-circle" class="w-5 h-5 shrink-0" />
-      <div class="flex-1 text-sm">
-        <p class="font-semibold">Endpoint de la API</p>
-        <p class="mt-1">
-          Usa tu clave en el header
-          <code class="font-mono bg-base-200 px-1 rounded">Authorization: Bearer ***</code>
-        </p>
-        <div class="mt-2 space-y-1">
-          <p>
-            <span class="text-base-content/60">Modelos disponibles:</span>
-            <code class="font-mono bg-base-200 px-1 rounded">GET /v1/models</code>
-          </p>
-          <p>
-            <span class="text-base-content/60">Chat completions:</span>
-            <code class="font-mono bg-base-200 px-1 rounded">POST /v1/chat/completions</code>
-          </p>
-        </div>
-      </div>
-    </div>
-
     <%!-- One-time new token alert --%>
     <div :if={@new_token} class="alert alert-warning shadow-lg" id="new-token-alert" role="alert">
       <.icon name="hero-key" class="w-5 h-5 shrink-0" />
@@ -509,6 +487,28 @@
 
     <%!-- Teams section (moved below metrics) --%>
     <div class="divider"></div>
+
+    <%!-- API usage info --%>
+    <div class="alert alert-info" id="api-usage-info">
+      <.icon name="hero-information-circle" class="w-5 h-5 shrink-0" />
+      <div class="flex-1 text-sm">
+        <p class="font-semibold">Endpoint de la API</p>
+        <p class="mt-1">
+          Usa tu clave en el header
+          <code class="font-mono bg-base-200 px-1 rounded">Authorization: Bearer ***</code>
+        </p>
+        <div class="mt-2 space-y-1">
+          <p>
+            <span class="text-base-content/60">Modelos disponibles:</span>
+            <code class="font-mono bg-base-200 px-1 rounded">GET /v1/models</code>
+          </p>
+          <p>
+            <span class="text-base-content/60">Chat completions:</span>
+            <code class="font-mono bg-base-200 px-1 rounded">POST /v1/chat/completions</code>
+          </p>
+        </div>
+      </div>
+    </div>
 
     <section id="teams-section">
       <h2 class="text-base font-semibold mb-3">Tus equipos</h2>

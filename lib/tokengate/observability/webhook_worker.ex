@@ -24,8 +24,8 @@ defmodule Tokengate.Observability.WebhookWorker do
   ## Dispatch
 
   `dispatch/1` is a plain function (not the worker callback) that resolves
-  all destinations for a request log's organization and enqueues one
-  `WebhookWorker` job per destination, batching the log ids.
+  all destinations for a request log's team (via the team member) and
+  enqueues one `WebhookWorker` job per destination, batching the log ids.
   """
 
   use Oban.Worker,
@@ -34,6 +34,7 @@ defmodule Tokengate.Observability.WebhookWorker do
 
   import Ecto.Query, warn: false
 
+  alias Tokengate.Accounts.TeamMember
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Observability.Destination
   alias Tokengate.Observability.OtlpBuilder
@@ -49,7 +50,8 @@ defmodule Tokengate.Observability.WebhookWorker do
       Repo.all(
         from rl in RequestLog,
           where: rl.id in ^log_ids,
-          order_by: [asc: rl.inserted_at]
+          order_by: [asc: rl.inserted_at],
+          preload: [team_member: [:user, :team]]
       )
 
     if logs == [] do
@@ -76,19 +78,31 @@ defmodule Tokengate.Observability.WebhookWorker do
   end
 
   @doc """
-  Resolves all observability destinations and enqueues one `WebhookWorker`
-  job per destination.
+  Resolves all observability destinations for the request log's team (via
+  the team member) and enqueues one `WebhookWorker` job per destination.
 
   Returns `{:ok, count}` where `count` is the number of jobs enqueued.
-  Returns `{:ok, 0}` if no destinations are configured.
+  Returns `{:ok, 0}` if no destinations are configured or if the request
+  log has no team member.
   """
   @spec dispatch(RequestLog.t()) :: {:ok, non_neg_integer()}
-  def dispatch(%RequestLog{id: log_id} = _request_log) do
-    destinations = Tokengate.Observability.list_destinations()
+  def dispatch(%RequestLog{id: log_id, team_member_id: tm_id} = _request_log)
+      when is_binary(log_id) and is_binary(tm_id) do
+    team_member = Repo.get(TeamMember, tm_id)
+    team_id = team_member && team_member.team_id
+
+    destinations =
+      if team_id do
+        Tokengate.Observability.list_destinations(team_id)
+      else
+        []
+      end
+
+    log_id_str = to_string(log_id)
 
     count =
       Enum.reduce(destinations, 0, fn destination, acc ->
-        %{destination_id: destination.id, request_log_ids: [to_string(log_id)]}
+        %{destination_id: destination.id, request_log_ids: [log_id_str]}
         |> __MODULE__.new()
         |> Oban.insert!()
 

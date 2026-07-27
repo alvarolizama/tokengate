@@ -1,6 +1,7 @@
 defmodule Tokengate.ObservabilityTest do
   use Tokengate.DataCase, async: true
 
+  alias Tokengate.Accounts
   alias Tokengate.Observability
   alias Tokengate.Observability.Destination
 
@@ -8,14 +9,29 @@ defmodule Tokengate.ObservabilityTest do
   # Fixtures
   # ---------------------------------------------------------------------------
 
+  defp team_fixture do
+    {:ok, team} =
+      Accounts.create_team(%{
+        "name" => "Platform Team",
+        "default_daily_budget_usd" => "100.00",
+        "default_monthly_budget_usd" => "1000.00",
+        "default_concurrency_limit" => 10,
+        "default_rpm_limit" => 120
+      })
+
+    team
+  end
+
   defp valid_destination_attrs(attrs \\ %{}) do
+    team = team_fixture()
+
     Map.merge(
       %{
         name: "Honeycomb",
         type: "otlp_webhook",
         url: "https://api.honeycomb.io",
         headers: %{"X-Api-Key" => "secret"},
-        privacy_mode: "metadata_only"
+        team_id: team.id
       },
       attrs
     )
@@ -41,48 +57,40 @@ defmodule Tokengate.ObservabilityTest do
       assert dest.type == "otlp_webhook"
       assert dest.url == "https://api.honeycomb.io"
       assert dest.headers == %{"X-Api-Key" => "secret"}
-      assert dest.privacy_mode == "metadata_only"
+      assert dest.team_id == attrs.team_id
     end
 
-    test "applies defaults when type and privacy_mode omitted" do
+    test "applies default type when type omitted" do
+      team = team_fixture()
+
       {:ok, dest} =
         Observability.create_destination(%{
           name: "Default Dest",
           type: "otlp_webhook",
-          privacy_mode: "metadata_only"
+          team_id: team.id
         })
 
       assert dest.type == "otlp_webhook"
-      assert dest.privacy_mode == "metadata_only"
     end
 
     test "validates type inclusion" do
+      team = team_fixture()
+
       {:error, changeset} =
         Observability.create_destination(%{
           name: "Bad",
           type: "invalid_type",
-          privacy_mode: "metadata_only"
+          team_id: team.id
         })
 
       assert "is invalid" in errors_on(changeset).type
     end
 
-    test "validates privacy_mode inclusion" do
-      {:error, changeset} =
-        Observability.create_destination(%{
-          name: "Bad",
-          type: "otlp_webhook",
-          privacy_mode: "leak_everything"
-        })
-
-      assert "is invalid" in errors_on(changeset).privacy_mode
-    end
-
-    test "requires name, type, privacy_mode" do
+    test "requires name, team_id" do
       {:error, changeset} = Observability.create_destination(%{})
 
       assert errors_on(changeset).name
-      # type and privacy_mode have defaults, so they're never blank
+      assert errors_on(changeset).team_id
     end
   end
 
@@ -90,12 +98,40 @@ defmodule Tokengate.ObservabilityTest do
   # list_destinations
   # ---------------------------------------------------------------------------
 
-  describe "list_destinations/0" do
-    test "list_destinations/0 returns all destinations" do
-      destination_fixture(%{name: "Dest1"})
+  describe "list_destinations/1" do
+    test "returns destinations scoped to the given team" do
+      dest1 = destination_fixture(%{name: "Dest1"})
       destination_fixture(%{name: "Dest2"})
 
-      assert length(Observability.list_destinations()) == 2
+      results = Observability.list_destinations(dest1.team_id)
+
+      assert length(results) == 1
+      assert hd(results).name == "Dest1"
+    end
+
+    test "returns all destinations for a team" do
+      team = team_fixture()
+
+      destination_fixture(%{name: "Dest1", team_id: team.id})
+      destination_fixture(%{name: "Dest2", team_id: team.id})
+
+      assert length(Observability.list_destinations(team.id)) == 2
+    end
+
+    test "returns empty list when no destinations for team" do
+      team = team_fixture()
+
+      assert Observability.list_destinations(team.id) == []
+    end
+
+    test "does not return destinations from other teams" do
+      dest1 = destination_fixture(%{name: "Dest1"})
+      dest2 = destination_fixture(%{name: "Dest2"})
+
+      refute dest1.team_id == dest2.team_id
+
+      assert length(Observability.list_destinations(dest1.team_id)) == 1
+      assert length(Observability.list_destinations(dest2.team_id)) == 1
     end
   end
 
@@ -128,12 +164,10 @@ defmodule Tokengate.ObservabilityTest do
       {:ok, updated} =
         Observability.update_destination(dest, %{
           name: "Updated Name",
-          privacy_mode: "full",
           url: "https://new.example.com"
         })
 
       assert updated.name == "Updated Name"
-      assert updated.privacy_mode == "full"
       assert updated.url == "https://new.example.com"
     end
   end
@@ -143,7 +177,7 @@ defmodule Tokengate.ObservabilityTest do
       dest = destination_fixture()
       {:ok, _} = Observability.delete_destination(dest)
 
-      assert Observability.list_destinations() == []
+      assert Observability.list_destinations(dest.team_id) == []
     end
   end
 end

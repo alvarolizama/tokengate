@@ -107,28 +107,11 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert html =~ "Modelos"
   end
 
-  test "regular user sees read-only view without create button", %{conn: conn} do
+  test "regular user is redirected from models page", %{conn: conn} do
     %{user: user, password: password} = register("user")
     conn = login(conn, user, password)
 
-    {:ok, view, html} = live(conn, ~p"/dashboard/models")
-
-    refute has_element?(view, "#new-model-btn")
-    assert html =~ "Modelos"
-  end
-
-  test "regular user cannot trigger new_alias event", %{conn: conn} do
-    %{user: user, password: password} = register("user")
-    conn = login(conn, user, password)
-
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
-
-    # Trigger the event directly — it should be blocked by the permission check
-    view |> render_click("new_alias")
-
-    # Form should not appear
-    refute has_element?(view, "#alias-form")
-    assert render(view) =~ "No tienes permisos"
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/models")
   end
 
   # -- Alias CRUD -----------------------------------------------------------
@@ -304,20 +287,16 @@ defmodule TokengateWeb.ModelsLiveTest do
 
   # -- Read-only view shows alias data -------------------------------------
 
-  test "regular user can see aliases but not action buttons", %{conn: conn} do
+  test "regular user is redirected from models (admin-only)", %{conn: conn} do
     %{user: admin, password: admin_password} = register("admin")
-    alias_record = create_alias()
+    _alias_record = create_alias()
     conn = login(conn, admin, admin_password)
     {:ok, _view, _html} = live(conn, ~p"/dashboard/models")
 
-    # Now login as regular user
+    # Now login as regular user — should be redirected
     %{user: user, password: password} = register("user")
     conn = login(Phoenix.ConnTest.build_conn(), user, password)
 
-    {:ok, view, html} = live(conn, ~p"/dashboard/models")
-
-    assert html =~ alias_record.name
-    refute has_element?(view, "#edit-alias-#{alias_record.id}")
-    refute has_element?(view, "#delete-alias-#{alias_record.id}")
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/models")
   end
 end
