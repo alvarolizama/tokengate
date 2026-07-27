@@ -140,6 +140,30 @@ defmodule TokengateWeb.StatsLiveTest do
     refute has_element?(view, "#provider-ranking")
   end
 
+  test "admin sees usage patterns section on index", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    team_with_log(%{cost: "0.005"})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
+
+    assert has_element?(view, "#usage-patterns")
+    assert has_element?(view, "#hour-distribution")
+    assert has_element?(view, "#busiest-hours")
+    assert has_element?(view, "#busiest-minutes")
+    assert has_element?(view, "#peak-concurrency")
+  end
+
+  test "regular user sees usage patterns but NOT peak concurrency", %{conn: conn} do
+    %{owner: owner} = team_with_log(%{cost: "0.005"})
+
+    conn = login(conn, owner, owner.password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
+
+    assert has_element?(view, "#usage-patterns")
+    refute has_element?(view, "#peak-concurrency")
+  end
+
   ## Models view ------------------------------------------------------------
 
   test "admin sees models table with all models", %{conn: conn} do

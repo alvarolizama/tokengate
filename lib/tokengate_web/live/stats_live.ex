@@ -48,6 +48,10 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:breakdown_team, [])
       |> assign(:breakdown_provider, [])
       |> assign(:provider_ranking, [])
+      |> assign(:hour_distribution, [])
+      |> assign(:busiest_hours, [])
+      |> assign(:busiest_minutes, [])
+      |> assign(:peak_concurrency, nil)
       |> assign(:hourly_series, [])
 
     {:ok, socket}
@@ -159,6 +163,10 @@ defmodule TokengateWeb.StatsLive do
     |> assign(:breakdown_member, load_member_breakdown(scope, opts))
     |> assign(:breakdown_team, load_team_breakdown(user, opts))
     |> assign(:provider_ranking, load_provider_ranking(user, opts))
+    |> assign(:hour_distribution, Rollup.usage_by_hour_of_day(scope[:team_id], opts))
+    |> assign(:busiest_hours, Rollup.busiest_hours(scope[:team_id], opts))
+    |> assign(:busiest_minutes, Rollup.busiest_minutes(scope[:team_id], opts))
+    |> assign(:peak_concurrency, load_peak_concurrency(user, opts))
   end
 
   defp load_breakdowns(socket, :models, user, opts) do
@@ -288,6 +296,12 @@ defmodule TokengateWeb.StatsLive do
     do: Rollup.provider_ranking(nil, opts)
 
   defp load_provider_ranking(_user, _opts), do: []
+
+  # Concurrencia pico: métrica de infraestructura, solo admin, siempre org-wide.
+  defp load_peak_concurrency(%{global_role: "admin"}, opts),
+    do: Rollup.peak_concurrency(nil, opts)
+
+  defp load_peak_concurrency(_user, _opts), do: nil
 
   ## Path building --------------------------------------------------------
 
@@ -453,6 +467,20 @@ defmodule TokengateWeb.StatsLive do
   def tier_badge_class("C"), do: "badge-warning badge-outline"
   def tier_badge_class("D"), do: "badge-error"
   def tier_badge_class(_), do: "badge-ghost"
+
+  def hour_label(hour) when hour in 0..23, do: "#{pad2(hour)}:00"
+
+  def format_bucket(nil), do: "—"
+  def format_bucket(%DateTime{} = dt), do: Calendar.strftime(dt, "%d/%m %H:%M")
+
+  def hour_distribution_max(rows) do
+    rows |> Enum.map(& &1.request_count) |> Enum.max(fn -> 0 end)
+  end
+
+  def hour_bar_height(count, max) when max > 0, do: max(round(count / max * 100), 4)
+  def hour_bar_height(_count, _max), do: 0
+
+  defp pad2(n), do: n |> Integer.to_string() |> String.pad_leading(2, "0")
 
   def accent_bg("primary"), do: "bg-primary/10"
   def accent_bg("success"), do: "bg-success/10"

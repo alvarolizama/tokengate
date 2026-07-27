@@ -407,6 +407,142 @@
                 </div>
               </div>
             <% end %>
+
+            <%!-- Patrones de uso: hora del día, picos y concurrencia --%>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="usage-patterns">
+              <div class="card bg-base-100 border border-base-300 shadow-sm" id="hour-distribution">
+                <div class="card-body">
+                  <h2 class="card-title text-base">
+                    <.icon name="hero-clock" class="w-5 h-5 text-base-content/60" />
+                    Uso por hora del día
+                  </h2>
+                  <p class="text-xs text-base-content/60">
+                    Requests acumulados por hora (UTC) en el período — patrones recurrentes.
+                  </p>
+                  <%= if hour_distribution_max(@hour_distribution) > 0 do %>
+                    <% max = hour_distribution_max(@hour_distribution) %>
+                    <div class="flex items-end gap-[3px] h-32 mt-4">
+                      <div
+                        :for={row <- @hour_distribution}
+                        class="flex-1 flex flex-col items-center justify-end h-full group"
+                      >
+                        <div
+                          class={[
+                            "w-full rounded-t transition-colors",
+                            if(row.request_count == max,
+                              do: "bg-primary hover:bg-primary/80",
+                              else: "bg-primary/40 hover:bg-primary/70"
+                            )
+                          ]}
+                          style={"height: #{hour_bar_height(row.request_count, max)}%"}
+                          title={"#{hour_label(row.hour)} — #{format_number(row.request_count)} requests"}
+                        >
+                        </div>
+                      </div>
+                    </div>
+                    <div class="flex gap-[3px] mt-1">
+                      <span :for={row <- @hour_distribution} class="flex-1 text-center">
+                        <span
+                          :if={rem(row.hour, 6) == 0}
+                          class="text-[10px] text-base-content/50"
+                        >
+                          {hour_label(row.hour)}
+                        </span>
+                      </span>
+                    </div>
+                  <% else %>
+                    <p class="text-sm text-base-content/40 py-6 text-center">
+                      Sin datos en este período.
+                    </p>
+                  <% end %>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-1 gap-4">
+                <%= if @current_user && @current_user.global_role == "admin" do %>
+                  <div
+                    class="card bg-base-100 border border-base-300 shadow-sm"
+                    id="peak-concurrency"
+                  >
+                    <div class="card-body">
+                      <h2 class="card-title text-base">
+                        <.icon name="hero-arrow-trending-up" class="w-5 h-5 text-base-content/60" />
+                        Pico de concurrencia
+                      </h2>
+                      <%= if @peak_concurrency && @peak_concurrency.max_concurrent > 0 do %>
+                        <div class="flex items-baseline gap-3 mt-2">
+                          <span class="text-3xl font-bold text-base-content">
+                            {format_number(@peak_concurrency.max_concurrent)}
+                          </span>
+                          <span class="text-sm text-base-content/60">
+                            requests simultáneos
+                          </span>
+                        </div>
+                        <p class="text-xs text-base-content/50 mt-1">
+                          Estimado desde los logs · {format_bucket(@peak_concurrency.at)} UTC
+                        </p>
+                      <% else %>
+                        <p class="text-sm text-base-content/40 py-4 text-center">
+                          Sin datos en este período.
+                        </p>
+                      <% end %>
+                    </div>
+                  </div>
+                <% end %>
+
+                <div class="card bg-base-100 border border-base-300 shadow-sm" id="busiest-hours">
+                  <div class="card-body">
+                    <h2 class="card-title text-base">
+                      <.icon name="hero-fire" class="w-5 h-5 text-base-content/60" /> Horas pico
+                    </h2>
+                    <%= if has_data?(@busiest_hours) do %>
+                      <ul class="mt-2 space-y-1">
+                        <li
+                          :for={{row, idx} <- Enum.with_index(@busiest_hours, 1)}
+                          id={"busiest-hour-#{idx}"}
+                          class="flex items-center justify-between text-sm"
+                        >
+                          <span class="text-base-content/70">
+                            {idx}. {format_bucket(row.bucket)} UTC
+                          </span>
+                          <span class="font-mono">{format_number(row.request_count)}</span>
+                        </li>
+                      </ul>
+                    <% else %>
+                      <p class="text-sm text-base-content/40 py-4 text-center">
+                        Sin datos en este período.
+                      </p>
+                    <% end %>
+                  </div>
+                </div>
+
+                <div class="card bg-base-100 border border-base-300 shadow-sm" id="busiest-minutes">
+                  <div class="card-body">
+                    <h2 class="card-title text-base">
+                      <.icon name="hero-bolt" class="w-5 h-5 text-base-content/60" /> Minutos pico
+                    </h2>
+                    <%= if has_data?(@busiest_minutes) do %>
+                      <ul class="mt-2 space-y-1">
+                        <li
+                          :for={{row, idx} <- Enum.with_index(@busiest_minutes, 1)}
+                          id={"busiest-minute-#{idx}"}
+                          class="flex items-center justify-between text-sm"
+                        >
+                          <span class="text-base-content/70">
+                            {idx}. {format_bucket(row.bucket)} UTC
+                          </span>
+                          <span class="font-mono">{format_number(row.request_count)}</span>
+                        </li>
+                      </ul>
+                    <% else %>
+                      <p class="text-sm text-base-content/40 py-4 text-center">
+                        Sin datos en este período.
+                      </p>
+                    <% end %>
+                  </div>
+                </div>
+              </div>
+            </div>
           </div>
         <% @live_action == :models -> %>
           <div class="space-y-6">
