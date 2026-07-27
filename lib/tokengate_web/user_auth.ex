@@ -49,6 +49,7 @@ defmodule TokengateWeb.UserAuth do
       |> assign_new(:current_user, fn -> user end)
 
     if user do
+      track_presence(socket, user)
       {:cont, socket}
     else
       {:halt, Phoenix.LiveView.redirect(socket, to: "/login")}
@@ -64,6 +65,7 @@ defmodule TokengateWeb.UserAuth do
 
     case user do
       %{global_role: "admin"} ->
+        track_presence(socket, user)
         {:cont, socket}
 
       nil ->
@@ -72,6 +74,17 @@ defmodule TokengateWeb.UserAuth do
       _non_admin ->
         {:halt, Phoenix.LiveView.redirect(socket, to: "/dashboard")}
     end
+  end
+
+  # Track the connected LiveView in Phoenix.Presence so the topbar can show
+  # how many users are on the dashboard right now. Only the connected mount
+  # owns a real websocket process worth tracking.
+  defp track_presence(socket, user) do
+    if Phoenix.LiveView.connected?(socket) do
+      {:ok, _} = TokengateWeb.Presence.track_user(self(), user)
+    end
+
+    :ok
   end
 
   defp fetch_user(session) do

@@ -55,6 +55,11 @@ defmodule Tokengate.Providers do
 
   def list_credentials, do: Repo.all(Credential)
 
+  @doc "Count of credentials in `error` status (auto-disabled after auth/billing failures)."
+  def count_error_credentials do
+    Repo.aggregate(from(c in Credential, where: c.status == "error"), :count)
+  end
+
   def list_credentials_for_provider(provider_id) do
     Repo.all(from(c in Credential, where: c.provider_id == ^provider_id))
   end

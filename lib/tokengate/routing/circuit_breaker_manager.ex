@@ -110,6 +110,18 @@ defmodule Tokengate.Routing.CircuitBreakerManager do
   end
 
   @doc """
+  Count of circuit breakers currently `:open` (failing credentials cut off
+  from routing). Iterates the registered breakers — cheap for the handful
+  of credentials a gateway manages.
+  """
+  @spec count_open() :: non_neg_integer()
+  def count_open do
+    @registry
+    |> Registry.select([{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}])
+    |> Enum.count(fn {_id, pid} -> Tokengate.Routing.CircuitBreaker.status(pid) == :open end)
+  end
+
+  @doc """
   Forces the breaker for `credential_id` back to `:closed` (admin use).
   Safe to call when no breaker exists.
   """

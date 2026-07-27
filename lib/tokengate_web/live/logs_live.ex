@@ -36,7 +36,6 @@ defmodule TokengateWeb.LogsLive do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(@pubsub, @logs_topic)
       Phoenix.PubSub.subscribe(@pubsub, TokengateWeb.Presence.topic())
-      {:ok, _} = TokengateWeb.Presence.track_user(self(), user)
 
       send(self(), :refresh_inflight)
 
@@ -434,23 +433,23 @@ defmodule TokengateWeb.LogsLive do
           <:subtitle>Registro de solicitudes a la API en tiempo real</:subtitle>
         </.header>
 
-        <%!-- Live indicators: online users + in-flight API requests --%>
-        <div
-          id="live-indicators"
-          class="card bg-base-100 border border-base-300 shadow-sm"
-        >
-          <div class="card-body p-4 flex flex-wrap items-center gap-x-8 gap-y-3">
-            <div class="flex items-center gap-2">
-              <span class="relative flex h-2.5 w-2.5">
-                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-60"></span>
-                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-success"></span>
-              </span>
-              <span class="text-sm font-medium" id="online-count">
-                {length(@online_users)} {if length(@online_users) == 1,
-                  do: "usuario",
-                  else: "usuarios"} conectado{if length(@online_users) == 1, do: "", else: "s"}
-              </span>
-              <div class="flex -space-x-2 ml-1" id="online-users">
+        <%!-- KPI strip: live indicators + summary, 5 cards in a row --%>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          <div class="card bg-base-100 border border-base-300 shadow-sm" id="live-indicators">
+            <div class="card-body p-4">
+              <div class="flex items-center justify-between">
+                <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Conectados
+                </p>
+                <span class="relative flex h-2.5 w-2.5">
+                  <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-60"></span>
+                  <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-success"></span>
+                </span>
+              </div>
+              <p class="mt-1 text-2xl font-bold text-base-content" id="online-count">
+                {length(@online_users)}
+              </p>
+              <div class="flex -space-x-2 mt-1 min-h-7" id="online-users">
                 <span
                   :for={u <- @online_users}
                   class="inline-flex items-center justify-center w-7 h-7 rounded-full bg-primary/15 text-primary text-xs font-semibold ring-2 ring-base-100"
@@ -461,19 +460,23 @@ defmodule TokengateWeb.LogsLive do
                 </span>
               </div>
             </div>
+          </div>
 
-            <div class="flex items-center gap-2" id="inflight-indicator">
-              <.icon name="hero-bolt" class="w-4 h-4 text-accent" />
-              <span class="text-sm font-medium" id="inflight-count">
-                {@api_inflight} {if @api_inflight == 1, do: "request", else: "requests"} en vuelo
-              </span>
-              <span class="text-xs text-base-content/40">conexiones al API en vivo</span>
+          <div class="card bg-base-100 border border-base-300 shadow-sm" id="inflight-indicator">
+            <div class="card-body p-4">
+              <div class="flex items-center justify-between">
+                <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  En vuelo
+                </p>
+                <.icon name="hero-bolt" class="w-4 h-4 text-accent" />
+              </div>
+              <p class="mt-1 text-2xl font-bold text-base-content" id="inflight-count">
+                {@api_inflight}
+              </p>
+              <p class="text-xs text-base-content/40 mt-1">requests en proceso</p>
             </div>
           </div>
-        </div>
 
-        <%!-- Summary strip --%>
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
           <div class="card bg-base-100 border border-base-300 shadow-sm">
             <div class="card-body p-4">
               <div class="flex items-center justify-between">

@@ -121,6 +121,8 @@ defmodule TokengateWeb.Layouts do
 
       <div class="flex-1" />
 
+      <.topbar_indicators current_scope={@current_scope} />
+
       <div class="flex items-center gap-3">
         <div class="hidden sm:flex flex-col items-end leading-tight">
           <span class="text-sm font-medium text-base-content">{@current_scope && @current_scope.email}</span>
@@ -147,6 +149,75 @@ defmodule TokengateWeb.Layouts do
         </.link>
       </div>
     </header>
+    """
+  end
+
+  # Live ops indicators: unattended alerts (error credentials + open
+  # breakers), online dashboard users (Presence) and in-flight API requests.
+  # Computed at render time — all reads are cheap (ETS/Registry + one COUNT).
+  attr :current_scope, :map, default: nil
+
+  defp topbar_indicators(assigns) do
+    assigns =
+      assigns
+      |> assign(:error_creds, Tokengate.Providers.count_error_credentials())
+      |> assign(:open_breakers, Tokengate.Routing.CircuitBreakerManager.count_open())
+      |> assign(:online, length(TokengateWeb.Presence.list_online()))
+      |> assign(:inflight, Tokengate.Limits.Manager.total_inflight())
+      |> assign(:admin?, match?(%{global_role: "admin"}, assigns.current_scope))
+
+    ~H"""
+    <div class="hidden md:flex items-center gap-2" id="topbar-indicators">
+      <%= if @admin? do %>
+        <.link
+          navigate={~p"/dashboard/alerts"}
+          id="topbar-error-creds"
+          class={[
+            "badge badge-lg gap-1.5",
+            if(@error_creds > 0, do: "badge-error", else: "badge-ghost")
+          ]}
+          title="Credenciales en error"
+        >
+          <.icon name="hero-key" class="w-3.5 h-3.5" />
+          <span id="topbar-error-creds-count">{@error_creds}</span>
+        </.link>
+
+        <.link
+          navigate={~p"/dashboard/alerts"}
+          id="topbar-open-breakers"
+          class={[
+            "badge badge-lg gap-1.5",
+            if(@open_breakers > 0, do: "badge-warning", else: "badge-ghost")
+          ]}
+          title="Circuit breakers abiertos"
+        >
+          <.icon name="hero-exclamation-triangle" class="w-3.5 h-3.5" />
+          <span id="topbar-open-breakers-count">{@open_breakers}</span>
+        </.link>
+      <% end %>
+
+      <span
+        id="topbar-online-users"
+        class="badge badge-lg badge-ghost gap-1.5"
+        title="Usuarios conectados al dashboard"
+      >
+        <span class="relative flex h-2 w-2">
+          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-60"></span>
+          <span class="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
+        </span>
+        <span id="topbar-online-count">{@online}</span>
+      </span>
+
+      <.link
+        navigate={~p"/dashboard/logs"}
+        id="topbar-inflight"
+        class="badge badge-lg badge-ghost gap-1.5"
+        title="Requests simultáneos en proceso"
+      >
+        <.icon name="hero-bolt" class="w-3.5 h-3.5 text-accent" />
+        <span id="topbar-inflight-count">{@inflight}</span>
+      </.link>
+    </div>
     """
   end
 
