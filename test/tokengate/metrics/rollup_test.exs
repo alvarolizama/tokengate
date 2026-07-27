@@ -101,6 +101,33 @@ defmodule Tokengate.Metrics.RollupTest do
     ma
   end
 
+  defp model_provider_fixture(model_alias, provider, attrs \\ %{}) do
+    unique = System.unique_integer([:positive])
+
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        name: "key-#{unique}",
+        api_key_encrypted: "sk-test-#{unique}",
+        status: "active"
+      })
+
+    {:ok, model_provider} =
+      Providers.create_model_provider(
+        Map.merge(
+          %{
+            model_alias_id: model_alias.id,
+            credential_id: credential.id,
+            provider_model: "gpt-4o-#{unique}",
+            enabled: true
+          },
+          attrs
+        )
+      )
+
+    %{model_provider | credential: credential}
+  end
+
   defp log_request(team_member_id, inserted_at, overrides \\ %{}) do
     attrs =
       @base_attrs
@@ -519,7 +546,7 @@ defmodule Tokengate.Metrics.RollupTest do
   # ---------------------------------------------------------------------
 
   describe "breakdown_by_provider_for_model/2" do
-    test "groups by provider for a specific model" do
+    test "groups by model provider (provider + provider model + credential)" do
       {tm, _team} = team_member_fixture()
       ma = model_alias_fixture(%{"name" => "gpt-4o"})
 
@@ -529,9 +556,13 @@ defmodule Tokengate.Metrics.RollupTest do
       {:ok, provider2} =
         Providers.create_provider(%{name: "Azure", base_url: "http://localhost:2"})
 
+      mp1 = model_provider_fixture(ma, provider1, %{provider_model: "gpt-4o-real"})
+      mp2 = model_provider_fixture(ma, provider2, %{provider_model: "gpt-4o-azure"})
+
       log_request(tm.id, ~U[2026-07-26 10:00:00Z], %{
         model_alias_id: ma.id,
         provider_id: provider1.id,
+        model_provider_id: mp1.id,
         cost_usd: Decimal.new("1.000000"),
         provider_cost_usd: Decimal.new("0.800000"),
         estimated_cost_usd: Decimal.new("1.000000"),
@@ -544,6 +575,7 @@ defmodule Tokengate.Metrics.RollupTest do
       log_request(tm.id, ~U[2026-07-26 11:00:00Z], %{
         model_alias_id: ma.id,
         provider_id: provider2.id,
+        model_provider_id: mp2.id,
         cost_usd: Decimal.new("2.000000"),
         provider_cost_usd: Decimal.new("1.500000"),
         estimated_cost_usd: Decimal.new("2.000000"),
@@ -556,16 +588,77 @@ defmodule Tokengate.Metrics.RollupTest do
       results = Rollup.breakdown_by_provider_for_model(ma.id, from: ~U[2026-07-01 00:00:00Z])
 
       assert length(results) == 2
-      # Ranked by provider_cost descending — provider2 first
+      # Ranked by provider_cost descending — mp2 first
       [first, second] = results
+      assert first.model_provider_id == mp2.id
       assert first.provider_name == "Azure"
+      assert first.provider_model == "gpt-4o-azure"
+      assert first.credential_name == mp2.credential.name
       assert first.request_count == 1
       assert Decimal.equal?(first.provider_cost_usd, Decimal.new("1.500000"))
       assert Decimal.equal?(first.estimated_cost_usd, Decimal.new("2.000000"))
       assert Decimal.equal?(first.savings_usd, Decimal.new("0.500000"))
 
+      assert second.model_provider_id == mp1.id
       assert second.provider_name == "OpenAI"
+      assert second.provider_model == "gpt-4o-real"
       assert Decimal.equal?(second.provider_cost_usd, Decimal.new("0.800000"))
+    end
+
+    test "separates two model providers under the same provider" do
+      {tm, _team} = team_member_fixture()
+      ma = model_alias_fixture(%{"name" => "gpt-4o"})
+
+      {:ok, provider} =
+        Providers.create_provider(%{name: "OpenAI", base_url: "http://localhost:1"})
+
+      mp1 = model_provider_fixture(ma, provider, %{provider_model: "gpt-4o"})
+      mp2 = model_provider_fixture(ma, provider, %{provider_model: "gpt-4o-mini"})
+
+      log_request(tm.id, ~U[2026-07-26 10:00:00Z], %{
+        model_alias_id: ma.id,
+        provider_id: provider.id,
+        model_provider_id: mp1.id
+      })
+
+      log_request(tm.id, ~U[2026-07-26 11:00:00Z], %{
+        model_alias_id: ma.id,
+        provider_id: provider.id,
+        model_provider_id: mp2.id
+      })
+
+      results = Rollup.breakdown_by_provider_for_model(ma.id, from: ~U[2026-07-01 00:00:00Z])
+
+      assert length(results) == 2
+      models = Enum.map(results, & &1.provider_model) |> Enum.sort()
+      assert models == ["gpt-4o", "gpt-4o-mini"]
+    end
+
+    test "logs without model_provider_id group into a single unknown row" do
+      {tm, _team} = team_member_fixture()
+      ma = model_alias_fixture(%{"name" => "gpt-4o"})
+
+      {:ok, provider} =
+        Providers.create_provider(%{name: "OpenAI", base_url: "http://localhost:1"})
+
+      log_request(tm.id, ~U[2026-07-26 10:00:00Z], %{
+        model_alias_id: ma.id,
+        provider_id: provider.id
+      })
+
+      log_request(tm.id, ~U[2026-07-26 11:00:00Z], %{
+        model_alias_id: ma.id,
+        provider_id: provider.id
+      })
+
+      results = Rollup.breakdown_by_provider_for_model(ma.id, from: ~U[2026-07-01 00:00:00Z])
+
+      assert length(results) == 1
+      [row] = results
+      assert row.model_provider_id == nil
+      assert row.provider_name == "—"
+      assert row.provider_model == nil
+      assert row.request_count == 2
     end
 
     test "returns empty list for nil model_alias_id" do

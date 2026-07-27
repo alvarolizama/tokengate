@@ -88,7 +88,7 @@ defmodule TokengateWeb.StatsExportController do
 
     header =
       if model_id do
-        ~w(proveedor requests costo_real costo_mercado costo_estimado ahorro tokens_in tokens_out tps)
+        ~w(proveedor_modelo requests costo_real costo_mercado costo_estimado ahorro tokens_in tokens_out tps)
       else
         ~w(modelo requests costo_real costo_mercado costo_estimado ahorro tokens_in tokens_out tps)
       end
@@ -134,7 +134,7 @@ defmodule TokengateWeb.StatsExportController do
 
   defp row_to_csv(row) do
     [
-      csv_escape(Map.get(row, :provider_name) || Map.get(row, :model_name) || "—"),
+      csv_escape(row_label(row)),
       row.request_count,
       decimal_to_csv(Map.get(row, :provider_cost_usd)),
       decimal_to_csv(Map.get(row, :estimated_cost_usd)),
@@ -145,6 +145,15 @@ defmodule TokengateWeb.StatsExportController do
       tps_to_csv(Map.get(row, :avg_tps))
     ]
   end
+
+  # Drill-down rows carry provider_name + provider_model ("OpenAI · gpt-4o");
+  # full-table rows carry model_name.
+  defp row_label(%{provider_name: name, provider_model: model})
+       when is_binary(name) and is_binary(model),
+       do: "#{name} · #{model}"
+
+  defp row_label(row),
+    do: Map.get(row, :provider_name) || Map.get(row, :model_name) || "—"
 
   defp row_to_csv_team(row) do
     # When team_id is set, rows are members (have user_email).

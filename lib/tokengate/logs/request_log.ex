@@ -23,6 +23,7 @@ defmodule Tokengate.Logs.RequestLog do
     field :inserted_at, :utc_datetime, primary_key: true
 
     field :provider_id, :binary_id
+    field :model_provider_id, :binary_id
     field :model_alias_id, :binary_id
     field :model_requested, :string
     field :model_responded, :string
@@ -44,7 +45,7 @@ defmodule Tokengate.Logs.RequestLog do
       type: :binary_id
   end
 
-  @permitted ~w(team_member_id provider_id model_alias_id
+  @permitted ~w(team_member_id provider_id model_provider_id model_alias_id
     model_requested model_responded agent_type status_code prompt_tokens
     completion_tokens cost_usd provider_cost_usd savings_usd estimated_cost_usd
     latency_ms ttft_ms streaming inserted_at)a

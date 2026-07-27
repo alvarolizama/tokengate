@@ -419,14 +419,21 @@ defmodule Tokengate.Metrics.Rollup do
   # -----------------------------------------------------------------------
 
   @doc """
-  Returns per-provider aggregate metrics for a specific model alias,
+  Returns per-model-provider aggregate metrics for a specific model alias,
   ranked by total provider cost (descending).
+
+  Groups by the concrete provider model deployment (`ModelProvider`), so two
+  credentials or two provider models under the same provider show up as
+  separate rows. Logs predating `model_provider_id` tracking group into a
+  single "unknown" row.
 
   Each row is:
 
       %{
-        provider_id: binary | nil,
+        model_provider_id: binary | nil,
         provider_name: String.t(),
+        provider_model: String.t() | nil,   # actual model name at the provider
+        credential_name: String.t() | nil,  # API key alias
         request_count: integer,
         cost_usd: Decimal,            # what the provider charges
         provider_cost_usd: Decimal,  # what was actually paid
@@ -457,14 +464,20 @@ defmodule Tokengate.Metrics.Rollup do
     query =
       RequestLog
       |> where([rl], rl.model_alias_id == ^model_alias_id)
-      |> join(:left, [rl], p in Tokengate.Providers.Provider, on: rl.provider_id == p.id)
+      |> join(:left, [rl], mp in Tokengate.Providers.ModelProvider,
+        on: rl.model_provider_id == mp.id
+      )
+      |> join(:left, [rl, mp], c in Tokengate.Providers.Credential, on: mp.credential_id == c.id)
+      |> join(:left, [rl, mp, c], p in Tokengate.Providers.Provider, on: c.provider_id == p.id)
       |> maybe_from(from)
       |> maybe_to(to)
-      |> group_by([rl, p], p.id)
+      |> group_by([rl, mp, c, p], [rl.model_provider_id, p.name, mp.provider_model, c.name])
       |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
-      |> select([rl, p], %{
-        provider_id: p.id,
+      |> select([rl, mp, c, p], %{
+        model_provider_id: rl.model_provider_id,
         provider_name: p.name,
+        provider_model: mp.provider_model,
+        credential_name: c.name,
         request_count: count(rl.id),
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd),
         provider_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
@@ -478,8 +491,10 @@ defmodule Tokengate.Metrics.Rollup do
     Repo.all(query)
     |> Enum.map(fn row ->
       %{
-        provider_id: row.provider_id,
+        model_provider_id: row.model_provider_id,
         provider_name: row.provider_name || "—",
+        provider_model: row.provider_model,
+        credential_name: row.credential_name,
         request_count: row.request_count,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
         provider_cost_usd: Decimal.new(to_string(row.provider_cost_usd)),

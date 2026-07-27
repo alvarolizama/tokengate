@@ -559,6 +559,7 @@ defmodule TokengateWeb.ProxyController do
     %{
       "team_member_id" => member.id,
       "provider_id" => route.model_provider.credential.provider_id,
+      "model_provider_id" => route.model_provider.id,
       "model_alias_id" => route.model_alias.id,
       "model_requested" => route.model_alias.name,
       "model_responded" => route.model_responded,

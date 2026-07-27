@@ -172,7 +172,14 @@ defmodule TokengateWeb.ProxyControllerTest do
         effective_from: DateTime.truncate(DateTime.utc_now(), :second)
       })
 
-    %{team: team, user: user, member: member, token: token, alias: model_alias}
+    %{
+      team: team,
+      user: user,
+      member: member,
+      token: token,
+      alias: model_alias,
+      model_provider: model_provider
+    }
   end
 
   defp authed_conn(conn, token) do
@@ -226,7 +233,8 @@ defmodule TokengateWeb.ProxyControllerTest do
   test "happy path: response carries cost info, headers, budget spend and async log", %{
     conn: conn
   } do
-    %{token: token, alias: model_alias, member: member} = proxy_fixture()
+    %{token: token, alias: model_alias, member: member, model_provider: model_provider} =
+      proxy_fixture()
 
     conn =
       conn
@@ -264,6 +272,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert log.model_responded =~ "gpt-4o-real"
     assert log.status_code == 200
     assert log.prompt_tokens == 20
+    assert log.model_provider_id == model_provider.id
     assert Decimal.equal?(log.cost_usd, Decimal.new("0.000150"))
     assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000150"))
     assert Decimal.equal?(log.estimated_cost_usd, Decimal.new("0.000250"))

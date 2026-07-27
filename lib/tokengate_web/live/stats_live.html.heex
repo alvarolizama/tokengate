@@ -445,14 +445,14 @@
                   <div class="card-body">
                     <h2 class="card-title text-base">
                       <.icon name="hero-server-stack" class="w-5 h-5 text-base-content/60" />
-                      Por proveedor
+                      Por modelo del proveedor
                     </h2>
                     <%= if has_data?(@breakdown_provider) do %>
                       <div class="overflow-x-auto mt-3">
                         <table class="table table-sm">
                           <thead>
                             <tr>
-                              <th>Proveedor</th><th class="text-right">Requests</th><th class="text-right">
+                              <th>Proveedor / Modelo</th><th class="text-right">Requests</th><th class="text-right">
                                 Real
                               </th><th class="text-right">Mercado</th><th class="text-right">
                                 Ahorro
@@ -464,9 +464,20 @@
                           <tbody>
                             <tr
                               :for={row <- @breakdown_provider}
-                              id={"bd-provider-#{row.provider_id || "unknown"}"}
+                              id={"bd-provider-#{row.model_provider_id || "unknown"}"}
                             >
-                              <td class="font-medium">{row.provider_name}</td>
+                              <td>
+                                <div class="font-medium">
+                                  {row.provider_name}{if row.provider_model,
+                                    do: " · #{row.provider_model}"}
+                                </div>
+                                <div
+                                  :if={row.credential_name}
+                                  class="text-xs text-base-content/60"
+                                >
+                                  {row.credential_name}
+                                </div>
+                              </td>
                               <td class="text-right font-mono">
                                 {format_number(row.request_count)}
                               </td>
