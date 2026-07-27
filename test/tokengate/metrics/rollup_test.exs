@@ -83,7 +83,7 @@ defmodule Tokengate.Metrics.RollupTest do
     streaming: false
   }
 
-  defp model_alias_fixture(attrs \\ %{}) do
+  defp model_alias_fixture(attrs) do
     {:ok, ma} =
       Providers.create_model_alias(
         Map.merge(
@@ -101,7 +101,7 @@ defmodule Tokengate.Metrics.RollupTest do
     ma
   end
 
-  defp model_provider_fixture(model_alias, provider, attrs \\ %{}) do
+  defp model_provider_fixture(model_alias, provider, attrs) do
     unique = System.unique_integer([:positive])
 
     {:ok, credential} =

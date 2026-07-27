@@ -373,14 +373,18 @@
                             id={"provider-ranking-row-#{row.provider_id}"}
                           >
                             <td class="text-base-content/60">{idx}</td>
-                            <td class="font-medium truncate max-w-[180px]">{row.provider_name}</td>
+                            <td class="font-medium truncate max-w-[180px]">
+                              {row.provider_name}
+                            </td>
                             <td class="text-center">
                               <span class={["badge badge-sm", tier_badge_class(row.tier)]}>
                                 {row.tier}
                               </span>
                             </td>
                             <td class="text-right font-mono">{row.score || "—"}</td>
-                            <td class="text-right font-mono">{format_number(row.request_count)}</td>
+                            <td class="text-right font-mono">
+                              {format_number(row.request_count)}
+                            </td>
                             <td class={[
                               "text-right font-mono",
                               row.error_rate >= 0.05 && "text-error",
