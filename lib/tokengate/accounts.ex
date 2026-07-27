@@ -329,8 +329,8 @@ defmodule Tokengate.Accounts do
     case the result is just the extra.
   - `concurrency_limit`: team default + member's `extra_concurrency` (when not
     nil). The team default is always present (defaults to 5).
-  - `rpm_limit`: team's `default_rpm_limit` (no member override). Always present
-    (defaults to 60).
+  - `rpm_limit`: team's `default_rpm_limit` + member's `extra_rpm` (when not
+    nil). The team default is always present (defaults to 60).
 
   Returns a map with `:daily_budget_usd`, `:monthly_budget_usd`,
   `:concurrency_limit`, and `:rpm_limit` keys.
@@ -345,7 +345,7 @@ defmodule Tokengate.Accounts do
       monthly_budget_usd: team.default_monthly_budget_usd,
       concurrency_limit:
         combine_integer(team.default_concurrency_limit, team_member.extra_concurrency),
-      rpm_limit: team.default_rpm_limit
+      rpm_limit: combine_integer(team.default_rpm_limit, team_member.extra_rpm)
     }
   end
 

@@ -56,6 +56,41 @@ defmodule Tokengate.Proxy.UsageNormalizer do
   def normalize(_provider, _body), do: nil
 
   @doc """
+  Extracts the cost reported by the provider in its response body, if any.
+
+  OpenRouter includes `body["usage"]["cost"]` as a float (USD).
+  Other OpenAI-compatible providers may include it under `body["cost"]`.
+
+  Returns a `Decimal.t()` or `nil` when the provider doesn't report a cost.
+  """
+  @spec extract_reported_cost(:openai | :anthropic, map()) :: Decimal.t() | nil
+  def extract_reported_cost(:openai, body) do
+    cost =
+      get_in(body, ["usage", "cost"]) ||
+        Map.get(body, "cost")
+
+    to_decimal(cost)
+  end
+
+  def extract_reported_cost(:anthropic, body) do
+    cost = get_in(body, ["usage", "cost"]) || Map.get(body, "cost")
+    to_decimal(cost)
+  end
+
+  def extract_reported_cost(_provider, _body), do: nil
+
+  defp to_decimal(nil), do: nil
+  defp to_decimal(%Decimal{} = d), do: d
+  defp to_decimal(n) when is_number(n), do: Decimal.new("#{n}")
+
+  defp to_decimal(s) when is_binary(s) do
+    case Decimal.parse(s) do
+      {decimal, ""} -> decimal
+      _ -> nil
+    end
+  end
+
+  @doc """
   Normalizes the usage payload of an OpenAI streaming final chunk.
 
   Same shape as the non-streaming response; returns nil when the chunk

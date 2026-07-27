@@ -83,6 +83,33 @@ defmodule Tokengate.Logs do
   end
 
   @doc """
+  Lists request logs with `inserted_at` strictly after `since` (DateTime),
+  ordered newest-first. Used by the LogsLive real-time subscription to
+  fetch new logs appended after page load.
+
+  Same filter support as `list_logs/1` (scope, status, agent, etc.), but
+  the `before` cursor and `limit` are ignored — all new logs are returned.
+  """
+  def list_logs_after(since, filters \\ %{})
+
+  def list_logs_after(nil, filters) do
+    list_logs(Map.put(filters, :limit, Map.get(filters, :limit, 100)))
+  end
+
+  def list_logs_after(%DateTime{} = since, filters) do
+    filters =
+      filters
+      |> Map.delete(:before)
+      |> Map.delete("before")
+      |> Map.put(:after, since)
+
+    RequestLog
+    |> apply_log_filters(filters)
+    |> order_by([rl], desc: rl.inserted_at)
+    |> Repo.all()
+  end
+
+  @doc """
   Lists request logs for a specific team, joining through `team_members`.
 
   Filters are the same as `list_logs/1`.
@@ -113,6 +140,7 @@ defmodule Tokengate.Logs do
     |> maybe_from(filters)
     |> maybe_to(filters)
     |> maybe_before(filters)
+    |> maybe_after(filters)
   end
 
   defp maybe_where(query, field, filters) do
@@ -179,6 +207,13 @@ defmodule Tokengate.Logs do
     case Map.get(filters, :before) || Map.get(filters, "before") do
       nil -> query
       before -> where(query, [rl], rl.inserted_at < ^before)
+    end
+  end
+
+  defp maybe_after(query, filters) do
+    case Map.get(filters, :after) || Map.get(filters, "after") do
+      nil -> query
+      after_dt -> where(query, [rl], rl.inserted_at > ^after_dt)
     end
   end
 

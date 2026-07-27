@@ -189,10 +189,11 @@ defmodule TokengateWeb.DashboardLiveTest do
     conn = login(conn, owner, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")
 
-    assert html =~ "Tus claves"
+    assert html =~ "Tus equipos"
     assert html =~ team.name
-    assert has_element?(view, "#membership-#{member.id}")
+    assert has_element?(view, "#team-#{team.id}")
     assert html =~ "••••"
+    _ = member
   end
 
   test "user can replace their key from dashboard", %{conn: conn} do
@@ -253,7 +254,7 @@ defmodule TokengateWeb.DashboardLiveTest do
     {:ok, view, html} = live(conn, ~p"/dashboard")
 
     assert html =~ "Tus equipos"
-    assert has_element?(view, "#team-budget-#{team.id}")
+    assert has_element?(view, "#team-#{team.id}")
     assert html =~ "Gasto diario"
     assert html =~ "Gasto mensual"
     _ = member

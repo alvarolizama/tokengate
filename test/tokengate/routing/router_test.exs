@@ -139,8 +139,7 @@ defmodule Tokengate.Routing.RouterTest do
       Enum.into(attrs, %{
         name: "Provider-#{unique}",
         base_url: "https://api.example.com",
-        billing_type: "pay_per_token",
-        track_real_usage: false
+        billing_type: "pay_per_token"
       })
 
     {:ok, provider} = Providers.create_provider(attrs)

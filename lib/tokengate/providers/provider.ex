@@ -15,7 +15,6 @@ defmodule Tokengate.Providers.Provider do
   schema "providers" do
     field :name, :string
     field :base_url, :string
-    field :track_real_usage, :boolean, default: false
     field :status, :string, default: "active"
 
     has_many :credentials, Tokengate.Providers.Credential
@@ -26,7 +25,7 @@ defmodule Tokengate.Providers.Provider do
   @doc false
   def changeset(provider, attrs) do
     provider
-    |> cast(attrs, [:name, :base_url, :track_real_usage, :status])
+    |> cast(attrs, [:name, :base_url, :status])
     |> validate_required([:name, :base_url])
     |> validate_inclusion(:status, @statuses)
     |> unique_constraint(:name)

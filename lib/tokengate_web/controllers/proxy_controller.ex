@@ -9,6 +9,21 @@ defmodule TokengateWeb.ProxyController do
       `estimated_cost_usd` (market price) and `cost_usd` (provider price),
       plus `X-Tokengate-Cost` / `X-Tokengate-Savings` headers.
 
+  ## Two-gate throttling
+
+  Requests pass through two independent throttle layers:
+
+    1. **Team limits** — protects TokenGate from abusive users (client-side).
+       Limits are derived from team defaults + member overrides and keyed by
+       the user's API key.
+
+    2. **Credential limits** — protects the provider API key from upstream
+       rate limits (provider-side). Limits are configured per credential
+       (`max_rpm`, `max_concurrent`) and keyed by credential.id.
+
+  Both gates must pass for a request to proceed. Team limits are acquired
+  first; if routing succeeds, credential limits are acquired before execution.
+
   Hot path discipline: auth, limits, budgets and routing read from
   ETS/atomics only. Postgres is touched asynchronously via Oban
   (`Tokengate.Logs.WriteWorker`).
@@ -47,14 +62,25 @@ defmodule TokengateWeb.ProxyController do
     key_id = member.api_key.id
 
     with :ok <- require_model(model),
-         :ok <- acquire_limits(key_id, limits) do
+         :ok <- acquire_team_limits(key_id, limits) do
       try do
         case route_and_check(member, payload, conn.assigns.api_key_hash, limits) do
           {:ok, route} ->
-            if payload["stream"] == true do
-              execute_stream(conn, route, payload, member, @max_attempts, [])
-            else
-              execute(conn, route, payload, member, @max_attempts, [])
+            # Second gate: credential limits (provider-side throttling)
+            case acquire_credential_limits(route.credential) do
+              :ok ->
+                try do
+                  if payload["stream"] == true do
+                    execute_stream(conn, route, payload, member, @max_attempts, [])
+                  else
+                    execute(conn, route, payload, member, @max_attempts, [])
+                  end
+                after
+                  release_credential_limits(route.credential)
+                end
+
+              {:error, error} ->
+                render_proxy_error(conn, error)
             end
 
           {:error, error} ->
@@ -74,7 +100,7 @@ defmodule TokengateWeb.ProxyController do
   defp require_model(model) when is_binary(model), do: :ok
   defp require_model(_), do: {:error, {:invalid_request, "model must be a string"}}
 
-  defp acquire_limits(key_id, limits) do
+  defp acquire_team_limits(key_id, limits) do
     case Limits.acquire(key_id, %{
            rpm_limit: limits.rpm_limit,
            concurrency_limit: limits.concurrency_limit
@@ -83,6 +109,28 @@ defmodule TokengateWeb.ProxyController do
       {:error, :rate_limited, retry_after_ms} -> {:error, {:rate_limited, retry_after_ms}}
       {:error, :concurrency_exceeded} -> {:error, :concurrency_exceeded}
     end
+  end
+
+  defp acquire_credential_limits(credential) do
+    # Use credential.id as the throttle key for provider-side limits
+    # nil limits mean unlimited (track but don't block)
+    case Limits.acquire(credential.id, %{
+           rpm_limit: credential.max_rpm,
+           concurrency_limit: credential.max_concurrent
+         }) do
+      :ok ->
+        :ok
+
+      {:error, :rate_limited, retry_after_ms} ->
+        {:error, {:provider_rate_limited, retry_after_ms}}
+
+      {:error, :concurrency_exceeded} ->
+        {:error, :provider_concurrency_exceeded}
+    end
+  end
+
+  defp release_credential_limits(credential) do
+    Limits.release(credential.id)
   end
 
   defp route_and_check(member, payload, api_key_hash, limits) do
@@ -296,7 +344,7 @@ defmodule TokengateWeb.ProxyController do
             {chunk, %{acc | completion: acc.completion <> extract_delta_text(decoded)}}
 
           usage ->
-            costs = stream_costs(route, usage)
+            costs = stream_costs(route, usage, decoded)
             injected = inject_usage_costs(decoded, usage, costs)
             {Jason.encode!(injected), %{acc | usage: {usage, costs}}}
         end
@@ -337,7 +385,7 @@ defmodule TokengateWeb.ProxyController do
             cache_creation_tokens: 0
           }
 
-          {usage, stream_costs(route, usage)}
+          {usage, stream_costs(route, usage, nil)}
       end
 
     Budgets.record_spend(member.id, costs.cost_usd)
@@ -360,9 +408,16 @@ defmodule TokengateWeb.ProxyController do
     conn
   end
 
-  defp stream_costs(route, usage) do
+  defp stream_costs(route, usage, body) do
     pricing = Providers.current_pricing(route.model_provider.id)
-    CostCalculator.breakdown(route.model_alias, pricing, usage)
+
+    provider_reported =
+      if body, do: UsageNormalizer.extract_reported_cost(:openai, body), else: nil
+
+    CostCalculator.breakdown(route.model_alias, pricing, usage,
+      billing_mode: route.model_provider.billing_mode,
+      provider_reported_cost: provider_reported
+    )
   end
 
   ## Success finalization #######################################################
@@ -370,8 +425,13 @@ defmodule TokengateWeb.ProxyController do
   defp finalize_success(conn, route, body, latency_ms, member) do
     usage = UsageNormalizer.normalize(:openai, body) || fallback_usage(conn.body_params, body)
     pricing = Providers.current_pricing(route.model_provider.id)
+    provider_reported = UsageNormalizer.extract_reported_cost(:openai, body)
 
-    costs = CostCalculator.breakdown(route.model_alias, pricing, usage)
+    costs =
+      CostCalculator.breakdown(route.model_alias, pricing, usage,
+        billing_mode: route.model_provider.billing_mode,
+        provider_reported_cost: provider_reported
+      )
 
     # Hot-path state updates (ETS only)
     Budgets.record_spend(member.id, costs.cost_usd)
@@ -486,6 +546,16 @@ defmodule TokengateWeb.ProxyController do
 
   defp error_details(:concurrency_exceeded),
     do: {429, "rate_limit_error", "concurrency_exceeded", "Too many concurrent requests"}
+
+  defp error_details({:provider_rate_limited, retry_ms}),
+    do:
+      {429, "rate_limit_error", "provider_rate_limited",
+       "Provider rate limit exceeded, retry in #{retry_ms}ms"}
+
+  defp error_details(:provider_concurrency_exceeded),
+    do:
+      {429, "rate_limit_error", "provider_concurrency_exceeded",
+       "Too many concurrent requests to provider"}
 
   defp error_details({:budget_exceeded, %{period: period}}),
     do: {402, "billing_error", "budget_exceeded", "Budget exceeded (#{period})"}

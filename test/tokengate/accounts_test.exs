@@ -437,6 +437,18 @@ defmodule Tokengate.AccountsTest do
       assert limits.concurrency_limit == 15
     end
 
+    test "adds extra_rpm to team default" do
+      team = team_fixture()
+      user = user_fixture()
+
+      {:ok, tm} =
+        Accounts.create_team_member(valid_team_member_attrs(user, team, %{"extra_rpm" => 40}))
+
+      limits = Accounts.effective_limits(tm)
+
+      assert limits.rpm_limit == 160
+    end
+
     test "nil team daily_budget_usd with nil extra → nil" do
       team = team_fixture(%{"default_daily_budget_usd" => nil})
       user = user_fixture()

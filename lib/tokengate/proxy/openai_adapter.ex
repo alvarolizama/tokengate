@@ -140,6 +140,39 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
     end
   end
 
+  @doc """
+  Fetches the list of available model IDs from the provider's `/models`
+  endpoint. Returns `{:ok, [model_id, ...]}` on success or
+  `{:error, reason}` on failure.
+  """
+  def list_models(provider, credential) do
+    url = models_url(provider)
+    api_key = Map.get(credential, :api_key_encrypted) || Map.get(credential, "api_key_encrypted")
+    request = Finch.build(:get, url, headers(api_key))
+
+    case Finch.request(request, finch_name(), receive_timeout: @default_receive_timeout) do
+      {:ok, %Finch.Response{status: status, body: resp_body}} when status in 200..299 ->
+        decoded = decode!(resp_body)
+        models = extract_model_ids(decoded)
+        {:ok, models}
+
+      {:ok, %Finch.Response{status: status}} ->
+        {:error, ProviderAdapter.classify_status(status)}
+
+      {:error, error} ->
+        {:error, ProviderAdapter.classify_error(error)}
+    end
+  end
+
+  defp extract_model_ids(%{"data" => models}) when is_list(models) do
+    models
+    |> Enum.map(fn m -> Map.get(m, "id") end)
+    |> Enum.filter(&is_binary/1)
+    |> Enum.sort()
+  end
+
+  defp extract_model_ids(_), do: []
+
   ## SSE helpers ##############################################################
 
   # Forwards accumulated SSE data lines to the caller, handling the framing

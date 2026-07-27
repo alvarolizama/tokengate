@@ -15,10 +15,13 @@ defmodule Tokengate.Providers.ModelProvider do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
+  @billing_modes ~w(pay_per_token included)
+
   schema "model_providers" do
     field :provider_model, :string
     field :priority, :integer
     field :enabled, :boolean, default: true
+    field :billing_mode, :string, default: "pay_per_token"
 
     belongs_to :model_alias, Tokengate.Providers.ModelAlias
     belongs_to :credential, Tokengate.Providers.Credential
@@ -36,10 +39,15 @@ defmodule Tokengate.Providers.ModelProvider do
       :credential_id,
       :provider_model,
       :priority,
-      :enabled
+      :enabled,
+      :billing_mode
     ])
     |> validate_required([:model_alias_id, :credential_id, :provider_model, :enabled])
+    |> validate_inclusion(:billing_mode, @billing_modes)
     |> foreign_key_constraint(:model_alias_id)
     |> foreign_key_constraint(:credential_id)
   end
+
+  @doc "List of valid billing modes"
+  def billing_modes, do: @billing_modes
 end

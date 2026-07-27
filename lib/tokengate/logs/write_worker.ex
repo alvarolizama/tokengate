@@ -17,6 +17,9 @@ defmodule Tokengate.Logs.WriteWorker do
   alias Tokengate.Logs
   alias Tokengate.Observability.WebhookWorker
 
+  @pubsub Tokengate.PubSub
+  @logs_topic "logs:new"
+
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
     attrs = %{
@@ -34,16 +37,30 @@ defmodule Tokengate.Logs.WriteWorker do
       savings_usd: args["savings_usd"],
       estimated_cost_usd: args["estimated_cost_usd"],
       latency_ms: args["latency_ms"],
-      streaming: args["streaming"] || false
+      streaming: args["streaming"] || false,
+      inserted_at: parse_inserted_at(args["inserted_at"])
     }
 
     case Logs.log_request(attrs) do
       {:ok, request_log} ->
         _ = WebhookWorker.dispatch(request_log)
+        broadcast_new_log(request_log)
         :ok
 
       {:error, changeset} ->
         {:error, "request log insert failed: #{inspect(changeset.errors)}"}
     end
+  end
+
+  defp parse_inserted_at(nil), do: nil
+  defp parse_inserted_at(iso_string) when is_binary(iso_string) do
+    case DateTime.from_iso8601(iso_string) do
+      {:ok, dt, _offset} -> dt
+      _ -> nil
+    end
+  end
+
+  defp broadcast_new_log(log) do
+    Phoenix.PubSub.broadcast(@pubsub, @logs_topic, {:new_log, log})
   end
 end

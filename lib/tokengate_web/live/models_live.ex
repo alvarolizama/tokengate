@@ -33,6 +33,10 @@ defmodule TokengateWeb.ModelsLive do
       |> assign(:provider_form, nil)
       |> assign(:provider_form_alias_id, nil)
       |> assign(:editing_ap_id, nil)
+      |> assign(:provider_models, [])
+      |> assign(:provider_models_loading, false)
+      |> assign(:provider_form_credential_id, nil)
+      |> assign(:current_billing_mode, "pay_per_token")
       |> load_aliases()
       |> assign_form_data()
 
@@ -168,7 +172,11 @@ defmodule TokengateWeb.ModelsLive do
     {:noreply,
      socket
      |> assign(:provider_form, nil)
-     |> assign(:editing_ap_id, nil)}
+     |> assign(:editing_ap_id, nil)
+     |> assign(:provider_models, [])
+     |> assign(:provider_models_loading, false)
+     |> assign(:provider_form_credential_id, nil)
+     |> assign(:current_billing_mode, "pay_per_token")}
   end
 
   def handle_event("edit_model_provider", %{"id" => ap_id}, socket) do
@@ -187,9 +195,60 @@ defmodule TokengateWeb.ModelsLive do
 
   def handle_event("save_model_provider", %{"model_provider" => ap_params}, socket) do
     if socket.assigns.is_admin do
-      save_model_provider(socket, socket.assigns.editing_ap_id, ap_params)
+      # Extract pricing fields (prefixed with "pricing_") into a nested map
+      {pricing_fields, provider_fields} =
+        Enum.reduce(ap_params, {%{}, %{}}, fn
+          {"pricing_" <> name, value}, {p, ap} ->
+            {Map.put(p, name, value), ap}
+
+          {key, value}, {p, ap} ->
+            {p, Map.put(ap, key, value)}
+        end)
+
+      # Only keep pricing if at least input or output price is present
+      pricing =
+        if pricing_fields["input_price_per_1m"] in ["", nil] and
+             pricing_fields["output_price_per_1m"] in ["", nil] do
+          %{}
+        else
+          pricing_fields
+        end
+
+      save_model_provider(
+        socket,
+        socket.assigns.editing_ap_id,
+        Map.put(provider_fields, "pricing", pricing)
+      )
     else
       {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+    end
+  end
+
+  def handle_event("provider_form_changed", %{"model_provider" => ap_params}, socket) do
+    if socket.assigns.is_admin do
+      credential_id = ap_params["credential_id"]
+
+      billing_mode =
+        ap_params["billing_mode"] || socket.assigns[:current_billing_mode] || "pay_per_token"
+
+      socket = assign(socket, :current_billing_mode, billing_mode)
+
+      cond do
+        credential_id == "" or credential_id == nil ->
+          {:noreply, assign(socket, :provider_models, [])}
+
+        credential_id != socket.assigns[:provider_form_credential_id] ->
+          {:noreply,
+           socket
+           |> assign(:provider_form_credential_id, credential_id)
+           |> assign(:provider_models_loading, true)
+           |> fetch_provider_models(credential_id)}
+
+        true ->
+          {:noreply, socket}
+      end
+    else
+      {:noreply, socket}
     end
   end
 
@@ -271,10 +330,61 @@ defmodule TokengateWeb.ModelsLive do
 
   ## Private helpers — model_provider save ---------------------------------
 
+  defp fetch_provider_models(socket, credential_id) do
+    credential =
+      Enum.find(socket.assigns.credentials_for_select, &(&1.id == credential_id))
+
+    if credential do
+      provider = credential.provider
+      lv_pid = self()
+
+      Task.start(fn ->
+        result = Tokengate.Proxy.OpenAIAdapter.list_models(provider, credential)
+        send(lv_pid, {:provider_models_result, result})
+      end)
+
+      socket
+    else
+      socket
+      |> assign(:provider_models, [])
+      |> assign(:provider_models_loading, false)
+    end
+  end
+
+  @impl true
+  def handle_info({:provider_models_result, result}, socket) do
+    case result do
+      {:ok, models} ->
+        {:noreply,
+         socket
+         |> assign(:provider_models, models)
+         |> assign(:provider_models_loading, false)}
+
+      {:error, _reason} ->
+        {:noreply,
+         socket
+         |> assign(:provider_models, [])
+         |> assign(:provider_models_loading, false)
+         |> put_flash(:error, "No se pudieron cargar los modelos del proveedor.")}
+    end
+  end
+
+  def handle_info(_msg, socket), do: {:noreply, socket}
+
   defp save_model_provider(socket, :new, ap_params) do
     ap_params = Map.put(ap_params, "model_alias_id", socket.assigns.provider_form_alias_id)
 
-    case Providers.create_model_provider(ap_params) do
+    {pricing_params, ap_params} = Map.pop(ap_params, "pricing", %{})
+
+    Repo.transaction(fn ->
+      with {:ok, ap} <- Providers.create_model_provider(ap_params),
+           {:ok, _pricing} <- maybe_create_pricing(ap, pricing_params) do
+        ap
+      else
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+    |> case do
       {:ok, _ap} ->
         {:noreply,
          socket
@@ -303,6 +413,17 @@ defmodule TokengateWeb.ModelsLive do
       {:error, changeset} ->
         {:noreply, assign(socket, :provider_form, to_form(changeset, as: :model_provider))}
     end
+  end
+
+  defp maybe_create_pricing(_ap, pricing) when pricing in [nil, %{}, ""], do: {:ok, nil}
+
+  defp maybe_create_pricing(ap, pricing) do
+    pricing_params =
+      pricing
+      |> Map.put("model_provider_id", ap.id)
+      |> Map.put_new("effective_from", DateTime.utc_now() |> DateTime.truncate(:second))
+
+    Providers.create_model_pricing(pricing_params)
   end
 
   ## Helpers ---------------------------------------------------------------
@@ -617,20 +738,50 @@ defmodule TokengateWeb.ModelsLive do
                   required
                   hint="La API key específica que servirá este modelo. Cada credencial tiene su propio circuit breaker y prioridad."
                 />
-                <.input
-                  field={@provider_form[:provider_model]}
-                  type="text"
-                  label="Modelo del proveedor"
-                  required
-                  placeholder="ej. gpt-4o-2024-08-06"
-                  hint="Nombre del modelo en la API del provider, tal como aparece en su documentación."
-                />
+
+                <%= if @provider_models_loading do %>
+                  <div class="flex items-center gap-2 text-sm text-base-content/50 py-2">
+                    <span class="loading loading-spinner loading-xs"></span>
+                    Cargando modelos del proveedor…
+                  </div>
+                <% end %>
+
+                <%= if @provider_models_loading == false and @provider_models != [] do %>
+                  <.input
+                    field={@provider_form[:provider_model]}
+                    type="select"
+                    label="Modelo del proveedor"
+                    options={@provider_models}
+                    prompt="Selecciona un modelo"
+                    required
+                    hint="Modelos disponibles para esta credencial, obtenidos en vivo del proveedor."
+                  />
+                <% else %>
+                  <.input
+                    field={@provider_form[:provider_model]}
+                    type="text"
+                    label="Modelo del proveedor"
+                    required
+                    placeholder="Primero selecciona una credencial"
+                    hint="Selecciona una credencial para ver los modelos disponibles."
+                  />
+                <% end %>
                 <div class="grid grid-cols-2 gap-3">
                   <.input
                     field={@provider_form[:priority]}
                     type="number"
                     label="Prioridad (menor = primero)"
                     hint="Orden de preferencia. Menor número = se intenta primero. Si cae, salta al siguiente."
+                  />
+                  <.input
+                    field={@provider_form[:billing_mode]}
+                    type="select"
+                    label="Facturación"
+                    options={[
+                      {"Pay per token", "pay_per_token"},
+                      {"Incluido (suscripción)", "included"}
+                    ]}
+                    hint="Pay per token: cobra por uso. Incluido: suscripción/RPM, gasto real = $0."
                   />
                 </div>
 
@@ -640,6 +791,45 @@ defmodule TokengateWeb.ModelsLive do
                   label="Habilitado"
                   hint="Si está apagado, este provider no recibe tráfico del modelo."
                 />
+
+                <%= if @editing_ap_id == :new and (@current_billing_mode || "pay_per_token") == "pay_per_token" do %>
+                  <div class="mt-4 pt-4 border-t border-base-200">
+                    <p class="text-sm font-semibold text-base-content mb-3">Pricing (opcional)</p>
+                    <p class="text-xs text-base-content/50 mb-3">
+                      Define el costo por 1M tokens. Si lo dejas vacío, se usará el costo reportado por el proveedor o el precio de mercado.
+                    </p>
+                    <div class="grid grid-cols-2 gap-3">
+                      <.input
+                        field={@provider_form[:pricing_input_price_per_1m]}
+                        type="number"
+                        step="0.01"
+                        label="Input $/1M"
+                        placeholder="ej. 0.15"
+                      />
+                      <.input
+                        field={@provider_form[:pricing_output_price_per_1m]}
+                        type="number"
+                        step="0.01"
+                        label="Output $/1M"
+                        placeholder="ej. 0.60"
+                      />
+                      <.input
+                        field={@provider_form[:pricing_cache_read_price_per_1m]}
+                        type="number"
+                        step="0.01"
+                        label="Cache read $/1M"
+                        placeholder="ej. 0.015"
+                      />
+                      <.input
+                        field={@provider_form[:pricing_cache_creation_price_per_1m]}
+                        type="number"
+                        step="0.01"
+                        label="Cache creation $/1M"
+                        placeholder="ej. 0.30"
+                      />
+                    </div>
+                  </div>
+                <% end %>
 
                 <div class="flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_model_provider" class="btn btn-ghost btn-sm">

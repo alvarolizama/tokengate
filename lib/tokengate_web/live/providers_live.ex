@@ -1,11 +1,12 @@
 defmodule TokengateWeb.ProvidersLive do
   @moduledoc """
-  Admin CRUD for providers + per-provider credential and pricing management.
+  Admin CRUD for providers + per-provider credential management.
 
   Providers are global (not org-scoped). Each provider can carry multiple
-  credentials (api_key_encrypted, max_rpm, max_concurrent, status) and
-  multiple model_providers (model × provider), each with its own versioned
-  pricing entries.
+  credentials (api_key_encrypted, max_rpm, max_concurrent, status).
+
+  Pricing is managed per ModelProvider (model × credential) in the
+  Models section, not here.
 
   Deleting a provider that is referenced by model_providers is blocked
   with a friendly Spanish flash message.
@@ -16,7 +17,7 @@ defmodule TokengateWeb.ProvidersLive do
   import Ecto.Query, only: [from: 2]
 
   alias Tokengate.Providers
-  alias Tokengate.Providers.{Provider, Credential, ModelProvider, ModelPricing}
+  alias Tokengate.Providers.{Provider, Credential, ModelProvider}
   alias Tokengate.Repo
 
   @impl true
@@ -28,10 +29,6 @@ defmodule TokengateWeb.ProvidersLive do
       |> assign(:editing_provider_id, nil)
       |> assign(:credential_provider_id, nil)
       |> assign(:credential_form, nil)
-      |> assign(:pricing_provider_id, nil)
-      |> assign(:pricing_form, nil)
-      |> assign(:editing_pricing_id, nil)
-      |> assign(:pricing_ap_id, nil)
       |> load_providers()
 
     {:ok, socket}
@@ -48,33 +45,40 @@ defmodule TokengateWeb.ProvidersLive do
       )
       |> Repo.all()
 
-    # Preload model_providers with credential (provider), model_alias and
-    # model_pricing, grouped by provider via credential
+    # Count model_providers per provider for display
     credential_ids =
       providers
       |> Enum.flat_map(& &1.credentials)
       |> Enum.map(& &1.id)
 
-    model_providers =
+    model_counts =
       if credential_ids == [] do
-        []
+        %{}
       else
         from(mp in ModelProvider,
           where: mp.credential_id in ^credential_ids,
-          preload: [:model_alias, credential: :provider, model_pricing: :model_provider],
-          order_by: [asc: mp.provider_model]
+          group_by: mp.credential_id,
+          select: {mp.credential_id, count(mp.id)}
         )
         |> Repo.all()
+        |> Enum.into(%{})
       end
 
-    aps_by_provider =
-      model_providers
-      |> Enum.group_by(fn mp -> mp.credential.provider_id end)
+    # Map credential counts to provider counts
+    provider_model_counts =
+      Enum.reduce(providers, %{}, fn provider, acc ->
+        count =
+          provider.credentials
+          |> Enum.map(&Map.get(model_counts, &1.id, 0))
+          |> Enum.sum()
+
+        Map.put(acc, provider.id, count)
+      end)
 
     socket
     |> assign(:providers, providers)
     |> assign(:providers_empty?, providers == [])
-    |> assign(:aps_by_provider, aps_by_provider)
+    |> assign(:provider_model_counts, provider_model_counts)
   end
 
   ## Events — provider CRUD ------------------------------------------------
@@ -229,75 +233,6 @@ defmodule TokengateWeb.ProvidersLive do
     end
   end
 
-  ## Events — pricing management -------------------------------------------
-
-  def handle_event("manage_pricing", %{"id" => provider_id}, socket) do
-    {:noreply,
-     socket
-     |> assign(:pricing_provider_id, provider_id)
-     |> assign(:pricing_form, nil)
-     |> assign(:editing_pricing_id, nil)
-     |> assign(:pricing_ap_id, nil)}
-  end
-
-  def handle_event("new_pricing", %{"ap_id" => ap_id}, socket) do
-    ap = get_model_provider_with_preloads!(ap_id)
-
-    changeset =
-      Providers.change_model_pricing(%ModelPricing{
-        model_provider_id: ap_id,
-        effective_from: DateTime.utc_now() |> DateTime.truncate(:second)
-      })
-
-    {:noreply,
-     socket
-     |> assign(:pricing_form, to_form(changeset, as: :model_pricing))
-     |> assign(:editing_pricing_id, :new)
-     |> assign(:pricing_ap_id, ap_id)
-     |> assign(:current_ap, ap)}
-  end
-
-  def handle_event("cancel_pricing", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:pricing_form, nil)
-     |> assign(:editing_pricing_id, nil)
-     |> assign(:pricing_ap_id, nil)
-     |> assign(:current_ap, nil)}
-  end
-
-  def handle_event("edit_pricing", %{"id" => pricing_id}, socket) do
-    pricing = Providers.get_model_pricing!(pricing_id)
-    changeset = Providers.change_model_pricing(pricing)
-    ap = get_model_provider_with_preloads!(pricing.model_provider_id)
-
-    {:noreply,
-     socket
-     |> assign(:pricing_form, to_form(changeset, as: :model_pricing))
-     |> assign(:editing_pricing_id, pricing.id)
-     |> assign(:pricing_ap_id, pricing.model_provider_id)
-     |> assign(:current_ap, ap)}
-  end
-
-  def handle_event("save_pricing", %{"model_pricing" => pricing_params}, socket) do
-    save_pricing(socket, socket.assigns.editing_pricing_id, pricing_params)
-  end
-
-  def handle_event("delete_pricing", %{"id" => pricing_id}, socket) do
-    pricing = Providers.get_model_pricing!(pricing_id)
-
-    case Providers.delete_model_pricing(pricing) do
-      {:ok, _} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Pricing eliminado.")
-         |> load_providers()}
-
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo eliminar el pricing.")}
-    end
-  end
-
   ## Private helpers — provider save --------------------------------------
 
   defp save_provider(socket, :new, provider_params) do
@@ -332,65 +267,14 @@ defmodule TokengateWeb.ProvidersLive do
     end
   end
 
-  ## Private helpers — pricing save --------------------------------------
-
-  defp save_pricing(socket, :new, pricing_params) do
-    case Providers.create_model_pricing(pricing_params) do
-      {:ok, _pricing} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Pricing creado.")
-         |> assign(:pricing_form, nil)
-         |> assign(:editing_pricing_id, nil)
-         |> assign(:pricing_ap_id, nil)
-         |> assign(:current_ap, nil)
-         |> load_providers()}
-
-      {:error, changeset} ->
-        {:noreply, assign(socket, :pricing_form, to_form(changeset, as: :model_pricing))}
-    end
-  end
-
-  defp save_pricing(socket, pricing_id, pricing_params) when is_binary(pricing_id) do
-    pricing = Providers.get_model_pricing!(pricing_id)
-
-    case Providers.update_model_pricing(pricing, pricing_params) do
-      {:ok, _pricing} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Pricing actualizado.")
-         |> assign(:pricing_form, nil)
-         |> assign(:editing_pricing_id, nil)
-         |> assign(:pricing_ap_id, nil)
-         |> assign(:current_ap, nil)
-         |> load_providers()}
-
-      {:error, changeset} ->
-        {:noreply, assign(socket, :pricing_form, to_form(changeset, as: :model_pricing))}
-    end
-  end
-
-  ## Private helpers — data fetching -------------------------------------
-
-  defp get_model_provider_with_preloads!(ap_id) do
-    from(mp in ModelProvider,
-      where: mp.id == ^ap_id,
-      preload: [:model_alias, credential: :provider]
-    )
-    |> Repo.one!()
-  end
-
   ## Helpers ---------------------------------------------------------------
 
   @doc "Credentials for a provider (from preloaded map)."
   def credentials_for(%{credentials: creds}), do: creds
   def credentials_for(_), do: []
 
-  @doc "Alias providers for a provider (from the grouped map)."
-  def aps_for(provider_id, aps_by_provider), do: Map.get(aps_by_provider, provider_id, [])
-
-  @doc "Pricing entries for an model_provider (from preloaded association)."
-  def pricing_entries(ap), do: ap.model_pricing || []
+  @doc "Model count for a provider (from the counts map)."
+  def model_count(provider_id, counts), do: Map.get(counts, provider_id, 0)
 
   @doc "Mask an api key for display: show only the last 4 chars."
   def mask_key(nil), do: "—"
@@ -416,20 +300,6 @@ defmodule TokengateWeb.ProvidersLive do
     Calendar.strftime(dt, "%Y-%m-%d %H:%M UTC")
   end
 
-  @doc "Label for whether a pricing entry is current (latest effective_from)."
-  def current_label(true), do: {"badge-success", "Actual"}
-  def current_label(false), do: {"badge-ghost", "Histórico"}
-
-  @doc "Check if a pricing entry is the current (latest) one for its model_provider."
-  def is_current?(pricing, ap) do
-    entries = ap.model_pricing || []
-
-    case Enum.at(entries, 0) do
-      nil -> false
-      latest -> latest.id == pricing.id
-    end
-  end
-
   ## Render ----------------------------------------------------------------
 
   @impl true
@@ -439,7 +309,7 @@ defmodule TokengateWeb.ProvidersLive do
       <div class="space-y-6">
         <.header>
           Proveedores
-          <:subtitle>Providers de LLM, credenciales y pricing por token</:subtitle>
+          <:subtitle>Providers de LLM y credenciales</:subtitle>
         </.header>
 
         <div class="flex justify-end">
@@ -474,15 +344,6 @@ defmodule TokengateWeb.ProvidersLive do
                   placeholder="https://api.openai.com/v1"
                   hint="URL base de la API del proveedor, incluyendo el API base path (ej. /v1, /api/v1). Sin slash final."
                 />
-
-                <div class="flex items-end pb-2">
-                  <.input
-                    field={@form[:track_real_usage]}
-                    type="checkbox"
-                    label="Trackear uso real del provider"
-                    hint="Registra el consumo real de tokens por petición, útil para comparar costo real vs plan fijo."
-                  />
-                </div>
               </div>
               <div class="flex gap-2 mt-4">
                 <button type="submit" class="btn btn-primary btn-sm" id="save-provider-btn">Guardar</button>
@@ -513,9 +374,6 @@ defmodule TokengateWeb.ProvidersLive do
                   <div class="flex items-center gap-2">
                     <h3 class="font-semibold text-base-content">{provider.name}</h3>
 
-                    <span :if={provider.track_real_usage} class="badge badge-sm badge-ghost">
-                      Uso real
-                    </span>
                     <span class={[
                       "badge badge-sm",
                       if(provider.status == "active", do: "badge-success", else: "badge-ghost")
@@ -525,8 +383,9 @@ defmodule TokengateWeb.ProvidersLive do
                   </div>
                   <p class="text-xs text-base-content/50 mt-1 font-mono">{provider.base_url}</p>
                   <p class="text-xs text-base-content/50 mt-0.5">
-                    {length(credentials_for(provider))} credencial(es) · {length(
-                      aps_for(provider.id, @aps_by_provider)
+                    {length(credentials_for(provider))} credencial(es) · {model_count(
+                      provider.id,
+                      @provider_model_counts
                     )} modelo(s)
                   </p>
                 </div>
@@ -546,14 +405,6 @@ defmodule TokengateWeb.ProvidersLive do
                     id={"credentials-#{provider.id}"}
                   >
                     <.icon name="hero-key" class="w-4 h-4" /> Credenciales
-                  </button>
-                  <button
-                    phx-click="manage_pricing"
-                    phx-value-id={provider.id}
-                    class="btn btn-sm btn-ghost"
-                    id={"pricing-#{provider.id}"}
-                  >
-                    <.icon name="hero-currency-dollar" class="w-4 h-4" /> Pricing
                   </button>
                   <button
                     phx-click="edit_provider"
@@ -689,181 +540,6 @@ defmodule TokengateWeb.ProvidersLive do
                   </table>
                 </div>
               </div>
-
-              <%!-- Pricing panel --%>
-              <div
-                :if={@pricing_provider_id == provider.id}
-                class="mt-3 pt-3 border-t border-base-300"
-                id={"pricing-panel-#{provider.id}"}
-              >
-                <div class="flex items-center justify-between mb-2">
-                  <h4 class="text-sm font-semibold">Pricing por token</h4>
-                </div>
-
-                <div
-                  :if={aps_for(provider.id, @aps_by_provider) == []}
-                  class="text-sm text-base-content/40 py-3"
-                >
-                  No hay modelos asignados a este proveedor. Asígnales desde la sección Modelos.
-                </div>
-
-                <div :for={ap <- aps_for(provider.id, @aps_by_provider)} class="mb-4 last:mb-0">
-                  <div class="flex items-center justify-between mb-1">
-                    <div>
-                      <code class="text-sm font-mono">{ap.provider_model}</code>
-                      <span class="text-xs text-base-content/40 ml-2">
-                        {if ap.model_alias, do: ap.model_alias.name, else: "—"}
-                      </span>
-                    </div>
-                    <button
-                      phx-click="new_pricing"
-                      phx-value-ap_id={ap.id}
-                      class="btn btn-xs btn-ghost"
-                      id={"new-pricing-#{ap.id}"}
-                    >
-                      <.icon name="hero-plus" class="w-3 h-3" /> Nuevo
-                    </button>
-                  </div>
-
-                  <div
-                    :if={pricing_entries(ap) == []}
-                    class="text-sm text-base-content/40 py-2"
-                  >
-                    Sin pricing configurado.
-                  </div>
-
-                  <div :if={pricing_entries(ap) != []} class="overflow-x-auto">
-                    <table class="table table-sm">
-                      <thead>
-                        <tr>
-                          <th>Desde</th>
-                          <th>Entrada /1M</th>
-                          <th>Salida /1M</th>
-                          <th>Cache Read /1M</th>
-                          <th>Cache Creation /1M</th>
-                          <th>Estado</th>
-                          <th></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr :for={p <- pricing_entries(ap)} id={"pricing-#{p.id}"}>
-                          <td>{fmt_dt(p.effective_from)}</td>
-                          <td>{fmt_dec(p.input_price_per_1m)}</td>
-                          <td>{fmt_dec(p.output_price_per_1m)}</td>
-                          <td>{fmt_dec(p.cache_read_price_per_1m)}</td>
-                          <td>{fmt_dec(p.cache_creation_price_per_1m)}</td>
-                          <td>
-                            <span class={[
-                              "badge",
-                              "badge-sm",
-                              elem(current_label(is_current?(p, ap)), 0)
-                            ]}>
-                              {elem(current_label(is_current?(p, ap)), 1)}
-                            </span>
-                          </td>
-                          <td>
-                            <div class="flex gap-1">
-                              <button
-                                phx-click="edit_pricing"
-                                phx-value-id={p.id}
-                                class="btn btn-xs btn-ghost"
-                                id={"edit-pricing-#{p.id}"}
-                              >
-                                <.icon name="hero-pencil-square" class="w-3 h-3" />
-                              </button>
-                              <button
-                                phx-click="delete_pricing"
-                                phx-value-id={p.id}
-                                data-confirm="¿Eliminar este pricing?"
-                                class="btn btn-xs btn-ghost text-error"
-                                id={"delete-pricing-#{p.id}"}
-                              >
-                                <.icon name="hero-trash" class="w-3 h-3" />
-                              </button>
-                            </div>
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <%!-- Pricing form modal (new/edit) --%>
-        <div :if={@pricing_form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_pricing" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
-            <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">
-                {if @editing_pricing_id == :new, do: "Nuevo Pricing", else: "Editar Pricing"}
-              </h2>
-
-              <%= if @current_ap do %>
-                <div class="alert alert-info py-2 px-3 mb-3 text-sm">
-                  <.icon name="hero-information-circle" class="w-4 h-4 shrink-0" />
-                  <span>
-                    Modelo: <code>{@current_ap.provider_model}</code>
-                    ·
-                    Alias:
-                    <strong>{if @current_ap.model_alias, do: @current_ap.model_alias.name, else: "—"}</strong>
-                  </span>
-                </div>
-              <% end %>
-
-              <.form for={@pricing_form} id="pricing-form" phx-submit="save_pricing">
-                <.input
-                  field={@pricing_form[:model_provider_id]}
-                  type="hidden"
-                />
-                <div class="grid grid-cols-2 gap-3">
-                  <.input
-                    field={@pricing_form[:input_price_per_1m]}
-                    type="number"
-                    label="Precio entrada /1M (USD)"
-                    step="any"
-                    required
-                  />
-                  <.input
-                    field={@pricing_form[:output_price_per_1m]}
-                    type="number"
-                    label="Precio salida /1M (USD)"
-                    step="any"
-                    required
-                  />
-                </div>
-                <div class="grid grid-cols-2 gap-3">
-                  <.input
-                    field={@pricing_form[:cache_read_price_per_1m]}
-                    type="number"
-                    label="Cache read /1M (opcional)"
-                    step="any"
-                  />
-                  <.input
-                    field={@pricing_form[:cache_creation_price_per_1m]}
-                    type="number"
-                    label="Cache creation /1M (opcional)"
-                    step="any"
-                  />
-                </div>
-                <.input
-                  field={@pricing_form[:effective_from]}
-                  type="datetime-local"
-                  label="Efectivo desde"
-                  required
-                />
-
-                <div class="flex gap-2 mt-4 justify-end">
-                  <button type="button" phx-click="cancel_pricing" class="btn btn-ghost btn-sm">
-                    Cancelar
-                  </button>
-                  <button type="submit" class="btn btn-primary btn-sm" id="save-pricing-btn">
-                    Guardar
-                  </button>
-                </div>
-              </.form>
             </div>
           </div>
         </div>

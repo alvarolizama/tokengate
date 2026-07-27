@@ -10,9 +10,11 @@ defmodule Tokengate.Proxy.CostCalculator do
       estimated tokens (budget check) and post-request with real tokens.
     * `cost_usd` — what this **specific provider charges** for the usage
       (model_provider `model_pricing`). Only meaningful for
-      `pay_per_token` providers.
-    * `provider_cost_usd` — what you **actually pay**: `0` for
-      subscription providers, `cost_usd` for pay-per-token.
+      `pay_per_token` providers; `0` for `included` providers.
+    * `provider_cost_usd` — what you **actually pay**. Prefers the cost
+      reported by the provider in its response body (when available);
+      otherwise uses the pricing-row calculation for `pay_per_token` or
+      `0` for `included` (subscription / RPM-limited) providers.
     * `savings_usd` — `estimated_cost_usd - provider_cost_usd`: how much
       is saved versus buying at market price.
 
@@ -89,27 +91,55 @@ defmodule Tokengate.Proxy.CostCalculator do
 
     * `model_alias` — map/struct with market prices
     * `pricing` — model_pricing map/struct or nil
-    * `billing_type` — "pay_per_token"
     * `usage` — normalized usage map
+    * `opts` — keyword list with:
+      * `:billing_mode` — `"pay_per_token"` (default) or `"included"`
+      * `:provider_reported_cost` — decimal cost reported by the provider
+        in its response body, when available. Takes precedence over the
+        pricing-row calculation.
 
   Returns `%{estimated_cost_usd, cost_usd, provider_cost_usd, savings_usd}`
-  with Decimal values. `cost_usd` falls back to the market cost when the
-  provider has no pricing row, so budget enforcement always has a value.
+  with Decimal values.
+
+  Billing mode semantics:
+    * `pay_per_token` — `cost_usd` = pricing-row calculation (or estimated
+      fallback when no pricing row exists); `provider_cost_usd` = the
+      provider-reported cost when available, otherwise `cost_usd`.
+    * `included` — `cost_usd` = `0` (no per-token charge);
+      `provider_cost_usd` = `0`; budget enforcement uses `estimated_cost_usd`.
   """
-  @spec breakdown(map(), map() | nil, usage()) :: %{
+  @spec breakdown(map(), map() | nil, usage(), keyword()) :: %{
           estimated_cost_usd: Decimal.t(),
           cost_usd: Decimal.t(),
           provider_cost_usd: Decimal.t(),
           savings_usd: Decimal.t()
         }
-  def breakdown(model_alias, pricing, usage) do
+  def breakdown(model_alias, pricing, usage, opts \\ []) do
+    billing_mode = Keyword.get(opts, :billing_mode, "pay_per_token")
+    provider_reported = Keyword.get(opts, :provider_reported_cost)
+
     estimated = market_cost(model_alias, usage)
-    priced = provider_priced_cost(pricing, usage) || estimated
-    real = real_provider_cost(provider_priced_cost(pricing, usage))
+
+    {cost_usd, real} =
+      case billing_mode do
+        "included" ->
+          {Decimal.new(0), Decimal.new(0)}
+
+        _pay_per_token ->
+          priced = provider_priced_cost(pricing, usage) || estimated
+
+          real =
+            case to_decimal(provider_reported) do
+              nil -> real_provider_cost(provider_priced_cost(pricing, usage))
+              reported -> reported
+            end
+
+          {priced, real}
+      end
 
     %{
       estimated_cost_usd: estimated,
-      cost_usd: priced,
+      cost_usd: cost_usd,
       provider_cost_usd: real,
       savings_usd: savings(estimated, real)
     }

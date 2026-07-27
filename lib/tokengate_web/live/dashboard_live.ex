@@ -128,30 +128,26 @@ defmodule TokengateWeb.DashboardLive do
   defp load_personal_data(socket, user) do
     memberships = Accounts.list_team_members_for_user(user.id)
 
+    teams =
+      Enum.map(memberships, fn membership ->
+        limits = Accounts.effective_limits(membership)
+        spend = Budgets.spend(membership.id)
+
+        %{
+          membership: membership,
+          team: membership.team,
+          team_role: membership.team_role,
+          api_key: membership.api_key,
+          daily_limit: limits.daily_budget_usd,
+          monthly_limit: limits.monthly_budget_usd,
+          daily_spend: spend.daily_usd,
+          monthly_spend: spend.monthly_usd
+        }
+      end)
+
     socket
     |> assign(:memberships, memberships)
-    |> assign(:team_budgets, build_team_budgets(memberships))
-  end
-
-  # Build a list of %{team: team, daily_limit: Decimal, monthly_limit: Decimal,
-  # daily_spend: Decimal, monthly_spend: Decimal, members_count: integer}
-  # for each distinct team the user belongs to.
-  defp build_team_budgets(memberships) do
-    memberships
-    |> Enum.uniq_by(& &1.team_id)
-    |> Enum.map(fn membership ->
-      team = membership.team
-      limits = Accounts.effective_limits(membership)
-      spend = Budgets.spend(membership.id)
-
-      %{
-        team: team,
-        daily_limit: limits.daily_budget_usd,
-        monthly_limit: limits.monthly_budget_usd,
-        daily_spend: spend.daily_usd,
-        monthly_spend: spend.monthly_usd
-      }
-    end)
+    |> assign(:teams, teams)
   end
 
   # Admins: org-wide in-memory snapshot + org-wide hourly series.

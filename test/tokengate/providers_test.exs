@@ -134,7 +134,6 @@ defmodule Tokengate.ProvidersTest do
       Enum.into(attrs, %{
         name: "OpenAI",
         base_url: "https://api.openai.com",
-        track_real_usage: false,
         status: "active"
       })
 
@@ -215,7 +214,6 @@ defmodule Tokengate.ProvidersTest do
       provider = provider_fixture()
       assert %Provider{} = provider
       assert provider.name == "OpenAI"
-      assert provider.track_real_usage == false
     end
 
     test "create_provider/1 requires name and base_url" do
@@ -232,8 +230,11 @@ defmodule Tokengate.ProvidersTest do
 
     test "update_provider/2 updates fields" do
       provider = provider_fixture()
-      {:ok, updated} = Providers.update_provider(provider, %{track_real_usage: true})
-      assert updated.track_real_usage == true
+
+      {:ok, updated} =
+        Providers.update_provider(provider, %{base_url: "https://api.anthropic.com"})
+
+      assert updated.base_url == "https://api.anthropic.com"
     end
 
     test "create_provider/1 defaults status to active" do

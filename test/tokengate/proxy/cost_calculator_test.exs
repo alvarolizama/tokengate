@@ -103,9 +103,10 @@ defmodule Tokengate.Proxy.CostCalculatorTest do
     end
   end
 
-  describe "breakdown/3" do
-    test "all four dimensions" do
-      result = CostCalculator.breakdown(@alias_gpt4o, @pricing, @usage)
+  describe "breakdown/4" do
+    test "pay_per_token with pricing: all four dimensions" do
+      result =
+        CostCalculator.breakdown(@alias_gpt4o, @pricing, @usage, billing_mode: "pay_per_token")
 
       # market: 1000*5/1M + 500*15/1M = 0.0125
       assert Decimal.equal?(result.estimated_cost_usd, Decimal.new("0.0125"))
@@ -115,13 +116,54 @@ defmodule Tokengate.Proxy.CostCalculatorTest do
       assert Decimal.equal?(result.savings_usd, Decimal.new("0.005"))
     end
 
-    test "nil pricing falls back to market for cost_usd, zero for provider_cost" do
-      result = CostCalculator.breakdown(@alias_gpt4o, nil, @usage)
+    test "pay_per_token with nil pricing falls back to market for cost_usd, zero for provider_cost" do
+      result = CostCalculator.breakdown(@alias_gpt4o, nil, @usage, billing_mode: "pay_per_token")
 
       assert Decimal.equal?(result.estimated_cost_usd, Decimal.new("0.0125"))
       assert Decimal.equal?(result.cost_usd, Decimal.new("0.0125"))
       assert Decimal.equal?(result.provider_cost_usd, Decimal.new(0))
       assert Decimal.equal?(result.savings_usd, Decimal.new("0.0125"))
+    end
+
+    test "included billing_mode: cost_usd = 0, provider_cost = 0" do
+      result = CostCalculator.breakdown(@alias_gpt4o, @pricing, @usage, billing_mode: "included")
+
+      assert Decimal.equal?(result.estimated_cost_usd, Decimal.new("0.0125"))
+      assert Decimal.equal?(result.cost_usd, Decimal.new(0))
+      assert Decimal.equal?(result.provider_cost_usd, Decimal.new(0))
+      assert Decimal.equal?(result.savings_usd, Decimal.new("0.0125"))
+    end
+
+    test "pay_per_token with provider_reported_cost overrides pricing calculation" do
+      result =
+        CostCalculator.breakdown(@alias_gpt4o, @pricing, @usage,
+          billing_mode: "pay_per_token",
+          provider_reported_cost: Decimal.new("0.003")
+        )
+
+      # cost_usd still uses pricing row, but provider_cost_usd uses reported
+      assert Decimal.equal?(result.cost_usd, Decimal.new("0.0075"))
+      assert Decimal.equal?(result.provider_cost_usd, Decimal.new("0.003"))
+      # savings = estimated - provider_cost = 0.0125 - 0.003
+      assert Decimal.equal?(result.savings_usd, Decimal.new("0.0095"))
+    end
+
+    test "included billing_mode ignores provider_reported_cost" do
+      result =
+        CostCalculator.breakdown(@alias_gpt4o, @pricing, @usage,
+          billing_mode: "included",
+          provider_reported_cost: Decimal.new("0.003")
+        )
+
+      assert Decimal.equal?(result.cost_usd, Decimal.new(0))
+      assert Decimal.equal?(result.provider_cost_usd, Decimal.new(0))
+    end
+
+    test "default opts: behaves as pay_per_token" do
+      result = CostCalculator.breakdown(@alias_gpt4o, @pricing, @usage)
+
+      assert Decimal.equal?(result.cost_usd, Decimal.new("0.0075"))
+      assert Decimal.equal?(result.provider_cost_usd, Decimal.new("0.0075"))
     end
   end
 end
