@@ -198,216 +198,6 @@
               </div>
             </div>
 
-            <%!-- Top 5 tables --%>
-            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-              <div class="card bg-base-100 border border-base-300 shadow-sm">
-                <div class="card-body">
-                  <div class="flex items-center justify-between">
-                    <h2 class="card-title text-base">
-                      <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" />
-                      Top 5 Modelos
-                    </h2>
-                    <.link
-                      patch={~p"/dashboard/stats/models?period=#{@period}"}
-                      class="btn btn-xs btn-ghost"
-                      id="see-all-models"
-                    >
-                      Ver todos <.icon name="hero-arrow-right" class="w-3 h-3" />
-                    </.link>
-                  </div>
-                  <%= if has_data?(@breakdown_model) do %>
-                    <div class="overflow-x-auto mt-3">
-                      <table class="table table-sm">
-                        <thead>
-                          <tr>
-                            <th>Modelo</th><th class="text-right">Requests</th><th class="text-right">
-                              Real
-                            </th><th class="text-right">Ahorro</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr
-                            :for={row <- Enum.take(@breakdown_model, 5)}
-                            id={"top-model-#{row.model_id || "unknown"}"}
-                          >
-                            <td class="font-medium truncate max-w-[180px]">{row.model_name}</td>
-                            <td class="text-right font-mono">
-                              {format_number(row.request_count)}
-                            </td>
-                            <td class="text-right font-mono">
-                              ${format_decimal(row.provider_cost_usd)}
-                            </td>
-                            <td class="text-right font-mono text-success">
-                              ${format_decimal(row.savings_usd)}
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                  <% else %>
-                    <p class="text-sm text-base-content/40 py-6 text-center">Sin datos.</p>
-                  <% end %>
-                </div>
-              </div>
-              <div class="card bg-base-100 border border-base-300 shadow-sm">
-                <div class="card-body">
-                  <div class="flex items-center justify-between">
-                    <h2 class="card-title text-base">
-                      <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" />
-                      Top 5 Equipos
-                    </h2>
-                    <.link
-                      patch={~p"/dashboard/stats/teams?period=#{@period}"}
-                      class="btn btn-xs btn-ghost"
-                      id="see-all-teams"
-                    >
-                      Ver todos <.icon name="hero-arrow-right" class="w-3 h-3" />
-                    </.link>
-                  </div>
-                  <%= if has_data?(@breakdown_team) do %>
-                    <div class="overflow-x-auto mt-3">
-                      <table class="table table-sm">
-                        <thead>
-                          <tr>
-                            <th>Equipo</th><th class="text-right">Requests</th><th class="text-right">
-                              Real
-                            </th><th class="text-right">Ahorro</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr
-                            :for={row <- Enum.take(@breakdown_team, 5)}
-                            id={"top-team-#{row.team_id}"}
-                          >
-                            <td class="font-medium truncate max-w-[180px]">{row.team_name}</td>
-                            <td class="text-right font-mono">
-                              {format_number(row.request_count)}
-                            </td>
-                            <td class="text-right font-mono">
-                              ${format_decimal(row.provider_cost_usd)}
-                            </td>
-                            <td class="text-right font-mono text-success">
-                              ${format_decimal(row.savings_usd)}
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                  <% else %>
-                    <p class="text-sm text-base-content/40 py-6 text-center">Sin datos.</p>
-                  <% end %>
-                </div>
-              </div>
-              <div class="card bg-base-100 border border-base-300 shadow-sm">
-                <div class="card-body">
-                  <h2 class="card-title text-base">
-                    <.icon name="hero-user" class="w-5 h-5 text-base-content/60" /> Top 5 Miembros
-                  </h2>
-                  <%= if has_data?(@breakdown_member) do %>
-                    <div class="overflow-x-auto mt-3">
-                      <table class="table table-sm">
-                        <thead>
-                          <tr>
-                            <th>Usuario</th><th class="text-right">Requests</th><th class="text-right">
-                              Real
-                            </th><th class="text-right">Ahorro</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr
-                            :for={row <- Enum.take(@breakdown_member, 5)}
-                            id={"top-member-#{row.team_member_id}"}
-                          >
-                            <td class="font-medium truncate max-w-[180px]">{row.user_email}</td>
-                            <td class="text-right font-mono">
-                              {format_number(row.request_count)}
-                            </td>
-                            <td class="text-right font-mono">
-                              ${format_decimal(row.provider_cost_usd)}
-                            </td>
-                            <td class="text-right font-mono text-success">
-                              ${format_decimal(row.savings_usd)}
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                  <% else %>
-                    <p class="text-sm text-base-content/40 py-6 text-center">Sin datos.</p>
-                  <% end %>
-                </div>
-              </div>
-            </div>
-
-            <%!-- Ranking de proveedores (solo admin) --%>
-            <%= if @current_user && @current_user.global_role == "admin" do %>
-              <div class="card bg-base-100 border border-base-300 shadow-sm" id="provider-ranking">
-                <div class="card-body">
-                  <h2 class="card-title text-base">
-                    <.icon name="hero-trophy" class="w-5 h-5 text-base-content/60" />
-                    Ranking de proveedores
-                  </h2>
-                  <p class="text-xs text-base-content/60">
-                    Clasificación por confiabilidad (fallos) y velocidad (latencia) en el período.
-                    Tier S es el mejor; "—" significa menos de 10 requests.
-                  </p>
-                  <%= if has_data?(@provider_ranking) do %>
-                    <div class="overflow-x-auto mt-3">
-                      <table class="table table-sm">
-                        <thead>
-                          <tr>
-                            <th>#</th>
-                            <th>Proveedor</th>
-                            <th class="text-center">Tier</th>
-                            <th class="text-right">Score</th>
-                            <th class="text-right">Requests</th>
-                            <th class="text-right">% Fallos</th>
-                            <th class="text-right">Latencia prom</th>
-                            <th class="text-right">P95</th>
-                            <th class="text-right">TTFT prom</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr
-                            :for={{row, idx} <- Enum.with_index(@provider_ranking, 1)}
-                            id={"provider-ranking-row-#{row.provider_id}"}
-                          >
-                            <td class="text-base-content/60">{idx}</td>
-                            <td class="font-medium truncate max-w-[180px]">
-                              {row.provider_name}
-                            </td>
-                            <td class="text-center">
-                              <span class={["badge badge-sm", tier_badge_class(row.tier)]}>
-                                {row.tier}
-                              </span>
-                            </td>
-                            <td class="text-right font-mono">{row.score || "—"}</td>
-                            <td class="text-right font-mono">
-                              {format_number(row.request_count)}
-                            </td>
-                            <td class={[
-                              "text-right font-mono",
-                              row.error_rate >= 0.05 && "text-error",
-                              row.error_rate > 0 && row.error_rate < 0.05 && "text-warning"
-                            ]}>
-                              {format_percent(row.error_rate)}
-                            </td>
-                            <td class="text-right font-mono">{format_ms(row.avg_latency_ms)}</td>
-                            <td class="text-right font-mono">{format_ms(row.p95_latency_ms)}</td>
-                            <td class="text-right font-mono">{format_ms(row.avg_ttft_ms)}</td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                  <% else %>
-                    <p class="text-sm text-base-content/40 py-6 text-center">
-                      Sin datos en este período.
-                    </p>
-                  <% end %>
-                </div>
-              </div>
-            <% end %>
-
             <%!-- Patrones de uso: hora del día, picos y concurrencia --%>
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="usage-patterns">
               <div
@@ -549,6 +339,256 @@
                 </div>
               </div>
             </div>
+            <%!-- Top 5 tables --%>
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div class="card bg-base-100 border border-base-300 shadow-sm">
+                <div class="card-body">
+                  <div class="flex items-center justify-between">
+                    <h2 class="card-title text-base">
+                      <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" />
+                      Top 5 Modelos
+                    </h2>
+                    <.link
+                      patch={~p"/dashboard/stats/models?period=#{@period}"}
+                      class="btn btn-xs btn-ghost"
+                      id="see-all-models"
+                    >
+                      Ver todos <.icon name="hero-arrow-right" class="w-3 h-3" />
+                    </.link>
+                  </div>
+                  <%= if has_data?(@breakdown_model) do %>
+                    <div class="overflow-x-auto mt-3">
+                      <table class="table table-sm">
+                        <thead>
+                          <tr>
+                            <th>Modelo</th><th class="text-right">Requests</th><th class="text-right">
+                              Real
+                            </th><th class="text-right">Ahorro</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr
+                            :for={row <- Enum.take(@breakdown_model, 5)}
+                            id={"top-model-#{row.model_id || "unknown"}"}
+                          >
+                            <td class="font-medium truncate max-w-[180px]">{row.model_name}</td>
+                            <td class="text-right font-mono">
+                              {format_number(row.request_count)}
+                            </td>
+                            <td class="text-right font-mono">
+                              ${format_decimal(row.provider_cost_usd)}
+                            </td>
+                            <td class="text-right font-mono text-success">
+                              ${format_decimal(row.savings_usd)}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  <% else %>
+                    <p class="text-sm text-base-content/40 py-6 text-center">Sin datos.</p>
+                  <% end %>
+                </div>
+              </div>
+              <div class="card bg-base-100 border border-base-300 shadow-sm">
+                <div class="card-body">
+                  <div class="flex items-center justify-between">
+                    <h2 class="card-title text-base">
+                      <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" />
+                      Top 5 Equipos
+                    </h2>
+                    <.link
+                      patch={~p"/dashboard/stats/teams?period=#{@period}"}
+                      class="btn btn-xs btn-ghost"
+                      id="see-all-teams"
+                    >
+                      Ver todos <.icon name="hero-arrow-right" class="w-3 h-3" />
+                    </.link>
+                  </div>
+                  <%= if has_data?(@breakdown_team) do %>
+                    <div class="overflow-x-auto mt-3">
+                      <table class="table table-sm">
+                        <thead>
+                          <tr>
+                            <th>Equipo</th><th class="text-right">Requests</th><th class="text-right">
+                              Real
+                            </th><th class="text-right">Ahorro</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr
+                            :for={row <- Enum.take(@breakdown_team, 5)}
+                            id={"top-team-#{row.team_id}"}
+                          >
+                            <td class="font-medium truncate max-w-[180px]">{row.team_name}</td>
+                            <td class="text-right font-mono">
+                              {format_number(row.request_count)}
+                            </td>
+                            <td class="text-right font-mono">
+                              ${format_decimal(row.provider_cost_usd)}
+                            </td>
+                            <td class="text-right font-mono text-success">
+                              ${format_decimal(row.savings_usd)}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  <% else %>
+                    <p class="text-sm text-base-content/40 py-6 text-center">Sin datos.</p>
+                  <% end %>
+                </div>
+              </div>
+              <div class="card bg-base-100 border border-base-300 shadow-sm">
+                <div class="card-body">
+                  <h2 class="card-title text-base">
+                    <.icon name="hero-user" class="w-5 h-5 text-base-content/60" /> Top 5 Miembros
+                  </h2>
+                  <%= if has_data?(@breakdown_member) do %>
+                    <div class="overflow-x-auto mt-3">
+                      <table class="table table-sm">
+                        <thead>
+                          <tr>
+                            <th>Usuario</th><th class="text-right">Requests</th><th class="text-right">
+                              Real
+                            </th><th class="text-right">Ahorro</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr
+                            :for={row <- Enum.take(@breakdown_member, 5)}
+                            id={"top-member-#{row.team_member_id}"}
+                          >
+                            <td class="font-medium truncate max-w-[180px]">{row.user_email}</td>
+                            <td class="text-right font-mono">
+                              {format_number(row.request_count)}
+                            </td>
+                            <td class="text-right font-mono">
+                              ${format_decimal(row.provider_cost_usd)}
+                            </td>
+                            <td class="text-right font-mono text-success">
+                              ${format_decimal(row.savings_usd)}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  <% else %>
+                    <p class="text-sm text-base-content/40 py-6 text-center">Sin datos.</p>
+                  <% end %>
+                </div>
+              </div>
+              <div class="card bg-base-100 border border-base-300 shadow-sm" id="top-agents">
+                <div class="card-body">
+                  <h2 class="card-title text-base">
+                    <.icon name="hero-cpu-chip" class="w-5 h-5 text-base-content/60" />
+                    Top 5 Agentes
+                  </h2>
+                  <%= if has_data?(@breakdown_agent) do %>
+                    <div class="overflow-x-auto mt-3">
+                      <table class="table table-sm">
+                        <thead>
+                          <tr>
+                            <th>Agente</th><th class="text-right">Requests</th><th class="text-right">
+                              Real
+                            </th><th class="text-right">Ahorro</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr
+                            :for={row <- Enum.take(@breakdown_agent, 5)}
+                            id={"top-agent-#{row.agent_type}"}
+                          >
+                            <td class="font-medium truncate max-w-[180px]">{row.agent_type}</td>
+                            <td class="text-right font-mono">
+                              {format_number(row.request_count)}
+                            </td>
+                            <td class="text-right font-mono">
+                              ${format_decimal(row.provider_cost_usd)}
+                            </td>
+                            <td class="text-right font-mono text-success">
+                              ${format_decimal(row.savings_usd)}
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  <% else %>
+                    <p class="text-sm text-base-content/40 py-6 text-center">Sin datos.</p>
+                  <% end %>
+                </div>
+              </div>
+            </div>
+
+            <%!-- Ranking de proveedores (solo admin) --%>
+            <%= if @current_user && @current_user.global_role == "admin" do %>
+              <div class="card bg-base-100 border border-base-300 shadow-sm" id="provider-ranking">
+                <div class="card-body">
+                  <h2 class="card-title text-base">
+                    <.icon name="hero-trophy" class="w-5 h-5 text-base-content/60" />
+                    Ranking de proveedores
+                  </h2>
+                  <p class="text-xs text-base-content/60">
+                    Clasificación por confiabilidad (fallos) y velocidad (latencia) en el período.
+                    Tier S es el mejor; "—" significa menos de 10 requests.
+                  </p>
+                  <%= if has_data?(@provider_ranking) do %>
+                    <div class="overflow-x-auto mt-3">
+                      <table class="table table-sm">
+                        <thead>
+                          <tr>
+                            <th>#</th>
+                            <th>Proveedor</th>
+                            <th class="text-center">Tier</th>
+                            <th class="text-right">Score</th>
+                            <th class="text-right">Requests</th>
+                            <th class="text-right">% Fallos</th>
+                            <th class="text-right">Latencia prom</th>
+                            <th class="text-right">P95</th>
+                            <th class="text-right">TTFT prom</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr
+                            :for={{row, idx} <- Enum.with_index(@provider_ranking, 1)}
+                            id={"provider-ranking-row-#{row.provider_id}"}
+                          >
+                            <td class="text-base-content/60">{idx}</td>
+                            <td class="font-medium truncate max-w-[180px]">
+                              {row.provider_name}
+                            </td>
+                            <td class="text-center">
+                              <span class={["badge badge-sm", tier_badge_class(row.tier)]}>
+                                {row.tier}
+                              </span>
+                            </td>
+                            <td class="text-right font-mono">{row.score || "—"}</td>
+                            <td class="text-right font-mono">
+                              {format_number(row.request_count)}
+                            </td>
+                            <td class={[
+                              "text-right font-mono",
+                              row.error_rate >= 0.05 && "text-error",
+                              row.error_rate > 0 && row.error_rate < 0.05 && "text-warning"
+                            ]}>
+                              {format_percent(row.error_rate)}
+                            </td>
+                            <td class="text-right font-mono">{format_ms(row.avg_latency_ms)}</td>
+                            <td class="text-right font-mono">{format_ms(row.p95_latency_ms)}</td>
+                            <td class="text-right font-mono">{format_ms(row.avg_ttft_ms)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  <% else %>
+                    <p class="text-sm text-base-content/40 py-6 text-center">
+                      Sin datos en este período.
+                    </p>
+                  <% end %>
+                </div>
+              </div>
+            <% end %>
+
           </div>
         <% @live_action == :models -> %>
           <div class="space-y-6">
