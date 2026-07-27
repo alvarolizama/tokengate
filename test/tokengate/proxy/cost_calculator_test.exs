@@ -78,22 +78,6 @@ defmodule Tokengate.Proxy.CostCalculatorTest do
     end
   end
 
-  describe "real_provider_cost/1" do
-    test "nil returns zero" do
-      assert Decimal.equal?(
-               CostCalculator.real_provider_cost(nil),
-               Decimal.new(0)
-             )
-    end
-
-    test "passes through the priced cost" do
-      assert Decimal.equal?(
-               CostCalculator.real_provider_cost(Decimal.new("1.5")),
-               Decimal.new("1.5")
-             )
-    end
-  end
-
   describe "savings/2" do
     test "estimated minus real provider cost" do
       assert Decimal.equal?(
@@ -116,13 +100,31 @@ defmodule Tokengate.Proxy.CostCalculatorTest do
       assert Decimal.equal?(result.savings_usd, Decimal.new("0.005"))
     end
 
-    test "pay_per_token with nil pricing falls back to market for cost_usd, zero for provider_cost" do
+    test "pay_per_token with nil pricing: honest fallback, no phantom savings" do
       result = CostCalculator.breakdown(@alias_gpt4o, nil, @usage, billing_mode: "pay_per_token")
 
       assert Decimal.equal?(result.estimated_cost_usd, Decimal.new("0.0125"))
       assert Decimal.equal?(result.cost_usd, Decimal.new("0.0125"))
-      assert Decimal.equal?(result.provider_cost_usd, Decimal.new(0))
-      assert Decimal.equal?(result.savings_usd, Decimal.new("0.0125"))
+      # Unknown real cost → falls back to the estimate instead of $0,
+      # so savings is 0 rather than an inflated 100%.
+      assert Decimal.equal?(result.provider_cost_usd, Decimal.new("0.0125"))
+      assert Decimal.equal?(result.savings_usd, Decimal.new("0"))
+    end
+
+    test "pay_per_token with cache tokens: no double-counting" do
+      # prompt_tokens is regular (non-cached) input per UsageNormalizer
+      # semantics; cache tokens are billed only at their cache price.
+      usage = %{
+        prompt_tokens: 800,
+        completion_tokens: 500,
+        cache_read_tokens: 200,
+        cache_creation_tokens: 0
+      }
+
+      result = CostCalculator.breakdown(@alias_gpt4o, @pricing, usage)
+
+      # provider: 800*2.5/1M + 500*10/1M + 200*1.25/1M = 0.002 + 0.005 + 0.00025
+      assert Decimal.equal?(result.provider_cost_usd, Decimal.new("0.00725"))
     end
 
     test "included billing_mode: cost_usd = 0, provider_cost = 0" do

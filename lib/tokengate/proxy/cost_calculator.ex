@@ -72,13 +72,6 @@ defmodule Tokengate.Proxy.CostCalculator do
   end
 
   @doc """
-  What is actually paid for the request: the priced cost.
-  """
-  @spec real_provider_cost(Decimal.t() | nil) :: Decimal.t()
-  def real_provider_cost(nil), do: Decimal.new(0)
-  def real_provider_cost(%Decimal{} = priced_cost), do: priced_cost
-
-  @doc """
   Savings versus market price: `estimated_cost_usd - provider_cost_usd`.
   """
   @spec savings(Decimal.t(), Decimal.t()) :: Decimal.t()
@@ -104,7 +97,9 @@ defmodule Tokengate.Proxy.CostCalculator do
   Billing mode semantics:
     * `pay_per_token` — `cost_usd` = pricing-row calculation (or estimated
       fallback when no pricing row exists); `provider_cost_usd` = the
-      provider-reported cost when available, otherwise `cost_usd`.
+      provider-reported cost when available, otherwise the pricing-row
+      calculation, otherwise the market estimate (honest fallback:
+      unknown real cost → savings 0 instead of phantom 100% savings).
     * `included` — `cost_usd` = `0` (no per-token charge);
       `provider_cost_usd` = `0`; budget enforcement uses `estimated_cost_usd`.
   """
@@ -126,15 +121,15 @@ defmodule Tokengate.Proxy.CostCalculator do
           {Decimal.new(0), Decimal.new(0)}
 
         _pay_per_token ->
-          priced = provider_priced_cost(pricing, usage) || estimated
+          priced = provider_priced_cost(pricing, usage)
 
           real =
             case to_decimal(provider_reported) do
-              nil -> real_provider_cost(provider_priced_cost(pricing, usage))
+              nil -> priced || estimated
               reported -> reported
             end
 
-          {priced, real}
+          {priced || estimated, real}
       end
 
     %{

@@ -505,12 +505,15 @@ defmodule TokengateWeb.ProxyController do
   end
 
   defp inject_usage_costs(body, usage, costs) do
+    # Preserve the provider's own token counts (OpenAI's prompt_tokens
+    # includes cached tokens — the client expects the original totals);
+    # only fill in counts when the provider sent no usage at all.
     response_usage =
       body
       |> Map.get("usage", %{})
+      |> Map.put_new("prompt_tokens", usage.prompt_tokens)
+      |> Map.put_new("completion_tokens", usage.completion_tokens)
       |> Map.merge(%{
-        "prompt_tokens" => usage.prompt_tokens,
-        "completion_tokens" => usage.completion_tokens,
         "estimated_cost_usd" => Decimal.to_float(costs.estimated_cost_usd),
         "cost_usd" => Decimal.to_float(costs.cost_usd)
       })

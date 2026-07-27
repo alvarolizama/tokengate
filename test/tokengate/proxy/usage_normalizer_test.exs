@@ -13,8 +13,10 @@ defmodule Tokengate.Proxy.UsageNormalizerTest do
         }
       }
 
+      # OpenAI's prompt_tokens includes cached tokens — prompt_tokens is
+      # normalized to regular (non-cached) input: 100 - 20 = 80.
       assert UsageNormalizer.normalize(:openai, body) == %{
-               prompt_tokens: 100,
+               prompt_tokens: 80,
                completion_tokens: 50,
                cache_read_tokens: 20,
                cache_creation_tokens: 0

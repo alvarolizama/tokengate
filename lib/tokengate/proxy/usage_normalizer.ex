@@ -10,6 +10,13 @@ defmodule Tokengate.Proxy.UsageNormalizer do
         cache_creation_tokens: non_neg_integer
       }
 
+  **Semantics**: `prompt_tokens` is the count of *regular* (non-cached)
+  input tokens — cache tokens are always reported separately. OpenAI's
+  `usage.prompt_tokens` includes cached tokens, so they are subtracted;
+  Anthropic's `input_tokens` already excludes cache tokens. This keeps
+  cost arithmetic uniform across providers (input × prompt + cache ×
+  cache price, never double-counted).
+
   Supported providers:
 
     * `:openai` — `usage.prompt_tokens` / `completion_tokens`,
@@ -36,10 +43,15 @@ defmodule Tokengate.Proxy.UsageNormalizer do
   """
   @spec normalize(:openai | :anthropic, map()) :: usage() | nil
   def normalize(:openai, %{"usage" => usage}) when is_map(usage) do
+    cached = get_in_int(usage, ["prompt_tokens_details", "cached_tokens"])
+    # OpenAI's prompt_tokens INCLUDES cached tokens — subtract them so
+    # prompt_tokens is regular (non-cached) input, matching Anthropic.
+    regular_input = max(get_int(usage, "prompt_tokens") - cached, 0)
+
     %{
-      prompt_tokens: get_int(usage, "prompt_tokens"),
+      prompt_tokens: regular_input,
       completion_tokens: get_int(usage, "completion_tokens"),
-      cache_read_tokens: get_in_int(usage, ["prompt_tokens_details", "cached_tokens"]),
+      cache_read_tokens: cached,
       cache_creation_tokens: 0
     }
   end
