@@ -42,6 +42,13 @@ COPY mix.exs mix.lock ./
 COPY config config
 
 RUN mix deps.get --only prod
+
+# Compile Erlang/rebar3 deps first with a memory-constrained Erlang VM.
+# Coolify build containers often have tight memory limits (512 MB-1 GB);
+# the default Erlang compiler can OOM during parallel compilation.
+# +S 1:1  → single scheduler (dramatically less memory)
+# +MBas busy_wait → avoids busy-waiting on the single scheduler
+RUN ERL_AFLAGS="+S 1:1 +MBas busy_wait" mix deps.compile idna telemetry telemetry_poller
 RUN mix deps.compile
 
 # --- Application + assets --------------------------------------------------
