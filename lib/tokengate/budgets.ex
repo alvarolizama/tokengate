@@ -55,6 +55,69 @@ defmodule Tokengate.Budgets do
     list_exhausted_member_budgets() |> length()
   end
 
+  @typedoc """
+  Team-level budget rollup: the monthly cap is the SUM of each member's
+  effective monthly limit (tope mensual × miembros), and the spend is the
+  SUM of each member's monthly spend (real). Members without a monthly
+  limit don't add to the cap and set `has_unlimited?`.
+  """
+  @type team_budget :: %{
+          team: Tokengate.Accounts.Team.t(),
+          member_count: non_neg_integer(),
+          monthly_limit_usd: Decimal.t() | nil,
+          monthly_spend_usd: Decimal.t(),
+          monthly_pct: float() | nil,
+          has_unlimited?: boolean()
+        }
+
+  @doc """
+  Rolls `list_member_budgets/0` up to the team level. Teams without
+  members don't appear. Ordered by highest monthly spend first.
+  """
+  @spec list_team_budgets() :: [team_budget()]
+  def list_team_budgets do
+    list_member_budgets()
+    |> Enum.group_by(fn mb -> mb.member.team_id end)
+    |> Enum.map(fn {_team_id, budgets} ->
+      limits = Enum.map(budgets, & &1.monthly_limit_usd)
+
+      monthly_limit_usd =
+        if Enum.all?(limits, &is_nil/1) do
+          nil
+        else
+          limits |> Enum.reject(&is_nil/1) |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
+        end
+
+      monthly_spend_usd =
+        Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.monthly_spend_usd, &2))
+
+      %{
+        team: hd(budgets).member.team,
+        member_count: length(budgets),
+        monthly_limit_usd: monthly_limit_usd,
+        monthly_spend_usd: monthly_spend_usd,
+        monthly_pct: pct(monthly_spend_usd, monthly_limit_usd),
+        has_unlimited?: Enum.any?(limits, &is_nil/1)
+      }
+    end)
+    |> Enum.sort_by(fn row -> Decimal.to_float(row.monthly_spend_usd) end, :desc)
+  end
+
+  @doc """
+  Lists `member_budget` maps for every team membership of a single user —
+  the per-user read behind the personal topbar chip (each user sees only
+  their own data). Ordered by most recently created first.
+  """
+  @spec list_member_budgets_for_user(term()) :: [member_budget()]
+  def list_member_budgets_for_user(user_id) do
+    TeamMember
+    |> where([tm], tm.user_id == ^user_id)
+    |> preload([:user, :team])
+    |> order_by([tm], desc: tm.inserted_at)
+    |> Repo.all()
+    |> Enum.map(&member_budget/1)
+  end
+
   @doc """
   Per-user spend rollup across all their team memberships.
 

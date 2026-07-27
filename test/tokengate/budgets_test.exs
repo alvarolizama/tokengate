@@ -192,8 +192,60 @@ defmodule Tokengate.BudgetsTest do
       _member = member_fixture()
 
       spend = Budgets.spend_by_user()
-
       refute Map.has_key?(spend, user.id)
+    end
+  end
+
+  describe "list_team_budgets/0" do
+    test "agrupa por equipo: tope = suma de límites mensuales, gasto = suma de spend" do
+      team = team_fixture(%{"default_monthly_budget_usd" => "500.00"})
+      member_a = member_fixture(team)
+      member_b = member_fixture(team)
+      # Otro equipo que no debe mezclarse
+      _other = member_fixture()
+
+      assert :ok = Manager.record_spend(member_a.id, Decimal.new("100.00"))
+      assert :ok = Manager.record_spend(member_b.id, Decimal.new("50.00"))
+
+      teams = Budgets.list_team_budgets()
+      row = Enum.find(teams, &(&1.team.id == team.id))
+
+      assert row.member_count == 2
+      # tope = 500 * 2 miembros
+      assert Decimal.eq?(row.monthly_limit_usd, Decimal.new("1000.00"))
+      # gasto real = 100 + 50
+      assert Decimal.eq?(row.monthly_spend_usd, Decimal.new("150.00"))
+      assert row.monthly_pct == 15.0
+      refute row.has_unlimited?
+    end
+
+    test "miembro sin límite mensual se marca y no suma al tope" do
+      team = team_fixture(%{"default_monthly_budget_usd" => "500.00"})
+      _limited = member_fixture(team)
+      _unlimited = member_fixture(team, nil, %{"extra_monthly_budget_usd" => nil})
+
+      # Forzar nil efectivo: equipo sin default
+      team_nil = team_fixture(%{"default_monthly_budget_usd" => nil})
+      _nil_member = member_fixture(team_nil)
+
+      teams = Budgets.list_team_budgets()
+
+      row = Enum.find(teams, &(&1.team.id == team.id))
+      assert Decimal.eq?(row.monthly_limit_usd, Decimal.new("1000.00"))
+      refute row.has_unlimited?
+
+      row_nil = Enum.find(teams, &(&1.team.id == team_nil.id))
+      assert is_nil(row_nil.monthly_limit_usd)
+      assert is_nil(row_nil.monthly_pct)
+      assert row_nil.has_unlimited?
+    end
+
+    test "equipos sin miembros no aparecen" do
+      team = team_fixture()
+      _member = member_fixture()
+
+      teams = Budgets.list_team_budgets()
+      refute Enum.find(teams, &(&1.team.id == team.id))
     end
   end
 end
