@@ -118,7 +118,7 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#kpi-savings")
     assert has_element?(view, "#kpi-tokens")
     assert has_element?(view, "#kpi-tps")
-    assert has_element?(view, "#top-agents")
+    assert has_element?(view, "#top-errors")
   end
 
   test "admin sees provider ranking on index", %{conn: conn} do

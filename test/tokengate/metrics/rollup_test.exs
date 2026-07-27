@@ -1029,53 +1029,34 @@ defmodule Tokengate.Metrics.RollupTest do
   end
 
   # ---------------------------------------------------------------------
-  # breakdown_by_agent/2
+  # top_errors/2
   # ---------------------------------------------------------------------
 
-  describe "breakdown_by_agent/2" do
-    test "agrupa por agent_type con requests, costo real y ahorro, ordenado por costo desc" do
+  describe "top_errors/2" do
+    test "agrupa por status_code los fallos (>= 400), ordenados por count desc" do
       {tm, _team} = team_member_fixture()
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-      for _ <- 1..3 do
-        log_request(tm.id, now, %{
-          agent_type: "cursor",
-          provider_cost_usd: Decimal.new("2.000000"),
-          savings_usd: Decimal.new("0.500000")
-        })
-      end
+      for _ <- 1..5, do: log_request(tm.id, now, %{status_code: 429})
+      for _ <- 1..3, do: log_request(tm.id, now, %{status_code: 500})
+      for _ <- 1..10, do: log_request(tm.id, now, %{status_code: 200})
 
-      log_request(tm.id, now, %{
-        agent_type: "api",
-        provider_cost_usd: Decimal.new("9.000000"),
-        savings_usd: Decimal.new("1.000000")
-      })
-
-      rows = Rollup.breakdown_by_agent(nil, from: DateTime.add(now, -3600, :second))
+      rows = Rollup.top_errors(nil, from: DateTime.add(now, -3600, :second))
 
       assert [first, second] = rows
-      assert first.agent_type == "api"
-      assert first.request_count == 1
-      assert Decimal.equal?(first.provider_cost_usd, Decimal.new("9.000000"))
-      assert Decimal.equal?(first.savings_usd, Decimal.new("1.000000"))
-
-      assert second.agent_type == "cursor"
-      assert second.request_count == 3
-      assert Decimal.equal?(second.provider_cost_usd, Decimal.new("6.000000"))
-      assert Decimal.equal?(second.savings_usd, Decimal.new("1.500000"))
+      assert first.status_code == 429
+      assert first.error_count == 5
+      assert second.status_code == 500
+      assert second.error_count == 3
     end
 
-    test "respeta :limit" do
+    test "sin fallos devuelve lista vacía" do
       {tm, _team} = team_member_fixture()
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-      for agent <- ["cursor", "api", "claude-code", "windsurf", "aider", "zed"] do
-        log_request(tm.id, now, %{agent_type: agent})
-      end
+      for _ <- 1..3, do: log_request(tm.id, now, %{status_code: 200})
 
-      rows = Rollup.breakdown_by_agent(nil, from: DateTime.add(now, -3600, :second), limit: 3)
-
-      assert length(rows) == 3
+      assert Rollup.top_errors(nil, from: DateTime.add(now, -3600, :second)) == []
     end
   end
 end

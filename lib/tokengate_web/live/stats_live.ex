@@ -47,7 +47,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:breakdown_member, [])
       |> assign(:breakdown_team, [])
       |> assign(:breakdown_provider, [])
-      |> assign(:breakdown_agent, [])
+      |> assign(:top_errors, [])
       |> assign(:provider_ranking, [])
       |> assign(:hour_distribution, [])
       |> assign(:busiest_hours, [])
@@ -163,7 +163,7 @@ defmodule TokengateWeb.StatsLive do
     |> assign(:breakdown_model, Rollup.breakdown_by_model(scope[:team_id], opts))
     |> assign(:breakdown_member, load_member_breakdown(scope, opts))
     |> assign(:breakdown_team, load_team_breakdown(user, opts))
-    |> assign(:breakdown_agent, Rollup.breakdown_by_agent(scope[:team_id], opts))
+    |> assign(:top_errors, Rollup.top_errors(scope[:team_id], opts))
     |> assign(:provider_ranking, load_provider_ranking(user, opts))
     |> assign(:hour_distribution, Rollup.usage_by_hour_of_day(scope[:team_id], opts))
     |> assign(:busiest_hours, Rollup.busiest_hours(scope[:team_id], opts))
@@ -471,6 +471,14 @@ defmodule TokengateWeb.StatsLive do
   def tier_badge_class(_), do: "badge-ghost"
 
   def hour_label(hour) when hour in 0..23, do: "#{pad2(hour)}:00"
+
+  def error_class_label(status) when status >= 400 and status < 500, do: "4xx cliente"
+  def error_class_label(status) when status >= 500, do: "5xx servidor"
+  def error_class_label(_), do: "—"
+
+  def error_class_badge(status) when status >= 400 and status < 500, do: "badge-warning"
+  def error_class_badge(status) when status >= 500, do: "badge-error"
+  def error_class_badge(_), do: "badge-ghost"
 
   def format_bucket(nil), do: "—"
   def format_bucket(%DateTime{} = dt), do: Calendar.strftime(dt, "%d/%m %H:%M")

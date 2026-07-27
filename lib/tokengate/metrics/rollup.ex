@@ -19,7 +19,7 @@ defmodule Tokengate.Metrics.Rollup do
     * `usage_by_hour_of_day/2` — 24h UTC distribution (recurring usage patterns)
     * `busiest_hours/2` / `busiest_minutes/2` — top-N busiest hour/minute buckets
     * `peak_concurrency/2`    — estimated max in-flight requests (sweep line)
-    * `breakdown_by_agent/2`  — top agents (agent_type) by real cost, ordered
+    * `top_errors/2`          — top HTTP error codes (>= 400) by count
   """
 
   import Ecto.Query, warn: false
@@ -983,24 +983,14 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   # -----------------------------------------------------------------------
-  # breakdown_by_agent/2
+  # top_errors/2
   # -----------------------------------------------------------------------
 
   @doc """
-  Top agentes (`agent_type`: cursor, claude-code, api, etc.) por costo
-  real en el período, ordenados desc.
+  Top códigos de error HTTP en el período (status_code >= 400, la
+  convención de fallo del repo), ordenados por cantidad desc.
 
-  A diferencia de `agent_breakdown/1` (mapa agregado para KPIs), esta
-  devuelve filas ordenadas para tablas Top N. Excluye `agent_type` nil.
-
-  Cada fila:
-
-      %{
-        agent_type: String.t(),
-        request_count: integer,
-        provider_cost_usd: Decimal,
-        savings_usd: Decimal
-      }
+  Cada fila: `%{status_code: integer, error_count: integer}`.
 
   ## Options
 
@@ -1008,35 +998,25 @@ defmodule Tokengate.Metrics.Rollup do
     * `:to`    — `inserted_at <= to` (DateTime)
     * `:limit` — default 5
   """
-  @spec breakdown_by_agent(String.t() | nil, keyword()) :: [map()]
-  def breakdown_by_agent(team_id \\ nil, opts \\ []) do
+  @spec top_errors(String.t() | nil, keyword()) :: [map()]
+  def top_errors(team_id \\ nil, opts \\ []) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
     limit = Keyword.get(opts, :limit, 5)
 
     RequestLog
-    |> where([rl], not is_nil(rl.agent_type))
+    |> where([rl], rl.status_code >= 400)
     |> maybe_join_team(team_id)
     |> maybe_from(from)
     |> maybe_to(to)
-    |> group_by([rl], rl.agent_type)
-    |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
+    |> group_by([rl], rl.status_code)
+    |> order_by([rl], desc: count(rl.id), asc: rl.status_code)
     |> limit(^limit)
     |> select([rl], %{
-      agent_type: rl.agent_type,
-      request_count: count(rl.id),
-      provider_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
-      savings_usd: fragment("COALESCE(SUM(?), 0)", rl.savings_usd)
+      status_code: rl.status_code,
+      error_count: count(rl.id)
     })
     |> Repo.all()
-    |> Enum.map(fn row ->
-      %{
-        agent_type: row.agent_type,
-        request_count: row.request_count,
-        provider_cost_usd: Decimal.new(to_string(row.provider_cost_usd)),
-        savings_usd: Decimal.new(to_string(row.savings_usd))
-      }
-    end)
   end
 
   # -----------------------------------------------------------------------

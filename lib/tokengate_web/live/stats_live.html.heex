@@ -478,43 +478,42 @@
                   <% end %>
                 </div>
               </div>
-              <div class="card bg-base-100 border border-base-300 shadow-sm" id="top-agents">
+              <div class="card bg-base-100 border border-base-300 shadow-sm" id="top-errors">
                 <div class="card-body">
                   <h2 class="card-title text-base">
-                    <.icon name="hero-cpu-chip" class="w-5 h-5 text-base-content/60" />
-                    Top 5 Agentes
+                    <.icon name="hero-exclamation-triangle" class="w-5 h-5 text-base-content/60" />
+                    Top 5 Errores
                   </h2>
-                  <%= if has_data?(@breakdown_agent) do %>
+                  <%= if has_data?(@top_errors) do %>
                     <div class="overflow-x-auto mt-3">
                       <table class="table table-sm">
                         <thead>
                           <tr>
-                            <th>Agente</th><th class="text-right">Requests</th><th class="text-right">
-                              Real
-                            </th><th class="text-right">Ahorro</th>
+                            <th>Código</th><th>Clase</th><th class="text-right">Fallos</th>
                           </tr>
                         </thead>
                         <tbody>
                           <tr
-                            :for={row <- Enum.take(@breakdown_agent, 5)}
-                            id={"top-agent-#{row.agent_type}"}
+                            :for={row <- @top_errors}
+                            id={"top-error-#{row.status_code}"}
                           >
-                            <td class="font-medium truncate max-w-[180px]">{row.agent_type}</td>
-                            <td class="text-right font-mono">
-                              {format_number(row.request_count)}
+                            <td class="font-medium font-mono">{row.status_code}</td>
+                            <td>
+                              <span class={["badge badge-sm", error_class_badge(row.status_code)]}>
+                                {error_class_label(row.status_code)}
+                              </span>
                             </td>
                             <td class="text-right font-mono">
-                              ${format_decimal(row.provider_cost_usd)}
-                            </td>
-                            <td class="text-right font-mono text-success">
-                              ${format_decimal(row.savings_usd)}
+                              {format_number(row.error_count)}
                             </td>
                           </tr>
                         </tbody>
                       </table>
                     </div>
                   <% else %>
-                    <p class="text-sm text-base-content/40 py-6 text-center">Sin datos.</p>
+                    <p class="text-sm text-base-content/40 py-6 text-center">
+                      Sin fallos en este período. 🎉
+                    </p>
                   <% end %>
                 </div>
               </div>
