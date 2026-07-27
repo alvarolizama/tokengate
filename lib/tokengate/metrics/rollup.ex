@@ -64,8 +64,8 @@ defmodule Tokengate.Metrics.Rollup do
       |> select([rl], %{
         hour: fragment("date_trunc('hour', ?)", rl.inserted_at),
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(cost_usd), 0)"),
-        savings_usd: fragment("COALESCE(SUM(savings_usd), 0)")
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd),
+        savings_usd: fragment("COALESCE(SUM(?), 0)", rl.savings_usd)
       })
 
     Repo.all(query)
@@ -109,12 +109,12 @@ defmodule Tokengate.Metrics.Rollup do
       |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
       |> where([rl, tm], tm.team_id == ^team_id)
       |> group_by([rl, tm], rl.team_member_id)
-      |> order_by([rl], desc: fragment("COALESCE(SUM(cost_usd), 0)"))
+      |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.cost_usd))
       |> limit(^limit)
       |> select([rl], %{
         team_member_id: rl.team_member_id,
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(cost_usd), 0)")
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd)
       })
 
     Repo.all(query)
@@ -152,7 +152,7 @@ defmodule Tokengate.Metrics.Rollup do
       |> select([rl], %{
         agent_type: rl.agent_type,
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(cost_usd), 0)")
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd)
       })
 
     Repo.all(query)
@@ -174,7 +174,7 @@ defmodule Tokengate.Metrics.Rollup do
       |> select([rl], %{
         agent_type: rl.agent_type,
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(cost_usd), 0)")
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd)
       })
 
     Repo.all(query)
@@ -231,18 +231,18 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_to(to)
       |> join(:left, [rl], ma in ModelAlias, on: rl.model_alias_id == ma.id)
       |> group_by([rl, ma], ma.id)
-      |> order_by([rl], desc: fragment("COALESCE(SUM(cost_usd), 0)"))
+      |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.cost_usd))
       |> select([rl, ma], %{
         model_id: ma.id,
         model_name: ma.name,
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(cost_usd), 0)"),
-        provider_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
-        estimated_cost_usd: fragment("COALESCE(SUM(estimated_cost_usd), 0)"),
-        savings_usd: fragment("COALESCE(SUM(savings_usd), 0)"),
-        prompt_tokens: fragment("COALESCE(SUM(prompt_tokens), 0)"),
-        completion_tokens: fragment("COALESCE(SUM(completion_tokens), 0)"),
-        total_latency_ms: fragment("COALESCE(SUM(latency_ms), 0)")
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd),
+        provider_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        estimated_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.estimated_cost_usd),
+        savings_usd: fragment("COALESCE(SUM(?), 0)", rl.savings_usd),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
       })
 
     Repo.all(query)
@@ -303,25 +303,25 @@ defmodule Tokengate.Metrics.Rollup do
     query =
       RequestLog
       |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
-      |> join(:inner, [tm], t in assoc(tm, :team))
-      |> join(:inner, [tm], u in assoc(tm, :user))
+      |> join(:inner, [_, tm], t in assoc(tm, :team))
+      |> join(:inner, [_, tm], u in assoc(tm, :user))
       |> maybe_member_team_filter(team_id)
       |> maybe_from(from)
       |> maybe_to(to)
-      |> group_by([rl, tm, t, u], tm.id)
-      |> order_by([rl], desc: fragment("COALESCE(SUM(rl.cost_usd), 0)"))
+      |> group_by([rl, tm, t, u], [tm.id, t.id, u.id])
+      |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.cost_usd))
       |> select([rl, tm, t, u], %{
         team_member_id: tm.id,
         team_name: t.name,
         user_email: u.email,
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(rl.cost_usd), 0)"),
-        provider_cost_usd: fragment("COALESCE(SUM(rl.provider_cost_usd), 0)"),
-        estimated_cost_usd: fragment("COALESCE(SUM(rl.estimated_cost_usd), 0)"),
-        savings_usd: fragment("COALESCE(SUM(rl.savings_usd), 0)"),
-        prompt_tokens: fragment("COALESCE(SUM(rl.prompt_tokens), 0)"),
-        completion_tokens: fragment("COALESCE(SUM(rl.completion_tokens), 0)"),
-        total_latency_ms: fragment("COALESCE(SUM(rl.latency_ms), 0)")
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd),
+        provider_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        estimated_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.estimated_cost_usd),
+        savings_usd: fragment("COALESCE(SUM(?), 0)", rl.savings_usd),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
       })
 
     Repo.all(query)
@@ -379,22 +379,22 @@ defmodule Tokengate.Metrics.Rollup do
     query =
       RequestLog
       |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
-      |> join(:inner, [tm], t in assoc(tm, :team))
+      |> join(:inner, [_, tm], t in assoc(tm, :team))
       |> maybe_from(from)
       |> maybe_to(to)
-      |> group_by([rl, t], t.id)
-      |> order_by([rl], desc: fragment("COALESCE(SUM(rl.cost_usd), 0)"))
-      |> select([rl, t], %{
+      |> group_by([rl, _, t], t.id)
+      |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.cost_usd))
+      |> select([rl, _, t], %{
         team_id: t.id,
         team_name: t.name,
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(rl.cost_usd), 0)"),
-        provider_cost_usd: fragment("COALESCE(SUM(rl.provider_cost_usd), 0)"),
-        estimated_cost_usd: fragment("COALESCE(SUM(rl.estimated_cost_usd), 0)"),
-        savings_usd: fragment("COALESCE(SUM(rl.savings_usd), 0)"),
-        prompt_tokens: fragment("COALESCE(SUM(rl.prompt_tokens), 0)"),
-        completion_tokens: fragment("COALESCE(SUM(rl.completion_tokens), 0)"),
-        total_latency_ms: fragment("COALESCE(SUM(rl.latency_ms), 0)")
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd),
+        provider_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        estimated_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.estimated_cost_usd),
+        savings_usd: fragment("COALESCE(SUM(?), 0)", rl.savings_usd),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
       })
 
     Repo.all(query)

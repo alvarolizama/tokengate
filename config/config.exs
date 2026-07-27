@@ -71,9 +71,9 @@ config :tokengate, Oban,
 
 # Circuit breaker defaults (cooldown y threshold configurables)
 config :tokengate, :circuit_breaker,
-  cooldown_ms: 30_000,
-  threshold: 5,
-  rate_limit_cooldown_ms: 5_000
+  cooldown_ms: 1_800_000,
+  threshold: 1,
+  rate_limit_cooldown_ms: 600_000
 
 # Streaming: max wait for the provider's first token before falling back.
 # Nothing is sent to the client until the first chunk arrives.

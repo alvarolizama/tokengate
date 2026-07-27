@@ -277,7 +277,10 @@
                   phx-value-tab="model"
                   class={[
                     "join-item btn btn-sm",
-                    if(breakdown_tab_active?(@active_breakdown, "model"), do: "btn-primary", else: "btn-ghost")
+                    if(breakdown_tab_active?(@active_breakdown, "model"),
+                      do: "btn-primary",
+                      else: "btn-ghost"
+                    )
                   ]}
                   id="tab-model"
                 >
@@ -288,7 +291,10 @@
                   phx-value-tab="member"
                   class={[
                     "join-item btn btn-sm",
-                    if(breakdown_tab_active?(@active_breakdown, "member"), do: "btn-primary", else: "btn-ghost")
+                    if(breakdown_tab_active?(@active_breakdown, "member"),
+                      do: "btn-primary",
+                      else: "btn-ghost"
+                    )
                   ]}
                   id="tab-member"
                 >
@@ -300,7 +306,10 @@
                     phx-value-tab="team"
                     class={[
                       "join-item btn btn-sm",
-                      if(breakdown_tab_active?(@active_breakdown, "team"), do: "btn-primary", else: "btn-ghost")
+                      if(breakdown_tab_active?(@active_breakdown, "team"),
+                        do: "btn-primary",
+                        else: "btn-ghost"
+                      )
                     ]}
                     id="tab-team"
                   >
@@ -328,21 +337,34 @@
                       </tr>
                     </thead>
                     <tbody>
-                      <tr :for={row <- @breakdown_model} id={"bd-model-#{row.model_id || "unknown"}"}>
+                      <tr
+                        :for={row <- @breakdown_model}
+                        id={"bd-model-#{row.model_id || "unknown"}"}
+                      >
                         <td class="font-medium">{row.model_name}</td>
                         <td class="text-right font-mono">{format_number(row.request_count)}</td>
-                        <td class="text-right font-mono">${format_decimal(row.provider_cost_usd)}</td>
-                        <td class="text-right font-mono text-base-content/60">${format_decimal(row.estimated_cost_usd)}</td>
-                        <td class="text-right font-mono text-success">${format_decimal(row.savings_usd)}</td>
+                        <td class="text-right font-mono">
+                          ${format_decimal(row.provider_cost_usd)}
+                        </td>
+                        <td class="text-right font-mono text-base-content/60">
+                          ${format_decimal(row.estimated_cost_usd)}
+                        </td>
+                        <td class="text-right font-mono text-success">
+                          ${format_decimal(row.savings_usd)}
+                        </td>
                         <td class="text-right font-mono">{format_number(row.prompt_tokens)}</td>
-                        <td class="text-right font-mono">{format_number(row.completion_tokens)}</td>
+                        <td class="text-right font-mono">
+                          {format_number(row.completion_tokens)}
+                        </td>
                         <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                       </tr>
                     </tbody>
                   </table>
                 </div>
               <% else %>
-                <p class="text-sm text-base-content/40 py-6 text-center">Sin datos para este periodo.</p>
+                <p class="text-sm text-base-content/40 py-6 text-center">
+                  Sin datos para este periodo.
+                </p>
               <% end %>
             <% end %>
 
@@ -369,18 +391,28 @@
                         <td>{row.team_name}</td>
                         <td class="font-mono text-sm">{row.user_email}</td>
                         <td class="text-right font-mono">{format_number(row.request_count)}</td>
-                        <td class="text-right font-mono">${format_decimal(row.provider_cost_usd)}</td>
-                        <td class="text-right font-mono text-base-content/60">${format_decimal(row.estimated_cost_usd)}</td>
-                        <td class="text-right font-mono text-success">${format_decimal(row.savings_usd)}</td>
+                        <td class="text-right font-mono">
+                          ${format_decimal(row.provider_cost_usd)}
+                        </td>
+                        <td class="text-right font-mono text-base-content/60">
+                          ${format_decimal(row.estimated_cost_usd)}
+                        </td>
+                        <td class="text-right font-mono text-success">
+                          ${format_decimal(row.savings_usd)}
+                        </td>
                         <td class="text-right font-mono">{format_number(row.prompt_tokens)}</td>
-                        <td class="text-right font-mono">{format_number(row.completion_tokens)}</td>
+                        <td class="text-right font-mono">
+                          {format_number(row.completion_tokens)}
+                        </td>
                         <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                       </tr>
                     </tbody>
                   </table>
                 </div>
               <% else %>
-                <p class="text-sm text-base-content/40 py-6 text-center">Sin datos para este periodo.</p>
+                <p class="text-sm text-base-content/40 py-6 text-center">
+                  Sin datos para este periodo.
+                </p>
               <% end %>
             <% end %>
 
@@ -405,18 +437,28 @@
                       <tr :for={row <- @breakdown_team} id={"bd-team-#{row.team_id}"}>
                         <td class="font-medium">{row.team_name}</td>
                         <td class="text-right font-mono">{format_number(row.request_count)}</td>
-                        <td class="text-right font-mono">${format_decimal(row.provider_cost_usd)}</td>
-                        <td class="text-right font-mono text-base-content/60">${format_decimal(row.estimated_cost_usd)}</td>
-                        <td class="text-right font-mono text-success">${format_decimal(row.savings_usd)}</td>
+                        <td class="text-right font-mono">
+                          ${format_decimal(row.provider_cost_usd)}
+                        </td>
+                        <td class="text-right font-mono text-base-content/60">
+                          ${format_decimal(row.estimated_cost_usd)}
+                        </td>
+                        <td class="text-right font-mono text-success">
+                          ${format_decimal(row.savings_usd)}
+                        </td>
                         <td class="text-right font-mono">{format_number(row.prompt_tokens)}</td>
-                        <td class="text-right font-mono">{format_number(row.completion_tokens)}</td>
+                        <td class="text-right font-mono">
+                          {format_number(row.completion_tokens)}
+                        </td>
                         <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                       </tr>
                     </tbody>
                   </table>
                 </div>
               <% else %>
-                <p class="text-sm text-base-content/40 py-6 text-center">Sin datos para este periodo.</p>
+                <p class="text-sm text-base-content/40 py-6 text-center">
+                  Sin datos para este periodo.
+                </p>
               <% end %>
             <% end %>
           </div>

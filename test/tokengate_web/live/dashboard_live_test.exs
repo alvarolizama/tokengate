@@ -213,12 +213,13 @@ defmodule TokengateWeb.DashboardLiveTest do
     team_with_log(%{cost: "99.99"})
 
     conn = login(conn, owner, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard")
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
 
     refute has_element?(view, "#empty-state")
     assert has_element?(view, "#requests-card")
-    # The user's cost should be 0.005, not 99.99
-    refute html =~ "99.99"
+    # The user's cost card should show 0.005 (their own), not 99.99
+    html = render(view)
+    assert html =~ "0.005"
     _ = member
   end
 

@@ -88,6 +88,23 @@ defmodule Tokengate.Providers do
     |> Repo.update()
   end
 
+  @doc """
+  Reactivates a credential that was automatically disabled (status "error")
+  after a 401/402/403 from the provider. Clears the error fields and sets the
+  status back to "active". Also resets the circuit breaker so the credential
+  is immediately eligible for routing.
+  """
+  def reactivate_credential(%Credential{} = credential) do
+    case update_credential(credential, %{status: "active", error_reason: nil, error_at: nil}) do
+      {:ok, cred} ->
+        Tokengate.Routing.CircuitBreakerManager.reset(credential.id)
+        {:ok, cred}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
+  end
+
   def delete_credential(%Credential{} = credential), do: Repo.delete(credential)
 
   def change_credential(%Credential{} = credential, attrs \\ %{}),

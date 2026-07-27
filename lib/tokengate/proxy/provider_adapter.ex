@@ -35,7 +35,12 @@ defmodule Tokengate.Proxy.ProviderAdapter do
   """
 
   @type failure_reason ::
-          :timeout | :server_error | :rate_limited | :client_error | :connection_error
+          :timeout
+          | :server_error
+          | :rate_limited
+          | :client_error
+          | :connection_error
+          | :auth_error
 
   @type chat_result ::
           {:ok, body :: map(), latency_ms :: non_neg_integer()}
@@ -90,15 +95,18 @@ defmodule Tokengate.Proxy.ProviderAdapter do
   @doc """
   Classifies an HTTP status code into a failure reason.
 
-    * `429` -> `:rate_limited`
-    * other `4xx` -> `:client_error`
-    * `5xx` -> `:server_error`
+    * `401`, `402`, `403` -> `:auth_error` (credential is bad — disable it
+      permanently and fall back to the next provider).
+    * `429`, `529` -> `:rate_limited` (cooldown 10 min, fall back).
+    * other `4xx` -> `:client_error` (caller's fault — surface, don't switch).
+    * `5xx` -> `:server_error` (cooldown 30 min, fall back).
 
   `nil` (no status, e.g. transport failure) is not a status and is not
   classified here — see `classify_error/1`.
   """
   @spec classify_status(non_neg_integer()) :: failure_reason()
-  def classify_status(429), do: :rate_limited
+  def classify_status(status) when status in [401, 402, 403], do: :auth_error
+  def classify_status(status) when status in [429, 529], do: :rate_limited
   def classify_status(status) when status >= 400 and status < 500, do: :client_error
   def classify_status(status) when status >= 500 and status < 600, do: :server_error
 

@@ -15,10 +15,19 @@ defmodule Tokengate.Proxy.ProviderAdapterTest do
       assert ProviderAdapter.classify_status(429) == :rate_limited
     end
 
+    test "401, 402, 403 map to :auth_error" do
+      assert ProviderAdapter.classify_status(401) == :auth_error
+      assert ProviderAdapter.classify_status(402) == :auth_error
+      assert ProviderAdapter.classify_status(403) == :auth_error
+    end
+
+    test "429 and 529 map to :rate_limited" do
+      assert ProviderAdapter.classify_status(429) == :rate_limited
+      assert ProviderAdapter.classify_status(529) == :rate_limited
+    end
+
     test "other 4xx map to :client_error" do
       assert ProviderAdapter.classify_status(400) == :client_error
-      assert ProviderAdapter.classify_status(401) == :client_error
-      assert ProviderAdapter.classify_status(403) == :client_error
       assert ProviderAdapter.classify_status(404) == :client_error
       assert ProviderAdapter.classify_status(422) == :client_error
     end

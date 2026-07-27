@@ -29,11 +29,13 @@ defmodule Tokengate.Routing.CircuitBreaker do
   # Reason used to pick the short cooldown when the breaker trips on :rate_limited.
   @short_cooldown_reasons [:rate_limited]
   # Reasons that count toward the failure threshold.
+  # :auth_error is NOT here — it triggers permanent deactivation in the DB,
+  # not a temporary breaker cooldown.
   @counting_reasons [:server_error, :timeout, :rate_limited]
 
-  @default_cooldown_ms 30_000
-  @default_threshold 5
-  @default_rate_limit_cooldown_ms 5_000
+  @default_cooldown_ms 1_800_000
+  @default_threshold 1
+  @default_rate_limit_cooldown_ms 600_000
 
   ## Child spec (for supervisors / start_supervised) ##########################
 

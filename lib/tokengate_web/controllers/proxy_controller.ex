@@ -170,8 +170,20 @@ defmodule TokengateWeb.ProxyController do
         Router.record_outcome(route, :success)
         finalize_success(conn, route, body, latency_ms, member)
 
+      {:error, :auth_error, status} ->
+        # 401/402/403: the credential is bad (invalid key, insufficient credit,
+        # forbidden). Disable it permanently in the DB and fall back.
+        disable_credential_async(route.credential, "auth_error_#{status}")
+        Router.record_outcome(route, {:failure, :auth_error})
+
+        if attempts_left > 1 do
+          retry_with_fallback(conn, route, payload, member, attempts_left, exclude, status)
+        else
+          render_proxy_error(conn, {:upstream_error, :auth_error, status})
+        end
+
       {:error, :client_error, status} ->
-        # 4xx from the provider: the caller's payload is at fault — surface
+        # Other 4xx from the provider: the caller's payload is at fault — surface
         # it without burning the breaker or trying other providers.
         Router.record_outcome(route, {:failure, :client_error})
         render_proxy_error(conn, {:upstream_client_error, status})
@@ -185,6 +197,19 @@ defmodule TokengateWeb.ProxyController do
           render_proxy_error(conn, {:upstream_error, reason, status})
         end
     end
+  end
+
+  # Permanently disable a credential after an auth/billing failure (401/402/403).
+  # Runs in a background Task to avoid blocking the hot path. The credential's
+  # status is set to "error" so the router excludes it from the candidate pool.
+  defp disable_credential_async(credential, reason) do
+    Task.start(fn ->
+      Providers.update_credential(credential, %{
+        status: "error",
+        error_reason: reason,
+        error_at: DateTime.utc_now()
+      })
+    end)
   end
 
   defp retry_with_fallback(conn, route, payload, member, attempts_left, exclude, _status) do
@@ -245,6 +270,11 @@ defmodule TokengateWeb.ProxyController do
 
           {:error, reason} ->
             Process.exit(pid, :kill)
+
+            if reason == :auth_error do
+              disable_credential_async(route.credential, "auth_error_stream")
+            end
+
             Router.record_outcome(route, {:failure, breaker_reason(reason)})
 
             if attempts_left > 1 do
@@ -524,6 +554,7 @@ defmodule TokengateWeb.ProxyController do
 
   defp breaker_reason(:timeout), do: :timeout
   defp breaker_reason(:rate_limited), do: :rate_limited
+  defp breaker_reason(:auth_error), do: :auth_error
   defp breaker_reason(:connection_error), do: :server_error
   defp breaker_reason(:server_error), do: :server_error
   defp breaker_reason(_), do: :server_error

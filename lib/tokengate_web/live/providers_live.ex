@@ -201,20 +201,45 @@ defmodule TokengateWeb.ProvidersLive do
 
   def handle_event("toggle_credential", %{"id" => cred_id}, socket) do
     cred = Providers.get_credential!(cred_id)
-    new_status = if cred.status == "active", do: "disabled", else: "active"
 
-    case Providers.update_credential(cred, %{status: new_status}) do
-      {:ok, _} ->
-        {:noreply,
-         socket
-         |> put_flash(
-           :info,
-           "Credencial #{if(new_status == "active", do: "activada", else: "desactivada")}."
-         )
-         |> load_providers()}
+    # Credentials in "error" state cannot be toggled — they must be reactivated.
+    if cred.status == "error" do
+      {:noreply, put_flash(socket, :error, "Esta credencial está en error. Usa Reactivar.")}
+    else
+      new_status = if cred.status == "active", do: "disabled", else: "active"
 
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo actualizar la credencial.")}
+      case Providers.update_credential(cred, %{status: new_status}) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> put_flash(
+             :info,
+             "Credencial #{if(new_status == "active", do: "activada", else: "desactivada")}."
+           )
+           |> load_providers()}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "No se pudo actualizar la credencial.")}
+      end
+    end
+  end
+
+  def handle_event("reactivate_credential", %{"id" => cred_id}, socket) do
+    cred = Providers.get_credential!(cred_id)
+
+    if cred.status == "error" do
+      case Providers.reactivate_credential(cred) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, "Credencial reactivada.")
+           |> load_providers()}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "No se pudo reactivar la credencial.")}
+      end
+    else
+      {:noreply, put_flash(socket, :error, "Solo se pueden reactivar credenciales en error.")}
     end
   end
 
@@ -498,7 +523,7 @@ defmodule TokengateWeb.ProvidersLive do
                         <th>Key</th>
                         <th>Max RPM</th>
                         <th>Max conc.</th>
-                        <th>Activo</th>
+                        <th>Estado</th>
                         <th></th>
                       </tr>
                     </thead>
@@ -513,29 +538,56 @@ defmodule TokengateWeb.ProvidersLive do
                         <td>{cred.max_rpm || "—"}</td>
                         <td>{cred.max_concurrent || "—"}</td>
                         <td>
-                          <label class={[
-                            "cursor-pointer",
-                            provider.status == "disabled" && "opacity-50 pointer-events-none"
-                          ]}>
-                            <input
-                              type="checkbox"
-                              class="toggle toggle-sm toggle-success"
-                              phx-click="toggle_credential"
-                              phx-value-id={cred.id}
-                              checked={cred.status == "active"}
-                              id={"toggle-credential-#{cred.id}"}
-                            />
-                          </label>
+                          <%= cond do %>
+                            <% cred.status == "active" -> %>
+                              <label class={[
+                                "cursor-pointer",
+                                provider.status == "disabled" && "opacity-50 pointer-events-none"
+                              ]}>
+                                <input
+                                  type="checkbox"
+                                  class="toggle toggle-sm toggle-success"
+                                  phx-click="toggle_credential"
+                                  phx-value-id={cred.id}
+                                  checked={cred.status == "active"}
+                                  id={"toggle-credential-#{cred.id}"}
+                                />
+                              </label>
+                            <% cred.status == "error" -> %>
+                              <div class="flex items-center gap-2">
+                                <span class="badge badge-sm badge-error">
+                                  Error
+                                </span>
+                                <span class="text-xs text-base-content/50" title={cred.error_reason}>
+                                  {cred.error_reason || "auth_error"}
+                                </span>
+                              </div>
+                            <% true -> %>
+                              <span class="badge badge-sm badge-ghost">
+                                Desactivada
+                              </span>
+                          <% end %>
                         </td>
                         <td class="text-right">
-                          <button
-                            phx-click="toggle_credential"
-                            phx-value-id={cred.id}
-                            class="btn btn-xs btn-ghost"
-                            id={"toggle-credential-btn-#{cred.id}"}
-                          >
-                            {if cred.status == "active", do: "Desactivar", else: "Activar"}
-                          </button>
+                          <%= if cred.status == "error" do %>
+                            <button
+                              phx-click="reactivate_credential"
+                              phx-value-id={cred.id}
+                              class="btn btn-xs btn-ghost btn-warning"
+                              id={"reactivate-credential-#{cred.id}"}
+                            >
+                              <.icon name="hero-arrow-path" class="w-3 h-3" /> Reactivar
+                            </button>
+                          <% else %>
+                            <button
+                              phx-click="toggle_credential"
+                              phx-value-id={cred.id}
+                              class="btn btn-xs btn-ghost"
+                              id={"toggle-credential-btn-#{cred.id}"}
+                            >
+                              {if cred.status == "active", do: "Desactivar", else: "Activar"}
+                            </button>
+                          <% end %>
                           <button
                             phx-click="delete_credential"
                             phx-value-id={cred.id}

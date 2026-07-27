@@ -216,8 +216,8 @@ defmodule TokengateWeb.DashboardLive do
       savings_usd: summary.total_savings_usd,
       prompt_tokens: summary.total_prompt_tokens,
       completion_tokens: summary.total_completion_tokens,
-      avg_latency_ms: summary.avg_latency_ms || 0.0,
-      avg_tps: summary.avg_tps
+      avg_latency_ms: Map.get(summary, :avg_latency_ms) || 0.0,
+      avg_tps: Map.get(summary, :avg_tps)
     }
 
     assign(socket, :metrics, metrics)
@@ -264,8 +264,7 @@ defmodule TokengateWeb.DashboardLive do
           total_estimated_cost_usd:
             Decimal.add(acc.total_estimated_cost_usd, s.total_estimated_cost_usd),
           total_prompt_tokens: acc.total_prompt_tokens + s.total_prompt_tokens,
-          total_completion_tokens:
-            acc.total_completion_tokens + s.total_completion_tokens
+          total_completion_tokens: acc.total_completion_tokens + s.total_completion_tokens
       }
     end)
   end
@@ -425,18 +424,16 @@ defmodule TokengateWeb.DashboardLive do
 
   defp breakdown_scope_for(_), do: %{team_id: nil, manager_team_ids: nil, member_ids: nil}
 
-  # Member breakdown: admin=org-wide(nil), manager=per managed teams, user=own
+  # Member breakdown: admin=org-wide(nil), manager=per managed teams, user=own (filtered)
   defp load_member_breakdown(%{manager_team_ids: ids}, _opts) when is_list(ids) and ids != [] do
     Enum.flat_map(ids, fn team_id ->
       Rollup.breakdown_by_member(team_id, [])
     end)
   end
 
-  defp load_member_breakdown(%{member_ids: ids}, _opts) when is_list(ids) and ids != [] do
-    # For user scope, breakdown_by_member filters by team_id. We need member-level.
-    # Reuse the org-wide call and filter by member_ids — but breakdown_by_member
-    # doesn't support member_ids directly. Use breakdown_by_member(nil) and filter.
-    Rollup.breakdown_by_member(nil, [])
+  defp load_member_breakdown(%{member_ids: ids}, opts) when is_list(ids) and ids != [] do
+    # User scope: fetch org-wide and filter to only the user's member ids.
+    Rollup.breakdown_by_member(nil, opts)
     |> Enum.filter(fn row -> row.team_member_id in ids end)
   end
 
