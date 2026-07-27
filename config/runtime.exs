@@ -7,16 +7,10 @@ import Config
 # any compile-time configuration in here, as it won't be applied.
 # The block below contains prod specific runtime configuration.
 
-# ## Using releases
-#
-# If you use `mix release`, you need to explicitly enable the server
-# by passing the PHX_SERVER=true when you start it:
-#
-#     PHX_SERVER=true bin/tokengate start
-#
-# Alternatively, you can use `mix phx.gen.release` to generate a `bin/server`
-# script that automatically sets the env var above.
-if System.get_env("PHX_SERVER") do
+# In prod the server is always enabled — PaaS start commands expect the
+# endpoint to boot without depending on PHX_SERVER. In dev/test the
+# PHX_SERVER gate is kept so `mix test` doesn't boot the endpoint.
+if config_env() == :prod or System.get_env("PHX_SERVER") do
   config :tokengate, TokengateWeb.Endpoint, server: true
 end
 
@@ -53,12 +47,24 @@ if config_env() == :prod do
       You can generate one by calling: mix phx.gen.secret
       """
 
-  host = System.get_env("PHX_HOST") || "example.com"
+  host =
+    System.get_env("PHX_HOST") ||
+      raise """
+      environment variable PHX_HOST is missing.
+      Set it to the bare hostname the app is served from (no scheme, no port).
+      """
+
+  scheme = System.get_env("PHX_SCHEME", "https")
+  url_port = String.to_integer(System.get_env("PHX_PORT", "443"))
 
   config :tokengate, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
+  # NOTE: force_ssl is compile-time in Phoenix (the endpoint marks it via
+  # compile_env), so it cannot live in this file. It stays in prod.exs and
+  # can only be disabled at BUILD time with DISABLE_FORCE_SSL=1
+  # (see config/prod.exs and the Dockerfile ARG).
   config :tokengate, TokengateWeb.Endpoint,
-    url: [host: host, port: 443, scheme: "https"],
+    url: [host: host, port: url_port, scheme: scheme],
     http: [
       # Enable IPv6 and bind on all interfaces.
       # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
@@ -78,7 +84,7 @@ if config_env() == :prod do
     client_secret: System.get_env("GOOGLE_OAUTH_CLIENT_SECRET"),
     redirect_uri:
       System.get_env("GOOGLE_OAUTH_REDIRECT_URI") ||
-        "https://#{host}/auth/google/callback",
+        "#{scheme}://#{host}/auth/google/callback",
     allowed_domains:
       (System.get_env("GOOGLE_OAUTH_ALLOWED_DOMAINS") || "")
       |> String.split(",", trim: true)

@@ -32,22 +32,45 @@ defmodule TokengateWeb.StatsExportController do
 
     type = params["type"] || "models"
 
-    {filename, csv_content} =
-      case type do
-        "teams" ->
-          team_id = params["team_id"]
-          build_teams_csv(user, team_id, opts)
+    case build_csv(user, type, params, opts) do
+      {:ok, {filename, csv_content}} ->
+        conn
+        |> put_resp_content_type("text/csv", "utf-8")
+        |> put_resp_header("content-disposition", "attachment; filename=\"#{filename}\"")
+        |> send_resp(200, csv_content)
 
-        _ ->
-          model_id = params["model_id"]
-          build_models_csv(user, model_id, opts)
-      end
-
-    conn
-    |> put_resp_content_type("text/csv", "utf-8")
-    |> put_resp_header("content-disposition", "attachment; filename=\"#{filename}\"")
-    |> send_resp(200, csv_content)
+      {:error, :forbidden} ->
+        conn
+        |> put_resp_content_type("application/json")
+        |> send_resp(403, Jason.encode!(%{"error" => "no autorizado"}))
+    end
   end
+
+  defp build_csv(user, "teams", params, opts) do
+    team_id = params["team_id"]
+
+    if team_id && not team_export_allowed?(user, team_id) do
+      {:error, :forbidden}
+    else
+      {:ok, build_teams_csv(user, team_id, opts)}
+    end
+  end
+
+  defp build_csv(user, _type, params, opts) do
+    {:ok, build_models_csv(user, params["model_id"], opts)}
+  end
+
+  # A team drill-down exposes every member's email and consumption, so only
+  # admins and managers of that team may export it.
+  defp team_export_allowed?(%{global_role: "admin"}, _team_id), do: true
+
+  defp team_export_allowed?(%{global_role: "user"} = user, team_id) do
+    user.id
+    |> Accounts.list_team_members_for_user()
+    |> Enum.any?(fn tm -> tm.team_id == team_id and tm.team_role == "manager" end)
+  end
+
+  defp team_export_allowed?(_, _), do: false
 
   ## Models CSV -----------------------------------------------------------
 

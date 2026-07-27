@@ -7,6 +7,7 @@ defmodule TokengateWeb.LogsLive do
   @page_size 50
   @pubsub Tokengate.PubSub
   @logs_topic "logs:new"
+  @summary_refresh_interval_ms 2_000
 
   @impl true
   def mount(_params, _session, socket) do
@@ -23,6 +24,7 @@ defmodule TokengateWeb.LogsLive do
       |> assign(:filters, default_filters())
       |> assign(:form, to_form(default_filters(), as: :filter))
       |> assign(:summary, empty_summary())
+      |> assign(:summary_refresh_scheduled, false)
       |> assign(:last_seen_at, DateTime.utc_now() |> DateTime.truncate(:second))
 
     socket = load_logs(socket, :reset)
@@ -46,13 +48,31 @@ defmodule TokengateWeb.LogsLive do
         |> stream_insert(:logs, log, at: 0)
         |> assign(:last_seen_at, max_datetime(log.inserted_at, socket.assigns[:last_seen_at]))
 
-      {:noreply, refresh_summary(socket)}
+      {:noreply, schedule_summary_refresh(socket)}
     else
       {:noreply, socket}
     end
   end
 
+  def handle_info(:refresh_summary, socket) do
+    {:noreply,
+     socket
+     |> assign(:summary_refresh_scheduled, false)
+     |> refresh_summary()}
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
+
+  # Coalesce summary refreshes: under load every new log would otherwise run
+  # a cost_summary query per connected LiveView. Cap at one per interval.
+  defp schedule_summary_refresh(socket) do
+    if socket.assigns[:summary_refresh_scheduled] do
+      socket
+    else
+      Process.send_after(self(), :refresh_summary, @summary_refresh_interval_ms)
+      assign(socket, :summary_refresh_scheduled, true)
+    end
+  end
 
   defp log_in_scope?(_log, nil), do: true
 

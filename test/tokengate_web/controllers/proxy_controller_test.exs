@@ -13,6 +13,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
   alias Tokengate.{Accounts, Providers, Repo}
   alias Tokengate.Budgets.Manager, as: Budgets
+  alias Tokengate.Limits.Manager, as: Limits
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Logs.WriteWorker
 
@@ -100,8 +101,9 @@ defmodule TokengateWeb.ProxyControllerTest do
       Accounts.create_team(%{
         name: "Team #{u}",
         default_daily_budget_usd: Map.get(opts, :daily_budget, "100.00"),
+        default_monthly_budget_usd: Map.get(opts, :monthly_budget),
         default_rpm_limit: Map.get(opts, :rpm_limit, 600),
-        default_concurrency_limit: 10
+        default_concurrency_limit: Map.get(opts, :concurrency_limit, 10)
       })
 
     {:ok, user} =
@@ -112,9 +114,18 @@ defmodule TokengateWeb.ProxyControllerTest do
       })
 
     {:ok, member} =
-      Accounts.create_team_member(%{user_id: user.id, team_id: team.id, team_role: "user"})
+      Accounts.create_team_member(%{
+        user_id: user.id,
+        team_id: team.id,
+        team_role: "user",
+        extra_daily_budget_usd: Map.get(opts, :extra_daily_budget),
+        extra_monthly_budget_usd: Map.get(opts, :extra_monthly_budget),
+        extra_concurrency: Map.get(opts, :extra_concurrency),
+        extra_rpm: Map.get(opts, :extra_rpm)
+      })
 
     {:ok, _api_key, token} = Accounts.replace_api_key(member)
+    member = Repo.preload(member, :api_key)
 
     provider_url =
       case Map.get(opts, :down) do
@@ -272,6 +283,51 @@ defmodule TokengateWeb.ProxyControllerTest do
              json_response(conn, 402)
   end
 
+  test "402 when estimated cost exceeds the monthly budget", %{conn: conn} do
+    # No daily limit; monthly cap below the estimated market cost (~0.00778)
+    %{token: token, alias: model_alias} =
+      proxy_fixture(%{daily_budget: nil, monthly_budget: "0.001"})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+
+    assert %{"error" => %{"code" => "budget_exceeded", "type" => "billing_error"}} =
+             json_response(conn, 402)
+  end
+
+  test "member extra daily budget raises the effective team limit", %{conn: conn} do
+    # Team default 0.001 would reject (~0.00778 estimated); the member's
+    # extra 0.01 raises the effective limit to 0.011, so the request passes.
+    %{token: token, alias: model_alias} =
+      proxy_fixture(%{daily_budget: "0.001", extra_daily_budget: "0.01"})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+
+    assert json_response(conn, 200)
+  end
+
+  test "429 when team concurrency limit is exceeded", %{conn: conn} do
+    %{token: token, alias: model_alias, member: member} =
+      proxy_fixture(%{concurrency_limit: 1})
+
+    # Simulate an in-flight request holding the only slot
+    :ok = Limits.acquire(member.api_key.id, %{rpm_limit: nil, concurrency_limit: 1})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+
+    assert %{"error" => %{"code" => "concurrency_exceeded"}} = json_response(conn, 429)
+
+    Limits.release(member.api_key.id)
+  end
+
   test "429 when RPM exceeded", %{conn: conn} do
     %{token: token, alias: model_alias} = proxy_fixture(%{rpm_limit: 1})
 
@@ -403,7 +459,6 @@ defmodule TokengateWeb.ProxyControllerTest do
         else: Application.delete_env(:tokengate, :first_token_timeout_ms)
     end)
 
-    u = unique()
     %{token: token, alias: model_alias} = proxy_fixture()
 
     # Repoint the provider at the slow stream endpoint

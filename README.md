@@ -66,6 +66,15 @@ Soporta proveedores `pay_per_token` (pago por token) e `included` (suscripción/
 
 ### Dashboard de estadísticas
 
+Dashboard principal (`/dashboard`) con KPIs y gráficas por periodo (Hoy, 7d, 30d, 90d):
+
+- **Costo por hora/día** — barras por bucket con tooltips
+- **Requests por hora/día** — volumen de tráfico
+- **Ahorro por hora/día** — ahorro vs precio de mercado
+- **Top modelos por costo real** — barras horizontales (top 5)
+- **Desglose** por modelo, API key y equipo
+- Actualización en tiempo real vía PubSub (con debounce para no ahogar Postgres)
+
 Sección `/dashboard/stats` con 3 vistas:
 
 - **Resumen** (`/dashboard/stats`) — KPIs globales + Top 5 modelos/equipos/miembros
@@ -141,14 +150,17 @@ Override con env vars: `TOKENGATE_ADMIN_EMAIL`, `TOKENGATE_ADMIN_PASSWORD`.
 | `DATABASE_URL` | URL de conexión Postgres (prod) | — |
 | `SECRET_KEY_BASE` | Clave de firma (prod) | — |
 | `PORT` | Puerto del servidor | `4000` |
-| `PHX_HOST` | Host público (prod) | `example.com` |
+| `PHX_HOST` | Host público (prod, sin scheme ni puerto) | requerida en prod |
+| `PHX_SCHEME` | Scheme para URLs generadas (`http`/`https`) | `https` |
+| `PHX_PORT` | Puerto para URLs generadas | `443` |
 | `TOKENGATE_ADMIN_EMAIL` | Email del admin root | `admin@tokengate.local` |
 | `TOKENGATE_ADMIN_PASSWORD` | Password del admin root | `tokengate-admin-secret-1` |
 | `WEBHOOK_SECRET` | HMAC secret para webhooks | — |
 | `GOOGLE_OAUTH_CLIENT_ID` | Google OAuth client ID | — |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | Google OAuth client secret | — |
-| `GOOGLE_OAUTH_REDIRECT_URI` | URL de callback | `https://{host}/auth/google/callback` |
-| `GOOGLE_OAUTH_ALLOWED_DOMAINS` | Dominios permitidos (comma-separated) | vacío = todos |
+| `GOOGLE_OAUTH_REDIRECT_URI` | URL de callback | `{scheme}://{host}/auth/google/callback` |
+| `GOOGLE_OAUTH_ALLOWED_DOMAINS` | Dominios permitidos (comma-separated) | vacío = sin auto-registro (fail-closed) |
+| `SKIP_MIGRATIONS` | `1` = el entrypoint Docker no migra/seedea | — |
 
 ### Google OAuth (opcional)
 
@@ -242,18 +254,64 @@ mix ecto.migrate       # migrar
 
 ## Deploy
 
-Diseñado para desplegar vía Coolify con releases de Elixir.
+Diseñado para desplegar vía **Coolify** con el `Dockerfile` multi-stage del repo
+(builder `hexpm/elixir` → runtime `debian:bookworm-slim`, non-root).
+
+### Docker
 
 ```bash
-# Build release
+# Build
+docker build -t tokengate .
+
+# Run (el entrypoint crea la DB si falta, migra y seedea el admin)
+docker run -p 4000:4000 \
+  -e DATABASE_URL=ecto://postgres:postgres@host.docker.internal/tokengate \
+  -e SECRET_KEY_BASE=$(mix phx.gen.secret) \
+  -e WEBHOOK_SECRET=$(openssl rand -hex 32) \
+  -e PHX_HOST=tokengate.example.com \
+  tokengate
+```
+
+El entrypoint (`docker/entrypoint.sh`) corre `Tokengate.Release.setup/0`
+(create DB → migrate → seed admin, idempotente) antes de arrancar. Una
+migración fallida aborta el boot y Coolify hace rollback. `SKIP_MIGRATIONS=1`
+lo salta (contenedores one-off).
+
+### Coolify
+
+- **Build pack**: Dockerfile (raíz del repo)
+- **Start command**: la provee el entrypoint — no hace falta pre-deploy hook
+- **Env vars** (runtime): `DATABASE_URL`, `SECRET_KEY_BASE`, `WEBHOOK_SECRET`,
+  `PHX_HOST`, y opcionales `PHX_SCHEME`, `PHX_PORT`, `GOOGLE_OAUTH_*`,
+  `TOKENGATE_ADMIN_EMAIL`, `TOKENGATE_ADMIN_PASSWORD`
+
+### HTTP plano (VPN / sin TLS)
+
+`force_ssl` es compile-time en Phoenix, así que desactivarlo requiere
+**rebuild** con el build arg:
+
+```bash
+docker build --build-arg DISABLE_FORCE_SSL=1 -t tokengate:http .
+```
+
+y en runtime `PHX_SCHEME=http` (para que las URLs generadas usen http).
+
+### Release manual (sin Docker)
+
+```bash
+MIX_ENV=prod mix deps.get --only prod
 MIX_ENV=prod mix assets.deploy
 MIX_ENV=prod mix release
 
-# Run
-PHX_SERVER=true _build/prod/rel/tokengate/bin/tokengate start
+# setup (create DB → migrate → seed admin) o solo migrate:
+_build/prod/rel/tokengate/bin/setup
+_build/prod/rel/tokengate/bin/migrate
+
+# arrancar
+_build/prod/rel/tokengate/bin/server
 ```
 
-Ver `config/runtime.exs` para configuración de producción.
+Ver `config/runtime.exs` para la configuración de producción.
 
 ## Licencia
 

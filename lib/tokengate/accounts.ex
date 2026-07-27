@@ -78,7 +78,13 @@ defmodule Tokengate.Accounts do
   # Users
   # ---------------------------------------------------------------------------
 
-  def list_users, do: Repo.all(User)
+  @doc """
+  Lists users ordered by most recently created, capped at `limit`
+  (default 500) so the admin list can't grow unbounded in memory.
+  """
+  def list_users(limit \\ 500) do
+    Repo.all(from u in User, order_by: [desc: u.inserted_at], limit: ^limit)
+  end
 
   def get_user!(id), do: Repo.get!(User, id)
 

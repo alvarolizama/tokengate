@@ -205,6 +205,33 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert html =~ "Costo por día (30d)"
   end
 
+  test "admin sees analytics charts with traffic", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    Collector.reset()
+
+    team_with_log(%{cost: "0.005"})
+
+    conn = login(conn, admin, password)
+    {:ok, view, html} = live(conn, ~p"/dashboard")
+
+    assert has_element?(view, "#charts-grid")
+    assert has_element?(view, "#cost-chart")
+    assert has_element?(view, "#requests-chart")
+    assert has_element?(view, "#savings-chart")
+    assert has_element?(view, "#top-models-chart")
+
+    # Series carry the rollup data (cost, requests, savings)
+    assert html =~ "Costo por hora"
+    assert html =~ "Requests por hora"
+    assert html =~ "Ahorro por hora"
+    assert html =~ "Top modelos por costo real"
+
+    # SVG bars rendered for the non-zero series
+    assert has_element?(view, "#cost-chart svg rect")
+    assert has_element?(view, "#requests-chart svg rect")
+    assert has_element?(view, "#savings-chart svg rect")
+  end
+
   test "user scope: sees only their own consumption", %{conn: conn} do
     %{team: _team, owner: owner, member: member, owner_password: password} =
       team_with_log(%{cost: "0.005"})

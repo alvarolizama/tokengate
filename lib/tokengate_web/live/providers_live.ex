@@ -22,6 +22,8 @@ defmodule TokengateWeb.ProvidersLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    user = socket.assigns[:current_user]
+
     socket =
       socket
       |> assign(:page_title, "Proveedores · Tokengate")
@@ -29,9 +31,24 @@ defmodule TokengateWeb.ProvidersLive do
       |> assign(:editing_provider_id, nil)
       |> assign(:credential_provider_id, nil)
       |> assign(:credential_form, nil)
+      |> assign(:is_admin, user && user.global_role == "admin")
+      |> require_admin_hook()
       |> load_providers()
 
     {:ok, socket}
+  end
+
+  # Defense-in-depth: the router already gates this LiveView behind
+  # live_session :admin, but a malicious client could fire events directly
+  # over the WebSocket. Halt every event for non-admins.
+  defp require_admin_hook(socket) do
+    attach_hook(socket, :require_admin, :handle_event, fn _event, _params, socket ->
+      if socket.assigns[:is_admin] do
+        {:cont, socket}
+      else
+        {:halt, put_flash(socket, :error, "No autorizado.")}
+      end
+    end)
   end
 
   ## Data loading ---------------------------------------------------------
@@ -509,7 +526,7 @@ defmodule TokengateWeb.ProvidersLive do
                       />
                       <.input
                         field={@credential_form[:api_key_encrypted]}
-                        type="text"
+                        type="password"
                         label="API key"
                         placeholder="sk-..."
                         hint="El token que entrega el proveedor (sk-...)."

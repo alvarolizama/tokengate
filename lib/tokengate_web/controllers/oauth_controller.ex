@@ -43,7 +43,7 @@ defmodule TokengateWeb.OAuthController do
     else
       stored_state = get_session(conn, :oauth_state)
 
-      if state != stored_state do
+      if is_nil(stored_state) or not Plug.Crypto.secure_compare(state, stored_state) do
         redirect_to_login(conn, "Error de validación. Intenta de nuevo.")
       else
         conn = delete_session(conn, :oauth_state)

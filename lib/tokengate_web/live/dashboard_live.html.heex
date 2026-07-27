@@ -442,45 +442,38 @@
           </div>
         </div>
 
-        <!-- Cost chart (inline SVG bars, no JS libs) -->
-        <div id="hourly-chart" class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body">
-            <h2 class="card-title text-base">
-              <.icon name="hero-chart-bar" class="w-5 h-5 text-base-content/60" />
-              {chart_title(@period)}
-            </h2>
-
-            <%= if @hourly_series == [] or chart_max_cost(@hourly_series) == 0.0 do %>
-              <div class="h-40 flex items-center justify-center text-base-content/40 text-sm">
-                Sin datos para {String.downcase(period_label(@period))}.
-              </div>
-            <% else %>
-              <% max_cost = chart_max_cost(@hourly_series) %>
-              <% bar_count = max(length(@hourly_series), 1) %>
-              <% bar_width = max(380 / bar_count - 4, 2) %>
-              <svg viewBox="0 0 400 150" class="w-full h-40 mt-4" preserveAspectRatio="none">
-                <%= for {row, i} <- Enum.with_index(@hourly_series) do %>
-                  <% cost = Decimal.to_float(row.cost_usd) %>
-                  <% height = if max_cost > 0, do: max(cost / max_cost * 120, 1), else: 1 %>
-                  <% x = 10 + i * (bar_width + 4) %>
-                  <% y = 140 - height %>
-                  <rect
-                    x={x}
-                    y={y}
-                    width={bar_width}
-                    height={height}
-                    rx="2"
-                    class="fill-primary/70 hover:fill-primary transition-colors"
-                  >
-                    <title>
-                      {Calendar.strftime(row.hour, "%d/%m %H:%M")} — ${Float.round(cost, 6)}
-                    </title>
-                  </rect>
-                <% end %>
-                <line x1="10" y1="140" x2="390" y2="140" class="stroke-base-300" stroke-width="1" />
-              </svg>
-            <% end %>
-          </div>
+        <%!-- Charts: cost / requests / savings per bucket + top models --%>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="charts-grid">
+          <.bar_chart
+            id="cost-chart"
+            title={chart_title(@period)}
+            icon="hero-currency-dollar"
+            series={@cost_series}
+            empty_label={"Sin datos para #{String.downcase(period_label(@period))}."}
+          />
+          <.bar_chart
+            id="requests-chart"
+            title={requests_title(@period)}
+            icon="hero-arrow-trending-up"
+            series={@requests_series}
+            bar_class="fill-accent/70 hover:fill-accent"
+            empty_label={"Sin datos para #{String.downcase(period_label(@period))}."}
+          />
+          <.bar_chart
+            id="savings-chart"
+            title={savings_title(@period)}
+            icon="hero-banknotes"
+            series={@savings_series}
+            bar_class="fill-success/70 hover:fill-success"
+            empty_label="Sin ahorro en este periodo."
+          />
+          <.hbars_chart
+            id="top-models-chart"
+            title="Top modelos por costo real"
+            icon="hero-chart-bar-square"
+            rows={@top_models}
+            empty_label="Sin datos para este periodo."
+          />
         </div>
       <% end %>
     <% end %>

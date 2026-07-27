@@ -118,17 +118,17 @@ defmodule TokengateWeb.OAuth.Google do
   @doc """
   Checks if a given email domain is in the allowed-domains list.
 
-  Returns `true` when the allowlist is empty (all domains allowed) or
-  when the domain matches. Returns `false` when the allowlist is non-empty
-  and the domain is not in it.
+  Fail-closed: an empty or missing allowlist means **no auto-registration**
+  (only pre-existing users can log in). Returns `true` only when the
+  allowlist is non-empty and the domain matches.
   """
   def domain_allowed?(email) when is_binary(email) do
     case config()[:allowed_domains] do
       nil ->
-        true
+        false
 
       [] ->
-        true
+        false
 
       domains when is_list(domains) ->
         domain = email |> String.split("@") |> List.last()

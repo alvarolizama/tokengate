@@ -140,9 +140,24 @@ defmodule TokengateWeb.OAuthControllerTest do
   end
 
   describe "TokengateWeb.OAuth.Google.domain_allowed?/1" do
-    test "allows all domains when allowlist is empty" do
+    test "denies all domains when allowlist is empty (fail-closed)" do
       # Test config has allowed_domains: []
-      assert TokengateWeb.OAuth.Google.domain_allowed?("anything@example.com")
+      refute TokengateWeb.OAuth.Google.domain_allowed?("anything@example.com")
+    end
+
+    test "allows only listed domains when allowlist is configured" do
+      previous = Application.get_env(:tokengate, :google_oauth)
+
+      Application.put_env(
+        :tokengate,
+        :google_oauth,
+        Keyword.put(previous, :allowed_domains, ["example.com"])
+      )
+
+      on_exit(fn -> Application.put_env(:tokengate, :google_oauth, previous) end)
+
+      assert TokengateWeb.OAuth.Google.domain_allowed?("user@example.com")
+      refute TokengateWeb.OAuth.Google.domain_allowed?("user@evil.com")
     end
   end
 end
