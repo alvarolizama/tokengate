@@ -19,6 +19,7 @@ defmodule Tokengate.Application do
       Tokengate.Limits.Supervisor,
       Tokengate.Budgets.Supervisor,
       Tokengate.Metrics.Supervisor,
+      Tokengate.Logs.Inflight,
       TokengateWeb.Endpoint
     ]
 
