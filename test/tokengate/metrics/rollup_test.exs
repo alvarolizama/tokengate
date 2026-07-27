@@ -770,4 +770,122 @@ defmodule Tokengate.Metrics.RollupTest do
       assert Rollup.breakdown_by_team_for_model(nil) == []
     end
   end
+
+  # ---------------------------------------------------------------------
+  # provider_ranking/2
+  # ---------------------------------------------------------------------
+
+  describe "provider_ranking/2" do
+    test "agrega requests, errores y latencia por proveedor, ordenado por score" do
+      {tm, _team} = team_member_fixture()
+
+      {:ok, fast} =
+        Providers.create_provider(%{name: "FastCo", base_url: "http://localhost:1"})
+
+      {:ok, slow} =
+        Providers.create_provider(%{name: "SlowCo", base_url: "http://localhost:2"})
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      for _ <- 1..20 do
+        log_request(tm.id, now, %{provider_id: fast.id, status_code: 200, latency_ms: 500})
+      end
+
+      for i <- 1..20 do
+        status = if i <= 4, do: 500, else: 200
+        log_request(tm.id, now, %{provider_id: slow.id, status_code: status, latency_ms: 2000})
+      end
+
+      ranking = Rollup.provider_ranking(nil, from: DateTime.add(now, -3600, :second))
+
+      assert [first, second] = ranking
+      assert first.provider_name == "FastCo"
+      assert second.provider_name == "SlowCo"
+
+      assert first.request_count == 20
+      assert first.error_count == 0
+      assert first.error_rate == 0.0
+      assert first.avg_latency_ms == 500
+      assert first.score > second.score
+      assert first.tier in ["S", "A"]
+
+      assert second.error_count == 4
+      assert_in_delta second.error_rate, 0.2, 0.001
+      assert second.avg_latency_ms == 2000
+    end
+
+    test "proveedor con menos de 10 requests queda sin score ni tier y va al final" do
+      {tm, _team} = team_member_fixture()
+
+      {:ok, big} =
+        Providers.create_provider(%{name: "BigCo", base_url: "http://localhost:1"})
+
+      {:ok, tiny} =
+        Providers.create_provider(%{name: "TinyCo", base_url: "http://localhost:2"})
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      for _ <- 1..10 do
+        log_request(tm.id, now, %{provider_id: big.id, status_code: 200, latency_ms: 800})
+      end
+
+      for _ <- 1..3 do
+        log_request(tm.id, now, %{provider_id: tiny.id, status_code: 200, latency_ms: 100})
+      end
+
+      ranking = Rollup.provider_ranking(nil, from: DateTime.add(now, -3600, :second))
+
+      assert [first, last] = ranking
+      assert first.provider_name == "BigCo"
+      assert first.score != nil
+
+      assert last.provider_name == "TinyCo"
+      assert last.request_count == 3
+      assert last.tier == "—"
+      assert is_nil(last.score)
+    end
+
+    test "4xx cuentan como fallo" do
+      {tm, _team} = team_member_fixture()
+
+      {:ok, provider} =
+        Providers.create_provider(%{name: "QuotaCo", base_url: "http://localhost:1"})
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      for _ <- 1..10 do
+        log_request(tm.id, now, %{provider_id: provider.id, status_code: 429, latency_ms: 100})
+      end
+
+      [row] = Rollup.provider_ranking(nil, from: DateTime.add(now, -3600, :second))
+
+      assert row.error_count == 10
+      assert row.error_rate == 1.0
+    end
+
+    test "excluye logs sin provider_id y respeta el rango :from" do
+      {tm, _team} = team_member_fixture()
+
+      {:ok, provider} =
+        Providers.create_provider(%{name: "RangedCo", base_url: "http://localhost:1"})
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      old = DateTime.add(now, -86_400, :second)
+
+      for _ <- 1..10 do
+        log_request(tm.id, now, %{provider_id: provider.id, status_code: 200, latency_ms: 400})
+      end
+
+      # Sin provider_id — no debe aparecer
+      log_request(tm.id, now, %{status_code: 200, latency_ms: 100})
+      # Fuera de rango — no debe contar
+      log_request(tm.id, old, %{provider_id: provider.id, status_code: 500, latency_ms: 9000})
+
+      [row] = Rollup.provider_ranking(nil, from: DateTime.add(now, -3600, :second))
+
+      assert row.provider_name == "RangedCo"
+      assert row.request_count == 10
+      assert row.error_count == 0
+    end
+  end
 end

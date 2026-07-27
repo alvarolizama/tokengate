@@ -15,6 +15,7 @@ defmodule Tokengate.Metrics.Rollup do
     * `breakdown_by_model/2` — per-model aggregates (requests, costs, tokens, tps)
     * `breakdown_by_member/2` — per-member aggregates (requests, costs, tokens, tps)
     * `breakdown_by_team/1`   — per-team aggregates (requests, costs, tokens, tps)
+    * `provider_ranking/2`    — provider ranking by failures + latency, tier S/A/B/C/D
   """
 
   import Ecto.Query, warn: false
@@ -668,6 +669,137 @@ defmodule Tokengate.Metrics.Rollup do
       }
     end)
   end
+
+  # -----------------------------------------------------------------------
+  # provider_ranking/2
+  # -----------------------------------------------------------------------
+
+  @min_sample_for_tier 10
+
+  @doc """
+  Ranking de proveedores por confiabilidad y velocidad.
+
+  Agrupa `request_logs` por `provider_id` (join directo a `Provider`).
+  Fallo = `status_code >= 400` (convención del repo, igual que Alerts).
+
+  Score 0-100: 60% confiabilidad (`1 - error_rate`) + 40% velocidad
+  (latencia promedio relativa al proveedor más rápido del período — el
+  mejor obtiene 100). Tiers: S ≥ 90, A ≥ 75, B ≥ 60, C ≥ 40, D < 40.
+
+  Proveedores con menos de #{@min_sample_for_tier} requests en el período
+  quedan sin score ni tier (`"—"`) y van al final de la lista.
+  Proveedores sin logs en el período no aparecen.
+
+  Cada fila:
+
+      %{
+        provider_id: binary,
+        provider_name: String.t(),
+        request_count: integer,
+        error_count: integer,
+        error_rate: float,
+        avg_latency_ms: integer | nil,
+        p95_latency_ms: integer | nil,
+        avg_ttft_ms: integer | nil,
+        score: integer | nil,
+        tier: String.t()
+      }
+
+  ## Options
+
+    * `:from` — `inserted_at >= from` (DateTime)
+    * `:to`   — `inserted_at <= to` (DateTime)
+  """
+  @spec provider_ranking(String.t() | nil, keyword()) :: [map()]
+  def provider_ranking(team_id \\ nil, opts \\ [])
+
+  def provider_ranking(team_id, opts) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    rows =
+      RequestLog
+      |> where([rl], not is_nil(rl.provider_id))
+      |> join(:inner, [rl], p in Tokengate.Providers.Provider, on: rl.provider_id == p.id)
+      |> maybe_join_team(team_id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> group_by([rl, p], [rl.provider_id, p.name])
+      |> select([rl, p], %{
+        provider_id: rl.provider_id,
+        provider_name: p.name,
+        request_count: count(rl.id),
+        error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
+        avg_latency_ms: fragment("AVG(?)", rl.latency_ms),
+        p95_latency_ms:
+          fragment("percentile_cont(0.95) WITHIN GROUP (ORDER BY ?)", rl.latency_ms),
+        avg_ttft_ms: fragment("AVG(?)", rl.ttft_ms)
+      })
+      |> Repo.all()
+
+    min_latency =
+      rows
+      |> Enum.map(& &1.avg_latency_ms)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(&to_float!/1)
+      |> case do
+        [] -> nil
+        latencies -> Enum.min(latencies)
+      end
+
+    rows
+    |> Enum.map(&score_ranking_row(&1, min_latency))
+    |> Enum.sort_by(fn row ->
+      {if(row.score, do: 0, else: 1), -(row.score || 0), row.provider_name}
+    end)
+  end
+
+  defp score_ranking_row(row, min_latency) do
+    avg_latency = row.avg_latency_ms && to_float!(row.avg_latency_ms)
+    error_rate = if row.request_count > 0, do: row.error_count / row.request_count, else: 0.0
+
+    {score, tier} =
+      cond do
+        row.request_count < @min_sample_for_tier ->
+          {nil, "—"}
+
+        is_nil(avg_latency) or avg_latency <= 0 or is_nil(min_latency) ->
+          # Sin latencia comparable: score solo por confiabilidad.
+          score = round(0.6 * ((1 - error_rate) * 100))
+          {score, tier_for(score)}
+
+        true ->
+          reliability = (1 - error_rate) * 100
+          speed = min_latency / avg_latency * 100
+          score = round(0.6 * reliability + 0.4 * speed)
+          {score, tier_for(score)}
+      end
+
+    %{
+      provider_id: row.provider_id,
+      provider_name: row.provider_name,
+      request_count: row.request_count,
+      error_count: row.error_count,
+      error_rate: Float.round(error_rate, 4),
+      avg_latency_ms: avg_latency && round(avg_latency),
+      p95_latency_ms: row.p95_latency_ms && round(to_float!(row.p95_latency_ms)),
+      avg_ttft_ms: row.avg_ttft_ms && round(to_float!(row.avg_ttft_ms)),
+      score: score,
+      tier: tier
+    }
+  end
+
+  # AVG/percentile_cont vienen de Postgres como float o Decimal según el
+  # tipo de la columna — normalizar a float.
+  defp to_float!(%Decimal{} = d), do: Decimal.to_float(d)
+  defp to_float!(n) when is_integer(n), do: n / 1
+  defp to_float!(n) when is_float(n), do: n
+
+  defp tier_for(score) when score >= 90, do: "S"
+  defp tier_for(score) when score >= 75, do: "A"
+  defp tier_for(score) when score >= 60, do: "B"
+  defp tier_for(score) when score >= 40, do: "C"
+  defp tier_for(_score), do: "D"
 
   # -----------------------------------------------------------------------
   # Internals
