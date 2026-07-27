@@ -69,6 +69,8 @@ defmodule TokengateWeb.ProxyController do
             # Second gate: credential limits (provider-side throttling)
             case acquire_credential_limits(route.credential) do
               :ok ->
+                {conn, inflight} = register_inflight(conn, member, payload)
+
                 try do
                   if payload["stream"] == true do
                     execute_stream(conn, route, payload, member, @max_attempts, [])
@@ -76,6 +78,7 @@ defmodule TokengateWeb.ProxyController do
                     execute(conn, route, payload, member, @max_attempts, [])
                   end
                 after
+                  Tokengate.Logs.Inflight.finish_request(inflight.id)
                   release_credential_limits(route.credential)
                 end
 
@@ -131,6 +134,33 @@ defmodule TokengateWeb.ProxyController do
 
   defp release_credential_limits(credential) do
     Limits.release(credential.id)
+  end
+
+  # Registers the request in the in-flight registry so the Logs UI shows it
+  # as "Pending" while it executes. Also parses think/effort from the payload
+  # and stashes them in conn assigns for the durable log.
+  # Returns `{conn, entry}` — the conn carries the think/effort assigns.
+  defp register_inflight(conn, member, payload) do
+    {think, effort} = Tokengate.Proxy.Reasoning.parse(payload)
+
+    conn =
+      conn
+      |> assign(:think, think)
+      |> assign(:effort, effort)
+
+    entry =
+      Tokengate.Logs.Inflight.start_request(%{
+        team_member_id: member.id,
+        user_email: member.user && member.user.email,
+        team_name: member.team && member.team.name,
+        model_requested: payload["model"],
+        agent_type: conn.assigns.agent_type,
+        streaming: payload["stream"] == true,
+        think: think,
+        effort: effort
+      })
+
+    {conn, entry}
   end
 
   defp route_and_check(member, payload, api_key_hash, limits) do
@@ -446,7 +476,9 @@ defmodule TokengateWeb.ProxyController do
     })
 
     enqueue_log(route, member, conn.assigns.agent_type, usage, costs, latency_ms, 200, true,
-      ttft_ms: acc.ttft_ms
+      ttft_ms: acc.ttft_ms,
+      think: conn.assigns[:think] || false,
+      effort: conn.assigns[:effort]
     )
 
     conn
@@ -494,7 +526,10 @@ defmodule TokengateWeb.ProxyController do
     })
 
     # Durable log + webhooks, async via Oban
-    enqueue_log(route, member, conn.assigns.agent_type, usage, costs, latency_ms, 200, false)
+    enqueue_log(route, member, conn.assigns.agent_type, usage, costs, latency_ms, 200, false,
+      think: conn.assigns[:think] || false,
+      effort: conn.assigns[:effort]
+    )
 
     body = inject_usage_costs(body, usage, costs)
 
@@ -554,7 +589,7 @@ defmodule TokengateWeb.ProxyController do
          latency_ms,
          status,
          streaming,
-         extra \\ []
+         extra
        ) do
     %{
       "team_member_id" => member.id,
@@ -573,7 +608,9 @@ defmodule TokengateWeb.ProxyController do
       "estimated_cost_usd" => Decimal.to_string(costs.estimated_cost_usd, :normal),
       "latency_ms" => latency_ms,
       "ttft_ms" => Keyword.get(extra, :ttft_ms),
-      "streaming" => streaming
+      "streaming" => streaming,
+      "think" => Keyword.get(extra, :think, false),
+      "effort" => Keyword.get(extra, :effort)
     }
     |> WriteWorker.new()
     |> Oban.insert()

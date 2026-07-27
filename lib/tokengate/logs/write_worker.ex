@@ -40,6 +40,8 @@ defmodule Tokengate.Logs.WriteWorker do
       latency_ms: args["latency_ms"],
       ttft_ms: args["ttft_ms"],
       streaming: args["streaming"] || false,
+      think: args["think"] || false,
+      effort: args["effort"],
       inserted_at: parse_inserted_at(args["inserted_at"])
     }
 
