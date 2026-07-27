@@ -227,4 +227,28 @@ defmodule TokengateWeb.UsersLiveTest do
     conn = post(conn, ~p"/login", %{email: target.email, password: "new-password-123"})
     assert Phoenix.Flash.get(conn.assigns.flash, :info) =~ "Sesión iniciada"
   end
+
+  ## Impersonate --------------------------------------------------------------
+
+  test "admin sees impersonate link for other users but not for self", %{conn: conn} do
+    %{user: admin, password: admin_password} = register("admin")
+    %{user: target} = register("user")
+    conn = login(conn, admin, admin_password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+
+    assert has_element?(view, "#impersonate-#{target.id}")
+    refute has_element?(view, "#impersonate-#{admin.id}")
+  end
+
+  test "root admin cannot be impersonated", %{conn: conn} do
+    %{user: admin, password: admin_password} = register("admin")
+
+    root = Accounts.get_user_by_email("admin@tokengate.local")
+    assert root, "seeds should create the root admin"
+
+    conn = login(conn, admin, admin_password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+
+    refute has_element?(view, "#impersonate-#{root.id}")
+  end
 end

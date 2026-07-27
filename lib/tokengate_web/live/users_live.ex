@@ -230,7 +230,7 @@ defmodule TokengateWeb.UsersLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.dashboard flash={@flash} current_scope={@current_user}>
+    <Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
       <div class="space-y-6">
         <.header>
           Usuarios
@@ -404,6 +404,17 @@ defmodule TokengateWeb.UsersLive do
                 <td class="text-xs text-base-content/50">{format_date(user.inserted_at)}</td>
                 <td>
                   <div class="flex gap-1">
+                    <.link
+                      :if={user.id != @current_user.id && !root_admin?(user)}
+                      href={~p"/impersonate/#{user.id}"}
+                      method="post"
+                      class="btn btn-xs btn-ghost"
+                      id={"impersonate-#{user.id}"}
+                      data-confirm={"¿Ver el dashboard como #{user.email}?"}
+                      title="Ver como este usuario"
+                    >
+                      <.icon name="hero-eye" class="w-3 h-3" />
+                    </.link>
                     <button
                       phx-click="edit_user"
                       phx-value-id={user.id}

@@ -524,7 +524,7 @@ defmodule TokengateWeb.ModelsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.dashboard flash={@flash} current_scope={@current_user}>
+    <Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
       <div class="space-y-6">
         <.header>
           Modelos

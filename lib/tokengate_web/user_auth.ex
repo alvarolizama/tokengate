@@ -38,7 +38,12 @@ defmodule TokengateWeb.UserAuth do
     * `:require_admin` — unauthenticated → `/login`, non-admins → `/dashboard`.
   """
   def on_mount(:default, _params, session, socket) do
-    {:cont, assign_new(socket, :current_user, fn -> fetch_user(session) end)}
+    socket =
+      socket
+      |> assign_new(:current_user, fn -> fetch_user(session) end)
+      |> assign_new(:impersonator, fn -> fetch_impersonator(session) end)
+
+    {:cont, socket}
   end
 
   def on_mount(:require_authenticated, _params, session, socket) do
@@ -47,6 +52,7 @@ defmodule TokengateWeb.UserAuth do
     socket =
       socket
       |> assign_new(:current_user, fn -> user end)
+      |> assign_new(:impersonator, fn -> fetch_impersonator(session) end)
 
     if user do
       track_presence(socket, user)
@@ -62,6 +68,7 @@ defmodule TokengateWeb.UserAuth do
     socket =
       socket
       |> assign_new(:current_user, fn -> user end)
+      |> assign_new(:impersonator, fn -> fetch_impersonator(session) end)
 
     case user do
       %{global_role: "admin"} ->
@@ -90,6 +97,15 @@ defmodule TokengateWeb.UserAuth do
   defp fetch_user(session) do
     # LiveView sessions use string keys; plug sessions may use atoms.
     case session["user_id"] || session[@session_key] do
+      nil -> nil
+      id -> Accounts.get_user(id)
+    end
+  end
+
+  # The original admin while an impersonation session is active. Stored in
+  # the session by SessionController.impersonate/2; `nil` otherwise.
+  defp fetch_impersonator(session) do
+    case session["impersonator_id"] || session[:impersonator_id] do
       nil -> nil
       id -> Accounts.get_user(id)
     end

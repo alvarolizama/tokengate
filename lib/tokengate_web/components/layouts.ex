@@ -72,7 +72,7 @@ defmodule TokengateWeb.Layouts do
 
   ## Examples
 
-      <Layouts.dashboard flash={@flash} current_scope={@current_user}>
+      <Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
         <h1>Dashboard</h1>
       </Layouts.dashboard>
 
@@ -86,6 +86,10 @@ defmodule TokengateWeb.Layouts do
     default: nil,
     doc: "the signed-in user (Tokengate.Accounts.User)"
 
+  attr :impersonator, :map,
+    default: nil,
+    doc: "the original admin user while an impersonation session is active"
+
   slot :inner_block, required: true
 
   def dashboard(assigns) do
@@ -94,6 +98,26 @@ defmodule TokengateWeb.Layouts do
       <input id="dashboard-drawer" type="checkbox" class="drawer-toggle" />
 
       <div class="drawer-content flex flex-col">
+        <div
+          :if={@impersonator}
+          id="impersonation-banner"
+          class="bg-warning text-warning-content px-4 py-2 flex items-center justify-center gap-3 text-sm"
+        >
+          <.icon name="hero-eye" class="w-4 h-4" />
+          <span>
+            Viendo como <strong>{@current_scope && @current_scope.email}</strong>
+            — sesión de {@impersonator.email}
+          </span>
+          <.link
+            href={~p"/impersonate"}
+            method="delete"
+            class="btn btn-xs btn-neutral"
+            id="stop-impersonating"
+          >
+            Volver a mi cuenta
+          </.link>
+        </div>
+
         <.dashboard_topbar current_scope={@current_scope} />
 
         <main class="flex-1 p-4 sm:p-6 lg:p-8">

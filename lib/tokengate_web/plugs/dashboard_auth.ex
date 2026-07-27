@@ -56,7 +56,15 @@ defmodule TokengateWeb.Plugs.DashboardAuth do
         id -> Accounts.get_user(id)
       end
 
-    assign(conn, :current_user, user)
+    impersonator =
+      case get_session(conn, :impersonator_id) do
+        nil -> nil
+        id -> Accounts.get_user(id)
+      end
+
+    conn
+    |> assign(:current_user, user)
+    |> assign(:impersonator, impersonator)
   end
 
   @doc """

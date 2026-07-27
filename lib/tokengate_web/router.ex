@@ -41,6 +41,12 @@ defmodule TokengateWeb.Router do
     post "/login", SessionController, :create
     delete "/logout", SessionController, :delete
 
+    # Impersonation — guards live inside the controller actions (the start
+    # route requires a real admin; the stop route runs while the session
+    # points at the impersonated user, so no admin plug can guard it).
+    post "/impersonate/:user_id", SessionController, :impersonate
+    delete "/impersonate", SessionController, :stop_impersonating
+
     # Google OAuth — public routes (no auth required to start the flow).
     get "/auth/google", OAuthController, :request
     get "/auth/google/callback", OAuthController, :callback

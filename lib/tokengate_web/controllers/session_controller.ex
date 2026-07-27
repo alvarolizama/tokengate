@@ -74,4 +74,112 @@ defmodule TokengateWeb.SessionController do
     |> put_flash(:info, "Sesión cerrada.")
     |> redirect(to: "/login")
   end
+
+  ## Impersonation ------------------------------------------------------------
+
+  @doc """
+  POST /impersonate/:user_id — starts an impersonation session.
+
+  Only a real admin (no active impersonation) can start one. The session
+  keeps `:user_id` pointing at the *effective* user (so every downstream
+  plug, LiveView hook and Presence tracker works unchanged) and stores the
+  original admin id under `:impersonator_id`.
+
+  Guards: authenticated, admin, not already impersonating, not self, target
+  exists, and the root admin can never be impersonated. Every start is
+  written to the audit log.
+  """
+  def impersonate(conn, %{"user_id" => user_id}) do
+    admin = conn.assigns[:current_user]
+
+    cond do
+      is_nil(admin) ->
+        conn
+        |> put_flash(:error, "Debes iniciar sesión para continuar.")
+        |> redirect(to: "/login")
+
+      get_session(conn, :impersonator_id) ->
+        conn
+        |> put_flash(:error, "Ya estás viendo como otro usuario. Vuelve a tu cuenta primero.")
+        |> redirect(to: "/dashboard")
+
+      admin.global_role != "admin" ->
+        conn
+        |> put_flash(:error, "No tienes permisos para impersonar usuarios.")
+        |> redirect(to: "/dashboard")
+
+      true ->
+        do_impersonate(conn, admin, Accounts.get_user(user_id))
+    end
+  end
+
+  defp do_impersonate(conn, _admin, nil) do
+    conn
+    |> put_flash(:error, "Usuario no encontrado.")
+    |> redirect(to: "/dashboard/users")
+  end
+
+  defp do_impersonate(conn, %{id: admin_id} = _admin, %{id: target_id})
+       when admin_id == target_id do
+    conn
+    |> put_flash(:error, "No puedes impersonarte a ti mismo.")
+    |> redirect(to: "/dashboard/users")
+  end
+
+  defp do_impersonate(conn, admin, target) do
+    if root_admin?(target) do
+      conn
+      |> put_flash(:error, "No se puede impersonar al administrador principal.")
+      |> redirect(to: "/dashboard/users")
+    else
+      {:ok, _} =
+        Tokengate.Auditing.audit(admin, "impersonate.start", "user", target.id, %{
+          "email" => target.email
+        })
+
+      conn
+      |> put_session(:impersonator_id, admin.id)
+      |> put_session(:user_id, target.id)
+      |> put_flash(:info, "Ahora estás viendo como #{target.email}.")
+      |> redirect(to: "/dashboard")
+    end
+  end
+
+  @doc """
+  DELETE /impersonate — ends the impersonation and restores the original
+  admin session. No-op (with an error flash) when not impersonating.
+  """
+  def stop_impersonating(conn, _params) do
+    case get_session(conn, :impersonator_id) do
+      nil ->
+        conn
+        |> put_flash(:error, "No estás impersonando a ningún usuario.")
+        |> redirect(to: "/dashboard")
+
+      impersonator_id ->
+        target = conn.assigns[:current_user]
+
+        {:ok, _} =
+          Tokengate.Auditing.audit(
+            impersonator_id,
+            "impersonate.stop",
+            "user",
+            target && target.id,
+            %{"email" => target && target.email}
+          )
+
+        conn
+        |> delete_session(:impersonator_id)
+        |> put_session(:user_id, impersonator_id)
+        |> put_flash(:info, "Volviste a tu cuenta.")
+        |> redirect(to: "/dashboard")
+    end
+  end
+
+  # The root admin (bootstrap account from seeds/env) can never be
+  # impersonated — mirrors the guard in UsersLive.
+  defp root_admin?(%{email: email}) do
+    root_email = System.get_env("TOKENGATE_ADMIN_EMAIL") || "admin@tokengate.local"
+    String.downcase(email) == String.downcase(root_email)
+  end
 end
