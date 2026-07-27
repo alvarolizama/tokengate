@@ -888,4 +888,136 @@ defmodule Tokengate.Metrics.RollupTest do
       assert row.error_count == 0
     end
   end
+
+  # ---------------------------------------------------------------------
+  # usage_by_hour_of_day/2
+  # ---------------------------------------------------------------------
+
+  describe "usage_by_hour_of_day/2" do
+    test "agrupa por hora del día (UTC) con zero-fill de las 24 horas" do
+      {tm, _team} = team_member_fixture()
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      # 3 logs a las 10:xx UTC, 1 a las 14:xx UTC
+      at_10 = %{now | hour: 10, minute: 15, second: 0}
+      at_14 = %{now | hour: 14, minute: 45, second: 0}
+
+      for _ <- 1..3, do: log_request(tm.id, at_10)
+      log_request(tm.id, at_14)
+
+      rows = Rollup.usage_by_hour_of_day(nil, from: DateTime.add(now, -86_400, :second))
+
+      assert length(rows) == 24
+      assert Enum.map(rows, & &1.hour) == Enum.to_list(0..23)
+
+      assert Enum.find(rows, &(&1.hour == 10)).request_count == 3
+      assert Enum.find(rows, &(&1.hour == 14)).request_count == 1
+      assert Enum.find(rows, &(&1.hour == 3)).request_count == 0
+    end
+
+    test "respeta el rango :from" do
+      {tm, _team} = team_member_fixture()
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      old = DateTime.add(now, -7 * 86_400, :second)
+
+      log_request(tm.id, now)
+      log_request(tm.id, old)
+
+      rows = Rollup.usage_by_hour_of_day(nil, from: DateTime.add(now, -3600, :second))
+
+      assert Enum.sum(Enum.map(rows, & &1.request_count)) == 1
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # busiest_hours/2 y busiest_minutes/2
+  # ---------------------------------------------------------------------
+
+  describe "busiest_hours/2" do
+    test "devuelve las horas con más requests, ordenadas desc" do
+      {tm, _team} = team_member_fixture()
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      busy = DateTime.add(now, -3600, :second) |> Map.put(:minute, 10)
+      quiet = DateTime.add(now, -1800, :second) |> Map.put(:minute, 10)
+
+      for _ <- 1..5, do: log_request(tm.id, busy)
+      for _ <- 1..2, do: log_request(tm.id, quiet)
+
+      rows = Rollup.busiest_hours(nil, from: DateTime.add(now, -7200, :second))
+
+      assert [first, second] = Enum.take(rows, 2)
+      assert first.request_count == 5
+      assert second.request_count == 2
+      # buckets truncados a la hora
+      assert first.bucket.minute == 0
+      assert first.bucket.second == 0
+    end
+  end
+
+  describe "busiest_minutes/2" do
+    test "devuelve los minutos con más requests, ordenados desc" do
+      {tm, _team} = team_member_fixture()
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      spike = DateTime.add(now, -600, :second) |> Map.put(:second, 5)
+      calm = DateTime.add(now, -300, :second) |> Map.put(:second, 5)
+
+      for _ <- 1..8, do: log_request(tm.id, spike)
+      for _ <- 1..3, do: log_request(tm.id, calm)
+
+      rows = Rollup.busiest_minutes(nil, from: DateTime.add(now, -1200, :second))
+
+      assert [first | _] = rows
+      assert first.request_count == 8
+      assert first.bucket.second == 0
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # peak_concurrency/2
+  # ---------------------------------------------------------------------
+
+  describe "peak_concurrency/2" do
+    test "estima la concurrencia máxima con sweep line sobre [inicio, fin]" do
+      {tm, _team} = team_member_fixture()
+      base = DateTime.utc_now() |> DateTime.add(-600, :second) |> DateTime.truncate(:second)
+
+      # A: [base+0,  base+10]  (termina a los 10s, latencia 10s)
+      # B: [base+2,  base+5]
+      # C: [base+7,  base+8]
+      # D: [base+0,  base+9]
+      log_request(tm.id, DateTime.add(base, 10, :second), %{latency_ms: 10_000})
+      log_request(tm.id, DateTime.add(base, 5, :second), %{latency_ms: 3_000})
+      log_request(tm.id, DateTime.add(base, 8, :second), %{latency_ms: 1_000})
+      log_request(tm.id, DateTime.add(base, 9, :second), %{latency_ms: 9_000})
+
+      peak = Rollup.peak_concurrency(nil, from: DateTime.add(base, -60, :second))
+
+      # En base+2..base+5 vuelan A, B y D → 3 concurrentes
+      assert peak.max_concurrent == 3
+      assert DateTime.compare(peak.at, DateTime.add(base, 2, :second)) == :eq
+    end
+
+    test "sin requests devuelve max 0" do
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      peak = Rollup.peak_concurrency(nil, from: DateTime.add(now, -60, :second))
+
+      assert peak.max_concurrent == 0
+      assert is_nil(peak.at)
+    end
+
+    test "latencia nil se trata como instantáneo sin romper" do
+      {tm, _team} = team_member_fixture()
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      log_request(tm.id, now, %{latency_ms: nil})
+      log_request(tm.id, now, %{latency_ms: 500})
+
+      peak = Rollup.peak_concurrency(nil, from: DateTime.add(now, -60, :second))
+
+      assert peak.max_concurrent >= 1
+    end
+  end
 end

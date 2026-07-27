@@ -16,6 +16,9 @@ defmodule Tokengate.Metrics.Rollup do
     * `breakdown_by_member/2` — per-member aggregates (requests, costs, tokens, tps)
     * `breakdown_by_team/1`   — per-team aggregates (requests, costs, tokens, tps)
     * `provider_ranking/2`    — provider ranking by failures + latency, tier S/A/B/C/D
+    * `usage_by_hour_of_day/2` — 24h UTC distribution (recurring usage patterns)
+    * `busiest_hours/2` / `busiest_minutes/2` — top-N busiest hour/minute buckets
+    * `peak_concurrency/2`    — estimated max in-flight requests (sweep line)
   """
 
   import Ecto.Query, warn: false
@@ -800,6 +803,183 @@ defmodule Tokengate.Metrics.Rollup do
   defp tier_for(score) when score >= 60, do: "B"
   defp tier_for(score) when score >= 40, do: "C"
   defp tier_for(_score), do: "D"
+
+  # -----------------------------------------------------------------------
+  # usage_by_hour_of_day/2
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Distribución de requests por hora del día (UTC), agregada sobre el
+  período. Devuelve siempre 24 filas (horas 0-23) con zero-fill — sirve
+  para ver patrones recurrentes de uso ("¿a qué horas se usa más?").
+
+  Cada fila: `%{hour: 0..23, request_count: integer}`.
+
+  ## Options
+
+    * `:from` — `inserted_at >= from` (DateTime)
+    * `:to`   — `inserted_at <= to` (DateTime)
+  """
+  @spec usage_by_hour_of_day(String.t() | nil, keyword()) :: [map()]
+  def usage_by_hour_of_day(team_id \\ nil, opts \\ []) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    counts =
+      RequestLog
+      |> maybe_join_team(team_id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> group_by([rl], fragment("EXTRACT(hour FROM ?)", rl.inserted_at))
+      |> select([rl], %{
+        hour: fragment("CAST(EXTRACT(hour FROM ?) AS integer)", rl.inserted_at),
+        request_count: count(rl.id)
+      })
+      |> Repo.all()
+      |> Map.new(fn row -> {row.hour, row.request_count} end)
+
+    for hour <- 0..23 do
+      %{hour: hour, request_count: Map.get(counts, hour, 0)}
+    end
+  end
+
+  # -----------------------------------------------------------------------
+  # busiest_hours/2 y busiest_minutes/2
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Top N horas (buckets `date_trunc('hour')`) con más requests en el
+  período, ordenadas desc. Cada fila: `%{bucket: DateTime, request_count}`.
+  """
+  @spec busiest_hours(String.t() | nil, keyword()) :: [map()]
+  def busiest_hours(team_id \\ nil, opts \\ []),
+    do: busiest_buckets(team_id, "hour", opts)
+
+  @doc """
+  Top N minutos (buckets `date_trunc('minute')`) con más requests en el
+  período, ordenados desc. Cada fila: `%{bucket: DateTime, request_count}`.
+  """
+  @spec busiest_minutes(String.t() | nil, keyword()) :: [map()]
+  def busiest_minutes(team_id \\ nil, opts \\ []),
+    do: busiest_buckets(team_id, "minute", opts)
+
+  # El unit va como literal SQL en cada cláusula (Ecto prohíbe fragments
+  # con strings interpolados por seguridad) — por eso dos cuerpos.
+  defp busiest_buckets(team_id, "hour", opts) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+    limit = Keyword.get(opts, :limit, 5)
+
+    RequestLog
+    |> maybe_join_team(team_id)
+    |> maybe_from(from)
+    |> maybe_to(to)
+    |> group_by([rl], fragment("date_trunc('hour', ?)", rl.inserted_at))
+    |> order_by([rl],
+      desc: count(rl.id),
+      asc: fragment("date_trunc('hour', ?)", rl.inserted_at)
+    )
+    |> limit(^limit)
+    |> select([rl], %{
+      bucket: fragment("date_trunc('hour', ?)", rl.inserted_at),
+      request_count: count(rl.id)
+    })
+    |> Repo.all()
+    |> Enum.map(fn row ->
+      %{bucket: to_utc_datetime(row.bucket), request_count: row.request_count}
+    end)
+  end
+
+  defp busiest_buckets(team_id, "minute", opts) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+    limit = Keyword.get(opts, :limit, 5)
+
+    RequestLog
+    |> maybe_join_team(team_id)
+    |> maybe_from(from)
+    |> maybe_to(to)
+    |> group_by([rl], fragment("date_trunc('minute', ?)", rl.inserted_at))
+    |> order_by([rl],
+      desc: count(rl.id),
+      asc: fragment("date_trunc('minute', ?)", rl.inserted_at)
+    )
+    |> limit(^limit)
+    |> select([rl], %{
+      bucket: fragment("date_trunc('minute', ?)", rl.inserted_at),
+      request_count: count(rl.id)
+    })
+    |> Repo.all()
+    |> Enum.map(fn row ->
+      %{bucket: to_utc_datetime(row.bucket), request_count: row.request_count}
+    end)
+  end
+
+  # -----------------------------------------------------------------------
+  # peak_concurrency/2
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Estima el pico de requests concurrentes en el período.
+
+  `request_logs` no persiste concurrencia — se reconstruye a partir del
+  intervalo de vuelo de cada request: `[inserted_at - latency_ms, inserted_at]`
+  (el log se escribe al completar). Un sweep line sobre los eventos +1/-1
+  da el máximo traslape. Requests con `latency_ms` nil cuentan como
+  instantáneos en su `inserted_at`.
+
+  Devuelve `%{max_concurrent: integer, at: DateTime | nil}` — `at` es el
+  primer momento en que se alcanzó el máximo; nil si no hubo requests.
+
+  Nota: carga `(inserted_at, latency_ms)` del período en memoria — es una
+  estimación para dashboards, no para hot paths.
+
+  ## Options
+
+    * `:from` — `inserted_at >= from` (DateTime)
+    * `:to`   — `inserted_at <= to` (DateTime)
+  """
+  @spec peak_concurrency(String.t() | nil, keyword()) :: map()
+  def peak_concurrency(team_id \\ nil, opts \\ []) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    events =
+      RequestLog
+      |> maybe_join_team(team_id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> select([rl], %{inserted_at: rl.inserted_at, latency_ms: rl.latency_ms})
+      |> Repo.all()
+      |> Enum.flat_map(fn row ->
+        latency = row.latency_ms || 0
+        start_at = DateTime.add(row.inserted_at, -latency, :millisecond)
+        # En empate de timestamp, los finales (-1) van antes que los
+        # inicios (+1): un request que termina justo cuando otro empieza
+        # no cuenta como concurrente.
+        [{start_at, 1}, {row.inserted_at, -1}]
+      end)
+      |> Enum.sort(fn {ts_a, delta_a}, {ts_b, delta_b} ->
+        case DateTime.compare(ts_a, ts_b) do
+          :lt -> true
+          :gt -> false
+          :eq -> delta_a <= delta_b
+        end
+      end)
+
+    {max_concurrent, at, _current} =
+      Enum.reduce(events, {0, nil, 0}, fn {ts, delta}, {max, max_at, current} ->
+        current = current + delta
+
+        if current > max do
+          {current, ts, current}
+        else
+          {max, max_at, current}
+        end
+      end)
+
+    %{max_concurrent: max_concurrent, at: at}
+  end
 
   # -----------------------------------------------------------------------
   # Internals
