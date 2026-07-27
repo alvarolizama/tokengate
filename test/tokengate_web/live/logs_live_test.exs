@@ -100,6 +100,21 @@ defmodule TokengateWeb.LogsLiveTest do
     assert html =~ "claude-code"
   end
 
+  test "live indicators show the connected user and in-flight requests", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
+
+    # Presence: the signed-in user appears online with their initials chip
+    assert has_element?(view, "#live-indicators")
+    assert has_element?(view, "#online-count")
+    assert has_element?(view, "#online-#{admin.id}")
+
+    # In-flight API connections counter (0 with no traffic)
+    assert has_element?(view, "#inflight-indicator")
+    assert has_element?(view, "#inflight-count")
+  end
+
   test "user scope: sees only their own logs", %{conn: conn} do
     %{owner: owner, owner_password: password} = team_with_logs()
     # Another team's logs — must not leak

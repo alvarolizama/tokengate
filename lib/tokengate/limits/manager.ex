@@ -155,6 +155,15 @@ defmodule Tokengate.Limits.Manager do
     release_concurrency(api_key_id)
   end
 
+  @doc """
+  Total in-flight proxy requests across every API key — the "live API
+  connections" counter shown on the dashboard.
+  """
+  @spec total_inflight() :: non_neg_integer()
+  def total_inflight do
+    :ets.foldl(fn {_key, count}, acc -> acc + count end, 0, @inflight_table)
+  end
+
   # --- GenServer ---
 
   @doc false

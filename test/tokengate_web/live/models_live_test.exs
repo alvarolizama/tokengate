@@ -243,6 +243,81 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert html =~ "claude-3-opus"
   end
 
+  test "admin can reorder provider priorities via drag-drop event", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    alias_record = create_alias()
+
+    ap1 = create_model_provider(alias_record, provider, %{priority: 1})
+    ap2 = create_model_provider(alias_record, provider, %{priority: 2})
+    ap3 = create_model_provider(alias_record, provider, %{priority: 3})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+
+    # Drag ap3 to the top
+    render_hook(view, "reorder_providers", %{
+      "alias_id" => alias_record.id,
+      "ids" => [ap3.id, ap1.id, ap2.id]
+    })
+
+    assert Providers.get_model_provider!(ap3.id).priority == 1
+    assert Providers.get_model_provider!(ap1.id).priority == 2
+    assert Providers.get_model_provider!(ap2.id).priority == 3
+  end
+
+  test "reorder rejects ids from another alias", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    alias_a = create_alias()
+    alias_b = create_alias()
+
+    ap_a = create_model_provider(alias_a, provider, %{priority: 1})
+    ap_b = create_model_provider(alias_b, provider, %{priority: 7})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+
+    render_hook(view, "reorder_providers", %{
+      "alias_id" => alias_a.id,
+      "ids" => [ap_b.id]
+    })
+
+    # Foreign id was rejected — priorities untouched
+    assert Providers.get_model_provider!(ap_a.id).priority == 1
+    assert Providers.get_model_provider!(ap_b.id).priority == 7
+  end
+
+  test "shows credential alias badge when the credential has a name", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    alias_record = create_alias()
+
+    u = unique()
+
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        name: "prod-openrouter",
+        api_key_encrypted: "sk-#{u}",
+        status: "active"
+      })
+
+    {:ok, _ap} =
+      Providers.create_model_provider(%{
+        model_alias_id: alias_record.id,
+        credential_id: credential.id,
+        provider_model: "gpt-4o-#{u}",
+        priority: 1,
+        enabled: true
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, _view, html} = live(conn, ~p"/dashboard/models")
+
+    assert html =~ "prod-openrouter"
+  end
+
   test "admin can toggle model_provider enabled state", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()

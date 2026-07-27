@@ -3,11 +3,13 @@ defmodule TokengateWeb.LogsLive do
   use TokengateWeb, :live_view
 
   alias Tokengate.{Accounts, Logs}
+  alias Tokengate.Limits.Manager, as: Limits
 
   @page_size 50
   @pubsub Tokengate.PubSub
   @logs_topic "logs:new"
   @summary_refresh_interval_ms 2_000
+  @inflight_refresh_interval_ms 3_000
 
   @impl true
   def mount(_params, _session, socket) do
@@ -26,14 +28,25 @@ defmodule TokengateWeb.LogsLive do
       |> assign(:summary, empty_summary())
       |> assign(:summary_refresh_scheduled, false)
       |> assign(:last_seen_at, DateTime.utc_now() |> DateTime.truncate(:second))
+      |> assign(:online_users, [])
+      |> assign(:api_inflight, 0)
 
     socket = load_logs(socket, :reset)
 
     if connected?(socket) do
       Phoenix.PubSub.subscribe(@pubsub, @logs_topic)
-    end
+      Phoenix.PubSub.subscribe(@pubsub, TokengateWeb.Presence.topic())
+      {:ok, _} = TokengateWeb.Presence.track_user(self(), user)
 
-    {:ok, socket}
+      send(self(), :refresh_inflight)
+
+      {:ok,
+       socket
+       |> assign(:online_users, TokengateWeb.Presence.list_online())
+       |> assign(:api_inflight, Limits.total_inflight())}
+    else
+      {:ok, socket}
+    end
   end
 
   ## Real-time -------------------------------------------------------------
@@ -59,6 +72,15 @@ defmodule TokengateWeb.LogsLive do
      socket
      |> assign(:summary_refresh_scheduled, false)
      |> refresh_summary()}
+  end
+
+  def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
+    {:noreply, assign(socket, :online_users, TokengateWeb.Presence.list_online())}
+  end
+
+  def handle_info(:refresh_inflight, socket) do
+    Process.send_after(self(), :refresh_inflight, @inflight_refresh_interval_ms)
+    {:noreply, assign(socket, :api_inflight, Limits.total_inflight())}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -358,6 +380,19 @@ defmodule TokengateWeb.LogsLive do
 
   defp format_number(_), do: "0"
 
+  defp initials(email) when is_binary(email) do
+    email
+    |> String.split("@")
+    |> List.first()
+    |> String.split(~r/[._-]/)
+    |> Enum.filter(&(&1 != ""))
+    |> Enum.take(2)
+    |> Enum.map_join("", &String.first(&1))
+    |> String.upcase()
+  end
+
+  defp initials(_), do: "?"
+
   defp format_datetime(datetime) do
     Calendar.strftime(datetime, "%d/%m/%Y %H:%M:%S")
   end
@@ -398,6 +433,44 @@ defmodule TokengateWeb.LogsLive do
           Logs
           <:subtitle>Registro de solicitudes a la API en tiempo real</:subtitle>
         </.header>
+
+        <%!-- Live indicators: online users + in-flight API requests --%>
+        <div
+          id="live-indicators"
+          class="card bg-base-100 border border-base-300 shadow-sm"
+        >
+          <div class="card-body p-4 flex flex-wrap items-center gap-x-8 gap-y-3">
+            <div class="flex items-center gap-2">
+              <span class="relative flex h-2.5 w-2.5">
+                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-60"></span>
+                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-success"></span>
+              </span>
+              <span class="text-sm font-medium" id="online-count">
+                {length(@online_users)} {if length(@online_users) == 1,
+                  do: "usuario",
+                  else: "usuarios"} conectado{if length(@online_users) == 1, do: "", else: "s"}
+              </span>
+              <div class="flex -space-x-2 ml-1" id="online-users">
+                <span
+                  :for={u <- @online_users}
+                  class="inline-flex items-center justify-center w-7 h-7 rounded-full bg-primary/15 text-primary text-xs font-semibold ring-2 ring-base-100"
+                  title={u.email}
+                  id={"online-#{u.id}"}
+                >
+                  {initials(u.email)}
+                </span>
+              </div>
+            </div>
+
+            <div class="flex items-center gap-2" id="inflight-indicator">
+              <.icon name="hero-bolt" class="w-4 h-4 text-accent" />
+              <span class="text-sm font-medium" id="inflight-count">
+                {@api_inflight} {if @api_inflight == 1, do: "request", else: "requests"} en vuelo
+              </span>
+              <span class="text-xs text-base-content/40">conexiones al API en vivo</span>
+            </div>
+          </div>
+        </div>
 
         <%!-- Summary strip --%>
         <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">

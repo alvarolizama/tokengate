@@ -26,10 +26,64 @@ import {hooks as colocatedHooks} from "phoenix-colocated/tokengate"
 import topbar from "../vendor/topbar"
 
 const csrfToken = document.querySelector("meta[name='csrf-token']").getAttribute("content")
+
+// Drag-and-drop reordering of model_providers within an alias table.
+// Native HTML5 DnD on <tr data-id> rows; on drop, pushes the new order so
+// the server normalizes priorities 1..N.
+const SortableProviders = {
+  mounted() {
+    this.dragged = null
+
+    this.el.addEventListener("dragstart", e => {
+      const row = e.target.closest("tr[data-id]")
+      if (!row) return
+      this.dragged = row
+      e.dataTransfer.effectAllowed = "move"
+      try { e.dataTransfer.setData("text/plain", row.dataset.id) } catch (_) {}
+      row.classList.add("opacity-40")
+    })
+
+    this.el.addEventListener("dragend", () => {
+      if (this.dragged) this.dragged.classList.remove("opacity-40")
+      this.dragged = null
+      this.clearIndicators()
+    })
+
+    this.el.addEventListener("dragover", e => {
+      if (!this.dragged) return
+      e.preventDefault()
+      e.dataTransfer.dropEffect = "move"
+      const row = e.target.closest("tr[data-id]")
+      this.clearIndicators()
+      if (!row || row === this.dragged) return
+      row.classList.add("bg-primary/10")
+    })
+
+    this.el.addEventListener("drop", e => {
+      if (!this.dragged) return
+      e.preventDefault()
+      const row = e.target.closest("tr[data-id]")
+      this.clearIndicators()
+      if (!row || row === this.dragged) return
+
+      const rect = row.getBoundingClientRect()
+      const after = (e.clientY - rect.top) > rect.height / 2
+      this.el.insertBefore(this.dragged, after ? row.nextSibling : row)
+
+      const ids = Array.from(this.el.querySelectorAll("tr[data-id]")).map(r => r.dataset.id)
+      this.pushEvent("reorder_providers", {alias_id: this.el.dataset.aliasId, ids})
+    })
+  },
+
+  clearIndicators() {
+    this.el.querySelectorAll("tr[data-id]").forEach(r => r.classList.remove("bg-primary/10"))
+  }
+}
+
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks},
+  hooks: {...colocatedHooks, SortableProviders},
 })
 
 // Show progress bar on live navigation and form submits

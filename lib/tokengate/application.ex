@@ -12,6 +12,7 @@ defmodule Tokengate.Application do
       Tokengate.Repo,
       {DNSCluster, query: Application.get_env(:tokengate, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Tokengate.PubSub},
+      TokengateWeb.Presence,
       {Finch, name: Tokengate.Finch},
       {Oban, Application.fetch_env!(:tokengate, Oban)},
       Tokengate.Routing.Supervisor,

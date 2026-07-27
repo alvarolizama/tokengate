@@ -294,6 +294,38 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
+  def handle_event("reorder_providers", %{"alias_id" => alias_id, "ids" => ids}, socket) do
+    if socket.assigns.is_admin do
+      valid_ids =
+        from(ap in ModelProvider, where: ap.model_alias_id == ^alias_id, select: ap.id)
+        |> Repo.all()
+        |> MapSet.new()
+
+      if is_list(ids) and ids != [] and Enum.all?(ids, &MapSet.member?(valid_ids, &1)) do
+        {:ok, _} =
+          Repo.transaction(fn ->
+            ids
+            |> Enum.with_index(1)
+            |> Enum.each(fn {ap_id, priority} ->
+              from(ap in ModelProvider, where: ap.id == ^ap_id)
+              |> Repo.update_all(
+                set: [
+                  priority: priority,
+                  updated_at: DateTime.truncate(DateTime.utc_now(), :second)
+                ]
+              )
+            end)
+          end)
+
+        {:noreply, load_aliases(socket)}
+      else
+        {:noreply, put_flash(socket, :error, "Orden inválido para este modelo.")}
+      end
+    else
+      {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+    end
+  end
+
   ## Private helpers — alias save ------------------------------------------
 
   defp save_alias(socket, :new, alias_params) do
@@ -459,9 +491,16 @@ defmodule TokengateWeb.ModelsLive do
   def fmt_dec(%Decimal{} = d), do: Decimal.to_string(d)
   def fmt_dec(n), do: to_string(n)
 
-  @doc "Find model_providers for a model_alias from the preloaded association"
-  def model_providers_for(%{model_providers: aps}), do: aps
+  @doc "Find model_providers for a model_alias from the preloaded association (priority ASC, nils last)"
+  def model_providers_for(%{model_providers: aps}) do
+    Enum.sort_by(aps, fn ap -> {is_nil(ap.priority), ap.priority || 0} end)
+  end
+
   def model_providers_for(_), do: []
+
+  @doc "Whether the credential has a human-readable alias (name) set"
+  def credential_named?(%{name: name}), do: is_binary(name) and name != ""
+  def credential_named?(_), do: false
 
   @doc "Provider name from preloaded credential"
   def provider_name(%{credential: %{provider: %Provider{name: name}}}), do: name
@@ -593,6 +632,8 @@ defmodule TokengateWeb.ModelsLive do
                     <table class="table table-sm">
                       <thead>
                         <tr>
+                          <th :if={@is_admin} class="w-8" title="Arrastra para reordenar prioridad">
+                          </th>
                           <th>Proveedor</th>
                           <th>Modelo</th>
                           <th>Prioridad</th>
@@ -602,21 +643,42 @@ defmodule TokengateWeb.ModelsLive do
                           <% end %>
                         </tr>
                       </thead>
-                      <tbody>
+                      <tbody
+                        id={"ap-sortable-#{model_alias.id}"}
+                        phx-hook="SortableProviders"
+                        data-alias-id={model_alias.id}
+                      >
                         <tr
                           :for={ap <- model_providers_for(model_alias)}
                           id={"alias-provider-#{ap.id}"}
+                          data-id={ap.id}
+                          draggable={to_string(@is_admin)}
+                          class={[@is_admin && "cursor-grab active:cursor-grabbing"]}
                         >
+                          <td :if={@is_admin} class="w-8 text-base-content/30">
+                            <.icon name="hero-bars-3" class="w-4 h-4" />
+                          </td>
                           <td class="font-medium">
                             {provider_name(ap)}
-                            <span class="text-xs text-base-content/40 ml-1">
-                              {if ap.credential,
-                                do: credential_label(ap.credential),
-                                else: "—"}
+                            <span
+                              :if={ap.credential && credential_named?(ap.credential)}
+                              class="badge badge-xs badge-outline font-normal ml-1"
+                              title="Alias de la API key"
+                            >
+                              <.icon name="hero-key" class="w-3 h-3" />
+                              {ap.credential.name}
+                            </span>
+                            <span
+                              :if={ap.credential && !credential_named?(ap.credential)}
+                              class="text-xs text-base-content/40 ml-1"
+                            >
+                              {mask_key(ap.credential.api_key_encrypted)}
                             </span>
                           </td>
                           <td><code class="text-sm">{ap.provider_model}</code></td>
-                          <td>{ap.priority || "—"}</td>
+                          <td>
+                            <span class="badge badge-xs badge-ghost">{ap.priority || "—"}</span>
+                          </td>
                           <td>
                             <span class={["badge", "badge-sm", enabled_badge(ap.enabled)]}>
                               {enabled_label(ap.enabled)}

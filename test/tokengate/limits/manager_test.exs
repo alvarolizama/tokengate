@@ -237,6 +237,28 @@ defmodule Tokengate.Limits.ManagerTest do
     end
   end
 
+  describe "total_inflight/0" do
+    test "sums in-flight counts across keys" do
+      key_a = unique_key()
+      key_b = unique_key()
+      base = Manager.total_inflight()
+
+      assert :ok = Manager.acquire(key_a, %{rpm_limit: 100, concurrency_limit: 10})
+      assert :ok = Manager.acquire(key_a, %{rpm_limit: 100, concurrency_limit: 10})
+      assert :ok = Manager.acquire(key_b, %{rpm_limit: 100, concurrency_limit: 10})
+
+      assert Manager.total_inflight() == base + 3
+
+      assert :ok = Manager.release(key_a)
+      assert Manager.total_inflight() == base + 2
+
+      # Cleanup so other tests see the same baseline
+      assert :ok = Manager.release(key_a)
+      assert :ok = Manager.release(key_b)
+      assert Manager.total_inflight() == base
+    end
+  end
+
   describe "sweep — GenServer cleanup" do
     test "old bucket is swept away, recent bucket is kept" do
       key = unique_key()
