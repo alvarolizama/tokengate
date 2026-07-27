@@ -22,6 +22,10 @@ Gateway autohospedado para modelos de lenguaje (LLM). Proxy compatible con la AP
     <td><img src="docs/screenshots/teams.png" alt="Equipos"></td>
     <td><img src="docs/screenshots/alerts.png" alt="Alertas"></td>
   </tr>
+  <tr>
+    <td><img src="docs/screenshots/users.png" alt="Usuarios con impersonación 'Ver como'"></td>
+    <td></td>
+  </tr>
 </table>
 
 ## Stack
@@ -124,6 +128,7 @@ Sección `/dashboard/stats` con 3 vistas:
 ### Observabilidad
 
 - **Logs en vivo** (`/dashboard/logs`) — requests individuales en tiempo real:
+  - **KPI cards en ventana móvil de 5 minutos** — Conectados, En vuelo, Req/min, Latencia prom y Errores (con % y resaltado en rojo); tick de 5s + debounce en logs nuevos, respetan los filtros activos
   - **Sección "En vuelo ahora"** — requests pending mientras el proveedor responde (registry ETS + PubSub, con TTL sweep anti-fantasmas)
   - Columnas **Usuario, Equipo, Think ✓ y Effort** — reasoning/effort parseados del payload del cliente (`reasoning_effort`, `reasoning.effort`, `thinking.type: enabled`)
   - Filtros en vivo por agente, estado, streaming, modelo (select de aliases) y rango de fechas — los pending también respetan los filtros
@@ -142,6 +147,15 @@ Sección `/dashboard/stats` con 3 vistas:
 | Modelos, Proveedores | ✅ | ❌ | ❌ |
 | Usuarios, API Keys | ✅ | ❌ | ❌ |
 | Créditos, Alertas | ✅ | ❌ | ❌ |
+
+### Impersonación de usuarios (admin)
+
+Desde `/dashboard/users`, un admin puede entrar a la app como cualquier usuario con el botón **"Ver como"** (👁):
+
+- **Banner persistente** en todo el dashboard — "Viendo como *user@example.com* — sesión de *admin@example.com*" con botón **"Volver a mi cuenta"**
+- La sesión cambia al usuario efectivo: dashboard, stats, logs y scoping por rol se ven exactamente como los vería él
+- **Guards**: no auto-impersonación, no nesting, no se puede impersonar al root admin, target debe existir
+- **Audit log** — cada inicio (`impersonate.start`) y fin (`impersonate.stop`) queda registrado con el admin real como actor
 
 El sidebar solo muestra links de configuración a admins.
 
