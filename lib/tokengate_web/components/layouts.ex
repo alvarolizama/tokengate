@@ -192,6 +192,7 @@ defmodule TokengateWeb.Layouts do
             <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
               Monitoreo
             </p>
+            <.sidebar_link href={~p"/dashboard/alerts"} label="Alertas" icon="hero-bell-alert" />
             <.sidebar_link href={~p"/dashboard/logs"} label="Logs" icon="hero-document-text" />
           </div>
         </nav>

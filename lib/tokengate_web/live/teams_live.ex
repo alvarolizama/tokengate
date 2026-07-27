@@ -303,6 +303,10 @@ defmodule TokengateWeb.TeamsLive do
   def format_decimal(nil), do: "—"
   def format_decimal(value), do: to_string(value)
 
+  # The `headers` destination field is a :map column, but the form edits it as
+  # a JSON string in a textarea. Convert the map to JSON for display; empty
+  # maps render as an empty textarea. Invalid JSON submitted previously is
+  # stored as %{"_raw" => original} — show the original string back.
   def headers_to_string(%{} = headers) when map_size(headers) == 0, do: ""
 
   def headers_to_string(%{} = headers) do
@@ -568,6 +572,7 @@ defmodule TokengateWeb.TeamsLive do
                     />
                     <.input
                       field={@webhook_form[:headers]}
+                      value={headers_to_string(@webhook_form[:headers].value)}
                       type="textarea"
                       label="Cabeceras (JSON)"
                       placeholder='{"Authorization": "Bearer xxx"}'

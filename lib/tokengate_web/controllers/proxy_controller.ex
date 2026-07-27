@@ -164,6 +164,8 @@ defmodule TokengateWeb.ProxyController do
 
   defp execute(conn, route, payload, member, attempts_left, exclude) do
     provider = route.model_provider.credential.provider
+    # The client sends the alias name; the provider expects its own model id.
+    payload = Map.put(payload, "model", route.model_responded)
 
     case OpenAIAdapter.chat_completion(provider, route.credential, payload) do
       {:ok, body, latency_ms} ->
@@ -221,7 +223,7 @@ defmodule TokengateWeb.ProxyController do
       :exclude_credential_ids => exclude
     }
 
-    case Router.route(payload["model"], member, request_context) do
+    case Router.route(route.model_alias.name, member, request_context) do
       {:ok, new_route} ->
         execute(conn, new_route, payload, member, attempts_left - 1, exclude)
 
@@ -243,7 +245,11 @@ defmodule TokengateWeb.ProxyController do
   # accounting, and it only affects the provider's own usage reporting.
   defp execute_stream(conn, route, payload, member, attempts_left, exclude) do
     provider = route.model_provider.credential.provider
-    payload = ensure_stream_options(payload)
+    # The client sends the alias name; the provider expects its own model id.
+    payload =
+      payload
+      |> Map.put("model", route.model_responded)
+      |> ensure_stream_options()
 
     case OpenAIAdapter.stream_chat_completion(provider, route.credential, payload,
            receive_timeout: 120_000
@@ -295,7 +301,7 @@ defmodule TokengateWeb.ProxyController do
       :exclude_credential_ids => exclude
     }
 
-    case Router.route(payload["model"], member, request_context) do
+    case Router.route(route.model_alias.name, member, request_context) do
       {:ok, new_route} ->
         execute_stream(conn, new_route, payload, member, attempts_left - 1, exclude)
 

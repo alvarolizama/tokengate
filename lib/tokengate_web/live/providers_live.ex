@@ -75,10 +75,20 @@ defmodule TokengateWeb.ProvidersLive do
         Map.put(acc, provider.id, count)
       end)
 
+    # Fetch circuit breaker status for every credential
+    breaker_statuses =
+      providers
+      |> Enum.flat_map(& &1.credentials)
+      |> Enum.map(fn cred ->
+        {cred.id, Tokengate.Routing.CircuitBreakerManager.status(cred.id)}
+      end)
+      |> Enum.into(%{})
+
     socket
     |> assign(:providers, providers)
     |> assign(:providers_empty?, providers == [])
     |> assign(:provider_model_counts, provider_model_counts)
+    |> assign(:breaker_statuses, breaker_statuses)
   end
 
   ## Events — provider CRUD ------------------------------------------------
@@ -243,6 +253,17 @@ defmodule TokengateWeb.ProvidersLive do
     end
   end
 
+  def handle_event("reset_breaker", %{"id" => cred_id}, socket) do
+    cred = Providers.get_credential!(cred_id)
+
+    Tokengate.Routing.CircuitBreakerManager.reset(cred.id)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Circuit breaker reseteado.")
+     |> load_providers()}
+  end
+
   def handle_event("delete_credential", %{"id" => cred_id}, socket) do
     cred = Providers.get_credential!(cred_id)
 
@@ -324,6 +345,12 @@ defmodule TokengateWeb.ProvidersLive do
   def fmt_dt(%DateTime{} = dt) do
     Calendar.strftime(dt, "%Y-%m-%d %H:%M UTC")
   end
+
+  @doc "Human-readable label for circuit breaker state."
+  def breaker_label(:closed), do: "Cerrado"
+  def breaker_label(:open), do: "Abierto"
+  def breaker_label(:half_open), do: "Half-Open"
+  def breaker_label(_), do: "—"
 
   ## Render ----------------------------------------------------------------
 
@@ -524,6 +551,7 @@ defmodule TokengateWeb.ProvidersLive do
                         <th>Max RPM</th>
                         <th>Max conc.</th>
                         <th>Estado</th>
+                        <th>Breaker</th>
                         <th></th>
                       </tr>
                     </thead>
@@ -554,12 +582,15 @@ defmodule TokengateWeb.ProvidersLive do
                                 />
                               </label>
                             <% cred.status == "error" -> %>
-                              <div class="flex items-center gap-2">
+                              <div class="flex flex-col gap-1">
                                 <span class="badge badge-sm badge-error">
                                   Error
                                 </span>
                                 <span class="text-xs text-base-content/50" title={cred.error_reason}>
                                   {cred.error_reason || "auth_error"}
+                                </span>
+                                <span :if={cred.error_at} class="text-xs text-base-content/40">
+                                  {fmt_dt(cred.error_at)}
                                 </span>
                               </div>
                             <% true -> %>
@@ -567,6 +598,28 @@ defmodule TokengateWeb.ProvidersLive do
                                 Desactivada
                               </span>
                           <% end %>
+                        </td>
+                        <td>
+                          <% breaker = Map.get(@breaker_statuses, cred.id, :closed) %>
+                          <div class="flex items-center gap-2">
+                            <span class={[
+                              "badge badge-sm",
+                              breaker == :closed && "badge-success",
+                              breaker == :open && "badge-error",
+                              breaker == :half_open && "badge-warning"
+                            ]}>
+                              {breaker_label(breaker)}
+                            </span>
+                            <button
+                              :if={breaker != :closed}
+                              phx-click="reset_breaker"
+                              phx-value-id={cred.id}
+                              class="btn btn-xs btn-ghost"
+                              id={"reset-breaker-#{cred.id}"}
+                            >
+                              <.icon name="hero-arrow-path" class="w-3 h-3" /> Reset
+                            </button>
+                          </div>
                         </td>
                         <td class="text-right">
                           <%= if cred.status == "error" do %>

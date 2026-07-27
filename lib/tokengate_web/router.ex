@@ -20,11 +20,6 @@ defmodule TokengateWeb.Router do
     plug TokengateWeb.Plugs.DashboardAuth, action: :require_authenticated
   end
 
-  # Browser routes reserved for admins (global_role == "admin").
-  pipeline :browser_admin do
-    plug TokengateWeb.Plugs.DashboardAuth, action: :require_admin
-  end
-
   pipeline :api do
     plug :accepts, ["json"]
   end
@@ -73,6 +68,7 @@ defmodule TokengateWeb.Router do
       live "/dashboard/users", UsersLive
       live "/dashboard/models", ModelsLive
       live "/dashboard/keys", ApiKeysLive
+      live "/dashboard/alerts", AlertsLive
     end
   end
 
