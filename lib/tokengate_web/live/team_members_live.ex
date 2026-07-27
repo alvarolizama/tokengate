@@ -10,8 +10,9 @@ defmodule TokengateWeb.TeamMembersLive do
   Supports:
     - Add member by email (creates team_member + auto-generates API key).
     - Remove member.
-    - Per-member extras: extra_daily_budget_usd, extra_concurrency, extra_rpm,
-      extra_model_aliases (individual grants beyond team aliases).
+    - Per-member extras: extra_daily_budget_usd, extra_monthly_budget_usd,
+      extra_concurrency, extra_rpm, extra_model_aliases (individual grants
+      beyond team aliases).
     - Change team_role (manager/user).
   """
 
@@ -194,6 +195,7 @@ defmodule TokengateWeb.TeamMembersLive do
       attrs =
         %{
           extra_daily_budget_usd: parse_decimal(override_params["extra_daily_budget_usd"]),
+          extra_monthly_budget_usd: parse_decimal(override_params["extra_monthly_budget_usd"]),
           extra_concurrency: parse_integer(override_params["extra_concurrency"]),
           extra_rpm: parse_integer(override_params["extra_rpm"])
         }
@@ -356,10 +358,14 @@ defmodule TokengateWeb.TeamMembersLive do
                 </div>
               </div>
 
-              <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3 text-sm">
+              <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-3 text-sm">
                 <div>
                   <p class="text-xs text-base-content/50 uppercase tracking-wide">Extra diario</p>
                   <p class="font-medium">{format_decimal(member.extra_daily_budget_usd)}</p>
+                </div>
+                <div>
+                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Extra mensual</p>
+                  <p class="font-medium">{format_decimal(member.extra_monthly_budget_usd)}</p>
                 </div>
                 <div>
                   <p class="text-xs text-base-content/50 uppercase tracking-wide">
@@ -429,6 +435,11 @@ defmodule TokengateWeb.TeamMembersLive do
                             do: Decimal.to_string(member.extra_daily_budget_usd),
                             else: ""
                           ),
+                        "extra_monthly_budget_usd" =>
+                          if(member.extra_monthly_budget_usd,
+                            do: Decimal.to_string(member.extra_monthly_budget_usd),
+                            else: ""
+                          ),
                         "extra_concurrency" =>
                           if(member.extra_concurrency,
                             do: to_string(member.extra_concurrency),
@@ -445,7 +456,7 @@ defmodule TokengateWeb.TeamMembersLive do
                     phx-submit="save_overrides"
                     phx-value-id={member.id}
                   >
-                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
                       <.input
                         field={to_form(%{})[:extra_daily_budget_usd]}
                         type="number"
@@ -455,6 +466,19 @@ defmodule TokengateWeb.TeamMembersLive do
                         value={
                           if(member.extra_daily_budget_usd,
                             do: Decimal.to_string(member.extra_daily_budget_usd),
+                            else: ""
+                          )
+                        }
+                      />
+                      <.input
+                        field={to_form(%{})[:extra_monthly_budget_usd]}
+                        type="number"
+                        label="Extra presupuesto mensual (USD)"
+                        step="any"
+                        name="overrides[extra_monthly_budget_usd]"
+                        value={
+                          if(member.extra_monthly_budget_usd,
+                            do: Decimal.to_string(member.extra_monthly_budget_usd),
                             else: ""
                           )
                         }

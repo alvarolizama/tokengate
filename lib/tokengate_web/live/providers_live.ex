@@ -447,7 +447,14 @@ defmodule TokengateWeb.ProvidersLive do
                 <div :if={@credential_form} class="mb-3" id="credential-form-card">
                   <.form for={@credential_form} id="credential-form" phx-submit="save_credential">
                     <.input field={@credential_form[:provider_id]} type="hidden" />
-                    <div class="grid grid-cols-1 sm:grid-cols-4 gap-3 items-end">
+                    <div class="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
+                      <.input
+                        field={@credential_form[:name]}
+                        type="text"
+                        label="Alias"
+                        placeholder="Producción"
+                        hint="Nombre para identificar esta credencial."
+                      />
                       <.input
                         field={@credential_form[:api_key_encrypted]}
                         type="text"
@@ -487,6 +494,7 @@ defmodule TokengateWeb.ProvidersLive do
                   <table class="table table-sm">
                     <thead>
                       <tr>
+                        <th>Alias</th>
                         <th>Key</th>
                         <th>Max RPM</th>
                         <th>Max conc.</th>
@@ -496,6 +504,9 @@ defmodule TokengateWeb.ProvidersLive do
                     </thead>
                     <tbody>
                       <tr :for={cred <- credentials_for(provider)} id={"credential-#{cred.id}"}>
+                        <td>
+                          {cred.name || "—"}
+                        </td>
                         <td>
                           <code class="text-sm font-mono">{mask_key(cred.api_key_encrypted)}</code>
                         </td>

@@ -323,10 +323,14 @@ defmodule Tokengate.Accounts do
   Computes the effective limits for a team member by combining team defaults
   with member overrides.
 
-  - `daily_budget_usd` / `monthly_budget_usd`: team default + member's
-    `extra_daily_budget_usd` (extra added when not nil). If the team default is
-    `nil`, the result is `nil` (no limit) unless an extra is provided, in which
-    case the result is just the extra.
+  - `daily_budget_usd`: team default + member's `extra_daily_budget_usd`
+    (extra added when not nil). If the team default is `nil`, the result is
+    `nil` (no limit) unless an extra is provided, in which case the result is
+    just the extra.
+  - `monthly_budget_usd`: team default + member's `extra_monthly_budget_usd`
+    (extra added when not nil). If the team default is `nil`, the result is
+    `nil` (no limit) unless an extra is provided, in which case the result is
+    just the extra.
   - `concurrency_limit`: team default + member's `extra_concurrency` (when not
     nil). The team default is always present (defaults to 5).
   - `rpm_limit`: team's `default_rpm_limit` + member's `extra_rpm` (when not
@@ -342,7 +346,8 @@ defmodule Tokengate.Accounts do
     %{
       daily_budget_usd:
         combine_decimal(team.default_daily_budget_usd, team_member.extra_daily_budget_usd),
-      monthly_budget_usd: team.default_monthly_budget_usd,
+      monthly_budget_usd:
+        combine_decimal(team.default_monthly_budget_usd, team_member.extra_monthly_budget_usd),
       concurrency_limit:
         combine_integer(team.default_concurrency_limit, team_member.extra_concurrency),
       rpm_limit: combine_integer(team.default_rpm_limit, team_member.extra_rpm)

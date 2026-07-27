@@ -205,6 +205,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
       |> form("#credential-form",
         credential: %{
           provider_id: provider.id,
+          name: "Producción",
           api_key_encrypted: "sk-tes...abcd",
           max_rpm: "500",
           max_concurrent: "10"
@@ -213,6 +214,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
       |> render_submit()
 
     assert html =~ "Credencial creada."
+    assert html =~ "Producción"
     assert html =~ "••••••abcd"
     assert html =~ "500"
 

@@ -431,7 +431,14 @@ defmodule TokengateWeb.ModelsLive do
   @doc "Credential options for the select (id -> display)"
   def credential_options(credentials) do
     Enum.map(credentials, fn c ->
-      {"#{c.provider.name} · #{mask_key(c.api_key_encrypted)}", c.id}
+      label =
+        if c.name do
+          "#{c.provider.name} · #{c.name}"
+        else
+          "#{c.provider.name} · #{mask_key(c.api_key_encrypted)}"
+        end
+
+      {label, c.id}
     end)
   end
 
@@ -459,6 +466,11 @@ defmodule TokengateWeb.ModelsLive do
   @doc "Provider name from preloaded credential"
   def provider_name(%{credential: %{provider: %Provider{name: name}}}), do: name
   def provider_name(_), do: "—"
+
+  @doc "Credential label: alias if set, otherwise masked key"
+  def credential_label(%{name: name}) when is_binary(name) and name != "", do: name
+  def credential_label(%{api_key_encrypted: key}), do: mask_key(key)
+  def credential_label(_), do: "—"
 
   @doc "Enabled badge class"
   def enabled_badge(true), do: "badge-success"
@@ -599,7 +611,7 @@ defmodule TokengateWeb.ModelsLive do
                             {provider_name(ap)}
                             <span class="text-xs text-base-content/40 ml-1">
                               {if ap.credential,
-                                do: mask_key(ap.credential.api_key_encrypted),
+                                do: credential_label(ap.credential),
                                 else: "—"}
                             </span>
                           </td>

@@ -53,6 +53,7 @@ defmodule Tokengate.Logs.WriteWorker do
   end
 
   defp parse_inserted_at(nil), do: nil
+
   defp parse_inserted_at(iso_string) when is_binary(iso_string) do
     case DateTime.from_iso8601(iso_string) do
       {:ok, dt, _offset} -> dt

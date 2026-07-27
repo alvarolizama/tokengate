@@ -66,11 +66,11 @@ defmodule TokengateWeb.LogsLive do
     streaming = filters["streaming"]
     model_search = filters["model_search"]
 
-    (agent in ["", nil, log.agent_type])
-    and status_class_match?(log.status_code, status_class)
-    and streaming_match?(log.streaming, streaming)
-    and model_match?(log, model_search)
-    and date_range_match?(log.inserted_at, filters["from"], filters["to"])
+    agent in ["", nil, log.agent_type] and
+      status_class_match?(log.status_code, status_class) and
+      streaming_match?(log.streaming, streaming) and
+      model_match?(log, model_search) and
+      date_range_match?(log.inserted_at, filters["from"], filters["to"])
   end
 
   defp status_class_match?(_status, ""), do: true
@@ -88,6 +88,7 @@ defmodule TokengateWeb.LogsLive do
 
   defp model_match?(_log, ""), do: true
   defp model_match?(_log, nil), do: true
+
   defp model_match?(log, search) do
     String.contains?(log.model_requested || "", search) or
       String.contains?(log.model_responded || "", search)
@@ -95,22 +96,26 @@ defmodule TokengateWeb.LogsLive do
 
   defp date_range_match?(_dt, "", ""), do: true
   defp date_range_match?(_dt, nil, nil), do: true
-  defp date_range_match?(dt, from, to) do
-    after_from? = case parse_date_string(from) do
-      nil -> true
-      from_dt -> DateTime.compare(dt, from_dt) != :lt
-    end
 
-    before_to? = case parse_date_string(to) do
-      nil -> true
-      to_dt -> DateTime.compare(dt, to_dt) != :gt
-    end
+  defp date_range_match?(dt, from, to) do
+    after_from? =
+      case parse_date_string(from) do
+        nil -> true
+        from_dt -> DateTime.compare(dt, from_dt) != :lt
+      end
+
+    before_to? =
+      case parse_date_string(to) do
+        nil -> true
+        to_dt -> DateTime.compare(dt, to_dt) != :gt
+      end
 
     after_from? and before_to?
   end
 
   defp parse_date_string(""), do: nil
   defp parse_date_string(nil), do: nil
+
   defp parse_date_string(date_str) do
     case Date.from_iso8601(date_str) do
       {:ok, date} ->

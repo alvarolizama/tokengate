@@ -361,6 +361,10 @@ defmodule Tokengate.Logs do
     * `:total_prompt_tokens`
     * `:total_completion_tokens`
     * `:request_count`
+    * `:avg_latency_ms` — mean latency over matched rows (`nil` when none)
+    * `:avg_tps` — approximate tokens-per-second: `SUM(completion_tokens) /
+      (SUM(latency_ms) / 1000)`. Assumes output is the dominant phase; nil
+      when no latency samples are present.
 
   All sums are Decimal-safe (use `COALESCE` + `SUM` in SQL). Token sums
   default to 0 when no rows match.
@@ -376,7 +380,9 @@ defmodule Tokengate.Logs do
         total_estimated_cost_usd: fragment("COALESCE(SUM(estimated_cost_usd), 0)"),
         total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
         total_completion_tokens: coalesce(sum(rl.completion_tokens), 0),
-        request_count: count(rl.id)
+        request_count: count(rl.id),
+        total_latency_ms: fragment("COALESCE(SUM(latency_ms), 0)"),
+        avg_latency_ms: fragment("AVG(latency_ms)")
       })
       |> Repo.one()
 
@@ -387,7 +393,25 @@ defmodule Tokengate.Logs do
       total_estimated_cost_usd: Decimal.new(to_string(result.total_estimated_cost_usd)),
       total_prompt_tokens: result.total_prompt_tokens,
       total_completion_tokens: result.total_completion_tokens,
-      request_count: result.request_count
+      request_count: result.request_count,
+      avg_latency_ms: avg_to_float(result.avg_latency_ms),
+      avg_tps: compute_avg_tps(result.total_completion_tokens, result.total_latency_ms)
     }
+  end
+
+  defp avg_to_float(nil), do: nil
+
+  defp avg_to_float(%Decimal{} = d) do
+    d |> Decimal.to_float() |> Float.round(1)
+  end
+
+  defp avg_to_float(n) when is_integer(n), do: Float.round(n / 1, 1)
+  defp avg_to_float(n) when is_float(n), do: Float.round(n, 1)
+
+  defp compute_avg_tps(_tokens, 0), do: nil
+  defp compute_avg_tps(0, _latency), do: 0.0
+
+  defp compute_avg_tps(tokens, latency_ms) when is_integer(tokens) and is_integer(latency_ms) do
+    tokens / (latency_ms / 1000)
   end
 end

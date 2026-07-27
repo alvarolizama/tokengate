@@ -13,6 +13,7 @@ defmodule Tokengate.Providers.Credential do
   @statuses ~w(active disabled)
 
   schema "provider_credentials" do
+    field :name, :string
     field :api_key_encrypted, :string
     field :max_rpm, :integer
     field :max_concurrent, :integer
@@ -27,7 +28,7 @@ defmodule Tokengate.Providers.Credential do
   @doc false
   def changeset(credential, attrs) do
     credential
-    |> cast(attrs, [:provider_id, :api_key_encrypted, :max_rpm, :max_concurrent, :status])
+    |> cast(attrs, [:provider_id, :name, :api_key_encrypted, :max_rpm, :max_concurrent, :status])
     |> validate_required([:provider_id, :api_key_encrypted, :status])
     |> validate_inclusion(:status, @statuses)
     |> foreign_key_constraint(:provider_id)
