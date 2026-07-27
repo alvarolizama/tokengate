@@ -939,7 +939,12 @@ defmodule Tokengate.Metrics.RollupTest do
 
       # Truncar a la hora para que los buckets sean deterministas sin
       # importar a qué minuto corra el test.
-      hour_now = DateTime.utc_now() |> DateTime.truncate(:second) |> Map.put(:minute, 0) |> Map.put(:second, 0)
+      hour_now =
+        DateTime.utc_now()
+        |> DateTime.truncate(:second)
+        |> Map.put(:minute, 0)
+        |> Map.put(:second, 0)
+
       busy = DateTime.add(hour_now, -3600, :second) |> DateTime.add(600, :second)
       quiet = DateTime.add(hour_now, -7200, :second) |> DateTime.add(600, :second)
 
