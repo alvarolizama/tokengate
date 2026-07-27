@@ -235,8 +235,7 @@ defmodule TokengateWeb.CreditsLive do
                             class={["progress w-full", bar_class(tb.monthly_pct)]}
                             value={bar_value(tb.monthly_pct)}
                             max="100"
-                          >
-                          </progress>
+                          ></progress>
                         </div>
                       <% end %>
                     </td>
