@@ -55,8 +55,12 @@ Soporta proveedores `pay_per_token` (pago por token) e `included` (suscripción/
   - Gasto diario y mensual (USD)
   - Concurrencia máxima
   - RPM (requests por minuto)
-  - Bloqueo automático al superar límites
+  - Bloqueo automático al superar límites (402 sin tocar al proveedor)
   - Overrides individuales (`extra_daily_budget_usd`, etc.)
+- **Visibilidad de créditos** (admin):
+  - `/dashboard/credits` — todos los miembros con barras de progreso diario/mensual, badges de estado (OK / Por agotarse ≥80% / Agotado / Sin límite) y refresh en vivo
+  - Sección "Miembros sin crédito" en Alertas + chip en el topbar con el conteo de agotados
+  - Columna "Gasto hoy / mes" en la página de Usuarios
 
 ### Autenticación
 
@@ -109,6 +113,7 @@ Sección `/dashboard/stats` con 3 vistas:
 | Equipos y miembros | ✅ | ✅ (sus equipos) | ❌ |
 | Modelos, Proveedores | ✅ | ❌ | ❌ |
 | Usuarios, API Keys | ✅ | ❌ | ❌ |
+| Créditos, Alertas | ✅ | ❌ | ❌ |
 
 El sidebar solo muestra links de configuración a admins.
 
