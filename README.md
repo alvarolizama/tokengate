@@ -5,6 +5,25 @@
 
 Gateway autohospedado para modelos de lenguaje (LLM). Proxy compatible con la API de OpenAI que enruta peticiones a múltiples proveedores con selección por prioridad y sticky routing, fallback, circuit breaker, presupuestos, observabilidad y control de costos multi-dimensión.
 
+<table>
+  <tr>
+    <td><img src="docs/screenshots/dashboard.png" alt="Dashboard en vivo"></td>
+    <td><img src="docs/screenshots/stats.png" alt="Estadísticas con ranking de proveedores"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/logs.png" alt="Logs en vivo con requests en vuelo"></td>
+    <td><img src="docs/screenshots/credits.png" alt="Créditos y presupuestos por equipo"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/models.png" alt="Aliases de modelos"></td>
+    <td><img src="docs/screenshots/providers.png" alt="Proveedores"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/teams.png" alt="Equipos"></td>
+    <td><img src="docs/screenshots/alerts.png" alt="Alertas"></td>
+  </tr>
+</table>
+
 ## Stack
 
 - **Elixir + Phoenix LiveView** (v1.8) — UI en tiempo real, sin SPA
@@ -59,6 +78,8 @@ Soporta proveedores `pay_per_token` (pago por token) e `included` (suscripción/
   - Overrides individuales (`extra_daily_budget_usd`, etc.)
 - **Visibilidad de créditos** (admin):
   - `/dashboard/credits` — todos los miembros con barras de progreso diario/mensual, badges de estado (OK / Por agotarse ≥80% / Agotado / Sin límite) y refresh en vivo
+  - **Tope presupuestario por equipo** — suma de límites mensuales de miembros vs gasto real del mes
+  - **Ahorro del mes** por miembro (vs precio de mercado)
   - Sección "Miembros sin crédito" en Alertas + chip en el topbar con el conteo de agotados
   - Columna "Gasto hoy / mes" en la página de Usuarios
 
@@ -85,7 +106,9 @@ Dashboard principal (`/dashboard`) con KPIs y gráficas por periodo (Hoy, 7d, 30
 
 Sección `/dashboard/stats` con 3 vistas:
 
-- **Resumen** (`/dashboard/stats`) — KPIs globales + Top 5 modelos/equipos/miembros
+- **Resumen** (`/dashboard/stats`) — KPIs globales + Top 5 modelos/equipos/miembros/errores
+- **Patrones de uso** — requests por hora del día, pico de concurrencia, horas y minutos más ocupados
+- **Ranking de proveedores** (admin) — score compuesto: 60% confiabilidad (tasa de fallos) + 40% velocidad relativa al más rápido; tiers **S/A/B/C/D**, umbral mínimo de 10 requests, con latencia promedio, P95 y TTFT
 - **Por modelo** (`/dashboard/stats/models`) — tabla de todos los modelos con drill-down:
   - Costo de mercado vs real vs ahorro
   - Desglose por proveedor (performance y costo)
@@ -100,6 +123,11 @@ Sección `/dashboard/stats` con 3 vistas:
 
 ### Observabilidad
 
+- **Logs en vivo** (`/dashboard/logs`) — requests individuales en tiempo real:
+  - **Sección "En vuelo ahora"** — requests pending mientras el proveedor responde (registry ETS + PubSub, con TTL sweep anti-fantasmas)
+  - Columnas **Usuario, Equipo, Think ✓ y Effort** — reasoning/effort parseados del payload del cliente (`reasoning_effort`, `reasoning.effort`, `thinking.type: enabled`)
+  - Filtros en vivo por agente, estado, streaming, modelo (select de aliases) y rango de fechas — los pending también respetan los filtros
+  - TTFT (time to first token) para streaming
 - **Logs de petición** asíncronos (Oban) — latencia, tokens, costo, status, agente
 - **Webhooks OTLP** compatibles con OpenRouter
 - **Audit log** — cambios administrativos
