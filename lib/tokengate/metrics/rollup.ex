@@ -12,12 +12,16 @@ defmodule Tokengate.Metrics.Rollup do
     * `hourly_series/2`     — bucketed request/cost/savings per hour
     * `top_consumers/2`     — per team-member aggregates, ranked by cost
     * `agent_breakdown/1`   — per agent_type aggregates
+    * `breakdown_by_model/2` — per-model aggregates (requests, costs, tokens, tps)
+    * `breakdown_by_member/2` — per-member aggregates (requests, costs, tokens, tps)
+    * `breakdown_by_team/1`   — per-team aggregates (requests, costs, tokens, tps)
   """
 
   import Ecto.Query, warn: false
 
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Accounts.TeamMember
+  alias Tokengate.Providers.ModelAlias
   alias Tokengate.Repo
 
   # -----------------------------------------------------------------------
@@ -184,8 +188,256 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   # -----------------------------------------------------------------------
+  # breakdown_by_model/2
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Returns per-model-aggregate metrics ranked by total cost (descending).
+
+  Each row is:
+
+      %{
+        model_id: binary | nil,
+        model_name: String.t(),
+        request_count: integer,
+        cost_usd: Decimal,            # what the provider charged (cost_usd)
+        provider_cost_usd: Decimal,  # what was actually paid
+        estimated_cost_usd: Decimal, # market estimate
+        savings_usd: Decimal,
+        prompt_tokens: integer,
+        completion_tokens: integer,
+        avg_tps: float | nil
+      }
+
+  `team_id` of `nil` is org-wide. When given, filters to logs whose
+  team_member belongs to that team.
+
+  ## Options
+
+    * `:from` — `inserted_at >= from` (DateTime)
+    * `:to`   — `inserted_at <= to` (DateTime)
+  """
+  @spec breakdown_by_model(String.t() | nil, keyword()) :: [map()]
+  def breakdown_by_model(team_id \\ nil, opts \\ [])
+
+  def breakdown_by_model(team_id, opts) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    query =
+      RequestLog
+      |> maybe_join_team(team_id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> join(:left, [rl], ma in ModelAlias, on: rl.model_alias_id == ma.id)
+      |> group_by([rl, ma], ma.id)
+      |> order_by([rl], desc: fragment("COALESCE(SUM(cost_usd), 0)"))
+      |> select([rl, ma], %{
+        model_id: ma.id,
+        model_name: ma.name,
+        request_count: count(rl.id),
+        cost_usd: fragment("COALESCE(SUM(cost_usd), 0)"),
+        provider_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
+        estimated_cost_usd: fragment("COALESCE(SUM(estimated_cost_usd), 0)"),
+        savings_usd: fragment("COALESCE(SUM(savings_usd), 0)"),
+        prompt_tokens: fragment("COALESCE(SUM(prompt_tokens), 0)"),
+        completion_tokens: fragment("COALESCE(SUM(completion_tokens), 0)"),
+        total_latency_ms: fragment("COALESCE(SUM(latency_ms), 0)")
+      })
+
+    Repo.all(query)
+    |> Enum.map(fn row ->
+      %{
+        model_id: row.model_id,
+        model_name: row.model_name || "—",
+        request_count: row.request_count,
+        cost_usd: Decimal.new(to_string(row.cost_usd)),
+        provider_cost_usd: Decimal.new(to_string(row.provider_cost_usd)),
+        estimated_cost_usd: Decimal.new(to_string(row.estimated_cost_usd)),
+        savings_usd: Decimal.new(to_string(row.savings_usd)),
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens,
+        avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
+      }
+    end)
+  end
+
+  # -----------------------------------------------------------------------
+  # breakdown_by_member/2
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Returns per-team-member aggregate metrics ranked by total cost (descending).
+
+  Each row is:
+
+      %{
+        team_member_id: binary,
+        team_name: String.t(),
+        user_email: String.t(),
+        request_count: integer,
+        cost_usd: Decimal,
+        provider_cost_usd: Decimal,
+        estimated_cost_usd: Decimal,
+        savings_usd: Decimal,
+        prompt_tokens: integer,
+        completion_tokens: integer,
+        avg_tps: float | nil
+      }
+
+  `team_id` of `nil` is org-wide. When given, filters to logs whose
+  team_member belongs to that team.
+
+  ## Options
+
+    * `:from` — `inserted_at >= from` (DateTime)
+    * `:to`   — `inserted_at <= to` (DateTime)
+  """
+  @spec breakdown_by_member(String.t() | nil, keyword()) :: [map()]
+  def breakdown_by_member(team_id \\ nil, opts \\ [])
+
+  def breakdown_by_member(team_id, opts) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    query =
+      RequestLog
+      |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
+      |> join(:inner, [tm], t in assoc(tm, :team))
+      |> join(:inner, [tm], u in assoc(tm, :user))
+      |> maybe_member_team_filter(team_id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> group_by([rl, tm, t, u], tm.id)
+      |> order_by([rl], desc: fragment("COALESCE(SUM(rl.cost_usd), 0)"))
+      |> select([rl, tm, t, u], %{
+        team_member_id: tm.id,
+        team_name: t.name,
+        user_email: u.email,
+        request_count: count(rl.id),
+        cost_usd: fragment("COALESCE(SUM(rl.cost_usd), 0)"),
+        provider_cost_usd: fragment("COALESCE(SUM(rl.provider_cost_usd), 0)"),
+        estimated_cost_usd: fragment("COALESCE(SUM(rl.estimated_cost_usd), 0)"),
+        savings_usd: fragment("COALESCE(SUM(rl.savings_usd), 0)"),
+        prompt_tokens: fragment("COALESCE(SUM(rl.prompt_tokens), 0)"),
+        completion_tokens: fragment("COALESCE(SUM(rl.completion_tokens), 0)"),
+        total_latency_ms: fragment("COALESCE(SUM(rl.latency_ms), 0)")
+      })
+
+    Repo.all(query)
+    |> Enum.map(fn row ->
+      %{
+        team_member_id: row.team_member_id,
+        team_name: row.team_name,
+        user_email: row.user_email,
+        request_count: row.request_count,
+        cost_usd: Decimal.new(to_string(row.cost_usd)),
+        provider_cost_usd: Decimal.new(to_string(row.provider_cost_usd)),
+        estimated_cost_usd: Decimal.new(to_string(row.estimated_cost_usd)),
+        savings_usd: Decimal.new(to_string(row.savings_usd)),
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens,
+        avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
+      }
+    end)
+  end
+
+  # -----------------------------------------------------------------------
+  # breakdown_by_team/1
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Returns per-team aggregate metrics ranked by total cost (descending).
+
+  Each row is:
+
+      %{
+        team_id: binary,
+        team_name: String.t(),
+        request_count: integer,
+        cost_usd: Decimal,
+        provider_cost_usd: Decimal,
+        estimated_cost_usd: Decimal,
+        savings_usd: Decimal,
+        prompt_tokens: integer,
+        completion_tokens: integer,
+        avg_tps: float | nil
+      }
+
+  ## Options
+
+    * `:from` — `inserted_at >= from` (DateTime)
+    * `:to`   — `inserted_at <= to` (DateTime)
+  """
+  @spec breakdown_by_team(keyword()) :: [map()]
+  def breakdown_by_team(opts \\ [])
+
+  def breakdown_by_team(opts) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    query =
+      RequestLog
+      |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
+      |> join(:inner, [tm], t in assoc(tm, :team))
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> group_by([rl, t], t.id)
+      |> order_by([rl], desc: fragment("COALESCE(SUM(rl.cost_usd), 0)"))
+      |> select([rl, t], %{
+        team_id: t.id,
+        team_name: t.name,
+        request_count: count(rl.id),
+        cost_usd: fragment("COALESCE(SUM(rl.cost_usd), 0)"),
+        provider_cost_usd: fragment("COALESCE(SUM(rl.provider_cost_usd), 0)"),
+        estimated_cost_usd: fragment("COALESCE(SUM(rl.estimated_cost_usd), 0)"),
+        savings_usd: fragment("COALESCE(SUM(rl.savings_usd), 0)"),
+        prompt_tokens: fragment("COALESCE(SUM(rl.prompt_tokens), 0)"),
+        completion_tokens: fragment("COALESCE(SUM(rl.completion_tokens), 0)"),
+        total_latency_ms: fragment("COALESCE(SUM(rl.latency_ms), 0)")
+      })
+
+    Repo.all(query)
+    |> Enum.map(fn row ->
+      %{
+        team_id: row.team_id,
+        team_name: row.team_name,
+        request_count: row.request_count,
+        cost_usd: Decimal.new(to_string(row.cost_usd)),
+        provider_cost_usd: Decimal.new(to_string(row.provider_cost_usd)),
+        estimated_cost_usd: Decimal.new(to_string(row.estimated_cost_usd)),
+        savings_usd: Decimal.new(to_string(row.savings_usd)),
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens,
+        avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
+      }
+    end)
+  end
+
+  # -----------------------------------------------------------------------
   # Internals
   # -----------------------------------------------------------------------
+
+  defp maybe_member_team_filter(query, nil), do: query
+
+  defp maybe_member_team_filter(query, team_id) when is_binary(team_id) do
+    where(query, [rl, tm, t, u], tm.team_id == ^team_id)
+  end
+
+  defp maybe_from(query, nil), do: query
+  defp maybe_from(query, from), do: where(query, [rl], rl.inserted_at >= ^from)
+
+  defp maybe_to(query, nil), do: query
+  defp maybe_to(query, to), do: where(query, [rl], rl.inserted_at <= ^to)
+
+  defp compute_tps(_tokens, 0), do: nil
+  defp compute_tps(0, _latency), do: 0.0
+
+  defp compute_tps(tokens, latency_ms) when is_integer(tokens) and is_integer(latency_ms) do
+    Float.round(tokens / (latency_ms / 1000), 1)
+  end
+
+  defp compute_tps(_, _), do: nil
 
   defp to_utc_datetime(%DateTime{} = dt), do: dt
 

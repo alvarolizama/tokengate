@@ -9,6 +9,7 @@ defmodule Tokengate.Metrics.RollupTest do
   alias Tokengate.Logs
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Accounts
+  alias Tokengate.Providers
 
   # ---------------------------------------------------------------------
   # Fixtures — create FK parents via the REAL Accounts context, then insert
@@ -81,6 +82,24 @@ defmodule Tokengate.Metrics.RollupTest do
     latency_ms: 500,
     streaming: false
   }
+
+  defp model_alias_fixture(attrs \\ %{}) do
+    {:ok, ma} =
+      Providers.create_model_alias(
+        Map.merge(
+          %{
+            "name" => "gpt-#{System.unique_integer([:positive])}",
+            "display_name" => "GPT Test",
+            "market_input_price_per_1m" => "1.00",
+            "market_output_price_per_1m" => "2.00",
+            "context_window" => 128_000
+          },
+          attrs
+        )
+      )
+
+    ma
+  end
 
   defp log_request(team_member_id, inserted_at, overrides \\ %{}) do
     attrs =
@@ -349,6 +368,149 @@ defmodule Tokengate.Metrics.RollupTest do
       {_, team} = team_member_fixture()
       breakdown = Rollup.agent_breakdown(team.id)
       assert breakdown == %{}
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # breakdown_by_model/2
+  # ---------------------------------------------------------------------
+
+  describe "breakdown_by_model/2" do
+    test "returns per-model aggregates ranked by cost descending" do
+      {tm, _team} = team_member_fixture()
+      ma = model_alias_fixture(%{"name" => "gpt-4o"})
+
+      log_request(tm.id, ~U[2026-07-26 10:00:00Z], %{
+        model_alias_id: ma.id,
+        cost_usd: Decimal.new("1.000000"),
+        provider_cost_usd: Decimal.new("0.800000"),
+        estimated_cost_usd: Decimal.new("1.000000"),
+        savings_usd: Decimal.new("0.200000"),
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        latency_ms: 1000
+      })
+
+      log_request(tm.id, ~U[2026-07-26 11:00:00Z], %{
+        model_alias_id: ma.id,
+        cost_usd: Decimal.new("2.000000"),
+        provider_cost_usd: Decimal.new("1.500000"),
+        estimated_cost_usd: Decimal.new("2.000000"),
+        savings_usd: Decimal.new("0.500000"),
+        prompt_tokens: 200,
+        completion_tokens: 100,
+        latency_ms: 1000
+      })
+
+      results = Rollup.breakdown_by_model(nil, from: ~U[2026-07-01 00:00:00Z])
+
+      assert length(results) == 1
+      row = hd(results)
+      assert row.model_id == ma.id
+      assert row.model_name == "gpt-4o"
+      assert row.request_count == 2
+      assert Decimal.equal?(row.cost_usd, Decimal.new("3.000000"))
+      assert Decimal.equal?(row.provider_cost_usd, Decimal.new("2.300000"))
+      assert Decimal.equal?(row.estimated_cost_usd, Decimal.new("3.000000"))
+      assert Decimal.equal?(row.savings_usd, Decimal.new("0.700000"))
+      assert row.prompt_tokens == 300
+      assert row.completion_tokens == 150
+      # 150 tokens / 2 seconds = 75.0 tps
+      assert row.avg_tps == 75.0
+    end
+
+    test "returns multiple models ranked by cost" do
+      {tm, _team} = team_member_fixture()
+      ma1 = model_alias_fixture(%{"name" => "cheap-model"})
+      ma2 = model_alias_fixture(%{"name" => "expensive-model"})
+
+      log_request(tm.id, ~U[2026-07-26 10:00:00Z], %{
+        model_alias_id: ma1.id,
+        cost_usd: Decimal.new("0.500000")
+      })
+
+      log_request(tm.id, ~U[2026-07-26 11:00:00Z], %{
+        model_alias_id: ma2.id,
+        cost_usd: Decimal.new("5.000000")
+      })
+
+      results = Rollup.breakdown_by_model(nil, from: ~U[2026-07-01 00:00:00Z])
+
+      assert length(results) == 2
+      assert hd(results).model_name == "expensive-model"
+    end
+
+    test "returns empty list when no logs match" do
+      results = Rollup.breakdown_by_model(nil, from: ~U[2026-07-01 00:00:00Z])
+      assert results == []
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # breakdown_by_member/2
+  # ---------------------------------------------------------------------
+
+  describe "breakdown_by_member/2" do
+    test "returns per-member aggregates with team and user info" do
+      team = team_fixture()
+      user = user_fixture(%{"email" => "test@example.com"})
+
+      {:ok, tm} = Accounts.create_team_member(%{"user_id" => user.id, "team_id" => team.id})
+
+      log_request(tm.id, ~U[2026-07-26 10:00:00Z], %{
+        cost_usd: Decimal.new("1.000000"),
+        provider_cost_usd: Decimal.new("0.800000"),
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        latency_ms: 500
+      })
+
+      results = Rollup.breakdown_by_member(nil, from: ~U[2026-07-01 00:00:00Z])
+
+      assert length(results) >= 1
+      row = Enum.find(results, fn r -> r.team_member_id == tm.id end)
+      assert row.team_name == team.name
+      assert row.user_email == "test@example.com"
+      assert row.request_count == 1
+      assert Decimal.equal?(row.cost_usd, Decimal.new("1.000000"))
+    end
+
+    test "team filter restricts to that team" do
+      {tm1, team1} = team_member_fixture()
+      {tm2, _team2} = team_member_fixture()
+
+      log_request(tm1.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("1.000000")})
+      log_request(tm2.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("5.000000")})
+
+      results = Rollup.breakdown_by_member(team1.id, from: ~U[2026-07-01 00:00:00Z])
+      assert length(results) == 1
+      assert hd(results).team_member_id == tm1.id
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # breakdown_by_team/1
+  # ---------------------------------------------------------------------
+
+  describe "breakdown_by_team/1" do
+    test "returns per-team aggregates ranked by cost" do
+      {tm1, team1} = team_member_fixture()
+      {tm2, _team2} = team_member_fixture()
+
+      log_request(tm1.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("1.000000")})
+      log_request(tm2.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("5.000000")})
+
+      results = Rollup.breakdown_by_team(from: ~U[2026-07-01 00:00:00Z])
+
+      assert length(results) >= 2
+      # Most expensive team should be first
+      [first | _] = results
+      assert Decimal.equal?(first.cost_usd, Decimal.new("5.000000"))
+    end
+
+    test "returns empty list when no logs match" do
+      results = Rollup.breakdown_by_team(from: ~U[2026-07-01 00:00:00Z])
+      assert results == []
     end
   end
 end

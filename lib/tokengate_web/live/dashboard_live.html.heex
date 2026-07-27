@@ -1,14 +1,32 @@
 <Layouts.dashboard flash={@flash} current_scope={@current_user}>
   <div class="space-y-6">
-    <.header>
-      Dashboard
-      <:subtitle>
-        <span class="inline-flex items-center gap-2">
-          <.icon name="hero-funnel" class="w-4 h-4 text-base-content/50" />
-          {@scope_label}
-        </span>
-      </:subtitle>
-    </.header>
+    <div class="flex items-center justify-between flex-wrap gap-4">
+      <.header>
+        Dashboard
+        <:subtitle>
+          <span class="inline-flex items-center gap-2">
+            <.icon name="hero-funnel" class="w-4 h-4 text-base-content/50" />
+            {@scope_label}
+          </span>
+        </:subtitle>
+      </.header>
+
+      <%!-- Period selector --%>
+      <div class="join" id="period-selector" role="tablist">
+        <button
+          :for={period <- ~w(today 7d 30d 90d)}
+          phx-click="set_period"
+          phx-value-period={period}
+          class={[
+            "join-item btn btn-sm",
+            if(period_active?(@period, period), do: "btn-primary", else: "btn-ghost")
+          ]}
+          id={"period-#{period}"}
+        >
+          {period_label(period)}
+        </button>
+      </div>
+    </div>
 
     <%!-- API usage info --%>
     <div class="alert alert-info" id="api-usage-info">
@@ -17,7 +35,7 @@
         <p class="font-semibold">Endpoint de la API</p>
         <p class="mt-1">
           Usa tu clave en el header
-          <code class="font-mono bg-base-200 px-1 rounded">Authorization: Bearer tu-clave</code>
+          <code class="font-mono bg-base-200 px-1 rounded">Authorization: Bearer ***</code>
         </p>
         <div class="mt-2 space-y-1">
           <p>
@@ -68,7 +86,388 @@
       </button>
     </div>
 
-    <%!-- Teams: API key + budget in one card per team --%>
+    <%!-- Metrics section --%>
+    <%= if @loading do %>
+      <div class="flex items-center justify-center py-20">
+        <span class="loading loading-spinner loading-lg text-primary"></span>
+        <span class="ml-3 text-base-content/60">Cargando métricas…</span>
+      </div>
+    <% else %>
+      <%= if @metrics.requests_total == 0 do %>
+        <div id="empty-state" class="flex flex-col items-center justify-center py-20 text-center">
+          <div class="w-20 h-20 rounded-full bg-base-300 flex items-center justify-center mb-4">
+            <.icon name="hero-chart-bar" class="w-10 h-10 text-base-content/40" />
+          </div>
+          <h3 class="text-lg font-semibold text-base-content">Aún no hay requests</h3>
+          <p class="mt-2 text-sm text-base-content/60 max-w-md">
+            Manda tu primer request al proxy para ver métricas aquí.
+          </p>
+        </div>
+      <% else %>
+        <!-- Metric cards: 6 KPIs -->
+        <div class="grid grid-cols-2 lg:grid-cols-3 gap-4">
+          <%!-- Requests --%>
+          <div
+            id="requests-card"
+            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+          >
+            <div class="card-body p-5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Requests
+                </span>
+                <span class={[
+                  "flex items-center justify-center w-9 h-9 rounded-lg",
+                  accent_bg("primary")
+                ]}>
+                  <.icon
+                    name="hero-arrow-trending-up"
+                    class={["w-5 h-5", accent_text("primary")]}
+                  />
+                </span>
+              </div>
+              <p class="mt-2 text-2xl font-bold text-base-content">
+                {format_number(@metrics.requests_total)}
+              </p>
+            </div>
+          </div>
+
+          <%!-- Costo real (provider_cost_usd) --%>
+          <div
+            id="cost-real-card"
+            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+          >
+            <div class="card-body p-5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Costo real
+                </span>
+                <span class={[
+                  "flex items-center justify-center w-9 h-9 rounded-lg",
+                  accent_bg("accent")
+                ]}>
+                  <.icon name="hero-currency-dollar" class={["w-5 h-5", accent_text("accent")]} />
+                </span>
+              </div>
+              <p class="mt-2 text-2xl font-bold text-base-content">
+                ${format_decimal(@metrics.provider_cost_usd)}
+              </p>
+            </div>
+          </div>
+
+          <%!-- Costo estimado (estimated_cost_usd) --%>
+          <div
+            id="cost-estimated-card"
+            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+          >
+            <div class="card-body p-5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Estimado
+                </span>
+                <span class={[
+                  "flex items-center justify-center w-9 h-9 rounded-lg",
+                  accent_bg("primary")
+                ]}>
+                  <.icon name="hero-calculator" class={["w-5 h-5", accent_text("primary")]} />
+                </span>
+              </div>
+              <p class="mt-2 text-2xl font-bold text-base-content">
+                ${format_decimal(@metrics.estimated_cost_usd)}
+              </p>
+            </div>
+          </div>
+
+          <%!-- Ahorros --%>
+          <div
+            id="savings-card"
+            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+          >
+            <div class="card-body p-5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Ahorros
+                </span>
+                <span class={[
+                  "flex items-center justify-center w-9 h-9 rounded-lg",
+                  accent_bg("success")
+                ]}>
+                  <.icon name="hero-banknotes" class={["w-5 h-5", accent_text("success")]} />
+                </span>
+              </div>
+              <p class="mt-2 text-2xl font-bold text-base-content">
+                ${format_decimal(@metrics.savings_usd)}
+              </p>
+            </div>
+          </div>
+
+          <%!-- Tokens (prompt + completion) --%>
+          <div
+            id="tokens-card"
+            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+          >
+            <div class="card-body p-5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Tokens
+                </span>
+                <span class={[
+                  "flex items-center justify-center w-9 h-9 rounded-lg",
+                  accent_bg("primary")
+                ]}>
+                  <.icon name="hero-cpu-chip" class={["w-5 h-5", accent_text("primary")]} />
+                </span>
+              </div>
+              <div class="mt-2 flex items-baseline gap-3">
+                <div>
+                  <p class="text-lg font-bold text-base-content">
+                    {format_number(@metrics.prompt_tokens)}
+                  </p>
+                  <p class="text-xs text-base-content/50">in</p>
+                </div>
+                <span class="text-base-content/30">/</span>
+                <div>
+                  <p class="text-lg font-bold text-base-content">
+                    {format_number(@metrics.completion_tokens)}
+                  </p>
+                  <p class="text-xs text-base-content/50">out</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <%!-- TPS promedio --%>
+          <div
+            id="tps-card"
+            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+          >
+            <div class="card-body p-5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  TPS promedio
+                </span>
+                <span class={[
+                  "flex items-center justify-center w-9 h-9 rounded-lg",
+                  accent_bg("accent")
+                ]}>
+                  <.icon name="hero-bolt" class={["w-5 h-5", accent_text("accent")]} />
+                </span>
+              </div>
+              <p class="mt-2 text-2xl font-bold text-base-content">
+                {format_tps(@metrics.avg_tps)}
+              </p>
+              <p class="text-xs text-base-content/40 mt-1">
+                {format_latency(@metrics.avg_latency_ms)}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Breakdown tabs -->
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body">
+            <div class="flex items-center justify-between flex-wrap gap-2">
+              <h2 class="card-title text-base">
+                <.icon name="hero-chart-bar-square" class="w-5 h-5 text-base-content/60" />
+                Desglose
+              </h2>
+              <div class="join" id="breakdown-tabs" role="tablist">
+                <button
+                  phx-click="set_breakdown"
+                  phx-value-tab="model"
+                  class={[
+                    "join-item btn btn-sm",
+                    if(breakdown_tab_active?(@active_breakdown, "model"), do: "btn-primary", else: "btn-ghost")
+                  ]}
+                  id="tab-model"
+                >
+                  Por modelo
+                </button>
+                <button
+                  phx-click="set_breakdown"
+                  phx-value-tab="member"
+                  class={[
+                    "join-item btn btn-sm",
+                    if(breakdown_tab_active?(@active_breakdown, "member"), do: "btn-primary", else: "btn-ghost")
+                  ]}
+                  id="tab-member"
+                >
+                  Por API key
+                </button>
+                <%= if has_breakdown_data?(@breakdown_team) do %>
+                  <button
+                    phx-click="set_breakdown"
+                    phx-value-tab="team"
+                    class={[
+                      "join-item btn btn-sm",
+                      if(breakdown_tab_active?(@active_breakdown, "team"), do: "btn-primary", else: "btn-ghost")
+                    ]}
+                    id="tab-team"
+                  >
+                    Por equipo
+                  </button>
+                <% end %>
+              </div>
+            </div>
+
+            <%!-- Model breakdown --%>
+            <%= if @active_breakdown == "model" do %>
+              <%= if has_breakdown_data?(@breakdown_model) do %>
+                <div class="overflow-x-auto mt-3">
+                  <table class="table table-sm">
+                    <thead>
+                      <tr>
+                        <th>Modelo</th>
+                        <th class="text-right">Requests</th>
+                        <th class="text-right">Costo real</th>
+                        <th class="text-right">Estimado</th>
+                        <th class="text-right">Ahorro</th>
+                        <th class="text-right">Tokens in</th>
+                        <th class="text-right">Tokens out</th>
+                        <th class="text-right">TPS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr :for={row <- @breakdown_model} id={"bd-model-#{row.model_id || "unknown"}"}>
+                        <td class="font-medium">{row.model_name}</td>
+                        <td class="text-right font-mono">{format_number(row.request_count)}</td>
+                        <td class="text-right font-mono">${format_decimal(row.provider_cost_usd)}</td>
+                        <td class="text-right font-mono text-base-content/60">${format_decimal(row.estimated_cost_usd)}</td>
+                        <td class="text-right font-mono text-success">${format_decimal(row.savings_usd)}</td>
+                        <td class="text-right font-mono">{format_number(row.prompt_tokens)}</td>
+                        <td class="text-right font-mono">{format_number(row.completion_tokens)}</td>
+                        <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              <% else %>
+                <p class="text-sm text-base-content/40 py-6 text-center">Sin datos para este periodo.</p>
+              <% end %>
+            <% end %>
+
+            <%!-- Member (API key) breakdown --%>
+            <%= if @active_breakdown == "member" do %>
+              <%= if has_breakdown_data?(@breakdown_member) do %>
+                <div class="overflow-x-auto mt-3">
+                  <table class="table table-sm">
+                    <thead>
+                      <tr>
+                        <th>Equipo</th>
+                        <th>Usuario</th>
+                        <th class="text-right">Requests</th>
+                        <th class="text-right">Costo real</th>
+                        <th class="text-right">Estimado</th>
+                        <th class="text-right">Ahorro</th>
+                        <th class="text-right">Tokens in</th>
+                        <th class="text-right">Tokens out</th>
+                        <th class="text-right">TPS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr :for={row <- @breakdown_member} id={"bd-member-#{row.team_member_id}"}>
+                        <td>{row.team_name}</td>
+                        <td class="font-mono text-sm">{row.user_email}</td>
+                        <td class="text-right font-mono">{format_number(row.request_count)}</td>
+                        <td class="text-right font-mono">${format_decimal(row.provider_cost_usd)}</td>
+                        <td class="text-right font-mono text-base-content/60">${format_decimal(row.estimated_cost_usd)}</td>
+                        <td class="text-right font-mono text-success">${format_decimal(row.savings_usd)}</td>
+                        <td class="text-right font-mono">{format_number(row.prompt_tokens)}</td>
+                        <td class="text-right font-mono">{format_number(row.completion_tokens)}</td>
+                        <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              <% else %>
+                <p class="text-sm text-base-content/40 py-6 text-center">Sin datos para este periodo.</p>
+              <% end %>
+            <% end %>
+
+            <%!-- Team breakdown --%>
+            <%= if @active_breakdown == "team" do %>
+              <%= if has_breakdown_data?(@breakdown_team) do %>
+                <div class="overflow-x-auto mt-3">
+                  <table class="table table-sm">
+                    <thead>
+                      <tr>
+                        <th>Equipo</th>
+                        <th class="text-right">Requests</th>
+                        <th class="text-right">Costo real</th>
+                        <th class="text-right">Estimado</th>
+                        <th class="text-right">Ahorro</th>
+                        <th class="text-right">Tokens in</th>
+                        <th class="text-right">Tokens out</th>
+                        <th class="text-right">TPS</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr :for={row <- @breakdown_team} id={"bd-team-#{row.team_id}"}>
+                        <td class="font-medium">{row.team_name}</td>
+                        <td class="text-right font-mono">{format_number(row.request_count)}</td>
+                        <td class="text-right font-mono">${format_decimal(row.provider_cost_usd)}</td>
+                        <td class="text-right font-mono text-base-content/60">${format_decimal(row.estimated_cost_usd)}</td>
+                        <td class="text-right font-mono text-success">${format_decimal(row.savings_usd)}</td>
+                        <td class="text-right font-mono">{format_number(row.prompt_tokens)}</td>
+                        <td class="text-right font-mono">{format_number(row.completion_tokens)}</td>
+                        <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              <% else %>
+                <p class="text-sm text-base-content/40 py-6 text-center">Sin datos para este periodo.</p>
+              <% end %>
+            <% end %>
+          </div>
+        </div>
+
+        <!-- Cost chart (inline SVG bars, no JS libs) -->
+        <div id="hourly-chart" class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body">
+            <h2 class="card-title text-base">
+              <.icon name="hero-chart-bar" class="w-5 h-5 text-base-content/60" />
+              {chart_title(@period)}
+            </h2>
+
+            <%= if @hourly_series == [] or chart_max_cost(@hourly_series) == 0.0 do %>
+              <div class="h-40 flex items-center justify-center text-base-content/40 text-sm">
+                Sin datos para {String.downcase(period_label(@period))}.
+              </div>
+            <% else %>
+              <% max_cost = chart_max_cost(@hourly_series) %>
+              <% bar_count = max(length(@hourly_series), 1) %>
+              <% bar_width = max(380 / bar_count - 4, 2) %>
+              <svg viewBox="0 0 400 150" class="w-full h-40 mt-4" preserveAspectRatio="none">
+                <%= for {row, i} <- Enum.with_index(@hourly_series) do %>
+                  <% cost = Decimal.to_float(row.cost_usd) %>
+                  <% height = if max_cost > 0, do: max(cost / max_cost * 120, 1), else: 1 %>
+                  <% x = 10 + i * (bar_width + 4) %>
+                  <% y = 140 - height %>
+                  <rect
+                    x={x}
+                    y={y}
+                    width={bar_width}
+                    height={height}
+                    rx="2"
+                    class="fill-primary/70 hover:fill-primary transition-colors"
+                  >
+                    <title>
+                      {Calendar.strftime(row.hour, "%d/%m %H:%M")} — ${Float.round(cost, 6)}
+                    </title>
+                  </rect>
+                <% end %>
+                <line x1="10" y1="140" x2="390" y2="140" class="stroke-base-300" stroke-width="1" />
+              </svg>
+            <% end %>
+          </div>
+        </div>
+      <% end %>
+    <% end %>
+
+    <%!-- Teams section (moved below metrics) --%>
+    <div class="divider"></div>
+
     <section id="teams-section">
       <h2 class="text-base font-semibold mb-3">Tus equipos</h2>
 
@@ -203,213 +602,5 @@
         </div>
       <% end %>
     </section>
-
-    <%!-- Metrics section --%>
-    <%= if @loading do %>
-      <div class="flex items-center justify-center py-20">
-        <span class="loading loading-spinner loading-lg text-primary"></span>
-        <span class="ml-3 text-base-content/60">Cargando métricas…</span>
-      </div>
-    <% else %>
-      <%= if @metrics.requests_total == 0 do %>
-        <div id="empty-state" class="flex flex-col items-center justify-center py-20 text-center">
-          <div class="w-20 h-20 rounded-full bg-base-300 flex items-center justify-center mb-4">
-            <.icon name="hero-chart-bar" class="w-10 h-10 text-base-content/40" />
-          </div>
-          <h3 class="text-lg font-semibold text-base-content">Aún no hay requests</h3>
-          <p class="mt-2 text-sm text-base-content/60 max-w-md">
-            Manda tu primer request al proxy para ver métricas aquí.
-          </p>
-        </div>
-      <% else %>
-        <!-- Metric cards -->
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <div
-            id="requests-card"
-            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-          >
-            <div class="card-body p-5">
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Requests (24h)
-                </span>
-                <span class={[
-                  "flex items-center justify-center w-9 h-9 rounded-lg",
-                  accent_bg("primary")
-                ]}>
-                  <.icon
-                    name="hero-arrow-trending-up"
-                    class={["w-5 h-5", accent_text("primary")]}
-                  />
-                </span>
-              </div>
-              <p class="mt-2 text-2xl font-bold text-base-content">
-                {format_number(@metrics.requests_total)}
-              </p>
-            </div>
-          </div>
-
-          <div
-            id="error-rate-card"
-            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-          >
-            <div class="card-body p-5">
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Tasa de error
-                </span>
-                <span class={[
-                  "flex items-center justify-center w-9 h-9 rounded-lg",
-                  accent_bg(if(@metrics.error_rate > 0.05, do: "error", else: "success"))
-                ]}>
-                  <.icon
-                    name="hero-exclamation-triangle"
-                    class={[
-                      "w-5 h-5",
-                      accent_text(if(@metrics.error_rate > 0.05, do: "error", else: "success"))
-                    ]}
-                  />
-                </span>
-              </div>
-              <p class="mt-2 text-2xl font-bold text-base-content">
-                {Float.round(@metrics.error_rate * 100, 2)}%
-              </p>
-            </div>
-          </div>
-
-          <div
-            id="cost-card"
-            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-          >
-            <div class="card-body p-5">
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Costo
-                </span>
-                <span class={[
-                  "flex items-center justify-center w-9 h-9 rounded-lg",
-                  accent_bg("accent")
-                ]}>
-                  <.icon name="hero-currency-dollar" class={["w-5 h-5", accent_text("accent")]} />
-                </span>
-              </div>
-              <p class="mt-2 text-2xl font-bold text-base-content">
-                ${format_decimal(@metrics.cost_usd)}
-              </p>
-            </div>
-          </div>
-
-          <div
-            id="savings-card"
-            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-          >
-            <div class="card-body p-5">
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Ahorros
-                </span>
-                <span class={[
-                  "flex items-center justify-center w-9 h-9 rounded-lg",
-                  accent_bg("success")
-                ]}>
-                  <.icon name="hero-banknotes" class={["w-5 h-5", accent_text("success")]} />
-                </span>
-              </div>
-              <p class="mt-2 text-2xl font-bold text-base-content">
-                ${format_decimal(@metrics.savings_usd)}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <!-- Tokens + latency -->
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div class="card bg-base-100 border border-base-300 shadow-sm">
-            <div class="card-body">
-              <h2 class="card-title text-base">
-                <.icon name="hero-cpu-chip" class="w-5 h-5 text-base-content/60" /> Tokens
-              </h2>
-              <div class="grid grid-cols-2 gap-4 mt-2">
-                <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Prompt</p>
-                  <p id="prompt-tokens" class="text-2xl font-semibold">
-                    {format_number(@metrics.prompt_tokens)}
-                  </p>
-                </div>
-                <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Completion</p>
-                  <p id="completion-tokens" class="text-2xl font-semibold">
-                    {format_number(@metrics.completion_tokens)}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <div class="card bg-base-100 border border-base-300 shadow-sm">
-            <div class="card-body">
-              <h2 class="card-title text-base">
-                <.icon name="hero-clock" class="w-5 h-5 text-base-content/60" /> Latencia
-              </h2>
-              <div class="grid grid-cols-2 gap-4 mt-2">
-                <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Promedio</p>
-                  <p id="latency-avg" class="text-2xl font-semibold">
-                    {Float.round(@metrics.latency_avg_ms, 1)} ms
-                  </p>
-                </div>
-                <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">P95</p>
-                  <p id="latency-p95" class="text-2xl font-semibold">
-                    {@metrics.latency_p95_ms} ms
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- Hourly cost chart (inline SVG bars, no JS libs) -->
-        <div id="hourly-chart" class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body">
-            <h2 class="card-title text-base">
-              <.icon name="hero-chart-bar" class="w-5 h-5 text-base-content/60" />
-              Costo por hora (24h)
-            </h2>
-
-            <%= if @hourly_series == [] or chart_max_cost(@hourly_series) == 0.0 do %>
-              <div class="h-40 flex items-center justify-center text-base-content/40 text-sm">
-                Sin datos para las últimas 24 horas.
-              </div>
-            <% else %>
-              <% max_cost = chart_max_cost(@hourly_series) %>
-              <% bar_count = max(length(@hourly_series), 1) %>
-              <% bar_width = max(380 / bar_count - 4, 2) %>
-              <svg viewBox="0 0 400 150" class="w-full h-40 mt-4" preserveAspectRatio="none">
-                <%= for {row, i} <- Enum.with_index(@hourly_series) do %>
-                  <% cost = Decimal.to_float(row.cost_usd) %>
-                  <% height = if max_cost > 0, do: max(cost / max_cost * 120, 1), else: 1 %>
-                  <% x = 10 + i * (bar_width + 4) %>
-                  <% y = 140 - height %>
-                  <rect
-                    x={x}
-                    y={y}
-                    width={bar_width}
-                    height={height}
-                    rx="2"
-                    class="fill-primary/70 hover:fill-primary transition-colors"
-                  >
-                    <title>
-                      {Calendar.strftime(row.hour, "%H:%M")} — ${Float.round(cost, 6)}
-                    </title>
-                  </rect>
-                <% end %>
-                <line x1="10" y1="140" x2="390" y2="140" class="stroke-base-300" stroke-width="1" />
-              </svg>
-            <% end %>
-          </div>
-        </div>
-      <% end %>
-    <% end %>
   </div>
 </Layouts.dashboard>

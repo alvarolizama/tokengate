@@ -112,31 +112,97 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert html =~ "Aún no hay requests"
   end
 
-  test "admin sees org-wide counters refresh on metrics broadcast", %{conn: conn} do
+  test "admin sees period selector with all options", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     Collector.reset()
 
     conn = login(conn, admin, password)
+    {:ok, view, html} = live(conn, ~p"/dashboard")
+
+    assert has_element?(view, "#period-selector")
+    assert has_element?(view, "#period-today")
+    assert has_element?(view, "#period-7d")
+    assert has_element?(view, "#period-30d")
+    assert has_element?(view, "#period-90d")
+    _ = html
+  end
+
+  test "admin sees metric cards when there is traffic", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    Collector.reset()
+
+    # Insert a log directly into Postgres
+    team_with_log(%{cost: "0.005"})
+
+    conn = login(conn, admin, password)
+    {:ok, view, html} = live(conn, ~p"/dashboard")
+
+    refute has_element?(view, "#empty-state")
+    assert has_element?(view, "#requests-card")
+    assert has_element?(view, "#cost-real-card")
+    assert has_element?(view, "#cost-estimated-card")
+    assert has_element?(view, "#savings-card")
+    assert has_element?(view, "#tokens-card")
+    assert has_element?(view, "#tps-card")
+    _ = html
+  end
+
+  test "admin sees breakdown tabs", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    Collector.reset()
+
+    team_with_log(%{cost: "0.005"})
+
+    conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
 
-    Collector.record_request(%{
-      model_alias_id: "alias-1",
-      provider_id: "prov-1",
-      agent_type: "claude-code",
-      status: 200,
-      latency_ms: 100,
-      prompt_tokens: 10,
-      completion_tokens: 5,
-      cost_usd: Decimal.new("0.005"),
-      savings_usd: Decimal.new("0.002"),
-      streaming: false
-    })
+    assert has_element?(view, "#breakdown-tabs")
+    assert has_element?(view, "#tab-model")
+    assert has_element?(view, "#tab-member")
+    # Team tab only shows when there's team breakdown data
+    assert has_element?(view, "#tab-team")
+  end
 
-    Phoenix.PubSub.broadcast(Tokengate.PubSub, "metrics:updated", {:metrics_updated, %{}})
+  test "switching breakdown tab shows the right table", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    Collector.reset()
 
+    team_with_log(%{cost: "0.005"})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    # Default is model
     html = render(view)
-    assert html =~ ~s(id="requests-card")
-    refute has_element?(view, "#empty-state")
+    assert html =~ "bd-model-"
+
+    # Switch to member
+    view |> element("#tab-member") |> render_click()
+    html = render(view)
+    assert html =~ "bd-member-"
+
+    # Switch to team
+    view |> element("#tab-team") |> render_click()
+    html = render(view)
+    assert html =~ "bd-team-"
+  end
+
+  test "switching period reloads metrics", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    Collector.reset()
+
+    team_with_log(%{cost: "0.005"})
+
+    conn = login(conn, admin, password)
+    {:ok, view, html} = live(conn, ~p"/dashboard")
+
+    # Default period is today — chart title reflects it
+    assert html =~ "Costo por hora"
+
+    # Switch to 30d
+    view |> element("#period-30d") |> render_click()
+    html = render(view)
+    assert html =~ "Costo por día (30d)"
   end
 
   test "user scope: sees only their own consumption", %{conn: conn} do
@@ -147,11 +213,12 @@ defmodule TokengateWeb.DashboardLiveTest do
     team_with_log(%{cost: "99.99"})
 
     conn = login(conn, owner, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard")
+    {:ok, view, html} = live(conn, ~p"/dashboard")
 
-    html = render(view)
-    assert html =~ ~s(id="cost-card")
     refute has_element?(view, "#empty-state")
+    assert has_element?(view, "#requests-card")
+    # The user's cost should be 0.005, not 99.99
+    refute html =~ "99.99"
     _ = member
   end
 
@@ -174,9 +241,8 @@ defmodule TokengateWeb.DashboardLiveTest do
     conn = login(conn, manager, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
 
-    html = render(view)
-    assert html =~ ~s(id="cost-card")
     refute has_element?(view, "#empty-state")
+    assert has_element?(view, "#requests-card")
     _ = Repo
   end
 
