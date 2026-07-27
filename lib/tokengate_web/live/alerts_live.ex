@@ -23,6 +23,7 @@ defmodule TokengateWeb.AlertsLive do
       socket
       |> assign(:page_title, "Alertas · Tokengate")
       |> assign(:is_admin, user && user.global_role == "admin")
+      |> assign(:reload_scheduled, false)
       |> require_admin_hook()
       |> load_alerts()
 
@@ -48,11 +49,28 @@ defmodule TokengateWeb.AlertsLive do
 
   @impl true
   def handle_info({:new_log, log}, socket) do
-    if log.status_code && log.status_code >= 400 do
-      {:noreply, load_recent_errors(socket)}
-    else
+    socket =
+      if log.status_code && log.status_code >= 400 do
+        load_recent_errors(socket)
+      else
+        socket
+      end
+
+    # Budget spend changes on every request; coalesce the reload so a busy
+    # proxy doesn't trigger a members query per request.
+    if socket.assigns[:reload_scheduled] do
       {:noreply, socket}
+    else
+      Process.send_after(self(), :reload_budget_alerts, 1_000)
+      {:noreply, assign(socket, :reload_scheduled, true)}
     end
+  end
+
+  def handle_info(:reload_budget_alerts, socket) do
+    {:noreply,
+     socket
+     |> assign(:reload_scheduled, false)
+     |> assign(:budget_exhausted, Tokengate.Budgets.list_exhausted_member_budgets())}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -124,6 +142,7 @@ defmodule TokengateWeb.AlertsLive do
     socket
     |> assign(:error_credentials, credentials)
     |> assign(:breaker_alerts, breaker_alerts)
+    |> assign(:budget_exhausted, Tokengate.Budgets.list_exhausted_member_budgets())
     |> load_recent_errors()
   end
 
@@ -148,6 +167,19 @@ defmodule TokengateWeb.AlertsLive do
   defp fmt_dt(%DateTime{} = dt) do
     Calendar.strftime(dt, "%d/%m/%Y %H:%M UTC")
   end
+
+  defp fmt_money(nil), do: "—"
+
+  defp fmt_money(%Decimal{} = d) do
+    d
+    |> Decimal.round(4)
+    |> Decimal.to_string()
+  end
+
+  defp budget_periods(%{daily_exhausted?: true, monthly_exhausted?: true}), do: "diario + mensual"
+  defp budget_periods(%{daily_exhausted?: true}), do: "diario"
+  defp budget_periods(%{monthly_exhausted?: true}), do: "mensual"
+  defp budget_periods(_), do: "—"
 
   defp breaker_label(:closed), do: "Cerrado"
   defp breaker_label(:open), do: "Abierto"
@@ -176,7 +208,7 @@ defmodule TokengateWeb.AlertsLive do
         </div>
 
         <%!-- Summary --%>
-        <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div class="card bg-base-100 border border-base-300 shadow-sm">
             <div class="card-body p-4">
               <div class="flex items-center justify-between">
@@ -212,6 +244,20 @@ defmodule TokengateWeb.AlertsLive do
             <div class="card-body p-4">
               <div class="flex items-center justify-between">
                 <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Miembros sin crédito
+                </p>
+                <.icon name="hero-banknotes" class="w-4 h-4 text-error" />
+              </div>
+              <p class="mt-1 text-2xl font-bold text-base-content" id="alert-count-budgets">
+                {length(@budget_exhausted)}
+              </p>
+            </div>
+          </div>
+
+          <div class="card bg-base-100 border border-base-300 shadow-sm">
+            <div class="card-body p-4">
+              <div class="flex items-center justify-between">
+                <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
                   Errores (24h)
                 </p>
                 <.icon name="hero-bug-ant" class="w-4 h-4 text-error" />
@@ -225,7 +271,10 @@ defmodule TokengateWeb.AlertsLive do
 
         <%!-- All clear --%>
         <div
-          :if={@error_credentials == [] and @breaker_alerts == [] and @recent_errors == []}
+          :if={
+            @error_credentials == [] and @breaker_alerts == [] and @recent_errors == [] and
+              @budget_exhausted == []
+          }
           class="text-center py-12 text-base-content/40"
           id="alerts-empty"
         >
@@ -316,6 +365,63 @@ defmodule TokengateWeb.AlertsLive do
                         >
                           <.icon name="hero-arrow-path" class="w-3 h-3" /> Reset breaker
                         </button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <%!-- Members out of budget --%>
+        <div :if={@budget_exhausted != []} class="space-y-2">
+          <h3 class="text-sm font-semibold text-base-content/70 uppercase tracking-wide">
+            Miembros sin crédito
+          </h3>
+          <div class="card bg-base-100 border border-error/30 shadow-sm">
+            <div class="card-body p-0">
+              <div class="overflow-x-auto">
+                <table class="table table-sm">
+                  <thead>
+                    <tr>
+                      <th>Usuario</th>
+                      <th>Equipo</th>
+                      <th>Límite agotado</th>
+                      <th>Gasto hoy</th>
+                      <th>Gasto mes</th>
+                      <th></th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr :for={b <- @budget_exhausted} id={"alert-budget-#{b.member.id}"}>
+                      <td class="font-medium">{b.member.user.email}</td>
+                      <td>{b.member.team.name}</td>
+                      <td>
+                        <span class="badge badge-sm badge-error">
+                          {budget_periods(b)}
+                        </span>
+                      </td>
+                      <td class="font-mono text-xs">
+                        ${fmt_money(b.daily_spend_usd)}
+                        <span :if={b.daily_limit_usd} class="text-base-content/50">
+                          / ${fmt_money(b.daily_limit_usd)}
+                        </span>
+                      </td>
+                      <td class="font-mono text-xs">
+                        ${fmt_money(b.monthly_spend_usd)}
+                        <span :if={b.monthly_limit_usd} class="text-base-content/50">
+                          / ${fmt_money(b.monthly_limit_usd)}
+                        </span>
+                      </td>
+                      <td class="text-right">
+                        <.link
+                          navigate={~p"/dashboard/credits"}
+                          class="btn btn-xs btn-ghost"
+                          id={"alert-budget-credits-#{b.member.id}"}
+                        >
+                          Ver créditos
+                        </.link>
                       </td>
                     </tr>
                   </tbody>

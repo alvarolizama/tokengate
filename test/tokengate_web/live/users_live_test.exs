@@ -60,6 +60,51 @@ defmodule TokengateWeb.UsersLiveTest do
     assert has_element?(view, "#new-user-btn")
   end
 
+  test "admin sees spend column with user budget rollup", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{user: member_user} = register("user")
+
+    {:ok, team} =
+      Accounts.create_team(%{
+        "name" => "Spend Team #{unique()}",
+        "default_daily_budget_usd" => "100.00",
+        "default_monthly_budget_usd" => "1000.00"
+      })
+
+    {:ok, member} =
+      Accounts.create_team_member(%{"user_id" => member_user.id, "team_id" => team.id})
+
+    assert :ok = Tokengate.Budgets.Manager.record_spend(member.id, Decimal.new("7.25"))
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+
+    assert has_element?(view, "#spend-#{member_user.id}", "$7.25")
+    assert has_element?(view, "#spend-#{admin.id}", "—")
+  end
+
+  test "user without credit shows sin crédito badge", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{user: member_user} = register("user")
+
+    {:ok, team} =
+      Accounts.create_team(%{
+        "name" => "Broke Team #{unique()}",
+        "default_daily_budget_usd" => "100.00",
+        "default_monthly_budget_usd" => "1000.00"
+      })
+
+    {:ok, member} =
+      Accounts.create_team_member(%{"user_id" => member_user.id, "team_id" => team.id})
+
+    assert :ok = Tokengate.Budgets.Manager.record_spend(member.id, Decimal.new("100.00"))
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+
+    assert has_element?(view, "#spend-#{member_user.id}", "sin crédito")
+  end
+
   ## Create user ------------------------------------------------------------
 
   test "admin can create a new user", %{conn: conn} do

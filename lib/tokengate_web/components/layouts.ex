@@ -158,13 +158,16 @@ defmodule TokengateWeb.Layouts do
   attr :current_scope, :map, default: nil
 
   defp topbar_indicators(assigns) do
+    admin? = match?(%{global_role: "admin"}, assigns.current_scope)
+
     assigns =
       assigns
       |> assign(:error_creds, Tokengate.Providers.count_error_credentials())
       |> assign(:open_breakers, Tokengate.Routing.CircuitBreakerManager.count_open())
+      |> assign(:budget_exhausted, if(admin?, do: Tokengate.Budgets.count_exhausted(), else: 0))
       |> assign(:online, length(TokengateWeb.Presence.list_online()))
       |> assign(:inflight, Tokengate.Limits.Manager.total_inflight())
-      |> assign(:admin?, match?(%{global_role: "admin"}, assigns.current_scope))
+      |> assign(:admin?, admin?)
 
     ~H"""
     <div class="hidden md:flex items-center gap-2" id="topbar-indicators">
@@ -193,6 +196,19 @@ defmodule TokengateWeb.Layouts do
         >
           <.icon name="hero-exclamation-triangle" class="w-3.5 h-3.5" />
           <span id="topbar-open-breakers-count">{@open_breakers}</span>
+        </.link>
+
+        <.link
+          navigate={~p"/dashboard/credits"}
+          id="topbar-budget-exhausted"
+          class={[
+            "badge badge-lg gap-1.5",
+            if(@budget_exhausted > 0, do: "badge-error", else: "badge-ghost")
+          ]}
+          title="Miembros sin crédito (presupuesto agotado)"
+        >
+          <.icon name="hero-banknotes" class="w-3.5 h-3.5" />
+          <span id="topbar-budget-exhausted-count">{@budget_exhausted}</span>
         </.link>
       <% end %>
 
@@ -264,6 +280,7 @@ defmodule TokengateWeb.Layouts do
               Monitoreo
             </p>
             <.sidebar_link href={~p"/dashboard/alerts"} label="Alertas" icon="hero-bell-alert" />
+            <.sidebar_link href={~p"/dashboard/credits"} label="Créditos" icon="hero-banknotes" />
             <.sidebar_link href={~p"/dashboard/logs"} label="Logs" icon="hero-document-text" />
           </div>
         </nav>

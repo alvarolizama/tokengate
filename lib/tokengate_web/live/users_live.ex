@@ -53,7 +53,10 @@ defmodule TokengateWeb.UsersLive do
 
   defp load_users(socket) do
     users = Accounts.list_users()
-    stream(socket, :users, users, reset: true)
+
+    socket
+    |> assign(:spend_by_user, Tokengate.Budgets.spend_by_user())
+    |> stream(:users, users, reset: true)
   end
 
   ## Events — create/edit user -------------------------------------------
@@ -150,6 +153,12 @@ defmodule TokengateWeb.UsersLive do
   end
 
   ## Template helpers -----------------------------------------------------
+
+  defp fmt_money(%Decimal{} = d) do
+    d
+    |> Decimal.round(4)
+    |> Decimal.to_string()
+  end
 
   defp save_new_user(socket, user_params) do
     case Accounts.admin_create_user(user_params) do
@@ -336,6 +345,7 @@ defmodule TokengateWeb.UsersLive do
                 <th>Rol</th>
                 <th>Estado</th>
                 <th>Google</th>
+                <th>Gasto hoy / mes</th>
                 <th>Creado</th>
                 <th></th>
               </tr>
@@ -373,6 +383,22 @@ defmodule TokengateWeb.UsersLive do
                     /> Google</span>
                   <% else %>
                     <span class="text-xs text-base-content/30">—</span>
+                  <% end %>
+                </td>
+                <td id={"spend-#{user.id}"}>
+                  <%= case Map.get(@spend_by_user, user.id) do %>
+                    <% nil -> %>
+                      <span class="text-xs text-base-content/30">—</span>
+                    <% spend -> %>
+                      <div class={[
+                        "text-xs font-mono",
+                        spend.exhausted? && "text-error font-semibold"
+                      ]}>
+                        ${fmt_money(spend.daily_usd)} / ${fmt_money(spend.monthly_usd)}
+                      </div>
+                      <%= if spend.exhausted? do %>
+                        <span class="badge badge-xs badge-error mt-0.5">sin crédito</span>
+                      <% end %>
                   <% end %>
                 </td>
                 <td class="text-xs text-base-content/50">{format_date(user.inserted_at)}</td>
