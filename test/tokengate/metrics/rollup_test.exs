@@ -1020,4 +1020,55 @@ defmodule Tokengate.Metrics.RollupTest do
       assert peak.max_concurrent >= 1
     end
   end
+
+  # ---------------------------------------------------------------------
+  # breakdown_by_agent/2
+  # ---------------------------------------------------------------------
+
+  describe "breakdown_by_agent/2" do
+    test "agrupa por agent_type con requests, costo real y ahorro, ordenado por costo desc" do
+      {tm, _team} = team_member_fixture()
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      for _ <- 1..3 do
+        log_request(tm.id, now, %{
+          agent_type: "cursor",
+          provider_cost_usd: Decimal.new("2.000000"),
+          savings_usd: Decimal.new("0.500000")
+        })
+      end
+
+      log_request(tm.id, now, %{
+        agent_type: "api",
+        provider_cost_usd: Decimal.new("9.000000"),
+        savings_usd: Decimal.new("1.000000")
+      })
+
+      rows = Rollup.breakdown_by_agent(nil, from: DateTime.add(now, -3600, :second))
+
+      assert [first, second] = rows
+      assert first.agent_type == "api"
+      assert first.request_count == 1
+      assert Decimal.equal?(first.provider_cost_usd, Decimal.new("9.000000"))
+      assert Decimal.equal?(first.savings_usd, Decimal.new("1.000000"))
+
+      assert second.agent_type == "cursor"
+      assert second.request_count == 3
+      assert Decimal.equal?(second.provider_cost_usd, Decimal.new("6.000000"))
+      assert Decimal.equal?(second.savings_usd, Decimal.new("1.500000"))
+    end
+
+    test "respeta :limit" do
+      {tm, _team} = team_member_fixture()
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      for agent <- ["cursor", "api", "claude-code", "windsurf", "aider", "zed"] do
+        log_request(tm.id, now, %{agent_type: agent})
+      end
+
+      rows = Rollup.breakdown_by_agent(nil, from: DateTime.add(now, -3600, :second), limit: 3)
+
+      assert length(rows) == 3
+    end
+  end
 end

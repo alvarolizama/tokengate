@@ -19,6 +19,7 @@ defmodule Tokengate.Metrics.Rollup do
     * `usage_by_hour_of_day/2` — 24h UTC distribution (recurring usage patterns)
     * `busiest_hours/2` / `busiest_minutes/2` — top-N busiest hour/minute buckets
     * `peak_concurrency/2`    — estimated max in-flight requests (sweep line)
+    * `breakdown_by_agent/2`  — top agents (agent_type) by real cost, ordered
   """
 
   import Ecto.Query, warn: false
@@ -979,6 +980,63 @@ defmodule Tokengate.Metrics.Rollup do
       end)
 
     %{max_concurrent: max_concurrent, at: at}
+  end
+
+  # -----------------------------------------------------------------------
+  # breakdown_by_agent/2
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Top agentes (`agent_type`: cursor, claude-code, api, etc.) por costo
+  real en el período, ordenados desc.
+
+  A diferencia de `agent_breakdown/1` (mapa agregado para KPIs), esta
+  devuelve filas ordenadas para tablas Top N. Excluye `agent_type` nil.
+
+  Cada fila:
+
+      %{
+        agent_type: String.t(),
+        request_count: integer,
+        provider_cost_usd: Decimal,
+        savings_usd: Decimal
+      }
+
+  ## Options
+
+    * `:from`  — `inserted_at >= from` (DateTime)
+    * `:to`    — `inserted_at <= to` (DateTime)
+    * `:limit` — default 5
+  """
+  @spec breakdown_by_agent(String.t() | nil, keyword()) :: [map()]
+  def breakdown_by_agent(team_id \\ nil, opts \\ []) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+    limit = Keyword.get(opts, :limit, 5)
+
+    RequestLog
+    |> where([rl], not is_nil(rl.agent_type))
+    |> maybe_join_team(team_id)
+    |> maybe_from(from)
+    |> maybe_to(to)
+    |> group_by([rl], rl.agent_type)
+    |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
+    |> limit(^limit)
+    |> select([rl], %{
+      agent_type: rl.agent_type,
+      request_count: count(rl.id),
+      provider_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+      savings_usd: fragment("COALESCE(SUM(?), 0)", rl.savings_usd)
+    })
+    |> Repo.all()
+    |> Enum.map(fn row ->
+      %{
+        agent_type: row.agent_type,
+        request_count: row.request_count,
+        provider_cost_usd: Decimal.new(to_string(row.provider_cost_usd)),
+        savings_usd: Decimal.new(to_string(row.savings_usd))
+      }
+    end)
   end
 
   # -----------------------------------------------------------------------
