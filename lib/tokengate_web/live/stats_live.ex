@@ -47,6 +47,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:breakdown_member, [])
       |> assign(:breakdown_team, [])
       |> assign(:breakdown_provider, [])
+      |> assign(:provider_ranking, [])
       |> assign(:hourly_series, [])
 
     {:ok, socket}
@@ -157,6 +158,7 @@ defmodule TokengateWeb.StatsLive do
     |> assign(:breakdown_model, Rollup.breakdown_by_model(scope[:team_id], opts))
     |> assign(:breakdown_member, load_member_breakdown(scope, opts))
     |> assign(:breakdown_team, load_team_breakdown(user, opts))
+    |> assign(:provider_ranking, load_provider_ranking(user, opts))
   end
 
   defp load_breakdowns(socket, :models, user, opts) do
@@ -280,6 +282,12 @@ defmodule TokengateWeb.StatsLive do
   end
 
   defp load_team_breakdown(_, _), do: []
+
+  # Ranking de proveedores: métrica de infraestructura, solo admin, siempre org-wide.
+  defp load_provider_ranking(%{global_role: "admin"}, opts),
+    do: Rollup.provider_ranking(nil, opts)
+
+  defp load_provider_ranking(_user, _opts), do: []
 
   ## Path building --------------------------------------------------------
 
@@ -429,6 +437,22 @@ defmodule TokengateWeb.StatsLive do
 
   def has_data?([]), do: false
   def has_data?(_), do: true
+
+  def format_ms(nil), do: "—"
+  def format_ms(ms) when is_integer(ms), do: "#{format_number(ms)} ms"
+  def format_ms(_), do: "—"
+
+  def format_percent(rate) when is_float(rate),
+    do: "#{:erlang.float_to_binary(rate * 100, decimals: 1)}%"
+
+  def format_percent(_), do: "—"
+
+  def tier_badge_class("S"), do: "badge-success"
+  def tier_badge_class("A"), do: "badge-info"
+  def tier_badge_class("B"), do: "badge-warning"
+  def tier_badge_class("C"), do: "badge-warning badge-outline"
+  def tier_badge_class("D"), do: "badge-error"
+  def tier_badge_class(_), do: "badge-ghost"
 
   def accent_bg("primary"), do: "bg-primary/10"
   def accent_bg("success"), do: "bg-success/10"

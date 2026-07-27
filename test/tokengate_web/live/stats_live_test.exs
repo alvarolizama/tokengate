@@ -120,6 +120,26 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#kpi-tps")
   end
 
+  test "admin sees provider ranking on index", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{provider: provider} = team_with_log(%{cost: "0.005"})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
+
+    assert has_element?(view, "#provider-ranking")
+    assert has_element?(view, "#provider-ranking-row-#{provider.id}")
+  end
+
+  test "regular user does NOT see provider ranking on index", %{conn: conn} do
+    %{owner: owner} = team_with_log(%{cost: "0.005"})
+
+    conn = login(conn, owner, owner.password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
+
+    refute has_element?(view, "#provider-ranking")
+  end
+
   ## Models view ------------------------------------------------------------
 
   test "admin sees models table with all models", %{conn: conn} do
