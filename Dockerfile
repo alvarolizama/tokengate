@@ -94,8 +94,8 @@ RUN chmod +x /app/entrypoint.sh
 
 USER app
 
-ENV HOME=/app MIX_ENV=prod PHX_SERVER=true PORT=4000
+ENV HOME=/app MIX_ENV=prod PHX_SERVER=true PORT=4001
 
-EXPOSE 4000
+EXPOSE 4001
 
 ENTRYPOINT ["/app/entrypoint.sh"]
