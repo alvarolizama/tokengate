@@ -35,6 +35,7 @@ defmodule Tokengate.Logs.RequestLog do
     field :savings_usd, :decimal
     field :estimated_cost_usd, :decimal
     field :latency_ms, :integer
+    field :ttft_ms, :integer
     field :streaming, :boolean, default: false
 
     belongs_to :team_member, Tokengate.Accounts.TeamMember,
@@ -46,7 +47,7 @@ defmodule Tokengate.Logs.RequestLog do
   @permitted ~w(team_member_id provider_id model_alias_id
     model_requested model_responded agent_type status_code prompt_tokens
     completion_tokens cost_usd provider_cost_usd savings_usd estimated_cost_usd
-    latency_ms streaming inserted_at)a
+    latency_ms ttft_ms streaming inserted_at)a
 
   @required ~w(team_member_id model_requested inserted_at)a
 

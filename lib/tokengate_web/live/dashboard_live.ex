@@ -238,6 +238,7 @@ defmodule TokengateWeb.DashboardLive do
       prompt_tokens: summary.total_prompt_tokens,
       completion_tokens: summary.total_completion_tokens,
       avg_latency_ms: Map.get(summary, :avg_latency_ms) || 0.0,
+      avg_ttft_ms: Map.get(summary, :avg_ttft_ms),
       avg_tps: Map.get(summary, :avg_tps)
     }
 
@@ -544,6 +545,7 @@ defmodule TokengateWeb.DashboardLive do
       prompt_tokens: 0,
       completion_tokens: 0,
       avg_latency_ms: 0.0,
+      avg_ttft_ms: nil,
       avg_tps: nil
     }
   end

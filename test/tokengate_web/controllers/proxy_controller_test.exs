@@ -445,6 +445,9 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert log.streaming == true
     assert log.prompt_tokens == 20
     assert log.completion_tokens == 2
+    # TTFT recorded for streaming: a small non-negative duration in ms
+    assert is_integer(log.ttft_ms)
+    assert log.ttft_ms >= 0
   end
 
   test "stream: first-token timeout falls back and returns 503 with a single provider", %{

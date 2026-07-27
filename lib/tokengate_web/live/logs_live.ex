@@ -412,6 +412,14 @@ defmodule TokengateWeb.LogsLive do
 
   defp tps(_completion_tokens, _latency_ms), do: "—"
 
+  # Time-to-first-token: only recorded for streaming requests (nil otherwise).
+  defp format_ttft(nil), do: "—"
+  defp format_ttft(ms) when is_integer(ms) and ms < 1000, do: "#{ms}ms"
+
+  defp format_ttft(ms) when is_integer(ms) do
+    :erlang.float_to_binary(ms / 1000, [:compact, {:decimals, 1}]) <> "s"
+  end
+
   defp status_badge_class(status_code) when status_code >= 200 and status_code < 300,
     do: "badge-success"
 
@@ -577,6 +585,7 @@ defmodule TokengateWeb.LogsLive do
                 <th class="text-right">Input</th>
                 <th class="text-right">Output</th>
                 <th class="text-right">TPS</th>
+                <th title="Time to first token — solo streaming">TTFT</th>
                 <th>Latencia</th>
                 <th class="text-right">Estimado</th>
                 <th class="text-right">Costo</th>
@@ -586,7 +595,7 @@ defmodule TokengateWeb.LogsLive do
             </thead>
             <tbody id="logs" phx-update="stream">
               <tr id="logs-empty" class="hidden only:table-row">
-                <td colspan="12" class="text-center py-8 text-base-content/40">
+                <td colspan="13" class="text-center py-8 text-base-content/40">
                   No hay logs que coincidan con los filtros.
                 </td>
               </tr>
@@ -608,6 +617,7 @@ defmodule TokengateWeb.LogsLive do
                 <td class="text-sm text-right tabular-nums text-base-content/70">
                   {tps(log.completion_tokens, log.latency_ms)}
                 </td>
+                <td class="text-sm text-base-content/70">{format_ttft(log.ttft_ms)}</td>
                 <td class="text-sm">{log.latency_ms}ms</td>
                 <td class="text-sm text-right tabular-nums">{format_cost(log.estimated_cost_usd)}</td>
                 <td class="text-sm text-right tabular-nums">{format_cost(log.cost_usd)}</td>

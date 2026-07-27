@@ -37,6 +37,7 @@ defmodule Tokengate.Logs.WriteWorker do
       savings_usd: args["savings_usd"],
       estimated_cost_usd: args["estimated_cost_usd"],
       latency_ms: args["latency_ms"],
+      ttft_ms: args["ttft_ms"],
       streaming: args["streaming"] || false,
       inserted_at: parse_inserted_at(args["inserted_at"])
     }

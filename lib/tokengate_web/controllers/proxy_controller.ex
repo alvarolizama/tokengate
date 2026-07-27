@@ -251,6 +251,10 @@ defmodule TokengateWeb.ProxyController do
       |> Map.put("model", route.model_responded)
       |> ensure_stream_options()
 
+    # Measured just before the upstream call: TTFT is the time from this
+    # point to the provider's first chunk.
+    request_start = System.monotonic_time(:millisecond)
+
     case OpenAIAdapter.stream_chat_completion(provider, route.credential, payload,
            receive_timeout: 120_000
          ) do
@@ -259,6 +263,7 @@ defmodule TokengateWeb.ProxyController do
 
         case await_first_chunk(pid, ref) do
           {:ok, first_chunk} ->
+            ttft_ms = System.monotonic_time(:millisecond) - request_start
             Router.record_outcome(route, :success)
 
             conn =
@@ -271,6 +276,7 @@ defmodule TokengateWeb.ProxyController do
               usage: nil,
               completion: "",
               prompt_estimate: TokenEstimator.estimate_messages(payload["messages"] || []),
+              ttft_ms: ttft_ms,
               latency_start: System.monotonic_time(:millisecond)
             })
 
@@ -439,7 +445,9 @@ defmodule TokengateWeb.ProxyController do
       streaming: true
     })
 
-    enqueue_log(route, member, conn.assigns.agent_type, usage, costs, latency_ms, 200, true)
+    enqueue_log(route, member, conn.assigns.agent_type, usage, costs, latency_ms, 200, true,
+      ttft_ms: acc.ttft_ms
+    )
 
     conn
   end
@@ -534,7 +542,17 @@ defmodule TokengateWeb.ProxyController do
     }
   end
 
-  defp enqueue_log(route, member, agent_type, usage, costs, latency_ms, status, streaming) do
+  defp enqueue_log(
+         route,
+         member,
+         agent_type,
+         usage,
+         costs,
+         latency_ms,
+         status,
+         streaming,
+         extra \\ []
+       ) do
     %{
       "team_member_id" => member.id,
       "provider_id" => route.model_provider.credential.provider_id,
@@ -550,6 +568,7 @@ defmodule TokengateWeb.ProxyController do
       "savings_usd" => Decimal.to_string(costs.savings_usd, :normal),
       "estimated_cost_usd" => Decimal.to_string(costs.estimated_cost_usd, :normal),
       "latency_ms" => latency_ms,
+      "ttft_ms" => Keyword.get(extra, :ttft_ms),
       "streaming" => streaming
     }
     |> WriteWorker.new()

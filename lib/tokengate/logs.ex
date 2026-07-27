@@ -365,6 +365,8 @@ defmodule Tokengate.Logs do
     * `:avg_tps` — approximate tokens-per-second: `SUM(completion_tokens) /
       (SUM(latency_ms) / 1000)`. Assumes output is the dominant phase; nil
       when no latency samples are present.
+    * `:avg_ttft_ms` — mean time-to-first-token over streaming rows (`nil`
+      when no streaming samples are present; AVG skips NULLs).
 
   All sums are Decimal-safe (use `COALESCE` + `SUM` in SQL). Token sums
   default to 0 when no rows match.
@@ -382,7 +384,8 @@ defmodule Tokengate.Logs do
         total_completion_tokens: coalesce(sum(rl.completion_tokens), 0),
         request_count: count(rl.id),
         total_latency_ms: fragment("COALESCE(SUM(latency_ms), 0)"),
-        avg_latency_ms: fragment("AVG(latency_ms)")
+        avg_latency_ms: fragment("AVG(latency_ms)"),
+        avg_ttft_ms: fragment("AVG(ttft_ms)")
       })
       |> Repo.one()
 
@@ -395,6 +398,7 @@ defmodule Tokengate.Logs do
       total_completion_tokens: result.total_completion_tokens,
       request_count: result.request_count,
       avg_latency_ms: avg_to_float(result.avg_latency_ms),
+      avg_ttft_ms: avg_to_float(result.avg_ttft_ms),
       avg_tps: compute_avg_tps(result.total_completion_tokens, result.total_latency_ms)
     }
   end

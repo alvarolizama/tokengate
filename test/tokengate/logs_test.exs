@@ -424,5 +424,75 @@ defmodule Tokengate.LogsTest do
       assert summary.total_completion_tokens == 0
       assert summary.request_count == 0
     end
+
+    test "avg_ttft_ms averages only streaming rows (NULLs skipped)" do
+      {tm, _} = team_member_fixture()
+
+      Logs.log_request(%{
+        team_member_id: tm.id,
+        model_requested: "gpt-4",
+        latency_ms: 2000,
+        ttft_ms: 300,
+        streaming: true,
+        inserted_at: @timestamp
+      })
+
+      Logs.log_request(%{
+        team_member_id: tm.id,
+        model_requested: "gpt-4",
+        latency_ms: 4000,
+        ttft_ms: 500,
+        streaming: true,
+        inserted_at: @timestamp
+      })
+
+      # Non-streaming row: no ttft — must not affect the average.
+      Logs.log_request(%{
+        team_member_id: tm.id,
+        model_requested: "gpt-4",
+        latency_ms: 9000,
+        streaming: false,
+        inserted_at: @timestamp
+      })
+
+      summary = Logs.cost_summary(%{team_member_id: tm.id})
+
+      assert summary.avg_ttft_ms == 400.0
+      assert summary.avg_latency_ms == 5000.0
+    end
+
+    test "avg_ttft_ms is nil when no streaming samples exist" do
+      {tm, _} = team_member_fixture()
+
+      Logs.log_request(%{
+        team_member_id: tm.id,
+        model_requested: "gpt-4",
+        latency_ms: 1000,
+        streaming: false,
+        inserted_at: @timestamp
+      })
+
+      summary = Logs.cost_summary(%{team_member_id: tm.id})
+
+      assert summary.avg_ttft_ms == nil
+    end
+  end
+
+  describe "log_request/1 with ttft_ms" do
+    test "persists ttft_ms for streaming requests" do
+      {tm, _} = team_member_fixture()
+
+      assert {:ok, log} =
+               Logs.log_request(%{
+                 team_member_id: tm.id,
+                 model_requested: "gpt-4",
+                 latency_ms: 1500,
+                 ttft_ms: 250,
+                 streaming: true,
+                 inserted_at: @timestamp
+               })
+
+      assert log.ttft_ms == 250
+    end
   end
 end

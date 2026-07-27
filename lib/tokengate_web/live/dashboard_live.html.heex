@@ -242,6 +242,12 @@
               </p>
               <p class="text-xs text-base-content/40 mt-1">
                 {format_latency(@metrics.avg_latency_ms)}
+                <span
+                  :if={@metrics[:avg_ttft_ms]}
+                  title="Time to first token promedio (streaming)"
+                >
+                  · TTFT {format_latency(@metrics.avg_ttft_ms)}
+                </span>
               </p>
             </div>
           </div>
