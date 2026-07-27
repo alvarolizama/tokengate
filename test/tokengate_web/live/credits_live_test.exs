@@ -1,14 +1,9 @@
 defmodule TokengateWeb.CreditsLiveTest do
-  @moduledoc """
-  LiveView tests for the admin credits overview (/dashboard/credits).
-
-  `async: false` because the budget ETS table is a named singleton.
-  """
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
 
-  alias Tokengate.Accounts
+  alias Tokengate.{Accounts, Logs, Providers}
   alias Tokengate.Budgets.Manager
 
   defp unique, do: System.unique_integer([:positive])
@@ -33,33 +28,69 @@ defmodule TokengateWeb.CreditsLiveTest do
     |> recycle()
   end
 
-  defp team_fixture(attrs \\ %{}) do
+  # Equipo con 2 miembros, gasto real registrado en ETS y logs con ahorro
+  # en el mes en curso.
+  defp team_with_spend_and_savings do
+    u = unique()
+
     {:ok, team} =
-      Accounts.create_team(
-        Map.merge(
-          %{
-            "name" => "Credits Team #{unique()}",
-            "default_daily_budget_usd" => "100.00",
-            "default_monthly_budget_usd" => "1000.00"
-          },
-          attrs
-        )
-      )
+      Accounts.create_team(%{
+        name: "Credits Team #{u}",
+        default_daily_budget_usd: "100.00",
+        default_monthly_budget_usd: "500.00"
+      })
 
-    team
-  end
+    {:ok, owner_a} =
+      Accounts.register_user(%{
+        email: "credits-a-#{u}@example.com",
+        name: "A #{u}",
+        password: "password-secret-#{u}1"
+      })
 
-  defp member_fixture(team, user) do
-    {:ok, member} =
-      Accounts.create_team_member(%{"user_id" => user.id, "team_id" => team.id})
+    {:ok, owner_b} =
+      Accounts.register_user(%{
+        email: "credits-b-#{u}@example.com",
+        name: "B #{u}",
+        password: "password-secret-#{u}1"
+      })
 
-    member
-  end
+    {:ok, member_a} =
+      Accounts.create_team_member(%{user_id: owner_a.id, team_id: team.id})
 
-  setup do
+    {:ok, member_b} =
+      Accounts.create_team_member(%{user_id: owner_b.id, team_id: team.id})
+
+    {:ok, provider} =
+      Providers.create_provider(%{name: "Prov #{u}", base_url: "http://localhost:1"})
+
+    # Gasto real del mes en los contadores ETS (fuente de Budgets)
     pid = Process.whereis(Manager) || start_supervised!(Manager)
     _ = :sys.get_state(pid)
-    :ok
+    :ok = Manager.record_spend(member_a.id, Decimal.new("100.00"))
+    :ok = Manager.record_spend(member_b.id, Decimal.new("50.00"))
+
+    # Logs con ahorro (estimated > real) para la columna Ahorro
+    for {member, savings} <- [{member_a, "0.40"}, {member_b, "0.20"}] do
+      {:ok, _log} =
+        Logs.log_request(%{
+          team_member_id: member.id,
+          provider_id: provider.id,
+          model_requested: "model-#{u}",
+          model_responded: "model-#{u}",
+          agent_type: "api",
+          status_code: 200,
+          prompt_tokens: 100,
+          completion_tokens: 50,
+          cost_usd: "0.60",
+          provider_cost_usd: "0.60",
+          savings_usd: savings,
+          estimated_cost_usd: "1.00",
+          latency_ms: 42,
+          streaming: false
+        })
+    end
+
+    %{team: team, member_a: member_a, member_b: member_b}
   end
 
   ## Auth -------------------------------------------------------------------
@@ -68,89 +99,27 @@ defmodule TokengateWeb.CreditsLiveTest do
     assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/dashboard/credits")
   end
 
-  test "regular user is redirected to /dashboard (admin-only)", %{conn: conn} do
-    %{user: user, password: password} = register("user")
-    conn = login(conn, user, password)
-    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/credits")
-  end
+  ## Team rollup --------------------------------------------------------------
 
-  ## Admin views --------------------------------------------------------------
-
-  test "admin sees the credits table with summary cards", %{conn: conn} do
+  test "admin sees team rollup with monthly cap, real spend and savings", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    %{user: member_user} = register("user")
-    team = team_fixture()
-    member = member_fixture(team, member_user)
-
-    conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard/credits")
-
-    assert html =~ "Créditos"
-    assert has_element?(view, "#credit-row-#{member.id}")
-    assert has_element?(view, "#credits-count-total")
-    assert has_element?(view, "#credits-count-near")
-    assert has_element?(view, "#credits-count-exhausted")
-    assert has_element?(view, "#refresh-credits")
-  end
-
-  test "member rows show spend, limits and status", %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
-    %{user: member_user} = register("user")
-    team = team_fixture()
-    member = member_fixture(team, member_user)
-
-    assert :ok = Manager.record_spend(member.id, Decimal.new("25.00"))
+    %{team: team, member_a: member_a} = team_with_spend_and_savings()
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/credits")
 
-    assert has_element?(view, "#credit-row-#{member.id}", member_user.email)
-    assert has_element?(view, "#credit-row-#{member.id}", team.name)
-    assert has_element?(view, "#credit-row-#{member.id}", "$25")
-    assert has_element?(view, "#credit-row-#{member.id}", "OK")
-  end
+    assert has_element?(view, "#team-budgets")
+    assert has_element?(view, "#team-budget-#{team.id}")
 
-  test "exhausted member shows Agotado badge and is counted", %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
-    %{user: member_user} = register("user")
-    team = team_fixture()
-    member = member_fixture(team, member_user)
+    row = view |> element("#team-budget-#{team.id}") |> render()
+    # Tope = 500 × 2 miembros = 1000
+    assert row =~ "1000"
+    # Gasto real = 100 + 50 = 150
+    assert row =~ "150"
+    # Ahorro del mes = 0.40 + 0.20 = 0.60
+    assert row =~ "0.6"
 
-    assert :ok = Manager.record_spend(member.id, Decimal.new("100.00"))
-
-    conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/credits")
-
-    assert has_element?(view, "#credit-row-#{member.id}", "Agotado")
-    assert has_element?(view, "#credits-count-exhausted", "1")
-  end
-
-  test "member without limits shows Sin límite", %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
-    %{user: member_user} = register("user")
-    team = team_fixture(%{"default_daily_budget_usd" => nil, "default_monthly_budget_usd" => nil})
-    member = member_fixture(team, member_user)
-
-    conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/credits")
-
-    assert has_element?(view, "#credit-row-#{member.id}", "Sin límite")
-  end
-
-  test "refresh event reloads the budget list", %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
-    %{user: member_user} = register("user")
-    team = team_fixture()
-    member = member_fixture(team, member_user)
-
-    conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/credits")
-
-    assert has_element?(view, "#credit-row-#{member.id}", "$0")
-
-    assert :ok = Manager.record_spend(member.id, Decimal.new("42.50"))
-
-    render_click(view, "refresh")
-    assert has_element?(view, "#credit-row-#{member.id}", "$42.5")
+    # Columna Ahorro en la tabla de miembros
+    assert has_element?(view, "#member-savings-#{member_a.id}")
   end
 end

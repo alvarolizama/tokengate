@@ -10,6 +10,7 @@ defmodule TokengateWeb.CreditsLive do
   use TokengateWeb, :live_view
 
   alias Tokengate.Budgets
+  alias Tokengate.Metrics.Rollup
 
   @reload_interval_ms 1_000
 
@@ -75,8 +76,35 @@ defmodule TokengateWeb.CreditsLive do
 
   defp load_budgets(socket) do
     budgets = Budgets.list_member_budgets()
+    team_budgets = Budgets.list_team_budgets()
 
-    assign(socket, :budgets, budgets)
+    # Ahorro del mes en curso desde los logs (fuente durable). El gasto
+    # viene de los contadores ETS; el ahorro no se trackea en ETS, así que
+    # se calcula del mes calendario igual que el contador mensual.
+    month_start = beginning_of_month()
+    team_savings = savings_by_team(month_start)
+    member_savings = savings_by_member(month_start)
+
+    socket
+    |> assign(:budgets, budgets)
+    |> assign(:team_budgets, team_budgets)
+    |> assign(:team_savings, team_savings)
+    |> assign(:member_savings, member_savings)
+  end
+
+  defp beginning_of_month do
+    now = DateTime.utc_now()
+    %{now | day: 1, hour: 0, minute: 0, second: 0, microsecond: {0, 0}}
+  end
+
+  defp savings_by_team(from) do
+    Rollup.breakdown_by_team(from: from)
+    |> Map.new(fn row -> {row.team_id, row.savings_usd} end)
+  end
+
+  defp savings_by_member(from) do
+    Rollup.breakdown_by_member(nil, from: from)
+    |> Map.new(fn row -> {row.team_member_id, row.savings_usd} end)
   end
 
   ## Template helpers --------------------------------------------------------
@@ -167,8 +195,66 @@ defmodule TokengateWeb.CreditsLive do
           </div>
         </div>
 
+        <div class="card bg-base-100 border border-base-300 shadow-sm" id="team-budgets">
+          <div class="card-body">
+            <h2 class="card-title text-base">
+              <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" /> Por equipo
+            </h2>
+            <p class="text-xs text-base-content/60">
+              Tope mensual = suma de los límites de cada miembro. Ahorro = estimado de mercado
+              menos lo realmente pagado en el mes.
+            </p>
+            <div class="overflow-x-auto mt-3">
+              <table class="table table-sm">
+                <thead>
+                  <tr>
+                    <th>Equipo</th>
+                    <th class="text-right">Miembros</th>
+                    <th class="w-64">Gasto mensual real</th>
+                    <th class="text-right">Ahorro del mes</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={tb <- @team_budgets} id={"team-budget-#{tb.team.id}"}>
+                    <td class="font-medium">{tb.team.name}</td>
+                    <td class="text-right font-mono">{tb.member_count}</td>
+                    <td>
+                      <%= if is_nil(tb.monthly_limit_usd) do %>
+                        <div class="text-xs text-base-content/60">
+                          ${fmt_money(tb.monthly_spend_usd)} · sin límite
+                        </div>
+                      <% else %>
+                        <div class="space-y-1">
+                          <div class="flex justify-between text-xs font-mono">
+                            <span>${fmt_money(tb.monthly_spend_usd)}</span>
+                            <span class="text-base-content/60">
+                              de ${fmt_money(tb.monthly_limit_usd)}
+                            </span>
+                          </div>
+                          <progress
+                            class={["progress w-full", bar_class(tb.monthly_pct)]}
+                            value={bar_value(tb.monthly_pct)}
+                            max="100"
+                          >
+                          </progress>
+                        </div>
+                      <% end %>
+                    </td>
+                    <td class="text-right font-mono text-success">
+                      ${fmt_money(Map.get(@team_savings, tb.team.id, Decimal.new(0)))}
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
         <div class="card bg-base-100 border border-base-300 shadow-sm">
           <div class="card-body">
+            <h2 class="card-title text-base">
+              <.icon name="hero-users" class="w-5 h-5 text-base-content/60" /> Por miembro
+            </h2>
             <div class="overflow-x-auto">
               <table class="table table-sm">
                 <thead>
@@ -177,6 +263,7 @@ defmodule TokengateWeb.CreditsLive do
                     <th>Equipo</th>
                     <th class="w-56">Diario</th>
                     <th class="w-56">Mensual</th>
+                    <th class="text-right">Ahorro del mes</th>
                     <th>Estado</th>
                   </tr>
                 </thead>
@@ -199,6 +286,12 @@ defmodule TokengateWeb.CreditsLive do
                         pct={b.monthly_pct}
                         id={"monthly-bar-#{b.member.id}"}
                       />
+                    </td>
+                    <td
+                      class="text-right font-mono text-success"
+                      id={"member-savings-#{b.member.id}"}
+                    >
+                      ${fmt_money(Map.get(@member_savings, b.member.id, Decimal.new(0)))}
                     </td>
                     <td>
                       <% {style, label} = status_for(b) %>
