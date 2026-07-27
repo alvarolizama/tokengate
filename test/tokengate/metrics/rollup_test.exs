@@ -936,15 +936,17 @@ defmodule Tokengate.Metrics.RollupTest do
   describe "busiest_hours/2" do
     test "devuelve las horas con más requests, ordenadas desc" do
       {tm, _team} = team_member_fixture()
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-      busy = DateTime.add(now, -3600, :second) |> Map.put(:minute, 10)
-      quiet = DateTime.add(now, -1800, :second) |> Map.put(:minute, 10)
+      # Truncar a la hora para que los buckets sean deterministas sin
+      # importar a qué minuto corra el test.
+      hour_now = DateTime.utc_now() |> DateTime.truncate(:second) |> Map.put(:minute, 0) |> Map.put(:second, 0)
+      busy = DateTime.add(hour_now, -3600, :second) |> DateTime.add(600, :second)
+      quiet = DateTime.add(hour_now, -7200, :second) |> DateTime.add(600, :second)
 
       for _ <- 1..5, do: log_request(tm.id, busy)
       for _ <- 1..2, do: log_request(tm.id, quiet)
 
-      rows = Rollup.busiest_hours(nil, from: DateTime.add(now, -7200, :second))
+      rows = Rollup.busiest_hours(nil, from: DateTime.add(hour_now, -10_800, :second))
 
       assert [first, second] = Enum.take(rows, 2)
       assert first.request_count == 5
