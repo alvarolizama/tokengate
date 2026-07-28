@@ -16,6 +16,7 @@ defmodule TokengateWeb.TeamsLive do
 
   alias Tokengate.Accounts
   alias Tokengate.Accounts.Team
+  alias Tokengate.Budgets
   alias Tokengate.Observability
   alias Tokengate.Observability.Destination
   alias Tokengate.Providers
@@ -70,12 +71,53 @@ defmodule TokengateWeb.TeamsLive do
     destinations_by_team =
       Observability.list_destinations_for_teams(Enum.map(teams, & &1.id))
 
+    # Budget + spend rollup per team and per member
+    member_budgets = Budgets.list_member_budgets()
+
+    team_budgets =
+      member_budgets
+      |> Enum.group_by(fn mb -> mb.member.team_id end)
+      |> Map.new(fn {team_id, budgets} ->
+        team = Enum.find(teams, &(&1.id == team_id))
+
+        daily_limit_usd =
+          budgets
+          |> Enum.map(& &1.daily_limit_usd)
+          |> Enum.reject(&is_nil/1)
+          |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
+
+        daily_spend_usd =
+          Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.daily_spend_usd, &2))
+
+        monthly_spend_usd =
+          Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.monthly_spend_usd, &2))
+
+        estimated_monthly_usd =
+          if team && team.team_daily_budget_usd do
+            Decimal.mult(team.team_daily_budget_usd, Decimal.new(30))
+          else
+            nil
+          end
+
+        {team_id,
+         %{
+           daily_limit_usd: daily_limit_usd,
+           team_daily_limit_usd: team && team.team_daily_budget_usd,
+           daily_spend_usd: daily_spend_usd,
+           monthly_spend_usd: monthly_spend_usd,
+           estimated_monthly_usd: estimated_monthly_usd,
+           member_count: length(budgets),
+           member_budgets: budgets
+         }}
+      end)
+
     socket
     |> stream(:teams, teams, reset: true)
     |> assign(:teams_empty?, teams == [])
     |> assign(:granted_aliases, granted_aliases)
     |> assign(:aliases_by_org, aliases_by_org)
     |> assign(:destinations_by_team, destinations_by_team)
+    |> assign(:team_budgets, team_budgets)
   end
 
   ## Events — team CRUD ---------------------------------------------------
@@ -332,46 +374,116 @@ defmodule TokengateWeb.TeamsLive do
           </:actions>
         </.header>
 
-        <div :if={@form} class="card bg-base-100 border border-base-300 shadow-sm" id="team-form-card">
-          <div class="card-body">
-            <h2 class="text-base font-semibold mb-2">
-              {if @editing_team_id == :new, do: "Nuevo equipo", else: "Editar equipo"}
-            </h2>
-            <.form for={@form} id="team-form" phx-submit="save_team">
-              <.input
-                field={@form[:name]}
-                type="text"
-                label="Nombre"
-                hint="Nombre identificativo del equipo."
-              />
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <%!-- Team form (create / edit) — modal --%>
+        <div :if={@form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div class="absolute inset-0 bg-black/50" phx-click="cancel_form" />
+          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
+            <div class="card-body p-6">
+              <h2 class="text-lg font-semibold mb-4">
+                {if @editing_team_id == :new, do: "Nuevo equipo", else: "Editar equipo"}
+              </h2>
+              <.form for={@form} id="team-form" phx-submit="save_team">
                 <.input
-                  field={@form[:default_daily_budget_usd]}
-                  type="number"
-                  label="Presupuesto diario (USD)"
-                  step="any"
-                  hint="Presupuesto diario por miembro. Cada miembro puede tener un extra que se suma a este valor. Vacío = sin límite."
+                  field={@form[:name]}
+                  type="text"
+                  label="Nombre"
+                  hint="Nombre identificativo del equipo."
+                />
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <.input
+                    field={@form[:default_daily_budget_usd]}
+                    type="number"
+                    label="Tope diario por usuario (USD)"
+                    step="any"
+                    hint="Presupuesto diario individual para cada miembro. Vacío = sin límite."
+                  />
+                  <.input
+                    field={@form[:team_daily_budget_usd]}
+                    type="number"
+                    label="Tope diario del equipo (USD)"
+                    step="any"
+                    hint="Presupuesto diario compartido por todo el equipo. Vacío = sin límite."
+                  />
+                  <.input
+                    field={@form[:default_concurrency_limit]}
+                    type="number"
+                    label="Concurrencia"
+                    hint="Concurrencia por miembro. Cada miembro puede tener un extra que se suma a este valor."
+                  />
+                  <.input
+                    field={@form[:default_rpm_limit]}
+                    type="number"
+                    label="RPM"
+                    hint="Requests por minuto por miembro."
+                  />
+                </div>
+                <div class="flex gap-2 mt-4 justify-end">
+                  <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
+                    Cancelar
+                  </button>
+                  <button type="submit" class="btn btn-primary btn-sm" id="save-team-btn">Guardar</button>
+                </div>
+              </.form>
+            </div>
+          </div>
+        </div>
+
+        <%!-- Webhook form (create / edit) — modal --%>
+        <div
+          :if={@webhook_form}
+          class="fixed inset-0 z-50 flex items-center justify-center p-4"
+          id={"webhook-form-#{@editing_webhook_team_id}"}
+        >
+          <div class="absolute inset-0 bg-black/50" phx-click="cancel_webhook" />
+          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
+            <div class="card-body p-6">
+              <h2 class="text-lg font-semibold mb-4">
+                {if @editing_webhook_id == :new, do: "Nuevo webhook", else: "Editar webhook"}
+              </h2>
+              <.form
+                for={@webhook_form}
+                id={"destination-form-#{@editing_webhook_team_id}"}
+                phx-submit="save_webhook"
+              >
+                <.input
+                  field={@webhook_form[:name]}
+                  type="text"
+                  label="Nombre"
+                  hint="Nombre identificativo del webhook. Ej.: «Datadog - Producción»."
                 />
                 <.input
-                  field={@form[:default_concurrency_limit]}
-                  type="number"
-                  label="Concurrencia"
-                  hint="Concurrencia por miembro. Cada miembro puede tener un extra que se suma a este valor."
+                  field={@webhook_form[:url]}
+                  type="text"
+                  label="URL"
+                  hint="Endpoint HTTPS donde se enviarán los datos de telemetría (formato OTLP)."
                 />
                 <.input
-                  field={@form[:default_rpm_limit]}
-                  type="number"
-                  label="RPM"
-                  hint="Requests por minuto por miembro."
+                  field={@webhook_form[:headers]}
+                  value={headers_to_string(@webhook_form[:headers].value)}
+                  type="textarea"
+                  label="Cabeceras (JSON)"
+                  placeholder='{"Authorization": "Bearer xxx"}'
+                  hint="Cabeceras HTTP adicionales en formato JSON. Dejalo vacio si no necesitas cabeceras extra."
                 />
-              </div>
-              <div class="flex gap-2 mt-3">
-                <button type="submit" class="btn btn-primary" id="save-team-btn">Guardar</button>
-                <button type="button" phx-click="cancel_form" class="btn btn-ghost">
-                  Cancelar
-                </button>
-              </div>
-            </.form>
+                <div class="flex gap-2 mt-4 justify-end">
+                  <button
+                    type="button"
+                    phx-click="cancel_webhook"
+                    class="btn btn-ghost btn-sm"
+                    id={"cancel-webhook-#{@editing_webhook_team_id}"}
+                  >
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    class="btn btn-primary btn-sm"
+                    id={"save-webhook-#{@editing_webhook_team_id}"}
+                  >
+                    Guardar
+                  </button>
+                </div>
+              </.form>
+            </div>
           </div>
         </div>
 
@@ -421,10 +533,41 @@ defmodule TokengateWeb.TeamsLive do
                 </div>
               </div>
 
-              <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3 text-sm">
+              <% tb =
+                Map.get(@team_budgets, team.id, %{
+                  daily_limit_usd: Decimal.new(0),
+                  team_daily_limit_usd: nil,
+                  daily_spend_usd: Decimal.new(0),
+                  monthly_spend_usd: Decimal.new(0),
+                  estimated_monthly_usd: nil,
+                  member_count: 0,
+                  member_budgets: []
+                }) %>
+
+              <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-3 text-sm">
                 <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Pool diario</p>
-                  <p class="font-medium">{format_decimal(team.default_daily_budget_usd)}</p>
+                  <p class="text-xs text-base-content/50 uppercase tracking-wide">
+                    Tope diario/usuario
+                  </p>
+                  <p class="font-medium">${format_decimal(team.default_daily_budget_usd)}</p>
+                </div>
+                <div>
+                  <p class="text-xs text-base-content/50 uppercase tracking-wide">
+                    Tope diario/equipo
+                  </p>
+                  <p class="font-medium">${format_decimal(team.team_daily_budget_usd)}</p>
+                </div>
+                <div>
+                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Gasto hoy</p>
+                  <p class="font-medium">${format_decimal(tb.daily_spend_usd)}</p>
+                </div>
+                <div>
+                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Gasto mensual</p>
+                  <p class="font-medium">${format_decimal(tb.monthly_spend_usd)}</p>
+                </div>
+                <div>
+                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Estimado mensual</p>
+                  <p class="font-medium">${format_decimal(tb.estimated_monthly_usd)}</p>
                 </div>
                 <div>
                   <p class="text-xs text-base-content/50 uppercase tracking-wide">Concurrencia</p>
@@ -433,6 +576,33 @@ defmodule TokengateWeb.TeamsLive do
                 <div>
                   <p class="text-xs text-base-content/50 uppercase tracking-wide">RPM</p>
                   <p class="font-medium">{team.default_rpm_limit}</p>
+                </div>
+              </div>
+
+              <div :if={tb.member_budgets != []} class="mt-4 pt-4 border-t border-base-300">
+                <h4 class="text-sm font-semibold mb-2">Consumo por miembro</h4>
+                <div class="overflow-x-auto">
+                  <table class="table table-sm">
+                    <thead>
+                      <tr>
+                        <th>Usuario</th>
+                        <th class="text-right">Gasto hoy</th>
+                        <th class="text-right">Gasto mensual</th>
+                        <th class="text-right">Tope diario</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr
+                        :for={mb <- tb.member_budgets}
+                        id={"member-budget-#{team.id}-#{mb.member.id}"}
+                      >
+                        <td class="font-medium">{mb.member.user.email}</td>
+                        <td class="text-right font-mono">${format_decimal(mb.daily_spend_usd)}</td>
+                        <td class="text-right font-mono">${format_decimal(mb.monthly_spend_usd)}</td>
+                        <td class="text-right font-mono">${format_decimal(mb.daily_limit_usd)}</td>
+                      </tr>
+                    </tbody>
+                  </table>
                 </div>
               </div>
 
@@ -471,7 +641,6 @@ defmodule TokengateWeb.TeamsLive do
                     Webhooks de observabilidad
                   </h4>
                   <button
-                    :if={@editing_webhook_team_id != team.id or @webhook_form == nil}
                     phx-click="new_webhook"
                     phx-value-team-id={team.id}
                     class="btn btn-xs btn-ghost gap-1 transition-colors hover:text-primary"
@@ -482,10 +651,7 @@ defmodule TokengateWeb.TeamsLive do
                 </div>
 
                 <!-- Destination list -->
-                <div
-                  :if={@editing_webhook_team_id != team.id or @webhook_form == nil}
-                  id={"webhooks-list-#{team.id}"}
-                >
+                <div id={"webhooks-list-#{team.id}"}>
                   <div
                     :for={destination <- Map.get(@destinations_by_team, team.id, [])}
                     class="flex items-center justify-between gap-3 py-2 px-3 rounded-lg bg-base-200/50 hover:bg-base-200 transition-colors mb-2"
@@ -532,56 +698,6 @@ defmodule TokengateWeb.TeamsLive do
                     <.icon name="hero-bell-slash" class="w-8 h-8 mx-auto mb-1.5 opacity-40" />
                     <p class="text-xs">No hay webhooks configurados para este equipo.</p>
                   </div>
-                </div>
-
-                <!-- Webhook form -->
-                <div
-                  :if={@editing_webhook_team_id == team.id and @webhook_form}
-                  id={"webhook-form-#{team.id}"}
-                >
-                  <.form
-                    for={@webhook_form}
-                    id={"destination-form-#{team.id}"}
-                    phx-submit="save_webhook"
-                  >
-                    <.input
-                      field={@webhook_form[:name]}
-                      type="text"
-                      label="Nombre"
-                      hint="Nombre identificativo del webhook. Ej.: «Datadog - Producción»."
-                    />
-                    <.input
-                      field={@webhook_form[:url]}
-                      type="text"
-                      label="URL"
-                      hint="Endpoint HTTPS donde se enviarán los datos de telemetría (formato OTLP)."
-                    />
-                    <.input
-                      field={@webhook_form[:headers]}
-                      value={headers_to_string(@webhook_form[:headers].value)}
-                      type="textarea"
-                      label="Cabeceras (JSON)"
-                      placeholder='{"Authorization": "Bearer xxx"}'
-                      hint="Cabeceras HTTP adicionales en formato JSON. Dejalo vacio si no necesitas cabeceras extra."
-                    />
-                    <div class="flex gap-2 mt-3">
-                      <button
-                        type="submit"
-                        class="btn btn-primary btn-sm"
-                        id={"save-webhook-#{team.id}"}
-                      >
-                        <.icon name="hero-check" class="w-4 h-4" /> Guardar webhook
-                      </button>
-                      <button
-                        type="button"
-                        phx-click="cancel_webhook"
-                        class="btn btn-ghost btn-sm"
-                        id={"cancel-webhook-#{team.id}"}
-                      >
-                        Cancelar
-                      </button>
-                    </div>
-                  </.form>
                 </div>
               </div>
             </div>

@@ -37,8 +37,9 @@ defmodule TokengateWeb.TeamMembersLive do
           |> assign(:page_title, "Miembros · Tokengate")
           |> assign(:team, team)
           |> assign(:editing_member_id, nil)
+          |> assign(:show_add_modal?, false)
+          |> assign(:add_form, add_member_form())
           |> assign(:add_member_error, nil)
-          |> assign(:member_form, to_form(%{"email" => "", "team_role" => "user"}))
           |> load_data()
 
         {:ok, socket}
@@ -101,9 +102,12 @@ defmodule TokengateWeb.TeamMembersLive do
 
     # Member budgets with spend
     alias_map = Map.new(org_alias_ids, fn a -> {a.id, a.name} end)
+    team_pool = team.default_daily_budget_usd || Decimal.new(0)
 
     member_budgets =
-      Enum.map(members, fn m -> budget_for_member(m, extra_alias_details, alias_map) end)
+      Enum.map(members, fn m ->
+        budget_for_member(m, team_pool, extra_alias_details, alias_map)
+      end)
 
     socket
     |> assign(:members, members)
@@ -116,7 +120,7 @@ defmodule TokengateWeb.TeamMembersLive do
     |> assign(:team_spend, Tokengate.Budgets.Manager.team_spend(Enum.map(members, & &1.id)))
   end
 
-  defp budget_for_member(member, extra_alias_details, alias_map) do
+  defp budget_for_member(member, team_pool, extra_alias_details, alias_map) do
     spend = Tokengate.Budgets.Manager.spend(member.id)
     member_extra = member.extra_daily_budget_usd || Decimal.new(0)
 
@@ -139,53 +143,129 @@ defmodule TokengateWeb.TeamMembersLive do
     %{
       member_id: member.id,
       daily_spend: spend.daily_usd,
+      team_pool: team_pool,
       member_extra: member_extra,
       model_extras: model_extras,
       model_extra_total: model_extra_total,
-      total_max: Decimal.add(Decimal.add(member_extra, model_extra_total), Decimal.new(0))
+      total_max: Decimal.add(Decimal.add(team_pool, member_extra), model_extra_total)
     }
   end
 
   ## Events — add member --------------------------------------------------
 
   @impl true
-  def handle_event("validate_add_member", _params, socket) do
-    {:noreply, socket}
+  def handle_event("new_member", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_add_modal?, true)
+     |> assign(:add_form, add_member_form())
+     |> assign(:add_member_error, nil)}
   end
 
-  def handle_event("add_member", %{"email" => email, "team_role" => team_role}, socket) do
+  @impl true
+  def handle_event("cancel_add_member", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_add_modal?, false)
+     |> assign(:add_form, add_member_form())
+     |> assign(:add_member_error, nil)}
+  end
+
+  @impl true
+  def handle_event("add_member", %{"add_member" => params}, socket) do
     team = socket.assigns.team
 
-    case Accounts.get_user_by_email(email) do
+    with {:ok, email} <- Map.fetch(params, "email"),
+         {:ok, user} <- fetch_user_by_email(email),
+         {:ok, daily} <- parse_decimal(params["extra_daily_budget_usd"]),
+         {:ok, concurrency} <- parse_integer(params["extra_concurrency"]),
+         {:ok, rpm} <- parse_integer(params["extra_rpm"]) do
+      attrs = %{
+        user_id: user.id,
+        team_id: team.id,
+        team_role: params["team_role"] || "user",
+        extra_daily_budget_usd: daily,
+        extra_concurrency: concurrency,
+        extra_rpm: rpm
+      }
+
+      case Accounts.create_team_member(attrs) do
+        {:ok, _member} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, "Miembro añadido. Genera su API key desde la sección API Keys.")
+           |> assign(:show_add_modal?, false)
+           |> assign(:add_form, add_member_form())
+           |> assign(:add_member_error, nil)
+           |> load_data()}
+
+        {:error, changeset} ->
+          msg = format_changeset_errors(changeset)
+
+          {:noreply,
+           socket
+           |> assign(:add_member_error, msg)
+           |> assign(:add_form, to_form(params, as: :add_member))}
+      end
+    else
+      :error ->
+        {:noreply,
+         socket
+         |> assign(:add_member_error, "Valores inválidos: revisa que sean números válidos.")
+         |> assign(:add_form, to_form(params, as: :add_member))}
+
       nil ->
         {:noreply,
          socket
          |> assign(:add_member_error, "No existe un usuario con ese email.")
-         |> assign(:member_form, to_form(%{"email" => email, "team_role" => team_role}))}
+         |> assign(:add_form, to_form(params, as: :add_member))}
+    end
+  end
 
-      user ->
-        case Accounts.create_team_member(%{
-               user_id: user.id,
-               team_id: team.id,
-               team_role: team_role
-             }) do
-          {:ok, _member} ->
-            {:noreply,
-             socket
-             |> put_flash(:info, "Miembro añadido. Genera su API key desde la sección API Keys.")
-             |> assign(:add_member_error, nil)
-             |> assign(:member_form, to_form(%{"email" => "", "team_role" => "user"}))
-             |> load_data()}
+  ## Events — change role ------------------------------------------------
 
-          {:error, changeset} ->
-            msg = format_changeset_errors(changeset)
-            {:noreply, assign(socket, :add_member_error, msg)}
-        end
+  @impl true
+  def handle_event("change_role", %{"id" => member_id, "team_role" => team_role}, socket) do
+    member = Accounts.get_team_member!(member_id)
+
+    if member.team_id != socket.assigns.team.id do
+      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
+    else
+      case Accounts.update_team_member(member, %{team_role: team_role}) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, "Rol actualizado.")
+           |> load_data()}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "No se pudo actualizar el rol.")}
+      end
+    end
+  end
+
+  @impl true
+  def handle_event("clear_sticky_routes", %{"id" => member_id}, socket) do
+    member = Accounts.get_team_member!(member_id)
+
+    if member.team_id != socket.assigns.team.id do
+      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
+    else
+      Accounts.clear_team_member_sticky_routes(member)
+
+      {:noreply,
+       socket
+       |> put_flash(
+         :info,
+         "Sticky routes limpiadas para #{member.user.email}. Su próxima petición se re-ruteará."
+       )
+       |> load_data()}
     end
   end
 
   ## Events — remove member ----------------------------------------------
 
+  @impl true
   def handle_event("remove_member", %{"id" => member_id}, socket) do
     member = Accounts.get_team_member!(member_id)
 
@@ -206,37 +286,19 @@ defmodule TokengateWeb.TeamMembersLive do
     end
   end
 
-  ## Events — change role ------------------------------------------------
-
-  def handle_event("change_role", %{"id" => member_id, "team_role" => team_role}, socket) do
-    member = Accounts.get_team_member!(member_id)
-
-    if member.team_id != socket.assigns.team.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
-    else
-      case Accounts.update_team_member(member, %{team_role: team_role}) do
-        {:ok, _} ->
-          {:noreply,
-           socket
-           |> put_flash(:info, "Rol actualizado.")
-           |> load_data()}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudo actualizar el rol.")}
-      end
-    end
-  end
-
   ## Events — override edits ---------------------------------------------
 
+  @impl true
   def handle_event("edit_overrides", %{"id" => member_id}, socket) do
     {:noreply, assign(socket, :editing_member_id, member_id)}
   end
 
+  @impl true
   def handle_event("cancel_overrides", _params, socket) do
     {:noreply, assign(socket, :editing_member_id, nil)}
   end
 
+  @impl true
   def handle_event("save_overrides", %{"overrides" => override_params} = params, socket) do
     member_id = params["id"]
     member = Accounts.get_team_member!(member_id)
@@ -274,6 +336,7 @@ defmodule TokengateWeb.TeamMembersLive do
 
   ## Events — extra alias grants -----------------------------------------
 
+  @impl true
   def handle_event(
         "toggle_extra_alias",
         %{"member-id" => member_id, "alias-id" => alias_id},
@@ -281,30 +344,61 @@ defmodule TokengateWeb.TeamMembersLive do
       ) do
     member = Accounts.get_team_member!(member_id)
 
-    cond do
-      member.team_id != socket.assigns.team.id ->
-        {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
+    if member.team_id != socket.assigns.team.id do
+      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
+    else
+      existing = Map.get(socket.assigns.extra_aliases, member_id, [])
 
-      true ->
-        existing = Map.get(socket.assigns.extra_aliases, member_id, [])
+      result =
+        if alias_id in existing do
+          Providers.revoke_extra_alias(member_id, alias_id)
+        else
+          Providers.grant_extra_alias(member_id, alias_id)
+        end
 
-        result =
-          if alias_id in existing do
-            Providers.revoke_extra_alias(member_id, alias_id)
-          else
-            Providers.grant_extra_alias(member_id, alias_id)
-          end
+      case result do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, "Aliases actualizados.")
+           |> load_data()}
 
-        case result do
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "No se pudo actualizar el alias.")}
+      end
+    end
+  end
+
+  @impl true
+  def handle_event(
+        "save_alias_extra",
+        %{"alias_extra" => params},
+        socket
+      ) do
+    member_id = params["member_id"]
+    alias_id = params["alias_id"]
+    budget = params["extra_daily_budget_usd"]
+
+    member = Accounts.get_team_member!(member_id)
+
+    if member.team_id != socket.assigns.team.id do
+      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
+    else
+      with {:ok, decimal_budget} <- parse_decimal(budget) do
+        case Providers.set_extra_alias(member_id, alias_id, decimal_budget) do
           {:ok, _} ->
             {:noreply,
              socket
-             |> put_flash(:info, "Aliases actualizados.")
+             |> put_flash(:info, "Extra por modelo actualizado.")
              |> load_data()}
 
           {:error, _} ->
-            {:noreply, put_flash(socket, :error, "No se pudo actualizar el alias.")}
+            {:noreply, put_flash(socket, :error, "No se pudo actualizar el extra por modelo.")}
         end
+      else
+        :error ->
+          {:noreply, put_flash(socket, :error, "Presupuesto inválido.")}
+      end
     end
   end
 
@@ -335,6 +429,26 @@ defmodule TokengateWeb.TeamMembersLive do
   end
 
   defp parse_integer(_), do: :error
+
+  defp add_member_form do
+    to_form(
+      %{
+        "email" => "",
+        "team_role" => "user",
+        "extra_daily_budget_usd" => "",
+        "extra_concurrency" => "",
+        "extra_rpm" => ""
+      },
+      as: :add_member
+    )
+  end
+
+  defp fetch_user_by_email(email) do
+    case Accounts.get_user_by_email(email) do
+      nil -> nil
+      user -> {:ok, user}
+    end
+  end
 
   defp format_changeset_errors(changeset) do
     errors =
@@ -378,32 +492,158 @@ defmodule TokengateWeb.TeamMembersLive do
           </:actions>
         </.header>
 
-        <div class="card bg-base-100 border border-base-300 shadow-sm" id="add-member-card">
-          <div class="card-body">
-            <h2 class="text-base font-semibold mb-2">Añadir miembro</h2>
-            <.form for={@member_form} id="add-member-form" phx-submit="add_member">
-              <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 items-end">
-                <.input
-                  field={@member_form[:email]}
-                  type="email"
-                  label="Email del usuario"
-                  placeholder="usuario@ejemplo.com"
-                />
-                <.input
-                  field={@member_form[:team_role]}
-                  type="select"
-                  label="Rol"
-                  options={[{"Usuario", "user"}, {"Manager", "manager"}]}
-                />
-                <div>
-                  <button type="submit" class="btn btn-primary w-full" id="add-member-btn">Añadir</button>
+        <div class="flex justify-end">
+          <button phx-click="new_member" class="btn btn-primary btn-sm" id="new-member-btn">
+            <.icon name="hero-plus" class="w-4 h-4" /> Añadir miembro
+          </button>
+        </div>
+
+        <%!-- Add member modal --%>
+        <div
+          :if={@show_add_modal?}
+          class="fixed inset-0 z-50 flex items-center justify-center p-4"
+          id="add-member-modal"
+        >
+          <div class="absolute inset-0 bg-black/50" phx-click="cancel_add_member" />
+          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-2xl">
+            <div class="card-body p-6">
+              <h2 class="text-lg font-semibold mb-4">Añadir miembro</h2>
+              <.form for={@add_form} id="add-member-form" phx-submit="add_member">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <.input
+                    field={@add_form[:email]}
+                    type="email"
+                    label="Email del usuario"
+                    placeholder="usuario@ejemplo.com"
+                  />
+                  <.input
+                    field={@add_form[:team_role]}
+                    type="select"
+                    label="Rol"
+                    options={[{"Usuario", "user"}, {"Manager", "manager"}]}
+                  />
+                  <.input
+                    field={@add_form[:extra_daily_budget_usd]}
+                    type="number"
+                    label="Extra diario (USD)"
+                    step="any"
+                    placeholder="0.00"
+                  />
+                  <.input
+                    field={@add_form[:extra_concurrency]}
+                    type="number"
+                    label="Extra concurrencia"
+                    placeholder="0"
+                  />
+                  <.input
+                    field={@add_form[:extra_rpm]}
+                    type="number"
+                    label="Extra RPM"
+                    placeholder="0"
+                  />
                 </div>
-              </div>
-            </.form>
-            <p :if={@add_member_error} class="text-sm text-error mt-2" id="add-member-error">
-              <.icon name="hero-exclamation-circle" class="w-4 h-4 inline mr-1" />
-              {@add_member_error}
-            </p>
+                <p :if={@add_member_error} class="text-sm text-error mt-4" id="add-member-error">
+                  <.icon name="hero-exclamation-circle" class="w-4 h-4 inline mr-1" />
+                  {@add_member_error}
+                </p>
+                <div class="flex gap-2 mt-6 justify-end">
+                  <button
+                    type="button"
+                    phx-click="cancel_add_member"
+                    class="btn btn-ghost btn-sm"
+                    id="cancel-add-member"
+                  >
+                    Cancelar
+                  </button>
+                  <button type="submit" class="btn btn-primary btn-sm" id="add-member-btn-submit">
+                    Añadir
+                  </button>
+                </div>
+              </.form>
+            </div>
+          </div>
+        </div>
+
+        <%!-- Overrides form (modal) --%>
+        <div
+          :if={@editing_member_id}
+          class="fixed inset-0 z-50 flex items-center justify-center p-4"
+          id={"overrides-form-#{@editing_member_id}"}
+        >
+          <div class="absolute inset-0 bg-black/50" phx-click="cancel_overrides" />
+          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
+            <div class="card-body p-6">
+              <h2 class="text-lg font-semibold mb-4">Extras del miembro</h2>
+              <% member = Enum.find(@members, &(&1.id == @editing_member_id)) %>
+              <.form
+                :if={member}
+                for={
+                  to_form(%{
+                    "extra_daily_budget_usd" =>
+                      if(member.extra_daily_budget_usd,
+                        do: Decimal.to_string(member.extra_daily_budget_usd),
+                        else: ""
+                      ),
+                    "extra_concurrency" =>
+                      if(member.extra_concurrency,
+                        do: to_string(member.extra_concurrency),
+                        else: ""
+                      ),
+                    "extra_rpm" => if(member.extra_rpm, do: to_string(member.extra_rpm), else: "")
+                  })
+                }
+                id={"override-form-#{@editing_member_id}"}
+                phx-submit="save_overrides"
+                phx-value-id={@editing_member_id}
+              >
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <.input
+                    field={to_form(%{})[:extra_daily_budget_usd]}
+                    type="number"
+                    label="Extra diario (USD)"
+                    step="any"
+                    name="overrides[extra_daily_budget_usd]"
+                    value={
+                      if(member.extra_daily_budget_usd,
+                        do: Decimal.to_string(member.extra_daily_budget_usd),
+                        else: ""
+                      )
+                    }
+                  />
+                  <.input
+                    field={to_form(%{})[:extra_concurrency]}
+                    type="number"
+                    label="Extra concurrencia"
+                    name="overrides[extra_concurrency]"
+                    value={
+                      if(member.extra_concurrency,
+                        do: to_string(member.extra_concurrency),
+                        else: ""
+                      )
+                    }
+                  />
+                  <.input
+                    field={to_form(%{})[:extra_rpm]}
+                    type="number"
+                    label="Extra RPM"
+                    name="overrides[extra_rpm]"
+                    value={if(member.extra_rpm, do: to_string(member.extra_rpm), else: "")}
+                  />
+                </div>
+                <div class="flex gap-2 mt-4 justify-end">
+                  <button type="button" phx-click="cancel_overrides" class="btn btn-ghost btn-sm">
+                    Cancelar
+                  </button>
+                  <button
+                    type="submit"
+                    class="btn btn-primary btn-sm"
+                    id={"save-overrides-#{@editing_member_id}"}
+                  >
+                    Guardar
+                  </button>
+                </div>
+              </.form>
+            </div>
           </div>
         </div>
 
@@ -411,10 +651,18 @@ defmodule TokengateWeb.TeamMembersLive do
         <div class="card bg-base-100 border border-base-300 shadow-sm" id="team-config">
           <div class="card-body p-5">
             <h2 class="text-sm font-semibold mb-3">Configuración del equipo</h2>
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 text-sm">
               <div>
-                <p class="text-xs text-base-content/50 uppercase tracking-wide">Pool diario</p>
-                <p class="font-medium">{format_decimal(@team.default_daily_budget_usd)}</p>
+                <p class="text-xs text-base-content/50 uppercase tracking-wide">
+                  Tope diario por usuario
+                </p>
+                <p class="font-medium">${format_decimal(@team.default_daily_budget_usd)}</p>
+              </div>
+              <div>
+                <p class="text-xs text-base-content/50 uppercase tracking-wide">
+                  Tope diario del equipo
+                </p>
+                <p class="font-medium">${format_decimal(@team.team_daily_budget_usd)}</p>
               </div>
               <div>
                 <p class="text-xs text-base-content/50 uppercase tracking-wide">
@@ -470,10 +718,14 @@ defmodule TokengateWeb.TeamMembersLive do
               </div>
 
               <%!-- Consumption + extras --%>
-              <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-4 text-sm">
+              <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 mt-4 text-sm">
                 <div>
                   <p class="text-xs text-base-content/50 uppercase tracking-wide">Gasto hoy</p>
                   <p class="font-semibold">${format_decimal(mb.daily_spend)}</p>
+                </div>
+                <div>
+                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Tope base</p>
+                  <p class="font-medium">${format_decimal(mb.team_pool)}</p>
                 </div>
                 <div>
                   <p class="text-xs text-base-content/50 uppercase tracking-wide">Extra general</p>
@@ -578,92 +830,78 @@ defmodule TokengateWeb.TeamMembersLive do
                   class="btn btn-sm btn-ghost text-error"
                   id={"remove-#{member.id}"}
                 >Eliminar</button>
+                <button
+                  phx-click="clear_sticky_routes"
+                  phx-value-id={member.id}
+                  class="btn btn-sm btn-ghost"
+                  id={"clear-sticky-#{member.id}"}
+                  title="Fuerza re-ruteo en la siguiente petición"
+                >
+                  <.icon name="hero-arrow-path" class="w-4 h-4" /> Quitar sticky
+                </button>
               </div>
-
-              <%= if @editing_member_id == member.id do %>
-                <div class="mt-3 pt-3 border-t border-base-300" id={"overrides-form-#{member.id}"}>
-                  <h4 class="text-sm font-semibold mb-2">Extras</h4>
-                  <.form
-                    for={
-                      to_form(%{
-                        "extra_daily_budget_usd" =>
-                          if(member.extra_daily_budget_usd,
-                            do: Decimal.to_string(member.extra_daily_budget_usd),
-                            else: ""
-                          ),
-                        "extra_concurrency" =>
-                          if(member.extra_concurrency,
-                            do: to_string(member.extra_concurrency),
-                            else: ""
-                          ),
-                        "extra_rpm" => if(member.extra_rpm, do: to_string(member.extra_rpm), else: "")
-                      })
-                    }
-                    id={"override-form-#{member.id}"}
-                    phx-submit="save_overrides"
-                    phx-value-id={member.id}
-                  >
-                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <.input
-                        field={to_form(%{})[:extra_daily_budget_usd]}
-                        type="number"
-                        label="Extra diario (USD)"
-                        step="any"
-                        name="overrides[extra_daily_budget_usd]"
-                        value={
-                          if(member.extra_daily_budget_usd,
-                            do: Decimal.to_string(member.extra_daily_budget_usd),
-                            else: ""
-                          )
-                        }
-                      />
-                      <.input
-                        field={to_form(%{})[:extra_concurrency]}
-                        type="number"
-                        label="Extra concurrencia"
-                        name="overrides[extra_concurrency]"
-                        value={
-                          if(member.extra_concurrency,
-                            do: to_string(member.extra_concurrency),
-                            else: ""
-                          )
-                        }
-                      />
-                      <.input
-                        field={to_form(%{})[:extra_rpm]}
-                        type="number"
-                        label="Extra RPM"
-                        name="overrides[extra_rpm]"
-                        value={if(member.extra_rpm, do: to_string(member.extra_rpm), else: "")}
-                      />
-                    </div>
-                    <div class="flex gap-2 mt-2">
-                      <button type="submit" class="btn btn-primary" id={"save-overrides-#{member.id}"}>Guardar</button>
-                      <button type="button" phx-click="cancel_overrides" class="btn btn-ghost">Cancelar</button>
-                    </div>
-                  </.form>
-                </div>
-              <% end %>
 
               <%!-- Extra aliases --%>
               <div :if={@org_aliases != []} class="mt-3 pt-3 border-t border-base-200">
                 <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">Aliases extra</p>
                 <div class="flex flex-wrap gap-3">
-                  <label
+                  <div
                     :for={alias <- @org_aliases}
-                    class="flex items-center gap-2 cursor-pointer text-sm"
+                    class="flex items-center gap-2 text-sm"
                   >
-                    <input
-                      type="checkbox"
-                      phx-click="toggle_extra_alias"
-                      phx-value-member-id={member.id}
-                      phx-value-alias-id={alias.id}
-                      checked={alias.id in extra_alias_ids(@extra_aliases, member.id)}
-                      class="checkbox checkbox-sm"
-                      id={"extra-alias-#{member.id}-#{alias.id}"}
-                    />
-                    <span>{alias.name}</span>
-                  </label>
+                    <% enabled? = alias.id in extra_alias_ids(@extra_aliases, member.id)
+
+                    alias_detail =
+                      Enum.find(Map.get(@extra_alias_details, member.id, []), fn {id, _} ->
+                        id == alias.id
+                      end)
+
+                    alias_budget = if alias_detail, do: elem(alias_detail, 1), else: nil %>
+                    <.form
+                      for={
+                        to_form(%{
+                          "member_id" => member.id,
+                          "alias_id" => alias.id,
+                          "extra_daily_budget_usd" =>
+                            if(alias_budget, do: Decimal.to_string(alias_budget), else: "")
+                        })
+                      }
+                      id={"alias-extra-form-#{member.id}-#{alias.id}"}
+                      phx-submit="save_alias_extra"
+                      class="flex items-center gap-2"
+                    >
+                      <input type="hidden" name="alias_extra[member_id]" value={member.id} />
+                      <input type="hidden" name="alias_extra[alias_id]" value={alias.id} />
+                      <input
+                        type="checkbox"
+                        name="alias_extra[enabled]"
+                        value="true"
+                        checked={enabled?}
+                        phx-click="toggle_extra_alias"
+                        phx-value-member-id={member.id}
+                        phx-value-alias-id={alias.id}
+                        class="checkbox checkbox-sm"
+                        id={"extra-alias-#{member.id}-#{alias.id}"}
+                      />
+                      <span class="whitespace-nowrap">{alias.name}</span>
+                      <input
+                        type="number"
+                        name="alias_extra[extra_daily_budget_usd]"
+                        value={if(alias_budget, do: Decimal.to_string(alias_budget), else: "")}
+                        placeholder="USD"
+                        step="any"
+                        class="input input-bordered input-xs w-24"
+                        id={"alias-extra-budget-#{member.id}-#{alias.id}"}
+                      />
+                      <button
+                        type="submit"
+                        class="btn btn-xs btn-primary"
+                        id={"alias-extra-save-#{member.id}-#{alias.id}"}
+                      >
+                        Guardar
+                      </button>
+                    </.form>
+                  </div>
                 </div>
               </div>
             </div>
