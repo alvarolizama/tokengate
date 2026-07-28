@@ -317,12 +317,17 @@ defmodule TokengateWeb.Layouts do
             <.sidebar_link href={~p"/dashboard/teams"} label="Equipos" icon="hero-user-group" />
           </div>
 
-          <div class="space-y-1">
+          <div :if={admin?(@current_scope)} class="space-y-1">
             <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
               Monitoreo
             </p>
             <.sidebar_link href={~p"/dashboard/alerts"} label="Alertas" icon="hero-bell-alert" />
             <.sidebar_link href={~p"/dashboard/credits"} label="Créditos" icon="hero-banknotes" />
+          </div>
+          <div class="space-y-1">
+            <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
+              Acceso
+            </p>
             <.sidebar_link href={~p"/dashboard/logs"} label="Logs" icon="hero-document-text" />
           </div>
         </nav>
