@@ -696,6 +696,8 @@ defmodule TokengateWeb.LogsLive do
                     <th>Modelo</th>
                     <th>Usuario</th>
                     <th>Equipo</th>
+                    <th>Proveedor</th>
+                    <th>API Key</th>
                     <th>Agente</th>
                     <th>Think</th>
                     <th>Effort</th>
@@ -709,6 +711,8 @@ defmodule TokengateWeb.LogsLive do
                     <td class="text-sm">{entry.model_requested}</td>
                     <td class="text-sm">{entry.user_email || "—"}</td>
                     <td class="text-sm">{entry.team_name || "—"}</td>
+                    <td class="text-sm">{entry.provider_name || "—"}</td>
+                    <td class="text-sm">{entry.api_key_prefix || "—"}</td>
                     <td>
                       <span class="badge badge-sm badge-ghost">{entry.agent_type || "api"}</span>
                     </td>
@@ -732,6 +736,7 @@ defmodule TokengateWeb.LogsLive do
                 <th>Modelo</th>
                 <th>Usuario</th>
                 <th>Equipo</th>
+                <th>API Key</th>
                 <th>Agente</th>
                 <th>Estado</th>
                 <th>Think</th>
@@ -750,7 +755,7 @@ defmodule TokengateWeb.LogsLive do
             </thead>
             <tbody id="logs" phx-update="stream">
               <tr id="logs-empty" class="hidden only:table-row">
-                <td colspan="17" class="text-center py-8 text-base-content/40">
+                <td colspan="18" class="text-center py-8 text-base-content/40">
                   No hay logs que coincidan con los filtros.
                 </td>
               </tr>
@@ -759,6 +764,7 @@ defmodule TokengateWeb.LogsLive do
                 <td class="text-sm">{model_display(log.model_requested, log.model_responded)}</td>
                 <td class="text-sm">{member_email(log)}</td>
                 <td class="text-sm">{member_team(log)}</td>
+                <td class="text-sm">{log.api_key_prefix || "—"}</td>
                 <td>
                   <span class="badge badge-sm badge-ghost">{log.agent_type}</span>
                 </td>

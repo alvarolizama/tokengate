@@ -72,7 +72,8 @@ defmodule TokengateWeb.LogsLiveTest do
         latency_ms: 42,
         streaming: false,
         think: Keyword.get(opts, :think, true),
-        effort: Keyword.get(opts, :effort, "high")
+        effort: Keyword.get(opts, :effort, "high"),
+        api_key_prefix: "sk-logs-"
       })
 
     %{team: team, owner: owner, member: member, log: log, model_alias: model_alias}
@@ -128,7 +129,9 @@ defmodule TokengateWeb.LogsLiveTest do
         agent_type: "api",
         streaming: true,
         think: true,
-        effort: "high"
+        effort: "high",
+        provider_name: "Test Provider",
+        api_key_prefix: "sk-live-"
       })
 
     html = render(view)

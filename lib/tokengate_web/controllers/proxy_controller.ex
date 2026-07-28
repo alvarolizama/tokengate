@@ -69,7 +69,7 @@ defmodule TokengateWeb.ProxyController do
             # Second gate: credential limits (provider-side throttling)
             case acquire_credential_limits(route.credential) do
               :ok ->
-                {conn, inflight} = register_inflight(conn, member, payload)
+                {conn, inflight} = register_inflight(conn, member, payload, route)
 
                 try do
                   if payload["stream"] == true do
@@ -140,7 +140,7 @@ defmodule TokengateWeb.ProxyController do
   # as "Pending" while it executes. Also parses think/effort from the payload
   # and stashes them in conn assigns for the durable log.
   # Returns `{conn, entry}` — the conn carries the think/effort assigns.
-  defp register_inflight(conn, member, payload) do
+  defp register_inflight(conn, member, payload, route) do
     {think, effort} = Tokengate.Proxy.Reasoning.parse(payload)
 
     conn =
@@ -157,7 +157,9 @@ defmodule TokengateWeb.ProxyController do
         agent_type: conn.assigns.agent_type,
         streaming: payload["stream"] == true,
         think: think,
-        effort: effort
+        effort: effort,
+        provider_name: route.model_provider.credential.provider.name,
+        api_key_prefix: member.api_key && member.api_key.key_prefix
       })
 
     {conn, entry}
@@ -614,7 +616,8 @@ defmodule TokengateWeb.ProxyController do
       "ttft_ms" => Keyword.get(extra, :ttft_ms),
       "streaming" => streaming,
       "think" => Keyword.get(extra, :think, false),
-      "effort" => Keyword.get(extra, :effort)
+      "effort" => Keyword.get(extra, :effort),
+      "api_key_prefix" => member.api_key && member.api_key.key_prefix
     }
     |> WriteWorker.new()
     |> Oban.insert()

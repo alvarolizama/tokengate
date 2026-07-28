@@ -39,6 +39,7 @@ defmodule Tokengate.Logs.RequestLog do
     field :streaming, :boolean, default: false
     field :think, :boolean, default: false
     field :effort, :string
+    field :api_key_prefix, :string
 
     belongs_to :team_member, Tokengate.Accounts.TeamMember,
       references: :id,
@@ -54,7 +55,7 @@ defmodule Tokengate.Logs.RequestLog do
   @permitted ~w(team_member_id provider_id model_provider_id model_alias_id
     model_requested model_responded agent_type status_code prompt_tokens
     completion_tokens cost_usd provider_cost_usd savings_usd estimated_cost_usd
-    latency_ms ttft_ms streaming think effort inserted_at)a
+    latency_ms ttft_ms streaming think effort api_key_prefix inserted_at)a
 
   @required ~w(team_member_id model_requested inserted_at)a
 

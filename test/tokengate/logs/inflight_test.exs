@@ -32,7 +32,9 @@ defmodule Tokengate.Logs.InflightTest do
         agent_type: "api",
         streaming: true,
         think: false,
-        effort: nil
+        effort: nil,
+        provider_name: "Test Provider",
+        api_key_prefix: "sk-test-"
       },
       overrides
     )

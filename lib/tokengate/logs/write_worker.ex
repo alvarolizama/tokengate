@@ -42,6 +42,7 @@ defmodule Tokengate.Logs.WriteWorker do
       streaming: args["streaming"] || false,
       think: args["think"] || false,
       effort: args["effort"],
+      api_key_prefix: args["api_key_prefix"],
       inserted_at: parse_inserted_at(args["inserted_at"])
     }
 

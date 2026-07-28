@@ -47,6 +47,8 @@ defmodule Tokengate.Logs.Inflight do
           streaming: boolean(),
           think: boolean(),
           effort: String.t() | nil,
+          provider_name: String.t() | nil,
+          api_key_prefix: String.t() | nil,
           started_at: DateTime.t()
         }
 
@@ -76,6 +78,8 @@ defmodule Tokengate.Logs.Inflight do
       streaming: Map.get(attrs, :streaming, false),
       think: Map.get(attrs, :think, false),
       effort: Map.get(attrs, :effort),
+      provider_name: Map.get(attrs, :provider_name),
+      api_key_prefix: Map.get(attrs, :api_key_prefix),
       started_at: DateTime.utc_now() |> DateTime.truncate(:second)
     }
 
