@@ -101,7 +101,6 @@ defmodule TokengateWeb.ProxyControllerTest do
       Accounts.create_team(%{
         name: "Team #{u}",
         default_daily_budget_usd: Map.get(opts, :daily_budget, "100.00"),
-        default_monthly_budget_usd: Map.get(opts, :monthly_budget),
         default_rpm_limit: Map.get(opts, :rpm_limit, 600),
         default_concurrency_limit: Map.get(opts, :concurrency_limit, 10)
       })
@@ -119,7 +118,6 @@ defmodule TokengateWeb.ProxyControllerTest do
         team_id: team.id,
         team_role: "user",
         extra_daily_budget_usd: Map.get(opts, :extra_daily_budget),
-        extra_monthly_budget_usd: Map.get(opts, :extra_monthly_budget),
         extra_concurrency: Map.get(opts, :extra_concurrency),
         extra_rpm: Map.get(opts, :extra_rpm)
       })
@@ -292,18 +290,18 @@ defmodule TokengateWeb.ProxyControllerTest do
              json_response(conn, 402)
   end
 
-  test "402 when estimated cost exceeds the monthly budget", %{conn: conn} do
-    # No daily limit; monthly cap below the estimated market cost (~0.00778)
-    %{token: token, alias: model_alias} =
-      proxy_fixture(%{daily_budget: nil, monthly_budget: "0.001"})
+  test "402 when estimated cost exceeds the daily budget (nil team budget is unlimited)", %{
+    conn: conn
+  } do
+    # Nil daily budget means unlimited pool — should pass.
+    %{token: token, alias: model_alias} = proxy_fixture(%{daily_budget: nil})
 
     conn =
       conn
       |> authed_conn(token)
       |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
 
-    assert %{"error" => %{"code" => "budget_exceeded", "type" => "billing_error"}} =
-             json_response(conn, 402)
+    assert json_response(conn, 200)
   end
 
   test "member extra daily budget raises the effective team limit", %{conn: conn} do

@@ -36,8 +36,7 @@ defmodule TokengateWeb.CreditsLiveTest do
     {:ok, team} =
       Accounts.create_team(%{
         name: "Credits Team #{u}",
-        default_daily_budget_usd: "100.00",
-        default_monthly_budget_usd: "500.00"
+        default_daily_budget_usd: "100.00"
       })
 
     {:ok, owner_a} =
@@ -101,7 +100,7 @@ defmodule TokengateWeb.CreditsLiveTest do
 
   ## Team rollup --------------------------------------------------------------
 
-  test "admin sees team rollup with monthly cap, real spend and savings", %{conn: conn} do
+  test "admin sees team rollup with daily cap, real spend and savings", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     %{team: team, member_a: member_a} = team_with_spend_and_savings()
 
@@ -112,8 +111,8 @@ defmodule TokengateWeb.CreditsLiveTest do
     assert has_element?(view, "#team-budget-#{team.id}")
 
     row = view |> element("#team-budget-#{team.id}") |> render()
-    # Tope = 500 × 2 miembros = 1000
-    assert row =~ "1000"
+    # Tope = 100 × 2 miembros = 200
+    assert row =~ "200"
     # Gasto real = 100 + 50 = 150
     assert row =~ "150"
     # Ahorro del mes = 0.40 + 0.20 = 0.60

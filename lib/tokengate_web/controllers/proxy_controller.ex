@@ -178,14 +178,29 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
-  defp check_budget(member, limits, route, payload) do
+  defp check_budget(member, _limits, route, payload) do
     estimated_usage = estimated_usage(payload)
     estimated_cost = CostCalculator.market_cost(route.model_alias, estimated_usage)
 
-    case Budgets.check(
-           member.id,
-           limits.daily_budget_usd,
-           limits.monthly_budget_usd,
+    # 3-level ladder: team pool → extra general → extra per model
+    member_ids = Accounts.list_member_ids_for_team(member.team_id)
+    team_daily = member.team && member.team.default_daily_budget_usd
+
+    team_spend_usd =
+      if team_daily do
+        Budgets.team_spend(member_ids)
+      else
+        Decimal.new(0)
+      end
+
+    member_extra = member.extra_daily_budget_usd
+    model_extra = Accounts.extra_model_daily_budget(member.id, route.model_alias.id)
+
+    case Budgets.check_ladder(
+           team_daily,
+           team_spend_usd,
+           member_extra,
+           model_extra,
            estimated_cost
          ) do
       :ok -> :ok
@@ -665,6 +680,11 @@ defmodule TokengateWeb.ProxyController do
 
   defp error_details({:budget_exceeded, %{period: period}}),
     do: {402, "billing_error", "budget_exceeded", "Budget exceeded (#{period})"}
+
+  defp error_details({:budget_exceeded, %{available: available}}),
+    do:
+      {402, "billing_error", "budget_exceeded",
+       "Budget exceeded. Available: $#{Decimal.round(available, 4)}"}
 
   defp error_details(:model_not_found),
     do: {404, "invalid_request_error", "model_not_found", "Model not found or not accessible"}

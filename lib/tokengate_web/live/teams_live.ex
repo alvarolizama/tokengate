@@ -353,13 +353,6 @@ defmodule TokengateWeb.TeamsLive do
                   hint="Presupuesto diario por miembro. Cada miembro puede tener un extra que se suma a este valor. Vacío = sin límite."
                 />
                 <.input
-                  field={@form[:default_monthly_budget_usd]}
-                  type="number"
-                  label="Presupuesto mensual (USD)"
-                  step="any"
-                  hint="Presupuesto mensual por miembro. Vacío = sin límite."
-                />
-                <.input
                   field={@form[:default_concurrency_limit]}
                   type="number"
                   label="Concurrencia"
@@ -428,14 +421,10 @@ defmodule TokengateWeb.TeamsLive do
                 </div>
               </div>
 
-              <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3 text-sm">
+              <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3 text-sm">
                 <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Diario</p>
+                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Pool diario</p>
                   <p class="font-medium">{format_decimal(team.default_daily_budget_usd)}</p>
-                </div>
-                <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Mensual</p>
-                  <p class="font-medium">{format_decimal(team.default_monthly_budget_usd)}</p>
                 </div>
                 <div>
                   <p class="text-xs text-base-content/50 uppercase tracking-wide">Concurrencia</p>

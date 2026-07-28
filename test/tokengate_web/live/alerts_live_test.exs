@@ -42,8 +42,7 @@ defmodule TokengateWeb.AlertsLiveTest do
         Map.merge(
           %{
             "name" => "Alerts Team #{unique()}",
-            "default_daily_budget_usd" => "100.00",
-            "default_monthly_budget_usd" => "1000.00"
+            "default_daily_budget_usd" => "100.00"
           },
           attrs
         )
@@ -64,10 +63,9 @@ defmodule TokengateWeb.AlertsLiveTest do
   test "exhausted member appears in the budget section with period badge", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
 
-    {member, member_user, team} =
-      broke_member_fixture(%{"default_monthly_budget_usd" => "100.00"})
+    {member, member_user, team} = broke_member_fixture()
 
-    # $150 > $100 daily AND > $100 monthly.
+    # $150 > $100 daily.
     assert :ok = Manager.record_spend(member.id, Decimal.new("150.00"))
 
     conn = login(conn, admin, password)
@@ -75,7 +73,7 @@ defmodule TokengateWeb.AlertsLiveTest do
 
     assert has_element?(view, "#alert-budget-#{member.id}", member_user.email)
     assert has_element?(view, "#alert-budget-#{member.id}", team.name)
-    assert has_element?(view, "#alert-budget-#{member.id}", "diario + mensual")
+    assert has_element?(view, "#alert-budget-#{member.id}", "diario")
     assert has_element?(view, "#alert-budget-credits-#{member.id}")
   end
 

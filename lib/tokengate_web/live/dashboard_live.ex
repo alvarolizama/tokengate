@@ -225,7 +225,7 @@ defmodule TokengateWeb.DashboardLive do
           team_role: membership.team_role,
           api_key: membership.api_key,
           daily_limit: limits.daily_budget_usd,
-          monthly_limit: limits.monthly_budget_usd,
+          monthly_limit: nil,
           daily_spend: spend.daily_usd,
           monthly_spend: spend.monthly_usd
         }

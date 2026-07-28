@@ -14,6 +14,7 @@ defmodule Tokengate.Providers.TeamMemberExtraAlias do
     # belongs_to TeamMember — module ref resolves at runtime
     belongs_to :team_member, Tokengate.Accounts.TeamMember
     belongs_to :model_alias, Tokengate.Providers.ModelAlias
+    field :extra_daily_budget_usd, :decimal
 
     timestamps(type: :utc_datetime)
   end
@@ -21,8 +22,9 @@ defmodule Tokengate.Providers.TeamMemberExtraAlias do
   @doc false
   def changeset(team_member_extra_alias, attrs) do
     team_member_extra_alias
-    |> cast(attrs, [:team_member_id, :model_alias_id])
+    |> cast(attrs, [:team_member_id, :model_alias_id, :extra_daily_budget_usd])
     |> validate_required([:team_member_id, :model_alias_id])
+    |> validate_number(:extra_daily_budget_usd, greater_than_or_equal_to: 0)
     |> unique_constraint([:team_member_id, :model_alias_id],
       name: :team_member_extra_aliases_team_member_id_model_alias_id_index
     )

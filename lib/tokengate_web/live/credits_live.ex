@@ -119,12 +119,12 @@ defmodule TokengateWeb.CreditsLive do
 
   defp status_for(%{exhausted?: true}), do: {:error, "Agotado"}
 
-  defp status_for(%{daily_pct: daily, monthly_pct: monthly}) do
-    near = Enum.any?([daily, monthly], fn pct -> is_float(pct) and pct >= 80.0 end)
+  defp status_for(%{daily_pct: daily}) do
+    near = is_float(daily) and daily >= 80.0
 
     cond do
       near -> {:warning, "Por agotarse"}
-      is_float(daily) or is_float(monthly) -> {:success, "OK"}
+      is_float(daily) -> {:success, "OK"}
       true -> {:ghost, "Sin límite"}
     end
   end
@@ -201,7 +201,7 @@ defmodule TokengateWeb.CreditsLive do
               <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" /> Por equipo
             </h2>
             <p class="text-xs text-base-content/60">
-              Tope mensual = suma de los límites de cada miembro. Ahorro = estimado de mercado
+              Tope diario = suma de los límites de cada miembro. Ahorro = estimado de mercado
               menos lo realmente pagado en el mes.
             </p>
             <div class="overflow-x-auto mt-3">
@@ -210,7 +210,7 @@ defmodule TokengateWeb.CreditsLive do
                   <tr>
                     <th>Equipo</th>
                     <th class="text-right">Miembros</th>
-                    <th class="w-64">Gasto mensual real</th>
+                    <th class="w-64">Gasto diario real</th>
                     <th class="text-right">Ahorro del mes</th>
                   </tr>
                 </thead>
@@ -219,21 +219,21 @@ defmodule TokengateWeb.CreditsLive do
                     <td class="font-medium">{tb.team.name}</td>
                     <td class="text-right font-mono">{tb.member_count}</td>
                     <td>
-                      <%= if is_nil(tb.monthly_limit_usd) do %>
+                      <%= if is_nil(tb.daily_limit_usd) do %>
                         <div class="text-xs text-base-content/60">
-                          ${fmt_money(tb.monthly_spend_usd)} · sin límite
+                          ${fmt_money(tb.daily_spend_usd)} · sin límite
                         </div>
                       <% else %>
                         <div class="space-y-1">
                           <div class="flex justify-between text-xs font-mono">
-                            <span>${fmt_money(tb.monthly_spend_usd)}</span>
+                            <span>${fmt_money(tb.daily_spend_usd)}</span>
                             <span class="text-base-content/60">
-                              de ${fmt_money(tb.monthly_limit_usd)}
+                              de ${fmt_money(tb.daily_limit_usd)}
                             </span>
                           </div>
                           <progress
-                            class={["progress w-full", bar_class(tb.monthly_pct)]}
-                            value={bar_value(tb.monthly_pct)}
+                            class={["progress w-full", bar_class(tb.daily_pct)]}
+                            value={bar_value(tb.daily_pct)}
                             max="100"
                           ></progress>
                         </div>
@@ -261,7 +261,7 @@ defmodule TokengateWeb.CreditsLive do
                     <th>Usuario</th>
                     <th>Equipo</th>
                     <th class="w-56">Diario</th>
-                    <th class="w-56">Mensual</th>
+                    <th class="w-56">Mensual (sin límite)</th>
                     <th class="text-right">Ahorro del mes</th>
                     <th>Estado</th>
                   </tr>
@@ -279,12 +279,7 @@ defmodule TokengateWeb.CreditsLive do
                       />
                     </td>
                     <td>
-                      <.budget_bar
-                        spend={b.monthly_spend_usd}
-                        limit={b.monthly_limit_usd}
-                        pct={b.monthly_pct}
-                        id={"monthly-bar-#{b.member.id}"}
-                      />
+                      <div class="text-xs text-base-content/40 text-center">—</div>
                     </td>
                     <td
                       class="text-right font-mono text-success"

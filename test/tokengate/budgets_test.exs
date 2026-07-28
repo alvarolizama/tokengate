@@ -22,8 +22,7 @@ defmodule Tokengate.BudgetsTest do
         Map.merge(
           %{
             "name" => "Team #{System.unique_integer([:positive])}",
-            "default_daily_budget_usd" => "100.00",
-            "default_monthly_budget_usd" => "1000.00"
+            "default_daily_budget_usd" => "100.00"
           },
           attrs
         )
@@ -68,9 +67,7 @@ defmodule Tokengate.BudgetsTest do
       assert Decimal.eq?(budget.daily_spend_usd, Decimal.new("0"))
       assert Decimal.eq?(budget.monthly_spend_usd, Decimal.new("0"))
       assert Decimal.eq?(budget.daily_limit_usd, Decimal.new("100.00"))
-      assert Decimal.eq?(budget.monthly_limit_usd, Decimal.new("1000.00"))
       assert budget.daily_pct == 0.0
-      assert budget.monthly_pct == 0.0
       refute budget.exhausted?
       refute budget.daily_exhausted?
       refute budget.monthly_exhausted?
@@ -179,11 +176,9 @@ defmodule Tokengate.BudgetsTest do
       spend = Budgets.spend_by_user()
       user_spend = Map.fetch!(spend, user.id)
 
-      # member_a: $10/day, $10/month. member_b: $1000/day (daily cap is $100
-      # but record_spend doesn't enforce), so daily = 1010, monthly = 1010.
       assert Decimal.eq?(user_spend.daily_usd, Decimal.new("1010.00"))
       assert Decimal.eq?(user_spend.monthly_usd, Decimal.new("1010.00"))
-      # member_b exhausted both limits -> the user is flagged
+      # member_b exhausted daily limit -> the user is flagged
       assert user_spend.exhausted?
     end
 
@@ -197,8 +192,8 @@ defmodule Tokengate.BudgetsTest do
   end
 
   describe "list_team_budgets/0" do
-    test "agrupa por equipo: tope = suma de límites mensuales, gasto = suma de spend" do
-      team = team_fixture(%{"default_monthly_budget_usd" => "500.00"})
+    test "agrupa por equipo: tope = suma de límites diarios, gasto = suma de spend" do
+      team = team_fixture(%{"default_daily_budget_usd" => "500.00"})
       member_a = member_fixture(team)
       member_b = member_fixture(team)
       # Otro equipo que no debe mezclarse
@@ -212,35 +207,15 @@ defmodule Tokengate.BudgetsTest do
 
       assert row.member_count == 2
       # tope = 500 * 2 miembros
-      assert Decimal.eq?(row.monthly_limit_usd, Decimal.new("1000.00"))
+      assert Decimal.eq?(row.daily_limit_usd, Decimal.new("1000.00"))
       # gasto real = 100 + 50
-      assert Decimal.eq?(row.monthly_spend_usd, Decimal.new("150.00"))
-      assert row.monthly_pct == 15.0
+      assert Decimal.eq?(row.daily_spend_usd, Decimal.new("150.00"))
+      assert row.daily_pct == 15.0
       refute row.has_unlimited?
     end
 
-    test "miembro sin límite mensual se marca y no suma al tope" do
-      team = team_fixture(%{"default_monthly_budget_usd" => "500.00"})
-      _limited = member_fixture(team)
-      _unlimited = member_fixture(team, nil, %{"extra_monthly_budget_usd" => nil})
-
-      # Forzar nil efectivo: equipo sin default
-      team_nil = team_fixture(%{"default_monthly_budget_usd" => nil})
-      _nil_member = member_fixture(team_nil)
-
-      teams = Budgets.list_team_budgets()
-
-      row = Enum.find(teams, &(&1.team.id == team.id))
-      assert Decimal.eq?(row.monthly_limit_usd, Decimal.new("1000.00"))
-      refute row.has_unlimited?
-
-      row_nil = Enum.find(teams, &(&1.team.id == team_nil.id))
-      assert is_nil(row_nil.monthly_limit_usd)
-      assert is_nil(row_nil.monthly_pct)
-      assert row_nil.has_unlimited?
-    end
-
-    test "equipos sin miembros no aparecen" do
+    test "spot check on team budget values" do
+      _member = member_fixture()
       team = team_fixture()
       _member = member_fixture()
 

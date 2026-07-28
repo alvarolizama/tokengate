@@ -57,29 +57,81 @@ defmodule Tokengate.Budgets.Manager do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Pre-flight budget check for `member_id`.
-
-  Compares the current spend (from the ETS cache, lazy-loaded from the DB
-  on first touch of the period) plus the `estimated_cost_usd` against the
-  daily and monthly limits. `nil` limit means unlimited for that period.
-
-  Returns `:ok` if within budget, or
-  `{:error, :budget_exceeded, %{period: :daily | :monthly, spend_micro: integer,
-  limit_usd: Decimal | nil}}` when the projected spend would exceed a limit.
-  Daily is checked first; if daily fails, monthly is not checked.
+  Returns the total daily spend across all team members (`team_member_ids`).
+  Combines each member's daily ETS counter into a single Decimal (USD).
+  Missing entries (members with no spend this period) count as 0.
   """
-  @spec check(
-          member_id :: term(),
-          daily_limit :: Decimal.t() | nil,
-          monthly_limit :: Decimal.t() | nil,
-          estimated_cost_usd :: Decimal.t() | nil
+  @spec team_spend([term()]) :: Decimal.t()
+  def team_spend(team_member_ids) do
+    team_member_ids
+    |> Enum.reduce(0, fn id, acc ->
+      ensure_loaded(id, :daily)
+      acc + read_counter({id, :daily})
+    end)
+    |> from_micro()
+  end
+
+  @doc """
+  Pre-flight budget check for a team member's request (3-level ladder).
+
+  The budget is checked sequentially:
+
+    1. **Team pool** — shared daily limit across all members.
+       `remaining = team_daily_budget - team_total_spend`.
+
+    2. **Extra general** — member's personal `extra_daily_budget_usd`.
+       Added on top of whatever is left from the pool.
+
+    3. **Extra per model** — `extra_daily_budget_usd` on the
+       `team_member_extra_alias` join. Added on top of pool + extra general.
+
+  Returns `:ok` if the estimated cost fits within the total available budget,
+  or `{:error, :budget_exceeded, %{available: Decimal.t()}}`.
+  """
+  @spec check_ladder(
+          team_daily_budget :: Decimal.t() | nil,
+          team_spend_usd :: Decimal.t(),
+          member_extra_daily :: Decimal.t() | nil,
+          model_extra_daily :: Decimal.t() | nil,
+          estimated_cost_usd :: Decimal.t()
         ) :: :ok | {:error, :budget_exceeded, map()}
-  def check(member_id, daily_limit, monthly_limit, estimated_cost_usd) do
+  def check_ladder(
+        team_daily_budget,
+        team_spend_usd,
+        member_extra_daily,
+        model_extra_daily,
+        estimated_cost_usd
+      ) do
     estimated_micro = to_micro(estimated_cost_usd)
 
-    with :ok <- check_period(member_id, :daily, daily_limit, estimated_micro),
-         :ok <- check_period(member_id, :monthly, monthly_limit, estimated_micro) do
+    # Team pool
+    pool_micro =
+      if team_daily_budget do
+        spend_micro = to_micro(team_spend_usd)
+        max(0, to_micro(team_daily_budget) - spend_micro)
+      else
+        :unlimited
+      end
+
+    # If pool is unlimited, we're done
+    if pool_micro == :unlimited do
       :ok
+    else
+      member_extra_micro = to_micro(member_extra_daily)
+      model_extra_micro = to_micro(model_extra_daily)
+      total_available = pool_micro + member_extra_micro + model_extra_micro
+
+      if estimated_micro <= total_available do
+        :ok
+      else
+        {:error, :budget_exceeded,
+         %{
+           available: from_micro(total_available),
+           pool_micro: pool_micro,
+           member_extra_micro: member_extra_micro,
+           model_extra_micro: model_extra_micro
+         }}
+      end
     end
   end
 
@@ -248,23 +300,8 @@ defmodule Tokengate.Budgets.Manager do
   # Internal — check logic
   # ---------------------------------------------------------------------------
 
-  defp check_period(_member_id, _period, nil, _estimated_micro), do: :ok
-
-  defp check_period(member_id, period, limit_usd, estimated_micro) do
-    ensure_loaded(member_id, period)
-    spend_micro = read_counter({member_id, period})
-    limit_micro = to_micro(limit_usd)
-
-    if spend_micro + estimated_micro > limit_micro do
-      {:error, :budget_exceeded,
-       %{period: period, spend_micro: spend_micro, limit_usd: limit_usd}}
-    else
-      :ok
-    end
-  end
-
   # ---------------------------------------------------------------------------
-  # Internal — lazy load
+  # Internal — ensure loaded / stale check
   # ---------------------------------------------------------------------------
 
   # Ensures the entry for (member_id, period) exists and is current. If it

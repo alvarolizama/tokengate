@@ -13,7 +13,6 @@ defmodule Tokengate.AccountsTest do
       %{
         "name" => "Platform Team",
         "default_daily_budget_usd" => "100.00",
-        "default_monthly_budget_usd" => "1000.00",
         "default_concurrency_limit" => 10,
         "default_rpm_limit" => 120
       },
@@ -86,15 +85,10 @@ defmodule Tokengate.AccountsTest do
     end
 
     test "create_team/1 allows nil budget" do
-      attrs =
-        valid_team_attrs(%{
-          "default_daily_budget_usd" => nil,
-          "default_monthly_budget_usd" => nil
-        })
+      attrs = valid_team_attrs(%{"default_daily_budget_usd" => nil})
 
       assert {:ok, %Team{} = team} = Accounts.create_team(attrs)
       assert team.default_daily_budget_usd == nil
-      assert team.default_monthly_budget_usd == nil
     end
   end
 
@@ -404,7 +398,6 @@ defmodule Tokengate.AccountsTest do
       limits = Accounts.effective_limits(tm)
 
       assert limits.daily_budget_usd == Decimal.new("100.00")
-      assert limits.monthly_budget_usd == Decimal.new("1000.00")
       assert limits.concurrency_limit == 10
       assert limits.rpm_limit == 120
     end
@@ -421,45 +414,6 @@ defmodule Tokengate.AccountsTest do
       limits = Accounts.effective_limits(tm)
 
       assert limits.daily_budget_usd == Decimal.new("150.00")
-    end
-
-    test "adds extra_monthly_budget_usd to team default" do
-      team = team_fixture()
-      user = user_fixture()
-
-      {:ok, tm} =
-        Accounts.create_team_member(
-          valid_team_member_attrs(user, team, %{"extra_monthly_budget_usd" => "250.00"})
-        )
-
-      limits = Accounts.effective_limits(tm)
-
-      assert limits.monthly_budget_usd == Decimal.new("1250.00")
-    end
-
-    test "nil team monthly_budget_usd with nil extra → nil" do
-      team = team_fixture(%{"default_monthly_budget_usd" => nil})
-      user = user_fixture()
-
-      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
-
-      limits = Accounts.effective_limits(tm)
-
-      assert limits.monthly_budget_usd == nil
-    end
-
-    test "nil team monthly_budget_usd with extra → just the extra" do
-      team = team_fixture(%{"default_monthly_budget_usd" => nil})
-      user = user_fixture()
-
-      {:ok, tm} =
-        Accounts.create_team_member(
-          valid_team_member_attrs(user, team, %{"extra_monthly_budget_usd" => "75.00"})
-        )
-
-      limits = Accounts.effective_limits(tm)
-
-      assert limits.monthly_budget_usd == Decimal.new("75.00")
     end
 
     test "adds extra_concurrency to team default" do

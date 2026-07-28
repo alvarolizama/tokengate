@@ -29,7 +29,6 @@ defmodule Tokengate.ProvidersTest do
     schema "teams" do
       field :name, :string
       field :default_daily_budget_usd, :decimal
-      field :default_monthly_budget_usd, :decimal
       field :default_concurrency_limit, :integer, default: 5
       field :default_rpm_limit, :integer, default: 60
       timestamps(type: :utc_datetime)

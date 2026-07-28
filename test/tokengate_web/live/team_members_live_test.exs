@@ -251,7 +251,6 @@ defmodule TokengateWeb.TeamMembersLiveTest do
       |> form("#override-form-#{member.id}", %{
         overrides: %{
           extra_daily_budget_usd: "5.50",
-          extra_monthly_budget_usd: "200.00",
           extra_concurrency: "3"
         }
       })
@@ -261,7 +260,6 @@ defmodule TokengateWeb.TeamMembersLiveTest do
 
     updated = Repo.get!(Tokengate.Accounts.TeamMember, member.id)
     assert Decimal.equal?(updated.extra_daily_budget_usd, Decimal.new("5.50"))
-    assert Decimal.equal?(updated.extra_monthly_budget_usd, Decimal.new("200.00"))
     assert updated.extra_concurrency == 3
   end
 
@@ -273,7 +271,6 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     {:ok, _} =
       Accounts.update_team_member(member, %{
         extra_daily_budget_usd: Decimal.new("10.00"),
-        extra_monthly_budget_usd: Decimal.new("500.00"),
         extra_concurrency: 5
       })
 
@@ -287,7 +284,6 @@ defmodule TokengateWeb.TeamMembersLiveTest do
       |> form("#override-form-#{member.id}", %{
         overrides: %{
           extra_daily_budget_usd: "",
-          extra_monthly_budget_usd: "",
           extra_concurrency: ""
         }
       })
@@ -297,7 +293,6 @@ defmodule TokengateWeb.TeamMembersLiveTest do
 
     updated = Repo.get!(Tokengate.Accounts.TeamMember, member.id)
     assert updated.extra_daily_budget_usd == nil
-    assert updated.extra_monthly_budget_usd == nil
     assert updated.extra_concurrency == nil
   end
 

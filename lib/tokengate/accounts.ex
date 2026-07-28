@@ -280,6 +280,11 @@ defmodule Tokengate.Accounts do
     Repo.all(from tm in TeamMember, where: tm.team_id == ^team_id, preload: [:user, :api_key])
   end
 
+  @doc "Returns just the IDs of team members for a team (lightweight, no preloads)."
+  def list_member_ids_for_team(team_id) do
+    Repo.all(from tm in TeamMember, where: tm.team_id == ^team_id, select: tm.id)
+  end
+
   def list_team_members_for_user(user_id) do
     Repo.all(from tm in TeamMember, where: tm.user_id == ^user_id, preload: [:team, :api_key])
   end
@@ -489,17 +494,12 @@ defmodule Tokengate.Accounts do
     (extra added when not nil). If the team default is `nil`, the result is
     `nil` (no limit) unless an extra is provided, in which case the result is
     just the extra.
-  - `monthly_budget_usd`: team default + member's `extra_monthly_budget_usd`
-    (extra added when not nil). If the team default is `nil`, the result is
-    `nil` (no limit) unless an extra is provided, in which case the result is
-    just the extra.
   - `concurrency_limit`: team default + member's `extra_concurrency` (when not
     nil). The team default is always present (defaults to 5).
   - `rpm_limit`: team's `default_rpm_limit` + member's `extra_rpm` (when not
     nil). The team default is always present (defaults to 60).
 
-  Returns a map with `:daily_budget_usd`, `:monthly_budget_usd`,
-  `:concurrency_limit`, and `:rpm_limit` keys.
+  Returns a map with `:daily_budget_usd`, `:concurrency_limit`, and `:rpm_limit` keys.
   """
   def effective_limits(%TeamMember{} = team_member) do
     team_member = Repo.preload(team_member, [:team])
@@ -508,12 +508,32 @@ defmodule Tokengate.Accounts do
     %{
       daily_budget_usd:
         combine_decimal(team.default_daily_budget_usd, team_member.extra_daily_budget_usd),
-      monthly_budget_usd:
-        combine_decimal(team.default_monthly_budget_usd, team_member.extra_monthly_budget_usd),
       concurrency_limit:
         combine_integer(team.default_concurrency_limit, team_member.extra_concurrency),
       rpm_limit: combine_integer(team.default_rpm_limit, team_member.extra_rpm)
     }
+  end
+
+  @doc """
+  Returns the extra daily budget a member has for a specific model alias.
+  `nil` if no extra budget is configured.
+  """
+  def extra_model_daily_budget(member_id, model_alias_id) do
+    import Ecto.Query, only: [from: 2]
+
+    case Repo.one(
+           from(tmea in Tokengate.Providers.TeamMemberExtraAlias,
+             where:
+               tmea.team_member_id == ^member_id and
+                 tmea.model_alias_id == ^model_alias_id and
+                 not is_nil(tmea.extra_daily_budget_usd),
+             select: tmea.extra_daily_budget_usd
+           )
+         ) do
+      nil -> nil
+      %Decimal{} = d -> d
+      other -> other
+    end
   end
 
   defp combine_decimal(nil, nil), do: nil

@@ -29,7 +29,6 @@ defmodule Tokengate.Budgets.ManagerTest do
           %{
             "name" => "Platform Team",
             "default_daily_budget_usd" => "100.00",
-            "default_monthly_budget_usd" => "1000.00",
             "default_concurrency_limit" => 10,
             "default_rpm_limit" => 120
           },
@@ -98,112 +97,133 @@ defmodule Tokengate.Budgets.ManagerTest do
   end
 
   # ---------------------------------------------------------------------------
-  # check/4 — budget pre-flight
+  # check_ladder/5 — budget pre-flight (3-level sequential)
   # ---------------------------------------------------------------------------
 
-  describe "check/4 — budget pre-flight" do
-    test "under both limits returns :ok" do
-      {tm, _} = team_member_fixture()
+  describe "check_ladder/5 — budget pre-flight" do
+    test "under pool limit returns :ok" do
+      {tm, team} = team_member_fixture()
 
-      # Record $10 spend (under $100 daily and $1000 monthly).
+      # Record $10 spend (under $100 daily pool).
       assert :ok = Manager.record_spend(tm.id, Decimal.new("10.00"))
-      assert :ok = Manager.check(tm.id, Decimal.new("100.00"), Decimal.new("1000.00"), nil)
+
+      assert :ok =
+               Manager.check_ladder(
+                 team.default_daily_budget_usd,
+                 Manager.team_spend([tm.id]),
+                 nil,
+                 nil,
+                 nil
+               )
     end
 
-    test "over daily limit returns error with daily period" do
-      {tm, _} = team_member_fixture()
+    test "over pool but under extra general returns :ok" do
+      {tm, team} = team_member_fixture()
 
+      # Record $90 spend.
       assert :ok = Manager.record_spend(tm.id, Decimal.new("90.00"))
 
-      # $90 + $20 estimated = $110 > $100 daily limit.
+      # $90 + $20 estimated = $110 > $100 pool, but $110 < $100 + $15 extra.
       result =
-        Manager.check(tm.id, Decimal.new("100.00"), Decimal.new("1000.00"), Decimal.new("20.00"))
+        Manager.check_ladder(
+          team.default_daily_budget_usd,
+          Manager.team_spend([tm.id]),
+          Decimal.new("15.00"),
+          nil,
+          Decimal.new("20.00")
+        )
 
-      assert {:error, :budget_exceeded, details} = result
-      assert details.period == :daily
-      # 90.00 * 1_000_000
-      assert details.spend_micro == 90_000_000
-      assert Decimal.equal?(details.limit_usd, Decimal.new("100.00"))
+      assert :ok = result
     end
 
-    test "over monthly limit returns error with monthly period" do
-      {tm, _} = team_member_fixture()
+    test "over pool and extra general but under model extra returns :ok" do
+      {tm, team} = team_member_fixture()
 
-      # Spend $90. Both daily and monthly are $90.
+      # Record $90 spend.
       assert :ok = Manager.record_spend(tm.id, Decimal.new("90.00"))
 
-      # Daily limit $200 (passes: $90 + $20 = $110 < $200).
-      # Monthly limit $100 (fails: $90 + $20 = $110 > $100).
+      # $90 + $25 = $115 > $100 pool, > $100 + $10 extra general, but < $100 + $10 + $10 model extra.
       result =
-        Manager.check(
-          tm.id,
-          Decimal.new("200.00"),
-          Decimal.new("100.00"),
+        Manager.check_ladder(
+          team.default_daily_budget_usd,
+          Manager.team_spend([tm.id]),
+          Decimal.new("10.00"),
+          Decimal.new("10.00"),
+          Decimal.new("25.00")
+        )
+
+      assert :ok = result
+    end
+
+    test "over all levels returns error" do
+      {tm, team} = team_member_fixture()
+
+      # Record $90 spend.
+      assert :ok = Manager.record_spend(tm.id, Decimal.new("90.00"))
+
+      # $90 + $20 = $110 > $100 pool, > $100 + $5 extra general, > $100 + $5 + $2 model extra.
+      result =
+        Manager.check_ladder(
+          team.default_daily_budget_usd,
+          Manager.team_spend([tm.id]),
+          Decimal.new("5.00"),
+          Decimal.new("2.00"),
           Decimal.new("20.00")
         )
 
       assert {:error, :budget_exceeded, details} = result
-      assert details.period == :monthly
+      assert Decimal.equal?(details.available, Decimal.new("17.00"))
     end
 
-    test "estimated pushes over limit returns error" do
-      {tm, _} = team_member_fixture()
-
-      # Record $50 spend.
-      assert :ok = Manager.record_spend(tm.id, Decimal.new("50.00"))
-
-      # $50 + $60 estimated = $110 > $100 daily limit.
-      result =
-        Manager.check(tm.id, Decimal.new("100.00"), Decimal.new("1000.00"), Decimal.new("60.00"))
-
-      assert {:error, :budget_exceeded, details} = result
-      assert details.period == :daily
-      assert details.spend_micro == 50_000_000
-    end
-
-    test "nil daily limit is unlimited" do
-      {tm, _} = team_member_fixture()
+    test "nil team budget is unlimited" do
+      {tm, _team} = team_member_fixture()
 
       # Record $500 spend.
       assert :ok = Manager.record_spend(tm.id, Decimal.new("500.00"))
 
-      # Nil daily limit — should pass daily.
-      assert :ok = Manager.check(tm.id, nil, Decimal.new("1000.00"), Decimal.new("100.00"))
-    end
-
-    test "nil monthly limit is unlimited" do
-      {tm, _} = team_member_fixture()
-
-      assert :ok = Manager.record_spend(tm.id, Decimal.new("50.00"))
-
-      # Nil monthly limit.
-      assert :ok = Manager.check(tm.id, Decimal.new("100.00"), nil, Decimal.new("50.00"))
+      # Nil pool budget — should pass regardless of extras.
+      assert :ok =
+               Manager.check_ladder(
+                 nil,
+                 Manager.team_spend([tm.id]),
+                 nil,
+                 nil,
+                 Decimal.new("100.00")
+               )
     end
 
     test "nil estimated cost treated as 0" do
-      {tm, _} = team_member_fixture()
+      {tm, team} = team_member_fixture()
 
+      # Record $50 spend.
       assert :ok = Manager.record_spend(tm.id, Decimal.new("50.00"))
 
       # nil estimated = 0; $50 < $100 so ok.
-      assert :ok = Manager.check(tm.id, Decimal.new("100.00"), Decimal.new("1000.00"), nil)
-    end
-
-    test "both limits nil is fully unlimited" do
-      {tm, _} = team_member_fixture()
-
-      assert :ok = Manager.record_spend(tm.id, Decimal.new("999999.00"))
-
-      assert :ok = Manager.check(tm.id, nil, nil, Decimal.new("999999.00"))
+      assert :ok =
+               Manager.check_ladder(
+                 team.default_daily_budget_usd,
+                 Manager.team_spend([tm.id]),
+                 nil,
+                 nil,
+                 nil
+               )
     end
 
     test "exactly at limit with zero estimated is ok" do
-      {tm, _} = team_member_fixture()
+      {tm, team} = team_member_fixture()
 
+      # Record $100 spend (exactly the pool).
       assert :ok = Manager.record_spend(tm.id, Decimal.new("100.00"))
 
       # Spend is exactly $100, estimated 0 — not over (uses > not >=).
-      assert :ok = Manager.check(tm.id, Decimal.new("100.00"), Decimal.new("1000.00"), nil)
+      assert :ok =
+               Manager.check_ladder(
+                 team.default_daily_budget_usd,
+                 Manager.team_spend([tm.id]),
+                 nil,
+                 nil,
+                 nil
+               )
     end
   end
 
@@ -283,20 +303,25 @@ defmodule Tokengate.Budgets.ManagerTest do
       assert Decimal.equal?(spend.monthly_usd, Decimal.new("40.00"))
     end
 
-    test "check/4 lazy-loads before comparing" do
-      {tm, _} = team_member_fixture()
+    test "check_ladder lazy-loads before comparing" do
+      {tm, team} = team_member_fixture()
 
       # Insert $90 of spend into request_logs.
       log_spend(tm.id, "90.00")
 
       # No record_spend call — check should lazy-load and see $90.
-      # $90 + $20 estimated = $110 > $100 daily.
+      # $90 + $20 estimated = $110 > $100 pool.
       result =
-        Manager.check(tm.id, Decimal.new("100.00"), Decimal.new("1000.00"), Decimal.new("20.00"))
+        Manager.check_ladder(
+          team.default_daily_budget_usd,
+          Manager.team_spend([tm.id]),
+          nil,
+          nil,
+          Decimal.new("20.00")
+        )
 
       assert {:error, :budget_exceeded, details} = result
-      assert details.period == :daily
-      assert details.spend_micro == 90_000_000
+      assert Decimal.equal?(details.available, Decimal.new("10.00"))
     end
 
     test "record_spend on top of lazy-loaded DB total accumulates correctly" do

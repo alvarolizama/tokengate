@@ -10,9 +10,9 @@ defmodule TokengateWeb.TeamMembersLive do
   Supports:
     - Add member by email (creates team_member + auto-generates API key).
     - Remove member.
-    - Per-member extras: extra_daily_budget_usd, extra_monthly_budget_usd,
+    - Per-member extras: extra_daily_budget_usd,
       extra_concurrency, extra_rpm, extra_model_aliases (individual grants
-      beyond team aliases).
+      beyond team aliases) with optional per-model daily budget.
     - Change team_role (manager/user).
   """
 
@@ -82,16 +82,68 @@ defmodule TokengateWeb.TeamMembersLive do
     extra_aliases =
       from(tmea in TeamMemberExtraAlias,
         where: tmea.team_member_id in ^Enum.map(members, & &1.id),
-        select: {tmea.team_member_id, tmea.model_alias_id}
+        select: {tmea.team_member_id, tmea.model_alias_id, tmea.extra_daily_budget_usd}
       )
       |> Repo.all()
+
+    # Group extra aliases with their budget per member
+    extra_alias_details =
+      extra_aliases
+      |> Enum.group_by(
+        fn {tm_id, _alias_id, _budget} -> tm_id end,
+        fn {_tm_id, alias_id, budget} -> {alias_id, budget} end
+      )
+
+    extra_aliases_simple =
+      extra_aliases
+      |> Enum.map(fn {tm_id, alias_id, _budget} -> {tm_id, alias_id} end)
       |> Enum.group_by(fn {tm_id, _} -> tm_id end, fn {_, alias_id} -> alias_id end)
+
+    # Member budgets with spend
+    alias_map = Map.new(org_alias_ids, fn a -> {a.id, a.name} end)
+
+    member_budgets =
+      Enum.map(members, fn m -> budget_for_member(m, extra_alias_details, alias_map) end)
 
     socket
     |> assign(:members, members)
+    |> assign(:member_budgets, Map.new(member_budgets, fn b -> {b.member_id, b} end))
     |> assign(:members_empty?, members == [])
     |> assign(:org_aliases, org_alias_ids)
-    |> assign(:extra_aliases, extra_aliases)
+    |> assign(:extra_aliases, extra_aliases_simple)
+    |> assign(:extra_alias_details, extra_alias_details)
+    |> assign(:alias_map, alias_map)
+    |> assign(:team_spend, Tokengate.Budgets.Manager.team_spend(Enum.map(members, & &1.id)))
+  end
+
+  defp budget_for_member(member, extra_alias_details, alias_map) do
+    spend = Tokengate.Budgets.Manager.spend(member.id)
+    member_extra = member.extra_daily_budget_usd || Decimal.new(0)
+
+    # Model extras
+    model_extras =
+      case Map.get(extra_alias_details, member.id, []) do
+        [] ->
+          []
+
+        details ->
+          Enum.map(details, fn {alias_id, budget} ->
+            %{alias_name: Map.get(alias_map, alias_id, "?"), extra: budget || Decimal.new(0)}
+          end)
+      end
+
+    model_extra_total =
+      model_extras
+      |> Enum.reduce(Decimal.new(0), fn me, acc -> Decimal.add(acc, me.extra) end)
+
+    %{
+      member_id: member.id,
+      daily_spend: spend.daily_usd,
+      member_extra: member_extra,
+      model_extras: model_extras,
+      model_extra_total: model_extra_total,
+      total_max: Decimal.add(Decimal.add(member_extra, model_extra_total), Decimal.new(0))
+    }
   end
 
   ## Events — add member --------------------------------------------------
@@ -193,12 +245,10 @@ defmodule TokengateWeb.TeamMembersLive do
       {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
     else
       with {:ok, daily} <- parse_decimal(override_params["extra_daily_budget_usd"]),
-           {:ok, monthly} <- parse_decimal(override_params["extra_monthly_budget_usd"]),
            {:ok, concurrency} <- parse_integer(override_params["extra_concurrency"]),
            {:ok, rpm} <- parse_integer(override_params["extra_rpm"]) do
         attrs = %{
           extra_daily_budget_usd: daily,
-          extra_monthly_budget_usd: monthly,
           extra_concurrency: concurrency,
           extra_rpm: rpm
         }
@@ -357,7 +407,34 @@ defmodule TokengateWeb.TeamMembersLive do
           </div>
         </div>
 
-        <div id="members">
+        <%!-- Configuración del equipo --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm" id="team-config">
+          <div class="card-body p-5">
+            <h2 class="text-sm font-semibold mb-3">Configuración del equipo</h2>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+              <div>
+                <p class="text-xs text-base-content/50 uppercase tracking-wide">Pool diario</p>
+                <p class="font-medium">{format_decimal(@team.default_daily_budget_usd)}</p>
+              </div>
+              <div>
+                <p class="text-xs text-base-content/50 uppercase tracking-wide">
+                  Gasto del equipo hoy
+                </p>
+                <p class="font-medium">${format_decimal(@team_spend)}</p>
+              </div>
+              <div>
+                <p class="text-xs text-base-content/50 uppercase tracking-wide">
+                  Concurrencia / RPM base
+                </p>
+                <p class="font-medium">
+                  {@team.default_concurrency_limit} / {@team.default_rpm_limit}
+                </p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div id="members" class="space-y-4">
           <div :if={@members_empty?} class="text-center py-12 text-base-content/40" id="members-empty">
             <.icon name="hero-users" class="w-10 h-10 mx-auto mb-2 opacity-40" />
             <p>Este equipo no tiene miembros todavía.</p>
@@ -365,31 +442,47 @@ defmodule TokengateWeb.TeamMembersLive do
           <div
             :for={member <- @members}
             id={"members-#{member.id}"}
-            class="card bg-base-100 border border-base-300 shadow-sm mb-4"
+            class="card bg-base-100 border border-base-300 shadow-sm"
           >
-            <div class="card-body">
+            <% mb =
+              Map.get(@member_budgets, member.id, %{
+                daily_spend: Decimal.new(0),
+                member_extra: Decimal.new(0),
+                model_extras: [],
+                model_extra_total: Decimal.new(0),
+                total_max: Decimal.new(0)
+              }) %>
+            <div class="card-body p-5">
+              <%!-- Header --%>
               <div class="flex items-start justify-between">
-                <div>
-                  <h3 class="font-semibold text-base-content">{member.user.email}</h3>
+                <div class="min-w-0">
+                  <h3 class="font-semibold text-base-content truncate">{member.user.email}</h3>
                   <p class="text-xs text-base-content/50 mt-0.5">
-                    {member.user.name} · Clave: <code class="font-mono">{masked_key(member)}</code>
+                    {member.user.name} · <code class="font-mono">{masked_key(member)}</code>
                   </p>
                 </div>
-                <div class="flex items-center gap-2">
+                <div class="flex items-center gap-2 shrink-0">
                   <span class={["badge", "badge-sm", elem(role_badge(member.team_role), 0)]}>
                     {elem(role_badge(member.team_role), 1)}
                   </span>
+                  <span class="badge badge-sm badge-ghost capitalize">{member.status}</span>
                 </div>
               </div>
 
-              <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-3 text-sm">
+              <%!-- Consumption + extras --%>
+              <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 mt-4 text-sm">
                 <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Extra diario</p>
-                  <p class="font-medium">{format_decimal(member.extra_daily_budget_usd)}</p>
+                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Gasto hoy</p>
+                  <p class="font-semibold">${format_decimal(mb.daily_spend)}</p>
                 </div>
                 <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Extra mensual</p>
-                  <p class="font-medium">{format_decimal(member.extra_monthly_budget_usd)}</p>
+                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Extra general</p>
+                  <p class="font-medium">
+                    <span :if={member.extra_daily_budget_usd}>+{format_decimal(
+                      member.extra_daily_budget_usd
+                    )}</span>
+                    <span :if={!member.extra_daily_budget_usd} class="text-base-content/40">—</span>
+                  </p>
                 </div>
                 <div>
                   <p class="text-xs text-base-content/50 uppercase tracking-wide">
@@ -401,12 +494,58 @@ defmodule TokengateWeb.TeamMembersLive do
                   <p class="text-xs text-base-content/50 uppercase tracking-wide">Extra RPM</p>
                   <p class="font-medium">{member.extra_rpm || "—"}</p>
                 </div>
-                <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Estado</p>
-                  <p class="font-medium capitalize">{member.status}</p>
+              </div>
+
+              <%!-- Model extras --%>
+              <div :if={mb.model_extras != []} class="mt-3 text-sm">
+                <p class="text-xs text-base-content/50 uppercase tracking-wide mb-1">
+                  Extras por modelo
+                </p>
+                <div class="flex flex-wrap gap-2">
+                  <span
+                    :for={me <- mb.model_extras}
+                    class="badge badge-sm badge-info gap-1"
+                  >
+                    {me.alias_name}
+                    <span class="font-mono">+{format_decimal(me.extra)}</span>
+                  </span>
                 </div>
               </div>
 
+              <%!-- Total max + bar --%>
+              <div class="mt-3 pt-3 border-t border-base-200">
+                <div class="flex items-center justify-between text-xs mb-1">
+                  <span class="text-base-content/60">Consumo máximo estimado</span>
+                  <span class="font-mono font-semibold">
+                    ${format_decimal(mb.total_max)}
+                  </span>
+                </div>
+                <% team_pool = @team.default_daily_budget_usd || Decimal.new(0) %>
+                <% max_possible =
+                  Decimal.add(Decimal.add(team_pool, mb.member_extra), mb.model_extra_total) %>
+                <%= if Decimal.compare(max_possible, Decimal.new(0)) == :gt do %>
+                  <% pct =
+                    Decimal.div(mb.daily_spend, max_possible)
+                    |> Decimal.mult(Decimal.new(100))
+                    |> Decimal.to_float()
+                    |> Float.round(1) %>
+                  <div class="h-2 rounded-full bg-base-200 overflow-hidden">
+                    <div
+                      class={[
+                        "h-full rounded-full transition-all",
+                        if(pct >= 90,
+                          do: "bg-error",
+                          else: if(pct >= 70, do: "bg-warning", else: "bg-primary")
+                        )
+                      ]}
+                      style={"width: #{min(pct, 100)}%"}
+                    >
+                    </div>
+                  </div>
+                <% end %>
+              </div>
+
+              <%!-- Actions --%>
               <div class="flex flex-wrap gap-2 mt-3">
                 <div class="flex items-center gap-1">
                   <span class="text-xs text-base-content/50 mr-1">Rol:</span>
@@ -427,30 +566,23 @@ defmodule TokengateWeb.TeamMembersLive do
                     </select>
                   </form>
                 </div>
-
                 <button
                   phx-click="edit_overrides"
                   phx-value-id={member.id}
                   class="btn btn-sm btn-ghost"
                   id={"edit-overrides-#{member.id}"}
-                >
-                  Extras
-                </button>
-
+                >Extras</button>
                 <button
                   phx-click="remove_member"
                   phx-value-id={member.id}
                   class="btn btn-sm btn-ghost text-error"
                   id={"remove-#{member.id}"}
-                  data-confirm="¿Eliminar miembro del equipo?"
-                >
-                  Eliminar
-                </button>
+                >Eliminar</button>
               </div>
 
               <%= if @editing_member_id == member.id do %>
                 <div class="mt-3 pt-3 border-t border-base-300" id={"overrides-form-#{member.id}"}>
-                  <h4 class="text-sm font-semibold mb-2">Extras del miembro</h4>
+                  <h4 class="text-sm font-semibold mb-2">Extras</h4>
                   <.form
                     for={
                       to_form(%{
@@ -459,50 +591,28 @@ defmodule TokengateWeb.TeamMembersLive do
                             do: Decimal.to_string(member.extra_daily_budget_usd),
                             else: ""
                           ),
-                        "extra_monthly_budget_usd" =>
-                          if(member.extra_monthly_budget_usd,
-                            do: Decimal.to_string(member.extra_monthly_budget_usd),
-                            else: ""
-                          ),
                         "extra_concurrency" =>
                           if(member.extra_concurrency,
                             do: to_string(member.extra_concurrency),
                             else: ""
                           ),
-                        "extra_rpm" =>
-                          if(member.extra_rpm,
-                            do: to_string(member.extra_rpm),
-                            else: ""
-                          )
+                        "extra_rpm" => if(member.extra_rpm, do: to_string(member.extra_rpm), else: "")
                       })
                     }
                     id={"override-form-#{member.id}"}
                     phx-submit="save_overrides"
                     phx-value-id={member.id}
                   >
-                    <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+                    <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
                       <.input
                         field={to_form(%{})[:extra_daily_budget_usd]}
                         type="number"
-                        label="Extra presupuesto diario (USD)"
+                        label="Extra diario (USD)"
                         step="any"
                         name="overrides[extra_daily_budget_usd]"
                         value={
                           if(member.extra_daily_budget_usd,
                             do: Decimal.to_string(member.extra_daily_budget_usd),
-                            else: ""
-                          )
-                        }
-                      />
-                      <.input
-                        field={to_form(%{})[:extra_monthly_budget_usd]}
-                        type="number"
-                        label="Extra presupuesto mensual (USD)"
-                        step="any"
-                        name="overrides[extra_monthly_budget_usd]"
-                        value={
-                          if(member.extra_monthly_budget_usd,
-                            do: Decimal.to_string(member.extra_monthly_budget_usd),
                             else: ""
                           )
                         }
@@ -524,26 +634,20 @@ defmodule TokengateWeb.TeamMembersLive do
                         type="number"
                         label="Extra RPM"
                         name="overrides[extra_rpm]"
-                        value={
-                          if(member.extra_rpm,
-                            do: to_string(member.extra_rpm),
-                            else: ""
-                          )
-                        }
+                        value={if(member.extra_rpm, do: to_string(member.extra_rpm), else: "")}
                       />
                     </div>
                     <div class="flex gap-2 mt-2">
                       <button type="submit" class="btn btn-primary" id={"save-overrides-#{member.id}"}>Guardar</button>
-                      <button type="button" phx-click="cancel_overrides" class="btn btn-ghost">
-                        Cancelar
-                      </button>
+                      <button type="button" phx-click="cancel_overrides" class="btn btn-ghost">Cancelar</button>
                     </div>
                   </.form>
                 </div>
               <% end %>
 
-              <div class="mt-3 pt-3 border-t border-base-300">
-                <h4 class="text-sm font-semibold mb-2">Aliases extra</h4>
+              <%!-- Extra aliases --%>
+              <div :if={@org_aliases != []} class="mt-3 pt-3 border-t border-base-200">
+                <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">Aliases extra</p>
                 <div class="flex flex-wrap gap-3">
                   <label
                     :for={alias <- @org_aliases}
@@ -560,9 +664,6 @@ defmodule TokengateWeb.TeamMembersLive do
                     />
                     <span>{alias.name}</span>
                   </label>
-                  <p :if={@org_aliases == []} class="text-xs text-base-content/40">
-                    No hay aliases disponibles.
-                  </p>
                 </div>
               </div>
             </div>

@@ -80,7 +80,6 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
       Accounts.create_team(%{
         "name" => "Platform Team",
         "default_daily_budget_usd" => "100.00",
-        "default_monthly_budget_usd" => "1000.00",
         "default_concurrency_limit" => 10,
         "default_rpm_limit" => 120
       })

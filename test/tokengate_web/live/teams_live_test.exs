@@ -107,7 +107,6 @@ defmodule TokengateWeb.TeamsLiveTest do
         team: %{
           name: "Mi Nuevo Equipo",
           default_daily_budget_usd: "10.50",
-          default_monthly_budget_usd: "300.00",
           default_concurrency_limit: 10,
           default_rpm_limit: 120
         }

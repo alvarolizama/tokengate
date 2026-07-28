@@ -67,8 +67,7 @@ defmodule TokengateWeb.UsersLiveTest do
     {:ok, team} =
       Accounts.create_team(%{
         "name" => "Spend Team #{unique()}",
-        "default_daily_budget_usd" => "100.00",
-        "default_monthly_budget_usd" => "1000.00"
+        "default_daily_budget_usd" => "100.00"
       })
 
     {:ok, member} =
@@ -90,8 +89,7 @@ defmodule TokengateWeb.UsersLiveTest do
     {:ok, team} =
       Accounts.create_team(%{
         "name" => "Broke Team #{unique()}",
-        "default_daily_budget_usd" => "100.00",
-        "default_monthly_budget_usd" => "1000.00"
+        "default_daily_budget_usd" => "100.00"
       })
 
     {:ok, member} =
