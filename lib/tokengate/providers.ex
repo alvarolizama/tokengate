@@ -52,6 +52,17 @@ defmodule Tokengate.Providers do
         from(c in Credential, where: c.provider_id == ^provider.id, select: c.id)
         |> Repo.all()
 
+      model_provider_ids =
+        if credential_ids != [] do
+          from(mp in ModelProvider,
+            where: mp.credential_id in ^credential_ids,
+            select: mp.id
+          )
+          |> Repo.all()
+        else
+          []
+        end
+
       if credential_ids != [] do
         # model_pricing references model_providers which reference credentials
         from(mp in ModelPricing,
@@ -70,8 +81,16 @@ defmodule Tokengate.Providers do
       end
 
       case Repo.delete(provider) do
-        {:ok, _} -> {:ok, provider}
-        {:error, changeset} -> Repo.rollback(changeset)
+        {:ok, _} ->
+          # Clear sticky routing entries pointing at deleted model providers
+          if model_provider_ids != [] do
+            Tokengate.Routing.StickyTracker.clear_all_for_provider(model_provider_ids)
+          end
+
+          {:ok, provider}
+
+        {:error, changeset} ->
+          Repo.rollback(changeset)
       end
     end)
     |> case do
@@ -181,7 +200,15 @@ defmodule Tokengate.Providers do
     |> Repo.update()
   end
 
-  def delete_model_alias(%ModelAlias{} = model_alias), do: Repo.delete(model_alias)
+  def delete_model_alias(%ModelAlias{} = model_alias) do
+    model_alias
+    |> Ecto.Changeset.change()
+    |> Ecto.Changeset.foreign_key_constraint(:model_alias_id,
+      name: "request_logs_model_alias_id_fkey",
+      message: "el modelo tiene logs de uso y no se puede eliminar"
+    )
+    |> Repo.delete()
+  end
 
   def change_model_alias(%ModelAlias{} = model_alias, attrs \\ %{}),
     do: ModelAlias.changeset(model_alias, attrs)
@@ -213,8 +240,14 @@ defmodule Tokengate.Providers do
       |> Repo.delete_all()
 
       case Repo.delete(model_provider) do
-        {:ok, _} = ok -> ok
-        {:error, changeset} -> Repo.rollback(changeset)
+        {:ok, _} ->
+          # Clear sticky routing entries pointing at the deleted model provider
+          Tokengate.Routing.StickyTracker.clear_all_for_provider([model_provider.id])
+
+          {:ok, model_provider}
+
+        {:error, changeset} ->
+          Repo.rollback(changeset)
       end
     end)
     |> case do
