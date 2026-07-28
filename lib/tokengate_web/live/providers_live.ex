@@ -516,7 +516,7 @@ defmodule TokengateWeb.ProvidersLive do
                 <div :if={@credential_form} class="mb-3" id="credential-form-card">
                   <.form for={@credential_form} id="credential-form" phx-submit="save_credential">
                     <.input field={@credential_form[:provider_id]} type="hidden" />
-                    <div class="grid grid-cols-1 sm:grid-cols-5 gap-3 items-end">
+                    <div class="grid grid-cols-1 sm:grid-cols-6 gap-3 items-end">
                       <.input
                         field={@credential_form[:name]}
                         type="text"
@@ -543,6 +543,12 @@ defmodule TokengateWeb.ProvidersLive do
                         label="Max concurrencia"
                         hint="Requests simultáneos. Vacío o 0 = sin límite."
                       />
+                      <.input
+                        field={@credential_form[:receive_timeout_ms]}
+                        type="number"
+                        label="Timeout (ms)"
+                        hint="Tiempo máximo de espera por respuesta. Default 120s."
+                      />
                       <div class="flex gap-2">
                         <button type="submit" class="btn btn-primary btn-sm" id="save-credential-btn">
                           Guardar
@@ -567,6 +573,7 @@ defmodule TokengateWeb.ProvidersLive do
                         <th>Key</th>
                         <th>Max RPM</th>
                         <th>Max conc.</th>
+                        <th>Timeout</th>
                         <th>Estado</th>
                         <th>Breaker</th>
                         <th></th>
@@ -582,6 +589,7 @@ defmodule TokengateWeb.ProvidersLive do
                         </td>
                         <td>{cred.max_rpm || "—"}</td>
                         <td>{cred.max_concurrent || "—"}</td>
+                        <td class="font-mono text-xs">{cred.receive_timeout_ms || 120_000} ms</td>
                         <td>
                           <%= cond do %>
                             <% cred.status == "active" -> %>

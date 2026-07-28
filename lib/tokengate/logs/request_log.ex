@@ -22,7 +22,6 @@ defmodule Tokengate.Logs.RequestLog do
     field :id, :binary_id, primary_key: true, autogenerate: true
     field :inserted_at, :utc_datetime, primary_key: true
 
-    field :provider_id, :binary_id
     field :model_provider_id, :binary_id
     field :model_alias_id, :binary_id
     field :model_requested, :string

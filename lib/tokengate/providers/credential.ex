@@ -25,6 +25,7 @@ defmodule Tokengate.Providers.Credential do
     field :api_key_encrypted, :string
     field :max_rpm, :integer
     field :max_concurrent, :integer
+    field :receive_timeout_ms, :integer, default: 120_000
     field :status, :string, default: "active"
     field :error_reason, :string
     field :error_at, :utc_datetime
@@ -44,6 +45,7 @@ defmodule Tokengate.Providers.Credential do
       :api_key_encrypted,
       :max_rpm,
       :max_concurrent,
+      :receive_timeout_ms,
       :status,
       :error_reason,
       :error_at

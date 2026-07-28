@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+  <defs>
+    <linearGradient id="tg-grad" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6366F1"/>
+      <stop offset="1" stop-color="#A855F7"/>
+    </linearGradient>
+  </defs>
+  <!-- Gate / portal frame -->
+  <path d="M8 8h48v6H14v44H8V8Z" fill="url(#tg-grad)"/>
+  <path d="M50 8h6v48h-6V8Z" fill="url(#tg-grad)"/>
+  <path d="M8 50h48v6H8v-6Z" fill="url(#tg-grad)"/>
+  <!-- Token (hexagon coin) passing through the gate -->
+  <path d="M32 18l10 6v12l-10 6-10-6V24l10-6Z" fill="url(#tg-grad)" fill-opacity="0.25" stroke="url(#tg-grad)" stroke-width="2.5" stroke-linejoin="round"/>
+  <circle cx="32" cy="30" r="4" fill="url(#tg-grad)"/>
+</svg>

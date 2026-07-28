@@ -196,8 +196,11 @@ defmodule TokengateWeb.ProxyController do
     provider = route.model_provider.credential.provider
     # The client sends the alias name; the provider expects its own model id.
     payload = Map.put(payload, "model", route.model_responded)
+    receive_timeout = route.credential.receive_timeout_ms || 120_000
 
-    case OpenAIAdapter.chat_completion(provider, route.credential, payload) do
+    case OpenAIAdapter.chat_completion(provider, route.credential, payload,
+           receive_timeout: receive_timeout
+         ) do
       {:ok, body, latency_ms} ->
         Router.record_outcome(route, :success)
         finalize_success(conn, route, body, latency_ms, member)
@@ -284,9 +287,10 @@ defmodule TokengateWeb.ProxyController do
     # Measured just before the upstream call: TTFT is the time from this
     # point to the provider's first chunk.
     request_start = System.monotonic_time(:millisecond)
+    receive_timeout = route.credential.receive_timeout_ms || 120_000
 
     case OpenAIAdapter.stream_chat_completion(provider, route.credential, payload,
-           receive_timeout: 120_000
+           receive_timeout: receive_timeout
          ) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
