@@ -190,6 +190,30 @@ defmodule TokengateWeb.DashboardLive do
   defp load_personal_data(socket, user) do
     memberships = Accounts.list_team_members_for_user(user.id)
 
+    # Auto-create a "General" team + membership + api key for users
+    # who don't belong to any team yet.
+    {memberships, socket} =
+      if memberships == [] do
+        {:ok, team} = Accounts.create_team(%{name: "General"})
+
+        {:ok, member} =
+          Accounts.create_team_member(%{
+            user_id: user.id,
+            team_id: team.id,
+            team_role: "user",
+            status: "active"
+          })
+
+        {:ok, _api_key, new_token} = Accounts.replace_api_key(member)
+
+        {Accounts.list_team_members_for_user(user.id),
+         socket
+         |> assign(:new_token, new_token)
+         |> assign(:new_token_team, "General")}
+      else
+        {memberships, socket}
+      end
+
     teams =
       Enum.map(memberships, fn membership ->
         limits = Accounts.effective_limits(membership)
