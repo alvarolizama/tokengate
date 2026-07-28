@@ -308,7 +308,6 @@ defmodule TokengateWeb.LogsLive do
 
   defp default_filters do
     %{
-      "agent_type" => "",
       "status_class" => "",
       "streaming" => "",
       "from" => "",
@@ -324,7 +323,6 @@ defmodule TokengateWeb.LogsLive do
 
     base =
       %{}
-      |> maybe_put(:agent_type, form_filters["agent_type"])
       |> maybe_put(:status_class, form_filters["status_class"])
       |> maybe_put(:streaming, parse_bool(form_filters["streaming"]))
       |> maybe_put(:model_search, form_filters["model_search"])
@@ -633,14 +631,8 @@ defmodule TokengateWeb.LogsLive do
           for={@form}
           id="logs-filter-form"
           phx-change="filter"
-          class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3"
+          class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3"
         >
-          <.input
-            field={@form[:agent_type]}
-            type="text"
-            placeholder="Agente"
-            label="Agente"
-          />
           <.input
             field={@form[:status_class]}
             type="select"
@@ -699,7 +691,6 @@ defmodule TokengateWeb.LogsLive do
                     <th>Proveedor</th>
                     <th>Credencial</th>
                     <th>API Key</th>
-                    <th>Agente</th>
                     <th>Think</th>
                     <th>Effort</th>
                     <th>Streaming</th>
@@ -715,9 +706,6 @@ defmodule TokengateWeb.LogsLive do
                     <td class="text-sm">{entry.provider_name || "—"}</td>
                     <td class="text-sm">{entry.credential_name || "—"}</td>
                     <td class="text-sm">{entry.api_key_prefix || "—"}</td>
-                    <td>
-                      <span class="badge badge-sm badge-ghost">{entry.agent_type || "api"}</span>
-                    </td>
                     <td><.think_badge value={entry.think} /></td>
                     <td class="text-sm">{entry.effort || "—"}</td>
                     <td>{if entry.streaming, do: "Sí", else: "No"}</td>
@@ -737,7 +725,7 @@ defmodule TokengateWeb.LogsLive do
                 <th colspan="7" class="text-[10px] uppercase tracking-wider text-primary/70 bg-primary/5 border-r border-base-200">
                   Identidad
                 </th>
-                <th colspan="5" class="text-[10px] uppercase tracking-wider text-accent/70 bg-accent/5 border-r border-base-200">
+                <th colspan="4" class="text-[10px] uppercase tracking-wider text-accent/70 bg-accent/5 border-r border-base-200">
                   Request
                 </th>
                 <th colspan="5" class="text-[10px] uppercase tracking-wider text-info/70 bg-info/5 border-r border-base-200">
@@ -755,7 +743,6 @@ defmodule TokengateWeb.LogsLive do
                 <th>API Key</th>
                 <th>Credencial</th>
                 <th class="border-r border-base-200">Proveedor</th>
-                <th>Agente</th>
                 <th>Estado</th>
                 <th>Think</th>
                 <th>Effort</th>
@@ -773,7 +760,7 @@ defmodule TokengateWeb.LogsLive do
             </thead>
             <tbody id="logs" phx-update="stream">
               <tr id="logs-empty" class="hidden only:table-row">
-                <td colspan="21" class="text-center py-8 text-base-content/40">
+                <td colspan="20" class="text-center py-8 text-base-content/40">
                   No hay logs que coincidan con los filtros.
                 </td>
               </tr>
@@ -785,9 +772,6 @@ defmodule TokengateWeb.LogsLive do
                 <td class="text-sm">{log.api_key_prefix || "—"}</td>
                 <td class="text-sm">{log.credential_name || "—"}</td>
                 <td class="text-sm border-r border-base-200">{provider_name(log)}</td>
-                <td>
-                  <span class="badge badge-sm badge-ghost">{log.agent_type}</span>
-                </td>
                 <td>
                   <span class={["badge", "badge-sm", status_badge_class(log.status_code)]}>
                     {log.status_code}

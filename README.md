@@ -1,142 +1,77 @@
 <div align="center">
   <img src="priv/static/images/logo.svg" alt="TokenGate logo" width="96">
   <h1>TokenGate</h1>
+  <p>Gateway autohospedado para LLMs. Proxy compatible con OpenAI que enruta a múltiples proveedores con prioridad, sticky routing, circuit breaker, presupuestos y observabilidad en tiempo real.</p>
 </div>
-
-Gateway autohospedado para modelos de lenguaje (LLM). Proxy compatible con la API de OpenAI que enruta peticiones a múltiples proveedores con selección por prioridad y sticky routing, fallback, circuit breaker, presupuestos, observabilidad y control de costos multi-dimensión.
 
 <table>
   <tr>
-    <td><img src="docs/screenshots/dashboard.png" alt="Dashboard en vivo"></td>
-    <td><img src="docs/screenshots/stats.png" alt="Estadísticas con ranking de proveedores"></td>
+    <td><img src="docs/screenshots/dashboard.png" alt="Dashboard"></td>
+    <td><img src="docs/screenshots/logs.png" alt="Logs en vivo"></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/logs.png" alt="Logs en vivo con requests en vuelo"></td>
-    <td><img src="docs/screenshots/credits.png" alt="Créditos y presupuestos por equipo"></td>
-  </tr>
-  <tr>
-    <td><img src="docs/screenshots/models.png" alt="Aliases de modelos"></td>
+    <td><img src="docs/screenshots/stats.png" alt="Estadísticas"></td>
     <td><img src="docs/screenshots/providers.png" alt="Proveedores"></td>
   </tr>
   <tr>
+    <td><img src="docs/screenshots/models.png" alt="Modelos"></td>
     <td><img src="docs/screenshots/teams.png" alt="Equipos"></td>
-    <td><img src="docs/screenshots/alerts.png" alt="Alertas"></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/users.png" alt="Usuarios con impersonación 'Ver como'"></td>
-    <td></td>
+    <td><img src="docs/screenshots/credits.png" alt="Créditos"></td>
+    <td><img src="docs/screenshots/alerts.png" alt="Alertas"></td>
   </tr>
 </table>
 
 ## Stack
 
-- **Elixir + Phoenix LiveView** (v1.8) — UI en tiempo real, sin SPA
-- **PostgreSQL** — persistencia (vía Ecto)
+- **Elixir + Phoenix LiveView v1.8** — UI en tiempo real, sin SPA
+- **PostgreSQL** — persistencia (Ecto)
 - **Oban** — jobs asíncronos (logs, webhooks OTLP)
 - **BEAM** — estado efímero (`:atomics`, `:gen_statem`, ETS)
-- **Tailwind CSS v4** — estilos
-- **Req** — cliente HTTP para upstreams y OAuth
-- **bcrypt_elixir** — hashing de credenciales
+- **Tailwind CSS v4** + DaisyUI — estilos
 
 ## Features
 
 ### Proxy API
 
-- Endpoint `POST /v1/chat/completions` compatible con OpenAI
-- Endpoint `GET /v1/models` para listar modelos disponibles
+- `POST /v1/chat/completions` y `GET /v1/models` compatibles con OpenAI
 - Autenticación vía bearer API key
 - Streaming de respuestas
 
-### Enrutamiento inteligente
+### Enrutamiento
 
-- **Selección por prioridad** — el primer proveedor disponible (prioridad ASC) gana
-- **Sticky routing** — la misma API key se pega al mismo proveedor (preserva prompt caches)
-- **Fallback** automático ante errores (hasta 3 intentos, excluyendo credenciales fallidas)
+- **Prioridad + sticky routing** — la misma API key se pega al mismo proveedor (preserva prompt caches)
+- **Fallback** automático ante errores (hasta 3 intentos)
 - **Circuit breaker** por credencial — abre tras N fallos, semi-abre para probar recuperación
-- **Reglas de reroute** — por longitud de contexto o presencia de imágenes
-- **Prioridades** — orden de preferencia configurable por modelo
+- **Reglas de reroute** por longitud de contexto o presencia de imágenes
 
 ### Control de costos (4 dimensiones)
 
-Cada request se registra con 4 métricas de costo:
+Cada request registra: **costo de mercado** (estimado), **costo del proveedor** (pricing row), **costo real pagado** (lo que pagaste de verdad) y **ahorro** vs precio de mercado. Soporta proveedores `pay_per_token` e `included` (suscripción).
 
-| Dimensión | Campo | Qué mide |
-|-----------|-------|----------|
-| **Costo de mercado** | `estimated_cost_usd` | Lo que costaría a precio público del modelo |
-| **Costo del proveedor** | `cost_usd` | Lo que el proveedor cobra (pricing row) |
-| **Costo real pagado** | `provider_cost_usd` | Lo que realmente pagaste (preferencia al costo reportado por el proveedor) |
-| **Ahorro** | `savings_usd` | `estimado - real` — cuánto ahorras vs precio de mercado |
+### Multi-tenant
 
-Soporta proveedores `pay_per_token` (pago por token) e `included` (suscripción/RPM-limited).
+- **Equipos → Miembros → API keys** con roles `admin`, `manager`, `user`
+- **Alias de modelos** — mapea `gpt-4` → proveedor+modelo real, con grants por equipo y miembro
+- **Presupuestos** por equipo y miembro: diario/mensual (USD), concurrencia, RPM
+- **Bloqueo automático** al superar límites (402 sin tocar al proveedor)
+- **Tope presupuestario por equipo** — límite compartido que aplica a todo el equipo
 
-### Gestión multi-tenant
+### Dashboard
 
-- **Equipos** → **Miembros** → **API keys**
-- **Roles**: `admin` (global) y `manager`/`user` (por equipo)
-- **Alias de modelos** — mapea `gpt-4` → proveedor+modelo real, con grants por equipo y por miembro
-- **Presupuestos y límites** por equipo y por miembro:
-  - Gasto diario y mensual (USD)
-  - Concurrencia máxima
-  - RPM (requests por minuto)
-  - Bloqueo automático al superar límites (402 sin tocar al proveedor)
-  - Overrides individuales (`extra_daily_budget_usd`, etc.)
-- **Visibilidad de créditos** (admin):
-  - `/dashboard/credits` — todos los miembros con barras de progreso diario/mensual, badges de estado (OK / Por agotarse ≥80% / Agotado / Sin límite) y refresh en vivo
-  - **Tope presupuestario por equipo** — suma de límites mensuales de miembros vs gasto real del mes
-  - **Ahorro del mes** por miembro (vs precio de mercado)
-  - Sección "Miembros sin crédito" en Alertas + chip en el topbar con el conteo de agotados
-  - Columna "Gasto hoy / mes" en la página de Usuarios
+- **KPIs en tiempo real** — requests, costo real, ahorro, tokens, TPS
+- **Gráficas** de costo, requests y ahorro por hora/día
+- **Desglose** por modelo, API key y equipo
+- **Estadísticas** con drill-down por modelo y equipo, ranking de proveedores (tiers S/A/B/C/D), patrones de uso, export CSV
+- **Logs en vivo** con requests en vuelo, filtros y columnas agrupadas (Identidad, Request, Rendimiento, Costos)
+- **Créditos** con barras de progreso y estado por miembro
+- **Alertas** — credenciales en error, breakers abiertos, miembros sin crédito
 
 ### Autenticación
 
-- **Password** — email + password con Bcrypt
-- **Google OAuth** — botón "Entrar con Google" en el login
-  - Usuarios existentes pueden vincular su cuenta de Google
-  - Auto-registro opcional por dominio allowlist
-  - Suspended users no pueden entrar
-- **Session-based** — cookies firmadas, no JWT
-- **Root admin** — creado via env vars en seeds, no puede ser suspendido
-
-### Dashboard de estadísticas
-
-Dashboard principal (`/dashboard`) con KPIs y gráficas por periodo (Hoy, 7d, 30d, 90d):
-
-- **Costo por hora/día** — barras por bucket con tooltips
-- **Requests por hora/día** — volumen de tráfico
-- **Ahorro por hora/día** — ahorro vs precio de mercado
-- **Top modelos por costo real** — barras horizontales (top 5)
-- **Desglose** por modelo, API key y equipo
-- Actualización en tiempo real vía PubSub (con debounce para no ahogar Postgres)
-
-Sección `/dashboard/stats` con 3 vistas:
-
-- **Resumen** (`/dashboard/stats`) — KPIs globales + Top 5 modelos/equipos/miembros/errores
-- **Patrones de uso** — requests por hora del día, pico de concurrencia, horas y minutos más ocupados
-- **Ranking de proveedores** (admin) — score compuesto: 60% confiabilidad (tasa de fallos) + 40% velocidad relativa al más rápido; tiers **S/A/B/C/D**, umbral mínimo de 10 requests, con latencia promedio, P95 y TTFT
-- **Por modelo** (`/dashboard/stats/models`) — tabla de todos los modelos con drill-down:
-  - Costo de mercado vs real vs ahorro
-  - Desglose por proveedor (performance y costo)
-  - Equipos y miembros que usan el modelo
-- **Por equipo** (`/dashboard/stats/teams`) — tabla de todos los equipos con drill-down:
-  - Vista global del equipo (KPIs)
-  - Modelos usados por el equipo
-  - Miembros del equipo con sus consumos
-- **Periodos**: 7d, 30d, 90d
-- **CSV export** — descarga cualquier tabla visible como CSV
-- **Scoping por rol**: admin ve todo, manager ve sus equipos, user ve solo lo suyo
-
-### Observabilidad
-
-- **Logs en vivo** (`/dashboard/logs`) — requests individuales en tiempo real:
-  - **KPI cards en ventana móvil de 5 minutos** — Conectados, En vuelo, Req/min, Latencia prom y Errores (con % y resaltado en rojo); tick de 5s + debounce en logs nuevos, respetan los filtros activos
-  - **Sección "En vuelo ahora"** — requests pending mientras el proveedor responde (registry ETS + PubSub, con TTL sweep anti-fantasmas)
-  - Columnas **Usuario, Equipo, Think ✓ y Effort** — reasoning/effort parseados del payload del cliente (`reasoning_effort`, `reasoning.effort`, `thinking.type: enabled`)
-  - Filtros en vivo por agente, estado, streaming, modelo (select de aliases) y rango de fechas — los pending también respetan los filtros
-  - TTFT (time to first token) para streaming
-- **Logs de petición** asíncronos (Oban) — latencia, tokens, costo, status, agente
-- **Webhooks OTLP** compatibles con OpenRouter
-- **Audit log** — cambios administrativos
-- **LiveDashboard** en dev
+- Password (Bcrypt) + Google OAuth opcional
+- Impersonación de usuarios (admin) con banner persistente y audit log
 
 ### Control de acceso
 
@@ -144,225 +79,74 @@ Sección `/dashboard/stats` con 3 vistas:
 |------|-------|---------|------|
 | Dashboard, Stats, Logs | ✅ | ✅ (sus equipos) | ✅ (suyo) |
 | Equipos y miembros | ✅ | ✅ (sus equipos) | ❌ |
-| Modelos, Proveedores | ✅ | ❌ | ❌ |
+| Proveedores, Modelos | ✅ | ❌ | ❌ |
 | Usuarios, API Keys | ✅ | ❌ | ❌ |
 | Créditos, Alertas | ✅ | ❌ | ❌ |
 
-### Impersonación de usuarios (admin)
-
-Desde `/dashboard/users`, un admin puede entrar a la app como cualquier usuario con el botón **"Ver como"** (👁):
-
-- **Banner persistente** en todo el dashboard — "Viendo como *user@example.com* — sesión de *admin@example.com*" con botón **"Volver a mi cuenta"**
-- La sesión cambia al usuario efectivo: dashboard, stats, logs y scoping por rol se ven exactamente como los vería él
-- **Guards**: no auto-impersonación, no nesting, no se puede impersonar al root admin, target debe existir
-- **Audit log** — cada inicio (`impersonate.start`) y fin (`impersonate.stop`) queda registrado con el admin real como actor
-
-El sidebar solo muestra links de configuración a admins.
-
 ## Inicio rápido
 
-### Prerequisitos
-
-- Elixir 1.15+
-- PostgreSQL 14+
-- Node.js 20+ (para assets)
-
-### Instalación
-
 ```bash
-# Clonar
-git clone <repo-url> tokengate
-cd tokengate
-
-# Instalar dependencias, crear DB, migrar y sembrar
-mix setup
-
-# Arrancar servidor
+git clone <repo-url> tokengate && cd tokengate
+mix setup    # deps + DB + assets
 mix phx.server
 ```
 
 El server arranca en `http://localhost:4000`.
 
-### Credenciales por defecto (seed)
-
-| Campo    | Valor                      |
-|----------|----------------------------|
-| Email    | `admin@tokengate.local`    |
-| Password | `tokengate-admin-secret-1` |
-
-Override con env vars: `TOKENGATE_ADMIN_EMAIL`, `TOKENGATE_ADMIN_PASSWORD`.
-
-## Configuración
-
-### Variables de entorno
-
-| Variable | Descripción | Default |
-|----------|-------------|---------|
-| `DATABASE_URL` | URL de conexión Postgres (prod) | — |
-| `SECRET_KEY_BASE` | Clave de firma (prod) | — |
-| `PORT` | Puerto del servidor | `4000` |
-| `PHX_HOST` | Host público (prod, sin scheme ni puerto) | requerida en prod |
-| `PHX_SCHEME` | Scheme para URLs generadas (`http`/`https`) | `https` |
-| `PHX_PORT` | Puerto para URLs generadas | `443` |
-| `TOKENGATE_ADMIN_EMAIL` | Email del admin root | `admin@tokengate.local` |
-| `TOKENGATE_ADMIN_PASSWORD` | Password del admin root | `tokengate-admin-secret-1` |
-| `WEBHOOK_SECRET` | HMAC secret para webhooks | — |
-| `GOOGLE_OAUTH_CLIENT_ID` | Google OAuth client ID | — |
-| `GOOGLE_OAUTH_CLIENT_SECRET` | Google OAuth client secret | — |
-| `GOOGLE_OAUTH_REDIRECT_URI` | URL de callback | `{scheme}://{host}/auth/google/callback` |
-| `GOOGLE_OAUTH_ALLOWED_DOMAINS` | Dominios permitidos (comma-separated) | vacío = sin auto-registro (fail-closed) |
-| `SKIP_MIGRATIONS` | `1` = el entrypoint Docker no migra/seedea | — |
-
-### Google OAuth (opcional)
-
-1. Crea un proyecto en [Google Cloud Console](https://console.cloud.google.com/)
-2. Habilita Google+ API y crea credenciales OAuth 2.0
-3. Configura la URI de redirección: `http://localhost:4000/auth/google/callback` (dev) o `https://{host}/auth/google/callback` (prod)
-4. Setea las env vars:
-
-```bash
-GOOGLE_OAUTH_CLIENT_ID=tu-client-id.apps.googleusercontent.com
-GOOGLE_OAUTH_CLIENT_SECRET=tu-client-secret
-GOOGLE_OAUTH_ALLOWED_DOMAINS=tu-empresa.com,otro-dominio.com
-```
-
-Sin estas vars, el botón "Entrar con Google" no aparece funcional.
+**Credenciales de seed:** `admin@tokengate.local` / `tokengate-admin-secret-1`
+(override con `TOKENGATE_ADMIN_EMAIL` y `TOKENGATE_ADMIN_PASSWORD`)
 
 ## Uso del proxy
 
 ```bash
 curl http://localhost:4000/v1/chat/completions \
-  -H "Authorization: Bearer tg-xxxx" \
+  -H "Authorization: Bearer tg-..." \
   -H "Content-Type: application/json" \
-  -d '{
-    "model": "gpt-4",
-    "messages": [{"role": "user", "content": "Hola"}]
-  }'
+  -d '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hola"}]}'
 ```
 
-El alias `gpt-4` se resuelve al proveedor y modelo configurado en el dashboard.
+Headers opcionales: `X-Agent-Type`, `X-Title`, `HTTP-Referer`
 
-### Headers opcionales
+## Configuración
 
-| Header | Descripción |
-|--------|-------------|
-| `X-Agent-Type` | Tipo de agente (`claude-code`, `cursor`, etc.) |
-| `X-Title` | Título del agente |
-| `HTTP-Referer` | Referer |
-
-## Estructura del proyecto
-
-```
-lib/tokengate/
-├── accounts/          # Users, teams, members, API keys
-├── providers/         # Providers, credentials, aliases, pricing
-├── routing/           # Router, prioridad + sticky, circuit breaker, reglas
-├── limits/            # Rate limits: RPM + concurrencia (ETS)
-├── budgets/           # Presupuestos diario/mensual (ETS + sync a Postgres)
-├── logs/              # Request logs (async via Oban)
-├── metrics/           # Rollup queries (dashboard stats)
-├── observability/     # OTLP webhooks, destinations
-├── proxy/             # Cost calculator, OpenAI adapter, usage normalizer
-└── auditing/          # Audit log
-
-lib/tokengate_web/
-├── controllers/       # Page, Session, Proxy, OAuth, StatsExport
-├── oauth/             # Google OAuth helper module
-├── live/              # Dashboard, Stats, Teams, Users, Keys, Logs, Models, Providers
-├── plugs/             # ApiAuth, DashboardAuth
-└── components/        # Layouts, core components
-```
-
-## Flujo de trabajo
-
-### Setup inicial (admin)
-
-1. **Login** con credenciales de seed
-2. **Proveedores** → crear proveedor (OpenAI, Anthropic, etc.) + credenciales (API keys)
-3. **Modelos** → crear alias de modelo (ej: `gpt-4o`) + asignar proveedor con pricing
-4. **Equipos** → crear equipo con presupuestos y límites
-5. **Equipos → Miembros** → agregar miembros por email, generar API keys
-6. **Equipos → Aliases** → grant de modelos al equipo
-7. Compartir API keys con los miembros
-
-### Uso diario
-
-- **Dashboard** — ver consumo en tiempo real, KPIs, breakdowns
-- **Estadísticas** — análisis histórico con drill-down por modelo/equipo, exportar CSV
-- **Logs** — inspeccionar requests individuales
-- **Usuarios** — crear/editar/suspender usuarios, resetear passwords
-
-## Comandos útiles
-
-```bash
-mix setup              # deps + DB + assets
-mix phx.server         # servidor dev
-mix test               # tests (crea DB de test automáticamente)
-mix precommit          # compile + warnings + format + test
-mix ecto.reset        # drop + create + migrate + seed
-mix ecto.migrate       # migrar
-```
+| Variable | Descripción | Default |
+|----------|-------------|---------|
+| `DATABASE_URL` | URL de conexión Postgres (prod) | — |
+| `SECRET_KEY_BASE` | Clave de firma (prod) | — |
+| `PHX_HOST` | Host público (prod) | requerida en prod |
+| `TOKENGATE_ADMIN_EMAIL` | Email del admin root | `admin@tokengate.local` |
+| `TOKENGATE_ADMIN_PASSWORD` | Password del admin root | `tokengate-admin-secret-1` |
+| `WEBHOOK_SECRET` | HMAC secret para webhooks | — |
+| `GOOGLE_OAUTH_CLIENT_ID` | Google OAuth (opcional) | — |
+| `GOOGLE_OAUTH_CLIENT_SECRET` | Google OAuth (opcional) | — |
+| `GOOGLE_OAUTH_ALLOWED_DOMAINS` | Dominios allowlist (comma-separated) | vacío |
+| `SKIP_MIGRATIONS` | `1` = no migrar en boot | — |
 
 ## Deploy
 
-Diseñado para desplegar vía **Coolify** con el `Dockerfile` multi-stage del repo
-(builder `hexpm/elixir` → runtime `debian:bookworm-slim`, non-root).
-
-### Docker
+Diseñado para **Coolify** con el `Dockerfile` multi-stage del repo. El entrypoint crea la DB, migra y seedea el admin automáticamente.
 
 ```bash
-# Build
 docker build -t tokengate .
-
-# Run (el entrypoint crea la DB si falta, migra y seedea el admin)
 docker run -p 4000:4000 \
-  -e DATABASE_URL=ecto://postgres:postgres@host.docker.internal/tokengate \
+  -e DATABASE_URL=ecto://postgres:postgres@host/tokengate \
   -e SECRET_KEY_BASE=$(mix phx.gen.secret) \
   -e WEBHOOK_SECRET=$(openssl rand -hex 32) \
   -e PHX_HOST=tokengate.example.com \
   tokengate
 ```
 
-El entrypoint (`docker/entrypoint.sh`) corre `Tokengate.Release.setup/0`
-(create DB → migrate → seed admin, idempotente) antes de arrancar. Una
-migración fallida aborta el boot y Coolify hace rollback. `SKIP_MIGRATIONS=1`
-lo salta (contenedores one-off).
+Para HTTP plano (VPN/sin TLS): `docker build --build-arg DISABLE_FORCE_SSL=1` y `PHX_SCHEME=http` en runtime.
 
-### Coolify
-
-- **Build pack**: Dockerfile (raíz del repo)
-- **Start command**: la provee el entrypoint — no hace falta pre-deploy hook
-- **Env vars** (runtime): `DATABASE_URL`, `SECRET_KEY_BASE`, `WEBHOOK_SECRET`,
-  `PHX_HOST`, y opcionales `PHX_SCHEME`, `PHX_PORT`, `GOOGLE_OAUTH_*`,
-  `TOKENGATE_ADMIN_EMAIL`, `TOKENGATE_ADMIN_PASSWORD`
-
-### HTTP plano (VPN / sin TLS)
-
-`force_ssl` es compile-time en Phoenix, así que desactivarlo requiere
-**rebuild** con el build arg:
+## Comandos útiles
 
 ```bash
-docker build --build-arg DISABLE_FORCE_SSL=1 -t tokengate:http .
+mix setup          # deps + DB + assets
+mix phx.server     # servidor dev
+mix test           # tests
+mix precommit      # compile + warnings + format + test
+mix ecto.reset     # drop + create + migrate + seed
 ```
-
-y en runtime `PHX_SCHEME=http` (para que las URLs generadas usen http).
-
-### Release manual (sin Docker)
-
-```bash
-MIX_ENV=prod mix deps.get --only prod
-MIX_ENV=prod mix assets.deploy
-MIX_ENV=prod mix release
-
-# setup (create DB → migrate → seed admin) o solo migrate:
-_build/prod/rel/tokengate/bin/setup
-_build/prod/rel/tokengate/bin/migrate
-
-# arrancar
-_build/prod/rel/tokengate/bin/server
-```
-
-Ver `config/runtime.exs` para la configuración de producción.
 
 ## Licencia
 
