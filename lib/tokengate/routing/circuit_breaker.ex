@@ -33,9 +33,9 @@ defmodule Tokengate.Routing.CircuitBreaker do
   # not a temporary breaker cooldown.
   @counting_reasons [:server_error, :timeout, :rate_limited]
 
-  @default_cooldown_ms 1_800_000
-  @default_threshold 1
-  @default_rate_limit_cooldown_ms 600_000
+  @default_cooldown_ms 60_000
+  @default_threshold 5
+  @default_rate_limit_cooldown_ms 10_000
 
   ## Child spec (for supervisors / start_supervised) ##########################
 
@@ -57,10 +57,10 @@ defmodule Tokengate.Routing.CircuitBreaker do
   Options:
 
     * `:credential_id`        - (required) unique identifier for the provider credential.
-    * `:cooldown_ms`          - time the breaker stays open before probing (default 30_000).
+    * `:cooldown_ms`          - time the breaker stays open before probing (default 60_000).
     * `:threshold`            - consecutive failures that trip the breaker (default 5).
     * `:rate_limit_cooldown_ms` - short cooldown used when the trip reason was `:rate_limited`
-      (default 5_000).
+      (default 10_000).
 
   The process is registered via `{:via, Registry, {Tokengate.Routing.CircuitBreakerRegistry, credential_id}}`.
   """

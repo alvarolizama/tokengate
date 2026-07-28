@@ -70,10 +70,16 @@ config :tokengate, Oban,
   queues: [default: 10, logs: 20, webhooks: 10, budgets: 5]
 
 # Circuit breaker defaults (cooldown y threshold configurables)
+# threshold: failures consecutivos que abren el breaker. 5 tolera ráfagas
+#   transitorias sin dejar el proveedor afuera por una sola falla.
+# cooldown_ms: tiempo que el breaker se queda abierto antes de probar.
+#   60s es suficiente para que un problema puntual se recupere.
+# rate_limit_cooldown_ms: cooldown corto para 429s, porque los proveedores
+#   suelen recuperarse de rate limits en segundos, no minutos.
 config :tokengate, :circuit_breaker,
-  cooldown_ms: 1_800_000,
-  threshold: 1,
-  rate_limit_cooldown_ms: 600_000
+  cooldown_ms: 60_000,
+  threshold: 5,
+  rate_limit_cooldown_ms: 10_000
 
 # Streaming: max wait for the provider's first token before falling back.
 # Nothing is sent to the client until the first chunk arrives.

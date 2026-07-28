@@ -430,18 +430,15 @@ defmodule TokengateWeb.ProvidersLive do
           </button>
         </div>
 
-        <%!-- Provider form (create / edit) --%>
-        <div
-          :if={@form}
-          class="card bg-base-100 border border-base-300 shadow-sm"
-          id="provider-form-card"
-        >
-          <div class="card-body">
-            <h2 class="text-base font-semibold mb-2">
-              {if @editing_provider_id == :new, do: "Nuevo proveedor", else: "Editar proveedor"}
-            </h2>
-            <.form for={@form} id="provider-form" phx-submit="save_provider">
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+        <%!-- Provider form (create / edit) — modal --%>
+        <div :if={@form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div class="absolute inset-0 bg-black/50" phx-click="cancel_form" />
+          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
+            <div class="card-body p-6">
+              <h2 class="text-lg font-semibold mb-4">
+                {if @editing_provider_id == :new, do: "Nuevo proveedor", else: "Editar proveedor"}
+              </h2>
+              <.form for={@form} id="provider-form" phx-submit="save_provider">
                 <.input
                   field={@form[:name]}
                   type="text"
@@ -456,12 +453,81 @@ defmodule TokengateWeb.ProvidersLive do
                   placeholder="https://api.openai.com/v1"
                   hint="URL base de la API del proveedor, incluyendo el API base path (ej. /v1, /api/v1). Sin slash final."
                 />
-              </div>
-              <div class="flex gap-2 mt-4">
-                <button type="submit" class="btn btn-primary btn-sm" id="save-provider-btn">Guardar</button>
-                <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
-              </div>
-            </.form>
+                <div class="flex gap-2 mt-4 justify-end">
+                  <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
+                    Cancelar
+                  </button>
+                  <button type="submit" class="btn btn-primary btn-sm" id="save-provider-btn">
+                    Guardar
+                  </button>
+                </div>
+              </.form>
+            </div>
+          </div>
+        </div>
+
+        <%!-- Credential form (create / edit) — modal --%>
+        <div :if={@credential_form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div class="absolute inset-0 bg-black/50" phx-click="cancel_credential" />
+          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-2xl">
+            <div class="card-body p-6">
+              <h2 class="text-lg font-semibold mb-4">
+                {if @editing_credential_id, do: "Editar credencial", else: "Nueva credencial"}
+              </h2>
+              <.form for={@credential_form} id="credential-form" phx-submit="save_credential">
+                <.input field={@credential_form[:provider_id]} type="hidden" />
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <.input
+                    field={@credential_form[:name]}
+                    type="text"
+                    label="Alias"
+                    placeholder="Producción"
+                    hint="Nombre para identificar esta credencial."
+                  />
+                  <.input
+                    field={@credential_form[:api_key_encrypted]}
+                    type="password"
+                    label={"API key#{if @editing_credential_id, do: " (dejar vacío = misma)", else: ""}"}
+                    placeholder={
+                      if @editing_credential_id,
+                        do: "sk-... (dejar vacío para mantener)",
+                        else: "sk-..."
+                    }
+                    hint={
+                      if @editing_credential_id,
+                        do: "Solo si quieres cambiarla.",
+                        else: "El token que entrega el proveedor (sk-...)."
+                    }
+                  />
+                  <.input
+                    field={@credential_form[:max_rpm]}
+                    type="number"
+                    label="Max RPM"
+                    hint="Requests por minuto. Vacío o 0 = sin límite."
+                  />
+                  <.input
+                    field={@credential_form[:max_concurrent]}
+                    type="number"
+                    label="Max concurrencia"
+                    hint="Requests simultáneos. Vacío o 0 = sin límite."
+                  />
+                  <.input
+                    field={@credential_form[:receive_timeout_ms]}
+                    type="number"
+                    label="Timeout (ms)"
+                    hint="Tiempo máximo de espera por respuesta. Default 120s."
+                  />
+                </div>
+                <div class="flex gap-2 mt-4 justify-end">
+                  <button type="button" phx-click="cancel_credential" class="btn btn-ghost btn-sm">
+                    Cancelar
+                  </button>
+                  <button type="submit" class="btn btn-primary btn-sm" id="save-credential-btn">
+                    {(@editing_credential_id && "Actualizar") || "Guardar"}
+                  </button>
+                </div>
+              </.form>
+            </div>
           </div>
         </div>
 
@@ -554,66 +620,6 @@ defmodule TokengateWeb.ProvidersLive do
                   >
                     <.icon name="hero-plus" class="w-3 h-3" /> Nueva
                   </button>
-                </div>
-
-                <div :if={@credential_form} class="mb-3" id="credential-form-card">
-                  <.form for={@credential_form} id="credential-form" phx-submit="save_credential">
-                    <.input field={@credential_form[:provider_id]} type="hidden" />
-                    <div class="grid grid-cols-1 sm:grid-cols-6 gap-3 items-end">
-                      <.input
-                        field={@credential_form[:name]}
-                        type="text"
-                        label="Alias"
-                        placeholder="Producción"
-                        hint="Nombre para identificar esta credencial."
-                      />
-                      <.input
-                        field={@credential_form[:api_key_encrypted]}
-                        type="password"
-                        label={"API key#{if @editing_credential_id, do: " (dejar vacío = misma)", else: ""}"}
-                        placeholder={
-                          if @editing_credential_id,
-                            do: "sk-... (dejar vacío para mantener)",
-                            else: "sk-..."
-                        }
-                        hint={
-                          if @editing_credential_id,
-                            do: "Solo si quieres cambiarla.",
-                            else: "El token que entrega el proveedor (sk-...)."
-                        }
-                      />
-                      <.input
-                        field={@credential_form[:max_rpm]}
-                        type="number"
-                        label="Max RPM"
-                        hint="Requests por minuto. Vacío o 0 = sin límite."
-                      />
-                      <.input
-                        field={@credential_form[:max_concurrent]}
-                        type="number"
-                        label="Max concurrencia"
-                        hint="Requests simultáneos. Vacío o 0 = sin límite."
-                      />
-                      <.input
-                        field={@credential_form[:receive_timeout_ms]}
-                        type="number"
-                        label="Timeout (ms)"
-                        hint="Tiempo máximo de espera por respuesta. Default 120s."
-                      />
-                      <div class="flex gap-2">
-                        <button type="submit" class="btn btn-primary btn-sm" id="save-credential-btn">
-                          {(@editing_credential_id && "Actualizar") || "Guardar"}
-                        </button>
-                        <button
-                          type="button"
-                          phx-click="cancel_credential"
-                          class="btn btn-ghost btn-sm"
-                        >
-                          Cancelar
-                        </button>
-                      </div>
-                    </div>
-                  </.form>
                 </div>
 
                 <div class="overflow-x-auto">

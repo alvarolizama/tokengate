@@ -88,6 +88,17 @@ defmodule Tokengate.Routing.StickyTracker do
   end
 
   @doc """
+  Drops all sticky entries for the given `api_key_hash` across every model alias.
+
+  Useful when an admin wants to force a team member off their current provider
+  so routing can rebalance them on the next request.
+  """
+  @spec clear_all_for_api_key_hash(binary()) :: :ok
+  def clear_all_for_api_key_hash(api_key_hash) when is_binary(api_key_hash) do
+    GenServer.call(__MODULE__, {:clear_all_for_api_key_hash, api_key_hash})
+  end
+
+  @doc """
   Drops all sticky entries pointing at any of the given `model_provider_ids`.
 
   Called when a provider goes down so that traffic is redistributed.
@@ -132,6 +143,14 @@ defmodule Tokengate.Routing.StickyTracker do
   @impl true
   def handle_call({:clear, api_key_hash, model_alias_id}, _from, state) do
     :ets.delete(@table, {api_key_hash, model_alias_id})
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call({:clear_all_for_api_key_hash, api_key_hash}, _from, state) do
+    # ETS match pattern: delete every key that starts with this api_key_hash.
+    # The key is {api_key_hash, model_alias_id}; we match the first element.
+    :ets.select_delete(@table, [{{{api_key_hash, :_}, :_}, [], [true]}])
     {:reply, :ok, state}
   end
 

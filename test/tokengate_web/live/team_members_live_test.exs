@@ -112,7 +112,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
 
     assert html =~ "Miembros de #{team.name}"
     assert html =~ owner.email
-    assert has_element?(view, "#add-member-form")
+    assert has_element?(view, "#new-member-btn")
   end
 
   test "manager sees members of their team", %{conn: conn} do
@@ -140,18 +140,23 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, team_url(team))
 
+    assert view |> element("#new-member-btn") |> render_click()
+
     html =
       view
       |> form("#add-member-form", %{
-        email: new_user.email,
-        team_role: "user"
+        "add_member[email]" => new_user.email,
+        "add_member[team_role]" => "user",
+        "add_member[extra_daily_budget_usd]" => "5.00",
+        "add_member[extra_concurrency]" => "2",
+        "add_member[extra_rpm]" => "100"
       })
       |> render_submit()
 
     assert html =~ "Miembro añadido"
     assert html =~ new_user.email
 
-    # Verify the team_member was created (no API key by default)
+    # Verify the team_member was created with overrides
     member =
       Repo.get_by(
         Tokengate.Accounts.TeamMember,
@@ -161,9 +166,26 @@ defmodule TokengateWeb.TeamMembersLiveTest do
 
     assert member != nil
     assert member.team_role == "user"
+    assert Decimal.equal?(member.extra_daily_budget_usd || Decimal.new(0), Decimal.new("5.00"))
+    assert member.extra_concurrency == 2
+    assert member.extra_rpm == 100
 
     api_key = Repo.get_by(Tokengate.Accounts.ApiKey, team_member_id: member.id)
     assert api_key == nil
+  end
+
+  test "add member modal can be cancelled", %{conn: conn} do
+    %{team: team} = team_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, team_url(team))
+
+    assert view |> element("#new-member-btn") |> render_click()
+    assert has_element?(view, "#add-member-modal")
+
+    html = view |> element("#cancel-add-member") |> render_click()
+    refute html =~ "add-member-modal"
   end
 
   test "add member with non-existent email shows error", %{conn: conn} do
@@ -173,11 +195,13 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, team_url(team))
 
+    assert view |> element("#new-member-btn") |> render_click()
+
     html =
       view
       |> form("#add-member-form", %{
-        email: "nonexistent@example.com",
-        team_role: "user"
+        "add_member[email]" => "nonexistent@example.com",
+        "add_member[team_role]" => "user"
       })
       |> render_submit()
 
@@ -340,6 +364,64 @@ defmodule TokengateWeb.TeamMembersLiveTest do
              team_member_id: member.id,
              model_alias_id: alias_.id
            )
+  end
+
+  test "admin sets a per-model extra budget", %{conn: conn} do
+    %{team: team, member: member, model_alias: alias_} = team_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, team_url(team))
+
+    # Grant the alias and set a budget
+    view
+    |> element("#extra-alias-#{member.id}-#{alias_.id}")
+    |> render_click()
+
+    html =
+      view
+      |> form("#alias-extra-form-#{member.id}-#{alias_.id}", %{
+        alias_extra: %{
+          member_id: member.id,
+          alias_id: alias_.id,
+          extra_daily_budget_usd: "7.50"
+        }
+      })
+      |> render_submit()
+
+    assert html =~ "Extra por modelo actualizado"
+
+    grant =
+      Repo.get_by(
+        Tokengate.Providers.TeamMemberExtraAlias,
+        team_member_id: member.id,
+        model_alias_id: alias_.id
+      )
+
+    assert grant != nil
+    assert Decimal.equal?(grant.extra_daily_budget_usd, Decimal.new("7.50"))
+
+    # The budget should appear in the member card
+    assert html =~ "+7.50"
+  end
+
+  test "total max includes team pool + general extra + model extras", %{conn: conn} do
+    %{team: team, member: member} = team_with_member()
+
+    Accounts.update_team(team, %{default_daily_budget_usd: Decimal.new("10.00")})
+
+    {:ok, _member} =
+      Accounts.update_team_member(member, %{extra_daily_budget_usd: Decimal.new("12.00")})
+
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, _view, html} = live(conn, team_url(team))
+
+    assert html =~ "Tope base"
+    assert html =~ "$10.00"
+    assert html =~ "+12.00"
+    assert html =~ "$22.00"
   end
 
   # --------------------------------------------------------------------------

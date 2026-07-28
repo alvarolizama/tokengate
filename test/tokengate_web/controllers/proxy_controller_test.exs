@@ -256,7 +256,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert get_resp_header(conn, "x-tokengate-cost") == ["0.000150"]
     assert get_resp_header(conn, "x-tokengate-savings") == ["0.000100"]
 
-    # Budget spend recorded in ETS
+    # Budget spend recorded in ETS uses provider_cost_usd (the real paid cost)
     spend = Budgets.spend(member.id)
     assert Decimal.equal?(spend.daily_usd, Decimal.new("0.000150"))
 

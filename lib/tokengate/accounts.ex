@@ -478,8 +478,28 @@ defmodule Tokengate.Accounts do
     Repo.delete(api_key)
   end
 
-  def change_api_key(%ApiKey{} = api_key, attrs \\ %{}) do
-    ApiKey.changeset(api_key, attrs)
+  @doc """
+  Clears all sticky routing entries for a team member's API key.
+
+  This forces the next requests from that member to re-evaluate provider
+  availability instead of sticking to a potentially degraded provider.
+  Returns `:ok` even when the member has no API key or no sticky entries.
+  """
+  def clear_team_member_sticky_routes(%TeamMember{} = team_member) do
+    team_member = Repo.preload(team_member, [:api_key])
+
+    if team_member.api_key && team_member.api_key.key_hash do
+      Tokengate.Routing.StickyTracker.clear_all_for_api_key_hash(team_member.api_key.key_hash)
+    end
+
+    :ok
+  end
+
+  def clear_team_member_sticky_routes(team_member_id) when is_binary(team_member_id) do
+    case get_team_member(team_member_id) do
+      nil -> :ok
+      %TeamMember{} = tm -> clear_team_member_sticky_routes(tm)
+    end
   end
 
   # ---------------------------------------------------------------------------

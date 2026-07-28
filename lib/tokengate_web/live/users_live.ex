@@ -242,15 +242,16 @@ defmodule TokengateWeb.UsersLive do
           </:actions>
         </.header>
 
+        <%!-- User form — create (modal) --%>
         <div
           :if={@form && @form_mode == :create}
-          class="card bg-base-100 border border-base-300 shadow-sm"
-          id="user-form-card"
+          class="fixed inset-0 z-50 flex items-center justify-center p-4"
         >
-          <div class="card-body">
-            <h2 class="text-base font-semibold mb-2">Nuevo usuario</h2>
-            <.form for={@form} id="user-form" phx-submit="save_user">
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div class="absolute inset-0 bg-black/50" phx-click="cancel_form" />
+          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
+            <div class="card-body p-6">
+              <h2 class="text-lg font-semibold mb-4">Nuevo usuario</h2>
+              <.form for={@form} id="user-form" phx-submit="save_user">
                 <.input
                   field={@form[:email]}
                   type="email"
@@ -258,8 +259,6 @@ defmodule TokengateWeb.UsersLive do
                   placeholder="usuario@empresa.com"
                 />
                 <.input field={@form[:name]} type="text" label="Nombre" placeholder="Nombre completo" />
-              </div>
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
                 <.input
                   field={@form[:password]}
                   type="password"
@@ -273,24 +272,25 @@ defmodule TokengateWeb.UsersLive do
                   options={[{"Usuario", "user"}, {"Administrador", "admin"}]}
                   prompt="Selecciona un rol"
                 />
-              </div>
-              <div class="flex gap-2 mt-3">
-                <button type="submit" class="btn btn-primary" id="save-user-btn">Crear</button>
-                <button type="button" phx-click="cancel_form" class="btn btn-ghost">Cancelar</button>
-              </div>
-            </.form>
+                <div class="flex gap-2 mt-4 justify-end">
+                  <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
+                  <button type="submit" class="btn btn-primary btn-sm" id="save-user-btn">Crear</button>
+                </div>
+              </.form>
+            </div>
           </div>
         </div>
 
+        <%!-- User form — edit (modal) --%>
         <div
           :if={@form && @form_mode == :edit}
-          class="card bg-base-100 border border-base-300 shadow-sm"
-          id="user-edit-card"
+          class="fixed inset-0 z-50 flex items-center justify-center p-4"
         >
-          <div class="card-body">
-            <h2 class="text-base font-semibold mb-2">Editar usuario</h2>
-            <.form for={@form} id="user-edit-form" phx-submit="save_user">
-              <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div class="absolute inset-0 bg-black/50" phx-click="cancel_form" />
+          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
+            <div class="card-body p-6">
+              <h2 class="text-lg font-semibold mb-4">Editar usuario</h2>
+              <.form for={@form} id="user-edit-form" phx-submit="save_user">
                 <.input field={@form[:name]} type="text" label="Nombre" />
                 <.input
                   field={@form[:global_role]}
@@ -298,42 +298,43 @@ defmodule TokengateWeb.UsersLive do
                   label="Rol"
                   options={[{"Usuario", "user"}, {"Administrador", "admin"}]}
                 />
-              </div>
-              <div class="mt-3">
                 <.input
                   field={@form[:status]}
                   type="select"
                   label="Estado"
                   options={[{"Activo", "active"}, {"Suspendido", "suspended"}]}
                 />
-              </div>
-              <div class="flex gap-2 mt-3">
-                <button type="submit" class="btn btn-primary" id="update-user-btn">Guardar</button>
-                <button type="button" phx-click="cancel_form" class="btn btn-ghost">Cancelar</button>
-              </div>
-            </.form>
+                <div class="flex gap-2 mt-4 justify-end">
+                  <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
+                  <button type="submit" class="btn btn-primary btn-sm" id="update-user-btn">Guardar</button>
+                </div>
+              </.form>
+            </div>
           </div>
         </div>
 
+        <%!-- User form — reset password (modal) --%>
         <div
           :if={@form && @form_mode == :reset_password}
-          class="card bg-base-100 border border-base-300 shadow-sm"
-          id="user-reset-card"
+          class="fixed inset-0 z-50 flex items-center justify-center p-4"
         >
-          <div class="card-body">
-            <h2 class="text-base font-semibold mb-2">Restablecer contraseña</h2>
-            <.form for={@form} id="user-reset-form" phx-submit="save_password">
-              <.input
-                field={@form[:password]}
-                type="password"
-                label="Nueva contraseña"
-                hint="Mínimo 12 caracteres, debe incluir letras y números."
-              />
-              <div class="flex gap-2 mt-3">
-                <button type="submit" class="btn btn-primary" id="reset-pwd-btn">Restablecer</button>
-                <button type="button" phx-click="cancel_form" class="btn btn-ghost">Cancelar</button>
-              </div>
-            </.form>
+          <div class="absolute inset-0 bg-black/50" phx-click="cancel_form" />
+          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
+            <div class="card-body p-6">
+              <h2 class="text-lg font-semibold mb-4">Restablecer contraseña</h2>
+              <.form for={@form} id="user-reset-form" phx-submit="save_password">
+                <.input
+                  field={@form[:password]}
+                  type="password"
+                  label="Nueva contraseña"
+                  hint="Mínimo 12 caracteres, debe incluir letras y números."
+                />
+                <div class="flex gap-2 mt-4 justify-end">
+                  <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
+                  <button type="submit" class="btn btn-primary btn-sm" id="reset-pwd-btn">Restablecer</button>
+                </div>
+              </.form>
+            </div>
           </div>
         </div>
 

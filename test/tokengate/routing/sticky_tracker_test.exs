@@ -96,4 +96,23 @@ defmodule Tokengate.Routing.StickyTrackerTest do
       assert StickyTracker.get("key-a", "alias-1") == "ap-1"
     end
   end
+
+  describe "clear_all_for_api_key_hash/1" do
+    test "drops all stickies for the given api key hash across aliases" do
+      StickyTracker.put("key-a", "alias-1", "ap-1")
+      StickyTracker.put("key-a", "alias-2", "ap-2")
+      StickyTracker.put("key-b", "alias-1", "ap-3")
+      _ = :sys.get_state(StickyTracker)
+
+      assert StickyTracker.clear_all_for_api_key_hash("key-a") == :ok
+
+      assert StickyTracker.get("key-a", "alias-1") == nil
+      assert StickyTracker.get("key-a", "alias-2") == nil
+      assert StickyTracker.get("key-b", "alias-1") == "ap-3"
+    end
+
+    test "clearing unknown api key hash is a no-op" do
+      assert StickyTracker.clear_all_for_api_key_hash("nope") == :ok
+    end
+  end
 end

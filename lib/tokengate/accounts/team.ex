@@ -13,6 +13,7 @@ defmodule Tokengate.Accounts.Team do
   schema "teams" do
     field :name, :string
     field :default_daily_budget_usd, :decimal
+    field :team_daily_budget_usd, :decimal
     field :default_concurrency_limit, :integer, default: 5
     field :default_rpm_limit, :integer, default: 60
 
@@ -21,7 +22,7 @@ defmodule Tokengate.Accounts.Team do
     timestamps(type: :utc_datetime)
   end
 
-  @permitted ~w(name default_daily_budget_usd
+  @permitted ~w(name default_daily_budget_usd team_daily_budget_usd
                 default_concurrency_limit default_rpm_limit)a
   @required ~w(name)a
 
@@ -32,5 +33,6 @@ defmodule Tokengate.Accounts.Team do
     |> validate_number(:default_concurrency_limit, greater_than: 0)
     |> validate_number(:default_rpm_limit, greater_than: 0)
     |> validate_number(:default_daily_budget_usd, greater_than_or_equal_to: 0)
+    |> validate_number(:team_daily_budget_usd, greater_than_or_equal_to: 0)
   end
 end

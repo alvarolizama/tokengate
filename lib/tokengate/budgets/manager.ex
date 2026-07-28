@@ -57,9 +57,11 @@ defmodule Tokengate.Budgets.Manager do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Returns the total daily spend across all team members (`team_member_ids`).
-  Combines each member's daily ETS counter into a single Decimal (USD).
-  Missing entries (members with no spend this period) count as 0.
+  Total daily spend across all `team_member_ids` from the ETS counters.
+
+  The counters now track `provider_cost_usd` (what TokenGate actually
+  paid), so this rollup is directly comparable to the dashboard's
+  "Costo real".
   """
   @spec team_spend([term()]) :: Decimal.t()
   def team_spend(team_member_ids) do
@@ -72,25 +74,30 @@ defmodule Tokengate.Budgets.Manager do
   end
 
   @doc """
-  Pre-flight budget check for a team member's request (3-level ladder).
+  Pre-flight budget check for a team member's request.
 
-  The budget is checked sequentially:
+  Two independent caps are checked:
 
-    1. **Team pool** — shared daily limit across all members.
-       `remaining = team_daily_budget - team_total_spend`.
+    1. **Team shared cap** (`team_daily_budget`) — total daily spend the whole
+       team may accumulate. `team_spend_usd` is the team's current spend.
 
-    2. **Extra general** — member's personal `extra_daily_budget_usd`.
-       Added on top of whatever is left from the pool.
+    2. **Member personal cap** (`member_daily_budget`) — individual daily limit
+       for this member (team default + member's `extra_daily_budget_usd`).
+       `member_spend_usd` is this member's current spend.
 
-    3. **Extra per model** — `extra_daily_budget_usd` on the
-       `team_member_extra_alias` join. Added on top of pool + extra general.
+    3. **Extras on top of the personal cap** — general and per-model extras
+       add to the member's personal budget.
 
-  Returns `:ok` if the estimated cost fits within the total available budget,
-  or `{:error, :budget_exceeded, %{available: Decimal.t()}}`.
+  The request passes only if it fits under both caps. `nil` for either cap
+  means unlimited for that dimension.
+
+  Returns `:ok` or `{:error, :budget_exceeded, %{available: Decimal.t()}}`.
   """
   @spec check_ladder(
           team_daily_budget :: Decimal.t() | nil,
           team_spend_usd :: Decimal.t(),
+          member_daily_budget :: Decimal.t() | nil,
+          member_spend_usd :: Decimal.t(),
           member_extra_daily :: Decimal.t() | nil,
           model_extra_daily :: Decimal.t() | nil,
           estimated_cost_usd :: Decimal.t()
@@ -98,46 +105,64 @@ defmodule Tokengate.Budgets.Manager do
   def check_ladder(
         team_daily_budget,
         team_spend_usd,
+        member_daily_budget,
+        member_spend_usd,
         member_extra_daily,
         model_extra_daily,
         estimated_cost_usd
       ) do
     estimated_micro = to_micro(estimated_cost_usd)
 
-    # Team pool
-    pool_micro =
+    # Team shared cap
+    team_available_micro =
       if team_daily_budget do
-        spend_micro = to_micro(team_spend_usd)
-        max(0, to_micro(team_daily_budget) - spend_micro)
+        max(0, to_micro(team_daily_budget) - to_micro(team_spend_usd))
       else
         :unlimited
       end
 
-    # If pool is unlimited, we're done
-    if pool_micro == :unlimited do
+    # Member personal cap + extras - current member spend
+    member_extra_micro = to_micro(member_extra_daily)
+    model_extra_micro = to_micro(model_extra_daily)
+
+    member_available_micro =
+      if member_daily_budget do
+        to_micro(member_daily_budget) + member_extra_micro + model_extra_micro -
+          to_micro(member_spend_usd)
+      else
+        :unlimited
+      end
+
+    available_micro =
+      cond do
+        team_available_micro == :unlimited and member_available_micro == :unlimited ->
+          :unlimited
+
+        team_available_micro == :unlimited ->
+          member_available_micro
+
+        member_available_micro == :unlimited ->
+          team_available_micro
+
+        true ->
+          min(team_available_micro, member_available_micro)
+      end
+
+    if available_micro == :unlimited or estimated_micro <= available_micro do
       :ok
     else
-      member_extra_micro = to_micro(member_extra_daily)
-      model_extra_micro = to_micro(model_extra_daily)
-      total_available = pool_micro + member_extra_micro + model_extra_micro
-
-      if estimated_micro <= total_available do
-        :ok
-      else
-        {:error, :budget_exceeded,
-         %{
-           available: from_micro(total_available),
-           pool_micro: pool_micro,
-           member_extra_micro: member_extra_micro,
-           model_extra_micro: model_extra_micro
-         }}
-      end
+      {:error, :budget_exceeded, %{available: from_micro(available_micro)}}
     end
   end
 
   @doc """
   Records actual spend for `member_id` by atomically incrementing both the
-  daily and monthly ETS counters by `cost_usd` (in micro-USD).
+  daily and monthly ETS counters by `provider_cost_usd` (in micro-USD).
+
+  `provider_cost_usd` is what TokenGate actually paid for the request,
+  preferring the cost reported by the provider and falling back to the
+  pricing-row estimate. This keeps the budget counters in the same currency
+  as the "Costo real" shown in the dashboard.
 
   If a period's entry is missing or stale (day/month rollover), it is
   lazy-loaded from the DB first (read in the caller, seeded via the
@@ -147,9 +172,9 @@ defmodule Tokengate.Budgets.Manager do
   for drift correction. In the test environment Oban runs in `:manual`
   mode, so the job is only enqueued (assert with `assert_enqueued/1`).
   """
-  @spec record_spend(member_id :: term(), cost_usd :: Decimal.t() | nil) :: :ok
-  def record_spend(member_id, cost_usd) do
-    micro = to_micro(cost_usd)
+  @spec record_spend(member_id :: term(), provider_cost_usd :: Decimal.t() | nil) :: :ok
+  def record_spend(member_id, provider_cost_usd) do
+    micro = to_micro(provider_cost_usd)
 
     ensure_loaded(member_id, :daily)
     ensure_loaded(member_id, :monthly)
@@ -216,6 +241,10 @@ defmodule Tokengate.Budgets.Manager do
   Loads the spend for `member_id` over the given period from the DB
   (`Tokengate.Logs.cost_summary/1`) and returns it as integer micro-USD.
 
+  This reads `total_provider_cost_usd` — what TokenGate actually paid —
+  so the budget counters stay in the same currency as the dashboard's
+  "Costo real".
+
   This is intended to be called from the **caller process** (not the
   GenServer) to keep DB I/O out of the singleton. The returned value is
   then handed to `seed/3` to populate the ETS cache.
@@ -231,7 +260,7 @@ defmodule Tokengate.Budgets.Manager do
         from: from
       })
 
-    to_micro(summary.total_cost_usd)
+    to_micro(summary.total_provider_cost_usd)
   end
 
   @doc false

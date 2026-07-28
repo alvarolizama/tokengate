@@ -40,7 +40,7 @@ defmodule TokengateWeb.ProxyController do
   alias Tokengate.Proxy.{CostCalculator, OpenAIAdapter, TokenEstimator, UsageNormalizer}
   alias Tokengate.Routing.Router
 
-  @max_attempts 3
+  @max_attempts 5
   @default_completion_estimate 512
 
   @doc """
@@ -180,11 +180,16 @@ defmodule TokengateWeb.ProxyController do
 
   defp check_budget(member, _limits, route, payload) do
     estimated_usage = estimated_usage(payload)
-    estimated_cost = CostCalculator.market_cost(route.model_alias, estimated_usage)
+    pricing = Providers.current_pricing(route.model_provider.id)
 
-    # 3-level ladder: team pool → extra general → extra per model
+    costs =
+      CostCalculator.breakdown(route.model_alias, pricing, estimated_usage,
+        billing_mode: route.model_provider.billing_mode,
+        provider_reported_cost: nil
+      )
+
     member_ids = Accounts.list_member_ids_for_team(member.team_id)
-    team_daily = member.team && member.team.default_daily_budget_usd
+    team_daily = member.team && member.team.team_daily_budget_usd
 
     team_spend_usd =
       if team_daily do
@@ -193,15 +198,19 @@ defmodule TokengateWeb.ProxyController do
         Decimal.new(0)
       end
 
+    member_daily = Accounts.effective_limits(member).daily_budget_usd
+    member_spend = Budgets.spend(member.id).daily_usd
     member_extra = member.extra_daily_budget_usd
     model_extra = Accounts.extra_model_daily_budget(member.id, route.model_alias.id)
 
     case Budgets.check_ladder(
            team_daily,
            team_spend_usd,
+           member_daily,
+           member_spend,
            member_extra,
            model_extra,
-           estimated_cost
+           costs.provider_cost_usd
          ) do
       :ok -> :ok
       {:error, :budget_exceeded, details} -> {:error, {:budget_exceeded, details}}
@@ -214,7 +223,7 @@ defmodule TokengateWeb.ProxyController do
     provider = route.model_provider.credential.provider
     # The client sends the alias name; the provider expects its own model id.
     payload = Map.put(payload, "model", route.model_responded)
-    receive_timeout = route.credential.receive_timeout_ms || 120_000
+    receive_timeout = route.credential.receive_timeout_ms || 180_000
 
     case OpenAIAdapter.chat_completion(provider, route.credential, payload,
            receive_timeout: receive_timeout
@@ -267,7 +276,17 @@ defmodule TokengateWeb.ProxyController do
   end
 
   defp retry_with_fallback(conn, route, payload, member, attempts_left, exclude, _status) do
-    exclude = [route.credential.id | exclude]
+    # En el primer fallo (attempts_left == @max_attempts) no excluimos la
+    # credential; dejamos que el router decida usando el breaker. Así una
+    # falla transitoria no quema el pool completo. Solo excluimos en
+    # reintentos posteriores, o cuando la credential ya es inviable (auth_error
+    # la disablea de todas formas).
+    exclude =
+      if attempts_left < @max_attempts do
+        [route.credential.id | exclude]
+      else
+        exclude
+      end
 
     request_context = %{
       "messages" => payload["messages"] || [],
@@ -306,7 +325,7 @@ defmodule TokengateWeb.ProxyController do
     # Measured just before the upstream call: TTFT is the time from this
     # point to the provider's first chunk.
     request_start = System.monotonic_time(:millisecond)
-    receive_timeout = route.credential.receive_timeout_ms || 120_000
+    receive_timeout = route.credential.receive_timeout_ms || 180_000
 
     case OpenAIAdapter.stream_chat_completion(provider, route.credential, payload,
            receive_timeout: receive_timeout
@@ -352,7 +371,14 @@ defmodule TokengateWeb.ProxyController do
   end
 
   defp retry_stream_with_fallback(conn, route, payload, member, attempts_left, exclude) do
-    exclude = [route.credential.id | exclude]
+    # Igual que retry_with_fallback: en el primer fallo no excluimos la
+    # credential; solo a partir del segundo reintento.
+    exclude =
+      if attempts_left < @max_attempts do
+        [route.credential.id | exclude]
+      else
+        exclude
+      end
 
     request_context = %{
       "messages" => payload["messages"] || [],
@@ -483,7 +509,7 @@ defmodule TokengateWeb.ProxyController do
           {usage, stream_costs(route, usage, nil)}
       end
 
-    Budgets.record_spend(member.id, costs.cost_usd)
+    Budgets.record_spend(member.id, costs.provider_cost_usd)
 
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
@@ -533,7 +559,7 @@ defmodule TokengateWeb.ProxyController do
       )
 
     # Hot-path state updates (ETS only)
-    Budgets.record_spend(member.id, costs.cost_usd)
+    Budgets.record_spend(member.id, costs.provider_cost_usd)
 
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,

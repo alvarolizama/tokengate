@@ -182,12 +182,31 @@ defmodule TokengateWeb.ModelsLive do
   def handle_event("edit_model_provider", %{"id" => ap_id}, socket) do
     if socket.assigns.is_admin do
       ap = Providers.get_model_provider!(ap_id)
-      changeset = Providers.change_model_provider(ap)
+      ap_with_pricing = Repo.preload(ap, :model_pricing)
+
+      # Populate virtual pricing fields for form display
+      ap_with_pricing =
+        case ap_with_pricing.model_pricing do
+          [p | _] ->
+            %{
+              ap_with_pricing
+              | pricing_input_price_per_1m: p.input_price_per_1m,
+                pricing_output_price_per_1m: p.output_price_per_1m,
+                pricing_cache_read_price_per_1m: p.cache_read_price_per_1m,
+                pricing_cache_creation_price_per_1m: p.cache_creation_price_per_1m
+            }
+
+          _ ->
+            ap_with_pricing
+        end
+
+      changeset = Providers.change_model_provider(ap_with_pricing)
 
       {:noreply,
        socket
        |> assign(:provider_form, to_form(changeset, as: :model_provider))
-       |> assign(:editing_ap_id, ap.id)}
+       |> assign(:editing_ap_id, ap.id)
+       |> assign(:current_billing_mode, ap.billing_mode || "pay_per_token")}
     else
       {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
     end
@@ -890,7 +909,7 @@ defmodule TokengateWeb.ModelsLive do
                   hint="Si está apagado, este provider no recibe tráfico del modelo."
                 />
 
-                <%= if @editing_ap_id == :new and (@current_billing_mode || "pay_per_token") == "pay_per_token" do %>
+                <%= if (@editing_ap_id == :new or is_binary(@editing_ap_id)) and (@current_billing_mode || "pay_per_token") == "pay_per_token" do %>
                   <div class="mt-4 pt-4 border-t border-base-200">
                     <p class="text-sm font-semibold text-base-content mb-3">Pricing (opcional)</p>
                     <p class="text-xs text-base-content/50 mb-3">

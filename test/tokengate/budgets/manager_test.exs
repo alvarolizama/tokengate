@@ -73,13 +73,16 @@ defmodule Tokengate.Budgets.ManagerTest do
     {team_member, team}
   end
 
-  defp log_spend(team_member_id, cost_usd, inserted_at \\ DateTime.utc_now()) do
+  defp log_spend(team_member_id, cost_usd, opts \\ []) do
+    provider_cost_usd = Keyword.get(opts, :provider_cost_usd, cost_usd)
+    inserted_at = Keyword.get(opts, :inserted_at, DateTime.utc_now())
+
     {:ok, _} =
       Logs.log_request(%{
         team_member_id: team_member_id,
         model_requested: "gpt-4",
         cost_usd: Decimal.new(to_string(cost_usd)),
-        provider_cost_usd: Decimal.new(to_string(cost_usd)),
+        provider_cost_usd: Decimal.new(to_string(provider_cost_usd)),
         savings_usd: Decimal.new("0"),
         estimated_cost_usd: Decimal.new(to_string(cost_usd)),
         inserted_at: inserted_at
@@ -97,37 +100,86 @@ defmodule Tokengate.Budgets.ManagerTest do
   end
 
   # ---------------------------------------------------------------------------
-  # check_ladder/5 — budget pre-flight (3-level sequential)
+  # check_ladder/7 — budget pre-flight
   # ---------------------------------------------------------------------------
 
-  describe "check_ladder/5 — budget pre-flight" do
-    test "under pool limit returns :ok" do
+  describe "check_ladder/7 — budget pre-flight" do
+    test "under both caps returns :ok" do
       {tm, team} = team_member_fixture()
 
-      # Record $10 spend (under $100 daily pool).
+      # Record $10 spend (under $100 team cap and $100 member cap).
       assert :ok = Manager.record_spend(tm.id, Decimal.new("10.00"))
 
       assert :ok =
                Manager.check_ladder(
                  team.default_daily_budget_usd,
                  Manager.team_spend([tm.id]),
+                 team.default_daily_budget_usd,
+                 Manager.spend(tm.id).daily_usd,
                  nil,
                  nil,
-                 nil
+                 Decimal.new("20.00")
                )
     end
 
-    test "over pool but under extra general returns :ok" do
+    test "over member cap returns error" do
       {tm, team} = team_member_fixture()
 
       # Record $90 spend.
       assert :ok = Manager.record_spend(tm.id, Decimal.new("90.00"))
 
-      # $90 + $20 estimated = $110 > $100 pool, but $110 < $100 + $15 extra.
+      # Member cap $100, already spent $90, request $20 → over.
+      result =
+        Manager.check_ladder(
+          nil,
+          Manager.team_spend([tm.id]),
+          team.default_daily_budget_usd,
+          Manager.spend(tm.id).daily_usd,
+          nil,
+          nil,
+          Decimal.new("20.00")
+        )
+
+      assert {:error, :budget_exceeded, details} = result
+      assert Decimal.equal?(details.available, Decimal.new("10.00"))
+    end
+
+    test "over team shared cap returns error" do
+      {tm, team} = team_member_fixture()
+
+      # Record $90 spend.
+      assert :ok = Manager.record_spend(tm.id, Decimal.new("90.00"))
+
+      # Team cap $100, already spent $90, request $20 → over.
+      # Member cap unlimited so team cap is the bottleneck.
       result =
         Manager.check_ladder(
           team.default_daily_budget_usd,
           Manager.team_spend([tm.id]),
+          nil,
+          Manager.spend(tm.id).daily_usd,
+          nil,
+          nil,
+          Decimal.new("20.00")
+        )
+
+      assert {:error, :budget_exceeded, details} = result
+      assert Decimal.equal?(details.available, Decimal.new("10.00"))
+    end
+
+    test "member extras add to personal cap" do
+      {tm, team} = team_member_fixture()
+
+      # Record $90 spend.
+      assert :ok = Manager.record_spend(tm.id, Decimal.new("90.00"))
+
+      # Member cap $100 + $15 extra general = $115 available.
+      result =
+        Manager.check_ladder(
+          nil,
+          Manager.team_spend([tm.id]),
+          team.default_daily_budget_usd,
+          Manager.spend(tm.id).daily_usd,
           Decimal.new("15.00"),
           nil,
           Decimal.new("20.00")
@@ -136,17 +188,19 @@ defmodule Tokengate.Budgets.ManagerTest do
       assert :ok = result
     end
 
-    test "over pool and extra general but under model extra returns :ok" do
+    test "model extra adds to personal cap" do
       {tm, team} = team_member_fixture()
 
       # Record $90 spend.
       assert :ok = Manager.record_spend(tm.id, Decimal.new("90.00"))
 
-      # $90 + $25 = $115 > $100 pool, > $100 + $10 extra general, but < $100 + $10 + $10 model extra.
+      # Member cap $100 + $10 general + $10 model = $120 available.
       result =
         Manager.check_ladder(
-          team.default_daily_budget_usd,
+          nil,
           Manager.team_spend([tm.id]),
+          team.default_daily_budget_usd,
+          Manager.spend(tm.id).daily_usd,
           Decimal.new("10.00"),
           Decimal.new("10.00"),
           Decimal.new("25.00")
@@ -155,41 +209,70 @@ defmodule Tokengate.Budgets.ManagerTest do
       assert :ok = result
     end
 
-    test "over all levels returns error" do
+    test "over all caps returns error" do
       {tm, team} = team_member_fixture()
 
       # Record $90 spend.
       assert :ok = Manager.record_spend(tm.id, Decimal.new("90.00"))
 
-      # $90 + $20 = $110 > $100 pool, > $100 + $5 extra general, > $100 + $5 + $2 model extra.
+      # Team cap $100, member cap $100 + $5 general + $2 model = $107.
+      # Bottleneck is team cap: $100 - $90 = $10 available.
       result =
         Manager.check_ladder(
           team.default_daily_budget_usd,
           Manager.team_spend([tm.id]),
+          team.default_daily_budget_usd,
+          Manager.spend(tm.id).daily_usd,
           Decimal.new("5.00"),
           Decimal.new("2.00"),
           Decimal.new("20.00")
         )
 
       assert {:error, :budget_exceeded, details} = result
-      assert Decimal.equal?(details.available, Decimal.new("17.00"))
+      assert Decimal.equal?(details.available, Decimal.new("10.00"))
     end
 
-    test "nil team budget is unlimited" do
+    test "nil team budget is unlimited for team cap" do
       {tm, _team} = team_member_fixture()
 
       # Record $500 spend.
       assert :ok = Manager.record_spend(tm.id, Decimal.new("500.00"))
 
-      # Nil pool budget — should pass regardless of extras.
-      assert :ok =
-               Manager.check_ladder(
-                 nil,
-                 Manager.team_spend([tm.id]),
-                 nil,
-                 nil,
-                 Decimal.new("100.00")
-               )
+      # Nil team budget, member cap $100 (default from fixture).
+      # 500 already spent, 100 cap → over.
+      result =
+        Manager.check_ladder(
+          nil,
+          Manager.team_spend([tm.id]),
+          Decimal.new("100.00"),
+          Manager.spend(tm.id).daily_usd,
+          nil,
+          nil,
+          Decimal.new("10.00")
+        )
+
+      assert {:error, :budget_exceeded, _details} = result
+    end
+
+    test "nil member budget is unlimited for member cap" do
+      {tm, team} = team_member_fixture()
+
+      # Record $500 spend.
+      assert :ok = Manager.record_spend(tm.id, Decimal.new("500.00"))
+
+      # Team cap $100, already over. Member cap unlimited doesn't help.
+      result =
+        Manager.check_ladder(
+          team.default_daily_budget_usd,
+          Manager.team_spend([tm.id]),
+          nil,
+          Manager.spend(tm.id).daily_usd,
+          nil,
+          nil,
+          Decimal.new("10.00")
+        )
+
+      assert {:error, :budget_exceeded, _details} = result
     end
 
     test "nil estimated cost treated as 0" do
@@ -203,6 +286,8 @@ defmodule Tokengate.Budgets.ManagerTest do
                Manager.check_ladder(
                  team.default_daily_budget_usd,
                  Manager.team_spend([tm.id]),
+                 team.default_daily_budget_usd,
+                 Manager.spend(tm.id).daily_usd,
                  nil,
                  nil,
                  nil
@@ -212,14 +297,16 @@ defmodule Tokengate.Budgets.ManagerTest do
     test "exactly at limit with zero estimated is ok" do
       {tm, team} = team_member_fixture()
 
-      # Record $100 spend (exactly the pool).
+      # Record $100 spend (exactly the cap).
       assert :ok = Manager.record_spend(tm.id, Decimal.new("100.00"))
 
-      # Spend is exactly $100, estimated 0 — not over (uses > not >=).
+      # Spend is exactly $100, estimated 0 — not over.
       assert :ok =
                Manager.check_ladder(
                  team.default_daily_budget_usd,
                  Manager.team_spend([tm.id]),
+                 team.default_daily_budget_usd,
+                 Manager.spend(tm.id).daily_usd,
                  nil,
                  nil,
                  nil
@@ -287,34 +374,37 @@ defmodule Tokengate.Budgets.ManagerTest do
   # ---------------------------------------------------------------------------
 
   describe "lazy load from DB" do
-    test "spend/1 reflects DB totals for untouched member" do
+    test "spend/1 reflects DB provider_cost_usd totals for untouched member" do
       {tm, _} = team_member_fixture()
 
-      # Insert request_logs rows directly via the Logs context.
-      log_spend(tm.id, "15.00")
-      log_spend(tm.id, "25.00")
+      # Insert request_logs rows where the real paid cost is lower than the
+      # credential price. The budget counters must use provider_cost_usd.
+      log_spend(tm.id, "16.00", provider_cost_usd: "4.00")
+      log_spend(tm.id, "16.00", provider_cost_usd: "4.00")
 
       # Clear any cached entry from record_spend above — this member is
       # untouched in ETS, so spend/1 will trigger a lazy load.
       spend = Manager.spend(tm.id)
 
-      # $40 total in DB.
-      assert Decimal.equal?(spend.daily_usd, Decimal.new("40.00"))
-      assert Decimal.equal?(spend.monthly_usd, Decimal.new("40.00"))
+      # $8 real paid total in DB, not $32 credential total.
+      assert Decimal.equal?(spend.daily_usd, Decimal.new("8.00"))
+      assert Decimal.equal?(spend.monthly_usd, Decimal.new("8.00"))
     end
 
     test "check_ladder lazy-loads before comparing" do
       {tm, team} = team_member_fixture()
 
-      # Insert $90 of spend into request_logs.
+      # Insert $90 of real paid spend into request_logs.
       log_spend(tm.id, "90.00")
 
       # No record_spend call — check should lazy-load and see $90.
-      # $90 + $20 estimated = $110 > $100 pool.
+      # Team cap $100, member cap $100, already spent $90, request $20 → over.
       result =
         Manager.check_ladder(
           team.default_daily_budget_usd,
           Manager.team_spend([tm.id]),
+          team.default_daily_budget_usd,
+          Manager.spend(tm.id).daily_usd,
           nil,
           nil,
           Decimal.new("20.00")
@@ -327,7 +417,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     test "record_spend on top of lazy-loaded DB total accumulates correctly" do
       {tm, _} = team_member_fixture()
 
-      # Seed DB with $30.
+      # Seed DB with $30 real paid.
       log_spend(tm.id, "30.00")
 
       # record_spend should lazy-load $30, then add $10 = $40.
