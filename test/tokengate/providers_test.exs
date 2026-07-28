@@ -1,6 +1,8 @@
 defmodule Tokengate.ProvidersTest do
   use Tokengate.DataCase, async: true
 
+  import Ecto.Query
+
   alias Tokengate.Providers
 
   alias Tokengate.Providers.{
@@ -394,11 +396,16 @@ defmodule Tokengate.ProvidersTest do
       assert %Credential{} = result.credential
       assert %Provider{} = result.credential.provider
     end
-  end
 
-  # ---------------------------------------------------------------------------
-  # ModelPricing tests
-  # ---------------------------------------------------------------------------
+    test "delete_model_provider/1 cascades pricing rows" do
+      mp = model_provider_fixture()
+      model_pricing_fixture(mp)
+
+      {:ok, _} = Providers.delete_model_provider(mp)
+      refute Repo.get(ModelProvider, mp.id)
+      assert Repo.all(from(mp in ModelPricing, where: mp.model_provider_id == ^mp.id)) == []
+    end
+  end
 
   describe "model_pricing" do
     test "create_model_pricing/1 with valid attrs" do

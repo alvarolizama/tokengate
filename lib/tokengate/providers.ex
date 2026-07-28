@@ -207,7 +207,21 @@ defmodule Tokengate.Providers do
     |> Repo.update()
   end
 
-  def delete_model_provider(%ModelProvider{} = model_provider), do: Repo.delete(model_provider)
+  def delete_model_provider(%ModelProvider{} = model_provider) do
+    Repo.transaction(fn ->
+      from(mp in ModelPricing, where: mp.model_provider_id == ^model_provider.id)
+      |> Repo.delete_all()
+
+      case Repo.delete(model_provider) do
+        {:ok, _} = ok -> ok
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+    |> case do
+      {:ok, _} -> {:ok, model_provider}
+      {:error, changeset} -> {:error, changeset}
+    end
+  end
 
   def change_model_provider(%ModelProvider{} = model_provider, attrs \\ %{}),
     do: ModelProvider.changeset(model_provider, attrs)

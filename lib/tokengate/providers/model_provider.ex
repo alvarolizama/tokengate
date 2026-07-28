@@ -32,7 +32,7 @@ defmodule Tokengate.Providers.ModelProvider do
     belongs_to :model_alias, Tokengate.Providers.ModelAlias
     belongs_to :credential, Tokengate.Providers.Credential
 
-    has_many :model_pricing, Tokengate.Providers.ModelPricing
+    has_many :model_pricing, Tokengate.Providers.ModelPricing, on_delete: :delete_all
 
     timestamps(type: :utc_datetime)
   end
