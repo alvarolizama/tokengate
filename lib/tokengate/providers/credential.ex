@@ -36,24 +36,29 @@ defmodule Tokengate.Providers.Credential do
     timestamps(type: :utc_datetime)
   end
 
+  @shared ~w(provider_id name max_rpm max_concurrent receive_timeout_ms
+    status error_reason error_at)a
+
   @doc false
-  def changeset(credential, attrs) do
+  def create_changeset(credential, attrs) do
     credential
-    |> cast(attrs, [
-      :provider_id,
-      :name,
-      :api_key_encrypted,
-      :max_rpm,
-      :max_concurrent,
-      :receive_timeout_ms,
-      :status,
-      :error_reason,
-      :error_at
-    ])
+    |> cast(attrs, @shared ++ [:api_key_encrypted])
     |> validate_required([:provider_id, :api_key_encrypted, :status])
     |> validate_inclusion(:status, @statuses)
     |> foreign_key_constraint(:provider_id)
   end
+
+  @doc false
+  def update_changeset(credential, attrs) do
+    credential
+    |> cast(attrs, @shared ++ [:api_key_encrypted])
+    |> validate_required([:provider_id, :status])
+    |> validate_inclusion(:status, @statuses)
+    |> foreign_key_constraint(:provider_id)
+  end
+
+  @doc false
+  def changeset(credential, attrs), do: create_changeset(credential, attrs)
 
   @doc "List of valid status values"
   def statuses, do: @statuses

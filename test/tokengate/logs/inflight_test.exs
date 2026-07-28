@@ -34,7 +34,8 @@ defmodule Tokengate.Logs.InflightTest do
         think: false,
         effort: nil,
         provider_name: "Test Provider",
-        api_key_prefix: "sk-test-"
+        api_key_prefix: "sk-test-",
+        credential_name: "Producción"
       },
       overrides
     )

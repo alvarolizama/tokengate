@@ -159,7 +159,8 @@ defmodule TokengateWeb.ProxyController do
         think: think,
         effort: effort,
         provider_name: route.model_provider.credential.provider.name,
-        api_key_prefix: member.api_key && member.api_key.key_prefix
+        api_key_prefix: member.api_key && member.api_key.key_prefix,
+        credential_name: route.credential.name
       })
 
     {conn, entry}
@@ -617,7 +618,8 @@ defmodule TokengateWeb.ProxyController do
       "streaming" => streaming,
       "think" => Keyword.get(extra, :think, false),
       "effort" => Keyword.get(extra, :effort),
-      "api_key_prefix" => member.api_key && member.api_key.key_prefix
+      "api_key_prefix" => member.api_key && member.api_key.key_prefix,
+      "credential_name" => route.credential.name
     }
     |> WriteWorker.new()
     |> Oban.insert()

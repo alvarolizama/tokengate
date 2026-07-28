@@ -43,6 +43,7 @@ defmodule Tokengate.Logs.WriteWorker do
       think: args["think"] || false,
       effort: args["effort"],
       api_key_prefix: args["api_key_prefix"],
+      credential_name: args["credential_name"],
       inserted_at: parse_inserted_at(args["inserted_at"])
     }
 

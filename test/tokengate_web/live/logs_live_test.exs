@@ -73,7 +73,8 @@ defmodule TokengateWeb.LogsLiveTest do
         streaming: false,
         think: Keyword.get(opts, :think, true),
         effort: Keyword.get(opts, :effort, "high"),
-        api_key_prefix: "sk-logs-"
+        api_key_prefix: "sk-logs-",
+        credential_name: "Staging"
       })
 
     %{team: team, owner: owner, member: member, log: log, model_alias: model_alias}
@@ -131,7 +132,8 @@ defmodule TokengateWeb.LogsLiveTest do
         think: true,
         effort: "high",
         provider_name: "Test Provider",
-        api_key_prefix: "sk-live-"
+        api_key_prefix: "sk-live-",
+        credential_name: "Producción"
       })
 
     html = render(view)

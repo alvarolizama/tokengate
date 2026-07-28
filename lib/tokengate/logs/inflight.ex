@@ -49,6 +49,7 @@ defmodule Tokengate.Logs.Inflight do
           effort: String.t() | nil,
           provider_name: String.t() | nil,
           api_key_prefix: String.t() | nil,
+          credential_name: String.t() | nil,
           started_at: DateTime.t()
         }
 
@@ -80,6 +81,7 @@ defmodule Tokengate.Logs.Inflight do
       effort: Map.get(attrs, :effort),
       provider_name: Map.get(attrs, :provider_name),
       api_key_prefix: Map.get(attrs, :api_key_prefix),
+      credential_name: Map.get(attrs, :credential_name),
       started_at: DateTime.utc_now() |> DateTime.truncate(:second)
     }
 
