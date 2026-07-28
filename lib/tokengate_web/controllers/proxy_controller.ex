@@ -40,7 +40,7 @@ defmodule TokengateWeb.ProxyController do
   alias Tokengate.Proxy.{CostCalculator, OpenAIAdapter, TokenEstimator, UsageNormalizer}
   alias Tokengate.Routing.Router
 
-  @max_attempts 5
+  @max_attempts 3
   @default_completion_estimate 512
 
   @doc """

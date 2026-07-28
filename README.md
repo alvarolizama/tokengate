@@ -42,8 +42,9 @@
 ### Enrutamiento
 
 - **Prioridad + sticky routing** — la misma API key se pega al mismo proveedor (preserva prompt caches)
+- **Circuit breaker** por credencial — abre tras 15 fallos consecutivos, semi-abre en 30s (20s si fue rate limit)
+- **Sticky routing** con TTL de 60 min — preserva prompt caches del proveedor por más tiempo
 - **Fallback** automático ante errores (hasta 3 intentos)
-- **Circuit breaker** por credencial — abre tras N fallos, semi-abre para probar recuperación
 - **Reglas de reroute** por longitud de contexto o presencia de imágenes
 
 ### Control de costos (4 dimensiones)

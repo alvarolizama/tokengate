@@ -28,9 +28,9 @@ defmodule Tokengate.Routing.StickyTracker do
   use GenServer
 
   @table :tokengate_sticky_routes
-  # Sticky entries expire after 30 minutes — after this, the router returns
-  # to the highest-priority active credential.
-  @ttl_ms 30 * 60 * 1000
+  # Sticky entries expire after 60 minutes — longer cache affinity reduces
+  # costs for high-traffic scenarios by keeping prompts cached at the provider.
+  @ttl_ms 60 * 60 * 1000
   @sweep_interval_ms 5 * 60 * 1000
 
   ## Public API ------------------------------------------------------------

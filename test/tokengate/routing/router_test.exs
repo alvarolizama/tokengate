@@ -431,7 +431,7 @@ defmodule Tokengate.Routing.RouterTest do
       assert CircuitBreakerManager.status(route.credential.id) == :closed
     end
 
-    test "failure records to the breaker; 5 server_errors trip it to :open" do
+    test "failure records to the breaker; consecutive server_errors trip it to :open" do
       f = full_setup()
 
       assert {:ok, route} = Router.route(f.model_alias.name, f.member)
@@ -440,7 +440,7 @@ defmodule Tokengate.Routing.RouterTest do
       # Reset breaker for this credential id before recording failures.
       CircuitBreakerManager.reset(cred_id)
 
-      for _ <- 1..5 do
+      for _ <- 1..15 do
         assert :ok = Router.record_outcome(route, {:failure, :server_error})
       end
 
