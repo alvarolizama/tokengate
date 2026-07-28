@@ -865,12 +865,16 @@
                             id={"bd-model-#{row.model_id || "unknown"}"}
                           >
                             <td class="font-medium">
-                              <.link
-                                patch={
-                                  ~p"/dashboard/stats/models?period=#{@period}&model_id=#{row.model_id}"
-                                }
-                                class="link link-hover"
-                              >{row.model_name}</.link>
+                              <%= if row.model_id do %>
+                                <.link
+                                  patch={
+                                    ~p"/dashboard/stats/models?period=#{@period}&model_id=#{row.model_id}"
+                                  }
+                                  class="link link-hover"
+                                >{row.model_name}</.link>
+                              <% else %>
+                                {row.model_name}
+                              <% end %>
                             </td>
                             <td class="text-right font-mono">
                               {format_number(row.request_count)}
