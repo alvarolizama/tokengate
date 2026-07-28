@@ -94,6 +94,21 @@ defmodule Tokengate.Accounts do
     Repo.get_by(User, email: String.downcase(email))
   end
 
+  @doc """
+  Case-insensitive partial email/name search for the member-add autocomplete.
+  Returns up to `limit` (default 10) users whose email or name contains the query.
+  """
+  def search_users(query, limit \\ 10) when is_binary(query) do
+    pattern = "%#{String.downcase(query)}%"
+
+    Repo.all(
+      from u in User,
+        where: ilike(u.email, ^pattern) or ilike(u.name, ^pattern),
+        order_by: [asc: u.email],
+        limit: ^limit
+    )
+  end
+
   def create_user(attrs) do
     %User{}
     |> User.changeset(attrs)

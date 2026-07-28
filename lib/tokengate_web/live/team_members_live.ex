@@ -40,6 +40,7 @@ defmodule TokengateWeb.TeamMembersLive do
           |> assign(:show_add_modal?, false)
           |> assign(:add_form, add_member_form())
           |> assign(:add_member_error, nil)
+          |> assign(:email_suggestions, [])
           |> load_data()
 
         {:ok, socket}
@@ -168,7 +169,32 @@ defmodule TokengateWeb.TeamMembersLive do
      socket
      |> assign(:show_add_modal?, false)
      |> assign(:add_form, add_member_form())
-     |> assign(:add_member_error, nil)}
+     |> assign(:add_member_error, nil)
+     |> assign(:email_suggestions, [])}
+  end
+
+  @impl true
+  def handle_event("search_email", %{"add_member" => %{"email" => query}}, socket) do
+    suggestions =
+      case String.trim(query) do
+        "" -> []
+        trimmed when byte_size(trimmed) < 2 -> []
+        trimmed -> Accounts.search_users(trimmed)
+      end
+
+    {:noreply, assign(socket, :email_suggestions, suggestions)}
+  end
+
+  @impl true
+  def handle_event("select_email", %{"email" => email}, socket) do
+    form =
+      socket.assigns.add_form
+      |> Map.update!(:params, fn params -> Map.put(params, "email", email) end)
+
+    {:noreply,
+     socket
+     |> assign(:add_form, to_form(form.params, as: :add_member))
+     |> assign(:email_suggestions, [])}
   end
 
   @impl true
@@ -464,7 +490,7 @@ defmodule TokengateWeb.TeamMembersLive do
     Map.get(extra_aliases, member_id, [])
   end
 
-  defp format_decimal(%Decimal{} = d), do: Decimal.to_string(d)
+  defp format_decimal(%Decimal{} = d), do: d |> Decimal.round(2) |> Decimal.to_string()
   defp format_decimal(nil), do: "—"
   defp format_decimal(value), do: to_string(value)
 
@@ -510,12 +536,37 @@ defmodule TokengateWeb.TeamMembersLive do
               <h2 class="text-lg font-semibold mb-4">Añadir miembro</h2>
               <.form for={@add_form} id="add-member-form" phx-submit="add_member">
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <.input
-                    field={@add_form[:email]}
-                    type="email"
-                    label="Email del usuario"
-                    placeholder="usuario@ejemplo.com"
-                  />
+                  <%!-- Email input with live autocomplete --%>
+                  <div class="sm:col-span-2 relative">
+                    <.input
+                      field={@add_form[:email]}
+                      type="email"
+                      label="Email del usuario"
+                      placeholder="usuario@ejemplo.com"
+                      phx-change="search_email"
+                      phx-debounce="300"
+                    />
+                    <div
+                      :if={@email_suggestions != []}
+                      class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-60 overflow-y-auto"
+                      id="email-suggestions"
+                    >
+                      <button
+                        :for={user <- @email_suggestions}
+                        type="button"
+                        phx-click="select_email"
+                        phx-value-email={user.email}
+                        class="w-full text-left px-3 py-2 hover:bg-base-200 transition-colors flex items-center gap-3 border-b border-base-200 last:border-0"
+                        id={"suggestion-#{user.id}"}
+                      >
+                        <div class="flex-1 min-w-0">
+                          <p class="text-sm font-medium truncate">{user.email}</p>
+                          <p class="text-xs text-base-content/50 truncate">{user.name}</p>
+                        </div>
+                        <span class={["badge", "badge-sm", "badge-ghost"]}>{user.global_role}</span>
+                      </button>
+                    </div>
+                  </div>
                   <.input
                     field={@add_form[:team_role]}
                     type="select"

@@ -338,7 +338,7 @@ defmodule TokengateWeb.TeamsLive do
     Map.get(granted_aliases, team_id, [])
   end
 
-  def format_decimal(%Decimal{} = d), do: Decimal.to_string(d)
+  def format_decimal(%Decimal{} = d), do: d |> Decimal.round(2) |> Decimal.to_string()
   def format_decimal(nil), do: "—"
   def format_decimal(value), do: to_string(value)
 
