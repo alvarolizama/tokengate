@@ -49,7 +49,7 @@ defmodule TokengateWeb.ModelsLive do
     aliases =
       from(ma in ModelAlias,
         left_join: aps in assoc(ma, :model_providers),
-        preload: [model_providers: {aps, [credential: :provider]}],
+        preload: [model_providers: {aps, [credential: :provider, model_pricing: []]}],
         order_by: [asc: ma.name]
       )
       |> Repo.all()
