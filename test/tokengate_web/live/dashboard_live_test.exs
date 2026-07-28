@@ -224,7 +224,11 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert html =~ "Costo por hora"
     assert html =~ "Requests por hora"
     assert html =~ "Ahorro por hora"
-    assert html =~ "Top modelos por costo real"
+    assert html =~ "Ranking de modelos por costo real"
+
+    # New ranking charts: Top 5 equipos + Top 5 miembros
+    assert has_element?(view, "#top-teams-chart")
+    assert has_element?(view, "#top-members-chart")
 
     # SVG bars rendered for the non-zero series
     assert has_element?(view, "#cost-chart svg rect")

@@ -612,7 +612,7 @@
           </div>
         </div>
 
-        <%!-- Charts: cost / requests / savings per bucket + top models --%>
+        <%!-- Charts: cost / requests / savings per bucket --%>
         <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="charts-grid">
           <.bar_chart
             id="cost-chart"
@@ -637,13 +637,33 @@
             bar_class="fill-success/70 hover:fill-success"
             empty_label="Sin ahorro en este periodo."
           />
+        </div>
+
+        <%!-- Rankings: Top 5 equipos + Top 5 miembros arriba, Ranking de modelos full-width abajo --%>
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="rankings-grid">
           <.hbars_chart
-            id="top-models-chart"
-            title="Top modelos por costo real"
-            icon="hero-chart-bar-square"
-            rows={@top_models}
+            id="top-teams-chart"
+            title="Top 5 equipos por costo real"
+            icon="hero-user-group"
+            rows={@top_teams}
             empty_label="Sin datos para este periodo."
           />
+          <.hbars_chart
+            id="top-members-chart"
+            title="Top 5 miembros por costo real"
+            icon="hero-users"
+            rows={@top_members}
+            empty_label="Sin datos para este periodo."
+          />
+          <div class="lg:col-span-2">
+            <.hbars_chart
+              id="top-models-chart"
+              title="Ranking de modelos por costo real"
+              icon="hero-chart-bar-square"
+              rows={@top_models}
+              empty_label="Sin datos para este periodo."
+            />
+          </div>
         </div>
       <% end %>
     <% end %>

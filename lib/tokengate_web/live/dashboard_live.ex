@@ -60,6 +60,8 @@ defmodule TokengateWeb.DashboardLive do
       |> assign(:requests_series, [])
       |> assign(:savings_series, [])
       |> assign(:top_models, [])
+      |> assign(:top_teams, [])
+      |> assign(:top_members, [])
       |> assign(:breakdown_model, [])
       |> assign(:breakdown_member, [])
       |> assign(:breakdown_team, [])
@@ -451,24 +453,44 @@ defmodule TokengateWeb.DashboardLive do
     # (managed teams for managers, own memberships for regular users).
     opts = Keyword.put(opts, :member_ids, socket.assigns[:scope_member_ids])
     breakdown_model = Rollup.breakdown_by_model(nil, opts)
+    breakdown_team = load_team_breakdown(user, opts)
+    breakdown_member = Rollup.breakdown_by_member(nil, opts)
 
     socket
     |> assign(:breakdown_model, breakdown_model)
     |> assign(:top_models, top_model_rows(breakdown_model))
-    |> assign(:breakdown_member, Rollup.breakdown_by_member(nil, opts))
-    |> assign(:breakdown_team, load_team_breakdown(user, opts))
+    |> assign(:breakdown_member, breakdown_member)
+    |> assign(:top_members, top_member_rows(breakdown_member))
+    |> assign(:breakdown_team, breakdown_team)
+    |> assign(:top_teams, top_team_rows(breakdown_team))
   end
 
   # Top 5 models by real (paid) cost for the horizontal-bars chart
   defp top_model_rows(breakdown_model) do
-    breakdown_model
+    top_rows(breakdown_model, & &1.model_name)
+  end
+
+  # Top 5 members by real (paid) cost for the horizontal-bars chart
+  defp top_member_rows(breakdown_member) do
+    top_rows(breakdown_member, & &1.user_email)
+  end
+
+  # Top 5 teams by real (paid) cost for the horizontal-bars chart
+  defp top_team_rows(breakdown_team) do
+    top_rows(breakdown_team, & &1.team_name)
+  end
+
+  # Shared ranking logic: sort by provider_cost_usd desc, take 5,
+  # normalize to %{label, value, tooltip} for `hbars_chart`.
+  defp top_rows(rows, label_fun) do
+    rows
     |> Enum.sort_by(fn row -> Decimal.to_float(row.provider_cost_usd) end, :desc)
     |> Enum.take(5)
     |> Enum.map(fn row ->
       cost = Decimal.to_float(row.provider_cost_usd)
 
       %{
-        label: row.model_name,
+        label: label_fun.(row),
         value: cost,
         tooltip: "$#{Float.round(cost, 6)} · #{row.request_count} req"
       }
