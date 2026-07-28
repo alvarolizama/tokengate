@@ -153,7 +153,8 @@ defmodule TokengateWeb.AlertsLive do
       from(rl in RequestLog,
         where: rl.status_code >= 400 and rl.inserted_at >= ^since,
         order_by: [desc: rl.inserted_at],
-        limit: ^@error_limit
+        limit: ^@error_limit,
+        preload: [:provider, team_member: [:user, :team]]
       )
       |> Repo.all()
 
@@ -452,6 +453,11 @@ defmodule TokengateWeb.AlertsLive do
                       <th>Fecha</th>
                       <th>Estado</th>
                       <th>Modelo</th>
+                      <th>Proveedor</th>
+                      <th>Usuario</th>
+                      <th>Equipo</th>
+                      <th>API Key</th>
+                      <th>Motivo</th>
                       <th>Agente</th>
                     </tr>
                   </thead>
@@ -464,6 +470,25 @@ defmodule TokengateWeb.AlertsLive do
                         </span>
                       </td>
                       <td class="text-sm">{log.model_requested}</td>
+                      <td class="text-sm">
+                        {(log.provider && log.provider.name) || "—"}
+                      </td>
+                      <td class="text-sm font-mono">
+                        {(log.team_member && log.team_member.user && log.team_member.user.email) ||
+                          "—"}
+                      </td>
+                      <td class="text-sm">
+                        {(log.team_member && log.team_member.team && log.team_member.team.name) || "—"}
+                      </td>
+                      <td class="text-sm font-mono">
+                        {log.api_key_prefix || "—"}
+                      </td>
+                      <td class="text-sm">
+                        <span :if={log.error_reason} class="badge badge-sm badge-ghost">
+                          {log.error_reason}
+                        </span>
+                        <span :if={!log.error_reason}>—</span>
+                      </td>
                       <td>
                         <span class="badge badge-sm badge-ghost">{log.agent_type}</span>
                       </td>

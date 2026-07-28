@@ -50,6 +50,10 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:breakdown_provider, [])
       |> assign(:top_errors, [])
       |> assign(:provider_ranking, [])
+      |> assign(:model_ranking, [])
+      |> assign(:member, nil)
+      |> assign(:member_models, [])
+      |> assign(:member_id, nil)
       |> assign(:hour_distribution, [])
       |> assign(:busiest_hours, [])
       |> assign(:busiest_minutes, [])
@@ -64,12 +68,14 @@ defmodule TokengateWeb.StatsLive do
     period = parse_period(params["period"])
     model_filter = params["model_id"]
     team_filter = params["team_id"]
+    member_id = params["member_id"]
 
     socket =
       socket
       |> assign(:period, period)
       |> assign(:model_filter, model_filter)
       |> assign(:team_filter, team_filter)
+      |> assign(:member_id, member_id)
       |> load_data(socket.assigns.current_user)
 
     {:noreply, socket}
@@ -168,6 +174,7 @@ defmodule TokengateWeb.StatsLive do
     |> assign(:breakdown_team, load_team_breakdown(user, opts))
     |> assign(:top_errors, Rollup.top_errors(nil, opts))
     |> assign(:provider_ranking, load_provider_ranking(user, opts))
+    |> assign(:model_ranking, load_model_ranking(user, opts))
     |> assign(:hour_distribution, Rollup.usage_by_hour_of_day(nil, opts))
     |> assign(:busiest_hours, Rollup.busiest_hours(nil, opts))
     |> assign(:busiest_minutes, Rollup.busiest_minutes(nil, opts))
@@ -212,6 +219,29 @@ defmodule TokengateWeb.StatsLive do
       base
       |> assign(:breakdown_member, [])
       |> assign(:breakdown_model, [])
+    end
+  end
+
+  defp load_breakdowns(socket, :member, user, opts) do
+    member_id = socket.assigns[:member_id]
+
+    # Load the team member with associations
+    member = Accounts.get_team_member!(member_id, :with_assoc)
+
+    # Scope check: non-admin users can only see members of teams they manage
+    allowed? = user.global_role == "admin" or member_id in Accounts.scope_member_ids(user)
+
+    if allowed? do
+      member_models = Rollup.breakdown_by_model_for_member(member_id, opts)
+
+      socket
+      |> assign(:member, member)
+      |> assign(:member_models, member_models)
+    else
+      socket
+      |> assign(:member, nil)
+      |> assign(:member_models, [])
+      |> put_flash(:error, "No tienes permiso para ver este miembro.")
     end
   end
 
@@ -282,6 +312,12 @@ defmodule TokengateWeb.StatsLive do
     do: Rollup.provider_ranking(nil, opts)
 
   defp load_provider_ranking(_user, _opts), do: []
+
+  # Ranking de modelos: mismo criterio que proveedores, solo admin.
+  defp load_model_ranking(%{global_role: "admin"}, opts),
+    do: Rollup.model_ranking(nil, opts)
+
+  defp load_model_ranking(_user, _opts), do: []
 
   # Concurrencia pico: métrica de infraestructura, solo admin, siempre org-wide.
   defp load_peak_concurrency(%{global_role: "admin"}, opts),

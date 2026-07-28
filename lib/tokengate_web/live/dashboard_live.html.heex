@@ -153,18 +153,19 @@
                       <span class="text-base-content/60">Gasto diario</span>
                       <span class="font-mono">
                         ${format_decimal(t.daily_spend)}
-                        <span class="text-base-content/40">
-                          / {if t.daily_limit, do: format_decimal(t.daily_limit), else: "∞"}
+                        <span :if={t.daily_limit} class="text-base-content/40">
+                          / ${format_decimal(t.daily_limit)}
                         </span>
                       </span>
                     </div>
-                    <div class="mt-1 h-2 rounded-full bg-base-200 overflow-hidden">
+                    <div
+                      :if={t.daily_limit}
+                      class="mt-1 h-2 rounded-full bg-base-200 overflow-hidden"
+                    >
+                      <% daily_pct = budget_pct(t.daily_spend, t.daily_limit) %>
                       <div
-                        class={[
-                          "h-full rounded-full transition-all",
-                          budget_bar_class(budget_pct(t.daily_spend, t.daily_limit))
-                        ]}
-                        style={"width: #{min(budget_pct(t.daily_spend, t.daily_limit) || 0, 100)}%"}
+                        class={["h-full rounded-full transition-all", budget_bar_class(daily_pct)]}
+                        style={budget_bar_width(daily_pct)}
                       >
                       </div>
                     </div>
@@ -176,18 +177,22 @@
                       <span class="text-base-content/60">Gasto mensual</span>
                       <span class="font-mono">
                         ${format_decimal(t.monthly_spend)}
-                        <span class="text-base-content/40">
-                          / {if t.monthly_limit, do: format_decimal(t.monthly_limit), else: "∞"}
+                        <span :if={t.monthly_limit} class="text-base-content/40">
+                          / ${format_decimal(t.monthly_limit)}
                         </span>
                       </span>
                     </div>
-                    <div class="mt-1 h-2 rounded-full bg-base-200 overflow-hidden">
+                    <div
+                      :if={t.monthly_limit}
+                      class="mt-1 h-2 rounded-full bg-base-200 overflow-hidden"
+                    >
+                      <% monthly_pct = budget_pct(t.monthly_spend, t.monthly_limit) %>
                       <div
                         class={[
                           "h-full rounded-full transition-all",
-                          budget_bar_class(budget_pct(t.monthly_spend, t.monthly_limit))
+                          budget_bar_class(monthly_pct)
                         ]}
-                        style={"width: #{min(budget_pct(t.monthly_spend, t.monthly_limit) || 0, 100)}%"}
+                        style={budget_bar_width(monthly_pct)}
                       >
                       </div>
                     </div>

@@ -204,12 +204,37 @@ defmodule TokengateWeb.Layouts do
         title={my_budget_title(@my_budget)}
       >
         <.icon name="hero-wallet" class="w-3.5 h-3.5" />
-        <span id="topbar-my-budget-daily">
-          H {my_budget_segment(@my_budget.daily_pct, @my_budget.daily_spend)}
+
+        <span id="topbar-my-budget-daily" class="flex items-center gap-1">
+          <span class="text-[0.65rem] opacity-60">H</span>
+          <span>{@my_budget.daily_spend |> fmt_money_compact()}{if @my_budget.daily_limit,
+            do: "/#{@my_budget.daily_limit |> fmt_money_compact()}",
+            else: ""}</span>
+          <%= if @my_budget.daily_limit do %>
+            <span class="inline-block w-8 h-1 bg-base-300 rounded-full overflow-hidden">
+              <span
+                class={budget_bar_class(@my_budget.daily_pct)}
+                style={"width: #{budget_bar_width(@my_budget.daily_pct)}%"}
+              ></span>
+            </span>
+          <% end %>
         </span>
+
         <span class="opacity-40">·</span>
-        <span id="topbar-my-budget-monthly">
-          M {my_budget_segment(@my_budget.monthly_pct, @my_budget.monthly_spend)}
+
+        <span id="topbar-my-budget-monthly" class="flex items-center gap-1">
+          <span class="text-[0.65rem] opacity-60">M</span>
+          <span>{@my_budget.monthly_spend |> fmt_money_compact()}{if @my_budget.monthly_limit,
+            do: "/#{@my_budget.monthly_limit |> fmt_money_compact()}",
+            else: ""}</span>
+          <%= if @my_budget.monthly_limit do %>
+            <span class="inline-block w-8 h-1 bg-base-300 rounded-full overflow-hidden">
+              <span
+                class={budget_bar_class(@my_budget.monthly_pct)}
+                style={"width: #{budget_bar_width(@my_budget.monthly_pct)}%"}
+              ></span>
+            </span>
+          <% end %>
         </span>
       </span>
 
@@ -431,10 +456,35 @@ defmodule TokengateWeb.Layouts do
   defp my_budget_chip_class(%{warning?: true}), do: "badge-warning"
   defp my_budget_chip_class(_), do: "badge-ghost"
 
-  # Chip segment: percentage of the limit when one exists, raw spend when
-  # the period is unlimited (exact amounts live in the tooltip).
-  defp my_budget_segment(nil, spend), do: "$#{fmt_money(spend)}"
-  defp my_budget_segment(pct, _spend), do: "#{round(pct)}%"
+  # Compact money format for the chip: $0.0230 → $0.02, $22.0000 → $22, $1500.50 → $1.5K
+  defp fmt_money_compact(%Decimal{} = d) do
+    f = Decimal.to_float(d)
+
+    cond do
+      f >= 1_000 ->
+        "$#{:erlang.float_to_binary(f / 1_000, decimals: 1)}K"
+
+      f == 0.0 ->
+        "$0"
+
+      true ->
+        :erlang.float_to_binary(f, decimals: 4)
+        |> String.replace(~r/\.?0+$/, "")
+        |> then(&"$#{&1}")
+    end
+  end
+
+  # Bar color by percentage: green < 60, warning 60-80, error > 80
+  defp budget_bar_class(nil), do: "bg-base-content/30"
+  defp budget_bar_class(pct) when pct >= 80.0, do: "bg-error"
+  defp budget_bar_class(pct) when pct >= 60.0, do: "bg-warning"
+  defp budget_bar_class(_), do: "bg-success"
+
+  # Bar width clamped to 0-100
+  defp budget_bar_width(nil), do: 0
+  defp budget_bar_width(pct) when pct > 100.0, do: 100
+  defp budget_bar_width(pct) when pct < 0.0, do: 0
+  defp budget_bar_width(pct), do: round(pct)
 
   defp my_budget_title(b) do
     daily = budget_period_title("Hoy", b.daily_spend, b.daily_limit, b.daily_pct)

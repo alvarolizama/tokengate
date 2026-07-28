@@ -722,11 +722,20 @@ defmodule TokengateWeb.DashboardLive do
 
   def budget_pct(_spend, nil), do: nil
 
-  def budget_pct(spend, limit) do
+  def budget_pct(spend, limit) when is_struct(limit, Decimal) do
     spend = Decimal.to_float(spend)
     limit = Decimal.to_float(limit)
     if limit > 0, do: Float.round(spend / limit * 100, 1), else: 0.0
   end
+
+  def budget_pct(spend, limit) when is_number(limit) do
+    spend = Decimal.to_float(spend)
+    if limit > 0, do: Float.round(spend / limit * 100, 1), else: 0.0
+  end
+
+  @doc "Returns CSS width string for budget bar, safe for nil limits."
+  def budget_bar_width(nil), do: "width: 0%"
+  def budget_bar_width(pct) when is_number(pct), do: "width: #{min(pct, 100)}%"
 
   def budget_bar_class(pct) when is_number(pct) do
     cond do

@@ -274,6 +274,57 @@ defmodule Tokengate.Metrics.Rollup do
   # -----------------------------------------------------------------------
 
   @doc """
+  Breakdown de modelos usados por un miembro específico (por team_member_id).
+  Útil para la vista de detalle de miembro: qué modelos usa, cuánto gasta, etc.
+  """
+  @spec breakdown_by_model_for_member(String.t(), keyword()) :: [map()]
+  def breakdown_by_model_for_member(member_id, opts \\ [])
+
+  def breakdown_by_model_for_member(nil, _opts), do: []
+
+  def breakdown_by_model_for_member(member_id, opts) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    query =
+      RequestLog
+      |> where([rl], rl.team_member_id == ^member_id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> join(:left, [rl], ma in ModelAlias, on: rl.model_alias_id == ma.id, as: :model_alias)
+      |> group_by([model_alias: ma], ma.id)
+      |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.cost_usd))
+      |> select([rl, model_alias: ma], %{
+        model_id: ma.id,
+        model_name: ma.name,
+        request_count: count(rl.id),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd),
+        provider_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        estimated_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.estimated_cost_usd),
+        savings_usd: fragment("COALESCE(SUM(?), 0)", rl.savings_usd),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
+      })
+
+    Repo.all(query)
+    |> Enum.map(fn row ->
+      %{
+        model_id: row.model_id,
+        model_name: row.model_name || "—",
+        request_count: row.request_count,
+        cost_usd: Decimal.new(to_string(row.cost_usd)),
+        provider_cost_usd: Decimal.new(to_string(row.provider_cost_usd)),
+        estimated_cost_usd: Decimal.new(to_string(row.estimated_cost_usd)),
+        savings_usd: Decimal.new(to_string(row.savings_usd)),
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens,
+        avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
+      }
+    end)
+  end
+
+  @doc """
   Returns per-team-member aggregate metrics ranked by total cost (descending).
 
   Each row is:
@@ -766,7 +817,7 @@ defmodule Tokengate.Metrics.Rollup do
     end)
   end
 
-  defp score_ranking_row(row, min_latency) do
+  defp score_ranking_row(row, min_latency, type \\ :provider) do
     avg_latency = row.avg_latency_ms && to_float!(row.avg_latency_ms)
     error_rate = if row.request_count > 0, do: row.error_count / row.request_count, else: 0.0
 
@@ -787,9 +838,7 @@ defmodule Tokengate.Metrics.Rollup do
           {score, tier_for(score)}
       end
 
-    %{
-      provider_id: row.provider_id,
-      provider_name: row.provider_name,
+    base = %{
       request_count: row.request_count,
       error_count: row.error_count,
       error_rate: Float.round(error_rate, 4),
@@ -799,6 +848,20 @@ defmodule Tokengate.Metrics.Rollup do
       score: score,
       tier: tier
     }
+
+    case type do
+      :model ->
+        Map.merge(base, %{
+          model_id: row.model_id,
+          model_name: row.model_name
+        })
+
+      _ ->
+        Map.merge(base, %{
+          provider_id: row.provider_id,
+          provider_name: row.provider_name
+        })
+    end
   end
 
   # AVG/percentile_cont vienen de Postgres como float o Decimal según el
@@ -812,6 +875,67 @@ defmodule Tokengate.Metrics.Rollup do
   defp tier_for(score) when score >= 60, do: "B"
   defp tier_for(score) when score >= 40, do: "C"
   defp tier_for(_score), do: "D"
+
+  # -----------------------------------------------------------------------
+  # model_ranking/2
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Ranking de modelos por confiabilidad (fallos) y velocidad (latencia).
+
+  Igual que `provider_ranking/2` pero agrupado por `ModelAlias` en vez de
+  por proveedor. Devuelve filas con la misma forma para reutilizar el
+  rendering del tier y score.
+
+  ## Options
+    * `:from` — `inserted_at >= from` (DateTime)
+    * `:to`   — `inserted_at <= to` (DateTime)
+    * `:member_ids` — restrict to logs of these team-member ids (scoping)
+  """
+  @spec model_ranking(String.t() | nil, keyword()) :: [map()]
+  def model_ranking(team_id \\ nil, opts \\ [])
+
+  def model_ranking(team_id, opts) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    rows =
+      RequestLog
+      |> where([rl], not is_nil(rl.model_alias_id))
+      |> join(:inner, [rl], ma in ModelAlias, on: rl.model_alias_id == ma.id)
+      |> maybe_join_team(team_id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> maybe_member_ids(Keyword.get(opts, :member_ids))
+      |> group_by([rl, ma], [ma.id, ma.name])
+      |> select([rl, ma], %{
+        model_id: ma.id,
+        model_name: ma.name,
+        request_count: count(rl.id),
+        error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
+        avg_latency_ms: fragment("AVG(?)", rl.latency_ms),
+        p95_latency_ms:
+          fragment("percentile_cont(0.95) WITHIN GROUP (ORDER BY ?)", rl.latency_ms),
+        avg_ttft_ms: fragment("AVG(?)", rl.ttft_ms)
+      })
+      |> Repo.all()
+
+    min_latency =
+      rows
+      |> Enum.map(& &1.avg_latency_ms)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(&to_float!/1)
+      |> case do
+        [] -> nil
+        latencies -> Enum.min(latencies)
+      end
+
+    rows
+    |> Enum.map(&score_ranking_row(&1, min_latency, :model))
+    |> Enum.sort_by(fn row ->
+      {if(row.score, do: 0, else: 1), -(row.score || 0), row.model_name}
+    end)
+  end
 
   # -----------------------------------------------------------------------
   # usage_by_hour_of_day/2

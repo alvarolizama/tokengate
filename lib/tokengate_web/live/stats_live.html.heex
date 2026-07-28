@@ -345,55 +345,6 @@
                 <div class="card-body">
                   <div class="flex items-center justify-between">
                     <h2 class="card-title text-base">
-                      <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" />
-                      Top 5 Modelos
-                    </h2>
-                    <.link
-                      patch={~p"/dashboard/stats/models?period=#{@period}"}
-                      class="btn btn-xs btn-ghost"
-                      id="see-all-models"
-                    >
-                      Ver todos <.icon name="hero-arrow-right" class="w-3 h-3" />
-                    </.link>
-                  </div>
-                  <%= if has_data?(@breakdown_model) do %>
-                    <div class="overflow-x-auto mt-3">
-                      <table class="table table-sm">
-                        <thead>
-                          <tr>
-                            <th>Modelo</th><th class="text-right">Requests</th><th class="text-right">
-                              Real
-                            </th><th class="text-right">Ahorro</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr
-                            :for={row <- Enum.take(@breakdown_model, 5)}
-                            id={"top-model-#{row.model_id || "unknown"}"}
-                          >
-                            <td class="font-medium truncate max-w-[180px]">{row.model_name}</td>
-                            <td class="text-right font-mono">
-                              {format_number(row.request_count)}
-                            </td>
-                            <td class="text-right font-mono">
-                              ${format_decimal(row.provider_cost_usd)}
-                            </td>
-                            <td class="text-right font-mono text-success">
-                              ${format_decimal(row.savings_usd)}
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                  <% else %>
-                    <p class="text-sm text-base-content/40 py-6 text-center">Sin datos.</p>
-                  <% end %>
-                </div>
-              </div>
-              <div class="card bg-base-100 border border-base-300 shadow-sm">
-                <div class="card-body">
-                  <div class="flex items-center justify-between">
-                    <h2 class="card-title text-base">
                       <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" />
                       Top 5 Equipos
                     </h2>
@@ -478,45 +429,6 @@
                   <% end %>
                 </div>
               </div>
-              <div class="card bg-base-100 border border-base-300 shadow-sm" id="top-errors">
-                <div class="card-body">
-                  <h2 class="card-title text-base">
-                    <.icon name="hero-exclamation-triangle" class="w-5 h-5 text-base-content/60" />
-                    Top 5 Errores
-                  </h2>
-                  <%= if has_data?(@top_errors) do %>
-                    <div class="overflow-x-auto mt-3">
-                      <table class="table table-sm">
-                        <thead>
-                          <tr>
-                            <th>Código</th><th>Clase</th><th class="text-right">Fallos</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          <tr
-                            :for={row <- @top_errors}
-                            id={"top-error-#{row.status_code}"}
-                          >
-                            <td class="font-medium font-mono">{row.status_code}</td>
-                            <td>
-                              <span class={["badge badge-sm", error_class_badge(row.status_code)]}>
-                                {error_class_label(row.status_code)}
-                              </span>
-                            </td>
-                            <td class="text-right font-mono">
-                              {format_number(row.error_count)}
-                            </td>
-                          </tr>
-                        </tbody>
-                      </table>
-                    </div>
-                  <% else %>
-                    <p class="text-sm text-base-content/40 py-6 text-center">
-                      Sin fallos en este período. 🎉
-                    </p>
-                  <% end %>
-                </div>
-              </div>
             </div>
 
             <%!-- Ranking de proveedores (solo admin) --%>
@@ -555,6 +467,73 @@
                             <td class="text-base-content/60">{idx}</td>
                             <td class="font-medium truncate max-w-[180px]">
                               {row.provider_name}
+                            </td>
+                            <td class="text-center">
+                              <span class={["badge badge-sm", tier_badge_class(row.tier)]}>
+                                {row.tier}
+                              </span>
+                            </td>
+                            <td class="text-right font-mono">{row.score || "—"}</td>
+                            <td class="text-right font-mono">
+                              {format_number(row.request_count)}
+                            </td>
+                            <td class={[
+                              "text-right font-mono",
+                              row.error_rate >= 0.05 && "text-error",
+                              row.error_rate > 0 && row.error_rate < 0.05 && "text-warning"
+                            ]}>
+                              {format_percent(row.error_rate)}
+                            </td>
+                            <td class="text-right font-mono">{format_ms(row.avg_latency_ms)}</td>
+                            <td class="text-right font-mono">{format_ms(row.p95_latency_ms)}</td>
+                            <td class="text-right font-mono">{format_ms(row.avg_ttft_ms)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  <% else %>
+                    <p class="text-sm text-base-content/40 py-6 text-center">
+                      Sin datos en este período.
+                    </p>
+                  <% end %>
+                </div>
+              </div>
+
+              <%!-- Ranking de modelos --%>
+              <div class="card bg-base-100 border border-base-300 shadow-sm" id="model-ranking">
+                <div class="card-body">
+                  <h2 class="card-title text-base">
+                    <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" />
+                    Ranking de modelos
+                  </h2>
+                  <p class="text-xs text-base-content/60">
+                    Clasificación por confiabilidad (fallos) y velocidad (latencia) en el período.
+                    Tier S es el mejor; "—" significa menos de 10 requests.
+                  </p>
+                  <%= if has_data?(@model_ranking) do %>
+                    <div class="overflow-x-auto mt-3">
+                      <table class="table table-sm">
+                        <thead>
+                          <tr>
+                            <th>#</th>
+                            <th>Modelo</th>
+                            <th class="text-center">Tier</th>
+                            <th class="text-right">Score</th>
+                            <th class="text-right">Requests</th>
+                            <th class="text-right">% Fallos</th>
+                            <th class="text-right">Latencia prom</th>
+                            <th class="text-right">P95</th>
+                            <th class="text-right">TTFT prom</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr
+                            :for={{row, idx} <- Enum.with_index(@model_ranking, 1)}
+                            id={"model-ranking-row-#{row.model_id}"}
+                          >
+                            <td class="text-base-content/60">{idx}</td>
+                            <td class="font-medium truncate max-w-[180px]">
+                              {row.model_name}
                             </td>
                             <td class="text-center">
                               <span class={["badge badge-sm", tier_badge_class(row.tier)]}>
@@ -1102,7 +1081,16 @@
                               :for={row <- @breakdown_member}
                               id={"bd-team-member-#{row.team_member_id}"}
                             >
-                              <td class="font-mono text-sm">{row.user_email}</td>
+                              <td class="font-mono text-sm">
+                                <.link
+                                  patch={
+                                    ~p"/dashboard/stats/members/#{row.team_member_id}?period=#{@period}"
+                                  }
+                                  class="link link-hover"
+                                >
+                                  {row.user_email}
+                                </.link>
+                              </td>
                               <td class="text-right font-mono">
                                 {format_number(row.request_count)}
                               </td>
@@ -1198,6 +1186,86 @@
                   <% else %>
                     <p class="text-sm text-base-content/40 py-6 text-center">
                       Sin datos para este periodo.
+                    </p>
+                  <% end %>
+                </div>
+              </div>
+            <% end %>
+          </div>
+        <% @live_action == :member -> %>
+          <div class="space-y-6">
+            <%= if @member do %>
+              <div class="flex items-center justify-between flex-wrap gap-3">
+                <div>
+                  <h1 class="text-xl font-bold">
+                    {@member.user.email}
+                  </h1>
+                  <p class="text-sm text-base-content/60">
+                    Equipo: {@member.team.name} · Rol: {@member.team_role}
+                  </p>
+                </div>
+                <.link
+                  patch={~p"/dashboard/stats/teams?period=#{@period}&team_id=#{@member.team_id}"}
+                  class="btn btn-sm btn-ghost"
+                  id="back-to-team"
+                >
+                  <.icon name="hero-arrow-left" class="w-4 h-4" /> Volver al equipo
+                </.link>
+              </div>
+
+              <div class="card bg-base-100 border border-base-300 shadow-sm">
+                <div class="card-body">
+                  <h2 class="card-title text-base">
+                    <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" />
+                    Modelos usados
+                  </h2>
+                  <%= if @member_models != [] do %>
+                    <div class="overflow-x-auto mt-3">
+                      <table class="table table-sm">
+                        <thead>
+                          <tr>
+                            <th>Modelo</th>
+                            <th class="text-right">Requests</th>
+                            <th class="text-right">Real</th>
+                            <th class="text-right">Mercado</th>
+                            <th class="text-right">Ahorro</th>
+                            <th class="text-right">Tokens in</th>
+                            <th class="text-right">Tokens out</th>
+                            <th class="text-right">TPS</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr
+                            :for={row <- @member_models}
+                            id={"member-model-#{row.model_id || "unknown"}"}
+                          >
+                            <td class="font-medium truncate max-w-[200px]">{row.model_name}</td>
+                            <td class="text-right font-mono">
+                              {format_number(row.request_count)}
+                            </td>
+                            <td class="text-right font-mono">
+                              ${format_decimal(row.provider_cost_usd)}
+                            </td>
+                            <td class="text-right font-mono text-base-content/60">
+                              ${format_decimal(row.estimated_cost_usd)}
+                            </td>
+                            <td class="text-right font-mono text-success">
+                              ${format_decimal(row.savings_usd)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {format_number(row.prompt_tokens)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {format_number(row.completion_tokens)}
+                            </td>
+                            <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  <% else %>
+                    <p class="text-sm text-base-content/40 py-6 text-center">
+                      Sin actividad en este período.
                     </p>
                   <% end %>
                 </div>
