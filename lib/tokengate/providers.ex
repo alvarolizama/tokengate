@@ -44,7 +44,41 @@ defmodule Tokengate.Providers do
     |> Repo.update()
   end
 
-  def delete_provider(%Provider{} = provider), do: Repo.delete(provider)
+  def delete_provider(%Provider{} = provider) do
+    Repo.transaction(fn ->
+      # Delete dependent records in order: model_pricing → model_providers
+      # → credentials → provider. Each step must succeed before the next.
+      credential_ids =
+        from(c in Credential, where: c.provider_id == ^provider.id, select: c.id)
+        |> Repo.all()
+
+      if credential_ids != [] do
+        # model_pricing references model_providers which reference credentials
+        from(mp in ModelPricing,
+          where:
+            mp.model_provider_id in subquery(
+              from(m in ModelProvider, where: m.credential_id in ^credential_ids, select: m.id)
+            )
+        )
+        |> Repo.delete_all()
+
+        from(mp in ModelProvider, where: mp.credential_id in ^credential_ids)
+        |> Repo.delete_all()
+
+        from(c in Credential, where: c.provider_id == ^provider.id)
+        |> Repo.delete_all()
+      end
+
+      case Repo.delete(provider) do
+        {:ok, _} -> {:ok, provider}
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+    |> case do
+      {:ok, _} -> {:ok, provider}
+      {:error, changeset} -> {:error, changeset}
+    end
+  end
 
   def change_provider(%Provider{} = provider, attrs \\ %{}),
     do: Provider.changeset(provider, attrs)

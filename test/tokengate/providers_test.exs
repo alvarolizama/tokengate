@@ -266,6 +266,26 @@ defmodule Tokengate.ProvidersTest do
       {:ok, _} = Providers.delete_provider(provider)
       assert Providers.list_providers() == []
     end
+
+    test "delete_provider/1 deletes provider with credentials (cascade)" do
+      provider = provider_fixture()
+      credential_fixture(provider)
+      credential_fixture(provider, %{name: "second"})
+
+      {:ok, _} = Providers.delete_provider(provider)
+      assert Providers.list_providers() == []
+      assert Providers.list_credentials_for_provider(provider.id) == []
+    end
+
+    test "delete_provider/1 cascades through model_providers and pricing" do
+      provider = provider_fixture()
+      mp = model_provider_fixture(nil, provider)
+
+      {:ok, _} = Providers.delete_provider(provider)
+      assert Providers.list_providers() == []
+      assert Providers.list_credentials_for_provider(provider.id) == []
+      refute Repo.get(ModelProvider, mp.id)
+    end
   end
 
   # ---------------------------------------------------------------------------
