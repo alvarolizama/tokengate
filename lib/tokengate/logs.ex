@@ -80,6 +80,7 @@ defmodule Tokengate.Logs do
     |> order_by([rl], desc: rl.inserted_at)
     |> limit(^limit)
     |> preload(team_member: [:user, :team])
+    |> preload(:provider)
     |> Repo.all()
   end
 
@@ -107,6 +108,8 @@ defmodule Tokengate.Logs do
     RequestLog
     |> apply_log_filters(filters)
     |> order_by([rl], desc: rl.inserted_at)
+    |> preload(team_member: [:user, :team])
+    |> preload(:provider)
     |> Repo.all()
   end
 

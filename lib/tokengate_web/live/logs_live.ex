@@ -506,6 +506,9 @@ defmodule TokengateWeb.LogsLive do
   defp member_team(%{team_member: %{team: %{name: name}}}), do: name
   defp member_team(_), do: "—"
 
+  defp provider_name(%{provider: %{name: name}}), do: name
+  defp provider_name(_), do: "—"
+
   attr :value, :boolean, default: false
 
   defp think_badge(assigns) do
@@ -740,7 +743,8 @@ defmodule TokengateWeb.LogsLive do
                 <th>Latencia</th>
                 <th class="text-right">Estimado</th>
                 <th class="text-right">Costo</th>
-                <th class="text-right">Proveedor</th>
+                <th>Proveedor</th>
+                <th class="text-right">Costo real</th>
                 <th class="text-right">Ahorro</th>
               </tr>
             </thead>
@@ -776,6 +780,7 @@ defmodule TokengateWeb.LogsLive do
                 <td class="text-sm">{log.latency_ms}ms</td>
                 <td class="text-sm text-right tabular-nums">{format_cost(log.estimated_cost_usd)}</td>
                 <td class="text-sm text-right tabular-nums">{format_cost(log.cost_usd)}</td>
+                <td class="text-sm">{provider_name(log)}</td>
                 <td class="text-sm text-right tabular-nums">{format_cost(log.provider_cost_usd)}</td>
                 <td class="text-sm text-right tabular-nums">{format_cost(log.savings_usd)}</td>
               </tr>

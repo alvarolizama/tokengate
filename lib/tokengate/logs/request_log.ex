@@ -45,6 +45,11 @@ defmodule Tokengate.Logs.RequestLog do
       references: :id,
       foreign_key: :team_member_id,
       type: :binary_id
+
+    belongs_to :provider, Tokengate.Providers.Provider,
+      references: :id,
+      foreign_key: :provider_id,
+      type: :binary_id
   end
 
   @permitted ~w(team_member_id provider_id model_provider_id model_alias_id

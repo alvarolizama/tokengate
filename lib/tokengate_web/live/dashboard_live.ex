@@ -780,7 +780,7 @@ defmodule TokengateWeb.DashboardLive do
               <div class="h-2.5 rounded-full bg-base-200 overflow-hidden">
                 <div
                   class="h-full rounded-full bg-primary/70 group-hover:bg-primary transition-all"
-                  style={"width: #{Float.round(max(row.value / @max_value * 100, 2), 1)}%"}
+                  style={"width: #{Float.round(max(row.value / @max_value * 100, 2.0), 1)}%"}
                 />
               </div>
             </div>
