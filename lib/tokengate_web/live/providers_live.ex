@@ -31,6 +31,7 @@ defmodule TokengateWeb.ProvidersLive do
       |> assign(:editing_provider_id, nil)
       |> assign(:credential_provider_id, nil)
       |> assign(:credential_form, nil)
+      |> assign(:editing_credential_id, nil)
       |> assign(:is_admin, user && user.global_role == "admin")
       |> require_admin_hook()
       |> load_providers()
@@ -198,31 +199,73 @@ defmodule TokengateWeb.ProvidersLive do
     {:noreply,
      socket
      |> assign(:credential_provider_id, provider_id)
-     |> assign(:credential_form, nil)}
+     |> assign(:credential_form, nil)
+     |> assign(:editing_credential_id, nil)}
   end
 
   def handle_event("new_credential", %{"provider_id" => provider_id}, socket) do
     changeset =
       Providers.change_credential(%Credential{provider_id: provider_id, status: "active"})
 
-    {:noreply, assign(socket, :credential_form, to_form(changeset, as: :credential))}
+    {:noreply,
+     socket
+     |> assign(:credential_form, to_form(changeset, as: :credential))
+     |> assign(:editing_credential_id, nil)}
+  end
+
+  def handle_event("edit_credential", %{"id" => cred_id}, socket) do
+    cred = Providers.get_credential!(cred_id)
+    changeset = Providers.change_credential(cred)
+
+    {:noreply,
+     socket
+     |> assign(:credential_form, to_form(changeset, as: :credential))
+     |> assign(:editing_credential_id, cred.id)}
   end
 
   def handle_event("cancel_credential", _params, socket) do
-    {:noreply, assign(socket, :credential_form, nil)}
+    {:noreply, socket |> assign(:credential_form, nil) |> assign(:editing_credential_id, nil)}
   end
 
   def handle_event("save_credential", %{"credential" => cred_params}, socket) do
-    case Providers.create_credential(cred_params) do
-      {:ok, _cred} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Credencial creada.")
-         |> assign(:credential_form, nil)
-         |> load_providers()}
+    editing_id = socket.assigns[:editing_credential_id]
 
-      {:error, changeset} ->
-        {:noreply, assign(socket, :credential_form, to_form(changeset, as: :credential))}
+    if editing_id do
+      cred = Providers.get_credential!(editing_id)
+
+      # Si el api_key viene vacío, evitamos sobrescribir — lo removemos
+      cred_params =
+        if cred_params["api_key_encrypted"] in [nil, ""] do
+          Map.drop(cred_params, ["api_key_encrypted"])
+        else
+          cred_params
+        end
+
+      case Providers.update_credential(cred, cred_params) do
+        {:ok, _cred} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, "Credencial actualizada.")
+           |> assign(:credential_form, nil)
+           |> assign(:editing_credential_id, nil)
+           |> load_providers()}
+
+        {:error, changeset} ->
+          {:noreply, assign(socket, :credential_form, to_form(changeset, as: :credential))}
+      end
+    else
+      case Providers.create_credential(cred_params) do
+        {:ok, _cred} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, "Credencial creada.")
+           |> assign(:credential_form, nil)
+           |> assign(:editing_credential_id, nil)
+           |> load_providers()}
+
+        {:error, changeset} ->
+          {:noreply, assign(socket, :credential_form, to_form(changeset, as: :credential))}
+      end
     end
   end
 
@@ -527,9 +570,17 @@ defmodule TokengateWeb.ProvidersLive do
                       <.input
                         field={@credential_form[:api_key_encrypted]}
                         type="password"
-                        label="API key"
-                        placeholder="sk-..."
-                        hint="El token que entrega el proveedor (sk-...)."
+                        label={"API key#{if @editing_credential_id, do: " (dejar vacío = misma)", else: ""}"}
+                        placeholder={
+                          if @editing_credential_id,
+                            do: "sk-... (dejar vacío para mantener)",
+                            else: "sk-..."
+                        }
+                        hint={
+                          if @editing_credential_id,
+                            do: "Solo si quieres cambiarla.",
+                            else: "El token que entrega el proveedor (sk-...)."
+                        }
                       />
                       <.input
                         field={@credential_form[:max_rpm]}
@@ -551,7 +602,7 @@ defmodule TokengateWeb.ProvidersLive do
                       />
                       <div class="flex gap-2">
                         <button type="submit" class="btn btn-primary btn-sm" id="save-credential-btn">
-                          Guardar
+                          {(@editing_credential_id && "Actualizar") || "Guardar"}
                         </button>
                         <button
                           type="button"
@@ -666,6 +717,14 @@ defmodule TokengateWeb.ProvidersLive do
                               {if cred.status == "active", do: "Desactivar", else: "Activar"}
                             </button>
                           <% end %>
+                          <button
+                            phx-click="edit_credential"
+                            phx-value-id={cred.id}
+                            class="btn btn-xs btn-ghost"
+                            id={"edit-credential-#{cred.id}"}
+                          >
+                            <.icon name="hero-pencil-square" class="w-3 h-3" /> Editar
+                          </button>
                           <button
                             phx-click="delete_credential"
                             phx-value-id={cred.id}

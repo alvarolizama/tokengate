@@ -220,6 +220,32 @@ defmodule TokengateWeb.ProvidersLiveTest do
 
     [cred] = Providers.list_credentials_for_provider(provider.id)
 
+    # Edit the credential — cambiar alias y dejar API key vacío
+    view |> element("#edit-credential-#{cred.id}") |> render_click()
+    assert has_element?(view, "#credential-form")
+
+    html =
+      view
+      |> form("#credential-form",
+        credential: %{
+          name: "Staging",
+          api_key_encrypted: "",
+          max_rpm: "300",
+          max_concurrent: "5"
+        }
+      )
+      |> render_submit()
+
+    assert html =~ "Credencial actualizada."
+    assert html =~ "Staging"
+    assert html =~ "300"
+
+    # Verificar que el API key NO se perdió
+    [updated] = Providers.list_credentials_for_provider(provider.id)
+    assert updated.api_key_encrypted == "sk-tes...abcd"
+    assert updated.max_rpm == 300
+    assert updated.max_concurrent == 5
+
     # Toggle it off
     html = view |> element("#toggle-credential-#{cred.id}") |> render_click()
     assert html =~ "desactivada"
