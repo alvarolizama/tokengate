@@ -10,9 +10,7 @@ defmodule Tokengate.ProvidersTest do
     Credential,
     ModelAlias,
     ModelProvider,
-    ModelPricing,
-    TeamModelAlias,
-    TeamMemberExtraAlias
+    ModelPricing
   }
 
   # ---------------------------------------------------------------------------
@@ -481,6 +479,86 @@ defmodule Tokengate.ProvidersTest do
       alias_ = model_alias_fixture()
 
       assert {:ok, nil} = Providers.revoke_alias_from_team(team.id, alias_.id)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Cascade delete behavior (FK on_delete)
+  # ---------------------------------------------------------------------------
+
+  describe "cascade deletes" do
+    alias Tokengate.Logs
+    alias Tokengate.Logs.RequestLog
+    alias Tokengate.Providers.{TeamModelAlias, TeamMemberExtraAlias}
+
+    @log_timestamp ~U[2026-07-26 12:00:00Z]
+
+    test "delete_model_alias/1 cascades to team_model_aliases" do
+      team = team_fixture()
+      alias_ = model_alias_fixture()
+      {:ok, _} = Providers.grant_alias_to_team(team.id, alias_.id)
+
+      assert Repo.get_by(TeamModelAlias, team_id: team.id, model_alias_id: alias_.id)
+
+      {:ok, _} = Providers.delete_model_alias(alias_)
+
+      refute Repo.get_by(TeamModelAlias, team_id: team.id, model_alias_id: alias_.id)
+    end
+
+    test "delete_model_alias/1 cascades to team_member_extra_aliases" do
+      member = team_member_fixture()
+      alias_ = model_alias_fixture()
+      {:ok, _} = Providers.grant_extra_alias(member.id, alias_.id)
+
+      assert Repo.get_by(TeamMemberExtraAlias,
+               team_member_id: member.id,
+               model_alias_id: alias_.id
+             )
+
+      {:ok, _} = Providers.delete_model_alias(alias_)
+
+      refute Repo.get_by(TeamMemberExtraAlias,
+               team_member_id: member.id,
+               model_alias_id: alias_.id
+             )
+    end
+
+    test "delete_provider/1 sets request_logs.provider_id to NULL (keeps history)" do
+      member = team_member_fixture()
+      provider = provider_fixture()
+
+      {:ok, log} =
+        Logs.log_request(%{
+          team_member_id: member.id,
+          provider_id: provider.id,
+          model_requested: "gpt-4",
+          inserted_at: @log_timestamp
+        })
+
+      {:ok, _} = Providers.delete_provider(provider)
+
+      reloaded = Repo.get_by(RequestLog, id: log.id, inserted_at: log.inserted_at)
+      assert reloaded != nil
+      assert reloaded.provider_id == nil
+    end
+
+    test "delete_model_alias/1 sets request_logs.model_alias_id to NULL (keeps history)" do
+      member = team_member_fixture()
+      alias_ = model_alias_fixture()
+
+      {:ok, log} =
+        Logs.log_request(%{
+          team_member_id: member.id,
+          model_alias_id: alias_.id,
+          model_requested: "gpt-4",
+          inserted_at: @log_timestamp
+        })
+
+      {:ok, _} = Providers.delete_model_alias(alias_)
+
+      reloaded = Repo.get_by(RequestLog, id: log.id, inserted_at: log.inserted_at)
+      assert reloaded != nil
+      assert reloaded.model_alias_id == nil
     end
   end
 end
