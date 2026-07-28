@@ -28,6 +28,8 @@ defmodule Tokengate.Logs.RequestLog do
     field :model_responded, :string
     field :agent_type, :string, default: "unknown"
     field :status_code, :integer
+    field :provider_status_code, :integer
+    field :error_reason, :string
     field :prompt_tokens, :integer, default: 0
     field :completion_tokens, :integer, default: 0
     field :cost_usd, :decimal
@@ -54,9 +56,10 @@ defmodule Tokengate.Logs.RequestLog do
   end
 
   @permitted ~w(team_member_id provider_id model_provider_id model_alias_id
-    model_requested model_responded agent_type status_code prompt_tokens
-    completion_tokens cost_usd provider_cost_usd savings_usd estimated_cost_usd
-    latency_ms ttft_ms streaming think effort api_key_prefix credential_name inserted_at)a
+    model_requested model_responded agent_type status_code provider_status_code
+    error_reason prompt_tokens completion_tokens cost_usd provider_cost_usd savings_usd
+    estimated_cost_usd latency_ms ttft_ms streaming think effort api_key_prefix
+    credential_name inserted_at)a
 
   @required ~w(team_member_id model_requested inserted_at)a
 

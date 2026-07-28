@@ -60,6 +60,14 @@ defmodule TokengateWeb.ProxyController do
     model = payload["model"]
     limits = Accounts.effective_limits(member)
     key_id = member.api_key.id
+    request_start = System.monotonic_time(:millisecond)
+
+    {think, effort} = Tokengate.Proxy.Reasoning.parse(payload)
+
+    conn =
+      conn
+      |> assign(:think, think)
+      |> assign(:effort, effort)
 
     with :ok <- require_model(model),
          :ok <- acquire_team_limits(key_id, limits) do
@@ -69,7 +77,7 @@ defmodule TokengateWeb.ProxyController do
             # Second gate: credential limits (provider-side throttling)
             case acquire_credential_limits(route.credential) do
               :ok ->
-                {conn, inflight} = register_inflight(conn, member, payload, route)
+                inflight = register_inflight(conn, member, payload, route)
 
                 try do
                   if payload["stream"] == true do
@@ -83,17 +91,23 @@ defmodule TokengateWeb.ProxyController do
                 end
 
               {:error, error} ->
-                render_proxy_error(conn, error)
+                log_and_render_proxy_error(conn, route, member, error,
+                  latency_ms: elapsed(request_start),
+                  error_reason: error_reason_string(error)
+                )
             end
 
           {:error, error} ->
-            render_proxy_error(conn, error)
+            log_and_render_gate_error(conn, member, model, error,
+              latency_ms: elapsed(request_start)
+            )
         end
       after
         Limits.release(key_id)
       end
     else
-      {:error, error} -> render_proxy_error(conn, error)
+      {:error, error} ->
+        log_and_render_gate_error(conn, member, model, error, latency_ms: elapsed(request_start))
     end
   end
 
@@ -137,33 +151,21 @@ defmodule TokengateWeb.ProxyController do
   end
 
   # Registers the request in the in-flight registry so the Logs UI shows it
-  # as "Pending" while it executes. Also parses think/effort from the payload
-  # and stashes them in conn assigns for the durable log.
-  # Returns `{conn, entry}` — the conn carries the think/effort assigns.
+  # as "Pending" while it executes. think/effort are already in conn assigns.
   defp register_inflight(conn, member, payload, route) do
-    {think, effort} = Tokengate.Proxy.Reasoning.parse(payload)
-
-    conn =
-      conn
-      |> assign(:think, think)
-      |> assign(:effort, effort)
-
-    entry =
-      Tokengate.Logs.Inflight.start_request(%{
-        team_member_id: member.id,
-        user_email: member.user && member.user.email,
-        team_name: member.team && member.team.name,
-        model_requested: payload["model"],
-        agent_type: conn.assigns.agent_type,
-        streaming: payload["stream"] == true,
-        think: think,
-        effort: effort,
-        provider_name: route.model_provider.credential.provider.name,
-        api_key_prefix: member.api_key && member.api_key.key_prefix,
-        credential_name: route.credential.name
-      })
-
-    {conn, entry}
+    Tokengate.Logs.Inflight.start_request(%{
+      team_member_id: member.id,
+      user_email: member.user && member.user.email,
+      team_name: member.team && member.team.name,
+      model_requested: payload["model"],
+      agent_type: conn.assigns.agent_type,
+      streaming: payload["stream"] == true,
+      think: conn.assigns[:think] || false,
+      effort: conn.assigns[:effort],
+      provider_name: route.model_provider.credential.provider.name,
+      api_key_prefix: member.api_key && member.api_key.key_prefix,
+      credential_name: route.credential.name
+    })
   end
 
   defp route_and_check(member, payload, api_key_hash, limits) do
@@ -241,14 +243,19 @@ defmodule TokengateWeb.ProxyController do
         if attempts_left > 1 do
           retry_with_fallback(conn, route, payload, member, attempts_left, exclude, status)
         else
-          render_proxy_error(conn, {:upstream_error, :auth_error, status})
+          log_and_render_proxy_error(conn, route, member, {:upstream_error, :auth_error, status},
+            error_reason: "auth_error"
+          )
         end
 
       {:error, :client_error, status} ->
         # Other 4xx from the provider: the caller's payload is at fault — surface
         # it without burning the breaker or trying other providers.
         Router.record_outcome(route, {:failure, :client_error})
-        render_proxy_error(conn, {:upstream_client_error, status})
+
+        log_and_render_proxy_error(conn, route, member, {:upstream_client_error, status},
+          error_reason: "client_error"
+        )
 
       {:error, reason, status, _error_message} ->
         Router.record_outcome(route, {:failure, breaker_reason(reason)})
@@ -256,7 +263,9 @@ defmodule TokengateWeb.ProxyController do
         if attempts_left > 1 do
           retry_with_fallback(conn, route, payload, member, attempts_left, exclude, status)
         else
-          render_proxy_error(conn, {:upstream_error, reason, status})
+          log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
+            error_reason: to_string(reason)
+          )
         end
     end
   end
@@ -299,10 +308,14 @@ defmodule TokengateWeb.ProxyController do
         execute(conn, new_route, payload, member, attempts_left - 1, exclude)
 
       {:error, :no_available_provider} ->
-        render_proxy_error(conn, :all_providers_down)
+        log_and_render_proxy_error(conn, route, member, :all_providers_down,
+          error_reason: "all_providers_down"
+        )
 
       {:error, error} ->
-        render_proxy_error(conn, error)
+        log_and_render_proxy_error(conn, route, member, error,
+          error_reason: error_reason_string(error)
+        )
     end
   end
 
@@ -364,7 +377,9 @@ defmodule TokengateWeb.ProxyController do
             if attempts_left > 1 do
               retry_stream_with_fallback(conn, route, payload, member, attempts_left, exclude)
             else
-              render_proxy_error(conn, {:upstream_error, reason, nil})
+              log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, nil},
+                error_reason: to_string(reason)
+              )
             end
         end
     end
@@ -391,10 +406,14 @@ defmodule TokengateWeb.ProxyController do
         execute_stream(conn, new_route, payload, member, attempts_left - 1, exclude)
 
       {:error, :no_available_provider} ->
-        render_proxy_error(conn, :all_providers_down)
+        log_and_render_proxy_error(conn, route, member, :all_providers_down,
+          error_reason: "all_providers_down"
+        )
 
       {:error, error} ->
-        render_proxy_error(conn, error)
+        log_and_render_proxy_error(conn, route, member, error,
+          error_reason: error_reason_string(error)
+        )
     end
   end
 
@@ -649,6 +668,8 @@ defmodule TokengateWeb.ProxyController do
       "model_responded" => route.model_responded,
       "agent_type" => agent_type,
       "status_code" => status,
+      "provider_status_code" => Keyword.get(extra, :provider_status_code),
+      "error_reason" => Keyword.get(extra, :error_reason),
       "prompt_tokens" => usage.prompt_tokens,
       "completion_tokens" => usage.completion_tokens,
       "cost_usd" => Decimal.to_string(costs.cost_usd, :normal),
@@ -666,6 +687,126 @@ defmodule TokengateWeb.ProxyController do
     |> WriteWorker.new()
     |> Oban.insert()
   end
+
+  ## Error logging ##############################################################
+
+  # Enqueues a durable log for a failed request, then renders the error to the
+  # client. `route` is available (the request got past routing), so we capture
+  # the provider status code (if any) and the error reason for observability.
+  defp log_and_render_proxy_error(conn, route, member, error, opts) do
+    {client_status, _type, code, _message} = error_details(error)
+
+    provider_status = provider_status_from_error(error)
+
+    enqueue_error_log(conn, route, member,
+      client_status: client_status,
+      provider_status: provider_status,
+      error_reason: Keyword.get(opts, :error_reason, code),
+      latency_ms: Keyword.get(opts, :latency_ms, 0),
+      streaming: conn.body_params["stream"] == true
+    )
+
+    Collector.record_request(%{
+      model_alias_id: route.model_alias.id,
+      provider_id: route.model_provider.credential.provider_id,
+      agent_type: conn.assigns.agent_type,
+      status: client_status,
+      latency_ms: Keyword.get(opts, :latency_ms, 0),
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cost_usd: Decimal.new(0),
+      savings_usd: Decimal.new(0),
+      streaming: conn.body_params["stream"] == true
+    })
+
+    render_proxy_error(conn, error)
+  end
+
+  # Gate-level errors (before routing succeeded): no provider was contacted,
+  # so there is no provider status to record. Still logs the failure.
+  defp log_and_render_gate_error(conn, member, model, error, opts) do
+    {client_status, _type, code, _message} = error_details(error)
+
+    enqueue_gate_error_log(member, model, conn.assigns.agent_type,
+      client_status: client_status,
+      error_reason: Keyword.get(opts, :error_reason, code),
+      latency_ms: Keyword.get(opts, :latency_ms, 0),
+      streaming: conn.body_params["stream"] == true
+    )
+
+    render_proxy_error(conn, error)
+  end
+
+  defp enqueue_error_log(conn, route, member, opts) do
+    %{
+      "team_member_id" => member.id,
+      "provider_id" => route.model_provider.credential.provider_id,
+      "model_provider_id" => route.model_provider.id,
+      "model_alias_id" => route.model_alias.id,
+      "model_requested" => route.model_alias.name,
+      "model_responded" => route.model_responded,
+      "agent_type" => conn.assigns.agent_type,
+      "status_code" => Keyword.get(opts, :client_status),
+      "provider_status_code" => Keyword.get(opts, :provider_status),
+      "error_reason" => Keyword.get(opts, :error_reason),
+      "prompt_tokens" => 0,
+      "completion_tokens" => 0,
+      "cost_usd" => "0",
+      "provider_cost_usd" => "0",
+      "savings_usd" => "0",
+      "estimated_cost_usd" => "0",
+      "latency_ms" => Keyword.get(opts, :latency_ms, 0),
+      "streaming" => Keyword.get(opts, :streaming, false),
+      "think" => conn.assigns[:think] || false,
+      "effort" => conn.assigns[:effort],
+      "api_key_prefix" => member.api_key && member.api_key.key_prefix,
+      "credential_name" => route.credential.name
+    }
+    |> WriteWorker.new()
+    |> Oban.insert()
+  end
+
+  defp enqueue_gate_error_log(member, model, agent_type, opts) do
+    %{
+      "team_member_id" => member.id,
+      "model_requested" => model,
+      "agent_type" => agent_type,
+      "status_code" => Keyword.get(opts, :client_status),
+      "provider_status_code" => nil,
+      "error_reason" => Keyword.get(opts, :error_reason),
+      "prompt_tokens" => 0,
+      "completion_tokens" => 0,
+      "cost_usd" => "0",
+      "provider_cost_usd" => "0",
+      "savings_usd" => "0",
+      "estimated_cost_usd" => "0",
+      "latency_ms" => Keyword.get(opts, :latency_ms, 0),
+      "streaming" => Keyword.get(opts, :streaming, false),
+      "api_key_prefix" => member.api_key && member.api_key.key_prefix
+    }
+    |> WriteWorker.new()
+    |> Oban.insert()
+  end
+
+  # Extracts the provider's HTTP status code from an upstream error tuple.
+  # Returns nil when the failure was not an HTTP response (timeout, connection
+  # error, etc.).
+  defp provider_status_from_error({:upstream_error, _reason, status})
+       when is_integer(status),
+       do: status
+
+  defp provider_status_from_error({:upstream_client_error, status})
+       when is_integer(status),
+       do: status
+
+  defp provider_status_from_error(_), do: nil
+
+  defp error_reason_string(error) do
+    {_status, _type, code, _msg} = error_details(error)
+    to_string(code)
+  end
+
+  defp elapsed(start_ms), do: System.monotonic_time(:millisecond) - start_ms
 
   ## Errors ######################################################################
 

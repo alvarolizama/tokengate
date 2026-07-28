@@ -31,6 +31,8 @@ defmodule Tokengate.Logs.WriteWorker do
       model_responded: args["model_responded"],
       agent_type: args["agent_type"] || "unknown",
       status_code: args["status_code"],
+      provider_status_code: args["provider_status_code"],
+      error_reason: args["error_reason"],
       prompt_tokens: args["prompt_tokens"] || 0,
       completion_tokens: args["completion_tokens"] || 0,
       cost_usd: args["cost_usd"],
