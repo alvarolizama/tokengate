@@ -122,6 +122,7 @@ Headers opcionales: `X-Agent-Type`, `X-Title`, `HTTP-Referer`
 | `GOOGLE_OAUTH_CLIENT_SECRET` | Google OAuth (opcional) | — |
 | `GOOGLE_OAUTH_ALLOWED_DOMAINS` | Dominios allowlist (comma-separated) | vacío |
 | `SKIP_MIGRATIONS` | `1` = no migrar en boot | — |
+| `ECTO_SSL` | `false` = desactivar SSL a Postgres (local dev) | `true` (SSL on por default) |
 
 ## Deploy
 

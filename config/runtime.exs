@@ -27,13 +27,21 @@ if config_env() == :prod do
 
   maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
+  # SSL on by default (AlloyDB/Cloud SQL require it).
+  # Set ECTO_SSL=false to disable for local dev or non-SSL databases.
+  maybe_ssl =
+    if System.get_env("ECTO_SSL") in ~w(false 0),
+      do: [],
+      else: [ssl: true, ssl_opts: [verify: :verify_none]]
+
   config :tokengate, Tokengate.Repo,
-    # ssl: true,
-    url: database_url,
-    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
-    # For machines with several cores, consider starting multiple pools of `pool_size`
-    # pool_count: 4,
-    socket_options: maybe_ipv6
+    [
+      url: database_url,
+      pool_size: String.to_integer(System.get_env("POOL_SIZE") || "10"),
+      # For machines with several cores, consider starting multiple pools of `pool_size`
+      # pool_count: 4,
+      socket_options: maybe_ipv6
+    ] ++ maybe_ssl
 
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you
