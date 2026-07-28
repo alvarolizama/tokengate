@@ -100,7 +100,12 @@ defmodule Tokengate.Providers do
   is immediately eligible for routing.
   """
   def reactivate_credential(%Credential{} = credential) do
-    case update_credential(credential, %{status: "active", error_reason: nil, error_at: nil}) do
+    case update_credential(credential, %{
+           status: "active",
+           error_reason: nil,
+           error_message: nil,
+           error_at: nil
+         }) do
       {:ok, cred} ->
         Tokengate.Routing.CircuitBreakerManager.reset(credential.id)
         {:ok, cred}

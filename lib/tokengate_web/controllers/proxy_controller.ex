@@ -223,10 +223,10 @@ defmodule TokengateWeb.ProxyController do
         Router.record_outcome(route, :success)
         finalize_success(conn, route, body, latency_ms, member)
 
-      {:error, :auth_error, status} ->
+      {:error, :auth_error, status, error_message} ->
         # 401/402/403: the credential is bad (invalid key, insufficient credit,
         # forbidden). Disable it permanently in the DB and fall back.
-        disable_credential_async(route.credential, "auth_error_#{status}")
+        disable_credential_async(route.credential, "auth_error_#{status}", error_message)
         Router.record_outcome(route, {:failure, :auth_error})
 
         if attempts_left > 1 do
@@ -241,7 +241,7 @@ defmodule TokengateWeb.ProxyController do
         Router.record_outcome(route, {:failure, :client_error})
         render_proxy_error(conn, {:upstream_client_error, status})
 
-      {:error, reason, status} ->
+      {:error, reason, status, _error_message} ->
         Router.record_outcome(route, {:failure, breaker_reason(reason)})
 
         if attempts_left > 1 do
@@ -255,11 +255,12 @@ defmodule TokengateWeb.ProxyController do
   # Permanently disable a credential after an auth/billing failure (401/402/403).
   # Runs in a background Task to avoid blocking the hot path. The credential's
   # status is set to "error" so the router excludes it from the candidate pool.
-  defp disable_credential_async(credential, reason) do
+  defp disable_credential_async(credential, reason, error_message \\ nil) do
     Task.start(fn ->
       Providers.update_credential(credential, %{
         status: "error",
         error_reason: reason,
+        error_message: error_message,
         error_at: DateTime.utc_now()
       })
     end)

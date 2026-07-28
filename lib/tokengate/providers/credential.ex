@@ -28,6 +28,7 @@ defmodule Tokengate.Providers.Credential do
     field :receive_timeout_ms, :integer, default: 120_000
     field :status, :string, default: "active"
     field :error_reason, :string
+    field :error_message, :string
     field :error_at, :utc_datetime
 
     belongs_to :provider, Tokengate.Providers.Provider
@@ -37,7 +38,7 @@ defmodule Tokengate.Providers.Credential do
   end
 
   @shared ~w(provider_id name max_rpm max_concurrent receive_timeout_ms
-    status error_reason error_at)a
+    status error_reason error_message error_at)a
 
   @doc false
   def create_changeset(credential, attrs) do

@@ -46,8 +46,9 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
         decoded = decode!(resp_body)
         {:ok, decoded, latency}
 
-      {:ok, %Finch.Response{status: status}} ->
-        {:error, ProviderAdapter.classify_status(status), status}
+      {:ok, %Finch.Response{status: status, body: resp_body}} ->
+        {:error, ProviderAdapter.classify_status(status), status,
+         extract_error_message(resp_body)}
 
       {:error, error} ->
         {:error, ProviderAdapter.classify_error(error), nil}
@@ -295,4 +296,21 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
       {:error, _} -> %{}
     end
   end
+
+  # Extract a human-readable error message from the provider's error body.
+  # Providers return different shapes; we try the most common ones.
+  defp extract_error_message(body) when is_binary(body) do
+    case Jason.decode(body) do
+      {:ok, %{"error" => %{"message" => msg}}} when is_binary(msg) -> truncate_msg(msg)
+      {:ok, %{"error" => msg}} when is_binary(msg) -> truncate_msg(msg)
+      {:ok, %{"message" => msg}} when is_binary(msg) -> truncate_msg(msg)
+      {:ok, %{"detail" => msg}} when is_binary(msg) -> truncate_msg(msg)
+      _ -> nil
+    end
+  end
+
+  defp extract_error_message(_), do: nil
+
+  defp truncate_msg(msg) when byte_size(msg) > 500, do: String.slice(msg, 0, 500) <> "…"
+  defp truncate_msg(msg), do: msg
 end

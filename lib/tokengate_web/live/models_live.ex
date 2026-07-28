@@ -491,6 +491,17 @@ defmodule TokengateWeb.ModelsLive do
   def fmt_dec(%Decimal{} = d), do: Decimal.to_string(d)
   def fmt_dec(n), do: to_string(n)
 
+  def fmt_price(nil), do: "—"
+  def fmt_price(%Decimal{} = d), do: "$#{Decimal.round(d, 2) |> Decimal.to_string()}"
+  def fmt_price(n), do: "$#{n}"
+
+  # Safely get the first pricing entry from a model_provider's model_pricing
+  # association. Returns nil when the association is not loaded or empty.
+  def pricing_for(%{model_pricing: %Ecto.Association.NotLoaded{}}), do: nil
+  def pricing_for(%{model_pricing: []}), do: nil
+  def pricing_for(%{model_pricing: [pricing | _]}), do: pricing
+  def pricing_for(_), do: nil
+
   @doc "Find model_providers for a model_alias from the preloaded association (priority ASC, nils last)"
   def model_providers_for(%{model_providers: aps}) do
     Enum.sort_by(aps, fn ap -> {is_nil(ap.priority), ap.priority || 0} end)
@@ -636,6 +647,7 @@ defmodule TokengateWeb.ModelsLive do
                           </th>
                           <th>Proveedor</th>
                           <th>Modelo</th>
+                          <th>Precio</th>
                           <th>Prioridad</th>
                           <th>Estado</th>
                           <%= if @is_admin do %>
@@ -676,6 +688,18 @@ defmodule TokengateWeb.ModelsLive do
                             </span>
                           </td>
                           <td><code class="text-sm">{ap.provider_model}</code></td>
+                          <td class="text-xs">
+                            <span :if={pricing_for(ap) != nil}>
+                              <span class="text-base-content/60">In:</span> {fmt_price(
+                                pricing_for(ap).input_price_per_1m
+                              )}
+                              <span class="text-base-content/30 mx-1">·</span>
+                              <span class="text-base-content/60">Out:</span> {fmt_price(
+                                pricing_for(ap).output_price_per_1m
+                              )}
+                            </span>
+                            <span :if={pricing_for(ap) == nil} class="text-base-content/30">—</span>
+                          </td>
                           <td>
                             <span class="badge badge-xs badge-ghost">{ap.priority || "—"}</span>
                           </td>

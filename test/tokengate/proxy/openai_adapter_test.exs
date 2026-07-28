@@ -151,17 +151,17 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
     end
 
     test "429 classifies as :rate_limited", %{credential: credential} do
-      assert {:error, :rate_limited, 429} =
+      assert {:error, :rate_limited, 429, _} =
                OpenAIAdapter.chat_completion(provider_to("/limited"), credential, %{})
     end
 
     test "500 classifies as :server_error", %{credential: credential} do
-      assert {:error, :server_error, 500} =
+      assert {:error, :server_error, 500, _} =
                OpenAIAdapter.chat_completion(provider_to("/broken"), credential, %{})
     end
 
     test "400 classifies as :client_error", %{credential: credential} do
-      assert {:error, :client_error, 400} =
+      assert {:error, :client_error, 400, _} =
                OpenAIAdapter.chat_completion(provider_to("/bad"), credential, %{})
     end
 

@@ -296,6 +296,7 @@ defmodule TokengateWeb.AlertsLive do
                       <th>Proveedor</th>
                       <th>Alias</th>
                       <th>Razón</th>
+                      <th>Error</th>
                       <th>Cuándo</th>
                       <th></th>
                     </tr>
@@ -306,6 +307,12 @@ defmodule TokengateWeb.AlertsLive do
                       <td>{cred.name || "—"}</td>
                       <td>
                         <code class="text-xs text-error">{cred.error_reason || "auth_error"}</code>
+                      </td>
+                      <td class="text-xs text-base-content/70 max-w-xs">
+                        <span :if={cred.error_message} class="line-clamp-2" title={cred.error_message}>
+                          {cred.error_message}
+                        </span>
+                        <span :if={!cred.error_message} class="text-base-content/30">—</span>
                       </td>
                       <td class="text-xs text-base-content/50">{fmt_dt(cred.error_at)}</td>
                       <td class="text-right">
