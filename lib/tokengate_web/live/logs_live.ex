@@ -733,6 +733,20 @@ defmodule TokengateWeb.LogsLive do
         <div class="overflow-x-auto">
           <table class="table table-zebra">
             <thead>
+              <tr class="border-b-0">
+                <th colspan="7" class="text-[10px] uppercase tracking-wider text-primary/70 bg-primary/5 border-r border-base-200">
+                  Identidad
+                </th>
+                <th colspan="5" class="text-[10px] uppercase tracking-wider text-accent/70 bg-accent/5 border-r border-base-200">
+                  Request
+                </th>
+                <th colspan="5" class="text-[10px] uppercase tracking-wider text-info/70 bg-info/5 border-r border-base-200">
+                  Rendimiento
+                </th>
+                <th colspan="4" class="text-[10px] uppercase tracking-wider text-success/70 bg-success/5">
+                  Costos
+                </th>
+              </tr>
               <tr>
                 <th>Fecha</th>
                 <th>Modelo</th>
@@ -740,25 +754,26 @@ defmodule TokengateWeb.LogsLive do
                 <th>Equipo</th>
                 <th>API Key</th>
                 <th>Credencial</th>
+                <th class="border-r border-base-200">Proveedor</th>
                 <th>Agente</th>
                 <th>Estado</th>
                 <th>Think</th>
                 <th>Effort</th>
+                <th class="border-r border-base-200">Streaming</th>
                 <th class="text-right">Input</th>
                 <th class="text-right">Output</th>
                 <th class="text-right">TPS</th>
                 <th title="Time to first token — solo streaming">TTFT</th>
-                <th>Latencia</th>
+                <th class="border-r border-base-200">Latencia</th>
                 <th class="text-right">Estimado</th>
                 <th class="text-right">Costo</th>
-                <th>Proveedor</th>
                 <th class="text-right">Costo real</th>
                 <th class="text-right">Ahorro</th>
               </tr>
             </thead>
             <tbody id="logs" phx-update="stream">
               <tr id="logs-empty" class="hidden only:table-row">
-                <td colspan="19" class="text-center py-8 text-base-content/40">
+                <td colspan="21" class="text-center py-8 text-base-content/40">
                   No hay logs que coincidan con los filtros.
                 </td>
               </tr>
@@ -769,6 +784,7 @@ defmodule TokengateWeb.LogsLive do
                 <td class="text-sm">{member_team(log)}</td>
                 <td class="text-sm">{log.api_key_prefix || "—"}</td>
                 <td class="text-sm">{log.credential_name || "—"}</td>
+                <td class="text-sm border-r border-base-200">{provider_name(log)}</td>
                 <td>
                   <span class="badge badge-sm badge-ghost">{log.agent_type}</span>
                 </td>
@@ -779,6 +795,7 @@ defmodule TokengateWeb.LogsLive do
                 </td>
                 <td><.think_badge value={log.think} /></td>
                 <td class="text-sm">{log.effort || "—"}</td>
+                <td class="text-sm border-r border-base-200">{if log.streaming, do: "Sí", else: "No"}</td>
                 <td class="text-sm text-right tabular-nums">{format_number(log.prompt_tokens)}</td>
                 <td class="text-sm text-right tabular-nums">
                   {format_number(log.completion_tokens)}
@@ -787,10 +804,9 @@ defmodule TokengateWeb.LogsLive do
                   {tps(log.completion_tokens, log.latency_ms)}
                 </td>
                 <td class="text-sm text-base-content/70">{format_ttft(log.ttft_ms)}</td>
-                <td class="text-sm">{log.latency_ms}ms</td>
+                <td class="text-sm border-r border-base-200">{log.latency_ms}ms</td>
                 <td class="text-sm text-right tabular-nums">{format_cost(log.estimated_cost_usd)}</td>
                 <td class="text-sm text-right tabular-nums">{format_cost(log.cost_usd)}</td>
-                <td class="text-sm">{provider_name(log)}</td>
                 <td class="text-sm text-right tabular-nums">{format_cost(log.provider_cost_usd)}</td>
                 <td class="text-sm text-right tabular-nums">{format_cost(log.savings_usd)}</td>
               </tr>

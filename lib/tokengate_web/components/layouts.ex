@@ -296,39 +296,50 @@ defmodule TokengateWeb.Layouts do
           <.sidebar_link href={~p"/dashboard"} label="Dashboard" icon="hero-chart-bar-square" />
           <.sidebar_link href={~p"/dashboard/stats"} label="Estadísticas" icon="hero-chart-pie" />
 
-          <div :if={admin?(@current_scope)} class="space-y-1">
+          <div class="space-y-1">
             <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
               Configuración
             </p>
-            <.sidebar_link href={~p"/dashboard/models"} label="Modelos" icon="hero-rectangle-stack" />
             <.sidebar_link
+              :if={admin?(@current_scope)}
               href={~p"/dashboard/providers"}
               label="Proveedores"
               icon="hero-server-stack"
             />
+            <.sidebar_link
+              :if={admin?(@current_scope)}
+              href={~p"/dashboard/models"}
+              label="Modelos"
+              icon="hero-rectangle-stack"
+            />
+            <.sidebar_link href={~p"/dashboard/teams"} label="Equipos" icon="hero-user-group" />
+          </div>
+
+          <div :if={admin?(@current_scope)} class="space-y-1">
+            <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
+              Acceso
+            </p>
             <.sidebar_link href={~p"/dashboard/users"} label="Usuarios" icon="hero-users" />
             <.sidebar_link href={~p"/dashboard/keys"} label="API Keys" icon="hero-key" />
           </div>
 
           <div class="space-y-1">
             <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
-              Acceso
-            </p>
-            <.sidebar_link href={~p"/dashboard/teams"} label="Equipos" icon="hero-user-group" />
-          </div>
-
-          <div :if={admin?(@current_scope)} class="space-y-1">
-            <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
               Monitoreo
             </p>
-            <.sidebar_link href={~p"/dashboard/alerts"} label="Alertas" icon="hero-bell-alert" />
-            <.sidebar_link href={~p"/dashboard/credits"} label="Créditos" icon="hero-banknotes" />
-          </div>
-          <div class="space-y-1">
-            <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
-              Acceso
-            </p>
             <.sidebar_link href={~p"/dashboard/logs"} label="Logs" icon="hero-document-text" />
+            <.sidebar_link
+              :if={admin?(@current_scope)}
+              href={~p"/dashboard/alerts"}
+              label="Alertas"
+              icon="hero-bell-alert"
+            />
+            <.sidebar_link
+              :if={admin?(@current_scope)}
+              href={~p"/dashboard/credits"}
+              label="Créditos"
+              icon="hero-banknotes"
+            />
           </div>
         </nav>
 
