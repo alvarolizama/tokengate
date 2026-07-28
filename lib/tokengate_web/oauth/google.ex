@@ -33,8 +33,12 @@ defmodule TokengateWeb.OAuth.Google do
   """
   def configured? do
     cfg = config()
-    cfg && cfg[:client_id] && cfg[:client_secret] && cfg[:redirect_uri]
+    present?(cfg[:client_id]) and present?(cfg[:client_secret]) and present?(cfg[:redirect_uri])
   end
+
+  defp present?(nil), do: false
+  defp present?(""), do: false
+  defp present?(_), do: true
 
   @doc """
   Builds the Google OAuth authorization URL with a CSRF state token.
