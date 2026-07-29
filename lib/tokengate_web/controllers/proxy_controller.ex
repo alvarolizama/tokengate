@@ -72,29 +72,19 @@ defmodule TokengateWeb.ProxyController do
     with :ok <- require_model(model),
          :ok <- acquire_team_limits(key_id, limits) do
       try do
-        case route_and_check(member, payload, conn.assigns.api_key_hash, limits) do
+        case route_and_acquire(member, payload, conn.assigns.api_key_hash, limits) do
           {:ok, route} ->
-            # Second gate: credential limits (provider-side throttling)
-            case acquire_credential_limits(route.credential) do
-              :ok ->
-                inflight = register_inflight(conn, member, payload, route)
+            inflight = register_inflight(conn, member, payload, route)
 
-                try do
-                  if payload["stream"] == true do
-                    execute_stream(conn, route, payload, member, @max_attempts, [])
-                  else
-                    execute(conn, route, payload, member, @max_attempts, [])
-                  end
-                after
-                  Tokengate.Logs.Inflight.finish_request(inflight.id)
-                  release_credential_limits(route.credential)
-                end
-
-              {:error, error} ->
-                log_and_render_proxy_error(conn, route, member, error,
-                  latency_ms: elapsed(request_start),
-                  error_reason: error_reason_string(error)
-                )
+            try do
+              if payload["stream"] == true do
+                execute_stream(conn, route, payload, member, @max_attempts, [])
+              else
+                execute(conn, route, payload, member, @max_attempts, [])
+              end
+            after
+              Tokengate.Logs.Inflight.finish_request(inflight.id)
+              release_credential_limits(route.credential)
             end
 
           {:error, error} ->
@@ -168,15 +158,36 @@ defmodule TokengateWeb.ProxyController do
     })
   end
 
-  defp route_and_check(member, payload, api_key_hash, limits) do
+  defp route_and_acquire(member, payload, api_key_hash, limits, exclude \\ []) do
     request_context = %{
       "messages" => payload["messages"] || [],
-      :api_key_hash => api_key_hash
+      :api_key_hash => api_key_hash,
+      :exclude_credential_ids => exclude
     }
 
     with {:ok, route} <- Router.route(payload["model"], member, request_context),
          :ok <- check_budget(member, limits, route, payload) do
-      {:ok, route}
+      case acquire_credential_limits(route.credential) do
+        :ok ->
+          {:ok, route}
+
+        {:error, :provider_concurrency_exceeded} ->
+          # This credential is saturated — try the next one by priority.
+          route_and_acquire(member, payload, api_key_hash, limits, [route.credential.id | exclude])
+
+        {:error, {:provider_rate_limited, _retry_ms}} ->
+          # Provider RPM limit hit — same fallback: try the next credential.
+          route_and_acquire(member, payload, api_key_hash, limits, [route.credential.id | exclude])
+      end
+    else
+      # All credentials excluded or unavailable — if we got here through
+      # concurrency fallback, surface the concurrency error instead of the
+      # generic "no available provider".
+      {:error, :no_available_provider} when exclude != [] ->
+        {:error, :provider_concurrency_exceeded}
+
+      {:error, error} ->
+        {:error, error}
     end
   end
 

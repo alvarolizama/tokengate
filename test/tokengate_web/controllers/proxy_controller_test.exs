@@ -100,7 +100,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     {:ok, team} =
       Accounts.create_team(%{
         name: "Team #{u}",
-        default_daily_budget_usd: Map.get(opts, :daily_budget, "100.00"),
+        monthly_budget_per_user_usd: Map.get(opts, :daily_budget, "100.00"),
         default_rpm_limit: Map.get(opts, :rpm_limit, 600),
         default_concurrency_limit: Map.get(opts, :concurrency_limit, 10)
       })
@@ -117,7 +117,7 @@ defmodule TokengateWeb.ProxyControllerTest do
         user_id: user.id,
         team_id: team.id,
         team_role: "user",
-        extra_daily_budget_usd: Map.get(opts, :extra_daily_budget),
+        extra_monthly_budget_usd: Map.get(opts, :extra_daily_budget),
         extra_concurrency: Map.get(opts, :extra_concurrency),
         extra_rpm: Map.get(opts, :extra_rpm)
       })
@@ -258,7 +258,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     # Budget spend recorded in ETS uses provider_cost_usd (the real paid cost)
     spend = Budgets.spend(member.id)
-    assert Decimal.equal?(spend.daily_usd, Decimal.new("0.000150"))
+    assert Decimal.equal?(spend.monthly_usd, Decimal.new("0.000150"))
 
     # Log job enqueued → drain → request_log row with all 4 dimensions
     assert_enqueued(worker: WriteWorker)
@@ -411,6 +411,80 @@ defmodule TokengateWeb.ProxyControllerTest do
       |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
 
     assert json_response(conn, 200)
+  end
+
+  test "concurrency fallback: saturated credential falls back to second credential", %{conn: conn} do
+    u = unique()
+
+    # First credential with max_concurrent: 1
+    %{token: token, alias: model_alias} = proxy_fixture(%{})
+
+    # Saturate the first credential's only concurrency slot
+    {:ok, cred1} =
+      Providers.update_credential(
+        hd(Providers.list_model_providers(model_alias.id)).credential,
+        %{max_concurrent: 1}
+      )
+
+    :ok = Limits.acquire(cred1.id, %{rpm_limit: nil, concurrency_limit: 1})
+
+    # Second credential at lower priority (higher number)
+    {:ok, provider2} =
+      Providers.create_provider(%{
+        name: "Healthy #{u}",
+        base_url: "http://localhost:#{@port}"
+      })
+
+    {:ok, cred2} =
+      Providers.create_credential(%{
+        provider_id: provider2.id,
+        api_key_encrypted: "sk-healthy-#{u}",
+        max_concurrent: 5
+      })
+
+    {:ok, ap2} =
+      Providers.create_model_provider(%{
+        model_alias_id: model_alias.id,
+        credential_id: cred2.id,
+        provider_model: "gpt-4o-healthy-#{u}",
+        priority: 2
+      })
+
+    {:ok, _} =
+      Providers.create_model_pricing(%{
+        model_provider_id: ap2.id,
+        input_price_per_1m: "2.50",
+        output_price_per_1m: "10.00",
+        effective_from: DateTime.truncate(DateTime.utc_now(), :second)
+      })
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+
+    assert json_response(conn, 200)
+
+    Limits.release(cred1.id)
+  end
+
+  test "429 provider_concurrency_exceeded when all credentials are saturated", %{conn: conn} do
+    %{token: token, alias: model_alias} = proxy_fixture(%{})
+
+    # Saturate the only credential's concurrency slot
+    [mp] = Providers.list_model_providers(model_alias.id)
+
+    {:ok, cred} = Providers.update_credential(mp.credential, %{max_concurrent: 1})
+    :ok = Limits.acquire(cred.id, %{rpm_limit: nil, concurrency_limit: 1})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+
+    assert %{"error" => %{"code" => "provider_concurrency_exceeded"}} = json_response(conn, 429)
+
+    Limits.release(cred.id)
   end
 
   ## Streaming #################################################################
