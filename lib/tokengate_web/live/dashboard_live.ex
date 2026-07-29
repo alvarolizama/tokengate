@@ -640,6 +640,38 @@ defmodule TokengateWeb.DashboardLive do
     |> Enum.max(fn -> 0.0 end)
   end
 
+  # Compute Y-axis labels (5 ticks from 0 to max)
+  defp compute_y_labels(+0.0), do: ["0"]
+  defp compute_y_labels(max_value) do
+    step = max_value / 4
+
+    for i <- 0..4 do
+      val = step * (4 - i)
+      format_chart_value(val)
+    end
+  end
+
+  # Compute X-axis labels (show ~5 evenly spaced labels)
+  defp compute_x_labels(series) when length(series) <= 5 do
+    Enum.map(series, & &1.label)
+  end
+
+  defp compute_x_labels(series) do
+    count = length(series)
+    # Show ~5 labels: first, last, and 3 evenly spaced
+    indices = [0, div(count - 1, 4), div(count - 1, 2), div(count - 1, 4) * 3, count - 1]
+    indices
+    |> Enum.uniq()
+    |> Enum.sort()
+    |> Enum.map(fn i -> Enum.at(series, i).label end)
+  end
+
+  defp format_chart_value(val) when val >= 1_000_000, do: "#{Float.round(val / 1_000_000, 1)}M"
+  defp format_chart_value(val) when val >= 1_000, do: "#{Float.round(val / 1_000, 1)}K"
+  defp format_chart_value(val) when val >= 1, do: "#{trunc(val)}"
+  defp format_chart_value(val) when val > 0, do: "#{Float.round(val, 2)}"
+  defp format_chart_value(_), do: "0"
+
   def period_label("today"), do: "Hoy"
   def period_label("7d"), do: "7 días"
   def period_label("30d"), do: "30 días"
@@ -747,6 +779,8 @@ defmodule TokengateWeb.DashboardLive do
       assigns
       |> assign(:max_value, max_value)
       |> assign(:bar_width, max(380 / bar_count - 4, 2))
+      |> assign(:y_labels, compute_y_labels(max_value))
+      |> assign(:x_labels, compute_x_labels(assigns.series))
 
     ~H"""
     <div id={@id} class="card bg-base-100 border border-base-300 shadow-sm">
@@ -761,26 +795,48 @@ defmodule TokengateWeb.DashboardLive do
             {@empty_label}
           </div>
         <% else %>
-          <svg viewBox="0 0 400 150" class="w-full h-40 mt-4" preserveAspectRatio="none">
-            <%= for {row, i} <- Enum.with_index(@series) do %>
-              <% height = if @max_value > 0, do: max(row.value / @max_value * 120, 1), else: 1 %>
-              <% x = 10 + i * (@bar_width + 4) %>
-              <% y = 140 - height %>
-              <rect
-                x={x}
-                y={y}
-                width={@bar_width}
-                height={height}
-                rx="2"
-                class={[@bar_class, "transition-colors"]}
-              >
-                <title>
-                  {row.label} — {row.tooltip}
-                </title>
-              </rect>
-            <% end %>
-            <line x1="10" y1="140" x2="390" y2="140" class="stroke-base-300" stroke-width="1" />
-          </svg>
+          <div class="mt-4">
+            <div class="flex">
+              <%!-- Y-axis labels --%>
+              <div class="flex flex-col justify-between text-[10px] text-base-content/50 pr-1 h-40 text-right w-8">
+                <%= for label <- @y_labels do %>
+                  <span>{label}</span>
+                <% end %>
+              </div>
+              <%!-- Chart --%>
+              <svg viewBox="0 0 400 150" class="flex-1 h-40" preserveAspectRatio="none">
+                <%= for {row, i} <- Enum.with_index(@series) do %>
+                  <% height = if @max_value > 0, do: max(row.value / @max_value * 120, 1), else: 1 %>
+                  <% x = 10 + i * (@bar_width + 4) %>
+                  <% y = 140 - height %>
+                  <rect
+                    x={x}
+                    y={y}
+                    width={@bar_width}
+                    height={height}
+                    rx="2"
+                    class={[@bar_class, "transition-colors"]}
+                  >
+                    <title>
+                      {row.label} — {row.tooltip}
+                    </title>
+                  </rect>
+                <% end %>
+                <line x1="10" y1="140" x2="390" y2="140" class="stroke-base-300" stroke-width="1" />
+                <%!-- Horizontal grid lines --%>
+                <%= for {_label, i} <- Enum.with_index(@y_labels) do %>
+                  <% y = 20 + i * (120 / (length(@y_labels) - 1)) %>
+                  <line x1="10" y1={y} x2="390" y2={y} class="stroke-base-300/50" stroke-width="0.5" stroke-dasharray="2,2" />
+                <% end %>
+              </svg>
+            </div>
+            <%!-- X-axis labels --%>
+            <div class="flex justify-between text-[10px] text-base-content/50 pl-9 mt-1">
+              <%= for label <- @x_labels do %>
+                <span>{label}</span>
+              <% end %>
+            </div>
+          </div>
         <% end %>
       </div>
     </div>
