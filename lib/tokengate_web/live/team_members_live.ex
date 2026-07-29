@@ -41,6 +41,7 @@ defmodule TokengateWeb.TeamMembersLive do
           |> assign(:add_form, add_member_form())
           |> assign(:add_member_error, nil)
           |> assign(:email_suggestions, [])
+          |> assign(:member_search, "")
           |> load_data()
 
         {:ok, socket}
@@ -65,7 +66,19 @@ defmodule TokengateWeb.TeamMembersLive do
 
   defp load_data(socket) do
     team = socket.assigns.team
+    search = socket.assigns[:member_search] || ""
     members = Accounts.list_team_members_for_team(team.id)
+
+    members =
+      if search == "" do
+        members
+      else
+        search_down = String.downcase(search)
+        Enum.filter(members, fn m ->
+          String.contains?(String.downcase(m.user.email), search_down) or
+            String.contains?(String.downcase(m.user.name || ""), search_down)
+        end)
+      end
 
     # Get all available model aliases
     org_alias_ids =
@@ -147,6 +160,11 @@ defmodule TokengateWeb.TeamMembersLive do
   end
 
   ## Events — add member --------------------------------------------------
+
+  @impl true
+  def handle_event("search_members", %{"member_search" => search}, socket) do
+    {:noreply, socket |> assign(:member_search, search) |> load_data()}
+  end
 
   @impl true
   def handle_event("new_member", _params, socket) do
@@ -845,6 +863,18 @@ defmodule TokengateWeb.TeamMembersLive do
               </div>
             </div>
           </div>
+        </div>
+
+        <div class="flex items-center gap-3 mb-1">
+          <input
+            type="text"
+            name="member_search"
+            value={@member_search}
+            placeholder="Buscar por nombre o correo…"
+            phx-change="search_members"
+            phx-debounce="200"
+            class="input input-sm w-72"
+          />
         </div>
 
         <div id="members" class="space-y-4">
