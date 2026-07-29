@@ -45,13 +45,15 @@
               </button>
             </div>
 
-            <div class="divider text-xs text-base-content/40">o</div>
+            <%= if assigns[:google_oauth_configured] do %>
+              <div class="divider text-xs text-base-content/40">o</div>
 
-            <div class="form-control">
-              <a href="/auth/google" class="btn btn-outline w-full" id="google-login-btn">
-                <.icon name="hero-globe-alt" class="w-5 h-5" /> Entrar con Google
-              </a>
-            </div>
+              <div class="form-control">
+                <a href="/auth/google" class="btn btn-outline w-full" id="google-login-btn">
+                  <.icon name="hero-globe-alt" class="w-5 h-5" /> Entrar con Google
+                </a>
+              </div>
+            <% end %>
           </.form>
         </div>
       </div>

@@ -30,6 +30,7 @@ defmodule TokengateWeb.SessionController do
       # from this controller's `SessionHTML` module.
       conn
       |> assign(:page_title, "Iniciar sesión · Tokengate")
+      |> assign(:google_oauth_configured, TokengateWeb.OAuth.Google.configured?())
       |> render(:new)
     end
   end
@@ -53,6 +54,7 @@ defmodule TokengateWeb.SessionController do
         conn
         |> put_flash(:error, "Tu cuenta está suspendida. Contacta al administrador.")
         |> assign(:email, email)
+        |> assign(:google_oauth_configured, TokengateWeb.OAuth.Google.configured?())
         |> assign(:page_title, "Iniciar sesión · Tokengate")
         |> render(:new)
 
@@ -60,6 +62,7 @@ defmodule TokengateWeb.SessionController do
         conn
         |> put_flash(:error, "Credenciales inválidas.")
         |> assign(:email, email)
+        |> assign(:google_oauth_configured, TokengateWeb.OAuth.Google.configured?())
         |> assign(:page_title, "Iniciar sesión · Tokengate")
         |> render(:new)
     end
