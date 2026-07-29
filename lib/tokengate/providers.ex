@@ -19,6 +19,7 @@ defmodule Tokengate.Providers do
     ModelAlias,
     ModelProvider,
     ModelPricing,
+    ServiceModelAlias,
     TeamModelAlias,
     TeamMemberExtraAlias
   }
@@ -433,6 +434,26 @@ defmodule Tokengate.Providers do
   end
 
   # ---------------------------------------------------------------------------
+  # Service Model Aliases
+  # ---------------------------------------------------------------------------
+
+  def grant_alias_to_service(service_id, model_alias_id) do
+    %ServiceModelAlias{}
+    |> ServiceModelAlias.changeset(%{service_id: service_id, model_alias_id: model_alias_id})
+    |> Repo.insert()
+  end
+
+  def revoke_alias_from_service(service_id, model_alias_id) do
+    case Repo.get_by(ServiceModelAlias,
+           service_id: service_id,
+           model_alias_id: model_alias_id
+         ) do
+      nil -> {:ok, nil}
+      sma -> Repo.delete(sma)
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Accessible Aliases
   # ---------------------------------------------------------------------------
 
@@ -443,6 +464,18 @@ defmodule Tokengate.Providers do
 
   Expects a team_member struct with `:id` and `:team` preloaded (team must have `:id`).
   """
+  def list_accessible_aliases(%{team: nil} = member) do
+    # Service (virtual team member) — only service_model_aliases
+    service_id = member.id
+
+    from(sma in ServiceModelAlias,
+      where: sma.service_id == ^service_id,
+      join: ma in ModelAlias,
+      on: ma.id == sma.model_alias_id
+    )
+    |> Repo.all()
+  end
+
   def list_accessible_aliases(team_member) do
     member_id = team_member.id
     team_id = team_member.team.id

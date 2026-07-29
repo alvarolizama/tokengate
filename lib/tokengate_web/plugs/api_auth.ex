@@ -1,10 +1,11 @@
 defmodule TokengateWeb.Plugs.ApiAuth do
   @moduledoc """
-  Authenticates proxy API requests via `Authorization: Bearer <api_key>`.
+  Authenticates proxy API requests via `Authorization: Bearer ***
 
   On success assigns:
 
     * `:current_team_member` — the TeamMember (team, user, api_key preloaded)
+      OR a virtual TeamMember struct when the key belongs to a Service.
     * `:api_key_hash` — sha256 hex of the presented token (sticky routing key)
     * `:agent_type` — from the `X-Agent-Type` header (default `"unknown"`)
 
@@ -15,19 +16,20 @@ defmodule TokengateWeb.Plugs.ApiAuth do
   Responds 401 (OpenAI-style error JSON) when the key is missing/invalid,
   403 when the membership is not active.
   """
-
   import Plug.Conn
 
   alias Tokengate.Accounts
+  alias Tokengate.Accounts.TeamMember
+  alias Tokengate.Repo
 
   def init(opts), do: opts
 
   def call(conn, _opts) do
     with [token] <- bearer_token(conn),
-         {:ok, team_member} <- fetch_member(token),
-         :ok <- active_membership(team_member) do
+         {:ok, member} <- fetch_member(token),
+         :ok <- active_membership(member) do
       conn
-      |> assign(:current_team_member, team_member)
+      |> assign(:current_team_member, member)
       |> assign(:api_key_hash, Accounts.hash_api_key(token))
       |> assign(:agent_type, agent_type(conn))
     else
@@ -46,9 +48,43 @@ defmodule TokengateWeb.Plugs.ApiAuth do
 
   defp fetch_member(token) when is_binary(token) do
     case Accounts.get_team_member_by_api_key(token) do
-      {:ok, %Accounts.TeamMember{} = member} -> {:ok, member}
-      _ -> :invalid_key
+      {:ok, %TeamMember{} = member} ->
+        {:ok, member}
+
+      _ ->
+        # Try service API key lookup
+        case Accounts.get_service_by_api_key(token) do
+          {:ok, service} ->
+            {:ok, service_to_virtual_member(service)}
+
+          _ ->
+            :invalid_key
+        end
     end
+  end
+
+  @doc """
+  Converts a Service into a virtual TeamMember struct.
+  This allows the proxy controller to handle services without changes.
+  """
+  def service_to_virtual_member(service) do
+    service = Repo.preload(service, [:api_key])
+
+    %TeamMember{
+      # Use service_id as a pseudo team_member_id for budget tracking
+      id: service.id,
+      team_id: nil,
+      user_id: nil,
+      team_role: "user",
+      extra_monthly_budget_usd: nil,
+      extra_concurrency: nil,
+      extra_rpm: nil,
+      status: "active",
+      # Preloaded associations (virtual)
+      team: nil,
+      user: nil,
+      api_key: service.api_key
+    }
   end
 
   defp active_membership(%{status: "active"}), do: :ok

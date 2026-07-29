@@ -70,6 +70,7 @@ defmodule TokengateWeb.Router do
       live "/dashboard/stats/members/:member_id", StatsLive, :member
       live "/dashboard/teams", TeamsLive
       live "/dashboard/teams/:id/members", TeamMembersLive
+      live "/dashboard/services", ServicesLive
       live "/dashboard/logs", LogsLive
       live "/dashboard/providers", ProvidersLive
       live "/dashboard/users", UsersLive

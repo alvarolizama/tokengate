@@ -337,6 +337,11 @@ defmodule TokengateWeb.Layouts do
                 icon="hero-rectangle-stack"
               />
               <.sidebar_link href={~p"/dashboard/teams"} label="Equipos" icon="hero-user-group" />
+              <.sidebar_link
+                href={~p"/dashboard/services"}
+                label="Servicios"
+                icon="hero-wrench-screwdriver"
+              />
             </div>
 
             <div class="space-y-1">

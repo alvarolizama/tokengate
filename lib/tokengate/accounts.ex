@@ -1,12 +1,11 @@
 defmodule Tokengate.Accounts do
   @moduledoc """
-  The Accounts context: teams, users, team members, and API keys.
+  The Accounts context: teams, users, team members, services, and API keys.
   """
 
   import Ecto.Query
-
   alias Tokengate.Repo
-  alias Tokengate.Accounts.{ApiKey, Team, TeamMember, User}
+  alias Tokengate.Accounts.{ApiKey, Service, ServiceApiKey, Team, TeamMember, User}
 
   # ---------------------------------------------------------------------------
   # Teams
@@ -529,6 +528,131 @@ defmodule Tokengate.Accounts do
   end
 
   # ---------------------------------------------------------------------------
+  # Services
+  # ---------------------------------------------------------------------------
+
+  def list_services, do: Repo.all(Service)
+
+  def get_service!(id), do: Repo.get!(Service, id)
+
+  def get_service(id), do: Repo.get(Service, id)
+
+  def create_service(attrs) do
+    %Service{}
+    |> Service.changeset(attrs)
+    |> Repo.insert()
+  end
+
+  def update_service(%Service{} = service, attrs) do
+    service
+    |> Service.changeset(attrs)
+    |> Repo.update()
+  end
+
+  def delete_service(%Service{} = service) do
+    alias Tokengate.Providers.ServiceModelAlias
+
+    service = Repo.preload(service, [:api_key, :model_aliases])
+
+    Repo.transaction(fn ->
+      # Delete service_model_aliases
+      from(sma in ServiceModelAlias, where: sma.service_id == ^service.id)
+      |> Repo.delete_all()
+
+      # Delete api key
+      if service.api_key, do: Repo.delete!(service.api_key)
+
+      # Delete the service itself
+      service
+      |> Repo.delete()
+      |> case do
+        {:ok, service} -> service
+        {:error, changeset} -> Repo.rollback(changeset)
+      end
+    end)
+  end
+
+  def change_service(%Service{} = service, attrs \\ %{}) do
+    Service.changeset(service, attrs)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Service API keys
+  # ---------------------------------------------------------------------------
+
+  def get_service_api_key!(id), do: Repo.get!(ServiceApiKey, id)
+
+  def get_service_api_key(id), do: Repo.get(ServiceApiKey, id)
+
+  @doc """
+  Looks up a service by a presented API key token.
+  Returns `{:ok, service}` only when the token matches an active API key.
+  The returned service has `:api_key` preloaded. Returns
+  `{:error, :not_found}` otherwise.
+  """
+  def get_service_by_api_key(token) when is_binary(token) do
+    key_hash = hash_api_key(token)
+
+    query =
+      from s in Service,
+        join: ak in assoc(s, :api_key),
+        where: ak.key_hash == ^key_hash and ak.status == "active",
+        preload: [:api_key]
+
+    case Repo.one(query) do
+      %Service{} = service -> {:ok, service}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  @doc """
+  Generates or replaces the API key for a service.
+  Returns `{:ok, api_key, new_token}` or `{:error, changeset}`.
+  """
+  def generate_service_api_key(%Service{id: service_id} = service) do
+    {new_token, new_hash, new_prefix} = generate_api_key_material()
+
+    service = Repo.preload(service, [:api_key])
+
+    if service.api_key do
+      service.api_key
+      |> ServiceApiKey.changeset(%{
+        "key_hash" => new_hash,
+        "key_prefix" => new_prefix,
+        "status" => "active"
+      })
+      |> Repo.update()
+      |> case do
+        {:ok, api_key} -> {:ok, api_key, new_token}
+        {:error, changeset} -> {:error, changeset}
+      end
+    else
+      %ServiceApiKey{}
+      |> ServiceApiKey.changeset(%{
+        "service_id" => service_id,
+        "key_hash" => new_hash,
+        "key_prefix" => new_prefix,
+        "status" => "active"
+      })
+      |> Repo.insert()
+      |> case do
+        {:ok, api_key} -> {:ok, api_key, new_token}
+        {:error, changeset} -> {:error, changeset}
+      end
+    end
+  end
+
+  @doc """
+  Revokes the API key for a service.
+  Returns `{:ok, api_key}` or `{:error, changeset}`.
+  """
+  def revoke_service_api_key(%ServiceApiKey{} = api_key) do
+    api_key
+    |> ServiceApiKey.changeset(%{status: "revoked"})
+    |> Repo.update()
+  end
+
+  # ---------------------------------------------------------------------------
   # Effective limits
   # ---------------------------------------------------------------------------
 
@@ -557,6 +681,14 @@ defmodule Tokengate.Accounts do
       concurrency_limit:
         combine_integer(team.default_concurrency_limit, team_member.extra_concurrency),
       rpm_limit: combine_integer(team.default_rpm_limit, team_member.extra_rpm)
+    }
+  end
+
+  def effective_limits(%Service{} = service) do
+    %{
+      monthly_budget_usd: service.monthly_budget_usd,
+      concurrency_limit: service.concurrency_limit,
+      rpm_limit: service.rpm_limit
     }
   end
 
