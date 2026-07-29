@@ -12,7 +12,7 @@ defmodule Tokengate.LogsTest do
     Map.merge(
       %{
         "name" => "Platform Team",
-        "default_daily_budget_usd" => "100.00",
+        "monthly_budget_per_user_usd" => "100.00",
         "default_concurrency_limit" => 10,
         "default_rpm_limit" => 120
       },

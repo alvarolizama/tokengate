@@ -374,42 +374,12 @@ defmodule Tokengate.Providers do
   end
 
   @doc """
-  Sets (upserts) an extra model alias grant for a team member, optionally with
-  a per-model daily budget. If the grant exists, updates the budget. If the
-  budget is empty/nil and the grant exists, deletes it.
+  Grants an extra model alias to an individual team member (access only, no
+  per-model budget). Idempotent: returns `{:error, :already_granted}` if the
+  grant already exists.
   """
-  def set_extra_alias(team_member_id, model_alias_id, extra_daily_budget_usd) do
-    existing =
-      Repo.get_by(TeamMemberExtraAlias,
-        team_member_id: team_member_id,
-        model_alias_id: model_alias_id
-      )
-
-    cond do
-      is_nil(extra_daily_budget_usd) or extra_daily_budget_usd == "" ->
-        if existing do
-          Repo.delete(existing)
-        else
-          {:ok, nil}
-        end
-
-      true ->
-        attrs = %{
-          team_member_id: team_member_id,
-          model_alias_id: model_alias_id,
-          extra_daily_budget_usd: extra_daily_budget_usd
-        }
-
-        if existing do
-          existing
-          |> TeamMemberExtraAlias.changeset(attrs)
-          |> Repo.update()
-        else
-          %TeamMemberExtraAlias{}
-          |> TeamMemberExtraAlias.changeset(attrs)
-          |> Repo.insert()
-        end
-    end
+  def set_extra_alias(team_member_id, model_alias_id) do
+    grant_extra_alias(team_member_id, model_alias_id)
   end
 
   @doc """

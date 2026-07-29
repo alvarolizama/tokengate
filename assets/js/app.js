@@ -80,10 +80,26 @@ const SortableProviders = {
   }
 }
 
+// Open/close DaisyUI <dialog> modals via push_event from LiveView.
+// Usage: push_event("open_modal", %{id: "my-modal"})
+//        push_event("close_modal", %{id: "my-modal"})
+const Modal = {
+  mounted() {
+    this.handleEvent("open_modal", ({id}) => {
+      const el = document.getElementById(id)
+      if (el && typeof el.showModal === "function") el.showModal()
+    })
+    this.handleEvent("close_modal", ({id}) => {
+      const el = document.getElementById(id)
+      if (el && typeof el.close === "function") el.close()
+    })
+  }
+}
+
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, SortableProviders},
+  hooks: {...colocatedHooks, SortableProviders, Modal},
 })
 
 // Show progress bar on live navigation and form submits

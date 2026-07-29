@@ -12,7 +12,7 @@
       </.header>
 
       <%!-- Period selector --%>
-      <div class="join" id="period-selector" role="tablist">
+      <div :if={@has_access} class="join" id="period-selector" role="tablist">
         <button
           :for={period <- ~w(today 7d 30d 90d)}
           phx-click="set_period"
@@ -35,17 +35,18 @@
         <p class="font-semibold">Nueva clave generada para {@new_token_team}</p>
         <div class="relative mt-2">
           <code
-            class="block p-2 pr-12 bg-base-200 rounded text-sm font-mono break-all select-all"
+            class="block p-2 pr-24 bg-base-200 rounded text-sm font-mono break-all select-all"
             id="new-token-value"
           >
             {@new_token}
           </code>
           <button
             type="button"
-            onclick="navigator.clipboard.writeText(document.getElementById('new-token-value').innerText).then(()=>{this.innerText='✓';setTimeout(()=>{this.innerText='Copiar'},1500)})"
-            class="absolute right-2 top-1/2 -translate-y-1/2 btn btn-xs btn-ghost"
             id="copy-token-btn"
             aria-label="Copiar al portapapeles"
+            phx-hook="CopyToClipboard"
+            data-target="new-token-value"
+            class="absolute right-2 top-1/2 -translate-y-1/2 btn btn-xs btn-ghost"
           >
             Copiar
           </button>
@@ -68,10 +69,13 @@
     <section id="teams-section">
       <h2 class="text-base font-semibold mb-3">Tus equipos</h2>
 
-      <%= if @teams == [] do %>
-        <div class="text-center py-8 text-base-content/40">
-          <.icon name="hero-user-group" class="w-8 h-8 mx-auto mb-2 opacity-40" />
-          <p>No perteneces a ningún equipo todavía.</p>
+    <%= if @teams == [] and not @has_access do %>
+        <div class="text-center py-12 text-base-content/50" id="no-team-state">
+          <.icon name="hero-user-group" class="w-10 h-10 mx-auto mb-3 opacity-40" />
+          <p class="font-medium">No tienes ningún equipo asignado.</p>
+          <p class="text-sm mt-1 text-base-content/40">
+            Contacta al administrador para que te asigne un equipo.
+          </p>
         </div>
       <% else %>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
@@ -145,33 +149,8 @@
                   </div>
                 <% end %>
 
-                <%!-- Budget bars --%>
+                <%!-- Budget bar — monthly only --%>
                 <div class="mt-4 pt-4 border-t border-base-200 space-y-3">
-                  <%!-- Daily budget --%>
-                  <div>
-                    <div class="flex items-center justify-between text-xs">
-                      <span class="text-base-content/60">Gasto diario</span>
-                      <span class="font-mono">
-                        ${format_decimal(t.daily_spend)}
-                        <span :if={t.daily_limit} class="text-base-content/40">
-                          / ${format_decimal(t.daily_limit)}
-                        </span>
-                      </span>
-                    </div>
-                    <div
-                      :if={t.daily_limit}
-                      class="mt-1 h-2 rounded-full bg-base-200 overflow-hidden"
-                    >
-                      <% daily_pct = budget_pct(t.daily_spend, t.daily_limit) %>
-                      <div
-                        class={["h-full rounded-full transition-all", budget_bar_class(daily_pct)]}
-                        style={budget_bar_width(daily_pct)}
-                      >
-                      </div>
-                    </div>
-                  </div>
-
-                  <%!-- Monthly budget --%>
                   <div>
                     <div class="flex items-center justify-between text-xs">
                       <span class="text-base-content/60">Gasto mensual</span>
@@ -205,29 +184,8 @@
       <% end %>
     </section>
 
-    <%!-- API usage info / endpoint --%>
-    <div class="alert alert-info mb-6" id="api-usage-info">
-      <.icon name="hero-information-circle" class="w-5 h-5 shrink-0" />
-      <div class="flex-1 text-sm">
-        <p class="font-semibold">Endpoint de la API</p>
-        <p class="mt-1">
-          Usa tu clave en el header
-          <code class="font-mono bg-base-200 px-1 rounded">Authorization: Bearer ***</code>
-        </p>
-        <div class="mt-2 space-y-1">
-          <p>
-            <span class="text-base-content/60">Modelos disponibles:</span>
-            <code class="font-mono bg-base-200 px-1 rounded">GET /v1/models</code>
-          </p>
-          <p>
-            <span class="text-base-content/60">Chat completions:</span>
-            <code class="font-mono bg-base-200 px-1 rounded">POST /v1/chat/completions</code>
-          </p>
-        </div>
-      </div>
-    </div>
-
-    <%!-- Metrics section --%>
+    <%= if @has_access do %>
+      <%!-- Metrics section --%>
     <%= if @loading do %>
       <div class="flex items-center justify-center py-20">
         <span class="loading loading-spinner loading-lg text-primary"></span>
@@ -645,7 +603,7 @@
         </div>
 
         <%!-- Rankings: Top 5 equipos + Top 5 miembros arriba, Ranking de modelos full-width abajo --%>
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="rankings-grid">
+        <div :if={@is_admin} class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="rankings-grid">
           <.hbars_chart
             id="top-teams-chart"
             title="Top 5 equipos por costo real"
@@ -671,6 +629,7 @@
           </div>
         </div>
       <% end %>
+    <% end %>
     <% end %>
   </div>
 </Layouts.dashboard>

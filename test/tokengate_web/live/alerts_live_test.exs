@@ -42,7 +42,7 @@ defmodule TokengateWeb.AlertsLiveTest do
         Map.merge(
           %{
             "name" => "Alerts Team #{unique()}",
-            "default_daily_budget_usd" => "100.00"
+            "monthly_budget_per_user_usd" => "100.00"
           },
           attrs
         )
@@ -73,7 +73,7 @@ defmodule TokengateWeb.AlertsLiveTest do
 
     assert has_element?(view, "#alert-budget-#{member.id}", member_user.email)
     assert has_element?(view, "#alert-budget-#{member.id}", team.name)
-    assert has_element?(view, "#alert-budget-#{member.id}", "diario")
+    assert has_element?(view, "#alert-budget-#{member.id}", "mensual")
     assert has_element?(view, "#alert-budget-credits-#{member.id}")
   end
 

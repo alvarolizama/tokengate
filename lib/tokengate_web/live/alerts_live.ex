@@ -177,8 +177,6 @@ defmodule TokengateWeb.AlertsLive do
     |> Decimal.to_string()
   end
 
-  defp budget_periods(%{daily_exhausted?: true, monthly_exhausted?: true}), do: "diario + mensual"
-  defp budget_periods(%{daily_exhausted?: true}), do: "diario"
   defp budget_periods(%{monthly_exhausted?: true}), do: "mensual"
   defp budget_periods(_), do: "—"
 
@@ -396,7 +394,6 @@ defmodule TokengateWeb.AlertsLive do
                       <th>Usuario</th>
                       <th>Equipo</th>
                       <th>Límite agotado</th>
-                      <th>Gasto hoy</th>
                       <th>Gasto mes</th>
                       <th></th>
                     </tr>
@@ -408,12 +405,6 @@ defmodule TokengateWeb.AlertsLive do
                       <td>
                         <span class="badge badge-sm badge-error">
                           {budget_periods(b)}
-                        </span>
-                      </td>
-                      <td class="font-mono text-xs">
-                        ${fmt_money(b.daily_spend_usd)}
-                        <span :if={b.daily_limit_usd} class="text-base-content/50">
-                          / ${fmt_money(b.daily_limit_usd)}
                         </span>
                       </td>
                       <td class="font-mono text-xs">

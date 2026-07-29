@@ -29,6 +29,9 @@ defmodule TokengateWeb.UsersLive do
       |> assign(:editing_user_id, nil)
       |> assign(:reset_user_id, nil)
       |> assign(:form_mode, nil)
+      |> assign(:delete_target_id, nil)
+      |> assign(:delete_target_email, nil)
+      |> assign(:all_teams, Accounts.list_teams())
       |> assign(:is_admin, user && user.global_role == "admin")
       |> require_admin_hook()
       |> load_users()
@@ -152,6 +155,54 @@ defmodule TokengateWeb.UsersLive do
     end
   end
 
+  ## Events — delete user -------------------------------------------------
+
+  def handle_event("open_delete_modal", %{"id" => user_id, "email" => email}, socket) do
+    {:noreply,
+     socket
+     |> assign(:delete_target_id, user_id)
+     |> assign(:delete_target_email, email)
+     |> push_event("open_modal", %{id: "delete-user-modal"})}
+  end
+
+  def handle_event("confirm_delete_user", %{"id" => user_id}, socket) do
+    user = Accounts.get_user!(user_id)
+    current_user = socket.assigns.current_user
+
+    cond do
+      root_admin?(user) ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "No se puede eliminar al administrador principal.")
+         |> assign(:delete_target_id, nil)
+         |> assign(:delete_target_email, nil)
+         |> push_event("close_modal", %{id: "delete-user-modal"})}
+
+      user.id == current_user.id ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "No puedes eliminar tu propia cuenta.")
+         |> assign(:delete_target_id, nil)
+         |> assign(:delete_target_email, nil)
+         |> push_event("close_modal", %{id: "delete-user-modal"})}
+
+      true ->
+        case Accounts.delete_user(user) do
+          {:ok, _} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Usuario eliminado permanentemente. Toda su data fue borrada.")
+             |> assign(:delete_target_id, nil)
+             |> assign(:delete_target_email, nil)
+             |> push_event("close_modal", %{id: "delete-user-modal"})
+             |> load_users()}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "No se pudo eliminar el usuario.")}
+        end
+    end
+  end
+
   ## Template helpers -----------------------------------------------------
 
   defp fmt_money(%Decimal{} = d) do
@@ -161,15 +212,47 @@ defmodule TokengateWeb.UsersLive do
   end
 
   defp save_new_user(socket, user_params) do
+    {team_ids, user_params} = Map.pop(user_params, "team_ids", [])
+    team_ids = team_ids |> List.wrap() |> Enum.reject(&(&1 in ["", nil]))
+
     case Accounts.admin_create_user(user_params) do
-      {:ok, _user} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Usuario creado correctamente.")
-         |> assign(:form, nil)
-         |> assign(:editing_user_id, nil)
-         |> assign(:form_mode, nil)
-         |> load_users()}
+      {:ok, user} ->
+        # Create team memberships + API keys for each selected team
+        results =
+          Enum.map(team_ids, fn team_id ->
+            with {:ok, member} <-
+                   Accounts.create_team_member(%{
+                     user_id: user.id,
+                     team_id: team_id,
+                     team_role: "user",
+                     status: "active"
+                   }),
+                 {:ok, _api_key, _token} <- Accounts.replace_api_key(member) do
+              {:ok, member}
+            end
+          end)
+
+        failed = Enum.filter(results, &match?({:error, _}, &1))
+
+        if failed == [] do
+          {:noreply,
+           socket
+           |> put_flash(:info, "Usuario creado con #{length(team_ids)} equipo(s).")
+           |> assign(:form, nil)
+           |> assign(:editing_user_id, nil)
+           |> assign(:form_mode, nil)
+           |> assign(:all_teams, Accounts.list_teams())
+           |> load_users()}
+        else
+          {:noreply,
+           socket
+           |> put_flash(:warning, "Usuario creado pero #{length(failed)} equipo(s) no se pudieron asignar.")
+           |> assign(:form, nil)
+           |> assign(:editing_user_id, nil)
+           |> assign(:form_mode, nil)
+           |> assign(:all_teams, Accounts.list_teams())
+           |> load_users()}
+        end
 
       {:error, changeset} ->
         {:noreply, assign(socket, :form, to_form(changeset, as: :user))}
@@ -272,6 +355,14 @@ defmodule TokengateWeb.UsersLive do
                   options={[{"Usuario", "user"}, {"Administrador", "admin"}]}
                   prompt="Selecciona un rol"
                 />
+                <.input
+                  field={@form[:team_ids]}
+                  type="select"
+                  multiple
+                  label="Equipos"
+                  options={Enum.map(@all_teams, fn t -> {t.name, t.id} end)}
+                  hint="Mantén Ctrl/Cmd para seleccionar múltiples equipos."
+                />
                 <div class="flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
                   <button type="submit" class="btn btn-primary btn-sm" id="save-user-btn">Crear</button>
@@ -346,7 +437,7 @@ defmodule TokengateWeb.UsersLive do
                 <th>Rol</th>
                 <th>Estado</th>
                 <th>Google</th>
-                <th>Gasto hoy / mes</th>
+                <th>Gasto mensual</th>
                 <th>Creado</th>
                 <th></th>
               </tr>
@@ -395,7 +486,7 @@ defmodule TokengateWeb.UsersLive do
                         "text-xs font-mono",
                         spend.exhausted? && "text-error font-semibold"
                       ]}>
-                        ${fmt_money(spend.daily_usd)} / ${fmt_money(spend.monthly_usd)}
+                        ${fmt_money(spend.monthly_usd)}
                       </div>
                       <%= if spend.exhausted? do %>
                         <span class="badge badge-xs badge-error mt-0.5">sin crédito</span>
@@ -450,6 +541,18 @@ defmodule TokengateWeb.UsersLive do
                         class="w-3 h-3"
                       />
                     </button>
+                    <%!-- Delete button: opens modal, not data-confirm (too destructive) --%>
+                    <button
+                      :if={user.id != @current_user.id && !root_admin?(user)}
+                      phx-click="open_delete_modal"
+                      phx-value-id={user.id}
+                      phx-value-email={user.email}
+                      class="btn btn-xs btn-ghost text-error"
+                      id={"delete-#{user.id}"}
+                      title="Eliminar usuario"
+                    >
+                      <.icon name="hero-trash" class="w-3 h-3" />
+                    </button>
                   </div>
                 </td>
               </tr>
@@ -457,6 +560,54 @@ defmodule TokengateWeb.UsersLive do
           </table>
         </div>
       </div>
+
+      <%!-- Delete confirmation modal — warns about irreversible data loss --%>
+      <dialog id="delete-user-modal" class="modal" phx-hook="Modal">
+        <div class="modal-box max-w-md">
+          <h3 class="text-lg font-bold text-error flex items-center gap-2">
+            <.icon name="hero-exclamation-triangle" class="w-5 h-5" />
+            Eliminar usuario
+          </h3>
+          <div class="py-4 space-y-3">
+            <p class="text-sm">
+              ¿Seguro que quieres eliminar a
+              <span class="font-semibold" id="delete-user-email">{@delete_target_email}</span>?
+            </p>
+            <div class="alert alert-warning text-sm">
+              <.icon name="hero-exclamation-triangle" class="w-5 h-5 shrink-0" />
+              <div>
+                <p class="font-semibold">Esta acción es irreversible.</p>
+                <p class="mt-1">
+                  Se borrará permanentemente toda su data:
+                </p>
+                <ul class="mt-1 list-disc list-inside space-y-0.5 text-xs">
+                  <li>Membresías de equipos</li>
+                  <li>Claves API</li>
+                  <li>Todo el historial de consumo (request_logs)</li>
+                  <li>Los logs de auditoría perderán la atribución al usuario</li>
+                </ul>
+              </div>
+            </div>
+          </div>
+          <div class="modal-action">
+            <form method="dialog">
+              <button class="btn btn-ghost btn-sm" id="cancel-delete-user">Cancelar</button>
+            </form>
+            <button
+              phx-click="confirm_delete_user"
+              phx-value-id={@delete_target_id}
+              class="btn btn-error btn-sm"
+              id="confirm-delete-user"
+            >
+              <.icon name="hero-trash" class="w-4 h-4" />
+              Sí, eliminar permanentemente
+            </button>
+          </div>
+        </div>
+        <form method="dialog" class="modal-backdrop">
+          <button>close</button>
+        </form>
+      </dialog>
     </Layouts.dashboard>
     """
   end

@@ -52,6 +52,7 @@ defmodule TokengateWeb.DashboardLive do
     socket =
       socket
       |> assign(:page_title, "Dashboard · Tokengate")
+      |> assign(:is_admin, user.global_role == "admin")
       |> assign(:loading, true)
       |> assign(:reload_scheduled, false)
       |> assign(:period, "today")
@@ -192,30 +193,6 @@ defmodule TokengateWeb.DashboardLive do
   defp load_personal_data(socket, user) do
     memberships = Accounts.list_team_members_for_user(user.id)
 
-    # Auto-create a "General" team + membership + api key for users
-    # who don't belong to any team yet.
-    {memberships, socket} =
-      if memberships == [] do
-        {:ok, team} = Accounts.create_team(%{name: "General"})
-
-        {:ok, member} =
-          Accounts.create_team_member(%{
-            user_id: user.id,
-            team_id: team.id,
-            team_role: "user",
-            status: "active"
-          })
-
-        {:ok, _api_key, new_token} = Accounts.replace_api_key(member)
-
-        {Accounts.list_team_members_for_user(user.id),
-         socket
-         |> assign(:new_token, new_token)
-         |> assign(:new_token_team, "General")}
-      else
-        {memberships, socket}
-      end
-
     teams =
       Enum.map(memberships, fn membership ->
         limits = Accounts.effective_limits(membership)
@@ -226,16 +203,19 @@ defmodule TokengateWeb.DashboardLive do
           team: membership.team,
           team_role: membership.team_role,
           api_key: membership.api_key,
-          daily_limit: limits.daily_budget_usd,
-          monthly_limit: nil,
-          daily_spend: spend.daily_usd,
+          monthly_limit: limits.monthly_budget_usd,
           monthly_spend: spend.monthly_usd
         }
       end)
 
+    # Admins always see the full org-wide dashboard. Regular users need at
+    # least one team membership to access API keys, endpoint info, and metrics.
+    has_access = user.global_role == "admin" or teams != []
+
     socket
     |> assign(:memberships, memberships)
     |> assign(:teams, teams)
+    |> assign(:has_access, has_access)
   end
 
   defp load_metrics(socket, user) do

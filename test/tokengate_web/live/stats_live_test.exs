@@ -132,13 +132,11 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#provider-ranking-row-#{provider.id}")
   end
 
-  test "regular user does NOT see provider ranking on index", %{conn: conn} do
+  test "regular user is redirected from stats to dashboard", %{conn: conn} do
     %{owner: owner} = team_with_log(%{cost: "0.005"})
 
     conn = login(conn, owner, owner.password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
-
-    refute has_element?(view, "#provider-ranking")
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/stats")
   end
 
   test "admin sees usage patterns section on index", %{conn: conn} do
@@ -155,14 +153,11 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#peak-concurrency")
   end
 
-  test "regular user sees usage patterns but NOT peak concurrency", %{conn: conn} do
+  test "regular user is redirected from stats (usage patterns)", %{conn: conn} do
     %{owner: owner} = team_with_log(%{cost: "0.005"})
 
     conn = login(conn, owner, owner.password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
-
-    assert has_element?(view, "#usage-patterns")
-    refute has_element?(view, "#peak-concurrency")
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/stats")
   end
 
   ## Models view ------------------------------------------------------------
@@ -237,20 +232,14 @@ defmodule TokengateWeb.StatsLiveTest do
 
   ## User scope --------------------------------------------------------------
 
-  test "user sees only their own consumption on stats", %{conn: conn} do
+  test "regular user is redirected from stats (own consumption)", %{conn: conn} do
     %{owner: owner, member: _member} = team_with_log(%{cost: "0.005"})
     # Another team's log that must not leak
     team_with_log(%{cost: "99.99"})
 
     password = owner.password
     conn = login(conn, owner, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
-
-    assert has_element?(view, "#kpi-requests")
-    # User scope: KPI cost should show 0.005 (their own), not 99.99
-    cost_html = view |> element("#kpi-cost-real") |> render()
-    assert cost_html =~ "0.005"
-    refute cost_html =~ "99.99"
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/stats")
   end
 
   ## CSV export --------------------------------------------------------------

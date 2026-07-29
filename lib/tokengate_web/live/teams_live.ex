@@ -80,30 +80,26 @@ defmodule TokengateWeb.TeamsLive do
       |> Map.new(fn {team_id, budgets} ->
         team = Enum.find(teams, &(&1.id == team_id))
 
-        daily_limit_usd =
+        monthly_limit_usd =
           budgets
-          |> Enum.map(& &1.daily_limit_usd)
+          |> Enum.map(& &1.monthly_limit_usd)
           |> Enum.reject(&is_nil/1)
           |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
-
-        daily_spend_usd =
-          Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.daily_spend_usd, &2))
 
         monthly_spend_usd =
           Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.monthly_spend_usd, &2))
 
         estimated_monthly_usd =
-          if team && team.team_daily_budget_usd do
-            Decimal.mult(team.team_daily_budget_usd, Decimal.new(30))
+          if team && team.monthly_budget_per_user_usd do
+            team.monthly_budget_per_user_usd
+            |> Decimal.mult(Decimal.new(length(budgets)))
           else
             nil
           end
 
         {team_id,
          %{
-           daily_limit_usd: daily_limit_usd,
-           team_daily_limit_usd: team && team.team_daily_budget_usd,
-           daily_spend_usd: daily_spend_usd,
+           monthly_limit_usd: monthly_limit_usd,
            monthly_spend_usd: monthly_spend_usd,
            estimated_monthly_usd: estimated_monthly_usd,
            member_count: length(budgets),
@@ -391,18 +387,11 @@ defmodule TokengateWeb.TeamsLive do
                 />
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <.input
-                    field={@form[:default_daily_budget_usd]}
+                    field={@form[:monthly_budget_per_user_usd]}
                     type="number"
-                    label="Tope diario por usuario (USD)"
+                    label="Budget mensual por usuario (USD)"
                     step="any"
-                    hint="Presupuesto diario individual para cada miembro. Vacío = sin límite."
-                  />
-                  <.input
-                    field={@form[:team_daily_budget_usd]}
-                    type="number"
-                    label="Tope diario del equipo (USD)"
-                    step="any"
-                    hint="Presupuesto diario compartido por todo el equipo. Vacío = sin límite."
+                    hint="Presupuesto mensual individual para cada miembro. Vacío = sin límite."
                   />
                   <.input
                     field={@form[:default_concurrency_limit]}
@@ -535,47 +524,56 @@ defmodule TokengateWeb.TeamsLive do
 
               <% tb =
                 Map.get(@team_budgets, team.id, %{
-                  daily_limit_usd: Decimal.new(0),
-                  team_daily_limit_usd: nil,
-                  daily_spend_usd: Decimal.new(0),
+                  monthly_limit_usd: Decimal.new(0),
                   monthly_spend_usd: Decimal.new(0),
                   estimated_monthly_usd: nil,
                   member_count: 0,
                   member_budgets: []
                 }) %>
 
-              <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 mt-3 text-sm">
-                <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">
-                    Tope diario/usuario
-                  </p>
-                  <p class="font-medium">${format_decimal(team.default_daily_budget_usd)}</p>
+              <%!-- Configuración de usuario — límites que aplican por miembro --%>
+              <div class="mt-3">
+                <p class="text-xs font-semibold text-base-content/40 uppercase tracking-wide mb-2">
+                  Configuración de usuario
+                </p>
+                <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 gap-3 text-sm">
+                  <div>
+                    <p class="text-xs text-base-content/50 uppercase tracking-wide">
+                      Budget mensual/usuario
+                    </p>
+                    <p class="font-medium">${format_decimal(team.monthly_budget_per_user_usd)}</p>
+                  </div>
+                  <div>
+                    <p class="text-xs text-base-content/50 uppercase tracking-wide">
+                      Concurrencia/usuario
+                    </p>
+                    <p class="font-medium">{team.default_concurrency_limit}</p>
+                  </div>
+                  <div>
+                    <p class="text-xs text-base-content/50 uppercase tracking-wide">
+                      RPM/usuario
+                    </p>
+                    <p class="font-medium">{team.default_rpm_limit}</p>
+                  </div>
                 </div>
-                <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">
-                    Tope diario/equipo
-                  </p>
-                  <p class="font-medium">${format_decimal(team.team_daily_budget_usd)}</p>
-                </div>
-                <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Gasto hoy</p>
-                  <p class="font-medium">${format_decimal(tb.daily_spend_usd)}</p>
-                </div>
-                <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Gasto mensual</p>
-                  <p class="font-medium">${format_decimal(tb.monthly_spend_usd)}</p>
-                </div>
-                <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Estimado mensual</p>
-                  <p class="font-medium">${format_decimal(tb.estimated_monthly_usd)}</p>
-                </div>
-                <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Concurrencia</p>
-                  <p class="font-medium">{team.default_concurrency_limit}</p>
-                </div>
-                <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">RPM</p>
-                  <p class="font-medium">{team.default_rpm_limit}</p>
+              </div>
+
+              <%!-- Gasto del equipo — consumo real y proyección --%>
+              <div class="mt-4 pt-3 border-t border-base-200">
+                <p class="text-xs font-semibold text-base-content/40 uppercase tracking-wide mb-2">
+                  Gasto
+                </p>
+                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
+                  <div>
+                    <p class="text-xs text-base-content/50 uppercase tracking-wide">Gasto mensual</p>
+                    <p class="font-medium">${format_decimal(tb.monthly_spend_usd)}</p>
+                  </div>
+                  <div>
+                    <p class="text-xs text-base-content/50 uppercase tracking-wide">
+                      Estimado mensual
+                    </p>
+                    <p class="font-medium">${format_decimal(tb.estimated_monthly_usd)}</p>
+                  </div>
                 </div>
               </div>
 
@@ -586,9 +584,8 @@ defmodule TokengateWeb.TeamsLive do
                     <thead>
                       <tr>
                         <th>Usuario</th>
-                        <th class="text-right">Gasto hoy</th>
                         <th class="text-right">Gasto mensual</th>
-                        <th class="text-right">Tope diario</th>
+                        <th class="text-right">Budget mensual</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -597,9 +594,8 @@ defmodule TokengateWeb.TeamsLive do
                         id={"member-budget-#{team.id}-#{mb.member.id}"}
                       >
                         <td class="font-medium">{mb.member.user.email}</td>
-                        <td class="text-right font-mono">${format_decimal(mb.daily_spend_usd)}</td>
                         <td class="text-right font-mono">${format_decimal(mb.monthly_spend_usd)}</td>
-                        <td class="text-right font-mono">${format_decimal(mb.daily_limit_usd)}</td>
+                        <td class="text-right font-mono">${format_decimal(mb.monthly_limit_usd)}</td>
                       </tr>
                     </tbody>
                   </table>

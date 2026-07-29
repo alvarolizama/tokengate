@@ -36,7 +36,7 @@ defmodule TokengateWeb.CreditsLiveTest do
     {:ok, team} =
       Accounts.create_team(%{
         name: "Credits Team #{u}",
-        default_daily_budget_usd: "100.00"
+        monthly_budget_per_user_usd: "100.00"
       })
 
     {:ok, owner_a} =

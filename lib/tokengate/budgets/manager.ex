@@ -57,95 +57,26 @@ defmodule Tokengate.Budgets.Manager do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Total daily spend across all `team_member_ids` from the ETS counters.
-
-  The counters now track `provider_cost_usd` (what TokenGate actually
-  paid), so this rollup is directly comparable to the dashboard's
-  "Costo real".
-  """
-  @spec team_spend([term()]) :: Decimal.t()
-  def team_spend(team_member_ids) do
-    team_member_ids
-    |> Enum.reduce(0, fn id, acc ->
-      ensure_loaded(id, :daily)
-      acc + read_counter({id, :daily})
-    end)
-    |> from_micro()
-  end
-
-  @doc """
   Pre-flight budget check for a team member's request.
 
-  Two independent caps are checked:
-
-    1. **Team shared cap** (`team_daily_budget`) — total daily spend the whole
-       team may accumulate. `team_spend_usd` is the team's current spend.
-
-    2. **Member personal cap** (`member_daily_budget`) — individual daily limit
-       for this member (team default + member's `extra_daily_budget_usd`).
-       `member_spend_usd` is this member's current spend.
-
-    3. **Extras on top of the personal cap** — general and per-model extras
-       add to the member's personal budget.
-
-  The request passes only if it fits under both caps. `nil` for either cap
-  means unlimited for that dimension.
+  Single cap: member's monthly budget (team default + member extra) minus
+  current monthly spend. `nil` budget means unlimited.
 
   Returns `:ok` or `{:error, :budget_exceeded, %{available: Decimal.t()}}`.
   """
   @spec check_ladder(
-          team_daily_budget :: Decimal.t() | nil,
-          team_spend_usd :: Decimal.t(),
-          member_daily_budget :: Decimal.t() | nil,
-          member_spend_usd :: Decimal.t(),
-          member_extra_daily :: Decimal.t() | nil,
-          model_extra_daily :: Decimal.t() | nil,
+          member_monthly_budget :: Decimal.t() | nil,
+          member_monthly_spend :: Decimal.t(),
           estimated_cost_usd :: Decimal.t()
         ) :: :ok | {:error, :budget_exceeded, map()}
-  def check_ladder(
-        team_daily_budget,
-        team_spend_usd,
-        member_daily_budget,
-        member_spend_usd,
-        member_extra_daily,
-        model_extra_daily,
-        estimated_cost_usd
-      ) do
+  def check_ladder(member_monthly_budget, member_monthly_spend, estimated_cost_usd) do
     estimated_micro = to_micro(estimated_cost_usd)
 
-    # Team shared cap
-    team_available_micro =
-      if team_daily_budget do
-        max(0, to_micro(team_daily_budget) - to_micro(team_spend_usd))
-      else
-        :unlimited
-      end
-
-    # Member personal cap + extras - current member spend
-    member_extra_micro = to_micro(member_extra_daily)
-    model_extra_micro = to_micro(model_extra_daily)
-
-    member_available_micro =
-      if member_daily_budget do
-        to_micro(member_daily_budget) + member_extra_micro + model_extra_micro -
-          to_micro(member_spend_usd)
-      else
-        :unlimited
-      end
-
     available_micro =
-      cond do
-        team_available_micro == :unlimited and member_available_micro == :unlimited ->
-          :unlimited
-
-        team_available_micro == :unlimited ->
-          member_available_micro
-
-        member_available_micro == :unlimited ->
-          team_available_micro
-
-        true ->
-          min(team_available_micro, member_available_micro)
+      if member_monthly_budget do
+        max(0, to_micro(member_monthly_budget) - to_micro(member_monthly_spend))
+      else
+        :unlimited
       end
 
     if available_micro == :unlimited or estimated_micro <= available_micro do

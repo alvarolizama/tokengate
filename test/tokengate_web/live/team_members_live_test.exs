@@ -115,15 +115,12 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     assert has_element?(view, "#new-member-btn")
   end
 
-  test "manager sees members of their team", %{conn: conn} do
+  test "manager is redirected from team members to dashboard", %{conn: conn} do
     %{team: team, owner: owner, owner_password: password} =
       team_with_member(%{team_role: "manager"})
 
     conn = login(conn, owner, password)
-    {:ok, _view, html} = live(conn, team_url(team))
-
-    assert html =~ "Miembros de #{team.name}"
-    assert html =~ owner.email
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, team_url(team))
   end
 
   # --------------------------------------------------------------------------
@@ -147,7 +144,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
       |> form("#add-member-form", %{
         "add_member[email]" => new_user.email,
         "add_member[team_role]" => "user",
-        "add_member[extra_daily_budget_usd]" => "5.00",
+        "add_member[extra_monthly_budget_usd]" => "5.00",
         "add_member[extra_concurrency]" => "2",
         "add_member[extra_rpm]" => "100"
       })
@@ -166,7 +163,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
 
     assert member != nil
     assert member.team_role == "user"
-    assert Decimal.equal?(member.extra_daily_budget_usd || Decimal.new(0), Decimal.new("5.00"))
+    assert Decimal.equal?(member.extra_monthly_budget_usd || Decimal.new(0), Decimal.new("5.00"))
     assert member.extra_concurrency == 2
     assert member.extra_rpm == 100
 
@@ -256,7 +253,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
   end
 
   # --------------------------------------------------------------------------
-  # Overrides (extra_daily_budget_usd, extra_monthly_budget_usd, extra_concurrency)
+  # Overrides (extra_monthly_budget_usd, extra_monthly_budget_usd, extra_concurrency)
   # --------------------------------------------------------------------------
 
   test "admin edits and saves overrides", %{conn: conn} do
@@ -274,7 +271,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
       view
       |> form("#override-form-#{member.id}", %{
         overrides: %{
-          extra_daily_budget_usd: "5.50",
+          extra_monthly_budget_usd: "5.50",
           extra_concurrency: "3"
         }
       })
@@ -283,7 +280,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     assert html =~ "Extras actualizados"
 
     updated = Repo.get!(Tokengate.Accounts.TeamMember, member.id)
-    assert Decimal.equal?(updated.extra_daily_budget_usd, Decimal.new("5.50"))
+    assert Decimal.equal?(updated.extra_monthly_budget_usd, Decimal.new("5.50"))
     assert updated.extra_concurrency == 3
   end
 
@@ -294,7 +291,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     # Pre-set values
     {:ok, _} =
       Accounts.update_team_member(member, %{
-        extra_daily_budget_usd: Decimal.new("10.00"),
+        extra_monthly_budget_usd: Decimal.new("10.00"),
         extra_concurrency: 5
       })
 
@@ -307,7 +304,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
       view
       |> form("#override-form-#{member.id}", %{
         overrides: %{
-          extra_daily_budget_usd: "",
+          extra_monthly_budget_usd: "",
           extra_concurrency: ""
         }
       })
@@ -316,7 +313,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     assert html =~ "Extras actualizados"
 
     updated = Repo.get!(Tokengate.Accounts.TeamMember, member.id)
-    assert updated.extra_daily_budget_usd == nil
+    assert updated.extra_monthly_budget_usd == nil
     assert updated.extra_concurrency == nil
   end
 
@@ -366,30 +363,17 @@ defmodule TokengateWeb.TeamMembersLiveTest do
            )
   end
 
-  test "admin sets a per-model extra budget", %{conn: conn} do
+  test "admin grants extra alias access (no per-model budget)", %{conn: conn} do
     %{team: team, member: member, model_alias: alias_} = team_with_member()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, team_url(team))
 
-    # Grant the alias and set a budget
+    # Grant the alias via checkbox toggle
     view
     |> element("#extra-alias-#{member.id}-#{alias_.id}")
     |> render_click()
-
-    html =
-      view
-      |> form("#alias-extra-form-#{member.id}-#{alias_.id}", %{
-        alias_extra: %{
-          member_id: member.id,
-          alias_id: alias_.id,
-          extra_daily_budget_usd: "7.50"
-        }
-      })
-      |> render_submit()
-
-    assert html =~ "Extra por modelo actualizado"
 
     grant =
       Repo.get_by(
@@ -399,29 +383,24 @@ defmodule TokengateWeb.TeamMembersLiveTest do
       )
 
     assert grant != nil
-    assert Decimal.equal?(grant.extra_daily_budget_usd, Decimal.new("7.50"))
-
-    # The budget should appear in the member card
-    assert html =~ "+7.50"
   end
 
-  test "total max includes team pool + general extra + model extras", %{conn: conn} do
+  test "member card shows budget mensual with extra", %{conn: conn} do
     %{team: team, member: member} = team_with_member()
 
-    Accounts.update_team(team, %{default_daily_budget_usd: Decimal.new("10.00")})
+    Accounts.update_team(team, %{monthly_budget_per_user_usd: Decimal.new("10.00")})
 
     {:ok, _member} =
-      Accounts.update_team_member(member, %{extra_daily_budget_usd: Decimal.new("12.00")})
+      Accounts.update_team_member(member, %{extra_monthly_budget_usd: Decimal.new("12.00")})
 
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
     {:ok, _view, html} = live(conn, team_url(team))
 
-    assert html =~ "Tope base"
+    assert html =~ "Budget mensual/usuario"
     assert html =~ "$10.00"
     assert html =~ "+12.00"
-    assert html =~ "$22.00"
   end
 
   # --------------------------------------------------------------------------

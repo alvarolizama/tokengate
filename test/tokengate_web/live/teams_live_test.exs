@@ -106,7 +106,7 @@ defmodule TokengateWeb.TeamsLiveTest do
       |> form("#team-form", %{
         team: %{
           name: "Mi Nuevo Equipo",
-          default_daily_budget_usd: "10.50",
+          monthly_budget_per_user_usd: "10.50",
           default_concurrency_limit: 10,
           default_rpm_limit: 120
         }

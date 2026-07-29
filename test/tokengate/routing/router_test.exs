@@ -32,7 +32,7 @@ defmodule Tokengate.Routing.RouterTest do
 
     schema "teams" do
       field :name, :string
-      field :default_daily_budget_usd, :decimal
+      field :monthly_budget_per_user_usd, :decimal
       field :default_concurrency_limit, :integer, default: 5
       field :default_rpm_limit, :integer, default: 60
       timestamps(type: :utc_datetime)
@@ -76,7 +76,7 @@ defmodule Tokengate.Routing.RouterTest do
 
     schema "team_members" do
       field :team_role, :string, default: "user"
-      field :extra_daily_budget_usd, :decimal
+      field :extra_monthly_budget_usd, :decimal
       field :extra_concurrency, :integer
       field :status, :string, default: "active"
       belongs_to :team, TestTeam

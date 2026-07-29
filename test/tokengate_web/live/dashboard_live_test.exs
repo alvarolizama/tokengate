@@ -333,18 +333,19 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert html =~ "No autorizado."
   end
 
-  test "user without teams auto-gets General team and API key", %{conn: conn} do
+  test "user without teams sees empty state, no General auto-created", %{conn: conn} do
     %{user: user, password: password} = register("user")
 
     conn = login(conn, user, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard")
+    {:ok, view, html} = live(conn, ~p"/dashboard")
 
-    html = render(view)
-
-    # The auto-created General team + API key should appear
-    assert html =~ "General", "should show General team name"
-    assert html =~ "Tus equipos", "should show teams section"
-    assert html =~ "Reemplazar", "should show replace key button (auto-created)"
+    # No team assigned — should show empty state, not auto-create General
+    assert has_element?(view, "#no-team-state")
+    assert html =~ "No tienes ningún equipo asignado"
+    refute html =~ "General", "should not auto-create General team"
+    refute html =~ "Endpoint de la API", "should not show endpoint info without team"
+    refute has_element?(view, "#api-usage-info")
+    refute has_element?(view, "#period-selector")
   end
 
   ## Teams & budgets on dashboard ------------------------------------------
@@ -358,7 +359,6 @@ defmodule TokengateWeb.DashboardLiveTest do
 
     assert html =~ "Tus equipos"
     assert has_element?(view, "#team-#{team.id}")
-    assert html =~ "Gasto diario"
     assert html =~ "Gasto mensual"
     _ = member
   end
