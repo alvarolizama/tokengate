@@ -7,19 +7,23 @@
 <table>
   <tr>
     <td><img src="docs/screenshots/dashboard.png" alt="Dashboard"></td>
-    <td><img src="docs/screenshots/logs.png" alt="Logs en vivo"></td>
-  </tr>
-  <tr>
     <td><img src="docs/screenshots/stats.png" alt="Estadísticas"></td>
-    <td><img src="docs/screenshots/providers.png" alt="Proveedores"></td>
   </tr>
   <tr>
-    <td><img src="docs/screenshots/models.png" alt="Modelos"></td>
+    <td><img src="docs/screenshots/logs.png" alt="Logs en vivo"></td>
     <td><img src="docs/screenshots/teams.png" alt="Equipos"></td>
   </tr>
   <tr>
+    <td><img src="docs/screenshots/services.png" alt="Servicios"></td>
+    <td><img src="docs/screenshots/models.png" alt="Modelos"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/providers.png" alt="Proveedores"></td>
     <td><img src="docs/screenshots/credits.png" alt="Créditos"></td>
+  </tr>
+  <tr>
     <td><img src="docs/screenshots/alerts.png" alt="Alertas"></td>
+    <td></td>
   </tr>
 </table>
 
@@ -44,6 +48,7 @@
 - **Prioridad + sticky routing** — la misma API key se pega al mismo proveedor (preserva prompt caches) con TTL de 60 min
 - **Circuit breaker** por credencial — abre tras 15 fallos consecutivos (configurable), semi-abre en 30s (20s si fue rate limit)
 - **Fallback** automático ante errores (hasta 3 intentos)
+- **Fallback por concurrencia** — si un proveedor está saturado, intenta el siguiente automáticamente
 - **Reglas de reroute** por longitud de contexto o presencia de imágenes
 
 ### Manejo de errores
@@ -71,7 +76,7 @@ TokenGate clasifica cada error del proveedor y decide si reintentar, desactivar 
 **Errores que se le entregan al cliente:**
 
 | HTTP | Code | Cuándo |
-|------|------|-------|
+|------|------|--------|
 | 400 | `invalid_request` | Payload malformado |
 | 402 | `budget_exceeded` | El gasto mensual del usuario supera su budget |
 | 404 | `model_not_found` | Modelo no existe o sin acceso |
@@ -93,7 +98,8 @@ Cada request registra 4 dimensiones: **costo de mercado** (estimado), **costo de
 ### Multi-tenant
 
 - **Equipos → Miembros → API keys** con roles `admin`, `manager`, `user`
-- **Alias de modelos** — mapea `gpt-4` → proveedor+modelo real, con grants por equipo y miembro
+- **Servicios** — API keys sin usuario asociado, con límites directos (budget, concurrencia, RPM)
+- **Alias de modelos** — mapea `gpt-4` → proveedor+modelo real, con grants por equipo, miembro y servicio
 - **Budget mensual por usuario** — cada equipo define un tope mensual por persona; los miembros pueden tener extra budget
 - **Límites por usuario** — concurrencia y RPM configurables por equipo + extra por miembro
 - **Bloqueo automático** al superar límites (402 sin tocar al proveedor)
@@ -120,6 +126,7 @@ Cada request registra 4 dimensiones: **costo de mercado** (estimado), **costo de
 |------|-------|---------|------|
 | Dashboard, Stats, Logs | ✅ | ✅ (sus equipos) | ✅ (suyo) |
 | Equipos y miembros | ✅ | ✅ (sus equipos) | ❌ |
+| Servicios | ✅ | ❌ | ❌ |
 | Proveedores, Modelos | ✅ | ❌ | ❌ |
 | Usuarios, API Keys | ✅ | ❌ | ❌ |
 | Créditos, Alertas | ✅ | ❌ | ❌ |
@@ -145,7 +152,7 @@ TokenGate tiene 3 niveles de configuración:
 | `max_concurrent` | Requests simultáneos máximos a esta credencial |
 | `receive_timeout_ms` | Timeout de respuesta del proveedor (default 180s) |
 
-**3. Por equipo y miembro** (Dashboard > Teams + Team Members) — límites que protegen al usuario:
+**3. Por equipo, miembro y servicio** — límites que protegen al usuario:
 
 | Campo | Nivel | Descripción |
 |-------|-------|-------------|
@@ -155,8 +162,11 @@ TokenGate tiene 3 niveles de configuración:
 | `extra_monthly_budget_usd` | Miembro | Extra budget mensual que se suma al del equipo |
 | `extra_concurrency` | Miembro | Extra concurrencia que se suma al del equipo |
 | `extra_rpm` | Miembro | Extra RPM que se suma al del equipo |
+| `monthly_budget_usd` | Servicio | Tope mensual del servicio |
+| `concurrency_limit` | Servicio | Concurrencia del servicio (default 5) |
+| `rpm_limit` | Servicio | RPM del servicio (default 60) |
 
-El límite efectivo del usuario siempre es `team default + member extra`.
+El límite efectivo del usuario siempre es `team default + member extra`. Los servicios tienen límites directos sin jerarquía.
 
 ## Inicio rápido
 
@@ -175,7 +185,7 @@ El server arranca en `http://localhost:4000`.
 
 ```bash
 curl http://localhost:4000/v1/chat/completions \
-  -H "Authorization: Bearer tg-..." \
+  -H "Authorization: Bearer ***" \
   -H "Content-Type: application/json" \
   -d '{"model": "gpt-4", "messages": [{"role": "user", "content": "Hola"}]}'
 ```
