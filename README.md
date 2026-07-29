@@ -51,6 +51,48 @@
 - **Fallback por concurrencia** — si un proveedor está saturado, intenta el siguiente automáticamente
 - **Reglas de reroute** por longitud de contexto o presencia de imágenes
 
+### Fallback por saturación de proveedor
+
+TokenGate no solo hace fallback ante errores — también lo hace **antes de enviar el request** cuando un proveedor está saturado:
+
+1. **Enrutamiento por prioridad** — los candidatos se ordenan por `priority ASC`. El primer disponible gana.
+2. **Sticky routing** — la misma API key se pega al mismo proveedor (preserva prompt caches) con TTL de 60 min.
+3. **Saturación de concurrencia** — si al intentar adquirir la credencial esta ya está en su límite de `max_concurrent`, se excluye y se intenta la siguiente credencial en la cola de prioridad. **No se devuelve error al cliente** — se rebotea al siguiente proveedor automáticamente.
+4. **Saturación de RPM** — si la credencial alcanzó su `max_rpm`, igual: se excluye y se prueba la siguiente.
+5. **Sin más candidatos** — si todas las credenciales están saturadas o sus breakers abiertos, se devuelve `503 provider_concurrency_exceeded` (o `no_available_provider` si no había exclusión).
+
+**Flujo completo de un request:**
+
+```
+Cliente → Auth → Budget check → Router (priority + sticky + breaker filter)
+  → Acquire limits (concurrency + RPM del proveedor)
+    → Si saturado: excluir credencial → re-router al siguiente en cola
+    → Si disponible: enviar al proveedor
+      → Éxito: registrar success, devolver respuesta
+      → Error 5xx/timeout: breaker cuenta fallo → fallback al siguiente (hasta 3 intentos)
+      → Error 429: breaker cuenta con cooldown corto (20s) → fallback al siguiente
+      → Error 401/402/403: desactivar credencial permanentemente → fallback al siguiente
+      → Error 4xx (otros): pasar directo al cliente (no es culpa del proveedor)
+```
+
+### Circuit breaker
+
+Cada credencial de proveedor tiene su propio circuit breaker (`:gen_statem`):
+
+| Estado | Comportamiento |
+|--------|---------------|
+| `closed` | Requests pasan normal. Cada fallo incrementa el contador. |
+| `open` | Requests rechazados inmediatamente. Tras `cooldown_ms` → `half_open`. |
+| `half_open` | Un probe request pasa. Si éxito → `closed`. Si fallo → `open` de nuevo. |
+
+**Reglas de conteo:**
+
+- Solo `:server_error`, `:timeout` y `:rate_limited` cuentan hacia el threshold
+- `:client_error` (4xx) **nunca cuenta** — es culpa del caller, no del proveedor
+- `:auth_error` no cuenta — desactiva la credencial permanentemente en la DB
+- Si el breaker abre por `:rate_limited`, usa cooldown corto (20s) porque los 429 se recuperan rápido
+- Si abre por `:server_error` o `:timeout`, usa cooldown normal (30s)
+
 ### Manejo de errores
 
 TokenGate clasifica cada error del proveedor y decide si reintentar, desactivar la credencial o pasar el error al cliente.
@@ -97,7 +139,7 @@ Cada request registra 4 dimensiones: **costo de mercado** (estimado), **costo de
 
 ### Multi-tenant
 
-- **Equipos → Miembros → API keys** con roles `admin`, `manager`, `user`
+- **Equipos → Miembros → API keys** con roles `admin` y `user`
 - **Servicios** — API keys sin usuario asociado, con límites directos (budget, concurrencia, RPM)
 - **Alias de modelos** — mapea `gpt-4` → proveedor+modelo real, con grants por equipo, miembro y servicio
 - **Budget mensual por usuario** — cada equipo define un tope mensual por persona; los miembros pueden tener extra budget
@@ -122,14 +164,15 @@ Cada request registra 4 dimensiones: **costo de mercado** (estimado), **costo de
 
 ### Control de acceso
 
-| Ruta | Admin | Manager | User |
-|------|-------|---------|------|
-| Dashboard, Stats, Logs | ✅ | ✅ (sus equipos) | ✅ (suyo) |
-| Equipos y miembros | ✅ | ✅ (sus equipos) | ❌ |
-| Servicios | ✅ | ❌ | ❌ |
-| Proveedores, Modelos | ✅ | ❌ | ❌ |
-| Usuarios, API Keys | ✅ | ❌ | ❌ |
-| Créditos, Alertas | ✅ | ❌ | ❌ |
+| Ruta | Admin | User |
+|------|-------|------|
+| Dashboard | ✅ (org) | ✅ (suyo) |
+| Stats, Logs | ✅ (org) | ✅ (suyo) |
+| Equipos y miembros | ✅ | ❌ |
+| Servicios | ✅ | ❌ |
+| Proveedores, Modelos | ✅ | ❌ |
+| Usuarios, API Keys | ✅ | ❌ |
+| Créditos, Alertas | ✅ | ❌ |
 
 ### Parámetros configurables
 
