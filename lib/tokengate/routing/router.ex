@@ -1,8 +1,8 @@
 defmodule Tokengate.Routing.Router do
   @moduledoc """
   Resolves a requested model name to a concrete provider credential, applying
-  access control, routing-rule reroutes, strategy-based provider selection,
-  and circuit-breaker availability filtering.
+  access control, strategy-based provider selection, and circuit-breaker
+  availability filtering.
 
   ## Public API
 
@@ -18,7 +18,6 @@ defmodule Tokengate.Routing.Router do
   A team member can only route to aliases returned by
   `Tokengate.Providers.list_accessible_aliases/1` — the union of aliases
   granted to their team plus any extra aliases granted to them individually.
-  Routing-rule reroute targets must *also* be accessible or the rule is skipped.
 
   ## Provider selection
 

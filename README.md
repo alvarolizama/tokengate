@@ -49,7 +49,6 @@
 - **Circuit breaker** por credencial — abre tras 15 fallos consecutivos (configurable), semi-abre en 30s (20s si fue rate limit)
 - **Fallback** automático ante errores (hasta 3 intentos)
 - **Fallback por concurrencia** — si un proveedor está saturado, intenta el siguiente automáticamente
-- **Reglas de reroute** por longitud de contexto o presencia de imágenes
 
 ### Fallback por saturación de proveedor
 
