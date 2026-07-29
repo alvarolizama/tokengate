@@ -193,17 +193,73 @@
         </div>
       <% else %>
         <%= if @metrics.requests_total == 0 do %>
-          <div
-            id="empty-state"
-            class="flex flex-col items-center justify-center py-20 text-center"
-          >
-            <div class="w-20 h-20 rounded-full bg-base-300 flex items-center justify-center mb-4">
-              <.icon name="hero-chart-bar" class="w-10 h-10 text-base-content/40" />
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+            <%!-- Empty state (spans 2 cols) --%>
+            <div
+              id="empty-state"
+              class="lg:col-span-2 flex flex-col items-center justify-center py-12 text-center"
+            >
+              <div class="w-20 h-20 rounded-full bg-base-300 flex items-center justify-center mb-4">
+                <.icon name="hero-chart-bar" class="w-10 h-10 text-base-content/40" />
+              </div>
+              <h3 class="text-lg font-semibold text-base-content">Aún no hay requests</h3>
+              <p class="mt-2 text-sm text-base-content/60 max-w-md">
+                Manda tu primer request al proxy para ver métricas aquí.
+              </p>
             </div>
-            <h3 class="text-lg font-semibold text-base-content">Aún no hay requests</h3>
-            <p class="mt-2 text-sm text-base-content/60 max-w-md">
-              Manda tu primer request al proxy para ver métricas aquí.
-            </p>
+
+            <%!-- Model catalog (always visible) --%>
+            <div
+              id="models-catalog-card"
+              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+            >
+              <div class="card-body p-5">
+                <div class="flex items-center justify-between mb-3">
+                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                    Modelos
+                  </span>
+                  <span class={[
+                    "flex items-center justify-center w-9 h-9 rounded-lg",
+                    accent_bg("primary")
+                  ]}>
+                    <.icon name="hero-server-stack" class={["w-5 h-5", accent_text("primary")]} />
+                  </span>
+                </div>
+                <div class="overflow-y-auto max-h-72">
+                  <table class="w-full text-xs">
+                    <thead>
+                      <tr class="text-base-content/50 border-b border-base-200">
+                        <th class="text-left py-1 font-medium">Modelo</th>
+                        <th class="text-right py-1 font-medium">In</th>
+                        <th class="text-right py-1 font-medium">Out</th>
+                        <th class="text-right py-1 font-medium">Ctx</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <%= for model <- @model_catalog do %>
+                        <tr class="border-b border-base-200 last:border-0 hover:bg-base-200/50">
+                          <td class="py-1.5 font-medium text-base-content truncate max-w-[120px]" title={model.name}>
+                            {model.name}
+                          </td>
+                          <td class="py-1.5 text-right text-base-content/70" title={"Input: $#{format_decimal(model.market_input)}/1M"}>
+                            ${format_decimal(model.market_input)}
+                          </td>
+                          <td class="py-1.5 text-right text-base-content/70" title={"Output: $#{format_decimal(model.market_output)}/1M"}>
+                            ${format_decimal(model.market_output)}
+                          </td>
+                          <td class="py-1.5 text-right text-base-content/70" title={"Contexto: #{format_number(model.context_window)} tokens"}>
+                            {format_compact(model.context_window)}
+                          </td>
+                        </tr>
+                      <% end %>
+                    </tbody>
+                  </table>
+                  <%= if @model_catalog == [] do %>
+                    <p class="text-sm text-base-content/40 italic py-2">Sin modelos configurados</p>
+                  <% end %>
+                </div>
+              </div>
+            </div>
           </div>
         <% else %>
           <!-- Metric cards: 6 KPIs + model catalog -->
@@ -274,46 +330,6 @@
                 <p class="mt-2 text-2xl font-bold text-base-content">
                   ${format_decimal(@metrics.savings_usd)}
                 </p>
-              </div>
-            </div>
-
-            <%!-- Modelos: catálogo con costo mercado y contexto (spans 2 rows) --%>
-            <div
-              id="models-catalog-card"
-              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow row-span-2"
-            >
-              <div class="card-body p-5">
-                <div class="flex items-center justify-between mb-3">
-                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                    Modelos
-                  </span>
-                  <span class={[
-                    "flex items-center justify-center w-9 h-9 rounded-lg",
-                    accent_bg("primary")
-                  ]}>
-                    <.icon name="hero-server-stack" class={["w-5 h-5", accent_text("primary")]} />
-                  </span>
-                </div>
-                <div class="overflow-y-auto max-h-72 space-y-2">
-                  <%= for model <- @model_catalog do %>
-                    <div class="flex items-center justify-between text-sm py-1.5 border-b border-base-200 last:border-0">
-                      <span class="font-medium text-base-content truncate mr-2" title={model.name}>
-                        {model.name}
-                      </span>
-                      <div class="flex items-center gap-3 text-xs text-base-content/60 whitespace-nowrap">
-                        <span title={"Input: $#{format_decimal(model.market_input)}/1M"}>
-                          ${format_decimal(model.market_input)}
-                        </span>
-                        <span title={"Contexto: #{format_number(model.context_window)} tokens"}>
-                          {format_compact(model.context_window)} ctx
-                        </span>
-                      </div>
-                    </div>
-                  <% end %>
-                  <%= if @model_catalog == [] do %>
-                    <p class="text-sm text-base-content/40 italic">Sin modelos configurados</p>
-                  <% end %>
-                </div>
               </div>
             </div>
 
