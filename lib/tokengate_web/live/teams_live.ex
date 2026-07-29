@@ -97,11 +97,19 @@ defmodule TokengateWeb.TeamsLive do
             nil
           end
 
+        estimated_monthly_extra_usd =
+          Enum.reduce(budgets, Decimal.new(0), fn mb, acc ->
+            if mb.member.extra_monthly_budget_usd,
+              do: Decimal.add(acc, mb.member.extra_monthly_budget_usd),
+              else: acc
+          end)
+
         {team_id,
          %{
            monthly_limit_usd: monthly_limit_usd,
            monthly_spend_usd: monthly_spend_usd,
            estimated_monthly_usd: estimated_monthly_usd,
+           estimated_monthly_extra_usd: estimated_monthly_extra_usd,
            member_count: length(budgets),
            member_budgets: budgets
          }}
@@ -527,52 +535,132 @@ defmodule TokengateWeb.TeamsLive do
                   monthly_limit_usd: Decimal.new(0),
                   monthly_spend_usd: Decimal.new(0),
                   estimated_monthly_usd: nil,
+                  estimated_monthly_extra_usd: Decimal.new(0),
                   member_count: 0,
                   member_budgets: []
                 }) %>
 
-              <%!-- Configuración de usuario — límites que aplican por miembro --%>
-              <div class="mt-3">
-                <p class="text-xs font-semibold text-base-content/40 uppercase tracking-wide mb-2">
-                  Configuración de usuario
-                </p>
-                <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-3 gap-3 text-sm">
-                  <div>
-                    <p class="text-xs text-base-content/50 uppercase tracking-wide">
-                      Budget mensual/usuario
+              <%!-- Stats cards: configuración + gasto — 5 tarjetas --%>
+              <div class="mt-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+                <%!-- Budget mensual/usuario --%>
+                <div class="card bg-base-100 border border-base-300 shadow-sm">
+                  <div class="card-body p-4">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                        Budget/mes
+                      </span>
+                      <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10">
+                        <.icon name="hero-banknotes" class="w-4 h-4 text-primary" />
+                      </span>
+                    </div>
+                    <p class="mt-1.5 text-lg font-bold text-base-content">
+                      ${format_decimal(team.monthly_budget_per_user_usd)}
                     </p>
-                    <p class="font-medium">${format_decimal(team.monthly_budget_per_user_usd)}</p>
-                  </div>
-                  <div>
-                    <p class="text-xs text-base-content/50 uppercase tracking-wide">
-                      Concurrencia/usuario
-                    </p>
-                    <p class="font-medium">{team.default_concurrency_limit}</p>
-                  </div>
-                  <div>
-                    <p class="text-xs text-base-content/50 uppercase tracking-wide">
-                      RPM/usuario
-                    </p>
-                    <p class="font-medium">{team.default_rpm_limit}</p>
+                    <p class="text-xs text-base-content/40">por usuario</p>
                   </div>
                 </div>
-              </div>
 
-              <%!-- Gasto del equipo — consumo real y proyección --%>
-              <div class="mt-4 pt-3 border-t border-base-200">
-                <p class="text-xs font-semibold text-base-content/40 uppercase tracking-wide mb-2">
-                  Gasto
-                </p>
-                <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-sm">
-                  <div>
-                    <p class="text-xs text-base-content/50 uppercase tracking-wide">Gasto mensual</p>
-                    <p class="font-medium">${format_decimal(tb.monthly_spend_usd)}</p>
-                  </div>
-                  <div>
-                    <p class="text-xs text-base-content/50 uppercase tracking-wide">
-                      Estimado mensual
+                <%!-- Concurrencia/usuario --%>
+                <div class="card bg-base-100 border border-base-300 shadow-sm">
+                  <div class="card-body p-4">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                        Concurrencia
+                      </span>
+                      <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent/10">
+                        <.icon name="hero-arrows-right-left" class="w-4 h-4 text-accent" />
+                      </span>
+                    </div>
+                    <p class="mt-1.5 text-lg font-bold text-base-content">
+                      {team.default_concurrency_limit}
                     </p>
-                    <p class="font-medium">${format_decimal(tb.estimated_monthly_usd)}</p>
+                    <p class="text-xs text-base-content/40">por usuario</p>
+                  </div>
+                </div>
+
+                <%!-- RPM/usuario --%>
+                <div class="card bg-base-100 border border-base-300 shadow-sm">
+                  <div class="card-body p-4">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                        RPM
+                      </span>
+                      <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent/10">
+                        <.icon name="hero-bolt" class="w-4 h-4 text-accent" />
+                      </span>
+                    </div>
+                    <p class="mt-1.5 text-lg font-bold text-base-content">
+                      {team.default_rpm_limit}
+                    </p>
+                    <p class="text-xs text-base-content/40">por usuario</p>
+                  </div>
+                </div>
+
+                <%!-- Gasto mensual --%>
+                <div class="card bg-base-100 border border-base-300 shadow-sm">
+                  <div class="card-body p-4">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                        Gasto/mes
+                      </span>
+                      <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-success/10">
+                        <.icon name="hero-currency-dollar" class="w-4 h-4 text-success" />
+                      </span>
+                    </div>
+                    <p class="mt-1.5 text-lg font-bold text-base-content">
+                      ${format_decimal(tb.monthly_spend_usd)}
+                    </p>
+                    <p class="text-xs text-base-content/40">real</p>
+                  </div>
+                </div>
+
+                <%!-- Estimado mensual --%>
+                <div class="card bg-base-100 border border-base-300 shadow-sm">
+                  <div class="card-body p-4">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                        Estimado/mes
+                      </span>
+                      <span class={[
+                        "flex items-center justify-center w-8 h-8 rounded-lg",
+                        if(
+                          tb.estimated_monthly_extra_usd &&
+                            Decimal.compare(tb.estimated_monthly_extra_usd, 0) == :gt,
+                          do: "bg-success/10",
+                          else: "bg-primary/10"
+                        )
+                      ]}>
+                        <.icon
+                          name="hero-calculator"
+                          class={[
+                            "w-4 h-4",
+                            if(
+                              tb.estimated_monthly_extra_usd &&
+                                Decimal.compare(tb.estimated_monthly_extra_usd, 0) == :gt,
+                              do: "text-success",
+                              else: "text-primary"
+                            )
+                          ]}
+                        />
+                      </span>
+                    </div>
+                    <p class="mt-1.5 text-lg font-bold text-base-content">
+                      ${format_decimal(
+                        Decimal.add(
+                          tb.estimated_monthly_usd || Decimal.new(0),
+                          tb.estimated_monthly_extra_usd
+                        )
+                      )}
+                    </p>
+                    <%= if Decimal.compare(tb.estimated_monthly_extra_usd, 0) == :gt do %>
+                      <p class="text-xs text-success">
+                        ${format_decimal(tb.estimated_monthly_usd)} base + ${format_decimal(
+                          tb.estimated_monthly_extra_usd
+                        )} extra
+                      </p>
+                    <% else %>
+                      <p class="text-xs text-base-content/40">proyección</p>
+                    <% end %>
                   </div>
                 </div>
               </div>
@@ -584,8 +672,10 @@ defmodule TokengateWeb.TeamsLive do
                     <thead>
                       <tr>
                         <th>Usuario</th>
-                        <th class="text-right">Gasto mensual</th>
-                        <th class="text-right">Budget mensual</th>
+                        <th class="text-right">Concurrencia</th>
+                        <th class="text-right">RPM</th>
+                        <th class="text-right">Gasto/mes</th>
+                        <th class="text-right">Budget/mes</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -594,8 +684,25 @@ defmodule TokengateWeb.TeamsLive do
                         id={"member-budget-#{team.id}-#{mb.member.id}"}
                       >
                         <td class="font-medium">{mb.member.user.email}</td>
+                        <td class="text-right font-mono">
+                          {team.default_concurrency_limit}
+                          <span :if={mb.member.extra_concurrency} class="text-success">
+                            +{mb.member.extra_concurrency}
+                          </span>
+                        </td>
+                        <td class="text-right font-mono">
+                          {team.default_rpm_limit}
+                          <span :if={mb.member.extra_rpm} class="text-success">
+                            +{mb.member.extra_rpm}
+                          </span>
+                        </td>
                         <td class="text-right font-mono">${format_decimal(mb.monthly_spend_usd)}</td>
-                        <td class="text-right font-mono">${format_decimal(mb.monthly_limit_usd)}</td>
+                        <td class="text-right font-mono">
+                          ${format_decimal(mb.monthly_limit_usd)}
+                          <span :if={mb.member.extra_monthly_budget_usd} class="text-success">
+                            +{format_decimal(mb.member.extra_monthly_budget_usd)}
+                          </span>
+                        </td>
                       </tr>
                     </tbody>
                   </table>

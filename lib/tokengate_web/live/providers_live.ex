@@ -561,10 +561,7 @@ defmodule TokengateWeb.ProvidersLive do
                   </div>
                   <p class="text-xs text-base-content/50 mt-1 font-mono">{provider.base_url}</p>
                   <p class="text-xs text-base-content/50 mt-0.5">
-                    {length(credentials_for(provider))} credencial(es) · {model_count(
-                      provider.id,
-                      @provider_model_counts
-                    )} modelo(s)
+                    {length(credentials_for(provider))} credenciales
                   </p>
                 </div>
                 <div class="flex gap-2 items-center">

@@ -246,7 +246,10 @@ defmodule TokengateWeb.UsersLive do
         else
           {:noreply,
            socket
-           |> put_flash(:warning, "Usuario creado pero #{length(failed)} equipo(s) no se pudieron asignar.")
+           |> put_flash(
+             :warning,
+             "Usuario creado pero #{length(failed)} equipo(s) no se pudieron asignar."
+           )
            |> assign(:form, nil)
            |> assign(:editing_user_id, nil)
            |> assign(:form_mode, nil)
@@ -565,13 +568,11 @@ defmodule TokengateWeb.UsersLive do
       <dialog id="delete-user-modal" class="modal" phx-hook="Modal">
         <div class="modal-box max-w-md">
           <h3 class="text-lg font-bold text-error flex items-center gap-2">
-            <.icon name="hero-exclamation-triangle" class="w-5 h-5" />
-            Eliminar usuario
+            <.icon name="hero-exclamation-triangle" class="w-5 h-5" /> Eliminar usuario
           </h3>
           <div class="py-4 space-y-3">
             <p class="text-sm">
-              ¿Seguro que quieres eliminar a
-              <span class="font-semibold" id="delete-user-email">{@delete_target_email}</span>?
+              ¿Seguro que quieres eliminar a <span class="font-semibold" id="delete-user-email">{@delete_target_email}</span>?
             </p>
             <div class="alert alert-warning text-sm">
               <.icon name="hero-exclamation-triangle" class="w-5 h-5 shrink-0" />
@@ -599,8 +600,7 @@ defmodule TokengateWeb.UsersLive do
               class="btn btn-error btn-sm"
               id="confirm-delete-user"
             >
-              <.icon name="hero-trash" class="w-4 h-4" />
-              Sí, eliminar permanentemente
+              <.icon name="hero-trash" class="w-4 h-4" /> Sí, eliminar permanentemente
             </button>
           </div>
         </div>

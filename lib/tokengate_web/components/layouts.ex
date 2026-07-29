@@ -224,9 +224,7 @@ defmodule TokengateWeb.Layouts do
 
         <span id="topbar-my-budget-monthly" class="flex items-center gap-1">
           <span class="text-[0.65rem] opacity-60">M</span>
-          <span>{@my_budget.monthly_spend |> fmt_money_compact()}{if @my_budget.monthly_limit,
-            do: "/#{@my_budget.monthly_limit |> fmt_money_compact()}",
-            else: ""}</span>
+          <span>{@my_budget.monthly_spend |> fmt_money_compact()}</span>
           <%= if @my_budget.monthly_limit do %>
             <span class="inline-block w-8 h-1 bg-base-300 rounded-full overflow-hidden">
               <span
@@ -234,6 +232,7 @@ defmodule TokengateWeb.Layouts do
                 style={"width: #{budget_bar_width(@my_budget.monthly_pct)}%"}
               ></span>
             </span>
+            <span>{@my_budget.monthly_limit |> fmt_money_compact()}</span>
           <% end %>
         </span>
       </span>
@@ -345,23 +344,22 @@ defmodule TokengateWeb.Layouts do
                 Acceso
               </p>
               <.sidebar_link href={~p"/dashboard/users"} label="Usuarios" icon="hero-users" />
-              <.sidebar_link href={~p"/dashboard/keys"} label="API Keys" icon="hero-key" />
             </div>
 
             <div class="space-y-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
                 Monitoreo
               </p>
+              <.sidebar_link
+                href={~p"/dashboard/credits"}
+                label="Créditos"
+                icon="hero-banknotes"
+              />
               <.sidebar_link href={~p"/dashboard/logs"} label="Logs" icon="hero-document-text" />
               <.sidebar_link
                 href={~p"/dashboard/alerts"}
                 label="Alertas"
                 icon="hero-bell-alert"
-              />
-              <.sidebar_link
-                href={~p"/dashboard/credits"}
-                label="Créditos"
-                icon="hero-banknotes"
               />
             </div>
           <% end %>
@@ -479,11 +477,11 @@ defmodule TokengateWeb.Layouts do
   defp budget_bar_class(pct) when pct >= 60.0, do: "bg-warning"
   defp budget_bar_class(_), do: "bg-success"
 
-  # Bar width clamped to 0-100
+  # Bar width: keep one decimal for small values, clamp 0-100
   defp budget_bar_width(nil), do: 0
   defp budget_bar_width(pct) when pct > 100.0, do: 100
   defp budget_bar_width(pct) when pct < 0.0, do: 0
-  defp budget_bar_width(pct), do: round(pct)
+  defp budget_bar_width(pct), do: Float.round(pct * 1.0, 1)
 
   defp my_budget_title(b) do
     daily = budget_period_title("Hoy", b.daily_spend, b.daily_limit, b.daily_pct)

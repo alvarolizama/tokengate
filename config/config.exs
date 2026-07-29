@@ -69,19 +69,6 @@ config :tokengate, Oban,
   plugins: [{Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7}],
   queues: [default: 10, logs: 20, webhooks: 10, budgets: 5]
 
-# Circuit breaker defaults para 50+ usuarios concurrentes:
-# threshold: 15 tolera ráfagas sin abrir prematuramente
-# cooldown_ms: 30s para recuperación rápida
-# rate_limit_cooldown_ms: 20s para 429/529 bajo carga
-config :tokengate, :circuit_breaker,
-  cooldown_ms: 30_000,
-  threshold: 15,
-  rate_limit_cooldown_ms: 20_000
-
-# Streaming: max wait for the provider's first token before falling back.
-# Nothing is sent to the client until the first chunk arrives.
-config :tokengate, :first_token_timeout_ms, 15_000
-
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 

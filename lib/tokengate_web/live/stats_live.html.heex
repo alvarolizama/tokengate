@@ -73,25 +73,6 @@
           <div class="space-y-6">
             <%!-- KPI cards --%>
             <div class="grid grid-cols-2 lg:grid-cols-3 gap-4">
-              <div id="kpi-requests" class="card bg-base-100 border border-base-300 shadow-sm">
-                <div class="card-body p-5">
-                  <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Requests</span>
-                    <span class={[
-                      "flex items-center justify-center w-9 h-9 rounded-lg",
-                      accent_bg("primary")
-                    ]}>
-                      <.icon
-                        name="hero-arrow-trending-up"
-                        class={["w-5 h-5", accent_text("primary")]}
-                      />
-                    </span>
-                  </div>
-                  <p class="mt-2 text-2xl font-bold text-base-content">
-                    {format_number(@metrics.requests_total)}
-                  </p>
-                </div>
-              </div>
               <div id="kpi-cost-real" class="card bg-base-100 border border-base-300 shadow-sm">
                 <div class="card-body p-5">
                   <div class="flex items-center justify-between">
@@ -117,7 +98,7 @@
               >
                 <div class="card-body p-5">
                   <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Estimado mercado</span>
+                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Mercado</span>
                     <span class={[
                       "flex items-center justify-center w-9 h-9 rounded-lg",
                       accent_bg("primary")
@@ -143,6 +124,25 @@
                   </div>
                   <p class="mt-2 text-2xl font-bold text-base-content">
                     ${format_decimal(@metrics.savings_usd)}
+                  </p>
+                </div>
+              </div>
+              <div id="kpi-requests" class="card bg-base-100 border border-base-300 shadow-sm">
+                <div class="card-body p-5">
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Requests</span>
+                    <span class={[
+                      "flex items-center justify-center w-9 h-9 rounded-lg",
+                      accent_bg("primary")
+                    ]}>
+                      <.icon
+                        name="hero-arrow-trending-up"
+                        class={["w-5 h-5", accent_text("primary")]}
+                      />
+                    </span>
+                  </div>
+                  <p class="mt-2 text-2xl font-bold text-base-content">
+                    {format_number(@metrics.requests_total)}
                   </p>
                 </div>
               </div>
@@ -219,17 +219,25 @@
                         :for={row <- @hour_distribution}
                         class="flex-1 flex flex-col items-center justify-end h-full group"
                       >
+                        <% height_pct = hour_bar_height(row.request_count, max) %>
                         <div
                           class={[
-                            "w-full rounded-t transition-colors",
+                            "w-full rounded-t transition-colors relative",
                             if(row.request_count == max,
                               do: "bg-primary hover:bg-primary/80",
                               else: "bg-primary/40 hover:bg-primary/70"
                             )
                           ]}
-                          style={"height: #{hour_bar_height(row.request_count, max)}%"}
-                          title={"#{hour_label(row.hour)} — #{format_number(row.request_count)} requests"}
+                          style={"height: #{height_pct}%"}
                         >
+                          <%!-- Hover tooltip --%>
+                          <div class={[
+                            "absolute -top-7 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded text-[10px] font-medium",
+                            "bg-base-content text-base-100 whitespace-nowrap",
+                            "opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10"
+                          ]}>
+                            {format_number(row.request_count)}
+                          </div>
                         </div>
                       </div>
                     </div>
@@ -358,12 +366,13 @@
                   </div>
                   <%= if has_data?(@breakdown_team) do %>
                     <div class="overflow-x-auto mt-3">
-                      <table class="table table-sm">
+                      <table class="table table-sm table-zebra">
                         <thead>
                           <tr>
-                            <th>Equipo</th><th class="text-right">Requests</th><th class="text-right">
-                              Real
-                            </th><th class="text-right">Ahorro</th>
+                            <th>Equipo</th>
+                            <th class="text-right">Requests</th>
+                            <th class="text-right">Costo real</th>
+                            <th class="text-right">Ahorro</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -397,12 +406,13 @@
                   </h2>
                   <%= if has_data?(@breakdown_member) do %>
                     <div class="overflow-x-auto mt-3">
-                      <table class="table table-sm">
+                      <table class="table table-sm table-zebra">
                         <thead>
                           <tr>
-                            <th>Usuario</th><th class="text-right">Requests</th><th class="text-right">
-                              Real
-                            </th><th class="text-right">Ahorro</th>
+                            <th>Usuario</th>
+                            <th class="text-right">Requests</th>
+                            <th class="text-right">Costo real</th>
+                            <th class="text-right">Ahorro</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -608,7 +618,13 @@
                     class="card bg-base-100 border border-base-300 shadow-sm"
                   >
                     <div class="card-body p-5">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Requests</span><p class="mt-2 text-2xl font-bold">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Requests</span>
+                        <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10">
+                          <.icon name="hero-server-stack" class="w-5 h-5 text-primary" />
+                        </span>
+                      </div>
+                      <p class="mt-2 text-2xl font-bold">
                         {format_number(@metrics.requests_total)}
                       </p>
                     </div>
@@ -618,7 +634,13 @@
                     class="card bg-base-100 border border-base-300 shadow-sm"
                   >
                     <div class="card-body p-5">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Costo mercado</span><p class="mt-2 text-2xl font-bold">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Costo mercado</span>
+                        <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10">
+                          <.icon name="hero-calculator" class="w-5 h-5 text-primary" />
+                        </span>
+                      </div>
+                      <p class="mt-2 text-2xl font-bold">
                         ${format_decimal(@metrics.estimated_cost_usd)}
                       </p>
                     </div>
@@ -628,7 +650,13 @@
                     class="card bg-base-100 border border-base-300 shadow-sm"
                   >
                     <div class="card-body p-5">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Costo real</span><p class="mt-2 text-2xl font-bold">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Costo real</span>
+                        <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-accent/10">
+                          <.icon name="hero-currency-dollar" class="w-5 h-5 text-accent" />
+                        </span>
+                      </div>
+                      <p class="mt-2 text-2xl font-bold">
                         ${format_decimal(@metrics.provider_cost_usd)}
                       </p>
                     </div>
@@ -638,7 +666,13 @@
                     class="card bg-base-100 border border-base-300 shadow-sm"
                   >
                     <div class="card-body p-5">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Ahorro</span><p class="mt-2 text-2xl font-bold text-success">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Ahorro</span>
+                        <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-success/10">
+                          <.icon name="hero-banknotes" class="w-5 h-5 text-success" />
+                        </span>
+                      </div>
+                      <p class="mt-2 text-2xl font-bold text-success">
                         ${format_decimal(@metrics.savings_usd)}
                       </p>
                     </div>
@@ -648,7 +682,13 @@
                     class="card bg-base-100 border border-base-300 shadow-sm"
                   >
                     <div class="card-body p-5">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens in/out</span><p
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens in/out</span>
+                        <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-base-300">
+                          <.icon name="hero-cpu-chip" class="w-5 h-5 text-base-content/60" />
+                        </span>
+                      </div>
+                      <p
                         class="mt-2 text-lg font-bold"
                         title={"#{format_number(@metrics.prompt_tokens)} / #{format_number(@metrics.completion_tokens)}"}
                       >
@@ -663,7 +703,13 @@
                     class="card bg-base-100 border border-base-300 shadow-sm"
                   >
                     <div class="card-body p-5">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">TPS</span><p class="mt-2 text-2xl font-bold">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">TPS</span>
+                        <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-base-300">
+                          <.icon name="hero-bolt" class="w-5 h-5 text-base-content/60" />
+                        </span>
+                      </div>
+                      <p class="mt-2 text-2xl font-bold">
                         {format_tps(@metrics.avg_tps)}
                       </p>
                     </div>
@@ -677,23 +723,25 @@
                     </h2>
                     <%= if has_data?(@breakdown_provider) do %>
                       <div class="overflow-x-auto mt-3">
-                        <table class="table table-sm">
+                        <table class="table table-sm table-zebra">
                           <thead>
                             <tr>
-                              <th>Proveedor / Modelo</th><th class="text-right">Requests</th><th class="text-right">
-                                Real
-                              </th><th class="text-right">Mercado</th><th class="text-right">
-                                Ahorro
-                              </th><th class="text-right">Tok in</th><th class="text-right">
-                                Tok out
-                              </th><th class="text-right">TPS</th>
+                              <th>#</th>
+                              <th>Proveedor / Modelo</th>
+                              <th class="text-right">Requests</th>
+                              <th class="text-right">Costo real</th>
+                              <th class="text-right">Mercado</th>
+                              <th class="text-right">Ahorro</th>
+                              <th class="text-right">Tokens in</th>
+                              <th class="text-right">Tokens out</th>
+                              <th class="text-right">TPS</th>
                             </tr>
                           </thead>
                           <tbody>
                             <tr
-                              :for={row <- @breakdown_provider}
-                              id={"bd-provider-#{row.model_provider_id || "unknown"}"}
-                            >
+                              :for={{row, idx} <- Enum.with_index(@breakdown_provider, 1)}
+                              id={"bd-provider-#{row.model_provider_id || "unknown"}"}>
+                              <td class="text-base-content/60">{idx}</td>
                               <td>
                                 <div class="font-medium">
                                   {row.provider_name}{if row.provider_model,
@@ -744,14 +792,15 @@
                     </h2>
                     <%= if has_data?(@breakdown_team) do %>
                       <div class="overflow-x-auto mt-3">
-                        <table class="table table-sm">
+                        <table class="table table-sm table-zebra">
                           <thead>
                             <tr>
-                              <th>Equipo</th><th class="text-right">Requests</th><th class="text-right">
-                                Real
-                              </th><th class="text-right">Mercado</th><th class="text-right">
-                                Ahorro
-                              </th><th class="text-right">TPS</th>
+                              <th>Equipo</th>
+                              <th class="text-right">Requests</th>
+                              <th class="text-right">Costo real</th>
+                              <th class="text-right">Mercado</th>
+                              <th class="text-right">Ahorro</th>
+                              <th class="text-right">TPS</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -789,14 +838,16 @@
                     </h2>
                     <%= if has_data?(@breakdown_member) do %>
                       <div class="overflow-x-auto mt-3">
-                        <table class="table table-sm">
+                        <table class="table table-sm table-zebra">
                           <thead>
                             <tr>
-                              <th>Equipo</th><th>Usuario</th><th class="text-right">Requests</th><th class="text-right">
-                                Real
-                              </th><th class="text-right">Mercado</th><th class="text-right">
-                                Ahorro
-                              </th><th class="text-right">TPS</th>
+                              <th>Equipo</th>
+                              <th>Usuario</th>
+                              <th class="text-right">Requests</th>
+                              <th class="text-right">Costo real</th>
+                              <th class="text-right">Mercado</th>
+                              <th class="text-right">Ahorro</th>
+                              <th class="text-right">TPS</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -847,16 +898,17 @@
                   </h2>
                   <%= if has_data?(@breakdown_model) do %>
                     <div class="overflow-x-auto mt-3">
-                      <table class="table table-sm">
+                      <table class="table table-sm table-zebra">
                         <thead>
                           <tr>
-                            <th>Modelo</th><th class="text-right">Requests</th><th class="text-right">
-                              Mercado
-                            </th><th class="text-right">Real</th><th class="text-right">
-                              Ahorro
-                            </th><th class="text-right">Tokens in</th><th class="text-right">
-                              Tokens out
-                            </th><th class="text-right">TPS</th>
+                            <th>Modelo</th>
+                            <th class="text-right">Requests</th>
+                            <th class="text-right">Costo real</th>
+                            <th class="text-right">Mercado</th>
+                            <th class="text-right">Ahorro</th>
+                            <th class="text-right">Tokens in</th>
+                            <th class="text-right">Tokens out</th>
+                            <th class="text-right">TPS</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -879,11 +931,11 @@
                             <td class="text-right font-mono">
                               {format_number(row.request_count)}
                             </td>
-                            <td class="text-right font-mono text-base-content/60">
-                              ${format_decimal(row.estimated_cost_usd)}
-                            </td>
                             <td class="text-right font-mono">
                               ${format_decimal(row.provider_cost_usd)}
+                            </td>
+                            <td class="text-right font-mono text-base-content/60">
+                              ${format_decimal(row.estimated_cost_usd)}
                             </td>
                             <td class="text-right font-mono text-success">
                               ${format_decimal(row.savings_usd)}
@@ -942,12 +994,24 @@
               <div class="space-y-6">
                 <div class="grid grid-cols-2 lg:grid-cols-3 gap-4">
                   <div
-                    id="team-kpi-requests"
+                    id="team-kpi-real"
                     class="card bg-base-100 border border-base-300 shadow-sm"
                   >
                     <div class="card-body p-5">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Requests</span><p class="mt-2 text-2xl font-bold">
-                        {format_number(@metrics.requests_total)}
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Costo real</span>
+                        <span class={[
+                          "flex items-center justify-center w-9 h-9 rounded-lg",
+                          accent_bg("accent")
+                        ]}>
+                          <.icon
+                            name="hero-currency-dollar"
+                            class={["w-5 h-5", accent_text("accent")]}
+                          />
+                        </span>
+                      </div>
+                      <p class="mt-2 text-2xl font-bold">
+                        ${format_decimal(@metrics.provider_cost_usd)}
                       </p>
                     </div>
                   </div>
@@ -956,18 +1020,20 @@
                     class="card bg-base-100 border border-base-300 shadow-sm"
                   >
                     <div class="card-body p-5">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Costo mercado</span><p class="mt-2 text-2xl font-bold">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Mercado</span>
+                        <span class={[
+                          "flex items-center justify-center w-9 h-9 rounded-lg",
+                          accent_bg("primary")
+                        ]}>
+                          <.icon
+                            name="hero-calculator"
+                            class={["w-5 h-5", accent_text("primary")]}
+                          />
+                        </span>
+                      </div>
+                      <p class="mt-2 text-2xl font-bold">
                         ${format_decimal(@metrics.estimated_cost_usd)}
-                      </p>
-                    </div>
-                  </div>
-                  <div
-                    id="team-kpi-real"
-                    class="card bg-base-100 border border-base-300 shadow-sm"
-                  >
-                    <div class="card-body p-5">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Costo real</span><p class="mt-2 text-2xl font-bold">
-                        ${format_decimal(@metrics.provider_cost_usd)}
                       </p>
                     </div>
                   </div>
@@ -976,8 +1042,42 @@
                     class="card bg-base-100 border border-base-300 shadow-sm"
                   >
                     <div class="card-body p-5">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Ahorro</span><p class="mt-2 text-2xl font-bold text-success">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Ahorro</span>
+                        <span class={[
+                          "flex items-center justify-center w-9 h-9 rounded-lg",
+                          accent_bg("success")
+                        ]}>
+                          <.icon
+                            name="hero-banknotes"
+                            class={["w-5 h-5", accent_text("success")]}
+                          />
+                        </span>
+                      </div>
+                      <p class="mt-2 text-2xl font-bold text-success">
                         ${format_decimal(@metrics.savings_usd)}
+                      </p>
+                    </div>
+                  </div>
+                  <div
+                    id="team-kpi-requests"
+                    class="card bg-base-100 border border-base-300 shadow-sm"
+                  >
+                    <div class="card-body p-5">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Requests</span>
+                        <span class={[
+                          "flex items-center justify-center w-9 h-9 rounded-lg",
+                          accent_bg("primary")
+                        ]}>
+                          <.icon
+                            name="hero-arrow-trending-up"
+                            class={["w-5 h-5", accent_text("primary")]}
+                          />
+                        </span>
+                      </div>
+                      <p class="mt-2 text-2xl font-bold">
+                        {format_number(@metrics.requests_total)}
                       </p>
                     </div>
                   </div>
@@ -986,19 +1086,50 @@
                     class="card bg-base-100 border border-base-300 shadow-sm"
                   >
                     <div class="card-body p-5">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens in/out</span><p
-                        class="mt-2 text-lg font-bold"
-                        title={"#{format_number(@metrics.prompt_tokens)} / #{format_number(@metrics.completion_tokens)}"}
-                      >
-                        {format_compact(@metrics.prompt_tokens)} / {format_compact(
-                          @metrics.completion_tokens
-                        )}
-                      </p>
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens</span>
+                        <span class={[
+                          "flex items-center justify-center w-9 h-9 rounded-lg",
+                          accent_bg("primary")
+                        ]}>
+                          <.icon name="hero-cpu-chip" class={["w-5 h-5", accent_text("primary")]} />
+                        </span>
+                      </div>
+                      <div class="mt-2 flex items-baseline gap-3">
+                        <div>
+                          <p
+                            class="text-lg font-bold"
+                            title={format_number(@metrics.prompt_tokens)}
+                          >
+                            {format_compact(@metrics.prompt_tokens)}
+                          </p>
+                          <p class="text-xs text-base-content/50">in</p>
+                        </div>
+                        <span class="text-base-content/30">/</span>
+                        <div>
+                          <p
+                            class="text-lg font-bold"
+                            title={format_number(@metrics.completion_tokens)}
+                          >
+                            {format_compact(@metrics.completion_tokens)}
+                          </p>
+                          <p class="text-xs text-base-content/50">out</p>
+                        </div>
+                      </div>
                     </div>
                   </div>
                   <div id="team-kpi-tps" class="card bg-base-100 border border-base-300 shadow-sm">
                     <div class="card-body p-5">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">TPS</span><p class="mt-2 text-2xl font-bold">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">TPS</span>
+                        <span class={[
+                          "flex items-center justify-center w-9 h-9 rounded-lg",
+                          accent_bg("accent")
+                        ]}>
+                          <.icon name="hero-bolt" class={["w-5 h-5", accent_text("accent")]} />
+                        </span>
+                      </div>
+                      <p class="mt-2 text-2xl font-bold">
                         {format_tps(@metrics.avg_tps)}
                       </p>
                     </div>
@@ -1012,16 +1143,17 @@
                     </h2>
                     <%= if has_data?(@breakdown_model) do %>
                       <div class="overflow-x-auto mt-3">
-                        <table class="table table-sm">
+                        <table class="table table-sm table-zebra">
                           <thead>
                             <tr>
-                              <th>Modelo</th><th class="text-right">Requests</th><th class="text-right">
-                                Real
-                              </th><th class="text-right">Mercado</th><th class="text-right">
-                                Ahorro
-                              </th><th class="text-right">Tokens in</th><th class="text-right">
-                                Tokens out
-                              </th><th class="text-right">TPS</th>
+                              <th>Modelo</th>
+                              <th class="text-right">Requests</th>
+                              <th class="text-right">Costo real</th>
+                              <th class="text-right">Mercado</th>
+                              <th class="text-right">Ahorro</th>
+                              <th class="text-right">Tokens in</th>
+                              <th class="text-right">Tokens out</th>
+                              <th class="text-right">TPS</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1068,16 +1200,17 @@
                     </h2>
                     <%= if has_data?(@breakdown_member) do %>
                       <div class="overflow-x-auto mt-3">
-                        <table class="table table-sm">
+                        <table class="table table-sm table-zebra">
                           <thead>
                             <tr>
-                              <th>Usuario</th><th class="text-right">Requests</th><th class="text-right">
-                                Real
-                              </th><th class="text-right">Mercado</th><th class="text-right">
-                                Ahorro
-                              </th><th class="text-right">Tokens in</th><th class="text-right">
-                                Tokens out
-                              </th><th class="text-right">TPS</th>
+                              <th>Usuario</th>
+                              <th class="text-right">Requests</th>
+                              <th class="text-right">Costo real</th>
+                              <th class="text-right">Mercado</th>
+                              <th class="text-right">Ahorro</th>
+                              <th class="text-right">Tokens in</th>
+                              <th class="text-right">Tokens out</th>
+                              <th class="text-right">TPS</th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1142,16 +1275,17 @@
                   </h2>
                   <%= if has_data?(@breakdown_team) do %>
                     <div class="overflow-x-auto mt-3">
-                      <table class="table table-sm">
+                      <table class="table table-sm table-zebra">
                         <thead>
                           <tr>
-                            <th>Equipo</th><th class="text-right">Requests</th><th class="text-right">
-                              Mercado
-                            </th><th class="text-right">Real</th><th class="text-right">
-                              Ahorro
-                            </th><th class="text-right">Tokens in</th><th class="text-right">
-                              Tokens out
-                            </th><th class="text-right">TPS</th>
+                            <th>Equipo</th>
+                            <th class="text-right">Requests</th>
+                            <th class="text-right">Costo real</th>
+                            <th class="text-right">Mercado</th>
+                            <th class="text-right">Ahorro</th>
+                            <th class="text-right">Tokens in</th>
+                            <th class="text-right">Tokens out</th>
+                            <th class="text-right">TPS</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1167,11 +1301,11 @@
                             <td class="text-right font-mono">
                               {format_number(row.request_count)}
                             </td>
-                            <td class="text-right font-mono text-base-content/60">
-                              ${format_decimal(row.estimated_cost_usd)}
-                            </td>
                             <td class="text-right font-mono">
                               ${format_decimal(row.provider_cost_usd)}
+                            </td>
+                            <td class="text-right font-mono text-base-content/60">
+                              ${format_decimal(row.estimated_cost_usd)}
                             </td>
                             <td class="text-right font-mono text-success">
                               ${format_decimal(row.savings_usd)}
@@ -1225,12 +1359,12 @@
                   </h2>
                   <%= if @member_models != [] do %>
                     <div class="overflow-x-auto mt-3">
-                      <table class="table table-sm">
+                      <table class="table table-sm table-zebra">
                         <thead>
                           <tr>
                             <th>Modelo</th>
                             <th class="text-right">Requests</th>
-                            <th class="text-right">Real</th>
+                            <th class="text-right">Costo real</th>
                             <th class="text-right">Mercado</th>
                             <th class="text-right">Ahorro</th>
                             <th class="text-right">Tokens in</th>

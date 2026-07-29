@@ -510,6 +510,19 @@ defmodule TokengateWeb.ModelsLive do
   def fmt_dec(%Decimal{} = d), do: Decimal.to_string(d)
   def fmt_dec(n), do: to_string(n)
 
+  def format_compact(n) when is_integer(n) and n >= 1_000_000_000,
+    do: "#{Float.round(n / 1_000_000_000, 1)}B"
+
+  def format_compact(n) when is_integer(n) and n >= 1_000_000,
+    do: "#{Float.round(n / 1_000_000, 1)}M"
+
+  def format_compact(n) when is_integer(n) and n >= 1_000,
+    do: "#{Float.round(n / 1_000, 1)}K"
+
+  def format_compact(n) when is_integer(n), do: Integer.to_string(n)
+  def format_compact(n) when is_float(n), do: format_compact(trunc(n))
+  def format_compact(_), do: "0"
+
   def fmt_price(nil), do: "—"
   def fmt_price(%Decimal{} = d), do: "$#{Decimal.round(d, 2) |> Decimal.to_string()}"
   def fmt_price(n), do: "$#{n}"
@@ -571,7 +584,7 @@ defmodule TokengateWeb.ModelsLive do
         </.header>
 
         <%!-- Alias list --%>
-        <div id="aliases" phx-update="stream">
+        <div id="aliases" phx-update="stream" class="space-y-3">
           <div
             :if={@aliases_empty?}
             id="aliases-empty"
@@ -581,7 +594,7 @@ defmodule TokengateWeb.ModelsLive do
             <p>No hay modelos configurados.</p>
           </div>
 
-          <div :for={{id, model_alias} <- @streams.aliases} id={id} class="space-y-3">
+          <div :for={{id, model_alias} <- @streams.aliases} id={id}>
             <div class="card bg-base-100 border border-base-300 shadow-sm">
               <div class="card-body p-5">
                 <div class="flex items-start justify-between gap-4">
@@ -590,24 +603,8 @@ defmodule TokengateWeb.ModelsLive do
                       <h3 class="font-semibold text-base-content truncate">
                         {model_alias.name}
                       </h3>
-                      <span class="badge badge-sm badge-ghost">
-                        {length(model_providers_for(model_alias))} proveedores
-                      </span>
                     </div>
                     <p class="text-sm text-base-content/60 mt-1">{model_alias.display_name}</p>
-                    <div class="flex gap-4 mt-2 text-xs text-base-content/50">
-                      <span>
-                        Precio entrada:
-                        <strong>{fmt_dec(model_alias.market_input_price_per_1m)}</strong>
-                      </span>
-                      <span>
-                        Precio salida:
-                        <strong>{fmt_dec(model_alias.market_output_price_per_1m)}</strong>
-                      </span>
-                      <span>
-                        Contexto: <strong>{model_alias.context_window}</strong> tokens
-                      </span>
-                    </div>
                   </div>
 
                   <div class="flex gap-2 shrink-0">
@@ -630,6 +627,63 @@ defmodule TokengateWeb.ModelsLive do
                         <.icon name="hero-trash" class="w-4 h-4" />
                       </button>
                     <% end %>
+                  </div>
+                </div>
+
+                <%!-- Stats cards: precio entrada, precio salida, contexto --%>
+                <div class="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-3">
+                  <div class="card bg-base-100 border border-base-300 shadow-sm">
+                    <div class="card-body p-4">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                          Precio entrada
+                        </span>
+                        <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10">
+                          <.icon name="hero-arrow-down-tray" class="w-4 h-4 text-primary" />
+                        </span>
+                      </div>
+                      <p class="mt-1.5 text-lg font-bold text-base-content">
+                        ${fmt_dec(model_alias.market_input_price_per_1m)}
+                      </p>
+                      <p class="text-xs text-base-content/40">por 1M tokens</p>
+                    </div>
+                  </div>
+
+                  <div class="card bg-base-100 border border-base-300 shadow-sm">
+                    <div class="card-body p-4">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                          Precio salida
+                        </span>
+                        <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent/10">
+                          <.icon name="hero-arrow-up-tray" class="w-4 h-4 text-accent" />
+                        </span>
+                      </div>
+                      <p class="mt-1.5 text-lg font-bold text-base-content">
+                        ${fmt_dec(model_alias.market_output_price_per_1m)}
+                      </p>
+                      <p class="text-xs text-base-content/40">por 1M tokens</p>
+                    </div>
+                  </div>
+
+                  <div class="card bg-base-100 border border-base-300 shadow-sm">
+                    <div class="card-body p-4">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                          Contexto
+                        </span>
+                        <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent/10">
+                          <.icon name="hero-window" class="w-4 h-4 text-accent" />
+                        </span>
+                      </div>
+                      <p
+                        class="mt-1.5 text-lg font-bold text-base-content"
+                        title={Integer.to_string(model_alias.context_window)}
+                      >
+                        {format_compact(model_alias.context_window)}
+                      </p>
+                      <p class="text-xs text-base-content/40">tokens</p>
+                    </div>
                   </div>
                 </div>
 

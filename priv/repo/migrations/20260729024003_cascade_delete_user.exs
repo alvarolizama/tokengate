@@ -48,15 +48,19 @@ defmodule Tokengate.Repo.Migrations.CascadeDeleteUser do
   def down do
     # Revert all FKs back to RESTRICT (default)
     execute "ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS audit_logs_user_id_fkey"
+
     execute "ALTER TABLE audit_logs ADD CONSTRAINT audit_logs_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL"
 
     execute "ALTER TABLE request_logs DROP CONSTRAINT IF EXISTS request_logs_team_member_id_fkey"
+
     execute "ALTER TABLE request_logs ADD CONSTRAINT request_logs_team_member_id_fkey FOREIGN KEY (team_member_id) REFERENCES team_members(id) ON DELETE RESTRICT"
 
     execute "ALTER TABLE api_keys DROP CONSTRAINT IF EXISTS api_keys_team_member_id_fkey"
+
     execute "ALTER TABLE api_keys ADD CONSTRAINT api_keys_team_member_id_fkey FOREIGN KEY (team_member_id) REFERENCES team_members(id) ON DELETE RESTRICT"
 
     execute "ALTER TABLE team_members DROP CONSTRAINT IF EXISTS team_members_user_id_fkey"
+
     execute "ALTER TABLE team_members ADD CONSTRAINT team_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT"
   end
 end

@@ -22,7 +22,7 @@ defmodule TokengateWeb.TeamMembersLive do
 
   alias Tokengate.Accounts
   alias Tokengate.Providers
-  alias Tokengate.Providers.{ModelAlias, TeamMemberExtraAlias}
+  alias Tokengate.Providers.{ModelAlias, TeamMemberExtraAlias, TeamModelAlias}
   alias Tokengate.Repo
 
   @impl true
@@ -37,6 +37,8 @@ defmodule TokengateWeb.TeamMembersLive do
           |> assign(:page_title, "Miembros · Tokengate")
           |> assign(:team, team)
           |> assign(:editing_member_id, nil)
+          |> assign(:new_token, nil)
+          |> assign(:new_token_member_id, nil)
           |> assign(:show_add_modal?, false)
           |> assign(:add_form, add_member_form())
           |> assign(:add_member_error, nil)
@@ -80,6 +82,15 @@ defmodule TokengateWeb.TeamMembersLive do
       )
       |> Repo.all()
 
+    # Get the team's own aliases (from team_model_aliases)
+    team_alias_ids =
+      from(tma in TeamModelAlias,
+        where: tma.team_id == ^team.id,
+        select: tma.model_alias_id
+      )
+      |> Repo.all()
+      |> MapSet.new()
+
     # Preload extra alias ids per member (access grants only, no budget)
     extra_aliases =
       from(tmea in TeamMemberExtraAlias,
@@ -107,22 +118,31 @@ defmodule TokengateWeb.TeamMembersLive do
       end)
 
     estimated_monthly =
-      if team && team.monthly_budget_per_user_usd do
+      if team.monthly_budget_per_user_usd do
         team.monthly_budget_per_user_usd
         |> Decimal.mult(Decimal.new(length(members)))
       else
         nil
       end
 
+    estimated_monthly_extra =
+      Enum.reduce(members, Decimal.new(0), fn m, acc ->
+        if m.extra_monthly_budget_usd,
+          do: Decimal.add(acc, m.extra_monthly_budget_usd),
+          else: acc
+      end)
+
     socket
     |> assign(:members, members)
     |> assign(:member_budgets, Map.new(member_budgets, fn b -> {b.member_id, b} end))
     |> assign(:members_empty?, members == [])
     |> assign(:org_aliases, org_alias_ids)
+    |> assign(:team_alias_ids, team_alias_ids)
     |> assign(:extra_aliases, extra_aliases_simple)
     |> assign(:alias_map, alias_map)
     |> assign(:team_monthly_spend, team_monthly_spend)
     |> assign(:estimated_monthly, estimated_monthly)
+    |> assign(:estimated_monthly_extra, estimated_monthly_extra)
   end
 
   defp budget_for_member(member, _alias_map) do
@@ -292,6 +312,61 @@ defmodule TokengateWeb.TeamMembersLive do
           {:noreply, put_flash(socket, :error, "No se pudo eliminar el miembro.")}
       end
     end
+  end
+
+  ## Events — API key management --------------------------------------------
+
+  @impl true
+  def handle_event("replace_key", %{"id" => member_id}, socket) do
+    member = Accounts.get_team_member!(member_id)
+
+    if member.team_id != socket.assigns.team.id do
+      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
+    else
+      case Accounts.replace_api_key(member) do
+        {:ok, _api_key, new_token} ->
+          {:noreply,
+           socket
+           |> assign(:new_token, new_token)
+           |> assign(:new_token_member_id, member_id)
+           |> put_flash(:info, "Clave regenerada correctamente.")
+           |> load_data()}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "No se pudo regenerar la clave.")}
+      end
+    end
+  end
+
+  @impl true
+  def handle_event("revoke_key", %{"id" => member_id}, socket) do
+    member = Accounts.get_team_member!(member_id, :with_assoc)
+
+    if member.team_id != socket.assigns.team.id do
+      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
+    else
+      case member.api_key do
+        nil ->
+          {:noreply, put_flash(socket, :error, "Esta membresía no tiene clave.")}
+
+        api_key ->
+          case Accounts.revoke_api_key(api_key) do
+            {:ok, _} ->
+              {:noreply,
+               socket
+               |> put_flash(:info, "Clave revocada.")
+               |> load_data()}
+
+            {:error, _} ->
+              {:noreply, put_flash(socket, :error, "No se pudo revocar la clave.")}
+          end
+      end
+    end
+  end
+
+  @impl true
+  def handle_event("dismiss_new_token", _params, socket) do
+    {:noreply, assign(socket, :new_token, nil)}
   end
 
   ## Events — override edits ---------------------------------------------
@@ -679,46 +754,134 @@ defmodule TokengateWeb.TeamMembersLive do
           <div class="card-body p-5">
             <h2 class="text-sm font-semibold mb-3">Resumen del equipo</h2>
 
-            <%!-- Configuración de usuario --%>
-            <p class="text-xs font-semibold text-base-content/40 uppercase tracking-wide mb-2">
-              Configuración de usuario
-            </p>
-            <div class="grid grid-cols-2 sm:grid-cols-3 gap-4 text-sm mb-4">
-              <div>
-                <p class="text-xs text-base-content/50 uppercase tracking-wide">
-                  Budget mensual/usuario
-                </p>
-                <p class="font-medium">${format_decimal(@team.monthly_budget_per_user_usd)}</p>
-              </div>
-              <div>
-                <p class="text-xs text-base-content/50 uppercase tracking-wide">
-                  Concurrencia/usuario
-                </p>
-                <p class="font-medium">{@team.default_concurrency_limit}</p>
-              </div>
-              <div>
-                <p class="text-xs text-base-content/50 uppercase tracking-wide">
-                  RPM/usuario
-                </p>
-                <p class="font-medium">{@team.default_rpm_limit}</p>
-              </div>
-            </div>
-
-            <%!-- Gasto --%>
-            <div class="pt-3 border-t border-base-200">
-              <p class="text-xs font-semibold text-base-content/40 uppercase tracking-wide mb-2">
-                Gasto
-              </p>
-              <div class="grid grid-cols-2 sm:grid-cols-2 gap-4 text-sm">
-                <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Gasto mensual</p>
-                  <p class="font-medium">${format_decimal(@team_monthly_spend)}</p>
-                </div>
-                <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">
-                    Estimado mensual
+            <%!-- Stats cards: configuración + gasto — 5 tarjetas --%>
+            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+              <%!-- Budget mensual/usuario --%>
+              <div class="card bg-base-100 border border-base-300 shadow-sm">
+                <div class="card-body p-4">
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                      Budget/mes
+                    </span>
+                    <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10">
+                      <.icon name="hero-banknotes" class="w-4 h-4 text-primary" />
+                    </span>
+                  </div>
+                  <p class="mt-1.5 text-lg font-bold text-base-content">
+                    ${format_decimal(@team.monthly_budget_per_user_usd)}
                   </p>
-                  <p class="font-medium">${format_decimal(@estimated_monthly)}</p>
+                  <p class="text-xs text-base-content/40">por usuario</p>
+                </div>
+              </div>
+
+              <%!-- Concurrencia/usuario --%>
+              <div class="card bg-base-100 border border-base-300 shadow-sm">
+                <div class="card-body p-4">
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                      Concurrencia
+                    </span>
+                    <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent/10">
+                      <.icon name="hero-arrows-right-left" class="w-4 h-4 text-accent" />
+                    </span>
+                  </div>
+                  <p class="mt-1.5 text-lg font-bold text-base-content">
+                    {@team.default_concurrency_limit}
+                  </p>
+                  <p class="text-xs text-base-content/40">por usuario</p>
+                </div>
+              </div>
+
+              <%!-- RPM/usuario --%>
+              <div class="card bg-base-100 border border-base-300 shadow-sm">
+                <div class="card-body p-4">
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                      RPM
+                    </span>
+                    <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent/10">
+                      <.icon name="hero-bolt" class="w-4 h-4 text-accent" />
+                    </span>
+                  </div>
+                  <p class="mt-1.5 text-lg font-bold text-base-content">
+                    {@team.default_rpm_limit}
+                  </p>
+                  <p class="text-xs text-base-content/40">por usuario</p>
+                </div>
+              </div>
+
+              <%!-- Gasto mensual --%>
+              <div class="card bg-base-100 border border-base-300 shadow-sm">
+                <div class="card-body p-4">
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                      Gasto/mes
+                    </span>
+                    <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-success/10">
+                      <.icon name="hero-currency-dollar" class="w-4 h-4 text-success" />
+                    </span>
+                  </div>
+                  <p class="mt-1.5 text-lg font-bold text-base-content">
+                    ${format_decimal(@team_monthly_spend)}
+                  </p>
+                  <p class="text-xs text-base-content/40">real</p>
+                </div>
+              </div>
+
+              <%!-- Estimado mensual --%>
+              <div class="card bg-base-100 border border-base-300 shadow-sm">
+                <div class="card-body p-4">
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                      Estimado/mes
+                    </span>
+                    <span class={[
+                      "flex items-center justify-center w-8 h-8 rounded-lg",
+                      if(
+                        @estimated_monthly_extra &&
+                          Decimal.compare(@estimated_monthly_extra, 0) == :gt,
+                        do: "bg-success/10",
+                        else: "bg-primary/10"
+                      )
+                    ]}>
+                      <.icon
+                        name="hero-calculator"
+                        class={[
+                          "w-4 h-4",
+                          if(
+                            @estimated_monthly_extra &&
+                              Decimal.compare(@estimated_monthly_extra, 0) == :gt,
+                            do: "text-success",
+                            else: "text-primary"
+                          )
+                        ]}
+                      />
+                    </span>
+                  </div>
+                  <p class="mt-1.5 text-lg font-bold text-base-content">
+                    ${format_decimal(
+                      Decimal.add(@estimated_monthly || Decimal.new(0), @estimated_monthly_extra)
+                    )}
+                  </p>
+                  <p
+                    :if={
+                      @estimated_monthly_extra && Decimal.compare(@estimated_monthly_extra, 0) == :gt
+                    }
+                    class="text-xs text-success"
+                  >
+                    ${format_decimal(@estimated_monthly)} base + ${format_decimal(
+                      @estimated_monthly_extra
+                    )} extra
+                  </p>
+                  <p
+                    :if={
+                      !(@estimated_monthly_extra &&
+                          Decimal.compare(@estimated_monthly_extra, 0) == :gt)
+                    }
+                    class="text-xs text-base-content/40"
+                  >
+                    proyección
+                  </p>
                 </div>
               </div>
             </div>
@@ -744,13 +907,28 @@ defmodule TokengateWeb.TeamMembersLive do
                 total_max: Decimal.new(0)
               }) %>
             <div class="card-body p-5">
-              <%!-- Header --%>
+              <%!-- Header with API key info --%>
               <div class="flex items-start justify-between">
                 <div class="min-w-0">
                   <h3 class="font-semibold text-base-content truncate">{member.user.email}</h3>
-                  <p class="text-xs text-base-content/50 mt-0.5">
-                    {member.user.name} · <code class="font-mono">{masked_key(member)}</code>
-                  </p>
+                  <div class="flex items-center gap-2 mt-0.5 flex-wrap">
+                    <span class="text-xs text-base-content/50">{member.user.name}</span>
+                    <span class="text-xs text-base-content/30">·</span>
+                    <code class="text-xs font-mono">{masked_key(member)}</code>
+                    <%= if member.api_key do %>
+                      <span class={[
+                        "badge badge-xs",
+                        if(member.api_key.status == "active",
+                          do: "badge-success",
+                          else: "badge-error"
+                        )
+                      ]}>
+                        {if(member.api_key.status == "active", do: "Activa", else: "Revocada")}
+                      </span>
+                    <% else %>
+                      <span class="badge badge-xs badge-ghost">Sin clave</span>
+                    <% end %>
+                  </div>
                 </div>
                 <div class="flex items-center gap-2 shrink-0">
                   <span class={["badge", "badge-sm", elem(role_badge(member.team_role), 0)]}>
@@ -760,63 +938,130 @@ defmodule TokengateWeb.TeamMembersLive do
                 </div>
               </div>
 
-              <%!-- Configuración de usuario — límites efectivos del member --%>
-              <div class="mt-4">
-                <p class="text-xs font-semibold text-base-content/40 uppercase tracking-wide mb-2">
-                  Configuración de usuario
-                </p>
-                <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
-                  <div>
-                    <p class="text-xs text-base-content/50 uppercase tracking-wide">
-                      Budget mensual/usuario
-                    </p>
-                    <p class="font-medium">
+              <%!-- New token reveal (after regenerate) --%>
+              <div
+                :if={@new_token && @new_token_member_id == member.id}
+                class="mt-3 alert alert-warning"
+                id={"new-token-#{member.id}"}
+              >
+                <.icon name="hero-exclamation-triangle" class="w-5 h-5 shrink-0" />
+                <div class="flex-1 text-sm">
+                  <p class="font-semibold">Guarda esta clave ahora — no se volverá a mostrar:</p>
+                  <code class="text-xs font-mono break-all">{@new_token}</code>
+                </div>
+                <button
+                  phx-click="dismiss_new_token"
+                  class="btn btn-sm btn-ghost"
+                  id={"dismiss-token-#{member.id}"}
+                >
+                  <.icon name="hero-x-mark" class="w-4 h-4" />
+                </button>
+              </div>
+
+              <%!-- Stats cards: configuración + gasto del miembro — 4 tarjetas --%>
+              <div class="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <%!-- Budget mensual --%>
+                <div class="card bg-base-100 border border-base-300 shadow-sm">
+                  <div class="card-body p-4">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                        Budget/mes
+                      </span>
+                      <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10">
+                        <.icon name="hero-banknotes" class="w-4 h-4 text-primary" />
+                      </span>
+                    </div>
+                    <p class="mt-1.5 text-lg font-bold text-base-content">
                       ${format_decimal(@team.monthly_budget_per_user_usd)}
-                      <span :if={member.extra_monthly_budget_usd} class="text-success">
-                        +{format_decimal(member.extra_monthly_budget_usd)}
-                      </span>
                     </p>
-                  </div>
-                  <div>
-                    <p class="text-xs text-base-content/50 uppercase tracking-wide">
-                      Concurrencia/usuario
+                    <p :if={member.extra_monthly_budget_usd} class="text-xs text-success">
+                      +${format_decimal(member.extra_monthly_budget_usd)} extra
                     </p>
-                    <p class="font-medium">
-                      {@team.default_concurrency_limit}
-                      <span :if={member.extra_concurrency} class="text-success">
-                        +{member.extra_concurrency}
-                      </span>
-                    </p>
-                  </div>
-                  <div>
-                    <p class="text-xs text-base-content/50 uppercase tracking-wide">
-                      RPM/usuario
-                    </p>
-                    <p class="font-medium">
-                      {@team.default_rpm_limit}
-                      <span :if={member.extra_rpm} class="text-success">
-                        +{member.extra_rpm}
-                      </span>
+                    <p :if={!member.extra_monthly_budget_usd} class="text-xs text-base-content/40">
+                      por usuario
                     </p>
                   </div>
                 </div>
-              </div>
 
-              <%!-- Gasto — consumo mensual --%>
-              <div class="mt-4 pt-3 border-t border-base-200">
-                <p class="text-xs font-semibold text-base-content/40 uppercase tracking-wide mb-2">
-                  Gasto
-                </p>
-                <div class="grid grid-cols-2 sm:grid-cols-2 gap-3 text-sm">
-                  <div>
-                    <p class="text-xs text-base-content/50 uppercase tracking-wide">Gasto mensual</p>
-                    <p class="font-semibold">${format_decimal(mb.monthly_spend)}</p>
-                  </div>
-                  <div>
-                    <p class="text-xs text-base-content/50 uppercase tracking-wide">
-                      Estimado mensual
+                <%!-- Concurrencia --%>
+                <div class="card bg-base-100 border border-base-300 shadow-sm">
+                  <div class="card-body p-4">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                        Concurrencia
+                      </span>
+                      <span class={[
+                        "flex items-center justify-center w-8 h-8 rounded-lg",
+                        if(member.extra_concurrency, do: "bg-success/10", else: "bg-accent/10")
+                      ]}>
+                        <.icon
+                          name="hero-arrows-right-left"
+                          class={[
+                            "w-4 h-4",
+                            if(member.extra_concurrency, do: "text-success", else: "text-accent")
+                          ]}
+                        />
+                      </span>
+                    </div>
+                    <p class="mt-1.5 text-lg font-bold text-base-content">
+                      {@team.default_concurrency_limit}
                     </p>
-                    <p class="font-medium">${format_decimal(@estimated_monthly)}</p>
+                    <p :if={member.extra_concurrency} class="text-xs text-success">
+                      +{member.extra_concurrency} extra
+                    </p>
+                    <p :if={!member.extra_concurrency} class="text-xs text-base-content/40">
+                      por usuario
+                    </p>
+                  </div>
+                </div>
+
+                <%!-- RPM --%>
+                <div class="card bg-base-100 border border-base-300 shadow-sm">
+                  <div class="card-body p-4">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                        RPM
+                      </span>
+                      <span class={[
+                        "flex items-center justify-center w-8 h-8 rounded-lg",
+                        if(member.extra_rpm, do: "bg-success/10", else: "bg-accent/10")
+                      ]}>
+                        <.icon
+                          name="hero-bolt"
+                          class={[
+                            "w-4 h-4",
+                            if(member.extra_rpm, do: "text-success", else: "text-accent")
+                          ]}
+                        />
+                      </span>
+                    </div>
+                    <p class="mt-1.5 text-lg font-bold text-base-content">
+                      {@team.default_rpm_limit}
+                    </p>
+                    <p :if={member.extra_rpm} class="text-xs text-success">
+                      +{member.extra_rpm} extra
+                    </p>
+                    <p :if={!member.extra_rpm} class="text-xs text-base-content/40">
+                      por usuario
+                    </p>
+                  </div>
+                </div>
+
+                <%!-- Gasto mensual --%>
+                <div class="card bg-base-100 border border-base-300 shadow-sm">
+                  <div class="card-body p-4">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                        Gasto/mes
+                      </span>
+                      <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-success/10">
+                        <.icon name="hero-currency-dollar" class="w-4 h-4 text-success" />
+                      </span>
+                    </div>
+                    <p class="mt-1.5 text-lg font-bold text-base-content">
+                      ${format_decimal(mb.monthly_spend)}
+                    </p>
+                    <p class="text-xs text-base-content/40">real</p>
                   </div>
                 </div>
               </div>
@@ -863,29 +1108,52 @@ defmodule TokengateWeb.TeamMembersLive do
                 >
                   <.icon name="hero-arrow-path" class="w-4 h-4" /> Quitar sticky
                 </button>
+                <button
+                  phx-click="replace_key"
+                  phx-value-id={member.id}
+                  class="btn btn-sm btn-ghost"
+                  id={"replace-key-#{member.id}"}
+                  data-confirm="¿Regenerar clave? La clave actual dejará de funcionar inmediatamente."
+                >
+                  <.icon name="hero-arrow-path" class="w-4 h-4" /> Regenerar
+                </button>
+                <%= if member.api_key && member.api_key.status == "active" do %>
+                  <button
+                    phx-click="revoke_key"
+                    phx-value-id={member.id}
+                    class="btn btn-sm btn-ghost text-error"
+                    id={"revoke-key-#{member.id}"}
+                    data-confirm="¿Revocar clave? Esta acción no se puede deshacer."
+                  >
+                    <.icon name="hero-no-symbol" class="w-4 h-4" /> Revocar
+                  </button>
+                <% end %>
               </div>
 
-              <%!-- Extra aliases — access grants only, no per-model budget --%>
+              <%!-- Modelos — team aliases (locked) + extra grants (toggleable) --%>
               <div :if={@org_aliases != []} class="mt-3 pt-3 border-t border-base-200">
-                <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">Aliases extra</p>
+                <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">Modelos</p>
                 <div class="flex flex-wrap gap-3">
                   <div
                     :for={alias <- @org_aliases}
                     class="flex items-center gap-2 text-sm"
                   >
-                    <% enabled? = alias.id in extra_alias_ids(@extra_aliases, member.id) %>
+                    <% in_team? = MapSet.member?(@team_alias_ids, alias.id)
+                    enabled? = alias.id in extra_alias_ids(@extra_aliases, member.id) %>
                     <input
                       type="checkbox"
-                      name="alias_extra[enabled]"
-                      value="true"
-                      checked={enabled?}
-                      phx-click="toggle_extra_alias"
+                      checked={in_team? or enabled?}
+                      disabled={in_team?}
+                      phx-click={not in_team? and "toggle_extra_alias"}
                       phx-value-member-id={member.id}
                       phx-value-alias-id={alias.id}
                       class="checkbox checkbox-sm"
                       id={"extra-alias-#{member.id}-#{alias.id}"}
                     />
-                    <span class="whitespace-nowrap" id={"extra-alias-label-#{member.id}-#{alias.id}"}>
+                    <span
+                      class={["whitespace-nowrap", in_team? && "text-base-content/50"]}
+                      id={"extra-alias-label-#{member.id}-#{alias.id}"}
+                    >
                       {alias.name}
                     </span>
                   </div>

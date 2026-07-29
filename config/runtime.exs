@@ -7,6 +7,21 @@ import Config
 # any compile-time configuration in here, as it won't be applied.
 # The block below contains prod specific runtime configuration.
 
+# ---------------------------------------------------------------------------
+# Circuit breaker (global — applies to all provider credentials)
+# ---------------------------------------------------------------------------
+config :tokengate, :circuit_breaker,
+  threshold: String.to_integer(System.get_env("CIRCUIT_BREAKER_THRESHOLD", "15")),
+  cooldown_ms: String.to_integer(System.get_env("CIRCUIT_BREAKER_COOLDOWN_MS", "30000")),
+  rate_limit_cooldown_ms:
+    String.to_integer(System.get_env("CIRCUIT_BREAKER_RATE_LIMIT_COOLDOWN_MS", "20000"))
+
+# Streaming: max wait for the provider's first token before falling back.
+# Nothing is sent to the client until the first chunk arrives.
+config :tokengate,
+       :first_token_timeout_ms,
+       String.to_integer(System.get_env("FIRST_TOKEN_TIMEOUT_MS", "15000"))
+
 # In prod the server is always enabled — PaaS start commands expect the
 # endpoint to boot without depending on PHX_SERVER. In dev/test the
 # PHX_SERVER gate is kept so `mix test` doesn't boot the endpoint.

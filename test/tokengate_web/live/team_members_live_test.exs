@@ -58,6 +58,10 @@ defmodule TokengateWeb.TeamMembersLiveTest do
         team_role: role
       })
 
+    # Provision API key for the member (required for proxy + UI display)
+    {:ok, _api_key, _token} = Accounts.replace_api_key(member)
+    member = Accounts.get_team_member!(member.id)
+
     %{
       team: team,
       model_alias: model_alias,
@@ -398,9 +402,9 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     conn = login(conn, admin, password)
     {:ok, _view, html} = live(conn, team_url(team))
 
-    assert html =~ "Budget mensual/usuario"
+    assert html =~ "Budget/mes"
     assert html =~ "$10.00"
-    assert html =~ "+12.00"
+    assert html =~ "+$12.00"
   end
 
   # --------------------------------------------------------------------------
@@ -419,5 +423,47 @@ defmodule TokengateWeb.TeamMembersLiveTest do
 
     assert has_element?(view, "#members-empty")
     assert html =~ "Este equipo no tiene miembros"
+  end
+
+  # --------------------------------------------------------------------------
+  # API key management
+  # --------------------------------------------------------------------------
+
+  test "admin can regenerate a member's API key", %{conn: conn} do
+    %{team: team, member: member} = team_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, team_url(team))
+
+    html = view |> element("#replace-key-#{member.id}") |> render_click()
+
+    assert html =~ "Clave regenerada"
+    assert has_element?(view, "#new-token-#{member.id}")
+  end
+
+  test "admin can revoke a member's API key", %{conn: conn} do
+    %{team: team, member: member} = team_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, team_url(team))
+
+    assert has_element?(view, "#revoke-key-#{member.id}")
+
+    html = view |> element("#revoke-key-#{member.id}") |> render_click()
+
+    assert html =~ "Clave revocada"
+    refute has_element?(view, "#revoke-key-#{member.id}")
+  end
+
+  test "member card shows API key status badge", %{conn: conn} do
+    %{team: team} = team_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, _view, html} = live(conn, team_url(team))
+
+    assert html =~ "Activa"
   end
 end

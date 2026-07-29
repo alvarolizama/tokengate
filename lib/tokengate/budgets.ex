@@ -64,9 +64,9 @@ defmodule Tokengate.Budgets do
   @type team_budget :: %{
           team: Tokengate.Accounts.Team.t(),
           member_count: non_neg_integer(),
-          daily_limit_usd: Decimal.t() | nil,
-          daily_spend_usd: Decimal.t(),
-          daily_pct: float() | nil,
+          monthly_limit_usd: Decimal.t() | nil,
+          monthly_spend_usd: Decimal.t(),
+          monthly_pct: float() | nil,
           has_unlimited?: boolean()
         }
 

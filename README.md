@@ -41,23 +41,63 @@
 
 ### Enrutamiento
 
-- **Prioridad + sticky routing** — la misma API key se pega al mismo proveedor (preserva prompt caches)
-- **Circuit breaker** por credencial — abre tras 15 fallos consecutivos, semi-abre en 30s (20s si fue rate limit)
-- **Sticky routing** con TTL de 60 min — preserva prompt caches del proveedor por más tiempo
+- **Prioridad + sticky routing** — la misma API key se pega al mismo proveedor (preserva prompt caches) con TTL de 60 min
+- **Circuit breaker** por credencial — abre tras 15 fallos consecutivos (configurable), semi-abre en 30s (20s si fue rate limit)
 - **Fallback** automático ante errores (hasta 3 intentos)
 - **Reglas de reroute** por longitud de contexto o presencia de imágenes
 
-### Control de costos (4 dimensiones)
+### Manejo de errores
 
-Cada request registra: **costo de mercado** (estimado), **costo del proveedor** (pricing row), **costo real pagado** (lo que pagaste de verdad) y **ahorro** vs precio de mercado. Soporta proveedores `pay_per_token` e `included` (suscripción).
+TokenGate clasifica cada error del proveedor y decide si reintentar, desactivar la credencial o pasar el error al cliente.
+
+**Clasificación de errores del proveedor:**
+
+| HTTP del proveedor | Razón | ¿Cuenta para breaker? | ¿Fallback? | ¿Desactiva credencial? |
+|----|----|----|----|----|
+| 401 / 402 / 403 | `auth_error` | ❌ | ✅ | ✅ Sí (status → `error`) |
+| 429 / 529 | `rate_limited` | ✅ (cooldown 20s) | ✅ | ❌ |
+| 5xx | `server_error` | ✅ (cooldown 30s) | ✅ | ❌ |
+| Timeout | `timeout` | ✅ (cooldown 30s) | ✅ | ❌ |
+| Otros 4xx | `client_error` | ❌ | ❌ Pasa directo | ❌ |
+
+**Estados de credencial del proveedor:**
+
+| Estado | Significado | ¿Rutiable? |
+|--------|-------------|------------|
+| `active` | Funcionando | ✅ |
+| `disabled` | Desactivada manualmente por admin | ❌ |
+| `error` | Auto-desactivada tras 401/402/403 del proveedor | ❌ (requiere reactivación manual) |
+
+**Errores que se le entregan al cliente:**
+
+| HTTP | Code | Cuándo |
+|------|------|-------|
+| 400 | `invalid_request` | Payload malformado |
+| 402 | `budget_exceeded` | El gasto mensual del usuario supera su budget |
+| 404 | `model_not_found` | Modelo no existe o sin acceso |
+| 429 | `rate_limited` | RPM del usuario excedido |
+| 429 | `concurrency_exceeded` | Concurrencia del usuario excedida |
+| 429 | `provider_rate_limited` | RPM de la credencial del proveedor excedido |
+| 429 | `provider_concurrency_exceeded` | Concurrencia del proveedor excedida |
+| 4xx | `upstream_client_error` | El proveedor rechazó el payload (4xx) — se pasa directo |
+| 502 | `upstream_error` | El proveedor falló (5xx, timeout) tras agotar fallback |
+| 503 | `no_providers` | Modelo sin providers configurados |
+| 503 | `no_available_provider` | Todos los providers filtrados o breakers abiertos |
+| 503 | `all_providers_down` | Todos los providers fallaron en fallback |
+| 500 | `internal_error` | Error no clasificado |
+
+### Control de costos
+
+Cada request registra 4 dimensiones: **costo de mercado** (estimado), **costo del proveedor** (pricing row), **costo real pagado** (lo que pagaste de verdad) y **ahorro** vs precio de mercado. Soporta proveedores `pay_per_token` e `included` (suscripción).
 
 ### Multi-tenant
 
 - **Equipos → Miembros → API keys** con roles `admin`, `manager`, `user`
 - **Alias de modelos** — mapea `gpt-4` → proveedor+modelo real, con grants por equipo y miembro
-- **Presupuestos** por equipo y miembro: diario/mensual (USD), concurrencia, RPM
+- **Budget mensual por usuario** — cada equipo define un tope mensual por persona; los miembros pueden tener extra budget
+- **Límites por usuario** — concurrencia y RPM configurables por equipo + extra por miembro
 - **Bloqueo automático** al superar límites (402 sin tocar al proveedor)
-- **Tope presupuestario por equipo** — límite compartido que aplica a todo el equipo
+- **Acceso a modelos extra** — un miembro puede tener grants a modelos fuera de su equipo (solo acceso, sin budget separado)
 
 ### Dashboard
 
@@ -83,6 +123,40 @@ Cada request registra: **costo de mercado** (estimado), **costo del proveedor** 
 | Proveedores, Modelos | ✅ | ❌ | ❌ |
 | Usuarios, API Keys | ✅ | ❌ | ❌ |
 | Créditos, Alertas | ✅ | ❌ | ❌ |
+
+### Parámetros configurables
+
+TokenGate tiene 3 niveles de configuración:
+
+**1. Global (env vars)** — aplica a toda la instancia, se setea antes de arrancar:
+
+| Variable | Descripción | Default |
+|----------|-------------|---------|
+| `CIRCUIT_BREAKER_THRESHOLD` | Fallos consecutivos para abrir el breaker | `15` |
+| `CIRCUIT_BREAKER_COOLDOWN_MS` | Tiempo en `open` antes de semi-abrir (ms) | `30000` |
+| `CIRCUIT_BREAKER_RATE_LIMIT_COOLDOWN_MS` | Cooldown corto si el fallo fue 429/529 (ms) | `20000` |
+| `FIRST_TOKEN_TIMEOUT_MS` | Timeout al primer token del proveedor antes de fallback (ms) | `15000` |
+
+**2. Por credencial del proveedor** (Dashboard > Providers) — límites que protegen al proveedor:
+
+| Campo | Descripción |
+|-------|-------------|
+| `max_rpm` | RPM máximo que se le manda a esta credencial |
+| `max_concurrent` | Requests simultáneos máximos a esta credencial |
+| `receive_timeout_ms` | Timeout de respuesta del proveedor (default 180s) |
+
+**3. Por equipo y miembro** (Dashboard > Teams + Team Members) — límites que protegen al usuario:
+
+| Campo | Nivel | Descripción |
+|-------|-------|-------------|
+| `monthly_budget_per_user_usd` | Equipo | Tope mensual por persona |
+| `default_concurrency_limit` | Equipo | Concurrencia por usuario (default 5) |
+| `default_rpm_limit` | Equipo | RPM por usuario (default 60) |
+| `extra_monthly_budget_usd` | Miembro | Extra budget mensual que se suma al del equipo |
+| `extra_concurrency` | Miembro | Extra concurrencia que se suma al del equipo |
+| `extra_rpm` | Miembro | Extra RPM que se suma al del equipo |
+
+El límite efectivo del usuario siempre es `team default + member extra`.
 
 ## Inicio rápido
 
@@ -123,6 +197,8 @@ Headers opcionales: `X-Agent-Type`, `X-Title`, `HTTP-Referer`
 | `GOOGLE_OAUTH_ALLOWED_DOMAINS` | Dominios allowlist (comma-separated) | vacío |
 | `SKIP_MIGRATIONS` | `1` = no migrar en boot | — |
 | `ECTO_SSL` | `false` = desactivar SSL a Postgres (local dev) | `true` (SSL on por default) |
+
+> Los parámetros de circuit breaker y timeout de streaming también son env vars — ver [Parámetros configurables](#parámetros-configurables).
 
 ## Deploy
 

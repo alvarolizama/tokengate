@@ -69,7 +69,7 @@
     <section id="teams-section">
       <h2 class="text-base font-semibold mb-3">Tus equipos</h2>
 
-    <%= if @teams == [] and not @has_access do %>
+      <%= if @teams == [] and not @has_access do %>
         <div class="text-center py-12 text-base-content/50" id="no-team-state">
           <.icon name="hero-user-group" class="w-10 h-10 mx-auto mb-3 opacity-40" />
           <p class="font-medium">No tienes ningún equipo asignado.</p>
@@ -186,450 +186,466 @@
 
     <%= if @has_access do %>
       <%!-- Metrics section --%>
-    <%= if @loading do %>
-      <div class="flex items-center justify-center py-20">
-        <span class="loading loading-spinner loading-lg text-primary"></span>
-        <span class="ml-3 text-base-content/60">Cargando métricas…</span>
-      </div>
-    <% else %>
-      <%= if @metrics.requests_total == 0 do %>
-        <div id="empty-state" class="flex flex-col items-center justify-center py-20 text-center">
-          <div class="w-20 h-20 rounded-full bg-base-300 flex items-center justify-center mb-4">
-            <.icon name="hero-chart-bar" class="w-10 h-10 text-base-content/40" />
-          </div>
-          <h3 class="text-lg font-semibold text-base-content">Aún no hay requests</h3>
-          <p class="mt-2 text-sm text-base-content/60 max-w-md">
-            Manda tu primer request al proxy para ver métricas aquí.
-          </p>
+      <%= if @loading do %>
+        <div class="flex items-center justify-center py-20">
+          <span class="loading loading-spinner loading-lg text-primary"></span>
+          <span class="ml-3 text-base-content/60">Cargando métricas…</span>
         </div>
       <% else %>
-        <!-- Metric cards: 6 KPIs -->
-        <div class="grid grid-cols-2 lg:grid-cols-3 gap-4">
-          <%!-- Requests --%>
+        <%= if @metrics.requests_total == 0 do %>
           <div
-            id="requests-card"
-            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+            id="empty-state"
+            class="flex flex-col items-center justify-center py-20 text-center"
           >
-            <div class="card-body p-5">
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Requests
-                </span>
-                <span class={[
-                  "flex items-center justify-center w-9 h-9 rounded-lg",
-                  accent_bg("primary")
-                ]}>
-                  <.icon
-                    name="hero-arrow-trending-up"
-                    class={["w-5 h-5", accent_text("primary")]}
-                  />
-                </span>
-              </div>
-              <p class="mt-2 text-2xl font-bold text-base-content">
-                {format_number(@metrics.requests_total)}
-              </p>
+            <div class="w-20 h-20 rounded-full bg-base-300 flex items-center justify-center mb-4">
+              <.icon name="hero-chart-bar" class="w-10 h-10 text-base-content/40" />
             </div>
+            <h3 class="text-lg font-semibold text-base-content">Aún no hay requests</h3>
+            <p class="mt-2 text-sm text-base-content/60 max-w-md">
+              Manda tu primer request al proxy para ver métricas aquí.
+            </p>
           </div>
-
-          <%!-- Costo real (provider_cost_usd) --%>
-          <div
-            id="cost-real-card"
-            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-          >
-            <div class="card-body p-5">
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Costo real
-                </span>
-                <span class={[
-                  "flex items-center justify-center w-9 h-9 rounded-lg",
-                  accent_bg("accent")
-                ]}>
-                  <.icon name="hero-currency-dollar" class={["w-5 h-5", accent_text("accent")]} />
-                </span>
-              </div>
-              <p class="mt-2 text-2xl font-bold text-base-content">
-                ${format_decimal(@metrics.provider_cost_usd)}
-              </p>
-            </div>
-          </div>
-
-          <%!-- Costo estimado (estimated_cost_usd) --%>
-          <div
-            id="cost-estimated-card"
-            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-          >
-            <div class="card-body p-5">
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Estimado
-                </span>
-                <span class={[
-                  "flex items-center justify-center w-9 h-9 rounded-lg",
-                  accent_bg("primary")
-                ]}>
-                  <.icon name="hero-calculator" class={["w-5 h-5", accent_text("primary")]} />
-                </span>
-              </div>
-              <p class="mt-2 text-2xl font-bold text-base-content">
-                ${format_decimal(@metrics.estimated_cost_usd)}
-              </p>
-            </div>
-          </div>
-
-          <%!-- Ahorros --%>
-          <div
-            id="savings-card"
-            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-          >
-            <div class="card-body p-5">
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Ahorros
-                </span>
-                <span class={[
-                  "flex items-center justify-center w-9 h-9 rounded-lg",
-                  accent_bg("success")
-                ]}>
-                  <.icon name="hero-banknotes" class={["w-5 h-5", accent_text("success")]} />
-                </span>
-              </div>
-              <p class="mt-2 text-2xl font-bold text-base-content">
-                ${format_decimal(@metrics.savings_usd)}
-              </p>
-            </div>
-          </div>
-
-          <%!-- Tokens (prompt + completion) --%>
-          <div
-            id="tokens-card"
-            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-          >
-            <div class="card-body p-5">
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Tokens
-                </span>
-                <span class={[
-                  "flex items-center justify-center w-9 h-9 rounded-lg",
-                  accent_bg("primary")
-                ]}>
-                  <.icon name="hero-cpu-chip" class={["w-5 h-5", accent_text("primary")]} />
-                </span>
-              </div>
-              <div class="mt-2 flex items-baseline gap-3">
-                <div>
-                  <p
-                    class="text-lg font-bold text-base-content"
-                    title={format_number(@metrics.prompt_tokens)}
-                  >
-                    {format_compact(@metrics.prompt_tokens)}
-                  </p>
-                  <p class="text-xs text-base-content/50">in</p>
+        <% else %>
+          <!-- Metric cards: 6 KPIs + model catalog -->
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <%!-- Costo real (provider_cost_usd) --%>
+            <div
+              id="cost-real-card"
+              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+            >
+              <div class="card-body p-5">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                    Costo real
+                  </span>
+                  <span class={[
+                    "flex items-center justify-center w-9 h-9 rounded-lg",
+                    accent_bg("accent")
+                  ]}>
+                    <.icon name="hero-currency-dollar" class={["w-5 h-5", accent_text("accent")]} />
+                  </span>
                 </div>
-                <span class="text-base-content/30">/</span>
-                <div>
-                  <p
-                    class="text-lg font-bold text-base-content"
-                    title={format_number(@metrics.completion_tokens)}
-                  >
-                    {format_compact(@metrics.completion_tokens)}
-                  </p>
-                  <p class="text-xs text-base-content/50">out</p>
+                <p class="mt-2 text-2xl font-bold text-base-content">
+                  ${format_decimal(@metrics.provider_cost_usd)}
+                </p>
+              </div>
+            </div>
+
+            <%!-- Costo estimado (estimated_cost_usd) --%>
+            <div
+              id="cost-estimated-card"
+              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+            >
+              <div class="card-body p-5">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                    Estimado
+                  </span>
+                  <span class={[
+                    "flex items-center justify-center w-9 h-9 rounded-lg",
+                    accent_bg("primary")
+                  ]}>
+                    <.icon name="hero-calculator" class={["w-5 h-5", accent_text("primary")]} />
+                  </span>
+                </div>
+                <p class="mt-2 text-2xl font-bold text-base-content">
+                  ${format_decimal(@metrics.estimated_cost_usd)}
+                </p>
+              </div>
+            </div>
+
+            <%!-- Ahorros --%>
+            <div
+              id="savings-card"
+              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+            >
+              <div class="card-body p-5">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                    Ahorros
+                  </span>
+                  <span class={[
+                    "flex items-center justify-center w-9 h-9 rounded-lg",
+                    accent_bg("success")
+                  ]}>
+                    <.icon name="hero-banknotes" class={["w-5 h-5", accent_text("success")]} />
+                  </span>
+                </div>
+                <p class="mt-2 text-2xl font-bold text-base-content">
+                  ${format_decimal(@metrics.savings_usd)}
+                </p>
+              </div>
+            </div>
+
+            <%!-- Modelos: catálogo con costo mercado y contexto (spans 2 rows) --%>
+            <div
+              id="models-catalog-card"
+              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow row-span-2"
+            >
+              <div class="card-body p-5">
+                <div class="flex items-center justify-between mb-3">
+                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                    Modelos
+                  </span>
+                  <span class={[
+                    "flex items-center justify-center w-9 h-9 rounded-lg",
+                    accent_bg("primary")
+                  ]}>
+                    <.icon name="hero-server-stack" class={["w-5 h-5", accent_text("primary")]} />
+                  </span>
+                </div>
+                <div class="overflow-y-auto max-h-72 space-y-2">
+                  <%= for model <- @model_catalog do %>
+                    <div class="flex items-center justify-between text-sm py-1.5 border-b border-base-200 last:border-0">
+                      <span class="font-medium text-base-content truncate mr-2" title={model.name}>
+                        {model.name}
+                      </span>
+                      <div class="flex items-center gap-3 text-xs text-base-content/60 whitespace-nowrap">
+                        <span title={"Input: $#{format_decimal(model.market_input)}/1M"}>
+                          ${format_decimal(model.market_input)}
+                        </span>
+                        <span title={"Contexto: #{format_number(model.context_window)} tokens"}>
+                          {format_compact(model.context_window)} ctx
+                        </span>
+                      </div>
+                    </div>
+                  <% end %>
+                  <%= if @model_catalog == [] do %>
+                    <p class="text-sm text-base-content/40 italic">Sin modelos configurados</p>
+                  <% end %>
                 </div>
               </div>
             </div>
-          </div>
 
-          <%!-- TPS promedio --%>
-          <div
-            id="tps-card"
-            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-          >
-            <div class="card-body p-5">
-              <div class="flex items-center justify-between">
-                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  TPS promedio
-                </span>
-                <span class={[
-                  "flex items-center justify-center w-9 h-9 rounded-lg",
-                  accent_bg("accent")
-                ]}>
-                  <.icon name="hero-bolt" class={["w-5 h-5", accent_text("accent")]} />
-                </span>
+            <%!-- Requests --%>
+            <div
+              id="requests-card"
+              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+            >
+              <div class="card-body p-5">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                    Requests
+                  </span>
+                  <span class={[
+                    "flex items-center justify-center w-9 h-9 rounded-lg",
+                    accent_bg("primary")
+                  ]}>
+                    <.icon
+                      name="hero-arrow-trending-up"
+                      class={["w-5 h-5", accent_text("primary")]}
+                    />
+                  </span>
+                </div>
+                <p class="mt-2 text-2xl font-bold text-base-content">
+                  {format_number(@metrics.requests_total)}
+                </p>
               </div>
-              <p class="mt-2 text-2xl font-bold text-base-content">
-                {format_tps(@metrics.avg_tps)}
-              </p>
-              <p class="text-xs text-base-content/40 mt-1">
-                {format_latency(@metrics.avg_latency_ms)}
-                <span
-                  :if={@metrics[:avg_ttft_ms]}
-                  title="Time to first token promedio (streaming)"
-                >
-                  · TTFT {format_latency(@metrics.avg_ttft_ms)}
-                </span>
-              </p>
+            </div>
+
+            <%!-- Tokens (prompt + completion) --%>
+            <div
+              id="tokens-card"
+              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+            >
+              <div class="card-body p-5">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                    Tokens
+                  </span>
+                  <span class={[
+                    "flex items-center justify-center w-9 h-9 rounded-lg",
+                    accent_bg("primary")
+                  ]}>
+                    <.icon name="hero-cpu-chip" class={["w-5 h-5", accent_text("primary")]} />
+                  </span>
+                </div>
+                <div class="mt-2 flex items-baseline gap-3">
+                  <div>
+                    <p
+                      class="text-lg font-bold text-base-content"
+                      title={format_number(@metrics.prompt_tokens)}
+                    >
+                      {format_compact(@metrics.prompt_tokens)}
+                    </p>
+                    <p class="text-xs text-base-content/50">in</p>
+                  </div>
+                  <span class="text-base-content/30">/</span>
+                  <div>
+                    <p
+                      class="text-lg font-bold text-base-content"
+                      title={format_number(@metrics.completion_tokens)}
+                    >
+                      {format_compact(@metrics.completion_tokens)}
+                    </p>
+                    <p class="text-xs text-base-content/50">out</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <%!-- TPS promedio --%>
+            <div
+              id="tps-card"
+              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+            >
+              <div class="card-body p-5">
+                <div class="flex items-center justify-between">
+                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                    TPS promedio
+                  </span>
+                  <span class={[
+                    "flex items-center justify-center w-9 h-9 rounded-lg",
+                    accent_bg("accent")
+                  ]}>
+                    <.icon name="hero-bolt" class={["w-5 h-5", accent_text("accent")]} />
+                  </span>
+                </div>
+                <p class="mt-2 text-2xl font-bold text-base-content">
+                  {format_tps(@metrics.avg_tps)}
+                </p>
+                <p class="text-xs text-base-content/40 mt-1">
+                  {format_latency(@metrics.avg_latency_ms)}
+                  <span
+                    :if={@metrics[:avg_ttft_ms]}
+                    title="Time to first token promedio (streaming)"
+                  >
+                    · TTFT {format_latency(@metrics.avg_ttft_ms)}
+                  </span>
+                </p>
+              </div>
             </div>
           </div>
-        </div>
 
-        <!-- Breakdown tabs -->
-        <div class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body">
-            <div class="flex items-center justify-between flex-wrap gap-2">
-              <h2 class="card-title text-base">
-                <.icon name="hero-chart-bar-square" class="w-5 h-5 text-base-content/60" />
-                Desglose
-              </h2>
-              <div class="join" id="breakdown-tabs" role="tablist">
-                <button
-                  phx-click="set_breakdown"
-                  phx-value-tab="model"
-                  class={[
-                    "join-item btn btn-sm",
-                    if(breakdown_tab_active?(@active_breakdown, "model"),
-                      do: "btn-primary",
-                      else: "btn-ghost"
-                    )
-                  ]}
-                  id="tab-model"
-                >
-                  Por modelo
-                </button>
-                <button
-                  phx-click="set_breakdown"
-                  phx-value-tab="member"
-                  class={[
-                    "join-item btn btn-sm",
-                    if(breakdown_tab_active?(@active_breakdown, "member"),
-                      do: "btn-primary",
-                      else: "btn-ghost"
-                    )
-                  ]}
-                  id="tab-member"
-                >
-                  Por API key
-                </button>
-                <%= if has_breakdown_data?(@breakdown_team) do %>
+          <!-- Breakdown tabs -->
+          <div class="card bg-base-100 border border-base-300 shadow-sm">
+            <div class="card-body">
+              <div class="flex items-center justify-between flex-wrap gap-2">
+                <h2 class="card-title text-base">
+                  <.icon name="hero-chart-bar-square" class="w-5 h-5 text-base-content/60" />
+                  Desglose
+                </h2>
+                <div class="join" id="breakdown-tabs" role="tablist">
                   <button
                     phx-click="set_breakdown"
-                    phx-value-tab="team"
+                    phx-value-tab="model"
                     class={[
                       "join-item btn btn-sm",
-                      if(breakdown_tab_active?(@active_breakdown, "team"),
+                      if(breakdown_tab_active?(@active_breakdown, "model"),
                         do: "btn-primary",
                         else: "btn-ghost"
                       )
                     ]}
-                    id="tab-team"
+                    id="tab-model"
                   >
-                    Por equipo
+                    Por modelo
                   </button>
-                <% end %>
+                  <button
+                    phx-click="set_breakdown"
+                    phx-value-tab="member"
+                    class={[
+                      "join-item btn btn-sm",
+                      if(breakdown_tab_active?(@active_breakdown, "member"),
+                        do: "btn-primary",
+                        else: "btn-ghost"
+                      )
+                    ]}
+                    id="tab-member"
+                  >
+                    Por API key
+                  </button>
+                  <%= if has_breakdown_data?(@breakdown_team) do %>
+                    <button
+                      phx-click="set_breakdown"
+                      phx-value-tab="team"
+                      class={[
+                        "join-item btn btn-sm",
+                        if(breakdown_tab_active?(@active_breakdown, "team"),
+                          do: "btn-primary",
+                          else: "btn-ghost"
+                        )
+                      ]}
+                      id="tab-team"
+                    >
+                      Por equipo
+                    </button>
+                  <% end %>
+                </div>
               </div>
+
+              <%!-- Model breakdown --%>
+              <%= if @active_breakdown == "model" do %>
+                <%= if has_breakdown_data?(@breakdown_model) do %>
+                  <div class="overflow-x-auto mt-3">
+                    <table class="table table-sm table-zebra">
+                      <thead>
+                        <tr>
+                          <th>Modelo</th>
+                          <th class="text-right">Requests</th>
+                          <th class="text-right">Costo real</th>
+                          <th class="text-right">Mercado</th>
+                          <th class="text-right">Ahorro</th>
+                          <th class="text-right">Tokens in</th>
+                          <th class="text-right">Tokens out</th>
+                          <th class="text-right">TPS</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr
+                          :for={row <- @breakdown_model}
+                          id={"bd-model-#{row.model_id || "unknown"}"}
+                        >
+                          <td class="font-medium">{row.model_name}</td>
+                          <td class="text-right font-mono">{format_number(row.request_count)}</td>
+                          <td class="text-right font-mono">
+                            ${format_decimal(row.provider_cost_usd)}
+                          </td>
+                          <td class="text-right font-mono text-base-content/60">
+                            ${format_decimal(row.estimated_cost_usd)}
+                          </td>
+                          <td class="text-right font-mono text-success">
+                            ${format_decimal(row.savings_usd)}
+                          </td>
+                          <td class="text-right font-mono">{format_number(row.prompt_tokens)}</td>
+                          <td class="text-right font-mono">
+                            {format_number(row.completion_tokens)}
+                          </td>
+                          <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                <% else %>
+                  <p class="text-sm text-base-content/40 py-6 text-center">
+                    Sin datos para este periodo.
+                  </p>
+                <% end %>
+              <% end %>
+
+              <%!-- Member (API key) breakdown --%>
+              <%= if @active_breakdown == "member" do %>
+                <%= if has_breakdown_data?(@breakdown_member) do %>
+                  <div class="overflow-x-auto mt-3">
+                    <table class="table table-sm table-zebra">
+                      <thead>
+                        <tr>
+                          <th>Equipo</th>
+                          <th>Usuario</th>
+                          <th class="text-right">Requests</th>
+                          <th class="text-right">Costo real</th>
+                          <th class="text-right">Mercado</th>
+                          <th class="text-right">Ahorro</th>
+                          <th class="text-right">Tokens in</th>
+                          <th class="text-right">Tokens out</th>
+                          <th class="text-right">TPS</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr :for={row <- @breakdown_member} id={"bd-member-#{row.team_member_id}"}>
+                          <td>{row.team_name}</td>
+                          <td class="font-mono text-sm">{row.user_email}</td>
+                          <td class="text-right font-mono">{format_number(row.request_count)}</td>
+                          <td class="text-right font-mono">
+                            ${format_decimal(row.provider_cost_usd)}
+                          </td>
+                          <td class="text-right font-mono text-base-content/60">
+                            ${format_decimal(row.estimated_cost_usd)}
+                          </td>
+                          <td class="text-right font-mono text-success">
+                            ${format_decimal(row.savings_usd)}
+                          </td>
+                          <td class="text-right font-mono">{format_number(row.prompt_tokens)}</td>
+                          <td class="text-right font-mono">
+                            {format_number(row.completion_tokens)}
+                          </td>
+                          <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                <% else %>
+                  <p class="text-sm text-base-content/40 py-6 text-center">
+                    Sin datos para este periodo.
+                  </p>
+                <% end %>
+              <% end %>
+
+              <%!-- Team breakdown --%>
+              <%= if @active_breakdown == "team" do %>
+                <%= if has_breakdown_data?(@breakdown_team) do %>
+                  <div class="overflow-x-auto mt-3">
+                    <table class="table table-sm table-zebra">
+                      <thead>
+                        <tr>
+                          <th>Equipo</th>
+                          <th class="text-right">Requests</th>
+                          <th class="text-right">Costo real</th>
+                          <th class="text-right">Mercado</th>
+                          <th class="text-right">Ahorro</th>
+                          <th class="text-right">Tokens in</th>
+                          <th class="text-right">Tokens out</th>
+                          <th class="text-right">TPS</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr :for={row <- @breakdown_team} id={"bd-team-#{row.team_id}"}>
+                          <td class="font-medium">{row.team_name}</td>
+                          <td class="text-right font-mono">{format_number(row.request_count)}</td>
+                          <td class="text-right font-mono">
+                            ${format_decimal(row.provider_cost_usd)}
+                          </td>
+                          <td class="text-right font-mono text-base-content/60">
+                            ${format_decimal(row.estimated_cost_usd)}
+                          </td>
+                          <td class="text-right font-mono text-success">
+                            ${format_decimal(row.savings_usd)}
+                          </td>
+                          <td class="text-right font-mono">{format_number(row.prompt_tokens)}</td>
+                          <td class="text-right font-mono">
+                            {format_number(row.completion_tokens)}
+                          </td>
+                          <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                <% else %>
+                  <p class="text-sm text-base-content/40 py-6 text-center">
+                    Sin datos para este periodo.
+                  </p>
+                <% end %>
+              <% end %>
             </div>
-
-            <%!-- Model breakdown --%>
-            <%= if @active_breakdown == "model" do %>
-              <%= if has_breakdown_data?(@breakdown_model) do %>
-                <div class="overflow-x-auto mt-3">
-                  <table class="table table-sm">
-                    <thead>
-                      <tr>
-                        <th>Modelo</th>
-                        <th class="text-right">Requests</th>
-                        <th class="text-right">Costo real</th>
-                        <th class="text-right">Estimado</th>
-                        <th class="text-right">Ahorro</th>
-                        <th class="text-right">Tokens in</th>
-                        <th class="text-right">Tokens out</th>
-                        <th class="text-right">TPS</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr
-                        :for={row <- @breakdown_model}
-                        id={"bd-model-#{row.model_id || "unknown"}"}
-                      >
-                        <td class="font-medium">{row.model_name}</td>
-                        <td class="text-right font-mono">{format_number(row.request_count)}</td>
-                        <td class="text-right font-mono">
-                          ${format_decimal(row.provider_cost_usd)}
-                        </td>
-                        <td class="text-right font-mono text-base-content/60">
-                          ${format_decimal(row.estimated_cost_usd)}
-                        </td>
-                        <td class="text-right font-mono text-success">
-                          ${format_decimal(row.savings_usd)}
-                        </td>
-                        <td class="text-right font-mono">{format_number(row.prompt_tokens)}</td>
-                        <td class="text-right font-mono">
-                          {format_number(row.completion_tokens)}
-                        </td>
-                        <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              <% else %>
-                <p class="text-sm text-base-content/40 py-6 text-center">
-                  Sin datos para este periodo.
-                </p>
-              <% end %>
-            <% end %>
-
-            <%!-- Member (API key) breakdown --%>
-            <%= if @active_breakdown == "member" do %>
-              <%= if has_breakdown_data?(@breakdown_member) do %>
-                <div class="overflow-x-auto mt-3">
-                  <table class="table table-sm">
-                    <thead>
-                      <tr>
-                        <th>Equipo</th>
-                        <th>Usuario</th>
-                        <th class="text-right">Requests</th>
-                        <th class="text-right">Costo real</th>
-                        <th class="text-right">Estimado</th>
-                        <th class="text-right">Ahorro</th>
-                        <th class="text-right">Tokens in</th>
-                        <th class="text-right">Tokens out</th>
-                        <th class="text-right">TPS</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr :for={row <- @breakdown_member} id={"bd-member-#{row.team_member_id}"}>
-                        <td>{row.team_name}</td>
-                        <td class="font-mono text-sm">{row.user_email}</td>
-                        <td class="text-right font-mono">{format_number(row.request_count)}</td>
-                        <td class="text-right font-mono">
-                          ${format_decimal(row.provider_cost_usd)}
-                        </td>
-                        <td class="text-right font-mono text-base-content/60">
-                          ${format_decimal(row.estimated_cost_usd)}
-                        </td>
-                        <td class="text-right font-mono text-success">
-                          ${format_decimal(row.savings_usd)}
-                        </td>
-                        <td class="text-right font-mono">{format_number(row.prompt_tokens)}</td>
-                        <td class="text-right font-mono">
-                          {format_number(row.completion_tokens)}
-                        </td>
-                        <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              <% else %>
-                <p class="text-sm text-base-content/40 py-6 text-center">
-                  Sin datos para este periodo.
-                </p>
-              <% end %>
-            <% end %>
-
-            <%!-- Team breakdown --%>
-            <%= if @active_breakdown == "team" do %>
-              <%= if has_breakdown_data?(@breakdown_team) do %>
-                <div class="overflow-x-auto mt-3">
-                  <table class="table table-sm">
-                    <thead>
-                      <tr>
-                        <th>Equipo</th>
-                        <th class="text-right">Requests</th>
-                        <th class="text-right">Costo real</th>
-                        <th class="text-right">Estimado</th>
-                        <th class="text-right">Ahorro</th>
-                        <th class="text-right">Tokens in</th>
-                        <th class="text-right">Tokens out</th>
-                        <th class="text-right">TPS</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr :for={row <- @breakdown_team} id={"bd-team-#{row.team_id}"}>
-                        <td class="font-medium">{row.team_name}</td>
-                        <td class="text-right font-mono">{format_number(row.request_count)}</td>
-                        <td class="text-right font-mono">
-                          ${format_decimal(row.provider_cost_usd)}
-                        </td>
-                        <td class="text-right font-mono text-base-content/60">
-                          ${format_decimal(row.estimated_cost_usd)}
-                        </td>
-                        <td class="text-right font-mono text-success">
-                          ${format_decimal(row.savings_usd)}
-                        </td>
-                        <td class="text-right font-mono">{format_number(row.prompt_tokens)}</td>
-                        <td class="text-right font-mono">
-                          {format_number(row.completion_tokens)}
-                        </td>
-                        <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              <% else %>
-                <p class="text-sm text-base-content/40 py-6 text-center">
-                  Sin datos para este periodo.
-                </p>
-              <% end %>
-            <% end %>
           </div>
-        </div>
 
-        <%!-- Charts: cost / requests / savings per bucket --%>
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="charts-grid">
-          <.bar_chart
-            id="cost-chart"
-            title={chart_title(@period)}
-            icon="hero-currency-dollar"
-            series={@cost_series}
-            empty_label={"Sin datos para #{String.downcase(period_label(@period))}."}
-          />
-          <.bar_chart
-            id="requests-chart"
-            title={requests_title(@period)}
-            icon="hero-arrow-trending-up"
-            series={@requests_series}
-            bar_class="fill-accent/70 hover:fill-accent"
-            empty_label={"Sin datos para #{String.downcase(period_label(@period))}."}
-          />
-          <.bar_chart
-            id="savings-chart"
-            title={savings_title(@period)}
-            icon="hero-banknotes"
-            series={@savings_series}
-            bar_class="fill-success/70 hover:fill-success"
-            empty_label="Sin ahorro en este periodo."
-          />
-        </div>
-
-        <%!-- Rankings: Top 5 equipos + Top 5 miembros arriba, Ranking de modelos full-width abajo --%>
-        <div :if={@is_admin} class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="rankings-grid">
-          <.hbars_chart
-            id="top-teams-chart"
-            title="Top 5 equipos por costo real"
-            icon="hero-user-group"
-            rows={@top_teams}
-            empty_label="Sin datos para este periodo."
-          />
-          <.hbars_chart
-            id="top-members-chart"
-            title="Top 5 miembros por costo real"
-            icon="hero-users"
-            rows={@top_members}
-            empty_label="Sin datos para este periodo."
-          />
-          <div class="lg:col-span-2">
-            <.hbars_chart
-              id="top-models-chart"
-              title="Ranking de modelos por costo real"
-              icon="hero-chart-bar-square"
-              rows={@top_models}
-              empty_label="Sin datos para este periodo."
+          <%!-- Charts: requests / cost / savings per bucket --%>
+          <div class="grid grid-cols-1 lg:grid-cols-3 gap-4" id="charts-grid">
+            <.bar_chart
+              id="requests-chart"
+              title={requests_title(@period)}
+              icon="hero-arrow-trending-up"
+              series={@requests_series}
+              bar_class="fill-accent/70 hover:fill-accent"
+              empty_label={"Sin datos para #{String.downcase(period_label(@period))}."}
+            />
+            <.bar_chart
+              id="cost-chart"
+              title={chart_title(@period)}
+              icon="hero-currency-dollar"
+              series={@cost_series}
+              empty_label={"Sin datos para #{String.downcase(period_label(@period))}."}
+            />
+            <.bar_chart
+              id="savings-chart"
+              title={savings_title(@period)}
+              icon="hero-banknotes"
+              series={@savings_series}
+              bar_class="fill-success/70 hover:fill-success"
+              empty_label="Sin ahorro en este periodo."
             />
           </div>
-        </div>
+        <% end %>
       <% end %>
-    <% end %>
     <% end %>
   </div>
 </Layouts.dashboard>

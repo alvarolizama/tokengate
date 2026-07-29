@@ -32,6 +32,7 @@ defmodule TokengateWeb.DashboardLive do
   alias Tokengate.Budgets.Manager, as: Budgets
   alias Tokengate.Logs
   alias Tokengate.Metrics.Rollup
+  alias Tokengate.Providers
 
   @pubsub Tokengate.PubSub
   @metrics_topic "metrics:updated"
@@ -71,6 +72,7 @@ defmodule TokengateWeb.DashboardLive do
       |> assign(:scope_member_ids, Accounts.scope_member_ids(user))
       |> assign(:new_token, nil)
       |> assign(:new_token_team, nil)
+      |> assign(:model_catalog, [])
       |> load_personal_data(user)
 
     if connected?(socket) do
@@ -228,6 +230,7 @@ defmodule TokengateWeb.DashboardLive do
     |> load_summary_metrics(user, opts)
     |> load_chart_series(user, opts, period)
     |> load_breakdowns(user, opts)
+    |> load_model_catalog()
     |> assign(:loading, false)
   end
 
@@ -824,5 +827,39 @@ defmodule TokengateWeb.DashboardLive do
       </div>
     </div>
     """
+  end
+
+  # Model catalog for the sidebar panel — only models the user has access to
+  defp load_model_catalog(%{assigns: %{is_admin: true}} = socket) do
+    models =
+      Providers.list_model_aliases()
+      |> Enum.sort_by(& &1.name)
+      |> Enum.map(&model_catalog_entry/1)
+
+    assign(socket, :model_catalog, models)
+  end
+
+  defp load_model_catalog(socket) do
+    memberships = Accounts.list_team_members_for_user(socket.assigns.current_user.id)
+
+    models =
+      memberships
+      |> Enum.flat_map(fn member ->
+        Providers.list_accessible_aliases(member)
+      end)
+      |> Enum.uniq_by(& &1.id)
+      |> Enum.sort_by(& &1.name)
+      |> Enum.map(&model_catalog_entry/1)
+
+    assign(socket, :model_catalog, models)
+  end
+
+  defp model_catalog_entry(ma) do
+    %{
+      name: ma.display_name || ma.name,
+      market_input: ma.market_input_price_per_1m,
+      market_output: ma.market_output_price_per_1m,
+      context_window: ma.context_window
+    }
   end
 end
