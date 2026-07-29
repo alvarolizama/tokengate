@@ -711,22 +711,24 @@ defmodule TokengateWeb.TeamsLive do
 
               <div class="mt-4 pt-4 border-t border-base-300">
                 <h4 class="text-sm font-semibold mb-2">Aliases de modelos</h4>
-                <div class="flex flex-wrap gap-3" id={"aliases-#{team.id}"}>
-                  <label
+                <div class="flex flex-wrap gap-2" id={"aliases-#{team.id}"}>
+                  <button
                     :for={alias <- Map.get(@aliases_by_org, "all", [])}
-                    class="flex items-center gap-2 cursor-pointer text-sm"
+                    type="button"
+                    phx-click="toggle_alias"
+                    phx-value-team-id={team.id}
+                    phx-value-alias-id={alias.id}
+                    class={[
+                      "badge badge-sm cursor-pointer transition-all",
+                      if(alias.id in granted_alias_ids(@granted_aliases, team.id),
+                        do: "badge-primary",
+                        else: "badge-outline"
+                      )
+                    ]}
+                    id={"alias-#{team.id}-#{alias.id}"}
                   >
-                    <input
-                      type="checkbox"
-                      phx-click="toggle_alias"
-                      phx-value-team-id={team.id}
-                      phx-value-alias-id={alias.id}
-                      checked={alias.id in granted_alias_ids(@granted_aliases, team.id)}
-                      class="checkbox checkbox-sm"
-                      id={"alias-#{team.id}-#{alias.id}"}
-                    />
-                    <span>{alias.name}</span>
-                  </label>
+                    {alias.name}
+                  </button>
                   <p
                     :if={Map.get(@aliases_by_org, "all", []) == []}
                     class="text-xs text-base-content/40"

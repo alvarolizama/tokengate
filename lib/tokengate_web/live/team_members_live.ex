@@ -1133,30 +1133,29 @@ defmodule TokengateWeb.TeamMembersLive do
               <%!-- Modelos — team aliases (locked) + extra grants (toggleable) --%>
               <div :if={@org_aliases != []} class="mt-3 pt-3 border-t border-base-200">
                 <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">Modelos</p>
-                <div class="flex flex-wrap gap-3">
-                  <div
+                <div class="flex flex-wrap gap-2">
+                  <button
                     :for={alias <- @org_aliases}
-                    class="flex items-center gap-2 text-sm"
+                    type="button"
+                    phx-click={not MapSet.member?(@team_alias_ids, alias.id) and "toggle_extra_alias"}
+                    phx-value-member-id={member.id}
+                    phx-value-alias-id={alias.id}
+                    class={[
+                      "badge badge-sm cursor-pointer transition-all",
+                      cond do
+                        MapSet.member?(@team_alias_ids, alias.id) -> "badge-primary"
+                        alias.id in extra_alias_ids(@extra_aliases, member.id) -> "badge-accent"
+                        true -> "badge-outline"
+                      end
+                    ]}
+                    disabled={MapSet.member?(@team_alias_ids, alias.id)}
+                    id={"extra-alias-#{member.id}-#{alias.id}"}
                   >
-                    <% in_team? = MapSet.member?(@team_alias_ids, alias.id)
-                    enabled? = alias.id in extra_alias_ids(@extra_aliases, member.id) %>
-                    <input
-                      type="checkbox"
-                      checked={in_team? or enabled?}
-                      disabled={in_team?}
-                      phx-click={not in_team? and "toggle_extra_alias"}
-                      phx-value-member-id={member.id}
-                      phx-value-alias-id={alias.id}
-                      class="checkbox checkbox-sm"
-                      id={"extra-alias-#{member.id}-#{alias.id}"}
-                    />
-                    <span
-                      class={["whitespace-nowrap", in_team? && "text-base-content/50"]}
-                      id={"extra-alias-label-#{member.id}-#{alias.id}"}
-                    >
-                      {alias.name}
-                    </span>
-                  </div>
+                    {alias.name}
+                    <%= if MapSet.member?(@team_alias_ids, alias.id) do %>
+                      <span class="text-[10px] opacity-60 ml-0.5">equipo</span>
+                    <% end %>
+                  </button>
                 </div>
               </div>
             </div>
