@@ -865,7 +865,7 @@ defmodule TokengateWeb.TeamMembersLive do
           </div>
         </div>
 
-        <div class="flex items-center gap-3 mb-1">
+        <div class="flex items-center justify-end gap-3 mb-4">
           <input
             type="text"
             name="member_search"
