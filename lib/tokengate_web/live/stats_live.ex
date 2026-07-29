@@ -19,8 +19,6 @@ defmodule TokengateWeb.StatsLive do
 
   use TokengateWeb, :live_view
 
-  import Ecto.Query, only: [from: 2]
-
   alias Tokengate.Accounts
   alias Tokengate.Logs
   alias Tokengate.Metrics.Rollup
@@ -143,22 +141,8 @@ defmodule TokengateWeb.StatsLive do
 
   defp fetch_summary(%{global_role: "user"} = user, opts) do
     memberships = Accounts.list_team_members_for_user(user.id)
-
-    manager_team_ids =
-      memberships
-      |> Enum.filter(&(&1.team_role == "manager"))
-      |> Enum.map(& &1.team_id)
-      |> Enum.uniq()
-
-    if manager_team_ids != [] do
-      Enum.reduce(manager_team_ids, empty_summary(), fn team_id, acc ->
-        s = Logs.cost_summary_for_team(team_id, Map.new(opts))
-        merge_summaries(acc, s)
-      end)
-    else
-      member_ids = Enum.map(memberships, & &1.id)
-      Logs.cost_summary_for_members(member_ids, Map.new(opts))
-    end
+    member_ids = Enum.map(memberships, & &1.id)
+    Logs.cost_summary_for_members(member_ids, Map.new(opts))
   end
 
   defp fetch_summary(_user, _opts), do: empty_summary()
@@ -263,10 +247,6 @@ defmodule TokengateWeb.StatsLive do
 
       [] ->
         []
-
-      team_ids ->
-        Rollup.breakdown_by_team_for_model(model_id, opts)
-        |> Enum.filter(fn row -> row.team_id in team_ids end)
     end
   end
 
@@ -277,32 +257,11 @@ defmodule TokengateWeb.StatsLive do
 
       [] ->
         []
-
-      team_ids ->
-        from(t in Tokengate.Accounts.Team, where: t.id in ^team_ids)
-        |> Tokengate.Repo.all()
     end
   end
 
   defp load_team_breakdown(%{global_role: "admin"}, opts) do
     Rollup.breakdown_by_team(opts)
-  end
-
-  defp load_team_breakdown(%{global_role: "user"} = user, opts) do
-    memberships = Accounts.list_team_members_for_user(user.id)
-
-    manager_team_ids =
-      memberships
-      |> Enum.filter(&(&1.team_role == "manager"))
-      |> Enum.map(& &1.team_id)
-      |> Enum.uniq()
-
-    if manager_team_ids != [] do
-      Rollup.breakdown_by_team(opts)
-      |> Enum.filter(fn row -> row.team_id in manager_team_ids end)
-    else
-      []
-    end
   end
 
   defp load_team_breakdown(_, _), do: []
@@ -387,35 +346,9 @@ defmodule TokengateWeb.StatsLive do
     }
   end
 
-  defp merge_summaries(acc, s) do
-    %{
-      acc
-      | request_count: acc.request_count + s.request_count,
-        total_cost_usd: Decimal.add(acc.total_cost_usd, s.total_cost_usd),
-        total_provider_cost_usd:
-          Decimal.add(acc.total_provider_cost_usd, s.total_provider_cost_usd),
-        total_savings_usd: Decimal.add(acc.total_savings_usd, s.total_savings_usd),
-        total_estimated_cost_usd:
-          Decimal.add(acc.total_estimated_cost_usd, s.total_estimated_cost_usd),
-        total_prompt_tokens: acc.total_prompt_tokens + s.total_prompt_tokens,
-        total_completion_tokens: acc.total_completion_tokens + s.total_completion_tokens
-    }
-  end
-
   defp scope_label_for(%{global_role: "admin"}), do: "Organización completa"
 
-  defp scope_label_for(%{global_role: "user"} = user) do
-    memberships = Accounts.list_team_members_for_user(user.id)
-
-    manager_teams =
-      memberships
-      |> Enum.filter(&(&1.team_role == "manager"))
-      |> Enum.map(& &1.team.name)
-
-    if manager_teams == [],
-      do: "Tus consumos",
-      else: "Equipos: " <> Enum.join(manager_teams, ", ")
-  end
+  defp scope_label_for(%{global_role: "user"}), do: "Tus consumos"
 
   defp scope_label_for(_), do: "—"
 

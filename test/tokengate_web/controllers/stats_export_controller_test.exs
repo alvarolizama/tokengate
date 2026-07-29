@@ -1,8 +1,7 @@
 defmodule TokengateWeb.StatsExportControllerTest do
   @moduledoc """
   CSV export endpoint tests — focusing on authorization: the team drill-down
-  exposes member-level data (emails, costs), so only admins and managers of
-  that team may export it.
+  exposes member-level data (emails, costs), so only admins may export it.
   """
 
   use TokengateWeb.ConnCase, async: false
@@ -84,34 +83,6 @@ defmodule TokengateWeb.StatsExportControllerTest do
     conn =
       conn
       |> login(admin, password)
-      |> get(~p"/dashboard/stats/export?type=teams&team_id=#{team.id}")
-
-    assert response(conn, 200) =~ "usuario,equipo"
-  end
-
-  test "manager of the team can export its drill-down", %{conn: conn} do
-    %{team: team} = team_with_log()
-
-    u = unique()
-
-    {:ok, manager_user} =
-      Accounts.register_user(%{
-        email: "mgr-#{u}@example.com",
-        name: "Mgr #{u}",
-        password: "password-secret-#{u}1"
-      })
-
-    {:ok, _membership} =
-      Accounts.create_team_member(%{
-        user_id: manager_user.id,
-        team_id: team.id,
-        team_role: "manager"
-      })
-
-    conn =
-      conn
-      |> post(~p"/login", %{email: manager_user.email, password: "password-secret-#{u}1"})
-      |> recycle()
       |> get(~p"/dashboard/stats/export?type=teams&team_id=#{team.id}")
 
     assert response(conn, 200) =~ "usuario,equipo"

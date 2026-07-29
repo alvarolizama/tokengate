@@ -318,7 +318,6 @@ defmodule Tokengate.Accounts do
   Resolves the team-member ids whose consumption a user is allowed to see.
 
     * admin — `nil` (org-wide, no filter)
-    * manager — ids of every member of the teams they manage
     * user — ids of their own memberships only
 
   Used to scope analytics queries (dashboard, stats, CSV export) so
@@ -328,36 +327,18 @@ defmodule Tokengate.Accounts do
 
   def scope_member_ids(%{global_role: "user"} = user) do
     memberships = list_team_members_for_user(user.id)
-
-    manager_team_ids =
-      memberships
-      |> Enum.filter(&(&1.team_role == "manager"))
-      |> Enum.map(& &1.team_id)
-      |> Enum.uniq()
-
-    if manager_team_ids != [] do
-      from(tm in TeamMember, where: tm.team_id in ^manager_team_ids, select: tm.id)
-      |> Repo.all()
-    else
-      Enum.map(memberships, & &1.id)
-    end
+    Enum.map(memberships, & &1.id)
   end
 
   def scope_member_ids(_), do: []
 
   @doc """
   Team ids a user is allowed to drill into: all for admins (`nil` =
-  unrestricted), only managed teams for non-admins.
+  unrestricted), empty for non-admins.
   """
   def scope_team_ids(%{global_role: "admin"}), do: nil
 
-  def scope_team_ids(%{global_role: "user"} = user) do
-    user.id
-    |> list_team_members_for_user()
-    |> Enum.filter(&(&1.team_role == "manager"))
-    |> Enum.map(& &1.team_id)
-    |> Enum.uniq()
-  end
+  def scope_team_ids(%{global_role: "user"}), do: []
 
   def scope_team_ids(_), do: []
 

@@ -60,15 +60,8 @@ defmodule TokengateWeb.StatsExportController do
   end
 
   # A team drill-down exposes every member's email and consumption, so only
-  # admins and managers of that team may export it.
+  # admins may export it.
   defp team_export_allowed?(%{global_role: "admin"}, _team_id), do: true
-
-  defp team_export_allowed?(%{global_role: "user"} = user, team_id) do
-    user.id
-    |> Accounts.list_team_members_for_user()
-    |> Enum.any?(fn tm -> tm.team_id == team_id and tm.team_role == "manager" end)
-  end
-
   defp team_export_allowed?(_, _), do: false
 
   ## Models CSV -----------------------------------------------------------
@@ -211,23 +204,6 @@ defmodule TokengateWeb.StatsExportController do
 
   defp load_team_breakdown(%{global_role: "admin"}, opts) do
     Rollup.breakdown_by_team(opts)
-  end
-
-  defp load_team_breakdown(%{global_role: "user"} = user, opts) do
-    memberships = Accounts.list_team_members_for_user(user.id)
-
-    manager_team_ids =
-      memberships
-      |> Enum.filter(&(&1.team_role == "manager"))
-      |> Enum.map(& &1.team_id)
-      |> Enum.uniq()
-
-    if manager_team_ids != [] do
-      Rollup.breakdown_by_team(opts)
-      |> Enum.filter(fn row -> row.team_id in manager_team_ids end)
-    else
-      []
-    end
   end
 
   defp load_team_breakdown(_, _), do: []

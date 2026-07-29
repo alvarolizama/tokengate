@@ -41,6 +41,7 @@ defmodule TokengateWeb.TeamsLive do
         |> assign(:webhook_form, nil)
         |> assign(:editing_webhook_team_id, nil)
         |> assign(:editing_webhook_id, nil)
+        |> assign(:team_search, "")
         |> load_teams()
 
       {:ok, socket}
@@ -50,12 +51,24 @@ defmodule TokengateWeb.TeamsLive do
   ## Data loading ---------------------------------------------------------
 
   defp load_teams(socket) do
+    search = socket.assigns[:team_search] || ""
+
     teams =
       from(t in Team,
         preload: [:team_members],
         order_by: [asc: t.name]
       )
       |> Repo.all()
+      |> then(fn teams ->
+        if search == "" do
+          teams
+        else
+          search_down = String.downcase(search)
+          Enum.filter(teams, fn t ->
+            String.contains?(String.downcase(t.name), search_down)
+          end)
+        end
+      end)
 
     granted_aliases =
       from(tma in TeamModelAlias, select: {tma.team_id, tma.model_alias_id})
@@ -125,6 +138,11 @@ defmodule TokengateWeb.TeamsLive do
   end
 
   ## Events — team CRUD ---------------------------------------------------
+
+  @impl true
+  def handle_event("search_teams", %{"team_search" => search}, socket) do
+    {:noreply, socket |> assign(:team_search, search) |> load_teams()}
+  end
 
   @impl true
   def handle_event("new_team", _params, socket) do
@@ -372,9 +390,20 @@ defmodule TokengateWeb.TeamsLive do
           Equipos
           <:subtitle>Gestiona equipos, presupuestos, aliases de modelos y webhooks</:subtitle>
           <:actions>
-            <.button phx-click="new_team" id="new-team-btn">
-              <.icon name="hero-plus" class="w-4 h-4" /> Nuevo equipo
-            </.button>
+            <div class="flex items-center gap-2">
+              <input
+                type="text"
+                name="team_search"
+                value={@team_search}
+                placeholder="Buscar equipo…"
+                phx-change="search_teams"
+                phx-debounce="200"
+                class="input input-sm w-48"
+              />
+              <.button phx-click="new_team" id="new-team-btn">
+                <.icon name="hero-plus" class="w-4 h-4" /> Nuevo equipo
+              </.button>
+            </div>
           </:actions>
         </.header>
 

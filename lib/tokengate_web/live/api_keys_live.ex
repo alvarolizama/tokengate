@@ -28,10 +28,7 @@ defmodule TokengateWeb.ApiKeysLive do
   end
 
   defp manager?(%{global_role: "admin"}, _memberships), do: true
-
-  defp manager?(_user, memberships) do
-    Enum.any?(memberships, &(&1.team_role == "manager"))
-  end
+  defp manager?(_user, _memberships), do: false
 
   defp load_managed_team_members(%{global_role: "admin"}, _memberships) do
     Accounts.list_teams()
@@ -40,18 +37,7 @@ defmodule TokengateWeb.ApiKeysLive do
     end)
   end
 
-  defp load_managed_team_members(_user, memberships) do
-    managed_team_ids =
-      memberships
-      |> Enum.filter(&(&1.team_role == "manager"))
-      |> Enum.map(& &1.team_id)
-      |> Enum.uniq()
-
-    Enum.map(managed_team_ids, fn team_id ->
-      team = Accounts.get_team!(team_id)
-      {team, Accounts.list_team_members_for_team(team_id)}
-    end)
-  end
+  defp load_managed_team_members(_user, _memberships), do: []
 
   ## Events ----------------------------------------------------------------
 
@@ -154,7 +140,6 @@ defmodule TokengateWeb.ApiKeysLive do
                         <thead>
                           <tr>
                             <th>Miembro</th>
-                            <th>Rol</th>
                             <th>Clave</th>
                             <th>Estado</th>
                             <th>Creada</th>
@@ -164,7 +149,6 @@ defmodule TokengateWeb.ApiKeysLive do
                         <tbody>
                           <tr :for={member <- members} id={"team-key-#{member.id}"}>
                             <td>{member.user.email}</td>
-                            <td class="capitalize">{member.team_role}</td>
                             <td><code class="text-sm font-mono">{masked_key(member)}</code></td>
                             <td>
                               <span class={["badge", "badge-sm", key_status_badge(member)]}>

@@ -4,7 +4,6 @@ defmodule TokengateWeb.TeamMembersLive do
 
   Access:
     - admin: manages members of any team.
-    - manager: manages members of teams where they have team_role == "manager".
     - user: denied — redirected to /dashboard.
 
   Supports:
@@ -13,7 +12,6 @@ defmodule TokengateWeb.TeamMembersLive do
     - Per-member extras: extra_monthly_budget_usd,
       extra_concurrency, extra_rpm, extra_model_aliases (individual grants
       beyond team aliases) with optional per-model daily budget.
-    - Change team_role (manager/user).
   """
 
   use TokengateWeb, :live_view
@@ -59,14 +57,8 @@ defmodule TokengateWeb.TeamMembersLive do
 
   defp check_access(%{global_role: "admin"}, _team), do: :ok
 
-  defp check_access(%{global_role: "user"} = user, team) do
-    memberships = Accounts.list_team_members_for_user(user.id)
-
-    if Enum.any?(memberships, &(&1.team_id == team.id and &1.team_role == "manager")) do
-      :ok
-    else
-      {:denied, "No tienes permisos para gestionar este equipo."}
-    end
+  defp check_access(_user, _team) do
+    {:denied, "No tienes permisos para gestionar este equipo."}
   end
 
   ## Data loading ---------------------------------------------------------
@@ -211,7 +203,7 @@ defmodule TokengateWeb.TeamMembersLive do
       attrs = %{
         user_id: user.id,
         team_id: team.id,
-        team_role: params["team_role"] || "user",
+        team_role: "user",
         extra_monthly_budget_usd: monthly,
         extra_concurrency: concurrency,
         extra_rpm: rpm
@@ -247,28 +239,6 @@ defmodule TokengateWeb.TeamMembersLive do
          socket
          |> assign(:add_member_error, "No existe un usuario con ese email.")
          |> assign(:add_form, to_form(params, as: :add_member))}
-    end
-  end
-
-  ## Events — change role ------------------------------------------------
-
-  @impl true
-  def handle_event("change_role", %{"id" => member_id, "team_role" => team_role}, socket) do
-    member = Accounts.get_team_member!(member_id)
-
-    if member.team_id != socket.assigns.team.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
-    else
-      case Accounts.update_team_member(member, %{team_role: team_role}) do
-        {:ok, _} ->
-          {:noreply,
-           socket
-           |> put_flash(:info, "Rol actualizado.")
-           |> load_data()}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudo actualizar el rol.")}
-      end
     end
   end
 
@@ -511,7 +481,6 @@ defmodule TokengateWeb.TeamMembersLive do
     to_form(
       %{
         "email" => "",
-        "team_role" => "user",
         "extra_monthly_budget_usd" => "",
         "extra_concurrency" => "",
         "extra_rpm" => ""
@@ -544,10 +513,6 @@ defmodule TokengateWeb.TeamMembersLive do
   defp format_decimal(%Decimal{} = d), do: d |> Decimal.round(2) |> Decimal.to_string()
   defp format_decimal(nil), do: "—"
   defp format_decimal(value), do: to_string(value)
-
-  defp role_badge("manager"), do: {"badge-primary", "Manager"}
-  defp role_badge("user"), do: {"badge-ghost", "Usuario"}
-  defp role_badge(_), do: {"badge-ghost", "—"}
 
   defp masked_key(%{api_key: %{key_prefix: prefix}}) when is_binary(prefix), do: "#{prefix}••••"
   defp masked_key(_), do: "Sin clave"
@@ -618,12 +583,6 @@ defmodule TokengateWeb.TeamMembersLive do
                       </button>
                     </div>
                   </div>
-                  <.input
-                    field={@add_form[:team_role]}
-                    type="select"
-                    label="Rol"
-                    options={[{"Usuario", "user"}, {"Manager", "manager"}]}
-                  />
                   <.input
                     field={@add_form[:extra_monthly_budget_usd]}
                     type="number"
@@ -931,9 +890,6 @@ defmodule TokengateWeb.TeamMembersLive do
                   </div>
                 </div>
                 <div class="flex items-center gap-2 shrink-0">
-                  <span class={["badge", "badge-sm", elem(role_badge(member.team_role), 0)]}>
-                    {elem(role_badge(member.team_role), 1)}
-                  </span>
                   <span class="badge badge-sm badge-ghost capitalize">{member.status}</span>
                 </div>
               </div>
@@ -1069,25 +1025,6 @@ defmodule TokengateWeb.TeamMembersLive do
               <%!-- Actions --%>
               <div class="flex flex-wrap items-center justify-between gap-2 mt-3">
                 <div class="flex items-center gap-2">
-                  <div class="flex items-center gap-1">
-                    <span class="text-xs text-base-content/50 mr-1">Rol:</span>
-                    <form
-                      phx-change="change_role"
-                      phx-value-id={member.id}
-                      id={"role-form-#{member.id}"}
-                    >
-                      <select
-                        name="team_role"
-                        class="select select-bordered select-sm"
-                        id={"role-select-#{member.id}"}
-                      >
-                        <option value="user" selected={member.team_role == "user"}>Usuario</option>
-                        <option value="manager" selected={member.team_role == "manager"}>
-                          Manager
-                        </option>
-                      </select>
-                    </form>
-                  </div>
                   <button
                     phx-click="clear_sticky_routes"
                     phx-value-id={member.id}

@@ -740,7 +740,8 @@
                           <tbody>
                             <tr
                               :for={{row, idx} <- Enum.with_index(@breakdown_provider, 1)}
-                              id={"bd-provider-#{row.model_provider_id || "unknown"}"}>
+                              id={"bd-provider-#{row.model_provider_id || "unknown"}"}
+                            >
                               <td class="text-base-content/60">{idx}</td>
                               <td>
                                 <div class="font-medium">

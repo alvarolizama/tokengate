@@ -3,7 +3,7 @@ defmodule TokengateWeb.DashboardLiveTest do
 
   import Phoenix.LiveViewTest
 
-  alias Tokengate.{Accounts, Logs, Providers, Repo}
+  alias Tokengate.{Accounts, Logs, Providers}
   alias Tokengate.Metrics.Collector
 
   defp unique, do: System.unique_integer([:positive])
@@ -75,9 +75,8 @@ defmodule TokengateWeb.DashboardLiveTest do
     %{team: team, owner: owner, member: member, owner_password: "password-secret-#{u}1"}
   end
 
-  defp team_with_member(opts \\ %{}) do
+  defp team_with_member(_opts \\ %{}) do
     _u = unique()
-    role = Map.get(opts, :team_role, "user")
 
     {:ok, team} = Accounts.create_team(%{name: "Team #{_u}"})
 
@@ -89,7 +88,7 @@ defmodule TokengateWeb.DashboardLiveTest do
       })
 
     {:ok, member} =
-      Accounts.create_team_member(%{user_id: owner.id, team_id: team.id, team_role: role})
+      Accounts.create_team_member(%{user_id: owner.id, team_id: team.id, team_role: "user"})
 
     {:ok, _api_key, _token} = Accounts.replace_api_key(member)
 
@@ -248,30 +247,6 @@ defmodule TokengateWeb.DashboardLiveTest do
     _ = member
   end
 
-  test "manager scope: aggregates the teams they manage", %{conn: conn} do
-    %{team: team, member: _member} = team_with_log(%{cost: "0.005"})
-
-    u = unique()
-    password = "password-secret-#{u}1"
-
-    {:ok, manager} =
-      Accounts.register_user(%{
-        email: "manager-#{u}@example.com",
-        name: "Manager #{u}",
-        password: password
-      })
-
-    {:ok, _membership} =
-      Accounts.create_team_member(%{user_id: manager.id, team_id: team.id, team_role: "manager"})
-
-    conn = login(conn, manager, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard")
-
-    refute has_element?(view, "#empty-state")
-    assert has_element?(view, "#requests-card")
-    _ = Repo
-  end
-
   ## Personal keys on dashboard --------------------------------------------
 
   test "user sees their own API key on dashboard", %{conn: conn} do
@@ -281,7 +256,6 @@ defmodule TokengateWeb.DashboardLiveTest do
     conn = login(conn, owner, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")
 
-    assert html =~ "Tus equipos"
     assert html =~ team.name
     assert has_element?(view, "#team-#{team.id}")
     assert html =~ "••••"
@@ -351,7 +325,6 @@ defmodule TokengateWeb.DashboardLiveTest do
     conn = login(conn, owner, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")
 
-    assert html =~ "Tus equipos"
     assert has_element?(view, "#team-#{team.id}")
     assert html =~ "Gasto mensual"
     _ = member

@@ -471,4 +471,21 @@ defmodule Tokengate.Logs do
   defp compute_avg_tps(tokens, latency_ms) when is_integer(tokens) and is_integer(latency_ms) do
     tokens / (latency_ms / 1000)
   end
+
+  @doc """
+  Per-user total historical spend across all team memberships.
+
+  Returns `%{user_id => Decimal.t()}` — the sum of `provider_cost_usd`
+  (the real cost) from all `request_logs`, grouped by user.
+  Used by the admin users page for the "Gasto total" column.
+  """
+  @spec total_spend_by_user() :: %{term() => Decimal.t()}
+  def total_spend_by_user do
+    RequestLog
+    |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
+    |> group_by([_rl, tm], tm.user_id)
+    |> select([rl, tm], {tm.user_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
+    |> Repo.all()
+    |> Map.new(fn {user_id, cost} -> {user_id, Decimal.new(to_string(cost))} end)
+  end
 end

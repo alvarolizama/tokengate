@@ -4,13 +4,11 @@ defmodule TokengateWeb.DashboardLive do
   overview: API usage info, the user's own API keys (replace/revoke),
   their teams with live budget spend.
 
-  Scope is determined by the signed-in user's memberships:
+  Scope is determined by the signed-in user's global role:
 
     * **admin** (`global_role == "admin"`) — org-wide aggregates from
       durable Postgres rollups.
-    * **manager** (any membership with `team_role == "manager"`) — aggregates
-      across every team where they are a manager.
-    * **user** (no manager memberships) — only their own consumption.
+    * **user** — only their own consumption.
 
   All metrics are fetched from Postgres (`request_logs`) via
   `Tokengate.Logs` and `Tokengate.Metrics.Rollup` — no in-memory ETS,
@@ -260,45 +258,15 @@ defmodule TokengateWeb.DashboardLive do
     Logs.cost_summary(Map.new(opts))
   end
 
-  # Non-admin: manager or user scope
+  # Non-admin: user scope — only own data
   defp fetch_summary(%{global_role: "user"} = user, opts) do
     memberships = Accounts.list_team_members_for_user(user.id)
-
-    manager_team_ids =
-      memberships
-      |> Enum.filter(fn tm -> tm.team_role == "manager" end)
-      |> Enum.map(fn tm -> tm.team_id end)
-      |> Enum.uniq()
-
-    if manager_team_ids != [] do
-      aggregate_team_summaries(manager_team_ids, opts)
-    else
-      member_ids = Enum.map(memberships, & &1.id)
-      Logs.cost_summary_for_members(member_ids, Map.new(opts))
-    end
+    member_ids = Enum.map(memberships, & &1.id)
+    Logs.cost_summary_for_members(member_ids, Map.new(opts))
   end
 
   defp fetch_summary(_user, _opts) do
     empty_summary()
-  end
-
-  defp aggregate_team_summaries(team_ids, opts) do
-    Enum.reduce(team_ids, empty_summary(), fn team_id, acc ->
-      s = Logs.cost_summary_for_team(team_id, Map.new(opts))
-
-      %{
-        acc
-        | request_count: acc.request_count + s.request_count,
-          total_cost_usd: Decimal.add(acc.total_cost_usd, s.total_cost_usd),
-          total_provider_cost_usd:
-            Decimal.add(acc.total_provider_cost_usd, s.total_provider_cost_usd),
-          total_savings_usd: Decimal.add(acc.total_savings_usd, s.total_savings_usd),
-          total_estimated_cost_usd:
-            Decimal.add(acc.total_estimated_cost_usd, s.total_estimated_cost_usd),
-          total_prompt_tokens: acc.total_prompt_tokens + s.total_prompt_tokens,
-          total_completion_tokens: acc.total_completion_tokens + s.total_completion_tokens
-      }
-    end)
   end
 
   # Chart series — granularity depends on period
@@ -307,24 +275,16 @@ defmodule TokengateWeb.DashboardLive do
     scope = chart_scope(user)
 
     series =
-      case period do
-        "today" -> Rollup.hourly_series(scope[:team_id], hours)
-        "7d" -> Rollup.hourly_series(scope[:team_id], hours)
-        _ -> daily_series(scope, hours, opts)
-      end
-
-    # For manager/user scopes, merge across teams
-    series =
       case scope do
-        %{team_ids: ids} when is_list(ids) and ids != [] ->
-          merge_series(ids, hours, period)
-
         %{member_ids: ids} when is_list(ids) ->
-          # Single-bucket fallback for user scope
           user_hourly_series(ids, opts, hours)
 
         _ ->
-          series
+          case period do
+            "today" -> Rollup.hourly_series(scope[:team_id], hours)
+            "7d" -> Rollup.hourly_series(scope[:team_id], hours)
+            _ -> daily_series(scope, hours, opts)
+          end
       end
 
     socket
@@ -372,48 +332,10 @@ defmodule TokengateWeb.DashboardLive do
 
   defp chart_scope(%{global_role: "user"} = user) do
     memberships = Accounts.list_team_members_for_user(user.id)
-
-    manager_team_ids =
-      memberships
-      |> Enum.filter(fn tm -> tm.team_role == "manager" end)
-      |> Enum.map(fn tm -> tm.team_id end)
-      |> Enum.uniq()
-
-    if manager_team_ids != [] do
-      %{team_ids: manager_team_ids}
-    else
-      %{member_ids: Enum.map(memberships, & &1.id)}
-    end
+    %{member_ids: Enum.map(memberships, & &1.id)}
   end
 
   defp chart_scope(_), do: %{team_id: nil}
-
-  # Merge per-team hourly or daily series into one combined, bucketed list
-  defp merge_series(team_ids, hours, period) do
-    team_ids
-    |> Enum.flat_map(fn team_id -> Rollup.hourly_series(team_id, hours) end)
-    |> merge_series_buckets(period)
-  end
-
-  defp merge_series_buckets(rows, _period) do
-    rows
-    |> Enum.group_by(fn row -> DateTime.truncate(row.hour, :second) end)
-    |> Enum.map(fn {hour, grouped} ->
-      %{
-        hour: hour,
-        request_count: Enum.sum(Enum.map(grouped, & &1.request_count)),
-        cost_usd:
-          grouped
-          |> Enum.map(& &1.cost_usd)
-          |> Enum.reduce(Decimal.new(0), &Decimal.add/2),
-        savings_usd:
-          grouped
-          |> Enum.map(& &1.savings_usd)
-          |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
-      }
-    end)
-    |> Enum.sort_by(& &1.hour, DateTime)
-  end
 
   defp user_hourly_series([], _opts, _hours), do: []
 
@@ -502,26 +424,9 @@ defmodule TokengateWeb.DashboardLive do
   defp usd_tooltip(value), do: "#{Float.round(value, 6)} USD"
   defp requests_tooltip(value), do: "#{trunc(value)} requests"
 
-  # Team breakdown: only admin and manager
+  # Team breakdown: admin only
   defp load_team_breakdown(%{global_role: "admin"}, opts) do
     Rollup.breakdown_by_team(opts)
-  end
-
-  defp load_team_breakdown(%{global_role: "user"} = user, opts) do
-    memberships = Accounts.list_team_members_for_user(user.id)
-
-    manager_team_ids =
-      memberships
-      |> Enum.filter(fn tm -> tm.team_role == "manager" end)
-      |> Enum.map(fn tm -> tm.team_id end)
-      |> Enum.uniq()
-
-    if manager_team_ids != [] do
-      Rollup.breakdown_by_team(opts)
-      |> Enum.filter(fn row -> row.team_id in manager_team_ids end)
-    else
-      []
-    end
   end
 
   defp load_team_breakdown(_, _), do: []
@@ -571,18 +476,7 @@ defmodule TokengateWeb.DashboardLive do
 
   defp scope_label_for(%{global_role: "admin"}), do: "Organización completa"
 
-  defp scope_label_for(%{global_role: "user"} = user) do
-    memberships = Accounts.list_team_members_for_user(user.id)
-
-    manager_teams =
-      memberships
-      |> Enum.filter(fn tm -> tm.team_role == "manager" end)
-      |> Enum.map(fn tm -> tm.team.name end)
-
-    if manager_teams == [],
-      do: "Tus consumos",
-      else: "Equipos: " <> Enum.join(manager_teams, ", ")
-  end
+  defp scope_label_for(%{global_role: "user"}), do: "Tus consumos"
 
   defp scope_label_for(_), do: "—"
 
@@ -642,6 +536,7 @@ defmodule TokengateWeb.DashboardLive do
 
   # Compute Y-axis labels (5 ticks from 0 to max)
   defp compute_y_labels(+0.0), do: ["0"]
+
   defp compute_y_labels(max_value) do
     step = max_value / 4
 
@@ -660,6 +555,7 @@ defmodule TokengateWeb.DashboardLive do
     count = length(series)
     # Show ~5 labels: first, last, and 3 evenly spaced
     indices = [0, div(count - 1, 4), div(count - 1, 2), div(count - 1, 4) * 3, count - 1]
+
     indices
     |> Enum.uniq()
     |> Enum.sort()
@@ -826,7 +722,15 @@ defmodule TokengateWeb.DashboardLive do
                 <%!-- Horizontal grid lines --%>
                 <%= for {_label, i} <- Enum.with_index(@y_labels) do %>
                   <% y = 20 + i * (120 / (length(@y_labels) - 1)) %>
-                  <line x1="10" y1={y} x2="390" y2={y} class="stroke-base-300/50" stroke-width="0.5" stroke-dasharray="2,2" />
+                  <line
+                    x1="10"
+                    y1={y}
+                    x2="390"
+                    y2={y}
+                    class="stroke-base-300/50"
+                    stroke-width="0.5"
+                    stroke-dasharray="2,2"
+                  />
                 <% end %>
               </svg>
             </div>

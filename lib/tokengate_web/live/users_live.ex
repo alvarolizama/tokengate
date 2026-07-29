@@ -33,6 +33,10 @@ defmodule TokengateWeb.UsersLive do
       |> assign(:delete_target_email, nil)
       |> assign(:all_teams, Accounts.list_teams())
       |> assign(:is_admin, user && user.global_role == "admin")
+      |> assign(:search_query, "")
+      |> assign(:editing_teams_user_id, nil)
+      |> assign(:editing_teams_user_name, nil)
+      |> assign(:editing_team_ids, [])
       |> require_admin_hook()
       |> load_users()
 
@@ -55,14 +59,109 @@ defmodule TokengateWeb.UsersLive do
   ## Data loading ---------------------------------------------------------
 
   defp load_users(socket) do
+    search = socket.assigns[:search_query] || ""
     users = Accounts.list_users()
+
+    filtered =
+      if search == "" do
+        users
+      else
+        search_lower = String.downcase(search)
+
+        Enum.filter(users, fn u ->
+          String.contains?(String.downcase(u.name || ""), search_lower) or
+            String.contains?(String.downcase(u.email), search_lower)
+        end)
+      end
+
+    sorted =
+      filtered
+      |> Enum.sort_by(fn u ->
+        {if(u.global_role == "admin", do: 0, else: 1), String.downcase(u.name || u.email)}
+      end)
 
     socket
     |> assign(:spend_by_user, Tokengate.Budgets.spend_by_user())
-    |> stream(:users, users, reset: true)
+    |> assign(:total_spend_by_user, Tokengate.Logs.total_spend_by_user())
+    |> assign(:user_teams, load_user_teams(sorted))
+    |> stream(:users, sorted, reset: true)
   end
 
-  ## Events — create/edit user -------------------------------------------
+  defp load_user_teams(users) do
+    users
+    |> Enum.map(fn user ->
+      teams = Accounts.list_team_members_for_user(user.id) |> Enum.map(& &1.team)
+      {user.id, teams}
+    end)
+    |> Map.new()
+  end
+
+  ## Events — search -------------------------------------------------------
+  def handle_event("search_users", %{"q" => query}, socket) do
+    {:noreply,
+     socket
+     |> assign(:search_query, query)
+     |> load_users()}
+  end
+
+  ## Events — edit teams --------------------------------------------------
+  def handle_event("edit_teams", %{"id" => user_id}, socket) do
+    user = Accounts.get_user!(user_id)
+    memberships = Accounts.list_team_members_for_user(user_id)
+    team_ids = Enum.map(memberships, & &1.team_id)
+
+    {:noreply,
+     socket
+     |> assign(:editing_teams_user_id, user_id)
+     |> assign(:editing_teams_user_name, user.name || user.email)
+     |> assign(:editing_team_ids, team_ids)}
+  end
+
+  def handle_event("cancel_edit_teams", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:editing_teams_user_id, nil)
+     |> assign(:editing_teams_user_name, nil)
+     |> assign(:editing_team_ids, [])}
+  end
+
+  def handle_event("save_teams", %{"team_ids" => team_ids}, socket) do
+    user_id = socket.assigns.editing_teams_user_id
+    user = Accounts.get_user!(user_id)
+    team_ids = team_ids |> List.wrap() |> Enum.reject(&(&1 in ["", nil]))
+
+    # Get current memberships
+    current = Accounts.list_team_members_for_user(user_id)
+    current_team_ids = Enum.map(current, & &1.team_id)
+
+    # Remove memberships not in new list
+    to_remove = current |> Enum.filter(&(&1.team_id not in team_ids))
+    Enum.each(to_remove, &Accounts.delete_team_member/1)
+
+    # Add new memberships
+    to_add = team_ids -- current_team_ids
+
+    Enum.each(to_add, fn team_id ->
+      with {:ok, member} <-
+             Accounts.create_team_member(%{
+               user_id: user_id,
+               team_id: team_id,
+               team_role: "user",
+               status: "active"
+             }),
+           {:ok, _api_key, _token} <- Accounts.replace_api_key(member) do
+        :ok
+      end
+    end)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Equipos actualizados para #{user.name || user.email}.")
+     |> assign(:editing_teams_user_id, nil)
+     |> assign(:editing_teams_user_name, nil)
+     |> assign(:editing_team_ids, [])
+     |> load_users()}
+  end
 
   @impl true
   def handle_event("new_user", _params, socket) do
@@ -322,9 +421,28 @@ defmodule TokengateWeb.UsersLive do
           Usuarios
           <:subtitle>Gestión de usuarios del sistema</:subtitle>
           <:actions>
-            <.button phx-click="new_user" id="new-user-btn">
-              <.icon name="hero-plus" class="w-4 h-4" /> Nuevo usuario
-            </.button>
+            <div class="flex items-center gap-3">
+              <.form for={%{}} phx-change="search_users" phx-submit="search_users" id="search-form">
+                <div class="relative">
+                  <.icon
+                    name="hero-magnifying-glass"
+                    class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40"
+                  />
+                  <input
+                    type="text"
+                    name="q"
+                    placeholder="Buscar por nombre o correo..."
+                    value={@search_query}
+                    phx-debounce="300"
+                    class="input input-sm input-bordered pl-9 w-64"
+                    id="user-search"
+                  />
+                </div>
+              </.form>
+              <.button phx-click="new_user" id="new-user-btn">
+                <.icon name="hero-plus" class="w-4 h-4" /> Nuevo usuario
+              </.button>
+            </div>
           </:actions>
         </.header>
 
@@ -439,8 +557,10 @@ defmodule TokengateWeb.UsersLive do
                 <th>Usuario</th>
                 <th>Rol</th>
                 <th>Estado</th>
+                <th>Equipos</th>
                 <th>Google</th>
                 <th>Gasto mensual</th>
+                <th>Gasto total</th>
                 <th>Creado</th>
                 <th></th>
               </tr>
@@ -471,6 +591,22 @@ defmodule TokengateWeb.UsersLive do
                                                                                        "Suspendido"}</span>
                 </td>
                 <td>
+                  <div class="flex flex-wrap items-center gap-1">
+                    <%= for team <- Map.get(@user_teams, user.id, []) do %>
+                      <span class="badge badge-xs badge-outline">{team.name}</span>
+                    <% end %>
+                    <button
+                      phx-click="edit_teams"
+                      phx-value-id={user.id}
+                      class="btn btn-xs btn-ghost"
+                      id={"teams-#{user.id}"}
+                      title="Editar equipos"
+                    >
+                      <.icon name="hero-pencil" class="w-3 h-3" />
+                    </button>
+                  </div>
+                </td>
+                <td>
                   <%= if google_badge(user) do %>
                     <span class="badge badge-sm badge-ghost"><.icon
                       name="hero-globe-alt"
@@ -494,6 +630,16 @@ defmodule TokengateWeb.UsersLive do
                       <%= if spend.exhausted? do %>
                         <span class="badge badge-xs badge-error mt-0.5">sin crédito</span>
                       <% end %>
+                  <% end %>
+                </td>
+                <td id={"total-spend-#{user.id}"}>
+                  <%= case Map.get(@total_spend_by_user, user.id) do %>
+                    <% nil -> %>
+                      <span class="text-xs text-base-content/30">—</span>
+                    <% total -> %>
+                      <div class="text-xs font-mono">
+                        ${fmt_money(total)}
+                      </div>
                   <% end %>
                 </td>
                 <td class="text-xs text-base-content/50">{format_date(user.inserted_at)}</td>
@@ -561,6 +707,48 @@ defmodule TokengateWeb.UsersLive do
               </tr>
             </tbody>
           </table>
+        </div>
+      </div>
+
+      <%!-- Teams editing modal --%>
+      <div
+        :if={@editing_teams_user_id}
+        class="fixed inset-0 z-50 flex items-center justify-center p-4"
+      >
+        <div class="absolute inset-0 bg-black/50" phx-click="cancel_edit_teams" />
+        <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-md">
+          <div class="card-body p-6">
+            <h2 class="text-lg font-semibold mb-4">
+              Equipos de <span class="text-primary">{@editing_teams_user_name}</span>
+            </h2>
+            <.form for={%{}} phx-submit="save_teams" id="edit-teams-form">
+              <div class="space-y-2">
+                <%= for team <- @all_teams do %>
+                  <label class="flex items-center gap-3 p-2 rounded-lg hover:bg-base-200 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      name="team_ids[]"
+                      value={team.id}
+                      checked={team.id in @editing_team_ids}
+                      class="checkbox checkbox-sm checkbox-primary"
+                    />
+                    <span class="text-sm">{team.name}</span>
+                  </label>
+                <% end %>
+                <%= if @all_teams == [] do %>
+                  <p class="text-sm text-base-content/50 py-2">No hay equipos creados.</p>
+                <% end %>
+              </div>
+              <div class="flex gap-2 mt-4 justify-end">
+                <button type="button" phx-click="cancel_edit_teams" class="btn btn-ghost btn-sm">
+                  Cancelar
+                </button>
+                <button type="submit" class="btn btn-primary btn-sm" id="save-teams-btn">
+                  Guardar
+                </button>
+              </div>
+            </.form>
+          </div>
         </div>
       </div>
 

@@ -254,21 +254,7 @@ defmodule TokengateWeb.LogsLive do
 
   defp resolve_scope_member_ids(user) do
     memberships = Accounts.list_team_members_for_user(user.id)
-
-    manager_team_ids =
-      memberships
-      |> Enum.filter(&(&1.team_role == "manager"))
-      |> Enum.map(& &1.team_id)
-      |> Enum.uniq()
-
-    if manager_team_ids != [] do
-      manager_team_ids
-      |> Enum.flat_map(&Accounts.list_team_members_for_team/1)
-      |> Enum.map(& &1.id)
-      |> Enum.uniq()
-    else
-      Enum.map(memberships, & &1.id)
-    end
+    Enum.map(memberships, & &1.id)
   end
 
   ## Data loading ----------------------------------------------------------

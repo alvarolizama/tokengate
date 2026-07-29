@@ -29,9 +29,8 @@ defmodule TokengateWeb.TeamMembersLiveTest do
   end
 
   # Builds org + team + model_alias. The "owner" user is a member of the team.
-  defp team_with_member(opts \\ %{}) do
+  defp team_with_member(_opts \\ %{}) do
     u = unique()
-    role = Map.get(opts, :team_role, "user")
 
     {:ok, model_alias} =
       Providers.create_model_alias(%{
@@ -55,7 +54,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
       Accounts.create_team_member(%{
         user_id: owner.id,
         team_id: team.id,
-        team_role: role
+        team_role: "user"
       })
 
     # Provision API key for the member (required for proxy + UI display)
@@ -82,25 +81,11 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     assert {:error, {:redirect, %{to: "/login"}}} = live(conn, team_url(team))
   end
 
-  test "plain user (no manager role) is denied access", %{conn: conn} do
-    %{team: team, owner: owner, owner_password: password} = team_with_member(%{team_role: "user"})
+  test "non-admin user is denied access", %{conn: conn} do
+    %{team: team, owner: owner, owner_password: password} = team_with_member()
 
     conn = login(conn, owner, password)
     assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, team_url(team))
-  end
-
-  test "manager of a different team is denied", %{conn: conn} do
-    # Team A — where the user is a manager
-    %{team: team_a, owner: manager, owner_password: password} =
-      team_with_member(%{team_role: "manager"})
-
-    # Team B — a different team
-    %{team: team_b} = team_with_member()
-
-    conn = login(conn, manager, password)
-    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, team_url(team_b))
-
-    _ = team_a
   end
 
   # --------------------------------------------------------------------------
@@ -117,14 +102,6 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     assert html =~ "Miembros de #{team.name}"
     assert html =~ owner.email
     assert has_element?(view, "#new-member-btn")
-  end
-
-  test "manager is redirected from team members to dashboard", %{conn: conn} do
-    %{team: team, owner: owner, owner_password: password} =
-      team_with_member(%{team_role: "manager"})
-
-    conn = login(conn, owner, password)
-    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, team_url(team))
   end
 
   # --------------------------------------------------------------------------
@@ -147,7 +124,6 @@ defmodule TokengateWeb.TeamMembersLiveTest do
       view
       |> form("#add-member-form", %{
         "add_member[email]" => new_user.email,
-        "add_member[team_role]" => "user",
         "add_member[extra_monthly_budget_usd]" => "5.00",
         "add_member[extra_concurrency]" => "2",
         "add_member[extra_rpm]" => "100"
@@ -166,7 +142,6 @@ defmodule TokengateWeb.TeamMembersLiveTest do
       )
 
     assert member != nil
-    assert member.team_role == "user"
     assert Decimal.equal?(member.extra_monthly_budget_usd || Decimal.new(0), Decimal.new("5.00"))
     assert member.extra_concurrency == 2
     assert member.extra_rpm == 100
@@ -201,8 +176,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     html =
       view
       |> form("#add-member-form", %{
-        "add_member[email]" => "nonexistent@example.com",
-        "add_member[team_role]" => "user"
+        "add_member[email]" => "nonexistent@example.com"
       })
       |> render_submit()
 
@@ -229,31 +203,6 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     refute has_element?(view, "#remove-#{member.id}")
 
     refute Repo.get(Tokengate.Accounts.TeamMember, member.id)
-  end
-
-  # --------------------------------------------------------------------------
-  # Change role
-  # --------------------------------------------------------------------------
-
-  test "admin changes a member's role", %{conn: conn} do
-    %{team: team, member: member} = team_with_member(%{team_role: "user"})
-    %{user: admin, password: password} = register("admin")
-
-    conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, team_url(team))
-
-    # The role select should be present
-    assert has_element?(view, "#role-select-#{member.id}")
-
-    html =
-      view
-      |> element("#role-form-#{member.id}")
-      |> render_change(%{team_role: "manager"})
-
-    assert html =~ "Rol actualizado"
-
-    updated = Repo.get!(Tokengate.Accounts.TeamMember, member.id)
-    assert updated.team_role == "manager"
   end
 
   # --------------------------------------------------------------------------

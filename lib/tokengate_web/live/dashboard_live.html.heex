@@ -67,7 +67,6 @@
 
     <%!-- Teams + models catalog — arriba de métricas --%>
     <section id="teams-section">
-
       <%= if @teams == [] and not @has_access do %>
         <div class="text-center py-12 text-base-content/50" id="no-team-state">
           <.icon name="hero-user-group" class="w-10 h-10 mx-auto mb-3 opacity-40" />
@@ -210,16 +209,28 @@
                   <tbody>
                     <%= for model <- @model_catalog do %>
                       <tr class="border-b border-base-200 last:border-0 hover:bg-base-200/50">
-                        <td class="py-1.5 font-medium text-base-content truncate max-w-[120px]" title={model.name}>
+                        <td
+                          class="py-1.5 font-medium text-base-content truncate max-w-[120px]"
+                          title={model.name}
+                        >
                           {model.name}
                         </td>
-                        <td class="py-1.5 text-right text-base-content/70" title={"Input: $#{format_decimal(model.market_input)}/1M"}>
+                        <td
+                          class="py-1.5 text-right text-base-content/70"
+                          title={"Input: $#{format_decimal(model.market_input)}/1M"}
+                        >
                           ${format_decimal(model.market_input)}
                         </td>
-                        <td class="py-1.5 text-right text-base-content/70" title={"Output: $#{format_decimal(model.market_output)}/1M"}>
+                        <td
+                          class="py-1.5 text-right text-base-content/70"
+                          title={"Output: $#{format_decimal(model.market_output)}/1M"}
+                        >
                           ${format_decimal(model.market_output)}
                         </td>
-                        <td class="py-1.5 text-right text-base-content/70" title={"Contexto: #{format_number(model.context_window)} tokens"}>
+                        <td
+                          class="py-1.5 text-right text-base-content/70"
+                          title={"Contexto: #{format_number(model.context_window)} tokens"}
+                        >
                           {format_compact(model.context_window)}
                         </td>
                       </tr>
