@@ -190,28 +190,12 @@ defmodule TokengateWeb.ProxyController do
         provider_reported_cost: nil
       )
 
-    member_ids = Accounts.list_member_ids_for_team(member.team_id)
-    team_daily = member.team && member.team.team_daily_budget_usd
-
-    team_spend_usd =
-      if team_daily do
-        Budgets.team_spend(member_ids)
-      else
-        Decimal.new(0)
-      end
-
-    member_daily = Accounts.effective_limits(member).daily_budget_usd
-    member_spend = Budgets.spend(member.id).daily_usd
-    member_extra = member.extra_daily_budget_usd
-    model_extra = Accounts.extra_model_daily_budget(member.id, route.model_alias.id)
+    member_monthly_budget = Accounts.effective_limits(member).monthly_budget_usd
+    member_monthly_spend = Budgets.spend(member.id).monthly_usd
 
     case Budgets.check_ladder(
-           team_daily,
-           team_spend_usd,
-           member_daily,
-           member_spend,
-           member_extra,
-           model_extra,
+           member_monthly_budget,
+           member_monthly_spend,
            costs.provider_cost_usd
          ) do
       :ok -> :ok
