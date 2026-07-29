@@ -919,8 +919,37 @@ defmodule TokengateWeb.TeamMembersLive do
                     <% end %>
                   </div>
                 </div>
-                <div class="flex items-center gap-2 shrink-0">
+                <div class="flex items-center gap-5 shrink-0">
                   <span class="badge badge-sm badge-ghost capitalize">{member.status}</span>
+                  <button
+                    phx-click="clear_sticky_routes"
+                    phx-value-id={member.id}
+                    class="btn btn-sm btn-ghost"
+                    id={"clear-sticky-#{member.id}"}
+                    title="Fuerza re-ruteo en la siguiente petición"
+                  >
+                    <.icon name="hero-arrow-path" class="w-4 h-4" /> Sticky
+                  </button>
+                  <button
+                    phx-click="replace_key"
+                    phx-value-id={member.id}
+                    class="btn btn-sm btn-ghost"
+                    id={"replace-key-#{member.id}"}
+                    data-confirm="¿Regenerar clave? La clave actual dejará de funcionar inmediatamente."
+                  >
+                    <.icon name="hero-arrow-path" class="w-4 h-4" /> Regenerar
+                  </button>
+                  <%= if member.api_key && member.api_key.status == "active" do %>
+                    <button
+                      phx-click="revoke_key"
+                      phx-value-id={member.id}
+                      class="btn btn-sm btn-ghost text-error"
+                      id={"revoke-key-#{member.id}"}
+                      data-confirm="¿Revocar clave? Esta acción no se puede deshacer."
+                    >
+                      <.icon name="hero-no-symbol" class="w-4 h-4" /> Revocar
+                    </button>
+                  <% end %>
                 </div>
               </div>
 
@@ -1056,40 +1085,11 @@ defmodule TokengateWeb.TeamMembersLive do
               <div class="flex flex-wrap items-center justify-between gap-2 mt-3">
                 <div class="flex items-center gap-2">
                   <button
-                    phx-click="clear_sticky_routes"
-                    phx-value-id={member.id}
-                    class="btn btn-sm btn-ghost"
-                    id={"clear-sticky-#{member.id}"}
-                    title="Fuerza re-ruteo en la siguiente petición"
-                  >
-                    <.icon name="hero-arrow-path" class="w-4 h-4" /> Quitar sticky
-                  </button>
-                  <button
                     phx-click="edit_overrides"
                     phx-value-id={member.id}
                     class="btn btn-sm btn-ghost"
                     id={"edit-overrides-#{member.id}"}
                   >Extras</button>
-                  <button
-                    phx-click="replace_key"
-                    phx-value-id={member.id}
-                    class="btn btn-sm btn-ghost"
-                    id={"replace-key-#{member.id}"}
-                    data-confirm="¿Regenerar clave? La clave actual dejará de funcionar inmediatamente."
-                  >
-                    <.icon name="hero-arrow-path" class="w-4 h-4" /> Regenerar
-                  </button>
-                  <%= if member.api_key && member.api_key.status == "active" do %>
-                    <button
-                      phx-click="revoke_key"
-                      phx-value-id={member.id}
-                      class="btn btn-sm btn-ghost text-error"
-                      id={"revoke-key-#{member.id}"}
-                      data-confirm="¿Revocar clave? Esta acción no se puede deshacer."
-                    >
-                      <.icon name="hero-no-symbol" class="w-4 h-4" /> Revocar
-                    </button>
-                  <% end %>
                 </div>
                 <button
                   phx-click="remove_member"
