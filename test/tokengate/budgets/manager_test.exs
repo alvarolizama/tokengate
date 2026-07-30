@@ -502,4 +502,61 @@ defmodule Tokengate.Budgets.ManagerTest do
       assert micro == 0
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # reset_monthly_counters/0 — monthly reset on 1st of month
+  # ---------------------------------------------------------------------------
+
+  describe "reset_monthly_counters/0" do
+    test "deletes all monthly ETS entries" do
+      {tm1, _} = team_member_fixture()
+      {tm2, _} = team_member_fixture()
+
+      assert :ok = Manager.record_spend(tm1.id, Decimal.new("10.00"))
+      assert :ok = Manager.record_spend(tm2.id, Decimal.new("20.00"))
+
+      # Verify entries exist.
+      assert Decimal.equal?(Manager.spend(tm1.id).monthly_usd, Decimal.new("10.00"))
+      assert Decimal.equal?(Manager.spend(tm2.id).monthly_usd, Decimal.new("20.00"))
+
+      # Reset all monthly counters.
+      deleted = Manager.reset_monthly_counters()
+      assert deleted >= 2
+
+      # Monthly counters are gone; next access lazy-loads from DB (which has
+      # no rows for this month yet if we haven't inserted any), so they read 0.
+      assert Decimal.equal?(Manager.spend(tm1.id).monthly_usd, Decimal.new("0"))
+      assert Decimal.equal?(Manager.spend(tm2.id).monthly_usd, Decimal.new("0"))
+    end
+
+    test "daily counters are unaffected" do
+      {tm, _} = team_member_fixture()
+
+      assert :ok = Manager.record_spend(tm.id, Decimal.new("15.00"))
+
+      Manager.reset_monthly_counters()
+
+      # Daily should still reflect the spend.
+      assert Decimal.equal?(Manager.spend(tm.id).daily_usd, Decimal.new("15.00"))
+    end
+
+    test "reset then record_spend accumulates from 0" do
+      {tm, _} = team_member_fixture()
+
+      # Log en el mes pasado para que el reset mensual lo ignore.
+      last_month = Date.add(Date.utc_today(), -31)
+      log_spend(tm.id, "5.00", inserted_at: DateTime.new!(last_month, ~T[00:00:00], "Etc/UTC"))
+
+      # Seed ETS con gasto actual.
+      assert :ok = Manager.record_spend(tm.id, Decimal.new("3.00"))
+
+      # After reset, monthly lazy-loads from DB (only last month's logs).
+      Manager.reset_monthly_counters()
+      assert Decimal.equal?(Manager.spend(tm.id).monthly_usd, Decimal.new("0"))
+
+      # Add new spend → should start from 0.
+      assert :ok = Manager.record_spend(tm.id, Decimal.new("2.00"))
+      assert Decimal.equal?(Manager.spend(tm.id).monthly_usd, Decimal.new("2.00"))
+    end
+  end
 end

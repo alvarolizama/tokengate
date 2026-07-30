@@ -864,6 +864,22 @@ defmodule TokengateWeb.ModelsLive do
                     hint="Precio de referencia de mercado por 1M tokens de salida."
                   />
                 </div>
+                <div class="grid grid-cols-2 gap-3">
+                  <.input
+                    field={@form[:market_cache_read_price_per_1m]}
+                    type="number"
+                    label="Precio cache read /1M"
+                    step="any"
+                    hint="Precio de mercado por 1M tokens de cache read. Si vacío, usa el precio de entrada."
+                  />
+                  <.input
+                    field={@form[:market_cache_creation_price_per_1m]}
+                    type="number"
+                    label="Precio cache creation /1M"
+                    step="any"
+                    hint="Precio de mercado por 1M tokens de cache creation. Si vacío, usa el precio de entrada."
+                  />
+                </div>
                 <.input
                   field={@form[:context_window]}
                   type="number"
@@ -973,28 +989,28 @@ defmodule TokengateWeb.ModelsLive do
                       <.input
                         field={@provider_form[:pricing_input_price_per_1m]}
                         type="number"
-                        step="0.01"
+                        step="any"
                         label="Input $/1M"
                         placeholder="ej. 0.15"
                       />
                       <.input
                         field={@provider_form[:pricing_output_price_per_1m]}
                         type="number"
-                        step="0.01"
+                        step="any"
                         label="Output $/1M"
                         placeholder="ej. 0.60"
                       />
                       <.input
                         field={@provider_form[:pricing_cache_read_price_per_1m]}
                         type="number"
-                        step="0.01"
+                        step="any"
                         label="Cache read $/1M"
                         placeholder="ej. 0.015"
                       />
                       <.input
                         field={@provider_form[:pricing_cache_creation_price_per_1m]}
                         type="number"
-                        step="0.01"
+                        step="any"
                         label="Cache creation $/1M"
                         placeholder="ej. 0.30"
                       />

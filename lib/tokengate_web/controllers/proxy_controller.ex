@@ -279,7 +279,11 @@ defmodule TokengateWeb.ProxyController do
     end)
   end
 
-  defp retry_with_fallback(conn, route, payload, member, attempts_left, exclude, _status) do
+  defp retry_with_fallback(conn, route, payload, member, attempts_left, exclude, status) do
+    # Log the failed attempt before trying the next provider.
+    # The client never sees this — it's purely for observability.
+    log_fallback_attempt(conn, route, member, status)
+
     # En el primer fallo (attempts_left == @max_attempts) no excluimos la
     # credential; dejamos que el router decida usando el breaker. Así una
     # falla transitoria no quema el pool completo. Solo excluimos en
@@ -795,6 +799,30 @@ defmodule TokengateWeb.ProxyController do
        do: status
 
   defp provider_status_from_error(_), do: nil
+
+  ## Fallback logging ##########################################################
+
+  # Logs a failed provider attempt before falling back to the next one.
+  # The client never sees this — it is purely for observability.
+  defp log_fallback_attempt(conn, route, member, status) do
+    error_reason =
+      case status do
+        429 -> "provider_rate_limited"
+        503 -> "provider_overloaded"
+        502 -> "provider_gateway_error"
+        500 -> "provider_internal_error"
+        401 -> "provider_auth_error"
+        _ -> "provider_error_#{status}"
+      end
+
+    enqueue_error_log(conn, route, member,
+      client_status: 200,
+      provider_status: status,
+      error_reason: error_reason,
+      latency_ms: 0,
+      streaming: conn.body_params["stream"] == true
+    )
+  end
 
   defp error_reason_string(error) do
     {_status, _type, code, _msg} = error_details(error)

@@ -66,7 +66,13 @@ config :logger, :default_formatter,
 # Configure Oban
 config :tokengate, Oban,
   repo: Tokengate.Repo,
-  plugins: [{Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7}],
+  plugins: [
+    {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
+    {Oban.Plugins.Cron,
+     crontab: [
+       {"0 0 1 * *", Tokengate.Budgets.ResetWorker}
+     ]}
+  ],
   queues: [default: 10, logs: 20, webhooks: 10, budgets: 5]
 
 # Use Jason for JSON parsing in Phoenix

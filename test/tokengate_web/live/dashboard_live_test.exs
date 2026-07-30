@@ -35,12 +35,21 @@ defmodule TokengateWeb.DashboardLiveTest do
 
     {:ok, team} = Accounts.create_team(%{name: "Team #{u}"})
 
-    {:ok, owner} =
-      Accounts.register_user(%{
-        email: "owner-#{u}@example.com",
-        name: "Owner #{u}",
-        password: "password-secret-#{u}1"
-      })
+    owner =
+      case Map.get(opts, :user) do
+        nil ->
+          {:ok, user} =
+            Accounts.register_user(%{
+              email: "owner-#{u}@example.com",
+              name: "Owner #{u}",
+              password: "password-secret-#{u}1"
+            })
+
+          user
+
+        %{} = user ->
+          user
+      end
 
     {:ok, member} =
       Accounts.create_team_member(%{user_id: owner.id, team_id: team.id, team_role: "user"})
@@ -72,7 +81,13 @@ defmodule TokengateWeb.DashboardLiveTest do
         })
     end
 
-    %{team: team, owner: owner, member: member, owner_password: "password-secret-#{u}1"}
+    password =
+      case Map.get(opts, :user) do
+        nil -> "password-secret-#{u}1"
+        _ -> nil
+      end
+
+    %{team: team, owner: owner, member: member, owner_password: password}
   end
 
   defp team_with_member(_opts \\ %{}) do
@@ -208,7 +223,8 @@ defmodule TokengateWeb.DashboardLiveTest do
     %{user: admin, password: password} = register("admin")
     Collector.reset()
 
-    team_with_log(%{cost: "0.005"})
+    # Admin needs their own team + member + log to see personal data
+    %{owner_password: _password} = team_with_log(%{cost: "0.005", user: admin})
 
     conn = login(conn, admin, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")

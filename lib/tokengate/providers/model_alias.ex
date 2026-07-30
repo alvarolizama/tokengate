@@ -15,6 +15,8 @@ defmodule Tokengate.Providers.ModelAlias do
     field :display_name, :string
     field :market_input_price_per_1m, :decimal
     field :market_output_price_per_1m, :decimal
+    field :market_cache_read_price_per_1m, :decimal
+    field :market_cache_creation_price_per_1m, :decimal
     field :context_window, :integer
 
     has_many :model_providers, Tokengate.Providers.ModelProvider
@@ -30,6 +32,8 @@ defmodule Tokengate.Providers.ModelAlias do
       :display_name,
       :market_input_price_per_1m,
       :market_output_price_per_1m,
+      :market_cache_read_price_per_1m,
+      :market_cache_creation_price_per_1m,
       :context_window
     ])
     |> validate_required([

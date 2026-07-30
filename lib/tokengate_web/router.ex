@@ -77,6 +77,7 @@ defmodule TokengateWeb.Router do
       live "/dashboard/models", ModelsLive
       live "/dashboard/alerts", AlertsLive
       live "/dashboard/credits", CreditsLive
+      live "/dashboard/settings", SettingsLive
     end
   end
 

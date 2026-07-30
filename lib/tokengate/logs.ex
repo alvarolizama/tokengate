@@ -488,4 +488,17 @@ defmodule Tokengate.Logs do
     |> Repo.all()
     |> Map.new(fn {user_id, cost} -> {user_id, Decimal.new(to_string(cost))} end)
   end
+
+  @doc """
+  Truncates all request logs. This is a **destructive operation** that
+  removes every row from `request_logs` while preserving the table
+  structure and partitions.
+
+  Returns `{0, nil}` as a sentinel (TRUNCATE does not return a row count).
+  """
+  @spec truncate_request_logs() :: {integer(), nil}
+  def truncate_request_logs do
+    Repo.query!("TRUNCATE TABLE request_logs RESTART IDENTITY CASCADE")
+    {0, nil}
+  end
 end

@@ -6,7 +6,7 @@ defmodule Tokengate.Routing.StickyTracker do
   The same API key is kept sticky to the same provider so that prompt-cache
   affinity is preserved across requests.
 
-  Entries expire after `@ttl_ms` (30 minutes). Reads check the TTL lazily
+  Entries expire after `@ttl_ms` (15 minutes). Reads check the TTL lazily
   and return `nil` for expired entries, deleting them on the fly. A periodic
   sweep runs every `@sweep_interval_ms` to purge expired entries in bulk.
 
@@ -28,9 +28,9 @@ defmodule Tokengate.Routing.StickyTracker do
   use GenServer
 
   @table :tokengate_sticky_routes
-  # Sticky entries expire after 60 minutes — longer cache affinity reduces
-  # costs for high-traffic scenarios by keeping prompts cached at the provider.
-  @ttl_ms 60 * 60 * 1000
+  # Sticky entries expire after 15 minutes — enough cache affinity for prompt
+  # caching without pinning users to degraded providers for too long.
+  @ttl_ms 15 * 60 * 1000
   @sweep_interval_ms 5 * 60 * 1000
 
   ## Public API ------------------------------------------------------------
@@ -108,6 +108,16 @@ defmodule Tokengate.Routing.StickyTracker do
     GenServer.call(__MODULE__, {:clear_all_for_provider, model_provider_ids})
   end
 
+  @doc """
+  Drops ALL sticky entries from the ETS table.
+
+  Useful as an admin-level "reset all stickiness" action.
+  """
+  @spec clear_all() :: :ok
+  def clear_all do
+    GenServer.call(__MODULE__, :clear_all)
+  end
+
   ## GenServer callbacks ---------------------------------------------------
 
   @impl true
@@ -177,6 +187,12 @@ defmodule Tokengate.Routing.StickyTracker do
       @table
     )
 
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call(:clear_all, _from, state) do
+    :ets.delete_all_objects(@table)
     {:reply, :ok, state}
   end
 

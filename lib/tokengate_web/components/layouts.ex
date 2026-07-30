@@ -367,6 +367,17 @@ defmodule TokengateWeb.Layouts do
                 icon="hero-bell-alert"
               />
             </div>
+
+            <div class="space-y-1">
+              <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
+                Sistema
+              </p>
+              <.sidebar_link
+                href={~p"/dashboard/settings"}
+                label="Configuración"
+                icon="hero-cog-6-tooth"
+              />
+            </div>
           <% end %>
         </nav>
 

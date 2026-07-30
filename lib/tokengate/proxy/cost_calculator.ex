@@ -33,16 +33,21 @@ defmodule Tokengate.Proxy.CostCalculator do
   Market-price cost of a usage map for a model alias.
 
   Expects a map/struct with `:market_input_price_per_1m` and
-  `:market_output_price_per_1m` Decimal fields. Cache-read tokens are
-  priced as regular input at market (no market cache baseline).
+  `:market_output_price_per_1m` Decimal fields. Cache-read and
+  cache-creation tokens use their dedicated market prices when set;
+  otherwise they fall back to the regular input market price.
   """
   @spec market_cost(map(), usage()) :: Decimal.t()
   def market_cost(model_alias, usage) do
     input = to_decimal(Map.get(model_alias, :market_input_price_per_1m))
     output = to_decimal(Map.get(model_alias, :market_output_price_per_1m))
+    cache_read = to_decimal(Map.get(model_alias, :market_cache_read_price_per_1m))
+    cache_creation = to_decimal(Map.get(model_alias, :market_cache_creation_price_per_1m))
 
-    per_million(input, prompt_units(usage))
+    per_million(input, units(usage, :prompt_tokens))
     |> Decimal.add(per_million(output, units(usage, :completion_tokens)))
+    |> Decimal.add(per_million(cache_read || input, units(usage, :cache_read_tokens)))
+    |> Decimal.add(per_million(cache_creation || input, units(usage, :cache_creation_tokens)))
     |> rounded()
   end
 
@@ -138,13 +143,6 @@ defmodule Tokengate.Proxy.CostCalculator do
       provider_cost_usd: real,
       savings_usd: savings(estimated, real)
     }
-  end
-
-  # Cache-read tokens are part of the provider's prompt token count on some
-  # APIs and separate on others; market_cost counts them as input either way.
-  defp prompt_units(usage) do
-    units(usage, :prompt_tokens) + units(usage, :cache_read_tokens) +
-      units(usage, :cache_creation_tokens)
   end
 
   defp units(usage, key) do

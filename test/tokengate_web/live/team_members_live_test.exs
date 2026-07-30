@@ -391,6 +391,20 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     assert has_element?(view, "#new-token-#{member.id}")
   end
 
+  test "admin can clear a member's sticky routes", %{conn: conn} do
+    %{team: team, member: member} = team_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, team_url(team))
+
+    assert has_element?(view, "#clear-sticky-#{member.id}")
+
+    html = view |> element("#clear-sticky-#{member.id}") |> render_click()
+
+    assert html =~ "Sticky routes limpiadas"
+  end
+
   test "admin can revoke a member's API key", %{conn: conn} do
     %{team: team, member: member} = team_with_member()
     %{user: admin, password: password} = register("admin")

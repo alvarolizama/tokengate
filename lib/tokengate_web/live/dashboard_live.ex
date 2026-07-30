@@ -1,14 +1,9 @@
 defmodule TokengateWeb.DashboardLive do
   @moduledoc """
-  Real-time metrics dashboard with role-scoped data, plus a personal
-  overview: API usage info, the user's own API keys (replace/revoke),
-  their teams with live budget spend.
+  Real-time metrics dashboard — personal overview only.
 
-  Scope is determined by the signed-in user's global role:
-
-    * **admin** (`global_role == "admin"`) — org-wide aggregates from
-      durable Postgres rollups.
-    * **user** — only their own consumption.
+  Scope is always personal: every user sees only their own consumption,
+  regardless of global role. Data comes from durable Postgres rollups.
 
   All metrics are fetched from Postgres (`request_logs`) via
   `Tokengate.Logs` and `Tokengate.Metrics.Rollup` — no in-memory ETS,
@@ -23,8 +18,6 @@ defmodule TokengateWeb.DashboardLive do
   """
 
   use TokengateWeb, :live_view
-
-  import Ecto.Query, only: [from: 2]
 
   alias Tokengate.Accounts
   alias Tokengate.Budgets.Manager, as: Budgets
@@ -66,7 +59,7 @@ defmodule TokengateWeb.DashboardLive do
       |> assign(:breakdown_member, [])
       |> assign(:breakdown_team, [])
       |> assign(:active_breakdown, "model")
-      |> assign(:scope_label, scope_label_for(user))
+      |> assign(:scope_label, "Personal")
       |> assign(:scope_member_ids, Accounts.scope_member_ids(user))
       |> assign(:new_token, nil)
       |> assign(:new_token_team, nil)
@@ -273,19 +266,9 @@ defmodule TokengateWeb.DashboardLive do
   defp load_chart_series(socket, user, opts, period) do
     hours = Map.fetch!(@periods, period)
     scope = chart_scope(user)
+    ids = scope.member_ids
 
-    series =
-      case scope do
-        %{member_ids: ids} when is_list(ids) ->
-          user_hourly_series(ids, opts, hours)
-
-        _ ->
-          case period do
-            "today" -> Rollup.hourly_series(scope[:team_id], hours)
-            "7d" -> Rollup.hourly_series(scope[:team_id], hours)
-            _ -> daily_series(scope, hours, opts)
-          end
-      end
+    series = user_hourly_series(ids, opts, hours)
 
     socket
     |> assign(:cost_series, to_chart_points(series, period, :cost_usd, &usd_tooltip/1))
@@ -296,46 +279,10 @@ defmodule TokengateWeb.DashboardLive do
     |> assign(:savings_series, to_chart_points(series, period, :savings_usd, &usd_tooltip/1))
   end
 
-  # Build a daily-bucketed series for 30d/90d periods (org-wide)
-  defp daily_series(%{team_id: nil}, _hours, opts) do
-    from = Keyword.fetch!(opts, :from)
-
-    query =
-      from(rl in Tokengate.Logs.RequestLog,
-        where: rl.inserted_at >= ^from,
-        group_by: fragment("date_trunc('day', ?)", rl.inserted_at),
-        order_by: fragment("date_trunc('day', ?)", rl.inserted_at),
-        select: %{
-          hour: fragment("date_trunc('day', ?)", rl.inserted_at),
-          request_count: count(rl.id),
-          cost_usd: fragment("COALESCE(SUM(cost_usd), 0)"),
-          savings_usd: fragment("COALESCE(SUM(savings_usd), 0)")
-        }
-      )
-
-    Tokengate.Repo.all(query)
-    |> Enum.map(fn row ->
-      %{
-        hour: to_utc_datetime(row.hour),
-        request_count: row.request_count,
-        cost_usd: Decimal.new(to_string(row.cost_usd)),
-        savings_usd: Decimal.new(to_string(row.savings_usd))
-      }
-    end)
-  end
-
-  defp daily_series(_, _, _), do: []
-
-  defp chart_scope(%{global_role: "admin"}) do
-    %{team_id: nil}
-  end
-
-  defp chart_scope(%{global_role: "user"} = user) do
+  defp chart_scope(user) do
     memberships = Accounts.list_team_members_for_user(user.id)
     %{member_ids: Enum.map(memberships, & &1.id)}
   end
-
-  defp chart_scope(_), do: %{team_id: nil}
 
   defp user_hourly_series([], _opts, _hours), do: []
 
@@ -467,18 +414,6 @@ defmodule TokengateWeb.DashboardLive do
     |> DateTime.add(-hours * 3600, :second)
     |> DateTime.truncate(:second)
   end
-
-  defp to_utc_datetime(%DateTime{} = dt), do: dt
-
-  defp to_utc_datetime(%NaiveDateTime{} = ndt) do
-    DateTime.from_naive!(ndt, "Etc/UTC")
-  end
-
-  defp scope_label_for(%{global_role: "admin"}), do: "Organización completa"
-
-  defp scope_label_for(%{global_role: "user"}), do: "Tus consumos"
-
-  defp scope_label_for(_), do: "—"
 
   ## Template helpers (rendered in the .heex template) -------------------
 

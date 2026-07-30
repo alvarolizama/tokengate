@@ -5,7 +5,9 @@ defmodule Tokengate.Proxy.CostCalculatorTest do
 
   @alias_gpt4o %{
     market_input_price_per_1m: Decimal.new("5.00"),
-    market_output_price_per_1m: Decimal.new("15.00")
+    market_output_price_per_1m: Decimal.new("15.00"),
+    market_cache_read_price_per_1m: Decimal.new("1.25"),
+    market_cache_creation_price_per_1m: Decimal.new("2.50")
   }
 
   @pricing %{
@@ -31,7 +33,7 @@ defmodule Tokengate.Proxy.CostCalculatorTest do
              )
     end
 
-    test "cache tokens count as input at market" do
+    test "cache tokens use dedicated market prices when set" do
       usage = %{
         prompt_tokens: 0,
         completion_tokens: 0,
@@ -39,7 +41,33 @@ defmodule Tokengate.Proxy.CostCalculatorTest do
         cache_creation_tokens: 0
       }
 
-      assert Decimal.equal?(CostCalculator.market_cost(@alias_gpt4o, usage), Decimal.new("5.0"))
+      # 1M cache_read at 1.25/1M
+      assert Decimal.equal?(
+               CostCalculator.market_cost(@alias_gpt4o, usage),
+               Decimal.new("1.25")
+             )
+    end
+
+    test "cache tokens fall back to input market price when dedicated prices are nil" do
+      alias_no_cache = %{
+        market_input_price_per_1m: Decimal.new("5.00"),
+        market_output_price_per_1m: Decimal.new("15.00"),
+        market_cache_read_price_per_1m: nil,
+        market_cache_creation_price_per_1m: nil
+      }
+
+      usage = %{
+        prompt_tokens: 0,
+        completion_tokens: 0,
+        cache_read_tokens: 1_000_000,
+        cache_creation_tokens: 1_000_000
+      }
+
+      # Both fall back to input price: 5.00 + 5.00
+      assert Decimal.equal?(
+               CostCalculator.market_cost(alias_no_cache, usage),
+               Decimal.new("10.0")
+             )
     end
   end
 

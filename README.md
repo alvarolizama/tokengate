@@ -45,7 +45,7 @@
 
 ### Enrutamiento
 
-- **Prioridad + sticky routing** — la misma API key se pega al mismo proveedor (preserva prompt caches) con TTL de 60 min
+- **Prioridad + sticky routing** — la misma API key se pega al mismo proveedor (preserva prompt caches) con TTL de 15 min
 - **Circuit breaker** por credencial — abre tras 15 fallos consecutivos (configurable), semi-abre en 30s (20s si fue rate limit)
 - **Fallback** automático ante errores (hasta 3 intentos)
 - **Fallback por concurrencia** — si un proveedor está saturado, intenta el siguiente automáticamente
@@ -55,7 +55,7 @@
 TokenGate no solo hace fallback ante errores — también lo hace **antes de enviar el request** cuando un proveedor está saturado:
 
 1. **Enrutamiento por prioridad** — los candidatos se ordenan por `priority ASC`. El primer disponible gana.
-2. **Sticky routing** — la misma API key se pega al mismo proveedor (preserva prompt caches) con TTL de 60 min.
+2. **Sticky routing** — la misma API key se pega al mismo proveedor (preserva prompt caches) con TTL de 15 min.
 3. **Saturación de concurrencia** — si al intentar adquirir la credencial esta ya está en su límite de `max_concurrent`, se excluye y se intenta la siguiente credencial en la cola de prioridad. **No se devuelve error al cliente** — se rebotea al siguiente proveedor automáticamente.
 4. **Saturación de RPM** — si la credencial alcanzó su `max_rpm`, igual: se excluye y se prueba la siguiente.
 5. **Sin más candidatos** — si todas las credenciales están saturadas o sus breakers abiertos, se devuelve `503 provider_concurrency_exceeded` (o `no_available_provider` si no había exclusión).
@@ -165,13 +165,13 @@ Cada request registra 4 dimensiones: **costo de mercado** (estimado), **costo de
 
 | Ruta | Admin | User |
 |------|-------|------|
-| Dashboard | ✅ (org) | ✅ (suyo) |
+| Dashboard | ✅ (personal) | ✅ (personal) |
 | Stats, Logs | ✅ (org) | ✅ (suyo) |
 | Equipos y miembros | ✅ | ❌ |
 | Servicios | ✅ | ❌ |
 | Proveedores, Modelos | ✅ | ❌ |
 | Usuarios, API Keys | ✅ | ❌ |
-| Créditos, Alertas | ✅ | ❌ |
+| Créditos, Alertas, Configuración | ✅ | ❌ |
 
 ### Parámetros configurables
 

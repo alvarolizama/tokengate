@@ -262,7 +262,7 @@ defmodule TokengateWeb.TeamMembersLive do
 
   @impl true
   def handle_event("clear_sticky_routes", %{"id" => member_id}, socket) do
-    member = Accounts.get_team_member!(member_id)
+    member = Accounts.get_team_member!(member_id, :with_assoc)
 
     if member.team_id != socket.assigns.team.id do
       {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}

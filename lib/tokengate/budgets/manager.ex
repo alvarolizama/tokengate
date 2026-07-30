@@ -194,6 +194,19 @@ defmodule Tokengate.Budgets.Manager do
     to_micro(summary.total_provider_cost_usd)
   end
 
+  @doc """
+  Deletes every `{member_id, :monthly}` entry from the ETS table.
+
+  Called by `Budgets.ResetWorker` on the 1st of each month. The next
+  `record_spend/2` or `spend/1` for each member will lazy-load from DB,
+  which effectively starts the monthly counter at 0.
+  """
+  @spec reset_monthly_counters() :: integer()
+  def reset_monthly_counters do
+    # Match pattern: delete every entry whose key ends in `:monthly`.
+    :ets.select_delete(@table, [{{{:_, :monthly}, :_, :_, :_}, [], [true]}])
+  end
+
   @doc false
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, opts, name: __MODULE__)
