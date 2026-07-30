@@ -41,7 +41,12 @@ defmodule TokengateWeb.ProxyController do
   alias Tokengate.Routing.Router
 
   @max_attempts 3
-  @default_completion_estimate 512
+
+  # Pre-request budget check estimates completion tokens as a fraction of
+  # max_tokens (never the full amount). The real usage is reconciled
+  # post-request: if actual completion tokens exceed the estimate, the
+  # overage is recorded in ETS and blocks the NEXT request.
+  @completion_estimate_ratio 0.10
 
   @doc """
   Lists the model aliases accessible to the authenticated API key.
@@ -639,9 +644,18 @@ defmodule TokengateWeb.ProxyController do
   end
 
   defp estimated_usage(payload) do
+    prompt_tokens = TokenEstimator.estimate_messages(payload["messages"] || [])
+    max_tokens = payload["max_tokens"] || 512
+
+    # Estimate completion as 10% of max_tokens — never the full amount.
+    # This keeps the pre-request budget check conservative: if the real
+    # usage exceeds the estimate, the overage is recorded post-request
+    # and blocks the NEXT request via the ETS spend counter.
+    completion_estimate = ceil(max_tokens * @completion_estimate_ratio)
+
     %{
-      prompt_tokens: TokenEstimator.estimate_messages(payload["messages"] || []),
-      completion_tokens: payload["max_tokens"] || @default_completion_estimate,
+      prompt_tokens: prompt_tokens,
+      completion_tokens: completion_estimate,
       cache_read_tokens: 0,
       cache_creation_tokens: 0
     }
