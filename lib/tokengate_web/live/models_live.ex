@@ -933,26 +933,15 @@ defmodule TokengateWeb.ModelsLive do
                   </div>
                 <% end %>
 
-                <%= if @provider_models_loading == false and @provider_models != [] do %>
-                  <.input
-                    field={@provider_form[:provider_model]}
-                    type="select"
-                    label="Modelo del proveedor"
-                    options={@provider_models}
-                    prompt="Selecciona un modelo"
-                    required
-                    hint="Modelos disponibles para esta credencial, obtenidos en vivo del proveedor."
-                  />
-                <% else %>
-                  <.input
-                    field={@provider_form[:provider_model]}
-                    type="text"
-                    label="Modelo del proveedor"
-                    required
-                    placeholder="Primero selecciona una credencial"
-                    hint="Selecciona una credencial para ver los modelos disponibles."
-                  />
-                <% end %>
+                <.input
+                  field={@provider_form[:provider_model]}
+                  type="datalist"
+                  label="Modelo del proveedor"
+                  options={@provider_models}
+                  required
+                  placeholder="Selecciona o escribe el modelo (ej. glm-5.2:dedicated)"
+                  hint="Sugerencias del catálogo público del proveedor. Puedes escribir cualquier valor para tiers dedicados o privados."
+                />
                 <div class="grid grid-cols-2 gap-3">
                   <.input
                     field={@provider_form[:priority]}

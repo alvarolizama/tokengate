@@ -171,7 +171,7 @@ defmodule TokengateWeb.CoreComponents do
   attr :type, :string,
     default: "text",
     values: ~w(checkbox color date datetime-local email file month number password
-               search select tel text textarea time url week hidden)
+               search select tel text textarea time url week hidden datalist)
 
   attr :field, Phoenix.HTML.FormField,
     doc: "a form field struct retrieved from the form, for example: @form[:email]"
@@ -184,6 +184,7 @@ defmodule TokengateWeb.CoreComponents do
   attr :class, :any, default: nil, doc: "the input class to use over defaults"
   attr :error_class, :any, default: nil, doc: "the input error class to use over defaults"
   attr :hint, :string, default: nil, doc: "help text shown below the input"
+  attr :placeholder, :string, default: nil, doc: "placeholder text for text-like inputs"
 
   attr :rest, :global,
     include: ~w(accept autocomplete capture cols disabled form list max maxlength min minlength
@@ -255,6 +256,38 @@ defmodule TokengateWeb.CoreComponents do
           <option :if={@prompt} value="">{@prompt}</option>
           {Phoenix.HTML.Form.options_for_select(@options, @value)}
         </select>
+      </label>
+      <.error :for={msg <- @errors}>{msg}</.error>
+      <p :if={@hint} class="text-xs text-base-content/50 mt-1">{@hint}</p>
+    </div>
+    """
+  end
+
+  # A free-text input with autocomplete suggestions (HTML5 <datalist>).
+  # Lets users pick from a known set of options OR type any custom value —
+  # useful for upstream model strings that aren't in the public catalog
+  # (e.g. dedicated tiers, private deployments, namespaced variants).
+  def input(%{type: "datalist"} = assigns) do
+    ~H"""
+    <div class="fieldset mb-2">
+      <label for={@id}>
+        <span :if={@label} class="label mb-1">{@label}</span>
+        <input
+          type="text"
+          id={@id}
+          name={@name}
+          value={Phoenix.HTML.Form.normalize_value("text", @value)}
+          list={@id <> "-list"}
+          class={[
+            @class || "w-full input",
+            @errors != [] && (@error_class || "input-error")
+          ]}
+          placeholder={@placeholder}
+          {@rest}
+        />
+        <datalist id={@id <> "-list"}>
+          <option :for={{label, value} <- @options} value={value}>{label}</option>
+        </datalist>
       </label>
       <.error :for={msg <- @errors}>{msg}</.error>
       <p :if={@hint} class="text-xs text-base-content/50 mt-1">{@hint}</p>
