@@ -542,6 +542,72 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   # -----------------------------------------------------------------------
+  # breakdown_by_service/1
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Returns per-service aggregate metrics ranked by total cost (descending).
+
+  Services are virtual team members (service.id = team_member_id in logs).
+
+  Each row is:
+
+      %{
+        service_id: binary,
+        service_name: String.t(),
+        request_count: integer,
+        cost_usd: Decimal,
+        prompt_tokens: integer,
+        completion_tokens: integer,
+        avg_tps: float | nil
+      }
+
+  ## Options
+
+    * `:from` — `inserted_at >= from` (DateTime)
+    * `:to`   — `inserted_at <= to` (DateTime)
+  """
+  @spec breakdown_by_service(keyword()) :: [map()]
+  def breakdown_by_service(opts \\ [])
+
+  def breakdown_by_service(opts) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    # Services are virtual team members with team_id = nil and user_id = nil
+    # Their logs have team_member_id = service.id
+    query =
+      RequestLog
+      |> join(:inner, [rl], s in Tokengate.Accounts.Service, on: rl.team_member_id == s.id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> group_by([rl, s], s.id)
+      |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
+      |> select([rl, s], %{
+        service_id: s.id,
+        service_name: s.name,
+        request_count: count(rl.id),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
+      })
+
+    Repo.all(query)
+    |> Enum.map(fn row ->
+      %{
+        service_id: row.service_id,
+        service_name: row.service_name,
+        request_count: row.request_count,
+        cost_usd: Decimal.new(to_string(row.cost_usd)),
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens,
+        avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
+      }
+    end)
+  end
+
+  # -----------------------------------------------------------------------
   # breakdown_by_team/1
   # -----------------------------------------------------------------------
 

@@ -37,8 +37,10 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:period, "today")
       |> assign(:model_filter, nil)
       |> assign(:team_filter, nil)
+      |> assign(:service_filter, nil)
       |> assign(:models, Providers.list_model_aliases())
       |> assign(:teams, scoped_teams(user))
+      |> assign(:services, scoped_services(user))
       |> assign(:scope_label, scope_label_for(user))
       |> assign(:scope_member_ids, Accounts.scope_member_ids(user))
       |> assign(:loading, true)
@@ -68,6 +70,7 @@ defmodule TokengateWeb.StatsLive do
     period = parse_period(params["period"])
     model_filter = params["model_id"]
     team_filter = params["team_id"]
+    service_filter = params["service_id"]
     member_id = params["member_id"]
 
     socket =
@@ -75,6 +78,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:period, period)
       |> assign(:model_filter, model_filter)
       |> assign(:team_filter, team_filter)
+      |> assign(:service_filter, service_filter)
       |> assign(:member_id, member_id)
       |> load_data(socket.assigns.current_user)
 
@@ -96,6 +100,15 @@ defmodule TokengateWeb.StatsLive do
   def handle_event("set_team_filter", %{"team_id" => team_id}, socket) do
     team_id = if team_id == "", do: nil, else: team_id
     {:noreply, push_patch(socket, to: build_path(socket, team_id: team_id))}
+  end
+
+  def handle_event("set_service_filter", %{"service_id" => service_id}, socket) do
+    service_id = if service_id == "", do: nil, else: service_id
+    {:noreply, push_patch(socket, to: build_path(socket, service_id: service_id))}
+  end
+
+  def handle_event("clear_service_filter", _params, socket) do
+    {:noreply, push_patch(socket, to: build_path(socket, service_id: nil))}
   end
 
   def handle_event("clear_model_filter", _params, socket) do
@@ -207,6 +220,23 @@ defmodule TokengateWeb.StatsLive do
     end
   end
 
+  defp load_breakdowns(socket, :services, user, opts) do
+    service_id = socket.assigns[:service_filter]
+
+    base =
+      socket
+      |> assign(:breakdown_service, load_service_breakdown(user, opts))
+
+    # Services are admin-only; no scoping needed beyond admin check
+    if service_id && user.global_role == "admin" do
+      base
+      |> assign(:breakdown_model, Rollup.breakdown_by_model(service_id, opts))
+    else
+      base
+      |> assign(:breakdown_model, [])
+    end
+  end
+
   defp load_breakdowns(socket, :member, user, opts) do
     member_id = socket.assigns[:member_id]
 
@@ -258,11 +288,23 @@ defmodule TokengateWeb.StatsLive do
     end
   end
 
+  defp scoped_services(%{global_role: "admin"}) do
+    Accounts.list_services()
+  end
+
+  defp scoped_services(_user), do: []
+
   defp load_team_breakdown(%{global_role: "admin"}, opts) do
     Rollup.breakdown_by_team(opts)
   end
 
   defp load_team_breakdown(_, _), do: []
+
+  defp load_service_breakdown(%{global_role: "admin"}, opts) do
+    Rollup.breakdown_by_service(opts)
+  end
+
+  defp load_service_breakdown(_, _), do: []
 
   # Ranking de proveedores: métrica de infraestructura, solo admin, siempre org-wide.
   defp load_provider_ranking(%{global_role: "admin"}, opts),
@@ -294,17 +336,20 @@ defmodule TokengateWeb.StatsLive do
     period = Keyword.get(overrides, :period, socket.assigns[:period])
     model_id = Keyword.get(overrides, :model_id, socket.assigns[:model_filter])
     team_id = Keyword.get(overrides, :team_id, socket.assigns[:team_filter])
+    service_id = Keyword.get(overrides, :service_id, socket.assigns[:service_filter])
 
     query =
       %{"period" => period}
       |> maybe_put("model_id", model_id)
       |> maybe_put("team_id", team_id)
+      |> maybe_put("service_id", service_id)
       |> URI.encode_query()
 
     case socket.assigns.live_action do
       :index -> ~p"/dashboard/stats?#{query}"
       :models -> ~p"/dashboard/stats/models?#{query}"
       :teams -> ~p"/dashboard/stats/teams?#{query}"
+      :services -> ~p"/dashboard/stats/services?#{query}"
     end
   end
 

@@ -60,6 +60,16 @@
       >
         <.icon name="hero-user-group" class="w-4 h-4" /> Equipos
       </.link>
+      <.link
+        patch={~p"/dashboard/stats/services?period=#{@period}"}
+        class={[
+          "join-item btn btn-sm",
+          if(@live_action == :services, do: "btn-primary", else: "btn-ghost")
+        ]}
+        id="nav-services"
+      >
+        <.icon name="hero-wrench-screwdriver" class="w-4 h-4" /> Servicios
+      </.link>
     </div>
 
     <%= if @loading do %>
@@ -1144,6 +1154,250 @@
                                 }
                                 class="link link-hover"
                               >{row.team_name}</.link>
+                            </td>
+                            <td class="text-right font-mono">
+                              {format_number(row.request_count)}
+                            </td>
+                            <td class="text-right font-mono">
+                              ${format_decimal(row.cost_usd)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {format_number(row.prompt_tokens)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {format_number(row.completion_tokens)}
+                            </td>
+                            <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  <% else %>
+                    <p class="text-sm text-base-content/40 py-6 text-center">
+                      Sin datos para este periodo.
+                    </p>
+                  <% end %>
+                </div>
+              </div>
+            <% end %>
+          </div>
+        <% @live_action == :services -> %>
+          <div class="space-y-6">
+            <div class="flex items-center justify-between flex-wrap gap-3">
+              <form
+                phx-change="set_service_filter"
+                id="service-filter-form"
+                class="flex items-center gap-2"
+              >
+                <.input
+                  type="select"
+                  name="service_id"
+                  value={@service_filter || ""}
+                  options={
+                    [{"Todos los servicios", ""}] ++ Enum.map(@services || [], &{&1.name, &1.id})
+                  }
+                  class="select select-sm select-bordered"
+                />
+              </form>
+              <.link
+                href="/dashboard/stats/export?type=services&period=#{@period}"
+                class="btn btn-sm btn-ghost"
+                id="csv-services"
+              >
+                <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> CSV
+              </.link>
+            </div>
+
+            <%= if @service_filter do %>
+              <div class="space-y-6">
+                <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div
+                    id="service-kpi-cost"
+                    class="card bg-base-100 border border-base-300 shadow-sm"
+                  >
+                    <div class="card-body p-5">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Costo</span>
+                        <span class={[
+                          "flex items-center justify-center w-9 h-9 rounded-lg",
+                          accent_bg("accent")
+                        ]}>
+                          <.icon
+                            name="hero-currency-dollar"
+                            class={["w-5 h-5", accent_text("accent")]}
+                          />
+                        </span>
+                      </div>
+                      <p class="mt-2 text-2xl font-bold">
+                        ${format_decimal(@metrics.cost_usd)}
+                      </p>
+                    </div>
+                  </div>
+                  <div
+                    id="service-kpi-requests"
+                    class="card bg-base-100 border border-base-300 shadow-sm"
+                  >
+                    <div class="card-body p-5">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Requests</span>
+                        <span class={[
+                          "flex items-center justify-center w-9 h-9 rounded-lg",
+                          accent_bg("primary")
+                        ]}>
+                          <.icon
+                            name="hero-arrow-trending-up"
+                            class={["w-5 h-5", accent_text("primary")]}
+                          />
+                        </span>
+                      </div>
+                      <p class="mt-2 text-2xl font-bold">
+                        {format_number(@metrics.requests_total)}
+                      </p>
+                    </div>
+                  </div>
+                  <div
+                    id="service-kpi-tokens"
+                    class="card bg-base-100 border border-base-300 shadow-sm"
+                  >
+                    <div class="card-body p-5">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens</span>
+                        <span class={[
+                          "flex items-center justify-center w-9 h-9 rounded-lg",
+                          accent_bg("primary")
+                        ]}>
+                          <.icon name="hero-cpu-chip" class={["w-5 h-5", accent_text("primary")]} />
+                        </span>
+                      </div>
+                      <div class="mt-2 flex items-baseline gap-3">
+                        <div>
+                          <p
+                            class="text-lg font-bold"
+                            title={format_number(@metrics.prompt_tokens)}
+                          >
+                            {format_compact(@metrics.prompt_tokens)}
+                          </p>
+                          <p class="text-xs text-base-content/50">in</p>
+                        </div>
+                        <span class="text-base-content/30">/</span>
+                        <div>
+                          <p
+                            class="text-lg font-bold"
+                            title={format_number(@metrics.completion_tokens)}
+                          >
+                            {format_compact(@metrics.completion_tokens)}
+                          </p>
+                          <p class="text-xs text-base-content/50">out</p>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                  <div
+                    id="service-kpi-tps"
+                    class="card bg-base-100 border border-base-300 shadow-sm"
+                  >
+                    <div class="card-body p-5">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">TPS</span>
+                        <span class={[
+                          "flex items-center justify-center w-9 h-9 rounded-lg",
+                          accent_bg("accent")
+                        ]}>
+                          <.icon name="hero-bolt" class={["w-5 h-5", accent_text("accent")]} />
+                        </span>
+                      </div>
+                      <p class="mt-2 text-2xl font-bold">
+                        {format_tps(@metrics.avg_tps)}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <div class="card bg-base-100 border border-base-300 shadow-sm">
+                  <div class="card-body">
+                    <h2 class="card-title text-base">
+                      <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" />
+                      Modelos usados
+                    </h2>
+                    <%= if has_data?(@breakdown_model) do %>
+                      <div class="overflow-x-auto mt-3">
+                        <table class="table table-sm table-zebra">
+                          <thead>
+                            <tr>
+                              <th>Modelo</th>
+                              <th class="text-right">Requests</th>
+                              <th class="text-right">Costo</th>
+                              <th class="text-right">Tokens in</th>
+                              <th class="text-right">Tokens out</th>
+                              <th class="text-right">TPS</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            <tr
+                              :for={row <- @breakdown_model}
+                              id={"bd-service-model-#{row.model_id || "unknown"}"}
+                            >
+                              <td class="font-medium">{row.model_name}</td>
+                              <td class="text-right font-mono">
+                                {format_number(row.request_count)}
+                              </td>
+                              <td class="text-right font-mono">
+                                ${format_decimal(row.cost_usd)}
+                              </td>
+                              <td class="text-right font-mono">
+                                {format_number(row.prompt_tokens)}
+                              </td>
+                              <td class="text-right font-mono">
+                                {format_number(row.completion_tokens)}
+                              </td>
+                              <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
+                            </tr>
+                          </tbody>
+                        </table>
+                      </div>
+                    <% else %>
+                      <p class="text-sm text-base-content/40 py-6 text-center">
+                        Sin datos para este periodo.
+                      </p>
+                    <% end %>
+                  </div>
+                </div>
+                <button
+                  phx-click="clear_service_filter"
+                  class="btn btn-sm btn-ghost"
+                  id="clear-service-filter"
+                >
+                  <.icon name="hero-x-mark" class="w-4 h-4" /> Quitar filtro de servicio
+                </button>
+              </div>
+            <% else %>
+              <div class="card bg-base-100 border border-base-300 shadow-sm">
+                <div class="card-body">
+                  <h2 class="card-title text-base">
+                    <.icon name="hero-wrench-screwdriver" class="w-5 h-5 text-base-content/60" />
+                    Todos los servicios
+                  </h2>
+                  <%= if has_data?(@breakdown_service) do %>
+                    <div class="overflow-x-auto mt-3">
+                      <table class="table table-sm table-zebra">
+                        <thead>
+                          <tr>
+                            <th>Servicio</th>
+                            <th class="text-right">Requests</th>
+                            <th class="text-right">Costo</th>
+                            <th class="text-right">Tokens in</th>
+                            <th class="text-right">Tokens out</th>
+                            <th class="text-right">TPS</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr :for={row <- @breakdown_service} id={"bd-service-#{row.service_id}"}>
+                            <td class="font-medium">
+                              <.link
+                                patch={
+                                  ~p"/dashboard/stats/services?period=#{@period}&service_id=#{row.service_id}"
+                                }
+                                class="link link-hover"
+                              >{row.service_name}</.link>
                             </td>
                             <td class="text-right font-mono">
                               {format_number(row.request_count)}

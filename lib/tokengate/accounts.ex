@@ -522,6 +522,10 @@ defmodule Tokengate.Accounts do
 
   def get_service(id), do: Repo.get(Service, id)
 
+  def list_services(limit \\ 500) do
+    Repo.all(from s in Service, order_by: [asc: s.name], limit: ^limit)
+  end
+
   def create_service(attrs) do
     %Service{}
     |> Service.changeset(attrs)
