@@ -287,8 +287,6 @@ defmodule Tokengate.Accounts do
   # Team members
   # ---------------------------------------------------------------------------
 
-  def list_team_members, do: Repo.all(TeamMember)
-
   def get_team_member!(id), do: Repo.get!(TeamMember, id)
 
   def get_team_member(id), do: Repo.get(TeamMember, id)
@@ -390,8 +388,6 @@ defmodule Tokengate.Accounts do
   # ---------------------------------------------------------------------------
   # API keys
   # ---------------------------------------------------------------------------
-
-  def list_api_keys, do: Repo.all(ApiKey)
 
   def get_api_key!(id), do: Repo.get!(ApiKey, id)
 
@@ -511,8 +507,6 @@ defmodule Tokengate.Accounts do
   # ---------------------------------------------------------------------------
   # Services
   # ---------------------------------------------------------------------------
-
-  def list_services, do: Repo.all(Service)
 
   def get_service!(id), do: Repo.get!(Service, id)
 

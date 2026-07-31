@@ -89,6 +89,7 @@ defmodule TokengateWeb.OAuthController do
 
   defp create_session(conn, user) do
     conn
+    |> configure_session(renew: true)
     |> put_session(:user_id, user.id)
     |> put_flash(:info, "Sesión iniciada con Google.")
     |> redirect(to: "/dashboard")

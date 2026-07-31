@@ -46,6 +46,7 @@ defmodule TokengateWeb.SessionController do
     case Accounts.authenticate_user(email, password) do
       {:ok, user} ->
         conn
+        |> configure_session(renew: true)
         |> put_session(:user_id, user.id)
         |> put_flash(:info, "Sesión iniciada.")
         |> redirect(to: "/dashboard")
@@ -141,6 +142,7 @@ defmodule TokengateWeb.SessionController do
         })
 
       conn
+      |> configure_session(renew: true)
       |> put_session(:impersonator_id, admin.id)
       |> put_session(:user_id, target.id)
       |> put_flash(:info, "Ahora estás viendo como #{target.email}.")
@@ -172,6 +174,7 @@ defmodule TokengateWeb.SessionController do
           )
 
         conn
+        |> configure_session(renew: true)
         |> delete_session(:impersonator_id)
         |> put_session(:user_id, impersonator_id)
         |> put_flash(:info, "Volviste a tu cuenta.")

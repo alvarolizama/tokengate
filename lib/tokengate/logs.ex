@@ -90,7 +90,8 @@ defmodule Tokengate.Logs do
   fetch new logs appended after page load.
 
   Same filter support as `list_logs/1` (scope, status, agent, etc.), but
-  the `before` cursor and `limit` are ignored — all new logs are returned.
+  the `before` cursor is ignored. A defensive `limit` caps how many new
+  logs are returned in a single real-time refresh (default 500).
   """
   def list_logs_after(since, filters \\ %{})
 
@@ -105,9 +106,12 @@ defmodule Tokengate.Logs do
       |> Map.delete("before")
       |> Map.put(:after, since)
 
+    limit = clamp_limit(Map.get(filters, :limit) || Map.get(filters, "limit") || 500)
+
     RequestLog
     |> apply_log_filters(filters)
     |> order_by([rl], desc: rl.inserted_at)
+    |> limit(^limit)
     |> preload(team_member: [:user, :team])
     |> preload(:provider)
     |> Repo.all()

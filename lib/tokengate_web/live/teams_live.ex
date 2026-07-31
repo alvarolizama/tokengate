@@ -36,6 +36,8 @@ defmodule TokengateWeb.TeamsLive do
       socket =
         socket
         |> assign(:page_title, "Equipos · Tokengate")
+        |> assign(:is_admin, true)
+        |> require_admin_hook()
         |> assign(:form, nil)
         |> assign(:editing_team_id, nil)
         |> assign(:webhook_form, nil)
@@ -46,6 +48,19 @@ defmodule TokengateWeb.TeamsLive do
 
       {:ok, socket}
     end
+  end
+
+  # Defense-in-depth: the router already gates this LiveView behind
+  # live_session :admin, but a malicious client could fire events directly
+  # over the WebSocket. Halt every event for non-admins.
+  defp require_admin_hook(socket) do
+    attach_hook(socket, :require_admin, :handle_event, fn _event, _params, socket ->
+      if socket.assigns[:is_admin] do
+        {:cont, socket}
+      else
+        {:halt, put_flash(socket, :error, "No autorizado.")}
+      end
+    end)
   end
 
   ## Data loading ---------------------------------------------------------

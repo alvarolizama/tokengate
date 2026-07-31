@@ -35,6 +35,8 @@ defmodule TokengateWeb.LogsLive do
       |> assign(:api_inflight, 0)
       |> assign(:pending, [])
       |> assign(:model_options, model_options())
+      |> assign(:is_admin, user.global_role == "admin")
+      |> require_admin_hook()
 
     socket = load_logs(socket, :reset)
 
@@ -57,6 +59,19 @@ defmodule TokengateWeb.LogsLive do
     else
       {:ok, socket}
     end
+  end
+
+  # Defense-in-depth: the router already gates this LiveView behind
+  # live_session :admin, but a malicious client could fire events directly
+  # over the WebSocket. Halt every event for non-admins.
+  defp require_admin_hook(socket) do
+    attach_hook(socket, :require_admin, :handle_event, fn _event, _params, socket ->
+      if socket.assigns[:is_admin] do
+        {:cont, socket}
+      else
+        {:halt, put_flash(socket, :error, "No autorizado.")}
+      end
+    end)
   end
 
   ## Real-time -------------------------------------------------------------
