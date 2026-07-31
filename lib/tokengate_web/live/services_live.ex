@@ -404,30 +404,77 @@ defmodule TokengateWeb.ServicesLive do
                   </div>
                   <% stats = Map.get(@service_stats, service.id, %{}) %>
                   <%= if stats != %{} do %>
-                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
-                      <div class="bg-base-200 rounded-lg p-3 text-center">
-                        <p class="text-xs text-base-content/50 uppercase tracking-wide">Gasto real</p>
-                        <p class="text-lg font-semibold text-base-content">
-                          ${format_decimal(stats.total_cost || 0)}
-                        </p>
+                    <div class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <%!-- Gasto real --%>
+                      <div class="card bg-base-100 border border-base-300 shadow-sm">
+                        <div class="card-body p-4">
+                          <div class="flex items-center justify-between">
+                            <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                              Gasto real
+                            </span>
+                            <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-success/10">
+                              <.icon name="hero-currency-dollar" class="w-4 h-4 text-success" />
+                            </span>
+                          </div>
+                          <p class="mt-1.5 text-lg font-bold text-base-content">
+                            ${format_decimal(stats.total_cost || 0)}
+                          </p>
+                          <p class="text-xs text-base-content/40">30 días</p>
+                        </div>
                       </div>
-                      <div class="bg-base-200 rounded-lg p-3 text-center">
-                        <p class="text-xs text-base-content/50 uppercase tracking-wide">Requests</p>
-                        <p class="text-lg font-semibold text-base-content">
-                          {format_number(stats.total_requests || 0)}
-                        </p>
+
+                      <%!-- Requests --%>
+                      <div class="card bg-base-100 border border-base-300 shadow-sm">
+                        <div class="card-body p-4">
+                          <div class="flex items-center justify-between">
+                            <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                              Requests
+                            </span>
+                            <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10">
+                              <.icon name="hero-bolt" class="w-4 h-4 text-primary" />
+                            </span>
+                          </div>
+                          <p class="mt-1.5 text-lg font-bold text-base-content">
+                            {format_number(stats.total_requests || 0)}
+                          </p>
+                          <p class="text-xs text-base-content/40">30 días</p>
+                        </div>
                       </div>
-                      <div class="bg-base-200 rounded-lg p-3 text-center">
-                        <p class="text-xs text-base-content/50 uppercase tracking-wide">Tokens In</p>
-                        <p class="text-lg font-semibold text-base-content">
-                          {format_number(stats.total_input_tokens || 0)}
-                        </p>
+
+                      <%!-- Tokens In --%>
+                      <div class="card bg-base-100 border border-base-300 shadow-sm">
+                        <div class="card-body p-4">
+                          <div class="flex items-center justify-between">
+                            <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                              Tokens In
+                            </span>
+                            <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent/10">
+                              <.icon name="hero-arrow-down-tray" class="w-4 h-4 text-accent" />
+                            </span>
+                          </div>
+                          <p class="mt-1.5 text-lg font-bold text-base-content">
+                            {format_number(stats.total_input_tokens || 0)}
+                          </p>
+                          <p class="text-xs text-base-content/40">30 días</p>
+                        </div>
                       </div>
-                      <div class="bg-base-200 rounded-lg p-3 text-center">
-                        <p class="text-xs text-base-content/50 uppercase tracking-wide">Tokens Out</p>
-                        <p class="text-lg font-semibold text-base-content">
-                          {format_number(stats.total_output_tokens || 0)}
-                        </p>
+
+                      <%!-- Tokens Out --%>
+                      <div class="card bg-base-100 border border-base-300 shadow-sm">
+                        <div class="card-body p-4">
+                          <div class="flex items-center justify-between">
+                            <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                              Tokens Out
+                            </span>
+                            <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-warning/10">
+                              <.icon name="hero-arrow-up-tray" class="w-4 h-4 text-warning" />
+                            </span>
+                          </div>
+                          <p class="mt-1.5 text-lg font-bold text-base-content">
+                            {format_number(stats.total_output_tokens || 0)}
+                          </p>
+                          <p class="text-xs text-base-content/40">30 días</p>
+                        </div>
                       </div>
                     </div>
                   <% else %>
