@@ -81,7 +81,8 @@ defmodule Tokengate.Routing.CircuitBreaker do
         ),
       failures: 0,
       last_reason: nil,
-      probe_in_flight?: false
+      probe_in_flight?: false,
+      opened_at: nil
     }
 
     :gen_statem.start_link(__MODULE__, data, name: name)
@@ -122,6 +123,19 @@ defmodule Tokengate.Routing.CircuitBreaker do
     :gen_statem.call(breaker, :reset)
   end
 
+  @doc """
+  Returns a details map with the full breaker state:
+
+    * `:state` — `:closed`, `:open`, or `:half_open`
+    * `:failures` — consecutive failure count
+    * `:last_reason` — reason of the last failure that tripped or refreshed the breaker
+    * `:opened_at` — `DateTime` when the breaker transitioned to `:open`, or `nil`
+  """
+  @spec details(breaker :: GenServer.server()) :: map()
+  def details(breaker) do
+    :gen_statem.call(breaker, :details)
+  end
+
   ## :gen_statem callbacks ###################################################
 
   @impl true
@@ -152,8 +166,15 @@ defmodule Tokengate.Routing.CircuitBreaker do
     {:keep_state, data, {:reply, from, :closed}}
   end
 
+  def closed({:call, from}, :details, data) do
+    {:keep_state, data,
+     {:reply, from,
+      %{state: :closed, failures: data.failures, last_reason: data.last_reason, opened_at: nil}}}
+  end
+
   def closed({:call, from}, :reset, data) do
-    {:keep_state, %{data | failures: 0, last_reason: nil, probe_in_flight?: false},
+    {:keep_state,
+     %{data | failures: 0, last_reason: nil, probe_in_flight?: false, opened_at: nil},
      {:reply, from, :ok}}
   end
 
@@ -175,8 +196,20 @@ defmodule Tokengate.Routing.CircuitBreaker do
     {:keep_state, data, {:reply, from, :open}}
   end
 
+  def open({:call, from}, :details, data) do
+    {:keep_state, data,
+     {:reply, from,
+      %{
+        state: :open,
+        failures: data.failures,
+        last_reason: data.last_reason,
+        opened_at: data.opened_at
+      }}}
+  end
+
   def open({:call, from}, :reset, data) do
-    {:next_state, :closed, %{data | failures: 0, last_reason: nil, probe_in_flight?: false},
+    {:next_state, :closed,
+     %{data | failures: 0, last_reason: nil, probe_in_flight?: false, opened_at: nil},
      {:reply, from, :ok}}
   end
 
@@ -211,13 +244,26 @@ defmodule Tokengate.Routing.CircuitBreaker do
     {:keep_state, data, {:reply, from, :half_open}}
   end
 
+  def half_open({:call, from}, :details, data) do
+    {:keep_state, data,
+     {:reply, from,
+      %{
+        state: :half_open,
+        failures: data.failures,
+        last_reason: data.last_reason,
+        opened_at: data.opened_at
+      }}}
+  end
+
   def half_open({:call, from}, :reset, data) do
-    {:next_state, :closed, %{data | failures: 0, last_reason: nil, probe_in_flight?: false},
+    {:next_state, :closed,
+     %{data | failures: 0, last_reason: nil, probe_in_flight?: false, opened_at: nil},
      {:reply, from, :ok}}
   end
 
   def half_open(:cast, :record_success, data) do
-    {:next_state, :closed, %{data | failures: 0, last_reason: nil, probe_in_flight?: false}}
+    {:next_state, :closed,
+     %{data | failures: 0, last_reason: nil, probe_in_flight?: false, opened_at: nil}}
   end
 
   def half_open(:cast, {:record_failure, reason}, data) do
@@ -235,10 +281,16 @@ defmodule Tokengate.Routing.CircuitBreaker do
 
       if failures >= data.threshold do
         cooldown = cooldown_for(reason, data)
+        now = DateTime.utc_now()
 
         {:next_state, :open,
-         %{data | failures: failures, last_reason: reason, probe_in_flight?: false},
-         {:state_timeout, cooldown, :probe}}
+         %{
+           data
+           | failures: failures,
+             last_reason: reason,
+             probe_in_flight?: false,
+             opened_at: now
+         }, {:state_timeout, cooldown, :probe}}
       else
         {:keep_state, %{data | failures: failures, last_reason: reason}}
       end

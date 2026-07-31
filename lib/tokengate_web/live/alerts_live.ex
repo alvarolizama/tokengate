@@ -11,6 +11,7 @@ defmodule TokengateWeb.AlertsLive do
   alias Tokengate.Providers
   alias Tokengate.Repo
   alias Tokengate.Logs.RequestLog
+  alias Tokengate.Providers.Provider
 
   @error_window_hours 24
   @error_limit 20
@@ -135,15 +136,93 @@ defmodule TokengateWeb.AlertsLive do
     breaker_alerts =
       all_creds
       |> Enum.map(fn cred ->
-        {cred, Tokengate.Routing.CircuitBreakerManager.status(cred.id)}
+        details = Tokengate.Routing.CircuitBreakerManager.details(cred.id)
+        {cred, details}
       end)
-      |> Enum.filter(fn {_cred, status} -> status != :closed end)
+      |> Enum.filter(fn {_cred, details} -> details.state != :closed end)
+
+    # Error counts per credential in the last 24h (for breaker table)
+    since = DateTime.utc_now() |> DateTime.add(-@error_window_hours * 3600, :second)
+
+    cred_error_counts =
+      from(rl in RequestLog,
+        where: rl.status_code >= 400 and rl.inserted_at >= ^since,
+        group_by: [rl.api_key_prefix, rl.provider_id],
+        select: %{
+          api_key_prefix: rl.api_key_prefix,
+          provider_id: rl.provider_id,
+          count: count(rl.id)
+        }
+      )
+      |> Repo.all()
+
+    # Activity stats for exhausted members (requests today, last request, top provider)
+    budget_activity = load_budget_activity()
 
     socket
     |> assign(:error_credentials, credentials)
     |> assign(:breaker_alerts, breaker_alerts)
+    |> assign(:cred_error_counts, cred_error_counts)
     |> assign(:budget_exhausted, Tokengate.Budgets.list_exhausted_member_budgets())
+    |> assign(:budget_activity, budget_activity)
     |> load_recent_errors()
+  end
+
+  defp load_budget_activity do
+    today_start = DateTime.new!(Date.utc_today(), ~T[00:00:00], "Etc/UTC")
+
+    # Get today's stats per team member
+    activity_query =
+      from(rl in RequestLog,
+        where: rl.inserted_at >= ^today_start,
+        group_by: rl.team_member_id,
+        select: %{
+          team_member_id: rl.team_member_id,
+          requests_today: count(rl.id),
+          last_request: max(rl.inserted_at)
+        }
+      )
+
+    # Get top provider per team member today
+    top_provider_query =
+      from(rl in RequestLog,
+        where: rl.inserted_at >= ^today_start and not is_nil(rl.provider_id),
+        group_by: [rl.team_member_id, rl.provider_id],
+        select: %{
+          team_member_id: rl.team_member_id,
+          provider_id: rl.provider_id,
+          request_count: count(rl.id)
+        }
+      )
+
+    activity_data = Repo.all(activity_query) |> Map.new(fn a -> {a.team_member_id, a} end)
+
+    top_providers =
+      Repo.all(top_provider_query)
+      |> Enum.group_by(fn t -> t.team_member_id end)
+      |> Map.new(fn {member_id, providers} ->
+        top = Enum.max_by(providers, fn p -> p.request_count end)
+        {member_id, top.provider_id}
+      end)
+
+    # Resolve provider names
+    provider_names =
+      from(p in Provider, select: p)
+      |> Repo.all()
+      |> Map.new(fn p -> {p.id, p.name} end)
+
+    activity_data
+    |> Map.new(fn {member_id, activity} ->
+      top_provider_id = Map.get(top_providers, member_id)
+      top_provider_name = if top_provider_id, do: Map.get(provider_names, top_provider_id, "—")
+
+      {member_id,
+       %{
+         requests_today: activity.requests_today,
+         last_request: activity.last_request,
+         top_provider: top_provider_name
+       }}
+    end)
   end
 
   defp load_recent_errors(socket) do
@@ -185,9 +264,56 @@ defmodule TokengateWeb.AlertsLive do
   defp breaker_label(:half_open), do: "Half-Open"
   defp breaker_label(_), do: "—"
 
+  defp reason_label(nil), do: "—"
+  defp reason_label(:server_error), do: "Error servidor"
+  defp reason_label(:timeout), do: "Timeout"
+  defp reason_label(:rate_limited), do: "Rate limited"
+  defp reason_label(:auth_error), do: "Error auth"
+  defp reason_label(:client_error), do: "Error cliente"
+  defp reason_label(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp reason_label(reason), do: to_string(reason)
+
   defp status_class_for(status_code) when status_code >= 500, do: "badge-error"
   defp status_class_for(status_code) when status_code >= 400, do: "badge-warning"
   defp status_class_for(_), do: "badge-ghost"
+
+  defp api_key_prefix(nil), do: "—"
+
+  defp api_key_prefix(encrypted) when is_binary(encrypted) and byte_size(encrypted) > 8 do
+    String.slice(encrypted, 0, 8) <> "…"
+  end
+
+  defp api_key_prefix(encrypted), do: encrypted
+
+  defp errors_for_credential(cred, error_counts) do
+    # Match by api_key_prefix (derived from encrypted key) and provider_id
+    prefix = api_key_prefix(cred.api_key_encrypted)
+    provider_id = cred.provider_id
+
+    error_counts
+    |> Enum.filter(fn ec ->
+      ec.api_key_prefix == prefix && ec.provider_id == provider_id
+    end)
+    |> Enum.map(& &1.count)
+    |> Enum.sum()
+  end
+
+  defp fmt_duration(nil), do: "—"
+
+  defp fmt_duration(%DateTime{} = opened_at) do
+    diff = DateTime.diff(DateTime.utc_now(), opened_at, :second)
+
+    cond do
+      diff < 60 -> "#{diff}s"
+      diff < 3600 -> "#{div(diff, 60)}m #{rem(diff, 60)}s"
+      diff < 86_400 -> "#{div(diff, 3600)}h #{div(rem(diff, 3600), 60)}m"
+      true -> "#{div(diff, 86_400)}d #{div(rem(diff, 86_400), 3600)}h"
+    end
+  end
+
+  defp fmt_latency(nil), do: "—"
+  defp fmt_latency(ms) when ms < 1000, do: "#{ms}ms"
+  defp fmt_latency(ms), do: "#{Float.round(ms / 1000, 1)}s"
 
   ## Render ----------------------------------------------------------------
 
@@ -294,6 +420,8 @@ defmodule TokengateWeb.AlertsLive do
                     <tr>
                       <th>Proveedor</th>
                       <th>Alias</th>
+                      <th>API Key</th>
+                      <th>Endpoint</th>
                       <th>Razón</th>
                       <th>Error</th>
                       <th>Cuándo</th>
@@ -304,6 +432,13 @@ defmodule TokengateWeb.AlertsLive do
                     <tr :for={cred <- @error_credentials} id={"alert-cred-#{cred.id}"}>
                       <td class="font-medium">{cred.provider.name}</td>
                       <td>{cred.name || "—"}</td>
+                      <td class="font-mono text-xs">{api_key_prefix(cred.api_key_encrypted)}</td>
+                      <td
+                        class="text-xs text-base-content/70 max-w-[200px] truncate"
+                        title={cred.provider.base_url}
+                      >
+                        {cred.provider.base_url}
+                      </td>
                       <td>
                         <code class="text-xs text-error">{cred.error_reason || "auth_error"}</code>
                       </td>
@@ -345,22 +480,34 @@ defmodule TokengateWeb.AlertsLive do
                     <tr>
                       <th>Proveedor</th>
                       <th>Alias</th>
+                      <th>API Key</th>
                       <th>Estado</th>
+                      <th>Razón</th>
+                      <th>Fallos</th>
+                      <th>Abierto desde</th>
+                      <th>Errores 24h</th>
                       <th></th>
                     </tr>
                   </thead>
                   <tbody>
-                    <tr :for={{cred, status} <- @breaker_alerts} id={"alert-breaker-#{cred.id}"}>
+                    <tr :for={{cred, details} <- @breaker_alerts} id={"alert-breaker-#{cred.id}"}>
                       <td class="font-medium">{cred.provider.name}</td>
                       <td>{cred.name || "—"}</td>
+                      <td class="font-mono text-xs">{api_key_prefix(cred.api_key_encrypted)}</td>
                       <td>
                         <span class={[
                           "badge badge-sm",
-                          status == :open && "badge-error",
-                          status == :half_open && "badge-warning"
+                          details.state == :open && "badge-error",
+                          details.state == :half_open && "badge-warning"
                         ]}>
-                          {breaker_label(status)}
+                          {breaker_label(details.state)}
                         </span>
+                      </td>
+                      <td class="text-sm">{reason_label(details.last_reason)}</td>
+                      <td class="text-sm tabular-nums">{details.failures}</td>
+                      <td class="text-sm">{fmt_duration(details.opened_at)}</td>
+                      <td class="text-sm tabular-nums">
+                        {errors_for_credential(cred, @cred_error_counts)}
                       </td>
                       <td class="text-right">
                         <button
@@ -395,6 +542,10 @@ defmodule TokengateWeb.AlertsLive do
                       <th>Equipo</th>
                       <th>Límite agotado</th>
                       <th>Gasto mes</th>
+                      <th>Gasto hoy</th>
+                      <th>Requests hoy</th>
+                      <th>Proveedor top (hoy)</th>
+                      <th>Último request</th>
                       <th></th>
                     </tr>
                   </thead>
@@ -412,6 +563,20 @@ defmodule TokengateWeb.AlertsLive do
                         <span :if={b.monthly_limit_usd} class="text-base-content/50">
                           / ${fmt_money(b.monthly_limit_usd)}
                         </span>
+                      </td>
+                      <td class="font-mono text-xs">
+                        ${fmt_money(b.daily_spend_usd)}
+                      </td>
+                      <td class="text-sm tabular-nums">
+                        {Map.get(@budget_activity, b.member.id, %{}) |> Map.get(:requests_today, 0)}
+                      </td>
+                      <td class="text-sm">
+                        {Map.get(@budget_activity, b.member.id, %{}) |> Map.get(:top_provider, "—")}
+                      </td>
+                      <td class="text-xs text-base-content/50">
+                        {Map.get(@budget_activity, b.member.id, %{})
+                        |> Map.get(:last_request)
+                        |> fmt_dt()}
                       </td>
                       <td class="text-right">
                         <.link
@@ -444,11 +609,16 @@ defmodule TokengateWeb.AlertsLive do
                       <th>Fecha</th>
                       <th>Estado</th>
                       <th>Modelo</th>
+                      <th>Modelo real</th>
                       <th>Proveedor</th>
                       <th>Usuario</th>
                       <th>Equipo</th>
                       <th>API Key</th>
                       <th>Motivo</th>
+                      <th>Prov. status</th>
+                      <th>Latencia</th>
+                      <th>Costo</th>
+                      <th>Stream</th>
                       <th>Agente</th>
                     </tr>
                   </thead>
@@ -461,6 +631,11 @@ defmodule TokengateWeb.AlertsLive do
                         </span>
                       </td>
                       <td class="text-sm">{log.model_requested}</td>
+                      <td class="text-xs text-base-content/60">
+                        {if log.model_responded != log.model_requested,
+                          do: log.model_responded,
+                          else: "—"}
+                      </td>
                       <td class="text-sm">
                         {(log.provider && log.provider.name) || "—"}
                       </td>
@@ -479,6 +654,21 @@ defmodule TokengateWeb.AlertsLive do
                           {log.error_reason}
                         </span>
                         <span :if={!log.error_reason}>—</span>
+                      </td>
+                      <td class="text-sm tabular-nums">
+                        {log.provider_status_code || "—"}
+                      </td>
+                      <td class="text-sm tabular-nums">
+                        {fmt_latency(log.latency_ms)}
+                      </td>
+                      <td class="text-sm font-mono tabular-nums">
+                        {if Decimal.compare(log.provider_cost_usd || 0, 0) == :gt,
+                          do: "$" <> fmt_money(log.provider_cost_usd),
+                          else: "—"}
+                      </td>
+                      <td>
+                        <span :if={log.streaming} class="badge badge-xs badge-ghost">SSE</span>
+                        <span :if={!log.streaming} class="text-base-content/30">—</span>
                       </td>
                       <td>
                         <span class="badge badge-sm badge-ghost">{log.agent_type}</span>

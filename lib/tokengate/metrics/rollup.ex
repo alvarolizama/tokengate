@@ -88,6 +88,166 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   # -----------------------------------------------------------------------
+  # user_ranking/2
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Ranking de usuarios por consumo: gasto, requests, tokens (in/out),
+  desglose por tipo de key (pay_per_token vs included), y modelo más usado.
+
+  Devuelve filas ordenadas por costo total descendente. Cada fila:
+
+      %{
+        team_member_id: binary,
+        team_name: String.t(),
+        user_email: String.t(),
+        request_count: integer,
+        cost_usd: Decimal,
+        prompt_tokens: integer,
+        completion_tokens: integer,
+        token_in_by_type: %{String.t() => integer},   # %{"pay_per_token" => 1234, "included" => 567}
+        token_out_by_type: %{String.t() => integer},   # same shape
+        requests_by_type: %{String.t() => integer},     # same shape
+        top_model: String.t() | nil,                    # model alias name with most requests
+        top_model_pct: float | nil                      # % of requests that used top model
+      }
+
+  ## Options
+    * `:from` — `inserted_at >= from` (DateTime)
+    * `:to`   — `inserted_at <= to` (DateTime)
+    * `:member_ids` — restrict to logs of these team-member ids (scoping)
+    * `:limit` — default 25
+  """
+  @spec user_ranking(String.t() | nil, keyword()) :: [map()]
+  def user_ranking(team_id \\ nil, opts \\ [])
+
+  def user_ranking(team_id, opts) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+    limit = Keyword.get(opts, :limit, 25)
+
+    base_query =
+      RequestLog
+      |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
+      |> join(:inner, [rl, tm], t in assoc(tm, :team))
+      |> join(:inner, [rl, tm], u in assoc(tm, :user))
+      |> join(:left, [rl], mp in Tokengate.Providers.ModelProvider,
+        on: rl.model_provider_id == mp.id
+      )
+      |> join(:left, [rl, _tm, _t, _u, mp], c in Tokengate.Providers.Credential,
+        on: mp.credential_id == c.id
+      )
+      |> maybe_member_team_filter(team_id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> maybe_member_ids(Keyword.get(opts, :member_ids))
+
+    # Base aggregates per user
+    base_rows =
+      base_query
+      |> group_by([rl, tm, t, u, mp, c], [tm.id, t.id, u.id])
+      |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
+      |> limit(^limit)
+      |> select([rl, tm, t, u, mp, c], %{
+        team_member_id: tm.id,
+        team_name: t.name,
+        user_email: u.email,
+        request_count: count(rl.id),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens)
+      })
+      |> Repo.all()
+      |> Enum.map(fn row ->
+        Map.put(row, :cost_usd, Decimal.new(to_string(row.cost_usd)))
+      end)
+
+    # Now enrich with per-type breakdown and top model
+    member_ids = Enum.map(base_rows, & &1.team_member_id)
+
+    token_by_type = token_breakdown_by_type(member_ids, from, to)
+    top_models = top_model_per_member(member_ids, from, to)
+
+    base_rows
+    |> Enum.map(fn row ->
+      types = Map.get(token_by_type, row.team_member_id, %{})
+      top = Map.get(top_models, row.team_member_id, %{model: nil, pct: nil})
+
+      Map.merge(row, %{
+        token_in_by_type: Map.get(types, :in, %{}),
+        token_out_by_type: Map.get(types, :out, %{}),
+        requests_by_type: Map.get(types, :requests, %{}),
+        top_model: top.model,
+        top_model_pct: top.pct
+      })
+    end)
+  end
+
+  defp token_breakdown_by_type([], _from, _to), do: %{}
+
+  defp token_breakdown_by_type(member_ids, from, to) do
+    query =
+      RequestLog
+      |> where([rl], rl.team_member_id in ^member_ids)
+      |> join(:inner, [rl], mp in Tokengate.Providers.ModelProvider,
+        on: rl.model_provider_id == mp.id
+      )
+      |> join(:inner, [_, mp], c in Tokengate.Providers.Credential, on: mp.credential_id == c.id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> group_by([rl, mp, c], [rl.team_member_id, mp.billing_mode])
+      |> select([rl, mp, c], %{
+        team_member_id: rl.team_member_id,
+        billing_mode: mp.billing_mode,
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+        request_count: count(rl.id)
+      })
+      |> Repo.all()
+
+    # Transform into %{member_id => %{in: %{type => tokens}, out: %{type => tokens}, requests: %{type => count}}}
+    query
+    |> Enum.group_by(& &1.team_member_id)
+    |> Map.new(fn {member_id, rows} ->
+      {member_id,
+       %{
+         in: Map.new(rows, fn r -> {r.billing_mode, r.prompt_tokens} end),
+         out: Map.new(rows, fn r -> {r.billing_mode, r.completion_tokens} end),
+         requests: Map.new(rows, fn r -> {r.billing_mode, r.request_count} end)
+       }}
+    end)
+  end
+
+  defp top_model_per_member([], _from, _to), do: %{}
+
+  defp top_model_per_member(member_ids, from, to) do
+    query =
+      RequestLog
+      |> where([rl], rl.team_member_id in ^member_ids)
+      |> join(:left, [rl], ma in ModelAlias, on: rl.model_alias_id == ma.id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> group_by([rl, ma], [rl.team_member_id, ma.name])
+      |> select([rl, ma], %{
+        team_member_id: rl.team_member_id,
+        model_name: ma.name,
+        request_count: count(rl.id)
+      })
+      |> Repo.all()
+
+    # For each member, find the top model and compute its %
+    query
+    |> Enum.group_by(& &1.team_member_id)
+    |> Map.new(fn {member_id, rows} ->
+      total = Enum.reduce(rows, 0, &(&1.request_count + &2))
+      top = Enum.max_by(rows, & &1.request_count, fn -> %{model_name: nil, request_count: 0} end)
+      pct = if total > 0, do: Float.round(top.request_count / total * 100, 1), else: nil
+
+      {member_id, %{model: top.model_name, pct: pct}}
+    end)
+  end
+
+  # -----------------------------------------------------------------------
   # top_consumers/2
   # -----------------------------------------------------------------------
 

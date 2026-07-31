@@ -35,6 +35,7 @@ defmodule TokengateWeb.KpiHelpers do
 
         true ->
           member_ids = Accounts.scope_member_ids(user)
+
           if member_ids == [] do
             empty_summary()
           else
@@ -135,14 +136,20 @@ defmodule TokengateWeb.KpiHelpers do
           </div>
           <div class="mt-2 flex items-baseline gap-3">
             <div>
-              <p class="text-lg font-bold text-base-content" title={format_number(@metrics.prompt_tokens)}>
+              <p
+                class="text-lg font-bold text-base-content"
+                title={format_number(@metrics.prompt_tokens)}
+              >
                 {format_compact(@metrics.prompt_tokens)}
               </p>
               <p class="text-xs text-base-content/50">in</p>
             </div>
             <span class="text-base-content/30">/</span>
             <div>
-              <p class="text-lg font-bold text-base-content" title={format_number(@metrics.completion_tokens)}>
+              <p
+                class="text-lg font-bold text-base-content"
+                title={format_number(@metrics.completion_tokens)}
+              >
                 {format_compact(@metrics.completion_tokens)}
               </p>
               <p class="text-xs text-base-content/50">out</p>

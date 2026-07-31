@@ -8,9 +8,7 @@ defmodule TokengateWeb.CreditsLive do
   """
 
   use TokengateWeb, :live_view
-
   alias Tokengate.Budgets
-  alias Tokengate.Metrics.Rollup
 
   @reload_interval_ms 1_000
 
@@ -78,38 +76,9 @@ defmodule TokengateWeb.CreditsLive do
     budgets = Budgets.list_member_budgets()
     team_budgets = Budgets.list_team_budgets()
 
-    # Ahorro del mes en curso desde los logs (fuente durable). El gasto
-    # viene de los contadores ETS; el ahorro no se trackea en ETS, así que
-    # se calcula del mes calendario igual que el contador mensual.
-    month_start = beginning_of_month()
-    team_spend = spend_by_team(month_start)
-    member_spend = spend_by_member(month_start)
-
     socket
     |> assign(:budgets, budgets)
     |> assign(:team_budgets, team_budgets)
-    |> assign(:team_savings, team_spend)
-    |> assign(:member_savings, member_spend)
-  end
-
-  defp beginning_of_month do
-    now = DateTime.utc_now()
-    %{now | day: 1, hour: 0, minute: 0, second: 0, microsecond: {0, 0}}
-  end
-
-  # Since the 2026-07-30 refactor we only track `cost_usd` (what the upstream
-  # reported). The "savings" used to be `market - provider_cost_usd` which is
-  # no longer computable without manual market pricing, so we expose the same
-  # total cost as the consumption figure and let the template compare against
-  # the user's monthly cap.
-  defp spend_by_team(from) do
-    Rollup.breakdown_by_team(from: from)
-    |> Map.new(fn row -> {row.team_id, row.cost_usd} end)
-  end
-
-  defp spend_by_member(from) do
-    Rollup.breakdown_by_member(nil, from: from)
-    |> Map.new(fn row -> {row.team_member_id, row.cost_usd} end)
   end
 
   ## Template helpers --------------------------------------------------------
@@ -206,8 +175,7 @@ defmodule TokengateWeb.CreditsLive do
               <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" /> Por equipo
             </h2>
             <p class="text-xs text-base-content/60">
-              Tope mensual = budget mensual por usuario. Ahorro = estimado de mercado
-              menos lo realmente pagado en el mes.
+              Tope mensual = budget mensual por usuario.
             </p>
             <div class="overflow-x-auto mt-3">
               <table class="table table-sm">
@@ -216,7 +184,6 @@ defmodule TokengateWeb.CreditsLive do
                     <th>Equipo</th>
                     <th class="text-right">Miembros</th>
                     <th class="w-64">Gasto mensual real</th>
-                    <th class="text-right">Ahorro del mes</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -244,9 +211,6 @@ defmodule TokengateWeb.CreditsLive do
                         </div>
                       <% end %>
                     </td>
-                    <td class="text-right font-mono text-success">
-                      ${fmt_money(Map.get(@team_savings, tb.team.id, Decimal.new(0)))}
-                    </td>
                   </tr>
                 </tbody>
               </table>
@@ -266,7 +230,6 @@ defmodule TokengateWeb.CreditsLive do
                     <th>Usuario</th>
                     <th>Equipo</th>
                     <th class="w-56">Mensual</th>
-                    <th class="text-right">Ahorro del mes</th>
                     <th>Estado</th>
                   </tr>
                 </thead>
@@ -281,12 +244,6 @@ defmodule TokengateWeb.CreditsLive do
                         pct={b.monthly_pct}
                         id={"monthly-bar-#{b.member.id}"}
                       />
-                    </td>
-                    <td
-                      class="text-right font-mono text-success"
-                      id={"member-savings-#{b.member.id}"}
-                    >
-                      ${fmt_money(Map.get(@member_savings, b.member.id, Decimal.new(0)))}
                     </td>
                     <td>
                       <% {style, label} = status_for(b) %>

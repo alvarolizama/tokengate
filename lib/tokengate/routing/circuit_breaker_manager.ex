@@ -110,6 +110,24 @@ defmodule Tokengate.Routing.CircuitBreakerManager do
   end
 
   @doc """
+  Returns a details map for `credential_id`'s breaker:
+
+    * `:state` — `:closed`, `:open`, or `:half_open`
+    * `:failures` — consecutive failure count
+    * `:last_reason` — reason of the last failure
+    * `:opened_at` — `DateTime` when the breaker opened, or `nil`
+
+  Returns a default closed-state map for unknown credentials.
+  """
+  @spec details(credential_id :: term()) :: map()
+  def details(credential_id) do
+    case lookup(credential_id) do
+      {:ok, pid} -> Tokengate.Routing.CircuitBreaker.details(pid)
+      :error -> %{state: :closed, failures: 0, last_reason: nil, opened_at: nil}
+    end
+  end
+
+  @doc """
   Count of circuit breakers currently `:open` (failing credentials cut off
   from routing). Iterates the registered breakers — cheap for the handful
   of credentials a gateway manages.
