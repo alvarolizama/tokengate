@@ -14,7 +14,7 @@
 
       <div class="join" id="period-selector" role="tablist">
         <button
-          :for={period <- ~w(7d 30d 90d)}
+          :for={period <- ~w(today 7d 30d 90d)}
           phx-click="set_period"
           phx-value-period={period}
           class={[
@@ -432,6 +432,107 @@
                             <td class="text-right font-mono">{format_ms(row.avg_latency_ms)}</td>
                             <td class="text-right font-mono">{format_ms(row.p95_latency_ms)}</td>
                             <td class="text-right font-mono">{format_ms(row.avg_ttft_ms)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  <% else %>
+                    <p class="text-sm text-base-content/40 py-6 text-center">
+                      Sin datos en este período.
+                    </p>
+                  <% end %>
+                </div>
+              </div>
+            <% end %>
+
+            <%!-- Ranking de usuarios (solo admin) --%>
+            <%= if @current_user && @current_user.global_role == "admin" do %>
+              <div class="card bg-base-100 border border-base-300 shadow-sm" id="user-ranking">
+                <div class="card-body">
+                  <h2 class="card-title text-base">
+                    <.icon name="hero-user-circle" class="w-5 h-5 text-base-content/60" />
+                    Ranking de usuarios
+                  </h2>
+                  <p class="text-xs text-base-content/60">
+                    Consumo por usuario: gasto, tokens (entrada/salida), distribución por tipo de key (pay_per_token vs included), y modelo más usado.
+                  </p>
+                  <%= if has_data?(@user_ranking) do %>
+                    <div class="overflow-x-auto mt-3">
+                      <table class="table table-sm">
+                        <thead>
+                          <tr>
+                            <th>#</th>
+                            <th>Usuario</th>
+                            <th>Equipo</th>
+                            <th class="text-right">Requests</th>
+                            <th class="text-right">Costo</th>
+                            <th class="text-right">Tokens in</th>
+                            <th class="text-right">Tokens out</th>
+                            <th class="text-center">Key pay_per_token</th>
+                            <th class="text-center">Key included</th>
+                            <th>Modelo top</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr
+                            :for={{row, idx} <- Enum.with_index(@user_ranking, 1)}
+                            id={"user-ranking-row-#{row.team_member_id}"}
+                          >
+                            <td class="text-base-content/60">{idx}</td>
+                            <td class="font-medium truncate max-w-[200px]">{row.user_email}</td>
+                            <td class="truncate max-w-[120px]">{row.team_name}</td>
+                            <td class="text-right font-mono">
+                              {format_number(row.request_count)}
+                            </td>
+                            <td class="text-right font-mono">${format_decimal(row.cost_usd)}</td>
+                            <td class="text-right font-mono">
+                              {format_compact(row.prompt_tokens)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {format_compact(row.completion_tokens)}
+                            </td>
+                            <td class="text-center">
+                              <% ppt_in = Map.get(row.token_in_by_type, "pay_per_token", 0) %>
+                              <% ppt_out = Map.get(row.token_out_by_type, "pay_per_token", 0) %>
+                              <% ppt_req = Map.get(row.requests_by_type, "pay_per_token", 0) %>
+                              <%= if ppt_req > 0 do %>
+                                <div class="text-xs">
+                                  <div class="font-mono">
+                                    {format_compact(ppt_in + ppt_out)} tok
+                                  </div>
+                                  <div class="text-base-content/50">
+                                    {format_number(ppt_req)} req
+                                  </div>
+                                </div>
+                              <% else %>
+                                <span class="text-base-content/30">—</span>
+                              <% end %>
+                            </td>
+                            <td class="text-center">
+                              <% inc_in = Map.get(row.token_in_by_type, "included", 0) %>
+                              <% inc_out = Map.get(row.token_out_by_type, "included", 0) %>
+                              <% inc_req = Map.get(row.requests_by_type, "included", 0) %>
+                              <%= if inc_req > 0 do %>
+                                <div class="text-xs">
+                                  <div class="font-mono">
+                                    {format_compact(inc_in + inc_out)} tok
+                                  </div>
+                                  <div class="text-base-content/50">
+                                    {format_number(inc_req)} req
+                                  </div>
+                                </div>
+                              <% else %>
+                                <span class="text-base-content/30">—</span>
+                              <% end %>
+                            </td>
+                            <td class="text-sm">
+                              <%= if row.top_model do %>
+                                <span class="font-medium">{row.top_model}</span>
+                                <span class="text-base-content/50 text-xs ml-1">({row.top_model_pct}%)</span>
+                              <% else %>
+                                <span class="text-base-content/30">—</span>
+                              <% end %>
+                            </td>
                           </tr>
                         </tbody>
                       </table>

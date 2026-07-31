@@ -97,7 +97,7 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#period-7d")
     assert has_element?(view, "#period-30d")
     assert has_element?(view, "#period-90d")
-    refute has_element?(view, "#period-today")
+    assert has_element?(view, "#period-today")
   end
 
   test "admin sees KPI cards and top tables on index", %{conn: conn} do
@@ -208,7 +208,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
   ## Period switching --------------------------------------------------------
 
-  test "switching period patches the URL", %{conn: conn} do
+  test "switching period updates data", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     team_with_log(%{cost: "0.005"})
 
@@ -217,8 +217,9 @@ defmodule TokengateWeb.StatsLiveTest do
 
     view |> element("#period-30d") |> render_click()
 
-    path = assert_patch(view)
-    assert URI.decode(path) =~ "period=30d"
+    # Period should change and data should reload
+    assert has_element?(view, "#period-30d.btn-primary")
+    refute has_element?(view, "#period-today.btn-primary")
   end
 
   ## User scope --------------------------------------------------------------

@@ -7,7 +7,7 @@ defmodule TokengateWeb.StatsLive do
     * `:models` — per-model breakdown + drill-down (provider, team, member)
     * `:teams`  — per-team breakdown + drill-down (members, models)
 
-  Periods: 7d, 30d, 90d (no "today" — this is analytics, not real-time monitoring).
+  Periods: Hoy, 7d, 30d, 90d.
 
   Scoping by role:
     * admin   — org-wide
@@ -16,7 +16,6 @@ defmodule TokengateWeb.StatsLive do
 
   CSV export available via `/dashboard/stats/export` controller.
   """
-
   use TokengateWeb, :live_view
 
   import TokengateWeb.KpiHelpers, only: [kpi_cards: 1]
@@ -26,7 +25,7 @@ defmodule TokengateWeb.StatsLive do
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Providers
 
-  @periods %{"7d" => 168, "30d" => 720, "90d" => 2160}
+  @periods %{"today" => 24, "7d" => 168, "30d" => 720, "90d" => 2160}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -35,7 +34,7 @@ defmodule TokengateWeb.StatsLive do
     socket =
       socket
       |> assign(:page_title, "Estadísticas · Tokengate")
-      |> assign(:period, "7d")
+      |> assign(:period, "today")
       |> assign(:model_filter, nil)
       |> assign(:team_filter, nil)
       |> assign(:models, Providers.list_model_aliases())
@@ -59,6 +58,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:busiest_minutes, [])
       |> assign(:peak_concurrency, nil)
       |> assign(:hourly_series, [])
+      |> assign(:user_ranking, [])
 
     {:ok, socket}
   end
@@ -83,8 +83,9 @@ defmodule TokengateWeb.StatsLive do
 
   @impl true
   def handle_event("set_period", %{"period" => period}, socket)
-      when period in ~w(7d 30d 90d) do
-    {:noreply, push_patch(socket, to: build_path(socket, period: period))}
+      when period in ~w(today 7d 30d 90d) do
+    user = socket.assigns[:current_user]
+    {:noreply, socket |> assign(:period, period) |> load_data(user)}
   end
 
   def handle_event("set_model_filter", %{"model_id" => model_id}, socket) do
@@ -158,6 +159,7 @@ defmodule TokengateWeb.StatsLive do
     |> assign(:top_errors, Rollup.top_errors(nil, opts))
     |> assign(:provider_ranking, load_provider_ranking(user, opts))
     |> assign(:model_ranking, load_model_ranking(user, opts))
+    |> assign(:user_ranking, load_user_ranking(user, opts))
     |> assign(:hour_distribution, Rollup.usage_by_hour_of_day(nil, opts))
     |> assign(:busiest_hours, Rollup.busiest_hours(nil, opts))
     |> assign(:busiest_minutes, Rollup.busiest_minutes(nil, opts))
@@ -251,11 +253,8 @@ defmodule TokengateWeb.StatsLive do
 
   defp scoped_teams(user) do
     case Accounts.scope_team_ids(user) do
-      nil ->
-        Accounts.list_teams()
-
-      [] ->
-        []
+      nil -> Accounts.list_teams()
+      [] -> []
     end
   end
 
@@ -276,6 +275,12 @@ defmodule TokengateWeb.StatsLive do
     do: Rollup.model_ranking(nil, opts)
 
   defp load_model_ranking(_user, _opts), do: []
+
+  # Ranking de usuarios: consumo por usuario, solo admin.
+  defp load_user_ranking(%{global_role: "admin"}, opts),
+    do: Rollup.user_ranking(nil, opts)
+
+  defp load_user_ranking(_user, _opts), do: []
 
   # Concurrencia pico: métrica de infraestructura, solo admin, siempre org-wide.
   defp load_peak_concurrency(%{global_role: "admin"}, opts),
@@ -309,9 +314,9 @@ defmodule TokengateWeb.StatsLive do
 
   ## Helpers --------------------------------------------------------------
 
-  defp parse_period(nil), do: "7d"
-  defp parse_period(period) when period in ~w(7d 30d 90d), do: period
-  defp parse_period(_), do: "7d"
+  defp parse_period(nil), do: "today"
+  defp parse_period(period) when period in ~w(today 7d 30d 90d), do: period
+  defp parse_period(_), do: "today"
 
   defp hours_ago_dt(hours) do
     DateTime.utc_now()
@@ -346,7 +351,6 @@ defmodule TokengateWeb.StatsLive do
   defp scope_label_for(_), do: "—"
 
   ## Template helpers -----------------------------------------------------
-
   def format_decimal(%Decimal{} = d) do
     d
     |> Decimal.round(4)
@@ -390,6 +394,7 @@ defmodule TokengateWeb.StatsLive do
   def format_tps(n) when is_float(n), do: Float.round(n, 1) |> Float.to_string()
   def format_tps(n) when is_integer(n), do: to_string(n)
 
+  def period_label("today"), do: "Hoy"
   def period_label("7d"), do: "7 días"
   def period_label("30d"), do: "30 días"
   def period_label("90d"), do: "90 días"
