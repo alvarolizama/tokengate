@@ -44,7 +44,6 @@ defmodule Tokengate.Providers.ModelProvider do
     field :priority, :integer
     field :enabled, :boolean, default: true
     field :billing_mode, :string, default: "pay_per_token"
-    field :context_window, :integer
     field :scope, :string, virtual: true, default: "global"
 
     belongs_to :model_alias, Tokengate.Providers.ModelAlias
@@ -65,7 +64,6 @@ defmodule Tokengate.Providers.ModelProvider do
       :priority,
       :enabled,
       :billing_mode,
-      :context_window,
       :exclusive_to_team_member_id,
       :exclusive_to_team_id
     ])

@@ -1211,18 +1211,12 @@ defmodule TokengateWeb.ModelsLive do
                   </div>
                 <% end %>
 
-                <div class="grid grid-cols-3 gap-3">
+                <div class="grid grid-cols-2 gap-3">
                   <.input
                     field={@provider_form[:priority]}
                     type="number"
                     label="Prioridad"
                     hint="Menor = se intenta primero."
-                  />
-                  <.input
-                    field={@provider_form[:context_window]}
-                    type="number"
-                    label="Contexto (tokens)"
-                    hint="Ventana de contexto del modelo en este proveedor."
                   />
                   <.input
                     field={@provider_form[:billing_mode]}
