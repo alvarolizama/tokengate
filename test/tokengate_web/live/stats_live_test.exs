@@ -49,8 +49,6 @@ defmodule TokengateWeb.StatsLiveTest do
       Providers.create_model_alias(%{
         name: "model-#{u}",
         display_name: "Model #{u}",
-        market_input_price_per_1m: "1.00",
-        market_output_price_per_1m: "2.00",
         context_window: 128_000
       })
 
@@ -66,10 +64,7 @@ defmodule TokengateWeb.StatsLiveTest do
           status_code: 200,
           prompt_tokens: 100,
           completion_tokens: 50,
-          cost_usd: cost,
           provider_cost_usd: cost,
-          savings_usd: "0.001",
-          estimated_cost_usd: "0.01",
           latency_ms: 42,
           streaming: false
         })
@@ -113,9 +108,7 @@ defmodule TokengateWeb.StatsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
 
     assert has_element?(view, "#kpi-requests")
-    assert has_element?(view, "#kpi-cost-real")
-    assert has_element?(view, "#kpi-cost-estimated")
-    assert has_element?(view, "#kpi-savings")
+    assert has_element?(view, "#kpi-cost")
     assert has_element?(view, "#kpi-tokens")
     assert has_element?(view, "#kpi-tps")
     assert has_element?(view, "#model-ranking")
@@ -181,9 +174,8 @@ defmodule TokengateWeb.StatsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats/models?model_id=#{ma.id}")
 
     assert has_element?(view, "#model-kpi-requests")
-    assert has_element?(view, "#model-kpi-mercado")
-    assert has_element?(view, "#model-kpi-real")
-    assert has_element?(view, "#model-kpi-ahorro")
+    # Since the 2026-07-30 refactor there's only one cost KPI: #model-kpi-cost.
+    assert has_element?(view, "#model-kpi-cost")
     # Provider breakdown
     assert has_element?(view, "#clear-model-filter")
   end
@@ -209,9 +201,8 @@ defmodule TokengateWeb.StatsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats/teams?team_id=#{team.id}")
 
     assert has_element?(view, "#team-kpi-requests")
-    assert has_element?(view, "#team-kpi-mercado")
-    assert has_element?(view, "#team-kpi-real")
-    assert has_element?(view, "#team-kpi-ahorro")
+    # Since the 2026-07-30 refactor there's only one cost KPI: #team-kpi-cost.
+    assert has_element?(view, "#team-kpi-cost")
     assert has_element?(view, "#clear-team-filter")
   end
 

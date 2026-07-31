@@ -7,6 +7,12 @@ defmodule Tokengate.Providers.ModelProvider do
   Each row pins a specific credential — allowing multiple credentials
   from the same provider to serve the same model with different
   priorities for fallback.
+
+  `billing_mode` is the only cost-relevant attribute left: it tells the
+  cost calculator whether the upstream is `pay_per_token` (use the
+  provider-reported cost from the response body) or `included`
+  (subscription/RPM — cost is $0). Per-provider pricing rows are gone;
+  we trust the upstream to report what it actually charged.
   """
 
   use Ecto.Schema
@@ -23,16 +29,8 @@ defmodule Tokengate.Providers.ModelProvider do
     field :enabled, :boolean, default: true
     field :billing_mode, :string, default: "pay_per_token"
 
-    # Virtual fields for pricing (not persisted here, handled via ModelPricing)
-    field :pricing_input_price_per_1m, :decimal, virtual: true
-    field :pricing_output_price_per_1m, :decimal, virtual: true
-    field :pricing_cache_read_price_per_1m, :decimal, virtual: true
-    field :pricing_cache_creation_price_per_1m, :decimal, virtual: true
-
     belongs_to :model_alias, Tokengate.Providers.ModelAlias
     belongs_to :credential, Tokengate.Providers.Credential
-
-    has_many :model_pricing, Tokengate.Providers.ModelPricing, on_delete: :delete_all
 
     timestamps(type: :utc_datetime)
   end
@@ -46,11 +44,7 @@ defmodule Tokengate.Providers.ModelProvider do
       :provider_model,
       :priority,
       :enabled,
-      :billing_mode,
-      :pricing_input_price_per_1m,
-      :pricing_output_price_per_1m,
-      :pricing_cache_read_price_per_1m,
-      :pricing_cache_creation_price_per_1m
+      :billing_mode
     ])
     |> validate_required([:model_alias_id, :credential_id, :provider_model, :enabled])
     |> validate_inclusion(:billing_mode, @billing_modes)

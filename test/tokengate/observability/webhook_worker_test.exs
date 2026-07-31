@@ -140,10 +140,7 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
             status_code: 200,
             prompt_tokens: 150,
             completion_tokens: 75,
-            cost_usd: Decimal.new("0.01234"),
             provider_cost_usd: Decimal.new("0.01000"),
-            savings_usd: Decimal.new("0.00234"),
-            estimated_cost_usd: Decimal.new("0.01500"),
             latency_ms: 500,
             streaming: false
           },

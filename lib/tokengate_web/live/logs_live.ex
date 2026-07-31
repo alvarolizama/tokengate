@@ -764,10 +764,7 @@ defmodule TokengateWeb.LogsLive do
                 <th class="text-right">TPS</th>
                 <th title="Time to first token — solo streaming">TTFT</th>
                 <th class="border-r border-base-200">Latencia</th>
-                <th class="text-right">Estimado</th>
                 <th class="text-right">Costo</th>
-                <th class="text-right">Costo real</th>
-                <th class="text-right">Ahorro</th>
               </tr>
             </thead>
             <tbody id="logs" phx-update="stream">
@@ -811,10 +808,7 @@ defmodule TokengateWeb.LogsLive do
                 </td>
                 <td class="text-sm text-base-content/70">{format_ttft(log.ttft_ms)}</td>
                 <td class="text-sm border-r border-base-200">{log.latency_ms}ms</td>
-                <td class="text-sm text-right tabular-nums">{format_cost(log.estimated_cost_usd)}</td>
-                <td class="text-sm text-right tabular-nums">{format_cost(log.cost_usd)}</td>
                 <td class="text-sm text-right tabular-nums">{format_cost(log.provider_cost_usd)}</td>
-                <td class="text-sm text-right tabular-nums">{format_cost(log.savings_usd)}</td>
               </tr>
             </tbody>
           </table>

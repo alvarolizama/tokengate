@@ -3,12 +3,18 @@ defmodule TokengateWeb.ModelsLive do
   CRUD for model_aliases + per-model model_provider management.
 
   Admins can create, edit, and delete models, and assign providers to each
-  model (provider_model, priority, enabled toggle).
+  model (provider_model, priority, enabled toggle, billing_mode).
   Managers and regular users see a read-only list.
 
   Models are global. Admins can create, edit, and delete models,
-  and assign providers to each model (provider_model, priority, enabled toggle).
-  Managers and regular users see a read-only list.
+  and assign providers to each model.
+
+  ## Cost model (2026-07-30)
+
+  Since we trust the upstream to report what it actually charged via
+  `usage.cost`, there is no per-provider pricing form anymore. The only
+  cost-relevant attribute on a model_provider is `billing_mode`:
+  `"pay_per_token"` or `"included"` (subscription / RPM-limited).
   """
 
   use TokengateWeb, :live_view
@@ -49,7 +55,7 @@ defmodule TokengateWeb.ModelsLive do
     aliases =
       from(ma in ModelAlias,
         left_join: aps in assoc(ma, :model_providers),
-        preload: [model_providers: {aps, [credential: :provider, model_pricing: []]}],
+        preload: [model_providers: {aps, [credential: :provider]}],
         order_by: [asc: ma.name]
       )
       |> Repo.all()
@@ -182,25 +188,7 @@ defmodule TokengateWeb.ModelsLive do
   def handle_event("edit_model_provider", %{"id" => ap_id}, socket) do
     if socket.assigns.is_admin do
       ap = Providers.get_model_provider!(ap_id)
-      ap_with_pricing = Repo.preload(ap, :model_pricing)
-
-      # Populate virtual pricing fields for form display
-      ap_with_pricing =
-        case ap_with_pricing.model_pricing do
-          [p | _] ->
-            %{
-              ap_with_pricing
-              | pricing_input_price_per_1m: p.input_price_per_1m,
-                pricing_output_price_per_1m: p.output_price_per_1m,
-                pricing_cache_read_price_per_1m: p.cache_read_price_per_1m,
-                pricing_cache_creation_price_per_1m: p.cache_creation_price_per_1m
-            }
-
-          _ ->
-            ap_with_pricing
-        end
-
-      changeset = Providers.change_model_provider(ap_with_pricing)
+      changeset = Providers.change_model_provider(ap)
 
       {:noreply,
        socket
@@ -214,30 +202,7 @@ defmodule TokengateWeb.ModelsLive do
 
   def handle_event("save_model_provider", %{"model_provider" => ap_params}, socket) do
     if socket.assigns.is_admin do
-      # Extract pricing fields (prefixed with "pricing_") into a nested map
-      {pricing_fields, provider_fields} =
-        Enum.reduce(ap_params, {%{}, %{}}, fn
-          {"pricing_" <> name, value}, {p, ap} ->
-            {Map.put(p, name, value), ap}
-
-          {key, value}, {p, ap} ->
-            {p, Map.put(ap, key, value)}
-        end)
-
-      # Only keep pricing if at least input or output price is present
-      pricing =
-        if pricing_fields["input_price_per_1m"] in ["", nil] and
-             pricing_fields["output_price_per_1m"] in ["", nil] do
-          %{}
-        else
-          pricing_fields
-        end
-
-      save_model_provider(
-        socket,
-        socket.assigns.editing_ap_id,
-        Map.put(provider_fields, "pricing", pricing)
-      )
+      save_model_provider(socket, socket.assigns.editing_ap_id, ap_params)
     else
       {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
     end
@@ -425,17 +390,7 @@ defmodule TokengateWeb.ModelsLive do
   defp save_model_provider(socket, :new, ap_params) do
     ap_params = Map.put(ap_params, "model_alias_id", socket.assigns.provider_form_alias_id)
 
-    {pricing_params, ap_params} = Map.pop(ap_params, "pricing", %{})
-
-    Repo.transaction(fn ->
-      with {:ok, ap} <- Providers.create_model_provider(ap_params),
-           {:ok, _pricing} <- maybe_create_pricing(ap, pricing_params) do
-        ap
-      else
-        {:error, changeset} -> Repo.rollback(changeset)
-      end
-    end)
-    |> case do
+    case Providers.create_model_provider(ap_params) do
       {:ok, _ap} ->
         {:noreply,
          socket
@@ -464,17 +419,6 @@ defmodule TokengateWeb.ModelsLive do
       {:error, changeset} ->
         {:noreply, assign(socket, :provider_form, to_form(changeset, as: :model_provider))}
     end
-  end
-
-  defp maybe_create_pricing(_ap, pricing) when pricing in [nil, %{}, ""], do: {:ok, nil}
-
-  defp maybe_create_pricing(ap, pricing) do
-    pricing_params =
-      pricing
-      |> Map.put("model_provider_id", ap.id)
-      |> Map.put_new("effective_from", DateTime.utc_now() |> DateTime.truncate(:second))
-
-    Providers.create_model_pricing(pricing_params)
   end
 
   ## Helpers ---------------------------------------------------------------
@@ -527,13 +471,6 @@ defmodule TokengateWeb.ModelsLive do
   def fmt_price(%Decimal{} = d), do: "$#{Decimal.round(d, 2) |> Decimal.to_string()}"
   def fmt_price(n), do: "$#{n}"
 
-  # Safely get the first pricing entry from a model_provider's model_pricing
-  # association. Returns nil when the association is not loaded or empty.
-  def pricing_for(%{model_pricing: %Ecto.Association.NotLoaded{}}), do: nil
-  def pricing_for(%{model_pricing: []}), do: nil
-  def pricing_for(%{model_pricing: [pricing | _]}), do: pricing
-  def pricing_for(_), do: nil
-
   @doc "Find model_providers for a model_alias from the preloaded association (priority ASC, nils last)"
   def model_providers_for(%{model_providers: aps}) do
     Enum.sort_by(aps, fn ap -> {is_nil(ap.priority), ap.priority || 0} end)
@@ -553,6 +490,16 @@ defmodule TokengateWeb.ModelsLive do
   def credential_label(%{name: name}) when is_binary(name) and name != "", do: name
   def credential_label(%{api_key_encrypted: key}), do: mask_key(key)
   def credential_label(_), do: "—"
+
+  @doc "Billing mode badge class"
+  def billing_badge("pay_per_token"), do: "badge-info"
+  def billing_badge("included"), do: "badge-success"
+  def billing_badge(_), do: "badge-ghost"
+
+  @doc "Billing mode label"
+  def billing_label("pay_per_token"), do: "Pay per token"
+  def billing_label("included"), do: "Incluida (suscripción)"
+  def billing_label(_), do: "—"
 
   @doc "Enabled badge class"
   def enabled_badge(true), do: "badge-success"
@@ -630,42 +577,8 @@ defmodule TokengateWeb.ModelsLive do
                   </div>
                 </div>
 
-                <%!-- Stats cards: precio entrada, precio salida, contexto --%>
-                <div class="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-3">
-                  <div class="card bg-base-100 border border-base-300 shadow-sm">
-                    <div class="card-body p-4">
-                      <div class="flex items-center justify-between">
-                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                          Precio entrada
-                        </span>
-                        <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10">
-                          <.icon name="hero-arrow-down-tray" class="w-4 h-4 text-primary" />
-                        </span>
-                      </div>
-                      <p class="mt-1.5 text-lg font-bold text-base-content">
-                        ${fmt_dec(model_alias.market_input_price_per_1m)}
-                      </p>
-                      <p class="text-xs text-base-content/40">por 1M tokens</p>
-                    </div>
-                  </div>
-
-                  <div class="card bg-base-100 border border-base-300 shadow-sm">
-                    <div class="card-body p-4">
-                      <div class="flex items-center justify-between">
-                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                          Precio salida
-                        </span>
-                        <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent/10">
-                          <.icon name="hero-arrow-up-tray" class="w-4 h-4 text-accent" />
-                        </span>
-                      </div>
-                      <p class="mt-1.5 text-lg font-bold text-base-content">
-                        ${fmt_dec(model_alias.market_output_price_per_1m)}
-                      </p>
-                      <p class="text-xs text-base-content/40">por 1M tokens</p>
-                    </div>
-                  </div>
-
+                <%!-- Single stat card: context window (cost is per-request, surfaced in logs) --%>
+                <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div class="card bg-base-100 border border-base-300 shadow-sm">
                     <div class="card-body p-4">
                       <div class="flex items-center justify-between">
@@ -683,6 +596,25 @@ defmodule TokengateWeb.ModelsLive do
                         {format_compact(model_alias.context_window)}
                       </p>
                       <p class="text-xs text-base-content/40">tokens</p>
+                    </div>
+                  </div>
+
+                  <div class="card bg-base-100 border border-base-300 shadow-sm">
+                    <div class="card-body p-4">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                          Costo
+                        </span>
+                        <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-info/10">
+                          <.icon name="hero-banknotes" class="w-4 h-4 text-info" />
+                        </span>
+                      </div>
+                      <p class="mt-1.5 text-sm font-medium text-base-content">
+                        Precio real por request, reportado por el proveedor
+                      </p>
+                      <p class="text-xs text-base-content/40">
+                        Visible en el detalle de cada log
+                      </p>
                     </div>
                   </div>
                 </div>
@@ -720,7 +652,7 @@ defmodule TokengateWeb.ModelsLive do
                           </th>
                           <th>Proveedor</th>
                           <th>Modelo</th>
-                          <th>Precio</th>
+                          <th>Facturación</th>
                           <th>Prioridad</th>
                           <th>Estado</th>
                           <%= if @is_admin do %>
@@ -761,17 +693,10 @@ defmodule TokengateWeb.ModelsLive do
                             </span>
                           </td>
                           <td><code class="text-sm">{ap.provider_model}</code></td>
-                          <td class="text-xs">
-                            <span :if={pricing_for(ap) != nil}>
-                              <span class="text-base-content/60">In:</span> {fmt_price(
-                                pricing_for(ap).input_price_per_1m
-                              )}
-                              <span class="text-base-content/30 mx-1">·</span>
-                              <span class="text-base-content/60">Out:</span> {fmt_price(
-                                pricing_for(ap).output_price_per_1m
-                              )}
+                          <td>
+                            <span class={["badge", "badge-sm", billing_badge(ap.billing_mode)]}>
+                              {billing_label(ap.billing_mode)}
                             </span>
-                            <span :if={pricing_for(ap) == nil} class="text-base-content/30">—</span>
                           </td>
                           <td>
                             <span class="badge badge-xs badge-ghost">{ap.priority || "—"}</span>
@@ -846,40 +771,6 @@ defmodule TokengateWeb.ModelsLive do
                   required
                   hint="Nombre visible para los usuarios en /v1/models."
                 />
-                <div class="grid grid-cols-2 gap-3">
-                  <.input
-                    field={@form[:market_input_price_per_1m]}
-                    type="number"
-                    label="Precio entrada /1M"
-                    step="any"
-                    required
-                    hint="Precio de referencia de mercado por 1M tokens de entrada."
-                  />
-                  <.input
-                    field={@form[:market_output_price_per_1m]}
-                    type="number"
-                    label="Precio salida /1M"
-                    step="any"
-                    required
-                    hint="Precio de referencia de mercado por 1M tokens de salida."
-                  />
-                </div>
-                <div class="grid grid-cols-2 gap-3">
-                  <.input
-                    field={@form[:market_cache_read_price_per_1m]}
-                    type="number"
-                    label="Precio cache read /1M"
-                    step="any"
-                    hint="Precio de mercado por 1M tokens de cache read. Si vacío, usa el precio de entrada."
-                  />
-                  <.input
-                    field={@form[:market_cache_creation_price_per_1m]}
-                    type="number"
-                    label="Precio cache creation /1M"
-                    step="any"
-                    hint="Precio de mercado por 1M tokens de cache creation. Si vacío, usa el precio de entrada."
-                  />
-                </div>
                 <.input
                   field={@form[:context_window]}
                   type="number"
@@ -955,9 +846,9 @@ defmodule TokengateWeb.ModelsLive do
                     label="Facturación"
                     options={[
                       {"Pay per token", "pay_per_token"},
-                      {"Incluido (suscripción)", "included"}
+                      {"Incluida (suscripción)", "included"}
                     ]}
-                    hint="Pay per token: cobra por uso. Incluido: suscripción/RPM, gasto real = $0."
+                    hint="Pay per token: cobra por uso, el proveedor reporta el costo real. Incluida: suscripción/RPM, gasto real = $0."
                   />
                 </div>
 
@@ -967,45 +858,6 @@ defmodule TokengateWeb.ModelsLive do
                   label="Habilitado"
                   hint="Si está apagado, este provider no recibe tráfico del modelo."
                 />
-
-                <%= if (@editing_ap_id == :new or is_binary(@editing_ap_id)) and (@current_billing_mode || "pay_per_token") == "pay_per_token" do %>
-                  <div class="mt-4 pt-4 border-t border-base-200">
-                    <p class="text-sm font-semibold text-base-content mb-3">Pricing (opcional)</p>
-                    <p class="text-xs text-base-content/50 mb-3">
-                      Define el costo por 1M tokens. Si lo dejas vacío, se usará el costo reportado por el proveedor o el precio de mercado.
-                    </p>
-                    <div class="grid grid-cols-2 gap-3">
-                      <.input
-                        field={@provider_form[:pricing_input_price_per_1m]}
-                        type="number"
-                        step="any"
-                        label="Input $/1M"
-                        placeholder="ej. 0.15"
-                      />
-                      <.input
-                        field={@provider_form[:pricing_output_price_per_1m]}
-                        type="number"
-                        step="any"
-                        label="Output $/1M"
-                        placeholder="ej. 0.60"
-                      />
-                      <.input
-                        field={@provider_form[:pricing_cache_read_price_per_1m]}
-                        type="number"
-                        step="any"
-                        label="Cache read $/1M"
-                        placeholder="ej. 0.015"
-                      />
-                      <.input
-                        field={@provider_form[:pricing_cache_creation_price_per_1m]}
-                        type="number"
-                        step="any"
-                        label="Cache creation $/1M"
-                        placeholder="ej. 0.30"
-                      />
-                    </div>
-                  </div>
-                <% end %>
 
                 <div class="flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_model_provider" class="btn btn-ghost btn-sm">

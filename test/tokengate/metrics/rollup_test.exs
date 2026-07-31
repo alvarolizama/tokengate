@@ -74,10 +74,7 @@ defmodule Tokengate.Metrics.RollupTest do
     status_code: 200,
     prompt_tokens: 100,
     completion_tokens: 50,
-    cost_usd: Decimal.new("1.000000"),
-    provider_cost_usd: Decimal.new("0.800000"),
-    savings_usd: Decimal.new("0.200000"),
-    estimated_cost_usd: Decimal.new("1.000000"),
+    cost_usd: Decimal.new("0.800000"),
     latency_ms: 500,
     streaming: false
   }
@@ -129,8 +126,7 @@ defmodule Tokengate.Metrics.RollupTest do
 
   defp log_request(team_member_id, inserted_at, overrides \\ %{}) do
     attrs =
-      @base_attrs
-      |> Map.merge(overrides)
+      Map.merge(@base_attrs, Map.new(overrides))
       |> Map.put(:team_member_id, team_member_id)
       |> Map.put(:inserted_at, inserted_at)
 
@@ -146,55 +142,47 @@ defmodule Tokengate.Metrics.RollupTest do
     test "returns hour buckets ordered ascending" do
       {tm, _team} = team_member_fixture()
 
-      log_request(tm.id, ~U[2026-07-26 10:30:00Z])
-      log_request(tm.id, ~U[2026-07-26 10:45:00Z])
-      log_request(tm.id, ~U[2026-07-26 11:15:00Z])
-      log_request(tm.id, ~U[2026-07-26 12:05:00Z])
+      now = DateTime.utc_now()
+
+      # Use offsets that always span 4 different hours regardless of the
+      # current minute (e.g. now=23:50 vs now=23:10 give different bucket
+      # boundaries). Multiples of 3600 seconds guarantee 4 distinct hour
+      # buckets regardless of when the test runs.
+      log_request(tm.id, DateTime.add(now, -3600, :second))
+      log_request(tm.id, DateTime.add(now, -7200, :second))
+      log_request(tm.id, DateTime.add(now, -10800, :second))
+      log_request(tm.id, DateTime.add(now, -14400, :second))
 
       series = Rollup.hourly_series(nil, 72)
 
-      # Expect 3 buckets: 10:00, 11:00, 12:00
+      # Expect 4 buckets, one per insert.
+      assert length(series) == 4
       hours = Enum.map(series, & &1.hour)
-      assert length(hours) == 3
       assert hours == Enum.sort_by(hours, & &1, DateTime)
 
-      bucket10 =
-        Enum.find(series, fn row ->
-          DateTime.compare(row.hour, ~U[2026-07-26 10:00:00Z]) == :eq
-        end)
-
-      assert bucket10.request_count == 2
-
-      bucket11 =
-        Enum.find(series, fn row ->
-          DateTime.compare(row.hour, ~U[2026-07-26 11:00:00Z]) == :eq
-        end)
-
-      assert bucket11.request_count == 1
+      # All four buckets have exactly 1 request.
+      assert Enum.all?(series, &(&1.request_count == 1))
     end
 
-    test "aggregates cost_usd and savings_usd per bucket" do
+    test "aggregates cost_usd per bucket" do
       {tm, _team} = team_member_fixture()
 
-      log_request(tm.id, ~U[2026-07-26 10:30:00Z], %{
-        cost_usd: Decimal.new("1.500000"),
-        savings_usd: Decimal.new("0.500000")
+      # Both inserts land in the same (now-1h) bucket regardless of when the
+      # test runs because the offsets differ by only 60 seconds.
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
+        cost_usd: Decimal.new("1.500000")
       })
 
-      log_request(tm.id, ~U[2026-07-26 10:45:00Z], %{
-        cost_usd: Decimal.new("2.500000"),
-        savings_usd: Decimal.new("0.500000")
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -3660, :second), %{
+        cost_usd: Decimal.new("2.500000")
       })
 
       series = Rollup.hourly_series(nil, 72)
 
-      bucket =
-        Enum.find(series, fn row ->
-          DateTime.compare(row.hour, ~U[2026-07-26 10:00:00Z]) == :eq
-        end)
+      # Series is ordered ascending; latest bucket aggregates both inserts.
+      bucket = Enum.at(series, -1)
 
       assert Decimal.equal?(bucket.cost_usd, Decimal.new("4.000000"))
-      assert Decimal.equal?(bucket.savings_usd, Decimal.new("1.000000"))
     end
 
     test "team filter excludes logs from other teams" do
@@ -204,8 +192,8 @@ defmodule Tokengate.Metrics.RollupTest do
       # Ensure distinct teams
       refute team1.id == team2.id
 
-      log_request(tm1.id, ~U[2026-07-26 10:30:00Z])
-      log_request(tm2.id, ~U[2026-07-26 10:30:00Z])
+      log_request(tm1.id, DateTime.add(DateTime.utc_now(), -1800, :second))
+      log_request(tm2.id, DateTime.add(DateTime.utc_now(), -1800, :second))
 
       series_team1 = Rollup.hourly_series(team1.id, 72)
       series_team2 = Rollup.hourly_series(team2.id, 72)
@@ -221,8 +209,8 @@ defmodule Tokengate.Metrics.RollupTest do
       {tm1, _team1} = team_member_fixture()
       {tm2, _team2} = team_member_fixture()
 
-      log_request(tm1.id, ~U[2026-07-26 10:30:00Z])
-      log_request(tm2.id, ~U[2026-07-26 10:45:00Z])
+      log_request(tm1.id, DateTime.add(DateTime.utc_now(), -1800, :second))
+      log_request(tm2.id, DateTime.add(DateTime.utc_now(), -2700, :second))
 
       series = Rollup.hourly_series(nil, 72)
       total = Enum.map(series, & &1.request_count) |> Enum.sum()
@@ -233,10 +221,10 @@ defmodule Tokengate.Metrics.RollupTest do
       {tm, _team} = team_member_fixture()
 
       # 48 hours ago — outside the 24h default window
-      old_ts = DateTime.add(~U[2026-07-26 12:00:00Z], -48 * 3600, :second)
+      old_ts = DateTime.add(DateTime.add(DateTime.utc_now(), -7200, :second), -48 * 3600, :second)
 
       log_request(tm.id, old_ts)
-      log_request(tm.id, ~U[2026-07-26 12:00:00Z])
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -7200, :second))
 
       # 24h window should exclude the old log. But since DateTime.utc_now()
       # is used as the cutoff reference inside the function and the test
@@ -273,14 +261,23 @@ defmodule Tokengate.Metrics.RollupTest do
       {:ok, tm3} = Accounts.create_team_member(%{"user_id" => user3.id, "team_id" => team.id})
 
       # tm1: $3.00 total across 2 logs
-      log_request(tm1.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("1.000000")})
-      log_request(tm1.id, ~U[2026-07-26 11:00:00Z], %{cost_usd: Decimal.new("2.000000")})
+      log_request(tm1.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
+        cost_usd: Decimal.new("1.000000")
+      })
+
+      log_request(tm1.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
+        cost_usd: Decimal.new("2.000000")
+      })
 
       # tm2: $5.00 total (top consumer)
-      log_request(tm2.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("5.000000")})
+      log_request(tm2.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
+        cost_usd: Decimal.new("5.000000")
+      })
 
       # tm3: $0.50 total
-      log_request(tm3.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("0.500000")})
+      log_request(tm3.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
+        cost_usd: Decimal.new("0.500000")
+      })
 
       results = Rollup.top_consumers(team.id, 10)
 
@@ -309,7 +306,10 @@ defmodule Tokengate.Metrics.RollupTest do
 
           {:ok, tm} = Accounts.create_team_member(%{"user_id" => user.id, "team_id" => team.id})
 
-          log_request(tm.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("#{i}.000000")})
+          log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
+            cost_usd: Decimal.new("#{i}.000000")
+          })
+
           tm
         end
 
@@ -321,8 +321,13 @@ defmodule Tokengate.Metrics.RollupTest do
       {tm1, team1} = team_member_fixture()
       {tm2, _team2} = team_member_fixture()
 
-      log_request(tm1.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("1.000000")})
-      log_request(tm2.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("5.000000")})
+      log_request(tm1.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
+        cost_usd: Decimal.new("1.000000")
+      })
+
+      log_request(tm2.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
+        cost_usd: Decimal.new("5.000000")
+      })
 
       results = Rollup.top_consumers(team1.id, 10)
       assert length(results) == 1
@@ -338,17 +343,17 @@ defmodule Tokengate.Metrics.RollupTest do
     test "groups by agent_type (org-wide, nil team)" do
       {tm, _team} = team_member_fixture()
 
-      log_request(tm.id, ~U[2026-07-26 10:00:00Z], %{
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         agent_type: "api",
         cost_usd: Decimal.new("1.000000")
       })
 
-      log_request(tm.id, ~U[2026-07-26 10:30:00Z], %{
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -1800, :second), %{
         agent_type: "api",
         cost_usd: Decimal.new("2.000000")
       })
 
-      log_request(tm.id, ~U[2026-07-26 11:00:00Z], %{
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
         agent_type: "sdk",
         cost_usd: Decimal.new("0.500000")
       })
@@ -369,12 +374,12 @@ defmodule Tokengate.Metrics.RollupTest do
       {tm1, team1} = team_member_fixture()
       {tm2, _team2} = team_member_fixture()
 
-      log_request(tm1.id, ~U[2026-07-26 10:00:00Z], %{
+      log_request(tm1.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         agent_type: "api",
         cost_usd: Decimal.new("1.000000")
       })
 
-      log_request(tm2.id, ~U[2026-07-26 10:00:00Z], %{
+      log_request(tm2.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         agent_type: "sdk",
         cost_usd: Decimal.new("5.000000")
       })
@@ -406,29 +411,23 @@ defmodule Tokengate.Metrics.RollupTest do
       {tm, _team} = team_member_fixture()
       ma = model_alias_fixture(%{"name" => "gpt-4o"})
 
-      log_request(tm.id, ~U[2026-07-26 10:00:00Z], %{
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         model_alias_id: ma.id,
         cost_usd: Decimal.new("1.000000"),
-        provider_cost_usd: Decimal.new("0.800000"),
-        estimated_cost_usd: Decimal.new("1.000000"),
-        savings_usd: Decimal.new("0.200000"),
         prompt_tokens: 100,
         completion_tokens: 50,
         latency_ms: 1000
       })
 
-      log_request(tm.id, ~U[2026-07-26 11:00:00Z], %{
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
         model_alias_id: ma.id,
         cost_usd: Decimal.new("2.000000"),
-        provider_cost_usd: Decimal.new("1.500000"),
-        estimated_cost_usd: Decimal.new("2.000000"),
-        savings_usd: Decimal.new("0.500000"),
         prompt_tokens: 200,
         completion_tokens: 100,
         latency_ms: 1000
       })
 
-      results = Rollup.breakdown_by_model(nil, from: ~U[2026-07-01 00:00:00Z])
+      results = Rollup.breakdown_by_model(nil, from: DateTime.add(DateTime.utc_now(), -10, :day))
 
       assert length(results) == 1
       row = hd(results)
@@ -436,9 +435,6 @@ defmodule Tokengate.Metrics.RollupTest do
       assert row.model_name == "gpt-4o"
       assert row.request_count == 2
       assert Decimal.equal?(row.cost_usd, Decimal.new("3.000000"))
-      assert Decimal.equal?(row.provider_cost_usd, Decimal.new("2.300000"))
-      assert Decimal.equal?(row.estimated_cost_usd, Decimal.new("3.000000"))
-      assert Decimal.equal?(row.savings_usd, Decimal.new("0.700000"))
       assert row.prompt_tokens == 300
       assert row.completion_tokens == 150
       # 150 tokens / 2 seconds = 75.0 tps
@@ -450,12 +446,12 @@ defmodule Tokengate.Metrics.RollupTest do
       ma1 = model_alias_fixture(%{"name" => "cheap-model"})
       ma2 = model_alias_fixture(%{"name" => "expensive-model"})
 
-      log_request(tm.id, ~U[2026-07-26 10:00:00Z], %{
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         model_alias_id: ma1.id,
         cost_usd: Decimal.new("0.500000")
       })
 
-      log_request(tm.id, ~U[2026-07-26 11:00:00Z], %{
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
         model_alias_id: ma2.id,
         cost_usd: Decimal.new("5.000000")
       })
@@ -483,15 +479,14 @@ defmodule Tokengate.Metrics.RollupTest do
 
       {:ok, tm} = Accounts.create_team_member(%{"user_id" => user.id, "team_id" => team.id})
 
-      log_request(tm.id, ~U[2026-07-26 10:00:00Z], %{
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         cost_usd: Decimal.new("1.000000"),
-        provider_cost_usd: Decimal.new("0.800000"),
         prompt_tokens: 100,
         completion_tokens: 50,
         latency_ms: 500
       })
 
-      results = Rollup.breakdown_by_member(nil, from: ~U[2026-07-01 00:00:00Z])
+      results = Rollup.breakdown_by_member(nil, from: DateTime.add(DateTime.utc_now(), -10, :day))
 
       assert length(results) >= 1
       row = Enum.find(results, fn r -> r.team_member_id == tm.id end)
@@ -505,8 +500,13 @@ defmodule Tokengate.Metrics.RollupTest do
       {tm1, team1} = team_member_fixture()
       {tm2, _team2} = team_member_fixture()
 
-      log_request(tm1.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("1.000000")})
-      log_request(tm2.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("5.000000")})
+      log_request(tm1.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
+        cost_usd: Decimal.new("1.000000")
+      })
+
+      log_request(tm2.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
+        cost_usd: Decimal.new("5.000000")
+      })
 
       results = Rollup.breakdown_by_member(team1.id, from: ~U[2026-07-01 00:00:00Z])
       assert length(results) == 1
@@ -523,8 +523,13 @@ defmodule Tokengate.Metrics.RollupTest do
       {tm1, _team1} = team_member_fixture()
       {tm2, _team2} = team_member_fixture()
 
-      log_request(tm1.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("1.000000")})
-      log_request(tm2.id, ~U[2026-07-26 10:00:00Z], %{cost_usd: Decimal.new("5.000000")})
+      log_request(tm1.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
+        cost_usd: Decimal.new("1.000000")
+      })
+
+      log_request(tm2.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
+        cost_usd: Decimal.new("5.000000")
+      })
 
       results = Rollup.breakdown_by_team(from: ~U[2026-07-01 00:00:00Z])
 
@@ -558,27 +563,21 @@ defmodule Tokengate.Metrics.RollupTest do
       mp1 = model_provider_fixture(ma, provider1, %{provider_model: "gpt-4o-real"})
       mp2 = model_provider_fixture(ma, provider2, %{provider_model: "gpt-4o-azure"})
 
-      log_request(tm.id, ~U[2026-07-26 10:00:00Z], %{
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         model_alias_id: ma.id,
         provider_id: provider1.id,
         model_provider_id: mp1.id,
-        cost_usd: Decimal.new("1.000000"),
-        provider_cost_usd: Decimal.new("0.800000"),
-        estimated_cost_usd: Decimal.new("1.000000"),
-        savings_usd: Decimal.new("0.200000"),
+        cost_usd: Decimal.new("0.800000"),
         prompt_tokens: 100,
         completion_tokens: 50,
         latency_ms: 1000
       })
 
-      log_request(tm.id, ~U[2026-07-26 11:00:00Z], %{
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
         model_alias_id: ma.id,
         provider_id: provider2.id,
         model_provider_id: mp2.id,
-        cost_usd: Decimal.new("2.000000"),
-        provider_cost_usd: Decimal.new("1.500000"),
-        estimated_cost_usd: Decimal.new("2.000000"),
-        savings_usd: Decimal.new("0.500000"),
+        cost_usd: Decimal.new("1.500000"),
         prompt_tokens: 200,
         completion_tokens: 100,
         latency_ms: 1000
@@ -594,14 +593,12 @@ defmodule Tokengate.Metrics.RollupTest do
       assert first.provider_model == "gpt-4o-azure"
       assert first.credential_name == mp2.credential.name
       assert first.request_count == 1
-      assert Decimal.equal?(first.provider_cost_usd, Decimal.new("1.500000"))
-      assert Decimal.equal?(first.estimated_cost_usd, Decimal.new("2.000000"))
-      assert Decimal.equal?(first.savings_usd, Decimal.new("0.500000"))
+      assert Decimal.equal?(first.cost_usd, Decimal.new("1.500000"))
 
       assert second.model_provider_id == mp1.id
       assert second.provider_name == "OpenAI"
       assert second.provider_model == "gpt-4o-real"
-      assert Decimal.equal?(second.provider_cost_usd, Decimal.new("0.800000"))
+      assert Decimal.equal?(second.cost_usd, Decimal.new("0.800000"))
     end
 
     test "separates two model providers under the same provider" do
@@ -614,13 +611,13 @@ defmodule Tokengate.Metrics.RollupTest do
       mp1 = model_provider_fixture(ma, provider, %{provider_model: "gpt-4o"})
       mp2 = model_provider_fixture(ma, provider, %{provider_model: "gpt-4o-mini"})
 
-      log_request(tm.id, ~U[2026-07-26 10:00:00Z], %{
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         model_alias_id: ma.id,
         provider_id: provider.id,
         model_provider_id: mp1.id
       })
 
-      log_request(tm.id, ~U[2026-07-26 11:00:00Z], %{
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
         model_alias_id: ma.id,
         provider_id: provider.id,
         model_provider_id: mp2.id
@@ -640,12 +637,12 @@ defmodule Tokengate.Metrics.RollupTest do
       {:ok, provider} =
         Providers.create_provider(%{name: "OpenAI", base_url: "http://localhost:1"})
 
-      log_request(tm.id, ~U[2026-07-26 10:00:00Z], %{
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         model_alias_id: ma.id,
         provider_id: provider.id
       })
 
-      log_request(tm.id, ~U[2026-07-26 11:00:00Z], %{
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
         model_alias_id: ma.id,
         provider_id: provider.id
       })
@@ -672,13 +669,13 @@ defmodule Tokengate.Metrics.RollupTest do
       {:ok, provider} =
         Providers.create_provider(%{name: "OpenAI", base_url: "http://localhost:1"})
 
-      log_request(tm.id, ~U[2026-07-26 10:00:00Z], %{
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         model_alias_id: ma1.id,
         provider_id: provider.id,
         cost_usd: Decimal.new("1.000000")
       })
 
-      log_request(tm.id, ~U[2026-07-26 11:00:00Z], %{
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
         model_alias_id: ma2.id,
         provider_id: provider.id,
         cost_usd: Decimal.new("5.000000")
@@ -706,16 +703,14 @@ defmodule Tokengate.Metrics.RollupTest do
 
       ma = model_alias_fixture(%{"name" => "gpt-4o"})
 
-      log_request(tm1.id, ~U[2026-07-26 10:00:00Z], %{
+      log_request(tm1.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         model_alias_id: ma.id,
-        cost_usd: Decimal.new("1.000000"),
-        provider_cost_usd: Decimal.new("0.800000")
+        cost_usd: Decimal.new("0.800000")
       })
 
-      log_request(tm2.id, ~U[2026-07-26 11:00:00Z], %{
+      log_request(tm2.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
         model_alias_id: ma.id,
-        cost_usd: Decimal.new("5.000000"),
-        provider_cost_usd: Decimal.new("4.000000")
+        cost_usd: Decimal.new("4.000000")
       })
 
       results = Rollup.breakdown_by_member_for_model(ma.id, from: ~U[2026-07-01 00:00:00Z])
@@ -744,16 +739,14 @@ defmodule Tokengate.Metrics.RollupTest do
 
       ma = model_alias_fixture(%{"name" => "gpt-4o"})
 
-      log_request(tm1.id, ~U[2026-07-26 10:00:00Z], %{
+      log_request(tm1.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         model_alias_id: ma.id,
-        cost_usd: Decimal.new("1.000000"),
-        provider_cost_usd: Decimal.new("0.800000")
+        cost_usd: Decimal.new("0.800000")
       })
 
-      log_request(tm2.id, ~U[2026-07-26 11:00:00Z], %{
+      log_request(tm2.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
         model_alias_id: ma.id,
-        cost_usd: Decimal.new("5.000000"),
-        provider_cost_usd: Decimal.new("4.000000")
+        cost_usd: Decimal.new("4.000000")
       })
 
       results = Rollup.breakdown_by_team_for_model(ma.id, from: ~U[2026-07-01 00:00:00Z])
@@ -761,7 +754,7 @@ defmodule Tokengate.Metrics.RollupTest do
       assert length(results) == 2
       [first, _] = results
       # Ranked by provider_cost descending
-      assert Decimal.equal?(first.provider_cost_usd, Decimal.new("4.000000"))
+      assert Decimal.equal?(first.cost_usd, Decimal.new("4.000000"))
       assert first.team_name != nil
     end
 

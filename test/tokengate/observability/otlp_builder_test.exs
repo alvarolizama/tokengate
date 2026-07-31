@@ -58,10 +58,7 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
         status_code: 200,
         prompt_tokens: 150,
         completion_tokens: 75,
-        cost_usd: Decimal.new("0.01234"),
         provider_cost_usd: Decimal.new("0.01000"),
-        savings_usd: Decimal.new("0.00234"),
-        estimated_cost_usd: Decimal.new("0.01500"),
         latency_ms: 500,
         streaming: false
       },
@@ -169,15 +166,14 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
     test "cost attributes as doubleValue from Decimals" do
       span = single_span()
 
-      assert find_attr(span, "tokengate.cost.estimated_usd").value.doubleValue == 0.015
-      assert find_attr(span, "tokengate.cost.usd").value.doubleValue == 0.01234
-      assert find_attr(span, "tokengate.cost.provider_usd").value.doubleValue == 0.01
-      assert find_attr(span, "tokengate.cost.savings_usd").value.doubleValue == 0.00234
+      # Since the 2026-07-30 refactor we only emit a single cost attribute,
+      # `gen_ai.usage.cost`, sourced from `provider_cost_usd`.
+      assert find_attr(span, "gen_ai.usage.cost").value.doubleValue == 0.01
     end
 
-    test "gen_ai.usage.total_cost from provider_cost_usd" do
+    test "gen_ai.usage.cost matches provider_cost_usd" do
       span = single_span()
-      attr = find_attr(span, "gen_ai.usage.total_cost")
+      attr = find_attr(span, "gen_ai.usage.cost")
       assert attr.value.doubleValue == 0.01
     end
 

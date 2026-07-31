@@ -52,7 +52,12 @@ defmodule TokengateWeb.ProxyControllerTest do
               "choices" => [
                 %{"index" => 0, "message" => %{"role" => "assistant", "content" => "qué onda"}}
               ],
-              "usage" => %{"prompt_tokens" => 20, "completion_tokens" => 10, "total_tokens" => 30}
+              "usage" => %{
+                "prompt_tokens" => 20,
+                "completion_tokens" => 10,
+                "total_tokens" => 30,
+                "cost" => 0.00015
+              }
             })
           end
       end
@@ -70,7 +75,7 @@ defmodule TokengateWeb.ProxyControllerTest do
       {:ok, conn} =
         chunk(
           conn,
-          ~s(data: {"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":2,"total_tokens":22}}\n\n)
+          ~s(data: {"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":2,"total_tokens":22,"cost":0.00007}}\n\n)
         )
 
       {:ok, conn} = chunk(conn, "data: [DONE]\n\n")
@@ -147,8 +152,6 @@ defmodule TokengateWeb.ProxyControllerTest do
       Providers.create_model_alias(%{
         name: "gpt-4o-#{u}",
         display_name: "GPT 4o",
-        market_input_price_per_1m: "5.00",
-        market_output_price_per_1m: "15.00",
         context_window: 128_000
       })
 
@@ -160,14 +163,6 @@ defmodule TokengateWeb.ProxyControllerTest do
         credential_id: credential.id,
         provider_model: "gpt-4o-real-#{u}",
         priority: 1
-      })
-
-    {:ok, _pricing} =
-      Providers.create_model_pricing(%{
-        model_provider_id: model_provider.id,
-        input_price_per_1m: "2.50",
-        output_price_per_1m: "10.00",
-        effective_from: DateTime.truncate(DateTime.utc_now(), :second)
       })
 
     %{
@@ -249,18 +244,16 @@ defmodule TokengateWeb.ProxyControllerTest do
     # provider = 20*2.5/1M + 10*10/1M = 0.00015
     assert body["usage"]["prompt_tokens"] == 20
     assert body["usage"]["completion_tokens"] == 10
-    assert_in_delta body["usage"]["estimated_cost_usd"], 0.00025, 0.0000001
     assert_in_delta body["usage"]["cost_usd"], 0.00015, 0.0000001
 
     # Cost headers
     assert get_resp_header(conn, "x-tokengate-cost") == ["0.000150"]
-    assert get_resp_header(conn, "x-tokengate-savings") == ["0.000100"]
 
     # Budget spend recorded in ETS uses provider_cost_usd (the real paid cost)
     spend = Budgets.spend(member.id)
     assert Decimal.equal?(spend.monthly_usd, Decimal.new("0.000150"))
 
-    # Log job enqueued → drain → request_log row with all 4 dimensions
+    # Log job enqueued → drain → request_log row with the single cost dimension
     assert_enqueued(worker: WriteWorker)
     assert %{success: 1} = Oban.drain_queue(queue: :logs)
 
@@ -271,15 +264,18 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert log.status_code == 200
     assert log.prompt_tokens == 20
     assert log.model_provider_id == model_provider.id
-    assert Decimal.equal?(log.cost_usd, Decimal.new("0.000150"))
     assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000150"))
-    assert Decimal.equal?(log.estimated_cost_usd, Decimal.new("0.000250"))
-    assert Decimal.equal?(log.savings_usd, Decimal.new("0.000100"))
   end
 
-  test "402 when estimated cost exceeds the daily budget", %{conn: conn} do
-    # Estimated completion = 512 tokens → market cost ≈ 20*5/1M + 512*15/1M ≈ 0.00778
-    %{token: token, alias: model_alias} = proxy_fixture(%{daily_budget: "0.001"})
+  test "402 when the daily cost brings the user over their monthly budget", %{conn: conn} do
+    # Without market pricing the pre-check no longer estimates. To trip the
+    # budget gate we set a tiny monthly cap and pre-load the ETS counter so
+    # the next request is rejected before being dispatched.
+    %{token: token, alias: model_alias, member: member} =
+      proxy_fixture(%{daily_budget: "0.0001"})
+
+    # Pre-seed the spend counter so the member is already at/over their cap.
+    Budgets.record_spend(member.id, Decimal.new("0.000150"))
 
     conn =
       conn
@@ -305,8 +301,8 @@ defmodule TokengateWeb.ProxyControllerTest do
   end
 
   test "member extra daily budget raises the effective team limit", %{conn: conn} do
-    # Team default 0.001 would reject (~0.00778 estimated); the member's
-    # extra 0.01 raises the effective limit to 0.011, so the request passes.
+    # Both caps allow the upstream-reported cost of $0.00015; the second
+    # request also passes since daily spend ($0.00030) < team + member cap.
     %{token: token, alias: model_alias} =
       proxy_fixture(%{daily_budget: "0.001", extra_daily_budget: "0.01"})
 
@@ -389,20 +385,12 @@ defmodule TokengateWeb.ProxyControllerTest do
     {:ok, cred2} =
       Providers.create_credential(%{provider_id: provider2.id, api_key_encrypted: "sk-healthy"})
 
-    {:ok, ap2} =
+    {:ok, _ap2} =
       Providers.create_model_provider(%{
         model_alias_id: model_alias.id,
         credential_id: cred2.id,
         provider_model: "gpt-4o-healthy",
         priority: 2
-      })
-
-    {:ok, _} =
-      Providers.create_model_pricing(%{
-        model_provider_id: ap2.id,
-        input_price_per_1m: "2.50",
-        output_price_per_1m: "10.00",
-        effective_from: DateTime.truncate(DateTime.utc_now(), :second)
       })
 
     conn =
@@ -442,20 +430,12 @@ defmodule TokengateWeb.ProxyControllerTest do
         max_concurrent: 5
       })
 
-    {:ok, ap2} =
+    {:ok, _ap2} =
       Providers.create_model_provider(%{
         model_alias_id: model_alias.id,
         credential_id: cred2.id,
         provider_model: "gpt-4o-healthy-#{u}",
         priority: 2
-      })
-
-    {:ok, _} =
-      Providers.create_model_pricing(%{
-        model_provider_id: ap2.id,
-        input_price_per_1m: "2.50",
-        output_price_per_1m: "10.00",
-        effective_from: DateTime.truncate(DateTime.utc_now(), :second)
       })
 
     conn =
@@ -511,7 +491,6 @@ defmodule TokengateWeb.ProxyControllerTest do
     # The usage frame carries the injected cost dimensions
     usage_frame = Enum.find(frames, &(&1 =~ "usage"))
     usage_json = usage_frame |> String.trim_leading("data: ") |> Jason.decode!()
-    assert_in_delta usage_json["usage"]["estimated_cost_usd"], 0.00013, 0.0000001
     assert_in_delta usage_json["usage"]["cost_usd"], 0.00007, 0.0000001
 
     # stream_options.include_usage was requested from the provider

@@ -1,167 +1,67 @@
 defmodule Tokengate.Proxy.CostCalculator do
   @moduledoc """
-  Cost accounting across TokenGate's four cost dimensions.
+  Cost accounting for TokenGate.
 
-  TokenGate never charges users — it tracks how much *value* is consumed,
-  what it would cost at market price, and what is actually paid:
+  Since the 2026-07-30 refactor, TokenGate tracks **one** cost dimension per
+  request: `provider_cost_usd` — the amount the upstream reported it charged.
 
-    * `estimated_cost_usd` — what the usage would cost at **market price**
-      (model_alias `market_*_price_per_1m`). Computed pre-request with
-      estimated tokens (budget check) and post-request with real tokens.
-    * `cost_usd` — what this **specific provider charges** for the usage
-      (model_provider `model_pricing`). Only meaningful for
-      `pay_per_token` providers; `0` for `included` providers.
-    * `provider_cost_usd` — what you **actually pay**. Prefers the cost
-      reported by the provider in its response body (when available);
-      otherwise uses the pricing-row calculation for `pay_per_token` or
-      `0` for `included` (subscription / RPM-limited) providers.
-    * `savings_usd` — `estimated_cost_usd - provider_cost_usd`: how much
-      is saved versus buying at market price.
+  Decision matrix (`billing_mode` × provider-reported availability):
 
-  All arithmetic uses `Decimal`; results are rounded to 6 decimal places
-  (matching the `numeric(12,6)` columns in `request_logs`).
+      |                        | reported cost present | reported cost absent |
+      | ---------------------- | --------------------- | --------------------- |
+      | `pay_per_token`        | use the reported cost | $0 (honest fallback) |
+      | `included` (sub/RPM)   | $0 (ignored)          | $0                    |
+
+  When `provider_reported_cost` is `nil` and the upstream is `pay_per_token`,
+  we record `$0` rather than estimating from a stale manual pricing row. The
+  upstream is the source of truth; if it doesn't tell us what it charged, we
+  don't make one up.
+
+  All returned values are `Decimal.t()`. The proxy/controller path forwards
+  the result to the `request_logs.provider_cost_usd` column (`numeric(12,6)`).
   """
 
-  @per_million Decimal.new(1_000_000)
-  @places 6
-
-  @type usage :: %{
-          optional(atom()) => non_neg_integer()
-        }
+  @zero Decimal.new(0)
 
   @doc """
-  Market-price cost of a usage map for a model alias.
+  Computes the real provider cost for a single request.
 
-  Expects a map/struct with `:market_input_price_per_1m` and
-  `:market_output_price_per_1m` Decimal fields. Cache-read and
-  cache-creation tokens use their dedicated market prices when set;
-  otherwise they fall back to the regular input market price.
+  ## Arguments
+
+    * `billing_mode` — `"pay_per_token"` or `"included"` from the
+      `model_providers` row.
+    * `provider_reported_cost` — Decimal/number/string the upstream returned
+      via `usage.cost` / `usage.total_cost` / top-level `cost` (when present),
+      or `nil` when the upstream doesn't report a cost.
+
+  Returns a `Decimal.t()` — always a valid Decimal. `included` always returns
+  $0, regardless of any reported cost. Unknown billing modes also return $0
+  defensively (never trust unreviewed input).
   """
-  @spec market_cost(map(), usage()) :: Decimal.t()
-  def market_cost(model_alias, usage) do
-    input = to_decimal(Map.get(model_alias, :market_input_price_per_1m))
-    output = to_decimal(Map.get(model_alias, :market_output_price_per_1m))
-    cache_read = to_decimal(Map.get(model_alias, :market_cache_read_price_per_1m))
-    cache_creation = to_decimal(Map.get(model_alias, :market_cache_creation_price_per_1m))
+  @spec provider_cost(String.t() | atom() | term(), term()) :: Decimal.t()
+  def provider_cost("included", _reported), do: @zero
+  def provider_cost("pay_per_token", nil), do: @zero
 
-    per_million(input, units(usage, :prompt_tokens))
-    |> Decimal.add(per_million(output, units(usage, :completion_tokens)))
-    |> Decimal.add(per_million(cache_read || input, units(usage, :cache_read_tokens)))
-    |> Decimal.add(per_million(cache_creation || input, units(usage, :cache_creation_tokens)))
-    |> rounded()
+  def provider_cost("pay_per_token", %Decimal{} = reported) do
+    Decimal.round(reported, 6)
   end
 
-  @doc """
-  Provider-specific cost of a usage map given a model pricing row.
-
-  Cache tokens use their dedicated prices when set; otherwise they are
-  billed at the regular input price. Returns nil when pricing is nil
-  (e.g. subscription providers carry no pricing rows).
-  """
-  @spec provider_priced_cost(map() | nil, usage()) :: Decimal.t() | nil
-  def provider_priced_cost(nil, _usage), do: nil
-
-  def provider_priced_cost(pricing, usage) do
-    input = to_decimal(Map.get(pricing, :input_price_per_1m))
-    output = to_decimal(Map.get(pricing, :output_price_per_1m))
-    cache_read = to_decimal(Map.get(pricing, :cache_read_price_per_1m)) || input
-    cache_creation = to_decimal(Map.get(pricing, :cache_creation_price_per_1m)) || input
-
-    regular_input = units(usage, :prompt_tokens)
-
-    per_million(input, regular_input)
-    |> Decimal.add(per_million(output, units(usage, :completion_tokens)))
-    |> Decimal.add(per_million(cache_read, units(usage, :cache_read_tokens)))
-    |> Decimal.add(per_million(cache_creation, units(usage, :cache_creation_tokens)))
-    |> rounded()
+  def provider_cost("pay_per_token", reported) when is_number(reported) do
+    reported
+    |> to_string()
+    |> Decimal.new()
+    |> Decimal.round(6)
   end
 
-  @doc """
-  Savings versus market price: `estimated_cost_usd - provider_cost_usd`.
-  """
-  @spec savings(Decimal.t(), Decimal.t()) :: Decimal.t()
-  def savings(%Decimal{} = estimated, %Decimal{} = provider_cost) do
-    Decimal.sub(estimated, provider_cost) |> rounded()
-  end
-
-  @doc """
-  Full four-dimension breakdown for one request.
-
-    * `model_alias` — map/struct with market prices
-    * `pricing` — model_pricing map/struct or nil
-    * `usage` — normalized usage map
-    * `opts` — keyword list with:
-      * `:billing_mode` — `"pay_per_token"` (default) or `"included"`
-      * `:provider_reported_cost` — decimal cost reported by the provider
-        in its response body, when available. Takes precedence over the
-        pricing-row calculation.
-
-  Returns `%{estimated_cost_usd, cost_usd, provider_cost_usd, savings_usd}`
-  with Decimal values.
-
-  Billing mode semantics:
-    * `pay_per_token` — `cost_usd` = pricing-row calculation (or estimated
-      fallback when no pricing row exists); `provider_cost_usd` = the
-      provider-reported cost when available, otherwise the pricing-row
-      calculation, otherwise the market estimate (honest fallback:
-      unknown real cost → savings 0 instead of phantom 100% savings).
-    * `included` — `cost_usd` = `0` (no per-token charge);
-      `provider_cost_usd` = `0`; budget enforcement uses `estimated_cost_usd`.
-  """
-  @spec breakdown(map(), map() | nil, usage(), keyword()) :: %{
-          estimated_cost_usd: Decimal.t(),
-          cost_usd: Decimal.t(),
-          provider_cost_usd: Decimal.t(),
-          savings_usd: Decimal.t()
-        }
-  def breakdown(model_alias, pricing, usage, opts \\ []) do
-    billing_mode = Keyword.get(opts, :billing_mode, "pay_per_token")
-    provider_reported = Keyword.get(opts, :provider_reported_cost)
-
-    estimated = market_cost(model_alias, usage)
-
-    {cost_usd, real} =
-      case billing_mode do
-        "included" ->
-          {Decimal.new(0), Decimal.new(0)}
-
-        _pay_per_token ->
-          priced = provider_priced_cost(pricing, usage)
-
-          real =
-            case to_decimal(provider_reported) do
-              nil -> priced || estimated
-              reported -> reported
-            end
-
-          {priced || estimated, real}
-      end
-
-    %{
-      estimated_cost_usd: estimated,
-      cost_usd: cost_usd,
-      provider_cost_usd: real,
-      savings_usd: savings(estimated, real)
-    }
-  end
-
-  defp units(usage, key) do
-    case Map.get(usage, key) do
-      n when is_integer(n) and n >= 0 -> n
-      _ -> 0
+  def provider_cost("pay_per_token", reported) when is_binary(reported) do
+    case Decimal.parse(reported) do
+      {decimal, ""} -> Decimal.round(decimal, 6)
+      _ -> @zero
     end
   end
 
-  defp per_million(nil, _units), do: Decimal.new(0)
+  def provider_cost("pay_per_token", _reported), do: @zero
 
-  defp per_million(%Decimal{} = price, units) do
-    price |> Decimal.mult(Decimal.new(units)) |> Decimal.div(@per_million)
-  end
-
-  defp rounded(%Decimal{} = value), do: Decimal.round(value, @places)
-
-  defp to_decimal(nil), do: nil
-  defp to_decimal(%Decimal{} = d), do: d
-  defp to_decimal(n) when is_number(n), do: Decimal.new(to_string(n))
-  defp to_decimal(s) when is_binary(s), do: Decimal.new(s)
+  # Unknown billing mode (or anything that isn't a recognized string) → $0.
+  def provider_cost(_billing_mode, _reported), do: @zero
 end

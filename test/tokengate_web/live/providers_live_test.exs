@@ -152,9 +152,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
       Providers.create_model_alias(%{
         name: "gpt-4o-#{u}",
         display_name: "GPT-4o #{u}",
-        context_window: 128_000,
-        market_input_price_per_1m: "5.0",
-        market_output_price_per_1m: "15.0"
+        context_window: 128_000
       })
 
     {:ok, credential} =

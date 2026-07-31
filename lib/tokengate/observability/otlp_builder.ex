@@ -177,11 +177,7 @@ defmodule Tokengate.Observability.OtlpBuilder do
       kv_int("gen_ai.usage.prompt_tokens", prompt_tokens),
       kv_int("gen_ai.usage.completion_tokens", completion_tokens),
       kv_int("gen_ai.usage.total_tokens", total_tokens),
-      kv_double("gen_ai.usage.total_cost", request_log.provider_cost_usd),
-      kv("tokengate.cost.estimated_usd", request_log.estimated_cost_usd, :double),
-      kv_double("tokengate.cost.usd", request_log.cost_usd),
-      kv_double("tokengate.cost.provider_usd", request_log.provider_cost_usd),
-      kv_double("tokengate.cost.savings_usd", request_log.savings_usd),
+      kv_double("gen_ai.usage.cost", request_log.provider_cost_usd),
       kv("tokengate.agent.type", request_log.agent_type),
       kv_bool("tokengate.streaming", request_log.streaming),
       kv_int("http.status_code", request_log.status_code),
@@ -217,10 +213,6 @@ defmodule Tokengate.Observability.OtlpBuilder do
 
   defp kv(key, value) do
     %{key: key, value: %{stringValue: to_string(value)}}
-  end
-
-  defp kv(key, %Decimal{} = value, :double) do
-    %{key: key, value: %{doubleValue: Decimal.to_float(value)}}
   end
 
   defp kv_int(key, nil), do: %{key: key, value: %{intValue: 0}}

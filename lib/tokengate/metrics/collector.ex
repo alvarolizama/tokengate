@@ -65,8 +65,8 @@ defmodule Tokengate.Metrics.Collector do
     * `latency_ms`      — integer
     * `prompt_tokens`    — integer
     * `completion_tokens` — integer
-    * `cost_usd`        — `Decimal.t()`
-    * `savings_usd`     — `Decimal.t()`
+    * `cost_usd`        — `Decimal.t()` — what the upstream charged (the
+      single cost dimension since the 2026-07-30 refactor)
     * `streaming`       — boolean (currently unused by counters)
 
   Runs entirely in the caller's process via atomic ETS updates. After
@@ -84,10 +84,8 @@ defmodule Tokengate.Metrics.Collector do
     prompt_tokens = Map.get(attrs, :prompt_tokens, 0)
     completion_tokens = Map.get(attrs, :completion_tokens, 0)
     cost_usd = Map.get(attrs, :cost_usd) || Decimal.new(0)
-    savings_usd = Map.get(attrs, :savings_usd) || Decimal.new(0)
 
     cost_micro = decimal_to_micro(cost_usd)
-    savings_micro = decimal_to_micro(savings_usd)
 
     # Counters
     incr({:requests, :total})
@@ -111,7 +109,6 @@ defmodule Tokengate.Metrics.Collector do
     add({:tokens, :prompt}, prompt_tokens)
     add({:tokens, :completion}, completion_tokens)
     add({:cost_micro, :total}, cost_micro)
-    add({:savings_micro, :total}, savings_micro)
 
     # Latency ring (prepend + trim to @max_latency_samples)
     push_latency(latency_ms)
@@ -137,12 +134,11 @@ defmodule Tokengate.Metrics.Collector do
         prompt_tokens: non_neg_integer(),
         completion_tokens: non_neg_integer(),
         cost_usd: Decimal.t(),
-        savings_usd: Decimal.t(),
         latency: %{count: non_neg_integer(), avg_ms: float(), p95_ms: number()}
       }
 
-  `error_rate` is `0.0` when there are no requests. `cost_usd`/`savings_usd`
-  are reconstructed from the micro-USD integer counters as `Decimal` with 6
+  `error_rate` is `0.0` when there are no requests. `cost_usd` is
+  reconstructed from the micro-USD integer counter as `Decimal` with 6
   decimal places. `p95_ms` uses the nearest-rank method on the last 200
   samples; when fewer than 20 samples exist the max is returned.
   """
@@ -159,7 +155,6 @@ defmodule Tokengate.Metrics.Collector do
     completion_tokens = read_counter({:tokens, :completion})
 
     cost_micro = read_counter({:cost_micro, :total})
-    savings_micro = read_counter({:savings_micro, :total})
 
     {count, avg_ms, p95_ms} = latency_stats()
 
@@ -173,7 +168,6 @@ defmodule Tokengate.Metrics.Collector do
       prompt_tokens: prompt_tokens,
       completion_tokens: completion_tokens,
       cost_usd: micro_to_decimal(cost_micro),
-      savings_usd: micro_to_decimal(savings_micro),
       latency: %{count: count, avg_ms: avg_ms, p95_ms: p95_ms}
     }
   end

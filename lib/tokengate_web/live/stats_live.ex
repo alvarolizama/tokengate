@@ -124,9 +124,6 @@ defmodule TokengateWeb.StatsLive do
     metrics = %{
       requests_total: summary.request_count,
       cost_usd: summary.total_cost_usd,
-      provider_cost_usd: summary.total_provider_cost_usd,
-      estimated_cost_usd: summary.total_estimated_cost_usd,
-      savings_usd: summary.total_savings_usd,
       prompt_tokens: summary.total_prompt_tokens,
       completion_tokens: summary.total_completion_tokens,
       avg_tps: Map.get(summary, :avg_tps)
@@ -324,9 +321,6 @@ defmodule TokengateWeb.StatsLive do
     %{
       requests_total: 0,
       cost_usd: Decimal.new(0),
-      provider_cost_usd: Decimal.new(0),
-      estimated_cost_usd: Decimal.new(0),
-      savings_usd: Decimal.new(0),
       prompt_tokens: 0,
       completion_tokens: 0,
       avg_tps: nil
@@ -336,9 +330,6 @@ defmodule TokengateWeb.StatsLive do
   defp empty_summary do
     %{
       total_cost_usd: Decimal.new(0),
-      total_provider_cost_usd: Decimal.new(0),
-      total_savings_usd: Decimal.new(0),
-      total_estimated_cost_usd: Decimal.new(0),
       total_prompt_tokens: 0,
       total_completion_tokens: 0,
       request_count: 0,

@@ -13,10 +13,6 @@ defmodule Tokengate.Providers.ModelAlias do
   schema "model_aliases" do
     field :name, :string
     field :display_name, :string
-    field :market_input_price_per_1m, :decimal
-    field :market_output_price_per_1m, :decimal
-    field :market_cache_read_price_per_1m, :decimal
-    field :market_cache_creation_price_per_1m, :decimal
     field :context_window, :integer
 
     has_many :model_providers, Tokengate.Providers.ModelProvider
@@ -27,22 +23,8 @@ defmodule Tokengate.Providers.ModelAlias do
   @doc false
   def changeset(model_alias, attrs) do
     model_alias
-    |> cast(attrs, [
-      :name,
-      :display_name,
-      :market_input_price_per_1m,
-      :market_output_price_per_1m,
-      :market_cache_read_price_per_1m,
-      :market_cache_creation_price_per_1m,
-      :context_window
-    ])
-    |> validate_required([
-      :name,
-      :display_name,
-      :market_input_price_per_1m,
-      :market_output_price_per_1m,
-      :context_window
-    ])
+    |> cast(attrs, [:name, :display_name, :context_window])
+    |> validate_required([:name, :display_name, :context_window])
     |> unique_constraint(:name)
   end
 end

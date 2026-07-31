@@ -72,10 +72,7 @@ defmodule TokengateWeb.DashboardLiveTest do
           status_code: 200,
           prompt_tokens: 100,
           completion_tokens: 50,
-          cost_usd: cost,
           provider_cost_usd: cost,
-          savings_usd: "0.001",
-          estimated_cost_usd: "0.01",
           latency_ms: 42,
           streaming: false
         })
@@ -91,15 +88,15 @@ defmodule TokengateWeb.DashboardLiveTest do
   end
 
   defp team_with_member(_opts \\ %{}) do
-    _u = unique()
+    u = unique()
 
-    {:ok, team} = Accounts.create_team(%{name: "Team #{_u}"})
+    {:ok, team} = Accounts.create_team(%{name: "Team #{u}"})
 
     {:ok, owner} =
       Accounts.register_user(%{
-        email: "owner-#{_u}@example.com",
-        name: "Owner #{_u}",
-        password: "password-secret-#{_u}1"
+        email: "owner-#{u}@example.com",
+        name: "Owner #{u}",
+        password: "password-secret-#{u}1"
       })
 
     {:ok, member} =
@@ -107,7 +104,7 @@ defmodule TokengateWeb.DashboardLiveTest do
 
     {:ok, _api_key, _token} = Accounts.replace_api_key(member)
 
-    %{team: team, owner: owner, member: member, owner_password: "password-secret-#{_u}1"}
+    %{team: team, owner: owner, member: member, owner_password: "password-secret-#{u}1"}
   end
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
@@ -153,9 +150,7 @@ defmodule TokengateWeb.DashboardLiveTest do
 
     refute has_element?(view, "#empty-state")
     assert has_element?(view, "#requests-card")
-    assert has_element?(view, "#cost-real-card")
-    assert has_element?(view, "#cost-estimated-card")
-    assert has_element?(view, "#savings-card")
+    assert has_element?(view, "#cost-card")
     assert has_element?(view, "#tokens-card")
     assert has_element?(view, "#tps-card")
     _ = html
@@ -232,17 +227,14 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert has_element?(view, "#charts-grid")
     assert has_element?(view, "#cost-chart")
     assert has_element?(view, "#requests-chart")
-    assert has_element?(view, "#savings-chart")
 
-    # Series carry the rollup data (cost, requests, savings)
+    # Series carry the rollup data (cost + requests)
     assert html =~ "Costo por hora"
     assert html =~ "Requests por hora"
-    assert html =~ "Ahorro por hora"
 
     # SVG bars rendered for the non-zero series
     assert has_element?(view, "#cost-chart svg rect")
     assert has_element?(view, "#requests-chart svg rect")
-    assert has_element?(view, "#savings-chart svg rect")
   end
 
   test "user scope: sees only their own consumption", %{conn: conn} do

@@ -81,10 +81,7 @@ defmodule Tokengate.Budgets.ManagerTest do
       Logs.log_request(%{
         team_member_id: team_member_id,
         model_requested: "gpt-4",
-        cost_usd: Decimal.new(to_string(cost_usd)),
         provider_cost_usd: Decimal.new(to_string(provider_cost_usd)),
-        savings_usd: Decimal.new("0"),
-        estimated_cost_usd: Decimal.new(to_string(cost_usd)),
         inserted_at: inserted_at
       })
   end

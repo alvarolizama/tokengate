@@ -137,7 +137,8 @@ defmodule TokengateWeb.SettingsLive do
                   Borra todas las asignaciones sticky de API key → provider.
                   Las próximas requests serán re-ruteadas desde cero.
                   No afecta modelos, proveedores, ni API keys.
-                  Actualmente hay <span class="font-mono font-semibold">{@sticky_count}</span> entradas activas.
+                  Actualmente hay <span class="font-mono font-semibold">{@sticky_count}</span>
+                  entradas activas.
                 </p>
               </div>
               <button

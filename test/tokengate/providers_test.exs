@@ -1,16 +1,13 @@
 defmodule Tokengate.ProvidersTest do
   use Tokengate.DataCase, async: true
 
-  import Ecto.Query
-
   alias Tokengate.Providers
 
   alias Tokengate.Providers.{
     Provider,
     Credential,
     ModelAlias,
-    ModelProvider,
-    ModelPricing
+    ModelProvider
   }
 
   # ---------------------------------------------------------------------------
@@ -163,8 +160,6 @@ defmodule Tokengate.ProvidersTest do
       Enum.into(attrs, %{
         name: "gpt-4-#{unique}",
         display_name: "GPT-4",
-        market_input_price_per_1m: Decimal.new("10.00"),
-        market_output_price_per_1m: Decimal.new("30.00"),
         context_window: 128_000
       })
 
@@ -187,21 +182,6 @@ defmodule Tokengate.ProvidersTest do
 
     {:ok, model_provider} = Providers.create_model_provider(attrs)
     model_provider
-  end
-
-  def model_pricing_fixture(model_provider \\ nil, attrs \\ %{}) do
-    model_provider = model_provider || model_provider_fixture()
-
-    attrs =
-      Enum.into(attrs, %{
-        model_provider_id: model_provider.id,
-        input_price_per_1m: Decimal.new("10.00"),
-        output_price_per_1m: Decimal.new("30.00"),
-        effective_from: DateTime.utc_now() |> DateTime.truncate(:second)
-      })
-
-    {:ok, pricing} = Providers.create_model_pricing(attrs)
-    pricing
   end
 
   # ---------------------------------------------------------------------------
@@ -336,8 +316,6 @@ defmodule Tokengate.ProvidersTest do
         Providers.create_model_alias(%{
           name: "gpt-4",
           display_name: "GPT-4",
-          market_input_price_per_1m: Decimal.new("1"),
-          market_output_price_per_1m: Decimal.new("1"),
           context_window: 1000
         })
 
@@ -395,53 +373,11 @@ defmodule Tokengate.ProvidersTest do
       assert %Provider{} = result.credential.provider
     end
 
-    test "delete_model_provider/1 cascades pricing rows" do
+    test "delete_model_provider/1 removes the row" do
       mp = model_provider_fixture()
-      model_pricing_fixture(mp)
 
       {:ok, _} = Providers.delete_model_provider(mp)
       refute Repo.get(ModelProvider, mp.id)
-      assert Repo.all(from(mp in ModelPricing, where: mp.model_provider_id == ^mp.id)) == []
-    end
-  end
-
-  describe "model_pricing" do
-    test "create_model_pricing/1 with valid attrs" do
-      pricing = model_pricing_fixture()
-      assert %ModelPricing{} = pricing
-      assert Decimal.equal?(pricing.input_price_per_1m, Decimal.new("10.00"))
-    end
-
-    test "current_pricing/1 returns latest by effective_from" do
-      model_provider = model_provider_fixture()
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
-
-      old =
-        model_pricing_fixture(model_provider, %{
-          effective_from: DateTime.add(now, -86_400),
-          input_price_per_1m: Decimal.new("5.00")
-        })
-
-      _new =
-        model_pricing_fixture(model_provider, %{
-          effective_from: now,
-          input_price_per_1m: Decimal.new("10.00")
-        })
-
-      result = Providers.current_pricing(model_provider.id)
-      assert result.id != old.id
-      assert Decimal.equal?(result.input_price_per_1m, Decimal.new("10.00"))
-    end
-
-    test "current_pricing/1 returns nil when no pricing exists" do
-      model_provider = model_provider_fixture()
-      assert Providers.current_pricing(model_provider.id) == nil
-    end
-
-    test "cache fields are nullable" do
-      pricing = model_pricing_fixture()
-      assert pricing.cache_read_price_per_1m == nil
-      assert pricing.cache_creation_price_per_1m == nil
     end
   end
 
