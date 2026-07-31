@@ -14,13 +14,14 @@ defmodule Tokengate.Accounts.User do
 
   # Virtual fields used during registration / password update.
   # Never persisted; consumed by the registration changeset.
-  @derive {Jason.Encoder, only: [:id, :email, :name, :global_role, :status]}
+  @derive {Jason.Encoder, only: [:id, :email, :name, :global_role, :status, :timezone]}
   schema "users" do
     field :email, :string
     field :name, :string
     field :password_hash, :string
     field :global_role, :string, default: "user"
     field :status, :string, default: "active"
+    field :timezone, :string, default: "Etc/UTC"
     field :google_id, :string
     field :avatar_url, :string
 
@@ -32,7 +33,7 @@ defmodule Tokengate.Accounts.User do
     timestamps(type: :utc_datetime)
   end
 
-  @permitted ~w(email name password global_role status google_id avatar_url)a
+  @permitted ~w(email name password global_role status google_id avatar_url timezone)a
 
   @doc """
   Changeset for self-registration (sign-up). Requires email + password
@@ -103,6 +104,27 @@ defmodule Tokengate.Accounts.User do
     |> cast(attrs, @permitted)
     |> validate_required([:email])
     |> validate_email()
+  end
+
+  @doc """
+  Changeset for updating a user's timezone preference.
+  Validates that the timezone is a known IANA timezone.
+  """
+  def timezone_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:timezone])
+    |> validate_required([:timezone])
+    |> validate_timezone()
+  end
+
+  defp validate_timezone(changeset) do
+    changeset
+    |> validate_change(:timezone, fn :timezone, tz ->
+      case DateTime.now(tz) do
+        {:ok, _} -> []
+        {:error, _} -> [timezone: "zona horaria no válida"]
+      end
+    end)
   end
 
   defp validate_email(changeset) do

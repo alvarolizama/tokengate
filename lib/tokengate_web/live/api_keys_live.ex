@@ -90,10 +90,6 @@ defmodule TokengateWeb.ApiKeysLive do
   defp key_status_label(%{api_key: %{status: "revoked"}}), do: "Revocada"
   defp key_status_label(_), do: "Sin clave"
 
-  defp format_date(datetime) do
-    Calendar.strftime(datetime, "%d/%m/%Y")
-  end
-
   ## Render ----------------------------------------------------------------
 
   @impl true
@@ -157,7 +153,7 @@ defmodule TokengateWeb.ApiKeysLive do
                             </td>
                             <td>
                               {if member.api_key,
-                                do: format_date(member.api_key.inserted_at),
+                                do: format_date(member.api_key.inserted_at, @timezone),
                                 else: "—"}
                             </td>
                             <td>

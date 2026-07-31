@@ -381,6 +381,8 @@ defmodule TokengateWeb.Layouts do
           <% end %>
         </nav>
 
+        <.timezone_selector current_scope={@current_scope} />
+
         <div class="p-3 border-t border-base-300">
           <p class="text-xs text-base-content/40 px-3">
             v{Application.spec(:tokengate, :vsn) |> to_string()}
@@ -409,6 +411,42 @@ defmodule TokengateWeb.Layouts do
       <.icon name={@icon} class="w-5 h-5 shrink-0" />
       {@label}
     </.link>
+    """
+  end
+
+  attr :current_scope, :map, default: nil
+
+  defp timezone_selector(assigns) do
+    tz = assigns.current_scope && assigns.current_scope.timezone
+
+    assigns = Phoenix.Component.assign(assigns, :current_timezone, tz || "Etc/UTC")
+
+    ~H"""
+    <div class="px-3 pb-3 border-t border-base-300 pt-3" id="timezone-selector">
+      <.form for={%{}} phx-change="set-timezone" id="tz-form">
+        <label
+          for="tz-select"
+          class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-base-content/40 mb-1.5"
+        >
+          <.icon name="hero-clock" class="w-4 h-4" /> Zona horaria
+        </label>
+        <select
+          id="tz-select"
+          name="timezone"
+          class="select select-bordered select-sm w-full text-xs"
+        >
+          <%= for {region, zones} <- timezone_options() do %>
+            <optgroup label={region}>
+              <%= for {label, value} <- zones do %>
+                <option value={value} selected={value == @current_timezone}>
+                  {label}
+                </option>
+              <% end %>
+            </optgroup>
+          <% end %>
+        </select>
+      </.form>
+    </div>
     """
   end
 

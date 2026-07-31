@@ -462,10 +462,6 @@ defmodule TokengateWeb.LogsLive do
 
   defp initials(_), do: "?"
 
-  defp format_datetime(datetime) do
-    Calendar.strftime(datetime, "%d/%m/%Y %H:%M:%S")
-  end
-
   defp model_display(model_requested, model_responded) do
     if model_requested == model_responded do
       model_requested
@@ -700,7 +696,9 @@ defmodule TokengateWeb.LogsLive do
                 </thead>
                 <tbody id="pending-rows">
                   <tr :for={entry <- @pending} id={"pending-row-#{entry.id}"}>
-                    <td class="whitespace-nowrap text-sm">{format_datetime(entry.started_at)}</td>
+                    <td class="whitespace-nowrap text-sm">
+                      {format_datetime(entry.started_at, @timezone)}
+                    </td>
                     <td class="text-sm">{entry.model_requested}</td>
                     <td class="text-sm">{entry.user_email || "—"}</td>
                     <td class="text-sm">{entry.team_name || "—"}</td>
@@ -789,7 +787,9 @@ defmodule TokengateWeb.LogsLive do
                 </td>
               </tr>
               <tr :for={{id, log} <- @streams.logs} id={id}>
-                <td class="whitespace-nowrap text-sm">{format_datetime(log.inserted_at)}</td>
+                <td class="whitespace-nowrap text-sm">
+                  {format_datetime(log.inserted_at, @timezone)}
+                </td>
                 <td class="text-sm">{model_display(log.model_requested, log.model_responded)}</td>
                 <td class="text-sm">{member_email(log)}</td>
                 <td class="text-sm">{member_team(log)}</td>

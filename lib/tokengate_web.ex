@@ -87,6 +87,9 @@ defmodule TokengateWeb do
       # Core UI components
       import TokengateWeb.CoreComponents
 
+      # Timezone-aware date formatting helpers
+      import TokengateWeb.TimezoneHelper
+
       # Common modules used in templates
       alias Phoenix.LiveView.JS
       alias TokengateWeb.Layouts

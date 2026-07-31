@@ -400,10 +400,10 @@ defmodule TokengateWeb.ProvidersLive do
   def fmt_dec(n), do: to_string(n)
 
   @doc "Format a datetime for display."
-  def fmt_dt(nil), do: "—"
+  def fmt_dt(nil, _timezone), do: "—"
 
-  def fmt_dt(%DateTime{} = dt) do
-    Calendar.strftime(dt, "%Y-%m-%d %H:%M UTC")
+  def fmt_dt(%DateTime{} = dt, timezone) do
+    TokengateWeb.TimezoneHelper.format_datetime_iso(dt, timezone)
   end
 
   @doc "Human-readable label for circuit breaker state."
@@ -669,7 +669,7 @@ defmodule TokengateWeb.ProvidersLive do
                                   {cred.error_reason || "auth_error"}
                                 </span>
                                 <span :if={cred.error_at} class="text-xs text-base-content/40">
-                                  {fmt_dt(cred.error_at)}
+                                  {fmt_dt(cred.error_at, @timezone)}
                                 </span>
                               </div>
                             <% true -> %>

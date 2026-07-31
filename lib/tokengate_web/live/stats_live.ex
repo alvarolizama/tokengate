@@ -431,9 +431,6 @@ defmodule TokengateWeb.StatsLive do
   def error_class_badge(status) when status >= 500, do: "badge-error"
   def error_class_badge(_), do: "badge-ghost"
 
-  def format_bucket(nil), do: "—"
-  def format_bucket(%DateTime{} = dt), do: Calendar.strftime(dt, "%d/%m %H:%M")
-
   def hour_distribution_max(rows) do
     rows |> Enum.map(& &1.request_count) |> Enum.max(fn -> 0 end)
   end

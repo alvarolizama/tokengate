@@ -224,7 +224,7 @@ defmodule TokengateWeb.DashboardLive do
 
     socket
     |> load_summary_metrics(user, opts)
-    |> load_chart_series(user, opts, period)
+    |> load_chart_series(user, opts, period, socket.assigns[:timezone])
     |> load_breakdowns(user, opts)
     |> load_model_catalog()
     |> assign(:loading, false)
@@ -265,7 +265,7 @@ defmodule TokengateWeb.DashboardLive do
   end
 
   # Chart series — granularity depends on period
-  defp load_chart_series(socket, user, _opts, period) do
+  defp load_chart_series(socket, user, _opts, period, timezone) do
     hours = Map.fetch!(@periods, period)
     member_ids = socket.assigns[:scope_member_ids] || []
 
@@ -294,13 +294,19 @@ defmodule TokengateWeb.DashboardLive do
       end)
 
     socket
-    |> assign(:cost_series, to_chart_points(series_with_tps, period, :cost_usd, &usd_tooltip/1))
+    |> assign(
+      :cost_series,
+      to_chart_points(series_with_tps, period, :cost_usd, &usd_tooltip/1, timezone)
+    )
     |> assign(
       :requests_series,
-      to_chart_points(series_with_tps, period, :request_count, &requests_tooltip/1)
+      to_chart_points(series_with_tps, period, :request_count, &requests_tooltip/1, timezone)
     )
-    |> assign(:tokens_series, to_token_points(series_with_tps, period))
-    |> assign(:tps_series, to_chart_points(series_with_tps, period, :tps, &tps_tooltip/1))
+    |> assign(:tokens_series, to_token_points(series_with_tps, period, timezone))
+    |> assign(
+      :tps_series,
+      to_chart_points(series_with_tps, period, :tps, &tps_tooltip/1, timezone)
+    )
   end
 
   defp hourly_series_for_members(member_ids, hours) do
@@ -333,13 +339,13 @@ defmodule TokengateWeb.DashboardLive do
     end)
   end
 
-  defp to_token_points(series, period) do
+  defp to_token_points(series, period, timezone) do
     Enum.map(series, fn row ->
       in_val = row.prompt_tokens * 1.0
       out_val = row.completion_tokens * 1.0
 
       %{
-        label: bucket_label(row.hour, period),
+        label: bucket_label(row.hour, period, timezone),
         value_in: in_val,
         value_out: out_val,
         tooltip: "#{format_compact(trunc(in_val))} in / #{format_compact(trunc(out_val))} out"
@@ -398,7 +404,7 @@ defmodule TokengateWeb.DashboardLive do
   end
 
   # Normalizes a bucketed rollup row into a chart point %{label, value, tooltip}
-  defp to_chart_points(series, period, field, tooltip_fn) do
+  defp to_chart_points(series, period, field, tooltip_fn, timezone) do
     Enum.map(series, fn row ->
       value =
         case Map.fetch!(row, field) do
@@ -406,15 +412,21 @@ defmodule TokengateWeb.DashboardLive do
           n when is_number(n) -> n * 1.0
         end
 
-      %{label: bucket_label(row.hour, period), value: value, tooltip: tooltip_fn.(value)}
+      %{
+        label: bucket_label(row.hour, period, timezone),
+        value: value,
+        tooltip: tooltip_fn.(value)
+      }
     end)
   end
 
-  defp bucket_label(hour, period) when period in ["today", "7d"] do
-    Calendar.strftime(hour, "%d/%m %H:%M")
+  defp bucket_label(hour, period, timezone) when period in ["today", "7d"] do
+    TokengateWeb.TimezoneHelper.format_bucket(hour, timezone)
   end
 
-  defp bucket_label(hour, _period), do: Calendar.strftime(hour, "%d/%m")
+  defp bucket_label(hour, _period, timezone) do
+    TokengateWeb.TimezoneHelper.format_bucket_date(hour, timezone)
+  end
 
   defp usd_tooltip(value), do: "#{Float.round(value, 6)} USD"
   defp requests_tooltip(value), do: "#{trunc(value)} requests"
@@ -603,10 +615,6 @@ defmodule TokengateWeb.DashboardLive do
   def key_status_label(%{api_key: %{status: "active"}}), do: "Activa"
   def key_status_label(%{api_key: %{status: "revoked"}}), do: "Revocada"
   def key_status_label(_), do: "Sin clave"
-
-  def format_date(datetime) do
-    Calendar.strftime(datetime, "%d/%m/%Y")
-  end
 
   ## Budget helpers -------------------------------------------------------
 

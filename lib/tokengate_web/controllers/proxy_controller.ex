@@ -218,7 +218,11 @@ defmodule TokengateWeb.ProxyController do
   defp execute(conn, route, payload, member, attempts_left, exclude) do
     provider = route.model_provider.credential.provider
     # The client sends the alias name; the provider expects its own model id.
-    payload = Map.put(payload, "model", route.model_responded)
+    payload =
+      payload
+      |> Map.put("model", route.model_responded)
+      |> inject_guard_rails(route.model_alias)
+
     receive_timeout = route.credential.receive_timeout_ms || 180_000
 
     case OpenAIAdapter.chat_completion(provider, route.credential, payload,
@@ -332,6 +336,7 @@ defmodule TokengateWeb.ProxyController do
       payload
       |> Map.put("model", route.model_responded)
       |> ensure_stream_options()
+      |> inject_guard_rails(route.model_alias)
 
     # Measured just before the upstream call: TTFT is the time from this
     # point to the provider's first chunk.
@@ -418,6 +423,34 @@ defmodule TokengateWeb.ProxyController do
   defp ensure_stream_options(payload) do
     options = Map.get(payload, "stream_options", %{})
     Map.put(payload, "stream_options", Map.put(options, "include_usage", true))
+  end
+
+  # Injects the model_alias's guard_rails at the beginning of the system prompt.
+  # If there is no system message yet, creates one. If there is one, prepends
+  # the guard_rails text. No-op when guard_rails is nil or empty.
+  defp inject_guard_rails(payload, model_alias) do
+    case model_alias.guard_rails do
+      nil ->
+        payload
+
+      "" ->
+        payload
+
+      guard_rails ->
+        messages = Map.get(payload, "messages", [])
+
+        case messages do
+          [%{"role" => "system", "content" => content} | rest] ->
+            Map.put(payload, "messages", [
+              %{"role" => "system", "content" => guard_rails <> "\n\n" <> content} | rest
+            ])
+
+          _ ->
+            Map.put(payload, "messages", [
+              %{"role" => "system", "content" => guard_rails} | messages
+            ])
+        end
+    end
   end
 
   defp await_first_chunk(pid, ref) do

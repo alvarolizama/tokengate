@@ -156,7 +156,10 @@
                           </span>
                         </div>
                         <p class="text-xs text-base-content/50 mt-1">
-                          Estimado desde los logs · {format_bucket(@peak_concurrency.at)} UTC
+                          Estimado desde los logs · {format_bucket(
+                            @peak_concurrency.at,
+                            @timezone
+                          )}
                         </p>
                       <% else %>
                         <p class="text-sm text-base-content/40 py-4 text-center">
@@ -180,7 +183,7 @@
                           class="flex items-center justify-between text-sm"
                         >
                           <span class="text-base-content/70">
-                            {idx}. {format_bucket(row.bucket)} UTC
+                            {idx}. {format_bucket(row.bucket, @timezone)}
                           </span>
                           <span class="font-mono">{format_number(row.request_count)}</span>
                         </li>
@@ -209,7 +212,7 @@
                           class="flex items-center justify-between text-sm"
                         >
                           <span class="text-base-content/70">
-                            {idx}. {format_bucket(row.bucket)} UTC
+                            {idx}. {format_bucket(row.bucket, @timezone)}
                           </span>
                           <span class="font-mono">{format_number(row.request_count)}</span>
                         </li>

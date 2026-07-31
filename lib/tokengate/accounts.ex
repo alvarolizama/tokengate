@@ -170,6 +170,16 @@ defmodule Tokengate.Accounts do
   end
 
   @doc """
+  Updates a user's timezone preference. Returns `{:ok, user}` or
+  `{:error, changeset}`.
+  """
+  def update_user_timezone(%User{} = user, timezone) when is_binary(timezone) do
+    user
+    |> User.timezone_changeset(%{timezone: timezone})
+    |> Repo.update()
+  end
+
+  @doc """
   Resets a user's password (admin action). Validates password complexity.
   """
   def reset_user_password(%User{} = user, attrs) do

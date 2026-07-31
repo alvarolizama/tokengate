@@ -406,10 +406,6 @@ defmodule TokengateWeb.UsersLive do
   def google_badge(%User{google_id: nil}), do: nil
   def google_badge(%User{google_id: _}), do: "Google"
 
-  def format_date(datetime) do
-    Calendar.strftime(datetime, "%d/%m/%Y")
-  end
-
   ## Render ----------------------------------------------------------------
 
   @impl true
@@ -642,7 +638,9 @@ defmodule TokengateWeb.UsersLive do
                       </div>
                   <% end %>
                 </td>
-                <td class="text-xs text-base-content/50">{format_date(user.inserted_at)}</td>
+                <td class="text-xs text-base-content/50">
+                  {format_date(user.inserted_at, @timezone)}
+                </td>
                 <td>
                   <div class="flex gap-1">
                     <.link

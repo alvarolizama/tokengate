@@ -42,6 +42,8 @@ defmodule TokengateWeb.ModelsLive do
       |> assign(:is_admin, is_admin)
       |> assign(:form, nil)
       |> assign(:editing_alias_id, nil)
+      |> assign(:guard_rails_form, nil)
+      |> assign(:guard_rails_alias_id, nil)
       |> assign(:provider_form, nil)
       |> assign(:provider_form_alias_id, nil)
       |> assign(:editing_ap_id, nil)
@@ -127,6 +129,48 @@ defmodule TokengateWeb.ModelsLive do
      socket
      |> assign(:form, nil)
      |> assign(:editing_alias_id, nil)}
+  end
+
+  def handle_event("edit_guard_rails", %{"id" => alias_id}, socket) do
+    if socket.assigns.is_admin do
+      model_alias = Providers.get_model_alias!(alias_id)
+      changeset = Providers.change_model_alias(model_alias)
+
+      {:noreply,
+       socket
+       |> assign(:guard_rails_form, to_form(changeset, as: :model_alias))
+       |> assign(:guard_rails_alias_id, model_alias.id)}
+    else
+      {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+    end
+  end
+
+  def handle_event("cancel_guard_rails", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:guard_rails_form, nil)
+     |> assign(:guard_rails_alias_id, nil)}
+  end
+
+  def handle_event("save_guard_rails", %{"model_alias" => alias_params}, socket) do
+    if socket.assigns.is_admin do
+      model_alias = Providers.get_model_alias!(socket.assigns.guard_rails_alias_id)
+
+      case Providers.update_model_alias(model_alias, alias_params) do
+        {:ok, _updated} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, "Guard rails actualizados.")
+           |> assign(:guard_rails_form, nil)
+           |> assign(:guard_rails_alias_id, nil)
+           |> load_aliases()}
+
+        {:error, changeset} ->
+          {:noreply, assign(socket, :guard_rails_form, to_form(changeset, as: :model_alias))}
+      end
+    else
+      {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+    end
   end
 
   def handle_event("edit_alias", %{"id" => alias_id}, socket) do
@@ -820,6 +864,14 @@ defmodule TokengateWeb.ModelsLive do
                   <div class="flex gap-2 shrink-0">
                     <%= if @is_admin do %>
                       <button
+                        phx-click="edit_guard_rails"
+                        phx-value-id={model_alias.id}
+                        class="btn btn-sm btn-ghost"
+                        id={"guard-rails-#{model_alias.id}"}
+                      >
+                        <.icon name="hero-shield-check" class="w-4 h-4" /> Guard Rails
+                      </button>
+                      <button
                         phx-click="edit_alias"
                         phx-value-id={model_alias.id}
                         class="btn btn-sm btn-ghost"
@@ -1016,6 +1068,42 @@ defmodule TokengateWeb.ModelsLive do
                     Cancelar
                   </button>
                   <button type="submit" class="btn btn-primary btn-sm" id="save-alias-btn">
+                    Guardar
+                  </button>
+                </div>
+              </.form>
+            </div>
+          </div>
+        </div>
+
+        <%!-- Guard Rails form --%>
+        <div :if={@guard_rails_form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div class="absolute inset-0 bg-black/50" phx-click="cancel_guard_rails" />
+          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-2xl">
+            <div class="card-body p-6">
+              <h2 class="text-lg font-semibold mb-2">
+                Guard Rails
+              </h2>
+              <p class="text-sm text-base-content/60 mb-4">
+                Texto que se inyecta al inicio de cada system prompt enviado al proveedor.
+                Úsalo para instrucciones de comportamiento, límites de contenido, o reglas de formato.
+              </p>
+
+              <.form for={@guard_rails_form} id="guard-rails-form" phx-submit="save_guard_rails">
+                <.input
+                  field={@guard_rails_form[:guard_rails]}
+                  type="textarea"
+                  label="Instrucciones de sistema (guard rails)"
+                  rows="8"
+                  placeholder="Ej: Responde siempre en español. No uses markdown. Sé conciso..."
+                  hint="Este texto se antepone al system prompt del usuario. Déjalo vacío para no inyectar nada."
+                />
+
+                <div class="flex gap-2 mt-4 justify-end">
+                  <button type="button" phx-click="cancel_guard_rails" class="btn btn-ghost btn-sm">
+                    Cancelar
+                  </button>
+                  <button type="submit" class="btn btn-primary btn-sm" id="save-guard-rails-btn">
                     Guardar
                   </button>
                 </div>

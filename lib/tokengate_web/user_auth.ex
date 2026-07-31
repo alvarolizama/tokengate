@@ -53,6 +53,8 @@ defmodule TokengateWeb.UserAuth do
       socket
       |> assign_new(:current_user, fn -> user end)
       |> assign_new(:impersonator, fn -> fetch_impersonator(session) end)
+      |> assign_timezone(user)
+      |> attach_timezone_handler()
 
     if user do
       track_presence(socket, user)
@@ -69,6 +71,8 @@ defmodule TokengateWeb.UserAuth do
       socket
       |> assign_new(:current_user, fn -> user end)
       |> assign_new(:impersonator, fn -> fetch_impersonator(session) end)
+      |> assign_timezone(user)
+      |> attach_timezone_handler()
 
     case user do
       %{global_role: "admin"} ->
@@ -82,6 +86,45 @@ defmodule TokengateWeb.UserAuth do
         {:halt, Phoenix.LiveView.redirect(socket, to: "/dashboard")}
     end
   end
+
+  # Assigns the user's timezone on the socket for use in date formatting.
+  defp assign_timezone(socket, %{timezone: tz}) when is_binary(tz),
+    do: Phoenix.Component.assign(socket, :timezone, tz)
+
+  defp assign_timezone(socket, _), do: Phoenix.Component.assign(socket, :timezone, "Etc/UTC")
+
+  # Attaches a live_hook that handles the "set-timezone" event from the
+  # sidebar selector. Persists the timezone to the user's record and
+  # updates the socket assign so all date formatters pick it up.
+  defp attach_timezone_handler(socket) do
+    Phoenix.LiveView.attach_hook(
+      socket,
+      :timezone_handler,
+      :handle_event,
+      &handle_timezone_event/3
+    )
+  end
+
+  defp handle_timezone_event("set-timezone", %{"timezone" => tz}, socket) do
+    user = socket.assigns[:current_user]
+
+    if user && tz != user.timezone do
+      case Accounts.update_user_timezone(user, tz) do
+        {:ok, updated_user} ->
+          {:halt,
+           socket
+           |> Phoenix.Component.assign(:timezone, tz)
+           |> Phoenix.Component.assign(:current_user, updated_user)}
+
+        {:error, _changeset} ->
+          {:halt, socket}
+      end
+    else
+      {:halt, Phoenix.Component.assign(socket, :timezone, tz)}
+    end
+  end
+
+  defp handle_timezone_event(_event, _params, socket), do: {:cont, socket}
 
   # Track the connected LiveView in Phoenix.Presence so the topbar can show
   # how many users are on the dashboard right now. Only the connected mount

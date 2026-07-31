@@ -107,7 +107,7 @@
 
                 <%= if t.api_key do %>
                   <p class="text-xs text-base-content/40 mt-1">
-                    Creada el {format_date(t.api_key.inserted_at)}
+                    Creada el {format_date(t.api_key.inserted_at, @timezone)}
                   </p>
 
                   <div class="flex gap-2 mt-3">

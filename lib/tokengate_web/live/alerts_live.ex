@@ -242,10 +242,10 @@ defmodule TokengateWeb.AlertsLive do
 
   ## Helpers ---------------------------------------------------------------
 
-  defp fmt_dt(nil), do: "—"
+  defp fmt_dt(nil, _timezone), do: "—"
 
-  defp fmt_dt(%DateTime{} = dt) do
-    Calendar.strftime(dt, "%d/%m/%Y %H:%M UTC")
+  defp fmt_dt(%DateTime{} = dt, timezone) do
+    TokengateWeb.TimezoneHelper.format_datetime_short(dt, timezone)
   end
 
   defp fmt_money(nil), do: "—"
@@ -448,7 +448,7 @@ defmodule TokengateWeb.AlertsLive do
                         </span>
                         <span :if={!cred.error_message} class="text-base-content/30">—</span>
                       </td>
-                      <td class="text-xs text-base-content/50">{fmt_dt(cred.error_at)}</td>
+                      <td class="text-xs text-base-content/50">{fmt_dt(cred.error_at, @timezone)}</td>
                       <td class="text-right">
                         <button
                           phx-click="reactivate_credential"
@@ -576,7 +576,7 @@ defmodule TokengateWeb.AlertsLive do
                       <td class="text-xs text-base-content/50">
                         {Map.get(@budget_activity, b.member.id, %{})
                         |> Map.get(:last_request)
-                        |> fmt_dt()}
+                        |> fmt_dt(@timezone)}
                       </td>
                       <td class="text-right">
                         <.link
@@ -624,7 +624,7 @@ defmodule TokengateWeb.AlertsLive do
                   </thead>
                   <tbody>
                     <tr :for={log <- @recent_errors} id={"alert-error-#{log.id}"}>
-                      <td class="whitespace-nowrap text-sm">{fmt_dt(log.inserted_at)}</td>
+                      <td class="whitespace-nowrap text-sm">{fmt_dt(log.inserted_at, @timezone)}</td>
                       <td>
                         <span class={["badge badge-sm", status_class_for(log.status_code)]}>
                           {log.status_code}
