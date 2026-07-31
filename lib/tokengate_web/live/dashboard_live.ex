@@ -281,20 +281,24 @@ defmodule TokengateWeb.DashboardLive do
           []
       end
 
-    series_with_tps = Enum.map(series, fn row ->
-      tps =
-        if row.total_latency_ms > 0 do
-          row.completion_tokens / (row.total_latency_ms / 1000.0)
-        else
-          0.0
-        end
+    series_with_tps =
+      Enum.map(series, fn row ->
+        tps =
+          if row.total_latency_ms > 0 do
+            row.completion_tokens / (row.total_latency_ms / 1000.0)
+          else
+            0.0
+          end
 
-      Map.put(row, :tps, tps)
-    end)
+        Map.put(row, :tps, tps)
+      end)
 
     socket
     |> assign(:cost_series, to_chart_points(series_with_tps, period, :cost_usd, &usd_tooltip/1))
-    |> assign(:requests_series, to_chart_points(series_with_tps, period, :request_count, &requests_tooltip/1))
+    |> assign(
+      :requests_series,
+      to_chart_points(series_with_tps, period, :request_count, &requests_tooltip/1)
+    )
     |> assign(:tokens_series, to_token_points(series_with_tps, period))
     |> assign(:tps_series, to_chart_points(series_with_tps, period, :tps, &tps_tooltip/1))
   end
@@ -765,8 +769,10 @@ defmodule TokengateWeb.DashboardLive do
               </div>
               <svg viewBox="0 0 400 150" class="flex-1 h-40" preserveAspectRatio="none">
                 <%= for {row, i} <- Enum.with_index(@series) do %>
-                  <% in_height = if @max_value > 0, do: max(row.value_in / @max_value * 120, 0), else: 0 %>
-                  <% out_height = if @max_value > 0, do: max(row.value_out / @max_value * 120, 0), else: 0 %>
+                  <% in_height =
+                    if @max_value > 0, do: max(row.value_in / @max_value * 120, 0), else: 0 %>
+                  <% out_height =
+                    if @max_value > 0, do: max(row.value_out / @max_value * 120, 0), else: 0 %>
                   <% x = 10 + i * (@bar_width + 4) %>
                   <% out_y = 140 - out_height %>
                   <% in_y = out_y - in_height %>

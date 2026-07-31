@@ -207,7 +207,10 @@
                     <%= for model <- @model_catalog do %>
                       <tr class="border-b border-base-200 last:border-0 hover:bg-base-200/50">
                         <td class="py-1.5">
-                          <div class="font-medium text-base-content truncate max-w-[160px]" title={model.name}>
+                          <div
+                            class="font-medium text-base-content truncate max-w-[160px]"
+                            title={model.name}
+                          >
                             {model.name}
                           </div>
                           <div class="text-[10px] text-base-content/40">

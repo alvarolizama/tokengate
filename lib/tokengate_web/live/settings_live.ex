@@ -4,10 +4,13 @@ defmodule TokengateWeb.SettingsLive do
 
   Currently supports:
     * Reset all request logs (truncate `request_logs` table)
+    * Reset sticky sessions
+    * Reset all member extras (budget, concurrency, rpm)
   """
 
   use TokengateWeb, :live_view
 
+  import Ecto.Query, only: [from: 2]
   alias Tokengate.Logs
   alias Tokengate.Repo
   alias Tokengate.Routing.StickyTracker
@@ -22,8 +25,10 @@ defmodule TokengateWeb.SettingsLive do
       |> assign(:is_admin, user && user.global_role == "admin")
       |> assign(:confirm_reset, false)
       |> assign(:confirm_sticky_reset, false)
+      |> assign(:confirm_extras_reset, false)
       |> assign(:log_count, count_logs())
       |> assign(:sticky_count, sticky_count())
+      |> assign(:extras_count, count_members_with_extras())
       |> require_admin_hook()
 
     {:ok, socket}
@@ -81,6 +86,27 @@ defmodule TokengateWeb.SettingsLive do
      |> assign(:confirm_sticky_reset, false)
      |> assign(:sticky_count, 0)
      |> put_flash(:info, "Sticky sessions reiniciadas.")}
+  end
+
+  @impl true
+  def handle_event("show_extras_reset_confirm", _params, socket) do
+    {:noreply, assign(socket, :confirm_extras_reset, true)}
+  end
+
+  @impl true
+  def handle_event("cancel_extras_reset", _params, socket) do
+    {:noreply, assign(socket, :confirm_extras_reset, false)}
+  end
+
+  @impl true
+  def handle_event("reset_all_extras", _params, socket) do
+    count = reset_all_member_extras()
+
+    {:noreply,
+     socket
+     |> assign(:confirm_extras_reset, false)
+     |> assign(:extras_count, 0)
+     |> put_flash(:info, "Extras de #{count} miembros reiniciados.")}
   end
 
   ## Render -----------------------------------------------------------------
@@ -148,6 +174,31 @@ defmodule TokengateWeb.SettingsLive do
                 id="reset-sticky-btn"
               >
                 Reiniciar stickies
+              </button>
+            </div>
+
+            <div class="divider my-2"></div>
+
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="font-semibold text-base-content">Reiniciar extras de miembros</h3>
+                <p class="text-sm text-base-content/60">
+                  Elimina todos los <code>extra_monthly_budget_usd</code>,
+                  <code>extra_concurrency</code> y <code>extra_rpm</code>
+                  de todos los miembros de todos los equipos.
+                  Los miembros quedarán con los valores por defecto de su equipo.
+                  El gasto acumulado NO se resetea.
+                  Actualmente hay <span class="font-mono font-semibold">{@extras_count}</span>
+                  miembros con extras activos.
+                </p>
+              </div>
+              <button
+                type="button"
+                phx-click="show_extras_reset_confirm"
+                class="btn btn-warning btn-outline btn-sm"
+                id="reset-extras-btn"
+              >
+                Reiniciar extras
               </button>
             </div>
           </div>
@@ -218,6 +269,43 @@ defmodule TokengateWeb.SettingsLive do
           </div>
         </div>
       </div>
+
+      <%!-- Confirmation modal: reset member extras --%>
+      <div :if={@confirm_extras_reset} class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/50" phx-click="cancel_extras_reset" />
+        <div class="relative card bg-base-100 border border-warning/50 shadow-xl w-full max-w-md">
+          <div class="card-body">
+            <h3 class="card-title text-warning flex items-center gap-2">
+              <.icon name="hero-exclamation-triangle" class="w-5 h-5" /> ¿Reiniciar extras de miembros?
+            </h3>
+            <p class="text-sm text-base-content/70 mt-2">
+              Esto eliminará <strong>todos</strong> los extras de todos los miembros:
+            </p>
+            <ul class="text-sm text-base-content/70 list-disc list-inside mt-1">
+              <li><code>extra_monthly_budget_usd</code> → nil</li>
+              <li><code>extra_concurrency</code> → nil</li>
+              <li><code>extra_rpm</code> → nil</li>
+            </ul>
+            <p class="text-sm text-base-content/70 mt-2">
+              Cada miembro quedarán con los valores por defecto de su equipo.
+              El gasto acumulado <strong>no se resetea</strong>.
+            </p>
+            <div class="flex gap-2 mt-4 justify-end">
+              <button type="button" phx-click="cancel_extras_reset" class="btn btn-ghost btn-sm">
+                Cancelar
+              </button>
+              <button
+                type="button"
+                phx-click="reset_all_extras"
+                class="btn btn-warning btn-sm"
+                id="confirm-reset-extras-btn"
+              >
+                Sí, reiniciar extras
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
     </Layouts.dashboard>
     """
   end
@@ -235,5 +323,41 @@ defmodule TokengateWeb.SettingsLive do
     rescue
       ArgumentError -> 0
     end
+  end
+
+  defp count_members_with_extras do
+    import Ecto.Query
+
+    Repo.one(
+      from(tm in "team_members",
+        where:
+          not is_nil(tm.extra_monthly_budget_usd) or
+            not is_nil(tm.extra_concurrency) or
+            not is_nil(tm.extra_rpm),
+        select: count(tm.id)
+      )
+    )
+  end
+
+  defp reset_all_member_extras do
+    import Ecto.Query
+
+    {count, _} =
+      Repo.update_all(
+        from(tm in "team_members",
+          where:
+            not is_nil(tm.extra_monthly_budget_usd) or
+              not is_nil(tm.extra_concurrency) or
+              not is_nil(tm.extra_rpm)
+        ),
+        set: [
+          extra_monthly_budget_usd: nil,
+          extra_concurrency: nil,
+          extra_rpm: nil,
+          updated_at: DateTime.truncate(DateTime.utc_now(), :second)
+        ]
+      )
+
+    count
   end
 end
