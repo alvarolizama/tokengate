@@ -41,6 +41,7 @@ defmodule TokengateWeb.ModelsLive do
       |> assign(:editing_ap_id, nil)
       |> assign(:provider_models, [])
       |> assign(:provider_models_loading, false)
+      |> assign(:provider_model_search, "")
       |> assign(:provider_form_credential_id, nil)
       |> assign(:current_billing_mode, "pay_per_token")
       |> load_aliases()
@@ -181,6 +182,7 @@ defmodule TokengateWeb.ModelsLive do
      |> assign(:editing_ap_id, nil)
      |> assign(:provider_models, [])
      |> assign(:provider_models_loading, false)
+      |> assign(:provider_model_search, "")
      |> assign(:provider_form_credential_id, nil)
      |> assign(:current_billing_mode, "pay_per_token")}
   end
@@ -194,9 +196,27 @@ defmodule TokengateWeb.ModelsLive do
        socket
        |> assign(:provider_form, to_form(changeset, as: :model_provider))
        |> assign(:editing_ap_id, ap.id)
-       |> assign(:current_billing_mode, ap.billing_mode || "pay_per_token")}
+       |> assign(:provider_form_credential_id, ap.credential_id)
+       |> assign(:current_billing_mode, ap.billing_mode || "pay_per_token")
+       |> assign(:provider_models_loading, true)
+       |> fetch_provider_models(ap.credential_id)}
     else
       {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+    end
+  end
+
+  def handle_event("select_provider_model", %{"model" => model}, socket) do
+    if socket.assigns.is_admin and socket.assigns.provider_form do
+      form = to_form(
+        Ecto.Changeset.put_change(socket.assigns.provider_form.source, :provider_model, model),
+        as: :model_provider
+      )
+      {:noreply,
+       socket
+       |> assign(:provider_form, form)
+       |> assign(:provider_model_search, model)}
+    else
+      {:noreply, socket}
     end
   end
 
@@ -211,11 +231,15 @@ defmodule TokengateWeb.ModelsLive do
   def handle_event("provider_form_changed", %{"model_provider" => ap_params}, socket) do
     if socket.assigns.is_admin do
       credential_id = ap_params["credential_id"]
+      model_search = ap_params["provider_model"] || ""
 
       billing_mode =
         ap_params["billing_mode"] || socket.assigns[:current_billing_mode] || "pay_per_token"
 
-      socket = assign(socket, :current_billing_mode, billing_mode)
+      socket =
+        socket
+        |> assign(:current_billing_mode, billing_mode)
+        |> assign(:provider_model_search, model_search)
 
       cond do
         credential_id == "" or credential_id == nil ->
@@ -364,6 +388,7 @@ defmodule TokengateWeb.ModelsLive do
       socket
       |> assign(:provider_models, [])
       |> assign(:provider_models_loading, false)
+      |> assign(:provider_model_search, "")
     end
   end
 
@@ -374,13 +399,15 @@ defmodule TokengateWeb.ModelsLive do
         {:noreply,
          socket
          |> assign(:provider_models, models)
-         |> assign(:provider_models_loading, false)}
+         |> assign(:provider_models_loading, false)
+      |> assign(:provider_model_search, "")}
 
       {:error, _reason} ->
         {:noreply,
          socket
          |> assign(:provider_models, [])
          |> assign(:provider_models_loading, false)
+      |> assign(:provider_model_search, "")
          |> put_flash(:error, "No se pudieron cargar los modelos del proveedor.")}
     end
   end
@@ -826,19 +853,41 @@ defmodule TokengateWeb.ModelsLive do
 
                 <.input
                   field={@provider_form[:provider_model]}
-                  type="datalist"
+                  type="text"
                   label="Modelo del proveedor"
-                  options={@provider_models}
                   required
-                  placeholder="Selecciona o escribe el modelo (ej. glm-5.2:dedicated)"
-                  hint="Sugerencias del catálogo público del proveedor. Puedes escribir cualquier valor para tiers dedicados o privados."
+                  placeholder="Escribe o selecciona el modelo (ej. glm-5.2:dedicated)"
+                  hint="Sugerencias del catálogo del proveedor. Puedes escribir cualquier valor para tiers dedicados o privados."
                 />
-                <div class="grid grid-cols-2 gap-3">
+                <%= if @provider_models != [] and !@provider_models_loading do %>
+                  <% search = String.downcase(@provider_model_search || "") %>
+                  <% filtered = Enum.filter(@provider_models, fn m -> String.contains?(String.downcase(m), search) end) %>
+                  <%= if filtered != [] do %>
+                    <div class="mt-1 max-h-32 overflow-y-auto rounded-lg border border-base-300 bg-base-200/50">
+                      <button
+                        :for={model <- filtered}
+                        type="button"
+                        phx-click="select_provider_model"
+                        phx-value-model={model}
+                        class="block w-full text-left px-3 py-1.5 text-sm font-mono hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0"
+                      >
+                        {model}
+                      </button>
+                    </div>
+                  <% end %>
+                <% end %>
+                <div class="grid grid-cols-3 gap-3">
                   <.input
                     field={@provider_form[:priority]}
                     type="number"
-                    label="Prioridad (menor = primero)"
-                    hint="Orden de preferencia. Menor número = se intenta primero. Si cae, salta al siguiente."
+                    label="Prioridad"
+                    hint="Menor = se intenta primero."
+                  />
+                  <.input
+                    field={@provider_form[:context_window]}
+                    type="number"
+                    label="Contexto (tokens)"
+                    hint="Ventana de contexto del modelo en este proveedor."
                   />
                   <.input
                     field={@provider_form[:billing_mode]}
@@ -848,7 +897,7 @@ defmodule TokengateWeb.ModelsLive do
                       {"Pay per token", "pay_per_token"},
                       {"Incluida (suscripción)", "included"}
                     ]}
-                    hint="Pay per token: cobra por uso, el proveedor reporta el costo real. Incluida: suscripción/RPM, gasto real = $0."
+                    hint="Pay per token: cobra por uso. Incluida: suscripción/RPM = $0."
                   />
                 </div>
 

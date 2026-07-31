@@ -35,7 +35,7 @@
         <p class="font-semibold">Nueva clave generada para {@new_token_team}</p>
         <div class="relative mt-2">
           <code
-            class="block p-2 pr-24 bg-base-200 rounded text-sm font-mono break-all select-all"
+            class="block p-2 pr-24 bg-base-300 rounded text-sm font-mono break-all select-all text-base-content"
             id="new-token-value"
           >
             {@new_token}
@@ -201,37 +201,18 @@
                   <thead>
                     <tr class="text-base-content/50 border-b border-base-200">
                       <th class="text-left py-1 font-medium">Modelo</th>
-                      <th class="text-right py-1 font-medium">In</th>
-                      <th class="text-right py-1 font-medium">Out</th>
-                      <th class="text-right py-1 font-medium">Ctx</th>
                     </tr>
                   </thead>
                   <tbody>
                     <%= for model <- @model_catalog do %>
                       <tr class="border-b border-base-200 last:border-0 hover:bg-base-200/50">
-                        <td
-                          class="py-1.5 font-medium text-base-content truncate max-w-[120px]"
-                          title={model.name}
-                        >
-                          {model.name}
-                        </td>
-                        <td
-                          class="py-1.5 text-right text-base-content/70"
-                          title={"Input: $#{format_decimal(model.market_input)}/1M"}
-                        >
-                          ${format_decimal(model.market_input)}
-                        </td>
-                        <td
-                          class="py-1.5 text-right text-base-content/70"
-                          title={"Output: $#{format_decimal(model.market_output)}/1M"}
-                        >
-                          ${format_decimal(model.market_output)}
-                        </td>
-                        <td
-                          class="py-1.5 text-right text-base-content/70"
-                          title={"Contexto: #{format_number(model.context_window)} tokens"}
-                        >
-                          {format_compact(model.context_window)}
+                        <td class="py-1.5">
+                          <div class="font-medium text-base-content truncate max-w-[160px]" title={model.name}>
+                            {model.name}
+                          </div>
+                          <div class="text-[10px] text-base-content/40">
+                            {format_compact(model.context_window)} ctx
+                          </div>
                         </td>
                       </tr>
                     <% end %>
@@ -270,7 +251,7 @@
           </div>
         <% else %>
           <!-- Metric cards: KPIs -->
-          <div class="grid grid-cols-2 lg:grid-cols-3 gap-4">
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <%!-- Costo (lo que el proveedor reportó por cada request) --%>
             <div
               id="cost-card"
@@ -574,30 +555,38 @@
             </div>
           </div>
 
-          <%!-- Charts: requests / cost / savings per bucket --%>
-          <div class="grid grid-cols-1 lg:grid-cols-3 gap-4" id="charts-grid">
-            <.bar_chart
-              id="requests-chart"
-              title={requests_title(@period)}
-              icon="hero-arrow-trending-up"
-              series={@requests_series}
-              bar_class="fill-accent/70 hover:fill-accent"
-              empty_label={"Sin datos para #{String.downcase(period_label(@period))}."}
-            />
+          <%!-- Charts: cost / requests / tokens per hour --%>
+          <div class="grid grid-cols-4 gap-4" id="charts-grid">
             <.bar_chart
               id="cost-chart"
               title={chart_title(@period)}
               icon="hero-currency-dollar"
               series={@cost_series}
+              bar_class="fill-accent/70 hover:fill-accent"
               empty_label={"Sin datos para #{String.downcase(period_label(@period))}."}
             />
             <.bar_chart
-              id="savings-chart"
-              title={savings_title(@period)}
-              icon="hero-banknotes"
-              series={@savings_series}
+              id="requests-chart"
+              title={requests_title(@period)}
+              icon="hero-arrow-trending-up"
+              series={@requests_series}
+              bar_class="fill-primary/70 hover:fill-primary"
+              empty_label={"Sin datos para #{String.downcase(period_label(@period))}."}
+            />
+            <.stacked_bar_chart
+              id="tokens-chart"
+              title={tokens_title(@period)}
+              icon="hero-cpu-chip"
+              series={@tokens_series}
+              empty_label={"Sin datos para #{String.downcase(period_label(@period))}."}
+            />
+            <.bar_chart
+              id="tps-chart"
+              title={tps_title(@period)}
+              icon="hero-bolt"
+              series={@tps_series}
               bar_class="fill-success/70 hover:fill-success"
-              empty_label="Sin ahorro en este periodo."
+              empty_label={"Sin datos para #{String.downcase(period_label(@period))}."}
             />
           </div>
         <% end %>

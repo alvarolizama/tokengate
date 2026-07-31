@@ -19,6 +19,8 @@ defmodule TokengateWeb.StatsLive do
 
   use TokengateWeb, :live_view
 
+  import TokengateWeb.KpiHelpers, only: [kpi_cards: 1]
+
   alias Tokengate.Accounts
   alias Tokengate.Logs
   alias Tokengate.Metrics.Rollup

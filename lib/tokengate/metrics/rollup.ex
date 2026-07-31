@@ -68,17 +68,21 @@ defmodule Tokengate.Metrics.Rollup do
       |> select([rl], %{
         hour: fragment("date_trunc('hour', ?)", rl.inserted_at),
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
+        completion_tokens: coalesce(sum(rl.completion_tokens), 0),
+        total_latency_ms: coalesce(sum(rl.latency_ms), 0)
       })
 
     Repo.all(query)
     |> Enum.map(fn row ->
       %{
-        # date_trunc returns a NaiveDateTime in Postgres; convert to UTC
-        # DateTime so consumers can compare apples-to-apples.
         hour: to_utc_datetime(row.hour),
         request_count: row.request_count,
-        cost_usd: Decimal.new(to_string(row.cost_usd))
+        cost_usd: Decimal.new(to_string(row.cost_usd)),
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens,
+        total_latency_ms: row.total_latency_ms
       }
     end)
   end

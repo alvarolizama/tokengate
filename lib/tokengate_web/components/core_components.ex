@@ -286,7 +286,7 @@ defmodule TokengateWeb.CoreComponents do
           {@rest}
         />
         <datalist id={@id <> "-list"}>
-          <option :for={{label, value} <- @options} value={value}>{label}</option>
+          <option :for={opt <- @options} value={opt} />
         </datalist>
       </label>
       <.error :for={msg <- @errors}>{msg}</.error>

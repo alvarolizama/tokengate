@@ -22,8 +22,12 @@ defmodule TokengateWeb.DashboardLive do
   alias Tokengate.Accounts
   alias Tokengate.Budgets.Manager, as: Budgets
   alias Tokengate.Logs
+  alias Tokengate.Logs.RequestLog
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Providers
+  alias Tokengate.Repo
+
+  import Ecto.Query
 
   @pubsub Tokengate.PubSub
   @metrics_topic "metrics:updated"
@@ -51,7 +55,8 @@ defmodule TokengateWeb.DashboardLive do
       |> assign(:metrics, empty_metrics())
       |> assign(:cost_series, [])
       |> assign(:requests_series, [])
-      |> assign(:savings_series, [])
+      |> assign(:tokens_series, [])
+      |> assign(:tps_series, [])
       |> assign(:top_models, [])
       |> assign(:top_teams, [])
       |> assign(:top_members, [])
@@ -260,38 +265,82 @@ defmodule TokengateWeb.DashboardLive do
   end
 
   # Chart series — granularity depends on period
-  defp load_chart_series(socket, user, opts, period) do
+  defp load_chart_series(socket, user, _opts, period) do
     hours = Map.fetch!(@periods, period)
-    scope = chart_scope(user)
-    ids = scope.member_ids
+    member_ids = socket.assigns[:scope_member_ids] || []
 
-    series = user_hourly_series(ids, opts, hours)
+    series =
+      cond do
+        user.global_role == "admin" and member_ids == [] ->
+          Rollup.hourly_series(nil, hours)
+
+        member_ids != [] ->
+          hourly_series_for_members(member_ids, hours)
+
+        true ->
+          []
+      end
+
+    series_with_tps = Enum.map(series, fn row ->
+      tps =
+        if row.total_latency_ms > 0 do
+          row.completion_tokens / (row.total_latency_ms / 1000.0)
+        else
+          0.0
+        end
+
+      Map.put(row, :tps, tps)
+    end)
 
     socket
-    |> assign(:cost_series, to_chart_points(series, period, :cost_usd, &usd_tooltip/1))
-    |> assign(
-      :requests_series,
-      to_chart_points(series, period, :request_count, &requests_tooltip/1)
-    )
+    |> assign(:cost_series, to_chart_points(series_with_tps, period, :cost_usd, &usd_tooltip/1))
+    |> assign(:requests_series, to_chart_points(series_with_tps, period, :request_count, &requests_tooltip/1))
+    |> assign(:tokens_series, to_token_points(series_with_tps, period))
+    |> assign(:tps_series, to_chart_points(series_with_tps, period, :tps, &tps_tooltip/1))
   end
 
-  defp chart_scope(user) do
-    memberships = Accounts.list_team_members_for_user(user.id)
-    %{member_ids: Enum.map(memberships, & &1.id)}
-  end
+  defp hourly_series_for_members(member_ids, hours) do
+    from_ts = hours_ago_dt(hours)
 
-  defp user_hourly_series([], _opts, _hours), do: []
+    query =
+      RequestLog
+      |> where([rl], rl.team_member_id in ^member_ids and rl.inserted_at >= ^from_ts)
+      |> group_by([rl], fragment("date_trunc('hour', ?)", rl.inserted_at))
+      |> order_by([rl], fragment("date_trunc('hour', ?)", rl.inserted_at))
+      |> select([rl], %{
+        hour: fragment("date_trunc('hour', ?)", rl.inserted_at),
+        request_count: count(rl.id),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
+        completion_tokens: coalesce(sum(rl.completion_tokens), 0),
+        total_latency_ms: coalesce(sum(rl.latency_ms), 0)
+      })
 
-  defp user_hourly_series(member_ids, opts, hours) do
-    summary = Logs.cost_summary_for_members(member_ids, Map.new(opts))
-
-    [
+    Repo.all(query)
+    |> Enum.map(fn row ->
       %{
-        hour: hours_ago_dt(hours),
-        request_count: summary.request_count,
-        cost_usd: summary.total_cost_usd
+        hour: row.hour |> DateTime.from_naive!("Etc/UTC"),
+        request_count: row.request_count,
+        cost_usd: Decimal.new(to_string(row.cost_usd)),
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens,
+        total_latency_ms: row.total_latency_ms
       }
-    ]
+    end)
+  end
+
+  defp to_token_points(series, period) do
+    Enum.map(series, fn row ->
+      in_val = row.prompt_tokens * 1.0
+      out_val = row.completion_tokens * 1.0
+
+      %{
+        label: bucket_label(row.hour, period),
+        value_in: in_val,
+        value_out: out_val,
+        tooltip: "#{format_compact(trunc(in_val))} in / #{format_compact(trunc(out_val))} out"
+      }
+    end)
   end
 
   # Breakdowns
@@ -365,6 +414,7 @@ defmodule TokengateWeb.DashboardLive do
 
   defp usd_tooltip(value), do: "#{Float.round(value, 6)} USD"
   defp requests_tooltip(value), do: "#{trunc(value)} requests"
+  defp tps_tooltip(value), do: "#{Float.round(value, 1)} tps"
 
   # Team breakdown: admin only
   defp load_team_breakdown(%{global_role: "admin"}, opts) do
@@ -379,9 +429,6 @@ defmodule TokengateWeb.DashboardLive do
       errors_total: 0,
       error_rate: 0.0,
       cost_usd: Decimal.new(0),
-      provider_cost_usd: Decimal.new(0),
-      estimated_cost_usd: Decimal.new(0),
-      savings_usd: Decimal.new(0),
       prompt_tokens: 0,
       completion_tokens: 0,
       avg_latency_ms: 0.0,
@@ -393,9 +440,6 @@ defmodule TokengateWeb.DashboardLive do
   defp empty_summary do
     %{
       total_cost_usd: Decimal.new(0),
-      total_provider_cost_usd: Decimal.new(0),
-      total_savings_usd: Decimal.new(0),
-      total_estimated_cost_usd: Decimal.new(0),
       total_prompt_tokens: 0,
       total_completion_tokens: 0,
       request_count: 0,
@@ -510,7 +554,8 @@ defmodule TokengateWeb.DashboardLive do
 
   def chart_title(period), do: series_title("Costo", period)
   def requests_title(period), do: series_title("Requests", period)
-  def savings_title(period), do: series_title("Ahorro", period)
+  def tokens_title(period), do: series_title("Tokens in/out", period)
+  def tps_title(period), do: series_title("TPS", period)
 
   defp series_title(label, period) do
     base =
@@ -679,6 +724,109 @@ defmodule TokengateWeb.DashboardLive do
 
   attr :id, :string, required: true
   attr :title, :string, required: true
+  attr :icon, :string, default: "hero-cpu-chip"
+  attr :series, :list, required: true
+  attr :empty_label, :string, default: "Sin datos para este periodo."
+
+  def stacked_bar_chart(assigns) do
+    max_value =
+      assigns.series
+      |> Enum.map(fn row -> row.value_in + row.value_out end)
+      |> Enum.max(fn -> 0.0 end)
+
+    bar_count = max(length(assigns.series), 1)
+
+    assigns =
+      assigns
+      |> assign(:max_value, max_value)
+      |> assign(:bar_width, max(380 / bar_count - 4, 2))
+      |> assign(:y_labels, compute_y_labels(max_value))
+      |> assign(:x_labels, compute_x_labels(assigns.series))
+
+    ~H"""
+    <div id={@id} class="card bg-base-100 border border-base-300 shadow-sm">
+      <div class="card-body">
+        <h2 class="card-title text-base">
+          <.icon name={@icon} class="w-5 h-5 text-base-content/60" />
+          {@title}
+        </h2>
+
+        <%= if @series == [] or @max_value == 0.0 do %>
+          <div class="h-40 flex items-center justify-center text-base-content/40 text-sm">
+            {@empty_label}
+          </div>
+        <% else %>
+          <div class="mt-4">
+            <div class="flex">
+              <div class="flex flex-col justify-between text-[10px] text-base-content/50 pr-1 h-40 text-right w-8">
+                <%= for label <- @y_labels do %>
+                  <span>{label}</span>
+                <% end %>
+              </div>
+              <svg viewBox="0 0 400 150" class="flex-1 h-40" preserveAspectRatio="none">
+                <%= for {row, i} <- Enum.with_index(@series) do %>
+                  <% in_height = if @max_value > 0, do: max(row.value_in / @max_value * 120, 0), else: 0 %>
+                  <% out_height = if @max_value > 0, do: max(row.value_out / @max_value * 120, 0), else: 0 %>
+                  <% x = 10 + i * (@bar_width + 4) %>
+                  <% out_y = 140 - out_height %>
+                  <% in_y = out_y - in_height %>
+                  <rect
+                    x={x}
+                    y={in_y}
+                    width={@bar_width}
+                    height={in_height}
+                    rx="2"
+                    class="fill-primary/70 hover:fill-primary transition-colors"
+                  >
+                    <title>{row.label} — {row.tooltip}</title>
+                  </rect>
+                  <rect
+                    x={x}
+                    y={out_y}
+                    width={@bar_width}
+                    height={out_height}
+                    class="fill-accent/70 hover:fill-accent transition-colors"
+                  >
+                    <title>{row.label} — {row.tooltip}</title>
+                  </rect>
+                <% end %>
+                <line x1="10" y1="140" x2="390" y2="140" class="stroke-base-300" stroke-width="1" />
+                <%= for {_label, i} <- Enum.with_index(@y_labels) do %>
+                  <% y = 20 + i * (120 / (length(@y_labels) - 1)) %>
+                  <line
+                    x1="10"
+                    y1={y}
+                    x2="390"
+                    y2={y}
+                    class="stroke-base-300/50"
+                    stroke-width="0.5"
+                    stroke-dasharray="2,2"
+                  />
+                <% end %>
+              </svg>
+            </div>
+            <div class="flex items-center gap-4 text-[10px] text-base-content/50 mt-1 pl-9">
+              <span class="flex items-center gap-1">
+                <span class="inline-block w-2 h-2 rounded-sm bg-primary/70"></span> Input
+              </span>
+              <span class="flex items-center gap-1">
+                <span class="inline-block w-2 h-2 rounded-sm bg-accent/70"></span> Output
+              </span>
+            </div>
+            <div class="flex justify-between text-[10px] text-base-content/50 pl-9 mt-1">
+              <%= for label <- @x_labels do %>
+                <span>{label}</span>
+              <% end %>
+            </div>
+          </div>
+        <% end %>
+      </div>
+    </div>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :title, :string, required: true
   attr :icon, :string, default: "hero-chart-bar-square"
   attr :rows, :list, required: true
   attr :empty_label, :string, default: "Sin datos para este periodo."
@@ -747,8 +895,6 @@ defmodule TokengateWeb.DashboardLive do
   defp model_catalog_entry(ma) do
     %{
       name: ma.display_name || ma.name,
-      market_input: ma.market_input_price_per_1m,
-      market_output: ma.market_output_price_per_1m,
       context_window: ma.context_window
     }
   end

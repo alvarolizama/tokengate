@@ -96,10 +96,27 @@ const Modal = {
   }
 }
 
+// Copy text from a target element to the clipboard.
+// Usage: <button phx-hook="CopyToClipboard" data-target="element-id">Copiar</button>
+const CopyToClipboard = {
+  mounted() {
+    this.el.addEventListener("click", () => {
+      const target = document.getElementById(this.el.dataset.target)
+      if (!target) return
+      const text = target.textContent.trim()
+      navigator.clipboard.writeText(text).then(() => {
+        const original = this.el.textContent
+        this.el.textContent = "¡Copiado!"
+        setTimeout(() => { this.el.textContent = original }, 1500)
+      })
+    })
+  }
+}
+
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, SortableProviders, Modal},
+  hooks: {...colocatedHooks, SortableProviders, Modal, CopyToClipboard},
 })
 
 // Show progress bar on live navigation and form submits

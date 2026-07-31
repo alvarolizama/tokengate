@@ -86,8 +86,6 @@ defmodule Tokengate.Metrics.RollupTest do
           %{
             "name" => "gpt-#{System.unique_integer([:positive])}",
             "display_name" => "GPT Test",
-            "market_input_price_per_1m" => "1.00",
-            "market_output_price_per_1m" => "2.00",
             "context_window" => 128_000
           },
           attrs
