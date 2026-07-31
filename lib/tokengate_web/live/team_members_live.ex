@@ -74,6 +74,7 @@ defmodule TokengateWeb.TeamMembersLive do
         members
       else
         search_down = String.downcase(search)
+
         Enum.filter(members, fn m ->
           String.contains?(String.downcase(m.user.email), search_down) or
             String.contains?(String.downcase(m.user.name || ""), search_down)

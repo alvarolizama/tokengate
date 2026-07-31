@@ -36,8 +36,6 @@ defmodule TokengateWeb.TeamMembersLiveTest do
       Providers.create_model_alias(%{
         name: "gpt-#{u}",
         display_name: "GPT #{u}",
-        market_input_price_per_1m: Decimal.new("10.00"),
-        market_output_price_per_1m: Decimal.new("30.00"),
         context_window: 128_000
       })
 

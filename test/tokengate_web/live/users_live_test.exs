@@ -283,8 +283,18 @@ defmodule TokengateWeb.UsersLiveTest do
   test "root admin cannot be impersonated", %{conn: conn} do
     %{user: admin, password: admin_password} = register("admin")
 
-    root = Accounts.get_user_by_email("admin@tokengate.local")
-    assert root, "seeds should create the root admin"
+    # Some tests assume a "root" admin exists; the seed script normally creates
+    # `admin@tokengate.local`, but tests don't run seeds. Create it on demand.
+    {:ok, root} =
+      if existing = Accounts.get_user_by_email("admin@tokengate.local") do
+        {:ok, existing}
+      else
+        Accounts.register_user(%{
+          email: "admin@tokengate.local",
+          name: "Root Admin",
+          password: "RootPass123!"
+        })
+      end
 
     conn = login(conn, admin, admin_password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/users")
@@ -321,8 +331,6 @@ defmodule TokengateWeb.UsersLiveTest do
       Providers.create_model_alias(%{
         name: "model-#{u}",
         display_name: "Model #{u}",
-        market_input_price_per_1m: "1.00",
-        market_output_price_per_1m: "2.00",
         context_window: 128_000
       })
 
@@ -337,10 +345,7 @@ defmodule TokengateWeb.UsersLiveTest do
         status_code: 200,
         prompt_tokens: 100,
         completion_tokens: 50,
-        cost_usd: "0.005",
         provider_cost_usd: "0.005",
-        savings_usd: "0.001",
-        estimated_cost_usd: "0.01",
         latency_ms: 42,
         streaming: false
       })
@@ -360,7 +365,17 @@ defmodule TokengateWeb.UsersLiveTest do
 
   test "root admin has no delete button", %{conn: conn} do
     %{user: admin, password: admin_password} = register("admin")
-    root = Accounts.get_user_by_email("admin@tokengate.local")
+
+    {:ok, root} =
+      if existing = Accounts.get_user_by_email("admin@tokengate.local") do
+        {:ok, existing}
+      else
+        Accounts.register_user(%{
+          email: "admin@tokengate.local",
+          name: "Root Admin",
+          password: "RootPass123!"
+        })
+      end
 
     conn = login(conn, admin, admin_password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/users")

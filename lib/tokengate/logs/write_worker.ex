@@ -8,8 +8,8 @@ defmodule Tokengate.Logs.WriteWorker do
   is dispatched to the organization's observability destinations via
   `Tokengate.Observability.WebhookWorker.dispatch/1`.
 
-  Decimal fields arrive as JSON strings — the RequestLog changeset casts
-  them back. Request logs NEVER contain prompt/completion content.
+  `provider_cost_usd` arrives as a JSON string — the RequestLog changeset
+  casts it back. Request logs NEVER contain prompt/completion content.
   """
 
   use Oban.Worker, queue: :logs, max_attempts: 5
@@ -35,10 +35,7 @@ defmodule Tokengate.Logs.WriteWorker do
       error_reason: args["error_reason"],
       prompt_tokens: args["prompt_tokens"] || 0,
       completion_tokens: args["completion_tokens"] || 0,
-      cost_usd: args["cost_usd"],
       provider_cost_usd: args["provider_cost_usd"],
-      savings_usd: args["savings_usd"],
-      estimated_cost_usd: args["estimated_cost_usd"],
       latency_ms: args["latency_ms"],
       ttft_ms: args["ttft_ms"],
       streaming: args["streaming"] || false,

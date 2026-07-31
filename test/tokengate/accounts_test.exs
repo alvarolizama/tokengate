@@ -232,8 +232,8 @@ defmodule Tokengate.AccountsTest do
       team = team_fixture()
       user = user_fixture()
 
-      {:ok, _tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
-      {:ok, _api_key, token} = Accounts.replace_api_key(_tm)
+      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, _api_key, token} = Accounts.replace_api_key(tm)
 
       assert {:ok, %TeamMember{}} = Accounts.get_team_member_by_api_key(token)
     end
@@ -299,8 +299,8 @@ defmodule Tokengate.AccountsTest do
       team = team_fixture(%{"name" => "Lookup Team"})
       user = user_fixture(%{"name" => "Lookup User", "email" => "lookup@example.com"})
 
-      {:ok, _tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
-      {:ok, _api_key, token} = Accounts.replace_api_key(_tm)
+      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, _api_key, token} = Accounts.replace_api_key(tm)
 
       assert {:ok, %TeamMember{team: %Team{}, user: %User{}}} =
                Accounts.get_team_member_by_api_key(token)

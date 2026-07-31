@@ -60,10 +60,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
         status_code: 200,
         prompt_tokens: 100,
         completion_tokens: 50,
-        cost_usd: "0.005",
         provider_cost_usd: "0.005",
-        savings_usd: "0.001",
-        estimated_cost_usd: "0.01",
         latency_ms: 42,
         streaming: false
       })

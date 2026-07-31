@@ -262,10 +262,7 @@ defmodule Tokengate.Logs do
       |> maybe_team_from(from)
       |> maybe_team_to(to)
       |> select([rl], %{
-        total_cost_usd: fragment("COALESCE(SUM(cost_usd), 0)"),
-        total_provider_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
-        total_savings_usd: fragment("COALESCE(SUM(savings_usd), 0)"),
-        total_estimated_cost_usd: fragment("COALESCE(SUM(estimated_cost_usd), 0)"),
+        total_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
         total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
         total_completion_tokens: coalesce(sum(rl.completion_tokens), 0),
         request_count: count(rl.id)
@@ -275,9 +272,6 @@ defmodule Tokengate.Logs do
 
     %{
       total_cost_usd: Decimal.new(to_string(result.total_cost_usd)),
-      total_provider_cost_usd: Decimal.new(to_string(result.total_provider_cost_usd)),
-      total_savings_usd: Decimal.new(to_string(result.total_savings_usd)),
-      total_estimated_cost_usd: Decimal.new(to_string(result.total_estimated_cost_usd)),
       total_prompt_tokens: result.total_prompt_tokens,
       total_completion_tokens: result.total_completion_tokens,
       request_count: result.request_count
@@ -307,9 +301,6 @@ defmodule Tokengate.Logs do
   def cost_summary_for_members([], _opts) do
     %{
       total_cost_usd: Decimal.new(0),
-      total_provider_cost_usd: Decimal.new(0),
-      total_savings_usd: Decimal.new(0),
-      total_estimated_cost_usd: Decimal.new(0),
       total_prompt_tokens: 0,
       total_completion_tokens: 0,
       request_count: 0
@@ -326,10 +317,7 @@ defmodule Tokengate.Logs do
       |> maybe_members_from(from)
       |> maybe_members_to(to)
       |> select([rl], %{
-        total_cost_usd: fragment("COALESCE(SUM(cost_usd), 0)"),
-        total_provider_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
-        total_savings_usd: fragment("COALESCE(SUM(savings_usd), 0)"),
-        total_estimated_cost_usd: fragment("COALESCE(SUM(estimated_cost_usd), 0)"),
+        total_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
         total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
         total_completion_tokens: coalesce(sum(rl.completion_tokens), 0),
         request_count: count(rl.id)
@@ -339,9 +327,6 @@ defmodule Tokengate.Logs do
 
     %{
       total_cost_usd: Decimal.new(to_string(result.total_cost_usd)),
-      total_provider_cost_usd: Decimal.new(to_string(result.total_provider_cost_usd)),
-      total_savings_usd: Decimal.new(to_string(result.total_savings_usd)),
-      total_estimated_cost_usd: Decimal.new(to_string(result.total_estimated_cost_usd)),
       total_prompt_tokens: result.total_prompt_tokens,
       total_completion_tokens: result.total_completion_tokens,
       request_count: result.request_count
@@ -380,10 +365,7 @@ defmodule Tokengate.Logs do
       RequestLog
       |> apply_log_filters(filters)
       |> select([rl], %{
-        total_cost_usd: fragment("COALESCE(SUM(cost_usd), 0)"),
-        total_provider_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
-        total_savings_usd: fragment("COALESCE(SUM(savings_usd), 0)"),
-        total_estimated_cost_usd: fragment("COALESCE(SUM(estimated_cost_usd), 0)"),
+        total_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
         total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
         total_completion_tokens: coalesce(sum(rl.completion_tokens), 0),
         request_count: count(rl.id),
@@ -395,9 +377,6 @@ defmodule Tokengate.Logs do
 
     %{
       total_cost_usd: Decimal.new(to_string(result.total_cost_usd)),
-      total_provider_cost_usd: Decimal.new(to_string(result.total_provider_cost_usd)),
-      total_savings_usd: Decimal.new(to_string(result.total_savings_usd)),
-      total_estimated_cost_usd: Decimal.new(to_string(result.total_estimated_cost_usd)),
       total_prompt_tokens: result.total_prompt_tokens,
       total_completion_tokens: result.total_completion_tokens,
       request_count: result.request_count,

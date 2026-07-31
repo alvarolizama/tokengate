@@ -82,14 +82,14 @@ defmodule TokengateWeb.CreditsLive do
     # viene de los contadores ETS; el ahorro no se trackea en ETS, así que
     # se calcula del mes calendario igual que el contador mensual.
     month_start = beginning_of_month()
-    team_savings = savings_by_team(month_start)
-    member_savings = savings_by_member(month_start)
+    team_spend = spend_by_team(month_start)
+    member_spend = spend_by_member(month_start)
 
     socket
     |> assign(:budgets, budgets)
     |> assign(:team_budgets, team_budgets)
-    |> assign(:team_savings, team_savings)
-    |> assign(:member_savings, member_savings)
+    |> assign(:team_savings, team_spend)
+    |> assign(:member_savings, member_spend)
   end
 
   defp beginning_of_month do
@@ -97,14 +97,19 @@ defmodule TokengateWeb.CreditsLive do
     %{now | day: 1, hour: 0, minute: 0, second: 0, microsecond: {0, 0}}
   end
 
-  defp savings_by_team(from) do
+  # Since the 2026-07-30 refactor we only track `cost_usd` (what the upstream
+  # reported). The "savings" used to be `market - provider_cost_usd` which is
+  # no longer computable without manual market pricing, so we expose the same
+  # total cost as the consumption figure and let the template compare against
+  # the user's monthly cap.
+  defp spend_by_team(from) do
     Rollup.breakdown_by_team(from: from)
-    |> Map.new(fn row -> {row.team_id, row.savings_usd} end)
+    |> Map.new(fn row -> {row.team_id, row.cost_usd} end)
   end
 
-  defp savings_by_member(from) do
+  defp spend_by_member(from) do
     Rollup.breakdown_by_member(nil, from: from)
-    |> Map.new(fn row -> {row.team_member_id, row.savings_usd} end)
+    |> Map.new(fn row -> {row.team_member_id, row.cost_usd} end)
   end
 
   ## Template helpers --------------------------------------------------------

@@ -31,8 +31,7 @@ defmodule Tokengate.Metrics.CollectorTest do
         latency_ms: 100,
         prompt_tokens: 50,
         completion_tokens: 25,
-        cost_usd: Decimal.new("0.500000"),
-        savings_usd: Decimal.new("0.100000"),
+        provider_cost_usd: Decimal.new("0.500000"),
         streaming: false
       },
       overrides
@@ -117,23 +116,20 @@ defmodule Tokengate.Metrics.CollectorTest do
   # micro-USD exactness over 1000 records
   # ---------------------------------------------------------------------
 
-  describe "micro-USD cost/savings counters" do
+  describe "micro-USD cost counter" do
     test "exact over 1000 records with fractional micro-USD" do
       # $0.000001 per request → 1000 requests = $0.001000 total.
       # 0.000001 * 1_000_000 = 1 micro-USD per request.
       cost = Decimal.new("0.000001")
-      savings = Decimal.new("0.000002")
 
       for _ <- 1..1000 do
-        Collector.record_request(attrs(%{cost_usd: cost, savings_usd: savings}))
+        Collector.record_request(attrs(%{cost_usd: cost}))
       end
 
       snap = Collector.snapshot()
 
       # 1000 * 0.000001 = 0.001000
       assert Decimal.equal?(snap.cost_usd, Decimal.new("0.001000"))
-      # 1000 * 0.000002 = 0.002000
-      assert Decimal.equal?(snap.savings_usd, Decimal.new("0.002000"))
     end
 
     test "rounds half-up on micro boundaries" do
@@ -144,13 +140,10 @@ defmodule Tokengate.Metrics.CollectorTest do
     end
 
     test "zero cost handled" do
-      Collector.record_request(
-        attrs(%{cost_usd: Decimal.new("0"), savings_usd: Decimal.new("0")})
-      )
+      Collector.record_request(attrs(%{cost_usd: Decimal.new("0")}))
 
       snap = Collector.snapshot()
       assert Decimal.equal?(snap.cost_usd, Decimal.new("0.000000"))
-      assert Decimal.equal?(snap.savings_usd, Decimal.new("0.000000"))
     end
   end
 
@@ -261,17 +254,13 @@ defmodule Tokengate.Metrics.CollectorTest do
   # ---------------------------------------------------------------------
 
   describe "snapshot/0 shape" do
-    test "returns Decimal cost_usd and savings_usd" do
-      Collector.record_request(
-        attrs(%{cost_usd: Decimal.new("1.500000"), savings_usd: Decimal.new("0.250000")})
-      )
+    test "returns Decimal cost_usd" do
+      Collector.record_request(attrs(%{cost_usd: Decimal.new("1.500000")}))
 
       snap = Collector.snapshot()
 
       assert %Decimal{} = snap.cost_usd
-      assert %Decimal{} = snap.savings_usd
       assert Decimal.equal?(snap.cost_usd, Decimal.new("1.500000"))
-      assert Decimal.equal?(snap.savings_usd, Decimal.new("0.250000"))
     end
 
     test "has all required keys" do
@@ -288,7 +277,6 @@ defmodule Tokengate.Metrics.CollectorTest do
       assert Map.has_key?(snap, :prompt_tokens)
       assert Map.has_key?(snap, :completion_tokens)
       assert Map.has_key?(snap, :cost_usd)
-      assert Map.has_key?(snap, :savings_usd)
       assert Map.has_key?(snap, :latency)
 
       assert Map.has_key?(snap.latency, :count)

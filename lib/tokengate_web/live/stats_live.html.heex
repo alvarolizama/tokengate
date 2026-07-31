@@ -73,10 +73,10 @@
           <div class="space-y-6">
             <%!-- KPI cards --%>
             <div class="grid grid-cols-2 lg:grid-cols-3 gap-4">
-              <div id="kpi-cost-real" class="card bg-base-100 border border-base-300 shadow-sm">
+              <div id="kpi-cost" class="card bg-base-100 border border-base-300 shadow-sm">
                 <div class="card-body p-5">
                   <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Costo real</span>
+                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Costo</span>
                     <span class={[
                       "flex items-center justify-center w-9 h-9 rounded-lg",
                       accent_bg("accent")
@@ -88,42 +88,10 @@
                     </span>
                   </div>
                   <p class="mt-2 text-2xl font-bold text-base-content">
-                    ${format_decimal(@metrics.provider_cost_usd)}
+                    ${format_decimal(@metrics.cost_usd)}
                   </p>
-                </div>
-              </div>
-              <div
-                id="kpi-cost-estimated"
-                class="card bg-base-100 border border-base-300 shadow-sm"
-              >
-                <div class="card-body p-5">
-                  <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Mercado</span>
-                    <span class={[
-                      "flex items-center justify-center w-9 h-9 rounded-lg",
-                      accent_bg("primary")
-                    ]}>
-                      <.icon name="hero-calculator" class={["w-5 h-5", accent_text("primary")]} />
-                    </span>
-                  </div>
-                  <p class="mt-2 text-2xl font-bold text-base-content">
-                    ${format_decimal(@metrics.estimated_cost_usd)}
-                  </p>
-                </div>
-              </div>
-              <div id="kpi-savings" class="card bg-base-100 border border-base-300 shadow-sm">
-                <div class="card-body p-5">
-                  <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Ahorros</span>
-                    <span class={[
-                      "flex items-center justify-center w-9 h-9 rounded-lg",
-                      accent_bg("success")
-                    ]}>
-                      <.icon name="hero-banknotes" class={["w-5 h-5", accent_text("success")]} />
-                    </span>
-                  </div>
-                  <p class="mt-2 text-2xl font-bold text-base-content">
-                    ${format_decimal(@metrics.savings_usd)}
+                  <p class="text-xs text-base-content/40 mt-1">
+                    Reportado por el proveedor
                   </p>
                 </div>
               </div>
@@ -371,8 +339,7 @@
                           <tr>
                             <th>Equipo</th>
                             <th class="text-right">Requests</th>
-                            <th class="text-right">Costo real</th>
-                            <th class="text-right">Ahorro</th>
+                            <th class="text-right">Costo</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -385,10 +352,7 @@
                               {format_number(row.request_count)}
                             </td>
                             <td class="text-right font-mono">
-                              ${format_decimal(row.provider_cost_usd)}
-                            </td>
-                            <td class="text-right font-mono text-success">
-                              ${format_decimal(row.savings_usd)}
+                              ${format_decimal(row.cost_usd)}
                             </td>
                           </tr>
                         </tbody>
@@ -411,8 +375,7 @@
                           <tr>
                             <th>Usuario</th>
                             <th class="text-right">Requests</th>
-                            <th class="text-right">Costo real</th>
-                            <th class="text-right">Ahorro</th>
+                            <th class="text-right">Costo</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -425,10 +388,7 @@
                               {format_number(row.request_count)}
                             </td>
                             <td class="text-right font-mono">
-                              ${format_decimal(row.provider_cost_usd)}
-                            </td>
-                            <td class="text-right font-mono text-success">
-                              ${format_decimal(row.savings_usd)}
+                              ${format_decimal(row.cost_usd)}
                             </td>
                           </tr>
                         </tbody>
@@ -630,50 +590,18 @@
                     </div>
                   </div>
                   <div
-                    id="model-kpi-mercado"
+                    id="model-kpi-cost"
                     class="card bg-base-100 border border-base-300 shadow-sm"
                   >
                     <div class="card-body p-5">
                       <div class="flex items-center justify-between">
-                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Costo mercado</span>
-                        <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10">
-                          <.icon name="hero-calculator" class="w-5 h-5 text-primary" />
-                        </span>
-                      </div>
-                      <p class="mt-2 text-2xl font-bold">
-                        ${format_decimal(@metrics.estimated_cost_usd)}
-                      </p>
-                    </div>
-                  </div>
-                  <div
-                    id="model-kpi-real"
-                    class="card bg-base-100 border border-base-300 shadow-sm"
-                  >
-                    <div class="card-body p-5">
-                      <div class="flex items-center justify-between">
-                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Costo real</span>
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Costo</span>
                         <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-accent/10">
                           <.icon name="hero-currency-dollar" class="w-5 h-5 text-accent" />
                         </span>
                       </div>
                       <p class="mt-2 text-2xl font-bold">
-                        ${format_decimal(@metrics.provider_cost_usd)}
-                      </p>
-                    </div>
-                  </div>
-                  <div
-                    id="model-kpi-ahorro"
-                    class="card bg-base-100 border border-base-300 shadow-sm"
-                  >
-                    <div class="card-body p-5">
-                      <div class="flex items-center justify-between">
-                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Ahorro</span>
-                        <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-success/10">
-                          <.icon name="hero-banknotes" class="w-5 h-5 text-success" />
-                        </span>
-                      </div>
-                      <p class="mt-2 text-2xl font-bold text-success">
-                        ${format_decimal(@metrics.savings_usd)}
+                        ${format_decimal(@metrics.cost_usd)}
                       </p>
                     </div>
                   </div>
@@ -729,9 +657,7 @@
                               <th>#</th>
                               <th>Proveedor / Modelo</th>
                               <th class="text-right">Requests</th>
-                              <th class="text-right">Costo real</th>
-                              <th class="text-right">Mercado</th>
-                              <th class="text-right">Ahorro</th>
+                              <th class="text-right">Costo</th>
                               <th class="text-right">Tokens in</th>
                               <th class="text-right">Tokens out</th>
                               <th class="text-right">TPS</th>
@@ -759,13 +685,7 @@
                                 {format_number(row.request_count)}
                               </td>
                               <td class="text-right font-mono">
-                                ${format_decimal(row.provider_cost_usd)}
-                              </td>
-                              <td class="text-right font-mono text-base-content/60">
-                                ${format_decimal(row.estimated_cost_usd)}
-                              </td>
-                              <td class="text-right font-mono text-success">
-                                ${format_decimal(row.savings_usd)}
+                                ${format_decimal(row.cost_usd)}
                               </td>
                               <td class="text-right font-mono">
                                 {format_number(row.prompt_tokens)}
@@ -798,9 +718,7 @@
                             <tr>
                               <th>Equipo</th>
                               <th class="text-right">Requests</th>
-                              <th class="text-right">Costo real</th>
-                              <th class="text-right">Mercado</th>
-                              <th class="text-right">Ahorro</th>
+                              <th class="text-right">Costo</th>
                               <th class="text-right">TPS</th>
                             </tr>
                           </thead>
@@ -811,13 +729,7 @@
                                 {format_number(row.request_count)}
                               </td>
                               <td class="text-right font-mono">
-                                ${format_decimal(row.provider_cost_usd)}
-                              </td>
-                              <td class="text-right font-mono text-base-content/60">
-                                ${format_decimal(row.estimated_cost_usd)}
-                              </td>
-                              <td class="text-right font-mono text-success">
-                                ${format_decimal(row.savings_usd)}
+                                ${format_decimal(row.cost_usd)}
                               </td>
                               <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                             </tr>
@@ -845,9 +757,7 @@
                               <th>Equipo</th>
                               <th>Usuario</th>
                               <th class="text-right">Requests</th>
-                              <th class="text-right">Costo real</th>
-                              <th class="text-right">Mercado</th>
-                              <th class="text-right">Ahorro</th>
+                              <th class="text-right">Costo</th>
                               <th class="text-right">TPS</th>
                             </tr>
                           </thead>
@@ -862,13 +772,7 @@
                                 {format_number(row.request_count)}
                               </td>
                               <td class="text-right font-mono">
-                                ${format_decimal(row.provider_cost_usd)}
-                              </td>
-                              <td class="text-right font-mono text-base-content/60">
-                                ${format_decimal(row.estimated_cost_usd)}
-                              </td>
-                              <td class="text-right font-mono text-success">
-                                ${format_decimal(row.savings_usd)}
+                                ${format_decimal(row.cost_usd)}
                               </td>
                               <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                             </tr>
@@ -904,9 +808,7 @@
                           <tr>
                             <th>Modelo</th>
                             <th class="text-right">Requests</th>
-                            <th class="text-right">Costo real</th>
-                            <th class="text-right">Mercado</th>
-                            <th class="text-right">Ahorro</th>
+                            <th class="text-right">Costo</th>
                             <th class="text-right">Tokens in</th>
                             <th class="text-right">Tokens out</th>
                             <th class="text-right">TPS</th>
@@ -933,13 +835,7 @@
                               {format_number(row.request_count)}
                             </td>
                             <td class="text-right font-mono">
-                              ${format_decimal(row.provider_cost_usd)}
-                            </td>
-                            <td class="text-right font-mono text-base-content/60">
-                              ${format_decimal(row.estimated_cost_usd)}
-                            </td>
-                            <td class="text-right font-mono text-success">
-                              ${format_decimal(row.savings_usd)}
+                              ${format_decimal(row.cost_usd)}
                             </td>
                             <td class="text-right font-mono">
                               {format_number(row.prompt_tokens)}
@@ -995,12 +891,12 @@
               <div class="space-y-6">
                 <div class="grid grid-cols-2 lg:grid-cols-3 gap-4">
                   <div
-                    id="team-kpi-real"
+                    id="team-kpi-cost"
                     class="card bg-base-100 border border-base-300 shadow-sm"
                   >
                     <div class="card-body p-5">
                       <div class="flex items-center justify-between">
-                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Costo real</span>
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Costo</span>
                         <span class={[
                           "flex items-center justify-center w-9 h-9 rounded-lg",
                           accent_bg("accent")
@@ -1012,51 +908,7 @@
                         </span>
                       </div>
                       <p class="mt-2 text-2xl font-bold">
-                        ${format_decimal(@metrics.provider_cost_usd)}
-                      </p>
-                    </div>
-                  </div>
-                  <div
-                    id="team-kpi-mercado"
-                    class="card bg-base-100 border border-base-300 shadow-sm"
-                  >
-                    <div class="card-body p-5">
-                      <div class="flex items-center justify-between">
-                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Mercado</span>
-                        <span class={[
-                          "flex items-center justify-center w-9 h-9 rounded-lg",
-                          accent_bg("primary")
-                        ]}>
-                          <.icon
-                            name="hero-calculator"
-                            class={["w-5 h-5", accent_text("primary")]}
-                          />
-                        </span>
-                      </div>
-                      <p class="mt-2 text-2xl font-bold">
-                        ${format_decimal(@metrics.estimated_cost_usd)}
-                      </p>
-                    </div>
-                  </div>
-                  <div
-                    id="team-kpi-ahorro"
-                    class="card bg-base-100 border border-base-300 shadow-sm"
-                  >
-                    <div class="card-body p-5">
-                      <div class="flex items-center justify-between">
-                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Ahorro</span>
-                        <span class={[
-                          "flex items-center justify-center w-9 h-9 rounded-lg",
-                          accent_bg("success")
-                        ]}>
-                          <.icon
-                            name="hero-banknotes"
-                            class={["w-5 h-5", accent_text("success")]}
-                          />
-                        </span>
-                      </div>
-                      <p class="mt-2 text-2xl font-bold text-success">
-                        ${format_decimal(@metrics.savings_usd)}
+                        ${format_decimal(@metrics.cost_usd)}
                       </p>
                     </div>
                   </div>
@@ -1149,9 +1001,7 @@
                             <tr>
                               <th>Modelo</th>
                               <th class="text-right">Requests</th>
-                              <th class="text-right">Costo real</th>
-                              <th class="text-right">Mercado</th>
-                              <th class="text-right">Ahorro</th>
+                              <th class="text-right">Costo</th>
                               <th class="text-right">Tokens in</th>
                               <th class="text-right">Tokens out</th>
                               <th class="text-right">TPS</th>
@@ -1167,13 +1017,7 @@
                                 {format_number(row.request_count)}
                               </td>
                               <td class="text-right font-mono">
-                                ${format_decimal(row.provider_cost_usd)}
-                              </td>
-                              <td class="text-right font-mono text-base-content/60">
-                                ${format_decimal(row.estimated_cost_usd)}
-                              </td>
-                              <td class="text-right font-mono text-success">
-                                ${format_decimal(row.savings_usd)}
+                                ${format_decimal(row.cost_usd)}
                               </td>
                               <td class="text-right font-mono">
                                 {format_number(row.prompt_tokens)}
@@ -1206,9 +1050,7 @@
                             <tr>
                               <th>Usuario</th>
                               <th class="text-right">Requests</th>
-                              <th class="text-right">Costo real</th>
-                              <th class="text-right">Mercado</th>
-                              <th class="text-right">Ahorro</th>
+                              <th class="text-right">Costo</th>
                               <th class="text-right">Tokens in</th>
                               <th class="text-right">Tokens out</th>
                               <th class="text-right">TPS</th>
@@ -1233,13 +1075,7 @@
                                 {format_number(row.request_count)}
                               </td>
                               <td class="text-right font-mono">
-                                ${format_decimal(row.provider_cost_usd)}
-                              </td>
-                              <td class="text-right font-mono text-base-content/60">
-                                ${format_decimal(row.estimated_cost_usd)}
-                              </td>
-                              <td class="text-right font-mono text-success">
-                                ${format_decimal(row.savings_usd)}
+                                ${format_decimal(row.cost_usd)}
                               </td>
                               <td class="text-right font-mono">
                                 {format_number(row.prompt_tokens)}
@@ -1281,9 +1117,7 @@
                           <tr>
                             <th>Equipo</th>
                             <th class="text-right">Requests</th>
-                            <th class="text-right">Costo real</th>
-                            <th class="text-right">Mercado</th>
-                            <th class="text-right">Ahorro</th>
+                            <th class="text-right">Costo</th>
                             <th class="text-right">Tokens in</th>
                             <th class="text-right">Tokens out</th>
                             <th class="text-right">TPS</th>
@@ -1303,13 +1137,7 @@
                               {format_number(row.request_count)}
                             </td>
                             <td class="text-right font-mono">
-                              ${format_decimal(row.provider_cost_usd)}
-                            </td>
-                            <td class="text-right font-mono text-base-content/60">
-                              ${format_decimal(row.estimated_cost_usd)}
-                            </td>
-                            <td class="text-right font-mono text-success">
-                              ${format_decimal(row.savings_usd)}
+                              ${format_decimal(row.cost_usd)}
                             </td>
                             <td class="text-right font-mono">
                               {format_number(row.prompt_tokens)}
@@ -1365,9 +1193,7 @@
                           <tr>
                             <th>Modelo</th>
                             <th class="text-right">Requests</th>
-                            <th class="text-right">Costo real</th>
-                            <th class="text-right">Mercado</th>
-                            <th class="text-right">Ahorro</th>
+                            <th class="text-right">Costo</th>
                             <th class="text-right">Tokens in</th>
                             <th class="text-right">Tokens out</th>
                             <th class="text-right">TPS</th>
@@ -1383,13 +1209,7 @@
                               {format_number(row.request_count)}
                             </td>
                             <td class="text-right font-mono">
-                              ${format_decimal(row.provider_cost_usd)}
-                            </td>
-                            <td class="text-right font-mono text-base-content/60">
-                              ${format_decimal(row.estimated_cost_usd)}
-                            </td>
-                            <td class="text-right font-mono text-success">
-                              ${format_decimal(row.savings_usd)}
+                              ${format_decimal(row.cost_usd)}
                             </td>
                             <td class="text-right font-mono">
                               {format_number(row.prompt_tokens)}

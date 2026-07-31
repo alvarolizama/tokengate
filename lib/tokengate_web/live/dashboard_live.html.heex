@@ -271,15 +271,15 @@
         <% else %>
           <!-- Metric cards: KPIs -->
           <div class="grid grid-cols-2 lg:grid-cols-3 gap-4">
-            <%!-- Costo real (provider_cost_usd) --%>
+            <%!-- Costo (lo que el proveedor reportó por cada request) --%>
             <div
-              id="cost-real-card"
+              id="cost-card"
               class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
             >
               <div class="card-body p-5">
                 <div class="flex items-center justify-between">
                   <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                    Costo real
+                    Costo
                   </span>
                   <span class={[
                     "flex items-center justify-center w-9 h-9 rounded-lg",
@@ -289,53 +289,10 @@
                   </span>
                 </div>
                 <p class="mt-2 text-2xl font-bold text-base-content">
-                  ${format_decimal(@metrics.provider_cost_usd)}
+                  ${format_decimal(@metrics.cost_usd)}
                 </p>
-              </div>
-            </div>
-
-            <%!-- Costo estimado (estimated_cost_usd) --%>
-            <div
-              id="cost-estimated-card"
-              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-            >
-              <div class="card-body p-5">
-                <div class="flex items-center justify-between">
-                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                    Estimado
-                  </span>
-                  <span class={[
-                    "flex items-center justify-center w-9 h-9 rounded-lg",
-                    accent_bg("primary")
-                  ]}>
-                    <.icon name="hero-calculator" class={["w-5 h-5", accent_text("primary")]} />
-                  </span>
-                </div>
-                <p class="mt-2 text-2xl font-bold text-base-content">
-                  ${format_decimal(@metrics.estimated_cost_usd)}
-                </p>
-              </div>
-            </div>
-
-            <%!-- Ahorros --%>
-            <div
-              id="savings-card"
-              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-            >
-              <div class="card-body p-5">
-                <div class="flex items-center justify-between">
-                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                    Ahorros
-                  </span>
-                  <span class={[
-                    "flex items-center justify-center w-9 h-9 rounded-lg",
-                    accent_bg("success")
-                  ]}>
-                    <.icon name="hero-banknotes" class={["w-5 h-5", accent_text("success")]} />
-                  </span>
-                </div>
-                <p class="mt-2 text-2xl font-bold text-base-content">
-                  ${format_decimal(@metrics.savings_usd)}
+                <p class="text-xs text-base-content/40 mt-1">
+                  Reportado por el proveedor
                 </p>
               </div>
             </div>
@@ -505,9 +462,7 @@
                         <tr>
                           <th>Modelo</th>
                           <th class="text-right">Requests</th>
-                          <th class="text-right">Costo real</th>
-                          <th class="text-right">Mercado</th>
-                          <th class="text-right">Ahorro</th>
+                          <th class="text-right">Costo</th>
                           <th class="text-right">Tokens in</th>
                           <th class="text-right">Tokens out</th>
                           <th class="text-right">TPS</th>
@@ -521,13 +476,7 @@
                           <td class="font-medium">{row.model_name}</td>
                           <td class="text-right font-mono">{format_number(row.request_count)}</td>
                           <td class="text-right font-mono">
-                            ${format_decimal(row.provider_cost_usd)}
-                          </td>
-                          <td class="text-right font-mono text-base-content/60">
-                            ${format_decimal(row.estimated_cost_usd)}
-                          </td>
-                          <td class="text-right font-mono text-success">
-                            ${format_decimal(row.savings_usd)}
+                            ${format_decimal(row.cost_usd)}
                           </td>
                           <td class="text-right font-mono">{format_number(row.prompt_tokens)}</td>
                           <td class="text-right font-mono">
@@ -555,9 +504,7 @@
                           <th>Equipo</th>
                           <th>Usuario</th>
                           <th class="text-right">Requests</th>
-                          <th class="text-right">Costo real</th>
-                          <th class="text-right">Mercado</th>
-                          <th class="text-right">Ahorro</th>
+                          <th class="text-right">Costo</th>
                           <th class="text-right">Tokens in</th>
                           <th class="text-right">Tokens out</th>
                           <th class="text-right">TPS</th>
@@ -569,13 +516,7 @@
                           <td class="font-mono text-sm">{row.user_email}</td>
                           <td class="text-right font-mono">{format_number(row.request_count)}</td>
                           <td class="text-right font-mono">
-                            ${format_decimal(row.provider_cost_usd)}
-                          </td>
-                          <td class="text-right font-mono text-base-content/60">
-                            ${format_decimal(row.estimated_cost_usd)}
-                          </td>
-                          <td class="text-right font-mono text-success">
-                            ${format_decimal(row.savings_usd)}
+                            ${format_decimal(row.cost_usd)}
                           </td>
                           <td class="text-right font-mono">{format_number(row.prompt_tokens)}</td>
                           <td class="text-right font-mono">
@@ -602,9 +543,7 @@
                         <tr>
                           <th>Equipo</th>
                           <th class="text-right">Requests</th>
-                          <th class="text-right">Costo real</th>
-                          <th class="text-right">Mercado</th>
-                          <th class="text-right">Ahorro</th>
+                          <th class="text-right">Costo</th>
                           <th class="text-right">Tokens in</th>
                           <th class="text-right">Tokens out</th>
                           <th class="text-right">TPS</th>
@@ -615,13 +554,7 @@
                           <td class="font-medium">{row.team_name}</td>
                           <td class="text-right font-mono">{format_number(row.request_count)}</td>
                           <td class="text-right font-mono">
-                            ${format_decimal(row.provider_cost_usd)}
-                          </td>
-                          <td class="text-right font-mono text-base-content/60">
-                            ${format_decimal(row.estimated_cost_usd)}
-                          </td>
-                          <td class="text-right font-mono text-success">
-                            ${format_decimal(row.savings_usd)}
+                            ${format_decimal(row.cost_usd)}
                           </td>
                           <td class="text-right font-mono">{format_number(row.prompt_tokens)}</td>
                           <td class="text-right font-mono">

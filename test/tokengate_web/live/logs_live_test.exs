@@ -50,8 +50,6 @@ defmodule TokengateWeb.LogsLiveTest do
       Providers.create_model_alias(%{
         name: "model-#{u}",
         display_name: "Model #{u}",
-        market_input_price_per_1m: "1.50",
-        market_output_price_per_1m: "3.00",
         context_window: 128_000
       })
 
@@ -65,10 +63,7 @@ defmodule TokengateWeb.LogsLiveTest do
         status_code: 200,
         prompt_tokens: 100,
         completion_tokens: 50,
-        cost_usd: "0.005",
         provider_cost_usd: "0.004",
-        savings_usd: "0.001",
-        estimated_cost_usd: "0.01",
         latency_ms: 42,
         streaming: false,
         think: Keyword.get(opts, :think, true),

@@ -6,6 +6,16 @@ defmodule Tokengate.Logs.RequestLog do
   (daily granularity). It is **append-only**: the context only inserts and
   queries — never updates or deletes.
 
+  ## Cost
+
+  `provider_cost_usd` is the **only** cost field: the amount the upstream
+  reported it charged for the request (typically `usage.cost` from
+  OpenAI-compatible gateways). When the upstream doesn't report a cost and
+  `billing_mode` is `included` (subscription / RPM-limited), the value is
+  `0`. When the upstream doesn't report a cost and `billing_mode` is
+  `pay_per_token`, the value is also `0` — honest fallback, no phantom
+  costs derived from stale manual pricing tables.
+
   ## Privacy
 
   This table **never** stores prompt or completion content — only metadata
@@ -32,10 +42,7 @@ defmodule Tokengate.Logs.RequestLog do
     field :error_reason, :string
     field :prompt_tokens, :integer, default: 0
     field :completion_tokens, :integer, default: 0
-    field :cost_usd, :decimal
     field :provider_cost_usd, :decimal
-    field :savings_usd, :decimal
-    field :estimated_cost_usd, :decimal
     field :latency_ms, :integer
     field :ttft_ms, :integer
     field :streaming, :boolean, default: false
@@ -57,8 +64,8 @@ defmodule Tokengate.Logs.RequestLog do
 
   @permitted ~w(team_member_id provider_id model_provider_id model_alias_id
     model_requested model_responded agent_type status_code provider_status_code
-    error_reason prompt_tokens completion_tokens cost_usd provider_cost_usd savings_usd
-    estimated_cost_usd latency_ms ttft_ms streaming think effort api_key_prefix
+    error_reason prompt_tokens completion_tokens provider_cost_usd
+    latency_ms ttft_ms streaming think effort api_key_prefix
     credential_name inserted_at)a
 
   @required ~w(team_member_id model_requested inserted_at)a
@@ -67,6 +74,27 @@ defmodule Tokengate.Logs.RequestLog do
   def changeset(request_log, attrs) do
     request_log
     |> cast(attrs, @permitted)
+    # Accept legacy `:cost_usd`/`:savings_usd`/`:estimated_cost_usd` keys in
+    # attrs (from test fixtures and any external callers written before the
+    # 2026-07-30 refactor) and fold them onto the single surviving column
+    # `provider_cost_usd`. The first non-nil value wins; explicit
+    # `provider_cost_usd` always takes precedence.
+    |> merge_legacy_cost_keys(attrs)
     |> validate_required(@required)
+  end
+
+  defp merge_legacy_cost_keys(%Ecto.Changeset{} = cs, attrs) do
+    case cs.changes do
+      %{provider_cost_usd: _} ->
+        cs
+
+      _ ->
+        for key <- [:cost_usd, :savings_usd, :estimated_cost_usd],
+            value = Map.get(attrs, key),
+            not is_nil(value),
+            reduce: cs do
+          acc -> put_change(acc, :provider_cost_usd, value)
+        end
+    end
   end
 end

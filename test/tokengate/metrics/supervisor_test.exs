@@ -31,7 +31,6 @@ defmodule Tokengate.Metrics.SupervisorTest do
       prompt_tokens: 10,
       completion_tokens: 5,
       cost_usd: Decimal.new("0.100000"),
-      savings_usd: Decimal.new("0.020000"),
       streaming: false
     })
 

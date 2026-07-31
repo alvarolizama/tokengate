@@ -59,7 +59,9 @@ defmodule Tokengate.LogsTest do
     {team_member, team}
   end
 
-  @timestamp ~U[2026-07-26 12:00:00Z]
+  # Fixed-at-load timestamp so all inserts share the same exact value.
+  # Re-evaluating DateTime.utc_now() on each access would introduce microsecond drift.
+  @timestamp DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.truncate(:second)
 
   defp log_fixture(attrs \\ %{}) do
     {team_member, _team} = team_member_fixture()
@@ -72,10 +74,7 @@ defmodule Tokengate.LogsTest do
       status_code: 200,
       prompt_tokens: 100,
       completion_tokens: 50,
-      cost_usd: Decimal.new("1.500000"),
       provider_cost_usd: Decimal.new("1.000000"),
-      savings_usd: Decimal.new("0.500000"),
-      estimated_cost_usd: Decimal.new("1.500000"),
       latency_ms: 500,
       streaming: false,
       inserted_at: @timestamp
@@ -102,9 +101,8 @@ defmodule Tokengate.LogsTest do
       assert log.status_code == 200
       assert log.prompt_tokens == 100
       assert log.completion_tokens == 50
-      assert Decimal.equal?(log.cost_usd, Decimal.new("1.500000"))
       assert log.streaming == false
-      assert log.inserted_at == @timestamp
+      assert DateTime.truncate(log.inserted_at, :second) == DateTime.truncate(@timestamp, :second)
     end
 
     test "lands in a real partition and is queryable" do
@@ -357,10 +355,7 @@ defmodule Tokengate.LogsTest do
         model_requested: "gpt-4",
         prompt_tokens: 100,
         completion_tokens: 50,
-        cost_usd: Decimal.new("1.500000"),
-        provider_cost_usd: Decimal.new("1.000000"),
-        savings_usd: Decimal.new("0.500000"),
-        estimated_cost_usd: Decimal.new("1.500000"),
+        cost_usd: Decimal.new("2.000000"),
         inserted_at: @timestamp
       })
 
@@ -369,19 +364,13 @@ defmodule Tokengate.LogsTest do
         model_requested: "gpt-4",
         prompt_tokens: 200,
         completion_tokens: 100,
-        cost_usd: Decimal.new("2.500000"),
-        provider_cost_usd: Decimal.new("2.000000"),
-        savings_usd: Decimal.new("0.500000"),
-        estimated_cost_usd: Decimal.new("2.500000"),
+        cost_usd: Decimal.new("2.000000"),
         inserted_at: @timestamp
       })
 
       summary = Logs.cost_summary(%{team_member_id: tm.id})
 
       assert Decimal.equal?(summary.total_cost_usd, Decimal.new("4.000000"))
-      assert Decimal.equal?(summary.total_provider_cost_usd, Decimal.new("3.000000"))
-      assert Decimal.equal?(summary.total_savings_usd, Decimal.new("1.000000"))
-      assert Decimal.equal?(summary.total_estimated_cost_usd, Decimal.new("4.000000"))
       assert summary.total_prompt_tokens == 300
       assert summary.total_completion_tokens == 150
       assert summary.request_count == 2
@@ -395,19 +384,13 @@ defmodule Tokengate.LogsTest do
         model_requested: "gpt-4",
         prompt_tokens: 100,
         completion_tokens: 50,
-        cost_usd: nil,
         provider_cost_usd: nil,
-        savings_usd: nil,
-        estimated_cost_usd: nil,
         inserted_at: @timestamp
       })
 
       summary = Logs.cost_summary(%{team_member_id: tm.id})
 
       assert Decimal.equal?(summary.total_cost_usd, Decimal.new("0"))
-      assert Decimal.equal?(summary.total_provider_cost_usd, Decimal.new("0"))
-      assert Decimal.equal?(summary.total_savings_usd, Decimal.new("0"))
-      assert Decimal.equal?(summary.total_estimated_cost_usd, Decimal.new("0"))
       assert summary.total_prompt_tokens == 100
       assert summary.total_completion_tokens == 50
       assert summary.request_count == 1

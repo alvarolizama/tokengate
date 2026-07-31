@@ -42,12 +42,6 @@ defmodule TokengateWeb.ProxyController do
 
   @max_attempts 3
 
-  # Pre-request budget check estimates completion tokens as a fraction of
-  # max_tokens (never the full amount). The real usage is reconciled
-  # post-request: if actual completion tokens exceed the estimate, the
-  # overage is recorded in ETS and blocks the NEXT request.
-  @completion_estimate_ratio 0.10
-
   @doc """
   Lists the model aliases accessible to the authenticated API key.
   """
@@ -196,23 +190,23 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
-  defp check_budget(member, _limits, route, payload) do
-    estimated_usage = estimated_usage(payload)
-    pricing = Providers.current_pricing(route.model_provider.id)
-
-    costs =
-      CostCalculator.breakdown(route.model_alias, pricing, estimated_usage,
-        billing_mode: route.model_provider.billing_mode,
-        provider_reported_cost: nil
-      )
-
+  defp check_budget(member, _limits, route, _payload) do
     member_monthly_budget = Accounts.effective_limits(member).monthly_budget_usd
     member_monthly_spend = Budgets.spend(member.id).monthly_usd
+
+    # Since the 2026-07-30 refactor we no longer estimate the upstream cost
+    # up-front (the upstream is the source of truth and we don't make up a
+    # number when it doesn't report one). The pre-check therefore asks a
+    # simpler question: "has the member already exhausted their monthly cap?"
+    # If yes, reject. If not, let the request through; the post-pipeline
+    # records the real reported cost and `record_spend` keeps the counter in
+    # sync. A subsequent request will see the updated spend and reject.
+    projected_cost = CostCalculator.provider_cost(route.model_provider.billing_mode, nil)
 
     case Budgets.check_ladder(
            member_monthly_budget,
            member_monthly_spend,
-           costs.provider_cost_usd
+           projected_cost
          ) do
       :ok -> :ok
       {:error, :budget_exceeded, details} -> {:error, {:budget_exceeded, details}}
@@ -488,9 +482,9 @@ defmodule TokengateWeb.ProxyController do
             {chunk, %{acc | completion: acc.completion <> extract_delta_text(decoded)}}
 
           usage ->
-            costs = stream_costs(route, usage, decoded)
-            injected = inject_usage_costs(decoded, usage, costs)
-            {Jason.encode!(injected), %{acc | usage: {usage, costs}}}
+            cost = stream_cost(route, usage, decoded)
+            injected = inject_usage_costs(decoded, usage, cost)
+            {Jason.encode!(injected), %{acc | usage: {usage, cost}}}
         end
 
       {:error, _} ->
@@ -514,10 +508,10 @@ defmodule TokengateWeb.ProxyController do
 
     latency_ms = System.monotonic_time(:millisecond) - acc.latency_start
 
-    {usage, costs} =
+    {usage, cost} =
       case acc.usage do
-        {usage, costs} ->
-          {usage, costs}
+        {usage, cost} ->
+          {usage, cost}
 
         nil ->
           # Provider sent no usage — fall back to the chars/4 heuristic over
@@ -529,10 +523,11 @@ defmodule TokengateWeb.ProxyController do
             cache_creation_tokens: 0
           }
 
-          {usage, stream_costs(route, usage, nil)}
+          cost = stream_cost(route, usage, nil)
+          {usage, cost}
       end
 
-    Budgets.record_spend(member.id, costs.provider_cost_usd)
+    Budgets.record_spend(member.id, cost)
 
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
@@ -542,12 +537,11 @@ defmodule TokengateWeb.ProxyController do
       latency_ms: latency_ms,
       prompt_tokens: usage.prompt_tokens,
       completion_tokens: usage.completion_tokens,
-      cost_usd: costs.cost_usd,
-      savings_usd: costs.savings_usd,
+      cost_usd: cost,
       streaming: true
     })
 
-    enqueue_log(route, member, conn.assigns.agent_type, usage, costs, latency_ms, 200, true,
+    enqueue_log(route, member, conn.assigns.agent_type, usage, cost, latency_ms, 200, true,
       ttft_ms: acc.ttft_ms,
       think: conn.assigns[:think] || false,
       effort: conn.assigns[:effort]
@@ -556,33 +550,23 @@ defmodule TokengateWeb.ProxyController do
     conn
   end
 
-  defp stream_costs(route, usage, body) do
-    pricing = Providers.current_pricing(route.model_provider.id)
-
+  defp stream_cost(route, _usage, body) do
     provider_reported =
       if body, do: UsageNormalizer.extract_reported_cost(:openai, body), else: nil
 
-    CostCalculator.breakdown(route.model_alias, pricing, usage,
-      billing_mode: route.model_provider.billing_mode,
-      provider_reported_cost: provider_reported
-    )
+    CostCalculator.provider_cost(route.model_provider.billing_mode, provider_reported)
   end
 
   ## Success finalization #######################################################
 
   defp finalize_success(conn, route, body, latency_ms, member) do
     usage = UsageNormalizer.normalize(:openai, body) || fallback_usage(conn.body_params, body)
-    pricing = Providers.current_pricing(route.model_provider.id)
     provider_reported = UsageNormalizer.extract_reported_cost(:openai, body)
 
-    costs =
-      CostCalculator.breakdown(route.model_alias, pricing, usage,
-        billing_mode: route.model_provider.billing_mode,
-        provider_reported_cost: provider_reported
-      )
+    cost = CostCalculator.provider_cost(route.model_provider.billing_mode, provider_reported)
 
     # Hot-path state updates (ETS only)
-    Budgets.record_spend(member.id, costs.provider_cost_usd)
+    Budgets.record_spend(member.id, cost)
 
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
@@ -592,26 +576,24 @@ defmodule TokengateWeb.ProxyController do
       latency_ms: latency_ms,
       prompt_tokens: usage.prompt_tokens,
       completion_tokens: usage.completion_tokens,
-      cost_usd: costs.cost_usd,
-      savings_usd: costs.savings_usd,
+      cost_usd: cost,
       streaming: false
     })
 
     # Durable log + webhooks, async via Oban
-    enqueue_log(route, member, conn.assigns.agent_type, usage, costs, latency_ms, 200, false,
+    enqueue_log(route, member, conn.assigns.agent_type, usage, cost, latency_ms, 200, false,
       think: conn.assigns[:think] || false,
       effort: conn.assigns[:effort]
     )
 
-    body = inject_usage_costs(body, usage, costs)
+    body = inject_usage_costs(body, usage, cost)
 
     conn
-    |> put_resp_header("x-tokengate-cost", Decimal.to_string(costs.cost_usd, :normal))
-    |> put_resp_header("x-tokengate-savings", Decimal.to_string(costs.savings_usd, :normal))
+    |> put_resp_header("x-tokengate-cost", Decimal.to_string(cost, :normal))
     |> json(body)
   end
 
-  defp inject_usage_costs(body, usage, costs) do
+  defp inject_usage_costs(body, usage, cost) do
     # Preserve the provider's own token counts (OpenAI's prompt_tokens
     # includes cached tokens — the client expects the original totals);
     # only fill in counts when the provider sent no usage at all.
@@ -621,8 +603,7 @@ defmodule TokengateWeb.ProxyController do
       |> Map.put_new("prompt_tokens", usage.prompt_tokens)
       |> Map.put_new("completion_tokens", usage.completion_tokens)
       |> Map.merge(%{
-        "estimated_cost_usd" => Decimal.to_float(costs.estimated_cost_usd),
-        "cost_usd" => Decimal.to_float(costs.cost_usd)
+        "cost_usd" => Decimal.to_float(cost)
       })
 
     Map.put(body, "usage", response_usage)
@@ -643,30 +624,12 @@ defmodule TokengateWeb.ProxyController do
     }
   end
 
-  defp estimated_usage(payload) do
-    prompt_tokens = TokenEstimator.estimate_messages(payload["messages"] || [])
-    max_tokens = payload["max_tokens"] || 512
-
-    # Estimate completion as 10% of max_tokens — never the full amount.
-    # This keeps the pre-request budget check conservative: if the real
-    # usage exceeds the estimate, the overage is recorded post-request
-    # and blocks the NEXT request via the ETS spend counter.
-    completion_estimate = ceil(max_tokens * @completion_estimate_ratio)
-
-    %{
-      prompt_tokens: prompt_tokens,
-      completion_tokens: completion_estimate,
-      cache_read_tokens: 0,
-      cache_creation_tokens: 0
-    }
-  end
-
   defp enqueue_log(
          route,
          member,
          agent_type,
          usage,
-         costs,
+         cost,
          latency_ms,
          status,
          streaming,
@@ -685,10 +648,7 @@ defmodule TokengateWeb.ProxyController do
       "error_reason" => Keyword.get(extra, :error_reason),
       "prompt_tokens" => usage.prompt_tokens,
       "completion_tokens" => usage.completion_tokens,
-      "cost_usd" => Decimal.to_string(costs.cost_usd, :normal),
-      "provider_cost_usd" => Decimal.to_string(costs.provider_cost_usd, :normal),
-      "savings_usd" => Decimal.to_string(costs.savings_usd, :normal),
-      "estimated_cost_usd" => Decimal.to_string(costs.estimated_cost_usd, :normal),
+      "provider_cost_usd" => Decimal.to_string(cost, :normal),
       "latency_ms" => latency_ms,
       "ttft_ms" => Keyword.get(extra, :ttft_ms),
       "streaming" => streaming,
@@ -728,7 +688,6 @@ defmodule TokengateWeb.ProxyController do
       prompt_tokens: 0,
       completion_tokens: 0,
       cost_usd: Decimal.new(0),
-      savings_usd: Decimal.new(0),
       streaming: conn.body_params["stream"] == true
     })
 
@@ -764,10 +723,7 @@ defmodule TokengateWeb.ProxyController do
       "error_reason" => Keyword.get(opts, :error_reason),
       "prompt_tokens" => 0,
       "completion_tokens" => 0,
-      "cost_usd" => "0",
       "provider_cost_usd" => "0",
-      "savings_usd" => "0",
-      "estimated_cost_usd" => "0",
       "latency_ms" => Keyword.get(opts, :latency_ms, 0),
       "streaming" => Keyword.get(opts, :streaming, false),
       "think" => conn.assigns[:think] || false,
@@ -789,10 +745,7 @@ defmodule TokengateWeb.ProxyController do
       "error_reason" => Keyword.get(opts, :error_reason),
       "prompt_tokens" => 0,
       "completion_tokens" => 0,
-      "cost_usd" => "0",
       "provider_cost_usd" => "0",
-      "savings_usd" => "0",
-      "estimated_cost_usd" => "0",
       "latency_ms" => Keyword.get(opts, :latency_ms, 0),
       "streaming" => Keyword.get(opts, :streaming, false),
       "api_key_prefix" => member.api_key && member.api_key.key_prefix

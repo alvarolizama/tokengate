@@ -41,8 +41,7 @@ defmodule Tokengate.Metrics.Rollup do
       %{
         hour: DateTime,          # truncated to the hour (UTC)
         request_count: integer,
-        cost_usd: Decimal,
-        savings_usd: Decimal
+        cost_usd: Decimal
       }
 
   Buckets `inserted_at` using Postgres `date_trunc("hour", inserted_at)`.
@@ -69,8 +68,7 @@ defmodule Tokengate.Metrics.Rollup do
       |> select([rl], %{
         hour: fragment("date_trunc('hour', ?)", rl.inserted_at),
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd),
-        savings_usd: fragment("COALESCE(SUM(?), 0)", rl.savings_usd)
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
       })
 
     Repo.all(query)
@@ -80,8 +78,7 @@ defmodule Tokengate.Metrics.Rollup do
         # DateTime so consumers can compare apples-to-apples.
         hour: to_utc_datetime(row.hour),
         request_count: row.request_count,
-        cost_usd: Decimal.new(to_string(row.cost_usd)),
-        savings_usd: Decimal.new(to_string(row.savings_usd))
+        cost_usd: Decimal.new(to_string(row.cost_usd))
       }
     end)
   end
@@ -114,12 +111,12 @@ defmodule Tokengate.Metrics.Rollup do
       |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
       |> where([rl, tm], tm.team_id == ^team_id)
       |> group_by([rl, tm], rl.team_member_id)
-      |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.cost_usd))
+      |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
       |> limit(^limit)
       |> select([rl], %{
         team_member_id: rl.team_member_id,
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd)
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
       })
 
     Repo.all(query)
@@ -157,7 +154,7 @@ defmodule Tokengate.Metrics.Rollup do
       |> select([rl], %{
         agent_type: rl.agent_type,
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd)
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
       })
 
     Repo.all(query)
@@ -179,7 +176,7 @@ defmodule Tokengate.Metrics.Rollup do
       |> select([rl], %{
         agent_type: rl.agent_type,
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd)
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
       })
 
     Repo.all(query)
@@ -205,10 +202,7 @@ defmodule Tokengate.Metrics.Rollup do
         model_id: binary | nil,
         model_name: String.t(),
         request_count: integer,
-        cost_usd: Decimal,            # what the provider charged (cost_usd)
-        provider_cost_usd: Decimal,  # what was actually paid
-        estimated_cost_usd: Decimal, # market estimate
-        savings_usd: Decimal,
+        cost_usd: Decimal,  # what the upstream charged for the request
         prompt_tokens: integer,
         completion_tokens: integer,
         avg_tps: float | nil
@@ -238,15 +232,12 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
       |> join(:left, [rl], ma in ModelAlias, on: rl.model_alias_id == ma.id, as: :model_alias)
       |> group_by([model_alias: ma], ma.id)
-      |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.cost_usd))
+      |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
       |> select([rl, model_alias: ma], %{
         model_id: ma.id,
         model_name: ma.name,
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd),
-        provider_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
-        estimated_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.estimated_cost_usd),
-        savings_usd: fragment("COALESCE(SUM(?), 0)", rl.savings_usd),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
@@ -259,9 +250,6 @@ defmodule Tokengate.Metrics.Rollup do
         model_name: row.model_name || "—",
         request_count: row.request_count,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
-        provider_cost_usd: Decimal.new(to_string(row.provider_cost_usd)),
-        estimated_cost_usd: Decimal.new(to_string(row.estimated_cost_usd)),
-        savings_usd: Decimal.new(to_string(row.savings_usd)),
         prompt_tokens: row.prompt_tokens,
         completion_tokens: row.completion_tokens,
         avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
@@ -293,15 +281,12 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_to(to)
       |> join(:left, [rl], ma in ModelAlias, on: rl.model_alias_id == ma.id, as: :model_alias)
       |> group_by([model_alias: ma], ma.id)
-      |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.cost_usd))
+      |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
       |> select([rl, model_alias: ma], %{
         model_id: ma.id,
         model_name: ma.name,
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd),
-        provider_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
-        estimated_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.estimated_cost_usd),
-        savings_usd: fragment("COALESCE(SUM(?), 0)", rl.savings_usd),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
@@ -314,9 +299,6 @@ defmodule Tokengate.Metrics.Rollup do
         model_name: row.model_name || "—",
         request_count: row.request_count,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
-        provider_cost_usd: Decimal.new(to_string(row.provider_cost_usd)),
-        estimated_cost_usd: Decimal.new(to_string(row.estimated_cost_usd)),
-        savings_usd: Decimal.new(to_string(row.savings_usd)),
         prompt_tokens: row.prompt_tokens,
         completion_tokens: row.completion_tokens,
         avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
@@ -334,10 +316,9 @@ defmodule Tokengate.Metrics.Rollup do
         team_name: String.t(),
         user_email: String.t(),
         request_count: integer,
-        cost_usd: Decimal,
-        provider_cost_usd: Decimal,
-        estimated_cost_usd: Decimal,
-        savings_usd: Decimal,
+        cost_usd: Decimal,  # what the upstream charged for the request
+        provider_
+        estimated_
         prompt_tokens: integer,
         completion_tokens: integer,
         avg_tps: float | nil
@@ -369,16 +350,13 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
       |> group_by([rl, tm, t, u], [tm.id, t.id, u.id])
-      |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.cost_usd))
+      |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
       |> select([rl, tm, t, u], %{
         team_member_id: tm.id,
         team_name: t.name,
         user_email: u.email,
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd),
-        provider_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
-        estimated_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.estimated_cost_usd),
-        savings_usd: fragment("COALESCE(SUM(?), 0)", rl.savings_usd),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
@@ -392,9 +370,6 @@ defmodule Tokengate.Metrics.Rollup do
         user_email: row.user_email,
         request_count: row.request_count,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
-        provider_cost_usd: Decimal.new(to_string(row.provider_cost_usd)),
-        estimated_cost_usd: Decimal.new(to_string(row.estimated_cost_usd)),
-        savings_usd: Decimal.new(to_string(row.savings_usd)),
         prompt_tokens: row.prompt_tokens,
         completion_tokens: row.completion_tokens,
         avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
@@ -415,10 +390,9 @@ defmodule Tokengate.Metrics.Rollup do
         team_id: binary,
         team_name: String.t(),
         request_count: integer,
-        cost_usd: Decimal,
-        provider_cost_usd: Decimal,
-        estimated_cost_usd: Decimal,
-        savings_usd: Decimal,
+        cost_usd: Decimal,  # what the upstream charged for the request
+        provider_
+        estimated_
         prompt_tokens: integer,
         completion_tokens: integer,
         avg_tps: float | nil
@@ -443,15 +417,12 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_from(from)
       |> maybe_to(to)
       |> group_by([rl, _, t], t.id)
-      |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.cost_usd))
+      |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
       |> select([rl, _, t], %{
         team_id: t.id,
         team_name: t.name,
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd),
-        provider_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
-        estimated_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.estimated_cost_usd),
-        savings_usd: fragment("COALESCE(SUM(?), 0)", rl.savings_usd),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
@@ -464,9 +435,6 @@ defmodule Tokengate.Metrics.Rollup do
         team_name: row.team_name,
         request_count: row.request_count,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
-        provider_cost_usd: Decimal.new(to_string(row.provider_cost_usd)),
-        estimated_cost_usd: Decimal.new(to_string(row.estimated_cost_usd)),
-        savings_usd: Decimal.new(to_string(row.savings_usd)),
         prompt_tokens: row.prompt_tokens,
         completion_tokens: row.completion_tokens,
         avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
@@ -495,10 +463,7 @@ defmodule Tokengate.Metrics.Rollup do
         provider_model: String.t() | nil,   # actual model name at the provider
         credential_name: String.t() | nil,  # API key alias
         request_count: integer,
-        cost_usd: Decimal,            # what the provider charges
-        provider_cost_usd: Decimal,  # what was actually paid
-        estimated_cost_usd: Decimal, # market estimate
-        savings_usd: Decimal,
+        cost_usd: Decimal,  # what the upstream charged for the request
         prompt_tokens: integer,
         completion_tokens: integer,
         avg_tps: float | nil
@@ -541,10 +506,7 @@ defmodule Tokengate.Metrics.Rollup do
         provider_model: mp.provider_model,
         credential_name: c.name,
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd),
-        provider_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
-        estimated_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.estimated_cost_usd),
-        savings_usd: fragment("COALESCE(SUM(?), 0)", rl.savings_usd),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
@@ -559,9 +521,6 @@ defmodule Tokengate.Metrics.Rollup do
         credential_name: row.credential_name,
         request_count: row.request_count,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
-        provider_cost_usd: Decimal.new(to_string(row.provider_cost_usd)),
-        estimated_cost_usd: Decimal.new(to_string(row.estimated_cost_usd)),
-        savings_usd: Decimal.new(to_string(row.savings_usd)),
         prompt_tokens: row.prompt_tokens,
         completion_tokens: row.completion_tokens,
         avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
@@ -584,10 +543,9 @@ defmodule Tokengate.Metrics.Rollup do
         team_name: String.t(),
         user_email: String.t(),
         request_count: integer,
-        cost_usd: Decimal,
-        provider_cost_usd: Decimal,
-        estimated_cost_usd: Decimal,
-        savings_usd: Decimal,
+        cost_usd: Decimal,  # what the upstream charged for the request
+        provider_
+        estimated_
         prompt_tokens: integer,
         completion_tokens: integer,
         avg_tps: float | nil
@@ -627,10 +585,7 @@ defmodule Tokengate.Metrics.Rollup do
         team_name: t.name,
         user_email: u.email,
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd),
-        provider_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
-        estimated_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.estimated_cost_usd),
-        savings_usd: fragment("COALESCE(SUM(?), 0)", rl.savings_usd),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
@@ -644,9 +599,6 @@ defmodule Tokengate.Metrics.Rollup do
         user_email: row.user_email,
         request_count: row.request_count,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
-        provider_cost_usd: Decimal.new(to_string(row.provider_cost_usd)),
-        estimated_cost_usd: Decimal.new(to_string(row.estimated_cost_usd)),
-        savings_usd: Decimal.new(to_string(row.savings_usd)),
         prompt_tokens: row.prompt_tokens,
         completion_tokens: row.completion_tokens,
         avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
@@ -668,10 +620,9 @@ defmodule Tokengate.Metrics.Rollup do
         team_id: binary,
         team_name: String.t(),
         request_count: integer,
-        cost_usd: Decimal,
-        provider_cost_usd: Decimal,
-        estimated_cost_usd: Decimal,
-        savings_usd: Decimal,
+        cost_usd: Decimal,  # what the upstream charged for the request
+        provider_
+        estimated_
         prompt_tokens: integer,
         completion_tokens: integer,
         avg_tps: float | nil
@@ -707,10 +658,7 @@ defmodule Tokengate.Metrics.Rollup do
         team_id: t.id,
         team_name: t.name,
         request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.cost_usd),
-        provider_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
-        estimated_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.estimated_cost_usd),
-        savings_usd: fragment("COALESCE(SUM(?), 0)", rl.savings_usd),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
@@ -723,9 +671,6 @@ defmodule Tokengate.Metrics.Rollup do
         team_name: row.team_name,
         request_count: row.request_count,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
-        provider_cost_usd: Decimal.new(to_string(row.provider_cost_usd)),
-        estimated_cost_usd: Decimal.new(to_string(row.estimated_cost_usd)),
-        savings_usd: Decimal.new(to_string(row.savings_usd)),
         prompt_tokens: row.prompt_tokens,
         completion_tokens: row.completion_tokens,
         avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
@@ -759,6 +704,7 @@ defmodule Tokengate.Metrics.Rollup do
         provider_id: binary,
         provider_name: String.t(),
         request_count: integer,
+        cost_usd: Decimal,  # what the upstream charged for the request
         error_count: integer,
         error_rate: float,
         avg_latency_ms: integer | nil,

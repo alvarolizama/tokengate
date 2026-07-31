@@ -164,8 +164,6 @@ defmodule Tokengate.Routing.RouterTest do
       Enum.into(attrs, %{
         name: "model-#{unique}",
         display_name: "Model #{unique}",
-        market_input_price_per_1m: Decimal.new("10.00"),
-        market_output_price_per_1m: Decimal.new("30.00"),
         context_window: 128_000
       })
 

@@ -82,9 +82,9 @@ defmodule TokengateWeb.StatsExportController do
 
     header =
       if model_id do
-        ~w(proveedor_modelo requests costo_real costo_mercado costo_estimado ahorro tokens_in tokens_out tps)
+        ~w(proveedor_modelo requests costo tokens_in tokens_out tps)
       else
-        ~w(modelo requests costo_real costo_mercado costo_estimado ahorro tokens_in tokens_out tps)
+        ~w(modelo requests costo tokens_in tokens_out tps)
       end
 
     csv =
@@ -110,9 +110,9 @@ defmodule TokengateWeb.StatsExportController do
 
     header =
       if team_id do
-        ~w(usuario equipo requests costo_real costo_mercado costo_estimado ahorro tokens_in tokens_out tps)
+        ~w(usuario equipo requests costo tokens_in tokens_out tps)
       else
-        ~w(equipo requests costo_real costo_mercado costo_estimado ahorro tokens_in tokens_out tps)
+        ~w(equipo requests costo tokens_in tokens_out tps)
       end
 
     csv =
@@ -130,10 +130,7 @@ defmodule TokengateWeb.StatsExportController do
     [
       csv_escape(row_label(row)),
       row.request_count,
-      decimal_to_csv(Map.get(row, :provider_cost_usd)),
-      decimal_to_csv(Map.get(row, :estimated_cost_usd)),
       decimal_to_csv(Map.get(row, :cost_usd)),
-      decimal_to_csv(Map.get(row, :savings_usd)),
       Map.get(row, :prompt_tokens, 0),
       Map.get(row, :completion_tokens, 0),
       tps_to_csv(Map.get(row, :avg_tps))
@@ -159,10 +156,7 @@ defmodule TokengateWeb.StatsExportController do
         csv_escape(row.user_email),
         csv_escape(Map.get(row, :team_name, "")),
         row.request_count,
-        decimal_to_csv(Map.get(row, :provider_cost_usd)),
-        decimal_to_csv(Map.get(row, :estimated_cost_usd)),
         decimal_to_csv(Map.get(row, :cost_usd)),
-        decimal_to_csv(Map.get(row, :savings_usd)),
         Map.get(row, :prompt_tokens, 0),
         Map.get(row, :completion_tokens, 0),
         tps_to_csv(Map.get(row, :avg_tps))
@@ -171,10 +165,7 @@ defmodule TokengateWeb.StatsExportController do
       [
         csv_escape(Map.get(row, :team_name, "—")),
         row.request_count,
-        decimal_to_csv(Map.get(row, :provider_cost_usd)),
-        decimal_to_csv(Map.get(row, :estimated_cost_usd)),
         decimal_to_csv(Map.get(row, :cost_usd)),
-        decimal_to_csv(Map.get(row, :savings_usd)),
         Map.get(row, :prompt_tokens, 0),
         Map.get(row, :completion_tokens, 0),
         tps_to_csv(Map.get(row, :avg_tps))

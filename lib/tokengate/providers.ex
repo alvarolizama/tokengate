@@ -2,9 +2,17 @@ defmodule Tokengate.Providers do
   @moduledoc """
   The Providers context.
 
-  Manages the routing domain: providers, credentials,
-  model aliases, alias providers, pricing, routing rules, and team/member
-  alias grants.
+  Manages the routing domain: providers, credentials, model aliases, alias
+  providers, and team/member alias grants.
+
+  ## Cost model (since 2026-07-30)
+
+  Per-provider pricing rows (`model_pricing`) and per-alias market prices
+  have been removed. `provider_cost_usd` is whatever the upstream reports
+  in its response body (`usage.cost` for OpenAI-compatible gateways). The
+  only cost-relevant attribute remaining is `model_providers.billing_mode`:
+  `"pay_per_token"` (use upstream-reported cost when available) or
+  `"included"` (subscription / RPM-limited — cost is $0).
 
   All `belongs_to` references to `Tokengate.Accounts.*` modules resolve at
   runtime — the Accounts context may not be compiled when this module is.
@@ -18,7 +26,6 @@ defmodule Tokengate.Providers do
     Credential,
     ModelAlias,
     ModelProvider,
-    ModelPricing,
     ServiceModelAlias,
     TeamModelAlias,
     TeamMemberExtraAlias
@@ -47,8 +54,8 @@ defmodule Tokengate.Providers do
 
   def delete_provider(%Provider{} = provider) do
     Repo.transaction(fn ->
-      # Delete dependent records in order: model_pricing → model_providers
-      # → credentials → provider. Each step must succeed before the next.
+      # Delete dependent records in order: model_providers → credentials
+      # → provider. Each step must succeed before the next.
       credential_ids =
         from(c in Credential, where: c.provider_id == ^provider.id, select: c.id)
         |> Repo.all()
@@ -65,15 +72,6 @@ defmodule Tokengate.Providers do
         end
 
       if credential_ids != [] do
-        # model_pricing references model_providers which reference credentials
-        from(mp in ModelPricing,
-          where:
-            mp.model_provider_id in subquery(
-              from(m in ModelProvider, where: m.credential_id in ^credential_ids, select: m.id)
-            )
-        )
-        |> Repo.delete_all()
-
         from(mp in ModelProvider, where: mp.credential_id in ^credential_ids)
         |> Repo.delete_all()
 
@@ -237,9 +235,6 @@ defmodule Tokengate.Providers do
 
   def delete_model_provider(%ModelProvider{} = model_provider) do
     Repo.transaction(fn ->
-      from(mp in ModelPricing, where: mp.model_provider_id == ^model_provider.id)
-      |> Repo.delete_all()
-
       case Repo.delete(model_provider) do
         {:ok, _} ->
           # Clear sticky routing entries pointing at the deleted model provider
@@ -262,99 +257,31 @@ defmodule Tokengate.Providers do
 
   @doc """
   Returns enabled model_providers for a model_alias, ordered by priority ASC
-  with NULLS LAST, preloading credential (with provider), and model_pricing.
+  with NULLS LAST, preloading credential (with provider).
   """
   def list_model_providers(model_alias_id) when is_binary(model_alias_id) do
     from(mp in ModelProvider,
       where: mp.model_alias_id == ^model_alias_id and mp.enabled == true,
       order_by: [asc_nulls_last: mp.priority],
-      preload: [:model_pricing, credential: :provider]
+      preload: [credential: :provider]
     )
     |> Repo.all()
   end
 
   @doc """
   Returns ALL model_providers for a model_alias (enabled and disabled),
-  preloading credential (with provider) and model_pricing. Ordered by
-  priority ASC with NULLS LAST.
+  preloading credential (with provider). Ordered by priority ASC with
+  NULLS LAST.
   """
   def list_all_model_providers(model_alias_id) when is_binary(model_alias_id) do
     from(mp in ModelProvider,
       where: mp.model_alias_id == ^model_alias_id,
       order_by: [asc_nulls_last: mp.priority],
-      preload: [:model_pricing, credential: :provider]
+      preload: [credential: :provider]
     )
     |> Repo.all()
   end
 
-  @doc """
-  Returns all model_providers, preloading credential (with provider),
-  model_alias, and model_pricing. Used by the pricing admin.
-  """
-  def list_pay_per_token_model_providers do
-    from(mp in ModelProvider,
-      join: c in assoc(mp, :credential),
-      join: p in assoc(c, :provider),
-      preload: [credential: {c, provider: p}, model_alias: [], model_pricing: :model_provider],
-      order_by: [asc: p.name]
-    )
-    |> Repo.all()
-  end
-
-  @doc """
-  Returns all model_providers for a model_alias with credential (with provider)
-  and model_pricing preloaded, including the model_alias association.
-  """
-  def list_model_providers_for_pricing(model_alias_id) when is_binary(model_alias_id) do
-    from(mp in ModelProvider,
-      join: c in assoc(mp, :credential),
-      join: p in assoc(c, :provider),
-      where: mp.model_alias_id == ^model_alias_id,
-      preload: [credential: {c, provider: p}, model_pricing: :model_provider],
-      order_by: [asc_nulls_last: mp.priority]
-    )
-    |> Repo.all()
-  end
-
-  # ---------------------------------------------------------------------------
-  # Model Pricing
-  # ---------------------------------------------------------------------------
-
-  def list_model_pricing, do: Repo.all(ModelPricing)
-
-  def get_model_pricing!(id), do: Repo.get!(ModelPricing, id)
-  def get_model_pricing(id), do: Repo.get(ModelPricing, id)
-
-  def create_model_pricing(attrs) do
-    %ModelPricing{}
-    |> ModelPricing.changeset(attrs)
-    |> Repo.insert()
-  end
-
-  def update_model_pricing(%ModelPricing{} = model_pricing, attrs) do
-    model_pricing
-    |> ModelPricing.changeset(attrs)
-    |> Repo.update()
-  end
-
-  def delete_model_pricing(%ModelPricing{} = model_pricing), do: Repo.delete(model_pricing)
-
-  def change_model_pricing(%ModelPricing{} = model_pricing, attrs \\ %{}),
-    do: ModelPricing.changeset(model_pricing, attrs)
-
-  @doc """
-  Returns the latest ModelPricing for an model_provider by effective_from.
-  """
-  def current_pricing(model_provider_id) do
-    from(p in ModelPricing,
-      where: p.model_provider_id == ^model_provider_id,
-      order_by: [desc: p.effective_from],
-      limit: 1
-    )
-    |> Repo.one()
-  end
-
-  # ---------------------------------------------------------------------------
   # ---------------------------------------------------------------------------
   # Team Member Extra Aliases
   # ---------------------------------------------------------------------------
@@ -499,22 +426,17 @@ defmodule Tokengate.Providers do
       on: ma.id == id.model_alias_id
     )
     |> Repo.all()
+    |> Enum.uniq_by(& &1.id)
   end
 
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
 
-  defp normalize_unique_error({:ok, record}), do: {:ok, record}
+  defp normalize_unique_error({:ok, _} = ok), do: ok
 
-  defp normalize_unique_error({:error, changeset}) do
-    errors = Ecto.Changeset.traverse_errors(changeset, fn {msg, _} -> msg end)
+  defp normalize_unique_error({:error, %{errors: [unique: _]}}),
+    do: {:error, :already_granted}
 
-    has_unique? =
-      Enum.any?(errors, fn {_field, messages} ->
-        Enum.any?(List.wrap(messages), &String.contains?(&1, "already"))
-      end)
-
-    if has_unique?, do: {:error, :already_granted}, else: {:error, changeset}
-  end
+  defp normalize_unique_error(error), do: error
 end

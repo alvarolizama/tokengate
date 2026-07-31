@@ -71,15 +71,25 @@ defmodule Tokengate.Budgets.Manager do
         ) :: :ok | {:error, :budget_exceeded, map()}
   def check_ladder(member_monthly_budget, member_monthly_spend, estimated_cost_usd) do
     estimated_micro = to_micro(estimated_cost_usd)
+    spend_micro = to_micro(member_monthly_spend)
 
     available_micro =
       if member_monthly_budget do
-        max(0, to_micro(member_monthly_budget) - to_micro(member_monthly_spend))
+        max(0, to_micro(member_monthly_budget) - spend_micro)
       else
         :unlimited
       end
 
-    if available_micro == :unlimited or estimated_micro <= available_micro do
+    # Two rejection paths:
+    #   1. Already exhausted (spend > budget) — rejects regardless of new cost.
+    #   2. New cost would push us over budget.
+    # The first path is what the 2026-07-30 refactor relies on: with the
+    # upstream cost only known after the call, we always pass `0` from the
+    # pre-check, so the "exhausted" gate is what actually keeps a member from
+    # racking up unlimited spend.
+    if available_micro == :unlimited or
+         (estimated_micro <= available_micro and
+            spend_micro <= to_micro(member_monthly_budget || 0)) do
       :ok
     else
       {:error, :budget_exceeded, %{available: from_micro(available_micro)}}
@@ -172,8 +182,8 @@ defmodule Tokengate.Budgets.Manager do
   Loads the spend for `member_id` over the given period from the DB
   (`Tokengate.Logs.cost_summary/1`) and returns it as integer micro-USD.
 
-  This reads `total_provider_cost_usd` — what TokenGate actually paid —
-  so the budget counters stay in the same currency as the dashboard's
+  This reads `total_cost_usd` — what TokenGate actually paid — so the
+  budget counters stay in the same currency as the dashboard's
   "Costo real".
 
   This is intended to be called from the **caller process** (not the
@@ -191,7 +201,7 @@ defmodule Tokengate.Budgets.Manager do
         from: from
       })
 
-    to_micro(summary.total_provider_cost_usd)
+    to_micro(summary.total_cost_usd)
   end
 
   @doc """

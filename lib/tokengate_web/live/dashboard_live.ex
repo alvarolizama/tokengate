@@ -233,9 +233,6 @@ defmodule TokengateWeb.DashboardLive do
       errors_total: 0,
       error_rate: 0.0,
       cost_usd: summary.total_cost_usd,
-      provider_cost_usd: summary.total_provider_cost_usd,
-      estimated_cost_usd: summary.total_estimated_cost_usd,
-      savings_usd: summary.total_savings_usd,
       prompt_tokens: summary.total_prompt_tokens,
       completion_tokens: summary.total_completion_tokens,
       avg_latency_ms: Map.get(summary, :avg_latency_ms) || 0.0,
@@ -276,7 +273,6 @@ defmodule TokengateWeb.DashboardLive do
       :requests_series,
       to_chart_points(series, period, :request_count, &requests_tooltip/1)
     )
-    |> assign(:savings_series, to_chart_points(series, period, :savings_usd, &usd_tooltip/1))
   end
 
   defp chart_scope(user) do
@@ -293,8 +289,7 @@ defmodule TokengateWeb.DashboardLive do
       %{
         hour: hours_ago_dt(hours),
         request_count: summary.request_count,
-        cost_usd: summary.total_cost_usd,
-        savings_usd: summary.total_savings_usd
+        cost_usd: summary.total_cost_usd
       }
     ]
   end
@@ -332,14 +327,14 @@ defmodule TokengateWeb.DashboardLive do
     top_rows(breakdown_team, & &1.team_name)
   end
 
-  # Shared ranking logic: sort by provider_cost_usd desc, take 5,
+  # Shared ranking logic: sort by cost_usd desc, take 5,
   # normalize to %{label, value, tooltip} for `hbars_chart`.
   defp top_rows(rows, label_fun) do
     rows
-    |> Enum.sort_by(fn row -> Decimal.to_float(row.provider_cost_usd) end, :desc)
+    |> Enum.sort_by(fn row -> Decimal.to_float(row.cost_usd) end, :desc)
     |> Enum.take(5)
     |> Enum.map(fn row ->
-      cost = Decimal.to_float(row.provider_cost_usd)
+      cost = Decimal.to_float(row.cost_usd)
 
       %{
         label: label_fun.(row),
