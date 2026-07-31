@@ -27,6 +27,16 @@ defmodule Tokengate.Routing.Router do
   `available?` predicate built from the circuit breaker so they never
   call the breaker directly.
 
+  ### Exclusive scope
+
+  Providers can be scoped to serve only specific consumers:
+    * Global (no scope) — available to all members with access.
+    * Member-exclusive — only the specified team member sees it.
+    * Team-exclusive — only members of the specified team see it.
+
+  Exclusive providers are injected with priority -1 (always first) for
+  the matching scope. If they fail, the normal fallback pool takes over.
+
   ## Fallback / retry
 
   Callers may pass `:exclude_credential_ids` in `request_context` (or as a
@@ -34,7 +44,6 @@ defmodule Tokengate.Routing.Router do
   used to retry on a different provider after a failure without re-selecting
   the same (now failed) credential.
   """
-
   alias Tokengate.Providers
   alias Tokengate.Routing.CircuitBreakerManager
   alias Tokengate.Routing.Priority
@@ -147,9 +156,19 @@ defmodule Tokengate.Routing.Router do
   # Internal: alias resolution + routing-rule evaluation
   # ---------------------------------------------------------------------------
 
-  defp route_alias(model_alias, _team_member, _accessible, request_context, breaker, exclude) do
-    # Load enabled model_providers for the alias (with credential preloaded).
-    model_providers = Providers.list_model_providers(model_alias.id)
+  defp route_alias(model_alias, team_member, _accessible, request_context, breaker, exclude) do
+    # Load model_providers visible to this member (global + their exclusives).
+    model_providers =
+      if team_member && team_member.team && team_member.team.id do
+        Providers.list_model_providers_for_member(
+          model_alias.id,
+          team_member.id,
+          team_member.team.id
+        )
+      else
+        # Fallback: no team context (e.g. service members), global only
+        Providers.list_model_providers(model_alias.id)
+      end
 
     if model_providers == [] do
       {:error, :no_providers_configured}
@@ -176,6 +195,9 @@ defmodule Tokengate.Routing.Router do
       breaker.allow?(ap.credential.id)
     end
 
+    # Mark exclusive providers with priority -1 so they always come first
+    candidates = inject_exclusive_priority(candidates)
+
     strategy_opts = %{
       api_key_hash: Map.get(request_context, :api_key_hash),
       model_alias_id: model_alias.id,
@@ -199,6 +221,18 @@ defmodule Tokengate.Routing.Router do
     end
   end
 
+  # Inject exclusive providers with priority -1 so they are always selected
+  # first by the priority strategy. Global providers keep their configured priority.
+  defp inject_exclusive_priority(candidates) do
+    Enum.map(candidates, fn mp ->
+      if mp.exclusive_to_team_member_id != nil || mp.exclusive_to_team_id != nil do
+        %{mp | priority: -1}
+      else
+        mp
+      end
+    end)
+  end
+
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
@@ -208,15 +242,8 @@ defmodule Tokengate.Routing.Router do
   end
 
   defp maybe_preload_team(team_member) do
-    # Reload the team association if it is not already a populated struct.
-    team = Map.get(team_member, :team)
-
-    if is_map(team) and Map.has_key?(team, :id) and team.id != nil do
-      team_member
-    else
-      # force: true re-loads the association even if it was previously set to nil.
-      Tokengate.Repo.preload(team_member, [:team], force: true)
-    end
+    # Always force-preload the team association to guarantee it's populated.
+    Tokengate.Repo.preload(team_member, [:team], force: true)
   end
 
   defp exclude_ids(request_context, opts) do

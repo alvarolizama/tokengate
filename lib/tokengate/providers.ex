@@ -173,6 +173,8 @@ defmodule Tokengate.Providers do
     do: Credential.changeset(credential, attrs)
 
   # ---------------------------------------------------------------------------
+  # Model Aliases
+  # ---------------------------------------------------------------------------
 
   def list_model_aliases, do: Repo.all(ModelAlias)
 
@@ -247,7 +249,7 @@ defmodule Tokengate.Providers do
       end
     end)
     |> case do
-      {:ok, _} -> {:ok, model_provider}
+      {:ok, model_provider} -> {:ok, model_provider}
       {:error, changeset} -> {:error, changeset}
     end
   end
@@ -256,8 +258,9 @@ defmodule Tokengate.Providers do
     do: ModelProvider.changeset(model_provider, attrs)
 
   @doc """
-  Returns enabled model_providers for a model_alias, ordered by priority ASC
-  with NULLS LAST, preloading credential (with provider).
+  Returns enabled model_providers for a model_alias (global only),
+  ordered by priority ASC with NULLS LAST, preloading credential (with provider).
+  Used by the admin UI — shows all providers regardless of scope.
   """
   def list_model_providers(model_alias_id) when is_binary(model_alias_id) do
     from(mp in ModelProvider,
@@ -279,6 +282,133 @@ defmodule Tokengate.Providers do
       order_by: [asc_nulls_last: mp.priority],
       preload: [credential: :provider]
     )
+    |> Repo.all()
+  end
+
+  # ---------------------------------------------------------------------------
+  # Exclusive Model Providers — routing queries
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Returns model_providers visible to a specific team member for routing.
+
+  Includes:
+  - Global providers (no exclusive scope)
+  - Providers exclusive to this member
+  - Providers exclusive to this member's team
+
+  Returns providers ordered by: exclusive_to_team_member_id DESC (member
+  first), then priority ASC. The router uses this to inject exclusive
+  providers with priority -1.
+  """
+  def list_model_providers_for_member(model_alias_id, team_member_id, team_id)
+      when is_binary(model_alias_id) and is_binary(team_member_id) and is_binary(team_id) do
+    # Build base query: enabled providers for this model alias
+    base_query =
+      from(mp in ModelProvider,
+        where: mp.model_alias_id == ^model_alias_id and mp.enabled == true,
+        preload: [credential: :provider]
+      )
+
+    # Add scope filter: global OR exclusive to this member OR exclusive to this team
+    query =
+      from(mp in base_query,
+        where:
+          is_nil(mp.exclusive_to_team_member_id) or
+            mp.exclusive_to_team_member_id == ^team_member_id or
+            mp.exclusive_to_team_id == ^team_id,
+        order_by: [
+          asc_nulls_last: mp.exclusive_to_team_member_id,
+          asc_nulls_last: mp.priority
+        ]
+      )
+
+    Repo.all(query)
+  end
+
+  @doc """
+  Checks if a credential is already assigned to any model_provider.
+  Returns the model_provider if assigned, nil otherwise.
+  """
+  def credential_in_use?(credential_id) do
+    Repo.one(
+      from(mp in ModelProvider,
+        where: mp.credential_id == ^credential_id,
+        limit: 1
+      )
+    )
+  end
+
+  @doc """
+  Returns active credentials available for scope assignment.
+
+  Filters:
+  - Only active credentials
+  - Excludes credentials already in use by other model_providers (unless
+    the model_provider is the one being edited, passed as exclude_id)
+  - When scope is "member": excludes credentials already exclusive to
+    another member for the same model_alias
+  - When scope is "team": excludes credentials already exclusive to
+    another team for the same model_alias
+  """
+  def list_available_credentials_for_scope(model_alias_id, scope, opts \\ []) do
+    exclude_model_provider_id = Keyword.get(opts, :exclude_model_provider_id)
+
+    base_query =
+      from(c in Credential,
+        where: c.status == "active",
+        preload: [:provider],
+        order_by: [asc: c.inserted_at]
+      )
+
+    # Exclude credentials already used by other model_providers
+    base_query =
+      if exclude_model_provider_id do
+        from(c in base_query,
+          where:
+            not fragment(
+              "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.id != ?)",
+              c.id,
+              ^exclude_model_provider_id
+            )
+        )
+      else
+        from(c in base_query,
+          where:
+            not fragment(
+              "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ?)",
+              c.id
+            )
+        )
+      end
+
+    # Additional scope-specific exclusions
+    case scope do
+      "member" ->
+        # Exclude credentials already exclusive to another member for this model
+        from(c in base_query,
+          where:
+            not fragment(
+              "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_alias_id = ? AND mp.exclusive_to_team_member_id IS NOT NULL)",
+              c.id,
+              ^model_alias_id
+            )
+        )
+
+      "team" ->
+        # Exclude credentials already exclusive to another team for this model
+        from(c in base_query,
+          where:
+            not fragment(
+              "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_alias_id = ? AND mp.exclusive_to_team_id IS NOT NULL)",
+              c.id,
+              ^model_alias_id
+            )
+        )
+
+      _ ->
+        base_query
+    end
     |> Repo.all()
   end
 
