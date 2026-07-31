@@ -25,8 +25,9 @@ defmodule Tokengate.Providers.ModelProvider do
       the specified team see this provider for the model.
 
   The two exclusive fields are mutually exclusive — you cannot set both.
-  A credential can only appear once across all model_providers (enforced
-  by a unique index).
+  A credential can be used across different model aliases, but can only
+  appear once per model alias (enforced by a composite unique index on
+  `credential_id` + `model_alias_id`).
   """
 
   use Ecto.Schema
@@ -76,8 +77,8 @@ defmodule Tokengate.Providers.ModelProvider do
     |> foreign_key_constraint(:exclusive_to_team_member_id)
     |> foreign_key_constraint(:exclusive_to_team_id)
     |> unique_constraint(:credential_id,
-      name: :model_providers_credential_id_unique_index,
-      message: "ya está asignado a otro modelo"
+      name: :model_providers_credential_model_alias_unique_index,
+      message: "ya está asignado a este modelo"
     )
     |> sync_scope_field()
   end

@@ -184,7 +184,8 @@ defmodule TokengateWeb.SettingsLive do
                 <h3 class="font-semibold text-base-content">Reiniciar extras de miembros</h3>
                 <p class="text-sm text-base-content/60">
                   Elimina todos los <code>extra_monthly_budget_usd</code>,
-                  <code>extra_concurrency</code> y <code>extra_rpm</code>
+                  <code>extra_concurrency</code>
+                  y <code>extra_rpm</code>
                   de todos los miembros de todos los equipos.
                   Los miembros quedarán con los valores por defecto de su equipo.
                   El gasto acumulado NO se resetea.
@@ -276,7 +277,8 @@ defmodule TokengateWeb.SettingsLive do
         <div class="relative card bg-base-100 border border-warning/50 shadow-xl w-full max-w-md">
           <div class="card-body">
             <h3 class="card-title text-warning flex items-center gap-2">
-              <.icon name="hero-exclamation-triangle" class="w-5 h-5" /> ¿Reiniciar extras de miembros?
+              <.icon name="hero-exclamation-triangle" class="w-5 h-5" />
+              ¿Reiniciar extras de miembros?
             </h3>
             <p class="text-sm text-base-content/70 mt-2">
               Esto eliminará <strong>todos</strong> los extras de todos los miembros:

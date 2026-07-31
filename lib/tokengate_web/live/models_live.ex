@@ -1158,7 +1158,9 @@ defmodule TokengateWeb.ModelsLive do
                 <%= if @current_scope == "member" do %>
                   <div class="relative">
                     <label class="text-sm font-medium text-base-content">Usuario exclusivo</label>
-                    <p class="text-xs text-base-content/50 mb-1">Solo este usuario podrá usar esta API key para este modelo.</p>
+                    <p class="text-xs text-base-content/50 mb-1">
+                      Solo este usuario podrá usar esta API key para este modelo.
+                    </p>
                     <input
                       type="text"
                       name="model_provider[scope_member_id_display]"
@@ -1175,7 +1177,9 @@ defmodule TokengateWeb.ModelsLive do
                         search = String.downcase(@scope_member_search || "")
                         email = if m.user, do: String.downcase(m.user.email), else: ""
                         name = if m.user && m.user.name, do: String.downcase(m.user.name), else: ""
-                        search == "" or String.contains?(email, search) or String.contains?(name, search)
+
+                        search == "" or String.contains?(email, search) or
+                          String.contains?(name, search)
                       end) %>
                     <%= if @scope_member_search != "" and members_filtered != [] do %>
                       <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
@@ -1191,14 +1195,20 @@ defmodule TokengateWeb.ModelsLive do
                         </button>
                       </div>
                     <% end %>
-                    <input type="hidden" name="model_provider[scope_member_id]" value={@current_scope_member_id} />
+                    <input
+                      type="hidden"
+                      name="model_provider[scope_member_id]"
+                      value={@current_scope_member_id}
+                    />
                   </div>
                 <% end %>
 
                 <%= if @current_scope == "team" do %>
                   <div class="relative">
                     <label class="text-sm font-medium text-base-content">Equipo exclusivo</label>
-                    <p class="text-xs text-base-content/50 mb-1">Solo los miembros de este equipo podrán usar esta API key para este modelo.</p>
+                    <p class="text-xs text-base-content/50 mb-1">
+                      Solo los miembros de este equipo podrán usar esta API key para este modelo.
+                    </p>
                     <input
                       type="text"
                       name="model_provider[scope_team_id_display]"
@@ -1229,7 +1239,11 @@ defmodule TokengateWeb.ModelsLive do
                         </button>
                       </div>
                     <% end %>
-                    <input type="hidden" name="model_provider[scope_team_id]" value={@current_scope_team_id} />
+                    <input
+                      type="hidden"
+                      name="model_provider[scope_team_id]"
+                      value={@current_scope_team_id}
+                    />
                   </div>
                 <% end %>
 
