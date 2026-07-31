@@ -410,7 +410,7 @@ defmodule TokengateWeb.ServicesLive do
                       total_input_tokens: 0,
                       total_output_tokens: 0
                     }) %>
-                  <div class="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  <div class="mt-3 grid grid-cols-4 gap-3 w-full">
                     <%!-- Gasto real --%>
                     <div class="card bg-base-100 border border-base-300 shadow-sm">
                       <div class="card-body p-4">
