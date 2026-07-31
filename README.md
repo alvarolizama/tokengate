@@ -4,29 +4,6 @@
   <p>Gateway autohospedado para LLMs. Proxy compatible con OpenAI que enruta a múltiples proveedores con prioridad, sticky routing, circuit breaker, presupuestos y observabilidad en tiempo real.</p>
 </div>
 
-<table>
-  <tr>
-    <td><img src="docs/screenshots/dashboard.png" alt="Dashboard"></td>
-    <td><img src="docs/screenshots/stats.png" alt="Estadísticas"></td>
-  </tr>
-  <tr>
-    <td><img src="docs/screenshots/logs.png" alt="Logs en vivo"></td>
-    <td><img src="docs/screenshots/teams.png" alt="Equipos"></td>
-  </tr>
-  <tr>
-    <td><img src="docs/screenshots/services.png" alt="Servicios"></td>
-    <td><img src="docs/screenshots/models.png" alt="Modelos"></td>
-  </tr>
-  <tr>
-    <td><img src="docs/screenshots/providers.png" alt="Proveedores"></td>
-    <td><img src="docs/screenshots/credits.png" alt="Créditos"></td>
-  </tr>
-  <tr>
-    <td><img src="docs/screenshots/alerts.png" alt="Alertas"></td>
-    <td></td>
-  </tr>
-</table>
-
 ## Stack
 
 - **Elixir + Phoenix LiveView v1.8** — UI en tiempo real, sin SPA
@@ -41,14 +18,15 @@
 
 - `POST /v1/chat/completions` y `GET /v1/models` compatibles con OpenAI
 - Autenticación vía bearer API key
-- Streaming de respuestas
+- Streaming de respuestas (SSE)
+- Headers opcionales: `X-Agent-Type`, `X-Title`, `HTTP-Referer`
 
 ### Enrutamiento
 
 - **Prioridad + sticky routing** — la misma API key se pega al mismo proveedor (preserva prompt caches) con TTL de 15 min
 - **Circuit breaker** por credencial — abre tras 15 fallos consecutivos (configurable), semi-abre en 30s (20s si fue rate limit)
 - **Fallback** automático ante errores (hasta 3 intentos)
-- **Fallback por concurrencia** — si un proveedor está saturado, intenta el siguiente automáticamente
+- **Fallback por saturación** — si un proveedor está saturado (concurrencia o RPM), intenta el siguiente automáticamente
 
 ### Fallback por saturación de proveedor
 
@@ -134,7 +112,19 @@ TokenGate clasifica cada error del proveedor y decide si reintentar, desactivar 
 
 ### Control de costos
 
-Cada request registra 4 dimensiones: **costo de mercado** (estimado), **costo del proveedor** (pricing row), **costo real pagado** (lo que pagaste de verdad) y **ahorro** vs precio de mercado. Soporta proveedores `pay_per_token` e `included` (suscripción).
+Cada request registra el **costo reportado por el proveedor** (`provider_cost_usd`). Se confía en lo que el upstream reporta en su respuesta (campo `usage.cost`). Soporta proveedores `pay_per_token` (costo por uso) e `included` (suscripción/RPM — costo es $0). El campo `billing_mode` en cada credencial indica al sistema cómo interpretar el costo.
+
+### Credential Pinning (Exclusive Scope)
+
+Un credential de proveedor puede ser **exclusivo** para un miembro o equipo específico:
+
+- **Global** — disponible para todos los miembros con acceso al modelo
+- **Exclusivo para miembro** — solo ese miembro usa esa API key para ese modelo
+- **Exclusivo para equipo** — solo los miembros de ese equipo usan esa API key para ese modelo
+
+Los credentials exclusivos tienen **prioridad máxima** (priority -1). Si fallan, el routing cae al pool global automáticamente. Un credential solo puede estar asignado a una vez (constraint de exclusividad en DB).
+
+Configuración desde **Dashboard > Models**: al asignar un proveedor a un modelo, se selecciona el scope (Global / Equipo / Usuario) y el destinatario. En **Dashboard > Teams > Members**, cada miembro muestra sus keys exclusivas.
 
 ### Multi-tenant
 
@@ -148,13 +138,44 @@ Cada request registra 4 dimensiones: **costo de mercado** (estimado), **costo de
 
 ### Dashboard
 
-- **KPIs en tiempo real** — requests, costo real, ahorro, tokens, TPS
-- **Gráficas** de costo, requests y ahorro por hora/día
+- **KPIs** — requests, costo real, tokens in/out, TPS (con selector de período: Hoy, 7d, 30d, 90d)
+- **Gráficas horarias** — costo, requests, tokens in/out (stacked), TPS por hora
 - **Desglose** por modelo, API key y equipo
-- **Estadísticas** con drill-down por modelo y equipo, ranking de proveedores (tiers S/A/B/C/D), patrones de uso, export CSV
-- **Logs en vivo** con requests en vuelo, filtros y columnas agrupadas (Identidad, Request, Rendimiento, Costos)
-- **Créditos** con barras de progreso y estado por miembro
-- **Alertas** — credenciales en error, breakers abiertos, miembros sin crédito
+- **Patrones de uso** — distribución por hora del día, horas pico, minutos pico, pico de concurrencia
+- **Top 5** equipos y miembros por consumo
+
+### Estadísticas (`/dashboard/stats`)
+
+- **Períodos** — Hoy, 7d, 30d, 90d
+- **Vistas** — Resumen, Modelos (drill-down por modelo), Equipos (drill-down por equipo)
+- **Rankings** — proveedores (tiers S/A/B/C/D por confiabilidad y latencia), modelos, usuarios
+- **Patrones de uso** — distribución por hora, horas/minutos pico, concurrencia
+- **Export CSV** para modelos y equipos
+- **Scoping** — admin ve todo, usuarios ven solo su consumo
+
+### Logs en vivo
+
+- Requests en vuelo con estado (Pending → Complete/Error)
+- Filtros por modelo, equipo, proveedor, estado HTTP
+- Columnas agrupadas: Identidad, Request, Rendimiento, Costos
+
+### Créditos
+
+- Barras de progreso por miembro mostrando consumo vs budget mensual
+- Estado por miembro: dentro del presupuesto, cerca del límite, excedido
+
+### Alertas
+
+- Credenciales en estado `error` (auto-desactivadas por 401/402/403)
+- Breakers abiertos con tiempo restante de cooldown
+- Miembros sin API key activa
+
+### Configuración (`/dashboard/settings`)
+
+Zona de peligro con acciones destructivas:
+- **Eliminar historial de logs** — trunca la tabla `request_logs`
+- **Reiniciar sticky sessions** — borra todas las asignaciones sticky de API key → proveedor
+- **Reiniciar extras de miembros** — elimina todos los `extra_monthly_budget_usd`, `extra_concurrency` y `extra_rpm` de todos los miembros (el gasto acumulado NO se resetea)
 
 ### Autenticación
 
@@ -248,7 +269,7 @@ Headers opcionales: `X-Agent-Type`, `X-Title`, `HTTP-Referer`
 | `GOOGLE_OAUTH_CLIENT_SECRET` | Google OAuth (opcional) | — |
 | `GOOGLE_OAUTH_ALLOWED_DOMAINS` | Dominios allowlist (comma-separated) | vacío |
 | `SKIP_MIGRATIONS` | `1` = no migrar en boot | — |
-| `ECTO_SSL` | `false` = desactivar SSL a Postgres (local dev) | `true` (SSL on por default) |
+| `ECTO_SSL` | `false` = desactivar SSL a Postgres (local dev) | `true` |
 
 > Los parámetros de circuit breaker y timeout de streaming también son env vars — ver [Parámetros configurables](#parámetros-configurables).
 
