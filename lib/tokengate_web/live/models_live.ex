@@ -3,7 +3,7 @@ defmodule TokengateWeb.ModelsLive do
   CRUD for model_aliases + per-model model_provider management.
 
   Admins can create, edit, and delete models, and assign providers to each
-  model (provider_model, priority, enabled toggle, billing_mode).
+  model (provider_model, priority, enabled toggle, billing_mode, scope).
   Managers and regular users see a read-only list.
 
   Models are global. Admins can create, edit, and delete models,
@@ -15,14 +15,20 @@ defmodule TokengateWeb.ModelsLive do
   `usage.cost`, there is no per-provider pricing form anymore. The only
   cost-relevant attribute on a model_provider is `billing_mode`:
   `"pay_per_token"` or `"included"` (subscription / RPM-limited).
-  """
 
+  ## Exclusive scope
+
+  A model_provider can be scoped to serve only specific consumers:
+    * Global — available to all team members with access.
+    * Member-exclusive — only the specified team member sees it.
+    * Team-exclusive — only members of the specified team see it.
+  """
   use TokengateWeb, :live_view
 
   import Ecto.Query, only: [from: 2]
-
+  alias Tokengate.Accounts
   alias Tokengate.Providers
-  alias Tokengate.Providers.{ModelAlias, ModelProvider, Provider}
+  alias Tokengate.Providers.{ModelAlias, ModelProvider}
   alias Tokengate.Repo
 
   @impl true
@@ -44,8 +50,14 @@ defmodule TokengateWeb.ModelsLive do
       |> assign(:provider_model_search, "")
       |> assign(:provider_form_credential_id, nil)
       |> assign(:current_billing_mode, "pay_per_token")
+      |> assign(:current_scope, "global")
+      |> assign(:current_scope_team_id, nil)
+      |> assign(:current_scope_member_id, nil)
+      |> assign(:scope_team_search, "")
+      |> assign(:scope_member_search, "")
       |> load_aliases()
       |> assign_form_data()
+      |> load_scope_data()
 
     {:ok, socket}
   end
@@ -77,6 +89,21 @@ defmodule TokengateWeb.ModelsLive do
 
     socket
     |> assign(:credentials_for_select, credentials)
+  end
+
+  defp load_scope_data(socket) do
+    teams = Accounts.list_teams()
+
+    members =
+      from(tm in Tokengate.Accounts.TeamMember,
+        preload: [:user],
+        order_by: [asc: tm.id]
+      )
+      |> Repo.all()
+
+    socket
+    |> assign(:teams_for_select, teams)
+    |> assign(:members_for_select, members)
   end
 
   ## Events — alias CRUD ---------------------------------------------------
@@ -169,7 +196,10 @@ defmodule TokengateWeb.ModelsLive do
        socket
        |> assign(:provider_form_alias_id, alias_id)
        |> assign(:provider_form, to_form(changeset, as: :model_provider))
-       |> assign(:editing_ap_id, :new)}
+       |> assign(:editing_ap_id, :new)
+       |> assign(:current_scope, "global")
+       |> assign(:current_scope_team_id, nil)
+       |> assign(:current_scope_member_id, nil)}
     else
       {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
     end
@@ -182,9 +212,14 @@ defmodule TokengateWeb.ModelsLive do
      |> assign(:editing_ap_id, nil)
      |> assign(:provider_models, [])
      |> assign(:provider_models_loading, false)
-      |> assign(:provider_model_search, "")
+     |> assign(:provider_model_search, "")
      |> assign(:provider_form_credential_id, nil)
-     |> assign(:current_billing_mode, "pay_per_token")}
+     |> assign(:current_billing_mode, "pay_per_token")
+     |> assign(:current_scope, "global")
+     |> assign(:current_scope_team_id, nil)
+     |> assign(:current_scope_member_id, nil)
+     |> assign(:scope_team_search, "")
+     |> assign(:scope_member_search, "")}
   end
 
   def handle_event("edit_model_provider", %{"id" => ap_id}, socket) do
@@ -192,12 +227,22 @@ defmodule TokengateWeb.ModelsLive do
       ap = Providers.get_model_provider!(ap_id)
       changeset = Providers.change_model_provider(ap)
 
+      scope =
+        cond do
+          ap.exclusive_to_team_member_id != nil -> "member"
+          ap.exclusive_to_team_id != nil -> "team"
+          true -> "global"
+        end
+
       {:noreply,
        socket
        |> assign(:provider_form, to_form(changeset, as: :model_provider))
        |> assign(:editing_ap_id, ap.id)
        |> assign(:provider_form_credential_id, ap.credential_id)
        |> assign(:current_billing_mode, ap.billing_mode || "pay_per_token")
+       |> assign(:current_scope, scope)
+       |> assign(:current_scope_team_id, ap.exclusive_to_team_id)
+       |> assign(:current_scope_member_id, ap.exclusive_to_team_member_id)
        |> assign(:provider_models_loading, true)
        |> fetch_provider_models(ap.credential_id)}
     else
@@ -207,10 +252,12 @@ defmodule TokengateWeb.ModelsLive do
 
   def handle_event("select_provider_model", %{"model" => model}, socket) do
     if socket.assigns.is_admin and socket.assigns.provider_form do
-      form = to_form(
-        Ecto.Changeset.put_change(socket.assigns.provider_form.source, :provider_model, model),
-        as: :model_provider
-      )
+      form =
+        to_form(
+          Ecto.Changeset.put_change(socket.assigns.provider_form.source, :provider_model, model),
+          as: :model_provider
+        )
+
       {:noreply,
        socket
        |> assign(:provider_form, form)
@@ -222,6 +269,8 @@ defmodule TokengateWeb.ModelsLive do
 
   def handle_event("save_model_provider", %{"model_provider" => ap_params}, socket) do
     if socket.assigns.is_admin do
+      # Inject scope fields from assigns into params
+      ap_params = inject_scope_params(ap_params, socket.assigns)
       save_model_provider(socket, socket.assigns.editing_ap_id, ap_params)
     else
       {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
@@ -255,6 +304,97 @@ defmodule TokengateWeb.ModelsLive do
         true ->
           {:noreply, socket}
       end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("change_scope", %{"scope" => scope}, socket) do
+    if socket.assigns.is_admin do
+      {:noreply,
+       socket
+       |> assign(:current_scope, scope)
+       |> assign(:current_scope_team_id, nil)
+       |> assign(:current_scope_member_id, nil)
+       |> assign(:scope_team_search, "")
+       |> assign(:scope_member_search, "")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("select_scope_member", %{"member_id" => member_id}, socket) do
+    if socket.assigns.is_admin do
+      {:noreply, assign(socket, :current_scope_member_id, member_id)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("select_scope_team", %{"team_id" => team_id}, socket) do
+    if socket.assigns.is_admin do
+      {:noreply, assign(socket, :current_scope_team_id, team_id)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Handle select change events from the scope dropdowns
+  def handle_event(
+        "select_scope_member",
+        %{"model_provider" => %{"scope_member_id" => member_id}},
+        socket
+      ) do
+    if socket.assigns.is_admin do
+      {:noreply, assign(socket, :current_scope_member_id, member_id)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event(
+        "select_scope_team",
+        %{"model_provider" => %{"scope_team_id" => team_id}},
+        socket
+      ) do
+    if socket.assigns.is_admin do
+      {:noreply, assign(socket, :current_scope_team_id, team_id)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("scope_team_search", %{"value" => search}, socket) do
+    {:noreply, assign(socket, :scope_team_search, search)}
+  end
+
+  def handle_event("scope_member_search", %{"value" => search}, socket) do
+    {:noreply, assign(socket, :scope_member_search, search)}
+  end
+
+  def handle_event("select_scope_team_item", %{"team_id" => team_id}, socket) do
+    if socket.assigns.is_admin do
+      team = Enum.find(socket.assigns.teams_for_select || [], &(&1.id == team_id))
+      label = if team, do: team.name, else: ""
+
+      {:noreply,
+       socket
+       |> assign(:current_scope_team_id, team_id)
+       |> assign(:scope_team_search, label)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("select_scope_member_item", %{"member_id" => member_id}, socket) do
+    if socket.assigns.is_admin do
+      member = Enum.find(socket.assigns.members_for_select || [], &(&1.id == member_id))
+      label = if member && member.user, do: member.user.email, else: ""
+
+      {:noreply,
+       socket
+       |> assign(:current_scope_member_id, member_id)
+       |> assign(:scope_member_search, label)}
     else
       {:noreply, socket}
     end
@@ -370,6 +510,27 @@ defmodule TokengateWeb.ModelsLive do
 
   ## Private helpers — model_provider save ---------------------------------
 
+  defp inject_scope_params(ap_params, assigns) do
+    scope = assigns[:current_scope] || "global"
+
+    case scope do
+      "member" ->
+        ap_params
+        |> Map.put("exclusive_to_team_member_id", assigns[:current_scope_member_id])
+        |> Map.put("exclusive_to_team_id", nil)
+
+      "team" ->
+        ap_params
+        |> Map.put("exclusive_to_team_member_id", nil)
+        |> Map.put("exclusive_to_team_id", assigns[:current_scope_team_id])
+
+      _ ->
+        ap_params
+        |> Map.put("exclusive_to_team_member_id", nil)
+        |> Map.put("exclusive_to_team_id", nil)
+    end
+  end
+
   defp fetch_provider_models(socket, credential_id) do
     credential =
       Enum.find(socket.assigns.credentials_for_select, &(&1.id == credential_id))
@@ -400,14 +561,14 @@ defmodule TokengateWeb.ModelsLive do
          socket
          |> assign(:provider_models, models)
          |> assign(:provider_models_loading, false)
-      |> assign(:provider_model_search, "")}
+         |> assign(:provider_model_search, "")}
 
       {:error, _reason} ->
         {:noreply,
          socket
          |> assign(:provider_models, [])
          |> assign(:provider_models_loading, false)
-      |> assign(:provider_model_search, "")
+         |> assign(:provider_model_search, "")
          |> put_flash(:error, "No se pudieron cargar los modelos del proveedor.")}
     end
   end
@@ -496,45 +657,114 @@ defmodule TokengateWeb.ModelsLive do
 
   def fmt_price(nil), do: "—"
   def fmt_price(%Decimal{} = d), do: "$#{Decimal.round(d, 2) |> Decimal.to_string()}"
-  def fmt_price(n), do: "$#{n}"
 
-  @doc "Find model_providers for a model_alias from the preloaded association (priority ASC, nils last)"
-  def model_providers_for(%{model_providers: aps}) do
-    Enum.sort_by(aps, fn ap -> {is_nil(ap.priority), ap.priority || 0} end)
+  @doc "Scope badge CSS class"
+  def scope_badge("member"), do: "badge-warning"
+  def scope_badge("team"), do: "badge-info"
+  def scope_badge(_), do: "badge-ghost"
+
+  @doc "Scope badge label"
+  def scope_label("member"), do: "Exclusivo miembro"
+  def scope_label("team"), do: "Exclusivo equipo"
+  def scope_label(_), do: "Global"
+
+  @doc "Resolve scope to human-readable label with target name"
+  def scope_target_label(%ModelProvider{} = mp, assigns) do
+    cond do
+      mp.exclusive_to_team_member_id ->
+        member =
+          Enum.find(assigns.members_for_select || [], &(&1.id == mp.exclusive_to_team_member_id))
+
+        if member && member.user, do: member.user.email, else: "Miembro"
+
+      mp.exclusive_to_team_id ->
+        team = Enum.find(assigns.teams_for_select || [], &(&1.id == mp.exclusive_to_team_id))
+        if team, do: team.name, else: "Equipo"
+
+      true ->
+        "Todos"
+    end
   end
 
-  def model_providers_for(_), do: []
+  def model_providers_for(model_alias) do
+    model_alias.model_providers || []
+  end
 
-  @doc "Whether the credential has a human-readable alias (name) set"
-  def credential_named?(%{name: name}), do: is_binary(name) and name != ""
-  def credential_named?(_), do: false
+  def provider_name(%ModelProvider{credential: %{provider: provider}}) when not is_nil(provider),
+    do: provider.name
 
-  @doc "Provider name from preloaded credential"
-  def provider_name(%{credential: %{provider: %Provider{name: name}}}), do: name
   def provider_name(_), do: "—"
 
-  @doc "Credential label: alias if set, otherwise masked key"
-  def credential_label(%{name: name}) when is_binary(name) and name != "", do: name
-  def credential_label(%{api_key_encrypted: key}), do: mask_key(key)
-  def credential_label(_), do: "—"
+  def credential_named?(%{name: name}) when is_binary(name) and name != "", do: true
+  def credential_named?(_), do: false
 
-  @doc "Billing mode badge class"
-  def billing_badge("pay_per_token"), do: "badge-info"
   def billing_badge("included"), do: "badge-success"
   def billing_badge(_), do: "badge-ghost"
 
-  @doc "Billing mode label"
-  def billing_label("pay_per_token"), do: "Pay per token"
-  def billing_label("included"), do: "Incluida (suscripción)"
-  def billing_label(_), do: "—"
+  def billing_label("included"), do: "Incluida"
+  def billing_label(_), do: "Pay per token"
 
-  @doc "Enabled badge class"
   def enabled_badge(true), do: "badge-success"
-  def enabled_badge(false), do: "badge-ghost"
+  def enabled_badge(_), do: "badge-ghost"
 
-  @doc "Enabled label"
   def enabled_label(true), do: "Activo"
   def enabled_label(false), do: "Inactivo"
+
+  def team_options(teams) do
+    Enum.map(teams, fn t -> {t.name, t.id} end)
+  end
+
+  def member_options(members) do
+    Enum.map(members, fn m ->
+      label = if m.user, do: m.user.email, else: m.user_id
+      {label, m.id}
+    end)
+  end
+
+  @doc "Filter teams that have the given model alias granted"
+  def teams_with_model_access(teams, model_alias_id) do
+    import Ecto.Query, only: [from: 2]
+    alias Tokengate.Providers.TeamModelAlias
+
+    team_ids_with_alias =
+      from(tma in TeamModelAlias,
+        where: tma.model_alias_id == ^model_alias_id,
+        select: tma.team_id
+      )
+      |> Repo.all()
+      |> MapSet.new()
+
+    Enum.filter(teams, &MapSet.member?(team_ids_with_alias, &1.id))
+  end
+
+  @doc "Filter members that have the given model alias accessible (via team or extra)"
+  def members_with_model_access(members, model_alias_id) do
+    import Ecto.Query, only: [from: 2]
+    alias Tokengate.Providers.{TeamModelAlias, TeamMemberExtraAlias}
+
+    # Teams that have this alias
+    team_ids_with_alias =
+      from(tma in TeamModelAlias,
+        where: tma.model_alias_id == ^model_alias_id,
+        select: tma.team_id
+      )
+      |> Repo.all()
+      |> MapSet.new()
+
+    # Members with extra alias grant
+    member_ids_with_extra =
+      from(tmea in TeamMemberExtraAlias,
+        where: tmea.model_alias_id == ^model_alias_id,
+        select: tmea.team_member_id
+      )
+      |> Repo.all()
+      |> MapSet.new()
+
+    Enum.filter(members, fn m ->
+      MapSet.member?(team_ids_with_alias, m.team_id) or
+        MapSet.member?(member_ids_with_extra, m.id)
+    end)
+  end
 
   ## Render ----------------------------------------------------------------
 
@@ -681,6 +911,7 @@ defmodule TokengateWeb.ModelsLive do
                           <th>Modelo</th>
                           <th>Facturación</th>
                           <th>Prioridad</th>
+                          <th>Scope</th>
                           <th>Estado</th>
                           <%= if @is_admin do %>
                             <th>Acciones</th>
@@ -727,6 +958,16 @@ defmodule TokengateWeb.ModelsLive do
                           </td>
                           <td>
                             <span class="badge badge-xs badge-ghost">{ap.priority || "—"}</span>
+                          </td>
+                          <td>
+                            <span class={["badge", "badge-sm", scope_badge(ap)]}>
+                              {scope_label(ap)}
+                            </span>
+                            <%= if ap.exclusive_to_team_member_id || ap.exclusive_to_team_id do %>
+                              <span class="text-xs text-base-content/40 ml-1">
+                                {scope_target_label(ap, assigns)}
+                              </span>
+                            <% end %>
                           </td>
                           <td>
                             <span class={["badge", "badge-sm", enabled_badge(ap.enabled)]}>
@@ -861,7 +1102,10 @@ defmodule TokengateWeb.ModelsLive do
                 />
                 <%= if @provider_models != [] and !@provider_models_loading do %>
                   <% search = String.downcase(@provider_model_search || "") %>
-                  <% filtered = Enum.filter(@provider_models, fn m -> String.contains?(String.downcase(m), search) end) %>
+                  <% filtered =
+                    Enum.filter(@provider_models, fn m ->
+                      String.contains?(String.downcase(m), search)
+                    end) %>
                   <%= if filtered != [] do %>
                     <div class="mt-1 max-h-32 overflow-y-auto rounded-lg border border-base-300 bg-base-200/50">
                       <button
@@ -876,6 +1120,119 @@ defmodule TokengateWeb.ModelsLive do
                     </div>
                   <% end %>
                 <% end %>
+
+                <%!-- Scope selector --%>
+                <div class="mt-4 mb-2">
+                  <label class="text-sm font-medium text-base-content">Alcance (Scope)</label>
+                  <p class="text-xs text-base-content/50 mb-2">
+                    Global = todos los miembros con acceso. Exclusivo = solo el miembro o equipo seleccionado.
+                  </p>
+                  <div class="flex gap-2">
+                    <button
+                      type="button"
+                      phx-click="change_scope"
+                      phx-value-scope="global"
+                      class={["btn btn-sm", @current_scope == "global" && "btn-primary"]}
+                    >
+                      <.icon name="hero-globe-alt" class="w-4 h-4" /> Global
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="change_scope"
+                      phx-value-scope="team"
+                      class={["btn btn-sm", @current_scope == "team" && "btn-info"]}
+                    >
+                      <.icon name="hero-users" class="w-4 h-4" /> Equipo
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="change_scope"
+                      phx-value-scope="member"
+                      class={["btn btn-sm", @current_scope == "member" && "btn-warning"]}
+                    >
+                      <.icon name="hero-user" class="w-4 h-4" /> Usuario
+                    </button>
+                  </div>
+                </div>
+
+                <%= if @current_scope == "member" do %>
+                  <div class="relative">
+                    <label class="text-sm font-medium text-base-content">Usuario exclusivo</label>
+                    <p class="text-xs text-base-content/50 mb-1">Solo este usuario podrá usar esta API key para este modelo.</p>
+                    <input
+                      type="text"
+                      name="model_provider[scope_member_id_display]"
+                      value={@scope_member_search}
+                      placeholder="Escribe para buscar usuario…"
+                      phx-keyup="scope_member_search"
+                      phx-debounce="200"
+                      class="input input-sm w-full"
+                      autocomplete="off"
+                    />
+                    <% members_filtered =
+                      members_with_model_access(@members_for_select, @provider_form_alias_id)
+                      |> Enum.filter(fn m ->
+                        search = String.downcase(@scope_member_search || "")
+                        email = if m.user, do: String.downcase(m.user.email), else: ""
+                        name = if m.user && m.user.name, do: String.downcase(m.user.name), else: ""
+                        search == "" or String.contains?(email, search) or String.contains?(name, search)
+                      end) %>
+                    <%= if @scope_member_search != "" and members_filtered != [] do %>
+                      <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                        <button
+                          :for={m <- Enum.take(members_filtered, 10)}
+                          type="button"
+                          phx-click="select_scope_member_item"
+                          phx-value-member_id={m.id}
+                          class="block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0"
+                        >
+                          <span class="text-sm font-medium">{m.user.email}</span>
+                          <span :if={m.user.name} class="text-xs text-base-content/50 ml-1">({m.user.name})</span>
+                        </button>
+                      </div>
+                    <% end %>
+                    <input type="hidden" name="model_provider[scope_member_id]" value={@current_scope_member_id} />
+                  </div>
+                <% end %>
+
+                <%= if @current_scope == "team" do %>
+                  <div class="relative">
+                    <label class="text-sm font-medium text-base-content">Equipo exclusivo</label>
+                    <p class="text-xs text-base-content/50 mb-1">Solo los miembros de este equipo podrán usar esta API key para este modelo.</p>
+                    <input
+                      type="text"
+                      name="model_provider[scope_team_id_display]"
+                      value={@scope_team_search}
+                      placeholder="Escribe para buscar equipo…"
+                      phx-keyup="scope_team_search"
+                      phx-debounce="200"
+                      class="input input-sm w-full"
+                      autocomplete="off"
+                    />
+                    <% teams_filtered =
+                      teams_with_model_access(@teams_for_select, @provider_form_alias_id)
+                      |> Enum.filter(fn t ->
+                        search = String.downcase(@scope_team_search || "")
+                        name = String.downcase(t.name || "")
+                        search == "" or String.contains?(name, search)
+                      end) %>
+                    <%= if @scope_team_search != "" and teams_filtered != [] do %>
+                      <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                        <button
+                          :for={t <- Enum.take(teams_filtered, 10)}
+                          type="button"
+                          phx-click="select_scope_team_item"
+                          phx-value-team_id={t.id}
+                          class="block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0"
+                        >
+                          <span class="text-sm font-medium">{t.name}</span>
+                        </button>
+                      </div>
+                    <% end %>
+                    <input type="hidden" name="model_provider[scope_team_id]" value={@current_scope_team_id} />
+                  </div>
+                <% end %>
+
                 <div class="grid grid-cols-3 gap-3">
                   <.input
                     field={@provider_form[:priority]}

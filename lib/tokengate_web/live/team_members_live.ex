@@ -149,6 +149,7 @@ defmodule TokengateWeb.TeamMembersLive do
     |> assign(:team_monthly_spend, team_monthly_spend)
     |> assign(:estimated_monthly, estimated_monthly)
     |> assign(:estimated_monthly_extra, estimated_monthly_extra)
+    |> load_exclusive_providers(members)
   end
 
   defp budget_for_member(member, _alias_map) do
@@ -158,6 +159,28 @@ defmodule TokengateWeb.TeamMembersLive do
       member_id: member.id,
       monthly_spend: spend.monthly_usd
     }
+  end
+
+  defp load_exclusive_providers(socket, members) do
+    member_ids = Enum.map(members, & &1.id)
+
+    # Query exclusive providers where any member in this team is the target
+    import Ecto.Query, only: [from: 2]
+    alias Tokengate.Providers.ModelProvider
+
+    exclusive_providers =
+      from(mp in ModelProvider,
+        where: mp.exclusive_to_team_member_id in ^member_ids,
+        preload: [credential: [:provider], model_alias: []]
+      )
+      |> Repo.all()
+
+    # Group by member_id for easy lookup
+    grouped =
+      exclusive_providers
+      |> Enum.group_by(& &1.exclusive_to_team_member_id)
+
+    assign(socket, :exclusive_providers, grouped)
   end
 
   ## Events — add member --------------------------------------------------
@@ -1127,6 +1150,41 @@ defmodule TokengateWeb.TeamMembersLive do
                     <% end %>
                   </button>
                 </div>
+              </div>
+
+              <%!-- API Keys Exclusivas --%>
+              <div class="mt-3 pt-3 border-t border-base-200">
+                <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">
+                  API Keys Exclusivas
+                </p>
+                <% member_exclusive = Map.get(@exclusive_providers || %{}, member.id, []) %>
+                <%= if member_exclusive == [] do %>
+                  <p class="text-xs text-base-content/40">Sin keys exclusivas asignadas.</p>
+                <% else %>
+                  <div class="space-y-1">
+                    <div
+                      :for={mp <- member_exclusive}
+                      class="flex items-center justify-between text-xs py-1 px-2 rounded bg-base-200/50"
+                    >
+                      <div class="flex items-center gap-2 min-w-0">
+                        <span class="badge badge-xs badge-warning">exclusiva</span>
+                        <span class="font-medium truncate">{mp.model_alias.name}</span>
+                        <span class="text-base-content/40">·</span>
+                        <span class="text-base-content/50">
+                          {if mp.credential && mp.credential.provider,
+                            do: mp.credential.provider.name,
+                            else: "—"}
+                        </span>
+                        <span class="text-base-content/40 font-mono">
+                          {if mp.credential,
+                            do: TokengateWeb.ModelsLive.mask_key(mp.credential.api_key_encrypted),
+                            else: "—"}
+                        </span>
+                      </div>
+                      <span class="badge badge-xs badge-ghost">{mp.provider_model}</span>
+                    </div>
+                  </div>
+                <% end %>
               </div>
             </div>
           </div>
