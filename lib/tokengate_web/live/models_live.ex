@@ -807,6 +807,12 @@ defmodule TokengateWeb.ModelsLive do
                       <h3 class="font-semibold text-base-content truncate">
                         {model_alias.name}
                       </h3>
+                      <span
+                        class="text-xs text-base-content/40"
+                        title={"#{model_alias.context_window} tokens"}
+                      >
+                        · {format_compact(model_alias.context_window)} ctx
+                      </span>
                     </div>
                     <p class="text-sm text-base-content/60 mt-1">{model_alias.display_name}</p>
                   </div>
@@ -831,48 +837,6 @@ defmodule TokengateWeb.ModelsLive do
                         <.icon name="hero-trash" class="w-4 h-4" />
                       </button>
                     <% end %>
-                  </div>
-                </div>
-
-                <%!-- Single stat card: context window (cost is per-request, surfaced in logs) --%>
-                <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-3">
-                  <div class="card bg-base-100 border border-base-300 shadow-sm">
-                    <div class="card-body p-4">
-                      <div class="flex items-center justify-between">
-                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                          Contexto
-                        </span>
-                        <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent/10">
-                          <.icon name="hero-window" class="w-4 h-4 text-accent" />
-                        </span>
-                      </div>
-                      <p
-                        class="mt-1.5 text-lg font-bold text-base-content"
-                        title={Integer.to_string(model_alias.context_window)}
-                      >
-                        {format_compact(model_alias.context_window)}
-                      </p>
-                      <p class="text-xs text-base-content/40">tokens</p>
-                    </div>
-                  </div>
-
-                  <div class="card bg-base-100 border border-base-300 shadow-sm">
-                    <div class="card-body p-4">
-                      <div class="flex items-center justify-between">
-                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                          Costo
-                        </span>
-                        <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-info/10">
-                          <.icon name="hero-banknotes" class="w-4 h-4 text-info" />
-                        </span>
-                      </div>
-                      <p class="mt-1.5 text-sm font-medium text-base-content">
-                        Precio real por request, reportado por el proveedor
-                      </p>
-                      <p class="text-xs text-base-content/40">
-                        Visible en el detalle de cada log
-                      </p>
-                    </div>
                   </div>
                 </div>
 
