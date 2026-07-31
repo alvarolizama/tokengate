@@ -69,7 +69,7 @@ defmodule TokengateWeb.ModelsLive do
       from(ma in ModelAlias,
         left_join: aps in assoc(ma, :model_providers),
         preload: [model_providers: {aps, [credential: :provider]}],
-        order_by: [asc: ma.name]
+        order_by: [asc: ma.name, asc_nulls_last: aps.priority]
       )
       |> Repo.all()
 
