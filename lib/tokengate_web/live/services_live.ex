@@ -72,11 +72,33 @@ defmodule TokengateWeb.ServicesLive do
       from(ma in ModelAlias, order_by: [asc: ma.name])
       |> Repo.all()
 
+    # Load monthly stats per service (team_member_id = service_id for services)
+    service_ids = Enum.map(services, & &1.id)
+    thirty_days_ago = DateTime.utc_now() |> DateTime.add(-30 * 86_400, :second)
+
+    stats =
+      from(l in Tokengate.Logs.RequestLog,
+        where: l.team_member_id in ^service_ids,
+        where: l.inserted_at >= ^thirty_days_ago,
+        group_by: l.team_member_id,
+        select: %{
+          service_id: l.team_member_id,
+          total_cost: sum(l.provider_cost_usd),
+          total_requests: count(l.id),
+          total_input_tokens: sum(l.prompt_tokens),
+          total_output_tokens: sum(l.completion_tokens),
+          avg_latency_ms: avg(l.latency_ms)
+        }
+      )
+      |> Repo.all()
+      |> Map.new(fn s -> {s.service_id, s} end)
+
     socket
     |> stream(:services, services, reset: true)
     |> assign(:services_empty?, services == [])
     |> assign(:granted_aliases, granted_aliases)
     |> assign(:aliases, aliases)
+    |> assign(:service_stats, stats)
   end
 
   ## Events — service CRUD ------------------------------------------------
@@ -254,6 +276,20 @@ defmodule TokengateWeb.ServicesLive do
   def format_decimal(nil), do: "—"
   def format_decimal(value), do: to_string(value)
 
+  def format_number(n) when is_integer(n) do
+    n
+    |> Integer.to_string()
+    |> String.reverse()
+    |> String.replace(~r/(\d{3})(?=\d)/, "\\1,")
+    |> String.reverse()
+  end
+
+  def format_number(%Decimal{} = d),
+    do: d |> Decimal.round(0) |> Decimal.to_string() |> format_number()
+
+  def format_number(nil), do: "0"
+  def format_number(n), do: to_string(n)
+
   ## Render ----------------------------------------------------------------
 
   @impl true
@@ -366,6 +402,39 @@ defmodule TokengateWeb.ServicesLive do
                       {service.rpm_limit} RPM
                     </span>
                   </div>
+                  <% stats = Map.get(@service_stats, service.id, %{}) %>
+                  <%= if stats != %{} do %>
+                    <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-4">
+                      <div class="bg-base-200 rounded-lg p-3 text-center">
+                        <p class="text-xs text-base-content/50 uppercase tracking-wide">Gasto real</p>
+                        <p class="text-lg font-semibold text-base-content">
+                          ${format_decimal(stats.total_cost || 0)}
+                        </p>
+                      </div>
+                      <div class="bg-base-200 rounded-lg p-3 text-center">
+                        <p class="text-xs text-base-content/50 uppercase tracking-wide">Requests</p>
+                        <p class="text-lg font-semibold text-base-content">
+                          {format_number(stats.total_requests || 0)}
+                        </p>
+                      </div>
+                      <div class="bg-base-200 rounded-lg p-3 text-center">
+                        <p class="text-xs text-base-content/50 uppercase tracking-wide">Tokens In</p>
+                        <p class="text-lg font-semibold text-base-content">
+                          {format_number(stats.total_input_tokens || 0)}
+                        </p>
+                      </div>
+                      <div class="bg-base-200 rounded-lg p-3 text-center">
+                        <p class="text-xs text-base-content/50 uppercase tracking-wide">Tokens Out</p>
+                        <p class="text-lg font-semibold text-base-content">
+                          {format_number(stats.total_output_tokens || 0)}
+                        </p>
+                      </div>
+                    </div>
+                  <% else %>
+                    <p class="text-xs text-base-content/40 mt-3">
+                      Sin actividad en los últimos 30 días
+                    </p>
+                  <% end %>
                 </div>
                 <div class="flex gap-1">
                   <button
