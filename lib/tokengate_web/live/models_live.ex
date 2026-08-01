@@ -1065,6 +1065,22 @@ defmodule TokengateWeb.ModelsLive do
                   hint="Tamaño máximo de contexto del modelo en tokens."
                 />
 
+                <div class="divider my-3 text-xs text-base-content/50">Optimización</div>
+
+                <.input
+                  field={@form[:prompt_cache_enabled]}
+                  type="checkbox"
+                  label="Prompt caching (prefix estable)"
+                  hint="Reordena system prompts al frente y dedupe para maximizar cache hits del proveedor."
+                />
+
+                <.input
+                  field={@form[:lazy_cleanup_enabled]}
+                  type="checkbox"
+                  label="Limpieza perezosa sin LLM"
+                  hint="Dedupe de tool outputs y recorte de bloques largos. 100% determinista, sin inferencia."
+                />
+
                 <div class="flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
                     Cancelar
@@ -1099,20 +1115,6 @@ defmodule TokengateWeb.ModelsLive do
                   rows="8"
                   placeholder="Ej: Responde siempre en español. No uses markdown. Sé conciso..."
                   hint="Este texto se antepone al system prompt del usuario. Déjalo vacío para no inyectar nada."
-                />
-
-                <.input
-                  field={@guard_rails_form[:prompt_cache_enabled]}
-                  type="checkbox"
-                  label="Prompt caching"
-                  hint="Reordena system prompts al frente para maximizar cache hits"
-                />
-
-                <.input
-                  field={@guard_rails_form[:lazy_cleanup_enabled]}
-                  type="checkbox"
-                  label="Limpieza lazy"
-                  hint="Dedupe de tool outputs y trim de contenido largo (sin LLM)"
                 />
 
                 <div class="flex gap-2 mt-4 justify-end">
