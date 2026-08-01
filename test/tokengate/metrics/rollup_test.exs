@@ -951,15 +951,17 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "usa la hora local del timezone" do
-      {tm, _team} = team_member_fixture()
+      {tm, team} = team_member_fixture()
 
       # 2026-07-31 05:30Z = 2026-07-30 23:30 en CDMX (UTC-6)
       log_request(tm.id, ~U[2026-07-31 05:30:00Z])
       # 2026-07-31 07:30Z = 2026-07-31 01:30 en CDMX
       log_request(tm.id, ~U[2026-07-31 07:30:00Z])
 
+      # Aislar por team_id: el fixture crea un team único, así los logs de
+      # otros tests async (que corren org-wide) no contaminan el conteo.
       rows =
-        Rollup.usage_by_hour_of_day(nil,
+        Rollup.usage_by_hour_of_day(team.id,
           from: ~U[2026-07-31 00:00:00Z],
           to: ~U[2026-07-31 23:59:59Z],
           timezone: "America/Mexico_City"
@@ -1006,13 +1008,13 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "agrupa por hora local del timezone" do
-      {tm, _team} = team_member_fixture()
+      {tm, team} = team_member_fixture()
 
       # 2026-07-31 05:30Z = 2026-07-30 23:30 en CDMX
       log_request(tm.id, ~U[2026-07-31 05:30:00Z])
 
       [row] =
-        Rollup.busiest_hours(nil,
+        Rollup.busiest_hours(team.id,
           from: ~U[2026-07-31 00:00:00Z],
           to: ~U[2026-07-31 23:59:59Z],
           timezone: "America/Mexico_City"

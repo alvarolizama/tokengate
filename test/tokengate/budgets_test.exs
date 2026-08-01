@@ -273,7 +273,8 @@ defmodule Tokengate.BudgetsTest do
       # 23:00 del día anterior local → daily 0, monthly > 0 (mismo mes salvo día 1)
       log_request(member.id, DateTime.add(today_start, -3600, :second), "5.00")
 
-      [budget] = Budgets.list_member_budgets(tz)
+      budgets = Budgets.list_member_budgets(tz)
+      budget = Enum.find(budgets, &(&1.member.id == member.id))
 
       assert Decimal.eq?(budget.daily_spend_usd, Decimal.new("0"))
 
