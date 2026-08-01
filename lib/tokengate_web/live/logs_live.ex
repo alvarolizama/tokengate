@@ -685,6 +685,7 @@ defmodule TokengateWeb.LogsLive do
                     <th>Modelo</th>
                     <th>Usuario</th>
                     <th>Equipo</th>
+                    <th>Agente</th>
                     <th>Proveedor</th>
                     <th>Credencial</th>
                     <th>API Key</th>
@@ -702,6 +703,7 @@ defmodule TokengateWeb.LogsLive do
                     <td class="text-sm">{entry.model_requested}</td>
                     <td class="text-sm">{entry.user_email || "—"}</td>
                     <td class="text-sm">{entry.team_name || "—"}</td>
+                    <td class="text-sm">{entry.client_agent || "—"}</td>
                     <td class="text-sm">{entry.provider_name || "—"}</td>
                     <td class="text-sm">{entry.credential_name || "—"}</td>
                     <td class="text-sm">{entry.api_key_prefix || "—"}</td>
@@ -728,7 +730,7 @@ defmodule TokengateWeb.LogsLive do
                   Cliente
                 </th>
                 <th
-                  colspan="4"
+                  colspan="5"
                   class="text-[10px] uppercase tracking-wider text-warning/70 bg-warning/5 border-r border-base-200"
                 >
                   Proveedor
@@ -757,9 +759,10 @@ defmodule TokengateWeb.LogsLive do
                 <th>Modelo</th>
                 <th>Usuario</th>
                 <th>Equipo</th>
-                <th>API Key</th>
+                <th>Agente</th>
                 <th class="border-r border-base-200">Credencial</th>
                 <th>Proveedor</th>
+                <th>API Key</th>
                 <th title="Código HTTP del proveedor">Prov. Status</th>
                 <th
                   title="Razón del error del proveedor"
@@ -793,9 +796,12 @@ defmodule TokengateWeb.LogsLive do
                 <td class="text-sm">{model_display(log.model_requested, log.model_responded)}</td>
                 <td class="text-sm">{member_email(log)}</td>
                 <td class="text-sm">{member_team(log)}</td>
-                <td class="text-sm">{log.api_key_prefix || "—"}</td>
+                <td class="text-sm" title={log.agent_type}>
+                  {log.client_agent || "—"}
+                </td>
                 <td class="text-sm border-r border-base-200">{log.credential_name || "—"}</td>
                 <td class="text-sm">{provider_name(log)}</td>
+                <td class="text-sm">{log.api_key_prefix || "—"}</td>
                 <td class="text-sm">
                   <span :if={log.provider_status_code} class="badge badge-sm badge-ghost">{log.provider_status_code}</span>
                   <span :if={!log.provider_status_code} class="text-base-content/40">—</span>

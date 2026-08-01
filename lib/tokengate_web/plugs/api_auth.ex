@@ -32,6 +32,7 @@ defmodule TokengateWeb.Plugs.ApiAuth do
       |> assign(:current_team_member, member)
       |> assign(:api_key_hash, Accounts.hash_api_key(token))
       |> assign(:agent_type, agent_type(conn))
+      |> assign(:client_agent, client_agent(conn))
     else
       :no_token -> reject(conn, 401, "missing_api_key", "Missing bearer token")
       :invalid_key -> reject(conn, 401, "invalid_api_key", "Invalid API key")
@@ -94,6 +95,27 @@ defmodule TokengateWeb.Plugs.ApiAuth do
     case get_req_header(conn, "x-agent-type") do
       [type | _] when byte_size(type) > 0 -> type
       _ -> "unknown"
+    end
+  end
+
+  @doc """
+  Resolves the best human-readable client identity from request headers.
+
+  Priority: `X-Title` → `User-Agent` → `X-Agent-Type` → `"unknown"`.
+  The result is truncated to 255 chars for storage.
+  """
+  def client_agent(conn) do
+    with :error <- first_header(conn, "x-title"),
+         :error <- first_header(conn, "user-agent"),
+         :error <- first_header(conn, "x-agent-type") do
+      "unknown"
+    end
+  end
+
+  defp first_header(conn, name) do
+    case get_req_header(conn, name) do
+      [value | _] when byte_size(value) > 0 -> String.slice(value, 0, 255)
+      _ -> :error
     end
   end
 

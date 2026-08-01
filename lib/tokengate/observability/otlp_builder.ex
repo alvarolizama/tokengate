@@ -179,6 +179,7 @@ defmodule Tokengate.Observability.OtlpBuilder do
       kv_int("gen_ai.usage.total_tokens", total_tokens),
       kv_double("gen_ai.usage.cost", request_log.provider_cost_usd),
       kv("tokengate.agent.type", request_log.agent_type),
+      kv("tokengate.agent.client", request_log.client_agent),
       kv_bool("tokengate.streaming", request_log.streaming),
       kv_int("http.status_code", request_log.status_code),
       kv("tokengate.team_member_id", to_string(request_log.team_member_id)),
