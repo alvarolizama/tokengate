@@ -33,10 +33,11 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
     url = chat_completions_url(provider)
     api_key = Map.get(credential, :api_key_encrypted) || Map.get(credential, "api_key_encrypted")
     receive_timeout = Keyword.get(opts, :receive_timeout, @default_receive_timeout)
+    forwarded_headers = Keyword.get(opts, :forwarded_headers, %{})
     body = Jason.encode!(payload)
 
     request =
-      Finch.build(:post, url, headers(api_key), body)
+      Finch.build(:post, url, headers(api_key, forwarded_headers), body)
 
     start = System.monotonic_time(:millisecond)
 
@@ -60,6 +61,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
     url = chat_completions_url(provider)
     api_key = Map.get(credential, :api_key_encrypted) || Map.get(credential, "api_key_encrypted")
     receive_timeout = Keyword.get(opts, :receive_timeout, @default_receive_timeout)
+    forwarded_headers = Keyword.get(opts, :forwarded_headers, %{})
 
     # Enforce stream: true. The caller is expected to set it (passthrough),
     # but a missing flag would silently produce a buffered body instead of an
@@ -68,7 +70,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
     body = Jason.encode!(stream_payload)
 
     request =
-      Finch.build(:post, url, headers(api_key), body)
+      Finch.build(:post, url, headers(api_key, forwarded_headers), body)
 
     caller = self()
 
@@ -281,11 +283,28 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
     |> String.trim_trailing("/")
   end
 
+  @forwarded_header_keys ~w(user-agent http-referer x-title)
+
   defp headers(api_key) do
     [
       {"content-type", "application/json"},
       {"authorization", "Bearer #{api_key}"}
     ]
+  end
+
+  defp headers(api_key, forwarded_headers) when is_map(forwarded_headers) do
+    base = headers(api_key)
+
+    forwarded =
+      @forwarded_header_keys
+      |> Enum.reduce([], fn key, acc ->
+        case Map.get(forwarded_headers, key) do
+          nil -> acc
+          value -> [{key, value} | acc]
+        end
+      end)
+
+    base ++ forwarded
   end
 
   defp finch_name, do: Tokengate.Finch

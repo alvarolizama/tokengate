@@ -148,6 +148,7 @@ defmodule TokengateWeb.ProxyController do
       team_name: member.team && member.team.name,
       model_requested: payload["model"],
       agent_type: conn.assigns.agent_type,
+      client_agent: conn.assigns.client_agent,
       streaming: payload["stream"] == true,
       think: conn.assigns[:think] || false,
       effort: conn.assigns[:effort],
@@ -215,6 +216,23 @@ defmodule TokengateWeb.ProxyController do
 
   ## Provider execution with fallback ##########################################
 
+  # Extracts whitelisted client headers to forward upstream.
+  @forwarded_header_keys %{
+    "user-agent" => "user-agent",
+    "http-referer" => "http-referer",
+    "x-title" => "x-title"
+  }
+
+  defp extract_forwarded_headers(conn) do
+    @forwarded_header_keys
+    |> Enum.reduce(%{}, fn {client_key, upstream_key}, acc ->
+      case Plug.Conn.get_req_header(conn, client_key) do
+        [value | _] -> Map.put(acc, upstream_key, value)
+        [] -> acc
+      end
+    end)
+  end
+
   defp execute(conn, route, payload, member, attempts_left, exclude) do
     provider = route.model_provider.credential.provider
     # The client sends the alias name; the provider expects its own model id.
@@ -226,7 +244,8 @@ defmodule TokengateWeb.ProxyController do
     receive_timeout = route.credential.receive_timeout_ms || 180_000
 
     case OpenAIAdapter.chat_completion(provider, route.credential, payload,
-           receive_timeout: receive_timeout
+           receive_timeout: receive_timeout,
+           forwarded_headers: extract_forwarded_headers(conn)
          ) do
       {:ok, body, latency_ms} ->
         Router.record_outcome(route, :success)
@@ -344,7 +363,8 @@ defmodule TokengateWeb.ProxyController do
     receive_timeout = route.credential.receive_timeout_ms || 180_000
 
     case OpenAIAdapter.stream_chat_completion(provider, route.credential, payload,
-           receive_timeout: receive_timeout
+           receive_timeout: receive_timeout,
+           forwarded_headers: extract_forwarded_headers(conn)
          ) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
@@ -577,7 +597,8 @@ defmodule TokengateWeb.ProxyController do
     enqueue_log(route, member, conn.assigns.agent_type, usage, cost, latency_ms, 200, true,
       ttft_ms: acc.ttft_ms,
       think: conn.assigns[:think] || false,
-      effort: conn.assigns[:effort]
+      effort: conn.assigns[:effort],
+      client_agent: conn.assigns.client_agent
     )
 
     conn
@@ -616,7 +637,8 @@ defmodule TokengateWeb.ProxyController do
     # Durable log + webhooks, async via Oban
     enqueue_log(route, member, conn.assigns.agent_type, usage, cost, latency_ms, 200, false,
       think: conn.assigns[:think] || false,
-      effort: conn.assigns[:effort]
+      effort: conn.assigns[:effort],
+      client_agent: conn.assigns.client_agent
     )
 
     body = inject_usage_costs(body, usage, cost)
@@ -676,6 +698,7 @@ defmodule TokengateWeb.ProxyController do
       "model_requested" => route.model_alias.name,
       "model_responded" => route.model_responded,
       "agent_type" => agent_type,
+      "client_agent" => Keyword.get(extra, :client_agent),
       "status_code" => status,
       "provider_status_code" => Keyword.get(extra, :provider_status_code),
       "error_reason" => Keyword.get(extra, :error_reason),
@@ -736,7 +759,8 @@ defmodule TokengateWeb.ProxyController do
       client_status: client_status,
       error_reason: Keyword.get(opts, :error_reason, code),
       latency_ms: Keyword.get(opts, :latency_ms, 0),
-      streaming: conn.body_params["stream"] == true
+      streaming: conn.body_params["stream"] == true,
+      client_agent: conn.assigns.client_agent
     )
 
     render_proxy_error(conn, error)
@@ -751,6 +775,7 @@ defmodule TokengateWeb.ProxyController do
       "model_requested" => route.model_alias.name,
       "model_responded" => route.model_responded,
       "agent_type" => conn.assigns.agent_type,
+      "client_agent" => conn.assigns.client_agent,
       "status_code" => Keyword.get(opts, :client_status),
       "provider_status_code" => Keyword.get(opts, :provider_status),
       "error_reason" => Keyword.get(opts, :error_reason),
@@ -773,6 +798,7 @@ defmodule TokengateWeb.ProxyController do
       "team_member_id" => member.id,
       "model_requested" => model,
       "agent_type" => agent_type,
+      "client_agent" => Keyword.get(opts, :client_agent),
       "status_code" => Keyword.get(opts, :client_status),
       "provider_status_code" => nil,
       "error_reason" => Keyword.get(opts, :error_reason),
