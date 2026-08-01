@@ -9,7 +9,8 @@ defmodule TokengateWeb.KpiHelpers do
       alias TokengateWeb.KpiHelpers
 
       # in mount or handle_params:
-      socket = KpiHelpers.assign_kpi_metrics(socket, user, hours: 24)
+      socket = KpiHelpers.assign_kpi_metrics(socket, user,
+        period: "today", timezone: socket.assigns[:timezone])
 
   Then in the template:
       <.live_component module={KpiHelpers} id="kpi-cards" metrics={@kpi_metrics} />
@@ -23,10 +24,19 @@ defmodule TokengateWeb.KpiHelpers do
 
   alias Tokengate.Accounts
   alias Tokengate.Logs
+  alias Tokengate.Periods
 
+  @doc """
+  Assigns the 4-card KPI metrics for a calendar `period` ("today", "7d",
+  "30d", "90d") computed against the user's local timezone.
+
+      socket = KpiHelpers.assign_kpi_metrics(socket, user,
+        period: "today", timezone: socket.assigns[:timezone])
+  """
   def assign_kpi_metrics(socket, user, opts) do
-    hours = Keyword.get(opts, :hours, 24)
-    from = hours_ago_dt(hours)
+    period = Keyword.get(opts, :period, "today")
+    timezone = Keyword.get(opts, :timezone) || user.timezone || "Etc/UTC"
+    %{from: from} = Periods.period_bounds(period, timezone)
 
     summary =
       cond do
@@ -72,12 +82,6 @@ defmodule TokengateWeb.KpiHelpers do
       request_count: 0,
       avg_tps: nil
     }
-  end
-
-  defp hours_ago_dt(hours) do
-    DateTime.utc_now()
-    |> DateTime.add(-hours * 3600, :second)
-    |> DateTime.truncate(:second)
   end
 
   # ---------------------------------------------------------------------
