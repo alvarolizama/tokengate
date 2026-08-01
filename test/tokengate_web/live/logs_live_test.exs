@@ -3,7 +3,7 @@ defmodule TokengateWeb.LogsLiveTest do
 
   import Phoenix.LiveViewTest
 
-  alias Tokengate.{Accounts, Logs, Providers}
+  alias Tokengate.{Accounts, Logs, Periods, Providers}
   alias Tokengate.Logs.Inflight
 
   defp unique, do: System.unique_integer([:positive])
@@ -69,7 +69,8 @@ defmodule TokengateWeb.LogsLiveTest do
         think: Keyword.get(opts, :think, true),
         effort: Keyword.get(opts, :effort, "high"),
         api_key_prefix: "sk-logs-",
-        credential_name: "Staging"
+        credential_name: "Staging",
+        inserted_at: Keyword.get(opts, :inserted_at, DateTime.utc_now() |> DateTime.truncate(:second))
       })
 
     %{team: team, owner: owner, member: member, log: log, model_alias: model_alias}
@@ -176,6 +177,57 @@ defmodule TokengateWeb.LogsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
 
     assert has_element?(view, "#logs-filter-form select[name='filter[model_search]']")
+  end
+
+  ## Date filters and timezone ----------------------------------------------------
+
+  test "date from/to filters respect the user's timezone", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    {:ok, admin} = Accounts.update_user_timezone(admin, "America/Mexico_City")
+
+    # 1 hora ANTES de la medianoche local (UTC-6) → "ayer" en tiempo local
+    today_start = Periods.start_of_day_utc("America/Mexico_City")
+    %{owner: owner} = member_with_log(inserted_at: DateTime.add(today_start, -3600, :second))
+
+    # Ancla única: el email del owner solo aparece en la fila del log,
+    # NO en los <option> del form (model_requested sí está en el select).
+    anchor = owner.email
+
+    conn = login(conn, admin, password)
+    {:ok, view, html} = live(conn, ~p"/dashboard/logs")
+
+    # Sin filtro el log aparece
+    assert html =~ anchor
+
+    # "desde hoy local": el log de ayer local desaparece
+    today = Periods.local_today("America/Mexico_City") |> Date.to_iso8601()
+
+    view
+    |> form("#logs-filter-form", filter: %{from: today})
+    |> render_change()
+
+    html = render(view)
+    refute html =~ anchor
+
+    # "hasta ayer local": el log SÍ aparece (cae en ayer local)
+    yesterday = Date.add(Periods.local_today("America/Mexico_City"), -1) |> Date.to_iso8601()
+
+    view
+    |> form("#logs-filter-form", filter: %{from: "", to: yesterday})
+    |> render_change()
+
+    html = render(view)
+    assert html =~ anchor
+
+    # "hasta anteayer local": el log desaparece
+    anteayer = Date.add(Periods.local_today("America/Mexico_City"), -2) |> Date.to_iso8601()
+
+    view
+    |> form("#logs-filter-form", filter: %{from: "", to: anteayer})
+    |> render_change()
+
+    html = render(view)
+    refute html =~ anchor
   end
 
   ## Realtime KPI cards (rolling 5-minute window) ---------------------------------

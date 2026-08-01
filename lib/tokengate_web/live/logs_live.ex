@@ -79,9 +79,11 @@ defmodule TokengateWeb.LogsLive do
 
   @impl true
   def handle_info({:new_log, log}, socket) do
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
+
     # Only prepend if the log falls within the user's scope and filters.
     if log_in_scope?(log, socket.assigns[:scope_member_ids]) and
-         log_matches_filters?(log, socket.assigns[:filters]) do
+         log_matches_filters?(log, socket.assigns[:filters], timezone) do
       socket =
         socket
         |> stream_insert(:logs, log, at: 0)
@@ -141,7 +143,7 @@ defmodule TokengateWeb.LogsLive do
     log.team_member_id in member_ids
   end
 
-  defp log_matches_filters?(log, filters) do
+  defp log_matches_filters?(log, filters, timezone) do
     agent = filters["agent_type"]
     status_class = filters["status_class"]
     streaming = filters["streaming"]
@@ -153,7 +155,7 @@ defmodule TokengateWeb.LogsLive do
       streaming_match?(log.streaming, streaming) and
       model_match?(log, model_search) and
       team_id_match?(log, team_id) and
-      date_range_match?(log.inserted_at, filters["from"], filters["to"])
+      date_range_match?(log.inserted_at, filters["from"], filters["to"], timezone)
   end
 
   defp team_id_match?(_log, ""), do: true
@@ -212,7 +214,7 @@ defmodule TokengateWeb.LogsLive do
       streaming_match?(entry.streaming, streaming) and
       pending_model_match?(entry, model_search) and
       team_id in ["", nil, entry.team_id] and
-      date_range_match?(entry.started_at, filters["from"], filters["to"])
+      date_range_match?(entry.started_at, filters["from"], filters["to"], assigns[:timezone] || "Etc/UTC")
   end
 
   defp pending_model_match?(_entry, ""), do: true
@@ -234,18 +236,18 @@ defmodule TokengateWeb.LogsLive do
     |> Enum.sort_by(&elem(&1, 0))
   end
 
-  defp date_range_match?(_dt, "", ""), do: true
-  defp date_range_match?(_dt, nil, nil), do: true
+  defp date_range_match?(_dt, "", "", _timezone), do: true
+  defp date_range_match?(_dt, nil, nil, _timezone), do: true
 
-  defp date_range_match?(dt, from, to) do
+  defp date_range_match?(dt, from, to, timezone) do
     after_from? =
-      case parse_date_string(from) do
+      case parse_date_string(from, timezone) do
         nil -> true
         from_dt -> DateTime.compare(dt, from_dt) != :lt
       end
 
     before_to? =
-      case parse_date_string(to) do
+      case parse_date_string(to, timezone, :end_of_day) do
         nil -> true
         to_dt -> DateTime.compare(dt, to_dt) != :gt
       end
@@ -253,15 +255,23 @@ defmodule TokengateWeb.LogsLive do
     after_from? and before_to?
   end
 
-  defp parse_date_string(""), do: nil
-  defp parse_date_string(nil), do: nil
+  defp parse_date_string(date_str, timezone, mode \\ :start_of_day)
 
-  defp parse_date_string(date_str) do
+  defp parse_date_string("", _tz, _mode), do: nil
+  defp parse_date_string(nil, _tz, _mode), do: nil
+
+  defp parse_date_string(date_str, timezone, mode) do
     case Date.from_iso8601(date_str) do
       {:ok, date} ->
+        time =
+          case mode do
+            :start_of_day -> ~T[00:00:00]
+            :end_of_day -> ~T[23:59:59]
+          end
+
         date
-        |> NaiveDateTime.new!(~T[00:00:00])
-        |> DateTime.from_naive!("Etc/UTC")
+        |> DateTime.new!(time, timezone)
+        |> DateTime.shift_zone!("Etc/UTC")
 
       _ ->
         nil
@@ -340,6 +350,7 @@ defmodule TokengateWeb.LogsLive do
     include_cursor = Keyword.get(opts, :include_cursor, false)
     include_limit = Keyword.get(opts, :include_limit, true)
     form_filters = socket.assigns[:filters]
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
 
     base =
       %{}
@@ -347,8 +358,8 @@ defmodule TokengateWeb.LogsLive do
       |> maybe_put(:streaming, parse_bool(form_filters["streaming"]))
       |> maybe_put(:model_search, form_filters["model_search"])
       |> maybe_put_team_id(form_filters["team_id"])
-      |> maybe_put(:from, parse_from_date(form_filters["from"]))
-      |> maybe_put(:to, parse_to_date(form_filters["to"]))
+      |> maybe_put(:from, parse_from_date(form_filters["from"], timezone))
+      |> maybe_put(:to, parse_to_date(form_filters["to"], timezone))
       |> maybe_put_scope(socket.assigns[:scope_member_ids])
 
     base =
@@ -376,30 +387,31 @@ defmodule TokengateWeb.LogsLive do
   defp parse_bool("false"), do: false
   defp parse_bool(_), do: nil
 
-  defp parse_from_date(""), do: nil
-  defp parse_from_date(nil), do: nil
+  defp parse_from_date("", _timezone), do: nil
+  defp parse_from_date(nil, _timezone), do: nil
 
-  defp parse_from_date(date_str) do
+  defp parse_from_date(date_str, timezone) do
     case Date.from_iso8601(date_str) do
       {:ok, date} ->
         date
-        |> NaiveDateTime.new!(~T(00:00:00))
-        |> DateTime.from_naive!("Etc/UTC")
+        |> DateTime.new!(~T[00:00:00], timezone)
+        |> DateTime.shift_zone!("Etc/UTC")
 
       _ ->
         nil
     end
   end
 
-  defp parse_to_date(""), do: nil
-  defp parse_to_date(nil), do: nil
+  defp parse_to_date("", _timezone), do: nil
+  defp parse_to_date(nil, _timezone), do: nil
 
-  defp parse_to_date(date_str) do
+  defp parse_to_date(date_str, timezone) do
     case Date.from_iso8601(date_str) do
       {:ok, date} ->
+        # End of the LOCAL day (23:59:59 local) converted to UTC
         date
-        |> NaiveDateTime.new!(~T(23:59:59))
-        |> DateTime.from_naive!("Etc/UTC")
+        |> DateTime.new!(~T[23:59:59], timezone)
+        |> DateTime.shift_zone!("Etc/UTC")
 
       _ ->
         nil
