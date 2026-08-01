@@ -34,6 +34,9 @@ defmodule TokengateWeb.ServicesLive do
         |> assign(:editing_service_id, nil)
         |> assign(:new_token, nil)
         |> assign(:new_token_service_id, nil)
+        |> assign(:supervisor_search_service_id, nil)
+        |> assign(:supervisor_search_query, "")
+        |> assign(:supervisor_search_results, [])
         |> load_services()
 
       {:ok, socket}
@@ -100,6 +103,21 @@ defmodule TokengateWeb.ServicesLive do
     |> assign(:granted_aliases, granted_aliases)
     |> assign(:aliases, aliases)
     |> assign(:service_stats, stats)
+    |> assign(:supervisors_map, build_supervisors_map(service_ids))
+  end
+
+  defp build_supervisors_map(service_ids) do
+    if service_ids == [] do
+      %{}
+    else
+      Repo.all(
+        from(ss in Tokengate.Accounts.ServiceSupervisor,
+          where: ss.service_id in ^service_ids,
+          preload: [:user]
+        )
+      )
+      |> Enum.group_by(& &1.service_id)
+    end
   end
 
   ## Events — service CRUD ------------------------------------------------
@@ -230,6 +248,77 @@ defmodule TokengateWeb.ServicesLive do
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, "No se pudo actualizar el alias.")}
+    end
+  end
+
+  ## Events — supervisor management -----------------------------------------
+
+  def handle_event("toggle_supervisor_form", %{"service-id" => service_id}, socket) do
+    open? = socket.assigns.supervisor_search_service_id == service_id
+
+    {:noreply,
+     socket
+     |> assign(:supervisor_search_service_id, (not open? && service_id) || nil)
+     |> assign(:supervisor_search_query, "")
+     |> assign(:supervisor_search_results, [])}
+  end
+
+  def handle_event("search_supervisor_users", %{"value" => query}, socket) do
+    results =
+      if is_binary(query) and String.trim(query) != "" do
+        service_id = socket.assigns.supervisor_search_service_id
+        supervisor_ids = service_supervisor_user_ids(socket, service_id)
+
+        query
+        |> String.trim()
+        |> Accounts.search_users(25)
+        |> Enum.reject(fn user -> user.id in supervisor_ids end)
+      else
+        []
+      end
+
+    {:noreply,
+     socket
+     |> assign(:supervisor_search_query, query || "")
+     |> assign(:supervisor_search_results, results)}
+  end
+
+  def handle_event("add_supervisor", %{"service-id" => service_id, "user-id" => user_id}, socket) do
+    case Accounts.add_service_supervisor(service_id, user_id) do
+      {:ok, _supervisor} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Supervisor agregado.")
+         |> assign(:supervisor_search_results, [])
+         |> assign(:supervisor_search_query, "")
+         |> load_services()}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "No se pudo agregar el supervisor.")}
+    end
+  end
+
+  def handle_event(
+        "remove_supervisor",
+        %{"service-id" => service_id, "user-id" => user_id},
+        socket
+      ) do
+    case Accounts.remove_service_supervisor(service_id, user_id) do
+      {:ok, _} ->
+        {:noreply,
+         socket
+         |> put_flash(:info, "Supervisor removido.")
+         |> load_services()}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "No se pudo remover el supervisor.")}
+    end
+  end
+
+  defp service_supervisor_user_ids(socket, service_id) do
+    case Map.get(socket.assigns.supervisors_map, service_id, []) do
+      list when is_list(list) -> Enum.map(list, & &1.user_id)
+      _ -> []
     end
   end
 
@@ -581,6 +670,105 @@ defmodule TokengateWeb.ServicesLive do
                   <%= if @aliases == [] do %>
                     <p class="text-xs text-base-content/40">No hay aliases configurados</p>
                   <% end %>
+                </div>
+              </div>
+
+              <%!-- Supervisores section --%>
+              <% supervisors = Map.get(@supervisors_map, service.id, []) %>
+              <div class="mt-4 p-3 bg-base-200 rounded-lg">
+                <div class="flex items-center justify-between mb-2">
+                  <div>
+                    <p class="text-sm font-medium">Supervisores</p>
+                    <p class="text-xs text-base-content/60">
+                      Los supervisores ven sus servicios asignados en
+                      <code>/dashboard/services/supervised</code>
+                      (solo lectura).
+                    </p>
+                  </div>
+                  <button
+                    phx-click="toggle_supervisor_form"
+                    phx-value-service-id={service.id}
+                    class="btn btn-ghost btn-xs"
+                    title={
+                      if @supervisor_search_service_id == service.id,
+                        do: "Cancelar",
+                        else: "Agregar supervisor"
+                    }
+                  >
+                    <.icon
+                      name={
+                        if @supervisor_search_service_id == service.id,
+                          do: "hero-x-mark",
+                          else: "hero-user-plus"
+                      }
+                      class="w-4 h-4"
+                    />
+                    {if @supervisor_search_service_id == service.id,
+                      do: "Cerrar",
+                      else: "Agregar supervisor"}
+                  </button>
+                </div>
+
+                <div :if={supervisors == []} class="text-xs text-base-content/40">
+                  Sin supervisores asignados.
+                </div>
+
+                <div :if={supervisors != []} class="flex flex-wrap gap-2">
+                  <span
+                    :for={supervisor <- supervisors}
+                    class="badge badge-primary badge-sm gap-1"
+                    id={"supervisor-#{service.id}-#{supervisor.user_id}"}
+                  >
+                    <span>{(supervisor.user && (supervisor.user.name || supervisor.user.email)) ||
+                      supervisor.user_id}</span>
+                    <button
+                      type="button"
+                      phx-click="remove_supervisor"
+                      phx-value-service-id={service.id}
+                      phx-value-user-id={supervisor.user_id}
+                      class="ml-1 leading-none opacity-70 hover:opacity-100"
+                      title="Quitar supervisor"
+                      aria-label="Quitar supervisor"
+                    >
+                      ×
+                    </button>
+                  </span>
+                </div>
+
+                <div :if={@supervisor_search_service_id == service.id} class="mt-3">
+                  <.input
+                    type="text"
+                    name="supervisor_query"
+                    value={@supervisor_search_query}
+                    placeholder="Buscar por email o nombre…"
+                    phx-keyup="search_supervisor_users"
+                    phx-change="search_supervisor_users"
+                    id={"supervisor-search-#{service.id}"}
+                  />
+
+                  <div
+                    :if={@supervisor_search_query != "" and @supervisor_search_results == []}
+                    class="text-xs text-base-content/40 mt-2"
+                  >
+                    Sin coincidencias.
+                  </div>
+
+                  <div
+                    :if={@supervisor_search_results != []}
+                    class="mt-2 max-h-48 overflow-y-auto border border-base-300 rounded-md"
+                  >
+                    <button
+                      :for={user <- @supervisor_search_results}
+                      type="button"
+                      phx-click="add_supervisor"
+                      phx-value-service-id={service.id}
+                      phx-value-user-id={user.id}
+                      class="w-full text-left px-3 py-2 text-sm hover:bg-base-100 border-b border-base-300 last:border-b-0"
+                    >
+                      <div class="font-medium">{user.name || user.email}</div>
+                      <div class="text-xs text-base-content/60">{user.email}</div>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

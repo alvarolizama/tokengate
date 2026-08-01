@@ -5,7 +5,16 @@ defmodule Tokengate.Accounts do
 
   import Ecto.Query
   alias Tokengate.Repo
-  alias Tokengate.Accounts.{ApiKey, Service, ServiceApiKey, Team, TeamMember, User}
+
+  alias Tokengate.Accounts.{
+    ApiKey,
+    Service,
+    ServiceApiKey,
+    ServiceSupervisor,
+    Team,
+    TeamMember,
+    User
+  }
 
   # ---------------------------------------------------------------------------
   # Teams
@@ -639,6 +648,115 @@ defmodule Tokengate.Accounts do
     api_key
     |> ServiceApiKey.changeset(%{status: "revoked"})
     |> Repo.update()
+  end
+
+  # ---------------------------------------------------------------------------
+  # Service supervisors
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Adds a supervisor (user) to a service. Idempotent: when the pair already
+  exists, returns `{:ok, existing}` instead of an error.
+
+  Strategy: try the insert; if a unique-constraint violation fires on
+  `[service_id, user_id]`, fetch and return the existing row. Any other
+  changeset error is returned as `{:error, changeset}`.
+  """
+  def add_service_supervisor(service_id, user_id)
+      when is_binary(service_id) and is_binary(user_id) do
+    %ServiceSupervisor{}
+    |> ServiceSupervisor.changeset(%{service_id: service_id, user_id: user_id})
+    |> Repo.insert()
+    |> case do
+      {:ok, %ServiceSupervisor{} = supervisor} ->
+        {:ok, supervisor}
+
+      {:error, changeset} ->
+        if unique_violation_on_pair?(changeset) do
+          {:ok, fetch_service_supervisor!(service_id, user_id)}
+        else
+          {:error, changeset}
+        end
+    end
+  end
+
+  @doc """
+  Removes a supervisor (user) from a service. Idempotent: returns
+  `{:ok, :not_found}` if the pair doesn't exist, `{:ok, :removed}` otherwise.
+  """
+  def remove_service_supervisor(service_id, user_id)
+      when is_binary(service_id) and is_binary(user_id) do
+    case Repo.get_by(ServiceSupervisor, service_id: service_id, user_id: user_id) do
+      nil ->
+        {:ok, :not_found}
+
+      %ServiceSupervisor{} = supervisor ->
+        Repo.delete(supervisor)
+        |> case do
+          {:ok, _} -> {:ok, :removed}
+          {:error, changeset} -> {:error, changeset}
+        end
+    end
+  end
+
+  @doc """
+  Lists the services a user supervises, preloaded with `:api_key`, ordered
+  by name. Used to scope the supervisor's view of services.
+  """
+  def services_for_supervisor(user_id) when is_binary(user_id) do
+    Repo.all(
+      from s in Service,
+        join: ss in assoc(s, :supervisors),
+        where: ss.user_id == ^user_id,
+        order_by: [asc: s.name],
+        preload: [:api_key]
+    )
+  end
+
+  @doc """
+  Returns the user_ids (binary_ids) that supervise the given service.
+  """
+  def service_supervisor_ids(service_id) when is_binary(service_id) do
+    Repo.all(
+      from ss in ServiceSupervisor,
+        where: ss.service_id == ^service_id,
+        select: ss.user_id
+    )
+  end
+
+  @doc """
+  Returns the `%ServiceSupervisor{}` rows for a service with `:user` preloaded,
+  for the admin management panel.
+  """
+  def service_supervisors(service_id) when is_binary(service_id) do
+    Repo.all(
+      from ss in ServiceSupervisor,
+        where: ss.service_id == ^service_id,
+        preload: [:user]
+    )
+  end
+
+  defp fetch_service_supervisor!(service_id, user_id) do
+    Repo.get_by!(ServiceSupervisor, service_id: service_id, user_id: user_id)
+  end
+
+  defp unique_violation_on_pair?(%Ecto.Changeset{} = changeset) do
+    case changeset.errors do
+      errors when is_list(errors) ->
+        Enum.any?(errors, fn
+          {:service_id, {_, opts}} when is_list(opts) ->
+            Keyword.get(opts, :constraint) == :unique
+
+          {:user_id, {_, opts}} when is_list(opts) ->
+            Keyword.get(opts, :constraint) == :unique
+
+          _ ->
+            false
+        end)
+
+      _ ->
+        false
+    end
   end
 
   # ---------------------------------------------------------------------------

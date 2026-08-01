@@ -62,6 +62,13 @@ defmodule TokengateWeb.Router do
       live "/dashboard", DashboardLive
     end
 
+    # Read-only view of the services the current user supervises. Open to
+    # any authenticated user (admin or not) — supervisors are read-only.
+    live_session :service_viewer,
+      on_mount: [{TokengateWeb.UserAuth, :require_authenticated}] do
+      live "/dashboard/services/supervised", SupervisedServicesLive
+    end
+
     live_session :admin,
       on_mount: [{TokengateWeb.UserAuth, :require_admin}] do
       live "/dashboard/stats", StatsLive, :index

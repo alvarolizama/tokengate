@@ -2,7 +2,7 @@ defmodule Tokengate.AccountsTest do
   use Tokengate.DataCase, async: true
 
   alias Tokengate.Accounts
-  alias Tokengate.Accounts.{ApiKey, Team, TeamMember, User}
+  alias Tokengate.Accounts.{ApiKey, Service, ServiceSupervisor, Team, TeamMember, User}
 
   # ---------------------------------------------------------------------------
   # Helpers
@@ -50,6 +50,23 @@ defmodule Tokengate.AccountsTest do
       },
       attrs
     )
+  end
+
+  defp valid_service_attrs(attrs) do
+    Map.merge(
+      %{
+        "name" => "Service #{System.unique_integer([:positive])}",
+        "monthly_budget_usd" => "100.00",
+        "concurrency_limit" => 5,
+        "rpm_limit" => 60
+      },
+      attrs
+    )
+  end
+
+  defp service_fixture(attrs \\ %{}) do
+    {:ok, service} = Accounts.create_service(valid_service_attrs(attrs))
+    service
   end
 
   # ---------------------------------------------------------------------------
@@ -465,6 +482,149 @@ defmodule Tokengate.AccountsTest do
       limits = Accounts.effective_limits(tm)
 
       assert limits.monthly_budget_usd == Decimal.new("25.00")
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Service supervisors
+  # ---------------------------------------------------------------------------
+
+  describe "service supervisors" do
+    test "add_service_supervisor/2 + services_for_supervisor/1 returns the service" do
+      service = service_fixture(%{"name" => "Alpha"})
+      user = user_fixture()
+
+      assert {:ok, %ServiceSupervisor{} = supervisor} =
+               Accounts.add_service_supervisor(service.id, user.id)
+
+      assert supervisor.service_id == service.id
+      assert supervisor.user_id == user.id
+
+      services = Accounts.services_for_supervisor(user.id)
+      assert [%Service{id: id}] = services
+      assert id == service.id
+    end
+
+    test "services_for_supervisor/1 orders by name" do
+      user = user_fixture()
+
+      later = service_fixture(%{"name" => "Zeta"})
+      earlier = service_fixture(%{"name" => "Alpha"})
+
+      {:ok, _} = Accounts.add_service_supervisor(later.id, user.id)
+      {:ok, _} = Accounts.add_service_supervisor(earlier.id, user.id)
+
+      services = Accounts.services_for_supervisor(user.id)
+      assert Enum.map(services, & &1.name) == ["Alpha", "Zeta"]
+    end
+
+    test "services_for_supervisor/1 preloads :api_key" do
+      service = service_fixture()
+      user = user_fixture()
+
+      {:ok, _} = Accounts.add_service_supervisor(service.id, user.id)
+
+      [%Service{} = s] = Accounts.services_for_supervisor(user.id)
+      # After `preload: [:api_key]`, the field is either a real %ServiceApiKey{}
+      # or `nil` (has_one with no result). Critically, the field is NOT left
+      # as %Ecto.Association.NotLoaded{} — that would prove preload was missed.
+      refute match?(%Ecto.Association.NotLoaded{}, s.api_key)
+    end
+
+    test "add_service_supervisor/2 is idempotent — second add returns the existing row" do
+      service = service_fixture()
+      user = user_fixture()
+
+      assert {:ok, first} = Accounts.add_service_supervisor(service.id, user.id)
+      assert {:ok, second} = Accounts.add_service_supervisor(service.id, user.id)
+      assert first.id == second.id
+      # Only one row exists
+      assert length(Accounts.service_supervisor_ids(service.id)) == 1
+    end
+
+    test "remove_service_supervisor/2 + services_for_supervisor/1 returns empty" do
+      service = service_fixture()
+      user = user_fixture()
+
+      {:ok, _} = Accounts.add_service_supervisor(service.id, user.id)
+      assert length(Accounts.services_for_supervisor(user.id)) == 1
+
+      assert {:ok, :removed} = Accounts.remove_service_supervisor(service.id, user.id)
+      assert Accounts.services_for_supervisor(user.id) == []
+      assert Accounts.service_supervisor_ids(service.id) == []
+    end
+
+    test "remove_service_supervisor/2 is idempotent — second remove is :not_found" do
+      service = service_fixture()
+      user = user_fixture()
+
+      {:ok, _} = Accounts.add_service_supervisor(service.id, user.id)
+
+      assert {:ok, :removed} = Accounts.remove_service_supervisor(service.id, user.id)
+      assert {:ok, :not_found} = Accounts.remove_service_supervisor(service.id, user.id)
+      # Calling again still does not error
+      assert {:ok, :not_found} = Accounts.remove_service_supervisor(service.id, user.id)
+    end
+
+    test "remove_service_supervisor/2 on never-added pair returns :not_found" do
+      service = service_fixture()
+      user = user_fixture()
+
+      assert {:ok, :not_found} = Accounts.remove_service_supervisor(service.id, user.id)
+    end
+
+    test "service_supervisor_ids/1 returns the supervising user ids" do
+      service = service_fixture()
+      user1 = user_fixture()
+      user2 = user_fixture()
+
+      {:ok, _} = Accounts.add_service_supervisor(service.id, user1.id)
+      {:ok, _} = Accounts.add_service_supervisor(service.id, user2.id)
+
+      ids = Accounts.service_supervisor_ids(service.id)
+      assert length(ids) == 2
+      assert user1.id in ids
+      assert user2.id in ids
+    end
+
+    test "service_supervisor_ids/1 is empty for a service with no supervisors" do
+      service = service_fixture()
+      assert Accounts.service_supervisor_ids(service.id) == []
+    end
+
+    test "service_supervisors/1 returns structs with :user preloaded" do
+      service = service_fixture()
+
+      user1 =
+        user_fixture(%{
+          "name" => "Alpha User",
+          "email" => "alpha#{System.unique_integer([:positive])}@example.com"
+        })
+
+      user2 =
+        user_fixture(%{
+          "name" => "Beta User",
+          "email" => "beta#{System.unique_integer([:positive])}@example.com"
+        })
+
+      {:ok, _} = Accounts.add_service_supervisor(service.id, user1.id)
+      {:ok, _} = Accounts.add_service_supervisor(service.id, user2.id)
+
+      supervisors = Accounts.service_supervisors(service.id)
+      assert length(supervisors) == 2
+
+      for %ServiceSupervisor{user: %User{}} = ss <- supervisors do
+        assert ss.service_id == service.id
+        assert ss.user_id in [user1.id, user2.id]
+      end
+
+      user_ids = supervisors |> Enum.map(& &1.user_id) |> Enum.sort()
+      assert user_ids == Enum.sort([user1.id, user2.id])
+    end
+
+    test "service_supervisors/1 is empty for a service with no supervisors" do
+      service = service_fixture()
+      assert Accounts.service_supervisors(service.id) == []
     end
   end
 end

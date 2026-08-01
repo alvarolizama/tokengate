@@ -19,6 +19,8 @@ defmodule Tokengate.Accounts.Service do
 
     has_one :api_key, Tokengate.Accounts.ServiceApiKey
     has_many :model_aliases, Tokengate.Providers.ServiceModelAlias
+    has_many :supervisors, Tokengate.Accounts.ServiceSupervisor
+    has_many :supervisor_users, through: [:supervisors, :user]
 
     timestamps(type: :utc_datetime)
   end
