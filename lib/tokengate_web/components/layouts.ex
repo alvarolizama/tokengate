@@ -18,10 +18,20 @@ defmodule TokengateWeb.Layouts do
   and it often contains your application menu, sidebar,
   or similar.
 
+  ## Optional assigns
+
+    * `hide_navbar` — when `true`, the top navbar is not rendered. Useful
+      for login / register pages that provide their own self-contained
+      centered design.
+
   ## Examples
 
       <Layouts.app flash={@flash}>
         <h1>Content</h1>
+      </Layouts.app>
+
+      <Layouts.app flash={@flash} hide_navbar>
+        <.live_component module={LoginLive} id="login" />
       </Layouts.app>
   """
   attr :flash, :map, required: true, doc: "the map of flash messages"
@@ -30,11 +40,13 @@ defmodule TokengateWeb.Layouts do
     default: nil,
     doc: "the current [scope](https://phoenix.hexdocs.pm/scopes.html)"
 
+  attr :hide_navbar, :boolean, default: false
+
   slot :inner_block, required: true
 
   def app(assigns) do
     ~H"""
-    <header class="navbar px-4 sm:px-6 lg:px-8">
+    <header :if={not @hide_navbar} class="navbar px-4 sm:px-6 lg:px-8">
       <div class="flex-1">
         <a href="/" class="flex-1 flex w-fit items-center gap-2">
           <img src={~p"/images/logo.svg"} width="36" alt="TokenGate" />
