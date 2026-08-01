@@ -415,4 +415,29 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert html =~ "Gasto mensual"
     _ = member
   end
+
+  ## Navbar budget chip ------------------------------------------------------
+
+  test "navbar chip aggregates spend across ALL user memberships", %{conn: conn} do
+    %{user: user, password: password} = register("user")
+
+    # Membership 1: $3.00 hoy
+    %{member: m1} = team_with_log(%{user: user, cost: "3.00"})
+    # Membership 2: $7.00 hoy
+    %{member: m2} = team_with_log(%{user: user, cost: "7.00"})
+
+    conn = login(conn, user, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    html = render(view)
+
+    # El chip debe mostrar la SUMA ($10), no solo una membership.
+    daily = element(view, "#topbar-my-budget-daily") |> render()
+    assert daily =~ "$10"
+
+    monthly = element(view, "#topbar-my-budget-monthly") |> render()
+    assert monthly =~ "$10"
+
+    _ = {m1, m2, html}
+  end
 end

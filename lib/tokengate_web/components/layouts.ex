@@ -485,42 +485,64 @@ defmodule TokengateWeb.Layouts do
 
   defp my_budget_summary(user, timezone) do
     case Tokengate.Budgets.list_member_budgets_for_user(user.id, timezone) do
-      [] ->
-        nil
-
-      [single] ->
-        budget_summary(single, 0)
-
-      many ->
-        primary = Enum.max_by(many, &budget_severity/1)
-        budget_summary(primary, length(many) - 1)
+      [] -> nil
+      budgets -> aggregate_budget_summary(budgets)
     end
   end
 
-  # Ranks memberships by worst limit utilization so the chip surfaces the
-  # one closest to exhaustion; unlimited ones rank below any limited one
-  # and compare by raw daily spend.
-  defp budget_severity(b) do
-    worst = Enum.max([b.daily_pct || -1.0, b.monthly_pct || -1.0])
-    {worst, Decimal.to_float(b.daily_spend_usd)}
-  end
+  # Aggregates ALL of the user's memberships into a single summary so the
+  # chip matches the dashboard card (which also sums across every team).
+  # Limits shown are the most restrictive (lowest non-nil) across memberships
+  # — that's the one that will block first.
+  defp aggregate_budget_summary(budgets) do
+    daily_spend = Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.daily_spend_usd, &2))
+    monthly_spend = Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.monthly_spend_usd, &2))
 
-  defp budget_summary(b, extra_count) do
-    worst_pct = Enum.max([b.daily_pct || 0.0, b.monthly_pct || 0.0])
+    daily_limit = most_restrictive_limit(budgets, :daily_limit_usd)
+    monthly_limit = most_restrictive_limit(budgets, :monthly_limit_usd)
+
+    daily_pct = pct_of(daily_spend, daily_limit)
+    monthly_pct = pct_of(monthly_spend, monthly_limit)
+
+    exhausted? = Enum.any?(budgets, & &1.exhausted?)
+    worst_pct = Enum.max([daily_pct || 0.0, monthly_pct || 0.0])
 
     %{
-      daily_spend: b.daily_spend_usd,
-      monthly_spend: b.monthly_spend_usd,
-      daily_limit: b.daily_limit_usd,
-      monthly_limit: b.monthly_limit_usd,
-      daily_pct: b.daily_pct,
-      monthly_pct: b.monthly_pct,
-      exhausted?: b.exhausted?,
+      daily_spend: daily_spend,
+      monthly_spend: monthly_spend,
+      daily_limit: daily_limit,
+      monthly_limit: monthly_limit,
+      daily_pct: daily_pct,
+      monthly_pct: monthly_pct,
+      exhausted?: exhausted?,
       warning?: worst_pct >= 80.0,
-      team_name: b.member.team && b.member.team.name,
-      extra_count: extra_count
+      team_name: aggregate_team_name(budgets),
+      extra_count: 0
     }
   end
+
+  defp most_restrictive_limit(budgets, field) do
+    budgets
+    |> Enum.map(&Map.get(&1, field))
+    |> Enum.reject(&is_nil/1)
+    |> case do
+      [] -> nil
+      limits -> Enum.min_by(limits, &Decimal.to_float/1)
+    end
+  end
+
+  defp pct_of(_spend, nil), do: nil
+
+  defp pct_of(spend, limit) do
+    if Decimal.compare(limit, Decimal.new(0)) == :gt do
+      Decimal.to_float(spend) / Decimal.to_float(limit) * 100.0
+    else
+      100.0
+    end
+  end
+
+  defp aggregate_team_name([single]), do: single.member.team && single.member.team.name
+  defp aggregate_team_name(many), do: "#{length(many)} equipos"
 
   defp my_budget_chip_class(%{exhausted?: true}), do: "badge-error"
   defp my_budget_chip_class(%{warning?: true}), do: "badge-warning"
