@@ -69,17 +69,21 @@ defmodule TokengateWeb.ProxyControllerTest do
         |> put_resp_content_type("text/event-stream")
         |> send_chunked(200)
 
-      {:ok, conn} = chunk(conn, ~s(data: {"choices":[{"delta":{"content":"qué"}}]}\n\n))
-      {:ok, conn} = chunk(conn, ~s(data: {"choices":[{"delta":{"content":" onda"}}]}\n\n))
+      frames = [
+        ~s(data: {"choices":[{"delta":{"content":"qué"}}]}\n\n),
+        ~s(data: {"choices":[{"delta":{"content":" onda"}}]}\n\n),
+        ~s(data: {"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":2,"total_tokens":22,"cost":0.00007}}\n\n),
+        "data: [DONE]\n\n"
+      ]
 
-      {:ok, conn} =
-        chunk(
-          conn,
-          ~s(data: {"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":2,"total_tokens":22,"cost":0.00007}}\n\n)
-        )
-
-      {:ok, conn} = chunk(conn, "data: [DONE]\n\n")
-      conn
+      Enum.reduce_while(frames, conn, fn frame, conn ->
+        case chunk(conn, frame) do
+          {:ok, conn} -> {:cont, conn}
+          # Client closed the connection after the terminal frame — nothing
+          # more to write, don't raise a MatchError.
+          {:error, :closed} -> {:halt, conn}
+        end
+      end)
     end
 
     defp json(conn, status, map) do

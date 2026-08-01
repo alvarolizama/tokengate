@@ -171,7 +171,7 @@ defmodule Tokengate.Routing.RouterTest do
     model_alias
   end
 
-  defp model_provider_fixture(model_alias, provider, attrs \\ %{}) do
+  defp model_provider_fixture(model_alias, provider, attrs) do
     credential = Map.get_lazy(attrs, :credential, fn -> credential_fixture(provider, %{}) end)
     attrs = Map.delete(attrs, :credential)
 

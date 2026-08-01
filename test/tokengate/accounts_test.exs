@@ -8,7 +8,7 @@ defmodule Tokengate.AccountsTest do
   # Helpers
   # ---------------------------------------------------------------------------
 
-  defp valid_team_attrs(attrs \\ %{}) do
+  defp valid_team_attrs(attrs) do
     Map.merge(
       %{
         "name" => "Platform Team",
