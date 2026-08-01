@@ -1152,9 +1152,10 @@ defmodule Tokengate.Metrics.Rollup do
   # -----------------------------------------------------------------------
 
   @doc """
-  Distribución de requests por hora del día (UTC), agregada sobre el
-  período. Devuelve siempre 24 filas (horas 0-23) con zero-fill — sirve
-  para ver patrones recurrentes de uso ("¿a qué horas se usa más?").
+  Distribución de requests por hora del día (hora local del timezone),
+  agregada sobre el período. Devuelve siempre 24 filas (horas 0-23) con
+  zero-fill — sirve para ver patrones recurrentes de uso ("¿a qué horas
+  se usa más?").
 
   Cada fila: `%{hour: 0..23, request_count: integer}`.
 
@@ -1163,11 +1164,13 @@ defmodule Tokengate.Metrics.Rollup do
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
     * `:member_ids` — restrict to logs of these team-member ids (scoping)
+    * `:timezone` — IANA zone for the hour-of-day extraction; default `"Etc/UTC"`
   """
   @spec usage_by_hour_of_day(String.t() | nil, keyword()) :: [map()]
   def usage_by_hour_of_day(team_id \\ nil, opts \\ []) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
+    timezone = Keyword.get(opts, :timezone, "Etc/UTC")
 
     counts =
       RequestLog
@@ -1175,11 +1178,19 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
-      |> group_by([rl], fragment("EXTRACT(hour FROM ?)", rl.inserted_at))
       |> select([rl], %{
-        hour: fragment("CAST(EXTRACT(hour FROM ?) AS integer)", rl.inserted_at),
-        request_count: count(rl.id)
+        hour:
+          fragment(
+            "CAST(EXTRACT(hour FROM (? AT TIME ZONE 'Etc/UTC') AT TIME ZONE ?) AS integer)",
+            rl.inserted_at,
+            ^timezone
+          ),
+        id: rl.id
       })
+      |> subquery()
+      |> then(fn subq ->
+        from(h in subq, group_by: h.hour, select: %{hour: h.hour, request_count: count(h.id)})
+      end)
       |> Repo.all()
       |> Map.new(fn row -> {row.hour, row.request_count} end)
 
@@ -1208,54 +1219,43 @@ defmodule Tokengate.Metrics.Rollup do
   def busiest_minutes(team_id \\ nil, opts \\ []),
     do: busiest_buckets(team_id, "minute", opts)
 
-  # El unit va como literal SQL en cada cláusula (Ecto prohíbe fragments
-  # con strings interpolados por seguridad) — por eso dos cuerpos.
-  defp busiest_buckets(team_id, "hour", opts) do
+  # El unit va como bind param (`^unit`); el bucket se materializa en una
+  # subquery para que GROUP BY/ORDER BY/SELECT compartan la misma columna
+  # (Postgres rechaza expresiones parametrizadas formalmente distintas).
+  defp busiest_buckets(team_id, unit, opts) when unit in ["hour", "minute"] do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
     limit = Keyword.get(opts, :limit, 5)
+    timezone = Keyword.get(opts, :timezone, "Etc/UTC")
 
-    RequestLog
-    |> maybe_join_team(team_id)
-    |> maybe_from(from)
-    |> maybe_to(to)
-    |> maybe_member_ids(Keyword.get(opts, :member_ids))
-    |> group_by([rl], fragment("date_trunc('hour', ?)", rl.inserted_at))
-    |> order_by([rl],
-      desc: count(rl.id),
-      asc: fragment("date_trunc('hour', ?)", rl.inserted_at)
+    bucketed =
+      RequestLog
+      |> maybe_join_team(team_id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> maybe_member_ids(Keyword.get(opts, :member_ids))
+      |> select([rl], %{
+        bucket:
+          fragment(
+            "date_trunc(?, ? AT TIME ZONE ?) AT TIME ZONE ?",
+            ^unit,
+            rl.inserted_at,
+            ^timezone,
+            ^timezone
+          ),
+        id: rl.id
+      })
+      |> subquery()
+
+    from(b in bucketed,
+      group_by: b.bucket,
+      order_by: [desc: count(b.id), asc: b.bucket],
+      limit: ^limit,
+      select: %{
+        bucket: b.bucket,
+        request_count: count(b.id)
+      }
     )
-    |> limit(^limit)
-    |> select([rl], %{
-      bucket: fragment("date_trunc('hour', ?)", rl.inserted_at),
-      request_count: count(rl.id)
-    })
-    |> Repo.all()
-    |> Enum.map(fn row ->
-      %{bucket: to_utc_datetime(row.bucket), request_count: row.request_count}
-    end)
-  end
-
-  defp busiest_buckets(team_id, "minute", opts) do
-    from = Keyword.get(opts, :from)
-    to = Keyword.get(opts, :to)
-    limit = Keyword.get(opts, :limit, 5)
-
-    RequestLog
-    |> maybe_join_team(team_id)
-    |> maybe_from(from)
-    |> maybe_to(to)
-    |> maybe_member_ids(Keyword.get(opts, :member_ids))
-    |> group_by([rl], fragment("date_trunc('minute', ?)", rl.inserted_at))
-    |> order_by([rl],
-      desc: count(rl.id),
-      asc: fragment("date_trunc('minute', ?)", rl.inserted_at)
-    )
-    |> limit(^limit)
-    |> select([rl], %{
-      bucket: fragment("date_trunc('minute', ?)", rl.inserted_at),
-      request_count: count(rl.id)
-    })
     |> Repo.all()
     |> Enum.map(fn row ->
       %{bucket: to_utc_datetime(row.bucket), request_count: row.request_count}

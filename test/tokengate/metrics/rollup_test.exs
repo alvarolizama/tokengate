@@ -949,6 +949,28 @@ defmodule Tokengate.Metrics.RollupTest do
 
       assert Enum.sum(Enum.map(rows, & &1.request_count)) == 1
     end
+
+    test "usa la hora local del timezone" do
+      {tm, _team} = team_member_fixture()
+
+      # 2026-07-31 05:30Z = 2026-07-30 23:30 en CDMX (UTC-6)
+      log_request(tm.id, ~U[2026-07-31 05:30:00Z])
+      # 2026-07-31 07:30Z = 2026-07-31 01:30 en CDMX
+      log_request(tm.id, ~U[2026-07-31 07:30:00Z])
+
+      rows =
+        Rollup.usage_by_hour_of_day(nil,
+          from: ~U[2026-07-31 00:00:00Z],
+          to: ~U[2026-07-31 23:59:59Z],
+          timezone: "America/Mexico_City"
+        )
+
+      assert Enum.find(rows, &(&1.hour == 1)).request_count == 1
+      assert Enum.find(rows, &(&1.hour == 23)).request_count == 1
+      # En UTC los logs caen en horas 5 y 7 — con CDMX no deben estar ahí
+      assert Enum.find(rows, &(&1.hour == 5)).request_count == 0
+      assert Enum.find(rows, &(&1.hour == 7)).request_count == 0
+    end
   end
 
   # ---------------------------------------------------------------------
@@ -981,6 +1003,25 @@ defmodule Tokengate.Metrics.RollupTest do
       # buckets truncados a la hora
       assert first.bucket.minute == 0
       assert first.bucket.second == 0
+    end
+
+    test "agrupa por hora local del timezone" do
+      {tm, _team} = team_member_fixture()
+
+      # 2026-07-31 05:30Z = 2026-07-30 23:30 en CDMX
+      log_request(tm.id, ~U[2026-07-31 05:30:00Z])
+
+      [row] =
+        Rollup.busiest_hours(nil,
+          from: ~U[2026-07-31 00:00:00Z],
+          to: ~U[2026-07-31 23:59:59Z],
+          timezone: "America/Mexico_City"
+        )
+
+      assert row.request_count == 1
+      assert DateTime.shift_zone!(row.bucket, "America/Mexico_City").hour == 23
+      # el bucket local 23:00 del 30 = 05:00Z del 31
+      assert DateTime.truncate(row.bucket, :second) == ~U[2026-07-31 05:00:00Z]
     end
   end
 
