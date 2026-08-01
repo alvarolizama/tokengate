@@ -30,7 +30,6 @@ defmodule Tokengate.Logs.WriteWorker do
       model_requested: args["model_requested"],
       model_responded: args["model_responded"],
       agent_type: args["agent_type"] || "unknown",
-      client_agent: args["client_agent"],
       status_code: args["status_code"],
       provider_status_code: args["provider_status_code"],
       error_reason: args["error_reason"],
@@ -44,6 +43,8 @@ defmodule Tokengate.Logs.WriteWorker do
       effort: args["effort"],
       api_key_prefix: args["api_key_prefix"],
       credential_name: args["credential_name"],
+      client_agent: args["client_agent"],
+      provider_key_prefix: args["provider_key_prefix"],
       inserted_at: parse_inserted_at(args["inserted_at"])
     }
 

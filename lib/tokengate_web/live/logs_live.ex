@@ -717,9 +717,10 @@ defmodule TokengateWeb.LogsLive do
                     <th>Usuario</th>
                     <th>Equipo</th>
                     <th>Agente</th>
+                    <th>API Key</th>
                     <th>Proveedor</th>
                     <th>Credencial</th>
-                    <th>API Key</th>
+                    <th title="API key o alias del proveedor">Prov. Key</th>
                     <th>Think</th>
                     <th>Effort</th>
                     <th>Streaming</th>
@@ -735,9 +736,10 @@ defmodule TokengateWeb.LogsLive do
                     <td class="text-sm">{entry.user_email || "—"}</td>
                     <td class="text-sm">{entry.team_name || "—"}</td>
                     <td class="text-sm">{entry.client_agent || "—"}</td>
+                    <td class="text-sm">{entry.api_key_prefix || "—"}</td>
                     <td class="text-sm">{entry.provider_name || "—"}</td>
                     <td class="text-sm">{entry.credential_name || "—"}</td>
-                    <td class="text-sm">{entry.api_key_prefix || "—"}</td>
+                    <td class="text-sm">{entry.credential_name || "—"}</td>
                     <td><.think_badge value={entry.think} /></td>
                     <td class="text-sm">{entry.effort || "—"}</td>
                     <td>{if entry.streaming, do: "Sí", else: "No"}</td>
@@ -755,7 +757,7 @@ defmodule TokengateWeb.LogsLive do
             <thead>
               <tr class="border-b-0">
                 <th
-                  colspan="6"
+                  colspan="7"
                   class="text-[10px] uppercase tracking-wider text-primary/70 bg-primary/5 border-r border-base-200"
                 >
                   Cliente
@@ -791,9 +793,10 @@ defmodule TokengateWeb.LogsLive do
                 <th>Usuario</th>
                 <th>Equipo</th>
                 <th>Agente</th>
+                <th>API Key</th>
                 <th class="border-r border-base-200">Credencial</th>
                 <th>Proveedor</th>
-                <th>API Key</th>
+                <th title="API key o alias del proveedor">Prov. Key</th>
                 <th title="Código HTTP del proveedor">Prov. Status</th>
                 <th
                   title="Razón del error del proveedor"
@@ -816,7 +819,7 @@ defmodule TokengateWeb.LogsLive do
             </thead>
             <tbody id="logs" phx-update="stream">
               <tr id="logs-empty" class="hidden only:table-row">
-                <td colspan="23" class="text-center py-8 text-base-content/40">
+                <td colspan="25" class="text-center py-8 text-base-content/40">
                   No hay logs que coincidan con los filtros.
                 </td>
               </tr>
@@ -830,9 +833,10 @@ defmodule TokengateWeb.LogsLive do
                 <td class="text-sm" title={log.agent_type}>
                   {log.client_agent || "—"}
                 </td>
+                <td class="text-sm">{log.api_key_prefix || "—"}</td>
                 <td class="text-sm border-r border-base-200">{log.credential_name || "—"}</td>
                 <td class="text-sm">{provider_name(log)}</td>
-                <td class="text-sm">{log.api_key_prefix || "—"}</td>
+                <td class="text-sm">{log.credential_name || log.provider_key_prefix || "—"}</td>
                 <td class="text-sm">
                   <span :if={log.provider_status_code} class="badge badge-sm badge-ghost">{log.provider_status_code}</span>
                   <span :if={!log.provider_status_code} class="text-base-content/40">—</span>

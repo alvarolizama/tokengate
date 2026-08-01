@@ -712,13 +712,12 @@ defmodule TokengateWeb.ProxyController do
       "think" => Keyword.get(extra, :think, false),
       "effort" => Keyword.get(extra, :effort),
       "api_key_prefix" => member.api_key && member.api_key.key_prefix,
-      "credential_name" => route.credential.name
+      "credential_name" => route.credential.name,
+      "provider_key_prefix" => provider_key_prefix(route.credential)
     }
     |> WriteWorker.new()
     |> Oban.insert()
   end
-
-  ## Error logging ##############################################################
 
   # Enqueues a durable log for a failed request, then renders the error to the
   # client. `route` is available (the request got past routing), so we capture
@@ -788,7 +787,8 @@ defmodule TokengateWeb.ProxyController do
       "think" => conn.assigns[:think] || false,
       "effort" => conn.assigns[:effort],
       "api_key_prefix" => member.api_key && member.api_key.key_prefix,
-      "credential_name" => route.credential.name
+      "credential_name" => route.credential.name,
+      "provider_key_prefix" => provider_key_prefix(route.credential)
     }
     |> WriteWorker.new()
     |> Oban.insert()
@@ -808,7 +808,9 @@ defmodule TokengateWeb.ProxyController do
       "provider_cost_usd" => "0",
       "latency_ms" => Keyword.get(opts, :latency_ms, 0),
       "streaming" => Keyword.get(opts, :streaming, false),
-      "api_key_prefix" => member.api_key && member.api_key.key_prefix
+      "api_key_prefix" => member.api_key && member.api_key.key_prefix,
+      "credential_name" => nil,
+      "provider_key_prefix" => nil
     }
     |> WriteWorker.new()
     |> Oban.insert()
@@ -826,6 +828,15 @@ defmodule TokengateWeb.ProxyController do
        do: status
 
   defp provider_status_from_error(_), do: nil
+
+  # Extracts a short prefix from a credential's api_key_encrypted. Shows the
+  # last 4 characters so admins can identify which provider key was used
+  # without exposing the full key. Returns nil when the key is missing.
+  defp provider_key_prefix(%{api_key_encrypted: key}) when is_binary(key) and byte_size(key) > 4,
+    do: String.slice(key, -4, 4)
+
+  defp provider_key_prefix(%{api_key_encrypted: key}) when is_binary(key), do: key
+  defp provider_key_prefix(_), do: nil
 
   ## Fallback logging ##########################################################
 

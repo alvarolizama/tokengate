@@ -51,6 +51,7 @@ defmodule Tokengate.Logs.RequestLog do
     field :api_key_prefix, :string
     field :credential_name, :string
     field :client_agent, :string
+    field :provider_key_prefix, :string
 
     belongs_to :team_member, Tokengate.Accounts.TeamMember,
       references: :id,
@@ -67,7 +68,7 @@ defmodule Tokengate.Logs.RequestLog do
     model_requested model_responded agent_type status_code provider_status_code
     error_reason prompt_tokens completion_tokens provider_cost_usd
     latency_ms ttft_ms streaming think effort api_key_prefix
-    credential_name client_agent inserted_at)a
+    credential_name client_agent provider_key_prefix inserted_at)a
 
   @required ~w(team_member_id model_requested inserted_at)a
 
