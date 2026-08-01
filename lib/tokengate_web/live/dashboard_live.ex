@@ -24,6 +24,7 @@ defmodule TokengateWeb.DashboardLive do
   alias Tokengate.Logs
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Metrics.Rollup
+  alias Tokengate.Periods
   alias Tokengate.Providers
   alias Tokengate.Repo
 
@@ -32,14 +33,6 @@ defmodule TokengateWeb.DashboardLive do
   @pubsub Tokengate.PubSub
   @metrics_topic "metrics:updated"
   @reload_interval_ms 2_000
-
-  # Period selector: label -> hours
-  @periods %{
-    "today" => 24,
-    "7d" => 168,
-    "30d" => 720,
-    "90d" => 2160
-  }
 
   @impl true
   def mount(_params, _session, socket) do
@@ -65,7 +58,7 @@ defmodule TokengateWeb.DashboardLive do
       |> assign(:breakdown_team, [])
       |> assign(:active_breakdown, "model")
       |> assign(:scope_label, "Personal")
-      |> assign(:scope_member_ids, Accounts.scope_member_ids(user))
+      |> assign(:scope_member_ids, user_member_ids(user))
       |> assign(:new_token, nil)
       |> assign(:new_token_team, nil)
       |> assign(:model_catalog, [])
@@ -115,7 +108,15 @@ defmodule TokengateWeb.DashboardLive do
 
   def handle_info(_msg, socket), do: {:noreply, socket}
 
-  ## Events — API key management --------------------------------------------
+  # ---------------------------------------------------------------------------
+  # Events — API key management --------------------------------------------
+  # ---------------------------------------------------------------------------
+
+  # User-wide scope: EVERY user (admin included) sees only their own
+  # memberships on /dashboard. The org-wide view lives in /dashboard/stats.
+  defp user_member_ids(user) do
+    user.id |> Accounts.list_team_members_for_user() |> Enum.map(& &1.id)
+  end
 
   @impl true
   def handle_event("replace_key", %{"id" => member_id}, socket) do
@@ -218,13 +219,13 @@ defmodule TokengateWeb.DashboardLive do
 
   defp load_metrics(socket, user) do
     period = socket.assigns[:period] || "today"
-    hours = Map.get(@periods, period, 24)
-    from = hours_ago_dt(hours)
-    opts = [from: from]
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
+    %{from: from, to: to} = Periods.period_bounds(period, timezone)
+    opts = [from: from, to: to]
 
     socket
     |> load_summary_metrics(user, opts)
-    |> load_chart_series(user, opts, period, socket.assigns[:timezone])
+    |> load_chart_series(user, opts, period, timezone)
     |> load_breakdowns(user, opts)
     |> load_model_catalog()
     |> assign(:loading, false)
@@ -248,37 +249,23 @@ defmodule TokengateWeb.DashboardLive do
     assign(socket, :metrics, metrics)
   end
 
-  # Admin: org-wide summary
-  defp fetch_summary(%{global_role: "admin"}, opts) do
-    Logs.cost_summary(Map.new(opts))
-  end
+  # User-wide: every user (admin included) sees only their own consumption.
+  defp fetch_summary(user, opts) do
+    member_ids = Enum.map(Accounts.list_team_members_for_user(user.id), & &1.id)
 
-  # Non-admin: user scope — only own data
-  defp fetch_summary(%{global_role: "user"} = user, opts) do
-    memberships = Accounts.list_team_members_for_user(user.id)
-    member_ids = Enum.map(memberships, & &1.id)
     Logs.cost_summary_for_members(member_ids, Map.new(opts))
-  end
-
-  defp fetch_summary(_user, _opts) do
-    empty_summary()
+    |> Map.merge(%{avg_latency_ms: nil, avg_ttft_ms: nil, avg_tps: nil})
   end
 
   # Chart series — granularity depends on period
-  defp load_chart_series(socket, user, _opts, period, timezone) do
-    hours = Map.fetch!(@periods, period)
+  defp load_chart_series(socket, _user, opts, period, timezone) do
     member_ids = socket.assigns[:scope_member_ids] || []
 
     series =
-      cond do
-        user.global_role == "admin" and member_ids == [] ->
-          Rollup.hourly_series(nil, hours)
-
-        member_ids != [] ->
-          hourly_series_for_members(member_ids, hours)
-
-        true ->
-          []
+      if member_ids == [] do
+        []
+      else
+        hourly_series_for_members(member_ids, opts, timezone)
       end
 
     series_with_tps =
@@ -309,27 +296,50 @@ defmodule TokengateWeb.DashboardLive do
     )
   end
 
-  defp hourly_series_for_members(member_ids, hours) do
-    from_ts = hours_ago_dt(hours)
+  defp hourly_series_for_members(member_ids, opts, timezone) do
+    from = Keyword.fetch!(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    # Bucket by LOCAL hour (see Rollup.hourly_series/2 for the subquery
+    # rationale: Postgres rejects parametrized GROUP BY vs SELECT).
+    bucketed =
+      RequestLog
+      |> where([rl], rl.team_member_id in ^member_ids and rl.inserted_at >= ^from)
+      |> maybe_to(to)
+      |> select([rl], %{
+        bucket:
+          fragment(
+            "date_trunc('hour', ? AT TIME ZONE ?) AT TIME ZONE ?",
+            rl.inserted_at,
+            ^timezone,
+            ^timezone
+          ),
+        id: rl.id,
+        provider_cost_usd: rl.provider_cost_usd,
+        prompt_tokens: rl.prompt_tokens,
+        completion_tokens: rl.completion_tokens,
+        latency_ms: rl.latency_ms
+      })
+      |> subquery()
 
     query =
-      RequestLog
-      |> where([rl], rl.team_member_id in ^member_ids and rl.inserted_at >= ^from_ts)
-      |> group_by([rl], fragment("date_trunc('hour', ?)", rl.inserted_at))
-      |> order_by([rl], fragment("date_trunc('hour', ?)", rl.inserted_at))
-      |> select([rl], %{
-        hour: fragment("date_trunc('hour', ?)", rl.inserted_at),
-        request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
-        prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
-        completion_tokens: coalesce(sum(rl.completion_tokens), 0),
-        total_latency_ms: coalesce(sum(rl.latency_ms), 0)
-      })
+      from(b in bucketed,
+        group_by: b.bucket,
+        order_by: b.bucket,
+        select: %{
+          hour: b.bucket,
+          request_count: count(b.id),
+          cost_usd: fragment("COALESCE(SUM(?), 0)", b.provider_cost_usd),
+          prompt_tokens: coalesce(sum(b.prompt_tokens), 0),
+          completion_tokens: coalesce(sum(b.completion_tokens), 0),
+          total_latency_ms: coalesce(sum(b.latency_ms), 0)
+        }
+      )
 
     Repo.all(query)
     |> Enum.map(fn row ->
       %{
-        hour: row.hour |> DateTime.from_naive!("Etc/UTC"),
+        hour: to_utc_datetime(row.hour),
         request_count: row.request_count,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
         prompt_tokens: row.prompt_tokens,
@@ -338,6 +348,12 @@ defmodule TokengateWeb.DashboardLive do
       }
     end)
   end
+
+  defp to_utc_datetime(%DateTime{} = dt), do: dt
+  defp to_utc_datetime(%NaiveDateTime{} = ndt), do: DateTime.from_naive!(ndt, "Etc/UTC")
+
+  defp maybe_to(query, nil), do: query
+  defp maybe_to(query, to), do: where(query, [rl], rl.inserted_at <= ^to)
 
   defp to_token_points(series, period, timezone) do
     Enum.map(series, fn row ->
@@ -353,13 +369,10 @@ defmodule TokengateWeb.DashboardLive do
     end)
   end
 
-  # Breakdowns
-  defp load_breakdowns(socket, user, opts) do
-    # Scoping: non-admin users only see consumption of their own scope
-    # (managed teams for managers, own memberships for regular users).
+  # Breakdowns — user-wide: always scoped to the logged-in user's memberships
+  defp load_breakdowns(socket, _user, opts) do
     opts = Keyword.put(opts, :member_ids, socket.assigns[:scope_member_ids])
     breakdown_model = Rollup.breakdown_by_model(nil, opts)
-    breakdown_team = load_team_breakdown(user, opts)
     breakdown_member = Rollup.breakdown_by_member(nil, opts)
 
     socket
@@ -367,8 +380,8 @@ defmodule TokengateWeb.DashboardLive do
     |> assign(:top_models, top_model_rows(breakdown_model))
     |> assign(:breakdown_member, breakdown_member)
     |> assign(:top_members, top_member_rows(breakdown_member))
-    |> assign(:breakdown_team, breakdown_team)
-    |> assign(:top_teams, top_team_rows(breakdown_team))
+    |> assign(:breakdown_team, [])
+    |> assign(:top_teams, [])
   end
 
   # Top 5 models by real (paid) cost for the horizontal-bars chart
@@ -379,11 +392,6 @@ defmodule TokengateWeb.DashboardLive do
   # Top 5 members by real (paid) cost for the horizontal-bars chart
   defp top_member_rows(breakdown_member) do
     top_rows(breakdown_member, & &1.user_email)
-  end
-
-  # Top 5 teams by real (paid) cost for the horizontal-bars chart
-  defp top_team_rows(breakdown_team) do
-    top_rows(breakdown_team, & &1.team_name)
   end
 
   # Shared ranking logic: sort by cost_usd desc, take 5,
@@ -432,13 +440,6 @@ defmodule TokengateWeb.DashboardLive do
   defp requests_tooltip(value), do: "#{trunc(value)} requests"
   defp tps_tooltip(value), do: "#{Float.round(value, 1)} tps"
 
-  # Team breakdown: admin only
-  defp load_team_breakdown(%{global_role: "admin"}, opts) do
-    Rollup.breakdown_by_team(opts)
-  end
-
-  defp load_team_breakdown(_, _), do: []
-
   defp empty_metrics do
     %{
       requests_total: 0,
@@ -451,23 +452,6 @@ defmodule TokengateWeb.DashboardLive do
       avg_ttft_ms: nil,
       avg_tps: nil
     }
-  end
-
-  defp empty_summary do
-    %{
-      total_cost_usd: Decimal.new(0),
-      total_prompt_tokens: 0,
-      total_completion_tokens: 0,
-      request_count: 0,
-      avg_latency_ms: nil,
-      avg_tps: nil
-    }
-  end
-
-  defp hours_ago_dt(hours) do
-    DateTime.utc_now()
-    |> DateTime.add(-hours * 3600, :second)
-    |> DateTime.truncate(:second)
   end
 
   ## Template helpers (rendered in the .heex template) -------------------

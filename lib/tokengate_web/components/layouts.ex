@@ -130,7 +130,10 @@ defmodule TokengateWeb.Layouts do
           </.link>
         </div>
 
-        <.dashboard_topbar current_scope={@current_scope} />
+        <.dashboard_topbar
+          current_scope={@current_scope}
+          timezone={assigns[:timezone] || "Etc/UTC"}
+        />
 
         <main class="flex-1 p-4 sm:p-6 lg:p-8">
           {render_slot(@inner_block)}
@@ -157,7 +160,7 @@ defmodule TokengateWeb.Layouts do
 
       <div class="flex-1" />
 
-      <.topbar_indicators current_scope={@current_scope} />
+      <.topbar_indicators current_scope={@current_scope} timezone={@timezone} />
 
       <div class="flex items-center gap-3">
         <div class="hidden sm:flex flex-col items-end leading-tight">
@@ -192,16 +195,20 @@ defmodule TokengateWeb.Layouts do
   # breakers), online dashboard users (Presence) and in-flight API requests.
   # Computed at render time — all reads are cheap (ETS/Registry + one COUNT).
   attr :current_scope, :map, default: nil
+  attr :timezone, :string, default: "Etc/UTC"
 
   defp topbar_indicators(assigns) do
     admin? = match?(%{global_role: "admin"}, assigns.current_scope)
-    my_budget = my_budget_summary(assigns.current_scope)
+    my_budget = my_budget_summary(assigns.current_scope, assigns.timezone)
 
     assigns =
       assigns
       |> assign(:error_creds, Tokengate.Providers.count_error_credentials())
       |> assign(:open_breakers, Tokengate.Routing.CircuitBreakerManager.count_open())
-      |> assign(:budget_exhausted, if(admin?, do: Tokengate.Budgets.count_exhausted(), else: 0))
+      |> assign(
+        :budget_exhausted,
+        if(admin?, do: Tokengate.Budgets.count_exhausted(assigns.timezone), else: 0)
+      )
       |> assign(:online, length(TokengateWeb.Presence.list_online()))
       |> assign(:inflight, Tokengate.Limits.Manager.total_inflight())
       |> assign(:admin?, admin?)
@@ -474,10 +481,10 @@ defmodule TokengateWeb.Layouts do
   # A user may belong to several teams: the chip surfaces the membership
   # closest to exhaustion and the tooltip notes how many more there are.
 
-  defp my_budget_summary(nil), do: nil
+  defp my_budget_summary(nil, _timezone), do: nil
 
-  defp my_budget_summary(user) do
-    case Tokengate.Budgets.list_member_budgets_for_user(user.id) do
+  defp my_budget_summary(user, timezone) do
+    case Tokengate.Budgets.list_member_budgets_for_user(user.id, timezone) do
       [] ->
         nil
 

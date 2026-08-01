@@ -3,7 +3,7 @@ defmodule TokengateWeb.DashboardLiveTest do
 
   import Phoenix.LiveViewTest
 
-  alias Tokengate.{Accounts, Logs, Providers}
+  alias Tokengate.{Accounts, Logs, Periods, Providers}
   alias Tokengate.Metrics.Collector
 
   defp unique, do: System.unique_integer([:positive])
@@ -61,6 +61,8 @@ defmodule TokengateWeb.DashboardLiveTest do
           base_url: "http://localhost:1"
         })
 
+      inserted_at = Map.get(opts, :inserted_at) || DateTime.utc_now() |> DateTime.truncate(:second)
+
       {:ok, _log} =
         Logs.log_request(%{
           team_member_id: member.id,
@@ -74,7 +76,8 @@ defmodule TokengateWeb.DashboardLiveTest do
           completion_tokens: 50,
           provider_cost_usd: cost,
           latency_ms: 42,
-          streaming: false
+          streaming: false,
+          inserted_at: inserted_at
         })
     end
 
@@ -87,7 +90,7 @@ defmodule TokengateWeb.DashboardLiveTest do
     %{team: team, owner: owner, member: member, owner_password: password}
   end
 
-  defp team_with_member(_opts \\ %{}) do
+  defp team_with_member(_opts) do
     u = unique()
 
     {:ok, team} = Accounts.create_team(%{name: "Team #{u}"})
@@ -142,8 +145,8 @@ defmodule TokengateWeb.DashboardLiveTest do
     %{user: admin, password: password} = register("admin")
     Collector.reset()
 
-    # Insert a log directly into Postgres
-    team_with_log(%{cost: "0.005"})
+    # Insert a log for the ADMIN's own membership (user-wide scope)
+    team_with_log(%{cost: "0.005", user: admin})
 
     conn = login(conn, admin, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")
@@ -156,11 +159,45 @@ defmodule TokengateWeb.DashboardLiveTest do
     _ = html
   end
 
+  test "admin does NOT see other members' traffic (user-wide)", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    Collector.reset()
+
+    # Log belongs to ANOTHER user's membership — admin must NOT see it
+    team_with_log(%{cost: "0.005"})
+
+    conn = login(conn, admin, password)
+    {:ok, view, html} = live(conn, ~p"/dashboard")
+
+    assert has_element?(view, "#empty-state")
+    assert html =~ "Aún no hay requests"
+  end
+
+  test "admin with no memberships sees empty state", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    Collector.reset()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    assert has_element?(view, "#empty-state")
+  end
+
+  test "scope label is Personal for admin (user-wide dashboard)", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    Collector.reset()
+
+    conn = login(conn, admin, password)
+    {:ok, _view, html} = live(conn, ~p"/dashboard")
+
+    assert html =~ "Personal"
+  end
+
   test "admin sees breakdown tabs", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     Collector.reset()
 
-    team_with_log(%{cost: "0.005"})
+    team_with_log(%{cost: "0.005", user: admin})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
@@ -168,15 +205,15 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert has_element?(view, "#breakdown-tabs")
     assert has_element?(view, "#tab-model")
     assert has_element?(view, "#tab-member")
-    # Team tab only shows when there's team breakdown data
-    assert has_element?(view, "#tab-team")
+    # Team breakdown is not shown on the personal dashboard
+    refute has_element?(view, "#tab-team")
   end
 
   test "switching breakdown tab shows the right table", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     Collector.reset()
 
-    team_with_log(%{cost: "0.005"})
+    team_with_log(%{cost: "0.005", user: admin})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
@@ -190,28 +227,63 @@ defmodule TokengateWeb.DashboardLiveTest do
     html = render(view)
     assert html =~ "bd-member-"
 
-    # Switch to team
-    view |> element("#tab-team") |> render_click()
-    html = render(view)
-    assert html =~ "bd-team-"
+    # Team tab is not rendered on the personal dashboard
+    refute has_element?(view, "#tab-team")
   end
 
   test "switching period reloads metrics", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     Collector.reset()
 
-    team_with_log(%{cost: "0.005"})
+    team_with_log(%{cost: "0.005", user: admin})
 
     conn = login(conn, admin, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")
 
     # Default period is today — chart title reflects it
     assert html =~ "Costo por hora"
-
     # Switch to 30d
     view |> element("#period-30d") |> render_click()
     html = render(view)
     assert html =~ "Costo por día (30d)"
+  end
+
+  test "today period excludes logs from the previous local day", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    {:ok, admin} = Accounts.update_user_timezone(admin, "America/Mexico_City")
+    Collector.reset()
+
+    # 23:00 del día anterior local (UTC-6) → NO cuenta en "Hoy" local
+    today_start = Periods.start_of_day_utc("America/Mexico_City")
+    team_with_log(%{cost: "0.005", user: admin, inserted_at: DateTime.add(today_start, -3600, :second)})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    assert has_element?(view, "#empty-state")
+  end
+
+  test "today period includes logs from the current local day", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    {:ok, admin} = Accounts.update_user_timezone(admin, "America/Mexico_City")
+    Collector.reset()
+
+    today_start = Periods.start_of_day_utc("America/Mexico_City")
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    candidate = DateTime.add(today_start, 3600, :second)
+
+    inserted_at =
+      if DateTime.compare(candidate, now) == :lt,
+        do: candidate,
+        else: DateTime.add(now, -60, :second)
+
+    team_with_log(%{cost: "0.005", user: admin, inserted_at: inserted_at})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    refute has_element?(view, "#empty-state")
+    assert has_element?(view, "#requests-card")
   end
 
   test "admin sees analytics charts with traffic", %{conn: conn} do
