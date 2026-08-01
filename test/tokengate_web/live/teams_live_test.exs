@@ -63,7 +63,7 @@ defmodule TokengateWeb.TeamsLiveTest do
   # Mount and render
   # --------------------------------------------------------------------------
 
-  test "admin sees the teams page with empty state", %{conn: conn} do
+  test "admin sees the teams page with empty state via search filter", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
@@ -71,6 +71,11 @@ defmodule TokengateWeb.TeamsLiveTest do
 
     assert html =~ "Equipos"
     assert has_element?(view, "#new-team-btn")
+
+    # Type a search term that matches no team → triggers empty state deterministically
+    no_match_term = "zzz-no-match-#{System.unique_integer([:positive])}"
+    view |> element("input[name='team_search']") |> render_change(%{team_search: no_match_term})
+
     assert has_element?(view, "#teams-empty")
   end
 

@@ -71,14 +71,17 @@ defmodule TokengateWeb.ProvidersLiveTest do
     assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/providers")
   end
 
-  test "admin sees the provider list and empty state", %{conn: conn} do
+  test "admin sees the provider list with a created provider", %{conn: conn} do
+    u = unique()
+    provider = create_provider(%{name: "listed-prov-#{u}"})
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
     {:ok, view, html} = live(conn, ~p"/dashboard/providers")
 
     assert html =~ "Proveedores"
-    assert has_element?(view, "#providers-empty")
+    assert has_element?(view, "#providers-#{provider.id}")
+    refute has_element?(view, "#providers-empty")
   end
 
   ## Provider CRUD ---------------------------------------------------------
