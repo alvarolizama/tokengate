@@ -42,6 +42,8 @@ defmodule Tokengate.Logs.RequestLog do
     field :error_reason, :string
     field :prompt_tokens, :integer, default: 0
     field :completion_tokens, :integer, default: 0
+    field :cache_read_tokens, :integer, default: 0
+    field :cache_creation_tokens, :integer, default: 0
     field :provider_cost_usd, :decimal
     field :latency_ms, :integer
     field :ttft_ms, :integer
@@ -66,7 +68,8 @@ defmodule Tokengate.Logs.RequestLog do
 
   @permitted ~w(team_member_id provider_id model_provider_id model_alias_id
     model_requested model_responded agent_type status_code provider_status_code
-    error_reason prompt_tokens completion_tokens provider_cost_usd
+    error_reason prompt_tokens completion_tokens cache_read_tokens
+    cache_creation_tokens provider_cost_usd
     latency_ms ttft_ms streaming think effort api_key_prefix
     credential_name client_agent provider_key_prefix inserted_at)a
 

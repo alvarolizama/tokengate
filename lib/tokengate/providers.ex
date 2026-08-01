@@ -355,8 +355,7 @@ defmodule Tokengate.Providers do
     base_query =
       from(c in Credential,
         where: c.status == "active",
-        preload: [:provider],
-        order_by: [asc: c.inserted_at]
+        preload: [:provider]
       )
 
     # Exclude credentials already used by other model_providers
@@ -408,6 +407,9 @@ defmodule Tokengate.Providers do
         base_query
     end
     |> Repo.all()
+    |> Enum.sort_by(fn credential ->
+      {String.downcase(credential.provider.name), String.downcase(credential.name || "")}
+    end)
   end
 
   # ---------------------------------------------------------------------------

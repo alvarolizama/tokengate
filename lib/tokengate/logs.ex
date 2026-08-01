@@ -291,6 +291,8 @@ defmodule Tokengate.Logs do
         total_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
         total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
         total_completion_tokens: coalesce(sum(rl.completion_tokens), 0),
+        total_cache_read_tokens: coalesce(sum(rl.cache_read_tokens), 0),
+        total_cache_creation_tokens: coalesce(sum(rl.cache_creation_tokens), 0),
         request_count: count(rl.id)
       })
 
@@ -300,6 +302,8 @@ defmodule Tokengate.Logs do
       total_cost_usd: Decimal.new(to_string(result.total_cost_usd)),
       total_prompt_tokens: result.total_prompt_tokens,
       total_completion_tokens: result.total_completion_tokens,
+      total_cache_read_tokens: result.total_cache_read_tokens,
+      total_cache_creation_tokens: result.total_cache_creation_tokens,
       request_count: result.request_count
     }
   end
@@ -329,6 +333,8 @@ defmodule Tokengate.Logs do
       total_cost_usd: Decimal.new(0),
       total_prompt_tokens: 0,
       total_completion_tokens: 0,
+      total_cache_read_tokens: 0,
+      total_cache_creation_tokens: 0,
       request_count: 0
     }
   end
@@ -346,6 +352,8 @@ defmodule Tokengate.Logs do
         total_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
         total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
         total_completion_tokens: coalesce(sum(rl.completion_tokens), 0),
+        total_cache_read_tokens: coalesce(sum(rl.cache_read_tokens), 0),
+        total_cache_creation_tokens: coalesce(sum(rl.cache_creation_tokens), 0),
         request_count: count(rl.id)
       })
 
@@ -355,6 +363,8 @@ defmodule Tokengate.Logs do
       total_cost_usd: Decimal.new(to_string(result.total_cost_usd)),
       total_prompt_tokens: result.total_prompt_tokens,
       total_completion_tokens: result.total_completion_tokens,
+      total_cache_read_tokens: result.total_cache_read_tokens,
+      total_cache_creation_tokens: result.total_cache_creation_tokens,
       request_count: result.request_count
     }
   end
@@ -394,6 +404,8 @@ defmodule Tokengate.Logs do
         total_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
         total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
         total_completion_tokens: coalesce(sum(rl.completion_tokens), 0),
+        total_cache_read_tokens: coalesce(sum(rl.cache_read_tokens), 0),
+        total_cache_creation_tokens: coalesce(sum(rl.cache_creation_tokens), 0),
         request_count: count(rl.id),
         total_latency_ms: fragment("COALESCE(SUM(latency_ms), 0)"),
         avg_latency_ms: fragment("AVG(latency_ms)"),
@@ -405,6 +417,8 @@ defmodule Tokengate.Logs do
       total_cost_usd: Decimal.new(to_string(result.total_cost_usd)),
       total_prompt_tokens: result.total_prompt_tokens,
       total_completion_tokens: result.total_completion_tokens,
+      total_cache_read_tokens: result.total_cache_read_tokens,
+      total_cache_creation_tokens: result.total_cache_creation_tokens,
       request_count: result.request_count,
       avg_latency_ms: avg_to_float(result.avg_latency_ms),
       avg_ttft_ms: avg_to_float(result.avg_ttft_ms),

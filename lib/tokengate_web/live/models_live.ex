@@ -84,10 +84,12 @@ defmodule TokengateWeb.ModelsLive do
     credentials =
       from(c in Tokengate.Providers.Credential,
         where: c.status == "active",
-        preload: [:provider],
-        order_by: [asc: c.inserted_at]
+        preload: [:provider]
       )
       |> Repo.all()
+      |> Enum.sort_by(fn credential ->
+        {String.downcase(credential.provider.name), String.downcase(credential.name || "")}
+      end)
 
     socket
     |> assign(:credentials_for_select, credentials)
@@ -660,7 +662,7 @@ defmodule TokengateWeb.ModelsLive do
     Enum.map(credentials, fn c ->
       label =
         if c.name do
-          "#{c.provider.name} · #{c.name}"
+          "#{c.provider.name} · #{c.name} · #{mask_key(c.api_key_encrypted)}"
         else
           "#{c.provider.name} · #{mask_key(c.api_key_encrypted)}"
         end
@@ -954,13 +956,13 @@ defmodule TokengateWeb.ModelsLive do
                             <span
                               :if={ap.credential && credential_named?(ap.credential)}
                               class="badge badge-xs badge-outline font-normal ml-1"
-                              title="Alias de la API key"
+                              title={ap.credential.name}
                             >
                               <.icon name="hero-key" class="w-3 h-3" />
                               {ap.credential.name}
                             </span>
                             <span
-                              :if={ap.credential && !credential_named?(ap.credential)}
+                              :if={ap.credential}
                               class="text-xs text-base-content/40 ml-1"
                             >
                               {mask_key(ap.credential.api_key_encrypted)}
@@ -1097,6 +1099,20 @@ defmodule TokengateWeb.ModelsLive do
                   rows="8"
                   placeholder="Ej: Responde siempre en español. No uses markdown. Sé conciso..."
                   hint="Este texto se antepone al system prompt del usuario. Déjalo vacío para no inyectar nada."
+                />
+
+                <.input
+                  field={@guard_rails_form[:prompt_cache_enabled]}
+                  type="checkbox"
+                  label="Prompt caching"
+                  hint="Reordena system prompts al frente para maximizar cache hits"
+                />
+
+                <.input
+                  field={@guard_rails_form[:lazy_cleanup_enabled]}
+                  type="checkbox"
+                  label="Limpieza lazy"
+                  hint="Dedupe de tool outputs y trim de contenido largo (sin LLM)"
                 />
 
                 <div class="flex gap-2 mt-4 justify-end">

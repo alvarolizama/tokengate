@@ -37,7 +37,15 @@ defmodule TokengateWeb.ProxyController do
   alias Tokengate.Logs.WriteWorker
   alias Tokengate.Metrics.Collector
   alias Tokengate.Providers
-  alias Tokengate.Proxy.{CostCalculator, OpenAIAdapter, TokenEstimator, UsageNormalizer}
+
+  alias Tokengate.Proxy.{
+    CostCalculator,
+    OpenAIAdapter,
+    PromptOptimizer,
+    TokenEstimator,
+    UsageNormalizer
+  }
+
   alias Tokengate.Routing.Router
 
   @max_attempts 3
@@ -241,6 +249,7 @@ defmodule TokengateWeb.ProxyController do
       payload
       |> Map.put("model", route.model_responded)
       |> inject_guard_rails(route.model_alias)
+      |> maybe_optimize(route.model_alias)
 
     receive_timeout = route.credential.receive_timeout_ms || 180_000
 
@@ -357,6 +366,7 @@ defmodule TokengateWeb.ProxyController do
       |> Map.put("model", route.model_responded)
       |> ensure_stream_options()
       |> inject_guard_rails(route.model_alias)
+      |> maybe_optimize(route.model_alias)
 
     # Measured just before the upstream call: TTFT is the time from this
     # point to the provider's first chunk.
@@ -471,6 +481,30 @@ defmodule TokengateWeb.ProxyController do
               %{"role" => "system", "content" => guard_rails} | messages
             ])
         end
+    end
+  end
+
+  # Applies the model_alias's prompt-pre-flight transforms to the payload.
+  # Both passes are pure and return a fresh messages list; the input is never
+  # mutated. When neither flag is set, returns the payload unchanged so the
+  # pipeline stays a zero-cost passthrough.
+  defp maybe_optimize(payload, model_alias) do
+    cond do
+      model_alias.prompt_cache_enabled and model_alias.lazy_cleanup_enabled ->
+        messages = payload["messages"] || []
+
+        payload
+        |> Map.put("messages", PromptOptimizer.stable_prefix(messages))
+        |> Map.update!("messages", &PromptOptimizer.lazy_cleanup/1)
+
+      model_alias.prompt_cache_enabled ->
+        Map.put(payload, "messages", PromptOptimizer.stable_prefix(payload["messages"] || []))
+
+      model_alias.lazy_cleanup_enabled ->
+        Map.put(payload, "messages", PromptOptimizer.lazy_cleanup(payload["messages"] || []))
+
+      true ->
+        payload
     end
   end
 
@@ -705,6 +739,8 @@ defmodule TokengateWeb.ProxyController do
       "error_reason" => Keyword.get(extra, :error_reason),
       "prompt_tokens" => usage.prompt_tokens,
       "completion_tokens" => usage.completion_tokens,
+      "cache_read_tokens" => Map.get(usage, :cache_read_tokens, 0),
+      "cache_creation_tokens" => Map.get(usage, :cache_creation_tokens, 0),
       "provider_cost_usd" => Decimal.to_string(cost, :normal),
       "latency_ms" => latency_ms,
       "ttft_ms" => Keyword.get(extra, :ttft_ms),
@@ -781,6 +817,8 @@ defmodule TokengateWeb.ProxyController do
       "error_reason" => Keyword.get(opts, :error_reason),
       "prompt_tokens" => 0,
       "completion_tokens" => 0,
+      "cache_read_tokens" => 0,
+      "cache_creation_tokens" => 0,
       "provider_cost_usd" => "0",
       "latency_ms" => Keyword.get(opts, :latency_ms, 0),
       "streaming" => Keyword.get(opts, :streaming, false),

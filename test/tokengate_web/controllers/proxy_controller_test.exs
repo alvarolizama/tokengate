@@ -467,6 +467,144 @@ defmodule TokengateWeb.ProxyControllerTest do
     Limits.release(cred.id)
   end
 
+  ## Prompt optimization flags ################################################
+
+  # Reusable noisy payload: has duplicate consecutive tool messages, redundant
+  # whitespace runs, and a system message that is NOT at the front — exactly the
+  # shape the lazy_cleanup / stable_prefix passes are designed to clean.
+  defp noisy_payload(model) do
+    %{
+      "model" => model,
+      "messages" => [
+        %{"role" => "user", "content" => "first prompt"},
+        %{"role" => "system", "content" => "you are a helper"},
+        %{"role" => "tool", "content" => "tool output A"},
+        %{"role" => "tool", "content" => "tool output A"},
+        %{"role" => "tool", "content" => "tool output B"},
+        %{"role" => "assistant", "content" => "ack"}
+      ]
+    }
+  end
+
+  test "lazy_cleanup_enabled: true dedupes duplicate tool messages before forwarding", %{
+    conn: conn
+  } do
+    %{token: token, alias: model_alias} = proxy_fixture()
+
+    # Flip the flag on the alias created by the fixture.
+    {:ok, alias_optimized} =
+      Providers.update_model_alias(model_alias, %{lazy_cleanup_enabled: true})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", noisy_payload(alias_optimized.name))
+
+    assert json_response(conn, 200)
+
+    # The provider received the cleaned payload: consecutive duplicate tool
+    # message ("tool output A" sent twice) collapsed into a single copy.
+    assert_receive {:provider_request, provider_payload}
+    tool_messages = Enum.filter(provider_payload["messages"], &(&1["role"] == "tool"))
+
+    assert length(tool_messages) == 2
+    assert Enum.map(tool_messages, & &1["content"]) == ["tool output A", "tool output B"]
+  end
+
+  test "lazy_cleanup_enabled: false passes the original payload through unchanged", %{
+    conn: conn
+  } do
+    %{token: token, alias: model_alias} = proxy_fixture()
+
+    # The default is already false, but set it explicitly so the test is
+    # self-documenting and resilient to future schema default changes.
+    {:ok, alias_passthrough} =
+      Providers.update_model_alias(model_alias, %{lazy_cleanup_enabled: false})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", noisy_payload(alias_passthrough.name))
+
+    assert json_response(conn, 200)
+
+    # Forwarded messages must equal the original payload byte-for-byte,
+    # including the duplicate tool messages and the mid-list system message.
+    assert_receive {:provider_request, provider_payload}
+    assert provider_payload["messages"] == noisy_payload(alias_passthrough.name)["messages"]
+  end
+
+  test "prompt_cache_enabled: true hoists every system message to the front", %{conn: conn} do
+    %{token: token, alias: model_alias} = proxy_fixture()
+
+    {:ok, alias_cached} =
+      Providers.update_model_alias(model_alias, %{prompt_cache_enabled: true})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", noisy_payload(alias_cached.name))
+
+    assert json_response(conn, 200)
+
+    assert_receive {:provider_request, provider_payload}
+    forwarded_messages = provider_payload["messages"]
+
+    # The system message is now at the front and any other system messages
+    # would also be hoisted (none in this fixture, so the front is exactly one).
+    assert hd(forwarded_messages)["role"] == "system"
+    assert hd(forwarded_messages)["content"] == "you are a helper"
+
+    # The rest of the messages preserve their original relative order.
+    rest = tl(forwarded_messages)
+    assert Enum.map(rest, & &1["role"]) == ["user", "tool", "tool", "tool", "assistant"]
+
+    assert Enum.map(rest, & &1["content"]) == [
+             "first prompt",
+             "tool output A",
+             "tool output A",
+             "tool output B",
+             "ack"
+           ]
+  end
+
+  ## Prompt optimization (lazy cleanup / prompt cache) ##########################
+
+  test "modelo con prompt_cache_enabled y guard_rails combina guard_rails + reorder", %{
+    conn: conn
+  } do
+    %{token: token, alias: model_alias} = proxy_fixture()
+
+    {:ok, _} =
+      Providers.update_model_alias(model_alias, %{
+        "prompt_cache_enabled" => true,
+        "guard_rails" => "sé breve"
+      })
+
+    messages = [
+      %{"role" => "user", "content" => "u1"},
+      %{"role" => "system", "content" => "regla"}
+    ]
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", %{"model" => model_alias.name, "messages" => messages})
+
+    assert json_response(conn, 200)
+
+    assert_receive {:provider_request, provider_payload}
+
+    # inject_guard_rails inserts a NEW system message at the front (the
+    # original system is mid-list, not first), then stable_prefix hoists both
+    # system messages to the front preserving order.
+    assert provider_payload["messages"] == [
+             %{"role" => "system", "content" => "sé breve"},
+             %{"role" => "system", "content" => "regla"},
+             %{"role" => "user", "content" => "u1"}
+           ]
+  end
+
   ## Streaming #################################################################
 
   test "stream: SSE passthrough with usage cost injection and async log", %{conn: conn} do

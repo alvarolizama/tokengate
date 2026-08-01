@@ -241,6 +241,8 @@ defmodule TokengateWeb.DashboardLive do
       cost_usd: summary.total_cost_usd,
       prompt_tokens: summary.total_prompt_tokens,
       completion_tokens: summary.total_completion_tokens,
+      cache_read_tokens: summary.total_cache_read_tokens,
+      cache_creation_tokens: summary.total_cache_creation_tokens,
       avg_latency_ms: Map.get(summary, :avg_latency_ms) || 0.0,
       avg_ttft_ms: Map.get(summary, :avg_ttft_ms),
       avg_tps: Map.get(summary, :avg_tps)
@@ -448,6 +450,8 @@ defmodule TokengateWeb.DashboardLive do
       cost_usd: Decimal.new(0),
       prompt_tokens: 0,
       completion_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
       avg_latency_ms: 0.0,
       avg_ttft_ms: nil,
       avg_tps: nil
@@ -482,6 +486,18 @@ defmodule TokengateWeb.DashboardLive do
   def format_compact(n) when is_integer(n), do: Integer.to_string(n)
   def format_compact(n) when is_float(n), do: format_compact(trunc(n))
   def format_compact(_), do: "0"
+
+  @doc """
+  Compact value for the cache KPI: shows the sum (read + creation) when
+  either is > 0, otherwise returns "—" so the slot stays visually empty.
+  """
+  def format_cache_value(read, creation)
+      when read in [nil, 0] and creation in [nil, 0],
+      do: "—"
+
+  def format_cache_value(read, creation) do
+    format_compact((read || 0) + (creation || 0))
+  end
 
   defp with_thousands_separator(n) do
     digits = Integer.to_string(abs(n))

@@ -490,6 +490,14 @@ defmodule TokengateWeb.LogsLive do
 
   defp format_number(_), do: "0"
 
+  defp format_cache_tokens(read, creation)
+       when read in [nil, 0] and creation in [nil, 0],
+       do: "—"
+
+  defp format_cache_tokens(read, creation) do
+    "#{format_number(read || 0)} / #{format_number(creation || 0)}"
+  end
+
   defp initials(email) when is_binary(email) do
     email
     |> String.split("@")
@@ -544,6 +552,20 @@ defmodule TokengateWeb.LogsLive do
 
   defp provider_name(%{provider: %{name: name}}), do: name
   defp provider_name(_), do: "—"
+
+  defp prov_key_display(%{credential_name: name, provider_key_prefix: prefix})
+       when is_binary(name) and name != "" and is_binary(prefix) and prefix != "",
+       do: "#{name} · #{prefix}"
+
+  defp prov_key_display(%{credential_name: name})
+       when is_binary(name) and name != "",
+       do: name
+
+  defp prov_key_display(%{provider_key_prefix: prefix})
+       when is_binary(prefix) and prefix != "",
+       do: prefix
+
+  defp prov_key_display(_), do: "—"
 
   attr :value, :boolean, default: false
 
@@ -786,7 +808,7 @@ defmodule TokengateWeb.LogsLive do
                   Proveedor
                 </th>
                 <th
-                  colspan="4"
+                  colspan="5"
                   class="text-[10px] uppercase tracking-wider text-accent/70 bg-accent/5 border-r border-base-200"
                 >
                   Respuesta
@@ -828,6 +850,7 @@ defmodule TokengateWeb.LogsLive do
                 <th class="border-r border-base-200">Streaming</th>
                 <th class="text-right">Input</th>
                 <th class="text-right">Output</th>
+                <th class="text-right" title="Cache read / Cache creation">Cache R/C</th>
                 <th class="text-right">TPS</th>
                 <th title="Time to first token — solo streaming">TTFT</th>
                 <th class="border-r border-base-200">Latencia</th>
@@ -836,7 +859,7 @@ defmodule TokengateWeb.LogsLive do
             </thead>
             <tbody id="logs" phx-update="stream">
               <tr id="logs-empty" class="hidden only:table-row">
-                <td colspan="25" class="text-center py-8 text-base-content/40">
+                <td colspan="26" class="text-center py-8 text-base-content/40">
                   No hay logs que coincidan con los filtros.
                 </td>
               </tr>
@@ -853,7 +876,16 @@ defmodule TokengateWeb.LogsLive do
                 <td class="text-sm">{log.api_key_prefix || "—"}</td>
                 <td class="text-sm border-r border-base-200">{log.credential_name || "—"}</td>
                 <td class="text-sm">{provider_name(log)}</td>
-                <td class="text-sm">{log.credential_name || log.provider_key_prefix || "—"}</td>
+                <td
+                  class="text-sm"
+                  title={
+                    if log.credential_name && log.credential_name != "",
+                      do: log.credential_name,
+                      else: nil
+                  }
+                >
+                  {prov_key_display(log)}
+                </td>
                 <td class="text-sm">
                   <span :if={log.provider_status_code} class="badge badge-sm badge-ghost">{log.provider_status_code}</span>
                   <span :if={!log.provider_status_code} class="text-base-content/40">—</span>
@@ -875,6 +907,9 @@ defmodule TokengateWeb.LogsLive do
                 <td class="text-sm text-right tabular-nums">{format_number(log.prompt_tokens)}</td>
                 <td class="text-sm text-right tabular-nums">
                   {format_number(log.completion_tokens)}
+                </td>
+                <td class="text-sm text-right tabular-nums">
+                  {format_cache_tokens(log.cache_read_tokens, log.cache_creation_tokens)}
                 </td>
                 <td class="text-sm text-right tabular-nums text-base-content/70">
                   {tps(log.completion_tokens, log.latency_ms)}
