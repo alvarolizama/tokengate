@@ -460,7 +460,8 @@ defmodule Tokengate.Metrics.RollupTest do
         latency_ms: 1000
       })
 
-      results = Rollup.breakdown_by_model(team.id, from: DateTime.add(DateTime.utc_now(), -10, :day))
+      results =
+        Rollup.breakdown_by_model(team.id, from: DateTime.add(DateTime.utc_now(), -10, :day))
 
       assert length(results) == 1
       row = hd(results)
