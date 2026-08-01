@@ -67,6 +67,7 @@ defmodule TokengateWeb.TeamMembersLive do
   defp load_data(socket) do
     team = socket.assigns.team
     search = socket.assigns[:member_search] || ""
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
     members = Accounts.list_team_members_for_team(team.id)
 
     members =
@@ -114,13 +115,13 @@ defmodule TokengateWeb.TeamMembersLive do
 
     member_budgets =
       Enum.map(members, fn m ->
-        budget_for_member(m, alias_map)
+        budget_for_member(m, alias_map, timezone)
       end)
 
     team_monthly_spend =
       Enum.reduce(members, Decimal.new(0), fn m, acc ->
-        spend = Tokengate.Budgets.Manager.spend(m.id)
-        Decimal.add(acc, spend.monthly_usd)
+        spend = Tokengate.Budgets.monthly_spend_for_member(m.id, timezone)
+        Decimal.add(acc, spend)
       end)
 
     estimated_monthly =
@@ -152,12 +153,10 @@ defmodule TokengateWeb.TeamMembersLive do
     |> load_exclusive_providers(members)
   end
 
-  defp budget_for_member(member, _alias_map) do
-    spend = Tokengate.Budgets.Manager.spend(member.id)
-
+  defp budget_for_member(member, _alias_map, timezone) do
     %{
       member_id: member.id,
-      monthly_spend: spend.monthly_usd
+      monthly_spend: Tokengate.Budgets.monthly_spend_for_member(member.id, timezone)
     }
   end
 

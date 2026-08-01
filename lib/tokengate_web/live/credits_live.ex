@@ -73,8 +73,9 @@ defmodule TokengateWeb.CreditsLive do
   ## Data loading ----------------------------------------------------------
 
   defp load_budgets(socket) do
-    budgets = Budgets.list_member_budgets()
-    team_budgets = Budgets.list_team_budgets()
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
+    budgets = Budgets.list_member_budgets(timezone)
+    team_budgets = Budgets.list_team_budgets(timezone)
 
     socket
     |> assign(:budgets, budgets)

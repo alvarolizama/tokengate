@@ -4,7 +4,6 @@ defmodule TokengateWeb.CreditsLiveTest do
   import Phoenix.LiveViewTest
 
   alias Tokengate.{Accounts, Logs, Providers}
-  alias Tokengate.Budgets.Manager
 
   defp unique, do: System.unique_integer([:positive])
 
@@ -62,14 +61,8 @@ defmodule TokengateWeb.CreditsLiveTest do
     {:ok, provider} =
       Providers.create_provider(%{name: "Prov #{u}", base_url: "http://localhost:1"})
 
-    # Gasto real del mes en los contadores ETS (fuente de Budgets)
-    pid = Process.whereis(Manager) || start_supervised!(Manager)
-    _ = :sys.get_state(pid)
-    :ok = Manager.record_spend(member_a.id, Decimal.new("100.00"))
-    :ok = Manager.record_spend(member_b.id, Decimal.new("50.00"))
-
-    # Logs con ahorro (estimated > real) para la columna Ahorro
-    for {member, _savings} <- [{member_a, "0.40"}, {member_b, "0.20"}] do
+    # Gasto real del mes desde Postgres (fuente del display de Budgets)
+    for {member, cost} <- [{member_a, "100.00"}, {member_b, "50.00"}] do
       {:ok, _log} =
         Logs.log_request(%{
           team_member_id: member.id,
@@ -80,9 +73,10 @@ defmodule TokengateWeb.CreditsLiveTest do
           status_code: 200,
           prompt_tokens: 100,
           completion_tokens: 50,
-          provider_cost_usd: "0.60",
+          provider_cost_usd: cost,
           latency_ms: 42,
-          streaming: false
+          streaming: false,
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
         })
     end
 

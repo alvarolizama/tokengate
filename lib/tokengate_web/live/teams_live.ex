@@ -101,7 +101,8 @@ defmodule TokengateWeb.TeamsLive do
       Observability.list_destinations_for_teams(Enum.map(teams, & &1.id))
 
     # Budget + spend rollup per team and per member
-    member_budgets = Budgets.list_member_budgets()
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
+    member_budgets = Budgets.list_member_budgets(timezone)
 
     team_budgets =
       member_budgets

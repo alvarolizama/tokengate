@@ -3,7 +3,7 @@ defmodule TokengateWeb.UsersLiveTest do
 
   import Phoenix.LiveViewTest
 
-  alias Tokengate.Accounts
+  alias Tokengate.{Accounts, Logs}
 
   defp unique, do: System.unique_integer([:positive])
 
@@ -73,7 +73,13 @@ defmodule TokengateWeb.UsersLiveTest do
     {:ok, member} =
       Accounts.create_team_member(%{"user_id" => member_user.id, "team_id" => team.id})
 
-    assert :ok = Tokengate.Budgets.Manager.record_spend(member.id, Decimal.new("7.25"))
+    {:ok, _log} =
+      Logs.log_request(%{
+        team_member_id: member.id,
+        model_requested: "gpt-4",
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+        provider_cost_usd: Decimal.new("7.25")
+      })
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/users")
@@ -95,7 +101,13 @@ defmodule TokengateWeb.UsersLiveTest do
     {:ok, member} =
       Accounts.create_team_member(%{"user_id" => member_user.id, "team_id" => team.id})
 
-    assert :ok = Tokengate.Budgets.Manager.record_spend(member.id, Decimal.new("100.00"))
+    {:ok, _log} =
+      Logs.log_request(%{
+        team_member_id: member.id,
+        model_requested: "gpt-4",
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+        provider_cost_usd: Decimal.new("100.00")
+      })
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/users")

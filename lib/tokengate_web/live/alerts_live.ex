@@ -68,10 +68,12 @@ defmodule TokengateWeb.AlertsLive do
   end
 
   def handle_info(:reload_budget_alerts, socket) do
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
+
     {:noreply,
      socket
      |> assign(:reload_scheduled, false)
-     |> assign(:budget_exhausted, Tokengate.Budgets.list_exhausted_member_budgets())}
+     |> assign(:budget_exhausted, Tokengate.Budgets.list_exhausted_member_budgets(timezone))}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -116,6 +118,8 @@ defmodule TokengateWeb.AlertsLive do
   ## Data loading ----------------------------------------------------------
 
   defp load_alerts(socket) do
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
+
     credentials =
       from(c in Providers.Credential,
         join: p in assoc(c, :provider),
@@ -157,19 +161,19 @@ defmodule TokengateWeb.AlertsLive do
       |> Repo.all()
 
     # Activity stats for exhausted members (requests today, last request, top provider)
-    budget_activity = load_budget_activity()
+    budget_activity = load_budget_activity(timezone)
 
     socket
     |> assign(:error_credentials, credentials)
     |> assign(:breaker_alerts, breaker_alerts)
     |> assign(:cred_error_counts, cred_error_counts)
-    |> assign(:budget_exhausted, Tokengate.Budgets.list_exhausted_member_budgets())
+    |> assign(:budget_exhausted, Tokengate.Budgets.list_exhausted_member_budgets(timezone))
     |> assign(:budget_activity, budget_activity)
     |> load_recent_errors()
   end
 
-  defp load_budget_activity do
-    today_start = DateTime.new!(Date.utc_today(), ~T[00:00:00], "Etc/UTC")
+  defp load_budget_activity(timezone) do
+    today_start = Tokengate.Periods.start_of_day_utc(timezone)
 
     # Get today's stats per team member
     activity_query =

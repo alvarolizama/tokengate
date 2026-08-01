@@ -11,6 +11,7 @@ defmodule TokengateWeb.AlertsLiveTest do
 
   alias Tokengate.Accounts
   alias Tokengate.Budgets.Manager
+  alias Tokengate.Logs
 
   defp unique, do: System.unique_integer([:positive])
 
@@ -60,13 +61,25 @@ defmodule TokengateWeb.AlertsLiveTest do
     :ok
   end
 
+  # The budget display reads spend from Postgres (local timezone), so tests
+  # insert real request_logs instead of only bumping the ETS counters.
+  defp log_spend(member_id, cost) do
+    {:ok, _} =
+      Logs.log_request(%{
+        team_member_id: member_id,
+        model_requested: "gpt-4",
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+        provider_cost_usd: Decimal.new(cost)
+      })
+  end
+
   test "exhausted member appears in the budget section with period badge", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
 
     {member, member_user, team} = broke_member_fixture()
 
-    # $150 > $100 daily.
-    assert :ok = Manager.record_spend(member.id, Decimal.new("150.00"))
+    # $150 > $100 monthly.
+    log_spend(member.id, "150.00")
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/alerts")
@@ -81,7 +94,7 @@ defmodule TokengateWeb.AlertsLiveTest do
     %{user: admin, password: password} = register("admin")
     {member, _member_user, _team} = broke_member_fixture()
 
-    assert :ok = Manager.record_spend(member.id, Decimal.new("100.00"))
+    log_spend(member.id, "100.00")
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/alerts")
@@ -93,7 +106,7 @@ defmodule TokengateWeb.AlertsLiveTest do
     %{user: admin, password: password} = register("admin")
     {member, _member_user, _team} = broke_member_fixture()
 
-    assert :ok = Manager.record_spend(member.id, Decimal.new("10.00"))
+    log_spend(member.id, "10.00")
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/alerts")

@@ -60,6 +60,7 @@ defmodule TokengateWeb.UsersLive do
 
   defp load_users(socket) do
     search = socket.assigns[:search_query] || ""
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
     users = Accounts.list_users()
 
     filtered =
@@ -81,7 +82,7 @@ defmodule TokengateWeb.UsersLive do
       end)
 
     socket
-    |> assign(:spend_by_user, Tokengate.Budgets.spend_by_user())
+    |> assign(:spend_by_user, Tokengate.Budgets.spend_by_user(timezone))
     |> assign(:total_spend_by_user, Tokengate.Logs.total_spend_by_user())
     |> assign(:user_teams, load_user_teams(sorted))
     |> stream(:users, sorted, reset: true)
