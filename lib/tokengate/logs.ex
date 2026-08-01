@@ -63,6 +63,8 @@ defmodule Tokengate.Logs do
 
   ## Filters (all optional)
     * `:team_member_id` — exact match
+    * `:team_member_ids` — list of allowed team_member ids (OR)
+    * `:team_id` — exact match, joined through `team_members`
     * `:provider_id` — exact match
     * `:model_alias_id` — exact match
     * `:agent_type` — exact match
@@ -138,6 +140,7 @@ defmodule Tokengate.Logs do
     query
     |> maybe_where(:team_member_id, filters)
     |> maybe_where_member_ids(filters)
+    |> maybe_where_team_id(filters)
     |> maybe_where(:provider_id, filters)
     |> maybe_where(:model_alias_id, filters)
     |> maybe_where(:agent_type, filters)
@@ -149,6 +152,25 @@ defmodule Tokengate.Logs do
     |> maybe_to(filters)
     |> maybe_before(filters)
     |> maybe_after(filters)
+  end
+
+  # Filter by team_id through the team_members join. When team_id is present we
+  # INNER JOIN team_members so the WHERE references both bindings.
+  defp maybe_where_team_id(query, filters) do
+    value = Map.get(filters, :team_id) || Map.get(filters, "team_id")
+
+    case value do
+      nil ->
+        query
+
+      team_id ->
+        tm =
+          TeamMember
+          |> where([tm], tm.team_id == ^team_id)
+          |> select([tm], tm.id)
+
+        where(query, [rl], rl.team_member_id in subquery(tm))
+    end
   end
 
   defp maybe_where(query, field, filters) do

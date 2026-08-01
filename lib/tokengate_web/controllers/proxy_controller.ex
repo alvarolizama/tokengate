@@ -146,6 +146,7 @@ defmodule TokengateWeb.ProxyController do
       team_member_id: member.id,
       user_email: member.user && member.user.email,
       team_name: member.team && member.team.name,
+      team_id: member.team_id,
       model_requested: payload["model"],
       agent_type: conn.assigns.agent_type,
       client_agent: conn.assigns.client_agent,

@@ -35,6 +35,7 @@ defmodule TokengateWeb.LogsLive do
       |> assign(:api_inflight, 0)
       |> assign(:pending, [])
       |> assign(:model_options, model_options())
+      |> assign(:team_options, team_options())
       |> assign(:is_admin, user.global_role == "admin")
       |> require_admin_hook()
 
@@ -145,12 +146,21 @@ defmodule TokengateWeb.LogsLive do
     status_class = filters["status_class"]
     streaming = filters["streaming"]
     model_search = filters["model_search"]
+    team_id = filters["team_id"]
 
     agent in ["", nil, log.agent_type] and
       status_class_match?(log.status_code, status_class) and
       streaming_match?(log.streaming, streaming) and
       model_match?(log, model_search) and
+      team_id_match?(log, team_id) and
       date_range_match?(log.inserted_at, filters["from"], filters["to"])
+  end
+
+  defp team_id_match?(_log, ""), do: true
+  defp team_id_match?(_log, nil), do: true
+
+  defp team_id_match?(log, team_id) do
+    log.team_member && log.team_member.team && log.team_member.team.id == team_id
   end
 
   defp status_class_match?(_status, ""), do: true
@@ -195,11 +205,13 @@ defmodule TokengateWeb.LogsLive do
     agent = filters["agent_type"]
     streaming = filters["streaming"]
     model_search = filters["model_search"]
+    team_id = filters["team_id"]
 
     in_scope and
       agent in ["", nil, entry.agent_type] and
       streaming_match?(entry.streaming, streaming) and
       pending_model_match?(entry, model_search) and
+      team_id in ["", nil, entry.team_id] and
       date_range_match?(entry.started_at, filters["from"], filters["to"])
   end
 
@@ -213,6 +225,12 @@ defmodule TokengateWeb.LogsLive do
   defp model_options do
     Providers.list_model_aliases()
     |> Enum.map(fn alias_ -> {alias_.display_name || alias_.name, alias_.name} end)
+    |> Enum.sort_by(&elem(&1, 0))
+  end
+
+  defp team_options do
+    Accounts.list_teams()
+    |> Enum.map(fn team -> {team.name, team.id} end)
     |> Enum.sort_by(&elem(&1, 0))
   end
 
@@ -313,7 +331,8 @@ defmodule TokengateWeb.LogsLive do
       "streaming" => "",
       "from" => "",
       "to" => "",
-      "model_search" => ""
+      "model_search" => "",
+      "team_id" => ""
     }
   end
 
@@ -327,6 +346,7 @@ defmodule TokengateWeb.LogsLive do
       |> maybe_put(:status_class, form_filters["status_class"])
       |> maybe_put(:streaming, parse_bool(form_filters["streaming"]))
       |> maybe_put(:model_search, form_filters["model_search"])
+      |> maybe_put_team_id(form_filters["team_id"])
       |> maybe_put(:from, parse_from_date(form_filters["from"]))
       |> maybe_put(:to, parse_to_date(form_filters["to"]))
       |> maybe_put_scope(socket.assigns[:scope_member_ids])
@@ -344,6 +364,10 @@ defmodule TokengateWeb.LogsLive do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, _key, ""), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  defp maybe_put_team_id(map, ""), do: map
+  defp maybe_put_team_id(map, nil), do: map
+  defp maybe_put_team_id(map, team_id), do: Map.put(map, :team_id, team_id)
 
   defp maybe_put_scope(map, nil), do: map
   defp maybe_put_scope(map, ids), do: Map.put(map, :team_member_ids, ids)
@@ -628,7 +652,7 @@ defmodule TokengateWeb.LogsLive do
           for={@form}
           id="logs-filter-form"
           phx-change="filter"
-          class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3"
+          class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3"
         >
           <.input
             field={@form[:status_class]}
@@ -650,6 +674,13 @@ defmodule TokengateWeb.LogsLive do
             prompt="Todos"
             options={@model_options}
             label="Modelo"
+          />
+          <.input
+            field={@form[:team_id]}
+            type="select"
+            prompt="Todos"
+            options={@team_options}
+            label="Equipo"
           />
           <.input
             field={@form[:from]}
