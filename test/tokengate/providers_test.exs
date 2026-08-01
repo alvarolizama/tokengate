@@ -202,9 +202,13 @@ defmodule Tokengate.ProvidersTest do
     end
 
     test "list_providers/0 returns all providers" do
-      provider_fixture()
-      provider_fixture(%{name: "Anthropic", base_url: "https://api.anthropic.com"})
-      assert length(Providers.list_providers()) == 2
+      p1 = provider_fixture()
+      p2 = provider_fixture(%{name: "Anthropic", base_url: "https://api.anthropic.com"})
+      all = Providers.list_providers()
+      # Our fixtures must appear in the result (concurrent tests may add more)
+      assert Enum.any?(all, &(&1.id == p1.id))
+      assert Enum.any?(all, &(&1.id == p2.id))
+      assert length(all) >= 2
     end
 
     test "update_provider/2 updates fields" do
@@ -244,7 +248,8 @@ defmodule Tokengate.ProvidersTest do
     test "delete_provider/1 deletes the provider" do
       provider = provider_fixture()
       {:ok, _} = Providers.delete_provider(provider)
-      assert Providers.list_providers() == []
+      # Verify OUR provider is gone (other tests may have providers)
+      refute Enum.any?(Providers.list_providers(), &(&1.id == provider.id))
     end
 
     test "delete_provider/1 deletes provider with credentials (cascade)" do
@@ -253,7 +258,7 @@ defmodule Tokengate.ProvidersTest do
       credential_fixture(provider, %{name: "second"})
 
       {:ok, _} = Providers.delete_provider(provider)
-      assert Providers.list_providers() == []
+      refute Enum.any?(Providers.list_providers(), &(&1.id == provider.id))
       assert Providers.list_credentials_for_provider(provider.id) == []
     end
 
@@ -262,7 +267,7 @@ defmodule Tokengate.ProvidersTest do
       mp = model_provider_fixture(nil, provider)
 
       {:ok, _} = Providers.delete_provider(provider)
-      assert Providers.list_providers() == []
+      refute Enum.any?(Providers.list_providers(), &(&1.id == provider.id))
       assert Providers.list_credentials_for_provider(provider.id) == []
       refute Repo.get(ModelProvider, mp.id)
     end

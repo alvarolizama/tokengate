@@ -173,11 +173,31 @@ defmodule Tokengate.LogsTest do
 
   describe "list_logs/1" do
     test "returns logs ordered by inserted_at DESC" do
-      {log1, _} = log_fixture(%{inserted_at: ~U[2026-07-26 10:00:00Z]})
-      {log2, _} = log_fixture(%{inserted_at: ~U[2026-07-26 12:00:00Z]})
-      {log3, _} = log_fixture(%{inserted_at: ~U[2026-07-26 11:00:00Z]})
+      {team_member, _team} = team_member_fixture()
 
-      logs = Logs.list_logs()
+      {:ok, log1} =
+        Logs.log_request(%{
+          team_member_id: team_member.id,
+          model_requested: "gpt-4",
+          inserted_at: ~U[2026-07-26 10:00:00Z]
+        })
+
+      {:ok, log2} =
+        Logs.log_request(%{
+          team_member_id: team_member.id,
+          model_requested: "gpt-4",
+          inserted_at: ~U[2026-07-26 12:00:00Z]
+        })
+
+      {:ok, log3} =
+        Logs.log_request(%{
+          team_member_id: team_member.id,
+          model_requested: "gpt-4",
+          inserted_at: ~U[2026-07-26 11:00:00Z]
+        })
+
+      # Scope to our own team_member so concurrent test inserts don't interfere
+      logs = Logs.list_logs(%{team_member_id: team_member.id})
       ids = Enum.map(logs, & &1.id)
 
       # Most recent first
