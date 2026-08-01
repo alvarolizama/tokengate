@@ -74,7 +74,8 @@ defmodule TokengateWeb.ServicesLive do
 
     # Load monthly stats per service (team_member_id = service_id for services)
     service_ids = Enum.map(services, & &1.id)
-    thirty_days_ago = DateTime.utc_now() |> DateTime.add(-30 * 86_400, :second)
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
+    thirty_days_ago = Tokengate.Periods.period_bounds("30d", timezone).from
 
     stats =
       from(l in Tokengate.Logs.RequestLog,
