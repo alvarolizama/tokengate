@@ -11,6 +11,8 @@ defmodule Tokengate.BudgetsTest do
 
   alias Tokengate.{Accounts, Budgets}
   alias Tokengate.Budgets.Manager
+  alias Tokengate.Logs
+  alias Tokengate.Periods
 
   # ---------------------------------------------------------------------------
   # Fixtures — create FK parents via the REAL Accounts context.
@@ -56,6 +58,16 @@ defmodule Tokengate.BudgetsTest do
     pid = Process.whereis(Manager) || start_supervised!(Manager)
     _ = :sys.get_state(pid)
     :ok
+  end
+
+  defp log_request(member_id, inserted_at, cost) do
+    {:ok, _} =
+      Logs.log_request(%{
+        team_member_id: member_id,
+        model_requested: "gpt-4",
+        inserted_at: inserted_at,
+        provider_cost_usd: Decimal.new(cost)
+      })
   end
 
   describe "member_budget/1" do
@@ -220,6 +232,90 @@ defmodule Tokengate.BudgetsTest do
 
       teams = Budgets.list_team_budgets()
       refute Enum.find(teams, &(&1.team.id == team.id))
+    end
+  end
+
+  describe "timezone-aware local spend" do
+    test "spend_by_member_ids usa boundaries locales (America/Mexico_City)" do
+      member = member_fixture()
+      tz = "America/Mexico_City"
+      today_start = Periods.start_of_day_utc(tz)
+      month_start = Periods.start_of_month_utc(tz)
+
+      # Ayer local (23:00 del día anterior) → NO cuenta hoy
+      log_request(member.id, DateTime.add(today_start, -3600, :second), "1.50")
+      # Hoy local (01:00) → cuenta hoy
+      log_request(member.id, DateTime.add(today_start, 3600, :second), "2.50")
+      # Mes anterior (23:00 del último día del mes anterior) → NO cuenta mes
+      log_request(member.id, DateTime.add(month_start, -3600, :second), "8.00")
+
+      spend = Budgets.spend_by_member_ids([member.id], tz)
+
+      assert Decimal.eq?(spend.daily[member.id], Decimal.new("2.50"))
+
+      # El monthly depende de si "ayer local" cayó en el mismo mes (día 1 == borde)
+      today = Periods.local_today(tz)
+      yesterday_same_month? = Date.add(today, -1).month == today.month
+
+      expected_monthly =
+        if yesterday_same_month?,
+          do: Decimal.new("4.00"),
+          else: Decimal.new("2.50")
+
+      assert Decimal.eq?(spend.monthly[member.id], expected_monthly)
+    end
+
+    test "list_member_budgets con timezone lee Postgres local" do
+      member = member_fixture()
+      tz = "America/Mexico_City"
+      today_start = Periods.start_of_day_utc(tz)
+
+      # 23:00 del día anterior local → daily 0, monthly > 0 (mismo mes salvo día 1)
+      log_request(member.id, DateTime.add(today_start, -3600, :second), "5.00")
+
+      [budget] = Budgets.list_member_budgets(tz)
+
+      assert Decimal.eq?(budget.daily_spend_usd, Decimal.new("0"))
+
+      # Si "ayer local" es el último día del mes anterior (hoy == día 1), no cuenta en monthly
+      today = Periods.local_today(tz)
+
+      expected_monthly =
+        if Date.add(today, -1).month == today.month,
+          do: Decimal.new("5.00"),
+          else: Decimal.new("0")
+
+      assert Decimal.eq?(budget.monthly_spend_usd, expected_monthly)
+    end
+
+    test "list_member_budgets_for_user con timezone" do
+      team = team_fixture()
+      user = user_fixture()
+      member = member_fixture(team, user)
+      tz = "America/Mexico_City"
+      today_start = Periods.start_of_day_utc(tz)
+
+      log_request(member.id, DateTime.add(today_start, 3600, :second), "3.25")
+
+      [budget] = Budgets.list_member_budgets_for_user(user.id, tz)
+
+      assert Decimal.eq?(budget.daily_spend_usd, Decimal.new("3.25"))
+      assert Decimal.eq?(budget.monthly_spend_usd, Decimal.new("3.25"))
+    end
+
+    test "monthly_spend_for_member / daily_spend_for_member" do
+      member = member_fixture()
+      tz = "America/Mexico_City"
+      today_start = Periods.start_of_day_utc(tz)
+
+      log_request(member.id, DateTime.add(today_start, 3600, :second), "1.00")
+
+      assert Decimal.eq?(Budgets.monthly_spend_for_member(member.id, tz), Decimal.new("1.00"))
+      assert Decimal.eq?(Budgets.daily_spend_for_member(member.id, tz), Decimal.new("1.00"))
+    end
+
+    test "list_member_budgets(tz) con 0 miembros no revienta" do
+      assert Budgets.spend_by_member_ids([], "America/Mexico_City") == %{daily: %{}, monthly: %{}}
     end
   end
 end

@@ -16,6 +16,10 @@ defmodule Tokengate.Budgets do
   alias Tokengate.{Accounts, Repo}
   alias Tokengate.Accounts.TeamMember
   alias Tokengate.Budgets.Manager
+  alias Tokengate.Logs.RequestLog
+  alias Tokengate.Periods
+
+  @default_timezone "Etc/UTC"
 
   @type member_budget :: %{
           member: TeamMember.t(),
@@ -33,6 +37,11 @@ defmodule Tokengate.Budgets do
   @doc """
   Lists a `member_budget` map for every team member (user and team
   preloaded on `:member`), ordered by most recently created first.
+
+  `list_member_budgets/1` computes daily/monthly spend from Postgres using
+  **local calendar boundaries** for the given timezone (2 aggregate queries,
+  independent of member count). `list_member_budgets/0` keeps the legacy
+  ETS-counter behavior (UTC periods).
   """
   @spec list_member_budgets() :: [member_budget()]
   def list_member_budgets do
@@ -43,16 +52,38 @@ defmodule Tokengate.Budgets do
     |> Enum.map(&member_budget/1)
   end
 
+  @spec list_member_budgets(String.t()) :: [member_budget()]
+  def list_member_budgets(timezone) do
+    members =
+      TeamMember
+      |> preload([:user, :team])
+      |> order_by([tm], desc: tm.inserted_at)
+      |> Repo.all()
+
+    spend = spend_by_member_ids(Enum.map(members, & &1.id), timezone)
+    Enum.map(members, &member_budget(&1, spend))
+  end
+
   @doc "Lists only the member budgets that hit a daily or monthly limit."
   @spec list_exhausted_member_budgets() :: [member_budget()]
   def list_exhausted_member_budgets do
     list_member_budgets() |> Enum.filter(& &1.exhausted?)
   end
 
+  @spec list_exhausted_member_budgets(String.t()) :: [member_budget()]
+  def list_exhausted_member_budgets(timezone) do
+    list_member_budgets(timezone) |> Enum.filter(& &1.exhausted?)
+  end
+
   @doc "Number of members currently blocked by a budget limit."
   @spec count_exhausted() :: non_neg_integer()
   def count_exhausted do
     list_exhausted_member_budgets() |> length()
+  end
+
+  @spec count_exhausted(String.t()) :: non_neg_integer()
+  def count_exhausted(timezone) do
+    list_exhausted_member_budgets(timezone) |> length()
   end
 
   @typedoc """
@@ -73,10 +104,21 @@ defmodule Tokengate.Budgets do
   @doc """
   Rolls `list_member_budgets/0` up to the team level. Teams without
   members don't appear. Ordered by highest monthly spend first.
+
+  `list_team_budgets/1` uses timezone-local spend from Postgres.
   """
   @spec list_team_budgets() :: [team_budget()]
   def list_team_budgets do
-    list_member_budgets()
+    list_member_budgets() |> rollup_team_budgets()
+  end
+
+  @spec list_team_budgets(String.t()) :: [team_budget()]
+  def list_team_budgets(timezone) do
+    list_member_budgets(timezone) |> rollup_team_budgets()
+  end
+
+  defp rollup_team_budgets(member_budgets) do
+    member_budgets
     |> Enum.group_by(fn mb -> mb.member.team_id end)
     |> Enum.map(fn {_team_id, budgets} ->
       limits = Enum.map(budgets, & &1.monthly_limit_usd)
@@ -107,6 +149,8 @@ defmodule Tokengate.Budgets do
   Lists `member_budget` maps for every team membership of a single user —
   the per-user read behind the personal topbar chip (each user sees only
   their own data). Ordered by most recently created first.
+
+  `list_member_budgets_for_user/2` uses timezone-local spend from Postgres.
   """
   @spec list_member_budgets_for_user(term()) :: [member_budget()]
   def list_member_budgets_for_user(user_id) do
@@ -116,6 +160,19 @@ defmodule Tokengate.Budgets do
     |> order_by([tm], desc: tm.inserted_at)
     |> Repo.all()
     |> Enum.map(&member_budget/1)
+  end
+
+  @spec list_member_budgets_for_user(term(), String.t()) :: [member_budget()]
+  def list_member_budgets_for_user(user_id, timezone) do
+    members =
+      TeamMember
+      |> where([tm], tm.user_id == ^user_id)
+      |> preload([:user, :team])
+      |> order_by([tm], desc: tm.inserted_at)
+      |> Repo.all()
+
+    spend = spend_by_member_ids(Enum.map(members, & &1.id), timezone)
+    Enum.map(members, &member_budget(&1, spend))
   end
 
   @doc """
@@ -131,7 +188,21 @@ defmodule Tokengate.Budgets do
           }
         }
   def spend_by_user do
-    list_member_budgets()
+    list_member_budgets() |> rollup_user_spend()
+  end
+
+  @spec spend_by_user(String.t()) :: %{
+          term() => %{
+            monthly_usd: Decimal.t(),
+            exhausted?: boolean()
+          }
+        }
+  def spend_by_user(timezone) do
+    list_member_budgets(timezone) |> rollup_user_spend()
+  end
+
+  defp rollup_user_spend(member_budgets) do
+    member_budgets
     |> Enum.group_by(fn mb -> mb.member.user_id end)
     |> Map.new(fn {user_id, budgets} ->
       {user_id,
@@ -143,7 +214,7 @@ defmodule Tokengate.Budgets do
     end)
   end
 
-  @doc "Builds the budget status map for a single team member."
+  @doc "Builds the budget status map for a single team member (ETS counters)."
   @spec member_budget(TeamMember.t()) :: member_budget()
   def member_budget(%TeamMember{} = member) do
     limits = Accounts.effective_limits(member)
@@ -163,6 +234,70 @@ defmodule Tokengate.Budgets do
       monthly_exhausted?: exhausted?(monthly_pct),
       exhausted?: exhausted?(monthly_pct)
     }
+  end
+
+  # Timezone-aware variant: spend comes from precomputed Postgres maps
+  # (%{daily: %{member_id => Decimal}, monthly: %{member_id => Decimal}}).
+  defp member_budget(%TeamMember{} = member, spend) do
+    limits = Accounts.effective_limits(member)
+    daily_usd = get_in(spend, [:daily, member.id]) || Decimal.new(0)
+    monthly_usd = get_in(spend, [:monthly, member.id]) || Decimal.new(0)
+    monthly_pct = pct(monthly_usd, limits.monthly_budget_usd)
+
+    %{
+      member: member,
+      daily_spend_usd: daily_usd,
+      monthly_spend_usd: monthly_usd,
+      daily_limit_usd: nil,
+      monthly_limit_usd: limits.monthly_budget_usd,
+      daily_pct: nil,
+      monthly_pct: monthly_pct,
+      daily_exhausted?: false,
+      monthly_exhausted?: exhausted?(monthly_pct),
+      exhausted?: exhausted?(monthly_pct)
+    }
+  end
+
+  @doc """
+  Daily/monthly spend per member from Postgres using LOCAL calendar
+  boundaries for the given timezone. Two aggregate queries total
+  (independent of member count). Returns
+  `%{daily: %{member_id => Decimal}, monthly: %{member_id => Decimal}}`.
+  """
+  @spec spend_by_member_ids([term()], String.t()) :: %{
+          daily: %{term() => Decimal.t()},
+          monthly: %{term() => Decimal.t()}
+        }
+  def spend_by_member_ids(member_ids, timezone \\ @default_timezone)
+
+  def spend_by_member_ids([], _timezone), do: %{daily: %{}, monthly: %{}}
+
+  def spend_by_member_ids(member_ids, timezone) do
+    %{
+      daily: member_spend_map(member_ids, Periods.start_of_day_utc(timezone)),
+      monthly: member_spend_map(member_ids, Periods.start_of_month_utc(timezone))
+    }
+  end
+
+  @doc "Monthly spend for a single member in the local month (display)."
+  def monthly_spend_for_member(member_id, timezone \\ @default_timezone) do
+    member_spend_map([member_id], Periods.start_of_month_utc(timezone))
+    |> Map.get(member_id, Decimal.new(0))
+  end
+
+  @doc "Daily spend for a single member in the local day (display)."
+  def daily_spend_for_member(member_id, timezone \\ @default_timezone) do
+    member_spend_map([member_id], Periods.start_of_day_utc(timezone))
+    |> Map.get(member_id, Decimal.new(0))
+  end
+
+  defp member_spend_map(member_ids, from) do
+    RequestLog
+    |> where([rl], rl.team_member_id in ^member_ids and rl.inserted_at >= ^from)
+    |> group_by([rl], rl.team_member_id)
+    |> select([rl], {rl.team_member_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
+    |> Repo.all()
+    |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
   end
 
   # Percentage of the limit consumed. `nil` limit = unlimited (no bar).
