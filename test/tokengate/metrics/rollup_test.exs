@@ -151,7 +151,7 @@ defmodule Tokengate.Metrics.RollupTest do
       log_request(tm.id, DateTime.add(now, -10800, :second))
       log_request(tm.id, DateTime.add(now, -14400, :second))
 
-      series = Rollup.hourly_series(nil, 72)
+      series = Rollup.hourly_series(nil, from: hours_ago(72))
 
       # Expect 4 buckets, one per insert.
       assert length(series) == 4
@@ -175,7 +175,7 @@ defmodule Tokengate.Metrics.RollupTest do
         cost_usd: Decimal.new("2.500000")
       })
 
-      series = Rollup.hourly_series(nil, 72)
+      series = Rollup.hourly_series(nil, from: hours_ago(72))
 
       # Series is ordered ascending; latest bucket aggregates both inserts.
       bucket = Enum.at(series, -1)
@@ -193,8 +193,8 @@ defmodule Tokengate.Metrics.RollupTest do
       log_request(tm1.id, DateTime.add(DateTime.utc_now(), -1800, :second))
       log_request(tm2.id, DateTime.add(DateTime.utc_now(), -1800, :second))
 
-      series_team1 = Rollup.hourly_series(team1.id, 72)
-      series_team2 = Rollup.hourly_series(team2.id, 72)
+      series_team1 = Rollup.hourly_series(team1.id, from: hours_ago(72))
+      series_team2 = Rollup.hourly_series(team2.id, from: hours_ago(72))
 
       count1 = Enum.map(series_team1, & &1.request_count) |> Enum.sum()
       count2 = Enum.map(series_team2, & &1.request_count) |> Enum.sum()
@@ -210,7 +210,7 @@ defmodule Tokengate.Metrics.RollupTest do
       log_request(tm1.id, DateTime.add(DateTime.utc_now(), -1800, :second))
       log_request(tm2.id, DateTime.add(DateTime.utc_now(), -2700, :second))
 
-      series = Rollup.hourly_series(nil, 72)
+      series = Rollup.hourly_series(nil, from: hours_ago(72))
       total = Enum.map(series, & &1.request_count) |> Enum.sum()
       assert total == 2
     end
@@ -235,11 +235,43 @@ defmodule Tokengate.Metrics.RollupTest do
       # both are in the past relative to now. So we instead verify the
       # function returns *something* for a large window and the count matches
       # the recent bucket we just inserted.
-      series = Rollup.hourly_series(nil, 24 * 365)
+      series = Rollup.hourly_series(nil, from: hours_ago(24 * 365))
       total = Enum.map(series, & &1.request_count) |> Enum.sum()
       # Both logs are within a year — should be included.
       assert total >= 2
     end
+
+    test "buckets by local hour when timezone is given" do
+      {tm, _team} = team_member_fixture()
+
+      # 2026-07-31 05:30Z = 2026-07-30 23:30 en America/Mexico_City (UTC-6)
+      log_request(tm.id, ~U[2026-07-31 05:30:00Z])
+      # 2026-07-31 07:30Z = 2026-07-31 01:30 en CDMX
+      log_request(tm.id, ~U[2026-07-31 07:30:00Z])
+
+      series =
+        Rollup.hourly_series(nil,
+          from: ~U[2026-07-31 00:00:00Z],
+          to: ~U[2026-07-31 23:59:59Z],
+          timezone: "America/Mexico_City"
+        )
+
+      # Dos buckets locales distintos: 23:00 (del 30 local) y 01:00 (del 31 local)
+      assert length(series) == 2
+
+      local_hours =
+        Enum.map(series, fn row ->
+          DateTime.shift_zone!(row.hour, "America/Mexico_City") |> Map.fetch!(:hour)
+        end)
+
+      assert Enum.sort(local_hours) == [1, 23]
+    end
+  end
+
+  defp hours_ago(hours) do
+    DateTime.utc_now()
+    |> DateTime.add(-hours * 3600, :second)
+    |> DateTime.truncate(:second)
   end
 
   # ---------------------------------------------------------------------

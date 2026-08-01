@@ -39,40 +39,68 @@ defmodule Tokengate.Metrics.Rollup do
   Each row is:
 
       %{
-        hour: DateTime,          # truncated to the hour (UTC)
+        hour: DateTime,          # truncated to the hour (in the requested timezone)
         request_count: integer,
         cost_usd: Decimal
       }
 
-  Buckets `inserted_at` using Postgres `date_trunc("hour", inserted_at)`.
-  `nil` `team_id` is org-wide (no team join). When `team_id` is given,
-  filters to logs whose team_member belongs to that team.
+  Buckets `inserted_at` using Postgres `date_trunc("hour", inserted_at
+  AT TIME ZONE ?) AT TIME ZONE ?` so the series is bucketed by **local
+  hour** for the requested timezone (UTC by default). `nil` `team_id` is
+  org-wide (no team join). When `team_id` is given, filters to logs whose
+  team_member belongs to that team.
 
-  `hours` defaults to 24 and is clamped to the last `hours` from now.
+  ## Options
+
+    * `:from` — `inserted_at >= from` (DateTime); defaults to 24h ago
+    * `:to`   — `inserted_at <= to` (DateTime)
+    * `:timezone` — IANA zone for local-hour bucketing; default `"Etc/UTC"`
   """
-  @spec hourly_series(String.t() | nil, pos_integer()) :: [map()]
-  def hourly_series(team_id \\ nil, hours \\ 24)
+  @spec hourly_series(String.t() | nil, keyword()) :: [map()]
+  def hourly_series(team_id \\ nil, opts \\ []) when is_list(opts) do
+    from = Keyword.get(opts, :from) || hours_ago_default()
+    to = Keyword.get(opts, :to)
+    timezone = Keyword.get(opts, :timezone, "Etc/UTC")
 
-  def hourly_series(team_id, hours) when is_integer(hours) and hours > 0 do
-    from_ts =
-      DateTime.utc_now()
-      |> DateTime.add(-hours * 3600, :second)
-      |> DateTime.truncate(:second)
+    # Materialize the local-hour bucket in a subquery first: Postgres rejects
+    # `GROUP BY date_trunc(... AT TIME ZONE $1)` + `SELECT date_trunc(... AT
+    # TIME ZONE $2)` as "column must appear in GROUP BY" because the two
+    # parametrized expressions are formally different. Grouping the outer
+    # query by the subquery's materialized column sidesteps that.
+    bucketed =
+      RequestLog
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> maybe_join_team(team_id)
+      |> select([rl], %{
+        bucket:
+          fragment(
+            "date_trunc('hour', ? AT TIME ZONE ?) AT TIME ZONE ?",
+            rl.inserted_at,
+            ^timezone,
+            ^timezone
+          ),
+        id: rl.id,
+        provider_cost_usd: rl.provider_cost_usd,
+        prompt_tokens: rl.prompt_tokens,
+        completion_tokens: rl.completion_tokens,
+        latency_ms: rl.latency_ms
+      })
+      |> subquery()
 
     query =
-      RequestLog
-      |> where([rl], rl.inserted_at >= ^from_ts)
-      |> maybe_join_team(team_id)
-      |> group_by([rl], fragment("date_trunc('hour', ?)", rl.inserted_at))
-      |> order_by([rl], fragment("date_trunc('hour', ?)", rl.inserted_at))
-      |> select([rl], %{
-        hour: fragment("date_trunc('hour', ?)", rl.inserted_at),
-        request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
-        prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
-        completion_tokens: coalesce(sum(rl.completion_tokens), 0),
-        total_latency_ms: coalesce(sum(rl.latency_ms), 0)
-      })
+      from(b in bucketed,
+        group_by: b.bucket,
+        order_by: b.bucket,
+        select: %{
+          hour: b.bucket,
+          request_count: count(b.id),
+          cost_usd: fragment("COALESCE(SUM(?), 0)", b.provider_cost_usd),
+          prompt_tokens: coalesce(sum(b.prompt_tokens), 0),
+          completion_tokens: coalesce(sum(b.completion_tokens), 0),
+          total_latency_ms: coalesce(sum(b.latency_ms), 0)
+        }
+      )
 
     Repo.all(query)
     |> Enum.map(fn row ->
@@ -85,6 +113,12 @@ defmodule Tokengate.Metrics.Rollup do
         total_latency_ms: row.total_latency_ms
       }
     end)
+  end
+
+  defp hours_ago_default do
+    DateTime.utc_now()
+    |> DateTime.add(-24 * 3600, :second)
+    |> DateTime.truncate(:second)
   end
 
   # -----------------------------------------------------------------------
