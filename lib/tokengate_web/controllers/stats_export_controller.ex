@@ -15,23 +15,19 @@ defmodule TokengateWeb.StatsExportController do
 
   alias Tokengate.Accounts
   alias Tokengate.Metrics.Rollup
-
-  @periods %{"7d" => 168, "30d" => 720, "90d" => 2160}
+  alias Tokengate.Periods
 
   def export(conn, params) do
     user = conn.assigns[:current_user]
+    timezone = (user && user.timezone) || "Etc/UTC"
 
     period = parse_period(params["period"])
-    hours = Map.fetch!(@periods, period)
-
-    from =
-      DateTime.utc_now() |> DateTime.add(-hours * 3600, :second) |> DateTime.truncate(:second)
-
-    opts = [from: from]
+    %{from: from, to: to} = Periods.period_bounds(period, timezone)
+    opts = [from: from, to: to]
 
     type = params["type"] || "models"
 
-    case build_csv(user, type, params, opts) do
+    case build_csv(user, type, params, opts, timezone) do
       {:ok, {filename, csv_content}} ->
         conn
         |> put_resp_content_type("text/csv", "utf-8")
@@ -45,18 +41,18 @@ defmodule TokengateWeb.StatsExportController do
     end
   end
 
-  defp build_csv(user, "teams", params, opts) do
+  defp build_csv(user, "teams", params, opts, timezone) do
     team_id = params["team_id"]
 
     if team_id && not team_export_allowed?(user, team_id) do
       {:error, :forbidden}
     else
-      {:ok, build_teams_csv(user, team_id, opts)}
+      {:ok, build_teams_csv(user, team_id, timezone, opts)}
     end
   end
 
-  defp build_csv(user, _type, params, opts) do
-    {:ok, build_models_csv(user, params["model_id"], opts)}
+  defp build_csv(user, _type, params, opts, timezone) do
+    {:ok, build_models_csv(user, params["model_id"], timezone, opts)}
   end
 
   # A team drill-down exposes every member's email and consumption, so only
@@ -66,7 +62,7 @@ defmodule TokengateWeb.StatsExportController do
 
   ## Models CSV -----------------------------------------------------------
 
-  defp build_models_csv(user, model_id, opts) do
+  defp build_models_csv(user, model_id, timezone, opts) do
     # Scoping: non-admin users only export consumption of their own scope
     # (managed teams for managers, own memberships for regular users).
     opts = Keyword.put(opts, :member_ids, Accounts.scope_member_ids(user))
@@ -93,12 +89,12 @@ defmodule TokengateWeb.StatsExportController do
       |> Enum.join("\n")
 
     suffix = if model_id, do: "_modelo", else: ""
-    {"estadisticas_modelos#{suffix}_#{Date.utc_today()}.csv", csv}
+    {"estadisticas_modelos#{suffix}_#{Periods.local_today(timezone)}.csv", csv}
   end
 
   ## Teams CSV ------------------------------------------------------------
 
-  defp build_teams_csv(user, team_id, opts) do
+  defp build_teams_csv(user, team_id, timezone, opts) do
     rows =
       if team_id do
         # Drill-down: members of this team
@@ -121,7 +117,7 @@ defmodule TokengateWeb.StatsExportController do
       |> Enum.join("\n")
 
     suffix = if team_id, do: "_equipo", else: ""
-    {"estadisticas_equipos#{suffix}_#{Date.utc_today()}.csv", csv}
+    {"estadisticas_equipos#{suffix}_#{Periods.local_today(timezone)}.csv", csv}
   end
 
   ## Row serialization ----------------------------------------------------

@@ -23,9 +23,8 @@ defmodule TokengateWeb.StatsLive do
   alias Tokengate.Accounts
   alias Tokengate.Logs
   alias Tokengate.Metrics.Rollup
+  alias Tokengate.Periods
   alias Tokengate.Providers
-
-  @periods %{"today" => 24, "7d" => 168, "30d" => 720, "90d" => 2160}
 
   @impl true
   def mount(_params, _session, socket) do
@@ -123,9 +122,9 @@ defmodule TokengateWeb.StatsLive do
 
   defp load_data(socket, user) do
     period = socket.assigns[:period]
-    hours = Map.fetch!(@periods, period)
-    from = hours_ago_dt(hours)
-    opts = [from: from]
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
+    %{from: from, to: to} = Periods.period_bounds(period, timezone)
+    opts = [from: from, to: to, timezone: timezone]
     action = socket.assigns.live_action
 
     socket
@@ -362,12 +361,6 @@ defmodule TokengateWeb.StatsLive do
   defp parse_period(nil), do: "today"
   defp parse_period(period) when period in ~w(today 7d 30d 90d), do: period
   defp parse_period(_), do: "today"
-
-  defp hours_ago_dt(hours) do
-    DateTime.utc_now()
-    |> DateTime.add(-hours * 3600, :second)
-    |> DateTime.truncate(:second)
-  end
 
   defp empty_metrics do
     %{

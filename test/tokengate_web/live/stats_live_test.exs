@@ -3,7 +3,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
   import Phoenix.LiveViewTest
 
-  alias Tokengate.{Accounts, Logs, Providers}
+  alias Tokengate.{Accounts, Logs, Periods, Providers}
 
   defp unique, do: System.unique_integer([:positive])
 
@@ -53,6 +53,8 @@ defmodule TokengateWeb.StatsLiveTest do
       })
 
     if cost = Map.get(opts, :cost) do
+      inserted_at = Map.get(opts, :inserted_at) || DateTime.utc_now() |> DateTime.truncate(:second)
+
       {:ok, _log} =
         Logs.log_request(%{
           team_member_id: member.id,
@@ -66,7 +68,8 @@ defmodule TokengateWeb.StatsLiveTest do
           completion_tokens: 50,
           provider_cost_usd: cost,
           latency_ms: 42,
-          streaming: false
+          streaming: false,
+          inserted_at: inserted_at
         })
     end
 
@@ -267,5 +270,46 @@ defmodule TokengateWeb.StatsLiveTest do
   test "unauthenticated CSV export redirects to login", %{conn: conn} do
     conn = get(conn, "/dashboard/stats/export?type=models&period=7d")
     assert redirected_to(conn, 302) =~ "/login"
+  end
+
+  test "hour distribution uses the user's local timezone", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    {:ok, admin} = Accounts.update_user_timezone(admin, "America/Mexico_City")
+
+    today_start = Periods.start_of_day_utc("America/Mexico_City")
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    candidate = DateTime.add(today_start, 3600, :second)
+
+    inserted_at =
+      if DateTime.compare(candidate, now) == :lt,
+        do: candidate,
+        else: DateTime.add(now, -60, :second)
+
+    team_with_log(%{cost: "0.005", inserted_at: inserted_at})
+
+    conn = login(conn, admin, password)
+    {:ok, view, html} = live(conn, ~p"/dashboard/stats")
+
+    # El log cayó en una hora local (01:00 local si candidate < now) y la
+    # distribución renderiza barras (max > 0)
+    assert html =~ "Uso por hora del día"
+    assert html =~ "hora local"
+    refute html =~ "Sin datos en este período."
+    # La barra de la hora local 1 (01:00) es la máxima
+    assert has_element?(view, "#kpi-requests")
+  end
+
+  test "hour distribution excludes the previous local day", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    {:ok, admin} = Accounts.update_user_timezone(admin, "America/Mexico_City")
+
+    # 23:00 del día anterior local → fuera de "Hoy" local
+    today_start = Periods.start_of_day_utc("America/Mexico_City")
+    team_with_log(%{cost: "0.005", inserted_at: DateTime.add(today_start, -3600, :second)})
+
+    conn = login(conn, admin, password)
+    {:ok, _view, html} = live(conn, ~p"/dashboard/stats")
+
+    assert html =~ "Sin datos en este período."
   end
 end
