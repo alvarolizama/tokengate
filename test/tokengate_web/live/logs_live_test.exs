@@ -70,7 +70,8 @@ defmodule TokengateWeb.LogsLiveTest do
         effort: Keyword.get(opts, :effort, "high"),
         api_key_prefix: "sk-logs-",
         credential_name: "Staging",
-        inserted_at: Keyword.get(opts, :inserted_at, DateTime.utc_now() |> DateTime.truncate(:second))
+        inserted_at:
+          Keyword.get(opts, :inserted_at, DateTime.utc_now() |> DateTime.truncate(:second))
       })
 
     %{team: team, owner: owner, member: member, log: log, model_alias: model_alias}

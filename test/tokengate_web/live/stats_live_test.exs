@@ -53,7 +53,8 @@ defmodule TokengateWeb.StatsLiveTest do
       })
 
     if cost = Map.get(opts, :cost) do
-      inserted_at = Map.get(opts, :inserted_at) || DateTime.utc_now() |> DateTime.truncate(:second)
+      inserted_at =
+        Map.get(opts, :inserted_at) || DateTime.utc_now() |> DateTime.truncate(:second)
 
       {:ok, _log} =
         Logs.log_request(%{

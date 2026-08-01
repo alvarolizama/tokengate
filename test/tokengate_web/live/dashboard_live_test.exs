@@ -61,7 +61,8 @@ defmodule TokengateWeb.DashboardLiveTest do
           base_url: "http://localhost:1"
         })
 
-      inserted_at = Map.get(opts, :inserted_at) || DateTime.utc_now() |> DateTime.truncate(:second)
+      inserted_at =
+        Map.get(opts, :inserted_at) || DateTime.utc_now() |> DateTime.truncate(:second)
 
       {:ok, _log} =
         Logs.log_request(%{
@@ -255,7 +256,12 @@ defmodule TokengateWeb.DashboardLiveTest do
 
     # 23:00 del día anterior local (UTC-6) → NO cuenta en "Hoy" local
     today_start = Periods.start_of_day_utc("America/Mexico_City")
-    team_with_log(%{cost: "0.005", user: admin, inserted_at: DateTime.add(today_start, -3600, :second)})
+
+    team_with_log(%{
+      cost: "0.005",
+      user: admin,
+      inserted_at: DateTime.add(today_start, -3600, :second)
+    })
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")

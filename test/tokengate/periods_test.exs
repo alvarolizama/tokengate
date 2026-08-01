@@ -31,6 +31,7 @@ defmodule Tokengate.PeriodsTest do
 
   test "start_of_n_days_ago_utc(0, tz) == start_of_day_utc(tz)" do
     assert Periods.start_of_n_days_ago_utc(0, "Etc/UTC") == Periods.start_of_day_utc("Etc/UTC")
+
     assert Periods.start_of_n_days_ago_utc(0, "America/Mexico_City") ==
              Periods.start_of_day_utc("America/Mexico_City")
   end

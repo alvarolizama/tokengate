@@ -214,7 +214,12 @@ defmodule TokengateWeb.LogsLive do
       streaming_match?(entry.streaming, streaming) and
       pending_model_match?(entry, model_search) and
       team_id in ["", nil, entry.team_id] and
-      date_range_match?(entry.started_at, filters["from"], filters["to"], assigns[:timezone] || "Etc/UTC")
+      date_range_match?(
+        entry.started_at,
+        filters["from"],
+        filters["to"],
+        assigns[:timezone] || "Etc/UTC"
+      )
   end
 
   defp pending_model_match?(_entry, ""), do: true
