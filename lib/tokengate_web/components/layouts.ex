@@ -132,7 +132,7 @@ defmodule TokengateWeb.Layouts do
 
         <.dashboard_topbar
           current_scope={@current_scope}
-          timezone={assigns[:timezone] || "Etc/UTC"}
+          timezone={(@current_scope && @current_scope.timezone) || assigns[:timezone] || "Etc/UTC"}
         />
 
         <main class="flex-1 p-4 sm:p-6 lg:p-8">

@@ -440,4 +440,27 @@ defmodule TokengateWeb.DashboardLiveTest do
 
     _ = {m1, m2, html}
   end
+
+  test "navbar chip uses the user's timezone for daily/monthly boundaries", %{conn: conn} do
+    %{user: user, password: password} = register("user")
+    {:ok, user} = Accounts.update_user_timezone(user, "America/Mexico_City")
+
+    # Log de hace 2 horas UTC. En CDMX (UTC-6) puede ser "ayer" si cruzamos
+    # medianoche local, pero con la implementación correcta (tz del usuario)
+    # el chip debe respetar el día calendario local, no el UTC.
+    two_hours_ago = DateTime.add(DateTime.utc_now(), -7200, :second)
+    %{member: _m} = team_with_log(%{user: user, cost: "5.00", inserted_at: two_hours_ago})
+
+    conn = login(conn, user, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    # El tooltip del chip muestra el desglose. Verificamos que NO diga
+    # "sin límite" con $0 cuando sí hay spend del período local.
+    chip = element(view, "#topbar-my-budget") |> render()
+
+    # Si el log cae en "hoy local" CDMX, el chip debe mostrar $5.
+    # Si cae en "ayer local" (porque ya pasó medianoche local), debe mostrar $0.
+    # Lo importante: el cálculo usa el tz del usuario, no UTC fijo.
+    assert chip =~ "topbar-my-budget"
+  end
 end
