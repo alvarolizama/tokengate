@@ -8,9 +8,9 @@
 
 - **Elixir + Phoenix LiveView v1.8** — UI en tiempo real, sin SPA
 - **PostgreSQL** — persistencia (Ecto)
-- **Oban** — jobs asíncronos (logs, webhooks OTLP)
-- **BEAM** — estado efímero (`:atomics`, `:gen_statem`, ETS)
-- **Tailwind CSS v4** + DaisyUI — estilos
+- **Oban** — jobs asíncronos (logs, webhooks OTLP, sync de budgets)
+- **BEAM** — estado efímero (`:gen_statem`, ETS)
+- **Tailwind CSS v4** — estilos
 
 ## Features
 
@@ -24,212 +24,81 @@
 ### Enrutamiento
 
 - **Prioridad + sticky routing** — la misma API key se pega al mismo proveedor (preserva prompt caches) con TTL de 15 min
-- **Circuit breaker** por credencial — abre tras 15 fallos consecutivos (configurable), semi-abre en 30s (20s si fue rate limit)
-- **Fallback** automático ante errores (hasta 3 intentos)
-- **Fallback por saturación** — si un proveedor está saturado (concurrencia o RPM), intenta el siguiente automáticamente
+- **Circuit breaker** por credencial (`:gen_statem`) — abre tras 15 fallos (configurable), cooldown 30s (20s si fue rate limit)
+- **Fallback** automático ante errores 5xx/timeout/429
+- **Fallback por saturación** — si la credencial está en su límite de concurrencia o RPM, se rebota a la siguiente en la cola de prioridad sin error al cliente
+- **Errores de auth** (401/402/403) — desactivan la credencial permanentemente (status → `error`) y hacen fallback
 
-### Fallback por saturación de proveedor
-
-TokenGate no solo hace fallback ante errores — también lo hace **antes de enviar el request** cuando un proveedor está saturado:
-
-1. **Enrutamiento por prioridad** — los candidatos se ordenan por `priority ASC`. El primer disponible gana.
-2. **Sticky routing** — la misma API key se pega al mismo proveedor (preserva prompt caches) con TTL de 15 min.
-3. **Saturación de concurrencia** — si al intentar adquirir la credencial esta ya está en su límite de `max_concurrent`, se excluye y se intenta la siguiente credencial en la cola de prioridad. **No se devuelve error al cliente** — se rebotea al siguiente proveedor automáticamente.
-4. **Saturación de RPM** — si la credencial alcanzó su `max_rpm`, igual: se excluye y se prueba la siguiente.
-5. **Sin más candidatos** — si todas las credenciales están saturadas o sus breakers abiertos, se devuelve `503 provider_concurrency_exceeded` (o `no_available_provider` si no había exclusión).
-
-**Flujo completo de un request:**
-
-```
-Cliente → Auth → Budget check → Router (priority + sticky + breaker filter)
-  → Acquire limits (concurrency + RPM del proveedor)
-    → Si saturado: excluir credencial → re-router al siguiente en cola
-    → Si disponible: enviar al proveedor
-      → Éxito: registrar success, devolver respuesta
-      → Error 5xx/timeout: breaker cuenta fallo → fallback al siguiente (hasta 3 intentos)
-      → Error 429: breaker cuenta con cooldown corto (20s) → fallback al siguiente
-      → Error 401/402/403: desactivar credencial permanentemente → fallback al siguiente
-      → Error 4xx (otros): pasar directo al cliente (no es culpa del proveedor)
-```
-
-### Circuit breaker
-
-Cada credencial de proveedor tiene su propio circuit breaker (`:gen_statem`):
-
-| Estado | Comportamiento |
-|--------|---------------|
-| `closed` | Requests pasan normal. Cada fallo incrementa el contador. |
-| `open` | Requests rechazados inmediatamente. Tras `cooldown_ms` → `half_open`. |
-| `half_open` | Un probe request pasa. Si éxito → `closed`. Si fallo → `open` de nuevo. |
-
-**Reglas de conteo:**
-
-- Solo `:server_error`, `:timeout` y `:rate_limited` cuentan hacia el threshold
-- `:client_error` (4xx) **nunca cuenta** — es culpa del caller, no del proveedor
-- `:auth_error` no cuenta — desactiva la credencial permanentemente en la DB
-- Si el breaker abre por `:rate_limited`, usa cooldown corto (20s) porque los 429 se recuperan rápido
-- Si abre por `:server_error` o `:timeout`, usa cooldown normal (30s)
-
-### Manejo de errores
-
-TokenGate clasifica cada error del proveedor y decide si reintentar, desactivar la credencial o pasar el error al cliente.
-
-**Clasificación de errores del proveedor:**
-
-| HTTP del proveedor | Razón | ¿Cuenta para breaker? | ¿Fallback? | ¿Desactiva credencial? |
-|----|----|----|----|----|
-| 401 / 402 / 403 | `auth_error` | ❌ | ✅ | ✅ Sí (status → `error`) |
-| 429 / 529 | `rate_limited` | ✅ (cooldown 20s) | ✅ | ❌ |
-| 5xx | `server_error` | ✅ (cooldown 30s) | ✅ | ❌ |
-| Timeout | `timeout` | ✅ (cooldown 30s) | ✅ | ❌ |
-| Otros 4xx | `client_error` | ❌ | ❌ Pasa directo | ❌ |
-
-**Estados de credencial del proveedor:**
-
-| Estado | Significado | ¿Rutiable? |
-|--------|-------------|------------|
-| `active` | Funcionando | ✅ |
-| `disabled` | Desactivada manualmente por admin | ❌ |
-| `error` | Auto-desactivada tras 401/402/403 del proveedor | ❌ (requiere reactivación manual) |
-
-**Errores que se le entregan al cliente:**
+### Errores al cliente
 
 | HTTP | Code | Cuándo |
 |------|------|--------|
 | 400 | `invalid_request` | Payload malformado |
-| 402 | `budget_exceeded` | El gasto mensual del usuario supera su budget |
+| 402 | `budget_exceeded` | Gasto mensual del usuario supera su budget |
 | 404 | `model_not_found` | Modelo no existe o sin acceso |
-| 429 | `rate_limited` | RPM del usuario excedido |
-| 429 | `concurrency_exceeded` | Concurrencia del usuario excedida |
-| 429 | `provider_rate_limited` | RPM de la credencial del proveedor excedido |
-| 429 | `provider_concurrency_exceeded` | Concurrencia del proveedor excedida |
-| 4xx | `upstream_client_error` | El proveedor rechazó el payload (4xx) — se pasa directo |
-| 502 | `upstream_error` | El proveedor falló (5xx, timeout) tras agotar fallback |
-| 503 | `no_providers` | Modelo sin providers configurados |
-| 503 | `no_available_provider` | Todos los providers filtrados o breakers abiertos |
-| 503 | `all_providers_down` | Todos los providers fallaron en fallback |
+| 429 | `rate_limited` / `concurrency_exceeded` | Límites del usuario excedidos |
+| 429 | `provider_rate_limited` / `provider_concurrency_exceeded` | Límites de la credencial excedidos |
+| 4xx | `upstream_client_error` | El proveedor rechazó el payload — se pasa directo |
+| 502 | `upstream_error` | El proveedor falló tras agotar fallback |
+| 503 | `no_providers` / `no_available_provider` / `all_providers_down` | Sin candidatos disponibles |
 | 500 | `internal_error` | Error no clasificado |
 
 ### Control de costos
 
-Cada request registra el **costo reportado por el proveedor** (`provider_cost_usd`). Se confía en lo que el upstream reporta en su respuesta (campo `usage.cost`). Soporta proveedores `pay_per_token` (costo por uso) e `included` (suscripción/RPM — costo es $0). El campo `billing_mode` en cada credencial indica al sistema cómo interpretar el costo.
+Cada request registra el **costo reportado por el proveedor** (`provider_cost_usd`). Se confía en lo que el upstream reporta en su respuesta. Soporta `billing_mode` `pay_per_token` (costo por uso) e `included` (suscripción — costo $0).
 
 ### Credential Pinning (Exclusive Scope)
 
-Un credential de proveedor puede ser **exclusivo** para un miembro o equipo específico:
-
-- **Global** — disponible para todos los miembros con acceso al modelo
-- **Exclusivo para miembro** — solo ese miembro usa esa API key para ese modelo
-- **Exclusivo para equipo** — solo los miembros de ese equipo usan esa API key para ese modelo
-
-Los credentials exclusivos tienen **prioridad máxima** (priority -1). Si fallan, el routing cae al pool global automáticamente. Un credential solo puede estar asignado a una vez (constraint de exclusividad en DB).
-
-Configuración desde **Dashboard > Models**: al asignar un proveedor a un modelo, se selecciona el scope (Global / Equipo / Usuario) y el destinatario. En **Dashboard > Teams > Members**, cada miembro muestra sus keys exclusivas.
+Un credential puede ser **global**, **exclusivo para miembro** o **exclusivo para equipo**. Los exclusivos tienen prioridad máxima (priority -1); si fallan, el routing cae al pool global. Constraint de exclusividad en DB. Se configura en **Dashboard > Models** y se ve por miembro en **Teams > Members**.
 
 ### Multi-tenant
 
 - **Equipos → Miembros → API keys** con roles `admin` y `user`
 - **Servicios** — API keys sin usuario asociado, con límites directos (budget, concurrencia, RPM)
 - **Alias de modelos** — mapea `gpt-4` → proveedor+modelo real, con grants por equipo, miembro y servicio
-- **Budget mensual por usuario** — cada equipo define un tope mensual por persona; los miembros pueden tener extra budget
-- **Límites por usuario** — concurrencia y RPM configurables por equipo + extra por miembro
-- **Bloqueo automático** al superar límites (402 sin tocar al proveedor)
-- **Acceso a modelos extra** — un miembro puede tener grants a modelos fuera de su equipo (solo acceso, sin budget separado)
+- **Budget mensual por usuario** — el equipo define tope por persona; miembros pueden tener extra budget/concurrencia/RPM (efectivo = team default + extra)
+- **Bloqueo automático** al superar límites (402/429 sin tocar al proveedor)
 
 ### Dashboard
 
-- **KPIs** — requests, costo real, tokens in/out, TPS (con selector de período: Hoy, 7d, 30d, 90d)
-- **Gráficas horarias** — costo, requests, tokens in/out (stacked), TPS por hora
+- **KPIs** — requests, costo, tokens in/out, TPS (períodos: Hoy, 7d, 30d, 90d)
+- **Gráficas horarias** — costo, requests, tokens (stacked), TPS
 - **Desglose** por modelo, API key y equipo
-- **Patrones de uso** — distribución por hora del día, horas pico, minutos pico, pico de concurrencia
 - **Top 5** equipos y miembros por consumo
+- **Logs en vivo** — requests en vuelo, filtros por modelo/equipo/proveedor/estado
 
 ### Estadísticas (`/dashboard/stats`)
 
-- **Períodos** — Hoy, 7d, 30d, 90d
-- **Vistas** — Resumen, Modelos (drill-down por modelo), Equipos (drill-down por equipo)
-- **Rankings** — proveedores (tiers S/A/B/C/D por confiabilidad y latencia), modelos, usuarios
-- **Patrones de uso** — distribución por hora, horas/minutos pico, concurrencia
-- **Export CSV** para modelos y equipos
+- Vistas: Resumen, Modelos, Equipos, Servicios, drill-down por miembro
+- Rankings de proveedores, modelos, usuarios
+- **Export CSV** (`/dashboard/stats/export`)
 - **Scoping** — admin ve todo, usuarios ven solo su consumo
 
-### Logs en vivo
+### Créditos, Alertas y Settings
 
-- Requests en vuelo con estado (Pending → Complete/Error)
-- Filtros por modelo, equipo, proveedor, estado HTTP
-- Columnas agrupadas: Identidad, Request, Rendimiento, Costos
-
-### Créditos
-
-- Barras de progreso por miembro mostrando consumo vs budget mensual
-- Estado por miembro: dentro del presupuesto, cerca del límite, excedido
-
-### Alertas
-
-- Credenciales en estado `error` (auto-desactivadas por 401/402/403)
-- Breakers abiertos con tiempo restante de cooldown
-- Miembros sin API key activa
-
-### Configuración (`/dashboard/settings`)
-
-Zona de peligro con acciones destructivas:
-- **Eliminar historial de logs** — trunca la tabla `request_logs`
-- **Reiniciar sticky sessions** — borra todas las asignaciones sticky de API key → proveedor
-- **Reiniciar extras de miembros** — elimina todos los `extra_monthly_budget_usd`, `extra_concurrency` y `extra_rpm` de todos los miembros (el gasto acumulado NO se resetea)
+- **Créditos** — consumo vs budget mensual por miembro
+- **Alertas** — credenciales en `error`, breakers abiertos, miembros sin API key
+- **Settings** (zona de peligro) — truncar `request_logs`, reiniciar sticky sessions, reiniciar extras de miembros
 
 ### Autenticación
 
-- Password (Bcrypt) + Google OAuth opcional
+- Password (Bcrypt) + Google OAuth opcional (con allowlist de dominios)
 - Impersonación de usuarios (admin) con banner persistente y audit log
-
-### Control de acceso
-
-| Ruta | Admin | User |
-|------|-------|------|
-| Dashboard | ✅ (personal) | ✅ (personal) |
-| Stats, Logs | ✅ (org) | ✅ (suyo) |
-| Equipos y miembros | ✅ | ❌ |
-| Servicios | ✅ | ❌ |
-| Proveedores, Modelos | ✅ | ❌ |
-| Usuarios, API Keys | ✅ | ❌ |
-| Créditos, Alertas, Configuración | ✅ | ❌ |
 
 ### Parámetros configurables
 
-TokenGate tiene 3 niveles de configuración:
-
-**1. Global (env vars)** — aplica a toda la instancia, se setea antes de arrancar:
+**1. Global (env vars):**
 
 | Variable | Descripción | Default |
 |----------|-------------|---------|
-| `CIRCUIT_BREAKER_THRESHOLD` | Fallos consecutivos para abrir el breaker | `15` |
-| `CIRCUIT_BREAKER_COOLDOWN_MS` | Tiempo en `open` antes de semi-abrir (ms) | `30000` |
-| `CIRCUIT_BREAKER_RATE_LIMIT_COOLDOWN_MS` | Cooldown corto si el fallo fue 429/529 (ms) | `20000` |
-| `FIRST_TOKEN_TIMEOUT_MS` | Timeout al primer token del proveedor antes de fallback (ms) | `15000` |
+| `CIRCUIT_BREAKER_THRESHOLD` | Fallos para abrir el breaker | `15` |
+| `CIRCUIT_BREAKER_COOLDOWN_MS` | Cooldown normal (ms) | `30000` |
+| `CIRCUIT_BREAKER_RATE_LIMIT_COOLDOWN_MS` | Cooldown si fue 429/529 (ms) | `20000` |
+| `FIRST_TOKEN_TIMEOUT_MS` | Timeout al primer token antes de fallback (ms) | `15000` |
 
-**2. Por credencial del proveedor** (Dashboard > Providers) — límites que protegen al proveedor:
+**2. Por credencial de proveedor:** `max_rpm`, `max_concurrent`, `receive_timeout_ms`
 
-| Campo | Descripción |
-|-------|-------------|
-| `max_rpm` | RPM máximo que se le manda a esta credencial |
-| `max_concurrent` | Requests simultáneos máximos a esta credencial |
-| `receive_timeout_ms` | Timeout de respuesta del proveedor (default 180s) |
-
-**3. Por equipo, miembro y servicio** — límites que protegen al usuario:
-
-| Campo | Nivel | Descripción |
-|-------|-------|-------------|
-| `monthly_budget_per_user_usd` | Equipo | Tope mensual por persona |
-| `default_concurrency_limit` | Equipo | Concurrencia por usuario (default 5) |
-| `default_rpm_limit` | Equipo | RPM por usuario (default 60) |
-| `extra_monthly_budget_usd` | Miembro | Extra budget mensual que se suma al del equipo |
-| `extra_concurrency` | Miembro | Extra concurrencia que se suma al del equipo |
-| `extra_rpm` | Miembro | Extra RPM que se suma al del equipo |
-| `monthly_budget_usd` | Servicio | Tope mensual del servicio |
-| `concurrency_limit` | Servicio | Concurrencia del servicio (default 5) |
-| `rpm_limit` | Servicio | RPM del servicio (default 60) |
-
-El límite efectivo del usuario siempre es `team default + member extra`. Los servicios tienen límites directos sin jerarquía.
+**3. Por equipo/miembro/servicio:** `monthly_budget_per_user_usd`, `default_concurrency_limit`, `default_rpm_limit` (equipo); `extra_monthly_budget_usd`, `extra_concurrency`, `extra_rpm` (miembro); `monthly_budget_usd`, `concurrency_limit`, `rpm_limit` (servicio).
 
 ## Inicio rápido
 
@@ -262,16 +131,16 @@ Headers opcionales: `X-Agent-Type`, `X-Title`, `HTTP-Referer`
 | `DATABASE_URL` | URL de conexión Postgres (prod) | — |
 | `SECRET_KEY_BASE` | Clave de firma (prod) | — |
 | `PHX_HOST` | Host público (prod) | requerida en prod |
+| `PHX_PORT` / `PHX_SCHEME` | Puerto / scheme (prod) | — |
+| `POOL_SIZE` | Pool de conexiones DB | — |
+| `ECTO_SSL` / `ECTO_SSL_VERIFY` | SSL a Postgres | `true` |
 | `TOKENGATE_ADMIN_EMAIL` | Email del admin root | `admin@tokengate.local` |
 | `TOKENGATE_ADMIN_PASSWORD` | Password del admin root | `tokengate-admin-secret-1` |
 | `WEBHOOK_SECRET` | HMAC secret para webhooks | — |
-| `GOOGLE_OAUTH_CLIENT_ID` | Google OAuth (opcional) | — |
-| `GOOGLE_OAUTH_CLIENT_SECRET` | Google OAuth (opcional) | — |
+| `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | Google OAuth (opcional) | — |
 | `GOOGLE_OAUTH_ALLOWED_DOMAINS` | Dominios allowlist (comma-separated) | vacío |
-| `SKIP_MIGRATIONS` | `1` = no migrar en boot | — |
-| `ECTO_SSL` | `false` = desactivar SSL a Postgres (local dev) | `true` |
-
-> Los parámetros de circuit breaker y timeout de streaming también son env vars — ver [Parámetros configurables](#parámetros-configurables).
+| `MAILGUN_API_KEY` / `MAILGUN_DOMAIN` | Envío de correos | — |
+| `SESSION_SIGNING_SALT` / `SESSION_ENCRYPTION_SALT` / `SESSION_MAX_AGE_SECONDS` | Cookies de sesión | — |
 
 ## Deploy
 
