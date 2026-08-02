@@ -57,6 +57,8 @@ defmodule TokengateWeb.ModelsLive do
       |> assign(:current_scope_member_id, nil)
       |> assign(:scope_team_search, "")
       |> assign(:scope_member_search, "")
+      |> assign(:scope_team_open, false)
+      |> assign(:scope_member_open, false)
       |> load_aliases()
       |> assign_form_data()
       |> load_scope_data()
@@ -256,7 +258,11 @@ defmodule TokengateWeb.ModelsLive do
        |> assign(:editing_ap_id, :new)
        |> assign(:current_scope, "global")
        |> assign(:current_scope_team_id, nil)
-       |> assign(:current_scope_member_id, nil)}
+       |> assign(:current_scope_member_id, nil)
+       |> assign(:scope_team_search, "")
+       |> assign(:scope_member_search, "")
+       |> assign(:scope_team_open, false)
+       |> assign(:scope_member_open, false)}
     else
       {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
     end
@@ -276,7 +282,9 @@ defmodule TokengateWeb.ModelsLive do
      |> assign(:current_scope_team_id, nil)
      |> assign(:current_scope_member_id, nil)
      |> assign(:scope_team_search, "")
-     |> assign(:scope_member_search, "")}
+     |> assign(:scope_member_search, "")
+     |> assign(:scope_team_open, false)
+     |> assign(:scope_member_open, false)}
   end
 
   def handle_event("edit_model_provider", %{"id" => ap_id}, socket) do
@@ -291,6 +299,31 @@ defmodule TokengateWeb.ModelsLive do
           true -> "global"
         end
 
+      # Prefill the search inputs with the current selection's label so the
+      # user sees which team / member is bound to the provider.
+      team_label =
+        if ap.exclusive_to_team_id do
+          team =
+            Enum.find(socket.assigns.teams_for_select || [], &(&1.id == ap.exclusive_to_team_id))
+
+          if team, do: team.name, else: ""
+        else
+          ""
+        end
+
+      member_label =
+        if ap.exclusive_to_team_member_id do
+          member =
+            Enum.find(
+              socket.assigns.members_for_select || [],
+              &(&1.id == ap.exclusive_to_team_member_id)
+            )
+
+          if member && member.user, do: member.user.email, else: ""
+        else
+          ""
+        end
+
       {:noreply,
        socket
        |> assign(:provider_form, to_form(changeset, as: :model_provider))
@@ -300,6 +333,10 @@ defmodule TokengateWeb.ModelsLive do
        |> assign(:current_scope, scope)
        |> assign(:current_scope_team_id, ap.exclusive_to_team_id)
        |> assign(:current_scope_member_id, ap.exclusive_to_team_member_id)
+       |> assign(:scope_team_search, team_label)
+       |> assign(:scope_member_search, member_label)
+       |> assign(:scope_team_open, false)
+       |> assign(:scope_member_open, false)
        |> assign(:provider_models_loading, true)
        |> fetch_provider_models(ap.credential_id)}
     else
@@ -374,7 +411,9 @@ defmodule TokengateWeb.ModelsLive do
        |> assign(:current_scope_team_id, nil)
        |> assign(:current_scope_member_id, nil)
        |> assign(:scope_team_search, "")
-       |> assign(:scope_member_search, "")}
+       |> assign(:scope_member_search, "")
+       |> assign(:scope_team_open, false)
+       |> assign(:scope_member_open, false)}
     else
       {:noreply, socket}
     end
@@ -422,11 +461,17 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   def handle_event("scope_team_search", %{"value" => search}, socket) do
-    {:noreply, assign(socket, :scope_team_search, search)}
+    {:noreply,
+     socket
+     |> assign(:scope_team_search, search)
+     |> assign(:scope_team_open, search != "")}
   end
 
   def handle_event("scope_member_search", %{"value" => search}, socket) do
-    {:noreply, assign(socket, :scope_member_search, search)}
+    {:noreply,
+     socket
+     |> assign(:scope_member_search, search)
+     |> assign(:scope_member_open, search != "")}
   end
 
   def handle_event("select_scope_team_item", %{"team_id" => team_id}, socket) do
@@ -437,7 +482,8 @@ defmodule TokengateWeb.ModelsLive do
       {:noreply,
        socket
        |> assign(:current_scope_team_id, team_id)
-       |> assign(:scope_team_search, label)}
+       |> assign(:scope_team_search, label)
+       |> assign(:scope_team_open, false)}
     else
       {:noreply, socket}
     end
@@ -451,7 +497,8 @@ defmodule TokengateWeb.ModelsLive do
       {:noreply,
        socket
        |> assign(:current_scope_member_id, member_id)
-       |> assign(:scope_member_search, label)}
+       |> assign(:scope_member_search, label)
+       |> assign(:scope_member_open, false)}
     else
       {:noreply, socket}
     end
@@ -1308,6 +1355,9 @@ defmodule TokengateWeb.ModelsLive do
                     />
                     <% members_filtered =
                       members_with_model_access(@members_for_select, @provider_form_alias_id)
+                      |> Enum.reject(fn m ->
+                        m.id == @current_scope_member_id
+                      end)
                       |> Enum.filter(fn m ->
                         search = String.downcase(@scope_member_search || "")
                         email = if m.user, do: String.downcase(m.user.email), else: ""
@@ -1316,7 +1366,7 @@ defmodule TokengateWeb.ModelsLive do
                         search == "" or String.contains?(email, search) or
                           String.contains?(name, search)
                       end) %>
-                    <%= if @scope_member_search != "" and members_filtered != [] do %>
+                    <%= if @scope_member_open and members_filtered != [] do %>
                       <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
                         <button
                           :for={m <- Enum.take(members_filtered, 10)}
@@ -1356,12 +1406,15 @@ defmodule TokengateWeb.ModelsLive do
                     />
                     <% teams_filtered =
                       teams_with_model_access(@teams_for_select, @provider_form_alias_id)
+                      |> Enum.reject(fn t ->
+                        t.id == @current_scope_team_id
+                      end)
                       |> Enum.filter(fn t ->
                         search = String.downcase(@scope_team_search || "")
                         name = String.downcase(t.name || "")
                         search == "" or String.contains?(name, search)
                       end) %>
-                    <%= if @scope_team_search != "" and teams_filtered != [] do %>
+                    <%= if @scope_team_open and teams_filtered != [] do %>
                       <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
                         <button
                           :for={t <- Enum.take(teams_filtered, 10)}
