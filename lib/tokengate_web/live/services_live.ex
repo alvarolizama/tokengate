@@ -98,7 +98,7 @@ defmodule TokengateWeb.ServicesLive do
       |> Map.new(fn s -> {s.service_id, s} end)
 
     socket
-    |> stream(:services, services, reset: true)
+    |> assign(:services, services)
     |> assign(:services_empty?, services == [])
     |> assign(:granted_aliases, granted_aliases)
     |> assign(:aliases, aliases)
@@ -256,9 +256,11 @@ defmodule TokengateWeb.ServicesLive do
   def handle_event("toggle_supervisor_form", %{"service-id" => service_id}, socket) do
     open? = socket.assigns.supervisor_search_service_id == service_id
 
+    new_id = if open?, do: nil, else: service_id
+
     {:noreply,
      socket
-     |> assign(:supervisor_search_service_id, (not open? && service_id) || nil)
+     |> assign(:supervisor_search_service_id, new_id)
      |> assign(:supervisor_search_query, "")
      |> assign(:supervisor_search_results, [])}
   end
@@ -463,7 +465,7 @@ defmodule TokengateWeb.ServicesLive do
           </div>
         </div>
 
-        <div id="services" phx-update="stream">
+        <div id="services">
           <div
             :if={@services_empty?}
             class="text-center py-12 text-base-content/40"
@@ -473,8 +475,8 @@ defmodule TokengateWeb.ServicesLive do
             <p>No hay servicios todavía.</p>
           </div>
           <div
-            :for={{id, service} <- @streams.services}
-            id={id}
+            :for={service <- @services}
+            id={"service-#{service.id}"}
             class="card bg-base-100 border border-base-300 shadow-sm mb-4 transition-shadow hover:shadow-md"
           >
             <div class="card-body">
