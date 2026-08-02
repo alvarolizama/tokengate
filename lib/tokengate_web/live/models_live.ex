@@ -1058,6 +1058,12 @@ defmodule TokengateWeb.ModelsLive do
                   hint="Nombre visible para los usuarios en /v1/models."
                 />
                 <.input
+                  field={@form[:description]}
+                  type="textarea"
+                  label="Descripción"
+                  hint="Descripción corta del modelo para el catálogo del dashboard."
+                />
+                <.input
                   field={@form[:context_window]}
                   type="number"
                   label="Ventana de contexto (tokens)"
