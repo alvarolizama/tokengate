@@ -3,7 +3,6 @@ defmodule TokengateWeb.LogsLive do
   use TokengateWeb, :live_view
 
   alias Tokengate.{Accounts, Logs}
-  alias Tokengate.Limits.Manager, as: Limits
   alias Tokengate.Logs.Inflight
   alias Tokengate.Providers
 
@@ -55,7 +54,7 @@ defmodule TokengateWeb.LogsLive do
       {:ok,
        socket
        |> assign(:online_users, TokengateWeb.Presence.list_online())
-       |> assign(:api_inflight, Limits.total_inflight())
+       |> assign(:api_inflight, Inflight.count())
        |> assign(:pending, visible_pending(socket.assigns))}
     else
       {:ok, socket}
@@ -108,20 +107,32 @@ defmodule TokengateWeb.LogsLive do
 
   def handle_info(:refresh_inflight, socket) do
     Process.send_after(self(), :refresh_inflight, @inflight_refresh_interval_ms)
-    {:noreply, assign(socket, :api_inflight, Limits.total_inflight())}
+    {:noreply, assign(socket, :api_inflight, visible_inflight_count(socket.assigns))}
   end
 
   def handle_info({:inflight_started, entry}, socket) do
     if pending_visible?(entry, socket.assigns) do
-      {:noreply, assign(socket, :pending, [entry | socket.assigns[:pending]])}
+      socket =
+        socket
+        |> assign(:pending, [entry | socket.assigns[:pending]])
+        |> assign(:api_inflight, socket.assigns[:api_inflight] + 1)
+
+      {:noreply, socket}
     else
       {:noreply, socket}
     end
   end
 
   def handle_info({:inflight_done, id}, socket) do
-    pending = Enum.reject(socket.assigns[:pending], &(&1.id == id))
-    {:noreply, assign(socket, :pending, pending)}
+    pending_before = socket.assigns[:pending]
+    removed? = Enum.any?(pending_before, &(&1.id == id))
+
+    socket =
+      socket
+      |> assign(:pending, Enum.reject(pending_before, &(&1.id == id)))
+      |> update(:api_inflight, fn n -> if removed?, do: max(n - 1, 0), else: n end)
+
+    {:noreply, socket}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -193,6 +204,12 @@ defmodule TokengateWeb.LogsLive do
   defp visible_pending(assigns) do
     Inflight.list()
     |> Enum.filter(&pending_visible?(&1, assigns))
+  end
+
+  # Counter shown in the "En vuelo" KPI card. Matches the rows in the
+  # "En vuelo ahora" table exactly so they never disagree.
+  defp visible_inflight_count(assigns) do
+    visible_pending(assigns) |> length()
   end
 
   defp pending_visible?(entry, assigns) do
