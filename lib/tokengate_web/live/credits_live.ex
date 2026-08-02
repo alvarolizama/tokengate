@@ -75,7 +75,9 @@ defmodule TokengateWeb.CreditsLive do
   defp load_budgets(socket) do
     timezone = socket.assigns[:timezone] || "Etc/UTC"
     budgets = Budgets.list_member_budgets(timezone)
-    team_budgets = Budgets.list_team_budgets(timezone)
+    # Reuse the already-loaded member budgets for the team rollup instead of
+    # list_team_budgets/1, which would re-query members + spend.
+    team_budgets = Budgets.rollup_team_budgets(budgets)
 
     socket
     |> assign(:budgets, budgets)

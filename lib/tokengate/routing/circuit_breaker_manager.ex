@@ -140,6 +140,32 @@ defmodule Tokengate.Routing.CircuitBreakerManager do
   end
 
   @doc """
+  Returns `%{credential_id => state}` for every registered breaker in one
+  Registry sweep, instead of one lookup + GenServer call per credential
+  (dashboard pages that render a status badge per credential).
+  """
+  @spec status_all() :: %{term() => :closed | :open | :half_open}
+  def status_all do
+    @registry
+    |> Registry.select([{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}])
+    |> Map.new(fn {id, pid} -> {id, Tokengate.Routing.CircuitBreaker.status(pid)} end)
+  end
+
+  @doc """
+  Returns `%{credential_id => details_map}` only for breakers NOT in
+  `:closed` state. One Registry sweep — avoids loading every credential
+  from the DB just to filter them in memory (AlertsLive).
+  """
+  @spec open_breakers() :: %{term() => map()}
+  def open_breakers do
+    @registry
+    |> Registry.select([{{:"$1", :"$2", :"$3"}, [], [{{:"$1", :"$2"}}]}])
+    |> Map.new(fn {id, pid} -> {id, Tokengate.Routing.CircuitBreaker.details(pid)} end)
+    |> Enum.filter(fn {_id, details} -> details.state != :closed end)
+    |> Map.new()
+  end
+
+  @doc """
   Forces the breaker for `credential_id` back to `:closed` (admin use).
   Safe to call when no breaker exists.
   """

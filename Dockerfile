@@ -29,6 +29,8 @@ ENV MIX_ENV=prod
 # force_ssl is compile-time (see config/prod.exs). For plain-HTTP deploys
 # (VPN tunnel, no TLS terminator) we disable it here permanently.
 # To re-enable TLS, set this to "" and rebuild.
+# Declared as ENV (not only ARG) so Coolify can override it per-deployment
+# via runtime env vars without rebuilding the image.
 ARG DISABLE_FORCE_SSL="1"
 ENV DISABLE_FORCE_SSL=${DISABLE_FORCE_SSL}
 
@@ -94,6 +96,13 @@ RUN chmod +x /app/entrypoint.sh
 USER app
 
 ENV HOME=/app MIX_ENV=prod PHX_SERVER=true PORT=4001
+
+# Propagate DISABLE_FORCE_SSL to runtime. NOTE: force_ssl is compile-time,
+# so this runtime value does NOT toggle Plug.SSL — it documents the build
+# choice for operators inspecting the container env (Coolify shows it in the
+# UI). To actually toggle force_ssl, rebuild with the build ARG.
+ARG DISABLE_FORCE_SSL="1"
+ENV DISABLE_FORCE_SSL=${DISABLE_FORCE_SSL}
 
 EXPOSE 4001
 

@@ -105,9 +105,17 @@ defmodule Tokengate.Accounts do
   @doc """
   Case-insensitive partial email/name search for the member-add autocomplete.
   Returns up to `limit` (default 10) users whose email or name contains the query.
+  LIKE wildcards (`%` and `_`) in the input are escaped so a search for "%"
+  cannot enumerate the whole users table.
   """
   def search_users(query, limit \\ 10) when is_binary(query) do
-    pattern = "%#{String.downcase(query)}%"
+    escaped =
+      query
+      |> String.replace("\\", "\\\\")
+      |> String.replace("%", "\\%")
+      |> String.replace("_", "\\_")
+
+    pattern = "%#{String.downcase(escaped)}%"
 
     Repo.all(
       from u in User,
@@ -329,6 +337,24 @@ defmodule Tokengate.Accounts do
 
   def list_team_members_for_user(user_id) do
     Repo.all(from tm in TeamMember, where: tm.user_id == ^user_id, preload: [:team, :api_key])
+  end
+
+  @doc """
+  Batch variant: returns a `%{user_id => [Team]}` map for a list of user ids
+  in a single query (with teams preloaded), instead of one query per user.
+  Users without memberships map to an empty list.
+  """
+  def list_teams_by_user_ids(user_ids) when is_list(user_ids) do
+    members =
+      Repo.all(
+        from tm in TeamMember,
+          where: tm.user_id in ^user_ids,
+          preload: [:team]
+      )
+
+    grouped = Enum.group_by(members, & &1.user_id, & &1.team)
+
+    Map.new(user_ids, fn id -> {id, Map.get(grouped, id, [])} end)
   end
 
   @doc """

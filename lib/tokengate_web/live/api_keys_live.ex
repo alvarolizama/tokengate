@@ -9,6 +9,8 @@ defmodule TokengateWeb.ApiKeysLive do
 
   use TokengateWeb, :live_view
 
+  import Ecto.Query, only: [from: 2]
+
   alias Tokengate.Accounts
 
   @impl true
@@ -31,9 +33,19 @@ defmodule TokengateWeb.ApiKeysLive do
   defp manager?(_user, _memberships), do: false
 
   defp load_managed_team_members(%{global_role: "admin"}, _memberships) do
-    Accounts.list_teams()
-    |> Enum.map(fn team ->
-      {team, Accounts.list_team_members_for_team(team.id)}
+    teams = Accounts.list_teams()
+
+    # One query for ALL members (grouped in memory) instead of one per team.
+    members_by_team =
+      Tokengate.Repo.all(
+        from tm in Tokengate.Accounts.TeamMember,
+          where: tm.team_id in ^Enum.map(teams, & &1.id),
+          preload: [:user, :api_key]
+      )
+      |> Enum.group_by(& &1.team_id)
+
+    Enum.map(teams, fn team ->
+      {team, Map.get(members_by_team, team.id, [])}
     end)
   end
 

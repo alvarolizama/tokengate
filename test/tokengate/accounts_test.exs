@@ -627,4 +627,39 @@ defmodule Tokengate.AccountsTest do
       assert Accounts.service_supervisors(service.id) == []
     end
   end
+
+  describe "search_users/2" do
+    test "matches by partial email, case-insensitive" do
+      user = user_fixture(%{"email" => "findme@example.com", "name" => "Someone"})
+
+      results = Accounts.search_users("FINDME")
+      assert Enum.map(results, & &1.id) == [user.id]
+    end
+
+    test "matches by partial name" do
+      user = user_fixture(%{"name" => "Pelana del Barrio"})
+
+      results = Accounts.search_users("pelana del")
+      assert Enum.map(results, & &1.id) == [user.id]
+    end
+
+    test "LIKE wildcards in the query are escaped, not treated as patterns" do
+      user_fixture(%{"email" => "percent100@example.com"})
+      user_fixture(%{"email" => "other@example.com"})
+
+      # A bare "%" would match EVERY row if unescaped; escaped it matches
+      # only emails/names containing a literal "%" — none here.
+      assert Accounts.search_users("%") == []
+
+      # "_" is a single-char wildcard in LIKE; escaped it matches literally.
+      assert Accounts.search_users("_") == []
+    end
+
+    test "literal percent sign in the stored value still matches" do
+      user = user_fixture(%{"name" => "Descuento 50% hoy"})
+
+      results = Accounts.search_users("50%")
+      assert Enum.map(results, & &1.id) == [user.id]
+    end
+  end
 end

@@ -557,6 +557,60 @@ defmodule Tokengate.Providers do
     |> Enum.uniq_by(& &1.id)
   end
 
+  @doc """
+  Batch variant of `list_accessible_aliases/1` for a list of team members
+  (e.g. all memberships of one user). Runs a constant number of queries
+  regardless of membership count — one for team grants, one for individual
+  grants, one for the aliases — instead of 2N+1.
+  """
+  def list_accessible_aliases_for_members(members) when is_list(members) do
+    {service_ids, real_members} = Enum.split_with(members, &(&1.team == nil))
+
+    team_ids = real_members |> Enum.map(& &1.team.id) |> Enum.uniq()
+    member_ids = Enum.map(real_members, & &1.id)
+
+    team_alias_ids =
+      if team_ids == [] do
+        []
+      else
+        Repo.all(
+          from tma in TeamModelAlias,
+            where: tma.team_id in ^team_ids,
+            select: tma.model_alias_id
+        )
+      end
+
+    member_alias_ids =
+      if member_ids == [] do
+        []
+      else
+        Repo.all(
+          from tmea in TeamMemberExtraAlias,
+            where: tmea.team_member_id in ^member_ids,
+            select: tmea.model_alias_id
+        )
+      end
+
+    service_alias_ids =
+      if service_ids == [] do
+        []
+      else
+        Repo.all(
+          from sma in ServiceModelAlias,
+            where: sma.service_id in ^service_ids,
+            select: sma.model_alias_id
+        )
+      end
+
+    all_ids = Enum.uniq(team_alias_ids ++ member_alias_ids ++ service_alias_ids)
+
+    if all_ids == [] do
+      []
+    else
+      Repo.all(from ma in ModelAlias, where: ma.id in ^all_ids)
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------

@@ -129,6 +129,19 @@ if config_env() == :prod do
          :webhook_secret,
          System.get_env("WEBHOOK_SECRET") || raise("WEBHOOK_SECRET is missing")
 
+  # Session cookie salts. endpoint.ex has dev-friendly fallbacks, but in prod
+  # they MUST come from env vars — otherwise every deployment shares the
+  # hardcoded salts committed to the repo and session cookies become
+  # forgeable/decryptable by anyone who read the source.
+  for var <- ["SESSION_SIGNING_SALT", "SESSION_ENCRYPTION_SALT"] do
+    System.get_env(var) ||
+      raise """
+      environment variable #{var} is missing.
+      Session cookie salts must not fall back to the repo defaults in prod.
+      Generate one with: mix phx.gen.secret 32
+      """
+  end
+
   # Google OAuth (optional — leave env vars empty to disable Google login)
   config :tokengate, :google_oauth,
     client_id: System.get_env("GOOGLE_OAUTH_CLIENT_ID"),

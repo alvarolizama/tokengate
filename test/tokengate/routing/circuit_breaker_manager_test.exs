@@ -11,6 +11,14 @@ defmodule Tokengate.Routing.CircuitBreakerManagerTest do
   @cooldown_ms 50
   @rate_limit_cooldown_ms 20
 
+  # Credential ids are :binary_id (UUIDs) in production, and the breaker
+  # Registry is a named singleton shared across test files. Using real UUIDs
+  # here means any breaker left registered (e.g. left open by a test) stays
+  # castable by Ecto in other LiveView tests that sweep the Registry
+  # (CircuitBreakerManager.status_all/open_breakers) — a string like
+  # "cred-open" would fail to dump to :binary_id and poison those tests.
+  defp credential, do: Ecto.UUID.generate()
+
   setup do
     prev = Application.get_env(:tokengate, :circuit_breaker)
 
@@ -41,19 +49,21 @@ defmodule Tokengate.Routing.CircuitBreakerManagerTest do
 
   describe "ensure_started/1" do
     test "starts a breaker and returns :ok" do
-      assert CircuitBreakerManager.ensure_started("cred-1") == :ok
-      assert CircuitBreakerManager.status("cred-1") == :closed
+      credential = credential()
+      assert CircuitBreakerManager.ensure_started(credential) == :ok
+      assert CircuitBreakerManager.status(credential) == :closed
     end
 
     test "is idempotent" do
-      assert CircuitBreakerManager.ensure_started("cred-2") == :ok
-      assert CircuitBreakerManager.ensure_started("cred-2") == :ok
-      assert CircuitBreakerManager.ensure_started("cred-2") == :ok
-      assert CircuitBreakerManager.status("cred-2") == :closed
+      credential = credential()
+      assert CircuitBreakerManager.ensure_started(credential) == :ok
+      assert CircuitBreakerManager.ensure_started(credential) == :ok
+      assert CircuitBreakerManager.ensure_started(credential) == :ok
+      assert CircuitBreakerManager.status(credential) == :closed
     end
 
     test "is safe under concurrent access from 50 tasks" do
-      credential = "cred-concurrent"
+      credential = credential()
 
       Task.async_stream(
         1..50,
@@ -74,13 +84,14 @@ defmodule Tokengate.Routing.CircuitBreakerManagerTest do
 
   describe "allow?/1" do
     test "unknown credential returns true (lazily starts in closed)" do
-      assert CircuitBreakerManager.allow?("cred-unknown") == true
+      credential = credential()
+      assert CircuitBreakerManager.allow?(credential) == true
       # The breaker was started as a side effect.
-      assert CircuitBreakerManager.status("cred-unknown") == :closed
+      assert CircuitBreakerManager.status(credential) == :closed
     end
 
     test "open credential returns false" do
-      credential = "cred-open"
+      credential = credential()
 
       for _ <- 1..@threshold do
         CircuitBreakerManager.record_failure(credential, :server_error)
@@ -93,7 +104,7 @@ defmodule Tokengate.Routing.CircuitBreakerManagerTest do
 
   describe "record_success/1 and record_failure/2" do
     test "success resets the failure counter" do
-      credential = "cred-success-reset"
+      credential = credential()
 
       for _ <- 1..(@threshold - 1) do
         CircuitBreakerManager.record_failure(credential, :server_error)
@@ -110,7 +121,7 @@ defmodule Tokengate.Routing.CircuitBreakerManagerTest do
     end
 
     test ":client_error never counts" do
-      credential = "cred-client-error"
+      credential = credential()
 
       for _ <- 1..100 do
         CircuitBreakerManager.record_failure(credential, :client_error)
@@ -121,7 +132,7 @@ defmodule Tokengate.Routing.CircuitBreakerManagerTest do
     end
 
     test "record_failure on a new credential ensures a breaker is started" do
-      credential = "cred-fail-new"
+      credential = credential()
 
       CircuitBreakerManager.record_failure(credential, :server_error)
       assert CircuitBreakerManager.status(credential) == :closed
@@ -136,14 +147,15 @@ defmodule Tokengate.Routing.CircuitBreakerManagerTest do
 
   describe "status/1" do
     test "returns :closed for an unknown credential without starting a process" do
-      assert CircuitBreakerManager.status("never-started") == :closed
+      credential = credential()
+      assert CircuitBreakerManager.status(credential) == :closed
 
       # Confirm no process was lazily started.
-      assert Registry.lookup(Tokengate.Routing.CircuitBreakerRegistry, "never-started") == []
+      assert Registry.lookup(Tokengate.Routing.CircuitBreakerRegistry, credential) == []
     end
 
     test "tracks the full lifecycle through the manager" do
-      credential = "cred-lifecycle"
+      credential = credential()
 
       assert CircuitBreakerManager.status(credential) == :closed
 
@@ -165,7 +177,7 @@ defmodule Tokengate.Routing.CircuitBreakerManagerTest do
 
   describe "reset/1" do
     test "forces an open breaker back to closed" do
-      credential = "cred-reset"
+      credential = credential()
 
       for _ <- 1..@threshold do
         CircuitBreakerManager.record_failure(credential, :server_error)
@@ -177,7 +189,7 @@ defmodule Tokengate.Routing.CircuitBreakerManagerTest do
     end
 
     test "is a no-op when the breaker does not exist" do
-      assert CircuitBreakerManager.reset("nonexistent-cred") == :ok
+      assert CircuitBreakerManager.reset(credential()) == :ok
     end
   end
 

@@ -21,6 +21,7 @@ defmodule TokengateWeb.UserStatsLive do
   alias Tokengate.Logs
 
   @page_size 50
+  @summary_refresh_interval_ms 2_000
 
   @impl true
   def mount(%{"user_id" => user_id}, _session, socket) do
@@ -47,6 +48,7 @@ defmodule TokengateWeb.UserStatsLive do
       |> assign(:page_size, @page_size)
       |> assign(:summary_5d, default_summary())
       |> assign(:summary_30d, default_summary())
+      |> assign(:summary_refresh_scheduled, false)
       |> require_admin_hook()
       |> load_summary()
       |> load_logs(:reset)
@@ -73,17 +75,19 @@ defmodule TokengateWeb.UserStatsLive do
       filters = socket.assigns.filters
 
       if log_matches_filters?(log, filters, timezone) do
+        socket = stream_insert(socket, :logs, log, at: 0)
+
+        # Coalesce summary reloads: at most one member_stats recompute per
+        # interval per connected LiveView, regardless of broadcast rate.
+        # Without this, every proxied request triggers 2 Postgres aggregate
+        # queries in every admin watching this page (PubSub storm).
         socket =
-          socket
-          |> stream_insert(:logs, log, at: 0)
-          |> assign(
-            :summary_5d,
-            Logs.member_stats(socket.assigns.team_member_ids, from: days_ago(5))
-          )
-          |> assign(
-            :summary_30d,
-            Logs.member_stats(socket.assigns.team_member_ids, from: days_ago(30))
-          )
+          if socket.assigns[:summary_refresh_scheduled] do
+            socket
+          else
+            Process.send_after(self(), :refresh_summary, @summary_refresh_interval_ms)
+            assign(socket, :summary_refresh_scheduled, true)
+          end
 
         {:noreply, socket}
       else
@@ -92,6 +96,13 @@ defmodule TokengateWeb.UserStatsLive do
     else
       {:noreply, socket}
     end
+  end
+
+  def handle_info(:refresh_summary, socket) do
+    {:noreply,
+     socket
+     |> assign(:summary_refresh_scheduled, false)
+     |> load_summary()}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}

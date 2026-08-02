@@ -141,21 +141,34 @@ defmodule TokengateWeb.AlertsLive do
       )
       |> Repo.all()
 
-    # All credential IDs (for breaker status lookup)
-    all_creds =
-      from(c in Providers.Credential,
-        join: p in assoc(c, :provider),
-        preload: [provider: p]
-      )
-      |> Repo.all()
+    # Breaker alerts: read the open breakers straight from the Registry
+    # (one sweep), then load ONLY those credentials from the DB — instead of
+    # loading every credential + one GenServer call per credential and
+    # filtering in memory.
+    open = Tokengate.Routing.CircuitBreakerManager.open_breakers()
+    open_ids = Map.keys(open)
+
+    open_creds =
+      if open_ids == [] do
+        []
+      else
+        from(c in Providers.Credential,
+          join: p in assoc(c, :provider),
+          where: c.id in ^open_ids,
+          preload: [provider: p]
+        )
+        |> Repo.all()
+      end
+
+    creds_by_id = Map.new(open_creds, &{&1.id, &1})
 
     breaker_alerts =
-      all_creds
-      |> Enum.map(fn cred ->
-        details = Tokengate.Routing.CircuitBreakerManager.details(cred.id)
-        {cred, details}
+      Enum.flat_map(open, fn {cred_id, details} ->
+        case creds_by_id do
+          %{^cred_id => cred} -> [{cred, details}]
+          _ -> []
+        end
       end)
-      |> Enum.filter(fn {_cred, details} -> details.state != :closed end)
 
     # Error counts per credential in the last 24h (for breaker table)
     since = DateTime.utc_now() |> DateTime.add(-@error_window_hours * 3600, :second)

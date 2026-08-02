@@ -68,18 +68,30 @@ defmodule TokengateWeb.SupervisedServicesLive do
 
   defp load_services(socket, %{id: user_id}) when is_binary(user_id) do
     services = Accounts.services_for_supervisor(user_id)
+    service_ids = Enum.map(services, & &1.id)
 
-    # granted_aliases: %{service_id => [model_alias_id, ...]}
+    # granted_aliases: %{service_id => [model_alias_id, ...]} — scoped to the
+    # supervisor's services only (never load the whole grant table into the
+    # socket, even if the template only renders this supervisor's rows).
     granted_aliases =
-      from(sma in ServiceModelAlias, select: {sma.service_id, sma.model_alias_id})
+      from(sma in ServiceModelAlias,
+        where: sma.service_id in ^service_ids,
+        select: {sma.service_id, sma.model_alias_id}
+      )
       |> Repo.all()
       |> Enum.group_by(fn {service_id, _} -> service_id end, fn {_, alias_id} -> alias_id end)
 
-    aliases =
-      from(ma in ModelAlias, order_by: [asc: ma.name])
-      |> Repo.all()
+    # Only the aliases actually granted to these services — not the full catalog.
+    granted_alias_ids = granted_aliases |> Map.values() |> List.flatten() |> Enum.uniq()
 
-    service_ids = Enum.map(services, & &1.id)
+    aliases =
+      if granted_alias_ids == [] do
+        []
+      else
+        from(ma in ModelAlias, where: ma.id in ^granted_alias_ids, order_by: [asc: ma.name])
+        |> Repo.all()
+      end
+
     timezone = socket.assigns[:timezone] || "Etc/UTC"
     thirty_days_ago = Periods.period_bounds("30d", timezone).from
 

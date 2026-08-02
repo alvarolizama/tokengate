@@ -92,14 +92,18 @@ defmodule TokengateWeb.ProvidersLive do
         Map.put(acc, provider.id, count)
       end)
 
-    # Fetch circuit breaker status for every credential
+    # Fetch circuit breaker status for every credential in one Registry sweep
+    # (instead of one lookup + GenServer call per credential). Unknown
+    # credentials simply don't appear — the template must default to :closed.
+    alias Tokengate.Routing.CircuitBreakerManager
+
     breaker_statuses =
-      providers
-      |> Enum.flat_map(& &1.credentials)
-      |> Enum.map(fn cred ->
-        {cred.id, Tokengate.Routing.CircuitBreakerManager.status(cred.id)}
+      CircuitBreakerManager.status_all()
+      |> then(fn all ->
+        providers
+        |> Enum.flat_map(& &1.credentials)
+        |> Map.new(fn cred -> {cred.id, Map.get(all, cred.id, :closed)} end)
       end)
-      |> Enum.into(%{})
 
     socket
     |> assign(:providers, providers)

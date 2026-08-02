@@ -910,9 +910,7 @@ defmodule TokengateWeb.DashboardLive do
 
     models =
       memberships
-      |> Enum.flat_map(fn member ->
-        Providers.list_accessible_aliases(member)
-      end)
+      |> Providers.list_accessible_aliases_for_members()
       |> Enum.uniq_by(& &1.id)
       |> Enum.sort_by(& &1.name)
       |> Enum.map(&model_catalog_entry/1)

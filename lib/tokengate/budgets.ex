@@ -117,7 +117,13 @@ defmodule Tokengate.Budgets do
     list_member_budgets(timezone) |> rollup_team_budgets()
   end
 
-  defp rollup_team_budgets(member_budgets) do
+  @doc """
+  Rolls a list of member budgets (from `list_member_budgets/0,1`) up to the
+  team level. Exposed so callers that already loaded member budgets (e.g.
+  CreditsLive) can derive the team rollup without re-querying members and
+  recomputing spend.
+  """
+  def rollup_team_budgets(member_budgets) do
     member_budgets
     |> Enum.group_by(fn mb -> mb.member.team_id end)
     |> Enum.map(fn {_team_id, budgets} ->

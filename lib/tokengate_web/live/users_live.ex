@@ -90,11 +90,8 @@ defmodule TokengateWeb.UsersLive do
 
   defp load_user_teams(users) do
     users
-    |> Enum.map(fn user ->
-      teams = Accounts.list_team_members_for_user(user.id) |> Enum.map(& &1.team)
-      {user.id, teams}
-    end)
-    |> Map.new()
+    |> Enum.map(& &1.id)
+    |> Accounts.list_teams_by_user_ids()
   end
 
   ## Events — search -------------------------------------------------------
