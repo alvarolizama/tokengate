@@ -250,10 +250,13 @@ defmodule TokengateWeb.UsersLiveTest do
     {:ok, view, _html} = live(conn, ~p"/dashboard/users")
     view |> element("#status-#{target.id}") |> render_click()
 
-    # Now try to login as the suspended user
+    # Now try to login as the suspended user. The flash is deliberately
+    # uniform ("Credenciales inválidas.") so the login endpoint can't be
+    # used to enumerate suspended accounts — the user is still rejected.
     conn = build_conn()
     conn = post(conn, ~p"/login", %{email: target.email, password: target_password})
-    assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "suspendida"
+    assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "Credenciales inválidas"
+    refute get_session(conn, :user_id)
   end
 
   ## Reset password ---------------------------------------------------------

@@ -13,6 +13,8 @@ defmodule TokengateWeb.SessionController do
       DELETE /logout  -> :delete (clear session, redirect to /login)
   """
 
+  require Logger
+
   use TokengateWeb, :controller
 
   alias Tokengate.Accounts
@@ -51,15 +53,12 @@ defmodule TokengateWeb.SessionController do
         |> put_flash(:info, "Sesión iniciada.")
         |> redirect(to: "/dashboard")
 
-      {:error, :suspended} ->
-        conn
-        |> put_flash(:error, "Tu cuenta está suspendida. Contacta al administrador.")
-        |> assign(:email, email)
-        |> assign(:google_oauth_configured, TokengateWeb.OAuth.Google.configured?())
-        |> assign(:page_title, "Iniciar sesión · Tokengate")
-        |> render(:new)
+      {:error, reason} ->
+        # Uniform message: distinguishing :suspended from :unauthorized would
+        # let an unauthenticated visitor enumerate which emails are registered
+        # and suspended. The real reason is logged server-side.
+        Logger.warning("login_failed status=#{reason}")
 
-      {:error, :unauthorized} ->
         conn
         |> put_flash(:error, "Credenciales inválidas.")
         |> assign(:email, email)
