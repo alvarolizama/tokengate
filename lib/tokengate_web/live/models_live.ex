@@ -67,11 +67,21 @@ defmodule TokengateWeb.ModelsLive do
   ## Data loading ---------------------------------------------------------
 
   defp load_aliases(socket) do
+    # Providers are grouped by scope first — global, then team-exclusive,
+    # then member-exclusive — and ordered by priority within each group.
     aliases =
       from(ma in ModelAlias,
         left_join: aps in assoc(ma, :model_providers),
         preload: [model_providers: {aps, [credential: :provider]}],
-        order_by: [asc: ma.name, asc_nulls_last: aps.priority]
+        order_by: [
+          asc: ma.name,
+          asc: fragment(
+            "CASE WHEN ? IS NOT NULL THEN 2 WHEN ? IS NOT NULL THEN 1 ELSE 0 END",
+            aps.exclusive_to_team_member_id,
+            aps.exclusive_to_team_id
+          ),
+          asc_nulls_last: aps.priority
+        ]
       )
       |> Repo.all()
 
@@ -705,11 +715,25 @@ defmodule TokengateWeb.ModelsLive do
   def fmt_price(%Decimal{} = d), do: "$#{Decimal.round(d, 2) |> Decimal.to_string()}"
 
   @doc "Scope badge CSS class"
+  def scope_badge(%ModelProvider{exclusive_to_team_member_id: id}) when not is_nil(id),
+    do: "badge-warning"
+
+  def scope_badge(%ModelProvider{exclusive_to_team_id: id}) when not is_nil(id),
+    do: "badge-info"
+
+  def scope_badge(%ModelProvider{}), do: "badge-ghost"
   def scope_badge("member"), do: "badge-warning"
   def scope_badge("team"), do: "badge-info"
   def scope_badge(_), do: "badge-ghost"
 
   @doc "Scope badge label"
+  def scope_label(%ModelProvider{exclusive_to_team_member_id: id}) when not is_nil(id),
+    do: "Exclusivo miembro"
+
+  def scope_label(%ModelProvider{exclusive_to_team_id: id}) when not is_nil(id),
+    do: "Exclusivo equipo"
+
+  def scope_label(%ModelProvider{}), do: "Global"
   def scope_label("member"), do: "Exclusivo miembro"
   def scope_label("team"), do: "Exclusivo equipo"
   def scope_label(_), do: "Global"
@@ -735,6 +759,19 @@ defmodule TokengateWeb.ModelsLive do
   def model_providers_for(model_alias) do
     model_alias.model_providers || []
   end
+
+  @doc """
+  Group key for scope grouping in the UI: 0 = global, 1 = team-exclusive,
+  2 = member-exclusive. Matches the SQL ordering in load_aliases/1.
+  """
+  def scope_group(%ModelProvider{exclusive_to_team_member_id: id}) when not is_nil(id), do: 2
+  def scope_group(%ModelProvider{exclusive_to_team_id: id}) when not is_nil(id), do: 1
+  def scope_group(%ModelProvider{}), do: 0
+
+  @doc "Group header label (nil for the global group — no header needed)"
+  def scope_group_label(1), do: "Exclusivos por equipo"
+  def scope_group_label(2), do: "Exclusivos por usuario"
+  def scope_group_label(_), do: nil
 
   def provider_name(%ModelProvider{credential: %{provider: provider}}) when not is_nil(provider),
     do: provider.name
@@ -768,6 +805,8 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   @doc "Filter teams that have the given model alias granted"
+  def teams_with_model_access(_teams, nil), do: []
+
   def teams_with_model_access(teams, model_alias_id) do
     import Ecto.Query, only: [from: 2]
     alias Tokengate.Providers.TeamModelAlias
@@ -784,6 +823,8 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   @doc "Filter members that have the given model alias accessible (via team or extra)"
+  def members_with_model_access(_members, nil), do: []
+
   def members_with_model_access(members, model_alias_id) do
     import Ecto.Query, only: [from: 2]
     alias Tokengate.Providers.{TeamModelAlias, TeamMemberExtraAlias}
@@ -941,13 +982,29 @@ defmodule TokengateWeb.ModelsLive do
                         phx-hook="SortableProviders"
                         data-alias-id={model_alias.id}
                       >
-                        <tr
-                          :for={ap <- model_providers_for(model_alias)}
-                          id={"alias-provider-#{ap.id}"}
-                          data-id={ap.id}
-                          draggable={to_string(@is_admin)}
-                          class={[@is_admin && "cursor-grab active:cursor-grabbing"]}
-                        >
+                        <% providers = model_providers_for(model_alias) %>
+                        <% groups = Enum.map(providers, &scope_group/1) %>
+                        <% prev_groups = [nil | Enum.drop(groups, -1)] %>
+                        <%= for {ap, prev_group} <- Enum.zip(providers, prev_groups) do %>
+                          <% current_group = scope_group(ap) %>
+                          <%!-- Group separator: a divider line + subtitle row when
+                               the scope group changes (global → team → member). --%>
+                          <%= if current_group != prev_group && not is_nil(scope_group_label(current_group)) do %>
+                            <tr class="pointer-events-none border-t-2 border-base-300">
+                              <td
+                                colspan={if @is_admin, do: "8", else: "6"}
+                                class="py-1.5 text-xs font-semibold uppercase tracking-wide text-base-content/50"
+                              >
+                                {scope_group_label(current_group)}
+                              </td>
+                            </tr>
+                          <% end %>
+                          <tr
+                            id={"alias-provider-#{ap.id}"}
+                            data-id={ap.id}
+                            draggable={to_string(@is_admin)}
+                            class={[@is_admin && "cursor-grab active:cursor-grabbing"]}
+                          >
                           <td :if={@is_admin} class="w-8 text-base-content/30">
                             <.icon name="hero-bars-3" class="w-4 h-4" />
                           </td>
@@ -1023,7 +1080,8 @@ defmodule TokengateWeb.ModelsLive do
                               </div>
                             </td>
                           <% end %>
-                        </tr>
+                          </tr>
+                        <% end %>
                       </tbody>
                     </table>
                   </div>
