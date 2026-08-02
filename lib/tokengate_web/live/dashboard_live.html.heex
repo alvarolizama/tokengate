@@ -219,23 +219,36 @@
                   <.icon name="hero-server-stack" class={["w-5 h-5", accent_text("primary")]} />
                 </span>
               </div>
-              <div class="overflow-y-auto max-h-40 flex-1">
+              <div class="overflow-y-auto max-h-96 flex-1">
                 <table class="w-full text-xs">
                   <thead>
                     <tr class="text-base-content/50 border-b border-base-200">
                       <th class="text-left py-1 font-medium">Modelo</th>
                       <th class="text-left py-1 font-medium">Descripción</th>
+                      <th class="text-right py-1 font-medium" title="Latencia promedio (user / team / org)">Latencia</th>
+                      <th class="text-right py-1 font-medium" title="Gasto real (user / team / org)">Gasto</th>
+                      <th class="text-right py-1 font-medium" title="Tokens in/out (user / team / org)">Tokens</th>
                     </tr>
                   </thead>
                   <tbody>
                     <%= for model <- @model_catalog do %>
+                      <% stats = Map.get(@model_usage_stats, model.id, %{user: %{}, team: %{}, org: %{}}) %>
+                      <% is_most_used = model.id == @most_used_model_id %>
                       <tr class="border-b border-base-200 last:border-0 hover:bg-base-200/50">
                         <td class="py-1.5">
-                          <div
-                            class="font-medium text-base-content"
-                            title={model.name}
-                          >
-                            {model.name}
+                          <div class="flex items-center gap-1">
+                            <div
+                              class="font-medium text-base-content"
+                              title={model.name}
+                            >
+                              {model.name}
+                            </div>
+                            <span :if={is_most_used} title="Tu modelo más usado">
+                              <.icon
+                                name="hero-trophy"
+                                class="w-3.5 h-3.5 text-warning"
+                              />
+                            </span>
                           </div>
                           <div class="text-[10px] text-base-content/40">
                             {format_compact(model.context_window)} ctx
@@ -243,6 +256,36 @@
                         </td>
                         <td class="py-1.5 text-base-content/60">
                           {model.description || "—"}
+                        </td>
+                        <td class="py-1.5 text-right tabular-nums text-base-content/70">
+                          <%= if stats.user.avg_latency_ms do %>
+                            <div>{stats.user.avg_latency_ms}ms</div>
+                            <div class="text-[10px] text-base-content/40">
+                              {stats.team.avg_latency_ms || "—"} / {stats.org.avg_latency_ms || "—"}
+                            </div>
+                          <% else %>
+                            —
+                          <% end %>
+                        </td>
+                        <td class="py-1.5 text-right tabular-nums text-base-content/70">
+                          <%= if Decimal.gt?(stats.user.cost_usd, Decimal.new(0)) do %>
+                            <div>${format_decimal(stats.user.cost_usd)}</div>
+                            <div class="text-[10px] text-base-content/40">
+                              ${format_decimal(stats.team.cost_usd)} / ${format_decimal(stats.org.cost_usd)}
+                            </div>
+                          <% else %>
+                            —
+                          <% end %>
+                        </td>
+                        <td class="py-1.5 text-right tabular-nums text-base-content/70">
+                          <%= if stats.user.prompt_tokens > 0 or stats.user.completion_tokens > 0 do %>
+                            <div>{format_compact(stats.user.prompt_tokens)} / {format_compact(stats.user.completion_tokens)}</div>
+                            <div class="text-[10px] text-base-content/40">
+                              {format_compact(stats.team.prompt_tokens)} / {format_compact(stats.team.completion_tokens)}
+                            </div>
+                          <% else %>
+                            —
+                          <% end %>
                         </td>
                       </tr>
                     <% end %>

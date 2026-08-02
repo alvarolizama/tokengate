@@ -241,6 +241,7 @@ defmodule TokengateWeb.DashboardLive do
     |> load_chart_series(user, opts, period, timezone)
     |> load_breakdowns(user, opts)
     |> load_model_catalog()
+    |> load_model_usage_stats(user)
     |> assign(:loading, false)
   end
 
@@ -921,9 +922,172 @@ defmodule TokengateWeb.DashboardLive do
 
   defp model_catalog_entry(ma) do
     %{
+      id: ma.id,
       name: ma.display_name || ma.name,
       description: ma.description,
       context_window: ma.context_window
     }
   end
+
+  # Enrich model catalog with usage stats (user / team / org) for the dashboard
+  # table. Called after load_model_catalog when the period is already set.
+  defp load_model_usage_stats(socket, user) do
+    period = socket.assigns[:period] || "today"
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
+    %{from: from, to: to} = Periods.period_bounds(period, timezone)
+    opts = [from: from, to: to]
+
+    member_ids = user_member_ids(user)
+    models = socket.assigns[:model_catalog] || []
+    model_ids = Enum.map(models, & &1.id)
+
+    if model_ids == [] or member_ids == [] do
+      assign(socket, :model_usage_stats, %{})
+    else
+      # User stats: only the current user's requests
+      user_stats = model_usage_stats_for_members(model_ids, member_ids, opts)
+
+      # Team stats: all members of the user's teams
+      team_ids = Enum.map(socket.assigns[:teams] || [], & &1.team.id)
+      team_stats = model_usage_stats_for_teams(model_ids, team_ids, opts)
+
+      # Org stats: all requests (no scoping)
+      org_stats = model_usage_stats_org(model_ids, opts)
+
+      # Merge into a single map: model_id => %{user: ..., team: ..., org: ...}
+      merged =
+        Map.new(model_ids, fn model_id ->
+          {model_id,
+           %{
+             user: Map.get(user_stats, model_id, empty_usage()),
+             team: Map.get(team_stats, model_id, empty_usage()),
+             org: Map.get(org_stats, model_id, empty_usage())
+           }}
+        end)
+
+      # Find the user's most-used model (by request_count)
+      most_used_id =
+        user_stats
+        |> Enum.sort_by(fn {_id, stats} -> stats.request_count end, :desc)
+        |> List.first()
+        |> case do
+          {id, _stats} -> id
+          nil -> nil
+        end
+
+      socket
+      |> assign(:model_usage_stats, merged)
+      |> assign(:most_used_model_id, most_used_id)
+    end
+  end
+
+  defp empty_usage do
+    %{request_count: 0, cost_usd: Decimal.new(0), prompt_tokens: 0, completion_tokens: 0, avg_latency_ms: nil}
+  end
+
+  defp model_usage_stats_for_members(model_ids, member_ids, opts) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    query =
+      RequestLog
+      |> where([rl], rl.model_alias_id in ^model_ids)
+      |> where([rl], rl.team_member_id in ^member_ids)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> group_by([rl], rl.model_alias_id)
+      |> select([rl], %{
+        model_id: rl.model_alias_id,
+        request_count: count(rl.id),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+        avg_latency_ms: fragment("AVG(?)", rl.latency_ms)
+      })
+
+    Map.new(Repo.all(query), fn row ->
+      {row.model_id,
+       %{
+         request_count: row.request_count,
+         cost_usd: Decimal.new(to_string(row.cost_usd)),
+         prompt_tokens: row.prompt_tokens,
+         completion_tokens: row.completion_tokens,
+         avg_latency_ms: row.avg_latency_ms && round(to_float!(row.avg_latency_ms))
+       }}
+    end)
+  end
+
+  defp model_usage_stats_for_teams(model_ids, team_ids, opts) do
+    if team_ids == [] do
+      %{}
+    else
+      from = Keyword.get(opts, :from)
+      to = Keyword.get(opts, :to)
+
+      query =
+        RequestLog
+        |> join(:inner, [rl], tm in Tokengate.Accounts.TeamMember, on: rl.team_member_id == tm.id)
+        |> where([rl, tm], rl.model_alias_id in ^model_ids)
+        |> where([rl, tm], tm.team_id in ^team_ids)
+        |> maybe_from(from)
+        |> maybe_to(to)
+        |> group_by([rl], rl.model_alias_id)
+        |> select([rl], %{
+          model_id: rl.model_alias_id,
+          request_count: count(rl.id),
+          cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+          prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+          completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+          avg_latency_ms: fragment("AVG(?)", rl.latency_ms)
+        })
+
+      Map.new(Repo.all(query), fn row ->
+        {row.model_id,
+         %{
+           request_count: row.request_count,
+           cost_usd: Decimal.new(to_string(row.cost_usd)),
+           prompt_tokens: row.prompt_tokens,
+           completion_tokens: row.completion_tokens,
+           avg_latency_ms: row.avg_latency_ms && round(to_float!(row.avg_latency_ms))
+         }}
+      end)
+    end
+  end
+
+  defp model_usage_stats_org(model_ids, opts) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    query =
+      RequestLog
+      |> where([rl], rl.model_alias_id in ^model_ids)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> group_by([rl], rl.model_alias_id)
+      |> select([rl], %{
+        model_id: rl.model_alias_id,
+        request_count: count(rl.id),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+        avg_latency_ms: fragment("AVG(?)", rl.latency_ms)
+      })
+
+    Map.new(Repo.all(query), fn row ->
+      {row.model_id,
+       %{
+         request_count: row.request_count,
+         cost_usd: Decimal.new(to_string(row.cost_usd)),
+         prompt_tokens: row.prompt_tokens,
+         completion_tokens: row.completion_tokens,
+         avg_latency_ms: row.avg_latency_ms && round(to_float!(row.avg_latency_ms))
+       }}
+    end)
+  end
+
+  defp maybe_from(query, nil), do: query
+  defp maybe_from(query, from), do: where(query, [rl], rl.inserted_at >= ^from)
+
+  defp to_float!(%Decimal{} = d), do: Decimal.to_float(d)
+  defp to_float!(n) when is_number(n), do: n * 1.0
 end
