@@ -65,7 +65,7 @@
       </button>
     </div>
 
-    <%!-- Teams + models catalog — arriba de métricas --%>
+    <%!-- Teams + models catalog + supervised services — arriba de métricas --%>
     <section id="teams-section">
       <%= if @teams == [] and not @has_access do %>
         <div class="text-center py-12 text-base-content/50" id="no-team-state">
@@ -192,7 +192,7 @@
             id="models-catalog-card"
             class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow md:col-span-2 lg:col-span-3"
           >
-            <div class="card-body p-5">
+            <div class="card-body p-5 flex flex-col h-full">
               <div class="flex items-center justify-between mb-3">
                 <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
                   Modelos
@@ -204,7 +204,7 @@
                   <.icon name="hero-server-stack" class={["w-5 h-5", accent_text("primary")]} />
                 </span>
               </div>
-              <div class="overflow-y-auto max-h-64">
+              <div class="overflow-y-auto max-h-64 flex-1">
                 <table class="w-full text-xs">
                   <thead>
                     <tr class="text-base-content/50 border-b border-base-200">
@@ -239,31 +239,30 @@
               </div>
             </div>
           </div>
+
+          <%!-- Supervised services shortcut — visible when the user supervises any service --%>
+          <.link
+            :if={@supervised_services_count > 0}
+            navigate={~p"/dashboard/services/supervised"}
+            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow block h-full"
+            id="supervised-services-card"
+          >
+            <div class="card-body p-5 flex flex-col h-full">
+              <div class="flex items-center justify-between">
+                <div>
+                  <h3 class="font-semibold text-base-content">Servicios supervisados</h3>
+                  <p class="text-xs text-base-content/50 mt-0.5">
+                    {@supervised_services_count} servicio(s) asignado(s) · Vista de solo lectura
+                  </p>
+                </div>
+                <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10">
+                  <.icon name="hero-eye" class="w-5 h-5 text-primary" />
+                </span>
+              </div>
+            </div>
+          </.link>
         </div>
       <% end %>
-    </section>
-
-    <%!-- Supervised services shortcut — visible when the user supervises any service --%>
-    <section :if={@supervised_services_count > 0} id="supervised-services-section">
-      <.link
-        navigate={~p"/dashboard/services/supervised"}
-        class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow block"
-        id="supervised-services-card"
-      >
-        <div class="card-body p-5">
-          <div class="flex items-center justify-between">
-            <div>
-              <h3 class="font-semibold text-base-content">Servicios supervisados</h3>
-              <p class="text-xs text-base-content/50 mt-0.5">
-                {@supervised_services_count} servicio(s) asignado(s) · Vista de solo lectura
-              </p>
-            </div>
-            <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10">
-              <.icon name="hero-eye" class="w-5 h-5 text-primary" />
-            </span>
-          </div>
-        </div>
-      </.link>
     </section>
 
     <%= if @has_access do %>
