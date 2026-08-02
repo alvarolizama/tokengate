@@ -23,7 +23,7 @@
 
 ### Enrutamiento
 
-- **Prioridad + sticky routing** — la misma API key se pega al mismo proveedor (preserva prompt caches) con TTL de 15 min
+- **Prioridad + sticky routing** — la misma API key se pega al mismo proveedor (preserva prompt caches). El TTL del sticky es **configurable por par modelo↔proveedor** (`sticky_ttl_ms` en `model_providers`, en segundos en el form `Model > Proveedor`). Si está vacío, el default global es 15 min. El estado y la visibilidad se reflejan en `/dashboard/models` aunque la `credential` se pause en `/dashboard/providers`.
 - **Circuit breaker** por credencial (`:gen_statem`) — abre tras 15 fallos (configurable), cooldown 30s (20s si fue rate limit)
 - **Fallback** automático ante errores 5xx/timeout/429
 - **Fallback por saturación** — si la credencial está en su límite de concurrencia o RPM, se rebota a la siguiente en la cola de prioridad sin error al cliente
@@ -98,7 +98,9 @@ Un credential puede ser **global**, **exclusivo para miembro** o **exclusivo par
 
 **2. Por credencial de proveedor:** `max_rpm`, `max_concurrent`, `receive_timeout_ms`
 
-**3. Por equipo/miembro/servicio:** `monthly_budget_per_user_usd`, `default_concurrency_limit`, `default_rpm_limit` (equipo); `extra_monthly_budget_usd`, `extra_concurrency`, `extra_rpm` (miembro); `monthly_budget_usd`, `concurrency_limit`, `rpm_limit` (servicio).
+**3. Por par `model_provider` (modelo × credencial):** `sticky_ttl_ms` (TTL del sticky routing en milisegundos, expuesto en segundos en el form — 1 a 86 400; vacío = 15 min global).
+
+**4. Por equipo/miembro/servicio:** `monthly_budget_per_user_usd`, `default_concurrency_limit`, `default_rpm_limit` (equipo); `extra_monthly_budget_usd`, `extra_concurrency`, `extra_rpm` (miembro); `monthly_budget_usd`, `concurrency_limit`, `rpm_limit` (servicio).
 
 ## Inicio rápido
 
