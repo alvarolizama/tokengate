@@ -60,7 +60,9 @@ defmodule TokengateWeb.ServicesLiveTest do
 
     # Click the user result
     view
-    |> element("button[phx-click='add_supervisor'][phx-value-service-id='#{service.id}'][phx-value-user-id='#{user.id}']")
+    |> element(
+      "button[phx-click='add_supervisor'][phx-value-service-id='#{service.id}'][phx-value-user-id='#{user.id}']"
+    )
     |> render_click()
 
     # Verify the supervisor was added

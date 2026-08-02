@@ -982,7 +982,13 @@ defmodule TokengateWeb.DashboardLive do
   end
 
   defp empty_usage do
-    %{request_count: 0, cost_usd: Decimal.new(0), prompt_tokens: 0, completion_tokens: 0, avg_latency_ms: nil}
+    %{
+      request_count: 0,
+      cost_usd: Decimal.new(0),
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      avg_latency_ms: nil
+    }
   end
 
   defp model_usage_stats_for_members(model_ids, member_ids, opts) do
