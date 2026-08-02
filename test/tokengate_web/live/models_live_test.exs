@@ -4,6 +4,8 @@ defmodule TokengateWeb.ModelsLiveTest do
   import Phoenix.LiveViewTest
 
   alias Tokengate.{Accounts, Providers}
+  alias Tokengate.Repo
+  import Ecto.Query
 
   defp unique, do: System.unique_integer([:positive])
 
@@ -243,6 +245,80 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     assert html =~ "Proveedor asignado"
     assert html =~ "claude-3-opus"
+  end
+
+  test "admin can set sticky_ttl_ms when creating a model provider", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    alias_record = create_alias()
+
+    credential =
+      Tokengate.Repo.insert!(%Tokengate.Providers.Credential{
+        provider_id: provider.id,
+        name: "Test Cred",
+        api_key_encrypted: "sk-...",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    view |> element("#new-ap-#{alias_record.id}") |> render_click()
+
+    html =
+      view
+      |> form("#alias-provider-form", %{
+        model_provider: %{
+          credential_id: credential.id,
+          provider_model: "gpt-4o-sticky",
+          priority: 1,
+          enabled: true,
+          sticky_ttl_ms: 60_000
+        }
+      })
+      |> render_submit()
+
+    assert html =~ "Proveedor asignado"
+
+    ap =
+      Repo.one!(
+        from mp in Tokengate.Providers.ModelProvider, where: mp.model_alias_id == ^alias_record.id
+      )
+
+    assert ap.sticky_ttl_ms == 60_000
+  end
+
+  test "sticky_ttl_ms below 1 second is rejected by the form", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    alias_record = create_alias()
+
+    credential =
+      Tokengate.Repo.insert!(%Tokengate.Providers.Credential{
+        provider_id: provider.id,
+        name: "Test Cred",
+        api_key_encrypted: "sk-...",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    view |> element("#new-ap-#{alias_record.id}") |> render_click()
+
+    html =
+      view
+      |> form("#alias-provider-form", %{
+        model_provider: %{
+          credential_id: credential.id,
+          provider_model: "gpt-4o-bad",
+          priority: 1,
+          enabled: true,
+          sticky_ttl_ms: 500
+        }
+      })
+      |> render_submit()
+
+    refute html =~ "Proveedor asignado"
+    assert html =~ "sticky_ttl_ms" or html =~ "TTL sticky"
   end
 
   test "admin can reorder provider priorities via drag-drop event", %{conn: conn} do

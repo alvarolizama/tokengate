@@ -1105,8 +1105,12 @@ defmodule TokengateWeb.ModelsLive do
                                     phx-value-id={ap.id}
                                     class="btn btn-xs btn-ghost"
                                     id={"toggle-ap-#{ap.id}"}
+                                    title={if ap.enabled, do: "Desactivar", else: "Activar"}
                                   >
-                                    <.icon name="hero-arrow-path" class="w-3 h-3" />
+                                    <.icon
+                                      name={if ap.enabled, do: "hero-pause", else: "hero-play"}
+                                      class="w-3 h-3"
+                                    />
                                   </button>
                                   <button
                                     phx-click="edit_model_provider"
@@ -1453,6 +1457,13 @@ defmodule TokengateWeb.ModelsLive do
                     hint="Pay per token: cobra por uso. Incluida: suscripción/RPM = $0."
                   />
                 </div>
+
+                <.input
+                  field={@provider_form[:sticky_ttl_ms]}
+                  type="number"
+                  label="TTL sticky (ms)"
+                  hint="Cuánto se queda pegada la misma credencial para esta API key. Vacío = 15 min (default). Mínimo 1000 ms (1 s), máximo 24 h (86 400 000)."
+                />
 
                 <.input
                   field={@provider_form[:enabled]}

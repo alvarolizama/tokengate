@@ -78,7 +78,7 @@ defmodule Tokengate.Routing.Priority do
         {:error, :no_available_provider}
 
       %ModelProvider{} = ap ->
-        sticky_put(api_key_hash, model_alias_id, ap.id)
+        sticky_put(api_key_hash, model_alias_id, ap.id, ap.sticky_ttl_ms)
         {:ok, ap}
     end
   end
@@ -113,9 +113,9 @@ defmodule Tokengate.Routing.Priority do
     :exit, _ -> nil
   end
 
-  defp sticky_put(api_key_hash, model_alias_id, model_provider_id) do
+  defp sticky_put(api_key_hash, model_alias_id, model_provider_id, sticky_ttl_ms) do
     try do
-      StickyTracker.put(api_key_hash, model_alias_id, model_provider_id)
+      StickyTracker.put(api_key_hash, model_alias_id, model_provider_id, sticky_ttl_ms)
     catch
       :exit, _ -> :ok
     end

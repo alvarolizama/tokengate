@@ -1,13 +1,14 @@
 defmodule Tokengate.Routing.StickyTracker do
   @moduledoc """
   GenServer that owns a public named ETS table (`:tokengate_sticky_routes`)
-  mapping `{api_key_hash, model_alias_id}` to `{model_provider_id, inserted_at}`.
+  mapping `{api_key_hash, model_alias_id}` to `{model_provider_id, inserted_at, ttl_ms}`.
 
   The same API key is kept sticky to the same provider so that prompt-cache
   affinity is preserved across requests.
 
-  Entries expire after `@ttl_ms` (15 minutes). Reads check the TTL lazily
-  and return `nil` for expired entries, deleting them on the fly. A periodic
+  Entries expire after their per-entry `ttl_ms` (or `@default_ttl_ms`,
+  15 minutes, when `ttl_ms` is nil). Reads check the TTL lazily and
+  return `nil` for expired entries, deleting them on the fly. A periodic
   sweep runs every `@sweep_interval_ms` to purge expired entries in bulk.
 
   The ETS table is created in `init/1` with `read_concurrency: true`. Reads
@@ -19,7 +20,8 @@ defmodule Tokengate.Routing.StickyTracker do
 
     * `start_link/1`
     * `get/2`          – direct ETS read (no server round-trip), with TTL.
-    * `put/3`          – async cast to the GenServer.
+    * `put/3`          – async cast to the GenServer (uses default TTL).
+    * `put/4`          – async cast with explicit per-entry TTL (ms).
     * `clear/2`        – sync call removing a single key.
     * `clear_all_for_provider/1` – drops all stickies pointing at any of the
       given model_provider_ids (used when a provider goes down).
@@ -28,10 +30,16 @@ defmodule Tokengate.Routing.StickyTracker do
   use GenServer
 
   @table :tokengate_sticky_routes
-  # Sticky entries expire after 15 minutes — enough cache affinity for prompt
+  # Default sticky window: 15 minutes — enough cache affinity for prompt
   # caching without pinning users to degraded providers for too long.
-  @ttl_ms 15 * 60 * 1000
+  # Overridable per-entry via `put/4`.
+  @default_ttl_ms 15 * 60 * 1000
   @sweep_interval_ms 5 * 60 * 1000
+
+  @doc """
+  Default sticky TTL applied when an entry is put without an explicit TTL.
+  """
+  def default_ttl_ms, do: @default_ttl_ms
 
   ## Public API ------------------------------------------------------------
 
@@ -47,7 +55,7 @@ defmodule Tokengate.Routing.StickyTracker do
   tracker is not running.
 
   Reads directly from the public ETS table — no GenServer round-trip.
-  Expired entries are deleted lazily on read.
+  Expired entries are deleted lazily on read. Honors the per-entry TTL.
   """
   @spec get(binary(), binary()) :: binary() | nil
   def get(api_key_hash, model_alias_id) do
@@ -56,8 +64,19 @@ defmodule Tokengate.Routing.StickyTracker do
     rescue
       ArgumentError -> nil
     else
+      [{_, {model_provider_id, inserted_at, ttl_ms}}] ->
+        if expired?(inserted_at, ttl_ms) do
+          GenServer.cast(__MODULE__, {:delete, {api_key_hash, model_alias_id}})
+          nil
+        else
+          model_provider_id
+        end
+
+      # Legacy entries written before per-entry TTL was added. Treat them
+      # as if they were written with the default TTL — keeps behavior
+      # unchanged across deploys.
       [{_, {model_provider_id, inserted_at}}] ->
-        if expired?(inserted_at) do
+        if expired?(inserted_at, @default_ttl_ms) do
           GenServer.cast(__MODULE__, {:delete, {api_key_hash, model_alias_id}})
           nil
         else
@@ -70,13 +89,27 @@ defmodule Tokengate.Routing.StickyTracker do
   end
 
   @doc """
-  Sticks `{api_key_hash, model_alias_id}` to `model_provider_id`.
-
-  Async cast: returns `:ok` immediately.
+  Sticks `{api_key_hash, model_alias_id}` to `model_provider_id` using the
+  default TTL (15 minutes).
   """
   @spec put(binary(), binary(), binary()) :: :ok
   def put(api_key_hash, model_alias_id, model_provider_id) do
-    GenServer.cast(__MODULE__, {:put, api_key_hash, model_alias_id, model_provider_id})
+    put(api_key_hash, model_alias_id, model_provider_id, nil)
+  end
+
+  @doc """
+  Sticks `{api_key_hash, model_alias_id}` to `model_provider_id` with an
+  explicit per-entry TTL in milliseconds. When `ttl_ms` is nil, the
+  default TTL (15 min) applies.
+  """
+  @spec put(binary(), binary(), binary(), non_neg_integer() | nil) :: :ok
+  def put(api_key_hash, model_alias_id, model_provider_id, ttl_ms)
+      when is_binary(api_key_hash) and is_binary(model_alias_id) and
+             is_binary(model_provider_id) do
+    GenServer.cast(
+      __MODULE__,
+      {:put, api_key_hash, model_alias_id, model_provider_id, ttl_ms || @default_ttl_ms}
+    )
   end
 
   @doc """
@@ -118,6 +151,21 @@ defmodule Tokengate.Routing.StickyTracker do
     GenServer.call(__MODULE__, :clear_all)
   end
 
+  @doc false
+  # Test helper: ages the entry past its TTL so the next get/2 returns nil
+  # without `Process.sleep`. `key` is the full {api_key_hash, model_alias_id}
+  # tuple. `ms` is how many milliseconds to add to the elapsed time.
+  def backdate_for_test(key, ms) do
+    case :ets.lookup(@table, key) do
+      [{^key, {model_provider_id, inserted_at, ttl_ms}}] ->
+        :ets.insert(@table, {key, {model_provider_id, inserted_at - ms, ttl_ms}})
+        :ok
+
+      [] ->
+        :ok
+    end
+  end
+
   ## GenServer callbacks ---------------------------------------------------
 
   @impl true
@@ -135,10 +183,14 @@ defmodule Tokengate.Routing.StickyTracker do
   end
 
   @impl true
-  def handle_cast({:put, api_key_hash, model_alias_id, model_provider_id}, state) do
+  def handle_cast(
+        {:put, api_key_hash, model_alias_id, model_provider_id, ttl_ms},
+        state
+      ) do
     :ets.insert(
       @table,
-      {{api_key_hash, model_alias_id}, {model_provider_id, System.monotonic_time(:millisecond)}}
+      {{api_key_hash, model_alias_id},
+       {model_provider_id, System.monotonic_time(:millisecond), ttl_ms}}
     )
 
     {:noreply, state}
@@ -171,10 +223,11 @@ defmodule Tokengate.Routing.StickyTracker do
 
     :ets.foldl(
       fn
-        {{api_key_hash, model_alias_id} = key, {model_provider_id, inserted_at}}, acc
+        {{api_key_hash, model_alias_id} = key, value}, acc
         when is_binary(api_key_hash) and is_binary(model_alias_id) ->
+          {model_provider_id, inserted_at, ttl_ms} = normalize_value(value)
           # Delete if the entry points at a cleared provider OR has expired.
-          if MapSet.member?(id_set, model_provider_id) or expired?(inserted_at, now) do
+          if MapSet.member?(id_set, model_provider_id) or expired?(inserted_at, ttl_ms, now) do
             :ets.delete(@table, key)
           end
 
@@ -214,8 +267,10 @@ defmodule Tokengate.Routing.StickyTracker do
 
     :ets.foldl(
       fn
-        {key, {_model_provider_id, inserted_at}}, acc ->
-          if expired?(inserted_at, now) do
+        {key, value}, acc ->
+          {_, inserted_at, ttl_ms} = normalize_value(value)
+
+          if expired?(inserted_at, ttl_ms, now) do
             :ets.delete(@table, key)
           end
 
@@ -229,7 +284,14 @@ defmodule Tokengate.Routing.StickyTracker do
     )
   end
 
-  defp expired?(inserted_at), do: expired?(inserted_at, System.monotonic_time(:millisecond))
+  # Accept both the new 3-tuple and the legacy 2-tuple on read. New writes
+  # always use the 3-tuple form; legacy entries are still honored until
+  # the natural TTL elapses (or the next write overwrites them).
+  defp normalize_value({id, at, ttl}), do: {id, at, ttl}
+  defp normalize_value({id, at}), do: {id, at, @default_ttl_ms}
 
-  defp expired?(inserted_at, now), do: now - inserted_at > @ttl_ms
+  defp expired?(inserted_at, ttl_ms),
+    do: expired?(inserted_at, ttl_ms, System.monotonic_time(:millisecond))
+
+  defp expired?(inserted_at, ttl_ms, now), do: now - inserted_at > ttl_ms
 end

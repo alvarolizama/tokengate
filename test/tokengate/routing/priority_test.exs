@@ -25,7 +25,8 @@ defmodule Tokengate.Routing.PriorityTest do
       priority: Keyword.get(opts, :priority),
       enabled: Keyword.get(opts, :enabled, true),
       provider_model: Keyword.get(opts, :provider_model, "model-#{id}"),
-      model_alias_id: Keyword.get(opts, :model_alias_id, "alias-1")
+      model_alias_id: Keyword.get(opts, :model_alias_id, "alias-1"),
+      sticky_ttl_ms: Keyword.get(opts, :sticky_ttl_ms)
     }
   end
 
@@ -139,6 +140,41 @@ defmodule Tokengate.Routing.PriorityTest do
       _ = :sys.get_state(StickyTracker)
       assert StickyTracker.get("key-a", "alias-1") == "high"
       assert StickyTracker.get("key-b", "alias-1") == "high"
+    end
+
+    test "model provider's sticky_ttl_ms is forwarded to StickyTracker" do
+      # Two candidates, both with TTL — pick the higher-priority one and
+      # verify its TTL is what got stored (not the default 15 min).
+      candidates = [
+        ap("custom", priority: 1, sticky_ttl_ms: 60_000),
+        ap("default", priority: 2)
+      ]
+
+      opts = %{api_key_hash: "key-ttl", model_alias_id: "alias-1"}
+      key = {"key-ttl", "alias-1"}
+
+      assert {:ok, selected} = Priority.select(candidates, opts)
+      assert selected.id == "custom"
+
+      _ = :sys.get_state(StickyTracker)
+
+      # The ETS row should carry the 60_000 TTL (not the 15-min default).
+      [{^key, {_id, _inserted_at, ttl_ms}}] = :ets.lookup(:tokengate_sticky_routes, key)
+      assert ttl_ms == 60_000
+    end
+
+    test "nil sticky_ttl_ms falls back to default 15 minutes" do
+      candidates = [ap("plain", priority: 1)]
+      opts = %{api_key_hash: "key-nil-ttl", model_alias_id: "alias-1"}
+      key = {"key-nil-ttl", "alias-1"}
+
+      assert {:ok, _} = Priority.select(candidates, opts)
+      _ = :sys.get_state(StickyTracker)
+
+      [{^key, {_id, _inserted_at, ttl_ms}}] = :ets.lookup(:tokengate_sticky_routes, key)
+
+      assert ttl_ms == StickyTracker.default_ttl_ms()
+      assert ttl_ms == 15 * 60 * 1000
     end
   end
 

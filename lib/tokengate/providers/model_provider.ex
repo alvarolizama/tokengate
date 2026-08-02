@@ -44,6 +44,7 @@ defmodule Tokengate.Providers.ModelProvider do
     field :priority, :integer
     field :enabled, :boolean, default: true
     field :billing_mode, :string, default: "pay_per_token"
+    field :sticky_ttl_ms, :integer
     field :scope, :string, virtual: true, default: "global"
 
     belongs_to :model_alias, Tokengate.Providers.ModelAlias
@@ -64,11 +65,16 @@ defmodule Tokengate.Providers.ModelProvider do
       :priority,
       :enabled,
       :billing_mode,
+      :sticky_ttl_ms,
       :exclusive_to_team_member_id,
       :exclusive_to_team_id
     ])
     |> validate_required([:model_alias_id, :credential_id, :provider_model, :enabled])
     |> validate_inclusion(:billing_mode, @billing_modes)
+    |> validate_number(:sticky_ttl_ms,
+      greater_than_or_equal_to: 1_000,
+      less_than_or_equal_to: 24 * 60 * 60 * 1000
+    )
     |> validate_exclusive_scope()
     |> foreign_key_constraint(:model_alias_id)
     |> foreign_key_constraint(:credential_id)
