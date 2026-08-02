@@ -110,17 +110,26 @@ defmodule TokengateWeb.TeamMembersLive do
       extra_aliases
       |> Enum.group_by(fn {tm_id, _} -> tm_id end, fn {_, alias_id} -> alias_id end)
 
-    # Member budgets with spend
+    # Member budgets with spend — one batched query for every member instead
+    # of one SUM per member (N+1).
     alias_map = Map.new(org_alias_ids, fn a -> {a.id, a.name} end)
+
+    monthly_spend_by_member =
+      members
+      |> Enum.map(& &1.id)
+      |> Tokengate.Budgets.spend_by_member_ids(timezone)
+      |> Map.get(:monthly)
 
     member_budgets =
       Enum.map(members, fn m ->
-        budget_for_member(m, alias_map, timezone)
+        %{
+          member_id: m.id,
+          monthly_spend: Map.get(monthly_spend_by_member, m.id, Decimal.new(0))
+        }
       end)
 
     team_monthly_spend =
-      Enum.reduce(members, Decimal.new(0), fn m, acc ->
-        spend = Tokengate.Budgets.monthly_spend_for_member(m.id, timezone)
+      Enum.reduce(monthly_spend_by_member, Decimal.new(0), fn {_id, spend}, acc ->
         Decimal.add(acc, spend)
       end)
 
@@ -151,13 +160,6 @@ defmodule TokengateWeb.TeamMembersLive do
     |> assign(:estimated_monthly, estimated_monthly)
     |> assign(:estimated_monthly_extra, estimated_monthly_extra)
     |> load_exclusive_providers(members)
-  end
-
-  defp budget_for_member(member, _alias_map, timezone) do
-    %{
-      member_id: member.id,
-      monthly_spend: Tokengate.Budgets.monthly_spend_for_member(member.id, timezone)
-    }
   end
 
   defp load_exclusive_providers(socket, members) do
