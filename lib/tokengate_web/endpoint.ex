@@ -1,14 +1,19 @@
 defmodule TokengateWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :tokengate
 
-  # The session will be stored in the cookie and signed,
-  # this means its contents can be read but not tampered with.
-  # Set :encryption_salt if you would also like to encrypt it.
+  # The session is stored in an encrypted cookie (contents can be neither
+  # read nor tampered with by the client). `secure: true` only restricts the
+  # cookie to HTTPS when the request itself is HTTPS, so local HTTP dev keeps
+  # working. Salts and lifetime are runtime-configurable via env vars.
   @session_options [
     store: :cookie,
     key: "_tokengate_key",
-    signing_salt: "TwS/TtVu",
-    same_site: "Lax"
+    signing_salt: System.get_env("SESSION_SIGNING_SALT", "TwS/TtVu"),
+    encryption_salt: System.get_env("SESSION_ENCRYPTION_SALT", "pScAXZ3eub"),
+    same_site: "Lax",
+    secure: true,
+    http_only: true,
+    max_age: String.to_integer(System.get_env("SESSION_MAX_AGE_SECONDS", "28800"))
   ]
 
   socket "/live", Phoenix.LiveView.Socket,
