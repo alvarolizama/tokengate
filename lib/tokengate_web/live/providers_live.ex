@@ -698,8 +698,12 @@ defmodule TokengateWeb.ProvidersLive do
                               phx-value-id={cred.id}
                               class="btn btn-xs btn-ghost"
                               id={"toggle-credential-btn-#{cred.id}"}
+                              title={if cred.status == "active", do: "Desactivar", else: "Activar"}
                             >
-                              {if cred.status == "active", do: "Desactivar", else: "Activar"}
+                              <.icon
+                                name={if cred.status == "active", do: "hero-pause", else: "hero-play"}
+                                class="w-3 h-3"
+                              />
                             </button>
                           <% end %>
                           <button
