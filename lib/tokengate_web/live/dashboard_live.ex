@@ -62,6 +62,7 @@ defmodule TokengateWeb.DashboardLive do
       |> assign(:new_token, nil)
       |> assign(:new_token_team, nil)
       |> assign(:model_catalog, [])
+      |> assign(:supervised_services_count, count_supervised_services(user))
       |> load_personal_data(user)
 
     if connected?(socket) do
@@ -116,6 +117,18 @@ defmodule TokengateWeb.DashboardLive do
   # memberships on /dashboard. The org-wide view lives in /dashboard/stats.
   defp user_member_ids(user) do
     user.id |> Accounts.list_team_members_for_user() |> Enum.map(& &1.id)
+  end
+
+  # Count of services the user supervises (read-only role). Used to show a
+  # shortcut card on /dashboard when > 0.
+  defp count_supervised_services(user) do
+    import Ecto.Query
+
+    Tokengate.Repo.one(
+      from ss in Tokengate.Accounts.ServiceSupervisor,
+        where: ss.user_id == ^user.id,
+        select: count(ss.id)
+    )
   end
 
   @impl true

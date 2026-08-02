@@ -231,6 +231,29 @@
       <% end %>
     </section>
 
+    <%!-- Supervised services shortcut — visible when the user supervises any service --%>
+    <section :if={@supervised_services_count > 0} id="supervised-services-section">
+      <.link
+        navigate={~p"/dashboard/services/supervised"}
+        class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow block"
+        id="supervised-services-card"
+      >
+        <div class="card-body p-5">
+          <div class="flex items-center justify-between">
+            <div>
+              <h3 class="font-semibold text-base-content">Servicios supervisados</h3>
+              <p class="text-xs text-base-content/50 mt-0.5">
+                {@supervised_services_count} servicio(s) asignado(s) · Vista de solo lectura
+              </p>
+            </div>
+            <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10">
+              <.icon name="hero-eye" class="w-5 h-5 text-primary" />
+            </span>
+          </div>
+        </div>
+      </.link>
+    </section>
+
     <%= if @has_access do %>
       <%!-- Metrics section --%>
       <%= if @loading do %>
