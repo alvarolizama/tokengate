@@ -29,7 +29,6 @@ defmodule TokengateWeb.ProvidersLive do
       |> assign(:page_title, "Proveedores · Tokengate")
       |> assign(:form, nil)
       |> assign(:editing_provider_id, nil)
-      |> assign(:credential_provider_id, nil)
       |> assign(:credential_form, nil)
       |> assign(:editing_credential_id, nil)
       |> assign(:is_admin, user && user.global_role == "admin")
@@ -194,14 +193,6 @@ defmodule TokengateWeb.ProvidersLive do
   end
 
   ## Events — credential management ----------------------------------------
-
-  def handle_event("manage_credentials", %{"id" => provider_id}, socket) do
-    {:noreply,
-     socket
-     |> assign(:credential_provider_id, provider_id)
-     |> assign(:credential_form, nil)
-     |> assign(:editing_credential_id, nil)}
-  end
 
   def handle_event("new_credential", %{"provider_id" => provider_id}, socket) do
     changeset =
@@ -574,14 +565,6 @@ defmodule TokengateWeb.ProvidersLive do
                     {if provider.status == "active", do: "Desactivar", else: "Activar"}
                   </button>
                   <button
-                    phx-click="manage_credentials"
-                    phx-value-id={provider.id}
-                    class="btn btn-sm btn-ghost"
-                    id={"credentials-#{provider.id}"}
-                  >
-                    <.icon name="hero-key" class="w-4 h-4" /> Credenciales
-                  </button>
-                  <button
                     phx-click="edit_provider"
                     phx-value-id={provider.id}
                     class="btn btn-sm btn-ghost"
@@ -601,9 +584,8 @@ defmodule TokengateWeb.ProvidersLive do
                 </div>
               </div>
 
-              <%!-- Credentials panel --%>
+              <%!-- Credentials panel — always open --%>
               <div
-                :if={@credential_provider_id == provider.id}
                 class="mt-3 pt-3 border-t border-base-300"
                 id={"credentials-panel-#{provider.id}"}
               >

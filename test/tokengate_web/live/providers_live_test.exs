@@ -193,8 +193,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/providers")
 
-    # Open the credentials panel
-    view |> element("#credentials-#{provider.id}") |> render_click()
+    # Credentials panel is always open
     assert has_element?(view, "#credentials-panel-#{provider.id}")
 
     # Create a credential
