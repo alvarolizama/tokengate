@@ -39,6 +39,7 @@ defmodule Tokengate.Logs.WriteWorker do
       latency_ms: args["latency_ms"],
       ttft_ms: args["ttft_ms"],
       streaming: args["streaming"] || false,
+      request_type: args["request_type"] || "chat",
       think: args["think"] || false,
       effort: args["effort"],
       api_key_prefix: args["api_key_prefix"],

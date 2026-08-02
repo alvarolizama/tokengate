@@ -30,7 +30,33 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
 
   @impl true
   def chat_completion(provider, credential, payload, opts \\ []) do
-    url = chat_completions_url(provider)
+    post_json(provider, credential, "/chat/completions", payload, opts)
+  end
+
+  @doc """
+  Generates embeddings via the provider's OpenAI-compatible `/embeddings`
+  endpoint. The payload is forwarded exactly as received — input may be a
+  string, list of strings, or provider-specific multimodal blocks.
+  """
+  def embeddings(provider, credential, payload, opts \\ []) do
+    post_json(provider, credential, "/embeddings", payload, opts)
+  end
+
+  @doc """
+  Reranks documents via the provider's `/rerank` endpoint (Cohere-style
+  request: `query`, `documents`, optional `top_n` / `return_documents` /
+  `task`). Served natively by oMLX and Fireworks. Providers without a
+  rerank surface (e.g. OpenRouter) will answer 404, which the caller's
+  fallback logic handles like any other upstream failure.
+  """
+  def rerank(provider, credential, payload, opts \\ []) do
+    post_json(provider, credential, "/rerank", payload, opts)
+  end
+
+  # Shared non-streaming POST transport: identical headers, timeout and
+  # error classification regardless of the endpoint segment.
+  defp post_json(provider, credential, path, payload, opts) do
+    url = base_url(provider) <> path
     api_key = Map.get(credential, :api_key_encrypted) || Map.get(credential, "api_key_encrypted")
     receive_timeout = Keyword.get(opts, :receive_timeout, @default_receive_timeout)
     forwarded_headers = Keyword.get(opts, :forwarded_headers, %{})

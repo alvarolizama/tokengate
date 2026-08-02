@@ -36,6 +36,43 @@ defmodule TokengateWeb.ProxyControllerTest do
         "down" in conn.path_info ->
           json(conn, 500, %{"error" => %{"message" => "provider exploded"}})
 
+        "embeddings" in conn.path_info ->
+          payload = Jason.decode!(body)
+          count = payload["input"] |> List.wrap() |> length()
+
+          data =
+            for idx <- 0..(count - 1) do
+              %{"object" => "embedding", "index" => idx, "embedding" => [0.1, 0.2, 0.3]}
+            end
+
+          json(conn, 200, %{
+            "object" => "list",
+            "model" => payload["model"],
+            "data" => data,
+            "usage" => %{"prompt_tokens" => 11, "total_tokens" => 11, "cost" => 0.000011}
+          })
+
+        "rerank-cohere" in conn.path_info ->
+          # oMLX-style response: Cohere shape, no usage
+          json(conn, 200, %{
+            "results" => [
+              %{"index" => 1, "relevance_score" => 0.9},
+              %{"index" => 0, "relevance_score" => 0.2}
+            ]
+          })
+
+        "rerank" in conn.path_info ->
+          # Fireworks-style response: Jina shape with usage
+          json(conn, 200, %{
+            "object" => "list",
+            "model" => "fireworks/qwen3-reranker-8b",
+            "data" => [
+              %{"index" => 1, "relevance_score" => 0.9, "document" => "doc uno"},
+              %{"index" => 0, "relevance_score" => 0.2, "document" => "doc cero"}
+            ],
+            "usage" => %{"prompt_tokens" => 42, "total_tokens" => 42, "cost" => 0.000042}
+          })
+
         "slowstream" in conn.path_info ->
           Process.sleep(300)
           stream(conn)
@@ -185,6 +222,12 @@ defmodule TokengateWeb.ProxyControllerTest do
 
   defp chat_body(model) do
     %{"model" => model, "messages" => [%{"role" => "user", "content" => "hola, ¿cómo vas?"}]}
+  end
+
+  defp update_alias_type(model_alias, type) do
+    model_alias
+    |> Ecto.Changeset.change(model_type: type)
+    |> Repo.update!()
   end
 
   ## Auth ######################################################################
@@ -680,5 +723,200 @@ defmodule TokengateWeb.ProxyControllerTest do
       |> post(~p"/v1/chat/completions", Map.put(chat_body(model_alias.name), "stream", true))
 
     assert %{"error" => %{"type" => "service_unavailable"}} = json_response(conn, 503)
+  end
+
+  ## Embeddings ################################################################
+
+  test "embeddings happy path: passthrough, cost from usage, log with request_type", %{
+    conn: conn
+  } do
+    %{token: token, alias: model_alias, member: member} = proxy_fixture()
+    update_alias_type(model_alias, "embedding")
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/embeddings", %{"model" => model_alias.name, "input" => ["hola", "wey"]})
+
+    body = json_response(conn, 200)
+
+    # Passthrough: two vectors back, upstream model id
+    assert [%{"index" => 0, "embedding" => [0.1, 0.2, 0.3]}, %{"index" => 1}] = body["data"]
+    assert body["model"] =~ "gpt-4o-real"
+
+    # Provider-reported usage drives cost (cost 0.000011)
+    assert get_resp_header(conn, "x-tokengate-cost") == ["0.000011"]
+
+    spend = Budgets.spend(member.id)
+    assert Decimal.equal?(spend.monthly_usd, Decimal.new("0.000011"))
+
+    assert_enqueued(worker: WriteWorker)
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.team_member_id == ^member.id)
+    assert log.request_type == "embedding"
+    assert log.prompt_tokens == 11
+    assert log.completion_tokens == 0
+    assert log.status_code == 200
+  end
+
+  test "embeddings accepts a bare string input", %{conn: conn} do
+    %{token: token, alias: model_alias} = proxy_fixture()
+    update_alias_type(model_alias, "embedding")
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/embeddings", %{"model" => model_alias.name, "input" => "una sola"})
+
+    assert %{"data" => [%{"index" => 0}]} = json_response(conn, 200)
+  end
+
+  test "embeddings 400 without input", %{conn: conn} do
+    %{token: token, alias: model_alias} = proxy_fixture()
+    update_alias_type(model_alias, "embedding")
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/embeddings", %{"model" => model_alias.name})
+
+    assert %{"error" => %{"code" => "invalid_request"}} = json_response(conn, 400)
+  end
+
+  test "embeddings 400 model_type_mismatch against an llm alias", %{conn: conn} do
+    %{token: token, alias: model_alias} = proxy_fixture()
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/embeddings", %{"model" => model_alias.name, "input" => "x"})
+
+    assert %{"error" => %{"code" => "model_type_mismatch"}} = json_response(conn, 400)
+  end
+
+  test "chat completions 400 model_type_mismatch against an embedding alias", %{conn: conn} do
+    %{token: token, alias: model_alias} = proxy_fixture()
+    update_alias_type(model_alias, "embedding")
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+
+    assert %{"error" => %{"code" => "model_type_mismatch"}} = json_response(conn, 400)
+  end
+
+  ## Rerank ####################################################################
+
+  test "rerank with Fireworks-style upstream normalizes to Cohere shape", %{conn: conn} do
+    %{token: token, alias: model_alias, member: member} = proxy_fixture()
+    update_alias_type(model_alias, "rerank")
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/rerank", %{
+        "model" => model_alias.name,
+        "query" => "chaos",
+        "documents" => ["doc cero", "doc uno"]
+      })
+
+    body = json_response(conn, 200)
+
+    # data → results normalization; scores and ordering intact
+    assert [%{"index" => 1, "relevance_score" => 0.9}, %{"index" => 0, "relevance_score" => 0.2}] =
+             body["results"]
+
+    refute Map.has_key?(body, "data")
+
+    # Fireworks-reported usage drives cost
+    assert get_resp_header(conn, "x-tokengate-cost") == ["0.000042"]
+
+    spend = Budgets.spend(member.id)
+    assert Decimal.equal?(spend.monthly_usd, Decimal.new("0.000042"))
+
+    assert_enqueued(worker: WriteWorker)
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.team_member_id == ^member.id)
+    assert log.request_type == "rerank"
+    assert log.prompt_tokens == 42
+    assert log.status_code == 200
+  end
+
+  test "rerank with oMLX-style upstream passes through and estimates usage", %{conn: conn} do
+    %{token: token, alias: model_alias, member: member} = proxy_fixture()
+    update_alias_type(model_alias, "rerank")
+
+    [model_provider] = Providers.list_model_providers(model_alias.id)
+
+    {:ok, _provider} =
+      Providers.update_provider(model_provider.credential.provider, %{
+        base_url: "http://localhost:#{@port}/rerank-cohere"
+      })
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/rerank", %{
+        "model" => model_alias.name,
+        "query" => "chaos",
+        "documents" => ["doc cero", "doc uno"]
+      })
+
+    body = json_response(conn, 200)
+    assert [%{"index" => 1, "relevance_score" => 0.9} | _] = body["results"]
+
+    # No upstream usage → estimated prompt_tokens > 0, zero cost (pay_per_token
+    # with no reported cost is the honest-zero policy)
+    assert_enqueued(worker: WriteWorker)
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.team_member_id == ^member.id)
+    assert log.request_type == "rerank"
+    assert log.prompt_tokens > 0
+    assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0"))
+  end
+
+  test "rerank 400 without documents", %{conn: conn} do
+    %{token: token, alias: model_alias} = proxy_fixture()
+    update_alias_type(model_alias, "rerank")
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/rerank", %{"model" => model_alias.name, "query" => "q"})
+
+    assert %{"error" => %{"code" => "invalid_request"}} = json_response(conn, 400)
+  end
+
+  test "rerank 400 model_type_mismatch against an llm alias", %{conn: conn} do
+    %{token: token, alias: model_alias} = proxy_fixture()
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/rerank", %{
+        "model" => model_alias.name,
+        "query" => "q",
+        "documents" => ["d"]
+      })
+
+    assert %{"error" => %{"code" => "model_type_mismatch"}} = json_response(conn, 400)
+  end
+
+  test "GET /v1/models includes model_type", %{conn: conn} do
+    %{token: token, alias: model_alias} = proxy_fixture()
+    update_alias_type(model_alias, "embedding")
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> get(~p"/v1/models")
+
+    assert %{"data" => models} = json_response(conn, 200)
+    entry = Enum.find(models, &(&1["id"] == model_alias.name))
+    assert entry["model_type"] == "embedding"
   end
 end

@@ -102,6 +102,8 @@ defmodule TokengateWeb.Router do
 
     get "/models", ProxyController, :models
     post "/chat/completions", ProxyController, :chat_completions
+    post "/embeddings", ProxyController, :embeddings
+    post "/rerank", ProxyController, :rerank
   end
 
   # Other scopes may use custom stacks.

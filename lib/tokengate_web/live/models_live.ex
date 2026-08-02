@@ -945,6 +945,12 @@ defmodule TokengateWeb.ModelsLive do
                       >
                         · {format_compact(model_alias.context_window)} ctx
                       </span>
+                      <span
+                        :if={model_alias.model_type != "llm"}
+                        class="badge badge-sm badge-outline badge-info"
+                      >
+                        {model_alias.model_type}
+                      </span>
                     </div>
                     <p class="text-sm text-base-content/60 mt-1">{model_alias.display_name}</p>
                   </div>
@@ -1183,21 +1189,31 @@ defmodule TokengateWeb.ModelsLive do
                   hint="Tamaño máximo de contexto del modelo en tokens."
                 />
 
-                <div class="divider my-3 text-xs text-base-content/50">Optimización</div>
-
                 <.input
-                  field={@form[:prompt_cache_enabled]}
-                  type="checkbox"
-                  label="Prompt caching (prefix estable)"
-                  hint="Reordena system prompts al frente y dedupe para maximizar cache hits del proveedor."
+                  field={@form[:model_type]}
+                  type="select"
+                  label="Tipo de modelo"
+                  options={[{"LLM (chat)", "llm"}, {"Embedding", "embedding"}, {"Rerank", "rerank"}]}
+                  hint="Define qué endpoint lo sirve: /v1/chat/completions, /v1/embeddings o /v1/rerank."
                 />
 
-                <.input
-                  field={@form[:lazy_cleanup_enabled]}
-                  type="checkbox"
-                  label="Limpieza perezosa sin LLM"
-                  hint="Dedupe de tool outputs y recorte de bloques largos. 100% determinista, sin inferencia."
-                />
+                <div :if={@form[:model_type].value in [nil, "llm", ""]}>
+                  <div class="divider my-3 text-xs text-base-content/50">Optimización</div>
+
+                  <.input
+                    field={@form[:prompt_cache_enabled]}
+                    type="checkbox"
+                    label="Prompt caching (prefix estable)"
+                    hint="Reordena system prompts al frente y dedupe para maximizar cache hits del proveedor."
+                  />
+
+                  <.input
+                    field={@form[:lazy_cleanup_enabled]}
+                    type="checkbox"
+                    label="Limpieza perezosa sin LLM"
+                    hint="Dedupe de tool outputs y recorte de bloques largos. 100% determinista, sin inferencia."
+                  />
+                </div>
 
                 <div class="flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">

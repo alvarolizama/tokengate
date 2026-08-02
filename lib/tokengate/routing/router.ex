@@ -72,11 +72,17 @@ defmodule Tokengate.Routing.Router do
     * `:breaker` – a module implementing the breaker API
       (`allow?/1`, `record_success/1`, `record_failure/2`) used in place of
       `CircuitBreakerManager` (test injection). Defaults to the real manager.
+    * `:capability` – the required `model_type` of the alias (`"llm"`,
+      `"embedding"`, `"rerank"`). Defaults to `"llm"` (chat completions).
+      When the alias exists but its `model_type` differs, returns
+      `{:error, :model_type_mismatch}`.
 
   ## Returns
 
     * `{:ok, route}` – the resolved route.
     * `{:error, :model_not_found}` – no accessible alias with that name.
+    * `{:error, :model_type_mismatch}` – alias exists but serves a
+      different capability than requested.
     * `{:error, :no_providers_configured}` – alias has no enabled alias providers.
     * `{:error, :no_available_provider}` – all candidates were filtered out
       (no active credential, breaker open, or excluded).
@@ -84,10 +90,15 @@ defmodule Tokengate.Routing.Router do
   """
   @spec route(String.t(), map(), map(), keyword()) ::
           {:ok, route()}
-          | {:error, :model_not_found | :no_providers_configured | :no_available_provider}
+          | {:error,
+             :model_not_found
+             | :model_type_mismatch
+             | :no_providers_configured
+             | :no_available_provider}
   def route(model_requested, team_member, request_context \\ %{}, opts \\ []) do
     breaker = Keyword.get(opts, :breaker, Map.get(request_context, :breaker, @default_breaker))
     exclude = exclude_ids(request_context, opts)
+    capability = Map.get(request_context, :capability, "llm")
 
     # Ensure team is preloaded (callers may not have preloaded it).
     team_member = maybe_preload_team(team_member)
@@ -97,6 +108,9 @@ defmodule Tokengate.Routing.Router do
     case find_alias_by_name(accessible, model_requested) do
       nil ->
         {:error, :model_not_found}
+
+      %{model_type: type} when type != capability ->
+        {:error, :model_type_mismatch}
 
       model_alias ->
         route_alias(model_alias, team_member, accessible, request_context, breaker, exclude)
@@ -147,6 +161,7 @@ defmodule Tokengate.Routing.Router do
         id: alias_.name,
         object: "model",
         context_window: alias_.context_window,
+        model_type: alias_.model_type,
         owned_by: "tokengate"
       }
     end)

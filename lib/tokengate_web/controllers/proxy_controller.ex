@@ -108,6 +108,326 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
+  @doc """
+  Proxies an embeddings request (OpenAI format) to the routed provider.
+
+  Non-streaming only. Works against any OpenAI-compatible `/embeddings`
+  surface — oMLX, OpenRouter and Fireworks all speak the same shape and
+  report `usage.prompt_tokens`; when the upstream omits usage, token counts
+  fall back to the chars/4 estimator over the inputs.
+  """
+  def embeddings(conn, _params) do
+    payload = conn.body_params
+
+    with :ok <- require_input(payload) do
+      simple_proxy(conn, payload, "embedding", &OpenAIAdapter.embeddings/4, :embedding)
+    else
+      {:error, error} -> render_proxy_error(conn, error)
+    end
+  end
+
+  @doc """
+  Proxies a rerank request (Cohere format: `query`, `documents[]`,
+  optional `top_n` / `return_documents` / `task`) to the routed provider.
+
+  Providers disagree on the response list key: oMLX answers Cohere-style
+  `results`, Fireworks answers Jina-style `data`. TokenGate normalizes
+  every upstream response to the Cohere shape (`results`) so clients see
+  one stable contract regardless of backend. Fireworks reports usage;
+  oMLX does not (falls back to the estimator).
+  """
+  def rerank(conn, _params) do
+    payload = conn.body_params
+
+    with :ok <- require_query(payload),
+         :ok <- require_documents(payload) do
+      simple_proxy(conn, payload, "rerank", &OpenAIAdapter.rerank/4, :rerank)
+    else
+      {:error, error} -> render_proxy_error(conn, error)
+    end
+  end
+
+  # Shared gate pipeline for non-streaming, non-chat endpoints (embeddings,
+  # rerank): same two-gate throttle, routing, budget check, inflight
+  # registry, fallback matrix and cost accounting as chat — minus the
+  # chat-only payload transforms (guard rails, prompt optimizer, reasoning).
+  defp simple_proxy(conn, payload, capability, adapter_fun, kind) do
+    member = conn.assigns.current_team_member
+    model = payload["model"]
+    limits = Accounts.effective_limits(member)
+    key_id = member.api_key.id
+    request_start = System.monotonic_time(:millisecond)
+
+    with :ok <- require_model(model),
+         :ok <- acquire_team_limits(key_id, limits) do
+      try do
+        case route_and_acquire(member, payload, conn.assigns.api_key_hash, limits, [],
+               capability: capability
+             ) do
+          {:ok, route} ->
+            inflight = register_inflight(conn, member, payload, route)
+
+            try do
+              execute_simple(conn, route, payload, member, @max_attempts, [], adapter_fun, kind,
+                capability: capability
+              )
+            after
+              Tokengate.Logs.Inflight.finish_request(inflight.id)
+              release_credential_limits(route.credential)
+            end
+
+          {:error, error} ->
+            log_and_render_gate_error(conn, member, model, error,
+              latency_ms: elapsed(request_start)
+            )
+        end
+      after
+        Limits.release(key_id)
+      end
+    else
+      {:error, error} ->
+        log_and_render_gate_error(conn, member, model, error, latency_ms: elapsed(request_start))
+    end
+  end
+
+  defp require_input(%{"input" => input}) when is_binary(input) or is_list(input), do: :ok
+  defp require_input(_), do: {:error, {:invalid_request, "input is required (string or array)"}}
+
+  defp require_query(%{"query" => query}) when is_binary(query), do: :ok
+  defp require_query(_), do: {:error, {:invalid_request, "query is required (string)"}}
+
+  defp require_documents(%{"documents" => docs}) when is_list(docs) and docs != [], do: :ok
+
+  defp require_documents(_),
+    do: {:error, {:invalid_request, "documents is required (non-empty array)"}}
+
+  # Non-streaming execution with the same fallback matrix as chat's
+  # execute/6: auth errors disable the credential, other 4xx surface
+  # without burning the breaker, everything else retries across credentials.
+  defp execute_simple(
+         conn,
+         route,
+         payload,
+         member,
+         attempts_left,
+         exclude,
+         adapter_fun,
+         kind,
+         route_opts
+       ) do
+    provider = route.model_provider.credential.provider
+    payload = Map.put(payload, "model", route.model_responded)
+
+    receive_timeout = route.credential.receive_timeout_ms || 180_000
+
+    case adapter_fun.(provider, route.credential, payload,
+           receive_timeout: receive_timeout,
+           forwarded_headers: extract_forwarded_headers(conn)
+         ) do
+      {:ok, body, latency_ms} ->
+        Router.record_outcome(route, :success)
+        finalize_simple_success(conn, route, body, latency_ms, member, kind)
+
+      {:error, :auth_error, status, error_message} ->
+        disable_credential_async(route.credential, "auth_error_#{status}", error_message)
+        Router.record_outcome(route, {:failure, :auth_error})
+
+        if attempts_left > 1 do
+          retry_simple_with_fallback(
+            conn,
+            route,
+            payload,
+            member,
+            attempts_left,
+            exclude,
+            status,
+            adapter_fun,
+            kind,
+            route_opts
+          )
+        else
+          log_and_render_proxy_error(conn, route, member, {:upstream_error, :auth_error, status},
+            error_reason: "auth_error"
+          )
+        end
+
+      {:error, :client_error, status} ->
+        Router.record_outcome(route, {:failure, :client_error})
+
+        log_and_render_proxy_error(conn, route, member, {:upstream_client_error, status},
+          error_reason: "client_error"
+        )
+
+      {:error, reason, status, _error_message} ->
+        Router.record_outcome(route, {:failure, breaker_reason(reason)})
+
+        if attempts_left > 1 do
+          retry_simple_with_fallback(
+            conn,
+            route,
+            payload,
+            member,
+            attempts_left,
+            exclude,
+            status,
+            adapter_fun,
+            kind,
+            route_opts
+          )
+        else
+          log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
+            error_reason: to_string(reason)
+          )
+        end
+    end
+  end
+
+  defp retry_simple_with_fallback(
+         conn,
+         route,
+         payload,
+         member,
+         attempts_left,
+         exclude,
+         status,
+         adapter_fun,
+         kind,
+         route_opts
+       ) do
+    log_fallback_attempt(conn, route, member, status)
+
+    exclude =
+      if attempts_left < @max_attempts do
+        [route.credential.id | exclude]
+      else
+        exclude
+      end
+
+    case Router.route(route.model_alias.name, member, %{
+           :api_key_hash => conn.assigns.api_key_hash,
+           :exclude_credential_ids => exclude,
+           :capability => Keyword.get(route_opts, :capability, "llm")
+         }) do
+      {:ok, new_route} ->
+        execute_simple(
+          conn,
+          new_route,
+          payload,
+          member,
+          attempts_left - 1,
+          exclude,
+          adapter_fun,
+          kind,
+          route_opts
+        )
+
+      {:error, :no_available_provider} ->
+        log_and_render_proxy_error(conn, route, member, :all_providers_down,
+          error_reason: "all_providers_down"
+        )
+
+      {:error, error} ->
+        log_and_render_proxy_error(conn, route, member, error,
+          error_reason: error_reason_string(error)
+        )
+    end
+  end
+
+  defp finalize_simple_success(conn, route, body, latency_ms, member, kind) do
+    {usage, body} = simple_usage(conn.body_params, body, kind)
+    provider_reported = UsageNormalizer.extract_reported_cost(:openai, body)
+
+    cost = CostCalculator.provider_cost(route.model_provider.billing_mode, provider_reported)
+
+    Budgets.record_spend(member.id, cost)
+
+    Collector.record_request(%{
+      model_alias_id: route.model_alias.id,
+      provider_id: route.model_provider.credential.provider_id,
+      agent_type: conn.assigns.agent_type,
+      status: 200,
+      latency_ms: latency_ms,
+      prompt_tokens: usage.prompt_tokens,
+      completion_tokens: usage.completion_tokens,
+      cost_usd: cost,
+      streaming: false
+    })
+
+    enqueue_log(route, member, conn.assigns.agent_type, usage, cost, latency_ms, 200, false,
+      client_agent: conn.assigns.client_agent,
+      request_type: to_string(kind)
+    )
+
+    conn
+    |> put_resp_header("x-tokengate-cost", Decimal.to_string(cost, :normal))
+    |> json(body)
+  end
+
+  # Resolves usage for non-chat responses, returning {usage, response_body}.
+  #
+  # :embedding — OpenAI shape; usage comes from the upstream when present,
+  #   otherwise estimated over the inputs. The body passes through untouched.
+  # :rerank — the response body is normalized to the Cohere shape
+  #   (`results`) so clients see one contract across oMLX and Fireworks.
+  #   Usage is read BEFORE stripping the provider's usage key (Fireworks
+  #   reports real prompt_tokens; oMLX reports nothing → estimate over
+  #   query + documents).
+  defp simple_usage(payload, body, :embedding) do
+    usage = UsageNormalizer.normalize(:openai, body) || estimate_embedding_usage(payload)
+    {usage, body}
+  end
+
+  defp simple_usage(payload, body, :rerank) do
+    usage = UsageNormalizer.normalize(:openai, body) || estimate_rerank_usage(payload)
+    {usage, normalize_rerank_body(body)}
+  end
+
+  defp estimate_embedding_usage(payload) do
+    tokens =
+      payload["input"]
+      |> List.wrap()
+      |> Enum.reduce(0, fn
+        s, acc when is_binary(s) -> acc + TokenEstimator.estimate_completion(s)
+        _, acc -> acc
+      end)
+
+    %{prompt_tokens: tokens, completion_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0}
+  end
+
+  defp estimate_rerank_usage(payload) do
+    query_tokens = TokenEstimator.estimate_completion(payload["query"] || "")
+
+    doc_tokens =
+      payload["documents"]
+      |> List.wrap()
+      |> Enum.reduce(0, fn
+        s, acc when is_binary(s) -> acc + TokenEstimator.estimate_completion(s)
+        _, acc -> acc
+      end)
+
+    %{
+      prompt_tokens: query_tokens + doc_tokens,
+      completion_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0
+    }
+  end
+
+  # Normalizes provider-specific rerank responses to the Cohere shape.
+  # oMLX already answers with `results`; Fireworks answers Jina-style with
+  # `object: "list"` + `data`. Item fields (`index`, `relevance_score`,
+  # optional `document`) are identical across providers.
+  defp normalize_rerank_body(%{"results" => _} = body), do: body
+
+  defp normalize_rerank_body(%{"data" => data} = body) when is_list(data) do
+    body
+    |> Map.delete("data")
+    |> Map.delete("object")
+    |> Map.put("results", data)
+  end
+
+  defp normalize_rerank_body(body), do: body
+
   ## Pipeline steps ############################################################
 
   defp require_model(nil), do: {:error, {:invalid_request, "model is required"}}
@@ -167,11 +487,12 @@ defmodule TokengateWeb.ProxyController do
     })
   end
 
-  defp route_and_acquire(member, payload, api_key_hash, limits, exclude \\ []) do
+  defp route_and_acquire(member, payload, api_key_hash, limits, exclude \\ [], route_opts \\ []) do
     request_context = %{
       "messages" => payload["messages"] || [],
       :api_key_hash => api_key_hash,
-      :exclude_credential_ids => exclude
+      :exclude_credential_ids => exclude,
+      :capability => Keyword.get(route_opts, :capability, "llm")
     }
 
     with {:ok, route} <- Router.route(payload["model"], member, request_context),
@@ -745,6 +1066,7 @@ defmodule TokengateWeb.ProxyController do
       "latency_ms" => latency_ms,
       "ttft_ms" => Keyword.get(extra, :ttft_ms),
       "streaming" => streaming,
+      "request_type" => Keyword.get(extra, :request_type, "chat"),
       "think" => Keyword.get(extra, :think, false),
       "effort" => Keyword.get(extra, :effort),
       "api_key_prefix" => member.api_key && member.api_key.key_prefix,
@@ -955,6 +1277,11 @@ defmodule TokengateWeb.ProxyController do
 
   defp error_details(:model_not_found),
     do: {404, "invalid_request_error", "model_not_found", "Model not found or not accessible"}
+
+  defp error_details(:model_type_mismatch),
+    do:
+      {400, "invalid_request_error", "model_type_mismatch",
+       "Model exists but does not serve this endpoint's capability"}
 
   defp error_details(:no_providers_configured),
     do: {503, "service_unavailable", "no_providers", "No providers configured for this model"}

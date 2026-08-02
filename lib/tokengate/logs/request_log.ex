@@ -48,6 +48,7 @@ defmodule Tokengate.Logs.RequestLog do
     field :latency_ms, :integer
     field :ttft_ms, :integer
     field :streaming, :boolean, default: false
+    field :request_type, :string, default: "chat"
     field :think, :boolean, default: false
     field :effort, :string
     field :api_key_prefix, :string
@@ -70,7 +71,7 @@ defmodule Tokengate.Logs.RequestLog do
     model_requested model_responded agent_type status_code provider_status_code
     error_reason prompt_tokens completion_tokens cache_read_tokens
     cache_creation_tokens provider_cost_usd
-    latency_ms ttft_ms streaming think effort api_key_prefix
+    latency_ms ttft_ms streaming request_type think effort api_key_prefix
     credential_name client_agent provider_key_prefix inserted_at)a
 
   @required ~w(team_member_id model_requested inserted_at)a
