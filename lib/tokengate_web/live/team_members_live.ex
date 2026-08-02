@@ -891,15 +891,16 @@ defmodule TokengateWeb.TeamMembersLive do
         </div>
 
         <div class="flex items-center justify-end gap-3 mb-4">
-          <input
-            type="text"
-            name="member_search"
-            value={@member_search}
-            placeholder="Buscar por nombre o correo…"
-            phx-change="search_members"
-            phx-debounce="200"
-            class="input input-sm w-72"
-          />
+          <.form for={%{}} phx-change="search_members" id="member-search-form">
+            <input
+              type="text"
+              name="member_search"
+              value={@member_search}
+              placeholder="Buscar por nombre o correo…"
+              phx-debounce="200"
+              class="input input-sm w-72"
+            />
+          </.form>
         </div>
 
         <div id="members" class="space-y-4">
