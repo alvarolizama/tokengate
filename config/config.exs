@@ -78,6 +78,17 @@ config :tokengate, Oban,
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason
 
+# Filter sensitive parameters out of any request logging (Plug.Logger,
+# error reporters, etc.) so secrets never land in logs in plaintext.
+config :phoenix, :filter_parameters, [
+  "password",
+  "secret",
+  "token",
+  "api_key",
+  "client_secret",
+  "authorization"
+]
+
 # Configure the time zone database for DateTime.shift_zone/3
 config :elixir, :time_zone_database, Tzdata.TimeZoneDatabase
 
