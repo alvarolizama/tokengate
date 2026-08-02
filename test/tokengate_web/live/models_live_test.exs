@@ -264,6 +264,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/dashboard/models")
     view |> element("#new-ap-#{alias_record.id}") |> render_click()
 
+    # Form input is in seconds; the column is stored in ms.
     html =
       view
       |> form("#alias-provider-form", %{
@@ -272,7 +273,7 @@ defmodule TokengateWeb.ModelsLiveTest do
           provider_model: "gpt-4o-sticky",
           priority: 1,
           enabled: true,
-          sticky_ttl_ms: 60_000
+          sticky_ttl_seconds: 60
         }
       })
       |> render_submit()
@@ -287,7 +288,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert ap.sticky_ttl_ms == 60_000
   end
 
-  test "sticky_ttl_ms below 1 second is rejected by the form", %{conn: conn} do
+  test "sticky_ttl_seconds below 1 second is rejected by the form", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
     alias_record = create_alias()
@@ -312,13 +313,82 @@ defmodule TokengateWeb.ModelsLiveTest do
           provider_model: "gpt-4o-bad",
           priority: 1,
           enabled: true,
-          sticky_ttl_ms: 500
+          sticky_ttl_seconds: 0
         }
       })
       |> render_submit()
 
     refute html =~ "Proveedor asignado"
-    assert html =~ "sticky_ttl_ms" or html =~ "TTL sticky"
+    # Validation error surfaces the seconds field (the form input source of truth).
+    assert html =~ "sticky_ttl_seconds" or html =~ "TTL sticky"
+  end
+
+  test "sticky_ttl_seconds above 24 h is rejected by the form", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    alias_record = create_alias()
+
+    credential =
+      Tokengate.Repo.insert!(%Tokengate.Providers.Credential{
+        provider_id: provider.id,
+        name: "Test Cred",
+        api_key_encrypted: "sk-...",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    view |> element("#new-ap-#{alias_record.id}") |> render_click()
+
+    html =
+      view
+      |> form("#alias-provider-form", %{
+        model_provider: %{
+          credential_id: credential.id,
+          provider_model: "gpt-4o-toobig",
+          priority: 1,
+          enabled: true,
+          sticky_ttl_seconds: 86_401
+        }
+      })
+      |> render_submit()
+
+    refute html =~ "Proveedor asignado"
+    assert html =~ "sticky_ttl_seconds" or html =~ "TTL sticky"
+  end
+
+  test "editing a model provider pre-fills sticky_ttl_seconds from sticky_ttl_ms", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    alias_record = create_alias()
+
+    credential =
+      Tokengate.Repo.insert!(%Tokengate.Providers.Credential{
+        provider_id: provider.id,
+        name: "Test Cred",
+        api_key_encrypted: "sk-...",
+        status: "active"
+      })
+
+    {:ok, ap} =
+      Providers.create_model_provider(%{
+        model_alias_id: alias_record.id,
+        credential_id: credential.id,
+        provider_model: "gpt-4o-edit",
+        priority: 1,
+        enabled: true,
+        sticky_ttl_ms: 300_000
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    view |> element("#edit-ap-#{ap.id}") |> render_click()
+
+    # Form should be open with 300 (seconds) pre-filled, not 300_000.
+    html = render(view)
+    assert has_element?(view, "#alias-provider-form")
+    assert html =~ ~s(value="300")
+    refute html =~ ~s(value="300000")
   end
 
   test "admin can reorder provider priorities via drag-drop event", %{conn: conn} do

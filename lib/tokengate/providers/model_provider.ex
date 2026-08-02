@@ -45,6 +45,10 @@ defmodule Tokengate.Providers.ModelProvider do
     field :enabled, :boolean, default: true
     field :billing_mode, :string, default: "pay_per_token"
     field :sticky_ttl_ms, :integer
+    # Virtual mirror of `sticky_ttl_ms` in seconds — exposed to the LiveView
+    # form so operators can type `900` instead of `900_000`. Synced by
+    # `sync_sticky_ttl_fields/1` before saving.
+    field :sticky_ttl_seconds, :integer, virtual: true
     field :scope, :string, virtual: true, default: "global"
 
     belongs_to :model_alias, Tokengate.Providers.ModelAlias
@@ -66,6 +70,7 @@ defmodule Tokengate.Providers.ModelProvider do
       :enabled,
       :billing_mode,
       :sticky_ttl_ms,
+      :sticky_ttl_seconds,
       :exclusive_to_team_member_id,
       :exclusive_to_team_id
     ])
@@ -75,6 +80,11 @@ defmodule Tokengate.Providers.ModelProvider do
       greater_than_or_equal_to: 1_000,
       less_than_or_equal_to: 24 * 60 * 60 * 1000
     )
+    |> validate_number(:sticky_ttl_seconds,
+      greater_than_or_equal_to: 1,
+      less_than_or_equal_to: 24 * 60 * 60
+    )
+    |> sync_sticky_ttl_fields()
     |> validate_exclusive_scope()
     |> foreign_key_constraint(:model_alias_id)
     |> foreign_key_constraint(:credential_id)
@@ -128,5 +138,33 @@ defmodule Tokengate.Providers.ModelProvider do
       end
 
     put_change(changeset, :scope, scope)
+  end
+
+  # Keep sticky_ttl_ms (stored) and sticky_ttl_seconds (form) coherent. The
+  # form submits seconds; we multiply by 1000 to populate ms. If the user
+  # submitted nil for both (no sticky override), we leave nil — StickyTracker
+  # then falls back to its 15-min default.
+  defp sync_sticky_ttl_fields(changeset) do
+    seconds = get_field(changeset, :sticky_ttl_seconds)
+    ms = get_field(changeset, :sticky_ttl_ms)
+
+    case {seconds, ms} do
+      {nil, ms} when not is_nil(ms) ->
+        changeset
+        |> put_change(:sticky_ttl_seconds, div(ms, 1000))
+        |> force_change(:sticky_ttl_ms, ms)
+
+      {seconds, _} when not is_nil(seconds) ->
+        ms_value = seconds * 1000
+
+        changeset
+        |> put_change(:sticky_ttl_ms, ms_value)
+        |> force_change(:sticky_ttl_seconds, seconds)
+
+      _ ->
+        changeset
+        |> put_change(:sticky_ttl_ms, nil)
+        |> put_change(:sticky_ttl_seconds, nil)
+    end
   end
 end
