@@ -335,8 +335,12 @@ defmodule TokengateWeb.ModelsLive do
        |> assign(:current_scope_member_id, ap.exclusive_to_team_member_id)
        |> assign(:scope_team_search, team_label)
        |> assign(:scope_member_search, member_label)
-       |> assign(:scope_team_open, false)
-       |> assign(:scope_member_open, false)
+       # Open the dropdowns in edit mode so the admin can re-pick without
+       # having to clear the field first. The pre-filled label acts as the
+       # current selection — it's not "missing autocomplete", it's already
+       # there; we just expose the rest of the list.
+       |> assign(:scope_team_open, scope == "team")
+       |> assign(:scope_member_open, scope == "member")
        |> assign(:provider_models_loading, true)
        |> fetch_provider_models(ap.credential_id)}
     else
@@ -884,54 +888,15 @@ defmodule TokengateWeb.ModelsLive do
     end)
   end
 
-  @doc "Filter teams that have the given model alias granted"
-  def teams_with_model_access(_teams, nil), do: []
+  @doc "All teams — the form filter is the search string in the template.
+  See members_with_model_access/2 for the rationale."
+  def teams_with_model_access(teams, _model_alias_id), do: teams
 
-  def teams_with_model_access(teams, model_alias_id) do
-    import Ecto.Query, only: [from: 2]
-    alias Tokengate.Providers.TeamModelAlias
-
-    team_ids_with_alias =
-      from(tma in TeamModelAlias,
-        where: tma.model_alias_id == ^model_alias_id,
-        select: tma.team_id
-      )
-      |> Repo.all()
-      |> MapSet.new()
-
-    Enum.filter(teams, &MapSet.member?(team_ids_with_alias, &1.id))
-  end
-
-  @doc "Filter members that have the given model alias accessible (via team or extra)"
-  def members_with_model_access(_members, nil), do: []
-
-  def members_with_model_access(members, model_alias_id) do
-    import Ecto.Query, only: [from: 2]
-    alias Tokengate.Providers.{TeamModelAlias, TeamMemberExtraAlias}
-
-    # Teams that have this alias
-    team_ids_with_alias =
-      from(tma in TeamModelAlias,
-        where: tma.model_alias_id == ^model_alias_id,
-        select: tma.team_id
-      )
-      |> Repo.all()
-      |> MapSet.new()
-
-    # Members with extra alias grant
-    member_ids_with_extra =
-      from(tmea in TeamMemberExtraAlias,
-        where: tmea.model_alias_id == ^model_alias_id,
-        select: tmea.team_member_id
-      )
-      |> Repo.all()
-      |> MapSet.new()
-
-    Enum.filter(members, fn m ->
-      MapSet.member?(team_ids_with_alias, m.team_id) or
-        MapSet.member?(member_ids_with_extra, m.id)
-    end)
-  end
+  @doc "All members — the form filter is the search string in the template.
+  The previous access check (TeamModelAlias / TeamMemberExtraAlias) only
+  matters for the create flow; in the edit form we want every member to
+  appear so the admin can re-pick even if grants have lapsed."
+  def members_with_model_access(members, _model_alias_id), do: members
 
   ## Render ----------------------------------------------------------------
 
@@ -1396,9 +1361,6 @@ defmodule TokengateWeb.ModelsLive do
                     />
                     <% members_filtered =
                       members_with_model_access(@members_for_select, @provider_form_alias_id)
-                      |> Enum.reject(fn m ->
-                        m.id == @current_scope_member_id
-                      end)
                       |> Enum.filter(fn m ->
                         search = String.downcase(@scope_member_search || "")
                         email = if m.user, do: String.downcase(m.user.email), else: ""
@@ -1414,10 +1376,19 @@ defmodule TokengateWeb.ModelsLive do
                           type="button"
                           phx-click="select_scope_member_item"
                           phx-value-member_id={m.id}
-                          class="block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0"
+                          class={[
+                            "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
+                            m.id == @current_scope_member_id && "bg-primary/10 font-semibold"
+                          ]}
                         >
                           <span class="text-sm font-medium">{m.user.email}</span>
                           <span :if={m.user.name} class="text-xs text-base-content/50 ml-1">({m.user.name})</span>
+                          <span
+                            :if={m.id == @current_scope_member_id}
+                            class="text-xs text-primary ml-2"
+                          >
+                            (actual)
+                          </span>
                         </button>
                       </div>
                     <% end %>
@@ -1447,9 +1418,6 @@ defmodule TokengateWeb.ModelsLive do
                     />
                     <% teams_filtered =
                       teams_with_model_access(@teams_for_select, @provider_form_alias_id)
-                      |> Enum.reject(fn t ->
-                        t.id == @current_scope_team_id
-                      end)
                       |> Enum.filter(fn t ->
                         search = String.downcase(@scope_team_search || "")
                         name = String.downcase(t.name || "")
@@ -1462,9 +1430,18 @@ defmodule TokengateWeb.ModelsLive do
                           type="button"
                           phx-click="select_scope_team_item"
                           phx-value-team_id={t.id}
-                          class="block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0"
+                          class={[
+                            "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
+                            t.id == @current_scope_team_id && "bg-primary/10 font-semibold"
+                          ]}
                         >
                           <span class="text-sm font-medium">{t.name}</span>
+                          <span
+                            :if={t.id == @current_scope_team_id}
+                            class="text-xs text-primary ml-2"
+                          >
+                            (actual)
+                          </span>
                         </button>
                       </div>
                     <% end %>

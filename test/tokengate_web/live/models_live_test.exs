@@ -481,6 +481,65 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert html =~ "desactivado"
   end
 
+  test "edit pre-fills the member search input with the full email", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{user: target, password: _} = register("user")
+    provider = create_provider()
+    alias_record = create_alias()
+
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        api_key_encrypted: "sk-test",
+        status: "active"
+      })
+
+    # Add target as a team_member of any team so members_for_select can preload it.
+    {:ok, team} = Accounts.create_team(%{name: "Team #{unique()}"})
+    {:ok, team_member} = Accounts.create_team_member(%{team_id: team.id, user_id: target.id})
+
+    {:ok, ap} =
+      Providers.create_model_provider(%{
+        model_alias_id: alias_record.id,
+        credential_id: credential.id,
+        provider_model: "gpt-4o-exc",
+        priority: 1,
+        enabled: true,
+        exclusive_to_team_member_id: team_member.id
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+
+    view |> element("#edit-ap-#{ap.id}") |> render_click()
+
+    html = render(view)
+
+    # The member search input should be pre-filled with the FULL email,
+    # not a single character, so the user sees who is bound.
+    assert html =~ ~s(value="#{target.email}")
+
+    # Dropdown should auto-open in edit mode so the admin can re-pick
+    # without clearing the field. The currently-bound member must appear
+    # in the dropdown, marked as (actual) — they were filtered out before.
+    assert html =~ "value=\"#{target.email}\""
+
+    # The currently-bound member must appear in the dropdown, marked as
+    # (actual) — they were filtered out before. Assert the email appears
+    # in the dropdown region (between the member search input and the end
+    # of the form) and that the (actual) tag is rendered.
+    assert has_element?(
+             view,
+             ~s(input[name="model_provider[scope_member_id_display]"])
+           )
+
+    # The (actual) marker confirms the bound member is rendered as an
+    # item in the dropdown (not excluded by Enum.reject).
+    assert html =~ "(actual)"
+
+    refute html =~ ~s(value="a")
+  end
+
   test "model_provider row surfaces credential disabled state in /dashboard/models", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
