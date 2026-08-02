@@ -655,6 +655,14 @@ defmodule TokengateWeb.UsersLive do
                     >
                       <.icon name="hero-eye" class="w-3 h-3" />
                     </.link>
+                    <.link
+                      navigate={~p"/dashboard/users/#{user.id}/stats"}
+                      class="btn btn-xs btn-ghost"
+                      id={"stats-#{user.id}"}
+                      title="Ver stats consolidados de este usuario"
+                    >
+                      <.icon name="hero-chart-bar" class="w-3 h-3" />
+                    </.link>
                     <button
                       phx-click="edit_user"
                       phx-value-id={user.id}

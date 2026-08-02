@@ -947,6 +947,14 @@ defmodule TokengateWeb.TeamMembersLive do
                 </div>
                 <div class="flex items-center gap-5 shrink-0">
                   <span class="badge badge-sm badge-ghost capitalize">{member.status}</span>
+                  <.link
+                    navigate={~p"/dashboard/users/#{member.user_id}/stats"}
+                    class="btn btn-sm btn-ghost"
+                    id={"stats-#{member.id}"}
+                    title="Ver stats consolidados de este usuario"
+                  >
+                    <.icon name="hero-chart-bar" class="w-4 h-4" /> Stats
+                  </.link>
                   <button
                     phx-click="clear_sticky_routes"
                     phx-value-id={member.id}

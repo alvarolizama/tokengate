@@ -365,7 +365,10 @@ defmodule Tokengate.Logs do
       total_completion_tokens: result.total_completion_tokens,
       total_cache_read_tokens: result.total_cache_read_tokens,
       total_cache_creation_tokens: result.total_cache_creation_tokens,
-      request_count: result.request_count
+      request_count: result.request_count,
+      avg_latency_ms: nil,
+      avg_tps: 0.0,
+      avg_ttft_ms: nil
     }
   end
 
@@ -519,5 +522,201 @@ defmodule Tokengate.Logs do
   def truncate_request_logs do
     Repo.query!("TRUNCATE TABLE request_logs RESTART IDENTITY CASCADE")
     {0, nil}
+  end
+
+  @doc """
+  Aggregated stats for a set of team_member_ids (used by the user-detail
+  stats page). Pass a list to consolidate across multiple memberships.
+
+  Combines:
+    * lifetime + 5d/30d cost & token totals (5d/30d via `:from` opts),
+    * request_count and per-status-class breakdown,
+    * top 5 models used (by request count, descending),
+    * last request timestamp (or `nil`),
+    * avg latency / avg tps / avg ttft over the lifetime of the member.
+
+  Filters out logs with `team_member_id == nil` (services etc.).
+
+  ## Options
+
+    * `:from` — `inserted_at >= from` (DateTime). Optional.
+    * `:to`   — `inserted_at <= to` (DateTime). Optional.
+  """
+  @spec member_stats(binary() | [binary()], keyword() | map()) :: map()
+  def member_stats(team_member_ids, opts \\ [])
+      when is_list(team_member_ids) or is_binary(team_member_ids) do
+    ids = if is_binary(team_member_ids), do: [team_member_ids], else: team_member_ids
+
+    opts_map =
+      cond do
+        is_map(opts) -> opts
+        is_list(opts) -> Map.new(opts)
+        true -> %{}
+      end
+
+    summary =
+      if ids == [] do
+        %{
+          total_cost_usd: Decimal.new(0),
+          total_prompt_tokens: 0,
+          total_completion_tokens: 0,
+          total_cache_read_tokens: 0,
+          total_cache_creation_tokens: 0,
+          request_count: 0,
+          avg_latency_ms: nil,
+          avg_tps: nil,
+          avg_ttft_ms: nil
+        }
+      else
+        cost_summary_for_members(ids, opts_map)
+      end
+
+    range =
+      opts_map
+      |> Map.take([:from, :to])
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+
+    status_class_breakdown =
+      if ids == [],
+        do: %{"2xx" => 0, "4xx" => 0, "5xx" => 0},
+        else: status_breakdown_for_ids(ids, opts_map)
+
+    top_models = if ids == [], do: [], else: top_models_for_ids(ids, 5, opts_map)
+
+    last_request_at =
+      if ids == [] do
+        nil
+      else
+        RequestLog
+        |> where([rl], rl.team_member_id in ^ids)
+        |> apply_member_stats_range(range)
+        |> select([rl], rl.inserted_at)
+        |> order_by([rl], desc: rl.inserted_at)
+        |> limit(1)
+        |> Repo.one()
+      end
+
+    realtime_window =
+      if ids == [] do
+        %{request_count: 0, error_count: 0, avg_latency_ms: nil, error_rate: 0.0}
+      else
+        RequestLog
+        |> where([rl], rl.team_member_id in ^ids)
+        |> apply_member_stats_range(range)
+        |> realtime_summary_for_member()
+      end
+
+    Map.merge(summary, %{
+      status_breakdown: status_class_breakdown,
+      top_models: top_models,
+      last_request_at: last_request_at,
+      realtime_5min: realtime_window
+    })
+  end
+
+  defp apply_member_stats_range(query, %{from: from, to: to}) do
+    query |> maybe_members_from(from) |> maybe_members_to(to)
+  end
+
+  defp apply_member_stats_range(query, _), do: query
+
+  @doc """
+  HTTP status-class breakdown (2xx/4xx/5xx) for a set of team_member_ids.
+  Returns a map `%{"2xx" => n, "4xx" => n, "5xx" => n}`, with counts of 0
+  for classes that never appeared.
+  """
+  @spec status_breakdown_for_ids([binary()], keyword() | map()) :: %{
+          optional(String.t()) => non_neg_integer()
+        }
+  def status_breakdown_for_ids(ids, opts \\ []) do
+    opts_map =
+      cond do
+        is_map(opts) -> opts
+        is_list(opts) -> Map.new(opts)
+        true -> %{}
+      end
+
+    range =
+      opts_map
+      |> Map.take([:from, :to])
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+
+    empty = %{"2xx" => 0, "4xx" => 0, "5xx" => 0}
+
+    RequestLog
+    |> where([rl], rl.team_member_id in ^ids)
+    |> apply_member_stats_range(range)
+    |> group_by([rl], fragment("CASE WHEN ? BETWEEN 200 AND 299 THEN '2xx'
+                                 WHEN ? BETWEEN 400 AND 499 THEN '4xx'
+                                 WHEN ? BETWEEN 500 AND 599 THEN '5xx'
+                                 ELSE NULL END", rl.status_code, rl.status_code, rl.status_code))
+    |> select(
+      [rl],
+      {fragment("CASE WHEN ? BETWEEN 200 AND 299 THEN '2xx'
+                                  WHEN ? BETWEEN 400 AND 499 THEN '4xx'
+                                  WHEN ? BETWEEN 500 AND 599 THEN '5xx'
+                                  ELSE NULL END", rl.status_code, rl.status_code, rl.status_code),
+       count(rl.id)}
+    )
+    |> Repo.all()
+    |> Enum.reduce(empty, fn {class, n}, acc -> Map.put(acc, class, n) end)
+  end
+
+  @doc """
+  Top-N most-requested models for a set of team_member_ids. Returns a
+  list of `%{model_requested, count}` sorted descending.
+  """
+  @spec top_models_for_ids([binary()], pos_integer(), keyword() | map()) :: [
+          %{required(atom()) => term()}
+        ]
+  def top_models_for_ids(ids, limit, opts \\ []) do
+    opts_map =
+      cond do
+        is_map(opts) -> opts
+        is_list(opts) -> Map.new(opts)
+        true -> %{}
+      end
+
+    range =
+      opts_map
+      |> Map.take([:from, :to])
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+
+    RequestLog
+    |> where([rl], rl.team_member_id in ^ids)
+    |> apply_member_stats_range(range)
+    |> group_by([rl], rl.model_requested)
+    |> select([rl], %{
+      model_requested: rl.model_requested,
+      count: count(rl.id)
+    })
+    |> order_by(desc: :count)
+    |> limit(^limit)
+    |> Repo.all()
+  end
+
+  defp realtime_summary_for_member(query) do
+    cutoff =
+      DateTime.utc_now() |> DateTime.add(-300, :second) |> DateTime.truncate(:second)
+
+    result =
+      query
+      |> where([rl], rl.inserted_at >= ^cutoff)
+      |> select([rl], %{
+        request_count: count(rl.id),
+        error_count: fragment("COUNT(*) FILTER (WHERE status_code >= 400)"),
+        avg_latency_ms: fragment("AVG(latency_ms)")
+      })
+      |> Repo.one()
+
+    %{
+      request_count: result.request_count,
+      error_count: result.error_count,
+      avg_latency_ms: avg_to_float(result.avg_latency_ms),
+      error_rate: error_rate(result.request_count, result.error_count)
+    }
   end
 end
