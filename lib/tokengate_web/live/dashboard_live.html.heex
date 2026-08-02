@@ -179,10 +179,10 @@
             </div>
           <% end %>
 
-          <%!-- Models catalog card (always visible) --%>
+          <%!-- Models catalog card (always visible, full width) --%>
           <div
             id="models-catalog-card"
-            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow md:col-span-2"
           >
             <div class="card-body p-5">
               <div class="flex items-center justify-between mb-3">
@@ -196,11 +196,12 @@
                   <.icon name="hero-server-stack" class={["w-5 h-5", accent_text("primary")]} />
                 </span>
               </div>
-              <div class="overflow-y-auto max-h-56">
+              <div class="overflow-y-auto max-h-64">
                 <table class="w-full text-xs">
                   <thead>
                     <tr class="text-base-content/50 border-b border-base-200">
                       <th class="text-left py-1 font-medium">Modelo</th>
+                      <th class="text-left py-1 font-medium">Descripción</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -208,7 +209,7 @@
                       <tr class="border-b border-base-200 last:border-0 hover:bg-base-200/50">
                         <td class="py-1.5">
                           <div
-                            class="font-medium text-base-content truncate max-w-[160px]"
+                            class="font-medium text-base-content"
                             title={model.name}
                           >
                             {model.name}
@@ -216,6 +217,9 @@
                           <div class="text-[10px] text-base-content/40">
                             {format_compact(model.context_window)} ctx
                           </div>
+                        </td>
+                        <td class="py-1.5 text-base-content/60">
+                          {model.description || "—"}
                         </td>
                       </tr>
                     <% end %>

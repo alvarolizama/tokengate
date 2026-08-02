@@ -13,6 +13,7 @@ defmodule Tokengate.Providers.ModelAlias do
   schema "model_aliases" do
     field :name, :string
     field :display_name, :string
+    field :description, :string
     field :context_window, :integer
     field :guard_rails, :string
     field :prompt_cache_enabled, :boolean, default: false
@@ -29,6 +30,7 @@ defmodule Tokengate.Providers.ModelAlias do
     |> cast(attrs, [
       :name,
       :display_name,
+      :description,
       :context_window,
       :guard_rails,
       :prompt_cache_enabled,

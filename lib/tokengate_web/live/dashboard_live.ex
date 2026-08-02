@@ -922,6 +922,7 @@ defmodule TokengateWeb.DashboardLive do
   defp model_catalog_entry(ma) do
     %{
       name: ma.display_name || ma.name,
+      description: ma.description,
       context_window: ma.context_window
     }
   end
