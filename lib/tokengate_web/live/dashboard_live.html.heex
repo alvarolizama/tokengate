@@ -87,7 +87,7 @@
         <div class={grid_class}>
           <%= for t <- @teams do %>
             <div
-              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow h-full"
+              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow h-full min-h-[253px]"
               id={"team-#{t.team.id}"}
             >
               <div class="card-body p-5 flex flex-col h-full">
@@ -190,7 +190,7 @@
           <%!-- Models catalog card (always visible, full width) --%>
           <div
             id="models-catalog-card"
-            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow md:col-span-2 lg:col-span-3"
+            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow md:col-span-2 lg:col-span-3 min-h-[253px]"
           >
             <div class="card-body p-5 flex flex-col h-full">
               <div class="flex items-center justify-between mb-3">
@@ -244,7 +244,7 @@
           <.link
             :if={@supervised_services_count > 0}
             navigate={~p"/dashboard/services/supervised"}
-            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow block h-full"
+            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow block h-full min-h-[253px]"
             id="supervised-services-card"
           >
             <div class="card-body p-5 flex flex-col h-full">
