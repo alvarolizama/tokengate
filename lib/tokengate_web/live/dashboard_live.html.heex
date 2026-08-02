@@ -87,10 +87,10 @@
         <div class={grid_class}>
           <%= for t <- @teams do %>
             <div
-              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow h-full"
               id={"team-#{t.team.id}"}
             >
-              <div class="card-body p-5">
+              <div class="card-body p-5 flex flex-col h-full">
                 <%!-- Header: team name, role, key status --%>
                 <div class="flex items-center justify-between">
                   <div>
@@ -155,8 +155,8 @@
                   </div>
                 <% end %>
 
-                <%!-- Budget bar — monthly only --%>
-                <div class="mt-4 pt-4 border-t border-base-200 space-y-3">
+                <%!-- Budget bar — monthly only (mt-auto pushes to bottom) --%>
+                <div class="mt-auto pt-4 border-t border-base-200 space-y-3">
                   <div>
                     <div class="flex items-center justify-between text-xs">
                       <span class="text-base-content/60">Gasto mensual</span>
