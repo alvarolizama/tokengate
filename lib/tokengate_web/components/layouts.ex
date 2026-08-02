@@ -210,7 +210,7 @@ defmodule TokengateWeb.Layouts do
         if(admin?, do: Tokengate.Budgets.count_exhausted(assigns.timezone), else: 0)
       )
       |> assign(:online, length(TokengateWeb.Presence.list_online()))
-      |> assign(:inflight, Tokengate.Limits.Manager.total_inflight())
+      |> assign(:inflight, Tokengate.Logs.Inflight.count())
       |> assign(:admin?, admin?)
       |> assign(:my_budget, my_budget)
 
