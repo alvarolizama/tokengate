@@ -25,6 +25,7 @@ defmodule TokengateWeb.AlertsLive do
       |> assign(:page_title, "Alertas · Tokengate")
       |> assign(:is_admin, user && user.global_role == "admin")
       |> assign(:reload_scheduled, false)
+      |> assign(:errors_refresh_scheduled, false)
       |> require_admin_hook()
       |> load_alerts()
 
@@ -50,9 +51,13 @@ defmodule TokengateWeb.AlertsLive do
 
   @impl true
   def handle_info({:new_log, log}, socket) do
+    # Coalesce error reloads: during a burst of upstream 5xx, one DB query
+    # per broadcast would hammer the database. Cap at one reload per second.
     socket =
-      if log.status_code && log.status_code >= 400 do
-        load_recent_errors(socket)
+      if (log.status_code && log.status_code >= 400) and
+           not socket.assigns[:errors_refresh_scheduled] do
+        Process.send_after(self(), :reload_recent_errors, 1_000)
+        assign(socket, :errors_refresh_scheduled, true)
       else
         socket
       end
@@ -65,6 +70,13 @@ defmodule TokengateWeb.AlertsLive do
       Process.send_after(self(), :reload_budget_alerts, 1_000)
       {:noreply, assign(socket, :reload_scheduled, true)}
     end
+  end
+
+  def handle_info(:reload_recent_errors, socket) do
+    {:noreply,
+     socket
+     |> assign(:errors_refresh_scheduled, false)
+     |> load_recent_errors()}
   end
 
   def handle_info(:reload_budget_alerts, socket) do
