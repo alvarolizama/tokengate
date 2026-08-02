@@ -124,6 +124,18 @@ defmodule Tokengate.Logs.Inflight do
     |> Enum.sort_by(& &1.started_at, {:desc, DateTime})
   end
 
+  @doc """
+  Number of currently in-flight requests — the count the dashboard's
+  "En vuelo" badge and the logs page render. Equal to `length(list/0)`
+  but reads the table directly so it stays O(n) on the entry count
+  without building the full entries.
+  """
+  @spec count() :: non_neg_integer()
+  def count do
+    ensure_table()
+    :ets.info(@table, :size) || 0
+  end
+
   @doc false
   # Test helper: ages an entry past the TTL so the sweep picks it up.
   def backdate_for_test(id, ms) do
