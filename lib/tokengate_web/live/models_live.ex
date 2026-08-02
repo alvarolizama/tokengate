@@ -841,6 +841,38 @@ defmodule TokengateWeb.ModelsLive do
   def enabled_label(true), do: "Activo"
   def enabled_label(false), do: "Inactivo"
 
+  # A model_provider is effectively active only when ITS row is enabled AND
+  # its credential exists and is in the "active" state. The credential
+  # status is managed in /dashboard/providers and must surface here too —
+  # otherwise disabling the credential leaves a misleading "Activo" badge
+  # in /dashboard/models even though the router already filters the row out
+  # of the candidate pool (router.ex filters by credential.status).
+  @doc false
+  def provider_active?(%{enabled: false}), do: false
+
+  def provider_active?(%{credential: nil}), do: false
+
+  def provider_active?(%{credential: %{status: status}}) when is_binary(status),
+    do: status == "active"
+
+  def provider_active?(_), do: true
+
+  def credential_status_label(%{credential: %{status: "active"}}), do: nil
+  def credential_status_label(%{credential: %{status: "disabled"}}), do: "credential desactivada"
+  def credential_status_label(%{credential: nil}), do: "sin credential"
+  def credential_status_label(_), do: nil
+
+  # Toggle button title — what the click would do given the effective state.
+  @doc false
+  def toggle_title(%{enabled: false}), do: "Activar"
+  def toggle_title(ap), do: toggle_title_effective(ap)
+
+  defp toggle_title_effective(ap) do
+    if provider_active?(ap),
+      do: "Desactivar",
+      else: "Credential desactivada — activa en /dashboard/providers"
+  end
+
   def team_options(teams) do
     Enum.map(teams, fn t -> {t.name, t.id} end)
   end
@@ -1093,8 +1125,11 @@ defmodule TokengateWeb.ModelsLive do
                               <% end %>
                             </td>
                             <td>
-                              <span class={["badge", "badge-sm", enabled_badge(ap.enabled)]}>
-                                {enabled_label(ap.enabled)}
+                              <span
+                                class={["badge", "badge-sm", enabled_badge(provider_active?(ap))]}
+                                title={credential_status_label(ap)}
+                              >
+                                {enabled_label(provider_active?(ap))}
                               </span>
                             </td>
                             <%= if @is_admin do %>
@@ -1105,10 +1140,12 @@ defmodule TokengateWeb.ModelsLive do
                                     phx-value-id={ap.id}
                                     class="btn btn-xs btn-ghost"
                                     id={"toggle-ap-#{ap.id}"}
-                                    title={if ap.enabled, do: "Desactivar", else: "Activar"}
+                                    title={toggle_title(ap)}
                                   >
                                     <.icon
-                                      name={if ap.enabled, do: "hero-pause", else: "hero-play"}
+                                      name={
+                                        if provider_active?(ap), do: "hero-pause", else: "hero-play"
+                                      }
                                       class="w-3 h-3"
                                     />
                                   </button>

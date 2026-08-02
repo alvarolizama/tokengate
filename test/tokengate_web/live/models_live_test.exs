@@ -481,6 +481,48 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert html =~ "desactivado"
   end
 
+  test "model_provider row surfaces credential disabled state in /dashboard/models", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    alias_record = create_alias()
+
+    # Create credential under the alias's model_provider, then disable it.
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        api_key_encrypted: "sk-test",
+        status: "active"
+      })
+
+    {:ok, ap} =
+      Providers.create_model_provider(%{
+        model_alias_id: alias_record.id,
+        credential_id: credential.id,
+        provider_model: "gpt-4o-dis",
+        priority: 1,
+        enabled: true
+      })
+
+    # Now flip the credential to "disabled" (what /dashboard/providers does).
+    {:ok, _} = Providers.update_credential(credential, %{status: "disabled"})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+
+    html = render(view)
+
+    # Effective state should be "Inactivo" even though ap.enabled is still true.
+    assert html =~ "Inactivo"
+
+    # The status badge title should explain why.
+    assert html =~ "credential desactivada"
+
+    # The toggle should show the play icon (it would not actually re-enable the
+    # credential — admin must go to /dashboard/providers for that).
+    assert has_element?(view, "#toggle-ap-#{ap.id} span.hero-play")
+    refute has_element?(view, "#toggle-ap-#{ap.id} span.hero-pause")
+  end
+
   test "admin can delete an model_provider", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
