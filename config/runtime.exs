@@ -42,12 +42,22 @@ if config_env() == :prod do
 
   maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
-  # SSL on by default (AlloyDB/Cloud SQL require it).
-  # Set ECTO_SSL=false to disable for local dev or non-SSL databases.
+  # SSL on by default (AlloyDB/Cloud SQL require it) with certificate
+  # verification. Set ECTO_SSL=false to disable for local dev or non-SSL
+  # databases, or ECTO_SSL_VERIFY=false if the database presents a
+  # certificate that can't be verified against the system CA bundle
+  # (e.g. self-signed in a private network).
   maybe_ssl =
-    if System.get_env("ECTO_SSL") in ~w(false 0),
-      do: [],
-      else: [ssl: true, ssl_opts: [verify: :verify_none]]
+    cond do
+      System.get_env("ECTO_SSL") in ~w(false 0) ->
+        []
+
+      System.get_env("ECTO_SSL_VERIFY") in ~w(false 0) ->
+        [ssl: true, ssl_opts: [verify: :verify_none]]
+
+      true ->
+        [ssl: true, ssl_opts: [verify: :verify_peer, cacerts: :public_key.cacerts_get()]]
+    end
 
   config :tokengate,
          Tokengate.Repo,
