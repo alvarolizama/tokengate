@@ -133,7 +133,9 @@ Headers opcionales: `X-Agent-Type`, `X-Title`, `HTTP-Referer`
 | `PHX_HOST` | Host público (prod) | requerida en prod |
 | `PHX_PORT` / `PHX_SCHEME` | Puerto / scheme (prod) | — |
 | `POOL_SIZE` | Pool de conexiones DB | — |
-| `ECTO_SSL` / `ECTO_SSL_VERIFY` | SSL a Postgres | `true` |
+| `ECTO_SSL` / `ECTO_SSL_VERIFY` | SSL a Postgres (verify = verificación estricta del cert) | `true` / `false` |
+| `SESSION_COOKIE_SECURE` | `true`/`false` = forzar flag Secure de la cookie de sesión | sin setear (Plug default) |
+| `CHECK_ORIGINS` | Orígenes permitidos para CSRF, comma-separated (acceso dual HTTP/HTTPS) | sin setear (el `url` configurado) |
 | `TOKENGATE_ADMIN_EMAIL` | Email del admin root | `admin@tokengate.local` |
 | `TOKENGATE_ADMIN_PASSWORD` | Password del admin root | `tokengate-admin-secret-1` |
 | `WEBHOOK_SECRET` | HMAC secret para webhooks | — |

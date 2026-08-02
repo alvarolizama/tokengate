@@ -42,21 +42,21 @@ if config_env() == :prod do
 
   maybe_ipv6 = if System.get_env("ECTO_IPV6") in ~w(true 1), do: [:inet6], else: []
 
-  # SSL on by default (AlloyDB/Cloud SQL require it) with certificate
-  # verification. Set ECTO_SSL=false to disable for local dev or non-SSL
-  # databases, or ECTO_SSL_VERIFY=false if the database presents a
-  # certificate that can't be verified against the system CA bundle
-  # (e.g. self-signed in a private network).
+  # SSL on by default (AlloyDB/Cloud SQL require it) WITHOUT certificate
+  # verification — prod databases use self-signed certs, so verifying against
+  # the system CA bundle breaks the connection. Set ECTO_SSL=false to disable
+  # SSL entirely for local dev or non-SSL databases, or ECTO_SSL_VERIFY=true
+  # to opt back into strict verification against the system CA bundle.
   maybe_ssl =
     cond do
       System.get_env("ECTO_SSL") in ~w(false 0) ->
         []
 
-      System.get_env("ECTO_SSL_VERIFY") in ~w(false 0) ->
-        [ssl: true, ssl_opts: [verify: :verify_none]]
+      System.get_env("ECTO_SSL_VERIFY") in ~w(true 1) ->
+        [ssl: true, ssl_opts: [verify: :verify_peer, cacerts: :public_key.cacerts_get()]]
 
       true ->
-        [ssl: true, ssl_opts: [verify: :verify_peer, cacerts: :public_key.cacerts_get()]]
+        [ssl: true, ssl_opts: [verify: :verify_none]]
     end
 
   config :tokengate,
@@ -97,16 +97,33 @@ if config_env() == :prod do
   # compile_env), so it cannot live in this file. It stays in prod.exs and
   # can only be disabled at BUILD time with DISABLE_FORCE_SSL=1
   # (see config/prod.exs and the Dockerfile ARG).
-  config :tokengate, TokengateWeb.Endpoint,
-    url: [host: host, port: url_port, scheme: scheme],
-    http: [
-      # Enable IPv6 and bind on all interfaces.
-      # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
-      # See the documentation on https://bandit.hexdocs.pm/Bandit.html#t:options/0
-      # for details about using IPv6 vs IPv4 and loopback vs public addresses.
-      ip: {0, 0, 0, 0, 0, 0, 0, 0}
-    ],
-    secret_key_base: secret_key_base
+  # CHECK_ORIGINS: comma-separated list of allowed origins for CSRF/WS
+  # checks, e.g. "https://tokengate.example.com,http://10.0.0.5:4001".
+  # Needed when the app is served from more than one scheme/host/port
+  # (e.g. HTTPS public + plain HTTP over VPN) — the CSRF origin check
+  # rejects POSTs whose Origin doesn't match, returning 403 on /login.
+  # Unset = key omitted entirely, Phoenix default (checks against the
+  # configured url).
+  check_origin_config =
+    case System.get_env("CHECK_ORIGINS") do
+      nil -> []
+      "" -> []
+      origins -> [check_origin: String.split(origins, ",", trim: true)]
+    end
+
+  config :tokengate,
+         TokengateWeb.Endpoint,
+         [
+           url: [host: host, port: url_port, scheme: scheme],
+           http: [
+             # Enable IPv6 and bind on all interfaces.
+             # Set it to  {0, 0, 0, 0, 0, 0, 0, 1} for local network only access.
+             # See the documentation on https://bandit.hexdocs.pm/Bandit.html#t:options/0
+             # for details about using IPv6 vs IPv4 and loopback vs public addresses.
+             ip: {0, 0, 0, 0, 0, 0, 0, 0}
+           ],
+           secret_key_base: secret_key_base
+         ] ++ check_origin_config
 
   config :tokengate,
          :webhook_secret,

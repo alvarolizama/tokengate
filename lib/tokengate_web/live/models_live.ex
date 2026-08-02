@@ -75,11 +75,12 @@ defmodule TokengateWeb.ModelsLive do
         preload: [model_providers: {aps, [credential: :provider]}],
         order_by: [
           asc: ma.name,
-          asc: fragment(
-            "CASE WHEN ? IS NOT NULL THEN 2 WHEN ? IS NOT NULL THEN 1 ELSE 0 END",
-            aps.exclusive_to_team_member_id,
-            aps.exclusive_to_team_id
-          ),
+          asc:
+            fragment(
+              "CASE WHEN ? IS NOT NULL THEN 2 WHEN ? IS NOT NULL THEN 1 ELSE 0 END",
+              aps.exclusive_to_team_member_id,
+              aps.exclusive_to_team_id
+            ),
           asc_nulls_last: aps.priority
         ]
       )
@@ -1005,81 +1006,81 @@ defmodule TokengateWeb.ModelsLive do
                             draggable={to_string(@is_admin)}
                             class={[@is_admin && "cursor-grab active:cursor-grabbing"]}
                           >
-                          <td :if={@is_admin} class="w-8 text-base-content/30">
-                            <.icon name="hero-bars-3" class="w-4 h-4" />
-                          </td>
-                          <td class="font-medium">
-                            {provider_name(ap)}
-                            <span
-                              :if={ap.credential && credential_named?(ap.credential)}
-                              class="badge badge-xs badge-outline font-normal ml-1"
-                              title={ap.credential.name}
-                            >
-                              <.icon name="hero-key" class="w-3 h-3" />
-                              {ap.credential.name}
-                            </span>
-                            <span
-                              :if={ap.credential}
-                              class="text-xs text-base-content/40 ml-1"
-                            >
-                              {mask_key(ap.credential.api_key_encrypted)}
-                            </span>
-                          </td>
-                          <td><code class="text-sm">{ap.provider_model}</code></td>
-                          <td>
-                            <span class={["badge", "badge-sm", billing_badge(ap.billing_mode)]}>
-                              {billing_label(ap.billing_mode)}
-                            </span>
-                          </td>
-                          <td>
-                            <span class="badge badge-xs badge-ghost">{ap.priority || "—"}</span>
-                          </td>
-                          <td>
-                            <span class={["badge", "badge-sm", scope_badge(ap)]}>
-                              {scope_label(ap)}
-                            </span>
-                            <%= if ap.exclusive_to_team_member_id || ap.exclusive_to_team_id do %>
-                              <span class="text-xs text-base-content/40 ml-1">
-                                {scope_target_label(ap, assigns)}
-                              </span>
-                            <% end %>
-                          </td>
-                          <td>
-                            <span class={["badge", "badge-sm", enabled_badge(ap.enabled)]}>
-                              {enabled_label(ap.enabled)}
-                            </span>
-                          </td>
-                          <%= if @is_admin do %>
-                            <td>
-                              <div class="flex gap-1">
-                                <button
-                                  phx-click="toggle_model_provider"
-                                  phx-value-id={ap.id}
-                                  class="btn btn-xs btn-ghost"
-                                  id={"toggle-ap-#{ap.id}"}
-                                >
-                                  <.icon name="hero-arrow-path" class="w-3 h-3" />
-                                </button>
-                                <button
-                                  phx-click="edit_model_provider"
-                                  phx-value-id={ap.id}
-                                  class="btn btn-xs btn-ghost"
-                                  id={"edit-ap-#{ap.id}"}
-                                >
-                                  <.icon name="hero-pencil-square" class="w-3 h-3" />
-                                </button>
-                                <button
-                                  phx-click="delete_model_provider"
-                                  phx-value-id={ap.id}
-                                  data-confirm="¿Eliminar este proveedor del modelo?"
-                                  class="btn btn-xs btn-ghost text-error"
-                                  id={"delete-ap-#{ap.id}"}
-                                >
-                                  <.icon name="hero-trash" class="w-3 h-3" />
-                                </button>
-                              </div>
+                            <td :if={@is_admin} class="w-8 text-base-content/30">
+                              <.icon name="hero-bars-3" class="w-4 h-4" />
                             </td>
-                          <% end %>
+                            <td class="font-medium">
+                              {provider_name(ap)}
+                              <span
+                                :if={ap.credential && credential_named?(ap.credential)}
+                                class="badge badge-xs badge-outline font-normal ml-1"
+                                title={ap.credential.name}
+                              >
+                                <.icon name="hero-key" class="w-3 h-3" />
+                                {ap.credential.name}
+                              </span>
+                              <span
+                                :if={ap.credential}
+                                class="text-xs text-base-content/40 ml-1"
+                              >
+                                {mask_key(ap.credential.api_key_encrypted)}
+                              </span>
+                            </td>
+                            <td><code class="text-sm">{ap.provider_model}</code></td>
+                            <td>
+                              <span class={["badge", "badge-sm", billing_badge(ap.billing_mode)]}>
+                                {billing_label(ap.billing_mode)}
+                              </span>
+                            </td>
+                            <td>
+                              <span class="badge badge-xs badge-ghost">{ap.priority || "—"}</span>
+                            </td>
+                            <td>
+                              <span class={["badge", "badge-sm", scope_badge(ap)]}>
+                                {scope_label(ap)}
+                              </span>
+                              <%= if ap.exclusive_to_team_member_id || ap.exclusive_to_team_id do %>
+                                <span class="text-xs text-base-content/40 ml-1">
+                                  {scope_target_label(ap, assigns)}
+                                </span>
+                              <% end %>
+                            </td>
+                            <td>
+                              <span class={["badge", "badge-sm", enabled_badge(ap.enabled)]}>
+                                {enabled_label(ap.enabled)}
+                              </span>
+                            </td>
+                            <%= if @is_admin do %>
+                              <td>
+                                <div class="flex gap-1">
+                                  <button
+                                    phx-click="toggle_model_provider"
+                                    phx-value-id={ap.id}
+                                    class="btn btn-xs btn-ghost"
+                                    id={"toggle-ap-#{ap.id}"}
+                                  >
+                                    <.icon name="hero-arrow-path" class="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    phx-click="edit_model_provider"
+                                    phx-value-id={ap.id}
+                                    class="btn btn-xs btn-ghost"
+                                    id={"edit-ap-#{ap.id}"}
+                                  >
+                                    <.icon name="hero-pencil-square" class="w-3 h-3" />
+                                  </button>
+                                  <button
+                                    phx-click="delete_model_provider"
+                                    phx-value-id={ap.id}
+                                    data-confirm="¿Eliminar este proveedor del modelo?"
+                                    class="btn btn-xs btn-ghost text-error"
+                                    id={"delete-ap-#{ap.id}"}
+                                  >
+                                    <.icon name="hero-trash" class="w-3 h-3" />
+                                  </button>
+                                </div>
+                              </td>
+                            <% end %>
                           </tr>
                         <% end %>
                       </tbody>

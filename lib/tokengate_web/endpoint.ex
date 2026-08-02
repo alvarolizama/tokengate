@@ -2,19 +2,27 @@ defmodule TokengateWeb.Endpoint do
   use Phoenix.Endpoint, otp_app: :tokengate
 
   # The session is stored in an encrypted cookie (contents can be neither
-  # read nor tampered with by the client). `secure: true` only restricts the
-  # cookie to HTTPS when the request itself is HTTPS, so local HTTP dev keeps
-  # working. Salts and lifetime are runtime-configurable via env vars.
+  # read nor tampered with by the client). Salts and lifetime are
+  # runtime-configurable via env vars. SESSION_COOKIE_SECURE=true forces the
+  # Secure flag (HTTPS-only cookie); unset = Plug default (secure only when
+  # the request itself is HTTPS, so HTTP deploys keep working).
+  session_secure =
+    case System.get_env("SESSION_COOKIE_SECURE") do
+      v when v in ["true", "1"] -> [secure: true]
+      v when v in ["false", "0"] -> [secure: false]
+      _ -> []
+    end
+
   @session_options [
-    store: :cookie,
-    key: "_tokengate_key",
-    signing_salt: System.get_env("SESSION_SIGNING_SALT", "TwS/TtVu"),
-    encryption_salt: System.get_env("SESSION_ENCRYPTION_SALT", "pScAXZ3eub"),
-    same_site: "Lax",
-    secure: true,
-    http_only: true,
-    max_age: String.to_integer(System.get_env("SESSION_MAX_AGE_SECONDS", "28800"))
-  ]
+                     store: :cookie,
+                     key: "_tokengate_key",
+                     signing_salt: System.get_env("SESSION_SIGNING_SALT", "TwS/TtVu"),
+                     encryption_salt: System.get_env("SESSION_ENCRYPTION_SALT", "pScAXZ3eub"),
+                     same_site: "Lax",
+                     http_only: true,
+                     max_age:
+                       String.to_integer(System.get_env("SESSION_MAX_AGE_SECONDS", "28800"))
+                   ] ++ session_secure
 
   socket "/live", Phoenix.LiveView.Socket,
     websocket: [connect_info: [session: @session_options]],
