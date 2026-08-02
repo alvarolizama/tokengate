@@ -76,18 +76,11 @@
           </p>
         </div>
       <% else %>
-        <%!-- Dynamic grid: 1 item=1col, 2 items=2col, 3+ items=3col --%>
-        <% team_count = length(@teams) %>
-        <% grid_class =
-          cond do
-            team_count == 1 -> "grid grid-cols-1 gap-4 mb-6"
-            team_count == 2 -> "grid grid-cols-1 md:grid-cols-2 gap-4 mb-6"
-            true -> "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6"
-          end %>
-        <div class={grid_class}>
+        <%!-- All cards full width, stacked vertically --%>
+        <div class="grid grid-cols-1 gap-4 mb-6">
           <%= for t <- @teams do %>
             <div
-              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow h-full min-h-[253px]"
+              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow h-full"
               id={"team-#{t.team.id}"}
             >
               <div class="card-body p-5 flex flex-col h-full">
@@ -190,7 +183,7 @@
           <%!-- Models catalog card (always visible, full width) --%>
           <div
             id="models-catalog-card"
-            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow md:col-span-2 lg:col-span-3 min-h-[253px]"
+            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
           >
             <div class="card-body p-5 flex flex-col h-full">
               <div class="flex items-center justify-between mb-3">
@@ -244,7 +237,7 @@
           <.link
             :if={@supervised_services_count > 0}
             navigate={~p"/dashboard/services/supervised"}
-            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow block h-full min-h-[253px]"
+            class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow block"
             id="supervised-services-card"
           >
             <div class="card-body p-5 flex flex-col h-full">
