@@ -318,17 +318,29 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
 
   # Extract a human-readable error message from the provider's error body.
   # Providers return different shapes; we try the most common ones.
+  # The message is scrubbed before returning: some providers (notably
+  # OpenAI) echo a fragment of the offending API key in their 401 error
+  # envelope, and this message is persisted to provider_credentials and
+  # rendered in the admin alerts page.
   defp extract_error_message(body) when is_binary(body) do
     case Jason.decode(body) do
-      {:ok, %{"error" => %{"message" => msg}}} when is_binary(msg) -> truncate_msg(msg)
-      {:ok, %{"error" => msg}} when is_binary(msg) -> truncate_msg(msg)
-      {:ok, %{"message" => msg}} when is_binary(msg) -> truncate_msg(msg)
-      {:ok, %{"detail" => msg}} when is_binary(msg) -> truncate_msg(msg)
+      {:ok, %{"error" => %{"message" => msg}}} when is_binary(msg) -> sanitize_msg(msg)
+      {:ok, %{"error" => msg}} when is_binary(msg) -> sanitize_msg(msg)
+      {:ok, %{"message" => msg}} when is_binary(msg) -> sanitize_msg(msg)
+      {:ok, %{"detail" => msg}} when is_binary(msg) -> sanitize_msg(msg)
       _ -> nil
     end
   end
 
   defp extract_error_message(_), do: nil
+
+  defp sanitize_msg(msg), do: msg |> scrub_secrets() |> truncate_msg()
+
+  @api_key_pattern ~r/\b(sk-|gsk_|key-|sk-proj-|sk-ant-|sk_live_|rk-)[A-Za-z0-9_-]{6,}/
+
+  defp scrub_secrets(msg) when is_binary(msg) do
+    String.replace(msg, @api_key_pattern, "[REDACTED]")
+  end
 
   defp truncate_msg(msg) when byte_size(msg) > 500, do: String.slice(msg, 0, 500) <> "…"
   defp truncate_msg(msg), do: msg
