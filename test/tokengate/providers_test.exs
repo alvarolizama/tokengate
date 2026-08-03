@@ -386,6 +386,99 @@ defmodule Tokengate.ProvidersTest do
     end
   end
 
+  describe "model_providers exclusive scope" do
+    test "team-exclusive provider is visible only to members of that team" do
+      team_a = team_fixture(%{name: "Team A"})
+      team_b = team_fixture(%{name: "Team B"})
+      member_a = team_member_fixture(team_a)
+      member_b = team_member_fixture(team_b)
+
+      alias_ = model_alias_fixture()
+      provider = provider_fixture()
+      credential = credential_fixture(provider)
+
+      {:ok, mp} =
+        Providers.create_model_provider(%{
+          model_alias_id: alias_.id,
+          credential_id: credential.id,
+          provider_model: "exclusive-model",
+          priority: 1,
+          enabled: true,
+          exclusive_to_team_id: team_a.id
+        })
+
+      # Same team → visible
+      visible_for_a = Providers.list_model_providers_for_member(alias_.id, member_a.id, team_a.id)
+      assert Enum.map(visible_for_a, & &1.id) == [mp.id]
+
+      # Other team → NOT visible. Regression: the "global" clause used to
+      # check only exclusive_to_team_member_id, so team-exclusive providers
+      # (member id nil) leaked to every other team.
+      visible_for_b = Providers.list_model_providers_for_member(alias_.id, member_b.id, team_b.id)
+      assert visible_for_b == []
+    end
+
+    test "member-exclusive provider is visible only to that member" do
+      team = team_fixture()
+      member_a = team_member_fixture(team)
+      member_b = team_member_fixture(team)
+
+      alias_ = model_alias_fixture()
+      provider = provider_fixture()
+      credential = credential_fixture(provider)
+
+      {:ok, mp} =
+        Providers.create_model_provider(%{
+          model_alias_id: alias_.id,
+          credential_id: credential.id,
+          provider_model: "member-model",
+          priority: 1,
+          enabled: true,
+          exclusive_to_team_member_id: member_a.id
+        })
+
+      visible_for_a = Providers.list_model_providers_for_member(alias_.id, member_a.id, team.id)
+      assert Enum.map(visible_for_a, & &1.id) == [mp.id]
+
+      visible_for_b = Providers.list_model_providers_for_member(alias_.id, member_b.id, team.id)
+      assert visible_for_b == []
+    end
+
+    test "global providers stay visible alongside matching exclusives" do
+      team = team_fixture()
+      member = team_member_fixture(team)
+      alias_ = model_alias_fixture()
+      provider = provider_fixture()
+      global_cred = credential_fixture(provider)
+      team_cred = credential_fixture(provider)
+
+      {:ok, global_mp} =
+        Providers.create_model_provider(%{
+          model_alias_id: alias_.id,
+          credential_id: global_cred.id,
+          provider_model: "global-model",
+          priority: 1,
+          enabled: true
+        })
+
+      {:ok, team_mp} =
+        Providers.create_model_provider(%{
+          model_alias_id: alias_.id,
+          credential_id: team_cred.id,
+          provider_model: "team-model",
+          priority: 1,
+          enabled: true,
+          exclusive_to_team_id: team.id
+        })
+
+      visible = Providers.list_model_providers_for_member(alias_.id, member.id, team.id)
+      ids = Enum.map(visible, & &1.id)
+
+      assert global_mp.id in ids
+      assert team_mp.id in ids
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Team Model Aliases
   # ---------------------------------------------------------------------------

@@ -308,11 +308,14 @@ defmodule Tokengate.Providers do
         preload: [credential: :provider]
       )
 
-    # Add scope filter: global OR exclusive to this member OR exclusive to this team
+    # Add scope filter: global OR exclusive to this member OR exclusive to this team.
+    # NOTE: "global" means BOTH exclusive fields are nil. Checking only
+    # exclusive_to_team_member_id leaks team-exclusive providers to every
+    # other team (they have exclusive_to_team_id set, member id nil).
     query =
       from(mp in base_query,
         where:
-          is_nil(mp.exclusive_to_team_member_id) or
+          (is_nil(mp.exclusive_to_team_member_id) and is_nil(mp.exclusive_to_team_id)) or
             mp.exclusive_to_team_member_id == ^team_member_id or
             mp.exclusive_to_team_id == ^team_id,
         order_by: [

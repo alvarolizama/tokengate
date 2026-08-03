@@ -509,4 +509,128 @@ defmodule Tokengate.Routing.RouterTest do
       assert MapSet.member?(ids, "claude-3")
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Exclusive scope (team/member-exclusive providers)
+  # ---------------------------------------------------------------------------
+
+  describe "exclusive scope" do
+    test "a team-exclusive provider is never selected for a member of another team" do
+      team_a = team_fixture(%{name: "Team A"})
+      team_b = team_fixture(%{name: "Team B"})
+      member_b = team_member_fixture(team_b)
+
+      model_alias = model_alias_fixture(%{name: "gpt-4", display_name: "GPT-4"})
+      {:ok, _} = Providers.grant_alias_to_team(team_a.id, model_alias.id)
+      {:ok, _} = Providers.grant_alias_to_team(team_b.id, model_alias.id)
+
+      # Global provider (fallback for everyone)
+      global_provider = provider_fixture()
+      global_cred = credential_fixture(global_provider, %{status: "active"})
+
+      global_ap =
+        model_provider_fixture(model_alias, global_provider, %{
+          provider_model: "gpt-4-global",
+          priority: 1,
+          credential: global_cred
+        })
+
+      # Provider exclusive to Team A
+      team_a_provider = provider_fixture()
+      team_a_cred = credential_fixture(team_a_provider, %{status: "active"})
+
+      model_provider_fixture(model_alias, team_a_provider, %{
+        provider_model: "gpt-4-team-a",
+        priority: 1,
+        credential: team_a_cred,
+        exclusive_to_team_id: team_a.id
+      })
+
+      member_b = Repo.preload(member_b, [:team])
+
+      # Member B must silently skip Team A's exclusive and land on the global.
+      assert {:ok, route} = Router.route(model_alias.name, member_b)
+      assert route.model_provider.id == global_ap.id
+      assert route.credential.id == global_cred.id
+      assert route.model_responded == "gpt-4-global"
+    end
+
+    test "a team-exclusive provider is picked first (priority -1) for its own team" do
+      team_a = team_fixture(%{name: "Team A"})
+      member_a = team_member_fixture(team_a)
+
+      model_alias = model_alias_fixture(%{name: "gpt-4", display_name: "GPT-4"})
+      {:ok, _} = Providers.grant_alias_to_team(team_a.id, model_alias.id)
+
+      # Global provider (would win by priority 1 without exclusive boost)
+      global_provider = provider_fixture()
+      global_cred = credential_fixture(global_provider, %{status: "active"})
+
+      model_provider_fixture(model_alias, global_provider, %{
+        provider_model: "gpt-4-global",
+        priority: 1,
+        credential: global_cred
+      })
+
+      # Provider exclusive to Team A
+      team_a_provider = provider_fixture()
+      team_a_cred = credential_fixture(team_a_provider, %{status: "active"})
+
+      team_a_ap =
+        model_provider_fixture(model_alias, team_a_provider, %{
+          provider_model: "gpt-4-team-a",
+          priority: 1,
+          credential: team_a_cred,
+          exclusive_to_team_id: team_a.id
+        })
+
+      member_a = Repo.preload(member_a, [:team])
+
+      # Member A must use their team's exclusive provider first.
+      assert {:ok, route} = Router.route(model_alias.name, member_a)
+      assert route.model_provider.id == team_a_ap.id
+      assert route.credential.id == team_a_cred.id
+      assert route.model_responded == "gpt-4-team-a"
+    end
+
+    test "member-exclusive provider is picked for the owner but skipped for teammates" do
+      team = team_fixture()
+      owner = team_member_fixture(team)
+      teammate = team_member_fixture(team)
+
+      model_alias = model_alias_fixture(%{name: "gpt-4", display_name: "GPT-4"})
+      {:ok, _} = Providers.grant_alias_to_team(team.id, model_alias.id)
+
+      global_provider = provider_fixture()
+      global_cred = credential_fixture(global_provider, %{status: "active"})
+
+      global_ap =
+        model_provider_fixture(model_alias, global_provider, %{
+          provider_model: "gpt-4-global",
+          priority: 1,
+          credential: global_cred
+        })
+
+      member_provider = provider_fixture()
+      member_cred = credential_fixture(member_provider, %{status: "active"})
+
+      model_provider_fixture(model_alias, member_provider, %{
+        provider_model: "gpt-4-owner",
+        priority: 1,
+        credential: member_cred,
+        exclusive_to_team_member_id: owner.id
+      })
+
+      owner = Repo.preload(owner, [:team])
+      teammate = Repo.preload(teammate, [:team])
+
+      assert {:ok, owner_route} = Router.route(model_alias.name, owner)
+      assert owner_route.model_responded == "gpt-4-owner"
+
+      # Teammate silently skips the owner's exclusive and lands on the global.
+      assert {:ok, mate_route} = Router.route(model_alias.name, teammate)
+      assert mate_route.model_provider.id == global_ap.id
+      assert mate_route.model_responded == "gpt-4-global"
+    end
+  end
 end
