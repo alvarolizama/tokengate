@@ -62,6 +62,7 @@ defmodule TokengateWeb.DashboardLive do
       |> assign(:new_token, nil)
       |> assign(:new_token_team, nil)
       |> assign(:model_catalog, [])
+      |> assign(:model_tiers, %{})
       |> assign(:supervised_services_count, count_supervised_services(user))
       |> load_personal_data(user)
 
@@ -614,6 +615,18 @@ defmodule TokengateWeb.DashboardLive do
   def accent_text("accent"), do: "text-accent"
   def accent_text(_), do: "text-base-content"
 
+  # Same tier colors as /dashboard/stats rankings
+  def tier_badge_class("S"), do: "badge-success"
+  def tier_badge_class("A"), do: "badge-info"
+  def tier_badge_class("B"), do: "badge-warning"
+  def tier_badge_class("C"), do: "badge-warning badge-outline"
+  def tier_badge_class("D"), do: "badge-error"
+  def tier_badge_class(_), do: "badge-ghost"
+
+  def model_type_badge_class("embedding"), do: "badge-info"
+  def model_type_badge_class("rerank"), do: "badge-warning"
+  def model_type_badge_class(_), do: "badge-ghost"
+
   ## Key helpers (from ApiKeysLive) ---------------------------------------
 
   def masked_key(%{api_key: %{key_prefix: prefix}}) when is_binary(prefix) do
@@ -953,6 +966,12 @@ defmodule TokengateWeb.DashboardLive do
       # Org stats: all requests (no scoping)
       org_stats = model_usage_stats_org(model_ids, opts)
 
+      # Org-wide tier per model (same scoring as /dashboard/stats)
+      tiers =
+        nil
+        |> Rollup.model_ranking(opts)
+        |> Map.new(fn row -> {row.model_id, row.tier} end)
+
       # Merge into a single map: model_id => %{user: ..., team: ..., org: ...}
       merged =
         Map.new(model_ids, fn model_id ->
@@ -976,6 +995,7 @@ defmodule TokengateWeb.DashboardLive do
 
       socket
       |> assign(:model_usage_stats, merged)
+      |> assign(:model_tiers, tiers)
       |> assign(:most_used_model_id, most_used_id)
     end
   end

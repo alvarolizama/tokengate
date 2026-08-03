@@ -224,8 +224,13 @@
                   <thead>
                     <tr class="text-base-content/50 border-b border-base-200">
                       <th class="text-left py-1 font-medium">Modelo</th>
-                      <th class="text-left py-1 font-medium">Tipo</th>
                       <th class="text-left py-1 font-medium">Descripción</th>
+                      <th
+                        class="text-right py-1 font-medium"
+                        title="Requests (user / team / org)"
+                      >
+                        Requests
+                      </th>
                       <th
                         class="text-right py-1 font-medium"
                         title="Latencia promedio (user / team / org)"
@@ -254,12 +259,25 @@
                       <tr class="border-b border-base-200 last:border-0 hover:bg-base-200/50">
                         <td class="py-1.5">
                           <div class="flex items-center gap-1">
+                            <% tier = Map.get(@model_tiers, model.id, "—") %>
+                            <span
+                              class={["badge badge-xs", tier_badge_class(tier)]}
+                              title="Calificación org-wide (igual que en /dashboard/stats)"
+                            >
+                              {tier}
+                            </span>
                             <div
                               class="font-medium text-base-content"
                               title={model.name}
                             >
                               {model.name}
                             </div>
+                            <span class={[
+                              "badge badge-xs badge-outline",
+                              model_type_badge_class(model.model_type)
+                            ]}>
+                              {model.model_type}
+                            </span>
                             <span :if={is_most_used} title="Tu modelo más usado">
                               <.icon
                                 name="hero-trophy"
@@ -271,18 +289,22 @@
                             {format_compact(model.context_window)} ctx
                           </div>
                         </td>
-                        <td class="py-1.5">
-                          <%= case model.model_type do %>
-                            <% "embedding" -> %>
-                              <span class="badge badge-xs badge-outline badge-info">embedding</span>
-                            <% "rerank" -> %>
-                              <span class="badge badge-xs badge-outline badge-warning">rerank</span>
-                            <% _ -> %>
-                              <span class="text-base-content/30">—</span>
-                          <% end %>
+                        <td class="py-1.5 text-base-content/60 max-w-48">
+                          <div class="whitespace-normal break-words">
+                            {model.description || "—"}
+                          </div>
                         </td>
-                        <td class="py-1.5 text-base-content/60">
-                          {model.description || "—"}
+                        <td class="py-1.5 text-right tabular-nums text-base-content/70">
+                          <%= if stats.user.request_count > 0 do %>
+                            <div>{format_compact(stats.user.request_count)}</div>
+                            <div class="text-[10px] text-base-content/40">
+                              {format_compact(stats.team.request_count)} / {format_compact(
+                                stats.org.request_count
+                              )}
+                            </div>
+                          <% else %>
+                            —
+                          <% end %>
                         </td>
                         <td class="py-1.5 text-right tabular-nums text-base-content/70">
                           <%= if stats.user.avg_latency_ms do %>
