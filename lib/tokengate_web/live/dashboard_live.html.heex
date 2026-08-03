@@ -220,31 +220,31 @@
                 </span>
               </div>
               <div class="overflow-y-auto max-h-96 flex-1">
-                <table class="w-full text-xs">
+                <table class="w-full text-xs table-fixed">
                   <thead>
                     <tr class="text-base-content/50 border-b border-base-200">
-                      <th class="text-left py-1 font-medium">Modelo</th>
-                      <th class="text-left py-1 font-medium">Descripción</th>
+                      <th class="text-left py-1 font-medium w-[26%]">Modelo</th>
+                      <th class="text-left py-1 font-medium w-[26%]">Descripción</th>
                       <th
-                        class="text-right py-1 font-medium"
+                        class="text-right py-1 font-medium w-[12%]"
                         title="Requests (user / team / org)"
                       >
                         Requests
                       </th>
                       <th
-                        class="text-right py-1 font-medium"
+                        class="text-right py-1 font-medium w-[12%]"
                         title="Latencia promedio (user / team / org)"
                       >
                         Latencia
                       </th>
                       <th
-                        class="text-right py-1 font-medium"
+                        class="text-right py-1 font-medium w-[12%]"
                         title="Gasto real (user / team / org)"
                       >
                         Gasto
                       </th>
                       <th
-                        class="text-right py-1 font-medium"
+                        class="text-right py-1 font-medium w-[12%]"
                         title="Tokens in/out (user / team / org)"
                       >
                         Tokens
@@ -258,7 +258,7 @@
                       <% is_most_used = model.id == @most_used_model_id %>
                       <tr class="border-b border-base-200 last:border-0 hover:bg-base-200/50">
                         <td class="py-1.5">
-                          <div class="flex items-center gap-1">
+                          <div class="flex items-center gap-1 flex-wrap">
                             <% tier = Map.get(@model_tiers, model.id, "—") %>
                             <span
                               class={["badge badge-xs", tier_badge_class(tier)]}
@@ -289,7 +289,7 @@
                             {format_compact(model.context_window)} ctx
                           </div>
                         </td>
-                        <td class="py-1.5 text-base-content/60 max-w-48">
+                        <td class="py-1.5 text-base-content/60">
                           <div class="whitespace-normal break-words">
                             {model.description || "—"}
                           </div>
