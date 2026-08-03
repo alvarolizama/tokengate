@@ -224,6 +224,7 @@
                   <thead>
                     <tr class="text-base-content/50 border-b border-base-200">
                       <th class="text-left py-1 font-medium">Modelo</th>
+                      <th class="text-left py-1 font-medium">Tipo</th>
                       <th class="text-left py-1 font-medium">Descripción</th>
                       <th
                         class="text-right py-1 font-medium"
@@ -269,6 +270,16 @@
                           <div class="text-[10px] text-base-content/40">
                             {format_compact(model.context_window)} ctx
                           </div>
+                        </td>
+                        <td class="py-1.5">
+                          <%= case model.model_type do %>
+                            <% "embedding" -> %>
+                              <span class="badge badge-xs badge-outline badge-info">embedding</span>
+                            <% "rerank" -> %>
+                              <span class="badge badge-xs badge-outline badge-warning">rerank</span>
+                            <% _ -> %>
+                              <span class="text-base-content/30">—</span>
+                          <% end %>
                         </td>
                         <td class="py-1.5 text-base-content/60">
                           {model.description || "—"}

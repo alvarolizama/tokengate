@@ -923,7 +923,8 @@ defmodule TokengateWeb.DashboardLive do
       id: ma.id,
       name: ma.display_name || ma.name,
       description: ma.description,
-      context_window: ma.context_window
+      context_window: ma.context_window,
+      model_type: ma.model_type
     }
   end
 
