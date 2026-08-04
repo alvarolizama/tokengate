@@ -178,6 +178,45 @@ defmodule Tokengate.Logs.Inflight do
     |> Enum.take(limit)
   end
 
+  @doc """
+  In-flight count per user — groups current entries by `user_email`.
+  Returns a list of maps sorted by count descending, capped at `limit`
+  entries. Each map has:
+
+    * `:user` — the user email (falls back to "desconocido" when nil)
+    * `:count` — number of in-flight requests
+    * `:credential_name` — credential alias (if available)
+    * `:provider_key_suffix` — last 4 chars of the provider API key
+  """
+  @spec count_by_user(non_neg_integer()) :: [
+          %{
+            user: String.t(),
+            count: non_neg_integer(),
+            credential_name: String.t() | nil,
+            provider_key_suffix: String.t() | nil
+          }
+        ]
+  def count_by_user(limit \\ 5) do
+    ensure_table()
+
+    @table
+    |> :ets.tab2list()
+    |> Enum.map(fn {_id, entry, _mono} -> entry end)
+    |> Enum.group_by(&(&1.user_email || "desconocido"))
+    |> Enum.map(fn {user, entries} ->
+      first = List.first(entries)
+
+      %{
+        user: user,
+        count: length(entries),
+        credential_name: first.credential_name,
+        provider_key_suffix: first.provider_key_suffix
+      }
+    end)
+    |> Enum.sort_by(& &1.count, :desc)
+    |> Enum.take(limit)
+  end
+
   @doc false
   # Test helper: ages an entry past the TTL so the sweep picks it up.
   def backdate_for_test(id, ms) do

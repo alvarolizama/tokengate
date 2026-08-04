@@ -28,6 +28,7 @@ defmodule TokengateWeb.LogsLive do
       |> assign(:filters, default_filters())
       |> assign(:form, to_form(default_filters(), as: :filter))
       |> assign(:summary, empty_summary())
+      |> assign(:top_users, [])
       |> assign(:summary_refresh_scheduled, false)
       |> assign(:last_seen_at, DateTime.utc_now() |> DateTime.truncate(:second))
       |> assign(:online_users, [])
@@ -56,6 +57,7 @@ defmodule TokengateWeb.LogsLive do
        |> assign(:online_users, TokengateWeb.Presence.list_online())
        |> assign(:api_inflight, Inflight.count())
        |> assign(:top_models, Inflight.count_by_model())
+       |> assign(:top_users, Inflight.count_by_user())
        |> assign(:pending, visible_pending(socket.assigns))}
     else
       {:ok, socket}
@@ -112,7 +114,8 @@ defmodule TokengateWeb.LogsLive do
     {:noreply,
      socket
      |> assign(:api_inflight, visible_inflight_count(socket.assigns))
-     |> assign(:top_models, Inflight.count_by_model())}
+     |> assign(:top_models, Inflight.count_by_model())
+     |> assign(:top_users, Inflight.count_by_user())}
   end
 
   def handle_info({:inflight_started, entry}, socket) do
@@ -646,10 +649,10 @@ defmodule TokengateWeb.LogsLive do
                   <div class="min-w-0">
                     <span class="font-medium text-base-content truncate block">{m.model}</span>
                     <span
-                      :if={m.credential_name || m.provider_key_suffix}
+                      :if={m.credential_name}
                       class="text-base-content/40 truncate block"
                     >
-                      {m.credential_name}<span :if={m.provider_key_suffix}> · …{m.provider_key_suffix}</span>
+                      {m.credential_name}
                     </span>
                   </div>
                   <span class="text-base-content/50 shrink-0 font-semibold ml-2">{m.count}</span>
@@ -659,33 +662,52 @@ defmodule TokengateWeb.LogsLive do
             </div>
           </div>
 
+          <%!-- Rendimiento: req/min + latencia --%>
           <div class="card bg-base-100 border border-base-300 shadow-sm">
             <div class="card-body p-4">
               <div class="flex items-center justify-between">
                 <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Req/min
+                  Rendimiento
                 </p>
                 <.icon name="hero-arrow-trending-up" class="w-4 h-4 text-base-content/40" />
               </div>
-              <p class="mt-1 text-2xl font-bold text-base-content" id="summary-req-per-min">
-                {@summary.req_per_min}
-              </p>
-              <p class="text-xs text-base-content/40 mt-1">últimos 5 min</p>
+              <div class="flex items-baseline gap-3 mt-1">
+                <p class="text-2xl font-bold text-base-content" id="summary-req-per-min">
+                  {@summary.req_per_min}
+                </p>
+                <p class="text-xs text-base-content/40">req/min</p>
+                <p class="text-2xl font-bold text-base-content" id="summary-latency">
+                  {if @summary.avg_latency_ms, do: "#{@summary.avg_latency_ms}", else: "—"}
+                </p>
+                <p class="text-xs text-base-content/40">ms prom</p>
+              </div>
             </div>
           </div>
 
-          <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <%!-- En vuelo por usuario --%>
+          <div class="card bg-base-100 border border-base-300 shadow-sm" id="top-users">
             <div class="card-body p-4">
               <div class="flex items-center justify-between">
                 <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Latencia prom
+                  En vuelo por usuario
                 </p>
-                <.icon name="hero-clock" class="w-4 h-4 text-base-content/40" />
+                <.icon name="hero-users" class="w-4 h-4 text-base-content/40" />
               </div>
-              <p class="mt-1 text-2xl font-bold text-base-content" id="summary-latency">
-                {if @summary.avg_latency_ms, do: "#{@summary.avg_latency_ms} ms", else: "—"}
-              </p>
-              <p class="text-xs text-base-content/40 mt-1">últimos 5 min</p>
+              <div class="mt-1 space-y-1" id="top-users-list">
+                <div :for={u <- @top_users} class="flex items-center justify-between text-xs">
+                  <div class="min-w-0">
+                    <span class="font-medium text-base-content truncate block">{u.user}</span>
+                    <span
+                      :if={u.credential_name}
+                      class="text-base-content/40 truncate block"
+                    >
+                      {u.credential_name}
+                    </span>
+                  </div>
+                  <span class="text-base-content/50 shrink-0 font-semibold ml-2">{u.count}</span>
+                </div>
+                <p :if={@top_users == []} class="text-xs text-base-content/30">—</p>
+              </div>
             </div>
           </div>
 
