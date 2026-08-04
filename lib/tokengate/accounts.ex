@@ -802,8 +802,20 @@ defmodule Tokengate.Accounts do
   - `rpm_limit`: team's `default_rpm_limit` + member's `extra_rpm` (when not
     nil). The team default is always present (defaults to 60).
 
+  @doc \"""
   Returns a map with `:monthly_budget_usd`, `:concurrency_limit`, and `:rpm_limit` keys.
+
+  Service virtual members (TeamMember with team: nil) are resolved to their
+  backing Service limits so the proxy controller can use a single code path.
   """
+  # Service virtual member — no team, look up the backing service limits.
+  def effective_limits(%TeamMember{team: nil, id: id}) do
+    case get_service(id) do
+      %Service{} = service -> effective_limits(service)
+      nil -> %{monthly_budget_usd: nil, concurrency_limit: 5, rpm_limit: 60}
+    end
+  end
+
   def effective_limits(%TeamMember{} = team_member) do
     team_member = Repo.preload(team_member, [:team])
     team = team_member.team

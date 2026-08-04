@@ -483,6 +483,45 @@ defmodule Tokengate.AccountsTest do
 
       assert limits.monthly_budget_usd == Decimal.new("25.00")
     end
+
+    test "service virtual member returns service limits (not team defaults)" do
+      service =
+        service_fixture(%{
+          "monthly_budget_usd" => "50.00",
+          "concurrency_limit" => 3,
+          "rpm_limit" => 30
+        })
+
+      service = Repo.preload(service, [:api_key])
+      member = TokengateWeb.Plugs.ApiAuth.service_to_virtual_member(service)
+
+      # The virtual member must NOT crash effective_limits (was a nil.team crash)
+      limits = Accounts.effective_limits(member)
+
+      assert limits.monthly_budget_usd == Decimal.new("50.00")
+      assert limits.concurrency_limit == 3
+      assert limits.rpm_limit == 30
+    end
+
+    test "service virtual member with no backing service returns safe defaults" do
+      # Build a virtual member with a non-existent service id
+      member = %TeamMember{
+        id: Ecto.UUID.generate(),
+        team_id: nil,
+        user_id: nil,
+        team_role: "user",
+        status: "active",
+        team: nil,
+        user: nil,
+        api_key: nil
+      }
+
+      limits = Accounts.effective_limits(member)
+
+      assert limits.monthly_budget_usd == nil
+      assert limits.concurrency_limit == 5
+      assert limits.rpm_limit == 60
+    end
   end
 
   # ---------------------------------------------------------------------------

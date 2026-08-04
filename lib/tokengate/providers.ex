@@ -529,7 +529,8 @@ defmodule Tokengate.Providers do
     from(sma in ServiceModelAlias,
       where: sma.service_id == ^service_id,
       join: ma in ModelAlias,
-      on: ma.id == sma.model_alias_id
+      on: ma.id == sma.model_alias_id,
+      select: ma
     )
     |> Repo.all()
   end
