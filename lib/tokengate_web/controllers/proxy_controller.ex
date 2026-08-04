@@ -48,7 +48,8 @@ defmodule TokengateWeb.ProxyController do
 
   alias Tokengate.Routing.Router
 
-  @max_attempts 3
+  @max_attempts 9
+  @max_retries_per_provider 3
 
   @doc """
   Lists the model aliases accessible to the authenticated API key.
@@ -215,6 +216,24 @@ defmodule TokengateWeb.ProxyController do
          kind,
          route_opts
        ) do
+    execute_simple(conn, route, payload, member, attempts_left, exclude, adapter_fun, kind,
+      route_opts,
+      provider_retries: 0
+    )
+  end
+
+  defp execute_simple(
+         conn,
+         route,
+         payload,
+         member,
+         attempts_left,
+         exclude,
+         adapter_fun,
+         kind,
+         route_opts,
+         provider_retries: provider_retries
+       ) do
     provider = route.model_provider.credential.provider
     payload = Map.put(payload, "model", route.model_responded)
 
@@ -243,7 +262,8 @@ defmodule TokengateWeb.ProxyController do
             status,
             adapter_fun,
             kind,
-            route_opts
+            route_opts,
+            provider_retries: provider_retries
           )
         else
           log_and_render_proxy_error(conn, route, member, {:upstream_error, :auth_error, status},
@@ -272,7 +292,8 @@ defmodule TokengateWeb.ProxyController do
             status,
             adapter_fun,
             kind,
-            route_opts
+            route_opts,
+            provider_retries: provider_retries
           )
         else
           log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
@@ -292,15 +313,17 @@ defmodule TokengateWeb.ProxyController do
          status,
          adapter_fun,
          kind,
-         route_opts
+         route_opts,
+         provider_retries: provider_retries
        ) do
     log_fallback_attempt(conn, route, member, status)
 
-    exclude =
-      if attempts_left < @max_attempts do
-        [route.credential.id | exclude]
+    # Per-provider retry: same logic as retry_with_fallback.
+    {exclude, provider_retries} =
+      if provider_retries < @max_retries_per_provider do
+        {exclude, provider_retries + 1}
       else
-        exclude
+        {[route.credential.id | exclude], 0}
       end
 
     case Router.route(route.model_alias.name, member, %{
@@ -318,7 +341,8 @@ defmodule TokengateWeb.ProxyController do
           exclude,
           adapter_fun,
           kind,
-          route_opts
+          route_opts,
+          provider_retries: provider_retries
         )
 
       {:error, :no_available_provider} ->
@@ -564,6 +588,10 @@ defmodule TokengateWeb.ProxyController do
   end
 
   defp execute(conn, route, payload, member, attempts_left, exclude) do
+    execute(conn, route, payload, member, attempts_left, exclude, 0)
+  end
+
+  defp execute(conn, route, payload, member, attempts_left, exclude, provider_retries) do
     provider = route.model_provider.credential.provider
     # The client sends the alias name; the provider expects its own model id.
     payload =
@@ -589,7 +617,9 @@ defmodule TokengateWeb.ProxyController do
         Router.record_outcome(route, {:failure, :auth_error})
 
         if attempts_left > 1 do
-          retry_with_fallback(conn, route, payload, member, attempts_left, exclude, status)
+          retry_with_fallback(conn, route, payload, member, attempts_left, exclude, status,
+            provider_retries
+          )
         else
           log_and_render_proxy_error(conn, route, member, {:upstream_error, :auth_error, status},
             error_reason: "auth_error"
@@ -609,7 +639,9 @@ defmodule TokengateWeb.ProxyController do
         Router.record_outcome(route, {:failure, breaker_reason(reason)})
 
         if attempts_left > 1 do
-          retry_with_fallback(conn, route, payload, member, attempts_left, exclude, status)
+          retry_with_fallback(conn, route, payload, member, attempts_left, exclude, status,
+            provider_retries
+          )
         else
           log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
             error_reason: to_string(reason)
@@ -632,21 +664,20 @@ defmodule TokengateWeb.ProxyController do
     end)
   end
 
-  defp retry_with_fallback(conn, route, payload, member, attempts_left, exclude, status) do
-    # Log the failed attempt before trying the next provider.
-    # The client never sees this — it's purely for observability.
+  defp retry_with_fallback(conn, route, payload, member, attempts_left, exclude, status,
+         provider_retries) do
     log_fallback_attempt(conn, route, member, status)
 
-    # En el primer fallo (attempts_left == @max_attempts) no excluimos la
-    # credential; dejamos que el router decida usando el breaker. Así una
-    # falla transitoria no quema el pool completo. Solo excluimos en
-    # reintentos posteriores, o cuando la credential ya es inviable (auth_error
-    # la disablea de todas formas).
-    exclude =
-      if attempts_left < @max_attempts do
-        [route.credential.id | exclude]
+    # Per-provider retry: keep trying the same provider up to
+    # @max_retries_per_provider times before moving on to the next one.
+    # The sticky tracker will re-select the same provider (breaker is
+    # still closed under the threshold), so we intentionally DON'T exclude
+    # the credential until retries are exhausted.
+    {exclude, provider_retries} =
+      if provider_retries < @max_retries_per_provider do
+        {exclude, provider_retries + 1}
       else
-        exclude
+        {[route.credential.id | exclude], 0}
       end
 
     request_context = %{
@@ -657,7 +688,7 @@ defmodule TokengateWeb.ProxyController do
 
     case Router.route(route.model_alias.name, member, request_context) do
       {:ok, new_route} ->
-        execute(conn, new_route, payload, member, attempts_left - 1, exclude)
+        execute(conn, new_route, payload, member, attempts_left - 1, exclude, provider_retries)
 
       {:error, :no_available_provider} ->
         log_and_render_proxy_error(conn, route, member, :all_providers_down,
@@ -680,6 +711,10 @@ defmodule TokengateWeb.ProxyController do
   # sanctioned payload mutation — the plan requires real usage for cost
   # accounting, and it only affects the provider's own usage reporting.
   defp execute_stream(conn, route, payload, member, attempts_left, exclude) do
+    execute_stream(conn, route, payload, member, attempts_left, exclude, 0)
+  end
+
+  defp execute_stream(conn, route, payload, member, attempts_left, exclude, provider_retries) do
     provider = route.model_provider.credential.provider
     # The client sends the alias name; the provider expects its own model id.
     payload =
@@ -730,7 +765,9 @@ defmodule TokengateWeb.ProxyController do
             Router.record_outcome(route, {:failure, breaker_reason(reason)})
 
             if attempts_left > 1 do
-              retry_stream_with_fallback(conn, route, payload, member, attempts_left, exclude)
+              retry_stream_with_fallback(conn, route, payload, member, attempts_left, exclude,
+                provider_retries
+              )
             else
               log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, nil},
                 error_reason: to_string(reason)
@@ -740,14 +777,14 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
-  defp retry_stream_with_fallback(conn, route, payload, member, attempts_left, exclude) do
-    # Igual que retry_with_fallback: en el primer fallo no excluimos la
-    # credential; solo a partir del segundo reintento.
-    exclude =
-      if attempts_left < @max_attempts do
-        [route.credential.id | exclude]
+  defp retry_stream_with_fallback(conn, route, payload, member, attempts_left, exclude,
+         provider_retries) do
+    # Same per-provider retry logic as retry_with_fallback.
+    {exclude, provider_retries} =
+      if provider_retries < @max_retries_per_provider do
+        {exclude, provider_retries + 1}
       else
-        exclude
+        {[route.credential.id | exclude], 0}
       end
 
     request_context = %{
@@ -758,7 +795,9 @@ defmodule TokengateWeb.ProxyController do
 
     case Router.route(route.model_alias.name, member, request_context) do
       {:ok, new_route} ->
-        execute_stream(conn, new_route, payload, member, attempts_left - 1, exclude)
+        execute_stream(conn, new_route, payload, member, attempts_left - 1, exclude,
+          provider_retries
+        )
 
       {:error, :no_available_provider} ->
         log_and_render_proxy_error(conn, route, member, :all_providers_down,
