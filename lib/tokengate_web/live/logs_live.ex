@@ -28,6 +28,7 @@ defmodule TokengateWeb.LogsLive do
       |> assign(:filters, default_filters())
       |> assign(:form, to_form(default_filters(), as: :filter))
       |> assign(:summary, empty_summary())
+      |> assign(:top_models, [])
       |> assign(:summary_refresh_scheduled, false)
       |> assign(:last_seen_at, DateTime.utc_now() |> DateTime.truncate(:second))
       |> assign(:online_users, [])
@@ -305,10 +306,13 @@ defmodule TokengateWeb.LogsLive do
   end
 
   defp refresh_summary(socket) do
-    summary =
-      Logs.realtime_summary(build_filters(socket, include_limit: false, include_cursor: false))
+    filters = build_filters(socket, include_limit: false, include_cursor: false)
+    summary = Logs.realtime_summary(filters)
+    top_models = Logs.requests_by_model(filters)
 
-    socket |> assign(:summary, summary)
+    socket
+    |> assign(:summary, summary)
+    |> assign(:top_models, top_models)
   end
 
   ## Scope resolution ------------------------------------------------------
@@ -329,14 +333,16 @@ defmodule TokengateWeb.LogsLive do
 
     logs = Logs.list_logs(list_filters)
 
-    summary =
-      Logs.realtime_summary(build_filters(socket, include_limit: false, include_cursor: false))
+    summary_filters = build_filters(socket, include_limit: false, include_cursor: false)
+    summary = Logs.realtime_summary(summary_filters)
+    top_models = Logs.requests_by_model(summary_filters)
 
     has_more = length(logs) == @page_size
 
     socket =
       socket
       |> assign(:summary, summary)
+      |> assign(:top_models, top_models)
       |> assign(:has_more, has_more)
 
     socket =
@@ -515,19 +521,6 @@ defmodule TokengateWeb.LogsLive do
     "#{format_number(read || 0)} / #{format_number(creation || 0)}"
   end
 
-  defp initials(email) when is_binary(email) do
-    email
-    |> String.split("@")
-    |> List.first()
-    |> String.split(~r/[._-]/)
-    |> Enum.filter(&(&1 != ""))
-    |> Enum.take(2)
-    |> Enum.map_join("", &String.first(&1))
-    |> String.upcase()
-  end
-
-  defp initials(_), do: "?"
-
   defp model_display(model_requested, model_responded) do
     if model_requested == model_responded do
       model_requested
@@ -607,45 +600,55 @@ defmodule TokengateWeb.LogsLive do
 
         <%!-- KPI strip: live indicators + summary, 5 cards in a row --%>
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+          <%!-- Merged: Conectados + En vuelo --%>
           <div class="card bg-base-100 border border-base-300 shadow-sm" id="live-indicators">
             <div class="card-body p-4">
               <div class="flex items-center justify-between">
                 <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Conectados
+                  Actividad
                 </p>
-                <span class="relative flex h-2.5 w-2.5">
-                  <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-60"></span>
-                  <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-success"></span>
-                </span>
+                <div class="flex items-center gap-2">
+                  <span class="relative flex h-2.5 w-2.5">
+                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-60"></span>
+                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-success"></span>
+                  </span>
+                  <.icon name="hero-bolt" class="w-4 h-4 text-accent" />
+                </div>
               </div>
-              <p class="mt-1 text-2xl font-bold text-base-content" id="online-count">
-                {length(@online_users)}
-              </p>
-              <div class="flex -space-x-2 mt-1 min-h-7" id="online-users">
-                <span
-                  :for={u <- @online_users}
-                  class="inline-flex items-center justify-center w-7 h-7 rounded-full bg-primary/15 text-primary text-xs font-semibold ring-2 ring-base-100"
-                  title={u.email}
-                  id={"online-#{u.id}"}
-                >
-                  {initials(u.email)}
-                </span>
+              <div class="flex items-baseline gap-3 mt-1">
+                <p class="text-2xl font-bold text-base-content" id="online-count">
+                  {length(@online_users)}
+                </p>
+                <p class="text-xs text-base-content/40">conectados</p>
+                <p class="text-2xl font-bold text-base-content" id="inflight-count">
+                  {@api_inflight}
+                </p>
+                <p class="text-xs text-base-content/40">en vuelo</p>
               </div>
             </div>
           </div>
 
-          <div class="card bg-base-100 border border-base-300 shadow-sm" id="inflight-indicator">
+          <%!-- Top modelos --%>
+          <div class="card bg-base-100 border border-base-300 shadow-sm" id="top-models">
             <div class="card-body p-4">
               <div class="flex items-center justify-between">
                 <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  En vuelo
+                  Top Modelos
                 </p>
-                <.icon name="hero-bolt" class="w-4 h-4 text-accent" />
+                <.icon name="hero-cpu-chip" class="w-4 h-4 text-base-content/40" />
               </div>
-              <p class="mt-1 text-2xl font-bold text-base-content" id="inflight-count">
-                {@api_inflight}
-              </p>
-              <p class="text-xs text-base-content/40 mt-1">requests en proceso</p>
+              <div class="mt-1 space-y-1" id="top-models-list">
+                <div :for={m <- @top_models} class="flex items-center justify-between text-xs">
+                  <span class="font-medium text-base-content truncate mr-2">{m.model}</span>
+                  <span class="text-base-content/50 shrink-0">
+                    {m.count}
+                    <span :if={m.provider_key_prefix} class="text-base-content/30">
+                      · {m.provider_key_prefix}…
+                    </span>
+                  </span>
+                </div>
+                <p :if={@top_models == []} class="text-xs text-base-content/30">—</p>
+              </div>
             </div>
           </div>
 
