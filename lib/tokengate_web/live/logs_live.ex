@@ -28,7 +28,6 @@ defmodule TokengateWeb.LogsLive do
       |> assign(:filters, default_filters())
       |> assign(:form, to_form(default_filters(), as: :filter))
       |> assign(:summary, empty_summary())
-      |> assign(:top_models, [])
       |> assign(:summary_refresh_scheduled, false)
       |> assign(:last_seen_at, DateTime.utc_now() |> DateTime.truncate(:second))
       |> assign(:online_users, [])
@@ -56,6 +55,7 @@ defmodule TokengateWeb.LogsLive do
        socket
        |> assign(:online_users, TokengateWeb.Presence.list_online())
        |> assign(:api_inflight, Inflight.count())
+       |> assign(:top_models, Inflight.count_by_model())
        |> assign(:pending, visible_pending(socket.assigns))}
     else
       {:ok, socket}
@@ -108,7 +108,11 @@ defmodule TokengateWeb.LogsLive do
 
   def handle_info(:refresh_inflight, socket) do
     Process.send_after(self(), :refresh_inflight, @inflight_refresh_interval_ms)
-    {:noreply, assign(socket, :api_inflight, visible_inflight_count(socket.assigns))}
+
+    {:noreply,
+     socket
+     |> assign(:api_inflight, visible_inflight_count(socket.assigns))
+     |> assign(:top_models, Inflight.count_by_model())}
   end
 
   def handle_info({:inflight_started, entry}, socket) do
@@ -633,19 +637,22 @@ defmodule TokengateWeb.LogsLive do
             <div class="card-body p-4">
               <div class="flex items-center justify-between">
                 <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Top Modelos
+                  En vuelo por modelo
                 </p>
                 <.icon name="hero-cpu-chip" class="w-4 h-4 text-base-content/40" />
               </div>
               <div class="mt-1 space-y-1" id="top-models-list">
                 <div :for={m <- @top_models} class="flex items-center justify-between text-xs">
-                  <span class="font-medium text-base-content truncate mr-2">{m.model}</span>
-                  <span class="text-base-content/50 shrink-0">
-                    {m.count}
-                    <span :if={m.provider_key_prefix} class="text-base-content/30">
-                      · {m.provider_key_prefix}…
+                  <div class="min-w-0">
+                    <span class="font-medium text-base-content truncate block">{m.model}</span>
+                    <span
+                      :if={m.credential_name || m.provider_key_suffix}
+                      class="text-base-content/40 truncate block"
+                    >
+                      {m.credential_name}<span :if={m.provider_key_suffix}> · …{m.provider_key_suffix}</span>
                     </span>
-                  </span>
+                  </div>
+                  <span class="text-base-content/50 shrink-0 font-semibold ml-2">{m.count}</span>
                 </div>
                 <p :if={@top_models == []} class="text-xs text-base-content/30">—</p>
               </div>

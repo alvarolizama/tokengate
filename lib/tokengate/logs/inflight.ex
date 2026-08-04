@@ -52,6 +52,7 @@ defmodule Tokengate.Logs.Inflight do
           provider_name: String.t() | nil,
           api_key_prefix: String.t() | nil,
           credential_name: String.t() | nil,
+          provider_key_suffix: String.t() | nil,
           started_at: DateTime.t()
         }
 
@@ -86,6 +87,7 @@ defmodule Tokengate.Logs.Inflight do
       provider_name: Map.get(attrs, :provider_name),
       api_key_prefix: Map.get(attrs, :api_key_prefix),
       credential_name: Map.get(attrs, :credential_name),
+      provider_key_suffix: Map.get(attrs, :provider_key_suffix),
       started_at: DateTime.utc_now() |> DateTime.truncate(:second)
     }
 
@@ -134,6 +136,46 @@ defmodule Tokengate.Logs.Inflight do
   def count do
     ensure_table()
     :ets.info(@table, :size) || 0
+  end
+
+  @doc """
+  In-flight count per model — groups current entries by `model_requested`.
+  Returns a list of maps sorted by count descending, capped at `limit`
+  entries. Each map has:
+
+    * `:model` — the model_requested string
+    * `:count` — number of in-flight requests
+    * `:credential_name` — credential alias (if available)
+    * `:provider_key_suffix` — last 4 chars of the provider API key
+  """
+  @spec count_by_model(non_neg_integer()) :: [
+          %{
+            model: String.t(),
+            count: non_neg_integer(),
+            credential_name: String.t() | nil,
+            provider_key_suffix: String.t() | nil
+          }
+        ]
+  def count_by_model(limit \\ 5) do
+    ensure_table()
+
+    @table
+    |> :ets.tab2list()
+    |> Enum.map(fn {_id, entry, _mono} -> entry end)
+    |> Enum.reject(&is_nil(&1.model_requested))
+    |> Enum.group_by(& &1.model_requested)
+    |> Enum.map(fn {model, entries} ->
+      first = List.first(entries)
+
+      %{
+        model: model,
+        count: length(entries),
+        credential_name: first.credential_name,
+        provider_key_suffix: first.provider_key_suffix
+      }
+    end)
+    |> Enum.sort_by(& &1.count, :desc)
+    |> Enum.take(limit)
   end
 
   @doc false

@@ -488,14 +488,14 @@ defmodule Tokengate.Logs do
   defp avg_to_float(n) when is_float(n), do: Float.round(n, 1)
 
   @doc """
-  Requests per model within a rolling window, including provider key prefix
+  Requests per model within a rolling window, including provider key suffix
   and credential name for each model. Returns a list of maps sorted by
   count descending, capped at `limit` entries.
 
   Each entry has:
     * `:model` — the model_requested string
     * `:count` — number of requests
-    * `:provider_key_prefix` — prefix of the provider API key used
+    * `:provider_key_suffix` — last 4 chars of the provider API key
     * `:credential_name` — credential name if available
   """
   def requests_by_model(filters \\ %{}, window_seconds \\ 300, limit \\ 5) do
@@ -511,7 +511,7 @@ defmodule Tokengate.Logs do
     |> select([rl], %{
       model: rl.model_requested,
       count: count(rl.id),
-      provider_key_prefix: rl.provider_key_prefix,
+      provider_key_suffix: rl.provider_key_prefix,
       credential_name: rl.credential_name
     })
     |> order_by(desc: :count)
