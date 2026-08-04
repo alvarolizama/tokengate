@@ -604,6 +604,10 @@ defmodule TokengateWeb.ModelsLiveTest do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
 
+    # The suite runs against a shared DB (async: false): other tests may
+    # have created aliases already. Wipe them so the empty state holds.
+    Repo.delete_all(Providers.ModelAlias)
+
     {:ok, _view, html} = live(conn, ~p"/dashboard/models")
 
     assert html =~ "No hay modelos configurados"

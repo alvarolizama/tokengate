@@ -20,7 +20,7 @@ config :tokengate, :circuit_breaker,
 # Nothing is sent to the client until the first chunk arrives.
 config :tokengate,
        :first_token_timeout_ms,
-       String.to_integer(System.get_env("FIRST_TOKEN_TIMEOUT_MS", "15000"))
+       String.to_integer(System.get_env("FIRST_TOKEN_TIMEOUT_MS", "30000"))
 
 # In prod the server is always enabled — PaaS start commands expect the
 # endpoint to boot without depending on PHX_SERVER. In dev/test the

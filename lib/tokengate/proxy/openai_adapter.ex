@@ -78,7 +78,10 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
          extract_error_message(resp_body)}
 
       {:error, error} ->
-        {:error, ProviderAdapter.classify_error(error), nil}
+        # Transport failures (timeouts, refused connections, DNS…) have no
+        # upstream status and no body. Normalize to the same 4-tuple shape
+        # as status-based errors so callers' case clauses don't miss them.
+        {:error, ProviderAdapter.classify_error(error), nil, nil}
     end
   end
 

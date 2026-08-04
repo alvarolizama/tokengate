@@ -920,16 +920,19 @@ defmodule TokengateWeb.ModelsLive do
         </.header>
 
         <%!-- Alias list --%>
-        <div id="aliases" phx-update="stream" class="space-y-3">
-          <div
-            :if={@aliases_empty?}
-            id="aliases-empty"
-            class="text-center py-12 text-base-content/40"
-          >
-            <.icon name="hero-cpu-chip" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-            <p>No hay modelos configurados.</p>
-          </div>
+        <%!-- The empty state must live OUTSIDE the stream container:
+             phx-update="stream" only manages children keyed by stream ids,
+             so a plain conditional div inside it never reaches the client. --%>
+        <div
+          :if={@aliases_empty?}
+          id="aliases-empty"
+          class="text-center py-12 text-base-content/40"
+        >
+          <.icon name="hero-cpu-chip" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+          <p>No hay modelos configurados.</p>
+        </div>
 
+        <div id="aliases" phx-update="stream" class="space-y-3">
           <div :for={{id, model_alias} <- @streams.aliases} id={id}>
             <div class="card bg-base-100 border border-base-300 shadow-sm">
               <div class="card-body p-5">

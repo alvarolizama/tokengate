@@ -216,7 +216,15 @@ defmodule TokengateWeb.ProxyController do
          kind,
          route_opts
        ) do
-    execute_simple(conn, route, payload, member, attempts_left, exclude, adapter_fun, kind,
+    execute_simple(
+      conn,
+      route,
+      payload,
+      member,
+      attempts_left,
+      exclude,
+      adapter_fun,
+      kind,
       route_opts,
       provider_retries: 0
     )
@@ -263,7 +271,8 @@ defmodule TokengateWeb.ProxyController do
             adapter_fun,
             kind,
             route_opts,
-            provider_retries: provider_retries
+            provider_retries: provider_retries,
+            reason: :auth_error
           )
         else
           log_and_render_proxy_error(conn, route, member, {:upstream_error, :auth_error, status},
@@ -271,7 +280,7 @@ defmodule TokengateWeb.ProxyController do
           )
         end
 
-      {:error, :client_error, status} ->
+      {:error, :client_error, status, _error_message} ->
         Router.record_outcome(route, {:failure, :client_error})
 
         log_and_render_proxy_error(conn, route, member, {:upstream_client_error, status},
@@ -293,7 +302,8 @@ defmodule TokengateWeb.ProxyController do
             adapter_fun,
             kind,
             route_opts,
-            provider_retries: provider_retries
+            provider_retries: provider_retries,
+            reason: reason
           )
         else
           log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
@@ -314,17 +324,13 @@ defmodule TokengateWeb.ProxyController do
          adapter_fun,
          kind,
          route_opts,
-         provider_retries: provider_retries
+         provider_retries: provider_retries,
+         reason: reason
        ) do
     log_fallback_attempt(conn, route, member, status)
 
-    # Per-provider retry: same logic as retry_with_fallback.
-    {exclude, provider_retries} =
-      if provider_retries < @max_retries_per_provider do
-        {exclude, provider_retries + 1}
-      else
-        {[route.credential.id | exclude], 0}
-      end
+    # Per-provider retry: same policy as retry_with_fallback.
+    {exclude, provider_retries} = next_candidate(route, exclude, provider_retries, reason)
 
     case Router.route(route.model_alias.name, member, %{
            :api_key_hash => conn.assigns.api_key_hash,
@@ -466,6 +472,32 @@ defmodule TokengateWeb.ProxyController do
       :ok -> :ok
       {:error, :rate_limited, retry_after_ms} -> {:error, {:rate_limited, retry_after_ms}}
       {:error, :concurrency_exceeded} -> {:error, :concurrency_exceeded}
+    end
+  end
+
+  # Shared retry policy for all three execution paths (chat, streaming,
+  # embeddings/rerank). Decides whether the next attempt should re-select
+  # the same credential or exclude it so the router moves to the next
+  # provider.
+  #
+  #   * `:timeout` — the provider hung for the full receive_timeout (or the
+  #     first_token_timeout in streaming). A hung provider won't recover in
+  #     the milliseconds a retry takes, and each retry would cost another
+  #     full timeout of client-perceived latency, so we exclude the
+  #     credential immediately and move on.
+  #   * any other reason — fast failures (5xx, 429, connection refused) are
+  #     often transient and cost almost nothing to retry, so the same
+  #     provider gets up to @max_retries_per_provider attempts before being
+  #     excluded.
+  defp next_candidate(route, exclude, _provider_retries, :timeout) do
+    {[route.credential.id | exclude], 0}
+  end
+
+  defp next_candidate(route, exclude, provider_retries, _reason) do
+    if provider_retries < @max_retries_per_provider do
+      {exclude, provider_retries + 1}
+    else
+      {[route.credential.id | exclude], 0}
     end
   end
 
@@ -617,8 +649,16 @@ defmodule TokengateWeb.ProxyController do
         Router.record_outcome(route, {:failure, :auth_error})
 
         if attempts_left > 1 do
-          retry_with_fallback(conn, route, payload, member, attempts_left, exclude, status,
-            provider_retries
+          retry_with_fallback(
+            conn,
+            route,
+            payload,
+            member,
+            attempts_left,
+            exclude,
+            status,
+            provider_retries,
+            :auth_error
           )
         else
           log_and_render_proxy_error(conn, route, member, {:upstream_error, :auth_error, status},
@@ -626,7 +666,7 @@ defmodule TokengateWeb.ProxyController do
           )
         end
 
-      {:error, :client_error, status} ->
+      {:error, :client_error, status, _error_message} ->
         # Other 4xx from the provider: the caller's payload is at fault — surface
         # it without burning the breaker or trying other providers.
         Router.record_outcome(route, {:failure, :client_error})
@@ -639,8 +679,16 @@ defmodule TokengateWeb.ProxyController do
         Router.record_outcome(route, {:failure, breaker_reason(reason)})
 
         if attempts_left > 1 do
-          retry_with_fallback(conn, route, payload, member, attempts_left, exclude, status,
-            provider_retries
+          retry_with_fallback(
+            conn,
+            route,
+            payload,
+            member,
+            attempts_left,
+            exclude,
+            status,
+            provider_retries,
+            reason
           )
         else
           log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
@@ -664,21 +712,25 @@ defmodule TokengateWeb.ProxyController do
     end)
   end
 
-  defp retry_with_fallback(conn, route, payload, member, attempts_left, exclude, status,
-         provider_retries) do
+  defp retry_with_fallback(
+         conn,
+         route,
+         payload,
+         member,
+         attempts_left,
+         exclude,
+         status,
+         provider_retries,
+         reason
+       ) do
     log_fallback_attempt(conn, route, member, status)
 
-    # Per-provider retry: keep trying the same provider up to
-    # @max_retries_per_provider times before moving on to the next one.
-    # The sticky tracker will re-select the same provider (breaker is
-    # still closed under the threshold), so we intentionally DON'T exclude
-    # the credential until retries are exhausted.
-    {exclude, provider_retries} =
-      if provider_retries < @max_retries_per_provider do
-        {exclude, provider_retries + 1}
-      else
-        {[route.credential.id | exclude], 0}
-      end
+    # A timeout means the provider is hung or saturated — fall back to the
+    # next provider immediately; the condition that hung it won't clear in
+    # the milliseconds a retry takes, and each retry would cost a full
+    # receive_timeout of client-perceived latency. Fast errors (5xx, 429)
+    # are often transient, so those keep the per-provider retries.
+    {exclude, provider_retries} = next_candidate(route, exclude, provider_retries, reason)
 
     request_context = %{
       "messages" => payload["messages"] || [],
@@ -765,8 +817,15 @@ defmodule TokengateWeb.ProxyController do
             Router.record_outcome(route, {:failure, breaker_reason(reason)})
 
             if attempts_left > 1 do
-              retry_stream_with_fallback(conn, route, payload, member, attempts_left, exclude,
-                provider_retries
+              retry_stream_with_fallback(
+                conn,
+                route,
+                payload,
+                member,
+                attempts_left,
+                exclude,
+                provider_retries,
+                reason
               )
             else
               log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, nil},
@@ -777,15 +836,19 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
-  defp retry_stream_with_fallback(conn, route, payload, member, attempts_left, exclude,
-         provider_retries) do
-    # Same per-provider retry logic as retry_with_fallback.
-    {exclude, provider_retries} =
-      if provider_retries < @max_retries_per_provider do
-        {exclude, provider_retries + 1}
-      else
-        {[route.credential.id | exclude], 0}
-      end
+  defp retry_stream_with_fallback(
+         conn,
+         route,
+         payload,
+         member,
+         attempts_left,
+         exclude,
+         provider_retries,
+         reason
+       ) do
+    # Same policy as retry_with_fallback: timeouts fall back immediately,
+    # fast errors retry the same provider up to @max_retries_per_provider.
+    {exclude, provider_retries} = next_candidate(route, exclude, provider_retries, reason)
 
     request_context = %{
       "messages" => payload["messages"] || [],
@@ -795,7 +858,13 @@ defmodule TokengateWeb.ProxyController do
 
     case Router.route(route.model_alias.name, member, request_context) do
       {:ok, new_route} ->
-        execute_stream(conn, new_route, payload, member, attempts_left - 1, exclude,
+        execute_stream(
+          conn,
+          new_route,
+          payload,
+          member,
+          attempts_left - 1,
+          exclude,
           provider_retries
         )
 

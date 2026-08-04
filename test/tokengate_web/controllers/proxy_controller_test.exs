@@ -77,6 +77,13 @@ defmodule TokengateWeb.ProxyControllerTest do
           Process.sleep(300)
           stream(conn)
 
+        "hang" in conn.path_info ->
+          # Simulates a hung/saturated provider: never answers within any
+          # reasonable receive_timeout. The caller must configure a short
+          # receive_timeout_ms on the credential so the test stays fast.
+          Process.sleep(30_000)
+          json(conn, 500, %{"error" => %{"message" => "eventually"}})
+
         true ->
           payload = Jason.decode!(body)
 
@@ -448,6 +455,123 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert json_response(conn, 200)
   end
 
+  ## Timeout retry policy ######################################################
+
+  # Adds a second, healthy provider+credential at lower priority so the
+  # router has somewhere to fall back to.
+  defp add_healthy_fallback(model_alias, u) do
+    {:ok, provider2} =
+      Providers.create_provider(%{
+        name: "Healthy #{u}",
+        base_url: "http://localhost:#{@port}"
+      })
+
+    {:ok, cred2} =
+      Providers.create_credential(%{
+        provider_id: provider2.id,
+        api_key_encrypted: "sk-healthy-#{u}"
+      })
+
+    {:ok, _ap2} =
+      Providers.create_model_provider(%{
+        model_alias_id: model_alias.id,
+        credential_id: cred2.id,
+        provider_model: "gpt-4o-healthy-#{u}",
+        priority: 2
+      })
+
+    cred2
+  end
+
+  # Points the alias's first (priority 1) credential's provider at the
+  # hanging endpoint with a short receive_timeout so tests stay fast.
+  defp make_first_provider_hang(model_alias) do
+    [model_provider] =
+      Providers.list_model_providers(model_alias.id) |> Enum.sort_by(& &1.priority)
+
+    {:ok, _credential} =
+      Providers.update_credential(model_provider.credential, %{receive_timeout_ms: 200})
+
+    {:ok, _provider} =
+      Providers.update_provider(model_provider.credential.provider, %{
+        base_url: "http://localhost:#{@port}/hang"
+      })
+  end
+
+  test "timeout falls back immediately to the second provider (no same-provider retries)", %{
+    conn: conn
+  } do
+    u = unique()
+    %{token: token, alias: model_alias} = proxy_fixture()
+    make_first_provider_hang(model_alias)
+    add_healthy_fallback(model_alias, u)
+
+    start = System.monotonic_time(:millisecond)
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+
+    elapsed = System.monotonic_time(:millisecond) - start
+
+    assert json_response(conn, 200)
+
+    # One timeout (200ms) + the healthy provider's answer. If the old policy
+    # were in place (3 retries at 200ms each before excluding), this would
+    # take ~800ms+. Give generous headroom for CI jitter.
+    assert elapsed < 700, "expected immediate fallback after one timeout, took #{elapsed}ms"
+  end
+
+  test "timeout with a single provider returns 503 after one attempt", %{conn: conn} do
+    %{token: token, alias: model_alias} = proxy_fixture()
+    make_first_provider_hang(model_alias)
+
+    start = System.monotonic_time(:millisecond)
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+
+    elapsed = System.monotonic_time(:millisecond) - start
+
+    assert %{"error" => %{"type" => "service_unavailable"}} = json_response(conn, 503)
+
+    # Old policy: 3 retries × 200ms before giving up (~600ms+). New policy:
+    # one timeout, then the pool is empty → 503 right away.
+    assert elapsed < 700, "expected single timeout before 503, took #{elapsed}ms"
+  end
+
+  test "fast 500 errors still retry the same provider before falling back", %{conn: conn} do
+    u = unique()
+    %{token: token, alias: model_alias} = proxy_fixture(%{down: true})
+    add_healthy_fallback(model_alias, u)
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+
+    assert json_response(conn, 200)
+
+    # The 500 path keeps per-provider retries: the first provider gets hit
+    # more than once (initial attempt + retries) before the router moves on.
+    # Each hit sends a {:provider_request, _} message from ProviderPlug.
+    hits =
+      for _ <- 1..100 do
+        receive do
+          {:provider_request, payload} -> payload
+        after
+          0 -> nil
+        end
+      end
+      |> Enum.reject(&is_nil/1)
+
+    down_hits = Enum.count(hits, fn payload -> payload["model"] =~ "gpt-4o-real" end)
+    assert down_hits >= 2, "expected the down provider to be retried, got #{down_hits} hit(s)"
+  end
+
   test "concurrency fallback: saturated credential falls back to second credential", %{conn: conn} do
     u = unique()
 
@@ -723,6 +847,46 @@ defmodule TokengateWeb.ProxyControllerTest do
       |> post(~p"/v1/chat/completions", Map.put(chat_body(model_alias.name), "stream", true))
 
     assert %{"error" => %{"type" => "service_unavailable"}} = json_response(conn, 503)
+  end
+
+  test "stream: first-token timeout falls back to the second provider immediately", %{conn: conn} do
+    previous = Application.get_env(:tokengate, :first_token_timeout_ms)
+    Application.put_env(:tokengate, :first_token_timeout_ms, 100)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:tokengate, :first_token_timeout_ms, previous),
+        else: Application.delete_env(:tokengate, :first_token_timeout_ms)
+    end)
+
+    u = unique()
+    %{token: token, alias: model_alias} = proxy_fixture()
+
+    # First provider streams too slowly (300ms > 100ms first-token budget)
+    [model_provider] = Providers.list_model_providers(model_alias.id)
+
+    {:ok, _provider} =
+      Providers.update_provider(model_provider.credential.provider, %{
+        base_url: "http://localhost:#{@port}/slowstream"
+      })
+
+    add_healthy_fallback(model_alias, u)
+
+    start = System.monotonic_time(:millisecond)
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", Map.put(chat_body(model_alias.name), "stream", true))
+
+    elapsed = System.monotonic_time(:millisecond) - start
+
+    assert conn.state == :chunked
+    assert response(conn, 200)
+
+    # Old policy: 3 retries × 100ms before falling back (~400ms+). New:
+    # one 100ms first-token timeout, then straight to the healthy provider.
+    assert elapsed < 400, "expected immediate streaming fallback, took #{elapsed}ms"
   end
 
   ## Embeddings ################################################################

@@ -168,7 +168,9 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
     test "receive timeout classifies as :timeout", %{credential: credential} do
       # /slow sleeps 200ms; the adapter URL helper appends the path, so we
       # exercise timeout via a provider pointing at the slow route directly.
-      assert {:error, :timeout, nil} =
+      # Transport errors are normalized to the 4-tuple shape (no status, no
+      # upstream error message).
+      assert {:error, :timeout, nil, nil} =
                OpenAIAdapter.chat_completion(
                  provider_to("/slow"),
                  credential,

@@ -954,7 +954,17 @@ defmodule TokengateWeb.DashboardLive do
     model_ids = Enum.map(models, & &1.id)
 
     if model_ids == [] or member_ids == [] do
-      assign(socket, :model_usage_stats, %{})
+      # Keep the same {user, team, org} shape per model that the happy path
+      # builds — the template reads stats.user.request_count unconditionally.
+      empty_stats =
+        Map.new(model_ids, fn model_id ->
+          {model_id, %{user: empty_usage(), team: empty_usage(), org: empty_usage()}}
+        end)
+
+      socket
+      |> assign(:model_usage_stats, empty_stats)
+      |> assign(:model_tiers, %{})
+      |> assign(:most_used_model_id, nil)
     else
       # User stats: only the current user's requests
       user_stats = model_usage_stats_for_members(model_ids, member_ids, opts)
