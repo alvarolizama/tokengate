@@ -28,6 +28,7 @@ defmodule TokengateWeb.LogsLive do
       |> assign(:filters, default_filters())
       |> assign(:form, to_form(default_filters(), as: :filter))
       |> assign(:summary, empty_summary())
+      |> assign(:top_models, [])
       |> assign(:top_users, [])
       |> assign(:summary_refresh_scheduled, false)
       |> assign(:last_seen_at, DateTime.utc_now() |> DateTime.truncate(:second))
@@ -313,13 +314,10 @@ defmodule TokengateWeb.LogsLive do
   end
 
   defp refresh_summary(socket) do
-    filters = build_filters(socket, include_limit: false, include_cursor: false)
-    summary = Logs.realtime_summary(filters)
-    top_models = Logs.requests_by_model(filters)
+    summary =
+      Logs.realtime_summary(build_filters(socket, include_limit: false, include_cursor: false))
 
-    socket
-    |> assign(:summary, summary)
-    |> assign(:top_models, top_models)
+    socket |> assign(:summary, summary)
   end
 
   ## Scope resolution ------------------------------------------------------
@@ -340,16 +338,14 @@ defmodule TokengateWeb.LogsLive do
 
     logs = Logs.list_logs(list_filters)
 
-    summary_filters = build_filters(socket, include_limit: false, include_cursor: false)
-    summary = Logs.realtime_summary(summary_filters)
-    top_models = Logs.requests_by_model(summary_filters)
+    summary =
+      Logs.realtime_summary(build_filters(socket, include_limit: false, include_cursor: false))
 
     has_more = length(logs) == @page_size
 
     socket =
       socket
       |> assign(:summary, summary)
-      |> assign(:top_models, top_models)
       |> assign(:has_more, has_more)
 
     socket =
@@ -622,15 +618,19 @@ defmodule TokengateWeb.LogsLive do
                   <.icon name="hero-bolt" class="w-4 h-4 text-accent" />
                 </div>
               </div>
-              <div class="flex items-baseline gap-3 mt-1">
-                <p class="text-2xl font-bold text-base-content" id="online-count">
-                  {length(@online_users)}
-                </p>
-                <p class="text-xs text-base-content/40">conectados</p>
-                <p class="text-2xl font-bold text-base-content" id="inflight-count">
-                  {@api_inflight}
-                </p>
-                <p class="text-xs text-base-content/40">en vuelo</p>
+              <div class="mt-1 space-y-1">
+                <div class="flex items-center justify-between">
+                  <p class="text-xs text-base-content/40">Conectados</p>
+                  <p class="text-2xl font-bold text-base-content" id="online-count">
+                    {length(@online_users)}
+                  </p>
+                </div>
+                <div class="flex items-center justify-between">
+                  <p class="text-xs text-base-content/40">En vuelo</p>
+                  <p class="text-2xl font-bold text-base-content" id="inflight-count">
+                    {@api_inflight}
+                  </p>
+                </div>
               </div>
             </div>
           </div>
@@ -698,15 +698,19 @@ defmodule TokengateWeb.LogsLive do
                 </p>
                 <.icon name="hero-arrow-trending-up" class="w-4 h-4 text-base-content/40" />
               </div>
-              <div class="flex items-baseline gap-3 mt-1">
-                <p class="text-2xl font-bold text-base-content" id="summary-req-per-min">
-                  {@summary.req_per_min}
-                </p>
-                <p class="text-xs text-base-content/40">req/min</p>
-                <p class="text-2xl font-bold text-base-content" id="summary-latency">
-                  {if @summary.avg_latency_ms, do: "#{@summary.avg_latency_ms}", else: "—"}
-                </p>
-                <p class="text-xs text-base-content/40">ms prom</p>
+              <div class="mt-1 space-y-1">
+                <div class="flex items-center justify-between">
+                  <p class="text-xs text-base-content/40">Req/min</p>
+                  <p class="text-2xl font-bold text-base-content" id="summary-req-per-min">
+                    {@summary.req_per_min}
+                  </p>
+                </div>
+                <div class="flex items-center justify-between">
+                  <p class="text-xs text-base-content/40">Latencia prom</p>
+                  <p class="text-2xl font-bold text-base-content" id="summary-latency">
+                    {if @summary.avg_latency_ms, do: "#{@summary.avg_latency_ms} ms", else: "—"}
+                  </p>
+                </div>
               </div>
             </div>
           </div>
