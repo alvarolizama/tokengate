@@ -672,6 +672,7 @@
                       Por modelo del proveedor
                     </h2>
                     <%= if has_data?(@breakdown_provider) do %>
+                      <% provider_total = breakdown_total(@breakdown_provider) %>
                       <div class="overflow-x-auto mt-3">
                         <table class="table table-sm table-zebra">
                           <thead>
@@ -718,6 +719,26 @@
                               <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                             </tr>
                           </tbody>
+                          <tfoot>
+                            <tr class="font-bold bg-base-200">
+                              <td colspan="2">
+                                Total · {distinct_providers(@breakdown_provider)} proveedores
+                              </td>
+                              <td class="text-right font-mono">
+                                {format_number(provider_total.request_count)}
+                              </td>
+                              <td class="text-right font-mono">
+                                ${format_decimal(provider_total.cost_usd)}
+                              </td>
+                              <td class="text-right font-mono">
+                                {format_number(provider_total.prompt_tokens)}
+                              </td>
+                              <td class="text-right font-mono">
+                                {format_number(provider_total.completion_tokens)}
+                              </td>
+                              <td></td>
+                            </tr>
+                          </tfoot>
                         </table>
                       </div>
                     <% else %>
@@ -734,6 +755,7 @@
                       Equipos que lo usan
                     </h2>
                     <%= if has_data?(@breakdown_team) do %>
+                      <% team_total = breakdown_total(@breakdown_team) %>
                       <div class="overflow-x-auto mt-3">
                         <table class="table table-sm table-zebra">
                           <thead>
@@ -756,6 +778,18 @@
                               <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                             </tr>
                           </tbody>
+                          <tfoot>
+                            <tr class="font-bold bg-base-200">
+                              <td>Total · {length(@breakdown_team)} equipos</td>
+                              <td class="text-right font-mono">
+                                {format_number(team_total.request_count)}
+                              </td>
+                              <td class="text-right font-mono">
+                                ${format_decimal(team_total.cost_usd)}
+                              </td>
+                              <td></td>
+                            </tr>
+                          </tfoot>
                         </table>
                       </div>
                     <% else %>
@@ -772,6 +806,7 @@
                       Miembros que lo usan
                     </h2>
                     <%= if has_data?(@breakdown_member) do %>
+                      <% member_total = breakdown_total(@breakdown_member) %>
                       <div class="overflow-x-auto mt-3">
                         <table class="table table-sm table-zebra">
                           <thead>
@@ -799,6 +834,20 @@
                               <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                             </tr>
                           </tbody>
+                          <tfoot>
+                            <tr class="font-bold bg-base-200">
+                              <td colspan="2">
+                                Total · {distinct_users(@breakdown_member)} usuarios
+                              </td>
+                              <td class="text-right font-mono">
+                                {format_number(member_total.request_count)}
+                              </td>
+                              <td class="text-right font-mono">
+                                ${format_decimal(member_total.cost_usd)}
+                              </td>
+                              <td></td>
+                            </tr>
+                          </tfoot>
                         </table>
                       </div>
                     <% else %>
@@ -824,6 +873,7 @@
                     Todos los modelos
                   </h2>
                   <%= if has_data?(@breakdown_model) do %>
+                    <% model_total = breakdown_total(@breakdown_model) %>
                     <div class="overflow-x-auto mt-3">
                       <table class="table table-sm table-zebra">
                         <thead>
@@ -868,6 +918,24 @@
                             <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                           </tr>
                         </tbody>
+                        <tfoot>
+                          <tr class="font-bold bg-base-200">
+                            <td>Total · {length(@breakdown_model)} modelos</td>
+                            <td class="text-right font-mono">
+                              {format_number(model_total.request_count)}
+                            </td>
+                            <td class="text-right font-mono">
+                              ${format_decimal(model_total.cost_usd)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {format_number(model_total.prompt_tokens)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {format_number(model_total.completion_tokens)}
+                            </td>
+                            <td></td>
+                          </tr>
+                        </tfoot>
                       </table>
                     </div>
                   <% else %>
@@ -1017,6 +1085,7 @@
                       Modelos usados
                     </h2>
                     <%= if has_data?(@breakdown_model) do %>
+                      <% model_total = breakdown_total(@breakdown_model) %>
                       <div class="overflow-x-auto mt-3">
                         <table class="table table-sm table-zebra">
                           <thead>
@@ -1050,6 +1119,24 @@
                               <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                             </tr>
                           </tbody>
+                          <tfoot>
+                            <tr class="font-bold bg-base-200">
+                              <td>Total · {length(@breakdown_model)} modelos</td>
+                              <td class="text-right font-mono">
+                                {format_number(model_total.request_count)}
+                              </td>
+                              <td class="text-right font-mono">
+                                ${format_decimal(model_total.cost_usd)}
+                              </td>
+                              <td class="text-right font-mono">
+                                {format_number(model_total.prompt_tokens)}
+                              </td>
+                              <td class="text-right font-mono">
+                                {format_number(model_total.completion_tokens)}
+                              </td>
+                              <td></td>
+                            </tr>
+                          </tfoot>
                         </table>
                       </div>
                     <% else %>
@@ -1066,6 +1153,7 @@
                       Miembros del equipo
                     </h2>
                     <%= if has_data?(@breakdown_member) do %>
+                      <% member_total = breakdown_total(@breakdown_member) %>
                       <div class="overflow-x-auto mt-3">
                         <table class="table table-sm table-zebra">
                           <thead>
@@ -1108,6 +1196,24 @@
                               <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                             </tr>
                           </tbody>
+                          <tfoot>
+                            <tr class="font-bold bg-base-200">
+                              <td>Total · {distinct_users(@breakdown_member)} usuarios</td>
+                              <td class="text-right font-mono">
+                                {format_number(member_total.request_count)}
+                              </td>
+                              <td class="text-right font-mono">
+                                ${format_decimal(member_total.cost_usd)}
+                              </td>
+                              <td class="text-right font-mono">
+                                {format_number(member_total.prompt_tokens)}
+                              </td>
+                              <td class="text-right font-mono">
+                                {format_number(member_total.completion_tokens)}
+                              </td>
+                              <td></td>
+                            </tr>
+                          </tfoot>
                         </table>
                       </div>
                     <% else %>
@@ -1133,6 +1239,7 @@
                     Todos los equipos
                   </h2>
                   <%= if has_data?(@breakdown_team) do %>
+                    <% team_total = breakdown_total(@breakdown_team) %>
                     <div class="overflow-x-auto mt-3">
                       <table class="table table-sm table-zebra">
                         <thead>
@@ -1170,6 +1277,24 @@
                             <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                           </tr>
                         </tbody>
+                        <tfoot>
+                          <tr class="font-bold bg-base-200">
+                            <td>Total · {length(@breakdown_team)} equipos</td>
+                            <td class="text-right font-mono">
+                              {format_number(team_total.request_count)}
+                            </td>
+                            <td class="text-right font-mono">
+                              ${format_decimal(team_total.cost_usd)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {format_number(team_total.prompt_tokens)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {format_number(team_total.completion_tokens)}
+                            </td>
+                            <td></td>
+                          </tr>
+                        </tfoot>
                       </table>
                     </div>
                   <% else %>
@@ -1319,6 +1444,7 @@
                       Modelos usados
                     </h2>
                     <%= if has_data?(@breakdown_model) do %>
+                      <% model_total = breakdown_total(@breakdown_model) %>
                       <div class="overflow-x-auto mt-3">
                         <table class="table table-sm table-zebra">
                           <thead>
@@ -1352,6 +1478,24 @@
                               <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                             </tr>
                           </tbody>
+                          <tfoot>
+                            <tr class="font-bold bg-base-200">
+                              <td>Total · {length(@breakdown_model)} modelos</td>
+                              <td class="text-right font-mono">
+                                {format_number(model_total.request_count)}
+                              </td>
+                              <td class="text-right font-mono">
+                                ${format_decimal(model_total.cost_usd)}
+                              </td>
+                              <td class="text-right font-mono">
+                                {format_number(model_total.prompt_tokens)}
+                              </td>
+                              <td class="text-right font-mono">
+                                {format_number(model_total.completion_tokens)}
+                              </td>
+                              <td></td>
+                            </tr>
+                          </tfoot>
                         </table>
                       </div>
                     <% else %>
@@ -1377,6 +1521,7 @@
                     Todos los servicios
                   </h2>
                   <%= if has_data?(@breakdown_service) do %>
+                    <% service_total = breakdown_total(@breakdown_service) %>
                     <div class="overflow-x-auto mt-3">
                       <table class="table table-sm table-zebra">
                         <thead>
@@ -1414,6 +1559,24 @@
                             <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                           </tr>
                         </tbody>
+                        <tfoot>
+                          <tr class="font-bold bg-base-200">
+                            <td>Total · {length(@breakdown_service)} servicios</td>
+                            <td class="text-right font-mono">
+                              {format_number(service_total.request_count)}
+                            </td>
+                            <td class="text-right font-mono">
+                              ${format_decimal(service_total.cost_usd)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {format_number(service_total.prompt_tokens)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {format_number(service_total.completion_tokens)}
+                            </td>
+                            <td></td>
+                          </tr>
+                        </tfoot>
                       </table>
                     </div>
                   <% else %>

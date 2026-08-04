@@ -425,6 +425,7 @@ defmodule Tokengate.Metrics.Rollup do
     query =
       RequestLog
       |> maybe_join_team(team_id)
+      |> maybe_team_member_id(Keyword.get(opts, :team_member_id))
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
@@ -1414,5 +1415,12 @@ defmodule Tokengate.Metrics.Rollup do
 
   defp maybe_member_ids(query, member_ids) when is_list(member_ids) do
     where(query, [rl], rl.team_member_id in ^member_ids)
+  end
+
+  # Single team_member_id filter (used for service drill-down).
+  defp maybe_team_member_id(query, nil), do: query
+
+  defp maybe_team_member_id(query, team_member_id) when is_binary(team_member_id) do
+    where(query, [rl], rl.team_member_id == ^team_member_id)
   end
 end

@@ -134,7 +134,7 @@ defmodule TokengateWeb.StatsLive do
   end
 
   defp load_summary(socket, user, opts) do
-    summary = fetch_summary(user, opts)
+    summary = fetch_summary(user, opts, socket.assigns)
 
     metrics = %{
       requests_total: summary.request_count,
@@ -147,17 +147,43 @@ defmodule TokengateWeb.StatsLive do
     assign(socket, :metrics, metrics)
   end
 
-  defp fetch_summary(%{global_role: "admin"}, opts) do
-    Logs.cost_summary(Map.new(opts))
+  defp fetch_summary(%{global_role: "admin"}, opts, assigns) do
+    opts
+    |> apply_stats_filters(assigns)
+    |> Logs.cost_summary()
   end
 
-  defp fetch_summary(%{global_role: "user"} = user, opts) do
+  defp fetch_summary(%{global_role: "user"} = user, opts, _assigns) do
     memberships = Accounts.list_team_members_for_user(user.id)
     member_ids = Enum.map(memberships, & &1.id)
-    Logs.cost_summary_for_members(member_ids, Map.new(opts))
+
+    opts
+    |> Map.new()
+    |> Map.put(:team_member_ids, member_ids)
+    |> Logs.cost_summary()
   end
 
-  defp fetch_summary(_user, _opts), do: empty_summary()
+  defp fetch_summary(_user, _opts, _assigns), do: empty_summary()
+
+  # Build a filter map from the active stats page filter so cost_summary
+  # returns data scoped to the selected model / team / service.
+  defp apply_stats_filters(opts, assigns) do
+    base = Map.new(opts)
+
+    cond do
+      assigns[:model_filter] ->
+        Map.put(base, :model_alias_id, assigns.model_filter)
+
+      assigns[:team_filter] ->
+        Map.put(base, :team_id, assigns.team_filter)
+
+      assigns[:service_filter] ->
+        Map.put(base, :team_member_id, assigns.service_filter)
+
+      true ->
+        base
+    end
+  end
 
   defp load_breakdowns(socket, :index, user, opts) do
     # Scoping: non-admin users only see consumption of their own scope
@@ -226,10 +252,14 @@ defmodule TokengateWeb.StatsLive do
       socket
       |> assign(:breakdown_service, load_service_breakdown(user, opts))
 
-    # Services are admin-only; no scoping needed beyond admin check
+    # Services are admin-only; no scoping needed beyond admin check.
+    # Services are virtual team members — filter by team_member_id, not team_id.
     if service_id && user.global_role == "admin" do
       base
-      |> assign(:breakdown_model, Rollup.breakdown_by_model(service_id, opts))
+      |> assign(
+        :breakdown_model,
+        Rollup.breakdown_by_model(nil, Keyword.put(opts, :team_member_id, service_id))
+      )
     else
       base
       |> assign(:breakdown_model, [])
@@ -451,6 +481,28 @@ defmodule TokengateWeb.StatsLive do
     do: "#{:erlang.float_to_binary(rate * 100, decimals: 1)}%"
 
   def format_percent(_), do: "—"
+
+  @doc "Compute a total row from a breakdown list for display in table footers."
+  def breakdown_total([]), do: nil
+
+  def breakdown_total(rows) when is_list(rows) do
+    %{
+      request_count: Enum.reduce(rows, 0, &(&1.request_count + &2)),
+      cost_usd: Enum.reduce(rows, Decimal.new(0), fn r, acc -> Decimal.add(acc, r.cost_usd) end),
+      prompt_tokens: Enum.reduce(rows, 0, &(&1.prompt_tokens + &2)),
+      completion_tokens: Enum.reduce(rows, 0, &(&1.completion_tokens + &2))
+    }
+  end
+
+  @doc "Count distinct providers (by model_provider_id) in a provider breakdown."
+  def distinct_providers(rows) when is_list(rows) do
+    rows |> Enum.map(& &1.model_provider_id) |> Enum.reject(&is_nil/1) |> Enum.uniq() |> length()
+  end
+
+  @doc "Count distinct users (by user_email) in a member breakdown."
+  def distinct_users(rows) when is_list(rows) do
+    rows |> Enum.map(& &1.user_email) |> Enum.uniq() |> length()
+  end
 
   def tier_badge_class("S"), do: "badge-success"
   def tier_badge_class("A"), do: "badge-info"
