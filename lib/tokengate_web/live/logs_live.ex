@@ -621,13 +621,13 @@ defmodule TokengateWeb.LogsLive do
               <div class="mt-1 space-y-1">
                 <div class="flex items-center justify-between">
                   <p class="text-xs text-base-content/40">Conectados</p>
-                  <p class="text-2xl font-bold text-base-content" id="online-count">
+                  <p class="text-2xl font-bold text-base-content text-right" id="online-count">
                     {length(@online_users)}
                   </p>
                 </div>
                 <div class="flex items-center justify-between">
                   <p class="text-xs text-base-content/40">En vuelo</p>
-                  <p class="text-2xl font-bold text-base-content" id="inflight-count">
+                  <p class="text-2xl font-bold text-base-content text-right" id="inflight-count">
                     {@api_inflight}
                   </p>
                 </div>
@@ -701,13 +701,13 @@ defmodule TokengateWeb.LogsLive do
               <div class="mt-1 space-y-1">
                 <div class="flex items-center justify-between">
                   <p class="text-xs text-base-content/40">Req/min</p>
-                  <p class="text-2xl font-bold text-base-content" id="summary-req-per-min">
+                  <p class="text-2xl font-bold text-base-content text-right" id="summary-req-per-min">
                     {@summary.req_per_min}
                   </p>
                 </div>
                 <div class="flex items-center justify-between">
                   <p class="text-xs text-base-content/40">Latencia prom</p>
-                  <p class="text-2xl font-bold text-base-content" id="summary-latency">
+                  <p class="text-2xl font-bold text-base-content text-right" id="summary-latency">
                     {if @summary.avg_latency_ms, do: "#{@summary.avg_latency_ms} ms", else: "—"}
                   </p>
                 </div>
@@ -723,18 +723,26 @@ defmodule TokengateWeb.LogsLive do
                 </p>
                 <.icon name="hero-exclamation-triangle" class="w-4 h-4 text-base-content/40" />
               </div>
-              <p
-                class={[
-                  "mt-1 text-2xl font-bold",
-                  if(@summary.error_count > 0, do: "text-error", else: "text-base-content")
-                ]}
-                id="summary-errors"
-              >
-                {@summary.error_count}
-              </p>
-              <p class="text-xs text-base-content/40 mt-1">
-                {@summary.error_rate}% · últimos 5 min
-              </p>
+              <div class="mt-1 space-y-1">
+                <div class="flex items-center justify-between">
+                  <p class="text-xs text-base-content/40">Errores</p>
+                  <p
+                    class={[
+                      "text-2xl font-bold text-right",
+                      if(@summary.error_count > 0, do: "text-error", else: "text-base-content")
+                    ]}
+                    id="summary-errors"
+                  >
+                    {@summary.error_count}
+                  </p>
+                </div>
+                <div class="flex items-center justify-between">
+                  <p class="text-xs text-base-content/40">Tasa</p>
+                  <p class="text-2xl font-bold text-base-content text-right" id="summary-error-rate">
+                    {@summary.error_rate}%
+                  </p>
+                </div>
+              </div>
             </div>
           </div>
         </div>
