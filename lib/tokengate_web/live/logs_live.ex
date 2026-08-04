@@ -662,28 +662,6 @@ defmodule TokengateWeb.LogsLive do
             </div>
           </div>
 
-          <%!-- Rendimiento: req/min + latencia --%>
-          <div class="card bg-base-100 border border-base-300 shadow-sm">
-            <div class="card-body p-4">
-              <div class="flex items-center justify-between">
-                <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Rendimiento
-                </p>
-                <.icon name="hero-arrow-trending-up" class="w-4 h-4 text-base-content/40" />
-              </div>
-              <div class="flex items-baseline gap-3 mt-1">
-                <p class="text-2xl font-bold text-base-content" id="summary-req-per-min">
-                  {@summary.req_per_min}
-                </p>
-                <p class="text-xs text-base-content/40">req/min</p>
-                <p class="text-2xl font-bold text-base-content" id="summary-latency">
-                  {if @summary.avg_latency_ms, do: "#{@summary.avg_latency_ms}", else: "—"}
-                </p>
-                <p class="text-xs text-base-content/40">ms prom</p>
-              </div>
-            </div>
-          </div>
-
           <%!-- En vuelo por usuario --%>
           <div class="card bg-base-100 border border-base-300 shadow-sm" id="top-users">
             <div class="card-body p-4">
@@ -707,6 +685,28 @@ defmodule TokengateWeb.LogsLive do
                   <span class="text-base-content/50 shrink-0 font-semibold ml-2">{u.count}</span>
                 </div>
                 <p :if={@top_users == []} class="text-xs text-base-content/30">—</p>
+              </div>
+            </div>
+          </div>
+
+          <%!-- Rendimiento: req/min + latencia --%>
+          <div class="card bg-base-100 border border-base-300 shadow-sm">
+            <div class="card-body p-4">
+              <div class="flex items-center justify-between">
+                <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Rendimiento
+                </p>
+                <.icon name="hero-arrow-trending-up" class="w-4 h-4 text-base-content/40" />
+              </div>
+              <div class="flex items-baseline gap-3 mt-1">
+                <p class="text-2xl font-bold text-base-content" id="summary-req-per-min">
+                  {@summary.req_per_min}
+                </p>
+                <p class="text-xs text-base-content/40">req/min</p>
+                <p class="text-2xl font-bold text-base-content" id="summary-latency">
+                  {if @summary.avg_latency_ms, do: "#{@summary.avg_latency_ms}", else: "—"}
+                </p>
+                <p class="text-xs text-base-content/40">ms prom</p>
               </div>
             </div>
           </div>
