@@ -246,6 +246,49 @@ defmodule Tokengate.Routing.CircuitBreakerTest do
     end
   end
 
+  describe "error message tracking" do
+    test "details/1 exposes the last upstream error message", %{breaker: breaker} do
+      CircuitBreaker.record_failure(breaker, :server_error, "max connections reached")
+      sync(breaker)
+
+      details = CircuitBreaker.details(breaker)
+      assert details.last_reason == :server_error
+      assert details.last_error_message == "max connections reached"
+    end
+
+    test "error message survives the trip to open", %{breaker: breaker} do
+      for _ <- 1..@threshold do
+        CircuitBreaker.record_failure(breaker, :server_error, "upstream exploded")
+      end
+
+      sync(breaker)
+      assert CircuitBreaker.status(breaker) == :open
+
+      details = CircuitBreaker.details(breaker)
+      assert details.last_error_message == "upstream exploded"
+    end
+
+    test "record_failure/2 without message still works (nil message)", %{breaker: breaker} do
+      CircuitBreaker.record_failure(breaker, :server_error)
+      sync(breaker)
+
+      details = CircuitBreaker.details(breaker)
+      assert details.last_reason == :server_error
+      assert details.last_error_message == nil
+    end
+
+    test "reset clears the error message", %{breaker: breaker} do
+      CircuitBreaker.record_failure(breaker, :server_error, "boom")
+      sync(breaker)
+
+      CircuitBreaker.reset(breaker)
+      sync(breaker)
+
+      details = CircuitBreaker.details(breaker)
+      assert details.last_error_message == nil
+    end
+  end
+
   ## Helpers ##################################################################
 
   defp trip_to_open(breaker) do

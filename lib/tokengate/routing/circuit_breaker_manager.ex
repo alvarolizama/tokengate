@@ -89,11 +89,20 @@ defmodule Tokengate.Routing.CircuitBreakerManager do
   Records a failed request for `credential_id`.
 
   Ensures a breaker exists first so failures for a new credential are tracked.
+  An optional `error_message` (the upstream provider's error body) is stored in
+  the breaker state for observability — surfaced in `details/1` and the admin UI.
   """
-  @spec record_failure(credential_id :: term(), reason :: atom()) :: :ok
-  def record_failure(credential_id, reason) do
+  @spec record_failure(
+          credential_id :: term(),
+          reason :: atom(),
+          error_message :: String.t() | nil
+        ) ::
+          :ok
+  def record_failure(credential_id, reason, error_message \\ nil) do
     ensure_started(credential_id)
-    lookup!(credential_id) |> Tokengate.Routing.CircuitBreaker.record_failure(reason)
+
+    lookup!(credential_id)
+    |> Tokengate.Routing.CircuitBreaker.record_failure(reason, error_message)
   end
 
   @doc """
@@ -115,6 +124,7 @@ defmodule Tokengate.Routing.CircuitBreakerManager do
     * `:state` — `:closed`, `:open`, or `:half_open`
     * `:failures` — consecutive failure count
     * `:last_reason` — reason of the last failure
+    * `:last_error_message` — upstream error message of the last failure, or `nil`
     * `:opened_at` — `DateTime` when the breaker opened, or `nil`
 
   Returns a default closed-state map for unknown credentials.
@@ -122,8 +132,11 @@ defmodule Tokengate.Routing.CircuitBreakerManager do
   @spec details(credential_id :: term()) :: map()
   def details(credential_id) do
     case lookup(credential_id) do
-      {:ok, pid} -> Tokengate.Routing.CircuitBreaker.details(pid)
-      :error -> %{state: :closed, failures: 0, last_reason: nil, opened_at: nil}
+      {:ok, pid} ->
+        Tokengate.Routing.CircuitBreaker.details(pid)
+
+      :error ->
+        %{state: :closed, failures: 0, last_reason: nil, last_error_message: nil, opened_at: nil}
     end
   end
 

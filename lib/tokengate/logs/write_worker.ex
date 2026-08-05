@@ -33,6 +33,7 @@ defmodule Tokengate.Logs.WriteWorker do
       status_code: args["status_code"],
       provider_status_code: args["provider_status_code"],
       error_reason: args["error_reason"],
+      error_message: args["error_message"],
       prompt_tokens: args["prompt_tokens"] || 0,
       completion_tokens: args["completion_tokens"] || 0,
       provider_cost_usd: args["provider_cost_usd"],

@@ -127,6 +127,8 @@ defmodule Tokengate.Routing.Router do
       `:latency_ms` is passed in `opts`, a slow success degrades the
       credential (it sinks within its routing tier) and a fast one heals it.
     * `{:failure, reason}` → `breaker.record_failure(credential.id, reason)`.
+    * `{:failure, reason, error_message}` → same, also storing the upstream
+      error message in the breaker state for observability.
 
   Always returns `:ok`. The caller decides whether to re-route (using
   `:exclude_credential_ids` to skip the failed credential) or surface the
@@ -140,7 +142,12 @@ defmodule Tokengate.Routing.Router do
     * `:latency_ms` — end-to-end latency of a successful upstream call.
       Compared against `slow_threshold_ms` (config `:tokengate, :routing`).
   """
-  @spec record_outcome(route(), :success | {:failure, atom()}, keyword()) :: :ok
+  @spec record_outcome(
+          route(),
+          :success | {:failure, atom()} | {:failure, atom(), String.t() | nil},
+          keyword()
+        ) ::
+          :ok
   def record_outcome(route, outcome, opts \\ []) do
     credential_id = route.credential.id
 
@@ -155,6 +162,9 @@ defmodule Tokengate.Routing.Router do
 
       {:failure, reason} ->
         @default_breaker.record_failure(credential_id, reason)
+
+      {:failure, reason, error_message} ->
+        @default_breaker.record_failure(credential_id, reason, error_message)
     end
 
     :ok

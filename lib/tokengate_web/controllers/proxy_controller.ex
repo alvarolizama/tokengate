@@ -261,7 +261,7 @@ defmodule TokengateWeb.ProxyController do
 
       {:error, :auth_error, status, error_message} ->
         disable_credential_async(route.credential, "auth_error_#{status}", error_message)
-        Router.record_outcome(route, {:failure, :auth_error})
+        Router.record_outcome(route, {:failure, :auth_error, error_message})
 
         if attempts_left > 1 do
           retry_simple_with_fallback(
@@ -276,23 +276,26 @@ defmodule TokengateWeb.ProxyController do
             kind,
             route_opts,
             provider_retries: provider_retries,
-            reason: :auth_error
+            reason: :auth_error,
+            error_message: error_message
           )
         else
           log_and_render_proxy_error(conn, route, member, {:upstream_error, :auth_error, status},
-            error_reason: "auth_error"
+            error_reason: "auth_error",
+            error_message: error_message
           )
         end
 
-      {:error, :client_error, status, _error_message} ->
+      {:error, :client_error, status, error_message} ->
         Router.record_outcome(route, {:failure, :client_error})
 
         log_and_render_proxy_error(conn, route, member, {:upstream_client_error, status},
-          error_reason: "client_error"
+          error_reason: "client_error",
+          error_message: error_message
         )
 
-      {:error, reason, status, _error_message} ->
-        Router.record_outcome(route, {:failure, breaker_reason(reason)})
+      {:error, reason, status, error_message} ->
+        Router.record_outcome(route, {:failure, breaker_reason(reason), error_message})
 
         if attempts_left > 1 do
           retry_simple_with_fallback(
@@ -307,11 +310,13 @@ defmodule TokengateWeb.ProxyController do
             kind,
             route_opts,
             provider_retries: provider_retries,
-            reason: reason
+            reason: reason,
+            error_message: error_message
           )
         else
           log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
-            error_reason: to_string(reason)
+            error_reason: to_string(reason),
+            error_message: error_message
           )
         end
     end
@@ -329,9 +334,10 @@ defmodule TokengateWeb.ProxyController do
          kind,
          route_opts,
          provider_retries: provider_retries,
-         reason: reason
+         reason: reason,
+         error_message: error_message
        ) do
-    log_fallback_attempt(conn, route, member, status)
+    log_fallback_attempt(conn, route, member, status, error_message)
 
     # Per-provider retry: same policy as retry_with_fallback.
     {exclude, provider_retries} = next_candidate(route, exclude, provider_retries, reason)
@@ -687,7 +693,7 @@ defmodule TokengateWeb.ProxyController do
         # 401/402/403: the credential is bad (invalid key, insufficient credit,
         # forbidden). Disable it permanently in the DB and fall back.
         disable_credential_async(route.credential, "auth_error_#{status}", error_message)
-        Router.record_outcome(route, {:failure, :auth_error})
+        Router.record_outcome(route, {:failure, :auth_error, error_message})
 
         if attempts_left > 1 do
           retry_with_fallback(
@@ -699,25 +705,28 @@ defmodule TokengateWeb.ProxyController do
             exclude,
             status,
             provider_retries,
-            :auth_error
+            :auth_error,
+            error_message
           )
         else
           log_and_render_proxy_error(conn, route, member, {:upstream_error, :auth_error, status},
-            error_reason: "auth_error"
+            error_reason: "auth_error",
+            error_message: error_message
           )
         end
 
-      {:error, :client_error, status, _error_message} ->
+      {:error, :client_error, status, error_message} ->
         # Other 4xx from the provider: the caller's payload is at fault — surface
         # it without burning the breaker or trying other providers.
         Router.record_outcome(route, {:failure, :client_error})
 
         log_and_render_proxy_error(conn, route, member, {:upstream_client_error, status},
-          error_reason: "client_error"
+          error_reason: "client_error",
+          error_message: error_message
         )
 
-      {:error, reason, status, _error_message} ->
-        Router.record_outcome(route, {:failure, breaker_reason(reason)})
+      {:error, reason, status, error_message} ->
+        Router.record_outcome(route, {:failure, breaker_reason(reason), error_message})
 
         if attempts_left > 1 do
           retry_with_fallback(
@@ -729,11 +738,13 @@ defmodule TokengateWeb.ProxyController do
             exclude,
             status,
             provider_retries,
-            reason
+            reason,
+            error_message
           )
         else
           log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
-            error_reason: to_string(reason)
+            error_reason: to_string(reason),
+            error_message: error_message
           )
         end
     end
@@ -768,9 +779,10 @@ defmodule TokengateWeb.ProxyController do
          exclude,
          status,
          provider_retries,
-         reason
+         reason,
+         error_message
        ) do
-    log_fallback_attempt(conn, route, member, status)
+    log_fallback_attempt(conn, route, member, status, error_message)
 
     # A timeout means the provider is hung or saturated — fall back to the
     # next provider immediately; the condition that hung it won't clear in
@@ -854,7 +866,7 @@ defmodule TokengateWeb.ProxyController do
               latency_start: System.monotonic_time(:millisecond)
             })
 
-          {:error, reason} ->
+          {:error, reason, status} ->
             Process.exit(pid, :kill)
 
             if reason == :auth_error do
@@ -864,6 +876,8 @@ defmodule TokengateWeb.ProxyController do
             Router.record_outcome(route, {:failure, breaker_reason(reason)})
 
             if attempts_left > 1 do
+              log_fallback_attempt(conn, route, member, status)
+
               retry_stream_with_fallback(
                 conn,
                 route,
@@ -875,7 +889,7 @@ defmodule TokengateWeb.ProxyController do
                 reason
               )
             else
-              log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, nil},
+              log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
                 error_reason: to_string(reason)
               )
             end
@@ -989,11 +1003,12 @@ defmodule TokengateWeb.ProxyController do
 
     receive do
       {:sse_chunk, chunk} -> {:ok, chunk}
-      {:sse_done} -> {:error, :empty_stream}
-      {:sse_error, reason} -> {:error, stream_error_reason(reason)}
-      {:DOWN, ^ref, :process, ^pid, reason} -> {:error, stream_error_reason(reason)}
+      {:sse_done} -> {:error, :empty_stream, nil}
+      {:sse_error, {reason, status}} -> {:error, stream_error_reason(reason), status}
+      {:sse_error, reason} -> {:error, stream_error_reason(reason), nil}
+      {:DOWN, ^ref, :process, ^pid, reason} -> {:error, stream_error_reason(reason), nil}
     after
-      timeout -> {:error, :timeout}
+      timeout -> {:error, :timeout, nil}
     end
   end
 
@@ -1292,6 +1307,7 @@ defmodule TokengateWeb.ProxyController do
       "status_code" => Keyword.get(opts, :client_status),
       "provider_status_code" => Keyword.get(opts, :provider_status),
       "error_reason" => Keyword.get(opts, :error_reason),
+      "error_message" => Keyword.get(opts, :error_message),
       "prompt_tokens" => 0,
       "completion_tokens" => 0,
       "cache_read_tokens" => 0,
@@ -1356,8 +1372,10 @@ defmodule TokengateWeb.ProxyController do
   ## Fallback logging ##########################################################
 
   # Logs a failed provider attempt before falling back to the next one.
-  # The client never sees this — it is purely for observability.
-  defp log_fallback_attempt(conn, route, member, status) do
+  # The client never sees this — it is purely for observability. The upstream
+  # error message (when present) is persisted so admins can see *why* the
+  # provider failed (rate limit, connection limit, etc.), not just the status.
+  defp log_fallback_attempt(conn, route, member, status, error_message \\ nil) do
     error_reason =
       case status do
         429 -> "provider_rate_limited"
@@ -1365,6 +1383,7 @@ defmodule TokengateWeb.ProxyController do
         502 -> "provider_gateway_error"
         500 -> "provider_internal_error"
         401 -> "provider_auth_error"
+        nil -> "provider_error"
         _ -> "provider_error_#{status}"
       end
 
@@ -1372,6 +1391,7 @@ defmodule TokengateWeb.ProxyController do
       client_status: 200,
       provider_status: status,
       error_reason: error_reason,
+      error_message: error_message,
       latency_ms: 0,
       streaming: conn.body_params["stream"] == true
     )

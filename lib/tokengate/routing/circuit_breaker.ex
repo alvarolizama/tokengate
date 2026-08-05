@@ -84,6 +84,7 @@ defmodule Tokengate.Routing.CircuitBreaker do
         ),
       failures: 0,
       last_reason: nil,
+      last_error_message: nil,
       probe_in_flight?: false,
       opened_at: nil
     }
@@ -108,10 +109,18 @@ defmodule Tokengate.Routing.CircuitBreaker do
 
   `reason` is one of `:server_error`, `:timeout`, `:rate_limited`, `:client_error`.
   `:client_error` is ignored entirely and never counts toward the threshold.
+
+  An optional third argument carries the upstream error message (e.g. the
+  provider's error body) so `details/1` can surface *why* the failure happened,
+  not just the classified reason.
   """
-  @spec record_failure(breaker :: GenServer.server(), reason :: atom()) :: :ok
-  def record_failure(breaker, reason) when is_atom(reason) do
-    :gen_statem.cast(breaker, {:record_failure, reason})
+  @spec record_failure(
+          breaker :: GenServer.server(),
+          reason :: atom(),
+          error_message :: String.t() | nil
+        ) :: :ok
+  def record_failure(breaker, reason, error_message \\ nil) when is_atom(reason) do
+    :gen_statem.cast(breaker, {:record_failure, reason, error_message})
   end
 
   @doc "Returns the current state (`:closed`, `:open`, or `:half_open`)."
@@ -132,6 +141,7 @@ defmodule Tokengate.Routing.CircuitBreaker do
     * `:state` — `:closed`, `:open`, or `:half_open`
     * `:failures` — consecutive failure count
     * `:last_reason` — reason of the last failure that tripped or refreshed the breaker
+    * `:last_error_message` — upstream error message of the last failure, or `nil`
     * `:opened_at` — `DateTime` when the breaker transitioned to `:open`, or `nil`
   """
   @spec details(breaker :: GenServer.server()) :: map()
@@ -172,21 +182,33 @@ defmodule Tokengate.Routing.CircuitBreaker do
   def closed({:call, from}, :details, data) do
     {:keep_state, data,
      {:reply, from,
-      %{state: :closed, failures: data.failures, last_reason: data.last_reason, opened_at: nil}}}
+      %{
+        state: :closed,
+        failures: data.failures,
+        last_reason: data.last_reason,
+        last_error_message: data.last_error_message,
+        opened_at: nil
+      }}}
   end
 
   def closed({:call, from}, :reset, data) do
     {:keep_state,
-     %{data | failures: 0, last_reason: nil, probe_in_flight?: false, opened_at: nil},
-     {:reply, from, :ok}}
+     %{
+       data
+       | failures: 0,
+         last_reason: nil,
+         last_error_message: nil,
+         probe_in_flight?: false,
+         opened_at: nil
+     }, {:reply, from, :ok}}
   end
 
   def closed(:cast, :record_success, data) do
     {:keep_state, %{data | failures: 0}}
   end
 
-  def closed(:cast, {:record_failure, reason}, data) do
-    handle_closed_failure(reason, data)
+  def closed(:cast, {:record_failure, reason, error_message}, data) do
+    handle_closed_failure(reason, error_message, data)
   end
 
   # -- :open ------------------------------------------------------------------
@@ -206,14 +228,21 @@ defmodule Tokengate.Routing.CircuitBreaker do
         state: :open,
         failures: data.failures,
         last_reason: data.last_reason,
+        last_error_message: data.last_error_message,
         opened_at: data.opened_at
       }}}
   end
 
   def open({:call, from}, :reset, data) do
     {:next_state, :closed,
-     %{data | failures: 0, last_reason: nil, probe_in_flight?: false, opened_at: nil},
-     {:reply, from, :ok}}
+     %{
+       data
+       | failures: 0,
+         last_reason: nil,
+         last_error_message: nil,
+         probe_in_flight?: false,
+         opened_at: nil
+     }, {:reply, from, :ok}}
   end
 
   def open(:cast, :record_success, data) do
@@ -222,11 +251,17 @@ defmodule Tokengate.Routing.CircuitBreaker do
     {:keep_state, data}
   end
 
-  def open(:cast, {:record_failure, _reason}, data) do
+  def open(:cast, {:record_failure, _reason, error_message}, data) do
     # Late failures while open refresh the cooldown so a sustained outage keeps
-    # the breaker open.
+    # the breaker open. Keep the freshest error message for observability.
     cooldown = cooldown_for(data.last_reason, data)
-    {:keep_state, %{data | probe_in_flight?: false}, {:state_timeout, cooldown, :probe}}
+
+    {:keep_state,
+     %{
+       data
+       | probe_in_flight?: false,
+         last_error_message: error_message || data.last_error_message
+     }, {:state_timeout, cooldown, :probe}}
   end
 
   def open(:state_timeout, :probe, data) do
@@ -254,23 +289,44 @@ defmodule Tokengate.Routing.CircuitBreaker do
         state: :half_open,
         failures: data.failures,
         last_reason: data.last_reason,
+        last_error_message: data.last_error_message,
         opened_at: data.opened_at
       }}}
   end
 
   def half_open({:call, from}, :reset, data) do
     {:next_state, :closed,
-     %{data | failures: 0, last_reason: nil, probe_in_flight?: false, opened_at: nil},
-     {:reply, from, :ok}}
+     %{
+       data
+       | failures: 0,
+         last_reason: nil,
+         last_error_message: nil,
+         probe_in_flight?: false,
+         opened_at: nil
+     }, {:reply, from, :ok}}
   end
 
   def half_open(:cast, :record_success, data) do
     {:next_state, :closed,
-     %{data | failures: 0, last_reason: nil, probe_in_flight?: false, opened_at: nil}}
+     %{
+       data
+       | failures: 0,
+         last_reason: nil,
+         last_error_message: nil,
+         probe_in_flight?: false,
+         opened_at: nil
+     }}
   end
 
-  def half_open(:cast, {:record_failure, reason}, data) do
-    new_data = %{data | failures: data.failures + 1, last_reason: reason, probe_in_flight?: false}
+  def half_open(:cast, {:record_failure, reason, error_message}, data) do
+    new_data = %{
+      data
+      | failures: data.failures + 1,
+        last_reason: reason,
+        last_error_message: error_message,
+        probe_in_flight?: false
+    }
+
     cooldown = cooldown_for(reason, data)
 
     {:next_state, :open, new_data, {:state_timeout, cooldown, :probe}}
@@ -278,7 +334,7 @@ defmodule Tokengate.Routing.CircuitBreaker do
 
   ## Internal helpers ########################################################
 
-  defp handle_closed_failure(reason, data) do
+  defp handle_closed_failure(reason, error_message, data) do
     if reason in @counting_reasons do
       failures = data.failures + 1
 
@@ -297,11 +353,13 @@ defmodule Tokengate.Routing.CircuitBreaker do
            data
            | failures: failures,
              last_reason: reason,
+             last_error_message: error_message,
              probe_in_flight?: false,
              opened_at: now
          }, {:state_timeout, cooldown, :probe}}
       else
-        {:keep_state, %{data | failures: failures, last_reason: reason}}
+        {:keep_state,
+         %{data | failures: failures, last_reason: reason, last_error_message: error_message}}
       end
     else
       # :client_error or any non-counting reason: ignore entirely.

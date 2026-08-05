@@ -1111,6 +1111,7 @@ defmodule TokengateWeb.LogsLive do
                         <th>API Key</th>
                         <th>Estado</th>
                         <th>Razón</th>
+                        <th>Detalle</th>
                         <th>Fallos</th>
                         <th>Abierto desde</th>
                         <th>Errores 24h</th>
@@ -1132,6 +1133,12 @@ defmodule TokengateWeb.LogsLive do
                           </span>
                         </td>
                         <td class="text-sm">{reason_label(details.last_reason)}</td>
+                        <td
+                          class="text-xs text-base-content/70 max-w-[260px] truncate"
+                          title={details.last_error_message}
+                        >
+                          {details.last_error_message || "—"}
+                        </td>
                         <td class="text-sm tabular-nums">{details.failures}</td>
                         <td class="text-sm">{fmt_duration(details.opened_at)}</td>
                         <td class="text-sm tabular-nums">
@@ -1721,12 +1728,28 @@ defmodule TokengateWeb.LogsLive do
                   <span :if={!log.provider_status_code} class="text-base-content/40">—</span>
                 </td>
                 <td colspan="2" class="text-sm border-r border-base-200">
-                  <span :if={log.error_reason} class="badge badge-sm badge-error">{log.error_reason}</span>
+                  <div :if={log.error_reason} class="flex flex-col gap-0.5">
+                    <span class="badge badge-sm badge-error">{log.error_reason}</span>
+                    <span
+                      :if={log.error_message}
+                      class="text-xs text-base-content/60 max-w-[220px] truncate"
+                      title={log.error_message}
+                    >
+                      {log.error_message}
+                    </span>
+                  </div>
                   <span :if={!log.error_reason} class="text-base-content/40">—</span>
                 </td>
                 <td>
                   <span class={["badge", "badge-sm", status_badge_class(log.status_code)]}>
                     {log.status_code}
+                  </span>
+                  <span
+                    :if={log.status_code == 200 && log.error_reason}
+                    class="badge badge-sm badge-warning ml-1"
+                    title="El proveedor falló y la request fue recuperada por fallback a otro proveedor"
+                  >
+                    fallback
                   </span>
                 </td>
                 <td><.think_badge value={log.think} /></td>

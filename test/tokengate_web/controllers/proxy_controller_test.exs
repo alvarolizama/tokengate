@@ -455,6 +455,56 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert json_response(conn, 200)
   end
 
+  test "fallback: the failed attempt log carries the upstream error message", %{conn: conn} do
+    u = unique()
+    %{token: token, alias: model_alias} = proxy_fixture(%{down: true})
+
+    # Second, healthy provider at lower priority (higher number)
+    {:ok, provider2} =
+      Providers.create_provider(%{
+        name: "Healthy #{u}",
+        base_url: "http://localhost:#{@port}"
+      })
+
+    {:ok, cred2} =
+      Providers.create_credential(%{provider_id: provider2.id, api_key_encrypted: "sk-healthy"})
+
+    {:ok, _ap2} =
+      Providers.create_model_provider(%{
+        model_alias_id: model_alias.id,
+        credential_id: cred2.id,
+        provider_model: "gpt-4o-healthy",
+        priority: 2
+      })
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+
+    assert json_response(conn, 200)
+
+    # The down provider 500s fast, so it gets @max_retries_per_provider
+    # attempts before being excluded (each one logs a fallback entry), then
+    # the healthy provider answers and logs the final success: 3 + 1 jobs.
+    assert %{success: 4} = Oban.drain_queue(queue: :logs)
+
+    fallback_logs =
+      Repo.all(
+        from l in RequestLog,
+          where:
+            l.model_alias_id == ^model_alias.id and l.error_reason == "provider_internal_error"
+      )
+
+    assert fallback_logs != []
+
+    Enum.each(fallback_logs, fn log ->
+      assert log.status_code == 200
+      assert log.provider_status_code == 500
+      assert log.error_message == "provider exploded"
+    end)
+  end
+
   ## Timeout retry policy ######################################################
 
   # Adds a second, healthy provider+credential at lower priority so the
