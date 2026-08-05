@@ -11,7 +11,7 @@ import Config
 # Circuit breaker (global — applies to all provider credentials)
 # ---------------------------------------------------------------------------
 config :tokengate, :circuit_breaker,
-  threshold: String.to_integer(System.get_env("CIRCUIT_BREAKER_THRESHOLD", "15")),
+  threshold: String.to_integer(System.get_env("CIRCUIT_BREAKER_THRESHOLD", "3")),
   cooldown_ms: String.to_integer(System.get_env("CIRCUIT_BREAKER_COOLDOWN_MS", "30000")),
   rate_limit_cooldown_ms:
     String.to_integer(System.get_env("CIRCUIT_BREAKER_RATE_LIMIT_COOLDOWN_MS", "20000"))
@@ -21,6 +21,21 @@ config :tokengate, :circuit_breaker,
 config :tokengate,
        :first_token_timeout_ms,
        String.to_integer(System.get_env("FIRST_TOKEN_TIMEOUT_MS", "30000"))
+
+# ---------------------------------------------------------------------------
+# Proxy upstream timeout (default; per-credential receive_timeout_ms overrides)
+# ---------------------------------------------------------------------------
+config :tokengate, :proxy,
+  receive_timeout_ms: String.to_integer(System.get_env("PROXY_RECEIVE_TIMEOUT_MS", "60000"))
+
+# ---------------------------------------------------------------------------
+# Routing health: a provider that answers but takes longer than
+# slow_threshold_ms is "degraded" and sinks to the bottom of its tier for
+# slow_penalty_ms. It recovers on its own on the next fast success.
+# ---------------------------------------------------------------------------
+config :tokengate, :routing,
+  slow_threshold_ms: String.to_integer(System.get_env("ROUTING_SLOW_THRESHOLD_MS", "30000")),
+  slow_penalty_ms: String.to_integer(System.get_env("ROUTING_SLOW_PENALTY_MS", "120000"))
 
 # In prod the server is always enabled — PaaS start commands expect the
 # endpoint to boot without depending on PHX_SERVER. In dev/test the

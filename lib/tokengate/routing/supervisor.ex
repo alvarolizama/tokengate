@@ -24,6 +24,7 @@ defmodule Tokengate.Routing.Supervisor do
   def init(_opts) do
     children = [
       {Tokengate.Routing.StickyTracker, name: Tokengate.Routing.StickyTracker},
+      {Tokengate.Routing.CredentialHealth, name: Tokengate.Routing.CredentialHealth},
       {Registry, keys: :unique, name: Tokengate.Routing.CircuitBreakerRegistry},
       Tokengate.Routing.CircuitBreakerManager
     ]

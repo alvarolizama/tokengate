@@ -25,7 +25,8 @@ defmodule Tokengate.Providers.Credential do
     field :api_key_encrypted, :string
     field :max_rpm, :integer
     field :max_concurrent, :integer
-    field :receive_timeout_ms, :integer, default: 180_000
+    field :max_concurrent_per_user, :integer
+    field :receive_timeout_ms, :integer
     field :status, :string, default: "active"
     field :error_reason, :string
     field :error_message, :string
@@ -37,7 +38,7 @@ defmodule Tokengate.Providers.Credential do
     timestamps(type: :utc_datetime)
   end
 
-  @shared ~w(provider_id name max_rpm max_concurrent receive_timeout_ms
+  @shared ~w(provider_id name max_rpm max_concurrent max_concurrent_per_user receive_timeout_ms
     status error_reason error_message error_at)a
 
   @doc false

@@ -223,4 +223,102 @@ defmodule Tokengate.Routing.PriorityTest do
       assert selected.id == "high"
     end
   end
+
+  describe "tiers (billing_mode + degradation)" do
+    # Candidates here carry a loaded credential + billing_mode so the tier
+    # sort engages. `mark_slow` degrades a credential's soft health.
+
+    defp ap_with_cred(id, opts) do
+      cred_id = Keyword.get(opts, :credential_id, "cred-#{id}")
+
+      %ModelProvider{
+        id: id,
+        priority: Keyword.get(opts, :priority),
+        enabled: true,
+        provider_model: "model-#{id}",
+        model_alias_id: "alias-1",
+        sticky_ttl_ms: nil,
+        billing_mode: Keyword.get(opts, :billing_mode, "pay_per_token"),
+        credential: %Tokengate.Providers.Credential{id: cred_id}
+      }
+    end
+
+    setup do
+      if :ets.whereis(:tokengate_credential_health) != :undefined do
+        :ets.delete_all_objects(:tokengate_credential_health)
+      end
+
+      :ok
+    end
+
+    test "healthy included beats pay_per_token regardless of priority" do
+      candidates = [
+        ap_with_cred("pay", priority: 1, billing_mode: "pay_per_token"),
+        ap_with_cred("sub", priority: 9, billing_mode: "included")
+      ]
+
+      assert {:ok, selected} = Priority.select(candidates, %{})
+      assert selected.id == "sub"
+    end
+
+    test "degraded included sinks below healthy pay_per_token" do
+      sub = ap_with_cred("sub", priority: 1, billing_mode: "included", credential_id: "cred-sub")
+      pay = ap_with_cred("pay", priority: 5, billing_mode: "pay_per_token")
+
+      :ok = Tokengate.Routing.CredentialHealth.mark_slow("cred-sub")
+      _ = :sys.get_state(GenServer.whereis(Tokengate.Routing.CredentialHealth))
+
+      assert {:ok, selected} = Priority.select([sub, pay], %{})
+      assert selected.id == "pay"
+    end
+
+    test "priority decides within the same tier" do
+      candidates = [
+        ap_with_cred("sub-b", priority: 5, billing_mode: "included"),
+        ap_with_cred("sub-a", priority: 1, billing_mode: "included")
+      ]
+
+      assert {:ok, selected} = Priority.select(candidates, %{})
+      assert selected.id == "sub-a"
+    end
+
+    test "degraded stuck provider releases the stick and re-sticks to a healthy one" do
+      sub = ap_with_cred("sub", priority: 1, billing_mode: "included", credential_id: "cred-sub2")
+      pay = ap_with_cred("pay", priority: 5, billing_mode: "pay_per_token")
+      candidates = [sub, pay]
+      opts = %{api_key_hash: "key-tier", model_alias_id: "alias-1"}
+
+      # Stick to the healthy subscription first.
+      assert {:ok, first} = Priority.select(candidates, opts)
+      assert first.id == "sub"
+      _ = :sys.get_state(StickyTracker)
+
+      # Degrade it: the stick is released and the next request flows to pay.
+      :ok = Tokengate.Routing.CredentialHealth.mark_slow("cred-sub2")
+      _ = :sys.get_state(GenServer.whereis(Tokengate.Routing.CredentialHealth))
+
+      assert {:ok, second} = Priority.select(candidates, opts)
+      assert second.id == "pay"
+
+      _ = :sys.get_state(StickyTracker)
+      assert StickyTracker.get("key-tier", "alias-1") == "pay"
+    end
+
+    test "candidates without a loaded credential are treated as healthy" do
+      # billing_mode but no credential struct → tier by billing_mode alone.
+      no_cred = %ModelProvider{
+        id: "bare",
+        priority: 9,
+        enabled: true,
+        provider_model: "m",
+        model_alias_id: "alias-1",
+        billing_mode: "included"
+      }
+
+      pay = ap_with_cred("pay", priority: 1, billing_mode: "pay_per_token")
+
+      assert {:ok, selected} = Priority.select([pay, no_cred], %{})
+      assert selected.id == "bare"
+    end
+  end
 end

@@ -65,9 +65,5 @@ defmodule TokengateWeb.Endpoint do
   plug Plug.Head
   plug Plug.Session, @session_options
 
-  if Mix.env() == :dev do
-    plug Extools
-  end
-
   plug TokengateWeb.Router
 end

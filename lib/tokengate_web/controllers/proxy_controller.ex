@@ -19,7 +19,11 @@ defmodule TokengateWeb.ProxyController do
 
     2. **Credential limits** — protects the provider API key from upstream
        rate limits (provider-side). Limits are configured per credential
-       (`max_rpm`, `max_concurrent`) and keyed by credential.id.
+       (`max_rpm`, `max_concurrent`, `max_concurrent_per_user`). The global
+       gates are keyed by credential.id; the per-user concurrency gate is
+       keyed by {credential.id, api_key_id} so one heavy user can't swallow
+       every slot of a shared subscription credential — when it trips, only
+       that user falls back to the next provider.
 
   Both gates must pass for a request to proceed. Team limits are acquired
   first; if routing succeeds, credential limits are acquired before execution.
@@ -92,7 +96,7 @@ defmodule TokengateWeb.ProxyController do
               end
             after
               Tokengate.Logs.Inflight.finish_request(inflight.id)
-              release_credential_limits(route.credential)
+              release_credential_limits(route.credential, key_id)
             end
 
           {:error, error} ->
@@ -174,7 +178,7 @@ defmodule TokengateWeb.ProxyController do
               )
             after
               Tokengate.Logs.Inflight.finish_request(inflight.id)
-              release_credential_limits(route.credential)
+              release_credential_limits(route.credential, key_id)
             end
 
           {:error, error} ->
@@ -245,14 +249,14 @@ defmodule TokengateWeb.ProxyController do
     provider = route.model_provider.credential.provider
     payload = Map.put(payload, "model", route.model_responded)
 
-    receive_timeout = route.credential.receive_timeout_ms || 180_000
+    receive_timeout = receive_timeout(route.credential)
 
     case adapter_fun.(provider, route.credential, payload,
            receive_timeout: receive_timeout,
            forwarded_headers: extract_forwarded_headers(conn)
          ) do
       {:ok, body, latency_ms} ->
-        Router.record_outcome(route, :success)
+        Router.record_outcome(route, :success, latency_ms: latency_ms)
         finalize_simple_success(conn, route, body, latency_ms, member, kind)
 
       {:error, :auth_error, status, error_message} ->
@@ -501,15 +505,34 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
-  defp acquire_credential_limits(credential) do
-    # Use credential.id as the throttle key for provider-side limits
-    # nil limits mean unlimited (track but don't block)
+  # Two-level provider-side gate, keyed by credential.id globally and by
+  # {credential.id, api_key_id} per user:
+  #
+  #   1. Global — `max_rpm` / `max_concurrent` protect the upstream API key
+  #      itself (quota and saturation). Shared by every user of the credential.
+  #   2. Per user — `max_concurrent_per_user` stops a single heavy user from
+  #      swallowing every slot of a shared subscription credential. When it
+  #      trips, only that user falls back to the next provider; everyone else
+  #      keeps using the subscription. nil means unlimited (track but don't block).
+  defp acquire_credential_limits(credential, key_id) do
     case Limits.acquire(credential.id, %{
            rpm_limit: credential.max_rpm,
            concurrency_limit: credential.max_concurrent
          }) do
       :ok ->
-        :ok
+        case Limits.acquire_concurrency(
+               {credential.id, key_id},
+               credential.max_concurrent_per_user
+             ) do
+          :ok ->
+            :ok
+
+          {:error, :concurrency_exceeded} ->
+            # Roll back the global slot so it doesn't leak while the user's
+            # request falls back to another provider.
+            Limits.release(credential.id)
+            {:error, :provider_user_concurrency_exceeded}
+        end
 
       {:error, :rate_limited, retry_after_ms} ->
         {:error, {:provider_rate_limited, retry_after_ms}}
@@ -519,8 +542,9 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
-  defp release_credential_limits(credential) do
+  defp release_credential_limits(credential, key_id) do
     Limits.release(credential.id)
+    Limits.release_concurrency({credential.id, key_id})
   end
 
   # Registers the request in the in-flight registry so the Logs UI shows it
@@ -545,6 +569,8 @@ defmodule TokengateWeb.ProxyController do
   end
 
   defp route_and_acquire(member, payload, api_key_hash, limits, exclude \\ [], route_opts \\ []) do
+    key_id = member.api_key.id
+
     request_context = %{
       "messages" => payload["messages"] || [],
       :api_key_hash => api_key_hash,
@@ -554,12 +580,17 @@ defmodule TokengateWeb.ProxyController do
 
     with {:ok, route} <- Router.route(payload["model"], member, request_context),
          :ok <- check_budget(member, limits, route, payload) do
-      case acquire_credential_limits(route.credential) do
+      case acquire_credential_limits(route.credential, key_id) do
         :ok ->
           {:ok, route}
 
         {:error, :provider_concurrency_exceeded} ->
           # This credential is saturated — try the next one by priority.
+          route_and_acquire(member, payload, api_key_hash, limits, [route.credential.id | exclude])
+
+        {:error, :provider_user_concurrency_exceeded} ->
+          # This user hit their per-user ceiling on this credential — only
+          # they fall back to the next provider; others keep the subscription.
           route_and_acquire(member, payload, api_key_hash, limits, [route.credential.id | exclude])
 
         {:error, {:provider_rate_limited, _retry_ms}} ->
@@ -603,6 +634,15 @@ defmodule TokengateWeb.ProxyController do
 
   ## Provider execution with fallback ##########################################
 
+  # Upstream receive timeout: the credential's own value wins when set; nil
+  # falls back to the global config default (60s). Credentials created before
+  # the default was relaxed carry an explicit value and keep it.
+  defp receive_timeout(credential) do
+    credential.receive_timeout_ms ||
+      Application.get_env(:tokengate, :proxy, [])
+      |> Keyword.get(:receive_timeout_ms, 60_000)
+  end
+
   # Extracts whitelisted client headers to forward upstream.
   @forwarded_header_keys %{
     "user-agent" => "user-agent",
@@ -633,14 +673,14 @@ defmodule TokengateWeb.ProxyController do
       |> inject_guard_rails(route.model_alias)
       |> maybe_optimize(route.model_alias)
 
-    receive_timeout = route.credential.receive_timeout_ms || 180_000
+    receive_timeout = receive_timeout(route.credential)
 
     case OpenAIAdapter.chat_completion(provider, route.credential, payload,
            receive_timeout: receive_timeout,
            forwarded_headers: extract_forwarded_headers(conn)
          ) do
       {:ok, body, latency_ms} ->
-        Router.record_outcome(route, :success)
+        Router.record_outcome(route, :success, latency_ms: latency_ms)
         finalize_success(conn, route, body, latency_ms, member)
 
       {:error, :auth_error, status, error_message} ->
@@ -710,6 +750,12 @@ defmodule TokengateWeb.ProxyController do
         error_message: error_message,
         error_at: DateTime.utc_now()
       })
+
+      Phoenix.PubSub.broadcast(
+        Tokengate.PubSub,
+        "alerts",
+        {:credential_error, credential.id, reason}
+      )
     end)
   end
 
@@ -780,7 +826,7 @@ defmodule TokengateWeb.ProxyController do
     # Measured just before the upstream call: TTFT is the time from this
     # point to the provider's first chunk.
     request_start = System.monotonic_time(:millisecond)
-    receive_timeout = route.credential.receive_timeout_ms || 180_000
+    receive_timeout = receive_timeout(route.credential)
 
     case OpenAIAdapter.stream_chat_completion(provider, route.credential, payload,
            receive_timeout: receive_timeout,
@@ -792,7 +838,7 @@ defmodule TokengateWeb.ProxyController do
         case await_first_chunk(pid, ref) do
           {:ok, first_chunk} ->
             ttft_ms = System.monotonic_time(:millisecond) - request_start
-            Router.record_outcome(route, :success)
+            Router.record_outcome(route, :success, latency_ms: ttft_ms)
 
             conn =
               conn

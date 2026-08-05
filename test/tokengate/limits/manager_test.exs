@@ -259,6 +259,89 @@ defmodule Tokengate.Limits.ManagerTest do
     end
   end
 
+  describe "per-user concurrency gate (composite {credential, user} key)" do
+    # The proxy gates per-user slots inside a shared credential by acquiring
+    # `acquire_concurrency({credential.id, api_key_id}, per_user_limit)`.
+    # These tests pin the composite-key behaviour the proxy relies on.
+
+    test "users are independent within the same credential" do
+      cred = unique_key()
+      user_a = unique_key()
+      user_b = unique_key()
+      per_user = 2
+
+      # User A fills their 2 slots.
+      assert :ok = Manager.acquire_concurrency({cred, user_a}, per_user)
+      assert :ok = Manager.acquire_concurrency({cred, user_a}, per_user)
+
+      assert {:error, :concurrency_exceeded} =
+               Manager.acquire_concurrency({cred, user_a}, per_user)
+
+      # User B still has their own 2 slots on the same credential.
+      assert :ok = Manager.acquire_concurrency({cred, user_b}, per_user)
+      assert :ok = Manager.acquire_concurrency({cred, user_b}, per_user)
+
+      assert {:error, :concurrency_exceeded} =
+               Manager.acquire_concurrency({cred, user_b}, per_user)
+
+      # Cleanup
+      Manager.release_concurrency({cred, user_a})
+      Manager.release_concurrency({cred, user_a})
+      Manager.release_concurrency({cred, user_b})
+      Manager.release_concurrency({cred, user_b})
+    end
+
+    test "the same user has independent counters across credentials" do
+      cred_1 = unique_key()
+      cred_2 = unique_key()
+      user = unique_key()
+      per_user = 1
+
+      assert :ok = Manager.acquire_concurrency({cred_1, user}, per_user)
+
+      assert {:error, :concurrency_exceeded} =
+               Manager.acquire_concurrency({cred_1, user}, per_user)
+
+      # Same user on a different credential: fresh counter.
+      assert :ok = Manager.acquire_concurrency({cred_2, user}, per_user)
+
+      Manager.release_concurrency({cred_1, user})
+      Manager.release_concurrency({cred_2, user})
+    end
+
+    test "nil per-user limit is unlimited but tracked" do
+      cred = unique_key()
+      user = unique_key()
+
+      for _ <- 1..50 do
+        assert :ok = Manager.acquire_concurrency({cred, user}, nil)
+      end
+
+      assert Manager.current_concurrency({cred, user}) == 50
+
+      for _ <- 1..50 do
+        Manager.release_concurrency({cred, user})
+      end
+    end
+
+    test "per-user release re-enables acquisition without touching the global counter" do
+      cred = unique_key()
+      user = unique_key()
+
+      # Global gate and per-user gate are separate counters.
+      assert :ok = Manager.acquire_concurrency(cred, 10)
+      assert :ok = Manager.acquire_concurrency({cred, user}, 1)
+      assert {:error, :concurrency_exceeded} = Manager.acquire_concurrency({cred, user}, 1)
+
+      # Releasing the per-user slot does not decrement the global one.
+      Manager.release_concurrency({cred, user})
+      assert Manager.current_concurrency(cred) == 1
+      assert Manager.current_concurrency({cred, user}) == 0
+
+      Manager.release_concurrency(cred)
+    end
+  end
+
   describe "sweep — GenServer cleanup" do
     test "old bucket is swept away, recent bucket is kept" do
       key = unique_key()

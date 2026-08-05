@@ -46,6 +46,7 @@ defmodule Tokengate.Routing.Router do
   """
   alias Tokengate.Providers
   alias Tokengate.Routing.CircuitBreakerManager
+  alias Tokengate.Routing.CredentialHealth
   alias Tokengate.Routing.Priority
 
   @type route :: %{
@@ -119,10 +120,13 @@ defmodule Tokengate.Routing.Router do
 
   @doc """
   Records the outcome of a routed request against the selected credential's
-  circuit breaker.
+  circuit breaker, and — for successes — against the credential's soft
+  health (`Tokengate.Routing.CredentialHealth`).
 
-    * `:success` → `breaker.record_success(credential.id)`
-    * `{:failure, reason}` → `breaker.record_failure(credential.id, reason)`
+    * `:success` → `breaker.record_success(credential.id)`. When
+      `:latency_ms` is passed in `opts`, a slow success degrades the
+      credential (it sinks within its routing tier) and a fast one heals it.
+    * `{:failure, reason}` → `breaker.record_failure(credential.id, reason)`.
 
   Always returns `:ok`. The caller decides whether to re-route (using
   `:exclude_credential_ids` to skip the failed credential) or surface the
@@ -130,14 +134,24 @@ defmodule Tokengate.Routing.Router do
 
   `reason` is one of `:server_error`, `:timeout`, `:rate_limited`,
   `:client_error`.
+
+  ## Options
+
+    * `:latency_ms` — end-to-end latency of a successful upstream call.
+      Compared against `slow_threshold_ms` (config `:tokengate, :routing`).
   """
-  @spec record_outcome(route(), :success | {:failure, atom()}) :: :ok
-  def record_outcome(route, outcome) do
+  @spec record_outcome(route(), :success | {:failure, atom()}, keyword()) :: :ok
+  def record_outcome(route, outcome, opts \\ []) do
     credential_id = route.credential.id
 
     case outcome do
       :success ->
         @default_breaker.record_success(credential_id)
+
+        case Keyword.get(opts, :latency_ms) do
+          nil -> :ok
+          latency_ms -> CredentialHealth.record_success(credential_id, latency_ms)
+        end
 
       {:failure, reason} ->
         @default_breaker.record_failure(credential_id, reason)
