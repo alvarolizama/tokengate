@@ -84,8 +84,8 @@ defmodule TokengateWeb.UsersLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/users")
 
-    assert has_element?(view, "#spend-#{member_user.id}", "$7.25")
-    assert has_element?(view, "#spend-#{admin.id}", "—")
+    assert has_element?(view, "#spend-#{member_user.id}-#{team.id}", "$7.25")
+    assert has_element?(view, "#spend-#{admin.id}-none", "—")
   end
 
   test "user without credit shows sin crédito badge", %{conn: conn} do
@@ -112,7 +112,84 @@ defmodule TokengateWeb.UsersLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/users")
 
-    assert has_element?(view, "#spend-#{member_user.id}", "sin crédito")
+    assert has_element?(view, "#spend-#{member_user.id}-#{team.id}", "sin crédito")
+  end
+
+  ## Team grouping + sorting ----------------------------------------------------
+
+  test "users are grouped under team headers with member counts", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{team: team, owner: _owner} = team_with_log()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+
+    # Group header row for the team with its member count badge.
+    assert has_element?(view, "tr#group-#{team.id}", team.name)
+    # Users without a team (the admin) land in the trailing Sin equipo group.
+    assert has_element?(view, "tr#group-none", "Sin equipo")
+  end
+
+  test "a user with two teams appears once per team with unique dom ids", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{user: multi} = register("user")
+
+    {:ok, team_a} = Accounts.create_team(%{name: "Multi A #{unique()}"})
+    {:ok, team_b} = Accounts.create_team(%{name: "Multi B #{unique()}"})
+    {:ok, _} = Accounts.create_team_member(%{user_id: multi.id, team_id: team_a.id})
+    {:ok, _} = Accounts.create_team_member(%{user_id: multi.id, team_id: team_b.id})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+
+    # Same user rendered in both groups, ids namespaced per group (no dupes).
+    assert has_element?(view, "tr#user-#{multi.id}-#{team_a.id}")
+    assert has_element?(view, "tr#user-#{multi.id}-#{team_b.id}")
+  end
+
+  test "clicking the Usuario sort header re-orders rows within groups", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    {:ok, team} = Accounts.create_team(%{name: "Sort Team #{unique()}"})
+
+    {:ok, zeta} =
+      Accounts.register_user(%{
+        email: "zeta-#{unique()}@example.com",
+        name: "Zeta",
+        password: "password-secret-z1",
+        global_role: "user"
+      })
+
+    {:ok, alpha} =
+      Accounts.register_user(%{
+        email: "alpha-#{unique()}@example.com",
+        name: "Alpha",
+        password: "password-secret-a1",
+        global_role: "user"
+      })
+
+    {:ok, _} = Accounts.create_team_member(%{user_id: zeta.id, team_id: team.id})
+    {:ok, _} = Accounts.create_team_member(%{user_id: alpha.id, team_id: team.id})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+
+    row_order = fn view ->
+      Regex.scan(~r/<tr[^>]+id="(user-[^"]+)"/, render(view))
+      |> Enum.map(fn [_full, id] -> id end)
+      |> Enum.filter(&String.ends_with?(&1, "-#{team.id}"))
+    end
+
+    # Default sort is name asc → Alpha before Zeta.
+    assert row_order.(view) == ["user-#{alpha.id}-#{team.id}", "user-#{zeta.id}-#{team.id}"]
+
+    # Toggle to desc → Zeta first.
+    view |> element("#sort-name") |> render_click()
+    assert row_order.(view) == ["user-#{zeta.id}-#{team.id}", "user-#{alpha.id}-#{team.id}"]
+
+    # Toggle back to asc.
+    view |> element("#sort-name") |> render_click()
+    assert row_order.(view) == ["user-#{alpha.id}-#{team.id}", "user-#{zeta.id}-#{team.id}"]
   end
 
   ## Create user ------------------------------------------------------------
@@ -212,7 +289,7 @@ defmodule TokengateWeb.UsersLiveTest do
     conn = login(conn, admin, admin_password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/users")
 
-    view |> element("#edit-#{target.id}") |> render_click()
+    view |> element("#edit-#{target.id}-none") |> render_click()
     assert has_element?(view, "#user-edit-form")
 
     html =
@@ -236,7 +313,7 @@ defmodule TokengateWeb.UsersLiveTest do
     conn = login(conn, admin, admin_password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/users")
 
-    html = view |> element("#status-#{target.id}") |> render_click()
+    html = view |> element("#status-#{target.id}-none") |> render_click()
     assert html =~ "Usuario suspendido"
 
     updated = Accounts.get_user!(target.id)
@@ -248,7 +325,7 @@ defmodule TokengateWeb.UsersLiveTest do
     %{user: target, password: target_password} = register("user")
     conn = login(conn, admin, admin_password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/users")
-    view |> element("#status-#{target.id}") |> render_click()
+    view |> element("#status-#{target.id}-none") |> render_click()
 
     # Now try to login as the suspended user. The flash is deliberately
     # uniform ("Credenciales inválidas.") so the login endpoint can't be
@@ -267,7 +344,7 @@ defmodule TokengateWeb.UsersLiveTest do
     conn = login(conn, admin, admin_password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/users")
 
-    view |> element("#pwd-#{target.id}") |> render_click()
+    view |> element("#pwd-#{target.id}-none") |> render_click()
     assert has_element?(view, "#user-reset-form")
 
     html =
@@ -291,8 +368,8 @@ defmodule TokengateWeb.UsersLiveTest do
     conn = login(conn, admin, admin_password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/users")
 
-    assert has_element?(view, "#impersonate-#{target.id}")
-    refute has_element?(view, "#impersonate-#{admin.id}")
+    assert has_element?(view, "#impersonate-#{target.id}-none")
+    refute has_element?(view, "#impersonate-#{admin.id}-none")
   end
 
   test "root admin cannot be impersonated", %{conn: conn} do
@@ -314,7 +391,7 @@ defmodule TokengateWeb.UsersLiveTest do
     conn = login(conn, admin, admin_password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/users")
 
-    refute has_element?(view, "#impersonate-#{root.id}")
+    refute has_element?(view, "#impersonate-#{root.id}-none")
   end
 
   ## Delete user -------------------------------------------------------------
@@ -374,8 +451,8 @@ defmodule TokengateWeb.UsersLiveTest do
     conn = login(conn, admin, admin_password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/users")
 
-    assert has_element?(view, "#delete-#{target.id}")
-    refute has_element?(view, "#delete-#{admin.id}")
+    assert has_element?(view, "#delete-#{target.id}-none")
+    refute has_element?(view, "#delete-#{admin.id}-none")
   end
 
   test "root admin has no delete button", %{conn: conn} do
@@ -395,7 +472,7 @@ defmodule TokengateWeb.UsersLiveTest do
     conn = login(conn, admin, admin_password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/users")
 
-    refute has_element?(view, "#delete-#{root.id}")
+    refute has_element?(view, "#delete-#{root.id}-none")
   end
 
   test "opening delete modal sets target email", %{conn: conn} do
@@ -404,7 +481,7 @@ defmodule TokengateWeb.UsersLiveTest do
     conn = login(conn, admin, admin_password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/users")
 
-    view |> element("#delete-#{target.id}") |> render_click()
+    view |> element("#delete-#{target.id}-none") |> render_click()
 
     assert has_element?(view, "#delete-user-modal")
     assert has_element?(view, "#confirm-delete-user")
@@ -413,7 +490,7 @@ defmodule TokengateWeb.UsersLiveTest do
 
   test "confirming delete removes user and all associated data", %{conn: conn} do
     %{user: admin, password: admin_password} = register("admin")
-    %{team: _team, owner: target, member: member} = team_with_log()
+    %{team: team, owner: target, member: member} = team_with_log()
 
     # Verify data exists before delete
     assert Accounts.get_user!(target.id)
@@ -423,7 +500,7 @@ defmodule TokengateWeb.UsersLiveTest do
     {:ok, view, _html} = live(conn, ~p"/dashboard/users")
 
     # Open modal then confirm
-    view |> element("#delete-#{target.id}") |> render_click()
+    view |> element("#delete-#{target.id}-#{team.id}") |> render_click()
     html = view |> element("#confirm-delete-user") |> render_click()
 
     assert html =~ "Usuario eliminado permanentemente"
@@ -444,6 +521,6 @@ defmodule TokengateWeb.UsersLiveTest do
     {:ok, view, _html} = live(conn, ~p"/dashboard/users")
 
     # No delete button for self
-    refute has_element?(view, "#delete-#{admin.id}")
+    refute has_element?(view, "#delete-#{admin.id}-none")
   end
 end

@@ -25,6 +25,7 @@ defmodule TokengateWeb.UsersLive do
     socket =
       socket
       |> assign(:page_title, "Usuarios · Tokengate")
+      |> stream_configure(:users, dom_id: &stream_dom_id/1)
       |> assign(:form, nil)
       |> assign(:editing_user_id, nil)
       |> assign(:reset_user_id, nil)
@@ -34,6 +35,8 @@ defmodule TokengateWeb.UsersLive do
       |> assign(:all_teams, Accounts.list_teams())
       |> assign(:is_admin, user && user.global_role == "admin")
       |> assign(:search_query, "")
+      |> assign(:sort_field, :name)
+      |> assign(:sort_direction, :asc)
       |> assign(:editing_teams_user_id, nil)
       |> assign(:editing_teams_user_name, nil)
       |> assign(:editing_team_ids, [])
@@ -58,6 +61,11 @@ defmodule TokengateWeb.UsersLive do
 
   ## Data loading ---------------------------------------------------------
 
+  # Sortable columns and their value extractors. Each function receives a
+  # user plus the lookup assigns (spend maps, team map) and returns a
+  # comparable value.
+  @sort_columns ~w(name role status teams monthly_spend total_spend inserted_at)a
+
   defp load_users(socket) do
     search = socket.assigns[:search_query] || ""
     timezone = socket.assigns[:timezone] || "Etc/UTC"
@@ -75,17 +83,24 @@ defmodule TokengateWeb.UsersLive do
         end)
       end
 
+    spend_by_user = Tokengate.Budgets.spend_by_user(timezone)
+    total_spend_by_user = Tokengate.Logs.total_spend_by_user()
+    user_teams = load_user_teams(filtered)
+
+    sort_ctx = %{
+      spend_by_user: spend_by_user,
+      total_spend_by_user: total_spend_by_user,
+      user_teams: user_teams
+    }
+
     sorted =
-      filtered
-      |> Enum.sort_by(fn u ->
-        {if(u.global_role == "admin", do: 0, else: 1), String.downcase(u.name || u.email)}
-      end)
+      sort_users(filtered, socket.assigns.sort_field, socket.assigns.sort_direction, sort_ctx)
 
     socket
-    |> assign(:spend_by_user, Tokengate.Budgets.spend_by_user(timezone))
-    |> assign(:total_spend_by_user, Tokengate.Logs.total_spend_by_user())
-    |> assign(:user_teams, load_user_teams(sorted))
-    |> stream(:users, sorted, reset: true)
+    |> assign(:spend_by_user, spend_by_user)
+    |> assign(:total_spend_by_user, total_spend_by_user)
+    |> assign(:user_teams, user_teams)
+    |> stream(:users, build_grouped_rows(sorted, user_teams), reset: true)
   end
 
   defp load_user_teams(users) do
@@ -94,12 +109,171 @@ defmodule TokengateWeb.UsersLive do
     |> Accounts.list_teams_by_user_ids()
   end
 
+  ## Sorting ---------------------------------------------------------------
+
+  # Applies the selected column sort. Admins keep floating to the top within
+  # each group (as before); the column comparator breaks the rest.
+  defp sort_users(users, field, direction, ctx) do
+    Enum.sort_by(
+      users,
+      fn u -> {if(u.global_role == "admin", do: 0, else: 1), sort_value(u, field, ctx)} end,
+      fn {role_a, val_a}, {role_b, val_b} ->
+        cond do
+          role_a != role_b -> role_a < role_b
+          true -> compare_sort_values(val_a, val_b, direction)
+        end
+      end
+    )
+  end
+
+  defp sort_value(user, :name, _ctx), do: String.downcase(user.name || user.email)
+  defp sort_value(user, :role, _ctx), do: user.global_role || ""
+  defp sort_value(user, :status, _ctx), do: user.status || ""
+
+  defp sort_value(user, :teams, ctx) do
+    case Map.get(ctx.user_teams, user.id, []) do
+      [] -> ""
+      teams -> teams |> Enum.map(&String.downcase(&1.name)) |> Enum.join(", ")
+    end
+  end
+
+  defp sort_value(user, :monthly_spend, ctx) do
+    case Map.get(ctx.spend_by_user, user.id) do
+      nil -> nil
+      spend -> spend.monthly_usd
+    end
+  end
+
+  defp sort_value(user, :total_spend, ctx) do
+    Map.get(ctx.total_spend_by_user, user.id)
+  end
+
+  defp sort_value(user, :inserted_at, _ctx), do: user.inserted_at
+
+  # nils always sort last, in both directions (users without spend/teams data).
+  defp compare_sort_values(a, b, direction) do
+    case {a, b} do
+      {nil, nil} ->
+        true
+
+      {nil, _} ->
+        false
+
+      {_, nil} ->
+        true
+
+      _ ->
+        if direction == :asc, do: compare_vals(a, b) != :gt, else: compare_vals(a, b) != :lt
+    end
+  end
+
+  defp compare_vals(%Decimal{} = a, %Decimal{} = b), do: Decimal.compare(a, b)
+
+  defp compare_vals(%DateTime{} = a, %DateTime{} = b) do
+    case DateTime.compare(a, b) do
+      :lt -> :lt
+      :gt -> :gt
+      :eq -> :eq
+    end
+  end
+
+  defp compare_vals(a, b) when is_binary(a) and is_binary(b) do
+    cond do
+      a < b -> :lt
+      a > b -> :gt
+      true -> :eq
+    end
+  end
+
+  defp compare_vals(a, b) do
+    cond do
+      a < b -> :lt
+      a > b -> :gt
+      true -> :eq
+    end
+  end
+
+  ## Team grouping -----------------------------------------------------------
+
+  # Stream dom_ids: a user appears once per team they belong to, so the row id
+  # is namespaced per group; group header rows get their own prefix.
+  defp stream_dom_id({:group, %{id: id}}), do: "group-#{id}"
+  defp stream_dom_id({:user, %{id: id}, group_id}), do: "user-#{id}-#{group_id}"
+
+  # Builds the stream rows: one {:group, team} header row per team followed by
+  # its {:user, user, group_id} rows. A user appears in every team they belong
+  # to (intentional — the admin sees the full roster per team). Users with no
+  # membership land in the trailing "Sin equipo" group. Teams whose members
+  # were all filtered out by the search are omitted.
+  defp build_grouped_rows(sorted_users, user_teams) do
+    team_names_by_id = Map.new(Tokengate.Accounts.list_teams(), &{&1.id, &1.name})
+
+    users_by_team_id =
+      Enum.reduce(sorted_users, %{}, fn user, acc ->
+        teams = Map.get(user_teams, user.id, [])
+
+        Enum.reduce(teams, acc, fn team, acc2 ->
+          Map.update(acc2, team.id, [user], &[user | &1])
+        end)
+      end)
+
+    ordered_team_ids =
+      users_by_team_id
+      |> Map.keys()
+      |> Enum.sort_by(fn team_id -> String.downcase(Map.get(team_names_by_id, team_id, "")) end)
+
+    grouped =
+      Enum.flat_map(ordered_team_ids, fn team_id ->
+        # Members were prepended during accumulation — reverse to restore the
+        # sorted order from sorted_users.
+        members = Enum.reverse(users_by_team_id[team_id])
+
+        [
+          {:group,
+           %{id: team_id, name: Map.get(team_names_by_id, team_id, "—"), count: length(members)}}
+        ] ++
+          Enum.map(members, &{:user, &1, team_id})
+      end)
+
+    orphans = Enum.filter(sorted_users, fn u -> Map.get(user_teams, u.id, []) == [] end)
+
+    if orphans == [] do
+      grouped
+    else
+      grouped ++
+        [{:group, %{id: "none", name: "Sin equipo", count: length(orphans)}}] ++
+        Enum.map(orphans, &{:user, &1, "none"})
+    end
+  end
+
   ## Events — search -------------------------------------------------------
+  @impl true
   def handle_event("search_users", %{"q" => query}, socket) do
     {:noreply,
      socket
      |> assign(:search_query, query)
      |> load_users()}
+  end
+
+  ## Events — sort ----------------------------------------------------------
+  def handle_event("sort_users", %{"field" => field}, socket) do
+    with {:ok, field} <- to_sort_field(field),
+         true <- field in @sort_columns do
+      {sort_field, sort_direction} =
+        if socket.assigns.sort_field == field do
+          {field, toggle_sort_direction(socket.assigns.sort_direction)}
+        else
+          {field, default_direction_for(field)}
+        end
+
+      {:noreply,
+       socket
+       |> assign(:sort_field, sort_field)
+       |> assign(:sort_direction, sort_direction)
+       |> load_users()}
+    else
+      _ -> {:noreply, socket}
+    end
   end
 
   ## Events — edit teams --------------------------------------------------
@@ -161,7 +335,6 @@ defmodule TokengateWeb.UsersLive do
      |> load_users()}
   end
 
-  @impl true
   def handle_event("new_user", _params, socket) do
     changeset = User.admin_create_changeset(%User{}, %{})
 
@@ -301,6 +474,22 @@ defmodule TokengateWeb.UsersLive do
   end
 
   ## Template helpers -----------------------------------------------------
+
+  defp to_sort_field(field) when is_binary(field) do
+    {:ok, String.to_existing_atom(field)}
+  rescue
+    ArgumentError -> :error
+  end
+
+  defp toggle_sort_direction(:asc), do: :desc
+  defp toggle_sort_direction(:desc), do: :asc
+
+  # Text-ish columns start asc; numeric/date columns start desc (most useful
+  # first: biggest spenders, newest users).
+  defp default_direction_for(field) when field in [:monthly_spend, :total_spend, :inserted_at],
+    do: :desc
+
+  defp default_direction_for(_), do: :asc
 
   defp fmt_money(%Decimal{} = d) do
     d
@@ -548,166 +737,92 @@ defmodule TokengateWeb.UsersLive do
           <table class="table table-sm">
             <thead>
               <tr>
-                <th>Usuario</th>
-                <th>Rol</th>
-                <th>Estado</th>
-                <th>Equipos</th>
+                <th>
+                  <.sort_button
+                    field={:name}
+                    label="Usuario"
+                    current={@sort_field}
+                    direction={@sort_direction}
+                  />
+                </th>
+                <th>
+                  <.sort_button
+                    field={:role}
+                    label="Rol"
+                    current={@sort_field}
+                    direction={@sort_direction}
+                  />
+                </th>
+                <th>
+                  <.sort_button
+                    field={:status}
+                    label="Estado"
+                    current={@sort_field}
+                    direction={@sort_direction}
+                  />
+                </th>
+                <th>
+                  <.sort_button
+                    field={:teams}
+                    label="Equipos"
+                    current={@sort_field}
+                    direction={@sort_direction}
+                  />
+                </th>
                 <th>Google</th>
-                <th>Gasto mensual</th>
-                <th>Gasto total</th>
-                <th>Creado</th>
+                <th class="text-right">
+                  <.sort_button
+                    field={:monthly_spend}
+                    label="Gasto mensual"
+                    current={@sort_field}
+                    direction={@sort_direction}
+                    align="right"
+                  />
+                </th>
+                <th class="text-right">
+                  <.sort_button
+                    field={:total_spend}
+                    label="Gasto total"
+                    current={@sort_field}
+                    direction={@sort_direction}
+                    align="right"
+                  />
+                </th>
+                <th>
+                  <.sort_button
+                    field={:inserted_at}
+                    label="Creado"
+                    current={@sort_field}
+                    direction={@sort_direction}
+                  />
+                </th>
                 <th></th>
               </tr>
             </thead>
             <tbody id="users" phx-update="stream">
-              <tr :for={{id, user} <- @streams.users} id={id}>
-                <td>
-                  <div class="flex items-center gap-3">
-                    <div class="avatar avatar-placeholder">
-                      <div class="w-8 rounded-full bg-primary text-primary-content">
-                        <span class="text-xs font-semibold">{initials(user)}</span>
+              <tr :for={{id, row} <- @streams.users} id={id}>
+                <%= case row do %>
+                  <% {:group, group} -> %>
+                    <td colspan="9" class="bg-base-200/60 border-y border-base-300 py-2">
+                      <div class="flex items-center gap-2">
+                        <.icon name="hero-user-group" class="w-4 h-4 text-base-content/60" />
+                        <span class="text-xs font-semibold uppercase tracking-wide text-base-content/70">
+                          {group.name}
+                        </span>
+                        <span class="badge badge-xs badge-ghost">{group.count}</span>
                       </div>
-                    </div>
-                    <div>
-                      <p class="font-medium text-sm">{user.name}</p>
-                      <p class="text-xs text-base-content/50">{user.email}</p>
-                    </div>
-                  </div>
-                </td>
-                <td>
-                  <span class={["badge", "badge-sm", role_badge(user.global_role)]}>{user.global_role}</span>
-                </td>
-                <td>
-                  <span class={["badge", "badge-sm", status_badge(user.status)]}>{if user.status ==
-                                                                                       "active",
-                                                                                     do: "Activo",
-                                                                                     else:
-                                                                                       "Suspendido"}</span>
-                </td>
-                <td>
-                  <div class="flex flex-wrap items-center gap-1">
-                    <%= for team <- Map.get(@user_teams, user.id, []) do %>
-                      <span class="badge badge-xs badge-outline">{team.name}</span>
-                    <% end %>
-                    <button
-                      phx-click="edit_teams"
-                      phx-value-id={user.id}
-                      class="btn btn-xs btn-ghost"
-                      id={"teams-#{user.id}"}
-                      title="Editar equipos"
-                    >
-                      <.icon name="hero-pencil" class="w-3 h-3" />
-                    </button>
-                  </div>
-                </td>
-                <td>
-                  <%= if google_badge(user) do %>
-                    <span class="badge badge-sm badge-ghost"><.icon
-                      name="hero-globe-alt"
-                      class="w-3 h-3"
-                    /> Google</span>
-                  <% else %>
-                    <span class="text-xs text-base-content/30">—</span>
-                  <% end %>
-                </td>
-                <td id={"spend-#{user.id}"}>
-                  <%= case Map.get(@spend_by_user, user.id) do %>
-                    <% nil -> %>
-                      <span class="text-xs text-base-content/30">—</span>
-                    <% spend -> %>
-                      <div class={[
-                        "text-xs font-mono",
-                        spend.exhausted? && "text-error font-semibold"
-                      ]}>
-                        ${fmt_money(spend.monthly_usd)}
-                      </div>
-                      <%= if spend.exhausted? do %>
-                        <span class="badge badge-xs badge-error mt-0.5">sin crédito</span>
-                      <% end %>
-                  <% end %>
-                </td>
-                <td id={"total-spend-#{user.id}"}>
-                  <%= case Map.get(@total_spend_by_user, user.id) do %>
-                    <% nil -> %>
-                      <span class="text-xs text-base-content/30">—</span>
-                    <% total -> %>
-                      <div class="text-xs font-mono">
-                        ${fmt_money(total)}
-                      </div>
-                  <% end %>
-                </td>
-                <td class="text-xs text-base-content/50">
-                  {format_date(user.inserted_at, @timezone)}
-                </td>
-                <td>
-                  <div class="flex gap-1">
-                    <.link
-                      :if={user.id != @current_user.id && !root_admin?(user)}
-                      href={~p"/impersonate/#{user.id}"}
-                      method="post"
-                      class="btn btn-xs btn-ghost"
-                      id={"impersonate-#{user.id}"}
-                      data-confirm={"¿Ver el dashboard como #{user.email}?"}
-                      title="Ver como este usuario"
-                    >
-                      <.icon name="hero-eye" class="w-3 h-3" />
-                    </.link>
-                    <.link
-                      navigate={~p"/dashboard/users/#{user.id}/stats"}
-                      class="btn btn-xs btn-ghost"
-                      id={"stats-#{user.id}"}
-                      title="Ver stats consolidados de este usuario"
-                    >
-                      <.icon name="hero-chart-bar" class="w-3 h-3" />
-                    </.link>
-                    <button
-                      phx-click="edit_user"
-                      phx-value-id={user.id}
-                      class="btn btn-xs btn-ghost"
-                      id={"edit-#{user.id}"}
-                    >
-                      <.icon name="hero-pencil" class="w-3 h-3" />
-                    </button>
-                    <button
-                      phx-click="reset_password"
-                      phx-value-id={user.id}
-                      class="btn btn-xs btn-ghost"
-                      id={"pwd-#{user.id}"}
-                    >
-                      <.icon name="hero-key" class="w-3 h-3" />
-                    </button>
-                    <button
-                      phx-click="toggle_status"
-                      phx-value-id={user.id}
-                      class="btn btn-xs btn-ghost"
-                      id={"status-#{user.id}"}
-                      data-confirm={
-                        if user.status == "active",
-                          do: "¿Suspender usuario?",
-                          else: "¿Activar usuario?"
-                      }
-                    >
-                      <.icon
-                        name={
-                          if user.status == "active", do: "hero-lock-closed", else: "hero-lock-open"
-                        }
-                        class="w-3 h-3"
-                      />
-                    </button>
-                    <%!-- Delete button: opens modal, not data-confirm (too destructive) --%>
-                    <button
-                      :if={user.id != @current_user.id && !root_admin?(user)}
-                      phx-click="open_delete_modal"
-                      phx-value-id={user.id}
-                      phx-value-email={user.email}
-                      class="btn btn-xs btn-ghost text-error"
-                      id={"delete-#{user.id}"}
-                      title="Eliminar usuario"
-                    >
-                      <.icon name="hero-trash" class="w-3 h-3" />
-                    </button>
-                  </div>
-                </td>
+                    </td>
+                  <% {:user, user, group_id} -> %>
+                    <.user_row
+                      user={user}
+                      group_id={group_id}
+                      user_teams={@user_teams}
+                      spend_by_user={@spend_by_user}
+                      total_spend_by_user={@total_spend_by_user}
+                      current_user={@current_user}
+                      timezone={@timezone}
+                    />
+                <% end %>
               </tr>
             </tbody>
           </table>
@@ -812,4 +927,184 @@ defmodule TokengateWeb.UsersLive do
   end
 
   defp initials(_), do: "—"
+
+  ## Components ---------------------------------------------------------------
+
+  attr :field, :atom, required: true
+  attr :label, :string, required: true
+  attr :current, :atom, required: true
+  attr :direction, :atom, required: true
+  attr :align, :string, default: "left"
+
+  defp sort_button(assigns) do
+    ~H"""
+    <button
+      phx-click="sort_users"
+      phx-value-field={@field}
+      class={[
+        "flex items-center gap-1 hover:text-primary",
+        @align == "right" && "justify-end w-full"
+      ]}
+      id={"sort-#{@field}"}
+    >
+      {@label}
+      <span class="inline-block w-3 text-center">
+        <%= if @current == @field do %>
+          {if @direction == :asc, do: "▲", else: "▼"}
+        <% end %>
+      </span>
+    </button>
+    """
+  end
+
+  attr :user, :map, required: true
+  attr :group_id, :string, required: true
+  attr :user_teams, :map, required: true
+  attr :spend_by_user, :map, required: true
+  attr :total_spend_by_user, :map, required: true
+  attr :current_user, :map, required: true
+  attr :timezone, :string, required: true
+
+  defp user_row(assigns) do
+    ~H"""
+    <td>
+      <div class="flex items-center gap-3">
+        <div class="avatar avatar-placeholder">
+          <div class="w-8 rounded-full bg-primary text-primary-content">
+            <span class="text-xs font-semibold">{initials(@user)}</span>
+          </div>
+        </div>
+        <div>
+          <p class="font-medium text-sm">{@user.name}</p>
+          <p class="text-xs text-base-content/50">{@user.email}</p>
+        </div>
+      </div>
+    </td>
+    <td>
+      <span class={["badge", "badge-sm", role_badge(@user.global_role)]}>{@user.global_role}</span>
+    </td>
+    <td>
+      <span class={["badge", "badge-sm", status_badge(@user.status)]}>
+        {if @user.status == "active", do: "Activo", else: "Suspendido"}
+      </span>
+    </td>
+    <td>
+      <div class="flex flex-wrap items-center gap-1">
+        <%= for team <- Map.get(@user_teams, @user.id, []) do %>
+          <span class="badge badge-xs badge-outline">{team.name}</span>
+        <% end %>
+        <button
+          phx-click="edit_teams"
+          phx-value-id={@user.id}
+          class="btn btn-xs btn-ghost"
+          id={"teams-#{@user.id}-#{@group_id}"}
+          title="Editar equipos"
+        >
+          <.icon name="hero-pencil" class="w-3 h-3" />
+        </button>
+      </div>
+    </td>
+    <td>
+      <%= if google_badge(@user) do %>
+        <span class="badge badge-sm badge-ghost"><.icon name="hero-globe-alt" class="w-3 h-3" />
+        Google</span>
+      <% else %>
+        <span class="text-xs text-base-content/30">—</span>
+      <% end %>
+    </td>
+    <td id={"spend-#{@user.id}-#{@group_id}"} class="text-right">
+      <%= case Map.get(@spend_by_user, @user.id) do %>
+        <% nil -> %>
+          <span class="text-xs text-base-content/30">—</span>
+        <% spend -> %>
+          <div class={["text-xs font-mono", spend.exhausted? && "text-error font-semibold"]}>
+            ${fmt_money(spend.monthly_usd)}
+          </div>
+          <%= if spend.exhausted? do %>
+            <span class="badge badge-xs badge-error mt-0.5">sin crédito</span>
+          <% end %>
+      <% end %>
+    </td>
+    <td id={"total-spend-#{@user.id}-#{@group_id}"} class="text-right">
+      <%= case Map.get(@total_spend_by_user, @user.id) do %>
+        <% nil -> %>
+          <span class="text-xs text-base-content/30">—</span>
+        <% total -> %>
+          <div class="text-xs font-mono">
+            ${fmt_money(total)}
+          </div>
+      <% end %>
+    </td>
+    <td class="text-xs text-base-content/50">
+      {format_date(@user.inserted_at, @timezone)}
+    </td>
+    <td>
+      <div class="flex gap-1">
+        <.link
+          :if={@user.id != @current_user.id && !root_admin?(@user)}
+          href={~p"/impersonate/#{@user.id}"}
+          method="post"
+          class="btn btn-xs btn-ghost"
+          id={"impersonate-#{@user.id}-#{@group_id}"}
+          data-confirm={"¿Ver el dashboard como #{@user.email}?"}
+          title="Ver como este usuario"
+        >
+          <.icon name="hero-eye" class="w-3 h-3" />
+        </.link>
+        <.link
+          navigate={~p"/dashboard/users/#{@user.id}/stats"}
+          class="btn btn-xs btn-ghost"
+          id={"stats-#{@user.id}-#{@group_id}"}
+          title="Ver stats consolidados de este usuario"
+        >
+          <.icon name="hero-chart-bar" class="w-3 h-3" />
+        </.link>
+        <button
+          phx-click="edit_user"
+          phx-value-id={@user.id}
+          class="btn btn-xs btn-ghost"
+          id={"edit-#{@user.id}-#{@group_id}"}
+        >
+          <.icon name="hero-pencil" class="w-3 h-3" />
+        </button>
+        <button
+          phx-click="reset_password"
+          phx-value-id={@user.id}
+          class="btn btn-xs btn-ghost"
+          id={"pwd-#{@user.id}-#{@group_id}"}
+        >
+          <.icon name="hero-key" class="w-3 h-3" />
+        </button>
+        <button
+          phx-click="toggle_status"
+          phx-value-id={@user.id}
+          class="btn btn-xs btn-ghost"
+          id={"status-#{@user.id}-#{@group_id}"}
+          data-confirm={
+            if @user.status == "active",
+              do: "¿Suspender usuario?",
+              else: "¿Activar usuario?"
+          }
+        >
+          <.icon
+            name={if @user.status == "active", do: "hero-lock-closed", else: "hero-lock-open"}
+            class="w-3 h-3"
+          />
+        </button>
+        <%!-- Delete button: opens modal, not data-confirm (too destructive) --%>
+        <button
+          :if={@user.id != @current_user.id && !root_admin?(@user)}
+          phx-click="open_delete_modal"
+          phx-value-id={@user.id}
+          phx-value-email={@user.email}
+          class="btn btn-xs btn-ghost text-error"
+          id={"delete-#{@user.id}-#{@group_id}"}
+          title="Eliminar usuario"
+        >
+          <.icon name="hero-trash" class="w-3 h-3" />
+        </button>
+      </div>
+    </td>
+    """
+  end
 end

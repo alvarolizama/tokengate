@@ -146,12 +146,12 @@ defmodule TokengateWeb.UserStatsLiveTest do
 
   describe "back-link icon" do
     test "users_live has a stats link for every user", %{conn: conn} do
-      {_, user} = fixture_user_with_memberships()
+      {team, user} = fixture_user_with_memberships()
       %{user: admin, password: password} = register("admin")
       conn = login(conn, admin, password)
 
       {:ok, _view, html} = live(conn, ~p"/dashboard/users")
-      assert html =~ ~s(id="stats-#{user.id}")
+      assert html =~ ~s(id="stats-#{user.id}-#{team.id}")
     end
   end
 end
