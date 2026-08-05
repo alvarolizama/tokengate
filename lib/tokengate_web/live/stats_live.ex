@@ -25,6 +25,17 @@ defmodule TokengateWeb.StatsLive do
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Periods
 
+  # Breakdown assigns whose tables have sortable column headers. The "sort"
+  # event re-orders these in memory — see resort_breakdowns/3.
+  @sortable_breakdowns [
+    :breakdown_model,
+    :breakdown_member,
+    :breakdown_team,
+    :breakdown_provider,
+    :breakdown_service,
+    :member_models
+  ]
+
   @impl true
   def mount(_params, _session, socket) do
     user = socket.assigns[:current_user]
@@ -50,7 +61,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:member, nil)
       |> assign(:member_models, [])
       |> assign(:member_id, nil)
-      |> assign(:sort_field, :requests)
+      |> assign(:sort_field, :request_count)
       |> assign(:sort_direction, :desc)
       |> assign(:hour_distribution, [])
       |> assign(:busiest_hours, [])
@@ -100,11 +111,27 @@ defmodule TokengateWeb.StatsLive do
       end
 
     {:noreply,
-     socket |> assign(:sort_field, sort_field) |> assign(:sort_direction, sort_direction)}
+     socket
+     |> assign(:sort_field, sort_field)
+     |> assign(:sort_direction, sort_direction)
+     |> resort_breakdowns(sort_field, sort_direction)}
   end
 
   defp toggle_direction(:asc), do: :desc
   defp toggle_direction(:desc), do: :asc
+
+  # Re-apply sort_rows to every breakdown list already loaded in the socket.
+  # Sorting is client-side over the current period's rows — no need to hit the
+  # DB again. Only assigns that exist are touched (each live_action loads a
+  # different subset).
+  defp resort_breakdowns(socket, field, direction) do
+    Enum.reduce(@sortable_breakdowns, socket, fn key, acc ->
+      case acc.assigns[key] do
+        nil -> acc
+        rows -> assign(acc, key, sort_rows(rows, field, direction))
+      end
+    end)
+  end
 
   ## Data loading ---------------------------------------------------------
 

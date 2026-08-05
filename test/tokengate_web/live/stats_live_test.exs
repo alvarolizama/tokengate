@@ -226,6 +226,79 @@ defmodule TokengateWeb.StatsLiveTest do
     refute has_element?(view, "#period-today.btn-primary")
   end
 
+  ## Sorting -------------------------------------------------------------------
+
+  test "clicking a sort header re-orders the breakdown table rows", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    # Same team/member, two different model aliases with different costs so
+    # the model breakdown has two sortable rows.
+    %{member: member, model_alias: cheap, provider: provider} =
+      team_with_log(%{cost: "0.001"})
+
+    u = unique()
+
+    {:ok, expensive} =
+      Providers.create_model_alias(%{
+        name: "model-expensive-#{u}",
+        display_name: "Expensive #{u}",
+        context_window: 128_000
+      })
+
+    {:ok, _log} =
+      Logs.log_request(%{
+        team_member_id: member.id,
+        provider_id: provider.id,
+        model_alias_id: expensive.id,
+        model_requested: expensive.name,
+        model_responded: expensive.name,
+        agent_type: "api",
+        status_code: 200,
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        provider_cost_usd: "0.500",
+        latency_ms: 42,
+        streaming: false,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, html} = live(conn, ~p"/dashboard/stats/models")
+
+    # Row order = order of appearance of the bd-model-<id> rows in the HTML.
+    row_order = fn view ->
+      Regex.scan(~r/<tr[^>]+id="(bd-model-[^"]+)"/, render(view))
+      |> Enum.map(fn [_full, id] -> id end)
+    end
+
+    expensive_row = "bd-model-#{expensive.id}"
+    cheap_row = "bd-model-#{cheap.id}"
+
+    assert html =~ expensive_row
+    assert html =~ cheap_row
+
+    # Click the Costo header: new field → desc, expensive first.
+    view
+    |> element("button[phx-click='sort'][phx-value-field='cost_usd']")
+    |> render_click()
+
+    assert row_order.(view) == [expensive_row, cheap_row]
+
+    # Click again → toggles to asc, cheap first.
+    view
+    |> element("button[phx-click='sort'][phx-value-field='cost_usd']")
+    |> render_click()
+
+    assert row_order.(view) == [cheap_row, expensive_row]
+
+    # Click once more → back to desc.
+    view
+    |> element("button[phx-click='sort'][phx-value-field='cost_usd']")
+    |> render_click()
+
+    assert row_order.(view) == [expensive_row, cheap_row]
+  end
+
   ## User scope --------------------------------------------------------------
 
   test "regular user is redirected from stats (own consumption)", %{conn: conn} do
