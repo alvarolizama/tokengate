@@ -377,4 +377,48 @@ defmodule TokengateWeb.LogsLiveTest do
     html = render(view)
     refute html =~ "err-model"
   end
+
+  ## System monitor section -------------------------------------------------
+
+  test "admin sees the live system monitor cards", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
+
+    assert has_element?(view, "#system-monitor")
+    assert has_element?(view, "#mon-ram")
+    assert has_element?(view, "#mon-cpu")
+    assert has_element?(view, "#mon-processes")
+    assert has_element?(view, "#mon-db")
+    assert has_element?(view, "#mon-io")
+    assert has_element?(view, "#mon-uptime")
+  end
+
+  test "system monitor refreshes on the tick", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
+
+    # Fire the refresh tick directly; the collector must run without crashing
+    # and re-render the monitor with live values.
+    send(view.pid, :refresh_system_metrics)
+    html = render(view)
+
+    assert html =~ "Monitor del sistema"
+    assert html =~ "Procesos"
+    assert html =~ "Base de datos"
+    assert html =~ "Uptime"
+  end
+
+  test "non-admin is redirected away from the logs dashboard", %{conn: conn} do
+    %{user: user, password: password} = register("user")
+
+    conn = login(conn, user, password)
+
+    # The whole /dashboard/logs lives behind live_session :admin, so a plain
+    # user never even mounts the view — they get bounced to /dashboard.
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/logs")
+  end
 end
