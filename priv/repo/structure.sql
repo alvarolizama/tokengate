@@ -203,8 +203,9 @@ CREATE TABLE public.provider_credentials (
     name character varying(255),
     error_reason character varying(255),
     error_at timestamp(0) without time zone,
-    receive_timeout_ms integer DEFAULT 120000 NOT NULL,
+    receive_timeout_ms integer,
     error_message character varying(255),
+    max_concurrent_per_user integer,
     CONSTRAINT provider_credentials_status_check CHECK (((status)::text = ANY ((ARRAY['active'::character varying, 'disabled'::character varying, 'error'::character varying])::text[])))
 );
 
