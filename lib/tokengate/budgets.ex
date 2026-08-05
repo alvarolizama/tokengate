@@ -306,6 +306,20 @@ defmodule Tokengate.Budgets do
     |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
   end
 
+  @doc """
+  Last request timestamp per member, across all time.
+  Returns `%{member_id => DateTime.t()}` — members without requests are missing.
+  """
+  @spec last_requests_by_member_ids([term()]) :: %{term() => DateTime.t()}
+  def last_requests_by_member_ids(member_ids) do
+    RequestLog
+    |> where([rl], rl.team_member_id in ^member_ids)
+    |> group_by([rl], rl.team_member_id)
+    |> select([rl], {rl.team_member_id, max(rl.inserted_at)})
+    |> Repo.all()
+    |> Map.new()
+  end
+
   # Percentage of the limit consumed. `nil` limit = unlimited (no bar).
   # A zero (or negative) limit blocks every request, so it reads as 100%.
   defp pct(_spend, nil), do: nil

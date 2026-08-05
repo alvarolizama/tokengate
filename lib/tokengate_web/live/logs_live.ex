@@ -2,9 +2,13 @@ defmodule TokengateWeb.LogsLive do
   @moduledoc false
   use TokengateWeb, :live_view
 
+  import Ecto.Query, only: [from: 2]
+
   alias Tokengate.{Accounts, Logs}
   alias Tokengate.Logs.Inflight
+  alias Tokengate.Logs.RequestLog
   alias Tokengate.Providers
+  alias Tokengate.Repo
 
   @page_size 50
   @pubsub Tokengate.PubSub
@@ -38,6 +42,11 @@ defmodule TokengateWeb.LogsLive do
       |> assign(:model_options, model_options())
       |> assign(:team_options, team_options())
       |> assign(:is_admin, user.global_role == "admin")
+      |> assign(:error_credentials, [])
+      |> assign(:breaker_alerts, [])
+      |> assign(:cred_error_counts, [])
+      |> assign(:budget_exhausted, [])
+      |> assign(:budget_activity, %{})
       |> require_admin_hook()
 
     socket = load_logs(socket, :reset)
@@ -46,6 +55,7 @@ defmodule TokengateWeb.LogsLive do
       Phoenix.PubSub.subscribe(@pubsub, @logs_topic)
       Phoenix.PubSub.subscribe(@pubsub, Inflight.topic())
       Phoenix.PubSub.subscribe(@pubsub, TokengateWeb.Presence.topic())
+      Phoenix.PubSub.subscribe(@pubsub, "alerts")
 
       send(self(), :refresh_inflight)
 
@@ -59,9 +69,10 @@ defmodule TokengateWeb.LogsLive do
        |> assign(:api_inflight, Inflight.count())
        |> assign(:top_models, Inflight.count_by_model())
        |> assign(:top_users, Inflight.count_by_user())
-       |> assign(:pending, visible_pending(socket.assigns))}
+       |> assign(:pending, visible_pending(socket.assigns))
+       |> load_alert_data()}
     else
-      {:ok, socket}
+      {:ok, load_alert_data(socket)}
     end
   end
 
@@ -144,6 +155,20 @@ defmodule TokengateWeb.LogsLive do
     {:noreply, socket}
   end
 
+  def handle_info({:breaker_opened, _credential_id, reason}, socket) do
+    {:noreply,
+     socket
+     |> put_flash(:error, "Circuit breaker abierto (#{reason_label(reason)})")
+     |> load_alert_data()}
+  end
+
+  def handle_info({:credential_error, _credential_id, reason}, socket) do
+    {:noreply,
+     socket
+     |> put_flash(:error, "Credencial desactivada (#{reason_label(reason)})")
+     |> load_alert_data()}
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # Coalesce summary refreshes: under load every new log would otherwise run
@@ -169,12 +194,14 @@ defmodule TokengateWeb.LogsLive do
     streaming = filters["streaming"]
     model_search = filters["model_search"]
     team_id = filters["team_id"]
+    error_reason = filters["error_reason"]
 
     agent in ["", nil, log.agent_type] and
       status_class_match?(log.status_code, status_class) and
       streaming_match?(log.streaming, streaming) and
       model_match?(log, model_search) and
       team_id_match?(log, team_id) and
+      error_reason_match?(log, error_reason) and
       date_range_match?(log.inserted_at, filters["from"], filters["to"], timezone)
   end
 
@@ -184,6 +211,10 @@ defmodule TokengateWeb.LogsLive do
   defp team_id_match?(log, team_id) do
     log.team_member && log.team_member.team && log.team_member.team.id == team_id
   end
+
+  defp error_reason_match?(_log, ""), do: true
+  defp error_reason_match?(_log, nil), do: true
+  defp error_reason_match?(log, reason), do: log.error_reason == reason
 
   defp status_class_match?(_status, ""), do: true
   defp status_class_match?(_status, nil), do: true
@@ -373,7 +404,8 @@ defmodule TokengateWeb.LogsLive do
       "from" => "",
       "to" => "",
       "model_search" => "",
-      "team_id" => ""
+      "team_id" => "",
+      "error_reason" => ""
     }
   end
 
@@ -389,6 +421,7 @@ defmodule TokengateWeb.LogsLive do
       |> maybe_put(:streaming, parse_bool(form_filters["streaming"]))
       |> maybe_put(:model_search, form_filters["model_search"])
       |> maybe_put_team_id(form_filters["team_id"])
+      |> maybe_put(:error_reason, form_filters["error_reason"])
       |> maybe_put(:from, parse_from_date(form_filters["from"], timezone))
       |> maybe_put(:to, parse_to_date(form_filters["to"], timezone))
       |> maybe_put_scope(socket.assigns[:scope_member_ids])
@@ -492,6 +525,163 @@ defmodule TokengateWeb.LogsLive do
     end
   end
 
+  def handle_event("reactivate_credential", %{"id" => cred_id}, socket) do
+    cred = Providers.get_credential!(cred_id)
+
+    if cred.status == "error" do
+      case Providers.reactivate_credential(cred) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, "Credencial reactivada.")
+           |> load_alert_data()}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "No se pudo reactivar la credencial.")}
+      end
+    else
+      {:noreply, put_flash(socket, :error, "Solo se pueden reactivar credenciales en error.")}
+    end
+  end
+
+  def handle_event("reset_breaker", %{"id" => cred_id}, socket) do
+    cred = Providers.get_credential!(cred_id)
+
+    Tokengate.Routing.CircuitBreakerManager.reset(cred.id)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Circuit breaker reseteado.")
+     |> load_alert_data()}
+  end
+
+  ## Alert data loading ------------------------------------------------------
+
+  defp load_alert_data(socket) do
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
+
+    credentials =
+      from(c in Providers.Credential,
+        join: p in assoc(c, :provider),
+        where: c.status == "error",
+        preload: [provider: p],
+        order_by: [desc: c.error_at]
+      )
+      |> Repo.all()
+
+    open = Tokengate.Routing.CircuitBreakerManager.open_breakers()
+    open_ids = Map.keys(open)
+
+    open_creds =
+      if open_ids == [] do
+        []
+      else
+        from(c in Providers.Credential,
+          join: p in assoc(c, :provider),
+          where: c.id in ^open_ids,
+          preload: [provider: p]
+        )
+        |> Repo.all()
+      end
+
+    creds_by_id = Map.new(open_creds, &{&1.id, &1})
+
+    breaker_alerts =
+      Enum.flat_map(open, fn {cred_id, details} ->
+        case creds_by_id do
+          %{^cred_id => cred} -> [{cred, details}]
+          _ -> []
+        end
+      end)
+
+    since = DateTime.utc_now() |> DateTime.add(-24 * 3600, :second)
+
+    cred_error_counts =
+      from(rl in RequestLog,
+        where: rl.status_code >= 400 and rl.inserted_at >= ^since,
+        group_by: [rl.api_key_prefix, rl.provider_id],
+        select: %{
+          api_key_prefix: rl.api_key_prefix,
+          provider_id: rl.provider_id,
+          count: count(rl.id)
+        }
+      )
+      |> Repo.all()
+
+    socket
+    |> assign(:error_credentials, credentials)
+    |> assign(:breaker_alerts, breaker_alerts)
+    |> assign(:cred_error_counts, cred_error_counts)
+    |> assign(:budget_exhausted, Tokengate.Budgets.list_exhausted_member_budgets(timezone))
+    |> assign(:budget_activity, load_budget_activity(timezone))
+  end
+
+  defp load_budget_activity(timezone) do
+    today_start = Tokengate.Periods.start_of_day_utc(timezone)
+
+    activity_query =
+      from(rl in RequestLog,
+        where: rl.inserted_at >= ^today_start,
+        group_by: rl.team_member_id,
+        select: %{
+          team_member_id: rl.team_member_id,
+          requests_today: count(rl.id),
+          last_request: max(rl.inserted_at)
+        }
+      )
+
+    top_provider_query =
+      from(rl in RequestLog,
+        where: rl.inserted_at >= ^today_start and not is_nil(rl.provider_id),
+        group_by: [rl.team_member_id, rl.provider_id],
+        select: %{
+          team_member_id: rl.team_member_id,
+          provider_id: rl.provider_id,
+          request_count: count(rl.id)
+        }
+      )
+
+    activity_data = Repo.all(activity_query) |> Map.new(fn a -> {a.team_member_id, a} end)
+
+    top_providers =
+      Repo.all(top_provider_query)
+      |> Enum.group_by(fn t -> t.team_member_id end)
+      |> Map.new(fn {member_id, providers} ->
+        top = Enum.max_by(providers, fn p -> p.request_count end)
+        {member_id, top.provider_id}
+      end)
+
+    provider_names =
+      from(p in Providers.Provider, select: p)
+      |> Repo.all()
+      |> Map.new(fn p -> {p.id, p.name} end)
+
+    activity_data
+    |> Map.new(fn {member_id, activity} ->
+      top_provider_id = Map.get(top_providers, member_id)
+      top_provider_name = if top_provider_id, do: Map.get(provider_names, top_provider_id, "—")
+
+      {member_id,
+       %{
+         requests_today: activity.requests_today,
+         last_request: activity.last_request,
+         top_provider: top_provider_name
+       }}
+    end)
+  end
+
+  defp errors_for_credential(cred, error_counts) do
+    prefix = api_key_prefix(cred.api_key_encrypted)
+    provider_id = cred.provider_id
+
+    error_counts
+    |> Enum.filter(fn ec ->
+      ec.api_key_prefix == prefix && ec.provider_id == provider_id
+    end)
+    |> Enum.map(& &1.count)
+    |> Enum.sum()
+  end
+
   ## Template helpers ------------------------------------------------------
 
   defp format_cost(%Decimal{} = d) do
@@ -580,6 +770,54 @@ defmodule TokengateWeb.LogsLive do
 
   defp prov_key_display(_), do: "—"
 
+  # --- Alert helpers ---------------------------------------------------------
+
+  defp fmt_money(nil), do: "—"
+
+  defp fmt_money(%Decimal{} = d) do
+    d
+    |> Decimal.round(4)
+    |> Decimal.to_string()
+  end
+
+  defp budget_periods(%{monthly_exhausted?: true}), do: "mensual"
+  defp budget_periods(_), do: "—"
+
+  defp breaker_label(:closed), do: "Cerrado"
+  defp breaker_label(:open), do: "Abierto"
+  defp breaker_label(:half_open), do: "Half-Open"
+  defp breaker_label(_), do: "—"
+
+  defp reason_label(nil), do: "—"
+  defp reason_label(:server_error), do: "Error servidor"
+  defp reason_label(:timeout), do: "Timeout"
+  defp reason_label(:rate_limited), do: "Rate limited"
+  defp reason_label(:auth_error), do: "Error auth"
+  defp reason_label(:client_error), do: "Error cliente"
+  defp reason_label(reason) when is_atom(reason), do: Atom.to_string(reason)
+  defp reason_label(reason) when is_binary(reason), do: reason
+
+  defp api_key_prefix(nil), do: "—"
+
+  defp api_key_prefix(encrypted) when is_binary(encrypted) and byte_size(encrypted) > 8 do
+    String.slice(encrypted, 0, 8) <> "…"
+  end
+
+  defp api_key_prefix(encrypted), do: encrypted
+
+  defp fmt_duration(nil), do: "—"
+
+  defp fmt_duration(%DateTime{} = opened_at) do
+    diff = DateTime.diff(DateTime.utc_now(), opened_at, :second)
+
+    cond do
+      diff < 60 -> "#{diff}s"
+      diff < 3600 -> "#{div(diff, 60)}m #{rem(diff, 60)}s"
+      diff < 86_400 -> "#{div(diff, 3600)}h #{div(rem(diff, 3600), 60)}m"
+      true -> "#{div(diff, 86_400)}d #{div(rem(diff, 86_400), 3600)}h"
+    end
+  end
+
   attr :value, :boolean, default: false
 
   defp think_badge(assigns) do
@@ -600,6 +838,254 @@ defmodule TokengateWeb.LogsLive do
           Logs
           <:subtitle>Registro de solicitudes a la API en tiempo real</:subtitle>
         </.header>
+
+        <%!-- Alert KPIs: creds en error, breakers, miembros sin crédito --%>
+        <div
+          :if={
+            @is_admin and
+              (@error_credentials != [] or @breaker_alerts != [] or @budget_exhausted != [])
+          }
+          class="grid grid-cols-1 sm:grid-cols-3 gap-4"
+        >
+          <div class="card bg-base-100 border border-base-300 shadow-sm">
+            <div class="card-body p-4">
+              <div class="flex items-center justify-between">
+                <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Credenciales en error
+                </p>
+                <.icon name="hero-exclamation-circle" class="w-4 h-4 text-error" />
+              </div>
+              <p class="mt-1 text-2xl font-bold text-base-content" id="alert-count-creds">
+                {length(@error_credentials)}
+              </p>
+            </div>
+          </div>
+
+          <div class="card bg-base-100 border border-base-300 shadow-sm">
+            <div class="card-body p-4">
+              <div class="flex items-center justify-between">
+                <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Breakers abiertos
+                </p>
+                <.icon name="hero-shield-exclamation" class="w-4 h-4 text-warning" />
+              </div>
+              <p class="mt-1 text-2xl font-bold text-base-content" id="alert-count-breakers">
+                {length(@breaker_alerts)}
+              </p>
+            </div>
+          </div>
+
+          <div class="card bg-base-100 border border-base-300 shadow-sm">
+            <div class="card-body p-4">
+              <div class="flex items-center justify-between">
+                <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Miembros sin crédito
+                </p>
+                <.icon name="hero-banknotes" class="w-4 h-4 text-error" />
+              </div>
+              <p class="mt-1 text-2xl font-bold text-base-content" id="alert-count-budgets">
+                {length(@budget_exhausted)}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <%!-- Alert tables: creds, breakers, budgets --%>
+        <div :if={@is_admin} class="space-y-6">
+          <%!-- Credentials in error --%>
+          <div :if={@error_credentials != []} class="space-y-2">
+            <h3 class="text-sm font-semibold text-base-content/70 uppercase tracking-wide">
+              Credenciales deshabilitadas por error
+            </h3>
+            <div class="card bg-base-100 border border-error/30 shadow-sm">
+              <div class="card-body p-0">
+                <div class="overflow-x-auto">
+                  <table class="table table-sm">
+                    <thead>
+                      <tr>
+                        <th>Proveedor</th>
+                        <th>Alias</th>
+                        <th>API Key</th>
+                        <th>Endpoint</th>
+                        <th>Razón</th>
+                        <th>Error</th>
+                        <th>Cuándo</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr :for={cred <- @error_credentials} id={"alert-cred-#{cred.id}"}>
+                        <td class="font-medium">{cred.provider.name}</td>
+                        <td>{cred.name || "—"}</td>
+                        <td class="font-mono text-xs">{api_key_prefix(cred.api_key_encrypted)}</td>
+                        <td
+                          class="text-xs text-base-content/70 max-w-[200px] truncate"
+                          title={cred.provider.base_url}
+                        >
+                          {cred.provider.base_url}
+                        </td>
+                        <td>
+                          <code class="text-xs text-error">{cred.error_reason || "auth_error"}</code>
+                        </td>
+                        <td class="text-xs text-base-content/70 max-w-xs">
+                          <span
+                            :if={cred.error_message}
+                            class="line-clamp-2"
+                            title={cred.error_message}
+                          >
+                            {cred.error_message}
+                          </span>
+                          <span :if={!cred.error_message} class="text-base-content/30">—</span>
+                        </td>
+                        <td class="text-xs text-base-content/50">
+                          {format_datetime(cred.error_at, @timezone)}
+                        </td>
+                        <td class="text-right">
+                          <button
+                            phx-click="reactivate_credential"
+                            phx-value-id={cred.id}
+                            class="btn btn-xs btn-warning"
+                            id={"alert-reactivate-#{cred.id}"}
+                          >
+                            <.icon name="hero-arrow-path" class="w-3 h-3" /> Reactivar
+                          </button>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <%!-- Open circuit breakers --%>
+          <div :if={@breaker_alerts != []} class="space-y-2">
+            <h3 class="text-sm font-semibold text-base-content/70 uppercase tracking-wide">
+              Circuit breakers abiertos
+            </h3>
+            <div class="card bg-base-100 border border-warning/30 shadow-sm">
+              <div class="card-body p-0">
+                <div class="overflow-x-auto">
+                  <table class="table table-sm">
+                    <thead>
+                      <tr>
+                        <th>Proveedor</th>
+                        <th>Alias</th>
+                        <th>API Key</th>
+                        <th>Estado</th>
+                        <th>Razón</th>
+                        <th>Fallos</th>
+                        <th>Abierto desde</th>
+                        <th>Errores 24h</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr :for={{cred, details} <- @breaker_alerts} id={"alert-breaker-#{cred.id}"}>
+                        <td class="font-medium">{cred.provider.name}</td>
+                        <td>{cred.name || "—"}</td>
+                        <td class="font-mono text-xs">{api_key_prefix(cred.api_key_encrypted)}</td>
+                        <td>
+                          <span class={[
+                            "badge badge-sm",
+                            details.state == :open && "badge-error",
+                            details.state == :half_open && "badge-warning"
+                          ]}>
+                            {breaker_label(details.state)}
+                          </span>
+                        </td>
+                        <td class="text-sm">{reason_label(details.last_reason)}</td>
+                        <td class="text-sm tabular-nums">{details.failures}</td>
+                        <td class="text-sm">{fmt_duration(details.opened_at)}</td>
+                        <td class="text-sm tabular-nums">
+                          {errors_for_credential(cred, @cred_error_counts)}
+                        </td>
+                        <td class="text-right">
+                          <button
+                            phx-click="reset_breaker"
+                            phx-value-id={cred.id}
+                            class="btn btn-xs btn-ghost"
+                            id={"alert-reset-breaker-#{cred.id}"}
+                          >
+                            <.icon name="hero-arrow-path" class="w-3 h-3" /> Reset breaker
+                          </button>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <%!-- Members out of budget --%>
+          <div :if={@budget_exhausted != []} class="space-y-2">
+            <h3 class="text-sm font-semibold text-base-content/70 uppercase tracking-wide">
+              Miembros sin crédito
+            </h3>
+            <div class="card bg-base-100 border border-error/30 shadow-sm">
+              <div class="card-body p-0">
+                <div class="overflow-x-auto">
+                  <table class="table table-sm">
+                    <thead>
+                      <tr>
+                        <th>Usuario</th>
+                        <th>Equipo</th>
+                        <th>Límite agotado</th>
+                        <th>Gasto mes</th>
+                        <th>Gasto hoy</th>
+                        <th>Requests hoy</th>
+                        <th>Proveedor top (hoy)</th>
+                        <th>Último request</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr :for={b <- @budget_exhausted} id={"alert-budget-#{b.member.id}"}>
+                        <td class="font-medium">{b.member.user.email}</td>
+                        <td>{b.member.team.name}</td>
+                        <td>
+                          <span class="badge badge-sm badge-error">
+                            {budget_periods(b)}
+                          </span>
+                        </td>
+                        <td class="font-mono text-xs">
+                          ${fmt_money(b.monthly_spend_usd)}
+                          <span :if={b.monthly_limit_usd} class="text-base-content/50">
+                            / ${fmt_money(b.monthly_limit_usd)}
+                          </span>
+                        </td>
+                        <td class="font-mono text-xs">
+                          ${fmt_money(b.daily_spend_usd)}
+                        </td>
+                        <td class="text-sm tabular-nums">
+                          {Map.get(@budget_activity, b.member.id, %{}) |> Map.get(:requests_today, 0)}
+                        </td>
+                        <td class="text-sm">
+                          {Map.get(@budget_activity, b.member.id, %{}) |> Map.get(:top_provider, "—")}
+                        </td>
+                        <td class="text-xs text-base-content/50">
+                          {Map.get(@budget_activity, b.member.id, %{})
+                          |> Map.get(:last_request)
+                          |> format_datetime(@timezone)}
+                        </td>
+                        <td class="text-right">
+                          <.link
+                            navigate={~p"/dashboard/credits"}
+                            class="btn btn-xs btn-ghost"
+                            id={"alert-budget-credits-#{b.member.id}"}
+                          >
+                            Ver créditos
+                          </.link>
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
 
         <%!-- KPI strip: live indicators + summary, 5 cards in a row --%>
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
@@ -752,7 +1238,7 @@ defmodule TokengateWeb.LogsLive do
           for={@form}
           id="logs-filter-form"
           phx-change="filter"
-          class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3"
+          class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3"
         >
           <.input
             field={@form[:status_class]}
@@ -783,6 +1269,19 @@ defmodule TokengateWeb.LogsLive do
             label="Equipo"
           />
           <.input
+            field={@form[:error_reason]}
+            type="select"
+            prompt="Todos"
+            options={[
+              {"rate_limited", "rate_limited"},
+              {"timeout", "timeout"},
+              {"server_error", "server_error"},
+              {"auth_error", "auth_error"},
+              {"client_error", "client_error"}
+            ]}
+            label="Error"
+          />
+          <.input
             field={@form[:from]}
             type="date"
             label="Desde"
@@ -793,6 +1292,16 @@ defmodule TokengateWeb.LogsLive do
             label="Hasta"
           />
         </.form>
+
+        <div class="flex justify-end">
+          <.link
+            href="/dashboard/stats/export?type=errors"
+            class="btn btn-sm btn-ghost"
+            id="csv-errors"
+          >
+            <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> CSV Errores
+          </.link>
+        </div>
 
         <%!-- Pending (in-flight) requests --%>
         <div

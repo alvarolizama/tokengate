@@ -24,7 +24,6 @@ defmodule TokengateWeb.StatsLive do
   alias Tokengate.Logs
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Periods
-  alias Tokengate.Providers
 
   @impl true
   def mount(_params, _session, socket) do
@@ -37,9 +36,6 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:model_filter, nil)
       |> assign(:team_filter, nil)
       |> assign(:service_filter, nil)
-      |> assign(:models, Providers.list_model_aliases())
-      |> assign(:teams, scoped_teams(user))
-      |> assign(:services, scoped_services(user))
       |> assign(:scope_label, scope_label_for(user))
       |> assign(:scope_member_ids, Accounts.scope_member_ids(user))
       |> assign(:loading, true)
@@ -54,6 +50,8 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:member, nil)
       |> assign(:member_models, [])
       |> assign(:member_id, nil)
+      |> assign(:sort_field, :requests)
+      |> assign(:sort_direction, :desc)
       |> assign(:hour_distribution, [])
       |> assign(:busiest_hours, [])
       |> assign(:busiest_minutes, [])
@@ -91,32 +89,22 @@ defmodule TokengateWeb.StatsLive do
     {:noreply, socket |> assign(:period, period) |> load_data(user)}
   end
 
-  def handle_event("set_model_filter", %{"model_id" => model_id}, socket) do
-    model_id = if model_id == "", do: nil, else: model_id
-    {:noreply, push_patch(socket, to: build_path(socket, model_id: model_id))}
+  def handle_event("sort", %{"field" => field}, socket) do
+    field = String.to_existing_atom(field)
+
+    {sort_field, sort_direction} =
+      if socket.assigns.sort_field == field do
+        {field, toggle_direction(socket.assigns.sort_direction)}
+      else
+        {field, :desc}
+      end
+
+    {:noreply,
+     socket |> assign(:sort_field, sort_field) |> assign(:sort_direction, sort_direction)}
   end
 
-  def handle_event("set_team_filter", %{"team_id" => team_id}, socket) do
-    team_id = if team_id == "", do: nil, else: team_id
-    {:noreply, push_patch(socket, to: build_path(socket, team_id: team_id))}
-  end
-
-  def handle_event("set_service_filter", %{"service_id" => service_id}, socket) do
-    service_id = if service_id == "", do: nil, else: service_id
-    {:noreply, push_patch(socket, to: build_path(socket, service_id: service_id))}
-  end
-
-  def handle_event("clear_service_filter", _params, socket) do
-    {:noreply, push_patch(socket, to: build_path(socket, service_id: nil))}
-  end
-
-  def handle_event("clear_model_filter", _params, socket) do
-    {:noreply, push_patch(socket, to: build_path(socket, model_id: nil))}
-  end
-
-  def handle_event("clear_team_filter", _params, socket) do
-    {:noreply, push_patch(socket, to: build_path(socket, team_id: nil))}
-  end
+  defp toggle_direction(:asc), do: :desc
+  defp toggle_direction(:desc), do: :asc
 
   ## Data loading ---------------------------------------------------------
 
@@ -223,6 +211,38 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:breakdown_team, [])
       |> assign(:breakdown_member, [])
     end
+    |> assign(
+      :breakdown_model,
+      sort_rows(
+        base.assigns.breakdown_model,
+        socket.assigns.sort_field,
+        socket.assigns.sort_direction
+      )
+    )
+    |> assign(
+      :breakdown_provider,
+      sort_rows(
+        base.assigns.breakdown_provider,
+        socket.assigns.sort_field,
+        socket.assigns.sort_direction
+      )
+    )
+    |> assign(
+      :breakdown_team,
+      sort_rows(
+        base.assigns.breakdown_team,
+        socket.assigns.sort_field,
+        socket.assigns.sort_direction
+      )
+    )
+    |> assign(
+      :breakdown_member,
+      sort_rows(
+        base.assigns.breakdown_member,
+        socket.assigns.sort_field,
+        socket.assigns.sort_direction
+      )
+    )
   end
 
   defp load_breakdowns(socket, :teams, user, opts) do
@@ -243,6 +263,30 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:breakdown_member, [])
       |> assign(:breakdown_model, [])
     end
+    |> assign(
+      :breakdown_team,
+      sort_rows(
+        base.assigns.breakdown_team,
+        socket.assigns.sort_field,
+        socket.assigns.sort_direction
+      )
+    )
+    |> assign(
+      :breakdown_member,
+      sort_rows(
+        base.assigns.breakdown_member,
+        socket.assigns.sort_field,
+        socket.assigns.sort_direction
+      )
+    )
+    |> assign(
+      :breakdown_model,
+      sort_rows(
+        base.assigns.breakdown_model,
+        socket.assigns.sort_field,
+        socket.assigns.sort_direction
+      )
+    )
   end
 
   defp load_breakdowns(socket, :services, user, opts) do
@@ -264,6 +308,22 @@ defmodule TokengateWeb.StatsLive do
       base
       |> assign(:breakdown_model, [])
     end
+    |> assign(
+      :breakdown_service,
+      sort_rows(
+        base.assigns.breakdown_service,
+        socket.assigns.sort_field,
+        socket.assigns.sort_direction
+      )
+    )
+    |> assign(
+      :breakdown_model,
+      sort_rows(
+        base.assigns.breakdown_model,
+        socket.assigns.sort_field,
+        socket.assigns.sort_direction
+      )
+    )
   end
 
   defp load_breakdowns(socket, :member, user, opts) do
@@ -310,19 +370,6 @@ defmodule TokengateWeb.StatsLive do
     end
   end
 
-  defp scoped_teams(user) do
-    case Accounts.scope_team_ids(user) do
-      nil -> Accounts.list_teams()
-      [] -> []
-    end
-  end
-
-  defp scoped_services(%{global_role: "admin"}) do
-    Accounts.list_services()
-  end
-
-  defp scoped_services(_user), do: []
-
   defp load_team_breakdown(%{global_role: "admin"}, opts) do
     Rollup.breakdown_by_team(opts)
   end
@@ -358,33 +405,6 @@ defmodule TokengateWeb.StatsLive do
     do: Rollup.peak_concurrency(nil, opts)
 
   defp load_peak_concurrency(_user, _opts), do: nil
-
-  ## Path building --------------------------------------------------------
-
-  defp build_path(socket, overrides) do
-    period = Keyword.get(overrides, :period, socket.assigns[:period])
-    model_id = Keyword.get(overrides, :model_id, socket.assigns[:model_filter])
-    team_id = Keyword.get(overrides, :team_id, socket.assigns[:team_filter])
-    service_id = Keyword.get(overrides, :service_id, socket.assigns[:service_filter])
-
-    query =
-      %{"period" => period}
-      |> maybe_put("model_id", model_id)
-      |> maybe_put("team_id", team_id)
-      |> maybe_put("service_id", service_id)
-      |> URI.encode_query()
-
-    case socket.assigns.live_action do
-      :index -> ~p"/dashboard/stats?#{query}"
-      :models -> ~p"/dashboard/stats/models?#{query}"
-      :teams -> ~p"/dashboard/stats/teams?#{query}"
-      :services -> ~p"/dashboard/stats/services?#{query}"
-    end
-  end
-
-  defp maybe_put(map, _key, nil), do: map
-  defp maybe_put(map, _key, ""), do: map
-  defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
   ## Helpers --------------------------------------------------------------
 
@@ -538,5 +558,51 @@ defmodule TokengateWeb.StatsLive do
   def accent_text("primary"), do: "text-primary"
   def accent_text("success"), do: "text-success"
   def accent_text("accent"), do: "text-accent"
-  def accent_text(_), do: "text-base-content"
+  def accent_text(_), do: "text-base-content/60"
+
+  @doc "Sort a breakdown list by field and direction."
+  def sort_rows([], _field, _direction), do: []
+
+  def sort_rows(rows, field, direction) do
+    Enum.sort_by(rows, &Map.get(&1, field), fn a, b ->
+      case {a, b} do
+        {nil, nil} ->
+          true
+
+        {nil, _} ->
+          direction == :asc
+
+        {_, nil} ->
+          direction == :desc
+
+        {a, b} ->
+          if direction == :asc do
+            compare_values(a, b) != :gt
+          else
+            compare_values(a, b) != :lt
+          end
+      end
+    end)
+  end
+
+  defp compare_values(a, b) when is_struct(a, Decimal) and is_struct(b, Decimal),
+    do: Decimal.compare(a, b)
+
+  defp compare_values(a, b) when is_binary(a) and is_binary(b), do: if(a <= b, do: :lt, else: :gt)
+  defp compare_values(a, b), do: if(a <= b, do: :lt, else: :gt)
+
+  @doc "Sort indicator for table headers."
+  def sort_icon(assigns) do
+    ~H"""
+    <span class="inline-block w-3 text-center">
+      <%= if @current == @field do %>
+        <%= if @direction == :asc do %>
+          ▲
+        <% else %>
+          ▼
+        <% end %>
+      <% end %>
+    </span>
+    """
+  end
 end

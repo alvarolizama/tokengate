@@ -14,6 +14,7 @@ defmodule TokengateWeb.StatsExportController do
   use TokengateWeb, :controller
 
   alias Tokengate.Accounts
+  alias Tokengate.Logs
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Periods
 
@@ -49,6 +50,10 @@ defmodule TokengateWeb.StatsExportController do
     else
       {:ok, build_teams_csv(user, team_id, timezone, opts)}
     end
+  end
+
+  defp build_csv(user, "errors", _params, opts, timezone) do
+    {:ok, build_errors_csv(user, opts, timezone)}
   end
 
   defp build_csv(user, _type, params, opts, timezone) do
@@ -118,6 +123,53 @@ defmodule TokengateWeb.StatsExportController do
 
     suffix = if team_id, do: "_equipo", else: ""
     {"estadisticas_equipos#{suffix}_#{Periods.local_today(timezone)}.csv", csv}
+  end
+
+  ## Errors CSV -----------------------------------------------------------
+
+  defp build_errors_csv(user, opts, timezone) do
+    filters =
+      opts
+      |> Map.new()
+      |> Map.put(:status_code, nil)
+      |> Map.put(:limit, 500)
+      |> Map.put(:team_member_ids, Accounts.scope_member_ids(user))
+
+    filters = Map.put(filters, :error_reason, nil)
+
+    rows =
+      Logs.list_logs(filters)
+      |> Enum.filter(&(&1.status_code && &1.status_code >= 400))
+
+    header =
+      ~w(fecha estado modelo proveedor usuario equipo api_key error_reason prov_status latencia_ms costo_usd)
+
+    csv =
+      [header | Enum.map(rows, &row_to_csv_error/1)]
+      |> Enum.map(&Enum.join(&1, ","))
+      |> Enum.join("\n")
+
+    {"errores_#{Periods.local_today(timezone)}.csv", csv}
+  end
+
+  defp row_to_csv_error(log) do
+    [
+      csv_escape(format_datetime_csv(log.inserted_at)),
+      log.status_code,
+      csv_escape(log.model_requested),
+      csv_escape(log.provider && log.provider.name),
+      csv_escape(log.team_member && log.team_member.user && log.team_member.user.email),
+      csv_escape(log.team_member && log.team_member.team && log.team_member.team.name),
+      csv_escape(log.api_key_prefix),
+      csv_escape(log.error_reason),
+      log.provider_status_code,
+      log.latency_ms,
+      decimal_to_csv(log.provider_cost_usd)
+    ]
+  end
+
+  defp format_datetime_csv(%DateTime{} = dt) do
+    Calendar.strftime(dt, "%Y-%m-%d %H:%M:%S UTC")
   end
 
   ## Row serialization ----------------------------------------------------

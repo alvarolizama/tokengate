@@ -33,6 +33,9 @@ defmodule Tokengate.Routing.CircuitBreaker do
   # not a temporary breaker cooldown.
   @counting_reasons [:server_error, :timeout, :rate_limited]
 
+  @pubsub Tokengate.PubSub
+  @alerts_topic "alerts"
+
   @default_cooldown_ms 60_000
   @default_threshold 5
   @default_rate_limit_cooldown_ms 10_000
@@ -230,7 +233,7 @@ defmodule Tokengate.Routing.CircuitBreaker do
     {:next_state, :half_open, %{data | probe_in_flight?: false}}
   end
 
-  # -- :half_open -------------------------------------------------------------
+  # -- :half_open ------------------------------------------------------------
 
   def half_open({:call, from}, :allow?, data) do
     if data.probe_in_flight? do
@@ -282,6 +285,12 @@ defmodule Tokengate.Routing.CircuitBreaker do
       if failures >= data.threshold do
         cooldown = cooldown_for(reason, data)
         now = DateTime.utc_now()
+
+        Phoenix.PubSub.broadcast(
+          @pubsub,
+          @alerts_topic,
+          {:breaker_opened, data.credential_id, reason}
+        )
 
         {:next_state, :open,
          %{

@@ -11,6 +11,7 @@ defmodule TokengateWeb.CreditsLive do
   alias Tokengate.Budgets
 
   @reload_interval_ms 1_000
+  @per_page 10
 
   @impl true
   def mount(_params, _session, socket) do
@@ -21,6 +22,8 @@ defmodule TokengateWeb.CreditsLive do
       |> assign(:page_title, "Créditos · Tokengate")
       |> assign(:is_admin, user && user.global_role == "admin")
       |> assign(:reload_scheduled, false)
+      |> assign(:per_page, @per_page)
+      |> assign(:shown_counts, %{})
       |> require_admin_hook()
       |> load_budgets()
 
@@ -70,6 +73,17 @@ defmodule TokengateWeb.CreditsLive do
     {:noreply, load_budgets(socket)}
   end
 
+  def handle_event("show_more", %{"team-id" => team_id}, socket) do
+    shown = Map.get(socket.assigns.shown_counts, team_id, @per_page)
+
+    {:noreply,
+     assign(
+       socket,
+       :shown_counts,
+       Map.put(socket.assigns.shown_counts, team_id, shown + @per_page)
+     )}
+  end
+
   ## Data loading ----------------------------------------------------------
 
   defp load_budgets(socket) do
@@ -81,7 +95,9 @@ defmodule TokengateWeb.CreditsLive do
 
     socket
     |> assign(:budgets, budgets)
+    |> assign(:budgets_by_team, Enum.group_by(budgets, fn b -> b.member.team.id end))
     |> assign(:team_budgets, team_budgets)
+    |> assign(:inactive_by_team, inactive_members(budgets, timezone))
   end
 
   ## Template helpers --------------------------------------------------------
@@ -94,24 +110,29 @@ defmodule TokengateWeb.CreditsLive do
     |> Decimal.to_string()
   end
 
-  defp status_for(%{exhausted?: true}), do: {:error, "Agotado"}
-
-  defp status_for(%{daily_pct: daily}) do
-    near = is_float(daily) and daily >= 80.0
-
-    cond do
-      near -> {:warning, "Por agotarse"}
-      is_float(daily) -> {:success, "OK"}
-      true -> {:ghost, "Sin límite"}
-    end
-  end
-
   defp bar_class(pct) when is_float(pct) and pct >= 100.0, do: "progress-error"
   defp bar_class(pct) when is_float(pct) and pct >= 80.0, do: "progress-warning"
   defp bar_class(_), do: "progress-success"
 
   defp bar_value(nil), do: 0
   defp bar_value(pct), do: min(pct, 100.0)
+
+  defp inactive_members(budgets, _timezone) do
+    inactive =
+      budgets
+      |> Enum.filter(fn b ->
+        Decimal.compare(b.daily_spend_usd, Decimal.new(0)) == :eq and
+          Decimal.compare(b.monthly_spend_usd, Decimal.new(0)) == :eq
+      end)
+
+    last_requests = Budgets.last_requests_by_member_ids(Enum.map(inactive, & &1.member.id))
+
+    inactive
+    |> Enum.map(fn b ->
+      Map.put(b, :last_request_at, Map.get(last_requests, b.member.id))
+    end)
+    |> Enum.group_by(fn b -> b.member.team.id end)
+  end
 
   @impl true
   def render(assigns) do
@@ -152,7 +173,7 @@ defmodule TokengateWeb.CreditsLive do
                 <.icon name="hero-exclamation-triangle" class="w-4 h-4 text-warning" />
               </div>
               <p class="mt-1 text-2xl font-bold text-base-content" id="credits-count-near">
-                {Enum.count(@budgets, fn b -> match?({:warning, _}, status_for(b)) end)}
+                {Enum.count(@budgets, fn b -> is_float(b.daily_pct) and b.daily_pct >= 80.0 end)}
               </p>
             </div>
           </div>
@@ -226,37 +247,112 @@ defmodule TokengateWeb.CreditsLive do
             <h2 class="card-title text-base">
               <.icon name="hero-users" class="w-5 h-5 text-base-content/60" /> Por miembro
             </h2>
-            <div class="overflow-x-auto">
-              <table class="table table-sm">
-                <thead>
-                  <tr>
-                    <th>Usuario</th>
-                    <th>Equipo</th>
-                    <th class="w-56">Mensual</th>
-                    <th>Estado</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr :for={b <- @budgets} id={"credit-row-#{b.member.id}"}>
-                    <td class="font-medium">{b.member.user.email}</td>
-                    <td>{b.member.team.name}</td>
-                    <td>
-                      <.budget_bar
-                        spend={b.monthly_spend_usd}
-                        limit={b.monthly_limit_usd}
-                        pct={b.monthly_pct}
-                        id={"monthly-bar-#{b.member.id}"}
-                      />
-                    </td>
-                    <td>
-                      <% {style, label} = status_for(b) %>
-                      <span class={"badge badge-#{style}"} id={"status-#{b.member.id}"}>
-                        {label}
-                      </span>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+            <div
+              :for={
+                {team_id, budgets} <- Enum.sort_by(@budgets_by_team, fn {_, bs} -> -length(bs) end)
+              }
+              class="space-y-3"
+              id={"team-group-#{team_id}"}
+            >
+              <h3 class="text-sm font-semibold text-base-content/70 uppercase tracking-wide">
+                {hd(budgets).member.team.name}
+                <span class="text-xs text-base-content/40">({length(budgets)})</span>
+              </h3>
+              <div class="overflow-x-auto">
+                <table class="table table-sm">
+                  <thead>
+                    <tr>
+                      <th class="w-48">Usuario</th>
+                      <th class="w-56">Mensual</th>
+                      <th class="w-56">Diario</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      :for={b <- Enum.take(budgets, Map.get(@shown_counts, team_id, @per_page))}
+                      id={"credit-row-#{b.member.id}"}
+                    >
+                      <td class="font-medium w-48">{b.member.user.email}</td>
+                      <td class="w-56">
+                        <.budget_bar
+                          spend={b.monthly_spend_usd}
+                          limit={b.monthly_limit_usd}
+                          pct={b.monthly_pct}
+                          id={"monthly-bar-#{b.member.id}"}
+                        />
+                      </td>
+                      <td class="w-56">
+                        <.budget_bar
+                          spend={b.daily_spend_usd}
+                          limit={b.daily_limit_usd}
+                          pct={b.daily_pct}
+                          id={"daily-bar-#{b.member.id}"}
+                        />
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div
+                :if={length(budgets) > Map.get(@shown_counts, team_id, @per_page)}
+                class="flex justify-center"
+              >
+                <button
+                  phx-click="show_more"
+                  phx-value-team-id={team_id}
+                  class="btn btn-ghost btn-xs"
+                  id={"show-more-#{team_id}"}
+                >
+                  Ver más ({length(budgets) - Map.get(@shown_counts, team_id, @per_page)} restantes)
+                </button>
+              </div>
+            </div>
+            <div :if={@budgets_by_team == %{}} class="text-center py-8 text-base-content/40">
+              Sin miembros registrados.
+            </div>
+          </div>
+        </div>
+
+        <%!-- Inactive members: no spend in current period --%>
+        <div :if={@inactive_by_team != %{}} class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body">
+            <h2 class="card-title text-base">
+              <.icon name="hero-pause-circle" class="w-5 h-5 text-base-content/60" />
+              Sin uso en el periodo
+            </h2>
+            <div
+              :for={
+                {team_id, budgets} <- Enum.sort_by(@inactive_by_team, fn {_, bs} -> -length(bs) end)
+              }
+              class="space-y-3"
+              id={"inactive-team-#{team_id}"}
+            >
+              <h3 class="text-sm font-semibold text-base-content/70 uppercase tracking-wide">
+                {hd(budgets).member.team.name}
+                <span class="text-xs text-base-content/40">({length(budgets)})</span>
+              </h3>
+              <div class="overflow-x-auto">
+                <table class="table table-sm">
+                  <thead>
+                    <tr>
+                      <th class="w-48">Usuario</th>
+                      <th class="w-48">Último request</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr :for={b <- budgets} id={"inactive-row-#{b.member.id}"}>
+                      <td class="font-medium">{b.member.user.email}</td>
+                      <td class="text-xs text-base-content/50">
+                        <%= if b.last_request_at do %>
+                          {Calendar.strftime(b.last_request_at, "%d %b %H:%M")}
+                        <% else %>
+                          <span class="badge badge-sm badge-ghost">nunca</span>
+                        <% end %>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
           </div>
         </div>

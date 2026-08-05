@@ -4,6 +4,7 @@ defmodule TokengateWeb.LogsLiveTest do
   import Phoenix.LiveViewTest
 
   alias Tokengate.{Accounts, Logs, Periods, Providers}
+  alias Tokengate.Budgets.Manager
   alias Tokengate.Logs.Inflight
 
   defp unique, do: System.unique_integer([:positive])
@@ -26,6 +27,36 @@ defmodule TokengateWeb.LogsLiveTest do
     conn
     |> post(~p"/login", %{email: user.email, password: password})
     |> recycle()
+  end
+
+  defp broke_member_fixture(attrs \\ %{}) do
+    %{user: member_user} = register("user")
+
+    {:ok, team} =
+      Accounts.create_team(
+        Map.merge(
+          %{
+            "name" => "Budget Team #{unique()}",
+            "monthly_budget_per_user_usd" => "100.00"
+          },
+          attrs
+        )
+      )
+
+    {:ok, member} =
+      Accounts.create_team_member(%{"user_id" => member_user.id, "team_id" => team.id})
+
+    {member, member_user, team}
+  end
+
+  defp log_spend(member_id, cost) do
+    {:ok, _} =
+      Logs.log_request(%{
+        team_member_id: member_id,
+        model_requested: "gpt-4",
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+        provider_cost_usd: Decimal.new(cost)
+      })
   end
 
   defp member_with_log(opts \\ []) do
@@ -84,6 +115,9 @@ defmodule TokengateWeb.LogsLiveTest do
     for entry <- Inflight.list() do
       Inflight.finish_request(entry.id)
     end
+
+    budget_pid = Process.whereis(Manager) || start_supervised!(Manager)
+    _ = :sys.get_state(budget_pid)
 
     :ok
   end
@@ -264,5 +298,83 @@ defmodule TokengateWeb.LogsLiveTest do
     send(view.pid, :refresh_summary)
     html = render(view)
     assert html =~ "summary-req-per-min"
+  end
+
+  ## Alerts merged from /dashboard/alerts ----------------------------------------
+
+  test "exhausted member appears in the budget section with period badge", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    {member, member_user, team} = broke_member_fixture()
+
+    # $150 > $100 monthly.
+    log_spend(member.id, "150.00")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
+
+    assert has_element?(view, "#alert-budget-#{member.id}", member_user.email)
+    assert has_element?(view, "#alert-budget-#{member.id}", team.name)
+    assert has_element?(view, "#alert-budget-#{member.id}", "mensual")
+    assert has_element?(view, "#alert-budget-credits-#{member.id}")
+  end
+
+  test "summary card counts members without credit", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    {member, _member_user, _team} = broke_member_fixture()
+
+    log_spend(member.id, "100.00")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
+
+    assert has_element?(view, "#alert-count-budgets", "1")
+  end
+
+  test "member under the limit does not appear in the budget section", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    {member, _member_user, _team} = broke_member_fixture()
+
+    log_spend(member.id, "10.00")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
+
+    refute has_element?(view, "#alert-budget-#{member.id}")
+  end
+
+  test "error_reason filter filters logs", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{member: member} = member_with_log()
+
+    # Log with error
+    {:ok, _} =
+      Logs.log_request(%{
+        team_member_id: member.id,
+        model_requested: "err-model",
+        model_responded: "err-model",
+        status_code: 429,
+        error_reason: "rate_limited",
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, html} = live(conn, ~p"/dashboard/logs")
+
+    assert html =~ "err-model"
+
+    view
+    |> form("#logs-filter-form", filter: %{error_reason: "rate_limited"})
+    |> render_change()
+
+    html = render(view)
+    assert html =~ "err-model"
+
+    view
+    |> form("#logs-filter-form", filter: %{error_reason: "timeout"})
+    |> render_change()
+
+    html = render(view)
+    refute html =~ "err-model"
   end
 end

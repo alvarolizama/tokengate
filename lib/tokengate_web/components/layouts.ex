@@ -102,6 +102,8 @@ defmodule TokengateWeb.Layouts do
     default: nil,
     doc: "the original admin user while an impersonation session is active"
 
+  attr :alert_count, :integer, default: 0
+
   slot :inner_block, required: true
 
   def dashboard(assigns) do
@@ -140,7 +142,7 @@ defmodule TokengateWeb.Layouts do
         </main>
       </div>
 
-      <.dashboard_sidebar current_scope={@current_scope} />
+      <.dashboard_sidebar current_scope={@current_scope} alert_count={@alert_count} />
 
       <.flash_group flash={@flash} />
     </div>
@@ -159,8 +161,6 @@ defmodule TokengateWeb.Layouts do
       </label>
 
       <div class="flex-1" />
-
-      <.topbar_indicators current_scope={@current_scope} timezone={@timezone} />
 
       <div class="flex items-center gap-3">
         <div class="hidden sm:flex flex-col items-end leading-tight">
@@ -191,138 +191,21 @@ defmodule TokengateWeb.Layouts do
     """
   end
 
-  # Live ops indicators: unattended alerts (error credentials + open
-  # breakers), online dashboard users (Presence) and in-flight API requests.
-  # Computed at render time — all reads are cheap (ETS/Registry + one COUNT).
   attr :current_scope, :map, default: nil
-  attr :timezone, :string, default: "Etc/UTC"
-
-  defp topbar_indicators(assigns) do
-    admin? = match?(%{global_role: "admin"}, assigns.current_scope)
-    my_budget = my_budget_summary(assigns.current_scope, assigns.timezone)
-
-    assigns =
-      assigns
-      |> assign(:error_creds, Tokengate.Providers.count_error_credentials())
-      |> assign(:open_breakers, Tokengate.Routing.CircuitBreakerManager.count_open())
-      |> assign(
-        :budget_exhausted,
-        if(admin?, do: Tokengate.Budgets.count_exhausted(assigns.timezone), else: 0)
-      )
-      |> assign(:online, length(TokengateWeb.Presence.list_online()))
-      |> assign(:inflight, Tokengate.Logs.Inflight.count())
-      |> assign(:admin?, admin?)
-      |> assign(:my_budget, my_budget)
-
-    ~H"""
-    <div class="hidden md:flex items-center gap-2" id="topbar-indicators">
-      <span
-        :if={@my_budget}
-        id="topbar-my-budget"
-        class={["badge badge-lg gap-1.5", my_budget_chip_class(@my_budget)]}
-        title={my_budget_title(@my_budget)}
-      >
-        <.icon name="hero-wallet" class="w-3.5 h-3.5" />
-
-        <span id="topbar-my-budget-daily" class="flex items-center gap-1">
-          <span class="text-[0.65rem] opacity-60">H</span>
-          <span>{@my_budget.daily_spend |> fmt_money_compact()}{if @my_budget.daily_limit,
-            do: "/#{@my_budget.daily_limit |> fmt_money_compact()}",
-            else: ""}</span>
-          <%= if @my_budget.daily_limit do %>
-            <span class="inline-block w-8 h-1 bg-base-300 rounded-full overflow-hidden">
-              <span
-                class={budget_bar_class(@my_budget.daily_pct)}
-                style={"width: #{budget_bar_width(@my_budget.daily_pct)}%"}
-              ></span>
-            </span>
-          <% end %>
-        </span>
-
-        <span class="opacity-40">·</span>
-
-        <span id="topbar-my-budget-monthly" class="flex items-center gap-1">
-          <span class="text-[0.65rem] opacity-60">M</span>
-          <span>{@my_budget.monthly_spend |> fmt_money_compact()}</span>
-          <%= if @my_budget.monthly_limit do %>
-            <span class="inline-block w-8 h-1 bg-base-300 rounded-full overflow-hidden">
-              <span
-                class={budget_bar_class(@my_budget.monthly_pct)}
-                style={"width: #{budget_bar_width(@my_budget.monthly_pct)}%"}
-              ></span>
-            </span>
-            <span>{@my_budget.monthly_limit |> fmt_money_compact()}</span>
-          <% end %>
-        </span>
-      </span>
-
-      <%= if @admin? do %>
-        <.link
-          navigate={~p"/dashboard/alerts"}
-          id="topbar-error-creds"
-          class={[
-            "badge badge-lg gap-1.5",
-            if(@error_creds > 0, do: "badge-error", else: "badge-ghost")
-          ]}
-          title="Credenciales en error"
-        >
-          <.icon name="hero-key" class="w-3.5 h-3.5" />
-          <span id="topbar-error-creds-count">{@error_creds}</span>
-        </.link>
-
-        <.link
-          navigate={~p"/dashboard/alerts"}
-          id="topbar-open-breakers"
-          class={[
-            "badge badge-lg gap-1.5",
-            if(@open_breakers > 0, do: "badge-warning", else: "badge-ghost")
-          ]}
-          title="Circuit breakers abiertos"
-        >
-          <.icon name="hero-exclamation-triangle" class="w-3.5 h-3.5" />
-          <span id="topbar-open-breakers-count">{@open_breakers}</span>
-        </.link>
-
-        <.link
-          navigate={~p"/dashboard/credits"}
-          id="topbar-budget-exhausted"
-          class={[
-            "badge badge-lg gap-1.5",
-            if(@budget_exhausted > 0, do: "badge-error", else: "badge-ghost")
-          ]}
-          title="Miembros sin crédito (presupuesto agotado)"
-        >
-          <.icon name="hero-banknotes" class="w-3.5 h-3.5" />
-          <span id="topbar-budget-exhausted-count">{@budget_exhausted}</span>
-        </.link>
-      <% end %>
-
-      <span
-        id="topbar-online-users"
-        class="badge badge-lg badge-ghost gap-1.5"
-        title="Usuarios conectados al dashboard"
-      >
-        <span class="relative flex h-2 w-2">
-          <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-60"></span>
-          <span class="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
-        </span>
-        <span id="topbar-online-count">{@online}</span>
-      </span>
-
-      <.link
-        navigate={~p"/dashboard/logs"}
-        id="topbar-inflight"
-        class="badge badge-lg badge-ghost gap-1.5"
-        title="Requests simultáneos en proceso"
-      >
-        <.icon name="hero-bolt" class="w-3.5 h-3.5 text-accent" />
-        <span id="topbar-inflight-count">{@inflight}</span>
-      </.link>
-    </div>
-    """
-  end
+  attr :alert_count, :integer, default: 0
 
   defp dashboard_sidebar(assigns) do
+    assigns =
+      if admin?(assigns.current_scope) do
+        timezone = "Etc/UTC"
+        creds = Tokengate.Providers.count_error_credentials()
+        breakers = Tokengate.Routing.CircuitBreakerManager.count_open()
+        budgets = Tokengate.Budgets.count_exhausted(timezone)
+        assign(assigns, :alert_count, creds + breakers + budgets)
+      else
+        assigns
+      end
+
     ~H"""
     <aside class="drawer-side z-40">
       <label for="dashboard-drawer" class="drawer-overlay" aria-label="Cerrar menú" />
@@ -379,11 +262,11 @@ defmodule TokengateWeb.Layouts do
                 label="Créditos"
                 icon="hero-banknotes"
               />
-              <.sidebar_link href={~p"/dashboard/logs"} label="Logs" icon="hero-document-text" />
               <.sidebar_link
-                href={~p"/dashboard/alerts"}
-                label="Alertas"
-                icon="hero-bell-alert"
+                href={~p"/dashboard/logs"}
+                label="Logs"
+                icon="hero-document-text"
+                badge={@alert_count}
               />
             </div>
 
@@ -416,6 +299,7 @@ defmodule TokengateWeb.Layouts do
   attr :label, :string, required: true
   attr :icon, :string, required: true
   attr :disabled, :boolean, default: false
+  attr :badge, :integer, default: 0
 
   defp sidebar_link(assigns) do
     ~H"""
@@ -429,6 +313,12 @@ defmodule TokengateWeb.Layouts do
     >
       <.icon name={@icon} class="w-5 h-5 shrink-0" />
       {@label}
+      <span
+        :if={@badge > 0}
+        class="ml-auto badge badge-sm badge-error"
+      >
+        {@badge}
+      </span>
     </.link>
     """
   end
@@ -475,129 +365,6 @@ defmodule TokengateWeb.Layouts do
 
   defp admin?(%{global_role: "admin"}), do: true
   defp admin?(_), do: false
-
-  # --- Personal budget chip -------------------------------------------------
-  # Every user sees THEIR OWN daily/monthly consumption vs effective limits.
-  # A user may belong to several teams: the chip surfaces the membership
-  # closest to exhaustion and the tooltip notes how many more there are.
-
-  defp my_budget_summary(nil, _timezone), do: nil
-
-  defp my_budget_summary(user, timezone) do
-    case Tokengate.Budgets.list_member_budgets_for_user(user.id, timezone) do
-      [] -> nil
-      budgets -> aggregate_budget_summary(budgets)
-    end
-  end
-
-  # Aggregates ALL of the user's memberships into a single summary so the
-  # chip matches the dashboard card (which also sums across every team).
-  # Limits shown are the most restrictive (lowest non-nil) across memberships
-  # — that's the one that will block first.
-  defp aggregate_budget_summary(budgets) do
-    daily_spend = Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.daily_spend_usd, &2))
-    monthly_spend = Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.monthly_spend_usd, &2))
-
-    daily_limit = most_restrictive_limit(budgets, :daily_limit_usd)
-    monthly_limit = most_restrictive_limit(budgets, :monthly_limit_usd)
-
-    daily_pct = pct_of(daily_spend, daily_limit)
-    monthly_pct = pct_of(monthly_spend, monthly_limit)
-
-    exhausted? = Enum.any?(budgets, & &1.exhausted?)
-    worst_pct = Enum.max([daily_pct || 0.0, monthly_pct || 0.0])
-
-    %{
-      daily_spend: daily_spend,
-      monthly_spend: monthly_spend,
-      daily_limit: daily_limit,
-      monthly_limit: monthly_limit,
-      daily_pct: daily_pct,
-      monthly_pct: monthly_pct,
-      exhausted?: exhausted?,
-      warning?: worst_pct >= 80.0,
-      team_name: aggregate_team_name(budgets),
-      extra_count: 0
-    }
-  end
-
-  defp most_restrictive_limit(budgets, field) do
-    budgets
-    |> Enum.map(&Map.get(&1, field))
-    |> Enum.reject(&is_nil/1)
-    |> case do
-      [] -> nil
-      limits -> Enum.min_by(limits, &Decimal.to_float/1)
-    end
-  end
-
-  defp pct_of(_spend, nil), do: nil
-
-  defp pct_of(spend, limit) do
-    if Decimal.compare(limit, Decimal.new(0)) == :gt do
-      Decimal.to_float(spend) / Decimal.to_float(limit) * 100.0
-    else
-      100.0
-    end
-  end
-
-  defp aggregate_team_name([single]), do: single.member.team && single.member.team.name
-  defp aggregate_team_name(many), do: "#{length(many)} equipos"
-
-  defp my_budget_chip_class(%{exhausted?: true}), do: "badge-error"
-  defp my_budget_chip_class(%{warning?: true}), do: "badge-warning"
-  defp my_budget_chip_class(_), do: "badge-ghost"
-
-  # Compact money format for the chip: $0.0230 → $0.02, $22.0000 → $22, $1500.50 → $1.5K
-  defp fmt_money_compact(%Decimal{} = d) do
-    f = Decimal.to_float(d)
-
-    cond do
-      f >= 1_000 ->
-        "$#{:erlang.float_to_binary(f / 1_000, decimals: 1)}K"
-
-      f == 0.0 ->
-        "$0"
-
-      true ->
-        :erlang.float_to_binary(f, decimals: 4)
-        |> String.replace(~r/\.?0+$/, "")
-        |> then(&"$#{&1}")
-    end
-  end
-
-  # Bar color by percentage: green < 60, warning 60-80, error > 80
-  defp budget_bar_class(nil), do: "bg-base-content/30"
-  defp budget_bar_class(pct) when pct >= 80.0, do: "bg-error"
-  defp budget_bar_class(pct) when pct >= 60.0, do: "bg-warning"
-  defp budget_bar_class(_), do: "bg-success"
-
-  # Bar width: keep one decimal for small values, clamp 0-100
-  defp budget_bar_width(nil), do: 0
-  defp budget_bar_width(pct) when pct > 100.0, do: 100
-  defp budget_bar_width(pct) when pct < 0.0, do: 0
-  defp budget_bar_width(pct), do: Float.round(pct * 1.0, 1)
-
-  defp my_budget_title(b) do
-    daily = budget_period_title("Hoy", b.daily_spend, b.daily_limit, b.daily_pct)
-    monthly = budget_period_title("Mes", b.monthly_spend, b.monthly_limit, b.monthly_pct)
-    team = if b.team_name, do: " — #{b.team_name}", else: ""
-    extra = if b.extra_count > 0, do: " (+#{b.extra_count} más)", else: ""
-
-    daily <> " · " <> monthly <> team <> extra
-  end
-
-  defp budget_period_title(label, spend, nil, _pct),
-    do: "#{label}: $#{fmt_money(spend)} (sin límite)"
-
-  defp budget_period_title(label, spend, limit, pct),
-    do: "#{label}: $#{fmt_money(spend)} de $#{fmt_money(limit)} (#{pct}%)"
-
-  defp fmt_money(%Decimal{} = d) do
-    d
-    |> Decimal.round(4)
-    |> Decimal.to_string()
-  end
 
   defp initials(nil), do: "—"
 

@@ -561,23 +561,7 @@
           </div>
         <% @live_action == :models -> %>
           <div class="space-y-6">
-            <div class="flex items-center justify-between flex-wrap gap-3">
-              <form
-                phx-change="set_model_filter"
-                id="model-filter-form"
-                class="flex items-center gap-2"
-              >
-                <.input
-                  type="select"
-                  name="model_id"
-                  value={@model_filter || ""}
-                  options={
-                    [{"Todos los modelos", ""}] ++
-                      Enum.map(@models, &{&1.display_name || &1.name, &1.id})
-                  }
-                  class="select select-sm select-bordered"
-                />
-              </form>
+            <div class="flex items-center justify-end flex-wrap gap-3">
               <.link
                 href={
                   if @model_filter,
@@ -678,12 +662,90 @@
                           <thead>
                             <tr>
                               <th>#</th>
-                              <th>Proveedor / Modelo</th>
-                              <th class="text-right">Requests</th>
-                              <th class="text-right">Costo</th>
-                              <th class="text-right">Tokens in</th>
-                              <th class="text-right">Tokens out</th>
-                              <th class="text-right">TPS</th>
+                              <th>
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="provider_name"
+                                  class="flex items-center gap-1 hover:text-primary"
+                                >
+                                  Proveedor / Modelo
+                                  <.sort_icon
+                                    field={:provider_name}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="request_count"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Requests
+                                  <.sort_icon
+                                    field={:request_count}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="cost_usd"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Costo
+                                  <.sort_icon
+                                    field={:cost_usd}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="prompt_tokens"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Tokens in
+                                  <.sort_icon
+                                    field={:prompt_tokens}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="completion_tokens"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Tokens out
+                                  <.sort_icon
+                                    field={:completion_tokens}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="avg_tps"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  TPS
+                                  <.sort_icon
+                                    field={:avg_tps}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
                             </tr>
                           </thead>
                           <tbody>
@@ -760,10 +822,62 @@
                         <table class="table table-sm table-zebra">
                           <thead>
                             <tr>
-                              <th>Equipo</th>
-                              <th class="text-right">Requests</th>
-                              <th class="text-right">Costo</th>
-                              <th class="text-right">TPS</th>
+                              <th>
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="team_name"
+                                  class="flex items-center gap-1 hover:text-primary"
+                                >
+                                  Equipo
+                                  <.sort_icon
+                                    field={:team_name}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="request_count"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Requests
+                                  <.sort_icon
+                                    field={:request_count}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="cost_usd"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Costo
+                                  <.sort_icon
+                                    field={:cost_usd}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="avg_tps"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  TPS
+                                  <.sort_icon
+                                    field={:avg_tps}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
                             </tr>
                           </thead>
                           <tbody>
@@ -811,11 +925,76 @@
                         <table class="table table-sm table-zebra">
                           <thead>
                             <tr>
-                              <th>Equipo</th>
-                              <th>Usuario</th>
-                              <th class="text-right">Requests</th>
-                              <th class="text-right">Costo</th>
-                              <th class="text-right">TPS</th>
+                              <th>
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="team_name"
+                                  class="flex items-center gap-1 hover:text-primary"
+                                >
+                                  Equipo
+                                  <.sort_icon
+                                    field={:team_name}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th>
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="user_email"
+                                  class="flex items-center gap-1 hover:text-primary"
+                                >
+                                  Usuario
+                                  <.sort_icon
+                                    field={:user_email}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="request_count"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Requests
+                                  <.sort_icon
+                                    field={:request_count}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="cost_usd"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Costo
+                                  <.sort_icon
+                                    field={:cost_usd}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="avg_tps"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  TPS
+                                  <.sort_icon
+                                    field={:avg_tps}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
                             </tr>
                           </thead>
                           <tbody>
@@ -878,12 +1057,90 @@
                       <table class="table table-sm table-zebra">
                         <thead>
                           <tr>
-                            <th>Modelo</th>
-                            <th class="text-right">Requests</th>
-                            <th class="text-right">Costo</th>
-                            <th class="text-right">Tokens in</th>
-                            <th class="text-right">Tokens out</th>
-                            <th class="text-right">TPS</th>
+                            <th>
+                              <button
+                                phx-click="sort"
+                                phx-value-field="model_name"
+                                class="flex items-center gap-1 hover:text-primary"
+                              >
+                                Modelo
+                                <.sort_icon
+                                  field={:model_name}
+                                  current={@sort_field}
+                                  direction={@sort_direction}
+                                />
+                              </button>
+                            </th>
+                            <th class="text-right">
+                              <button
+                                phx-click="sort"
+                                phx-value-field="request_count"
+                                class="flex items-center justify-end gap-1 hover:text-primary"
+                              >
+                                Requests
+                                <.sort_icon
+                                  field={:request_count}
+                                  current={@sort_field}
+                                  direction={@sort_direction}
+                                />
+                              </button>
+                            </th>
+                            <th class="text-right">
+                              <button
+                                phx-click="sort"
+                                phx-value-field="cost_usd"
+                                class="flex items-center justify-end gap-1 hover:text-primary"
+                              >
+                                Costo
+                                <.sort_icon
+                                  field={:cost_usd}
+                                  current={@sort_field}
+                                  direction={@sort_direction}
+                                />
+                              </button>
+                            </th>
+                            <th class="text-right">
+                              <button
+                                phx-click="sort"
+                                phx-value-field="prompt_tokens"
+                                class="flex items-center justify-end gap-1 hover:text-primary"
+                              >
+                                Tokens in
+                                <.sort_icon
+                                  field={:prompt_tokens}
+                                  current={@sort_field}
+                                  direction={@sort_direction}
+                                />
+                              </button>
+                            </th>
+                            <th class="text-right">
+                              <button
+                                phx-click="sort"
+                                phx-value-field="completion_tokens"
+                                class="flex items-center justify-end gap-1 hover:text-primary"
+                              >
+                                Tokens out
+                                <.sort_icon
+                                  field={:completion_tokens}
+                                  current={@sort_field}
+                                  direction={@sort_direction}
+                                />
+                              </button>
+                            </th>
+                            <th class="text-right">
+                              <button
+                                phx-click="sort"
+                                phx-value-field="avg_tps"
+                                class="flex items-center justify-end gap-1 hover:text-primary"
+                              >
+                                TPS
+                                <.sort_icon
+                                  field={:avg_tps}
+                                  current={@sort_field}
+                                  direction={@sort_direction}
+                                />
+                              </button>
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
@@ -949,20 +1206,7 @@
           </div>
         <% @live_action == :teams -> %>
           <div class="space-y-6">
-            <div class="flex items-center justify-between flex-wrap gap-3">
-              <form
-                phx-change="set_team_filter"
-                id="team-filter-form"
-                class="flex items-center gap-2"
-              >
-                <.input
-                  type="select"
-                  name="team_id"
-                  value={@team_filter || ""}
-                  options={[{"Todos los equipos", ""}] ++ Enum.map(@teams, &{&1.name, &1.id})}
-                  class="select select-sm select-bordered"
-                />
-              </form>
+            <div class="flex items-center justify-end flex-wrap gap-3">
               <.link
                 href={
                   if @team_filter,
@@ -1090,12 +1334,90 @@
                         <table class="table table-sm table-zebra">
                           <thead>
                             <tr>
-                              <th>Modelo</th>
-                              <th class="text-right">Requests</th>
-                              <th class="text-right">Costo</th>
-                              <th class="text-right">Tokens in</th>
-                              <th class="text-right">Tokens out</th>
-                              <th class="text-right">TPS</th>
+                              <th>
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="model_name"
+                                  class="flex items-center gap-1 hover:text-primary"
+                                >
+                                  Modelo
+                                  <.sort_icon
+                                    field={:model_name}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="request_count"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Requests
+                                  <.sort_icon
+                                    field={:request_count}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="cost_usd"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Costo
+                                  <.sort_icon
+                                    field={:cost_usd}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="prompt_tokens"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Tokens in
+                                  <.sort_icon
+                                    field={:prompt_tokens}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="completion_tokens"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Tokens out
+                                  <.sort_icon
+                                    field={:completion_tokens}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="avg_tps"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  TPS
+                                  <.sort_icon
+                                    field={:avg_tps}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1158,12 +1480,90 @@
                         <table class="table table-sm table-zebra">
                           <thead>
                             <tr>
-                              <th>Usuario</th>
-                              <th class="text-right">Requests</th>
-                              <th class="text-right">Costo</th>
-                              <th class="text-right">Tokens in</th>
-                              <th class="text-right">Tokens out</th>
-                              <th class="text-right">TPS</th>
+                              <th>
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="user_email"
+                                  class="flex items-center gap-1 hover:text-primary"
+                                >
+                                  Usuario
+                                  <.sort_icon
+                                    field={:user_email}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="request_count"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Requests
+                                  <.sort_icon
+                                    field={:request_count}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="cost_usd"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Costo
+                                  <.sort_icon
+                                    field={:cost_usd}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="prompt_tokens"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Tokens in
+                                  <.sort_icon
+                                    field={:prompt_tokens}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="completion_tokens"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Tokens out
+                                  <.sort_icon
+                                    field={:completion_tokens}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="avg_tps"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  TPS
+                                  <.sort_icon
+                                    field={:avg_tps}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1244,12 +1644,90 @@
                       <table class="table table-sm table-zebra">
                         <thead>
                           <tr>
-                            <th>Equipo</th>
-                            <th class="text-right">Requests</th>
-                            <th class="text-right">Costo</th>
-                            <th class="text-right">Tokens in</th>
-                            <th class="text-right">Tokens out</th>
-                            <th class="text-right">TPS</th>
+                            <th>
+                              <button
+                                phx-click="sort"
+                                phx-value-field="team_name"
+                                class="flex items-center gap-1 hover:text-primary"
+                              >
+                                Equipo
+                                <.sort_icon
+                                  field={:team_name}
+                                  current={@sort_field}
+                                  direction={@sort_direction}
+                                />
+                              </button>
+                            </th>
+                            <th class="text-right">
+                              <button
+                                phx-click="sort"
+                                phx-value-field="request_count"
+                                class="flex items-center justify-end gap-1 hover:text-primary"
+                              >
+                                Requests
+                                <.sort_icon
+                                  field={:request_count}
+                                  current={@sort_field}
+                                  direction={@sort_direction}
+                                />
+                              </button>
+                            </th>
+                            <th class="text-right">
+                              <button
+                                phx-click="sort"
+                                phx-value-field="cost_usd"
+                                class="flex items-center justify-end gap-1 hover:text-primary"
+                              >
+                                Costo
+                                <.sort_icon
+                                  field={:cost_usd}
+                                  current={@sort_field}
+                                  direction={@sort_direction}
+                                />
+                              </button>
+                            </th>
+                            <th class="text-right">
+                              <button
+                                phx-click="sort"
+                                phx-value-field="prompt_tokens"
+                                class="flex items-center justify-end gap-1 hover:text-primary"
+                              >
+                                Tokens in
+                                <.sort_icon
+                                  field={:prompt_tokens}
+                                  current={@sort_field}
+                                  direction={@sort_direction}
+                                />
+                              </button>
+                            </th>
+                            <th class="text-right">
+                              <button
+                                phx-click="sort"
+                                phx-value-field="completion_tokens"
+                                class="flex items-center justify-end gap-1 hover:text-primary"
+                              >
+                                Tokens out
+                                <.sort_icon
+                                  field={:completion_tokens}
+                                  current={@sort_field}
+                                  direction={@sort_direction}
+                                />
+                              </button>
+                            </th>
+                            <th class="text-right">
+                              <button
+                                phx-click="sort"
+                                phx-value-field="avg_tps"
+                                class="flex items-center justify-end gap-1 hover:text-primary"
+                              >
+                                TPS
+                                <.sort_icon
+                                  field={:avg_tps}
+                                  current={@sort_field}
+                                  direction={@sort_direction}
+                                />
+                              </button>
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1308,22 +1786,7 @@
           </div>
         <% @live_action == :services -> %>
           <div class="space-y-6">
-            <div class="flex items-center justify-between flex-wrap gap-3">
-              <form
-                phx-change="set_service_filter"
-                id="service-filter-form"
-                class="flex items-center gap-2"
-              >
-                <.input
-                  type="select"
-                  name="service_id"
-                  value={@service_filter || ""}
-                  options={
-                    [{"Todos los servicios", ""}] ++ Enum.map(@services || [], &{&1.name, &1.id})
-                  }
-                  class="select select-sm select-bordered"
-                />
-              </form>
+            <div class="flex items-center justify-end flex-wrap gap-3">
               <.link
                 href="/dashboard/stats/export?type=services&period=#{@period}"
                 class="btn btn-sm btn-ghost"
@@ -1449,12 +1912,90 @@
                         <table class="table table-sm table-zebra">
                           <thead>
                             <tr>
-                              <th>Modelo</th>
-                              <th class="text-right">Requests</th>
-                              <th class="text-right">Costo</th>
-                              <th class="text-right">Tokens in</th>
-                              <th class="text-right">Tokens out</th>
-                              <th class="text-right">TPS</th>
+                              <th>
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="model_name"
+                                  class="flex items-center gap-1 hover:text-primary"
+                                >
+                                  Modelo
+                                  <.sort_icon
+                                    field={:model_name}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="request_count"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Requests
+                                  <.sort_icon
+                                    field={:request_count}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="cost_usd"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Costo
+                                  <.sort_icon
+                                    field={:cost_usd}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="prompt_tokens"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Tokens in
+                                  <.sort_icon
+                                    field={:prompt_tokens}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="completion_tokens"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  Tokens out
+                                  <.sort_icon
+                                    field={:completion_tokens}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
+                              <th class="text-right">
+                                <button
+                                  phx-click="sort"
+                                  phx-value-field="avg_tps"
+                                  class="flex items-center justify-end gap-1 hover:text-primary"
+                                >
+                                  TPS
+                                  <.sort_icon
+                                    field={:avg_tps}
+                                    current={@sort_field}
+                                    direction={@sort_direction}
+                                  />
+                                </button>
+                              </th>
                             </tr>
                           </thead>
                           <tbody>
@@ -1526,12 +2067,90 @@
                       <table class="table table-sm table-zebra">
                         <thead>
                           <tr>
-                            <th>Servicio</th>
-                            <th class="text-right">Requests</th>
-                            <th class="text-right">Costo</th>
-                            <th class="text-right">Tokens in</th>
-                            <th class="text-right">Tokens out</th>
-                            <th class="text-right">TPS</th>
+                            <th>
+                              <button
+                                phx-click="sort"
+                                phx-value-field="service_name"
+                                class="flex items-center gap-1 hover:text-primary"
+                              >
+                                Servicio
+                                <.sort_icon
+                                  field={:service_name}
+                                  current={@sort_field}
+                                  direction={@sort_direction}
+                                />
+                              </button>
+                            </th>
+                            <th class="text-right">
+                              <button
+                                phx-click="sort"
+                                phx-value-field="request_count"
+                                class="flex items-center justify-end gap-1 hover:text-primary"
+                              >
+                                Requests
+                                <.sort_icon
+                                  field={:request_count}
+                                  current={@sort_field}
+                                  direction={@sort_direction}
+                                />
+                              </button>
+                            </th>
+                            <th class="text-right">
+                              <button
+                                phx-click="sort"
+                                phx-value-field="cost_usd"
+                                class="flex items-center justify-end gap-1 hover:text-primary"
+                              >
+                                Costo
+                                <.sort_icon
+                                  field={:cost_usd}
+                                  current={@sort_field}
+                                  direction={@sort_direction}
+                                />
+                              </button>
+                            </th>
+                            <th class="text-right">
+                              <button
+                                phx-click="sort"
+                                phx-value-field="prompt_tokens"
+                                class="flex items-center justify-end gap-1 hover:text-primary"
+                              >
+                                Tokens in
+                                <.sort_icon
+                                  field={:prompt_tokens}
+                                  current={@sort_field}
+                                  direction={@sort_direction}
+                                />
+                              </button>
+                            </th>
+                            <th class="text-right">
+                              <button
+                                phx-click="sort"
+                                phx-value-field="completion_tokens"
+                                class="flex items-center justify-end gap-1 hover:text-primary"
+                              >
+                                Tokens out
+                                <.sort_icon
+                                  field={:completion_tokens}
+                                  current={@sort_field}
+                                  direction={@sort_direction}
+                                />
+                              </button>
+                            </th>
+                            <th class="text-right">
+                              <button
+                                phx-click="sort"
+                                phx-value-field="avg_tps"
+                                class="flex items-center justify-end gap-1 hover:text-primary"
+                              >
+                                TPS
+                                <.sort_icon
+                                  field={:avg_tps}
+                                  current={@sort_field}
+                                  direction={@sort_direction}
+                                />
+                              </button>
+                            </th>
                           </tr>
                         </thead>
                         <tbody>

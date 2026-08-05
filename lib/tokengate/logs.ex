@@ -147,6 +147,7 @@ defmodule Tokengate.Logs do
     |> maybe_where(:status_code, filters)
     |> maybe_status_class(filters)
     |> maybe_model_search(filters)
+    |> maybe_error_reason(filters)
     |> maybe_where(:streaming, filters)
     |> maybe_from(filters)
     |> maybe_to(filters)
@@ -216,6 +217,14 @@ defmodule Tokengate.Logs do
           [rl],
           ilike(rl.model_requested, ^pattern) or ilike(rl.model_responded, ^pattern)
         )
+    end
+  end
+
+  defp maybe_error_reason(query, filters) do
+    case Map.get(filters, :error_reason) || Map.get(filters, "error_reason") do
+      nil -> query
+      "" -> query
+      reason -> where(query, [rl], rl.error_reason == ^reason)
     end
   end
 
