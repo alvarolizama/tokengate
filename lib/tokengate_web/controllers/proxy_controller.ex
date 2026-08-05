@@ -35,6 +35,8 @@ defmodule TokengateWeb.ProxyController do
 
   use TokengateWeb, :controller
 
+  import Ecto.Query, only: [from: 2]
+
   alias Tokengate.Accounts
   alias Tokengate.Budgets.Manager, as: Budgets
   alias Tokengate.Limits.Manager, as: Limits
@@ -1279,7 +1281,11 @@ defmodule TokengateWeb.ProxyController do
   end
 
   # Gate-level errors (before routing succeeded): no provider was contacted,
-  # so there is no provider status to record. Still logs the failure.
+  # so there is no provider status to record. Still logs the failure — and
+  # resolves the model alias id so these rows show up in the per-model stats
+  # drill-down (stats page, provider breakdown). Without it, a burst of gate
+  # errors (concurrency exceeded, rate limited) would leave the model's
+  # stats page looking empty even though traffic hit the gateway.
   defp log_and_render_gate_error(conn, member, model, error, opts) do
     {client_status, _type, code, _message} = error_details(error)
 
@@ -1292,6 +1298,19 @@ defmodule TokengateWeb.ProxyController do
     )
 
     render_proxy_error(conn, error)
+  end
+
+  # Resolves the alias id by name for gate-error logs. Alias names are
+  # globally unique. The gate path is cold (the request already failed), so a
+  # single indexed lookup is acceptable; a miss (model_not_found) returns nil.
+  defp alias_id_for_name(nil), do: nil
+
+  defp alias_id_for_name(name) when is_binary(name) do
+    Tokengate.Repo.one(
+      from ma in Tokengate.Providers.ModelAlias,
+        where: ma.name == ^name,
+        select: ma.id
+    )
   end
 
   defp enqueue_error_log(conn, route, member, opts) do
@@ -1328,6 +1347,7 @@ defmodule TokengateWeb.ProxyController do
   defp enqueue_gate_error_log(member, model, agent_type, opts) do
     %{
       "team_member_id" => member.id,
+      "model_alias_id" => alias_id_for_name(model),
       "model_requested" => model,
       "agent_type" => agent_type,
       "client_agent" => Keyword.get(opts, :client_agent),

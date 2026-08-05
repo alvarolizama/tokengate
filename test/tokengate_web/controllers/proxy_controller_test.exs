@@ -688,6 +688,38 @@ defmodule TokengateWeb.ProxyControllerTest do
     Limits.release(cred.id)
   end
 
+  test "gate error logs carry model_alias_id so per-model stats see them", %{conn: conn} do
+    %{token: token, alias: model_alias} = proxy_fixture(%{})
+
+    # Saturate the only credential's concurrency slot → gate error
+    [mp] = Providers.list_model_providers(model_alias.id)
+
+    {:ok, cred} = Providers.update_credential(mp.credential, %{max_concurrent: 1})
+    :ok = Limits.acquire(cred.id, %{rpm_limit: nil, concurrency_limit: 1})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+
+    assert %{"error" => %{"code" => "provider_concurrency_exceeded"}} = json_response(conn, 429)
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log =
+      Repo.one(
+        from l in RequestLog,
+          where: l.error_reason == "provider_concurrency_exceeded",
+          order_by: [desc: l.inserted_at],
+          limit: 1
+      )
+
+    assert log.model_alias_id == model_alias.id
+    assert log.model_requested == model_alias.name
+
+    Limits.release(cred.id)
+  end
+
   ## Prompt optimization flags ################################################
 
   # Reusable noisy payload: has duplicate consecutive tool messages, redundant
