@@ -66,6 +66,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:sort_direction, :desc)
       |> assign(:hour_distribution, [])
       |> assign(:hour_usage_stacked, [])
+      |> assign(:hovered_hour, nil)
       |> assign(:busiest_hours, [])
       |> assign(:busiest_minutes, [])
       |> assign(:peak_concurrency, nil)
@@ -118,6 +119,15 @@ defmodule TokengateWeb.StatsLive do
      |> assign(:sort_field, sort_field)
      |> assign(:sort_direction, sort_direction)
      |> resort_breakdowns(sort_field, sort_direction)}
+  end
+
+  def handle_event("hour_hover", %{"hour" => hour}, socket) do
+    hour = String.to_integer(hour)
+    {:noreply, assign(socket, :hovered_hour, hour)}
+  end
+
+  def handle_event("hour_leave", _params, socket) do
+    {:noreply, assign(socket, :hovered_hour, nil)}
   end
 
   defp toggle_direction(:asc), do: :desc
@@ -673,7 +683,7 @@ defmodule TokengateWeb.StatsLive do
         model_data =
           Enum.find(
             hour_row.models,
-            %{requests: 0, cost_usd: Decimal.new(0)},
+            %{requests: 0, cost_usd: Decimal.new(0), billing_mode: "unknown"},
             &(&1.model == model_name)
           )
 
@@ -690,6 +700,58 @@ defmodule TokengateWeb.StatsLive do
       end)
       |> Enum.filter(&(&1.height_pct > 0))
     end
+  end
+
+  def legend_data(stacked_rows, hovered_hour) do
+    all_models = top_models_from_stacked(stacked_rows)
+
+    source_models =
+      if hovered_hour do
+        hour_row = Enum.find(stacked_rows, &(&1.hour == hovered_hour))
+        if hour_row, do: hour_row.models, else: []
+      else
+        stacked_rows
+        |> Enum.flat_map(& &1.models)
+        |> Enum.group_by(& &1.model)
+        |> Enum.map(fn {model, entries} ->
+          requests = Enum.reduce(entries, 0, &(&1.requests + &2))
+          cost = Enum.reduce(entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
+          %{model: model, requests: requests, cost_usd: cost}
+        end)
+      end
+
+    legend_entries =
+      all_models
+      |> Enum.with_index()
+      |> Enum.map(fn {model_info, idx} ->
+        model_name = model_info.model
+
+        data =
+          Enum.find(source_models, %{requests: 0, cost_usd: Decimal.new(0)}, &(&1.model == model_name))
+
+        %{
+          model: model_name,
+          requests: data.requests,
+          cost_usd: data.cost_usd,
+          color: model_color_light(idx),
+          is_pay_per_token: Decimal.compare(data.cost_usd, Decimal.new(0)) == :gt
+        }
+      end)
+      |> Enum.filter(&(&1.requests > 0))
+      |> Enum.sort_by(& &1.requests, :desc)
+
+    total_requests = Enum.reduce(legend_entries, 0, &(&1.requests + &2))
+
+    total_cost =
+      legend_entries
+      |> Enum.reduce(Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
+
+    %{
+      entries: legend_entries,
+      total_requests: total_requests,
+      total_cost_usd: total_cost,
+      hovered_hour: hovered_hour
+    }
   end
 
   def hour_bar_height(count, max) when max > 0, do: max(round(count / max * 100), 4)
