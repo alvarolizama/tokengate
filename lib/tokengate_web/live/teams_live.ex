@@ -758,10 +758,13 @@ defmodule TokengateWeb.TeamsLive do
                         <td class="text-center">
                           <% tier = get_member_tier(@usage_tiers_by_team, team.id, mb.member.id) %>
                           <%= if tier do %>
-                            <span class={[
-                              "badge badge-sm",
-                              tier_badge_class(tier.tier)
-                            ]} title={"Score: #{tier.score} | Peak RPM: #{tier.peak_rpm} | Días activos: #{tier.active_days}"}>
+                            <span
+                              class={[
+                                "badge badge-sm",
+                                tier_badge_class(tier.tier)
+                              ]}
+                              title={"Score: #{tier.score} | Peak RPM: #{tier.peak_rpm} | Días activos: #{tier.active_days}"}
+                            >
                               {String.capitalize(tier.tier)}
                             </span>
                           <% else %>

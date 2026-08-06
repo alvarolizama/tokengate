@@ -256,6 +256,46 @@ defmodule Tokengate.Logs do
     end
   end
 
+  @doc """
+  Top models by request count in the last N minutes (default 1, limit 3).
+  Accepts the same filter map as `list_logs/1` (team_member_ids, agent_type,
+  model_search, etc.) so the cards respect the active filters.
+  Returns [%{model: String.t(), count: integer}].
+  """
+  def top_models_last_minutes(minutes \\ 1, limit \\ 3, filters \\ %{}) do
+    cutoff = DateTime.add(DateTime.utc_now(), -minutes * 60, :second)
+
+    RequestLog
+    |> where([rl], rl.inserted_at >= ^cutoff)
+    |> where([rl], not is_nil(rl.model_requested))
+    |> apply_log_filters(filters)
+    |> group_by([rl], rl.model_requested)
+    |> order_by([rl], desc: count(rl.id))
+    |> limit(^limit)
+    |> select([rl], %{model: rl.model_requested, count: count(rl.id)})
+    |> Repo.all()
+  end
+
+  @doc """
+  Top users by request count in the last N minutes (default 1, limit 3).
+  Accepts the same filter map as `list_logs/1` so the cards respect the
+  active filters. Returns [%{user: String.t(), count: integer}].
+  """
+  def top_users_last_minutes(minutes \\ 1, limit \\ 3, filters \\ %{}) do
+    cutoff = DateTime.add(DateTime.utc_now(), -minutes * 60, :second)
+
+    RequestLog
+    |> where([rl], rl.inserted_at >= ^cutoff)
+    |> apply_log_filters(filters)
+    |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
+    |> join(:inner, [rl, tm], u in assoc(tm, :user))
+    |> group_by([rl, tm, u], u.email)
+    |> order_by([rl], desc: count(rl.id))
+    |> limit(^limit)
+    |> select([rl, tm, u], %{user: u.email, count: count(rl.id)})
+    |> Repo.all()
+  end
+
   defp clamp_limit(nil), do: @default_limit
 
   defp clamp_limit(limit) when is_integer(limit) and limit > 0 do

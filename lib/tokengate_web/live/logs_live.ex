@@ -68,15 +68,25 @@ defmodule TokengateWeb.LogsLive do
       # System monitor (RAM/CPU/processes/DB) refreshes on its own tick.
       :timer.send_interval(@system_metrics_tick_ms, :refresh_system_metrics)
 
-      {:ok,
-       socket
-       |> assign(:online_users, TokengateWeb.Presence.list_online())
-       |> assign(:api_inflight, Inflight.count())
-       |> assign(:top_models, Inflight.count_by_model())
-       |> assign(:top_users, Inflight.count_by_user())
-       |> assign(:pending, visible_pending(socket.assigns))
-       |> assign(:system_metrics, collect_system_metrics())
-       |> load_alert_data()}
+      pending = visible_pending(socket.assigns)
+
+      socket =
+        socket
+        |> assign(:online_users, TokengateWeb.Presence.list_online())
+        |> assign(:api_inflight, Inflight.count())
+        |> assign(:top_models, top_models_card(socket.assigns))
+        |> assign(:top_users, top_users_card(socket.assigns))
+        |> assign(:pending, pending)
+        |> assign(:system_metrics, collect_system_metrics())
+        |> load_alert_data()
+
+      # Insert existing pending entries at the top of the logs stream
+      socket =
+        Enum.reduce(pending, socket, fn entry, acc ->
+          stream_insert(acc, :logs, pending_entry_to_log(entry), at: 0)
+        end)
+
+      {:ok, socket}
     else
       {:ok, load_alert_data(socket)}
     end
@@ -132,8 +142,8 @@ defmodule TokengateWeb.LogsLive do
     {:noreply,
      socket
      |> assign(:api_inflight, visible_inflight_count(socket.assigns))
-     |> assign(:top_models, Inflight.count_by_model())
-     |> assign(:top_users, Inflight.count_by_user())}
+     |> assign(:top_models, top_models_card(socket.assigns))
+     |> assign(:top_users, top_users_card(socket.assigns))}
   end
 
   def handle_info(:refresh_system_metrics, socket) do
@@ -146,6 +156,7 @@ defmodule TokengateWeb.LogsLive do
         socket
         |> assign(:pending, [entry | socket.assigns[:pending]])
         |> assign(:api_inflight, socket.assigns[:api_inflight] + 1)
+        |> stream_insert(:logs, pending_entry_to_log(entry), at: 0)
 
       {:noreply, socket}
     else
@@ -161,6 +172,7 @@ defmodule TokengateWeb.LogsLive do
       socket
       |> assign(:pending, Enum.reject(pending_before, &(&1.id == id)))
       |> update(:api_inflight, fn n -> if removed?, do: max(n - 1, 0), else: n end)
+      |> stream_delete(:logs, %{id: "pending-#{id}"})
 
     {:noreply, socket}
   end
@@ -260,6 +272,73 @@ defmodule TokengateWeb.LogsLive do
   # "En vuelo ahora" table exactly so they never disagree.
   defp visible_inflight_count(assigns) do
     visible_pending(assigns) |> length()
+  end
+
+  # Top-cards: build a filter map that combines the user's scope
+  # (team_member_ids) with the active UI filters so the cards never leak
+  # rows the table would hide.
+  defp top_card_filters(assigns) do
+    filters = assigns[:filters] || %{}
+
+    base =
+      case assigns[:scope_member_ids] do
+        nil -> %{}
+        ids -> %{team_member_ids: ids}
+      end
+
+    base
+    |> maybe_put_filter(filters, "agent_type", :agent_type)
+    |> maybe_put_filter(filters, "model_search", :model_search)
+    |> maybe_put_filter(filters, "team_id", :team_id)
+    |> maybe_put_filter(filters, "streaming", :streaming)
+    |> maybe_put_filter(filters, "error_reason", :error_reason)
+  end
+
+  defp maybe_put_filter(acc, filters, key, field) do
+    case Map.get(filters, key) do
+      nil -> acc
+      "" -> acc
+      value -> Map.put(acc, field, value)
+    end
+  end
+
+  defp top_models_card(assigns) do
+    Logs.top_models_last_minutes(1, 3, top_card_filters(assigns))
+  end
+
+  defp top_users_card(assigns) do
+    Logs.top_users_last_minutes(1, 3, top_card_filters(assigns))
+  end
+
+  # Converts an Inflight entry to the log shape so it renders inside the
+  # main logs table. `__pending__: true` flags the row for special styling.
+  defp pending_entry_to_log(entry) do
+    %{
+      id: "pending-#{entry.id}",
+      inserted_at: entry.started_at,
+      model_requested: entry.model_requested,
+      model_responded: nil,
+      team_member: %{user: %{email: entry.user_email}, team: %{name: entry.team_name}},
+      client_agent: entry.client_agent,
+      api_key_prefix: entry.api_key_prefix,
+      provider: %{name: entry.provider_name},
+      provider_key_prefix: entry.provider_key_suffix,
+      provider_status_code: nil,
+      error_reason: nil,
+      error_message: nil,
+      status_code: nil,
+      think: entry.think,
+      effort: entry.effort,
+      streaming: entry.streaming,
+      prompt_tokens: nil,
+      completion_tokens: nil,
+      cache_read_tokens: nil,
+      cache_creation_tokens: nil,
+      latency_ms: nil,
+      ttft_ms: nil,
+      provider_cost_usd: nil,
+      __pending__: true
+    }
   end
 
   defp pending_visible?(entry, assigns) do
@@ -373,6 +452,17 @@ defmodule TokengateWeb.LogsLive do
   end
 
   ## Data loading ----------------------------------------------------------
+
+  defp load_logs_with_pending(socket, :reset) do
+    socket = load_logs(socket, :reset)
+
+    # Re-insert pending entries at the top after stream reset
+    pending = socket.assigns[:pending] || []
+
+    Enum.reduce(pending, socket, fn entry, acc ->
+      stream_insert(acc, :logs, pending_entry_to_log(entry), at: 0)
+    end)
+  end
 
   defp load_logs(socket, mode) do
     list_filters = build_filters(socket, include_cursor: mode == :more)
@@ -602,8 +692,22 @@ defmodule TokengateWeb.LogsLive do
           scope_member_ids: socket.assigns[:scope_member_ids]
         })
       )
+      |> assign(
+        :top_models,
+        top_models_card(%{
+          filters: filter_params,
+          scope_member_ids: socket.assigns[:scope_member_ids]
+        })
+      )
+      |> assign(
+        :top_users,
+        top_users_card(%{
+          filters: filter_params,
+          scope_member_ids: socket.assigns[:scope_member_ids]
+        })
+      )
 
-    {:noreply, load_logs(socket, :reset)}
+    {:noreply, load_logs_with_pending(socket, :reset)}
   end
 
   def handle_event("load_more", _params, socket) do
@@ -1392,26 +1496,18 @@ defmodule TokengateWeb.LogsLive do
             </div>
           </div>
 
-          <%!-- Top modelos --%>
+          <%!-- Top 3 modelos último minuto --%>
           <div class="card bg-base-100 border border-base-300 shadow-sm" id="top-models">
             <div class="card-body p-4">
               <div class="flex items-center justify-between">
                 <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  En vuelo por modelo
+                  Top 3 modelos · último minuto
                 </p>
                 <.icon name="hero-cpu-chip" class="w-4 h-4 text-base-content/40" />
               </div>
               <div class="mt-1 space-y-1" id="top-models-list">
                 <div :for={m <- @top_models} class="flex items-center justify-between text-xs">
-                  <div class="min-w-0">
-                    <span class="font-medium text-base-content truncate block">{m.model}</span>
-                    <span
-                      :if={m.credential_name}
-                      class="text-base-content/40 truncate block"
-                    >
-                      {m.credential_name}
-                    </span>
-                  </div>
+                  <span class="font-medium text-base-content truncate">{m.model}</span>
                   <span class="text-base-content/50 shrink-0 font-semibold ml-2">{m.count}</span>
                 </div>
                 <p :if={@top_models == []} class="text-xs text-base-content/30">—</p>
@@ -1419,26 +1515,18 @@ defmodule TokengateWeb.LogsLive do
             </div>
           </div>
 
-          <%!-- En vuelo por usuario --%>
+          <%!-- Top 3 usuarios último minuto --%>
           <div class="card bg-base-100 border border-base-300 shadow-sm" id="top-users">
             <div class="card-body p-4">
               <div class="flex items-center justify-between">
                 <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  En vuelo por usuario
+                  Top 3 usuarios · último minuto
                 </p>
                 <.icon name="hero-users" class="w-4 h-4 text-base-content/40" />
               </div>
               <div class="mt-1 space-y-1" id="top-users-list">
                 <div :for={u <- @top_users} class="flex items-center justify-between text-xs">
-                  <div class="min-w-0">
-                    <span class="font-medium text-base-content truncate block">{u.user}</span>
-                    <span
-                      :if={u.credential_name}
-                      class="text-base-content/40 truncate block"
-                    >
-                      {u.credential_name}
-                    </span>
-                  </div>
+                  <span class="font-medium text-base-content truncate">{u.user}</span>
                   <span class="text-base-content/50 shrink-0 font-semibold ml-2">{u.count}</span>
                 </div>
                 <p :if={@top_users == []} class="text-xs text-base-content/30">—</p>
@@ -1574,62 +1662,7 @@ defmodule TokengateWeb.LogsLive do
           </.link>
         </div>
 
-        <%!-- Pending (in-flight) requests --%>
-        <div
-          :if={@pending != []}
-          class="card bg-base-100 border border-warning/40 shadow-sm"
-          id="pending-section"
-        >
-          <div class="card-body p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="relative flex h-2.5 w-2.5">
-                <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-60"></span>
-                <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-warning"></span>
-              </span>
-              <h3 class="text-sm font-semibold">En vuelo ahora ({length(@pending)})</h3>
-            </div>
-            <div class="overflow-x-auto">
-              <table class="table table-sm">
-                <thead>
-                  <tr>
-                    <th>Inicio</th>
-                    <th>Modelo</th>
-                    <th>Usuario</th>
-                    <th>Equipo</th>
-                    <th>Agente</th>
-                    <th>API Key</th>
-                    <th>Proveedor</th>
-                    <th title="API key o alias del proveedor">Prov. Key</th>
-                    <th>Think</th>
-                    <th>Effort</th>
-                    <th>Streaming</th>
-                    <th>Estado</th>
-                  </tr>
-                </thead>
-                <tbody id="pending-rows">
-                  <tr :for={entry <- @pending} id={"pending-row-#{entry.id}"}>
-                    <td class="whitespace-nowrap text-sm">
-                      {format_datetime(entry.started_at, @timezone)}
-                    </td>
-                    <td class="text-sm">{entry.model_requested}</td>
-                    <td class="text-sm">{entry.user_email || "—"}</td>
-                    <td class="text-sm">{entry.team_name || "—"}</td>
-                    <td class="text-sm">{entry.client_agent || "—"}</td>
-                    <td class="text-sm">{entry.api_key_prefix || "—"}</td>
-                    <td class="text-sm">{entry.provider_name || "—"}</td>
-                    <td class="text-sm">{entry.credential_name || "—"}</td>
-                    <td><.think_badge value={entry.think} /></td>
-                    <td class="text-sm">{entry.effort || "—"}</td>
-                    <td>{if entry.streaming, do: "Sí", else: "No"}</td>
-                    <td><span class="badge badge-sm badge-warning">Pending</span></td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-        <%!-- Logs table --%>
+        <%!-- Logs table (includes pending in-flight rows highlighted) --%>
         <div class="overflow-x-auto">
           <table class="table table-zebra">
             <thead>
@@ -1701,75 +1734,119 @@ defmodule TokengateWeb.LogsLive do
                   No hay logs que coincidan con los filtros.
                 </td>
               </tr>
-              <tr :for={{id, log} <- @streams.logs} id={id}>
-                <td class="whitespace-nowrap text-sm">
-                  {format_datetime(log.inserted_at, @timezone)}
-                </td>
-                <td class="text-sm">{model_display(log.model_requested, log.model_responded)}</td>
-                <td class="text-sm">{member_email(log)}</td>
-                <td class="text-sm">{member_team(log)}</td>
-                <td class="text-sm" title={log.agent_type}>
-                  {log.client_agent || "—"}
-                </td>
-                <td class="text-sm">{log.api_key_prefix || "—"}</td>
-                <td class="text-sm border-r border-base-200">{provider_name(log)}</td>
-                <td
-                  class="text-sm"
-                  title={
-                    if log.credential_name && log.credential_name != "",
-                      do: log.credential_name,
-                      else: nil
-                  }
-                >
-                  {prov_key_display(log)}
-                </td>
-                <td class="text-sm">
-                  <span :if={log.provider_status_code} class="badge badge-sm badge-ghost">{log.provider_status_code}</span>
-                  <span :if={!log.provider_status_code} class="text-base-content/40">—</span>
-                </td>
-                <td colspan="2" class="text-sm border-r border-base-200">
-                  <div :if={log.error_reason} class="flex flex-col gap-0.5">
-                    <span class="badge badge-sm badge-error">{log.error_reason}</span>
-                    <span
-                      :if={log.error_message}
-                      class="text-xs text-base-content/60 max-w-[220px] truncate"
-                      title={log.error_message}
-                    >
-                      {log.error_message}
+              <tr
+                :for={{id, log} <- @streams.logs}
+                id={id}
+                class={if Map.get(log, :__pending__), do: "bg-warning/20 hover:bg-warning/30"}
+              >
+                <%= if Map.get(log, :__pending__) do %>
+                  <%!-- Pending in-flight row --%>
+                  <td class="whitespace-nowrap text-sm font-medium">
+                    <span class="flex items-center gap-1.5">
+                      <span class="relative flex h-2 w-2">
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-warning opacity-60"></span>
+                        <span class="relative inline-flex rounded-full h-2 w-2 bg-warning"></span>
+                      </span>
+                      {format_datetime(log.inserted_at, @timezone)}
                     </span>
-                  </div>
-                  <span :if={!log.error_reason} class="text-base-content/40">—</span>
-                </td>
-                <td>
-                  <span class={["badge", "badge-sm", status_badge_class(log.status_code)]}>
-                    {log.status_code}
-                  </span>
-                  <span
-                    :if={log.status_code == 200 && log.error_reason}
-                    class="badge badge-sm badge-warning ml-1"
-                    title="El proveedor falló y la request fue recuperada por fallback a otro proveedor"
+                  </td>
+                  <td class="text-sm">{log.model_requested}</td>
+                  <td class="text-sm">{member_email(log)}</td>
+                  <td class="text-sm">{member_team(log)}</td>
+                  <td class="text-sm">{log.client_agent || "—"}</td>
+                  <td class="text-sm">{log.api_key_prefix || "—"}</td>
+                  <td class="text-sm border-r border-base-200">{provider_name(log)}</td>
+                  <td class="text-sm">{prov_key_display(log)}</td>
+                  <td class="text-sm">—</td>
+                  <td colspan="2" class="text-sm border-r border-base-200">—</td>
+                  <td>
+                    <span class="badge badge-sm badge-warning">En vuelo</span>
+                  </td>
+                  <td><.think_badge value={log.think} /></td>
+                  <td class="text-sm">{log.effort || "—"}</td>
+                  <td class="text-sm border-r border-base-200">
+                    {if log.streaming, do: "Sí", else: "No"}
+                  </td>
+                  <td class="text-sm text-right tabular-nums">—</td>
+                  <td class="text-sm text-right tabular-nums">—</td>
+                  <td class="text-sm text-right tabular-nums">—</td>
+                  <td class="text-sm text-right tabular-nums text-base-content/70">—</td>
+                  <td class="text-sm text-base-content/70">—</td>
+                  <td class="text-sm border-r border-base-200">—</td>
+                  <td class="text-sm text-right tabular-nums">—</td>
+                <% else %>
+                  <%!-- Completed log row --%>
+                  <td class="whitespace-nowrap text-sm">
+                    {format_datetime(log.inserted_at, @timezone)}
+                  </td>
+                  <td class="text-sm">{model_display(log.model_requested, log.model_responded)}</td>
+                  <td class="text-sm">{member_email(log)}</td>
+                  <td class="text-sm">{member_team(log)}</td>
+                  <td class="text-sm" title={log.agent_type}>
+                    {log.client_agent || "—"}
+                  </td>
+                  <td class="text-sm">{log.api_key_prefix || "—"}</td>
+                  <td class="text-sm border-r border-base-200">{provider_name(log)}</td>
+                  <td
+                    class="text-sm"
+                    title={
+                      if log.credential_name && log.credential_name != "",
+                        do: log.credential_name,
+                        else: nil
+                    }
                   >
-                    fallback
-                  </span>
-                </td>
-                <td><.think_badge value={log.think} /></td>
-                <td class="text-sm">{log.effort || "—"}</td>
-                <td class="text-sm border-r border-base-200">
-                  {if log.streaming, do: "Sí", else: "No"}
-                </td>
-                <td class="text-sm text-right tabular-nums">{format_number(log.prompt_tokens)}</td>
-                <td class="text-sm text-right tabular-nums">
-                  {format_number(log.completion_tokens)}
-                </td>
-                <td class="text-sm text-right tabular-nums">
-                  {format_cache_tokens(log.cache_read_tokens, log.cache_creation_tokens)}
-                </td>
-                <td class="text-sm text-right tabular-nums text-base-content/70">
-                  {tps(log.completion_tokens, log.latency_ms)}
-                </td>
-                <td class="text-sm text-base-content/70">{format_ttft(log.ttft_ms)}</td>
-                <td class="text-sm border-r border-base-200">{log.latency_ms}ms</td>
-                <td class="text-sm text-right tabular-nums">{format_cost(log.provider_cost_usd)}</td>
+                    {prov_key_display(log)}
+                  </td>
+                  <td class="text-sm">
+                    <span :if={log.provider_status_code} class="badge badge-sm badge-ghost">{log.provider_status_code}</span>
+                    <span :if={!log.provider_status_code} class="text-base-content/40">—</span>
+                  </td>
+                  <td colspan="2" class="text-sm border-r border-base-200">
+                    <div :if={log.error_reason} class="flex flex-col gap-0.5">
+                      <span class="badge badge-sm badge-error">{log.error_reason}</span>
+                      <span
+                        :if={log.error_message}
+                        class="text-xs text-base-content/60 max-w-[220px] truncate"
+                        title={log.error_message}
+                      >
+                        {log.error_message}
+                      </span>
+                    </div>
+                    <span :if={!log.error_reason} class="text-base-content/40">—</span>
+                  </td>
+                  <td>
+                    <span class={["badge", "badge-sm", status_badge_class(log.status_code)]}>
+                      {log.status_code}
+                    </span>
+                    <span
+                      :if={log.status_code == 200 && log.error_reason}
+                      class="badge badge-sm badge-warning ml-1"
+                      title="El proveedor falló y la request fue recuperada por fallback a otro proveedor"
+                    >
+                      fallback
+                    </span>
+                  </td>
+                  <td><.think_badge value={log.think} /></td>
+                  <td class="text-sm">{log.effort || "—"}</td>
+                  <td class="text-sm border-r border-base-200">
+                    {if log.streaming, do: "Sí", else: "No"}
+                  </td>
+                  <td class="text-sm text-right tabular-nums">{format_number(log.prompt_tokens)}</td>
+                  <td class="text-sm text-right tabular-nums">
+                    {format_number(log.completion_tokens)}
+                  </td>
+                  <td class="text-sm text-right tabular-nums">
+                    {format_cache_tokens(log.cache_read_tokens, log.cache_creation_tokens)}
+                  </td>
+                  <td class="text-sm text-right tabular-nums text-base-content/70">
+                    {tps(log.completion_tokens, log.latency_ms)}
+                  </td>
+                  <td class="text-sm text-base-content/70">{format_ttft(log.ttft_ms)}</td>
+                  <td class="text-sm border-r border-base-200">{log.latency_ms}ms</td>
+                  <td class="text-sm text-right tabular-nums">
+                    {format_cost(log.provider_cost_usd)}
+                  </td>
+                <% end %>
               </tr>
             </tbody>
           </table>

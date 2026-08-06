@@ -168,13 +168,13 @@ defmodule TokengateWeb.LogsLiveTest do
       })
 
     html = render(view)
-    assert html =~ "pending-row-#{entry.id}"
-    assert html =~ "Pending"
+    assert html =~ "pending-#{entry.id}"
+    assert html =~ "En vuelo"
     assert html =~ "live@example.com"
 
     Inflight.finish_request(entry.id)
     html = render(view)
-    refute html =~ "pending-row-#{entry.id}"
+    refute html =~ "pending-#{entry.id}"
   end
 
   test "pending respects model filter", %{conn: conn} do
