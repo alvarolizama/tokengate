@@ -104,6 +104,15 @@ defmodule TokengateWeb.TeamsLive do
     timezone = socket.assigns[:timezone] || "Etc/UTC"
     member_budgets = Budgets.list_member_budgets(timezone)
 
+    # Usage tiers per team (last 30 days)
+    usage_tiers_by_team =
+      teams
+      |> Enum.map(& &1.id)
+      |> Map.new(fn team_id ->
+        tiers = Tokengate.Metrics.Rollup.member_usage_tiers(team_id, from: days_ago(30))
+        {team_id, tiers}
+      end)
+
     team_budgets =
       member_budgets
       |> Enum.group_by(fn mb -> mb.member.team_id end)
@@ -152,6 +161,11 @@ defmodule TokengateWeb.TeamsLive do
     |> assign(:aliases_by_org, aliases_by_org)
     |> assign(:destinations_by_team, destinations_by_team)
     |> assign(:team_budgets, team_budgets)
+    |> assign(:usage_tiers_by_team, usage_tiers_by_team)
+  end
+
+  defp days_ago(n) do
+    DateTime.add(DateTime.utc_now(), -n * 86400, :second)
   end
 
   ## Events — team CRUD ---------------------------------------------------
@@ -376,6 +390,16 @@ defmodule TokengateWeb.TeamsLive do
   def granted_alias_ids(granted_aliases, team_id) do
     Map.get(granted_aliases, team_id, [])
   end
+
+  def get_member_tier(usage_tiers_by_team, team_id, member_id) do
+    tiers = Map.get(usage_tiers_by_team, team_id, [])
+    Enum.find(tiers, &(&1.team_member_id == member_id))
+  end
+
+  def tier_badge_class("alto"), do: "badge-error"
+  def tier_badge_class("regular"), do: "badge-warning"
+  def tier_badge_class("bajo"), do: "badge-ghost"
+  def tier_badge_class(_), do: "badge-ghost"
 
   def format_decimal(%Decimal{} = d), do: d |> Decimal.round(2) |> Decimal.to_string()
   def format_decimal(nil), do: "—"
@@ -718,6 +742,7 @@ defmodule TokengateWeb.TeamsLive do
                     <thead>
                       <tr>
                         <th>Usuario</th>
+                        <th class="text-center">Tier</th>
                         <th class="text-right">Concurrencia</th>
                         <th class="text-right">RPM</th>
                         <th class="text-right">Gasto/mes</th>
@@ -730,6 +755,19 @@ defmodule TokengateWeb.TeamsLive do
                         id={"member-budget-#{team.id}-#{mb.member.id}"}
                       >
                         <td class="font-medium">{mb.member.user.email}</td>
+                        <td class="text-center">
+                          <% tier = get_member_tier(@usage_tiers_by_team, team.id, mb.member.id) %>
+                          <%= if tier do %>
+                            <span class={[
+                              "badge badge-sm",
+                              tier_badge_class(tier.tier)
+                            ]} title={"Score: #{tier.score} | Peak RPM: #{tier.peak_rpm} | Días activos: #{tier.active_days}"}>
+                              {String.capitalize(tier.tier)}
+                            </span>
+                          <% else %>
+                            <span class="badge badge-sm badge-ghost" title="Sin actividad en 30 días">—</span>
+                          <% end %>
+                        </td>
                         <td class="text-right font-mono">
                           {team.default_concurrency_limit}
                           <span :if={mb.member.extra_concurrency} class="text-success">

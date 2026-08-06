@@ -19,6 +19,7 @@ defmodule TokengateWeb.TeamMembersLive do
   import Ecto.Query, only: [from: 2]
 
   alias Tokengate.Accounts
+  alias Tokengate.Metrics.Rollup
   alias Tokengate.Providers
   alias Tokengate.Providers.{ModelAlias, TeamMemberExtraAlias, TeamModelAlias}
   alias Tokengate.Repo
@@ -148,6 +149,9 @@ defmodule TokengateWeb.TeamMembersLive do
           else: acc
       end)
 
+    # Usage tiers for this team (last 30 days)
+    usage_tiers = Rollup.member_usage_tiers(team.id, from: days_ago(30))
+
     socket
     |> assign(:members, members)
     |> assign(:member_budgets, Map.new(member_budgets, fn b -> {b.member_id, b} end))
@@ -159,7 +163,12 @@ defmodule TokengateWeb.TeamMembersLive do
     |> assign(:team_monthly_spend, team_monthly_spend)
     |> assign(:estimated_monthly, estimated_monthly)
     |> assign(:estimated_monthly_extra, estimated_monthly_extra)
+    |> assign(:usage_tiers, usage_tiers)
     |> load_exclusive_providers(members)
+  end
+
+  defp days_ago(n) do
+    DateTime.add(DateTime.utc_now(), -n * 86400, :second)
   end
 
   defp load_exclusive_providers(socket, members) do
@@ -560,6 +569,15 @@ defmodule TokengateWeb.TeamMembersLive do
   defp masked_key(%{api_key: %{key_prefix: prefix}}) when is_binary(prefix), do: "#{prefix}••••"
   defp masked_key(_), do: "Sin clave"
 
+  defp get_member_tier(usage_tiers, member_id) do
+    Enum.find(usage_tiers, &(&1.team_member_id == member_id))
+  end
+
+  defp tier_badge_class("alto"), do: "badge-error"
+  defp tier_badge_class("regular"), do: "badge-warning"
+  defp tier_badge_class("bajo"), do: "badge-ghost"
+  defp tier_badge_class(_), do: "badge-ghost"
+
   ## Render ----------------------------------------------------------------
 
   @impl true
@@ -946,6 +964,17 @@ defmodule TokengateWeb.TeamMembersLive do
                   </div>
                 </div>
                 <div class="flex items-center gap-5 shrink-0">
+                  <% tier = get_member_tier(@usage_tiers, member.id) %>
+                  <%= if tier do %>
+                    <span class={[
+                      "badge badge-sm",
+                      tier_badge_class(tier.tier)
+                    ]} title={"Score: #{tier.score} | Peak RPM: #{tier.peak_rpm} | Días activos: #{tier.active_days} | Requests: #{tier.request_count}"}>
+                      {String.capitalize(tier.tier)}
+                    </span>
+                  <% else %>
+                    <span class="badge badge-sm badge-ghost" title="Sin actividad en 30 días">—</span>
+                  <% end %>
                   <span class="badge badge-sm badge-ghost capitalize">{member.status}</span>
                   <.link
                     navigate={~p"/dashboard/users/#{member.user_id}/stats"}

@@ -1330,6 +1330,203 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   # -----------------------------------------------------------------------
+  # member_usage_tiers/2
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Clasifica a los miembros de un equipo en 3 tiers de uso: alto, regular, bajo.
+
+  Combina volumen (tokens, costo, requests), frecuencia (días activos),
+  y concurrencia (pico de requests simultáneos por minuto) en un score
+  compuesto 0-100. Después aplica terciles para dividir en 3 grupos.
+
+  ## Clasificación
+
+    * `"alto"`   — score ≥ 66 (tercil superior)
+    * `"regular"` — score 33-65 (tercil medio)
+    * `"bajo"`   — score < 33 (tercil inferior) o sin actividad
+
+  ## Métricas por miembro
+
+      %{
+        team_member_id: binary,
+        team_name: String.t(),
+        user_email: String.t(),
+        user_name: String.t() | nil,
+        request_count: integer,
+        cost_usd: Decimal,
+        prompt_tokens: integer,
+        completion_tokens: integer,
+        active_days: integer,        # días distintos con al menos 1 request
+        peak_rpm: integer,            # máximo requests en 1 minuto
+        avg_rpm: float,              # promedio de requests por minuto activo
+        p95_rpm: integer,             # percentil 95 de RPM (sostenido)
+        score: integer,               # 0-100 compuesto
+        tier: String.t()              # "alto" | "regular" | "bajo"
+      }
+
+  ## Options
+
+    * `:from` — `inserted_at >= from` (DateTime)
+    * `:to`   — `inserted_at <= to` (DateTime)
+    * `:member_ids` — restrict to logs of these team-member ids (scoping)
+  """
+  @spec member_usage_tiers(String.t() | nil, keyword()) :: [map()]
+  def member_usage_tiers(team_id \\ nil, opts \\ []) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    base_query =
+      RequestLog
+      |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
+      |> join(:inner, [_, tm], t in assoc(tm, :team))
+      |> join(:inner, [_, tm], u in assoc(tm, :user))
+      |> maybe_member_team_filter(team_id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> maybe_member_ids(Keyword.get(opts, :member_ids))
+
+    # Base aggregates per member
+    members =
+      base_query
+      |> group_by([rl, tm, t, u], [tm.id, t.name, u.email, u.name])
+      |> select([rl, tm, t, u], %{
+        team_member_id: tm.id,
+        team_name: t.name,
+        user_email: u.email,
+        user_name: u.name,
+        request_count: count(rl.id),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+        active_days:
+          fragment(
+            "COUNT(DISTINCT date_trunc('day', ?))",
+            rl.inserted_at
+          )
+      })
+      |> Repo.all()
+      |> Enum.map(fn row ->
+        Map.put(row, :cost_usd, Decimal.new(to_string(row.cost_usd)))
+      end)
+
+    member_ids = Enum.map(members, & &1.team_member_id)
+
+    # RPM stats per member (peak, avg, p95)
+    rpm_stats = rpm_stats_per_member(member_ids, from, to)
+
+    # Merge and compute score + tier
+    members
+    |> Enum.map(fn member ->
+      stats = Map.get(rpm_stats, member.team_member_id, %{})
+
+      member
+      |> Map.merge(%{
+        peak_rpm: Map.get(stats, :peak_rpm, 0),
+        avg_rpm: Map.get(stats, :avg_rpm, 0.0),
+        p95_rpm: Map.get(stats, :p95_rpm, 0)
+      })
+    end)
+    |> assign_scores_and_tiers()
+  end
+
+  defp rpm_stats_per_member([], _from, _to), do: %{}
+
+  defp rpm_stats_per_member(member_ids, from, to) do
+    # Bucket requests by minute per member
+    minute_buckets =
+      RequestLog
+      |> where([rl], rl.team_member_id in ^member_ids)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> select([rl], %{
+        team_member_id: rl.team_member_id,
+        minute: fragment("date_trunc('minute', ?)", rl.inserted_at)
+      })
+      |> subquery()
+
+    query =
+      from(m in minute_buckets,
+        group_by: [m.team_member_id, m.minute],
+        select: %{
+          team_member_id: m.team_member_id,
+          minute: m.minute,
+          rpm: count()
+        }
+      )
+
+    rows = Repo.all(query)
+
+    rows
+    |> Enum.group_by(& &1.team_member_id)
+    |> Map.new(fn {member_id, member_rows} ->
+      rpms = Enum.map(member_rows, & &1.rpm)
+      count = length(rpms)
+
+      peak = Enum.max(rpms, fn -> 0 end)
+      avg = if count > 0, do: Float.round(Enum.sum(rpms) / count, 1), else: 0.0
+
+      # Nearest-rank p95
+      sorted = Enum.sort(rpms)
+
+      p95 =
+        if count < 20 do
+          peak
+        else
+          rank = ceil(0.95 * count)
+          index = max(rank - 1, 0)
+          Enum.at(sorted, index)
+        end
+
+      {member_id, %{peak_rpm: peak, avg_rpm: avg, p95_rpm: p95}}
+    end)
+  end
+
+  defp assign_scores_and_tiers(members) when members == [], do: []
+
+  defp assign_scores_and_tiers(members) do
+    # Compute max values for normalization
+    max_tokens =
+      members |> Enum.map(&(&1.prompt_tokens + &1.completion_tokens)) |> Enum.max(fn -> 1 end)
+
+    max_cost = members |> Enum.map(&Decimal.to_float(&1.cost_usd)) |> Enum.max(fn -> 1.0 end)
+    max_requests = members |> Enum.map(& &1.request_count) |> Enum.max(fn -> 1 end)
+    max_active_days = members |> Enum.map(& &1.active_days) |> Enum.max(fn -> 1 end)
+    max_peak_rpm = members |> Enum.map(& &1.peak_rpm) |> Enum.max(fn -> 1 end)
+    max_p95_rpm = members |> Enum.map(& &1.p95_rpm) |> Enum.max(fn -> 1 end)
+
+    members
+    |> Enum.map(fn m ->
+      total_tokens = m.prompt_tokens + m.completion_tokens
+      cost_float = Decimal.to_float(m.cost_usd)
+
+      # Weighted score 0-100
+      score =
+        round(
+          0.25 * normalize(total_tokens, max_tokens) +
+            0.20 * normalize(cost_float, max_cost) +
+            0.15 * normalize(m.request_count, max_requests) +
+            0.15 * normalize(m.active_days, max_active_days) +
+            0.15 * normalize(m.peak_rpm, max_peak_rpm) +
+            0.10 * normalize(m.p95_rpm, max_p95_rpm)
+        )
+
+      tier =
+        cond do
+          score >= 66 -> "alto"
+          score >= 33 -> "regular"
+          true -> "bajo"
+        end
+
+      Map.merge(m, %{score: score, tier: tier})
+    end)
+    |> Enum.sort_by(& &1.score, :desc)
+  end
+
+  defp normalize(value, max) when max > 0, do: min(value / max * 100, 100.0)
+  defp normalize(_value, _max), do: 0.0
+
+  # -----------------------------------------------------------------------
   # top_errors/2
   # -----------------------------------------------------------------------
 

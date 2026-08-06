@@ -1100,6 +1100,130 @@ defmodule Tokengate.Metrics.RollupTest do
   end
 
   # ---------------------------------------------------------------------
+  # member_usage_tiers/2
+  # ---------------------------------------------------------------------
+
+  describe "member_usage_tiers/2" do
+    test "clasifica miembros en 3 tiers por uso" do
+      {tm1, team} = team_member_fixture()
+      {tm2, _team} = team_member_fixture(%{"team_id" => team.id})
+      {tm3, _team} = team_member_fixture(%{"team_id" => team.id})
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      # tm1: alto uso — muchos requests, tokens, y picos
+      for i <- 1..50 do
+        log_request(tm1.id, DateTime.add(now, -i * 60, :second), %{
+          prompt_tokens: 500,
+          completion_tokens: 200,
+          cost_usd: Decimal.new("2.000000")
+        })
+      end
+
+      # tm2: uso regular
+      for i <- 1..20 do
+        log_request(tm2.id, DateTime.add(now, -i * 120, :second), %{
+          prompt_tokens: 200,
+          completion_tokens: 100,
+          cost_usd: Decimal.new("0.500000")
+        })
+      end
+
+      # tm3: bajo uso
+      for i <- 1..5 do
+        log_request(tm3.id, DateTime.add(now, -i * 300, :second), %{
+          prompt_tokens: 50,
+          completion_tokens: 20,
+          cost_usd: Decimal.new("0.100000")
+        })
+      end
+
+      rows = Rollup.member_usage_tiers(team.id, from: DateTime.add(now, -3600, :second))
+
+      assert length(rows) == 3
+
+      # Verificar que todos tienen tier y score
+      assert Enum.all?(rows, &(&1.tier in ["alto", "regular", "bajo"]))
+      assert Enum.all?(rows, &is_integer(&1.score))
+
+      # Ordenados por score descendente
+      scores = Enum.map(rows, & &1.score)
+      assert scores == Enum.sort(scores, :desc)
+    end
+
+    test "miembro sin actividad no aparece" do
+      {_tm, team} = team_member_fixture()
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      rows = Rollup.member_usage_tiers(team.id, from: DateTime.add(now, -3600, :second))
+
+      assert rows == []
+    end
+
+    test "filtra por team_id" do
+      {tm1, team1} = team_member_fixture()
+      {_tm2, team2} = team_member_fixture()
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      log_request(tm1.id, now)
+
+      rows_team1 = Rollup.member_usage_tiers(team1.id, from: DateTime.add(now, -60, :second))
+      rows_team2 = Rollup.member_usage_tiers(team2.id, from: DateTime.add(now, -60, :second))
+
+      assert length(rows_team1) == 1
+      assert rows_team2 == []
+    end
+
+    test "filtra por member_ids" do
+      {tm1, _team} = team_member_fixture()
+      {tm2, _team} = team_member_fixture()
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      log_request(tm1.id, now)
+      log_request(tm2.id, now)
+
+      rows =
+        Rollup.member_usage_tiers(nil,
+          from: DateTime.add(now, -60, :second),
+          member_ids: [tm1.id]
+        )
+
+      assert length(rows) == 1
+      assert hd(rows).team_member_id == tm1.id
+    end
+
+    test "calcula peak_rpm y p95_rpm correctamente" do
+      {tm, team} = team_member_fixture()
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      base_minute = DateTime.add(now, -3600, :second)
+
+      # 10 requests en el mismo minuto (peak)
+      for i <- 0..9 do
+        log_request(tm.id, DateTime.add(base_minute, i, :second))
+      end
+
+      # 5 requests en otro minuto
+      for i <- 0..4 do
+        log_request(tm.id, DateTime.add(base_minute, 60 + i, :second))
+      end
+
+      rows = Rollup.member_usage_tiers(team.id, from: DateTime.add(now, -7200, :second))
+
+      assert length(rows) == 1
+      row = hd(rows)
+
+      assert row.peak_rpm == 10
+      # con <20 samples, p95 = max
+      assert row.p95_rpm == 10
+      assert row.request_count == 15
+    end
+  end
+
+  # ---------------------------------------------------------------------
   # top_errors/2
   # ---------------------------------------------------------------------
 

@@ -33,7 +33,8 @@ defmodule TokengateWeb.StatsLive do
     :breakdown_team,
     :breakdown_provider,
     :breakdown_service,
-    :member_models
+    :member_models,
+    :member_usage_tiers
   ]
 
   @impl true
@@ -69,6 +70,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:peak_concurrency, nil)
       |> assign(:hourly_series, [])
       |> assign(:user_ranking, [])
+      |> assign(:member_usage_tiers, [])
 
     {:ok, socket}
   end
@@ -213,6 +215,7 @@ defmodule TokengateWeb.StatsLive do
     |> assign(:provider_ranking, load_provider_ranking(user, opts))
     |> assign(:model_ranking, load_model_ranking(user, opts))
     |> assign(:user_ranking, load_user_ranking(user, opts))
+    |> assign(:member_usage_tiers, load_member_usage_tiers(user, opts))
     |> assign(:hour_distribution, Rollup.usage_by_hour_of_day(nil, opts))
     |> assign(:busiest_hours, Rollup.busiest_hours(nil, opts))
     |> assign(:busiest_minutes, Rollup.busiest_minutes(nil, opts))
@@ -427,6 +430,12 @@ defmodule TokengateWeb.StatsLive do
 
   defp load_user_ranking(_user, _opts), do: []
 
+  # Tiers de uso por miembro: solo admin, org-wide.
+  defp load_member_usage_tiers(%{global_role: "admin"}, opts),
+    do: Rollup.member_usage_tiers(nil, opts)
+
+  defp load_member_usage_tiers(_user, _opts), do: []
+
   # Concurrencia pico: métrica de infraestructura, solo admin, siempre org-wide.
   defp load_peak_concurrency(%{global_role: "admin"}, opts),
     do: Rollup.peak_concurrency(nil, opts)
@@ -556,6 +565,9 @@ defmodule TokengateWeb.StatsLive do
   def tier_badge_class("B"), do: "badge-warning"
   def tier_badge_class("C"), do: "badge-warning badge-outline"
   def tier_badge_class("D"), do: "badge-error"
+  def tier_badge_class("alto"), do: "badge-error"
+  def tier_badge_class("regular"), do: "badge-warning"
+  def tier_badge_class("bajo"), do: "badge-ghost"
   def tier_badge_class(_), do: "badge-ghost"
 
   def hour_label(hour) when hour in 0..23, do: "#{pad2(hour)}:00"
