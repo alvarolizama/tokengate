@@ -213,6 +213,7 @@ defmodule Tokengate.Budgets do
     |> Map.new(fn {user_id, budgets} ->
       {user_id,
        %{
+         daily_usd: Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.daily_spend_usd, &2)),
          monthly_usd:
            Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.monthly_spend_usd, &2)),
          exhausted?: Enum.any?(budgets, & &1.exhausted?)

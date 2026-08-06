@@ -37,6 +37,7 @@ defmodule TokengateWeb.UsersLive do
       |> assign(:search_query, "")
       |> assign(:sort_field, :name)
       |> assign(:sort_direction, :asc)
+      |> assign(:filter_today_spend, false)
       |> assign(:editing_teams_user_id, nil)
       |> assign(:editing_teams_user_name, nil)
       |> assign(:editing_team_ids, [])
@@ -86,6 +87,19 @@ defmodule TokengateWeb.UsersLive do
     spend_by_user = Tokengate.Budgets.spend_by_user(timezone)
     total_spend_by_user = Tokengate.Logs.total_spend_by_user()
     user_teams = load_user_teams(filtered)
+
+    # Filter by today's spend when toggle is active
+    filtered =
+      if socket.assigns.filter_today_spend do
+        Enum.filter(filtered, fn u ->
+          case Map.get(spend_by_user, u.id) do
+            %{daily_usd: d} -> Decimal.compare(d, Decimal.new(0)) == :gt
+            _ -> false
+          end
+        end)
+      else
+        filtered
+      end
 
     sort_ctx = %{
       spend_by_user: spend_by_user,
@@ -252,6 +266,14 @@ defmodule TokengateWeb.UsersLive do
     {:noreply,
      socket
      |> assign(:search_query, query)
+     |> load_users()}
+  end
+
+  ## Events — filter --------------------------------------------------------
+  def handle_event("toggle_today_spend", _params, socket) do
+    {:noreply,
+     socket
+     |> update(:filter_today_spend, &(!&1))
      |> load_users()}
   end
 
@@ -622,6 +644,17 @@ defmodule TokengateWeb.UsersLive do
                   />
                 </div>
               </.form>
+              <button
+                phx-click="toggle_today_spend"
+                class={[
+                  "btn btn-sm",
+                  @filter_today_spend && "btn-primary",
+                  !@filter_today_spend && "btn-ghost"
+                ]}
+                id="toggle-today-spend"
+              >
+                <.icon name="hero-currency-dollar" class="w-4 h-4" /> Gasto hoy
+              </button>
               <.button phx-click="new_user" id="new-user-btn">
                 <.icon name="hero-plus" class="w-4 h-4" /> Nuevo usuario
               </.button>
