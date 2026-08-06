@@ -1245,12 +1245,13 @@ defmodule Tokengate.Metrics.Rollup do
         on: rl.model_provider_id == mp.id
       )
       |> join(:left, [rl, mp], c in Tokengate.Providers.Credential, on: mp.credential_id == c.id)
+      |> join(:left, [rl, mp, c], p in Tokengate.Providers.Provider, on: c.provider_id == p.id)
       |> maybe_join_team(team_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
       |> join(:left, [rl], ma in ModelAlias, on: rl.model_alias_id == ma.id)
-      |> select([rl, mp, ma], %{
+      |> select([rl, mp, c, p, ma], %{
         hour:
           fragment(
             "CAST(EXTRACT(hour FROM (? AT TIME ZONE 'Etc/UTC') AT TIME ZONE ?) AS integer)",
@@ -1259,17 +1260,21 @@ defmodule Tokengate.Metrics.Rollup do
           ),
         model: fragment("COALESCE(?, ?)", ma.name, rl.model_requested),
         billing_mode: fragment("COALESCE(?, 'unknown')", mp.billing_mode),
+        provider_name: p.name,
+        credential_name: c.name,
         cost_usd: rl.provider_cost_usd,
         id: rl.id
       })
       |> subquery()
       |> then(fn subq ->
         from(r in subq,
-          group_by: [r.hour, r.model, r.billing_mode],
+          group_by: [r.hour, r.model, r.billing_mode, r.provider_name, r.credential_name],
           select: %{
             hour: r.hour,
             model: r.model,
             billing_mode: r.billing_mode,
+            provider_name: r.provider_name,
+            credential_name: r.credential_name,
             cost_usd: fragment("COALESCE(SUM(?), 0)", r.cost_usd),
             request_count: count(r.id)
           }
@@ -1277,35 +1282,61 @@ defmodule Tokengate.Metrics.Rollup do
       end)
       |> Repo.all()
 
-    by_hour = Enum.group_by(rows, & &1.hour)
+    by_hour =
+      rows
+      |> Enum.group_by(& &1.hour)
 
     for hour <- 0..23 do
       hour_rows = Map.get(by_hour, hour, [])
 
-      models =
+      # Agrupar por model_alias
+      by_model =
         hour_rows
-        |> Enum.map(fn r ->
+        |> Enum.group_by(& &1.model)
+        |> Enum.map(fn {model, entries} ->
+          requests = Enum.reduce(entries, 0, &(&1.request_count + &2))
+          cost = Enum.reduce(entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
+          billing_mode = entries |> List.first() |> Map.get(:billing_mode, "unknown")
+
+          providers =
+            entries
+            |> Enum.map(fn e ->
+              %{
+                provider_name: e.provider_name || "—",
+                credential_name: e.credential_name || "—",
+                requests: e.request_count,
+                cost_usd: Decimal.new(to_string(e.cost_usd))
+              }
+            end)
+            |> Enum.filter(&(&1.requests > 0))
+            |> Enum.sort_by(& &1.requests, :desc)
+
           %{
-            model: r.model,
-            requests: r.request_count,
-            cost_usd: Decimal.new(to_string(r.cost_usd)),
-            billing_mode: r.billing_mode
+            model: model,
+            requests: requests,
+            cost_usd: cost,
+            billing_mode: billing_mode,
+            providers: providers
           }
         end)
         |> Enum.sort_by(& &1.requests, :desc)
 
-      total_requests = Enum.reduce(models, 0, &(&1.requests + &2))
+      total_requests = Enum.reduce(by_model, 0, &(&1.requests + &2))
+      included_requests = by_model |> Enum.filter(&(&1.billing_mode == "included")) |> Enum.reduce(0, &(&1.requests + &2))
+      pay_per_token_requests = by_model |> Enum.filter(&(&1.billing_mode == "pay_per_token")) |> Enum.reduce(0, &(&1.requests + &2))
 
       total_cost =
-        models
+        by_model
         |> Enum.filter(&(&1.billing_mode == "pay_per_token"))
         |> Enum.reduce(Decimal.new(0), fn m, acc -> Decimal.add(acc, m.cost_usd) end)
 
       %{
         hour: hour,
         total_requests: total_requests,
+        included_requests: included_requests,
+        pay_per_token_requests: pay_per_token_requests,
         total_cost_usd: total_cost,
-        models: models
+        models: by_model
       }
     end
   end

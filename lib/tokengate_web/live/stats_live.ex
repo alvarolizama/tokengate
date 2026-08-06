@@ -659,10 +659,7 @@ defmodule TokengateWeb.StatsLive do
     |> Enum.group_by(& &1.model)
     |> Enum.map(fn {model, entries} ->
       total_requests = Enum.reduce(entries, 0, &(&1.requests + &2))
-
-      total_cost =
-        Enum.reduce(entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
-
+      total_cost = Enum.reduce(entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
       %{model: model, requests: total_requests, cost_usd: total_cost}
     end)
     |> Enum.sort_by(& &1.requests, :desc)
@@ -675,30 +672,43 @@ defmodule TokengateWeb.StatsLive do
     if hour_total <= 0 do
       []
     else
-      all_models
-      |> Enum.with_index()
-      |> Enum.map(fn {model_info, idx} ->
-        model_name = model_info.model
+      # 1. Segmento included (gris) — siempre al fondo
+      included_segment =
+        if hour_row.included_requests > 0 do
+          pct = Float.round(hour_row.included_requests / hour_total * 100, 1)
+          [%{height_pct: pct, color: "bg-base-300/30", is_pay_per_token: false}]
+        else
+          []
+        end
 
-        model_data =
-          Enum.find(
-            hour_row.models,
-            %{requests: 0, cost_usd: Decimal.new(0), billing_mode: "unknown"},
-            &(&1.model == model_name)
-          )
+      # 2. Segmentos pay_per_token por model alias (colores)
+      ppt_segments =
+        all_models
+        |> Enum.with_index()
+        |> Enum.map(fn {model_info, idx} ->
+          model_name = model_info.model
 
-        pct = Float.round(model_data.requests / hour_total * 100, 1)
+          model_data =
+            Enum.find(
+              hour_row.models,
+              %{requests: 0, cost_usd: Decimal.new(0)},
+              &(&1.model == model_name and &1.billing_mode == "pay_per_token")
+            )
 
-        %{
-          model: model_name,
-          requests: model_data.requests,
-          cost_usd: model_data.cost_usd,
-          height_pct: pct,
-          color: model_color_light(idx),
-          is_pay_per_token: model_data.billing_mode == "pay_per_token"
-        }
-      end)
-      |> Enum.filter(&(&1.height_pct > 0))
+          if model_data.requests > 0 do
+            pct = Float.round(model_data.requests / hour_total * 100, 1)
+            %{
+              height_pct: pct,
+              color: model_color_light(idx),
+              is_pay_per_token: true
+            }
+          else
+            nil
+          end
+        end)
+        |> Enum.reject(&is_nil/1)
+
+      included_segment ++ ppt_segments
     end
   end
 
@@ -716,7 +726,20 @@ defmodule TokengateWeb.StatsLive do
         |> Enum.map(fn {model, entries} ->
           requests = Enum.reduce(entries, 0, &(&1.requests + &2))
           cost = Enum.reduce(entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
-          %{model: model, requests: requests, cost_usd: cost}
+
+          # Agregar providers del período para este model
+          providers =
+            entries
+            |> Enum.flat_map(& &1.providers)
+            |> Enum.group_by(fn p -> {p.provider_name, p.credential_name} end)
+            |> Enum.map(fn {{p_name, c_name}, p_entries} ->
+              p_requests = Enum.reduce(p_entries, 0, &(&1.requests + &2))
+              p_cost = Enum.reduce(p_entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
+              %{provider_name: p_name, credential_name: c_name, requests: p_requests, cost_usd: p_cost}
+            end)
+            |> Enum.sort_by(& &1.requests, :desc)
+
+          %{model: model, requests: requests, cost_usd: cost, providers: providers}
         end)
       end
 
@@ -727,14 +750,14 @@ defmodule TokengateWeb.StatsLive do
         model_name = model_info.model
 
         data =
-          Enum.find(source_models, %{requests: 0, cost_usd: Decimal.new(0)}, &(&1.model == model_name))
+          Enum.find(source_models, %{requests: 0, cost_usd: Decimal.new(0), providers: []}, &(&1.model == model_name))
 
         %{
           model: model_name,
           requests: data.requests,
           cost_usd: data.cost_usd,
           color: model_color_light(idx),
-          is_pay_per_token: Decimal.compare(data.cost_usd, Decimal.new(0)) == :gt
+          providers: data.providers
         }
       end)
       |> Enum.filter(&(&1.requests > 0))

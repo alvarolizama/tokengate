@@ -96,8 +96,8 @@
                     Uso por hora del día
                   </h2>
                   <p class="text-xs text-base-content/60">
-                    Requests acumulados por hora (hora local) — la barra muestra uso total,
-                    el segmento destacado es de modelos pay_per_token.
+                    Requests acumulados por hora (hora local).
+                    La barra gris = uso included, los colores = uso pay_per_token por model alias.
                   </p>
 
                   <%= if hour_usage_stacked_max(@hour_usage_stacked) > 0 do %>
@@ -154,7 +154,7 @@
                       </div>
 
                       <%!-- Legend panel --%>
-                      <div class="w-48 shrink-0 border-l border-base-300 pl-4">
+                      <div class="w-56 shrink-0 border-l border-base-300 pl-4">
                         <div class="text-[10px] font-semibold text-base-content/60 uppercase tracking-wide mb-2">
                           <%= if legend.hovered_hour do %>
                             {hour_label(legend.hovered_hour)} hrs
@@ -162,20 +162,40 @@
                             Total período
                           <% end %>
                         </div>
-                        <div class="space-y-1.5">
-                          <div :for={entry <- legend.entries} class="flex items-center gap-1.5">
-                            <span class={["w-2.5 h-2.5 rounded-sm shrink-0", entry.color]} />
-                            <div class="flex-1 min-w-0">
-                              <div class="text-[10px] font-medium truncate">{entry.model}</div>
-                              <div class="text-[9px] text-base-content/50">
+
+                        <%!-- Model alias entries --%>
+                        <div class="space-y-2.5">
+                          <div :for={entry <- legend.entries}>
+                            <%!-- Model alias header --%>
+                            <div class="flex items-center gap-1.5">
+                              <span class={["w-2.5 h-2.5 rounded-sm shrink-0", entry.color]} />
+                              <span class="text-[10px] font-medium truncate flex-1">{entry.model}</span>
+                              <span class="text-[9px] text-base-content/50 shrink-0">
                                 {format_number(entry.requests)} req
-                                <span :if={entry.is_pay_per_token} class="text-warning">
-                                  · ${format_decimal(entry.cost_usd)}
+                              </span>
+                            </div>
+
+                            <%!-- Provider breakdown --%>
+                            <div :if={entry.providers != []} class="pl-4 mt-0.5 space-y-0.5">
+                              <div :for={prov <- entry.providers} class="flex items-center justify-between text-[9px]">
+                                <span class="text-base-content/50 truncate mr-2">
+                                  {prov.provider_name}
+                                  <span :if={prov.credential_name != "—"} class="text-base-content/30">
+                                    ({prov.credential_name})
+                                  </span>
+                                </span>
+                                <span class="text-base-content/40 shrink-0 whitespace-nowrap">
+                                  {format_number(prov.requests)} req
+                                  <span :if={Decimal.compare(prov.cost_usd, Decimal.new(0)) == :gt} class="text-warning">
+                                    · ${format_decimal(prov.cost_usd)}
+                                  </span>
                                 </span>
                               </div>
                             </div>
                           </div>
                         </div>
+
+                        <%!-- Totals --%>
                         <div class="mt-3 pt-2 border-t border-base-300">
                           <div class="text-[10px] font-semibold">
                             {format_number(legend.total_requests)} requests
