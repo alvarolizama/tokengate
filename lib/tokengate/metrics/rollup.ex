@@ -1201,6 +1201,116 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   # -----------------------------------------------------------------------
+  # cost_by_hour_of_day_stacked/2
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Uso total por hora del día, con desglose por modelo.
+
+  Incluye TODOS los modelos (pay_per_token e included). Para cada hora:
+
+      %{
+        hour: 0..23,
+        total_requests: integer,
+        total_cost_usd: Decimal,      # solo pay_per_token tiene costo > 0
+        models: [
+          %{
+            model: String.t(),
+            requests: integer,
+            cost_usd: Decimal,        # 0 para included
+            billing_mode: String.t()
+          }
+        ]
+      }
+
+  La barra muestra `total_requests` (todos los modelos). El segmento
+  destacado es la proporción de requests de modelos pay_per_token.
+
+  ## Options
+
+    * `:from` — `inserted_at >= from` (DateTime)
+    * `:to`   — `inserted_at <= to` (DateTime)
+    * `:member_ids` — restrict to logs of these team-member ids (scoping)
+    * `:timezone` — IANA zone for the hour-of-day extraction; default `"Etc/UTC"`
+  """
+  @spec usage_by_hour_of_day_stacked(String.t() | nil, keyword()) :: [map()]
+  def usage_by_hour_of_day_stacked(team_id \\ nil, opts \\ []) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+    timezone = Keyword.get(opts, :timezone, "Etc/UTC")
+
+    rows =
+      RequestLog
+      |> join(:left, [rl], mp in Tokengate.Providers.ModelProvider,
+        on: rl.model_provider_id == mp.id
+      )
+      |> join(:left, [rl, mp], c in Tokengate.Providers.Credential, on: mp.credential_id == c.id)
+      |> maybe_join_team(team_id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> maybe_member_ids(Keyword.get(opts, :member_ids))
+      |> join(:left, [rl], ma in ModelAlias, on: rl.model_alias_id == ma.id)
+      |> select([rl, mp, ma], %{
+        hour:
+          fragment(
+            "CAST(EXTRACT(hour FROM (? AT TIME ZONE 'Etc/UTC') AT TIME ZONE ?) AS integer)",
+            rl.inserted_at,
+            ^timezone
+          ),
+        model: fragment("COALESCE(?, ?)", ma.name, rl.model_requested),
+        billing_mode: fragment("COALESCE(?, 'unknown')", mp.billing_mode),
+        cost_usd: rl.provider_cost_usd,
+        id: rl.id
+      })
+      |> subquery()
+      |> then(fn subq ->
+        from(r in subq,
+          group_by: [r.hour, r.model, r.billing_mode],
+          select: %{
+            hour: r.hour,
+            model: r.model,
+            billing_mode: r.billing_mode,
+            cost_usd: fragment("COALESCE(SUM(?), 0)", r.cost_usd),
+            request_count: count(r.id)
+          }
+        )
+      end)
+      |> Repo.all()
+
+    by_hour = Enum.group_by(rows, & &1.hour)
+
+    for hour <- 0..23 do
+      hour_rows = Map.get(by_hour, hour, [])
+
+      models =
+        hour_rows
+        |> Enum.map(fn r ->
+          %{
+            model: r.model,
+            requests: r.request_count,
+            cost_usd: Decimal.new(to_string(r.cost_usd)),
+            billing_mode: r.billing_mode
+          }
+        end)
+        |> Enum.sort_by(& &1.requests, :desc)
+
+      total_requests = Enum.reduce(models, 0, &(&1.requests + &2))
+
+      total_cost =
+        models
+        |> Enum.filter(&(&1.billing_mode == "pay_per_token"))
+        |> Enum.reduce(Decimal.new(0), fn m, acc -> Decimal.add(acc, m.cost_usd) end)
+
+      %{
+        hour: hour,
+        total_requests: total_requests,
+        total_cost_usd: total_cost,
+        models: models
+      }
+    end
+  end
+
+  # -----------------------------------------------------------------------
   # busiest_hours/2 y busiest_minutes/2
   # -----------------------------------------------------------------------
 

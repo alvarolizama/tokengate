@@ -96,39 +96,70 @@
                     Uso por hora del día
                   </h2>
                   <p class="text-xs text-base-content/60">
-                    Requests acumulados por hora (hora local) en el período — patrones recurrentes.
+                    Requests acumulados por hora (hora local) — la barra muestra uso total,
+                    el segmento destacado es de modelos pay_per_token.
                   </p>
-                  <%= if hour_distribution_max(@hour_distribution) > 0 do %>
-                    <% max = hour_distribution_max(@hour_distribution) %>
+
+                  <%= if hour_usage_stacked_max(@hour_usage_stacked) > 0 do %>
+                    <% max = hour_usage_stacked_max(@hour_usage_stacked) %>
+                    <% top_models = top_models_from_stacked(@hour_usage_stacked) %>
+
                     <div class="flex items-end gap-[3px] h-32 mt-4">
                       <div
-                        :for={row <- @hour_distribution}
+                        :for={row <- @hour_usage_stacked}
                         class="flex-1 flex flex-col items-center justify-end h-full group"
                       >
-                        <% height_pct = hour_bar_height(row.request_count, max) %>
+                        <% height_pct = hour_usage_bar_height(row.total_requests, max) %>
                         <div
                           class={[
-                            "w-full rounded-t transition-colors relative",
-                            if(row.request_count == max,
+                            "w-full rounded-t transition-colors relative overflow-hidden",
+                            if(row.total_requests == max,
                               do: "bg-primary hover:bg-primary/80",
                               else: "bg-primary/40 hover:bg-primary/70"
                             )
                           ]}
                           style={"height: #{height_pct}%"}
                         >
-                          <%!-- Hover tooltip --%>
-                          <div class={[
-                            "absolute -top-7 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded text-[10px] font-medium",
-                            "bg-base-content text-base-100 whitespace-nowrap",
-                            "opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10"
-                          ]}>
-                            {format_number(row.request_count)}
+                          <%!-- Pay-per-token segment --%>
+                          <div
+                            :if={pay_per_token_pct(row) > 0}
+                            class="absolute bottom-0 left-0 right-0 bg-warning/60"
+                            style={"height: #{pay_per_token_pct(row)}%"}
+                          />
+                        </div>
+
+                        <%!-- Hover tooltip --%>
+                        <div class={[
+                          "absolute -top-8 left-1/2 -translate-x-1/2 px-2 py-1 rounded text-[10px] font-medium",
+                          "bg-base-content text-base-100 whitespace-nowrap z-10",
+                          "opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none"
+                        ]}>
+                          <div class="font-semibold">
+                            {format_number(row.total_requests)} total
+                          </div>
+                          <div :if={pay_per_token_requests(row) > 0} class="text-warning">
+                            {format_number(pay_per_token_requests(row))} pay-per-token
+                            (${format_decimal(row.total_cost_usd)})
+                          </div>
+                          <div :if={pay_per_token_requests(row) == 0} class="text-base-content/60">
+                            Sin costo
+                          </div>
+                          <div
+                            :for={m <- Enum.take(row.models, 3)}
+                            class="text-[9px] text-base-content/80 border-t border-base-300/30 mt-0.5 pt-0.5"
+                          >
+                            {m.model}: {format_number(m.requests)}
+                            <span :if={m.billing_mode == "pay_per_token"} class="text-warning">
+                              (${format_decimal(m.cost_usd)})
+                            </span>
                           </div>
                         </div>
                       </div>
                     </div>
+
+                    <%!-- Hour labels --%>
                     <div class="flex gap-[3px] mt-1">
-                      <span :for={row <- @hour_distribution} class="flex-1 text-center">
+                      <span :for={row <- @hour_usage_stacked} class="flex-1 text-center">
                         <span
                           :if={rem(row.hour, 6) == 0}
                           class="text-[10px] text-base-content/50"
@@ -136,6 +167,26 @@
                           {hour_label(row.hour)}
                         </span>
                       </span>
+                    </div>
+
+                    <%!-- Legend --%>
+                    <div class="flex items-center gap-4 mt-3 pt-2 border-t border-base-300">
+                      <div class="flex items-center gap-1.5">
+                        <span class="w-3 h-3 rounded-sm bg-primary/40" />
+                        <span class="text-[10px] text-base-content/60">Uso total (requests)</span>
+                      </div>
+                      <div class="flex items-center gap-1.5">
+                        <span class="w-3 h-3 rounded-sm bg-warning/60" />
+                        <span class="text-[10px] text-base-content/60">Pay-per-token</span>
+                      </div>
+                      <div class="flex items-center gap-1.5 ml-auto">
+                        <span class="text-[10px] text-base-content/40">
+                          Top: {top_models
+                          |> Enum.take(3)
+                          |> Enum.map(& &1.model)
+                          |> Enum.join(", ")}
+                        </span>
+                      </div>
                     </div>
                   <% else %>
                     <p class="text-sm text-base-content/40 py-6 text-center">

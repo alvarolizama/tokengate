@@ -65,6 +65,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:sort_field, :request_count)
       |> assign(:sort_direction, :desc)
       |> assign(:hour_distribution, [])
+      |> assign(:hour_usage_stacked, [])
       |> assign(:busiest_hours, [])
       |> assign(:busiest_minutes, [])
       |> assign(:peak_concurrency, nil)
@@ -217,6 +218,7 @@ defmodule TokengateWeb.StatsLive do
     |> assign(:user_ranking, load_user_ranking(user, opts))
     |> assign(:member_usage_tiers, load_member_usage_tiers(user, opts))
     |> assign(:hour_distribution, Rollup.usage_by_hour_of_day(nil, opts))
+    |> assign(:hour_usage_stacked, Rollup.usage_by_hour_of_day_stacked(nil, opts))
     |> assign(:busiest_hours, Rollup.busiest_hours(nil, opts))
     |> assign(:busiest_minutes, Rollup.busiest_minutes(nil, opts))
     |> assign(:peak_concurrency, load_peak_concurrency(user, opts))
@@ -582,6 +584,112 @@ defmodule TokengateWeb.StatsLive do
 
   def hour_distribution_max(rows) do
     rows |> Enum.map(& &1.request_count) |> Enum.max(fn -> 0 end)
+  end
+
+  def hour_usage_stacked_max(rows) do
+    rows |> Enum.map(& &1.total_requests) |> Enum.max(fn -> 0 end)
+  end
+
+  def hour_usage_bar_height(requests, max) when max > 0 do
+    max(round(requests / max * 100), 4)
+  end
+
+  def hour_usage_bar_height(_requests, _max), do: 0
+
+  def pay_per_token_requests(hour_row) do
+    hour_row.models
+    |> Enum.filter(&(&1.billing_mode == "pay_per_token"))
+    |> Enum.reduce(0, &(&1.requests + &2))
+  end
+
+  def pay_per_token_pct(hour_row) do
+    total = hour_row.total_requests
+    ppt = pay_per_token_requests(hour_row)
+
+    if total > 0 do
+      Float.round(ppt / total * 100, 1)
+    else
+      0.0
+    end
+  end
+
+  def model_color(index) do
+    colors = [
+      "bg-primary",
+      "bg-secondary",
+      "bg-accent",
+      "bg-success",
+      "bg-warning",
+      "bg-error",
+      "bg-info",
+      "bg-neutral"
+    ]
+
+    Enum.at(colors, rem(index, length(colors)))
+  end
+
+  def model_color_light(index) do
+    colors = [
+      "bg-primary/40",
+      "bg-secondary/40",
+      "bg-accent/40",
+      "bg-success/40",
+      "bg-warning/40",
+      "bg-error/40",
+      "bg-info/40",
+      "bg-neutral/40"
+    ]
+
+    Enum.at(colors, rem(index, length(colors)))
+  end
+
+  def top_models_from_stacked(rows) do
+    rows
+    |> Enum.flat_map(& &1.models)
+    |> Enum.group_by(& &1.model)
+    |> Enum.map(fn {model, entries} ->
+      total_requests = Enum.reduce(entries, 0, &(&1.requests + &2))
+
+      total_cost =
+        Enum.reduce(entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
+
+      %{model: model, requests: total_requests, cost_usd: total_cost}
+    end)
+    |> Enum.sort_by(& &1.requests, :desc)
+    |> Enum.take(8)
+  end
+
+  def model_segments(hour_row, all_models) do
+    hour_total = hour_row.total_requests
+
+    if hour_total <= 0 do
+      []
+    else
+      all_models
+      |> Enum.with_index()
+      |> Enum.map(fn {model_info, idx} ->
+        model_name = model_info.model
+
+        model_data =
+          Enum.find(
+            hour_row.models,
+            %{requests: 0, cost_usd: Decimal.new(0)},
+            &(&1.model == model_name)
+          )
+
+        pct = Float.round(model_data.requests / hour_total * 100, 1)
+
+        %{
+          model: model_name,
+          requests: model_data.requests,
+          cost_usd: model_data.cost_usd,
+          height_pct: pct,
+          color: model_color_light(idx),
+          is_pay_per_token: model_data.billing_mode == "pay_per_token"
+        }
+      end)
+      |> Enum.filter(&(&1.height_pct > 0))
+    end
   end
 
   def hour_bar_height(count, max) when max > 0, do: max(round(count / max * 100), 4)
