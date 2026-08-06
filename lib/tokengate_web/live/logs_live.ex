@@ -16,7 +16,6 @@ defmodule TokengateWeb.LogsLive do
   @summary_refresh_interval_ms 2_000
   @summary_tick_interval_ms 5_000
   @inflight_refresh_interval_ms 3_000
-  @system_metrics_tick_ms 2_000
 
   @impl true
   def mount(_params, _session, socket) do
@@ -48,7 +47,6 @@ defmodule TokengateWeb.LogsLive do
       |> assign(:cred_error_counts, [])
       |> assign(:budget_exhausted, [])
       |> assign(:budget_activity, %{})
-      |> assign(:system_metrics, empty_system_metrics())
       |> require_admin_hook()
 
     socket = load_logs(socket, :reset)
@@ -65,9 +63,6 @@ defmodule TokengateWeb.LogsLive do
       # logs arrive), so refresh them on a fixed tick, not only on new logs.
       :timer.send_interval(@summary_tick_interval_ms, :refresh_summary)
 
-      # System monitor (RAM/CPU/processes/DB) refreshes on its own tick.
-      :timer.send_interval(@system_metrics_tick_ms, :refresh_system_metrics)
-
       pending = visible_pending(socket.assigns)
 
       socket =
@@ -77,7 +72,6 @@ defmodule TokengateWeb.LogsLive do
         |> assign(:top_models, top_models_card(socket.assigns))
         |> assign(:top_users, top_users_card(socket.assigns))
         |> assign(:pending, pending)
-        |> assign(:system_metrics, collect_system_metrics())
         |> load_alert_data()
 
       # Insert existing pending entries at the top of the logs stream
@@ -144,10 +138,6 @@ defmodule TokengateWeb.LogsLive do
      |> assign(:api_inflight, visible_inflight_count(socket.assigns))
      |> assign(:top_models, top_models_card(socket.assigns))
      |> assign(:top_users, top_users_card(socket.assigns))}
-  end
-
-  def handle_info(:refresh_system_metrics, socket) do
-    {:noreply, assign(socket, :system_metrics, collect_system_metrics())}
   end
 
   def handle_info({:inflight_started, entry}, socket) do
@@ -592,85 +582,6 @@ defmodule TokengateWeb.LogsLive do
     }
   end
 
-  ## System monitor ------------------------------------------------------------
-
-  defp empty_system_metrics do
-    %{
-      memory: %{total: 0, processes: 0, ets: 0, atom: 0, binary: 0},
-      process_count: 0,
-      process_limit: 0,
-      run_queue: 0,
-      schedulers: 0,
-      schedulers_online: 0,
-      db_pool_size: 0,
-      db_query_ms: nil,
-      io_in: 0,
-      io_out: 0,
-      uptime_ms: 0
-    }
-  end
-
-  # Collects live VM + DB stats. Pure OTP/Erlang introspection — no external
-  # deps. CPU load is approximated by run_queue vs schedulers (a saturated VM
-  # has a run queue longer than its online schedulers); process_count and
-  # memory are instantaneous. DB health is a timed SELECT 1 probe.
-  defp collect_system_metrics do
-    # :erlang.memory/0 returns a keyword list, not a map.
-    mem = :erlang.memory()
-
-    {db_pool_size, db_query_ms} = db_pool_stats()
-
-    {{input_bytes, output_bytes}, uptime_ms} = io_and_uptime()
-
-    %{
-      memory: %{
-        total: Keyword.get(mem, :total, 0),
-        processes: Keyword.get(mem, :processes, 0),
-        ets: Keyword.get(mem, :ets, 0),
-        atom: Keyword.get(mem, :atom, 0),
-        binary: Keyword.get(mem, :binary, 0)
-      },
-      process_count: :erlang.system_info(:process_count),
-      process_limit: :erlang.system_info(:process_limit),
-      run_queue: :erlang.statistics(:run_queue),
-      schedulers: :erlang.system_info(:schedulers),
-      schedulers_online: :erlang.system_info(:schedulers_online),
-      db_pool_size: db_pool_size,
-      db_query_ms: db_query_ms,
-      io_in: input_bytes,
-      io_out: output_bytes,
-      uptime_ms: uptime_ms
-    }
-  end
-
-  # DB pool stats. We report the configured pool_size plus a live health probe:
-  # a trivial `SELECT 1` timed in ms tells us the pool is answering and how
-  # fast — far more useful than a guessed "busy" count. On any failure (DB
-  # down, pool exhausted) we report pool_size with a nil latency.
-  defp db_pool_stats do
-    config = Repo.config()
-    pool_size = Keyword.get(config, :pool_size, 10)
-
-    latency_ms =
-      try do
-        t0 = System.monotonic_time(:millisecond)
-        _ = Repo.query!("SELECT 1", [], timeout: 2_000)
-        System.monotonic_time(:millisecond) - t0
-      rescue
-        _ -> nil
-      catch
-        :exit, _ -> nil
-      end
-
-    {pool_size, latency_ms}
-  end
-
-  defp io_and_uptime do
-    {{:input, in_b}, {:output, out_b}} = :erlang.statistics(:io)
-    {uptime_ms, _} = :erlang.statistics(:wall_clock)
-    {{in_b, out_b}, uptime_ms}
-  end
-
   ## Events ----------------------------------------------------------------
 
   @impl true
@@ -898,54 +809,6 @@ defmodule TokengateWeb.LogsLive do
   end
 
   defp format_number(_), do: "0"
-
-  ## System monitor formatters -------------------------------------------------
-
-  defp format_bytes(bytes) when is_integer(bytes) and bytes >= 1_073_741_824 do
-    "#{Float.round(bytes / 1_073_741_824, 2)} GB"
-  end
-
-  defp format_bytes(bytes) when is_integer(bytes) and bytes >= 1_048_576 do
-    "#{Float.round(bytes / 1_048_576, 1)} MB"
-  end
-
-  defp format_bytes(bytes) when is_integer(bytes) and bytes >= 1_024 do
-    "#{Float.round(bytes / 1_024, 1)} KB"
-  end
-
-  defp format_bytes(bytes) when is_integer(bytes), do: "#{bytes} B"
-  defp format_bytes(_), do: "—"
-
-  defp format_uptime(ms) when is_integer(ms) do
-    total_seconds = div(ms, 1000)
-    days = div(total_seconds, 86_400)
-    hours = div(rem(total_seconds, 86_400), 3600)
-    minutes = div(rem(total_seconds, 3600), 60)
-
-    cond do
-      days > 0 -> "#{days}d #{hours}h"
-      hours > 0 -> "#{hours}h #{minutes}m"
-      true -> "#{minutes}m"
-    end
-  end
-
-  defp format_uptime(_), do: "—"
-
-  defp format_query_ms(nil), do: "—"
-  defp format_query_ms(ms) when is_integer(ms), do: "#{ms} ms"
-
-  # CPU load: run_queue vs online schedulers. >1 means the VM is saturated
-  # (more runnable work than scheduler capacity). Rendered as a percentage.
-  defp cpu_load_pct(run_queue, schedulers_online)
-       when is_integer(run_queue) and is_integer(schedulers_online) and schedulers_online > 0 do
-    min(round(run_queue / schedulers_online * 100), 999)
-  end
-
-  defp cpu_load_pct(_, _), do: 0
-
-  defp cpu_color(pct) when pct < 50, do: "text-success"
-  defp cpu_color(pct) when pct < 90, do: "text-warning"
-  defp cpu_color(_), do: "text-error"
 
   defp format_cache_tokens(read, creation)
        when read in [nil, 0] and creation in [nil, 0],
@@ -1330,133 +1193,6 @@ defmodule TokengateWeb.LogsLive do
                     </tbody>
                   </table>
                 </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <%!-- System monitor: live VM + DB health (admin only) --%>
-        <div :if={@is_admin} class="space-y-2" id="system-monitor">
-          <div class="flex items-center gap-2">
-            <h3 class="text-sm font-semibold text-base-content/70 uppercase tracking-wide">
-              Monitor del sistema
-            </h3>
-            <span class="relative flex h-2 w-2">
-              <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-info opacity-60"></span>
-              <span class="relative inline-flex rounded-full h-2 w-2 bg-info"></span>
-            </span>
-            <span class="text-xs text-base-content/40">en vivo · cada 2s</span>
-          </div>
-
-          <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
-            <%!-- RAM --%>
-            <div class="card bg-base-100 border border-base-300 shadow-sm" id="mon-ram">
-              <div class="card-body p-4">
-                <div class="flex items-center justify-between">
-                  <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">RAM</p>
-                  <.icon name="hero-server-stack" class="w-4 h-4 text-base-content/40" />
-                </div>
-                <p class="mt-1 text-xl font-bold text-base-content">
-                  {format_bytes(@system_metrics.memory.total)}
-                </p>
-                <p class="text-xs text-base-content/50">
-                  proc {format_bytes(@system_metrics.memory.processes)} · ets {format_bytes(
-                    @system_metrics.memory.ets
-                  )}
-                </p>
-              </div>
-            </div>
-
-            <%!-- CPU / load --%>
-            <div class="card bg-base-100 border border-base-300 shadow-sm" id="mon-cpu">
-              <div class="card-body p-4">
-                <div class="flex items-center justify-between">
-                  <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                    Carga
-                  </p>
-                  <.icon name="hero-cpu-chip" class="w-4 h-4 text-base-content/40" />
-                </div>
-                <p class={[
-                  "mt-1 text-xl font-bold",
-                  cpu_color(
-                    cpu_load_pct(@system_metrics.run_queue, @system_metrics.schedulers_online)
-                  )
-                ]}>
-                  {cpu_load_pct(@system_metrics.run_queue, @system_metrics.schedulers_online)}%
-                </p>
-                <p class="text-xs text-base-content/50">
-                  cola {@system_metrics.run_queue} · {@system_metrics.schedulers_online} sched
-                </p>
-              </div>
-            </div>
-
-            <%!-- Processes --%>
-            <div class="card bg-base-100 border border-base-300 shadow-sm" id="mon-processes">
-              <div class="card-body p-4">
-                <div class="flex items-center justify-between">
-                  <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                    Procesos
-                  </p>
-                  <.icon name="hero-squares-2x2" class="w-4 h-4 text-base-content/40" />
-                </div>
-                <p class="mt-1 text-xl font-bold text-base-content">
-                  {format_number(@system_metrics.process_count)}
-                </p>
-                <p class="text-xs text-base-content/50">
-                  límite {format_number(@system_metrics.process_limit)}
-                </p>
-              </div>
-            </div>
-
-            <%!-- DB --%>
-            <div class="card bg-base-100 border border-base-300 shadow-sm" id="mon-db">
-              <div class="card-body p-4">
-                <div class="flex items-center justify-between">
-                  <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                    Base de datos
-                  </p>
-                  <.icon name="hero-circle-stack" class="w-4 h-4 text-base-content/40" />
-                </div>
-                <p class="mt-1 text-xl font-bold text-base-content">
-                  {format_query_ms(@system_metrics.db_query_ms)}
-                </p>
-                <p class="text-xs text-base-content/50">
-                  pool {@system_metrics.db_pool_size} · SELECT 1
-                </p>
-              </div>
-            </div>
-
-            <%!-- IO --%>
-            <div class="card bg-base-100 border border-base-300 shadow-sm" id="mon-io">
-              <div class="card-body p-4">
-                <div class="flex items-center justify-between">
-                  <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">I/O</p>
-                  <.icon name="hero-arrow-path" class="w-4 h-4 text-base-content/40" />
-                </div>
-                <p class="mt-1 text-xl font-bold text-base-content">
-                  {format_bytes(@system_metrics.io_in)}
-                </p>
-                <p class="text-xs text-base-content/50">
-                  in · out {format_bytes(@system_metrics.io_out)}
-                </p>
-              </div>
-            </div>
-
-            <%!-- Uptime --%>
-            <div class="card bg-base-100 border border-base-300 shadow-sm" id="mon-uptime">
-              <div class="card-body p-4">
-                <div class="flex items-center justify-between">
-                  <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                    Uptime
-                  </p>
-                  <.icon name="hero-clock" class="w-4 h-4 text-base-content/40" />
-                </div>
-                <p class="mt-1 text-xl font-bold text-base-content">
-                  {format_uptime(@system_metrics.uptime_ms)}
-                </p>
-                <p class="text-xs text-base-content/50">
-                  {@system_metrics.schedulers} schedulers
-                </p>
               </div>
             </div>
           </div>
