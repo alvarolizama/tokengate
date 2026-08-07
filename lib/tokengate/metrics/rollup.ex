@@ -392,6 +392,7 @@ defmodule Tokengate.Metrics.Rollup do
       |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
       |> select([rl, tm, t, u], %{
         team_member_id: tm.id,
+        user_id: u.id,
         team_name: t.name,
         user_email: u.email,
         request_count: count(rl.id),
@@ -405,6 +406,7 @@ defmodule Tokengate.Metrics.Rollup do
     |> Enum.map(fn row ->
       %{
         team_member_id: row.team_member_id,
+        user_id: row.user_id,
         team_name: row.team_name,
         user_email: row.user_email,
         request_count: row.request_count,
@@ -687,6 +689,7 @@ defmodule Tokengate.Metrics.Rollup do
       |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
       |> select([rl, tm, t, u], %{
         team_member_id: tm.id,
+        user_id: u.id,
         team_name: t.name,
         user_email: u.email,
         request_count: count(rl.id),
@@ -700,6 +703,7 @@ defmodule Tokengate.Metrics.Rollup do
     |> Enum.map(fn row ->
       %{
         team_member_id: row.team_member_id,
+        user_id: row.user_id,
         team_name: row.team_name,
         user_email: row.user_email,
         request_count: row.request_count,

@@ -1035,7 +1035,14 @@
                               id={"bd-model-member-#{row.team_member_id}"}
                             >
                               <td>{row.team_name}</td>
-                              <td class="font-mono text-sm">{row.user_email}</td>
+                              <td class="font-mono text-sm">
+                                <.link
+                                  navigate={~p"/dashboard/users/#{row.user_id}/stats"}
+                                  class="link link-hover"
+                                >
+                                  {row.user_email}
+                                </.link>
+                              </td>
                               <td class="text-right font-mono">
                                 {format_number(row.request_count)}
                               </td>
@@ -1457,7 +1464,18 @@
                               :for={row <- @breakdown_model}
                               id={"bd-team-model-#{row.model_id || "unknown"}"}
                             >
-                              <td class="font-medium">{row.model_name}</td>
+                              <td class="font-medium">
+                                <%= if row.model_id do %>
+                                  <.link
+                                    patch={
+                                      ~p"/dashboard/stats/models?period=#{@period}&model_id=#{row.model_id}"
+                                    }
+                                    class="link link-hover"
+                                  >{row.model_name}</.link>
+                                <% else %>
+                                  {row.model_name}
+                                <% end %>
+                              </td>
                               <td class="text-right font-mono">
                                 {format_number(row.request_count)}
                               </td>
@@ -1605,9 +1623,7 @@
                             >
                               <td class="font-mono text-sm">
                                 <.link
-                                  patch={
-                                    ~p"/dashboard/stats/members/#{row.team_member_id}?period=#{@period}"
-                                  }
+                                  navigate={~p"/dashboard/users/#{row.user_id}/stats"}
                                   class="link link-hover"
                                 >
                                   {row.user_email}
@@ -2035,7 +2051,18 @@
                               :for={row <- @breakdown_model}
                               id={"bd-service-model-#{row.model_id || "unknown"}"}
                             >
-                              <td class="font-medium">{row.model_name}</td>
+                              <td class="font-medium">
+                                <%= if row.model_id do %>
+                                  <.link
+                                    patch={
+                                      ~p"/dashboard/stats/models?period=#{@period}&model_id=#{row.model_id}"
+                                    }
+                                    class="link link-hover"
+                                  >{row.model_name}</.link>
+                                <% else %>
+                                  {row.model_name}
+                                <% end %>
+                              </td>
                               <td class="text-right font-mono">
                                 {format_number(row.request_count)}
                               </td>
@@ -2284,7 +2311,18 @@
                             :for={row <- @member_models}
                             id={"member-model-#{row.model_id || "unknown"}"}
                           >
-                            <td class="font-medium truncate max-w-[200px]">{row.model_name}</td>
+                            <td class="font-medium truncate max-w-[200px]">
+                              <%= if row.model_id do %>
+                                <.link
+                                  navigate={
+                                    ~p"/dashboard/stats/models?period=#{@period}&model_id=#{row.model_id}"
+                                  }
+                                  class="link link-hover"
+                                >{row.model_name}</.link>
+                              <% else %>
+                                {row.model_name}
+                              <% end %>
+                            </td>
                             <td class="text-right font-mono">
                               {format_number(row.request_count)}
                             </td>
