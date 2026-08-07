@@ -166,31 +166,18 @@
                         <%!-- Model alias entries --%>
                         <div class="space-y-2.5">
                           <div :for={entry <- legend.entries}>
-                            <%!-- Model alias header --%>
                             <div class="flex items-center gap-1.5">
                               <span class={["w-2.5 h-2.5 rounded-sm shrink-0", entry.color]} />
                               <span class="text-[10px] font-medium truncate flex-1">{entry.model}</span>
                               <span class="text-[9px] text-base-content/50 shrink-0">
                                 {format_number(entry.requests)} req
                               </span>
-                            </div>
-
-                            <%!-- Provider breakdown --%>
-                            <div :if={entry.providers != []} class="pl-4 mt-0.5 space-y-0.5">
-                              <div :for={prov <- entry.providers} class="flex items-center justify-between text-[9px]">
-                                <span class="text-base-content/50 truncate mr-2">
-                                  {prov.provider_name}
-                                  <span :if={prov.credential_name != "—"} class="text-base-content/30">
-                                    ({prov.credential_name})
-                                  </span>
-                                </span>
-                                <span class="text-base-content/40 shrink-0 whitespace-nowrap">
-                                  {format_number(prov.requests)} req
-                                  <span :if={Decimal.compare(prov.cost_usd, Decimal.new(0)) == :gt} class="text-warning">
-                                    · ${format_decimal(prov.cost_usd)}
-                                  </span>
-                                </span>
-                              </div>
+                              <span
+                                :if={Decimal.compare(entry.cost_usd, Decimal.new(0)) == :gt}
+                                class="text-[9px] text-warning shrink-0"
+                              >
+                                ${format_decimal(entry.cost_usd)}
+                              </span>
                             </div>
                           </div>
                         </div>
@@ -200,7 +187,10 @@
                           <div class="text-[10px] font-semibold">
                             {format_number(legend.total_requests)} requests
                           </div>
-                          <div :if={Decimal.compare(legend.total_cost_usd, Decimal.new(0)) == :gt} class="text-[10px] text-warning font-medium">
+                          <div
+                            :if={Decimal.compare(legend.total_cost_usd, Decimal.new(0)) == :gt}
+                            class="text-[10px] text-warning font-medium"
+                          >
                             ${format_decimal(legend.total_cost_usd)} total
                           </div>
                         </div>

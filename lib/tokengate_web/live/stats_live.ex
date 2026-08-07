@@ -659,7 +659,10 @@ defmodule TokengateWeb.StatsLive do
     |> Enum.group_by(& &1.model)
     |> Enum.map(fn {model, entries} ->
       total_requests = Enum.reduce(entries, 0, &(&1.requests + &2))
-      total_cost = Enum.reduce(entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
+
+      total_cost =
+        Enum.reduce(entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
+
       %{model: model, requests: total_requests, cost_usd: total_cost}
     end)
     |> Enum.sort_by(& &1.requests, :desc)
@@ -697,6 +700,7 @@ defmodule TokengateWeb.StatsLive do
 
           if model_data.requests > 0 do
             pct = Float.round(model_data.requests / hour_total * 100, 1)
+
             %{
               height_pct: pct,
               color: model_color_light(idx),
@@ -725,21 +729,11 @@ defmodule TokengateWeb.StatsLive do
         |> Enum.group_by(& &1.model)
         |> Enum.map(fn {model, entries} ->
           requests = Enum.reduce(entries, 0, &(&1.requests + &2))
-          cost = Enum.reduce(entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
 
-          # Agregar providers del período para este model
-          providers =
-            entries
-            |> Enum.flat_map(& &1.providers)
-            |> Enum.group_by(fn p -> {p.provider_name, p.credential_name} end)
-            |> Enum.map(fn {{p_name, c_name}, p_entries} ->
-              p_requests = Enum.reduce(p_entries, 0, &(&1.requests + &2))
-              p_cost = Enum.reduce(p_entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
-              %{provider_name: p_name, credential_name: c_name, requests: p_requests, cost_usd: p_cost}
-            end)
-            |> Enum.sort_by(& &1.requests, :desc)
+          cost =
+            Enum.reduce(entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
 
-          %{model: model, requests: requests, cost_usd: cost, providers: providers}
+          %{model: model, requests: requests, cost_usd: cost}
         end)
       end
 
@@ -750,14 +744,17 @@ defmodule TokengateWeb.StatsLive do
         model_name = model_info.model
 
         data =
-          Enum.find(source_models, %{requests: 0, cost_usd: Decimal.new(0), providers: []}, &(&1.model == model_name))
+          Enum.find(
+            source_models,
+            %{requests: 0, cost_usd: Decimal.new(0)},
+            &(&1.model == model_name)
+          )
 
         %{
           model: model_name,
           requests: data.requests,
           cost_usd: data.cost_usd,
-          color: model_color_light(idx),
-          providers: data.providers
+          color: model_color_light(idx)
         }
       end)
       |> Enum.filter(&(&1.requests > 0))
