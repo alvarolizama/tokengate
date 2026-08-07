@@ -555,11 +555,50 @@ defmodule TokengateWeb.StatsLive do
     rows |> Enum.map(& &1.total_requests) |> Enum.max(fn -> 0 end)
   end
 
+  @doc """
+  Altura de barra en % usando escala raíz cuadrada.
+
+  Las distribuciones por hora tienen picos muy marcados (horas laborales)
+  y valles casi en cero (madrugada). Con escala lineal las barras chicas
+  se vuelven invisibles; sqrt comprime los picos y levanta los valles,
+  manteniendo el orden relativo.
+  """
   def hour_usage_bar_height(requests, max) when max > 0 do
-    max(round(requests / max * 100), 4)
+    pct = :math.sqrt(requests / max) * 100
+    max(Float.round(pct, 1), 8.0)
   end
 
   def hour_usage_bar_height(_requests, _max), do: 0
+
+  @doc """
+  "Nice number" para ticks del eje Y (1, 2, 5 × 10^n).
+  """
+  def nice_ceiling(value) when value <= 0, do: 10
+
+  def nice_ceiling(value) do
+    exp = :math.log10(value) |> Float.floor() |> round()
+    base = :math.pow(10, exp)
+    fraction = value / base
+
+    nice_fraction =
+      cond do
+        fraction <= 1 -> 1
+        fraction <= 2 -> 2
+        fraction <= 5 -> 5
+        true -> 10
+      end
+
+    round(nice_fraction * base)
+  end
+
+  @doc "Genera `count` ticks (sin incluir 0) hasta un techo 'nice' para el eje Y."
+  def y_axis_ticks(max, count \\ 3) do
+    ceiling = nice_ceiling(max)
+
+    1..count
+    |> Enum.map(fn i -> round(ceiling * i / count) end)
+    |> Enum.uniq()
+  end
 
   def pay_per_token_requests(hour_row) do
     hour_row.models
@@ -588,21 +627,6 @@ defmodule TokengateWeb.StatsLive do
       "bg-error",
       "bg-info",
       "bg-neutral"
-    ]
-
-    Enum.at(colors, rem(index, length(colors)))
-  end
-
-  def model_color_light(index) do
-    colors = [
-      "bg-primary/40",
-      "bg-secondary/40",
-      "bg-accent/40",
-      "bg-success/40",
-      "bg-warning/40",
-      "bg-error/40",
-      "bg-info/40",
-      "bg-neutral/40"
     ]
 
     Enum.at(colors, rem(index, length(colors)))
@@ -658,7 +682,7 @@ defmodule TokengateWeb.StatsLive do
 
             %{
               height_pct: pct,
-              color: model_color_light(idx),
+              color: model_color(idx),
               is_pay_per_token: true
             }
           else
@@ -709,7 +733,7 @@ defmodule TokengateWeb.StatsLive do
           model: model_name,
           requests: data.requests,
           cost_usd: data.cost_usd,
-          color: model_color_light(idx)
+          color: model_color(idx)
         }
       end)
       |> Enum.filter(&(&1.requests > 0))

@@ -419,4 +419,43 @@ defmodule TokengateWeb.StatsLiveTest do
 
     assert html =~ "Sin datos en este período."
   end
+
+  describe "hour_usage_bar_height/2 (sqrt scale)" do
+    alias TokengateWeb.StatsLive
+
+    test "the max value gets 100%" do
+      assert StatsLive.hour_usage_bar_height(10_000, 10_000) == 100.0
+    end
+
+    test "sqrt scale lifts small values above the linear equivalent" do
+      # lineal sería 1% (invisible); sqrt(0.01) = 10%
+      assert StatsLive.hour_usage_bar_height(100, 10_000) == 10.0
+    end
+
+    test "enforces a visible minimum height" do
+      assert StatsLive.hour_usage_bar_height(1, 1_000_000) == 8.0
+    end
+
+    test "zero max returns 0" do
+      assert StatsLive.hour_usage_bar_height(0, 0) == 0
+    end
+  end
+
+  describe "y_axis_ticks/2" do
+    alias TokengateWeb.StatsLive
+
+    test "returns ascending ticks up to a nice ceiling" do
+      assert [_, _, _] = ticks = StatsLive.y_axis_ticks(950)
+      assert ticks == Enum.sort(ticks)
+      assert List.last(ticks) >= 950
+    end
+
+    test "ticks are nice round numbers for powers of ten" do
+      assert StatsLive.y_axis_ticks(1000) == [333, 667, 1000]
+    end
+
+    test "handles tiny maxima" do
+      assert [_, _, _] = StatsLive.y_axis_ticks(5)
+    end
+  end
 end
