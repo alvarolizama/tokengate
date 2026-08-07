@@ -168,9 +168,11 @@ defmodule TokengateWeb.KpiHelpers do
             <div>
               <p
                 class="text-lg font-bold text-base-content"
-                title={format_number(
-                  (@metrics[:cache_read_tokens] || 0) + (@metrics[:cache_creation_tokens] || 0)
-                )}
+                title={
+                  format_number(
+                    (@metrics[:cache_read_tokens] || 0) + (@metrics[:cache_creation_tokens] || 0)
+                  )
+                }
               >
                 {format_compact(
                   (@metrics[:cache_read_tokens] || 0) + (@metrics[:cache_creation_tokens] || 0)
