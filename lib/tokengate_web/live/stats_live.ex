@@ -71,7 +71,6 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:busiest_minutes, [])
       |> assign(:peak_concurrency, nil)
       |> assign(:hourly_series, [])
-      |> assign(:user_ranking, [])
       |> assign(:member_usage_tiers, [])
 
     {:ok, socket}
@@ -225,7 +224,6 @@ defmodule TokengateWeb.StatsLive do
     |> assign(:top_errors, Rollup.top_errors(nil, opts))
     |> assign(:provider_ranking, load_provider_ranking(user, opts))
     |> assign(:model_ranking, load_model_ranking(user, opts))
-    |> assign(:user_ranking, load_user_ranking(user, opts))
     |> assign(:member_usage_tiers, load_member_usage_tiers(user, opts))
     |> assign(:hour_distribution, Rollup.usage_by_hour_of_day(nil, opts))
     |> assign(:hour_usage_stacked, Rollup.usage_by_hour_of_day_stacked(nil, opts))
@@ -435,12 +433,6 @@ defmodule TokengateWeb.StatsLive do
     do: Rollup.model_ranking(nil, opts)
 
   defp load_model_ranking(_user, _opts), do: []
-
-  # Ranking de usuarios: consumo por usuario, solo admin.
-  defp load_user_ranking(%{global_role: "admin"}, opts),
-    do: Rollup.user_ranking(nil, opts)
-
-  defp load_user_ranking(_user, _opts), do: []
 
   # Tiers de uso por miembro: solo admin, org-wide.
   defp load_member_usage_tiers(%{global_role: "admin"}, opts),
