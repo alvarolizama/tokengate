@@ -153,6 +153,10 @@ defmodule Tokengate.Limits.Manager do
   @spec release(api_key_id :: String.t() | term()) :: :ok
   def release(api_key_id) do
     release_concurrency(api_key_id)
+    # Notificar al IncludedWaiter — si api_key_id es una credential, puede
+    # haber requests esperando en cola. Si es un user key, no hay waiters
+    # registrados y notify_slot es un no-op barato (una lookup en ETS).
+    Tokengate.Routing.IncludedWaiter.notify_slot(api_key_id)
   end
 
   @doc """

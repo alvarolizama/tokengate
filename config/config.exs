@@ -92,6 +92,25 @@ config :phoenix, :filter_parameters, [
 # Configure the time zone database for DateTime.shift_zone/3
 config :elixir, :time_zone_database, Tzdata.TimeZoneDatabase
 
+# ── Included credential wait + sticky TTL ──────────────────────────────
+
+config :tokengate, :proxy,
+  # Tiempos de espera en cola FIFO cuando una credential included está llena.
+  # La llave es "cuántas included quedan después de excluir esta", el valor
+  # es el timeout en milisegundos. Se toma el primer tier cuyo threshold
+  # sea <= al número de included restantes (por eso 0 siempre matchea).
+  included_wait_tiers: [
+    {2, 3_000},
+    {1, 5_000},
+    {0, 30_000}
+  ],
+  # TTL por defecto del sticky routing según billing_mode.
+  # Si el model_provider tiene sticky_ttl_ms explícito, ese gana.
+  sticky_default_ttl_ms: %{
+    "included" => 15 * 60 * 1000,
+    "pay_per_token" => 3 * 60 * 1000
+  }
+
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
 import_config "#{config_env()}.exs"

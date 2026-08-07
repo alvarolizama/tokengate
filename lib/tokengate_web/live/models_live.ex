@@ -1495,7 +1495,7 @@ defmodule TokengateWeb.ModelsLive do
                   field={@provider_form[:sticky_ttl_seconds]}
                   type="number"
                   label="TTL sticky (segundos)"
-                  hint="Cuánto se queda pegada la misma credencial para esta API key. Vacío = 900 s (15 min, default). Mínimo 1 s, máximo 86 400 s (24 h). Se guarda en milisegundos."
+                  hint="Vacío usa el default según facturación: included → 900 s (15 min), pay-per-token → 180 s (3 min).\nSi pones un valor, siempre se usa ese. Mínimo 1 s, máximo 86 400 s (24 h).\nSe guarda en milisegundos."
                 />
 
                 <.input

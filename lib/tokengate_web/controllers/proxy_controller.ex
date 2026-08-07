@@ -53,6 +53,7 @@ defmodule TokengateWeb.ProxyController do
   }
 
   alias Tokengate.Routing.Router
+  alias Tokengate.Routing.IncludedWaiter
 
   @max_attempts 9
   @max_retries_per_provider 3
@@ -578,6 +579,7 @@ defmodule TokengateWeb.ProxyController do
 
   defp route_and_acquire(member, payload, api_key_hash, limits, exclude \\ [], route_opts \\ []) do
     key_id = member.api_key.id
+    model_requested = payload["model"]
 
     request_context = %{
       "messages" => payload["messages"] || [],
@@ -586,35 +588,66 @@ defmodule TokengateWeb.ProxyController do
       :capability => Keyword.get(route_opts, :capability, "llm")
     }
 
-    with {:ok, route} <- Router.route(payload["model"], member, request_context),
+    with {:ok, route} <- Router.route(model_requested, member, request_context),
          :ok <- check_budget(member, limits, route, payload) do
       case acquire_credential_limits(route.credential, key_id) do
         :ok ->
           {:ok, route}
 
         {:error, :provider_concurrency_exceeded} ->
-          # This credential is saturated — try the next one by priority.
-          route_and_acquire(member, payload, api_key_hash, limits, [route.credential.id | exclude])
+          # Si es included, esperar en cola FIFO con timeout según cuántas
+          # included queden. Si es pay-per-token, fallback inmediato.
+          if route.model_provider.billing_mode == "included" do
+            case maybe_wait_for_included(route, member, key_id, model_requested) do
+              :ok ->
+                {:ok, route}
+
+              {:error, :queue_timeout} ->
+                route_and_acquire(member, payload, api_key_hash, limits, [
+                  route.credential.id | exclude
+                ])
+            end
+          else
+            route_and_acquire(member, payload, api_key_hash, limits, [
+              route.credential.id | exclude
+            ])
+          end
 
         {:error, :provider_user_concurrency_exceeded} ->
-          # This user hit their per-user ceiling on this credential — only
-          # they fall back to the next provider; others keep the subscription.
           route_and_acquire(member, payload, api_key_hash, limits, [route.credential.id | exclude])
 
         {:error, {:provider_rate_limited, _retry_ms}} ->
-          # Provider RPM limit hit — same fallback: try the next credential.
           route_and_acquire(member, payload, api_key_hash, limits, [route.credential.id | exclude])
       end
     else
-      # All credentials excluded or unavailable — if we got here through
-      # concurrency fallback, surface the concurrency error instead of the
-      # generic "no available provider".
       {:error, :no_available_provider} when exclude != [] ->
         {:error, :provider_concurrency_exceeded}
 
       {:error, error} ->
         {:error, error}
     end
+  end
+
+  # Espera en cola FIFO por un slot en una credential included saturada.
+  # El timeout depende de cuántas included quedan disponibles en la cascada.
+  defp maybe_wait_for_included(route, member, _key_id, model_requested) do
+    remaining = Router.count_remaining_included(model_requested, member, route.credential.id)
+    timeout_ms = included_wait_timeout(remaining)
+    credential = route.credential
+
+    IncludedWaiter.wait_for_slot(credential.id, credential.max_concurrent, timeout_ms)
+  end
+
+  defp included_wait_timeout(remaining) do
+    tiers =
+      Application.get_env(:tokengate, :proxy, [])
+      |> Keyword.get(:included_wait_tiers, [])
+
+    # Recorre tiers en orden; el primero cuyo threshold <= remaining da el timeout.
+    # El tier {0, 30_000} siempre matchea como fallback.
+    Enum.find_value(tiers, 30_000, fn {threshold, timeout} ->
+      if remaining <= threshold, do: timeout
+    end)
   end
 
   defp check_budget(member, _limits, route, _payload) do

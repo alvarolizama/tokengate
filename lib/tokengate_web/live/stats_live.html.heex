@@ -12,19 +12,27 @@
         </:subtitle>
       </.header>
 
-      <div class="join" id="period-selector" role="tablist">
-        <button
-          :for={period <- ~w(today 7d 30d 90d)}
-          phx-click="set_period"
-          phx-value-period={period}
-          class={[
-            "join-item btn btn-sm",
-            if(period_active?(@period, period), do: "btn-primary", else: "btn-ghost")
-          ]}
-          id={"period-#{period}"}
-        >
-          {period_label(period)}
-        </button>
+      <div class="flex items-center gap-3">
+        <span
+          :if={@stats_loading}
+          class="loading loading-spinner loading-sm text-primary"
+          id="stats-loading"
+          title="Actualizando estadísticas…"
+        ></span>
+        <div class="join" id="period-selector" role="tablist">
+          <button
+            :for={period <- ~w(today 7d 30d 90d)}
+            phx-click="set_period"
+            phx-value-period={period}
+            class={[
+              "join-item btn btn-sm",
+              if(period_active?(@period, period), do: "btn-primary", else: "btn-ghost")
+            ]}
+            id={"period-#{period}"}
+          >
+            {period_label(period)}
+          </button>
+        </div>
       </div>
     </div>
 
@@ -72,12 +80,13 @@
       </.link>
     </div>
 
-    <%= if @loading do %>
-      <div class="flex items-center justify-center py-20">
-        <span class="loading loading-spinner loading-lg text-primary"></span>
-        <span class="ml-3 text-base-content/60">Cargando estadísticas…</span>
-      </div>
-    <% else %>
+    <div
+      class={[
+        "transition-opacity duration-200",
+        @stats_loading && "opacity-50 pointer-events-none"
+      ]}
+      id="stats-content"
+    >
       <%= cond do %>
         <% @live_action == :index -> %>
           <div class="space-y-6">
@@ -2350,6 +2359,6 @@
             <% end %>
           </div>
       <% end %>
-    <% end %>
+    </div>
   </div>
 </Layouts.dashboard>

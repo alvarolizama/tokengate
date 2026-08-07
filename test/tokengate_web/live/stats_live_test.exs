@@ -27,6 +27,29 @@ defmodule TokengateWeb.StatsLiveTest do
     |> recycle()
   end
 
+  # Stats data now loads in an async task (assign_async), so tests must wait
+  # for the async result to land before asserting on data-driven markup.
+  # `:sys.get_state/1` syncs with the LiveView process (it processes all
+  # pending messages first), so one call after `render/1` is usually enough;
+  # the tiny sleep gives the supervised async task a chance to finish when
+  # the DB is under load.
+  defp wait_stats_loaded(view, attempts \\ 200)
+
+  defp wait_stats_loaded(view, attempts) when attempts > 0 do
+    state = :sys.get_state(view.pid)
+
+    case get_in(state, [Access.key(:socket), Access.key(:assigns), Access.key(:stats_loading)]) do
+      false ->
+        view
+
+      _other ->
+        Process.sleep(10)
+        wait_stats_loaded(view, attempts - 1)
+    end
+  end
+
+  defp wait_stats_loaded(_view, 0), do: raise("stats async data never loaded")
+
   defp team_with_log(opts) do
     u = unique()
 
@@ -110,6 +133,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
+    wait_stats_loaded(view)
 
     assert has_element?(view, "#kpi-requests")
     assert has_element?(view, "#kpi-cost")
@@ -124,6 +148,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
+    wait_stats_loaded(view)
 
     assert has_element?(view, "#provider-ranking")
     assert has_element?(view, "#provider-ranking-row-#{provider.id}")
@@ -142,6 +167,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
+    wait_stats_loaded(view)
 
     assert has_element?(view, "#usage-patterns")
     assert has_element?(view, "#hour-distribution")
@@ -165,6 +191,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats/models")
+    wait_stats_loaded(view)
 
     assert has_element?(view, "#csv-models")
     assert has_element?(view, "table")
@@ -176,6 +203,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats/models?model_id=#{ma.id}")
+    wait_stats_loaded(view)
 
     assert has_element?(view, "#model-kpi-requests")
     # Since the 2026-07-30 refactor there's only one cost KPI: #model-kpi-cost.
@@ -192,6 +220,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats/teams")
+    wait_stats_loaded(view)
 
     assert has_element?(view, "#csv-teams")
     assert has_element?(view, "table")
@@ -203,6 +232,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats/teams?team_id=#{team.id}")
+    wait_stats_loaded(view)
 
     assert has_element?(view, "#team-kpi-requests")
     # Since the 2026-07-30 refactor there's only one cost KPI: #team-kpi-cost.
@@ -263,7 +293,8 @@ defmodule TokengateWeb.StatsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard/stats/models")
+    {:ok, view, _html} = live(conn, ~p"/dashboard/stats/models")
+    html = render(wait_stats_loaded(view))
 
     # Row order = order of appearance of the bd-model-<id> rows in the HTML.
     row_order = fn view ->
@@ -362,7 +393,8 @@ defmodule TokengateWeb.StatsLiveTest do
     team_with_log(%{cost: "0.005", inserted_at: inserted_at})
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard/stats")
+    {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
+    html = render(wait_stats_loaded(view))
 
     # El log cayó en una hora local (01:00 local si candidate < now) y la
     # distribución renderiza barras (max > 0)
@@ -382,7 +414,8 @@ defmodule TokengateWeb.StatsLiveTest do
     team_with_log(%{cost: "0.005", inserted_at: DateTime.add(today_start, -3600, :second)})
 
     conn = login(conn, admin, password)
-    {:ok, _view, html} = live(conn, ~p"/dashboard/stats")
+    {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
+    html = render(wait_stats_loaded(view))
 
     assert html =~ "Sin datos en este período."
   end

@@ -163,7 +163,33 @@ defmodule Tokengate.Routing.PriorityTest do
       assert ttl_ms == 60_000
     end
 
-    test "nil sticky_ttl_ms falls back to default 15 minutes" do
+    test "nil sticky_ttl_ms falls back to billing_mode default: included=15min, pay_per_token=3min" do
+      # included → 15 min default
+      included = ap_with_cred("incl", priority: 1, billing_mode: "included")
+      candidates = [included]
+      opts = %{api_key_hash: "key-incl-ttl", model_alias_id: "alias-1"}
+      key_incl = {"key-incl-ttl", "alias-1"}
+
+      assert {:ok, _} = Priority.select(candidates, opts)
+      _ = :sys.get_state(StickyTracker)
+
+      [{^key_incl, {_id, _inserted_at, ttl_ms}}] = :ets.lookup(:tokengate_sticky_routes, key_incl)
+      assert ttl_ms == 15 * 60 * 1000
+
+      # pay_per_token → 3 min default (from config)
+      pay = ap_with_cred("pay", priority: 1, billing_mode: "pay_per_token")
+      candidates_pay = [pay]
+      opts_pay = %{api_key_hash: "key-pay-ttl", model_alias_id: "alias-1"}
+      key_pay = {"key-pay-ttl", "alias-1"}
+
+      assert {:ok, _} = Priority.select(candidates_pay, opts_pay)
+      _ = :sys.get_state(StickyTracker)
+
+      [{^key_pay, {_id, _inserted_at, ttl_pay}}] = :ets.lookup(:tokengate_sticky_routes, key_pay)
+      assert ttl_pay == 3 * 60 * 1000
+    end
+
+    test "nil sticky_ttl_ms falls back to billing_mode default (plain ap, nil billing = 15 min)" do
       candidates = [ap("plain", priority: 1)]
       opts = %{api_key_hash: "key-nil-ttl", model_alias_id: "alias-1"}
       key = {"key-nil-ttl", "alias-1"}
@@ -173,8 +199,8 @@ defmodule Tokengate.Routing.PriorityTest do
 
       [{^key, {_id, _inserted_at, ttl_ms}}] = :ets.lookup(:tokengate_sticky_routes, key)
 
-      assert ttl_ms == StickyTracker.default_ttl_ms()
-      assert ttl_ms == 15 * 60 * 1000
+      # plain ap has billing_mode "pay_per_token" from schema default → 3 min
+      assert ttl_ms == 3 * 60 * 1000
     end
   end
 

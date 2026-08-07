@@ -86,7 +86,8 @@ defmodule Tokengate.Routing.Priority do
         {:error, :no_available_provider}
 
       %ModelProvider{} = ap ->
-        sticky_put(api_key_hash, model_alias_id, ap.id, ap.sticky_ttl_ms)
+        ttl = sticky_ttl_for(ap)
+        sticky_put(api_key_hash, model_alias_id, ap.id, ttl)
         {:ok, ap}
     end
   end
@@ -160,6 +161,22 @@ defmodule Tokengate.Routing.Priority do
     ArgumentError -> nil
   catch
     :exit, _ -> nil
+  end
+
+  # Returns the sticky TTL for a model_provider:
+  #
+  #   1. If the model_provider has an explicit `sticky_ttl_ms`, use it.
+  #   2. Otherwise fall back to the billing_mode default from config
+  #      (included → 15 min, pay_per_token → 3 min).
+  #
+  defp sticky_ttl_for(%ModelProvider{sticky_ttl_ms: ms}) when not is_nil(ms), do: ms
+
+  defp sticky_ttl_for(%ModelProvider{billing_mode: mode}) do
+    defaults =
+      Application.get_env(:tokengate, :proxy, [])
+      |> Keyword.get(:sticky_default_ttl_ms, %{})
+
+    Map.get(defaults, mode, 15 * 60 * 1000)
   end
 
   defp sticky_put(api_key_hash, model_alias_id, model_provider_id, sticky_ttl_ms) do

@@ -50,28 +50,12 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:service_filter, nil)
       |> assign(:scope_label, scope_label_for(user))
       |> assign(:scope_member_ids, Accounts.scope_member_ids(user))
-      |> assign(:loading, true)
-      |> assign(:metrics, empty_metrics())
-      |> assign(:breakdown_model, [])
-      |> assign(:breakdown_member, [])
-      |> assign(:breakdown_team, [])
-      |> assign(:breakdown_provider, [])
-      |> assign(:top_errors, [])
-      |> assign(:provider_ranking, [])
-      |> assign(:model_ranking, [])
-      |> assign(:member, nil)
-      |> assign(:member_models, [])
       |> assign(:member_id, nil)
       |> assign(:sort_field, :request_count)
       |> assign(:sort_direction, :desc)
-      |> assign(:hour_distribution, [])
-      |> assign(:hour_usage_stacked, [])
       |> assign(:hovered_hour, nil)
-      |> assign(:busiest_hours, [])
-      |> assign(:busiest_minutes, [])
-      |> assign(:peak_concurrency, nil)
-      |> assign(:hourly_series, [])
-      |> assign(:member_usage_tiers, [])
+      |> assign(:stats_loading, true)
+      |> assign(empty_data_assigns())
 
     {:ok, socket}
   end
@@ -91,7 +75,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:team_filter, team_filter)
       |> assign(:service_filter, service_filter)
       |> assign(:member_id, member_id)
-      |> load_data(socket.assigns.current_user)
+      |> start_data_load()
 
     {:noreply, socket}
   end
@@ -99,8 +83,7 @@ defmodule TokengateWeb.StatsLive do
   @impl true
   def handle_event("set_period", %{"period" => period}, socket)
       when period in ~w(today 7d 30d 90d) do
-    user = socket.assigns[:current_user]
-    {:noreply, socket |> assign(:period, period) |> load_data(user)}
+    {:noreply, socket |> assign(:period, period) |> start_data_load()}
   end
 
   def handle_event("sort", %{"field" => field}, socket) do
@@ -147,246 +130,221 @@ defmodule TokengateWeb.StatsLive do
 
   ## Data loading ---------------------------------------------------------
 
-  defp load_data(socket, user) do
-    period = socket.assigns[:period]
-    timezone = socket.assigns[:timezone] || "Etc/UTC"
-    %{from: from, to: to} = Periods.period_bounds(period, timezone)
-    opts = [from: from, to: to, timezone: timezone]
-    action = socket.assigns.live_action
+  # Kick off an async data load. The socket renders right away with the
+  # previous period's data (or empty values on first mount) plus an inline
+  # loading indicator; when every query finishes, the new data lands in one
+  # diff via handle_info/2. Switching periods quickly cancels the in-flight
+  # load automatically.
+  defp start_data_load(socket) do
+    assigns = socket.assigns
+
+    params = %{
+      user: assigns.current_user,
+      period: assigns.period,
+      model_filter: assigns.model_filter,
+      team_filter: assigns.team_filter,
+      service_filter: assigns.service_filter,
+      member_id: assigns.member_id,
+      scope_member_ids: assigns.scope_member_ids,
+      live_action: assigns.live_action,
+      timezone: assigns[:timezone] || "Etc/UTC",
+      sort_field: assigns.sort_field,
+      sort_direction: assigns.sort_direction
+    }
 
     socket
-    |> load_summary(user, opts)
-    |> load_breakdowns(action, user, opts)
-    |> assign(:loading, false)
+    |> assign(:stats_loading, true)
+    |> start_async(:stats_data, fn -> compute_data_assigns(params) end)
   end
 
-  defp load_summary(socket, user, opts) do
-    summary = fetch_summary(user, opts, socket.assigns)
+  @impl true
+  def handle_async(:stats_data, {:ok, data}, socket) do
+    socket =
+      socket
+      |> assign(:stats_loading, false)
+      |> assign(empty_data_assigns())
+      |> assign(data)
 
-    metrics = %{
+    {:noreply, socket}
+  end
+
+  def handle_async(:stats_data, {:exit, reason}, socket) do
+    require Logger
+    Logger.warning("stats data load failed: #{inspect(reason)}")
+
+    {:noreply, assign(socket, :stats_loading, false)}
+  end
+
+  # Pure orchestration: no socket, no assigns — everything runs off plain
+  # values so it can execute inside an async task (queries in parallel).
+  defp compute_data_assigns(params) do
+    %{from: from, to: to} = Periods.period_bounds(params.period, params.timezone)
+    opts = [from: from, to: to, timezone: params.timezone]
+
+    summary_task = fn -> {:metrics, summary_to_metrics(fetch_summary(params, opts))} end
+
+    [summary_task | breakdown_tasks(params, opts)]
+    |> run_parallel()
+    |> Map.new()
+    |> apply_sorting(params)
+  end
+
+  # Run every query function concurrently and collect results in order.
+  # Queries share the Repo pool, so wall time is pool rounds, not the sum of
+  # every query — this is what makes period switching feel fast.
+  defp run_parallel(fun_list) do
+    fun_list
+    |> Task.async_stream(fn fun -> fun.() end, timeout: :infinity, zip_input_on_exit: true)
+    |> Enum.map(fn {:ok, result} -> result end)
+  end
+
+  defp summary_to_metrics(summary) do
+    %{
       requests_total: summary.request_count,
       cost_usd: summary.total_cost_usd,
       prompt_tokens: summary.total_prompt_tokens,
       completion_tokens: summary.total_completion_tokens,
       avg_tps: Map.get(summary, :avg_tps)
     }
-
-    assign(socket, :metrics, metrics)
   end
 
-  defp fetch_summary(%{global_role: "admin"}, opts, assigns) do
-    opts
-    |> apply_stats_filters(assigns)
-    |> Logs.cost_summary()
-  end
+  # Each task returns {assign_key, rows} so results can be applied without
+  # caring about completion order.
+  defp breakdown_tasks(params, opts) do
+    opts = Keyword.put(opts, :member_ids, params.scope_member_ids)
 
-  defp fetch_summary(%{global_role: "user"} = user, opts, _assigns) do
-    memberships = Accounts.list_team_members_for_user(user.id)
-    member_ids = Enum.map(memberships, & &1.id)
+    case params.live_action do
+      :index ->
+        admin? = params.user.global_role == "admin"
 
-    opts
-    |> Map.new()
-    |> Map.put(:team_member_ids, member_ids)
-    |> Logs.cost_summary()
-  end
+        maybe_admin_tasks(admin?, opts) ++
+          [
+            fn -> {:breakdown_model, Rollup.breakdown_by_model(nil, opts)} end,
+            fn -> {:breakdown_member, Rollup.breakdown_by_member(nil, opts)} end,
+            fn -> {:breakdown_team, breakdown_by_team_if_admin(admin?, opts)} end,
+            fn -> {:top_errors, Rollup.top_errors(nil, opts)} end,
+            fn -> {:hour_distribution, Rollup.usage_by_hour_of_day(nil, opts)} end,
+            fn -> {:hour_usage_stacked, Rollup.usage_by_hour_of_day_stacked(nil, opts)} end,
+            fn -> {:busiest_hours, Rollup.busiest_hours(nil, opts)} end,
+            fn -> {:busiest_minutes, Rollup.busiest_minutes(nil, opts)} end
+          ]
 
-  defp fetch_summary(_user, _opts, _assigns), do: empty_summary()
+      :models ->
+        model_id = params.model_filter
 
-  # Build a filter map from the active stats page filter so cost_summary
-  # returns data scoped to the selected model / team / service.
-  defp apply_stats_filters(opts, assigns) do
-    base = Map.new(opts)
+        if model_id do
+          [
+            fn -> {:breakdown_model, Rollup.breakdown_by_model(nil, opts)} end,
+            fn ->
+              {:breakdown_provider, Rollup.breakdown_by_provider_for_model(model_id, opts)}
+            end,
+            fn ->
+              {:breakdown_team, breakdown_team_for_model(params.user, model_id, opts)}
+            end,
+            fn ->
+              {:breakdown_member, Rollup.breakdown_by_member_for_model(model_id, opts)}
+            end
+          ]
+        else
+          [fn -> {:breakdown_model, Rollup.breakdown_by_model(nil, opts)} end]
+        end
 
-    cond do
-      assigns[:model_filter] ->
-        Map.put(base, :model_alias_id, assigns.model_filter)
+      :teams ->
+        team_id = params.team_filter
+        admin? = params.user.global_role == "admin"
+        allowed? = team_id && team_drilldown_allowed?(params.user, team_id)
 
-      assigns[:team_filter] ->
-        Map.put(base, :team_id, assigns.team_filter)
+        [fn -> {:breakdown_team, breakdown_by_team_if_admin(admin?, opts)} end] ++
+          if allowed? do
+            [
+              fn -> {:breakdown_member, Rollup.breakdown_by_member(team_id, opts)} end,
+              fn -> {:breakdown_model, Rollup.breakdown_by_model(team_id, opts)} end
+            ]
+          else
+            []
+          end
 
-      assigns[:service_filter] ->
-        Map.put(base, :team_member_id, assigns.service_filter)
+      :services ->
+        service_id = params.service_filter
+        admin? = params.user.global_role == "admin"
 
-      true ->
-        base
+        # Services are virtual team members — filter by team_member_id, not team_id.
+        [fn -> {:breakdown_service, breakdown_by_service_if_admin(admin?, opts)} end] ++
+          if service_id && admin? do
+            [
+              fn ->
+                {:breakdown_model,
+                 Rollup.breakdown_by_model(nil, Keyword.put(opts, :team_member_id, service_id))}
+              end
+            ]
+          else
+            []
+          end
+
+      :member ->
+        member_id = params.member_id
+
+        allowed? =
+          params.user.global_role == "admin" or
+            member_id in Accounts.scope_member_ids(params.user)
+
+        if allowed? do
+          [
+            fn -> {:member, Accounts.get_team_member!(member_id, :with_assoc)} end,
+            fn -> {:member_models, Rollup.breakdown_by_model_for_member(member_id, opts)} end
+          ]
+        else
+          []
+        end
+
+      _ ->
+        []
     end
   end
 
-  defp load_breakdowns(socket, :index, user, opts) do
-    # Scoping: non-admin users only see consumption of their own scope
-    # (managed teams for managers, own memberships for regular users).
-    opts = Keyword.put(opts, :member_ids, socket.assigns[:scope_member_ids])
-
-    socket
-    |> assign(:breakdown_model, Rollup.breakdown_by_model(nil, opts))
-    |> assign(:breakdown_member, Rollup.breakdown_by_member(nil, opts))
-    |> assign(:breakdown_team, load_team_breakdown(user, opts))
-    |> assign(:top_errors, Rollup.top_errors(nil, opts))
-    |> assign(:provider_ranking, load_provider_ranking(user, opts))
-    |> assign(:model_ranking, load_model_ranking(user, opts))
-    |> assign(:member_usage_tiers, load_member_usage_tiers(user, opts))
-    |> assign(:hour_distribution, Rollup.usage_by_hour_of_day(nil, opts))
-    |> assign(:hour_usage_stacked, Rollup.usage_by_hour_of_day_stacked(nil, opts))
-    |> assign(:busiest_hours, Rollup.busiest_hours(nil, opts))
-    |> assign(:busiest_minutes, Rollup.busiest_minutes(nil, opts))
-    |> assign(:peak_concurrency, load_peak_concurrency(user, opts))
+  # Admin-only infra/org-wide queries on the index view.
+  defp maybe_admin_tasks(true, opts) do
+    [
+      fn -> {:provider_ranking, Rollup.provider_ranking(nil, opts)} end,
+      fn -> {:model_ranking, Rollup.model_ranking(nil, opts)} end,
+      fn -> {:member_usage_tiers, Rollup.member_usage_tiers(nil, opts)} end,
+      fn -> {:peak_concurrency, Rollup.peak_concurrency(nil, opts)} end
+    ]
   end
 
-  defp load_breakdowns(socket, :models, user, opts) do
-    model_id = socket.assigns[:model_filter]
-    opts = Keyword.put(opts, :member_ids, socket.assigns[:scope_member_ids])
+  defp maybe_admin_tasks(false, _opts), do: []
 
-    base =
-      socket
-      |> assign(:breakdown_model, Rollup.breakdown_by_model(nil, opts))
-
-    if model_id do
-      base
-      |> assign(:breakdown_provider, Rollup.breakdown_by_provider_for_model(model_id, opts))
-      |> assign(:breakdown_team, load_team_breakdown_for_model(user, model_id, opts))
-      |> assign(:breakdown_member, Rollup.breakdown_by_member_for_model(model_id, opts))
-    else
-      base
-      |> assign(:breakdown_provider, [])
-      |> assign(:breakdown_team, [])
-      |> assign(:breakdown_member, [])
-    end
-    |> assign(
-      :breakdown_model,
-      sort_rows(
-        base.assigns.breakdown_model,
-        socket.assigns.sort_field,
-        socket.assigns.sort_direction
-      )
-    )
-    |> assign(
-      :breakdown_provider,
-      sort_rows(
-        base.assigns.breakdown_provider,
-        socket.assigns.sort_field,
-        socket.assigns.sort_direction
-      )
-    )
-    |> assign(
-      :breakdown_team,
-      sort_rows(
-        base.assigns.breakdown_team,
-        socket.assigns.sort_field,
-        socket.assigns.sort_direction
-      )
-    )
-    |> assign(
-      :breakdown_member,
-      sort_rows(
-        base.assigns.breakdown_member,
-        socket.assigns.sort_field,
-        socket.assigns.sort_direction
-      )
-    )
+  defp apply_sorting(data, %{sort_field: field, sort_direction: direction}) do
+    Enum.reduce(@sortable_breakdowns, data, fn key, acc ->
+      case acc do
+        %{^key => rows} -> Map.put(acc, key, sort_rows(rows, field, direction))
+        _ -> acc
+      end
+    end)
   end
 
-  defp load_breakdowns(socket, :teams, user, opts) do
-    team_id = socket.assigns[:team_filter]
-
-    base =
-      socket
-      |> assign(:breakdown_team, load_team_breakdown(user, opts))
-
-    # Fail-closed: a crafted ?team_id= for a team the user doesn't manage
-    # shows empty drill-down tables instead of other teams' data.
-    if team_id && team_drilldown_allowed?(user, team_id) do
-      base
-      |> assign(:breakdown_member, Rollup.breakdown_by_member(team_id, opts))
-      |> assign(:breakdown_model, Rollup.breakdown_by_model(team_id, opts))
-    else
-      base
-      |> assign(:breakdown_member, [])
-      |> assign(:breakdown_model, [])
-    end
-    |> assign(
-      :breakdown_team,
-      sort_rows(
-        base.assigns.breakdown_team,
-        socket.assigns.sort_field,
-        socket.assigns.sort_direction
-      )
-    )
-    |> assign(
-      :breakdown_member,
-      sort_rows(
-        base.assigns.breakdown_member,
-        socket.assigns.sort_field,
-        socket.assigns.sort_direction
-      )
-    )
-    |> assign(
-      :breakdown_model,
-      sort_rows(
-        base.assigns.breakdown_model,
-        socket.assigns.sort_field,
-        socket.assigns.sort_direction
-      )
-    )
-  end
-
-  defp load_breakdowns(socket, :services, user, opts) do
-    service_id = socket.assigns[:service_filter]
-
-    base =
-      socket
-      |> assign(:breakdown_service, load_service_breakdown(user, opts))
-
-    # Services are admin-only; no scoping needed beyond admin check.
-    # Services are virtual team members — filter by team_member_id, not team_id.
-    if service_id && user.global_role == "admin" do
-      base
-      |> assign(
-        :breakdown_model,
-        Rollup.breakdown_by_model(nil, Keyword.put(opts, :team_member_id, service_id))
-      )
-    else
-      base
-      |> assign(:breakdown_model, [])
-    end
-    |> assign(
-      :breakdown_service,
-      sort_rows(
-        base.assigns.breakdown_service,
-        socket.assigns.sort_field,
-        socket.assigns.sort_direction
-      )
-    )
-    |> assign(
-      :breakdown_model,
-      sort_rows(
-        base.assigns.breakdown_model,
-        socket.assigns.sort_field,
-        socket.assigns.sort_direction
-      )
-    )
-  end
-
-  defp load_breakdowns(socket, :member, user, opts) do
-    member_id = socket.assigns[:member_id]
-
-    # Load the team member with associations
-    member = Accounts.get_team_member!(member_id, :with_assoc)
-
-    # Scope check: non-admin users can only see members of teams they manage
-    allowed? = user.global_role == "admin" or member_id in Accounts.scope_member_ids(user)
-
-    if allowed? do
-      member_models = Rollup.breakdown_by_model_for_member(member_id, opts)
-
-      socket
-      |> assign(:member, member)
-      |> assign(:member_models, member_models)
-    else
-      socket
-      |> assign(:member, nil)
-      |> assign(:member_models, [])
-      |> put_flash(:error, "No tienes permiso para ver este miembro.")
-    end
+  # Empty values for every data assign — used on mount so the first render
+  # (while the async load runs) shows empty states instead of stale assigns.
+  defp empty_data_assigns do
+    %{
+      metrics: empty_metrics(),
+      breakdown_model: [],
+      breakdown_member: [],
+      breakdown_team: [],
+      breakdown_provider: [],
+      breakdown_service: [],
+      top_errors: [],
+      provider_ranking: [],
+      model_ranking: [],
+      member: nil,
+      member_models: [],
+      hour_distribution: [],
+      hour_usage_stacked: [],
+      busiest_hours: [],
+      busiest_minutes: [],
+      peak_concurrency: nil,
+      member_usage_tiers: []
+    }
   end
 
   ## Scoping helpers ------------------------------------------------------
@@ -400,51 +358,56 @@ defmodule TokengateWeb.StatsLive do
 
   # Team table for a model drill-down: admins see every team; managers only
   # teams they manage; regular users don't see team-level data at all.
-  defp load_team_breakdown_for_model(user, model_id, opts) do
+  defp breakdown_team_for_model(user, model_id, opts) do
     case Accounts.scope_team_ids(user) do
-      nil ->
-        Rollup.breakdown_by_team_for_model(model_id, opts)
-
-      [] ->
-        []
+      nil -> Rollup.breakdown_by_team_for_model(model_id, opts)
+      [] -> []
     end
   end
 
-  defp load_team_breakdown(%{global_role: "admin"}, opts) do
-    Rollup.breakdown_by_team(opts)
+  defp breakdown_by_team_if_admin(true, opts), do: Rollup.breakdown_by_team(opts)
+  defp breakdown_by_team_if_admin(false, _opts), do: []
+
+  defp breakdown_by_service_if_admin(true, opts), do: Rollup.breakdown_by_service(opts)
+  defp breakdown_by_service_if_admin(false, _opts), do: []
+
+  defp fetch_summary(%{user: %{global_role: "admin"}} = params, opts) do
+    opts
+    |> apply_stats_filters(params)
+    |> Logs.cost_summary()
   end
 
-  defp load_team_breakdown(_, _), do: []
+  defp fetch_summary(%{user: %{global_role: "user"} = user}, opts) do
+    memberships = Accounts.list_team_members_for_user(user.id)
+    member_ids = Enum.map(memberships, & &1.id)
 
-  defp load_service_breakdown(%{global_role: "admin"}, opts) do
-    Rollup.breakdown_by_service(opts)
+    opts
+    |> Map.new()
+    |> Map.put(:team_member_ids, member_ids)
+    |> Logs.cost_summary()
   end
 
-  defp load_service_breakdown(_, _), do: []
+  defp fetch_summary(_params, _opts), do: empty_summary()
 
-  # Ranking de proveedores: métrica de infraestructura, solo admin, siempre org-wide.
-  defp load_provider_ranking(%{global_role: "admin"}, opts),
-    do: Rollup.provider_ranking(nil, opts)
+  # Build a filter map from the active stats page filter so cost_summary
+  # returns data scoped to the selected model / team / service.
+  defp apply_stats_filters(opts, params) do
+    base = Map.new(opts)
 
-  defp load_provider_ranking(_user, _opts), do: []
+    cond do
+      params.model_filter ->
+        Map.put(base, :model_alias_id, params.model_filter)
 
-  # Ranking de modelos: mismo criterio que proveedores, solo admin.
-  defp load_model_ranking(%{global_role: "admin"}, opts),
-    do: Rollup.model_ranking(nil, opts)
+      params.team_filter ->
+        Map.put(base, :team_id, params.team_filter)
 
-  defp load_model_ranking(_user, _opts), do: []
+      params.service_filter ->
+        Map.put(base, :team_member_id, params.service_filter)
 
-  # Tiers de uso por miembro: solo admin, org-wide.
-  defp load_member_usage_tiers(%{global_role: "admin"}, opts),
-    do: Rollup.member_usage_tiers(nil, opts)
-
-  defp load_member_usage_tiers(_user, _opts), do: []
-
-  # Concurrencia pico: métrica de infraestructura, solo admin, siempre org-wide.
-  defp load_peak_concurrency(%{global_role: "admin"}, opts),
-    do: Rollup.peak_concurrency(nil, opts)
-
-  defp load_peak_concurrency(_user, _opts), do: nil
+      true ->
+        base
+    end
+  end
 
   ## Helpers --------------------------------------------------------------
 

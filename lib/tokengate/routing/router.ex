@@ -191,6 +191,41 @@ defmodule Tokengate.Routing.Router do
     end)
   end
 
+  @doc """
+  Cuántas credentials `included` quedan disponibles para `team_member` y
+  `model_requested` después de excluir `credential_id`.
+
+  Se usa para decidir el timeout de la cola FIFO: a más included restantes,
+  menos tiempo se espera en la actual.
+  """
+  @spec count_remaining_included(String.t(), map(), term()) :: non_neg_integer()
+  def count_remaining_included(model_requested, team_member, exclude_credential_id) do
+    alias_id = resolve_alias_id(model_requested, team_member)
+
+    if is_nil(alias_id) do
+      0
+    else
+      model_providers =
+        if team_member && team_member.team && team_member.team.id do
+          Providers.list_model_providers_for_member(
+            alias_id,
+            team_member.id,
+            team_member.team.id
+          )
+        else
+          Providers.list_model_providers(alias_id)
+        end
+
+      model_providers
+      |> Enum.count(fn mp ->
+        mp.billing_mode == "included" and
+          mp.credential != nil and
+          mp.credential.status == "active" and
+          mp.credential.id != exclude_credential_id
+      end)
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Internal: alias resolution + routing-rule evaluation
   # ---------------------------------------------------------------------------
@@ -278,6 +313,16 @@ defmodule Tokengate.Routing.Router do
 
   defp find_alias_by_name(accessible, name) do
     Enum.find(accessible, fn alias_ -> alias_.name == name end)
+  end
+
+  defp resolve_alias_id(nil, _team_member), do: nil
+
+  defp resolve_alias_id(model_requested, team_member) do
+    team_member = maybe_preload_team(team_member)
+
+    team_member
+    |> Providers.list_accessible_aliases()
+    |> Enum.find_value(fn alias_ -> alias_.name == model_requested && alias_.id end)
   end
 
   defp maybe_preload_team(team_member) do
