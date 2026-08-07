@@ -27,6 +27,7 @@ defmodule TokengateWeb.DashboardLive do
   alias Tokengate.Periods
   alias Tokengate.Providers
   alias Tokengate.Repo
+  alias TokengateWeb.KpiHelpers
 
   import Ecto.Query
 
@@ -513,6 +514,12 @@ defmodule TokengateWeb.DashboardLive do
   def format_cache_value(read, creation) do
     format_compact((read || 0) + (creation || 0))
   end
+
+  @doc "Delegates to `KpiHelpers.cache_hit_rate/2` so templates can call it locally."
+  def cache_hit_rate(read, prompt), do: KpiHelpers.cache_hit_rate(read, prompt)
+
+  @doc "Formats a hit rate for the cache slot subtitle."
+  def format_hit_rate(rate), do: KpiHelpers.format_hit_rate(rate)
 
   defp with_thousands_separator(n) do
     digits = Integer.to_string(abs(n))

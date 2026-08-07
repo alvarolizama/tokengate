@@ -19,6 +19,7 @@ defmodule TokengateWeb.UserStatsLive do
 
   alias Tokengate.Accounts
   alias Tokengate.Logs
+  alias TokengateWeb.KpiHelpers
 
   @page_size 50
   @summary_refresh_interval_ms 2_000
@@ -362,7 +363,15 @@ defmodule TokengateWeb.UserStatsLive do
           <.stat_card
             label="Input tokens (5d)"
             value={format_number(@summary_5d.total_prompt_tokens)}
-            sub="prompt + cache_read"
+            sub={
+              "prompt + cache_read · hit " <>
+                KpiHelpers.format_hit_rate(
+                  KpiHelpers.cache_hit_rate(
+                    @summary_5d.total_cache_read_tokens,
+                    @summary_5d.total_prompt_tokens
+                  )
+                )
+            }
             icon="hero-arrow-down-on-square-stack"
           />
           <.stat_card

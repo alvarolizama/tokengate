@@ -58,6 +58,8 @@ defmodule TokengateWeb.KpiHelpers do
       cost_usd: Map.get(summary, :total_cost_usd, Decimal.new(0)),
       prompt_tokens: summary.total_prompt_tokens,
       completion_tokens: summary.total_completion_tokens,
+      cache_read_tokens: Map.get(summary, :total_cache_read_tokens, 0),
+      cache_creation_tokens: Map.get(summary, :total_cache_creation_tokens, 0),
       avg_tps: Map.get(summary, :avg_tps)
     }
 
@@ -70,6 +72,8 @@ defmodule TokengateWeb.KpiHelpers do
       cost_usd: Decimal.new(0),
       prompt_tokens: 0,
       completion_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
       avg_tps: nil
     }
   end
@@ -79,6 +83,8 @@ defmodule TokengateWeb.KpiHelpers do
       total_cost_usd: Decimal.new(0),
       total_prompt_tokens: 0,
       total_completion_tokens: 0,
+      total_cache_read_tokens: 0,
+      total_cache_creation_tokens: 0,
       request_count: 0,
       avg_tps: nil
     }
@@ -158,6 +164,24 @@ defmodule TokengateWeb.KpiHelpers do
               </p>
               <p class="text-xs text-base-content/50">out</p>
             </div>
+            <span class="text-base-content/30">/</span>
+            <div>
+              <p
+                class="text-lg font-bold text-base-content"
+                title={format_number(
+                  (@metrics[:cache_read_tokens] || 0) + (@metrics[:cache_creation_tokens] || 0)
+                )}
+              >
+                {format_compact(
+                  (@metrics[:cache_read_tokens] || 0) + (@metrics[:cache_creation_tokens] || 0)
+                )}
+              </p>
+              <p class="text-xs text-base-content/50">
+                cache · {format_hit_rate(
+                  cache_hit_rate(@metrics[:cache_read_tokens], @metrics.prompt_tokens)
+                )} hit
+              </p>
+            </div>
           </div>
         </div>
       </div>
@@ -221,4 +245,27 @@ defmodule TokengateWeb.KpiHelpers do
   def format_tps(nil), do: "—"
   def format_tps(n) when is_float(n), do: Float.round(n, 1) |> Float.to_string()
   def format_tps(n) when is_integer(n), do: to_string(n)
+
+  @doc """
+  Cache hit rate: percentage of input tokens served from cache
+  (`cache_read / (prompt + cache_read)`). Cache creation tokens are
+  excluded — they are a write cost, not a hit.
+
+  Returns `nil` when there is no input traffic at all, so callers can
+  render "—" instead of a misleading 0.0%.
+  """
+  def cache_hit_rate(read, prompt) when is_integer(read) and is_integer(prompt) do
+    total = prompt + read
+
+    if total > 0 do
+      Float.round(read / total * 100, 1)
+    end
+  end
+
+  def cache_hit_rate(_, _), do: nil
+
+  @doc "Formats a cache hit rate for display, e.g. \"42.5%\" or \"—\"."
+  def format_hit_rate(nil), do: "—"
+  def format_hit_rate(rate) when is_float(rate), do: "#{rate}%"
+  def format_hit_rate(rate) when is_integer(rate), do: "#{rate}.0%"
 end
