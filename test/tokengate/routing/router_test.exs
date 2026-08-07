@@ -445,6 +445,75 @@ defmodule Tokengate.Routing.RouterTest do
       assert CircuitBreakerManager.status(cred_id) == :open
       assert CircuitBreakerManager.allow?(cred_id) == false
     end
+
+    test "rate_limited failures on a pay_per_token provider still trip the breaker" do
+      f = full_setup()
+
+      # pay_per_token is the default billing_mode for a fresh model_provider.
+      assert f.model_provider.billing_mode == "pay_per_token"
+
+      assert {:ok, route} = Router.route(f.model_alias.name, f.member)
+      cred_id = route.credential.id
+
+      CircuitBreakerManager.reset(cred_id)
+
+      for _ <- 1..15 do
+        assert :ok = Router.record_outcome(route, {:failure, :rate_limited})
+      end
+
+      assert CircuitBreakerManager.status(cred_id) == :open
+      assert CircuitBreakerManager.allow?(cred_id) == false
+    end
+
+    test "rate_limited failures on an included provider do NOT trip the breaker" do
+      f = full_setup()
+
+      {:ok, mp} = Providers.update_model_provider(f.model_provider, %{billing_mode: "included"})
+
+      assert {:ok, route} = Router.route(f.model_alias.name, f.member)
+      assert route.model_provider.billing_mode == "included"
+      cred_id = route.credential.id
+
+      CircuitBreakerManager.reset(cred_id)
+      Tokengate.Routing.CredentialHealth.mark_healthy(cred_id)
+
+      for _ <- 1..15 do
+        assert :ok = Router.record_outcome(route, {:failure, :rate_limited})
+      end
+
+      # Flush the CredentialHealth GenServer mailbox so the async mark_slow
+      # casts have been handled before we assert on the ETS table.
+      _ = :sys.get_state(Tokengate.Routing.CredentialHealth)
+
+      # The breaker stays closed — 429s on a subscription are capacity, not death.
+      assert CircuitBreakerManager.status(cred_id) == :closed
+      assert CircuitBreakerManager.allow?(cred_id) == true
+
+      # But the credential is degraded within its tier instead.
+      assert Tokengate.Routing.CredentialHealth.degraded?(cred_id)
+
+      # Silence the unused-variable warning pattern; mp proves the update took.
+      assert mp.billing_mode == "included"
+    end
+
+    test "server_error on an included provider still trips the breaker" do
+      f = full_setup()
+
+      {:ok, _mp} = Providers.update_model_provider(f.model_provider, %{billing_mode: "included"})
+
+      assert {:ok, route} = Router.route(f.model_alias.name, f.member)
+      cred_id = route.credential.id
+
+      CircuitBreakerManager.reset(cred_id)
+
+      for _ <- 1..15 do
+        assert :ok = Router.record_outcome(route, {:failure, :server_error})
+      end
+
+      # A dead credential is a dead credential — included or not.
+      assert CircuitBreakerManager.status(cred_id) == :open
+      assert CircuitBreakerManager.allow?(cred_id) == false
+    end
   end
 
   # ---------------------------------------------------------------------------

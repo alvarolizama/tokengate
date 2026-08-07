@@ -130,6 +130,17 @@ defmodule Tokengate.Routing.Router do
     * `{:failure, reason, error_message}` → same, also storing the upstream
       error message in the breaker state for observability.
 
+  ### Included providers and rate limits
+
+  A `:rate_limited` failure against a `billing_mode == "included"` provider
+  **does not** trip the circuit breaker: subscription 429s are a capacity
+  signal ("too many RPM right now"), not a dead credential. Instead the
+  credential is degraded via `CredentialHealth.mark_slow/1` — it sinks to
+  the bottom of its routing tier so healthy pay-per-token providers absorb
+  the burst, while the included credential stays available as fallback.
+  `:server_error` and `:timeout` still count toward the breaker normally —
+  those mean the credential itself is broken, not merely busy.
+
   Always returns `:ok`. The caller decides whether to re-route (using
   `:exclude_credential_ids` to skip the failed credential) or surface the
   error to the client.
@@ -161,13 +172,27 @@ defmodule Tokengate.Routing.Router do
         end
 
       {:failure, reason} ->
-        @default_breaker.record_failure(credential_id, reason)
+        record_failure_outcome(route, reason, nil)
 
       {:failure, reason, error_message} ->
-        @default_breaker.record_failure(credential_id, reason, error_message)
+        record_failure_outcome(route, reason, error_message)
     end
 
     :ok
+  end
+
+  # Included providers treat 429s as a soft capacity signal: degrade the
+  # credential within its tier instead of counting it toward the breaker.
+  # Everything else (and every pay_per_token failure) feeds the breaker.
+  defp record_failure_outcome(route, reason, error_message) do
+    credential_id = route.credential.id
+    included? = route.model_provider.billing_mode == "included"
+
+    if reason == :rate_limited and included? do
+      CredentialHealth.mark_slow(credential_id)
+    else
+      @default_breaker.record_failure(credential_id, reason, error_message)
+    end
   end
 
   @doc """
