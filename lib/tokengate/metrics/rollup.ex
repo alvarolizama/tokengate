@@ -2076,4 +2076,176 @@ defmodule Tokengate.Metrics.Rollup do
   defp maybe_team_member_id(query, team_member_id) when is_binary(team_member_id) do
     where(query, [rl], rl.team_member_id == ^team_member_id)
   end
+
+  # -----------------------------------------------------------------------
+  # daily_series_by_provider_for_model/2
+  # -----------------------------------------------------------------------
+  # Daily request count per provider for a specific model alias.
+  # Used by the models drill-down sparkline chart.
+
+  def daily_series_by_provider_for_model(model_alias_id, opts \\ [])
+
+  def daily_series_by_provider_for_model(nil, _opts), do: []
+
+  def daily_series_by_provider_for_model(model_alias_id, opts)
+      when is_binary(model_alias_id) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+    timezone = Keyword.get(opts, :timezone, "Etc/UTC")
+
+    bucketed =
+      RequestLog
+      |> where([rl], rl.model_alias_id == ^model_alias_id)
+      |> maybe_member_ids(Keyword.get(opts, :member_ids))
+      |> join(:left, [rl], mp in Tokengate.Providers.ModelProvider,
+        on: rl.model_provider_id == mp.id
+      )
+      |> join(:left, [rl, mp], c in Tokengate.Providers.Credential, on: mp.credential_id == c.id)
+      |> join(:left, [rl, mp, c], p in Tokengate.Providers.Provider, on: c.provider_id == p.id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> select([rl, mp, c, p], %{
+        bucket:
+          fragment(
+            "date_trunc('day', ? AT TIME ZONE ?) AT TIME ZONE ?",
+            rl.inserted_at,
+            ^timezone,
+            ^timezone
+          ),
+        label: p.name,
+        id: rl.id
+      })
+      |> subquery()
+
+    query =
+      from(b in bucketed,
+        group_by: [b.bucket, b.label],
+        order_by: [b.bucket, b.label],
+        select: %{
+          date: b.bucket,
+          label: b.label,
+          request_count: count(b.id)
+        }
+      )
+
+    Repo.all(query)
+    |> Enum.map(fn row ->
+      %{
+        date: to_utc_datetime(row.date),
+        label: row.label || "—",
+        request_count: row.request_count
+      }
+    end)
+  end
+
+  # -----------------------------------------------------------------------
+  # daily_series_by_model_for_team/2
+  # -----------------------------------------------------------------------
+  # Daily request count per model for a specific team.
+  # Used by the teams drill-down sparkline chart.
+
+  def daily_series_by_model_for_team(team_id, opts \\ [])
+
+  def daily_series_by_model_for_team(nil, _opts), do: []
+
+  def daily_series_by_model_for_team(team_id, opts)
+      when is_binary(team_id) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+    timezone = Keyword.get(opts, :timezone, "Etc/UTC")
+
+    bucketed =
+      RequestLog
+      |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
+      |> where([rl, tm], tm.team_id == ^team_id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> select([rl, tm], %{
+        bucket:
+          fragment(
+            "date_trunc('day', ? AT TIME ZONE ?) AT TIME ZONE ?",
+            rl.inserted_at,
+            ^timezone,
+            ^timezone
+          ),
+        label: rl.model_requested,
+        id: rl.id
+      })
+      |> subquery()
+
+    query =
+      from(b in bucketed,
+        group_by: [b.bucket, b.label],
+        order_by: [b.bucket, b.label],
+        select: %{
+          date: b.bucket,
+          label: b.label,
+          request_count: count(b.id)
+        }
+      )
+
+    Repo.all(query)
+    |> Enum.map(fn row ->
+      %{
+        date: to_utc_datetime(row.date),
+        label: row.label || "—",
+        request_count: row.request_count
+      }
+    end)
+  end
+
+  # -----------------------------------------------------------------------
+  # daily_series_by_model_for_service/2
+  # -----------------------------------------------------------------------
+  # Daily request count per model for a specific service (team_member_id).
+  # Used by the services drill-down sparkline chart.
+
+  def daily_series_by_model_for_service(team_member_id, opts \\ [])
+
+  def daily_series_by_model_for_service(nil, _opts), do: []
+
+  def daily_series_by_model_for_service(team_member_id, opts)
+      when is_binary(team_member_id) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+    timezone = Keyword.get(opts, :timezone, "Etc/UTC")
+
+    bucketed =
+      RequestLog
+      |> where([rl], rl.team_member_id == ^team_member_id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> select([rl], %{
+        bucket:
+          fragment(
+            "date_trunc('day', ? AT TIME ZONE ?) AT TIME ZONE ?",
+            rl.inserted_at,
+            ^timezone,
+            ^timezone
+          ),
+        label: rl.model_requested,
+        id: rl.id
+      })
+      |> subquery()
+
+    query =
+      from(b in bucketed,
+        group_by: [b.bucket, b.label],
+        order_by: [b.bucket, b.label],
+        select: %{
+          date: b.bucket,
+          label: b.label,
+          request_count: count(b.id)
+        }
+      )
+
+    Repo.all(query)
+    |> Enum.map(fn row ->
+      %{
+        date: to_utc_datetime(row.date),
+        label: row.label || "—",
+        request_count: row.request_count
+      }
+    end)
+  end
 end

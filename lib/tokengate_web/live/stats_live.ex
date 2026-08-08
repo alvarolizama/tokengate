@@ -246,6 +246,16 @@ defmodule TokengateWeb.StatsLive do
             end,
             fn ->
               {:breakdown_member, Rollup.breakdown_by_member_for_model(model_id, opts)}
+            end,
+            fn ->
+              {:drilldown_series, Rollup.daily_series_by_provider_for_model(model_id, opts)}
+            end,
+            fn ->
+              {:drilldown_series_labels,
+               Rollup.daily_series_by_provider_for_model(model_id, opts)
+               |> Enum.map(& &1.label)
+               |> Enum.uniq()
+               |> Enum.sort()}
             end
           ]
         else
@@ -261,7 +271,15 @@ defmodule TokengateWeb.StatsLive do
           if allowed? do
             [
               fn -> {:breakdown_member, Rollup.breakdown_by_member(team_id, opts)} end,
-              fn -> {:breakdown_model, Rollup.breakdown_by_model(team_id, opts)} end
+              fn -> {:breakdown_model, Rollup.breakdown_by_model(team_id, opts)} end,
+              fn -> {:drilldown_series, Rollup.daily_series_by_model_for_team(team_id, opts)} end,
+              fn ->
+                {:drilldown_series_labels,
+                 Rollup.daily_series_by_model_for_team(team_id, opts)
+                 |> Enum.map(& &1.label)
+                 |> Enum.uniq()
+                 |> Enum.sort()}
+              end
             ]
           else
             []
@@ -278,6 +296,16 @@ defmodule TokengateWeb.StatsLive do
               fn ->
                 {:breakdown_model,
                  Rollup.breakdown_by_model(nil, Keyword.put(opts, :team_member_id, service_id))}
+              end,
+              fn ->
+                {:drilldown_series, Rollup.daily_series_by_model_for_service(service_id, opts)}
+              end,
+              fn ->
+                {:drilldown_series_labels,
+                 Rollup.daily_series_by_model_for_service(service_id, opts)
+                 |> Enum.map(& &1.label)
+                 |> Enum.uniq()
+                 |> Enum.sort()}
               end
             ]
           else
@@ -347,7 +375,9 @@ defmodule TokengateWeb.StatsLive do
       busiest_hours: [],
       busiest_minutes: [],
       peak_concurrency: nil,
-      member_usage_tiers: []
+      member_usage_tiers: [],
+      drilldown_series: [],
+      drilldown_series_labels: []
     }
   end
 
@@ -799,6 +829,63 @@ defmodule TokengateWeb.StatsLive do
   end
 
   defp pad2(n), do: n |> Integer.to_string() |> String.pad_leading(2, "0")
+
+  # ── Drill-down sparkline helpers ─────────────────────────────────────────
+
+  @doc """
+  Pivot daily series rows into a day-bucketed map for the sparkline chart.
+
+  Input rows: [%{date: DateTime, label: String, request_count: integer}]
+
+  Output: %{
+    days: [Date],           # ordered unique days
+    series: %{
+      "label" => %{date => count}
+    }
+  }
+  """
+  def pivot_daily_series(rows) when is_list(rows) do
+    days =
+      rows
+      |> Enum.map(&DateTime.to_date(&1.date))
+      |> Enum.uniq()
+      |> Enum.sort()
+
+    series =
+      rows
+      |> Enum.group_by(& &1.label)
+      |> Map.new(fn {label, entries} ->
+        by_date = Map.new(entries, &{DateTime.to_date(&1.date), &1.request_count})
+        {label, by_date}
+      end)
+
+    %{days: days, series: series}
+  end
+
+  @doc "Max single-day count across all labels (for scaling the chart)."
+  def daily_series_max(%{series: series}) do
+    series
+    |> Enum.flat_map(fn {_label, by_date} -> Map.values(by_date) end)
+    |> Enum.max(fn -> 0 end)
+  end
+
+  @doc "Sparkline bar height in % using sqrt scale."
+  def sparkline_bar_height(count, max) when max > 0 do
+    pct = :math.sqrt(count / max) * 100
+    max(Float.round(pct, 1), 4.0)
+  end
+
+  def sparkline_bar_height(_count, _max), do: 0.0
+
+  @doc "Color for a sparkline label by index (reuses provider color palette)."
+  def sparkline_color(index) do
+    provider_color(index)
+  end
+
+  @doc "Total requests for a label across all days."
+  def sparkline_label_total(by_date) do
+    by_date |> Map.values() |> Enum.sum()
+  end
 
   def accent_bg("primary"), do: "bg-primary/10"
   def accent_bg("success"), do: "bg-success/10"
