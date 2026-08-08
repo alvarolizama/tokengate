@@ -24,9 +24,13 @@ defmodule TokengateWeb.MonitorLive do
 
   use TokengateWeb, :live_view
 
+  import Ecto.Query
+
   alias Tokengate.Logs.Inflight
   alias Tokengate.Metrics.{Collector, Rollup, Window}
   alias Tokengate.Providers
+  alias Tokengate.Routing.CircuitBreakerManager
+  alias Tokengate.Repo
 
   @refresh_ms 5_000
 
@@ -228,17 +232,51 @@ defmodule TokengateWeb.MonitorLive do
       |> Enum.uniq()
       |> Map.new()
 
+    # Breaker details for open/half-open breakers
+    breaker_details = CircuitBreakerManager.open_breakers()
+
+    # Resolve credential IDs by name for breaker lookup
+    cred_name_to_id =
+      (Map.keys(cred_window) ++ Enum.map(inflight_by_cred, fn {k, _} -> k end))
+      |> Enum.uniq()
+      |> then(fn names ->
+        if names == [] do
+          %{}
+        else
+          Tokengate.Providers.Credential
+          |> where([c], c.name in ^names)
+          |> select([c], {c.name, c.id})
+          |> Repo.all()
+          |> Map.new()
+        end
+      end)
+
     credential_tickets =
       cred_window
       |> Enum.map(fn {cred_name, counts} ->
         cred_inflight = Map.get(inflight_by_cred, cred_name, [])
+
+        # Users currently in flight via this credential, with counts
+        inflight_users =
+          cred_inflight
+          |> Enum.group_by(&(&1.user_email || "desconocido"))
+          |> Enum.map(fn {user, entries} -> %{name: user, count: length(entries)} end)
+          |> Enum.sort_by(& &1.count, :desc)
+
+        # Breaker status
+        cred_id = Map.get(cred_name_to_id, cred_name)
+        breaker = Map.get(breaker_details, cred_id)
 
         %{
           credential_name: cred_name,
           provider_name: Map.get(cred_provider_names, cred_name, "—"),
           sparkline: counts,
           total_requests: Enum.sum(counts),
-          inflight: length(cred_inflight)
+          inflight: length(cred_inflight),
+          inflight_users: inflight_users,
+          breaker_state: breaker && breaker.state,
+          breaker_reason: breaker && breaker.last_reason,
+          breaker_message: breaker && breaker.last_error_message
         }
       end)
       |> Enum.sort_by(& &1.total_requests, :desc)
@@ -392,6 +430,33 @@ defmodule TokengateWeb.MonitorLive do
 
   def format_cost(_), do: "$0.00"
 
+  # ── Breaker helpers ───────────────────────────────────────────────────────
+
+  def breaker_label(nil), do: "Cerrado"
+  def breaker_label(:closed), do: "Cerrado"
+  def breaker_label(:open), do: "Abierto"
+  def breaker_label(:half_open), do: "Half-Open"
+  def breaker_label(_), do: "—"
+
+  def breaker_dot_class(nil), do: "bg-success"
+  def breaker_dot_class(:closed), do: "bg-success"
+  def breaker_dot_class(:open), do: "bg-error"
+  def breaker_dot_class(:half_open), do: "bg-warning"
+  def breaker_dot_class(_), do: "bg-base-content/30"
+
+  def breaker_badge_class(nil), do: "badge-ghost"
+  def breaker_badge_class(:closed), do: "badge-ghost"
+  def breaker_badge_class(:open), do: "badge-error"
+  def breaker_badge_class(:half_open), do: "badge-warning"
+  def breaker_badge_class(_), do: "badge-ghost"
+
+  def breaker_reason_label(nil), do: ""
+  def breaker_reason_label(:timeout), do: "timeout"
+  def breaker_reason_label(:rate_limited), do: "rate_limited"
+  def breaker_reason_label(:auth_error), do: "auth_error"
+  def breaker_reason_label(:server_error), do: "server_error"
+  def breaker_reason_label(other), do: to_string(other)
+
   # ── Function Components ──────────────────────────────────────────────────
 
   attr :label, :string, required: true
@@ -421,15 +486,16 @@ defmodule TokengateWeb.MonitorLive do
     ~H"""
     <div class="ml-6 md:ml-10 mt-1 mb-2 rounded-lg border border-base-200 bg-base-100/50 overflow-hidden">
       <%!-- Sub-header --%>
-      <div class="hidden md:grid grid-cols-[1fr_1fr_1fr_64px_72px_72px_72px_48px] gap-2 px-3 py-1.5 bg-base-200/30 text-[9px] font-semibold uppercase tracking-wider text-base-content/40">
+      <div class="hidden md:grid grid-cols-[1fr_1fr_1fr_1fr_64px_72px_72px_72px_72px] gap-2 px-3 py-1.5 bg-base-200/30 text-[9px] font-semibold uppercase tracking-wider text-base-content/40">
         <span>API Key</span>
+        <span>Key suffix</span>
         <span>Proveedor</span>
         <span>Usuarios</span>
         <span class="text-right">Req</span>
         <span class="text-right">p95</span>
         <span class="text-right">Err</span>
         <span class="text-right">$</span>
-        <span class="text-center">Estado</span>
+        <span class="text-center">Breaker</span>
       </div>
 
       <%= if @rows == [] do %>
@@ -439,11 +505,16 @@ defmodule TokengateWeb.MonitorLive do
       <% else %>
         <div
           :for={row <- @rows}
-          class="grid grid-cols-[1fr_1fr_auto] md:grid-cols-[1fr_1fr_1fr_64px_72px_72px_72px_48px] gap-2 px-3 py-1.5 items-center text-[11px] hover:bg-base-200/20 transition-colors border-b border-base-200/30 last:border-b-0"
+          class="grid grid-cols-[1fr_auto] md:grid-cols-[1fr_1fr_1fr_1fr_64px_72px_72px_72px_72px] gap-2 px-3 py-1.5 items-center text-[11px] hover:bg-base-200/20 transition-colors border-b border-base-200/30 last:border-b-0"
         >
           <%!-- Credential name --%>
           <span class="font-medium text-base-content/70 truncate">
             {row.credential_name}
+          </span>
+
+          <%!-- Key suffix --%>
+          <span class="font-mono text-base-content/50 truncate hidden md:block">
+            {if row[:provider_key_prefix], do: "····#{row.provider_key_prefix}", else: "—"}
           </span>
 
           <%!-- Provider name --%>
@@ -483,12 +554,9 @@ defmodule TokengateWeb.MonitorLive do
             {format_cost(row.cost_usd)}
           </span>
 
-          <%!-- Status dot --%>
+          <%!-- Breaker status --%>
           <div class="flex items-center justify-center gap-1">
-            <span class={["w-2 h-2 rounded-full", credential_status_dot(row.status)]} />
-            <span class="text-[9px] text-base-content/40 hidden md:inline">
-              {credential_status_label(row.status)}
-            </span>
+            <span class={["w-2 h-2 rounded-full", breaker_dot_class(nil)]} />
           </div>
         </div>
       <% end %>
@@ -503,8 +571,9 @@ defmodule TokengateWeb.MonitorLive do
     ~H"""
     <div class="ml-6 md:ml-10 mt-1 mb-2 rounded-lg border border-base-200 bg-base-100/50 overflow-hidden">
       <%!-- Sub-header --%>
-      <div class="hidden md:grid grid-cols-[1fr_1fr_64px_72px_72px_72px] gap-2 px-3 py-1.5 bg-base-200/30 text-[9px] font-semibold uppercase tracking-wider text-base-content/40">
+      <div class="hidden md:grid grid-cols-[1fr_1fr_1fr_64px_72px_72px_72px] gap-2 px-3 py-1.5 bg-base-200/30 text-[9px] font-semibold uppercase tracking-wider text-base-content/40">
         <span>Modelo</span>
+        <span>Key suffix</span>
         <span>Usuarios</span>
         <span class="text-right">Req</span>
         <span class="text-right">p95</span>
@@ -519,11 +588,16 @@ defmodule TokengateWeb.MonitorLive do
       <% else %>
         <div
           :for={row <- @rows}
-          class="grid grid-cols-[1fr_auto] md:grid-cols-[1fr_1fr_64px_72px_72px_72px] gap-2 px-3 py-1.5 items-center text-[11px] hover:bg-base-200/20 transition-colors border-b border-base-200/30 last:border-b-0"
+          class="grid grid-cols-[1fr_auto] md:grid-cols-[1fr_1fr_1fr_64px_72px_72px_72px] gap-2 px-3 py-1.5 items-center text-[11px] hover:bg-base-200/20 transition-colors border-b border-base-200/30 last:border-b-0"
         >
           <%!-- Model name --%>
           <span class="font-medium text-base-content/70 truncate">
             {row.model_name}
+          </span>
+
+          <%!-- Key suffix --%>
+          <span class="font-mono text-base-content/50 truncate hidden md:block">
+            {if row[:provider_key_prefix], do: "····#{row.provider_key_prefix}", else: "—"}
           </span>
 
           <%!-- Users --%>

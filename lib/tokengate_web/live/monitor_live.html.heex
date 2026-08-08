@@ -195,13 +195,22 @@
         <div class="card bg-base-100 border border-base-300 shadow-sm" id="monitor-chart-creds">
           <div class="card-body space-y-1 p-4 sm:p-6">
             <%!-- Table header --%>
-            <div class="hidden md:grid grid-cols-[1fr_1fr_120px_56px_64px_64px_48px] gap-3 px-2 pb-2 border-b border-base-200 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
+            <div class="hidden lg:grid grid-cols-[1fr_1fr_120px_56px_56px_56px_72px_1fr] gap-3 px-2 pb-2 border-b border-base-200 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
               <span>API Key</span>
               <span>Proveedor</span>
               <span class="text-center">60 min</span>
               <span class="text-right">RPM</span>
-              <span class="text-right hidden lg:block">Hora</span>
-              <span class="text-right hidden lg:block">Total</span>
+              <span class="text-right">Hora</span>
+              <span class="text-right">Total</span>
+              <span class="text-center">Vuelo</span>
+              <span>Breaker · Usuarios en vuelo</span>
+            </div>
+            <div class="hidden md:grid lg:hidden grid-cols-[1fr_1fr_120px_56px_56px_48px] gap-3 px-2 pb-2 border-b border-base-200 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
+              <span>API Key</span>
+              <span>Proveedor</span>
+              <span class="text-center">60 min</span>
+              <span class="text-right">RPM</span>
+              <span class="text-right">Hora</span>
               <span class="text-center">Vuelo</span>
             </div>
 
@@ -210,27 +219,28 @@
               <button
                 type="button"
                 class={[
-                  "w-full grid grid-cols-[1fr_auto] md:grid-cols-[1fr_1fr_120px_56px_64px_64px_48px] gap-3 items-center px-2 py-2 rounded-lg transition-colors text-left",
+                  "w-full grid grid-cols-[1fr_auto] md:grid-cols-[1fr_1fr_120px_56px_56px_48px] lg:grid-cols-[1fr_1fr_120px_56px_56px_56px_72px_1fr] gap-3 items-center px-2 py-2 rounded-lg transition-colors text-left",
                   @expanded_credential == ticket.credential_name && "bg-base-200/50",
                   "hover:bg-base-200/30"
                 ]}
                 phx-click="toggle-expand-credential"
                 phx-value-credential-name={ticket.credential_name}
               >
-                <%!-- Credential name --%>
+                <%!-- Credential name + breaker dot --%>
                 <div class="flex items-center gap-2 min-w-0">
-                  <span class="w-2 h-2 rounded-full shrink-0 bg-success" />
+                  <span class={[
+                    "w-2 h-2 rounded-full shrink-0",
+                    breaker_dot_class(ticket.breaker_state)
+                  ]} />
                   <span class="text-xs font-medium text-base-content/80 truncate">
                     {ticket.credential_name}
                   </span>
                 </div>
 
                 <%!-- Provider name --%>
-                <div class="flex items-center gap-2 min-w-0">
-                  <span class="text-xs text-base-content/50 truncate">
-                    {ticket.provider_name}
-                  </span>
-                </div>
+                <span class="text-xs text-base-content/50 truncate hidden md:block">
+                  {ticket.provider_name}
+                </span>
 
                 <%!-- Sparkline --%>
                 <div class="hidden md:block w-[120px]">
@@ -258,11 +268,11 @@
                 </span>
 
                 <%!-- Hour volume --%>
-                <span class="hidden lg:block text-right text-[11px] tabular-nums text-base-content/50">
+                <span class="hidden md:block text-right text-[11px] tabular-nums text-base-content/50">
                   {format_number(hour_volume(ticket.sparkline))}
                 </span>
 
-                <%!-- Total --%>
+                <%!-- Total (lg only) --%>
                 <span class="hidden lg:block text-right text-[11px] tabular-nums text-base-content/50">
                   {format_number(ticket.total_requests)}
                 </span>
@@ -274,6 +284,35 @@
                 ]}>
                   {inflight_label(ticket.inflight)}
                 </span>
+
+                <%!-- Breaker + Usuarios en vuelo (lg only) --%>
+                <div class="hidden lg:flex items-center gap-2 min-w-0">
+                  <%= if ticket.breaker_state && ticket.breaker_state != :closed do %>
+                    <span class={[
+                      "badge badge-xs shrink-0",
+                      breaker_badge_class(ticket.breaker_state)
+                    ]}>
+                      {breaker_label(ticket.breaker_state)}
+                    </span>
+                    <span
+                      class="text-[9px] text-base-content/40 truncate"
+                      title={breaker_reason_label(ticket.breaker_reason)}
+                    >
+                      {breaker_reason_label(ticket.breaker_reason)}
+                    </span>
+                  <% else %>
+                    <span class="text-[10px] text-base-content/30 shrink-0">Cerrado</span>
+                  <% end %>
+                  <div class="flex flex-wrap gap-1 min-w-0">
+                    <span :for={u <- ticket.inflight_users} class="badge badge-xs badge-primary">
+                      <%= if u.count > 1 do %>
+                        {u.name} ({u.count})
+                      <% else %>
+                        {u.name}
+                      <% end %>
+                    </span>
+                  </div>
+                </div>
               </button>
 
               <%!-- Drill-down: models served by this API key --%>

@@ -1116,6 +1116,7 @@ defmodule Tokengate.Metrics.Rollup do
       |> select([rl], %{
         credential_name: rl.credential_name,
         provider_id: rl.provider_id,
+        provider_key_prefix: fragment("MAX(?)", rl.provider_key_prefix),
         request_count: count(rl.id),
         error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
         avg_latency_ms: fragment("AVG(?)", rl.latency_ms),
@@ -1156,7 +1157,7 @@ defmodule Tokengate.Metrics.Rollup do
       else
         Tokengate.Providers.Credential
         |> where([c], c.name in ^cred_names)
-        |> select([c], {c.name, c.status})
+        |> select([c], {c.name, %{status: c.status, id: c.id}})
         |> Repo.all()
         |> Map.new()
       end
@@ -1218,7 +1219,9 @@ defmodule Tokengate.Metrics.Rollup do
         avg_latency_ms: avg_lat && round(avg_lat),
         p95_latency_ms: p95 && round(p95),
         cost_usd: Decimal.new(to_string(row.cost_usd)),
-        status: Map.get(cred_statuses, row.credential_name),
+        status: Map.get(cred_statuses, row.credential_name, %{}) |> Map.get(:status),
+        credential_id: Map.get(cred_statuses, row.credential_name, %{}) |> Map.get(:id),
+        provider_key_prefix: row.provider_key_prefix,
         members: Map.get(members_by_cred, {row.credential_name, row.provider_id}, [])
       }
     end)
@@ -1266,6 +1269,7 @@ defmodule Tokengate.Metrics.Rollup do
       |> group_by([rl], [rl.model_alias_id])
       |> select([rl], %{
         model_alias_id: rl.model_alias_id,
+        provider_key_prefix: fragment("MAX(?)", rl.provider_key_prefix),
         request_count: count(rl.id),
         error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
         avg_latency_ms: fragment("AVG(?)", rl.latency_ms),
@@ -1274,6 +1278,13 @@ defmodule Tokengate.Metrics.Rollup do
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
       })
       |> Repo.all()
+
+    # Resolve credential_id from credential_name
+    credential =
+      Tokengate.Providers.Credential
+      |> where([c], c.name == ^credential_name)
+      |> select([c], %{id: c.id, status: c.status})
+      |> Repo.one()
 
     # Resolve model_alias_id → name
     alias_ids =
@@ -1342,6 +1353,8 @@ defmodule Tokengate.Metrics.Rollup do
         p95_latency_ms: p95 && round(p95),
         cost_usd: Decimal.new(to_string(row.cost_usd)),
         status: nil,
+        credential_id: credential && credential.id,
+        provider_key_prefix: row.provider_key_prefix,
         members: Map.get(members_by_model, row.model_alias_id, [])
       }
     end)
