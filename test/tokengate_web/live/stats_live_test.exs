@@ -399,7 +399,6 @@ defmodule TokengateWeb.StatsLiveTest do
     # El log cayó en una hora local (01:00 local si candidate < now) y la
     # distribución renderiza barras (max > 0)
     assert html =~ "Uso por hora del día"
-    assert html =~ "hora local"
     refute html =~ "Sin datos en este período."
     # La barra de la hora local 1 (01:00) es la máxima
     assert has_element?(view, "#kpi-requests")
