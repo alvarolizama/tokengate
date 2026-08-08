@@ -3,7 +3,7 @@ defmodule TokengateWeb.StatsExportController do
   CSV export endpoint for stats data.
 
   Accepts query params:
-    * `type`   — `models` or `teams` (required)
+    * `type`   — `models`, `teams`, `errors`, or `logs` (required)
     * `period` — `7d`, `30d`, `90d` (default: `7d`)
     * `model_id` — filter by model (for models type only)
     * `team_id`  — filter by team (for teams type only)
@@ -54,6 +54,10 @@ defmodule TokengateWeb.StatsExportController do
 
   defp build_csv(user, "errors", _params, opts, timezone) do
     {:ok, build_errors_csv(user, opts, timezone)}
+  end
+
+  defp build_csv(user, "logs", _params, opts, timezone) do
+    {:ok, build_logs_csv(user, opts, timezone)}
   end
 
   defp build_csv(user, _type, params, opts, timezone) do
@@ -151,6 +155,59 @@ defmodule TokengateWeb.StatsExportController do
 
     {"errores_#{Periods.local_today(timezone)}.csv", csv}
   end
+
+  ## Logs CSV (full export) -----------------------------------------------
+
+  defp build_logs_csv(user, opts, timezone) do
+    filters =
+      opts
+      |> Map.new()
+      |> Map.put(:limit, 50_000)
+      |> Map.put(:team_member_ids, Accounts.scope_member_ids(user))
+
+    rows = Logs.list_logs(filters)
+
+    header =
+      ~w(fecha estado modelo usuario equipo agente api_key proveedor prov_key prov_status error_reason error_message streaming think effort tokens_in tokens_out cache_read cache_creation latencia_ms ttft_ms costo_usd)
+
+    csv =
+      [header | Enum.map(rows, &row_to_csv_log/1)]
+      |> Enum.map(&Enum.join(&1, ","))
+      |> Enum.join("\n")
+
+    {"logs_#{Periods.local_today(timezone)}.csv", csv}
+  end
+
+  defp row_to_csv_log(log) do
+    [
+      csv_escape(format_datetime_csv(log.inserted_at)),
+      log.status_code,
+      csv_escape(model_display_csv(log.model_requested, log.model_responded)),
+      csv_escape(log.team_member && log.team_member.user && log.team_member.user.email),
+      csv_escape(log.team_member && log.team_member.team && log.team_member.team.name),
+      csv_escape(log.client_agent),
+      csv_escape(log.api_key_prefix),
+      csv_escape(log.provider && log.provider.name),
+      csv_escape(log.provider_key_prefix),
+      log.provider_status_code,
+      csv_escape(log.error_reason),
+      csv_escape(log.error_message),
+      if(log.streaming, do: "true", else: "false"),
+      if(log.think, do: "true", else: "false"),
+      csv_escape(log.effort),
+      log.prompt_tokens,
+      log.completion_tokens,
+      log.cache_read_tokens,
+      log.cache_creation_tokens,
+      log.latency_ms,
+      log.ttft_ms,
+      decimal_to_csv(log.provider_cost_usd)
+    ]
+  end
+
+  defp model_display_csv(requested, nil), do: requested || ""
+  defp model_display_csv(requested, responded) when requested == responded, do: requested
+  defp model_display_csv(requested, responded), do: "#{requested} → #{responded}"
 
   defp row_to_csv_error(log) do
     [
