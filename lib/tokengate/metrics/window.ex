@@ -28,6 +28,7 @@ defmodule Tokengate.Metrics.Window do
   use GenServer
 
   @table :tokengate_metrics_window
+  @credential_table :tokengate_metrics_window_creds
   @window_minutes 60
   @pubsub Tokengate.PubSub
   @topic "metrics:window"
@@ -102,6 +103,89 @@ defmodule Tokengate.Metrics.Window do
   end
 
   @doc """
+  Records a request into the current minute bucket for the given credential.
+
+  Same atomic ETS pattern as `record_request/1` but keyed on `credential_name`
+  for the per-API-key Monitor tab.
+  """
+  @spec record_request_credential(map()) :: :ok
+  def record_request_credential(attrs) do
+    credential_name = Map.get(attrs, :credential_name)
+
+    unless is_nil(credential_name) do
+      minute = System.system_time(:second) |> div(60)
+
+      :ets.update_counter(
+        @credential_table,
+        {credential_name, minute},
+        {2, 1},
+        {{credential_name, minute}, 0}
+      )
+    end
+
+    :ok
+  end
+
+  @doc """
+  Returns the rolling window as a map of `credential_name => [counts]`.
+
+  Same shape as `snapshot/0` but keyed on `credential_name` instead of
+  `model_alias_id`.
+  """
+  @spec snapshot_by_credential() :: %{binary => [non_neg_integer()]}
+  def snapshot_by_credential do
+    ensure_credential_table()
+
+    now_minute = System.system_time(:second) |> div(60)
+    start_minute = now_minute - @window_minutes + 1
+
+    all =
+      @credential_table
+      |> :ets.tab2list()
+      |> Enum.reject(fn {{_name, minute}, _count} -> minute < start_minute end)
+
+    names =
+      all
+      |> Enum.map(fn {{name, _minute}, _count} -> name end)
+      |> Enum.uniq()
+
+    Map.new(names, fn name ->
+      counts =
+        for minute <- start_minute..now_minute do
+          case :ets.lookup(@credential_table, {name, minute}) do
+            [{_key, count}] -> count
+            [] -> 0
+          end
+        end
+
+      {name, counts}
+    end)
+  end
+
+  @doc ~S"""
+  Backfills the credential window from Postgres `request_logs`.
+
+  Same pattern as `backfill/0` but groups by `credential_name`.
+  """
+  @spec backfill_by_credential() :: :ok
+  def backfill_by_credential do
+    ensure_credential_table()
+
+    from =
+      DateTime.utc_now()
+      |> DateTime.add(-@window_minutes * 60, :second)
+      |> DateTime.truncate(:second)
+
+    Tokengate.Metrics.Rollup.minute_series_by_credential(from)
+    |> Enum.each(fn {credential_name, minute_dt, count} ->
+      minute = DateTime.to_unix(minute_dt, :second) |> div(60)
+      :ets.insert(@credential_table, {{credential_name, minute}, count})
+    end)
+
+    :ok
+  end
+
+  @doc """
   Backfills the window from Postgres `request_logs`.
 
   Fetches the last hour of logs grouped by model_alias_id + minute and
@@ -134,7 +218,9 @@ defmodule Tokengate.Metrics.Window do
   @spec reset() :: :ok
   def reset do
     ensure_table()
+    ensure_credential_table()
     :ets.delete_all_objects(@table)
+    :ets.delete_all_objects(@credential_table)
     :ok
   end
 
@@ -148,12 +234,14 @@ defmodule Tokengate.Metrics.Window do
   @impl true
   def init(_opts) do
     ensure_table()
+    ensure_credential_table()
 
     # Backfill from Postgres so the sparkline is populated on boot.
     # catch (not rescue) to also trap :noproc / EXIT from the sandbox
     # when the Repo isn't available yet (e.g. during test setup).
     try do
       backfill()
+      backfill_by_credential()
     catch
       _, _ -> :ok
     end
@@ -184,14 +272,29 @@ defmodule Tokengate.Metrics.Window do
     end
   end
 
+  defp ensure_credential_table do
+    case :ets.whereis(@credential_table) do
+      :undefined ->
+        :ets.new(@credential_table, [:named_table, :public, :set, write_concurrency: true])
+
+      _tid ->
+        @credential_table
+    end
+  end
+
   defp rotate do
     ensure_table()
+    ensure_credential_table()
 
     cutoff = div(System.system_time(:second), 60) - @window_minutes
 
     @table
     |> :ets.select([{{{:"$1", :"$2"}, :_}, [{:<, :"$2", cutoff}], [{{:"$1", :"$2"}}]}])
     |> Enum.each(fn key -> :ets.delete(@table, key) end)
+
+    @credential_table
+    |> :ets.select([{{{:"$1", :"$2"}, :_}, [{:<, :"$2", cutoff}], [{{:"$1", :"$2"}}]}])
+    |> Enum.each(fn key -> :ets.delete(@credential_table, key) end)
 
     :ok
   end

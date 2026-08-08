@@ -387,6 +387,7 @@ defmodule TokengateWeb.ProxyController do
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
       provider_id: route.model_provider.credential.provider_id,
+      credential_name: route.credential.name,
       agent_type: conn.assigns.agent_type,
       status: 200,
       latency_ms: latency_ms,
@@ -1153,6 +1154,7 @@ defmodule TokengateWeb.ProxyController do
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
       provider_id: route.model_provider.credential.provider_id,
+      credential_name: route.credential.name,
       agent_type: conn.assigns.agent_type,
       status: 200,
       latency_ms: latency_ms,
@@ -1193,6 +1195,7 @@ defmodule TokengateWeb.ProxyController do
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
       provider_id: route.model_provider.credential.provider_id,
+      credential_name: route.credential.name,
       agent_type: conn.assigns.agent_type,
       status: 200,
       latency_ms: latency_ms,
@@ -1308,6 +1311,7 @@ defmodule TokengateWeb.ProxyController do
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
       provider_id: route.model_provider.credential.provider_id,
+      credential_name: route.credential.name,
       agent_type: conn.assigns.agent_type,
       status: client_status,
       latency_ms: Keyword.get(opts, :latency_ms, 0),

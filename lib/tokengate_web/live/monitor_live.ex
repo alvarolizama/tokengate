@@ -47,6 +47,10 @@ defmodule TokengateWeb.MonitorLive do
       |> assign(:expanded_model, nil)
       |> assign(:credential_rows, [])
       |> assign(:total_inflight, 0)
+      |> assign(:active_tab, "model")
+      |> assign(:credential_tickets, [])
+      |> assign(:expanded_credential, nil)
+      |> assign(:credential_model_rows, [])
 
     {:ok, socket}
   end
@@ -92,6 +96,25 @@ defmodule TokengateWeb.MonitorLive do
     {:noreply, socket}
   end
 
+  @impl true
+  def handle_event("switch-tab", %{"tab" => tab}, socket) do
+    socket = assign(socket, :active_tab, tab)
+    {:noreply, refresh_data(socket)}
+  end
+
+  @impl true
+  def handle_event("toggle-expand-credential", %{"credential-name" => cred_name}, socket) do
+    new_expanded =
+      if socket.assigns[:expanded_credential] == cred_name, do: nil, else: cred_name
+
+    socket =
+      socket
+      |> assign(:expanded_credential, new_expanded)
+      |> refresh_credential_model_rows(new_expanded)
+
+    {:noreply, socket}
+  end
+
   defp refresh_credential_rows(socket, nil), do: assign(socket, :credential_rows, [])
 
   defp refresh_credential_rows(socket, model_id),
@@ -100,6 +123,16 @@ defmodule TokengateWeb.MonitorLive do
         socket,
         :credential_rows,
         Rollup.breakdown_by_credential(model_id, from: one_hour_ago())
+      )
+
+  defp refresh_credential_model_rows(socket, nil), do: assign(socket, :credential_model_rows, [])
+
+  defp refresh_credential_model_rows(socket, cred_name),
+    do:
+      assign(
+        socket,
+        :credential_model_rows,
+        Rollup.breakdown_by_model_for_credential(cred_name, from: one_hour_ago())
       )
 
   defp refresh_data(socket) do
@@ -179,10 +212,54 @@ defmodule TokengateWeb.MonitorLive do
         socket
       end
 
+    # Build credential tickets for the "Por API key" tab
+    cred_window = Window.snapshot_by_credential()
+
+    inflight_by_cred =
+      inflight_entries
+      |> Enum.reject(&is_nil(&1.credential_name))
+      |> Enum.group_by(& &1.credential_name)
+
+    # Resolve provider names for credentials from inflight
+    cred_provider_names =
+      inflight_entries
+      |> Enum.reject(fn e -> is_nil(e.credential_name) or is_nil(e.provider_name) end)
+      |> Enum.map(fn e -> {e.credential_name, e.provider_name} end)
+      |> Enum.uniq()
+      |> Map.new()
+
+    credential_tickets =
+      cred_window
+      |> Enum.map(fn {cred_name, counts} ->
+        cred_inflight = Map.get(inflight_by_cred, cred_name, [])
+
+        %{
+          credential_name: cred_name,
+          provider_name: Map.get(cred_provider_names, cred_name, "—"),
+          sparkline: counts,
+          total_requests: Enum.sum(counts),
+          inflight: length(cred_inflight)
+        }
+      end)
+      |> Enum.sort_by(& &1.total_requests, :desc)
+
+    # Refresh credential model rows if a credential is expanded
+    socket =
+      if expanded_cred = socket.assigns[:expanded_credential] do
+        assign(
+          socket,
+          :credential_model_rows,
+          Rollup.breakdown_by_model_for_credential(expanded_cred, from: one_hour_ago())
+        )
+      else
+        socket
+      end
+
     socket
     |> assign(:tickets, tickets)
     |> assign(:indices, indices)
     |> assign(:total_inflight, total_inflight)
+    |> assign(:credential_tickets, credential_tickets)
   end
 
   # ── Helpers ──────────────────────────────────────────────────────────────
@@ -344,9 +421,10 @@ defmodule TokengateWeb.MonitorLive do
     ~H"""
     <div class="ml-6 md:ml-10 mt-1 mb-2 rounded-lg border border-base-200 bg-base-100/50 overflow-hidden">
       <%!-- Sub-header --%>
-      <div class="hidden md:grid grid-cols-[1fr_1fr_64px_72px_72px_72px_48px] gap-2 px-3 py-1.5 bg-base-200/30 text-[9px] font-semibold uppercase tracking-wider text-base-content/40">
+      <div class="hidden md:grid grid-cols-[1fr_1fr_1fr_64px_72px_72px_72px_48px] gap-2 px-3 py-1.5 bg-base-200/30 text-[9px] font-semibold uppercase tracking-wider text-base-content/40">
         <span>API Key</span>
         <span>Proveedor</span>
+        <span>Usuarios</span>
         <span class="text-right">Req</span>
         <span class="text-right">p95</span>
         <span class="text-right">Err</span>
@@ -361,7 +439,7 @@ defmodule TokengateWeb.MonitorLive do
       <% else %>
         <div
           :for={row <- @rows}
-          class="grid grid-cols-[1fr_1fr_auto] md:grid-cols-[1fr_1fr_64px_72px_72px_72px_48px] gap-2 px-3 py-1.5 items-center text-[11px] hover:bg-base-200/20 transition-colors"
+          class="grid grid-cols-[1fr_1fr_auto] md:grid-cols-[1fr_1fr_1fr_64px_72px_72px_72px_48px] gap-2 px-3 py-1.5 items-center text-[11px] hover:bg-base-200/20 transition-colors border-b border-base-200/30 last:border-b-0"
         >
           <%!-- Credential name --%>
           <span class="font-medium text-base-content/70 truncate">
@@ -372,6 +450,13 @@ defmodule TokengateWeb.MonitorLive do
           <span class="text-base-content/50 truncate hidden md:block">
             {row.provider_name}
           </span>
+
+          <%!-- Users --%>
+          <div class="flex flex-wrap gap-1">
+            <span :for={m <- row[:members] || []} class="badge badge-xs badge-ghost">
+              {m.name}
+            </span>
+          </div>
 
           <%!-- Request count --%>
           <span class="text-right tabular-nums text-base-content/60">
@@ -405,6 +490,73 @@ defmodule TokengateWeb.MonitorLive do
               {credential_status_label(row.status)}
             </span>
           </div>
+        </div>
+      <% end %>
+    </div>
+    """
+  end
+
+  # ── Credential model drilldown (for the "Por API key" tab) ────────────────
+  attr :rows, :list, default: []
+
+  def credential_model_drilldown(assigns) do
+    ~H"""
+    <div class="ml-6 md:ml-10 mt-1 mb-2 rounded-lg border border-base-200 bg-base-100/50 overflow-hidden">
+      <%!-- Sub-header --%>
+      <div class="hidden md:grid grid-cols-[1fr_1fr_64px_72px_72px_72px] gap-2 px-3 py-1.5 bg-base-200/30 text-[9px] font-semibold uppercase tracking-wider text-base-content/40">
+        <span>Modelo</span>
+        <span>Usuarios</span>
+        <span class="text-right">Req</span>
+        <span class="text-right">p95</span>
+        <span class="text-right">Err</span>
+        <span class="text-right">$</span>
+      </div>
+
+      <%= if @rows == [] do %>
+        <p class="text-[11px] text-base-content/40 px-3 py-2">
+          Sin datos de modelos para esta API key en la última hora.
+        </p>
+      <% else %>
+        <div
+          :for={row <- @rows}
+          class="grid grid-cols-[1fr_auto] md:grid-cols-[1fr_1fr_64px_72px_72px_72px] gap-2 px-3 py-1.5 items-center text-[11px] hover:bg-base-200/20 transition-colors border-b border-base-200/30 last:border-b-0"
+        >
+          <%!-- Model name --%>
+          <span class="font-medium text-base-content/70 truncate">
+            {row.model_name}
+          </span>
+
+          <%!-- Users --%>
+          <div class="flex flex-wrap gap-1">
+            <span :for={m <- row[:members] || []} class="badge badge-xs badge-ghost">
+              {m.name}
+            </span>
+          </div>
+
+          <%!-- Request count --%>
+          <span class="text-right tabular-nums text-base-content/60">
+            {format_number(row.request_count)}
+          </span>
+
+          <%!-- p95 latency --%>
+          <span class="text-right tabular-nums text-base-content/50 hidden md:block">
+            {if row.p95_latency_ms, do: "#{row.p95_latency_ms}ms", else: "—"}
+          </span>
+
+          <%!-- Error rate --%>
+          <span class={[
+            "text-right tabular-nums hidden md:block",
+            row.error_rate > 0.05 && "text-error",
+            row.error_rate > 0 && row.error_rate <= 0.05 && "text-warning",
+            row.error_rate == 0 && "text-base-content/40"
+          ]}>
+            {Float.round(row.error_rate * 100, 1)}%
+          </span>
+
+          <%!-- Cost --%>
+          <span class="text-right tabular-nums text-base-content/50 hidden md:block">
+            {format_cost(row.cost_usd)}
+          </span>
         </div>
       <% end %>
     </div>

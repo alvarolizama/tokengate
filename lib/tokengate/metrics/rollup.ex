@@ -1031,6 +1031,42 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   # -----------------------------------------------------------------------
+  # minute_series_by_credential/1
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Returns per-minute request counts grouped by `credential_name`, for
+  the Monitor's per-API-key 60-minute rolling sparklines.
+
+  Each row is a 3-tuple:
+
+      {credential_name :: String.t(), minute :: DateTime, count :: integer}
+
+  Only rows with non-nil `credential_name` are included.
+  """
+  @spec minute_series_by_credential(DateTime.t()) :: [{binary, DateTime.t(), non_neg_integer()}]
+  def minute_series_by_credential(from) do
+    bucketed =
+      RequestLog
+      |> where([rl], not is_nil(rl.credential_name) and rl.inserted_at >= ^from)
+      |> select([rl], %{
+        bucket: fragment("date_trunc('minute', ?)", rl.inserted_at),
+        credential_name: rl.credential_name,
+        id: rl.id
+      })
+      |> subquery()
+
+    from(b in bucketed,
+      group_by: [b.credential_name, b.bucket],
+      select: %{credential_name: b.credential_name, minute: b.bucket, count: count(b.id)}
+    )
+    |> Repo.all()
+    |> Enum.map(fn row ->
+      {row.credential_name, to_utc_datetime(row.minute), row.count}
+    end)
+  end
+
+  # -----------------------------------------------------------------------
   # breakdown_by_credential/1
   # -----------------------------------------------------------------------
 
@@ -1125,6 +1161,45 @@ defmodule Tokengate.Metrics.Rollup do
         |> Map.new()
       end
 
+    # Members per credential: group by (credential_name, provider_id, team_member_id)
+    # and join users for names.
+    member_rows =
+      RequestLog
+      |> where([rl], rl.model_alias_id == ^model_alias_id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> join(:inner, [rl], tm in Tokengate.Accounts.TeamMember, on: tm.id == rl.team_member_id)
+      |> join(:left, [rl, tm], u in Tokengate.Accounts.User, on: u.id == tm.user_id)
+      |> group_by([rl, tm, u], [
+        rl.credential_name,
+        rl.provider_id,
+        rl.team_member_id,
+        u.name,
+        u.email
+      ])
+      |> select([rl, tm, u], %{
+        credential_name: rl.credential_name,
+        provider_id: rl.provider_id,
+        member_name: u.name,
+        member_email: u.email,
+        request_count: count(rl.id)
+      })
+      |> Repo.all()
+
+    members_by_cred =
+      member_rows
+      |> Enum.group_by(fn r -> {r.credential_name, r.provider_id} end)
+      |> Enum.map(fn {key, rows} ->
+        {key,
+         rows
+         |> Enum.map(fn r ->
+           %{name: r.member_name || r.member_email || "—", request_count: r.request_count}
+         end)
+         |> Enum.sort_by(& &1.request_count, :desc)
+         |> Enum.take(5)}
+      end)
+      |> Map.new()
+
     rows
     |> Enum.map(fn row ->
       req = row.request_count
@@ -1143,7 +1218,131 @@ defmodule Tokengate.Metrics.Rollup do
         avg_latency_ms: avg_lat && round(avg_lat),
         p95_latency_ms: p95 && round(p95),
         cost_usd: Decimal.new(to_string(row.cost_usd)),
-        status: Map.get(cred_statuses, row.credential_name)
+        status: Map.get(cred_statuses, row.credential_name),
+        members: Map.get(members_by_cred, {row.credential_name, row.provider_id}, [])
+      }
+    end)
+    |> Enum.sort_by(& &1.request_count, :desc)
+  end
+
+  # -----------------------------------------------------------------------
+  # breakdown_by_model_for_credential/2
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Per-model aggregate metrics for a specific credential (API key),
+  ranked by request count (descending).
+
+  Mirrors `breakdown_by_credential/2` but instead of showing which
+  credentials serve a model, it shows which models are served by a
+  credential — the drill-down for the "Por API key" Monitor tab.
+
+  Each row:
+
+      %{
+        model_name: String.t(),
+        request_count: integer,
+        error_count: integer,
+        error_rate: float,
+        avg_latency_ms: integer | nil,
+        p95_latency_ms: integer | nil,
+        cost_usd: Decimal,
+        status: String.t() | nil,
+        members: [%{name: String.t(), request_count: integer}]
+      }
+  """
+  @spec breakdown_by_model_for_credential(String.t() | nil, keyword()) :: [map()]
+  def breakdown_by_model_for_credential(nil, _opts), do: []
+
+  def breakdown_by_model_for_credential(credential_name, opts) when is_binary(credential_name) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    rows =
+      RequestLog
+      |> where([rl], rl.credential_name == ^credential_name)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> group_by([rl], [rl.model_alias_id])
+      |> select([rl], %{
+        model_alias_id: rl.model_alias_id,
+        request_count: count(rl.id),
+        error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
+        avg_latency_ms: fragment("AVG(?)", rl.latency_ms),
+        p95_latency_ms:
+          fragment("percentile_cont(0.95) WITHIN GROUP (ORDER BY ?)", rl.latency_ms),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
+      })
+      |> Repo.all()
+
+    # Resolve model_alias_id → name
+    alias_ids =
+      rows
+      |> Enum.map(& &1.model_alias_id)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    alias_names =
+      if alias_ids == [] do
+        %{}
+      else
+        Tokengate.Providers.ModelAlias
+        |> where([ma], ma.id in ^alias_ids)
+        |> select([ma], {ma.id, ma.name})
+        |> Repo.all()
+        |> Map.new()
+      end
+
+    # Members per model
+    member_rows =
+      RequestLog
+      |> where([rl], rl.credential_name == ^credential_name)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> join(:inner, [rl], tm in Tokengate.Accounts.TeamMember, on: tm.id == rl.team_member_id)
+      |> join(:left, [rl, tm], u in Tokengate.Accounts.User, on: u.id == tm.user_id)
+      |> group_by([rl, tm, u], [rl.model_alias_id, rl.team_member_id, u.name, u.email])
+      |> select([rl, tm, u], %{
+        model_alias_id: rl.model_alias_id,
+        member_name: u.name,
+        member_email: u.email,
+        request_count: count(rl.id)
+      })
+      |> Repo.all()
+
+    members_by_model =
+      member_rows
+      |> Enum.group_by(& &1.model_alias_id)
+      |> Enum.map(fn {alias_id, m_rows} ->
+        {alias_id,
+         m_rows
+         |> Enum.map(fn r ->
+           %{name: r.member_name || r.member_email || "—", request_count: r.request_count}
+         end)
+         |> Enum.sort_by(& &1.request_count, :desc)
+         |> Enum.take(5)}
+      end)
+      |> Map.new()
+
+    rows
+    |> Enum.map(fn row ->
+      req = row.request_count
+      errs = row.error_count
+      err_rate = if req > 0, do: errs / req * 1.0, else: 0.0
+
+      avg_lat = row.avg_latency_ms && to_float!(row.avg_latency_ms)
+      p95 = row.p95_latency_ms && to_float!(row.p95_latency_ms)
+
+      %{
+        model_name: Map.get(alias_names, row.model_alias_id, row.model_alias_id || "—"),
+        request_count: req,
+        error_count: errs,
+        error_rate: Float.round(err_rate, 4),
+        avg_latency_ms: avg_lat && round(avg_lat),
+        p95_latency_ms: p95 && round(p95),
+        cost_usd: Decimal.new(to_string(row.cost_usd)),
+        status: nil,
+        members: Map.get(members_by_model, row.model_alias_id, [])
       }
     end)
     |> Enum.sort_by(& &1.request_count, :desc)
