@@ -993,6 +993,163 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   # -----------------------------------------------------------------------
+  # minute_series_by_model/1
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Returns per-minute request counts grouped by `model_alias_id`, for
+  the Monitor's 60-minute rolling sparklines.
+
+  Each row is a 3-tuple:
+
+      {model_alias_id :: binary, minute :: DateTime, count :: integer}
+
+  The `minute` is `date_trunc('minute', inserted_at)` truncated to UTC.
+  Only rows with non-nil `model_alias_id` are included (gate errors with
+  no alias are excluded — they don't belong in the per-model sparklines).
+  """
+  @spec minute_series_by_model(DateTime.t()) :: [{binary, DateTime.t(), non_neg_integer()}]
+  def minute_series_by_model(from) do
+    bucketed =
+      RequestLog
+      |> where([rl], not is_nil(rl.model_alias_id) and rl.inserted_at >= ^from)
+      |> select([rl], %{
+        bucket: fragment("date_trunc('minute', ?)", rl.inserted_at),
+        alias_id: rl.model_alias_id,
+        id: rl.id
+      })
+      |> subquery()
+
+    from(b in bucketed,
+      group_by: [b.alias_id, b.bucket],
+      select: %{alias_id: b.alias_id, minute: b.bucket, count: count(b.id)}
+    )
+    |> Repo.all()
+    |> Enum.map(fn row ->
+      {row.alias_id, to_utc_datetime(row.minute), row.count}
+    end)
+  end
+
+  # -----------------------------------------------------------------------
+  # breakdown_by_credential/1
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Returns per-credential aggregate metrics for a specific model alias,
+  ranked by request count (descending).
+
+  Groups by `credential_name` (the API key alias stored in the log), so
+  the Monitor drill-down shows which provider API keys are serving the
+  model and their health.
+
+  Each row:
+
+      %{
+        credential_name: String.t() | nil,
+        provider_name: String.t() | nil,
+        request_count: integer,
+        error_count: integer,
+        error_rate: float,
+        avg_latency_ms: float | nil,
+        p95_latency_ms: float | nil,
+        cost_usd: Decimal,
+        status: String.t() | nil
+      }
+
+  `status` comes from the `provider_credentials` table (active / disabled /
+  error) via a left join on `credential_name` → `Credential.name`. May be
+  nil when the credential no longer exists (e.g. logs from a deleted key).
+
+  `model_alias_id` of `nil` returns an empty list.
+  """
+  @spec breakdown_by_credential(String.t() | nil, keyword()) :: [map()]
+  def breakdown_by_credential(model_alias_id, opts \\ [])
+
+  def breakdown_by_credential(nil, _opts), do: []
+
+  def breakdown_by_credential(model_alias_id, opts) when is_binary(model_alias_id) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    rows =
+      RequestLog
+      |> where([rl], rl.model_alias_id == ^model_alias_id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> group_by([rl], [rl.credential_name, rl.provider_id])
+      |> select([rl], %{
+        credential_name: rl.credential_name,
+        provider_id: rl.provider_id,
+        request_count: count(rl.id),
+        error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
+        avg_latency_ms: fragment("AVG(?)", rl.latency_ms),
+        p95_latency_ms:
+          fragment("percentile_cont(0.95) WITHIN GROUP (ORDER BY ?)", rl.latency_ms),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
+      })
+      |> Repo.all()
+
+    # Resolve provider ids → names
+    provider_names =
+      rows
+      |> Enum.map(& &1.provider_id)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+      |> then(fn ids ->
+        if ids == [] do
+          %{}
+        else
+          Tokengate.Providers.Provider
+          |> where([p], p.id in ^ids)
+          |> select([p], {p.id, p.name})
+          |> Repo.all()
+          |> Map.new()
+        end
+      end)
+
+    # Resolve credential statuses by name
+    cred_names =
+      rows
+      |> Enum.map(& &1.credential_name)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    cred_statuses =
+      if cred_names == [] do
+        %{}
+      else
+        Tokengate.Providers.Credential
+        |> where([c], c.name in ^cred_names)
+        |> select([c], {c.name, c.status})
+        |> Repo.all()
+        |> Map.new()
+      end
+
+    rows
+    |> Enum.map(fn row ->
+      req = row.request_count
+      errs = row.error_count
+      err_rate = if req > 0, do: errs / req * 1.0, else: 0.0
+
+      avg_lat = row.avg_latency_ms && to_float!(row.avg_latency_ms)
+      p95 = row.p95_latency_ms && to_float!(row.p95_latency_ms)
+
+      %{
+        credential_name: row.credential_name || "—",
+        provider_name: Map.get(provider_names, row.provider_id, "—"),
+        request_count: req,
+        error_count: errs,
+        error_rate: Float.round(err_rate, 4),
+        avg_latency_ms: avg_lat && round(avg_lat),
+        p95_latency_ms: p95 && round(p95),
+        cost_usd: Decimal.new(to_string(row.cost_usd)),
+        status: Map.get(cred_statuses, row.credential_name)
+      }
+    end)
+    |> Enum.sort_by(& &1.request_count, :desc)
+  end
+
+  # -----------------------------------------------------------------------
   # usage_by_hour_of_day/2
   # -----------------------------------------------------------------------
 

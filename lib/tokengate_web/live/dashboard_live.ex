@@ -6,12 +6,15 @@ defmodule TokengateWeb.DashboardLive do
   regardless of global role. Data comes from durable Postgres rollups.
 
   All metrics are fetched from Postgres (`request_logs`) via
-  `Tokengate.Logs` and `Tokengate.Metrics.Rollup` — no in-memory ETS,
-  so numbers are always consistent with the durable source of truth.
+  `Tokengate.Logs` and `Tokengate.Metrics.Rollup`. Results are cached in
+  the `Tokengate.Metrics.DashboardCache` ETS table (5s TTL) so that
+  multiple connected dashboards for the same user share one set of
+  Postgres queries instead of re-querying on every PubSub broadcast.
 
   Real-time updates come from `Phoenix.PubSub` on the `"metrics:updated"`
   topic (broadcast by `Tokengate.Metrics.Collector.record_request/1`).
-  On `{:metrics_updated, _}` the LiveView re-fetches its data from Postgres.
+  On `{:metrics_updated, _}` the LiveView debounces and re-reads from
+  cache — a cache hit skips all Postgres queries.
 
   A period selector lets the user choose: Hoy (24h), 7d, 30d, 90d.
   All UI strings are in Spanish (the app's UI language).
@@ -23,6 +26,7 @@ defmodule TokengateWeb.DashboardLive do
   alias Tokengate.Budgets.Manager, as: Budgets
   alias Tokengate.Logs
   alias Tokengate.Logs.RequestLog
+  alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Periods
   alias Tokengate.Providers
@@ -64,8 +68,11 @@ defmodule TokengateWeb.DashboardLive do
       |> assign(:new_token_team, nil)
       |> assign(:model_catalog, [])
       |> assign(:model_tiers, %{})
+      |> assign(:model_usage_stats, %{})
+      |> assign(:most_used_model_id, nil)
       |> assign(:supervised_services_count, count_supervised_services(user))
       |> load_personal_data(user)
+      |> load_model_catalog()
 
     if connected?(socket) do
       Phoenix.PubSub.subscribe(@pubsub, @metrics_topic)
@@ -235,19 +242,25 @@ defmodule TokengateWeb.DashboardLive do
   defp load_metrics(socket, user) do
     period = socket.assigns[:period] || "today"
     timezone = socket.assigns[:timezone] || "Etc/UTC"
+    cache_key = DashboardCache.build_key(user.id, period, timezone)
+
+    cached =
+      DashboardCache.fetch_or_compute(cache_key, fn ->
+        compute_metrics_bundle(user, period, timezone, socket.assigns)
+      end)
+
+    apply_metrics_bundle(socket, cached)
+  end
+
+  # Computes the full metrics bundle from Postgres. This is the expensive
+  # path — called only on cache miss.
+  defp compute_metrics_bundle(user, period, timezone, assigns) do
     %{from: from, to: to} = Periods.period_bounds(period, timezone)
     opts = [from: from, to: to]
 
-    socket
-    |> load_summary_metrics(user, opts)
-    |> load_chart_series(user, opts, period, timezone)
-    |> load_breakdowns(user, opts)
-    |> load_model_catalog()
-    |> load_model_usage_stats(user)
-    |> assign(:loading, false)
-  end
+    member_ids = assigns[:scope_member_ids] || []
 
-  defp load_summary_metrics(socket, user, opts) do
+    # Summary
     summary = fetch_summary(user, opts)
 
     metrics = %{
@@ -264,21 +277,7 @@ defmodule TokengateWeb.DashboardLive do
       avg_tps: Map.get(summary, :avg_tps)
     }
 
-    assign(socket, :metrics, metrics)
-  end
-
-  # User-wide: every user (admin included) sees only their own consumption.
-  defp fetch_summary(user, opts) do
-    member_ids = Enum.map(Accounts.list_team_members_for_user(user.id), & &1.id)
-
-    Logs.cost_summary_for_members(member_ids, Map.new(opts))
-    |> Map.merge(%{avg_latency_ms: nil, avg_ttft_ms: nil, avg_tps: nil})
-  end
-
-  # Chart series — granularity depends on period
-  defp load_chart_series(socket, _user, opts, period, timezone) do
-    member_ids = socket.assigns[:scope_member_ids] || []
-
+    # Chart series
     series =
       if member_ids == [] do
         []
@@ -298,20 +297,115 @@ defmodule TokengateWeb.DashboardLive do
         Map.put(row, :tps, tps)
       end)
 
-    socket
-    |> assign(
-      :cost_series,
-      to_chart_points(series_with_tps, period, :cost_usd, &usd_tooltip/1, timezone)
-    )
-    |> assign(
-      :requests_series,
+    cost_series = to_chart_points(series_with_tps, period, :cost_usd, &usd_tooltip/1, timezone)
+
+    requests_series =
       to_chart_points(series_with_tps, period, :request_count, &requests_tooltip/1, timezone)
-    )
-    |> assign(:tokens_series, to_token_points(series_with_tps, period, timezone))
-    |> assign(
-      :tps_series,
-      to_chart_points(series_with_tps, period, :tps, &tps_tooltip/1, timezone)
-    )
+
+    tokens_series = to_token_points(series_with_tps, period, timezone)
+    tps_series = to_chart_points(series_with_tps, period, :tps, &tps_tooltip/1, timezone)
+
+    # Breakdowns
+    breakdown_opts = Keyword.put(opts, :member_ids, member_ids)
+    breakdown_model = Rollup.breakdown_by_model(nil, breakdown_opts)
+    breakdown_member = Rollup.breakdown_by_member(nil, breakdown_opts)
+
+    # Model usage stats
+    {model_usage_stats, model_tiers, most_used_model_id} =
+      compute_model_usage(user, period, timezone, opts, assigns)
+
+    %{
+      metrics: metrics,
+      cost_series: cost_series,
+      requests_series: requests_series,
+      tokens_series: tokens_series,
+      tps_series: tps_series,
+      breakdown_model: breakdown_model,
+      top_models: top_model_rows(breakdown_model),
+      breakdown_member: breakdown_member,
+      top_members: top_member_rows(breakdown_member),
+      model_usage_stats: model_usage_stats,
+      model_tiers: model_tiers,
+      most_used_model_id: most_used_model_id
+    }
+  end
+
+  defp compute_model_usage(user, period, timezone, _opts, assigns) do
+    %{from: from, to: to} = Periods.period_bounds(period, timezone)
+    usage_opts = [from: from, to: to]
+
+    member_ids = user_member_ids(user)
+    models = assigns[:model_catalog] || []
+    model_ids = Enum.map(models, & &1.id)
+
+    if model_ids == [] or member_ids == [] do
+      empty_stats =
+        Map.new(model_ids, fn model_id ->
+          {model_id, %{user: empty_usage(), team: empty_usage(), org: empty_usage()}}
+        end)
+
+      {empty_stats, %{}, nil}
+    else
+      user_stats = model_usage_stats_for_members(model_ids, member_ids, usage_opts)
+      team_ids = Enum.map(assigns[:teams] || [], & &1.team.id)
+      team_stats = model_usage_stats_for_teams(model_ids, team_ids, usage_opts)
+      org_stats = model_usage_stats_org(model_ids, usage_opts)
+
+      tiers =
+        nil
+        |> Rollup.model_ranking(usage_opts)
+        |> Map.new(fn row -> {row.model_id, row.tier} end)
+
+      merged =
+        Map.new(model_ids, fn model_id ->
+          {model_id,
+           %{
+             user: Map.get(user_stats, model_id, empty_usage()),
+             team: Map.get(team_stats, model_id, empty_usage()),
+             org: Map.get(org_stats, model_id, empty_usage())
+           }}
+        end)
+
+      most_used_id =
+        user_stats
+        |> Enum.sort_by(fn {_id, stats} -> stats.request_count end, :desc)
+        |> List.first()
+        |> case do
+          {id, _stats} -> id
+          nil -> nil
+        end
+
+      {merged, tiers, most_used_id}
+    end
+  end
+
+  # Applies the cached (or freshly computed) metrics bundle to the socket.
+  # This is the cheap path — no Postgres queries, just assigns.
+  defp apply_metrics_bundle(socket, bundle) do
+    socket
+    |> assign(:metrics, bundle.metrics)
+    |> assign(:cost_series, bundle.cost_series)
+    |> assign(:requests_series, bundle.requests_series)
+    |> assign(:tokens_series, bundle.tokens_series)
+    |> assign(:tps_series, bundle.tps_series)
+    |> assign(:breakdown_model, bundle.breakdown_model)
+    |> assign(:top_models, bundle.top_models)
+    |> assign(:breakdown_member, bundle.breakdown_member)
+    |> assign(:top_members, bundle.top_members)
+    |> assign(:breakdown_team, [])
+    |> assign(:top_teams, [])
+    |> assign(:model_usage_stats, bundle.model_usage_stats)
+    |> assign(:model_tiers, bundle.model_tiers)
+    |> assign(:most_used_model_id, bundle.most_used_model_id)
+    |> assign(:loading, false)
+  end
+
+  # User-wide: every user (admin included) sees only their own consumption.
+  defp fetch_summary(user, opts) do
+    member_ids = Enum.map(Accounts.list_team_members_for_user(user.id), & &1.id)
+
+    Logs.cost_summary_for_members(member_ids, Map.new(opts))
+    |> Map.merge(%{avg_latency_ms: nil, avg_ttft_ms: nil, avg_tps: nil})
   end
 
   defp hourly_series_for_members(member_ids, opts, timezone) do
@@ -385,21 +479,6 @@ defmodule TokengateWeb.DashboardLive do
         tooltip: "#{format_compact(trunc(in_val))} in / #{format_compact(trunc(out_val))} out"
       }
     end)
-  end
-
-  # Breakdowns — user-wide: always scoped to the logged-in user's memberships
-  defp load_breakdowns(socket, _user, opts) do
-    opts = Keyword.put(opts, :member_ids, socket.assigns[:scope_member_ids])
-    breakdown_model = Rollup.breakdown_by_model(nil, opts)
-    breakdown_member = Rollup.breakdown_by_member(nil, opts)
-
-    socket
-    |> assign(:breakdown_model, breakdown_model)
-    |> assign(:top_models, top_model_rows(breakdown_model))
-    |> assign(:breakdown_member, breakdown_member)
-    |> assign(:top_members, top_member_rows(breakdown_member))
-    |> assign(:breakdown_team, [])
-    |> assign(:top_teams, [])
   end
 
   # Top 5 models by real (paid) cost for the horizontal-bars chart
@@ -946,75 +1025,6 @@ defmodule TokengateWeb.DashboardLive do
       context_window: ma.context_window,
       model_type: ma.model_type
     }
-  end
-
-  # Enrich model catalog with usage stats (user / team / org) for the dashboard
-  # table. Called after load_model_catalog when the period is already set.
-  defp load_model_usage_stats(socket, user) do
-    period = socket.assigns[:period] || "today"
-    timezone = socket.assigns[:timezone] || "Etc/UTC"
-    %{from: from, to: to} = Periods.period_bounds(period, timezone)
-    opts = [from: from, to: to]
-
-    member_ids = user_member_ids(user)
-    models = socket.assigns[:model_catalog] || []
-    model_ids = Enum.map(models, & &1.id)
-
-    if model_ids == [] or member_ids == [] do
-      # Keep the same {user, team, org} shape per model that the happy path
-      # builds — the template reads stats.user.request_count unconditionally.
-      empty_stats =
-        Map.new(model_ids, fn model_id ->
-          {model_id, %{user: empty_usage(), team: empty_usage(), org: empty_usage()}}
-        end)
-
-      socket
-      |> assign(:model_usage_stats, empty_stats)
-      |> assign(:model_tiers, %{})
-      |> assign(:most_used_model_id, nil)
-    else
-      # User stats: only the current user's requests
-      user_stats = model_usage_stats_for_members(model_ids, member_ids, opts)
-
-      # Team stats: all members of the user's teams
-      team_ids = Enum.map(socket.assigns[:teams] || [], & &1.team.id)
-      team_stats = model_usage_stats_for_teams(model_ids, team_ids, opts)
-
-      # Org stats: all requests (no scoping)
-      org_stats = model_usage_stats_org(model_ids, opts)
-
-      # Org-wide tier per model (same scoring as /dashboard/stats)
-      tiers =
-        nil
-        |> Rollup.model_ranking(opts)
-        |> Map.new(fn row -> {row.model_id, row.tier} end)
-
-      # Merge into a single map: model_id => %{user: ..., team: ..., org: ...}
-      merged =
-        Map.new(model_ids, fn model_id ->
-          {model_id,
-           %{
-             user: Map.get(user_stats, model_id, empty_usage()),
-             team: Map.get(team_stats, model_id, empty_usage()),
-             org: Map.get(org_stats, model_id, empty_usage())
-           }}
-        end)
-
-      # Find the user's most-used model (by request_count)
-      most_used_id =
-        user_stats
-        |> Enum.sort_by(fn {_id, stats} -> stats.request_count end, :desc)
-        |> List.first()
-        |> case do
-          {id, _stats} -> id
-          nil -> nil
-        end
-
-      socket
-      |> assign(:model_usage_stats, merged)
-      |> assign(:model_tiers, tiers)
-      |> assign(:most_used_model_id, most_used_id)
-    end
   end
 
   defp empty_usage do

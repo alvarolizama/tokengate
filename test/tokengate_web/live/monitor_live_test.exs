@@ -60,7 +60,7 @@ defmodule TokengateWeb.MonitorLiveTest do
       credential_name: "key-1"
     })
 
-    {:ok, view, html} = live(conn, ~p"/dashboard/monitor")
+    {:ok, _view, html} = live(conn, ~p"/dashboard/monitor")
 
     # The total in-flight badge should show at least 1
     assert html =~ "en vuelo"

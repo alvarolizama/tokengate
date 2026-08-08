@@ -1,12 +1,13 @@
 <Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
   <div class="space-y-6">
+    <%!-- Header ──────────────────────────────────────────────────────── --%>
     <div class="flex items-center justify-between flex-wrap gap-4">
       <.header>
         Monitor en vivo
         <:subtitle>
           <span class="inline-flex items-center gap-2">
             <.icon name="hero-signal" class="w-4 h-4 text-base-content/50" />
-            Actividad por modelo y proveedor en tiempo real
+            Terminal de actividad por modelo · última hora
           </span>
         </:subtitle>
       </.header>
@@ -22,13 +23,45 @@
         <span class="badge badge-sm badge-primary">
           {@total_inflight} en vuelo
         </span>
-        <span class="badge badge-sm badge-ghost">
-          {format_number(@total_requests)} total
-        </span>
       </div>
     </div>
 
-    <%= if @model_rows == [] do %>
+    <%!-- Índices strip ───────────────────────────────────────────────── --%>
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+      <.index_card
+        label="Requests / s"
+        value={format_number(@indices[:rps] || 0)}
+        icon="hero-bolt"
+        color="text-primary"
+      />
+      <.index_card
+        label="En vuelo"
+        value={format_number(@indices[:inflight] || 0)}
+        icon="hero-rocket-launch"
+        color="text-secondary"
+      />
+      <.index_card
+        label="% Error"
+        value={"#{Float.round((@indices[:error_rate] || 0.0) * 100, 1)}%"}
+        icon="hero-exclamation-triangle"
+        color={health_class(@indices[:error_rate] || 0.0)}
+      />
+      <.index_card
+        label="Costo total"
+        value={"$#{format_cost(@indices[:cost_usd] || Decimal.new(0))}"}
+        icon="hero-banknotes"
+        color="text-success"
+      />
+      <.index_card
+        label="Total requests"
+        value={format_number(@indices[:total_requests] || 0)}
+        icon="hero-chart-bar"
+        color="text-base-content/60"
+      />
+    </div>
+
+    <%!-- Watchlist de tickets ─────────────────────────────────────── --%>
+    <%= if @tickets == [] do %>
       <div class="card bg-base-100 border border-base-300 shadow-sm">
         <div class="card-body">
           <p class="text-sm text-base-content/40 py-8 text-center">
@@ -37,66 +70,86 @@
         </div>
       </div>
     <% else %>
-      <% max = model_max(@model_rows) %>
-
       <div class="card bg-base-100 border border-base-300 shadow-sm" id="monitor-chart">
-        <div class="card-body space-y-3">
-          <h2 class="card-title text-base">
-            <.icon name="hero-chart-bar" class="w-5 h-5 text-base-content/60" />
-            Actividad por modelo
-          </h2>
-          <p class="text-xs text-base-content/60">
-            Requests acumulados por modelo desde el arranque. Segmentos coloreados por proveedor/credential.
-            El badge a la derecha muestra los requests en vuelo ahora mismo.
-          </p>
+        <div class="card-body space-y-1 p-4 sm:p-6">
+          <%!-- Table header --%>
+          <div class="hidden md:grid grid-cols-[1fr_120px_56px_64px_64px_48px] gap-3 px-2 pb-2 border-b border-base-200 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
+            <span>Modelo</span>
+            <span class="text-center">60 min</span>
+            <span class="text-right">RPM</span>
+            <span class="text-right hidden lg:block">Hora</span>
+            <span class="text-right hidden lg:block">Total</span>
+            <span class="text-center">Vuelo</span>
+          </div>
 
-          <div :for={row <- @model_rows} class="group">
-            <div class="flex items-center gap-3">
-              <%!-- Model label --%>
-              <span class="text-[11px] font-medium text-base-content/70 w-32 truncate shrink-0 text-right">
-                {row.model_name}
-              </span>
-
-              <%!-- Bar --%>
-              <div class="flex-1 relative h-7 rounded overflow-hidden bg-base-200/50">
-                <div
-                  class="h-full transition-all bg-primary/70"
-                  style={"width: #{bar_width(row.requests, max)}%"}
-                >
-                </div>
+          <%!-- Ticket rows --%>
+          <div :for={ticket <- @tickets} class="space-y-0">
+            <button
+              type="button"
+              class={[
+                "w-full grid grid-cols-[1fr_auto] md:grid-cols-[1fr_120px_56px_64px_64px_48px] gap-3 items-center px-2 py-2 rounded-lg transition-colors text-left",
+                @expanded_model == ticket.alias_id && "bg-base-200/50",
+                "hover:bg-base-200/30"
+              ]}
+              phx-click="toggle-expand"
+              phx-value-model-id={ticket.alias_id}
+            >
+              <%!-- Model name + health dot --%>
+              <div class="flex items-center gap-2 min-w-0">
+                <span class={["w-2 h-2 rounded-full shrink-0", health_dot_class(0)]} />
+                <span class="text-xs font-medium text-base-content/80 truncate">
+                  {ticket.model_name}
+                </span>
               </div>
 
-              <%!-- Request count --%>
-              <span class="text-[10px] text-base-content/50 tabular-nums shrink-0 w-14 text-right">
-                {format_number(row.requests)}
+              <%!-- Sparkline --%>
+              <div class="hidden md:block w-[120px]">
+                <svg viewBox="0 0 120 30" class="w-full h-8" preserveAspectRatio="none">
+                  <path
+                    d={sparkline_area_path(ticket.sparkline)}
+                    class="fill-primary/10"
+                  >
+                  </path>
+                  <polyline
+                    points={sparkline_points(ticket.sparkline)}
+                    fill="none"
+                    class="stroke-primary"
+                    stroke-width="1.5"
+                    stroke-linejoin="round"
+                    stroke-linecap="round"
+                  >
+                  </polyline>
+                </svg>
+              </div>
+
+              <%!-- Current RPM --%>
+              <span class="hidden md:block text-right text-[11px] tabular-nums text-base-content/70">
+                {current_rpm(ticket.sparkline)}
+              </span>
+
+              <%!-- Hour volume --%>
+              <span class="hidden lg:block text-right text-[11px] tabular-nums text-base-content/50">
+                {format_number(hour_volume(ticket.sparkline))}
+              </span>
+
+              <%!-- Total since start --%>
+              <span class="hidden lg:block text-right text-[11px] tabular-nums text-base-content/50">
+                {format_number(ticket.total_requests)}
               </span>
 
               <%!-- In-flight badge --%>
               <span class={[
                 "badge badge-sm shrink-0 w-8 justify-center",
-                inflight_badge_class(row.inflight)
+                inflight_badge_class(ticket.inflight)
               ]}>
-                {inflight_label(row.inflight)}
+                {inflight_label(ticket.inflight)}
               </span>
-            </div>
+            </button>
 
-            <%!-- Provider/key breakdown shown below each bar --%>
-            <div
-              :if={row.providers != []}
-              class="ml-44 mt-1 flex flex-wrap gap-x-4 gap-y-1"
-            >
-              <span
-                :for={{seg, idx} <- Enum.with_index(row.providers)}
-                class="inline-flex items-center gap-1.5 text-[9px] text-base-content/50"
-              >
-                <span class={["w-2 h-2 rounded-sm shrink-0", provider_color(idx)]} />
-                {seg.provider_name}
-                <span :if={seg.credential_name != "—"} class="text-base-content/40">
-                  · {seg.credential_name}
-                </span>
-                <span class="tabular-nums">({seg.count})</span>
-              </span>
-            </div>
+            <%!-- Drill-down: credentials por modelo --%>
+            <%= if @expanded_model == ticket.alias_id do %>
+              <.credential_drilldown rows={@credential_rows} />
+            <% end %>
           </div>
         </div>
       </div>
