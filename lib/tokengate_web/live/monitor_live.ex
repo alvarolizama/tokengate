@@ -27,6 +27,7 @@ defmodule TokengateWeb.MonitorLive do
   import Ecto.Query
 
   alias Tokengate.Logs.Inflight
+  alias Tokengate.Logs.RequestLog
   alias Tokengate.Metrics.{Collector, Rollup, Window}
   alias Tokengate.Providers
   alias Tokengate.Routing.CircuitBreakerManager
@@ -40,6 +41,7 @@ defmodule TokengateWeb.MonitorLive do
       Phoenix.PubSub.subscribe(Tokengate.PubSub, "metrics:updated")
       Phoenix.PubSub.subscribe(Tokengate.PubSub, Inflight.topic())
       Phoenix.PubSub.subscribe(Tokengate.PubSub, Window.topic())
+      Phoenix.PubSub.subscribe(Tokengate.PubSub, "alerts")
       send(self(), :refresh)
     end
 
@@ -55,6 +57,14 @@ defmodule TokengateWeb.MonitorLive do
       |> assign(:credential_tickets, [])
       |> assign(:expanded_credential, nil)
       |> assign(:credential_model_rows, [])
+      |> assign(:is_admin, true)
+      |> assign(:error_credentials, [])
+      |> assign(:breaker_alerts, [])
+      |> assign(:cred_error_counts, [])
+      |> assign(:budget_exhausted, [])
+      |> assign(:budget_activity, %{})
+
+    socket = load_alert_data(socket)
 
     {:ok, socket}
   end
@@ -85,9 +95,219 @@ defmodule TokengateWeb.MonitorLive do
     {:noreply, socket}
   end
 
+  # ── Alert handlers ────────────────────────────────────────────────────────
+
+  def handle_info({:breaker_opened, _credential_id, _reason}, socket) do
+    {:noreply, load_alert_data(socket)}
+  end
+
+  def handle_info({:credential_error, _credential_id, _reason}, socket) do
+    {:noreply, load_alert_data(socket)}
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
+  # ── Alert data loading ────────────────────────────────────────────────────
+
+  defp load_alert_data(socket) do
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
+
+    credentials =
+      from(c in Providers.Credential,
+        join: p in assoc(c, :provider),
+        where: c.status == "error",
+        preload: [provider: p],
+        order_by: [desc: c.error_at]
+      )
+      |> Repo.all()
+
+    open = CircuitBreakerManager.open_breakers()
+    open_ids = Map.keys(open)
+
+    open_creds =
+      if open_ids == [] do
+        []
+      else
+        from(c in Providers.Credential,
+          join: p in assoc(c, :provider),
+          where: c.id in ^open_ids,
+          preload: [provider: p]
+        )
+        |> Repo.all()
+      end
+
+    creds_by_id = Map.new(open_creds, &{&1.id, &1})
+
+    breaker_alerts =
+      Enum.flat_map(open, fn {cred_id, details} ->
+        case creds_by_id do
+          %{^cred_id => cred} -> [{cred, details}]
+          _ -> []
+        end
+      end)
+
+    since = DateTime.utc_now() |> DateTime.add(-24 * 3600, :second)
+
+    cred_error_counts =
+      from(rl in RequestLog,
+        where: rl.status_code >= 400 and rl.inserted_at >= ^since,
+        group_by: [rl.api_key_prefix, rl.provider_id],
+        select: %{
+          api_key_prefix: rl.api_key_prefix,
+          provider_id: rl.provider_id,
+          count: count(rl.id)
+        }
+      )
+      |> Repo.all()
+
+    socket
+    |> assign(:error_credentials, credentials)
+    |> assign(:breaker_alerts, breaker_alerts)
+    |> assign(:cred_error_counts, cred_error_counts)
+    |> assign(:budget_exhausted, Tokengate.Budgets.list_exhausted_member_budgets(timezone))
+    |> assign(:budget_activity, load_budget_activity(timezone))
+  end
+
+  defp load_budget_activity(timezone) do
+    today_start = Tokengate.Periods.start_of_day_utc(timezone)
+
+    activity_query =
+      from(rl in RequestLog,
+        where: rl.inserted_at >= ^today_start,
+        group_by: rl.team_member_id,
+        select: %{
+          team_member_id: rl.team_member_id,
+          requests_today: count(rl.id),
+          last_request: max(rl.inserted_at)
+        }
+      )
+
+    top_provider_query =
+      from(rl in RequestLog,
+        where: rl.inserted_at >= ^today_start and not is_nil(rl.provider_id),
+        group_by: [rl.team_member_id, rl.provider_id],
+        select: %{
+          team_member_id: rl.team_member_id,
+          provider_id: rl.provider_id,
+          request_count: count(rl.id)
+        }
+      )
+
+    activity_data = Repo.all(activity_query) |> Map.new(fn a -> {a.team_member_id, a} end)
+
+    top_providers =
+      Repo.all(top_provider_query)
+      |> Enum.group_by(fn t -> t.team_member_id end)
+      |> Map.new(fn {member_id, providers} ->
+        top = Enum.max_by(providers, fn p -> p.request_count end)
+        {member_id, top.provider_id}
+      end)
+
+    provider_names =
+      from(p in Providers.Provider, select: p)
+      |> Repo.all()
+      |> Map.new(fn p -> {p.id, p.name} end)
+
+    activity_data
+    |> Map.new(fn {member_id, activity} ->
+      top_provider_id = Map.get(top_providers, member_id)
+      top_provider_name = if top_provider_id, do: Map.get(provider_names, top_provider_id, "—")
+
+      {member_id,
+       %{
+         requests_today: activity.requests_today,
+         last_request: activity.last_request,
+         top_provider: top_provider_name
+       }}
+    end)
+  end
+
+  # ── Alert helpers (public for .html.heex template) ──────────────────────
+
+  def errors_for_credential(cred, error_counts) do
+    prefix = api_key_prefix(cred.api_key_encrypted)
+    provider_id = cred.provider_id
+
+    error_counts
+    |> Enum.filter(fn ec ->
+      ec.api_key_prefix == prefix && ec.provider_id == provider_id
+    end)
+    |> Enum.map(& &1.count)
+    |> Enum.sum()
+  end
+
+  def api_key_prefix(nil), do: "—"
+
+  def api_key_prefix(encrypted) when is_binary(encrypted) and byte_size(encrypted) > 8 do
+    String.slice(encrypted, 0, 8) <> "…"
+  end
+
+  def api_key_prefix(encrypted), do: encrypted
+
+  def fmt_money(nil), do: "—"
+
+  def fmt_money(%Decimal{} = d) do
+    d
+    |> Decimal.round(4)
+    |> Decimal.to_string()
+  end
+
+  def budget_periods(%{monthly_exhausted?: true}), do: "mensual"
+  def budget_periods(_), do: "—"
+
+  def reason_label(nil), do: "—"
+  def reason_label(:server_error), do: "Error servidor"
+  def reason_label(:timeout), do: "Timeout"
+  def reason_label(:rate_limited), do: "Rate limited"
+  def reason_label(:auth_error), do: "Error auth"
+  def reason_label(:client_error), do: "Error cliente"
+  def reason_label(reason) when is_atom(reason), do: Atom.to_string(reason)
+  def reason_label(reason) when is_binary(reason), do: reason
+
+  def fmt_duration(nil), do: "—"
+
+  def fmt_duration(%DateTime{} = opened_at) do
+    diff = DateTime.diff(DateTime.utc_now(), opened_at, :second)
+
+    cond do
+      diff < 60 -> "#{diff}s"
+      diff < 3600 -> "#{div(diff, 60)}m #{rem(diff, 60)}s"
+      diff < 86_400 -> "#{div(diff, 3600)}h #{div(rem(diff, 3600), 60)}m"
+      true -> "#{div(diff, 86_400)}d #{div(rem(diff, 86_400), 3600)}h"
+    end
+  end
+
+  # ── Event handlers ──────────────────────────────────────────────────────
+
   @impl true
+  def handle_event("reactivate_credential", %{"id" => cred_id}, socket) do
+    cred = Providers.get_credential!(cred_id)
+
+    if cred.status == "error" do
+      case Providers.reactivate_credential(cred) do
+        {:ok, _} ->
+          {:noreply,
+           socket
+           |> put_flash(:info, "Credencial reactivada.")
+           |> load_alert_data()}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "No se pudo reactivar la credencial.")}
+      end
+    else
+      {:noreply, put_flash(socket, :error, "Solo se pueden reactivar credenciales en error.")}
+    end
+  end
+
+  def handle_event("reset_breaker", %{"id" => cred_id}, socket) do
+    CircuitBreakerManager.reset(cred_id)
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Circuit breaker reseteado.")
+     |> load_alert_data()}
+  end
+
   def handle_event("toggle-expand", %{"model-id" => model_id}, socket) do
     new_expanded =
       if socket.assigns[:expanded_model] == model_id, do: nil, else: model_id
@@ -100,13 +320,11 @@ defmodule TokengateWeb.MonitorLive do
     {:noreply, socket}
   end
 
-  @impl true
   def handle_event("switch-tab", %{"tab" => tab}, socket) do
     socket = assign(socket, :active_tab, tab)
     {:noreply, refresh_data(socket)}
   end
 
-  @impl true
   def handle_event("toggle-expand-credential", %{"credential-name" => cred_name}, socket) do
     new_expanded =
       if socket.assigns[:expanded_credential] == cred_name, do: nil, else: cred_name

@@ -26,6 +26,235 @@
       </div>
     </div>
 
+    <%!-- Alert KPIs: creds en error, breakers, miembros sin crédito ──────── --%>
+    <div
+      :if={
+        @error_credentials != [] or @breaker_alerts != [] or @budget_exhausted != []
+      }
+      class="grid grid-cols-1 sm:grid-cols-3 gap-4"
+    >
+      <div class="card bg-base-100 border border-base-300 shadow-sm">
+        <div class="card-body p-4">
+          <div class="flex items-center justify-between">
+            <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+              Credenciales en error
+            </p>
+            <.icon name="hero-exclamation-circle" class="w-4 h-4 text-error" />
+          </div>
+          <p class="mt-1 text-2xl font-bold text-base-content" id="alert-count-creds">
+            {length(@error_credentials)}
+          </p>
+        </div>
+      </div>
+
+      <div class="card bg-base-100 border border-base-300 shadow-sm">
+        <div class="card-body p-4">
+          <div class="flex items-center justify-between">
+            <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+              Breakers abiertos
+            </p>
+            <.icon name="hero-shield-exclamation" class="w-4 h-4 text-warning" />
+          </div>
+          <p class="mt-1 text-2xl font-bold text-base-content" id="alert-count-breakers">
+            {length(@breaker_alerts)}
+          </p>
+        </div>
+      </div>
+
+      <div class="card bg-base-100 border border-base-300 shadow-sm">
+        <div class="card-body p-4">
+          <div class="flex items-center justify-between">
+            <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+              Miembros sin crédito
+            </p>
+            <.icon name="hero-banknotes" class="w-4 h-4 text-error" />
+          </div>
+          <p class="mt-1 text-2xl font-bold text-base-content" id="alert-count-budgets">
+            {length(@budget_exhausted)}
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <%!-- Alert tables: creds, breakers, budgets ─────────────────────────── --%>
+    <div class="space-y-6">
+      <%!-- Credentials in error --%>
+      <div :if={@error_credentials != []} class="space-y-2">
+        <h3 class="text-sm font-semibold text-base-content/70 uppercase tracking-wide">
+          Credenciales deshabilitadas por error
+        </h3>
+        <div class="card bg-base-100 border border-error/30 shadow-sm">
+          <div class="card-body p-0">
+            <div class="overflow-x-auto">
+              <table class="table table-sm">
+                <thead>
+                  <tr>
+                    <th>Proveedor</th>
+                    <th>Alias</th>
+                    <th>API Key</th>
+                    <th>Endpoint</th>
+                    <th>Razón</th>
+                    <th>Error</th>
+                    <th>Cuándo</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={cred <- @error_credentials} id={"alert-cred-#{cred.id}"}>
+                    <td class="font-medium">{cred.provider.name}</td>
+                    <td>{cred.name || "—"}</td>
+                    <td class="font-mono text-xs">{api_key_prefix(cred.api_key_encrypted)}</td>
+                    <td class="text-xs text-base-content/70 max-w-[200px] truncate" title={cred.provider.base_url}>
+                      {cred.provider.base_url}
+                    </td>
+                    <td>
+                      <code class="text-xs text-error">{cred.error_reason || "auth_error"}</code>
+                    </td>
+                    <td class="text-xs text-base-content/70 max-w-xs">
+                      <span :if={cred.error_message} class="line-clamp-2" title={cred.error_message}>
+                        {cred.error_message}
+                      </span>
+                      <span :if={!cred.error_message} class="text-base-content/30">—</span>
+                    </td>
+                    <td class="text-xs text-base-content/50">
+                      {format_datetime(cred.error_at, @timezone)}
+                    </td>
+                    <td class="text-right">
+                      <button phx-click="reactivate_credential" phx-value-id={cred.id}
+                        class="btn btn-xs btn-warning" id={"alert-reactivate-#{cred.id}"}>
+                        <.icon name="hero-arrow-path" class="w-3 h-3" /> Reactivar
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <%!-- Open circuit breakers --%>
+      <div :if={@breaker_alerts != []} class="space-y-2">
+        <h3 class="text-sm font-semibold text-base-content/70 uppercase tracking-wide">
+          Circuit breakers abiertos
+        </h3>
+        <div class="card bg-base-100 border border-warning/30 shadow-sm">
+          <div class="card-body p-0">
+            <div class="overflow-x-auto">
+              <table class="table table-sm">
+                <thead>
+                  <tr>
+                    <th>Proveedor</th>
+                    <th>Alias</th>
+                    <th>API Key</th>
+                    <th>Estado</th>
+                    <th>Razón</th>
+                    <th>Detalle</th>
+                    <th>Fallos</th>
+                    <th>Abierto desde</th>
+                    <th>Errores 24h</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={{cred, details} <- @breaker_alerts} id={"alert-breaker-#{cred.id}"}>
+                    <td class="font-medium">{cred.provider.name}</td>
+                    <td>{cred.name || "—"}</td>
+                    <td class="font-mono text-xs">{api_key_prefix(cred.api_key_encrypted)}</td>
+                    <td>
+                      <span class={[
+                        "badge badge-sm",
+                        details.state == :open && "badge-error",
+                        details.state == :half_open && "badge-warning"
+                      ]}>
+                        {breaker_label(details.state)}
+                      </span>
+                    </td>
+                    <td class="text-sm">{reason_label(details.last_reason)}</td>
+                    <td class="text-xs text-base-content/70 max-w-[260px] truncate" title={details.last_error_message}>
+                      {details.last_error_message || "—"}
+                    </td>
+                    <td class="text-sm tabular-nums">{details.failures}</td>
+                    <td class="text-sm">{fmt_duration(details.opened_at)}</td>
+                    <td class="text-sm tabular-nums">
+                      {errors_for_credential(cred, @cred_error_counts)}
+                    </td>
+                    <td class="text-right">
+                      <button phx-click="reset_breaker" phx-value-id={cred.id}
+                        class="btn btn-xs btn-ghost" id={"alert-reset-breaker-#{cred.id}"}>
+                        <.icon name="hero-arrow-path" class="w-3 h-3" /> Reset breaker
+                      </button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <%!-- Members out of budget --%>
+      <div :if={@budget_exhausted != []} class="space-y-2">
+        <h3 class="text-sm font-semibold text-base-content/70 uppercase tracking-wide">
+          Miembros sin crédito
+        </h3>
+        <div class="card bg-base-100 border border-error/30 shadow-sm">
+          <div class="card-body p-0">
+            <div class="overflow-x-auto">
+              <table class="table table-sm">
+                <thead>
+                  <tr>
+                    <th>Usuario</th>
+                    <th>Equipo</th>
+                    <th>Límite agotado</th>
+                    <th>Gasto mes</th>
+                    <th>Gasto hoy</th>
+                    <th>Requests hoy</th>
+                    <th>Proveedor top (hoy)</th>
+                    <th>Último request</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={b <- @budget_exhausted} id={"alert-budget-#{b.member.id}"}>
+                    <td class="font-medium">{b.member.user.email}</td>
+                    <td>{b.member.team.name}</td>
+                    <td>
+                      <span class="badge badge-sm badge-error">{budget_periods(b)}</span>
+                    </td>
+                    <td class="font-mono text-xs">
+                      ${fmt_money(b.monthly_spend_usd)}
+                      <span :if={b.monthly_limit_usd} class="text-base-content/50">
+                        / ${fmt_money(b.monthly_limit_usd)}
+                      </span>
+                    </td>
+                    <td class="font-mono text-xs">
+                      ${fmt_money(b.daily_spend_usd)}
+                    </td>
+                    <td class="text-sm tabular-nums">
+                      {Map.get(@budget_activity, b.member.id, %{}) |> Map.get(:requests_today, 0)}
+                    </td>
+                    <td class="text-sm">
+                      {Map.get(@budget_activity, b.member.id, %{}) |> Map.get(:top_provider, "—")}
+                    </td>
+                    <td class="text-xs text-base-content/50">
+                      {Map.get(@budget_activity, b.member.id, %{}) |> Map.get(:last_request) |> format_datetime(@timezone)}
+                    </td>
+                    <td class="text-right">
+                      <.link navigate={~p"/dashboard/credits"} class="btn btn-xs btn-ghost"
+                        id={"alert-budget-credits-#{b.member.id}"}>
+                        Ver créditos
+                      </.link>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <%!-- Índices strip ───────────────────────────────────────────────── --%>
     <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
       <.index_card
