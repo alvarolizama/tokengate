@@ -17,6 +17,14 @@ defmodule Tokengate.Routing.RouterTest do
   alias Tokengate.Providers
   alias Tokengate.Routing.{Router, CircuitBreakerManager}
 
+  setup do
+    # The Routing.Cache ETS table persists across tests (it's owned by the
+    # app-tree GenServer, not the test). Clear it so provider fixtures from
+    # one test don't leak into the next through the 60s cache TTL.
+    Tokengate.Routing.Cache.invalidate_all()
+    :ok
+  end
+
   # ---------------------------------------------------------------------------
   # Test-only schemas for FK parent tables owned by the Accounts context.
   # (Same pattern as ProvidersTest — avoids depending on Accounts context

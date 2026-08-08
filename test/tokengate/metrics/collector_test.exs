@@ -148,28 +148,38 @@ defmodule Tokengate.Metrics.CollectorTest do
   end
 
   # ---------------------------------------------------------------------
-  # latency samples trim at 200
+  # latency histogram (atomic bucket counters)
   # ---------------------------------------------------------------------
 
-  describe "latency ring" do
-    test "trims samples to 200 entries" do
+  describe "latency histogram" do
+    test "counts every sample (no 200-entry cap)" do
       for i <- 1..250 do
         Collector.record_request(attrs(%{latency_ms: i}))
       end
 
       snap = Collector.snapshot()
-      assert snap.latency.count == 200
+      assert snap.latency.count == 250
     end
 
-    test "keeps the most recent 200 (prepended, so 250..51)" do
+    test "avg is exact over all samples" do
       for i <- 1..250 do
         Collector.record_request(attrs(%{latency_ms: i}))
       end
 
       snap = Collector.snapshot()
-      # The last 200 recorded are 51..250. avg = sum(51..250) / 200.
-      expected_avg = Enum.sum(51..250) / 200
+      # avg = sum(1..250) / 250 = 125.5
+      expected_avg = Enum.sum(1..250) / 250
       assert_in_delta snap.latency.avg_ms, expected_avg, 0.001
+    end
+
+    test "bucketizes correctly" do
+      Collector.record_request(attrs(%{latency_ms: 10}))
+      Collector.record_request(attrs(%{latency_ms: 75}))
+      Collector.record_request(attrs(%{latency_ms: 300}))
+      Collector.record_request(attrs(%{latency_ms: 60_000}))
+
+      snap = Collector.snapshot()
+      assert snap.latency.count == 4
     end
   end
 
@@ -188,34 +198,28 @@ defmodule Tokengate.Metrics.CollectorTest do
       assert_in_delta snap.latency.avg_ms, 30.0, 0.001
     end
 
-    test "p95 returns max when count < 20" do
-      for ms <- [10, 50, 100, 200] do
-        Collector.record_request(attrs(%{latency_ms: ms}))
-      end
-
-      snap = Collector.snapshot()
-      # count 4 < 20 → p95 is max
-      assert snap.latency.p95_ms == 200
-    end
-
-    test "p95 uses nearest-rank for count >= 20" do
-      # 20 samples 1..20. p95 rank = ceil(0.95 * 20) = 19, index 18 → value 19.
+    test "p95 uses histogram nearest-rank for count >= 20" do
+      # 20 samples 1..20 all fall in the first bucket (≤50ms). p95 rank = 19,
+      # interpolated within the 0-50ms bucket width.
       for ms <- 1..20 do
         Collector.record_request(attrs(%{latency_ms: ms}))
       end
 
       snap = Collector.snapshot()
-      assert snap.latency.p95_ms == 19
+      assert snap.latency.p95_ms > 0
+      assert snap.latency.p95_ms <= 50
     end
 
     test "p95 with 100 samples" do
+      # 100 samples 1..100: 50 in first bucket, 50 in second (≤100ms).
+      # p95 rank = 95 lands in the second bucket, interpolated between 50-100ms.
       for ms <- 1..100 do
         Collector.record_request(attrs(%{latency_ms: ms}))
       end
 
       snap = Collector.snapshot()
-      # rank = ceil(0.95 * 100) = 95, index 94 → value 95
-      assert snap.latency.p95_ms == 95
+      assert snap.latency.p95_ms > 50
+      assert snap.latency.p95_ms <= 100
     end
 
     test "empty latency returns count 0, avg 0.0, p95 0" do

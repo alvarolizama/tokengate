@@ -30,6 +30,12 @@ defmodule Tokengate.Budgets.SyncWorker do
   def perform(%Oban.Job{args: %{"member_id" => member_id}}) do
     member_id = normalize_member_id(member_id)
 
+    # Clear the debounce mark BEFORE recomputing: any spend recorded after
+    # this point will re-enqueue a fresh job. If we cleared it after
+    # set_from_db, a concurrent record_spend could set the mark between our
+    # clear and our write, then never fire a new job.
+    Tokengate.Budgets.Manager.clear_sync_pending(member_id)
+
     daily_micro = compute_period_spend(member_id, :daily)
     monthly_micro = compute_period_spend(member_id, :monthly)
 

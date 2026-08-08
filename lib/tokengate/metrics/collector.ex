@@ -12,9 +12,9 @@ defmodule Tokengate.Metrics.Collector do
   The GenServer only creates the ETS table in `init/1` and never touches it
   again directly. Every public function (`record_request/1`, `snapshot/0`,
   `reset/0`) runs **in the caller's process** against the public table —
-  `record_request/1` uses `:ets.update_counter/4` (atomic), and
-  `snapshot/0` / `reset/0` read/replace keys directly. This avoids a
-  GenServer bottleneck on the hot path.
+  `record_request/1` uses `:ets.update_counter/4` (atomic), and `snapshot/0` /
+  `reset/0` read/replace keys directly. This avoids a GenServer bottleneck on
+  the hot path.
 
   ## Counters
 
@@ -27,7 +27,15 @@ defmodule Tokengate.Metrics.Collector do
     * `{:tokens, :completion}`         — total completion tokens
     * `{:cost_micro, :total}`          — total cost in micro-USD (Decimal → integer)
     * `{:savings_micro, :total}`       — total savings in micro-USD
-    * `{:latency_samples}`             — list of the last 200 latency samples (ms)
+    * `{:latency, :sum}`               — sum of all latency samples (ms)
+    * `{:latency, :count}`             — number of latency samples
+    * `{:latency, {:bucket, upper}}`   — histogram bucket counters (atomic)
+
+  Latency is a fixed-bucket histogram instead of the old prepend-and-trim
+  list: each request atomically increments its bucket with
+  `:ets.update_counter/4`, so there is no read-modify-write race between
+  concurrent proxy processes. p95 is approximated from the histogram with
+  nearest-rank interpolation; avg is `sum / count` exact.
 
   Micro-USD: `round(cost_usd * 1_000_000)` so $1.500000 → 1_500_000.
   """
@@ -37,9 +45,13 @@ defmodule Tokengate.Metrics.Collector do
   alias Phoenix.PubSub
 
   @table :tokengate_metrics
-  @max_latency_samples 200
   @pubsub Tokengate.PubSub
   @topic "metrics:updated"
+
+  # Fixed latency buckets (upper bound in ms, inclusive). The infinity bucket
+  # catches everything above the last finite bound. Ordered ascending for
+  # nearest-rank p95 computation.
+  @latency_buckets [50, 100, 250, 500, 1_000, 2_500, 5_000, 10_000, 30_000, :infinity]
 
   ## Public API ---------------------------------------------------------------
 
@@ -110,8 +122,11 @@ defmodule Tokengate.Metrics.Collector do
     add({:tokens, :completion}, completion_tokens)
     add({:cost_micro, :total}, cost_micro)
 
-    # Latency ring (prepend + trim to @max_latency_samples)
-    push_latency(latency_ms)
+    # Latency histogram: atomic bucket increment + running sum/count.
+    record_latency(latency_ms)
+
+    # Rolling per-model window for the Monitor sparklines
+    Tokengate.Metrics.Window.record_request(attrs)
 
     lite = snapshot_lite()
     PubSub.broadcast(@pubsub, @topic, {:metrics_updated, lite})
@@ -139,8 +154,8 @@ defmodule Tokengate.Metrics.Collector do
 
   `error_rate` is `0.0` when there are no requests. `cost_usd` is
   reconstructed from the micro-USD integer counter as `Decimal` with 6
-  decimal places. `p95_ms` uses the nearest-rank method on the last 200
-  samples; when fewer than 20 samples exist the max is returned.
+  decimal places. `avg_ms` is exact (`sum / count`). `p95_ms` is the
+  nearest-rank upper bound from the fixed-bucket histogram.
   """
   @spec snapshot() :: map()
   def snapshot do
@@ -194,8 +209,6 @@ defmodule Tokengate.Metrics.Collector do
     # the GenServer and named, so we wipe known keys rather than recreating
     # it (which would race with the owner).
     :ets.delete_all_objects(@table)
-    # Re-seed the latency_samples key as an empty list.
-    :ets.insert(@table, {:latency_samples, []})
     :ok
   end
 
@@ -218,10 +231,6 @@ defmodule Tokengate.Metrics.Collector do
         write_concurrency: true
       ])
     end
-
-    # Seed the latency samples list if absent.
-    :ets.insert_new(@table, {:latency_samples, []})
-    :ok
   end
 
   # Increment a counter by 1, initializing to 0 on first write.
@@ -264,69 +273,88 @@ defmodule Tokengate.Metrics.Collector do
     |> Map.new()
   end
 
-  # Latency ring: prepend, then trim to @max_latency_samples.
-  # Uses :ets.lookup_element with a default to avoid a race when the key is
-  # missing; updates are single-writer-per-key via update_element which is
-  # atomic for the value field.
-  defp push_latency(latency_ms) do
-    # Read current list, prepend, trim, write back. This is not lock-free
-    # across concurrent writers, but latency samples are an approximation
-    # (dashboard p95) and occasional lost prepends are acceptable. The
-    # alternative — routing every request through the GenServer — would
-    # serialize all proxy responses on a single process.
-    current =
-      try do
-        :ets.lookup_element(@table, :latency_samples, 2)
-      rescue
-        ArgumentError -> []
-      else
-        list when is_list(list) -> list
-        _ -> []
-      end
+  # Latency histogram ----------------------------------------------------------
 
-    new_list =
-      [latency_ms | current]
-      |> Enum.take(@max_latency_samples)
+  defp record_latency(latency_ms) when is_integer(latency_ms) and latency_ms >= 0 do
+    # Sum + count for exact average.
+    add({:latency, :sum}, latency_ms)
+    incr({:latency, :count})
 
-    :ets.insert(@table, {:latency_samples, new_list})
+    # Atomic bucket increment. The bucket key is the upper bound; :infinity
+    # catches anything above the last finite bound.
+    bucket = latency_bucket(latency_ms)
+    incr({:latency, {:bucket, bucket}})
+
     :ok
   end
 
-  defp latency_stats do
-    samples =
-      try do
-        :ets.lookup_element(@table, :latency_samples, 2)
-      rescue
-        ArgumentError -> []
-      else
-        list when is_list(list) -> list
-        _ -> []
-      end
+  defp record_latency(_latency_ms), do: :ok
 
-    count = length(samples)
+  defp latency_bucket(latency_ms) do
+    Enum.find(@latency_buckets, fn
+      :infinity -> true
+      upper -> latency_ms <= upper
+    end)
+  end
+
+  defp latency_stats do
+    count = read_counter({:latency, :count})
+    sum = read_counter({:latency, :sum})
 
     if count == 0 do
       {0, 0.0, 0}
     else
-      sorted = Enum.sort(samples)
-      avg = Enum.sum(sorted) / count
-      p95 = percentile(sorted, count)
+      avg = sum / count
+      p95 = histogram_p95(count)
       {count, avg * 1.0, p95}
     end
   end
 
-  # Nearest-rank p95: index = ceil(0.95 * count) - 1 (0-based). For count < 20,
-  # we return the max (per spec) so small sample sizes don't produce a
-  # misleadingly low p95.
-  defp percentile(sorted, count) when count < 20 do
-    Enum.max(sorted)
+  # Nearest-rank p95 over the fixed-bucket histogram: find the bucket whose
+  # cumulative count reaches the p95 rank, then linearly interpolate within
+  # that bucket's width for a smoother estimate. The :infinity bucket maps
+  # to the previous finite bound (no upper width to interpolate over).
+  defp histogram_p95(total_count) do
+    rank = ceil(0.95 * total_count)
+
+    {_cumulative, p95} =
+      Enum.reduce_while(@latency_buckets, {0, 0}, fn bucket, {cumulative, _p95} ->
+        count = read_counter({:latency, {:bucket, bucket}})
+        cumulative = cumulative + count
+
+        if cumulative >= rank do
+          p95 = interpolate_bucket(bucket, cumulative - count, rank, count)
+          {:halt, {cumulative, p95}}
+        else
+          {:cont, {cumulative, 0}}
+        end
+      end)
+
+    p95
   end
 
-  defp percentile(sorted, count) do
-    # Nearest-rank method: rank = ceil(p/100 * n), index = rank - 1 (0-based).
-    rank = ceil(0.95 * count)
-    index = max(rank - 1, 0)
-    Enum.at(sorted, index)
+  defp interpolate_bucket(:infinity, _bucket_start, _rank, _count) do
+    # Open-ended bucket: use the previous finite bound as the estimate.
+    @latency_buckets |> Enum.at(-2)
+  end
+
+  defp interpolate_bucket(upper, bucket_start, rank, count) do
+    # Linear interpolation within the bucket's width.
+    lower = previous_bucket_upper(upper)
+
+    if count == 0 do
+      upper
+    else
+      fraction = (rank - bucket_start) / count
+      lower + fraction * (upper - lower)
+    end
+  end
+
+  defp previous_bucket_upper(upper) do
+    case Enum.take_while(@latency_buckets, &(&1 != upper)) do
+      [] -> 0
+      buckets -> List.last(buckets)
+    end
   end
 
   defp error_rate(0, _errors), do: 0.0

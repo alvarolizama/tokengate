@@ -902,7 +902,14 @@ defmodule TokengateWeb.ProxyController do
             })
 
           {:error, reason, status} ->
+            # Kill the upstream stream FIRST — before any fallback work. The
+            # Finch.stream_while task holds a real HTTP connection open; if we
+            # left it running it would only die after the full receive_timeout,
+            # leaking connections and file descriptors while the provider is
+            # hung. Killing it here closes the socket immediately and frees
+            # the credential's concurrency slot.
             Process.exit(pid, :kill)
+            Process.demonitor(ref, [:flush])
 
             if reason == :auth_error do
               disable_credential_async(route.credential, "auth_error_stream")

@@ -16,6 +16,7 @@ defmodule Tokengate.Application do
       {Finch, name: Tokengate.Finch},
       {Oban, Application.fetch_env!(:tokengate, Oban)},
       Tokengate.Routing.Supervisor,
+      Tokengate.Routing.Cache,
       Tokengate.Limits.Supervisor,
       Tokengate.Budgets.Supervisor,
       Tokengate.Metrics.Supervisor,

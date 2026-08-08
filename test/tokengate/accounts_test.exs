@@ -668,18 +668,33 @@ defmodule Tokengate.AccountsTest do
   end
 
   describe "search_users/2" do
-    test "matches by partial email, case-insensitive" do
+    test "matches by email prefix, case-insensitive" do
       user = user_fixture(%{"email" => "findme@example.com", "name" => "Someone"})
 
       results = Accounts.search_users("FINDME")
       assert Enum.map(results, & &1.id) == [user.id]
     end
 
-    test "matches by partial name" do
+    test "matches by name prefix" do
       user = user_fixture(%{"name" => "Pelana del Barrio"})
 
-      results = Accounts.search_users("pelana del")
+      results = Accounts.search_users("pelana")
       assert Enum.map(results, & &1.id) == [user.id]
+    end
+
+    test "does NOT match mid-string (prefix only)" do
+      user_fixture(%{"name" => "Pelana del Barrio"})
+
+      # "del" appears mid-name but not at the start — prefix search excludes it.
+      assert Accounts.search_users("del") == []
+    end
+
+    test "queries shorter than 3 chars return no results" do
+      user_fixture(%{"email" => "ab@example.com", "name" => "Ab"})
+
+      assert Accounts.search_users("a") == []
+      assert Accounts.search_users("ab") == []
+      assert Accounts.search_users("") == []
     end
 
     test "LIKE wildcards in the query are escaped, not treated as patterns" do
@@ -687,15 +702,15 @@ defmodule Tokengate.AccountsTest do
       user_fixture(%{"email" => "other@example.com"})
 
       # A bare "%" would match EVERY row if unescaped; escaped it matches
-      # only emails/names containing a literal "%" — none here.
+      # only emails/names containing a literal "%" — none here. Also < 3 chars.
       assert Accounts.search_users("%") == []
 
       # "_" is a single-char wildcard in LIKE; escaped it matches literally.
       assert Accounts.search_users("_") == []
     end
 
-    test "literal percent sign in the stored value still matches" do
-      user = user_fixture(%{"name" => "Descuento 50% hoy"})
+    test "literal percent sign in the stored value still matches from the start" do
+      user = user_fixture(%{"name" => "50% descuento hoy"})
 
       results = Accounts.search_users("50%")
       assert Enum.map(results, & &1.id) == [user.id]

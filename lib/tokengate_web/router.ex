@@ -7,7 +7,14 @@ defmodule TokengateWeb.Router do
     plug :fetch_live_flash
     plug :put_root_layout, html: {TokengateWeb.Layouts, :root}
     plug :protect_from_forgery
-    plug :put_secure_browser_headers
+
+    plug :put_secure_browser_headers, %{
+      "content-security-policy" =>
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' wss: ws:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+      "permissions-policy" =>
+        "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()"
+    }
+
     # Loads :current_user from the session so every browser request (including
     # LiveView mounts) has access to the signed-in user.
     plug TokengateWeb.Plugs.DashboardAuth, action: :fetch_current_user

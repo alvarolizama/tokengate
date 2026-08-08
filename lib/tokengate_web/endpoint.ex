@@ -20,8 +20,13 @@ defmodule TokengateWeb.Endpoint do
                      encryption_salt: System.get_env("SESSION_ENCRYPTION_SALT", "pScAXZ3eub"),
                      same_site: "Lax",
                      http_only: true,
+                     # Sliding expiration: `renew: true` re-issues the cookie
+                     # with a fresh max_age on every authenticated request, so
+                     # an active user stays signed in while an idle browser
+                     # expires after SESSION_MAX_AGE_SECONDS (default 4h).
+                     renew: true,
                      max_age:
-                       String.to_integer(System.get_env("SESSION_MAX_AGE_SECONDS", "28800"))
+                       String.to_integer(System.get_env("SESSION_MAX_AGE_SECONDS", "14400"))
                    ] ++ session_secure
 
   socket "/live", Phoenix.LiveView.Socket,

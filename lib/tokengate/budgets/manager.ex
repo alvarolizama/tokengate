@@ -124,12 +124,12 @@ defmodule Tokengate.Budgets.Manager do
     bump_counter({member_id, :daily}, micro)
     bump_counter({member_id, :monthly}, micro)
 
-    # Enqueue drift-correction worker. In test env (testing: :manual) this
-    # only queues the job; it does not execute it.
-    _ =
-      %{member_id: member_id}
-      |> Tokengate.Budgets.SyncWorker.new()
-      |> Oban.insert()
+    # Debounced drift-correction enqueue: instead of one Oban job per request,
+    # we mark `{:sync_pending, member_id}` with insert_new and only enqueue when
+    # the mark didn't already exist. The SyncWorker deletes the mark when it
+    # runs, so the next request re-enqueues. This collapses bursts of spend
+    # into a single sync per member per SyncWorker run.
+    maybe_enqueue_sync(member_id)
 
     :ok
   end
@@ -345,6 +345,29 @@ defmodule Tokengate.Budgets.Manager do
     period = elem(key, 1)
     default = {key, 0, false, current_period_stamp(period)}
     :ets.update_counter(@table, key, {2, inc}, default)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Internal — debounced SyncWorker enqueue
+  # ---------------------------------------------------------------------------
+
+  defp maybe_enqueue_sync(member_id) do
+    key = {:sync_pending, member_id}
+
+    if :ets.insert_new(@table, {key, true}) do
+      _ =
+        %{member_id: member_id}
+        |> Tokengate.Budgets.SyncWorker.new()
+        |> Oban.insert()
+    end
+
+    :ok
+  end
+
+  @doc false
+  def clear_sync_pending(member_id) do
+    :ets.delete(@table, {:sync_pending, member_id})
+    :ok
   end
 
   # ---------------------------------------------------------------------------

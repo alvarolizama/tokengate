@@ -121,8 +121,8 @@ defmodule Tokengate.Logs.Inflight do
     ensure_table()
 
     @table
-    |> :ets.tab2list()
-    |> Enum.map(fn {_id, entry, _mono} -> entry end)
+    |> :ets.select([{{:"$1", :"$2", :"$3"}, [], [{{:"$2", :"$3"}}]}])
+    |> Enum.map(fn {entry, _mono} -> entry end)
     |> Enum.sort_by(& &1.started_at, {:desc, DateTime})
   end
 
@@ -159,19 +159,23 @@ defmodule Tokengate.Logs.Inflight do
   def count_by_model(limit \\ 5) do
     ensure_table()
 
+    # Project only the 3 fields we need instead of copying full 20-key maps.
+    # The match spec returns a 3-tuple {model, credential_name, key_suffix}.
     @table
-    |> :ets.tab2list()
-    |> Enum.map(fn {_id, entry, _mono} -> entry end)
-    |> Enum.reject(&is_nil(&1.model_requested))
-    |> Enum.group_by(& &1.model_requested)
-    |> Enum.map(fn {model, entries} ->
-      first = List.first(entries)
+    |> :ets.select([
+      {{:"$1", %{model_requested: :"$2", credential_name: :"$3", provider_key_suffix: :"$4"},
+        :"$5"}, [], [{{:"$2", :"$3", :"$4"}}]}
+    ])
+    |> Enum.reject(fn {model, _cred, _suffix} -> is_nil(model) end)
+    |> Enum.group_by(fn {model, _cred, _suffix} -> model end)
+    |> Enum.map(fn {model, group} ->
+      {_model, credential_name, provider_key_suffix} = List.first(group)
 
       %{
         model: model,
-        count: length(entries),
-        credential_name: first.credential_name,
-        provider_key_suffix: first.provider_key_suffix
+        count: length(group),
+        credential_name: credential_name,
+        provider_key_suffix: provider_key_suffix
       }
     end)
     |> Enum.sort_by(& &1.count, :desc)
@@ -199,18 +203,22 @@ defmodule Tokengate.Logs.Inflight do
   def count_by_user(limit \\ 5) do
     ensure_table()
 
+    # Same projection trick: 3-tuples instead of full entries. nil user_email
+    # groups under "desconocido" (the UI label for service/system requests).
     @table
-    |> :ets.tab2list()
-    |> Enum.map(fn {_id, entry, _mono} -> entry end)
-    |> Enum.group_by(&(&1.user_email || "desconocido"))
-    |> Enum.map(fn {user, entries} ->
-      first = List.first(entries)
+    |> :ets.select([
+      {{:"$1", %{user_email: :"$2", credential_name: :"$3", provider_key_suffix: :"$4"}, :"$5"},
+       [], [{{:"$2", :"$3", :"$4"}}]}
+    ])
+    |> Enum.group_by(fn {user_email, _cred, _suffix} -> user_email || "desconocido" end)
+    |> Enum.map(fn {user, group} ->
+      {_email, credential_name, provider_key_suffix} = List.first(group)
 
       %{
         user: user,
-        count: length(entries),
-        credential_name: first.credential_name,
-        provider_key_suffix: first.provider_key_suffix
+        count: length(group),
+        credential_name: credential_name,
+        provider_key_suffix: provider_key_suffix
       }
     end)
     |> Enum.sort_by(& &1.count, :desc)

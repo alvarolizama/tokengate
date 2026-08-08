@@ -103,19 +103,28 @@ defmodule Tokengate.Accounts do
   end
 
   @doc """
-  Case-insensitive partial email/name search for the member-add autocomplete.
-  Returns up to `limit` (default 10) users whose email or name contains the query.
+  Case-insensitive prefix email/name search for the member-add autocomplete.
+
+  Security hardening (2026-08-08): requires at least 3 characters and matches
+  only from the START of the email/name (no `%foo%` substring scan), so an
+  admin cannot enumerate the whole users table with a one-character query.
   LIKE wildcards (`%` and `_`) in the input are escaped so a search for "%"
-  cannot enumerate the whole users table.
+  returns no results.
+
+  Returns up to `limit` (default 10) users whose email or name starts with
+  the query (case-insensitive).
   """
-  def search_users(query, limit \\ 10) when is_binary(query) do
+  def search_users(query, limit \\ 10)
+  def search_users(query, _limit) when byte_size(query) < 3, do: []
+
+  def search_users(query, limit) when is_binary(query) do
     escaped =
       query
       |> String.replace("\\", "\\\\")
       |> String.replace("%", "\\%")
       |> String.replace("_", "\\_")
 
-    pattern = "%#{String.downcase(escaped)}%"
+    pattern = "#{String.downcase(escaped)}%"
 
     Repo.all(
       from u in User,

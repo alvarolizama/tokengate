@@ -135,12 +135,29 @@ defmodule Tokengate.Providers do
     %Credential{}
     |> Credential.changeset(attrs)
     |> Repo.insert()
+    |> case do
+      {:ok, cred} ->
+        Tokengate.Routing.Cache.invalidate(:disabled_credentials)
+        {:ok, cred}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
   end
 
   def update_credential(%Credential{} = credential, attrs) do
     credential
     |> Credential.update_changeset(attrs)
     |> Repo.update()
+    |> case do
+      {:ok, cred} ->
+        Tokengate.Routing.Cache.invalidate(:disabled_credentials)
+        Tokengate.Routing.Cache.invalidate_all()
+        {:ok, cred}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
   end
 
   @doc """
@@ -165,7 +182,17 @@ defmodule Tokengate.Providers do
     end
   end
 
-  def delete_credential(%Credential{} = credential), do: Repo.delete(credential)
+  def delete_credential(%Credential{} = credential) do
+    case Repo.delete(credential) do
+      {:ok, cred} ->
+        Tokengate.Routing.Cache.invalidate(:disabled_credentials)
+        Tokengate.Routing.Cache.invalidate_all()
+        {:ok, cred}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
+  end
 
   def change_credential(%Credential{} = credential, attrs \\ %{}),
     do: Credential.changeset(credential, attrs)
@@ -225,12 +252,28 @@ defmodule Tokengate.Providers do
     %ModelProvider{}
     |> ModelProvider.changeset(attrs)
     |> Repo.insert()
+    |> case do
+      {:ok, mp} ->
+        Tokengate.Routing.Cache.invalidate_all()
+        {:ok, mp}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
   end
 
   def update_model_provider(%ModelProvider{} = model_provider, attrs) do
     model_provider
     |> ModelProvider.changeset(attrs)
     |> Repo.update()
+    |> case do
+      {:ok, mp} ->
+        Tokengate.Routing.Cache.invalidate_all()
+        {:ok, mp}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
   end
 
   def delete_model_provider(%ModelProvider{} = model_provider) do
@@ -239,6 +282,7 @@ defmodule Tokengate.Providers do
         {:ok, _} ->
           # Clear sticky routing entries pointing at the deleted model provider
           Tokengate.Routing.StickyTracker.clear_all_for_provider([model_provider.id])
+          Tokengate.Routing.Cache.invalidate_all()
 
           {:ok, model_provider}
 

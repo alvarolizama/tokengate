@@ -257,28 +257,49 @@ defmodule Tokengate.Routing.Router do
 
   defp route_alias(model_alias, team_member, _accessible, request_context, breaker, exclude) do
     # Load model_providers visible to this member (global + their exclusives).
+    # The heavy part (join credential + provider, order by priority) is cached
+    # per (model_alias_id, team_id) for 60s; disabled credentials are a
+    # separate ETS set refreshed every 60s. Both are stale-tolerant because
+    # the fallback matrix re-routes on a dead credential anyway.
+    team_id = team_member && team_member.team && team_member.team.id
+
     model_providers =
-      if team_member && team_member.team && team_member.team.id do
-        Providers.list_model_providers_for_member(
-          model_alias.id,
-          team_member.id,
-          team_member.team.id
-        )
-      else
-        # Fallback: no team context (e.g. service members), global only
-        Providers.list_model_providers(model_alias.id)
-      end
+      Tokengate.Routing.Cache.fetch_model_providers(model_alias.id, team_id, fn ->
+        if team_id do
+          # NOTE: the cached list is shared by every member of the team. The
+          # member-exclusive provider rows are filtered per-member below in
+          # `visible_to_member?/2`, so caching by team_id is safe.
+          Providers.list_model_providers_for_member(
+            model_alias.id,
+            team_member.id,
+            team_id
+          )
+        else
+          # Fallback: no team context (e.g. service members), global only
+          Providers.list_model_providers(model_alias.id)
+        end
+      end)
 
     if model_providers == [] do
       {:error, :no_providers_configured}
     else
-      # Filter out candidates whose credential is excluded or disabled.
+      disabled_ids = Tokengate.Routing.Cache.disabled_credential_ids()
+
+      # Filter out candidates whose credential is excluded, disabled, or
+      # missing. Disabled credentials are checked against the cached set so
+      # a freshly-disabled credential stops receiving traffic within 60s
+      # instead of waiting for the next credential-health sweep.
+      # Member-exclusive rows are also dropped for non-owners: the cached
+      # list is keyed by team, so without this filter a teammate would see
+      # the owner's exclusive provider.
       candidates =
         model_providers
         |> Enum.filter(fn mp ->
           mp.credential != nil and
             mp.credential.status == "active" and
-            mp.credential.id not in exclude
+            not MapSet.member?(disabled_ids, mp.credential.id) and
+            mp.credential.id not in exclude and
+            visible_to_member?(mp, team_member)
         end)
 
       if candidates == [] do
@@ -348,6 +369,18 @@ defmodule Tokengate.Routing.Router do
     team_member
     |> Providers.list_accessible_aliases()
     |> Enum.find_value(fn alias_ -> alias_.name == model_requested && alias_.id end)
+  end
+
+  # Member-exclusive scoping for the cached provider list. A cached entry is
+  # keyed by (alias_id, team_id), so the raw list may contain a provider
+  # exclusive to a *different* member of the same team. Global rows (both
+  # scope fields nil) and team-exclusive rows are visible to everyone in the
+  # team; member-exclusive rows only to their owner.
+  defp visible_to_member?(mp, team_member) do
+    case mp.exclusive_to_team_member_id do
+      nil -> true
+      member_id -> team_member != nil and team_member.id == member_id
+    end
   end
 
   defp maybe_preload_team(team_member) do
