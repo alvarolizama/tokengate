@@ -712,11 +712,30 @@ defmodule TokengateWeb.StatsLive do
     rows |> Enum.map(& &1.total_requests) |> Enum.max(fn -> 0 end)
   end
 
+  @provider_colors ~w(bg-primary bg-secondary bg-accent bg-success bg-warning bg-error bg-info bg-neutral)
+
+  @doc "Color de fondo para un proveedor por su índice en la leyenda."
+  def provider_color(index) do
+    Enum.at(@provider_colors, rem(index, length(@provider_colors)))
+  end
+
+  @doc """
+  Color para un proveedor en la leyenda, buscando su índice por nombre.
+  """
+  def provider_legend_color(provider_name, legend) do
+    idx =
+      legend
+      |> Enum.with_index()
+      |> Enum.find_value(fn {entry, i} -> if entry.provider_name == provider_name, do: i end)
+
+    provider_color(idx || 0)
+  end
+
   @doc """
   Segmentos apilados por proveedor para una barra de modelo.
 
   Cada segmento tiene `width_pct` (ancho relativo al total del modelo) y
-  `color` (gris si included, morado si pay_per_token).
+  `color` — un color distinto por proveedor.
   """
   def provider_segments(model_row) do
     total = model_row.total_requests
@@ -724,14 +743,16 @@ defmodule TokengateWeb.StatsLive do
     if total <= 0 do
       []
     else
+      # Build a name→color map from this model's providers
+      color_map =
+        model_row.providers
+        |> Enum.with_index()
+        |> Enum.map(fn {p, idx} -> {p.provider_name, provider_color(idx)} end)
+        |> Map.new()
+
       model_row.providers
       |> Enum.map(fn p ->
         pct = Float.round(p.requests / total * 100, 1)
-
-        color =
-          if p.billing_mode == "included",
-            do: "bg-base-300/40",
-            else: "bg-primary"
 
         %{
           provider_name: p.provider_name,
@@ -739,7 +760,7 @@ defmodule TokengateWeb.StatsLive do
           cost_usd: p.cost_usd,
           billing_mode: p.billing_mode,
           width_pct: pct,
-          color: color
+          color: Map.get(color_map, p.provider_name, "bg-primary")
         }
       end)
     end
