@@ -36,8 +36,6 @@ defmodule TokengateWeb.LogsLive do
       |> assign(:top_users, [])
       |> assign(:summary_refresh_scheduled, false)
       |> assign(:last_seen_at, DateTime.utc_now() |> DateTime.truncate(:second))
-      |> assign(:online_users, [])
-      |> assign(:api_inflight, 0)
       |> assign(:pending, [])
       |> assign(:model_options, model_options())
       |> assign(:team_options, team_options())
@@ -54,7 +52,6 @@ defmodule TokengateWeb.LogsLive do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(@pubsub, @logs_topic)
       Phoenix.PubSub.subscribe(@pubsub, Inflight.topic())
-      Phoenix.PubSub.subscribe(@pubsub, TokengateWeb.Presence.topic())
       Phoenix.PubSub.subscribe(@pubsub, "alerts")
 
       send(self(), :refresh_inflight)
@@ -67,8 +64,6 @@ defmodule TokengateWeb.LogsLive do
 
       socket =
         socket
-        |> assign(:online_users, TokengateWeb.Presence.list_online())
-        |> assign(:api_inflight, Inflight.count())
         |> assign(:top_models, top_models_card(socket.assigns))
         |> assign(:top_users, top_users_card(socket.assigns))
         |> assign(:pending, pending)
@@ -126,16 +121,11 @@ defmodule TokengateWeb.LogsLive do
      |> refresh_summary()}
   end
 
-  def handle_info(%Phoenix.Socket.Broadcast{event: "presence_diff"}, socket) do
-    {:noreply, assign(socket, :online_users, TokengateWeb.Presence.list_online())}
-  end
-
   def handle_info(:refresh_inflight, socket) do
     Process.send_after(self(), :refresh_inflight, @inflight_refresh_interval_ms)
 
     {:noreply,
      socket
-     |> assign(:api_inflight, visible_inflight_count(socket.assigns))
      |> assign(:top_models, top_models_card(socket.assigns))
      |> assign(:top_users, top_users_card(socket.assigns))}
   end
@@ -145,7 +135,6 @@ defmodule TokengateWeb.LogsLive do
       socket =
         socket
         |> assign(:pending, [entry | socket.assigns[:pending]])
-        |> assign(:api_inflight, socket.assigns[:api_inflight] + 1)
         |> stream_insert(:logs, pending_entry_to_log(entry), at: 0)
 
       {:noreply, socket}
@@ -156,12 +145,10 @@ defmodule TokengateWeb.LogsLive do
 
   def handle_info({:inflight_done, id}, socket) do
     pending_before = socket.assigns[:pending]
-    removed? = Enum.any?(pending_before, &(&1.id == id))
 
     socket =
       socket
       |> assign(:pending, Enum.reject(pending_before, &(&1.id == id)))
-      |> update(:api_inflight, fn n -> if removed?, do: max(n - 1, 0), else: n end)
       |> stream_delete(:logs, %{id: "pending-#{id}"})
 
     {:noreply, socket}
@@ -256,12 +243,6 @@ defmodule TokengateWeb.LogsLive do
   defp visible_pending(assigns) do
     Inflight.list()
     |> Enum.filter(&pending_visible?(&1, assigns))
-  end
-
-  # Counter shown in the "En vuelo" KPI card. Matches the rows in the
-  # "En vuelo ahora" table exactly so they never disagree.
-  defp visible_inflight_count(assigns) do
-    visible_pending(assigns) |> length()
   end
 
   # Top-cards: build a filter map that combines the user's scope
@@ -1198,40 +1179,8 @@ defmodule TokengateWeb.LogsLive do
           </div>
         </div>
 
-        <%!-- KPI strip: live indicators + summary, 5 cards in a row --%>
-        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
-          <%!-- Merged: Conectados + En vuelo --%>
-          <div class="card bg-base-100 border border-base-300 shadow-sm" id="live-indicators">
-            <div class="card-body p-4">
-              <div class="flex items-center justify-between">
-                <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Actividad
-                </p>
-                <div class="flex items-center gap-2">
-                  <span class="relative flex h-2.5 w-2.5">
-                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-60"></span>
-                    <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-success"></span>
-                  </span>
-                  <.icon name="hero-bolt" class="w-4 h-4 text-accent" />
-                </div>
-              </div>
-              <div class="mt-1 space-y-1">
-                <div class="flex items-center justify-between">
-                  <p class="text-xs text-base-content/40">Conectados</p>
-                  <p class="text-2xl font-bold text-base-content text-right" id="online-count">
-                    {length(@online_users)}
-                  </p>
-                </div>
-                <div class="flex items-center justify-between">
-                  <p class="text-xs text-base-content/40">En vuelo</p>
-                  <p class="text-2xl font-bold text-base-content text-right" id="inflight-count">
-                    {@api_inflight}
-                  </p>
-                </div>
-              </div>
-            </div>
-          </div>
-
+        <%!-- KPI strip: summary cards, 4 in a row --%>
+        <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <%!-- Top 3 modelos último minuto --%>
           <div class="card bg-base-100 border border-base-300 shadow-sm" id="top-models">
             <div class="card-body p-4">
