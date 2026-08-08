@@ -551,10 +551,6 @@ defmodule TokengateWeb.StatsLive do
   def error_class_badge(status) when status >= 500, do: "badge-error"
   def error_class_badge(_), do: "badge-ghost"
 
-  def hour_distribution_max(rows) do
-    rows |> Enum.map(& &1.request_count) |> Enum.max(fn -> 0 end)
-  end
-
   def hour_usage_stacked_max(rows) do
     rows |> Enum.map(& &1.total_requests) |> Enum.max(fn -> 0 end)
   end
@@ -604,153 +600,82 @@ defmodule TokengateWeb.StatsLive do
     |> Enum.uniq()
   end
 
-  def pay_per_token_requests(hour_row) do
-    hour_row.models
-    |> Enum.filter(&(&1.billing_mode == "pay_per_token"))
-    |> Enum.reduce(0, &(&1.requests + &2))
-  end
+  @doc """
+  Segmentos de barra para una hora: solo dos colores.
 
-  def pay_per_token_pct(hour_row) do
-    total = hour_row.total_requests
-    ppt = pay_per_token_requests(hour_row)
-
-    if total > 0 do
-      Float.round(ppt / total * 100, 1)
-    else
-      0.0
-    end
-  end
-
-  def model_color(index) do
-    colors = [
-      "bg-primary",
-      "bg-secondary",
-      "bg-accent",
-      "bg-success",
-      "bg-warning",
-      "bg-error",
-      "bg-info",
-      "bg-neutral"
-    ]
-
-    Enum.at(colors, rem(index, length(colors)))
-  end
-
-  def top_models_from_stacked(rows) do
-    rows
-    |> Enum.flat_map(& &1.models)
-    |> Enum.group_by(& &1.model)
-    |> Enum.map(fn {model, entries} ->
-      total_requests = Enum.reduce(entries, 0, &(&1.requests + &2))
-
-      total_cost =
-        Enum.reduce(entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
-
-      %{model: model, requests: total_requests, cost_usd: total_cost}
-    end)
-    |> Enum.sort_by(& &1.requests, :desc)
-    |> Enum.take(8)
-  end
-
-  def model_segments(hour_row, all_models) do
+  - Gris (`bg-base-300/30`) = requests included
+  - Morado (`bg-primary`) = requests pay_per_token (todos los modelos combinados)
+  """
+  def bar_segments(hour_row) do
     hour_total = hour_row.total_requests
 
     if hour_total <= 0 do
       []
     else
-      # 1. Segmento included (gris) — siempre al fondo
       included_segment =
         if hour_row.included_requests > 0 do
           pct = Float.round(hour_row.included_requests / hour_total * 100, 1)
-          [%{height_pct: pct, color: "bg-base-300/30", is_pay_per_token: false}]
+          [%{height_pct: pct, color: "bg-base-300/30"}]
         else
           []
         end
 
-      # 2. Segmentos pay_per_token por model alias (colores)
-      ppt_segments =
-        all_models
-        |> Enum.with_index()
-        |> Enum.map(fn {model_info, idx} ->
-          model_name = model_info.model
+      ppt_segment =
+        if hour_row.pay_per_token_requests > 0 do
+          pct = Float.round(hour_row.pay_per_token_requests / hour_total * 100, 1)
+          [%{height_pct: pct, color: "bg-primary"}]
+        else
+          []
+        end
 
-          model_data =
-            Enum.find(
-              hour_row.models,
-              %{requests: 0, cost_usd: Decimal.new(0)},
-              &(&1.model == model_name and &1.billing_mode == "pay_per_token")
-            )
-
-          if model_data.requests > 0 do
-            pct = Float.round(model_data.requests / hour_total * 100, 1)
-
-            %{
-              height_pct: pct,
-              color: model_color(idx),
-              is_pay_per_token: true
-            }
-          else
-            nil
-          end
-        end)
-        |> Enum.reject(&is_nil/1)
-
-      included_segment ++ ppt_segments
+      included_segment ++ ppt_segment
     end
   end
 
-  def legend_data(stacked_rows, hovered_hour) do
-    all_models = top_models_from_stacked(stacked_rows)
+  @doc """
+  Datos para la leyenda de la gráfica de uso por hora.
 
-    source_models =
+  - `included_requests` — total de requests included en el periodo (o la hora hovered)
+  - `ppt_entries` — desglose por modelo de los requests pay_per_token, con costo
+  """
+  def legend_data(stacked_rows, hovered_hour) do
+    source_rows =
       if hovered_hour do
         hour_row = Enum.find(stacked_rows, &(&1.hour == hovered_hour))
         if hour_row, do: hour_row.models, else: []
       else
-        stacked_rows
-        |> Enum.flat_map(& &1.models)
-        |> Enum.group_by(& &1.model)
-        |> Enum.map(fn {model, entries} ->
-          requests = Enum.reduce(entries, 0, &(&1.requests + &2))
-
-          cost =
-            Enum.reduce(entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
-
-          %{model: model, requests: requests, cost_usd: cost}
-        end)
+        stacked_rows |> Enum.flat_map(& &1.models)
       end
 
-    legend_entries =
-      all_models
-      |> Enum.with_index()
-      |> Enum.map(fn {model_info, idx} ->
-        model_name = model_info.model
+    # Included total
+    included_requests =
+      source_rows
+      |> Enum.filter(&(&1.billing_mode == "included"))
+      |> Enum.reduce(0, &(&1.requests + &2))
 
-        data =
-          Enum.find(
-            source_models,
-            %{requests: 0, cost_usd: Decimal.new(0)},
-            &(&1.model == model_name)
-          )
+    # Pay-per-token entries grouped by model
+    ppt_entries =
+      source_rows
+      |> Enum.filter(&(&1.billing_mode == "pay_per_token"))
+      |> Enum.group_by(& &1.model)
+      |> Enum.map(fn {model, entries} ->
+        requests = Enum.reduce(entries, 0, &(&1.requests + &2))
 
-        %{
-          model: model_name,
-          requests: data.requests,
-          cost_usd: data.cost_usd,
-          color: model_color(idx)
-        }
+        cost =
+          Enum.reduce(entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
+
+        %{model: model, requests: requests, cost_usd: cost}
       end)
-      |> Enum.filter(&(&1.requests > 0))
       |> Enum.sort_by(& &1.requests, :desc)
 
-    total_requests = Enum.reduce(legend_entries, 0, &(&1.requests + &2))
+    total_requests = included_requests + Enum.reduce(ppt_entries, 0, &(&1.requests + &2))
 
     total_cost =
-      legend_entries
-      |> Enum.reduce(Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
+      Enum.reduce(ppt_entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
 
     %{
-      entries: legend_entries,
+      included_requests: included_requests,
+      ppt_entries: ppt_entries,
       total_requests: total_requests,
       total_cost_usd: total_cost,
       hovered_hour: hovered_hour

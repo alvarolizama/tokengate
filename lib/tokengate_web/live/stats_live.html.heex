@@ -106,13 +106,12 @@
                   </h2>
                   <p class="text-xs text-base-content/60">
                     Requests acumulados por hora (hora local).
-                    La barra gris = uso included, los colores = uso pay_per_token por model alias.
+                    La barra gris = uso included, la barra morada = uso pay_per_token.
                     Escala √ para hacer visibles las horas de poco uso.
                   </p>
 
                   <%= if hour_usage_stacked_max(@hour_usage_stacked) > 0 do %>
                     <% max = hour_usage_stacked_max(@hour_usage_stacked) %>
-                    <% top_models = top_models_from_stacked(@hour_usage_stacked) %>
                     <% legend = legend_data(@hour_usage_stacked, @hovered_hour) %>
                     <% y_ticks = y_axis_ticks(max) %>
 
@@ -153,7 +152,7 @@
                                 phx-mouseleave="hour_leave"
                               >
                                 <% height_pct = hour_usage_bar_height(row.total_requests, max) %>
-                                <% segments = model_segments(row, top_models) %>
+                                <% segments = bar_segments(row) %>
 
                                 <%!-- Tooltip --%>
                                 <div class="hidden group-hover:block absolute -top-1 -translate-y-full left-1/2 -translate-x-1/2 z-20 pointer-events-none">
@@ -168,10 +167,10 @@
                                       included: {format_number(row.included_requests)}
                                     </div>
                                     <div
-                                      :if={pay_per_token_requests(row) > 0}
+                                      :if={row.pay_per_token_requests > 0}
                                       class="text-base-content/70"
                                     >
-                                      pay_per_token: {format_number(pay_per_token_requests(row))}
+                                      pay_per_token: {format_number(row.pay_per_token_requests)}
                                     </div>
                                   </div>
                                 </div>
@@ -232,11 +231,22 @@
                           <% end %>
                         </div>
 
-                        <%!-- Model alias entries --%>
+                        <%!-- Included entry --%>
+                        <div :if={legend.included_requests > 0} class="mb-2">
+                          <div class="flex items-center gap-1.5">
+                            <span class="w-2.5 h-2.5 rounded-sm shrink-0 bg-base-300/30" />
+                            <span class="text-[10px] font-medium flex-1">Included</span>
+                            <span class="text-[9px] text-base-content/50 shrink-0">
+                              {format_number(legend.included_requests)} req
+                            </span>
+                          </div>
+                        </div>
+
+                        <%!-- Pay-per-token model breakdown --%>
                         <div class="space-y-2.5">
-                          <div :for={entry <- legend.entries}>
+                          <div :for={entry <- legend.ppt_entries}>
                             <div class="flex items-center gap-1.5">
-                              <span class={["w-2.5 h-2.5 rounded-sm shrink-0", entry.color]} />
+                              <span class="w-2.5 h-2.5 rounded-sm shrink-0 bg-primary" />
                               <span class="text-[10px] font-medium truncate flex-1">{entry.model}</span>
                               <span class="text-[9px] text-base-content/50 shrink-0">
                                 {format_number(entry.requests)} req
