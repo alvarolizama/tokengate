@@ -1,0 +1,105 @@
+<Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
+  <div class="space-y-6">
+    <div class="flex items-center justify-between flex-wrap gap-4">
+      <.header>
+        Monitor en vivo
+        <:subtitle>
+          <span class="inline-flex items-center gap-2">
+            <.icon name="hero-signal" class="w-4 h-4 text-base-content/50" />
+            Actividad por modelo y proveedor en tiempo real
+          </span>
+        </:subtitle>
+      </.header>
+
+      <div class="flex items-center gap-3">
+        <span class="inline-flex items-center gap-2 text-sm text-base-content/60">
+          <span class="relative flex h-2.5 w-2.5">
+            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-success"></span>
+          </span>
+          En vivo
+        </span>
+        <span class="badge badge-sm badge-primary">
+          {@total_inflight} en vuelo
+        </span>
+        <span class="badge badge-sm badge-ghost">
+          {format_number(@total_requests)} total
+        </span>
+      </div>
+    </div>
+
+    <%= if @model_rows == [] do %>
+      <div class="card bg-base-100 border border-base-300 shadow-sm">
+        <div class="card-body">
+          <p class="text-sm text-base-content/40 py-8 text-center">
+            Sin actividad registrada. Los requests aparecerán aquí en cuanto lleguen.
+          </p>
+        </div>
+      </div>
+    <% else %>
+      <% max = model_max(@model_rows) %>
+
+      <div class="card bg-base-100 border border-base-300 shadow-sm" id="monitor-chart">
+        <div class="card-body space-y-3">
+          <h2 class="card-title text-base">
+            <.icon name="hero-chart-bar" class="w-5 h-5 text-base-content/60" />
+            Actividad por modelo
+          </h2>
+          <p class="text-xs text-base-content/60">
+            Requests acumulados por modelo desde el arranque. Segmentos coloreados por proveedor/credential.
+            El badge a la derecha muestra los requests en vuelo ahora mismo.
+          </p>
+
+          <div :for={row <- @model_rows} class="group">
+            <div class="flex items-center gap-3">
+              <%!-- Model label --%>
+              <span class="text-[11px] font-medium text-base-content/70 w-32 truncate shrink-0 text-right">
+                {row.model_name}
+              </span>
+
+              <%!-- Bar --%>
+              <div class="flex-1 relative h-7 rounded overflow-hidden bg-base-200/50">
+                <div
+                  class="h-full transition-all bg-primary/70"
+                  style={"width: #{bar_width(row.requests, max)}%"}
+                >
+                </div>
+              </div>
+
+              <%!-- Request count --%>
+              <span class="text-[10px] text-base-content/50 tabular-nums shrink-0 w-14 text-right">
+                {format_number(row.requests)}
+              </span>
+
+              <%!-- In-flight badge --%>
+              <span class={[
+                "badge badge-sm shrink-0 w-8 justify-center",
+                inflight_badge_class(row.inflight)
+              ]}>
+                {inflight_label(row.inflight)}
+              </span>
+            </div>
+
+            <%!-- Provider/key breakdown shown below each bar --%>
+            <div
+              :if={row.providers != []}
+              class="ml-44 mt-1 flex flex-wrap gap-x-4 gap-y-1"
+            >
+              <span
+                :for={{seg, idx} <- Enum.with_index(row.providers)}
+                class="inline-flex items-center gap-1.5 text-[9px] text-base-content/50"
+              >
+                <span class={["w-2 h-2 rounded-sm shrink-0", provider_color(idx)]} />
+                {seg.provider_name}
+                <span :if={seg.credential_name != "—"} class="text-base-content/40">
+                  · {seg.credential_name}
+                </span>
+                <span class="tabular-nums">({seg.count})</span>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    <% end %>
+  </div>
+</Layouts.dashboard>

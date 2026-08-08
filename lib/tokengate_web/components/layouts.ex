@@ -263,6 +263,11 @@ defmodule TokengateWeb.Layouts do
                 Monitoreo
               </p>
               <.sidebar_link
+                href={~p"/dashboard/monitor"}
+                label="Monitor"
+                icon="hero-signal"
+              />
+              <.sidebar_link
                 href={~p"/dashboard/logs"}
                 label="Logs"
                 icon="hero-document-text"
