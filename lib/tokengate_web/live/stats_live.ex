@@ -654,9 +654,10 @@ defmodule TokengateWeb.StatsLive do
       |> Enum.reduce(0, &(&1.requests + &2))
 
     # Pay-per-token entries grouped by model
+    # (includes unknown billing_mode, treated as pay_per_token)
     ppt_entries =
       source_rows
-      |> Enum.filter(&(&1.billing_mode == "pay_per_token"))
+      |> Enum.filter(&(&1.billing_mode != "included"))
       |> Enum.group_by(& &1.model)
       |> Enum.map(fn {model, entries} ->
         requests = Enum.reduce(entries, 0, &(&1.requests + &2))

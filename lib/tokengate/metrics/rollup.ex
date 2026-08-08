@@ -1127,17 +1127,16 @@ defmodule Tokengate.Metrics.Rollup do
     for hour <- 0..23 do
       hour_rows = Map.get(by_hour, hour, [])
 
-      # Agrupar por model_alias
-      by_model =
+      # Agrupar por (model, billing_mode) — un mismo model alias puede tener
+      # providers incluidos y pay_per_token simultáneamente.
+      by_model_billing =
         hour_rows
-        |> Enum.group_by(& &1.model)
-        |> Enum.map(fn {model, entries} ->
+        |> Enum.group_by(&{&1.model, &1.billing_mode})
+        |> Enum.map(fn {{model, billing_mode}, entries} ->
           requests = Enum.reduce(entries, 0, &(&1.request_count + &2))
 
           cost =
             Enum.reduce(entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
-
-          billing_mode = entries |> List.first() |> Map.get(:billing_mode, "unknown")
 
           %{
             model: model,
@@ -1148,22 +1147,26 @@ defmodule Tokengate.Metrics.Rollup do
         end)
         |> Enum.sort_by(& &1.requests, :desc)
 
-      total_requests = Enum.reduce(by_model, 0, &(&1.requests + &2))
+      total_requests = Enum.reduce(by_model_billing, 0, &(&1.requests + &2))
 
+      # Totales por billing_mode desde los rows agrupados del SQL (no del
+      # by_model aplanado) para no perder requests cuando un modelo tiene
+      # providers mixtos. Los NULL/unknown se tratan como pay_per_token
+      # (el default del schema) para no perderlos en la visualización.
       included_requests =
-        by_model
+        hour_rows
         |> Enum.filter(&(&1.billing_mode == "included"))
-        |> Enum.reduce(0, &(&1.requests + &2))
+        |> Enum.reduce(0, &(&1.request_count + &2))
 
       pay_per_token_requests =
-        by_model
-        |> Enum.filter(&(&1.billing_mode == "pay_per_token"))
-        |> Enum.reduce(0, &(&1.requests + &2))
+        hour_rows
+        |> Enum.filter(&(&1.billing_mode != "included"))
+        |> Enum.reduce(0, &(&1.request_count + &2))
 
       total_cost =
-        by_model
-        |> Enum.filter(&(&1.billing_mode == "pay_per_token"))
-        |> Enum.reduce(Decimal.new(0), fn m, acc -> Decimal.add(acc, m.cost_usd) end)
+        hour_rows
+        |> Enum.filter(&(&1.billing_mode != "included"))
+        |> Enum.reduce(Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
 
       %{
         hour: hour,
@@ -1171,7 +1174,7 @@ defmodule Tokengate.Metrics.Rollup do
         included_requests: included_requests,
         pay_per_token_requests: pay_per_token_requests,
         total_cost_usd: total_cost,
-        models: by_model
+        models: by_model_billing
       }
     end
   end
