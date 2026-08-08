@@ -601,6 +601,23 @@ defmodule TokengateWeb.StatsLive do
   end
 
   @doc """
+  Modelos pay_per_token para mostrar en el tooltip del hover de una barra.
+
+  Filtra los models del hour_row por billing_mode != "included", los agrupa
+  por nombre y los ordena por requests desc.
+  """
+  def ppt_models_for_tooltip(hour_row) do
+    hour_row.models
+    |> Enum.filter(&(&1.billing_mode != "included"))
+    |> Enum.group_by(& &1.model)
+    |> Enum.map(fn {model, entries} ->
+      requests = Enum.reduce(entries, 0, &(&1.requests + &2))
+      %{model: model, requests: requests}
+    end)
+    |> Enum.sort_by(& &1.requests, :desc)
+  end
+
+  @doc """
   Segmentos de barra para una hora: solo dos colores.
 
   - Gris (`bg-base-300/30`) = requests included

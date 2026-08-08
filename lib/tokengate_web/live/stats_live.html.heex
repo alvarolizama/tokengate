@@ -172,6 +172,15 @@
                                     >
                                       pay_per_token: {format_number(row.pay_per_token_requests)}
                                     </div>
+                                    <div
+                                      :for={m <- ppt_models_for_tooltip(row)}
+                                      class="text-base-content/50 flex justify-between gap-3"
+                                    >
+                                      <span class="truncate max-w-[140px]">{m.model}</span>
+                                      <span class="tabular-nums shrink-0">{format_number(
+                                        m.requests
+                                      )}</span>
+                                    </div>
                                   </div>
                                 </div>
 
