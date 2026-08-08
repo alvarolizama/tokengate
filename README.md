@@ -1,10 +1,18 @@
+<p align="center">
+  <img src="priv/static/images/logo.svg" width="120" alt="TokenGate">
+</p>
+
+<h1 align="center">TokenGate</h1>
+
+<p align="center">
+  An OpenAI-compatible <strong>LLM API gateway</strong> built with <strong>Phoenix 1.8 + LiveView</strong>. It sits between your agents/apps and the model providers (OpenAI, OpenRouter, Fireworks, oMLX, …): your clients call TokenGate with their TokenGate API key, and TokenGate routes each request to the best provider credential — with budgets, rate limits, circuit breakers, and full cost accounting in between.
+</p>
+
+<p align="center">
+  Think "LiteLLM, but as an Elixir app with a real admin UI".
+</p>
+
 <img src="docs/screenshots/dashboard.png" alt="TokenGate — LLM API gateway" width="100%">
-
-# TokenGate
-
-An OpenAI-compatible **LLM API gateway** built with **Phoenix 1.8 + LiveView**. It sits between your agents/apps and the model providers (OpenAI, OpenRouter, Fireworks, oMLX, …): your clients call TokenGate with their TokenGate API key, and TokenGate routes each request to the best provider credential — with budgets, rate limits, circuit breakers, and full cost accounting in between.
-
-Think "LiteLLM, but as an Elixir app with a real admin UI".
 
 ## Key features
 

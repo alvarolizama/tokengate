@@ -93,7 +93,102 @@
             <%!-- KPI cards --%>
             <.kpi_cards metrics={@metrics} />
 
-            <%!-- Patrones de uso: hora del día, picos y concurrencia --%>
+            <%!-- KPIs secundarios: concurrencia, horas y minutos pico --%>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <%= if @current_user && @current_user.global_role == "admin" do %>
+                <div id="peak-concurrency" class="card bg-base-100 border border-base-300 shadow-sm">
+                  <div class="card-body p-5">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                        Pico de concurrencia
+                      </span>
+                      <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10">
+                        <.icon name="hero-arrow-trending-up" class="w-5 h-5 text-primary" />
+                      </span>
+                    </div>
+                    <%= if @peak_concurrency && @peak_concurrency.max_concurrent > 0 do %>
+                      <p class="mt-2 text-2xl font-bold text-base-content">
+                        {format_number(@peak_concurrency.max_concurrent)}
+                      </p>
+                      <p class="text-xs text-base-content/40 mt-1">
+                        requests simultáneos · {format_bucket(
+                          @peak_concurrency.at,
+                          @timezone
+                        )}
+                      </p>
+                    <% else %>
+                      <p class="text-sm text-base-content/40 mt-2">
+                        Sin datos
+                      </p>
+                    <% end %>
+                  </div>
+                </div>
+              <% end %>
+
+              <div id="busiest-hours" class="card bg-base-100 border border-base-300 shadow-sm">
+                <div class="card-body p-5">
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                      Horas pico
+                    </span>
+                    <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-warning/10">
+                      <.icon name="hero-fire" class="w-5 h-5 text-warning" />
+                    </span>
+                  </div>
+                  <%= if has_data?(@busiest_hours) do %>
+                    <ul class="mt-2 space-y-1">
+                      <li
+                        :for={{row, idx} <- Enum.with_index(@busiest_hours, 1)}
+                        id={"busiest-hour-#{idx}"}
+                        class="flex items-center justify-between text-sm"
+                      >
+                        <span class="text-base-content/70">
+                          {idx}. {format_bucket(row.bucket, @timezone)}
+                        </span>
+                        <span class="font-mono">{format_number(row.request_count)}</span>
+                      </li>
+                    </ul>
+                  <% else %>
+                    <p class="text-sm text-base-content/40 mt-2">
+                      Sin datos
+                    </p>
+                  <% end %>
+                </div>
+              </div>
+
+              <div id="busiest-minutes" class="card bg-base-100 border border-base-300 shadow-sm">
+                <div class="card-body p-5">
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                      Minutos pico
+                    </span>
+                    <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-accent/10">
+                      <.icon name="hero-bolt" class="w-5 h-5 text-accent" />
+                    </span>
+                  </div>
+                  <%= if has_data?(@busiest_minutes) do %>
+                    <ul class="mt-2 space-y-1">
+                      <li
+                        :for={{row, idx} <- Enum.with_index(@busiest_minutes, 1)}
+                        id={"busiest-minute-#{idx}"}
+                        class="flex items-center justify-between text-sm"
+                      >
+                        <span class="text-base-content/70">
+                          {idx}. {format_bucket(row.bucket, @timezone)}
+                        </span>
+                        <span class="font-mono">{format_number(row.request_count)}</span>
+                      </li>
+                    </ul>
+                  <% else %>
+                    <p class="text-sm text-base-content/40 mt-2">
+                      Sin datos
+                    </p>
+                  <% end %>
+                </div>
+              </div>
+            </div>
+
+            <%!-- Patrones de uso: gráficas de modelo/proveedor y hora del día --%>
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="usage-patterns">
               <%!-- Card 1: Por modelo y proveedor --%>
               <div
@@ -372,100 +467,6 @@
                       Sin datos en este período.
                     </p>
                   <% end %>
-                </div>
-              </div>
-
-              <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <%= if @current_user && @current_user.global_role == "admin" do %>
-                  <div id="peak-concurrency" class="card bg-base-100 border border-base-300 shadow-sm">
-                    <div class="card-body p-5">
-                      <div class="flex items-center justify-between">
-                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                          Pico de concurrencia
-                        </span>
-                        <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10">
-                          <.icon name="hero-arrow-trending-up" class="w-5 h-5 text-primary" />
-                        </span>
-                      </div>
-                      <%= if @peak_concurrency && @peak_concurrency.max_concurrent > 0 do %>
-                        <p class="mt-2 text-2xl font-bold text-base-content">
-                          {format_number(@peak_concurrency.max_concurrent)}
-                        </p>
-                        <p class="text-xs text-base-content/40 mt-1">
-                          requests simultáneos · {format_bucket(
-                            @peak_concurrency.at,
-                            @timezone
-                          )}
-                        </p>
-                      <% else %>
-                        <p class="text-sm text-base-content/40 mt-2">
-                          Sin datos
-                        </p>
-                      <% end %>
-                    </div>
-                  </div>
-                <% end %>
-
-                <div id="busiest-hours" class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-5">
-                    <div class="flex items-center justify-between">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                        Horas pico
-                      </span>
-                      <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-warning/10">
-                        <.icon name="hero-fire" class="w-5 h-5 text-warning" />
-                      </span>
-                    </div>
-                    <%= if has_data?(@busiest_hours) do %>
-                      <ul class="mt-2 space-y-1">
-                        <li
-                          :for={{row, idx} <- Enum.with_index(@busiest_hours, 1)}
-                          id={"busiest-hour-#{idx}"}
-                          class="flex items-center justify-between text-sm"
-                        >
-                          <span class="text-base-content/70">
-                            {idx}. {format_bucket(row.bucket, @timezone)}
-                          </span>
-                          <span class="font-mono">{format_number(row.request_count)}</span>
-                        </li>
-                      </ul>
-                    <% else %>
-                      <p class="text-sm text-base-content/40 mt-2">
-                        Sin datos
-                      </p>
-                    <% end %>
-                  </div>
-                </div>
-
-                <div id="busiest-minutes" class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-5">
-                    <div class="flex items-center justify-between">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                        Minutos pico
-                      </span>
-                      <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-accent/10">
-                        <.icon name="hero-bolt" class="w-5 h-5 text-accent" />
-                      </span>
-                    </div>
-                    <%= if has_data?(@busiest_minutes) do %>
-                      <ul class="mt-2 space-y-1">
-                        <li
-                          :for={{row, idx} <- Enum.with_index(@busiest_minutes, 1)}
-                          id={"busiest-minute-#{idx}"}
-                          class="flex items-center justify-between text-sm"
-                        >
-                          <span class="text-base-content/70">
-                            {idx}. {format_bucket(row.bucket, @timezone)}
-                          </span>
-                          <span class="font-mono">{format_number(row.request_count)}</span>
-                        </li>
-                      </ul>
-                    <% else %>
-                      <p class="text-sm text-base-content/40 mt-2">
-                        Sin datos
-                      </p>
-                    <% end %>
-                  </div>
                 </div>
               </div>
             </div>
