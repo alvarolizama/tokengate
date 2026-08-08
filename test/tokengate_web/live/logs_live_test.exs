@@ -29,36 +29,6 @@ defmodule TokengateWeb.LogsLiveTest do
     |> recycle()
   end
 
-  defp broke_member_fixture(attrs \\ %{}) do
-    %{user: member_user} = register("user")
-
-    {:ok, team} =
-      Accounts.create_team(
-        Map.merge(
-          %{
-            "name" => "Budget Team #{unique()}",
-            "monthly_budget_per_user_usd" => "100.00"
-          },
-          attrs
-        )
-      )
-
-    {:ok, member} =
-      Accounts.create_team_member(%{"user_id" => member_user.id, "team_id" => team.id})
-
-    {member, member_user, team}
-  end
-
-  defp log_spend(member_id, cost) do
-    {:ok, _} =
-      Logs.log_request(%{
-        team_member_id: member_id,
-        model_requested: "gpt-4",
-        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
-        provider_cost_usd: Decimal.new(cost)
-      })
-  end
-
   defp member_with_log(opts \\ []) do
     u = unique()
 
@@ -300,48 +270,7 @@ defmodule TokengateWeb.LogsLiveTest do
     assert html =~ "summary-req-per-min"
   end
 
-  ## Alerts merged from /dashboard/alerts ----------------------------------------
-
-  test "exhausted member appears in the budget section with period badge", %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
-
-    {member, member_user, team} = broke_member_fixture()
-
-    # $150 > $100 monthly.
-    log_spend(member.id, "150.00")
-
-    conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
-
-    assert has_element?(view, "#alert-budget-#{member.id}", member_user.email)
-    assert has_element?(view, "#alert-budget-#{member.id}", team.name)
-    assert has_element?(view, "#alert-budget-#{member.id}", "mensual")
-    assert has_element?(view, "#alert-budget-credits-#{member.id}")
-  end
-
-  test "summary card counts members without credit", %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
-    {member, _member_user, _team} = broke_member_fixture()
-
-    log_spend(member.id, "100.00")
-
-    conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
-
-    assert has_element?(view, "#alert-count-budgets", "1")
-  end
-
-  test "member under the limit does not appear in the budget section", %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
-    {member, _member_user, _team} = broke_member_fixture()
-
-    log_spend(member.id, "10.00")
-
-    conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
-
-    refute has_element?(view, "#alert-budget-#{member.id}")
-  end
+  ## Alerts moved to /dashboard/monitor ----------------------------------------
 
   test "error_reason filter filters logs", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
