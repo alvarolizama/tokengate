@@ -219,12 +219,16 @@ defmodule TokengateWeb.Layouts do
         </div>
 
         <nav class="flex-1 p-3 space-y-4">
-          <.sidebar_link href={~p"/dashboard"} label="Dashboard" icon="hero-chart-bar-square" />
+          <div class="space-y-1">
+            <.sidebar_link href={~p"/dashboard"} label="Dashboard" icon="hero-chart-bar-square" />
+
+            <%= if admin?(@current_scope) do %>
+              <.sidebar_link href={~p"/dashboard/stats"} label="Estadísticas" icon="hero-chart-pie" />
+              <.sidebar_link href={~p"/dashboard/credits"} label="Créditos" icon="hero-banknotes" />
+            <% end %>
+          </div>
 
           <%= if admin?(@current_scope) do %>
-            <.sidebar_link href={~p"/dashboard/stats"} label="Estadísticas" icon="hero-chart-pie" />
-            <.sidebar_link href={~p"/dashboard/credits"} label="Créditos" icon="hero-banknotes" />
-
             <div class="space-y-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
                 Configuración
