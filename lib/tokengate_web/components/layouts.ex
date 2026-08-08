@@ -223,6 +223,7 @@ defmodule TokengateWeb.Layouts do
 
           <%= if admin?(@current_scope) do %>
             <.sidebar_link href={~p"/dashboard/stats"} label="Estadísticas" icon="hero-chart-pie" />
+            <.sidebar_link href={~p"/dashboard/credits"} label="Créditos" icon="hero-banknotes" />
 
             <div class="space-y-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
@@ -257,11 +258,6 @@ defmodule TokengateWeb.Layouts do
               <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
                 Monitoreo
               </p>
-              <.sidebar_link
-                href={~p"/dashboard/credits"}
-                label="Créditos"
-                icon="hero-banknotes"
-              />
               <.sidebar_link
                 href={~p"/dashboard/logs"}
                 label="Logs"
