@@ -1180,6 +1180,114 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   # -----------------------------------------------------------------------
+  # usage_by_model_provider_stacked/2
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Requests agrupados por model alias, con desglose por proveedor (ModelProvider).
+
+  Devuelve una lista de modelos, cada uno con su total de requests y la lista
+  de proveedores que lo sirvieron (con requests, billing_mode y costo).
+
+  Las barras horizontales de la gráfica de stats usan esta data: una barra
+  por modelo, segmentos apilados por proveedor.
+
+  ## Opciones
+
+    * `:from` — `inserted_at >= from` (DateTime)
+    * `:to`   — `inserted_at <= to` (DateTime)
+    * `:member_ids` — restrict to logs of these team-member ids (scoping)
+  """
+  @spec usage_by_model_provider_stacked(keyword()) :: [map()]
+  def usage_by_model_provider_stacked(opts \\ []) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    rows =
+      RequestLog
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> maybe_member_ids(Keyword.get(opts, :member_ids))
+      |> join(:left, [rl], ma in ModelAlias, on: rl.model_alias_id == ma.id)
+      |> join(:left, [rl, ma], mp in Tokengate.Providers.ModelProvider,
+        on: rl.model_provider_id == mp.id
+      )
+      |> join(:left, [rl, ma, mp], c in Tokengate.Providers.Credential,
+        on: mp.credential_id == c.id
+      )
+      |> join(:left, [rl, ma, mp, c], p in Tokengate.Providers.Provider,
+        on: c.provider_id == p.id
+      )
+      |> group_by(
+        [rl, ma, mp, c, p],
+        [ma.id, ma.name, mp.id, p.name, mp.billing_mode]
+      )
+      |> select(
+        [rl, ma, mp, c, p],
+        %{
+          model_id: ma.id,
+          model_name: ma.name,
+          provider_id: mp.id,
+          provider_name: p.name,
+          billing_mode: fragment("COALESCE(?, 'pay_per_token')", mp.billing_mode),
+          request_count: count(rl.id),
+          cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
+        }
+      )
+      |> Repo.all()
+      |> Enum.map(fn row ->
+        %{
+          model_id: row.model_id,
+          model_name: row.model_name || "—",
+          provider_id: row.provider_id,
+          provider_name: row.provider_name || "—",
+          billing_mode: row.billing_mode || "pay_per_token",
+          request_count: row.request_count,
+          cost_usd: Decimal.new(to_string(row.cost_usd))
+        }
+      end)
+
+    # Agrupar por modelo
+    rows
+    |> Enum.group_by(& &1.model_id)
+    |> Enum.map(fn {_model_id, entries} ->
+      model_name = List.first(entries).model_name
+
+      providers =
+        entries
+        |> Enum.group_by(&{&1.provider_id, &1.provider_name})
+        |> Enum.map(fn {{_pid, provider_name}, p_entries} ->
+          requests = Enum.reduce(p_entries, 0, &(&1.request_count + &2))
+
+          cost =
+            Enum.reduce(p_entries, Decimal.new(0), fn e, acc ->
+              Decimal.add(acc, e.cost_usd)
+            end)
+
+          billing_mode = List.first(p_entries).billing_mode
+
+          %{
+            provider_name: provider_name,
+            requests: requests,
+            cost_usd: cost,
+            billing_mode: billing_mode
+          }
+        end)
+        |> Enum.sort_by(& &1.requests, :desc)
+
+      total_requests = Enum.reduce(providers, 0, &(&1.requests + &2))
+
+      %{
+        model_name: model_name,
+        total_requests: total_requests,
+        providers: providers
+      }
+    end)
+    |> Enum.sort_by(& &1.total_requests, :desc)
+    |> Enum.take(10)
+  end
+
+  # -----------------------------------------------------------------------
   # busiest_hours/2 y busiest_minutes/2
   # -----------------------------------------------------------------------
 

@@ -93,6 +93,88 @@
             <%!-- KPI cards --%>
             <.kpi_cards metrics={@metrics} />
 
+            <%!-- Model × provider stacked horizontal bars --%>
+            <div
+              class="card bg-base-100 border border-base-300 shadow-sm"
+              id="model-provider-chart"
+            >
+              <div class="card-body">
+                <h2 class="card-title text-base">
+                  <.icon name="hero-chart-bar" class="w-5 h-5 text-base-content/60" />
+                  Uso por modelo y proveedor
+                </h2>
+                <p class="text-xs text-base-content/60">
+                  Requests por modelo (barras horizontales), apilados por proveedor.
+                  Gris = included, morado = pay_per_token.
+                </p>
+
+                <%= if model_provider_max(@model_provider_stacked) > 0 do %>
+                  <% legend = provider_legend(@model_provider_stacked) %>
+
+                  <div class="flex gap-4 mt-4">
+                    <%!-- Chart --%>
+                    <div class="flex-1 space-y-2.5">
+                      <div
+                        :for={row <- @model_provider_stacked}
+                        class="group"
+                      >
+                        <div class="flex items-center gap-3">
+                          <%!-- Model label --%>
+                          <span class="text-[11px] font-medium text-base-content/70 w-32 truncate shrink-0 text-right">
+                            {row.model_name}
+                          </span>
+
+                          <%!-- Bar --%>
+                          <div class="flex-1 relative h-6 rounded overflow-hidden bg-base-200/50">
+                            <div
+                              :for={seg <- provider_segments(row)}
+                              class={["h-full inline-block transition-all", seg.color]}
+                              style={"width: #{seg.width_pct}%"}
+                              title={"#{seg.provider_name}: #{format_number(seg.requests)} req"}
+                            >
+                            </div>
+                          </div>
+
+                          <%!-- Request count --%>
+                          <span class="text-[10px] text-base-content/50 tabular-nums shrink-0 w-12 text-right">
+                            {format_number(row.total_requests)}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+
+                    <%!-- Legend --%>
+                    <div class="w-52 shrink-0 border-l border-base-300 pl-4">
+                      <div class="text-[10px] font-semibold text-base-content/60 uppercase tracking-wide mb-2">
+                        Proveedores
+                      </div>
+                      <div class="space-y-2">
+                        <div :for={entry <- legend}>
+                          <div class="flex items-center gap-1.5">
+                            <span class="w-2.5 h-2.5 rounded-sm shrink-0 bg-primary" />
+                            <span class="text-[10px] font-medium truncate flex-1">{entry.provider_name}</span>
+                            <span class="text-[9px] text-base-content/50 shrink-0">
+                              {format_number(entry.requests)} req
+                            </span>
+                            <span
+                              :if={Decimal.compare(entry.cost_usd, Decimal.new(0)) == :gt}
+                              class="text-[9px] text-warning shrink-0"
+                            >
+                              ${format_decimal(entry.cost_usd)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                <% else %>
+                  <p class="text-sm text-base-content/40 py-6 text-center">
+                    Sin datos en este período.
+                  </p>
+                <% end %>
+              </div>
+            </div>
+
             <%!-- Patrones de uso: hora del día, picos y concurrencia --%>
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="usage-patterns">
               <div

@@ -227,6 +227,7 @@ defmodule TokengateWeb.StatsLive do
             fn -> {:top_errors, Rollup.top_errors(nil, opts)} end,
             fn -> {:hour_distribution, Rollup.usage_by_hour_of_day(nil, opts)} end,
             fn -> {:hour_usage_stacked, Rollup.usage_by_hour_of_day_stacked(nil, opts)} end,
+            fn -> {:model_provider_stacked, Rollup.usage_by_model_provider_stacked(opts)} end,
             fn -> {:busiest_hours, Rollup.busiest_hours(nil, opts)} end,
             fn -> {:busiest_minutes, Rollup.busiest_minutes(nil, opts)} end
           ]
@@ -342,6 +343,7 @@ defmodule TokengateWeb.StatsLive do
       member_models: [],
       hour_distribution: [],
       hour_usage_stacked: [],
+      model_provider_stacked: [],
       busiest_hours: [],
       busiest_minutes: [],
       peak_concurrency: nil,
@@ -702,6 +704,67 @@ defmodule TokengateWeb.StatsLive do
 
   def hour_bar_height(count, max) when max > 0, do: max(round(count / max * 100), 4)
   def hour_bar_height(_count, _max), do: 0
+
+  # ── Model × provider stacked horizontal bar helpers ───────────────────────
+
+  @doc "Total de requests del modelo con más requests (para escalar las barras)."
+  def model_provider_max(rows) do
+    rows |> Enum.map(& &1.total_requests) |> Enum.max(fn -> 0 end)
+  end
+
+  @doc """
+  Segmentos apilados por proveedor para una barra de modelo.
+
+  Cada segmento tiene `width_pct` (ancho relativo al total del modelo) y
+  `color` (gris si included, morado si pay_per_token).
+  """
+  def provider_segments(model_row) do
+    total = model_row.total_requests
+
+    if total <= 0 do
+      []
+    else
+      model_row.providers
+      |> Enum.map(fn p ->
+        pct = Float.round(p.requests / total * 100, 1)
+
+        color =
+          if p.billing_mode == "included",
+            do: "bg-base-300/40",
+            else: "bg-primary"
+
+        %{
+          provider_name: p.provider_name,
+          requests: p.requests,
+          cost_usd: p.cost_usd,
+          billing_mode: p.billing_mode,
+          width_pct: pct,
+          color: color
+        }
+      end)
+    end
+  end
+
+  @doc """
+  Leyenda de proveedores agregados: nombre, requests totales, costo total.
+  Ordenada por requests desc.
+  """
+  def provider_legend(rows) do
+    rows
+    |> Enum.flat_map(& &1.providers)
+    |> Enum.group_by(& &1.provider_name)
+    |> Enum.map(fn {provider_name, entries} ->
+      requests = Enum.reduce(entries, 0, &(&1.requests + &2))
+
+      cost =
+        Enum.reduce(entries, Decimal.new(0), fn e, acc ->
+          Decimal.add(acc, e.cost_usd)
+        end)
+
+      %{provider_name: provider_name, requests: requests, cost_usd: cost}
+    end)
+    |> Enum.sort_by(& &1.requests, :desc)
+  end
 
   defp pad2(n), do: n |> Integer.to_string() |> String.pad_leading(2, "0")
 
