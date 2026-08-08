@@ -735,21 +735,15 @@ defmodule TokengateWeb.StatsLive do
   Segmentos apilados por proveedor para una barra de modelo.
 
   Cada segmento tiene `width_pct` (ancho relativo al total del modelo) y
-  `color` — un color distinto por proveedor.
+  `color` — un color distinto por proveedor, usando el mismo índice
+  global de la leyenda para que barras y leyenda coincidan.
   """
-  def provider_segments(model_row) do
+  def provider_segments(model_row, legend) do
     total = model_row.total_requests
 
     if total <= 0 do
       []
     else
-      # Build a name→color map from this model's providers
-      color_map =
-        model_row.providers
-        |> Enum.with_index()
-        |> Enum.map(fn {p, idx} -> {p.provider_name, provider_color(idx)} end)
-        |> Map.new()
-
       model_row.providers
       |> Enum.map(fn p ->
         pct = Float.round(p.requests / total * 100, 1)
@@ -760,7 +754,7 @@ defmodule TokengateWeb.StatsLive do
           cost_usd: p.cost_usd,
           billing_mode: p.billing_mode,
           width_pct: pct,
-          color: Map.get(color_map, p.provider_name, "bg-primary")
+          color: provider_legend_color(p.provider_name, legend)
         }
       end)
     end
