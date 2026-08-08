@@ -95,31 +95,23 @@
 
             <%!-- Patrones de uso: hora del día, picos y concurrencia --%>
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="usage-patterns">
+              <%!-- Card 1: Por modelo y proveedor --%>
               <div
                 class="card bg-base-100 border border-base-300 shadow-sm"
-                id="hour-distribution"
+                id="model-provider-breakdown"
               >
                 <div class="card-body p-4 gap-2">
-                  <div class="flex items-center justify-between">
-                    <h2 class="card-title text-base">
-                      <.icon name="hero-clock" class="w-5 h-5 text-base-content/60" />
-                      Uso por hora del día
-                    </h2>
-                    <span class="text-[10px] text-base-content/40 hidden sm:inline">
-                      gris = included · morada = pay_per_token · escala √
-                    </span>
-                  </div>
+                  <h2 class="card-title text-base">
+                    <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" />
+                    Por modelo y proveedor
+                  </h2>
 
-                  <%!-- Model × provider stacked horizontal bars --%>
                   <%= if model_provider_max(@model_provider_stacked) > 0 do %>
                     <% mp_legend = provider_legend(@model_provider_stacked) %>
 
                     <div class="flex gap-4 mt-2 pt-2 border-t border-base-200">
                       <%!-- Chart --%>
                       <div class="flex-1 space-y-2">
-                        <div class="text-[10px] font-semibold text-base-content/50 uppercase tracking-wide mb-1">
-                          Por modelo y proveedor
-                        </div>
                         <div
                           :for={row <- @model_provider_stacked}
                           class="group"
@@ -176,7 +168,29 @@
                         </div>
                       </div>
                     </div>
+                  <% else %>
+                    <p class="text-sm text-base-content/40 py-6 text-center">
+                      Sin datos en este período.
+                    </p>
                   <% end %>
+                </div>
+              </div>
+
+              <%!-- Card 2: Uso por hora del día --%>
+              <div
+                class="card bg-base-100 border border-base-300 shadow-sm"
+                id="hour-distribution"
+              >
+                <div class="card-body p-4 gap-2">
+                  <div class="flex items-center justify-between">
+                    <h2 class="card-title text-base">
+                      <.icon name="hero-clock" class="w-5 h-5 text-base-content/60" />
+                      Uso por hora del día
+                    </h2>
+                    <span class="text-[10px] text-base-content/40 hidden sm:inline">
+                      gris = included · morada = pay_per_token · escala √
+                    </span>
+                  </div>
 
                   <%!-- Hour distribution chart --%>
                   <%= if hour_usage_stacked_max(@hour_usage_stacked) > 0 do %>
