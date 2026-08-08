@@ -375,46 +375,47 @@
                 </div>
               </div>
 
-              <div class="grid grid-cols-1 gap-4">
+              <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <%= if @current_user && @current_user.global_role == "admin" do %>
-                  <div
-                    class="card bg-base-100 border border-base-300 shadow-sm"
-                    id="peak-concurrency"
-                  >
-                    <div class="card-body">
-                      <h2 class="card-title text-base">
-                        <.icon name="hero-arrow-trending-up" class="w-5 h-5 text-base-content/60" />
-                        Pico de concurrencia
-                      </h2>
+                  <div id="peak-concurrency" class="card bg-base-100 border border-base-300 shadow-sm">
+                    <div class="card-body p-5">
+                      <div class="flex items-center justify-between">
+                        <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                          Pico de concurrencia
+                        </span>
+                        <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10">
+                          <.icon name="hero-arrow-trending-up" class="w-5 h-5 text-primary" />
+                        </span>
+                      </div>
                       <%= if @peak_concurrency && @peak_concurrency.max_concurrent > 0 do %>
-                        <div class="flex items-baseline gap-3 mt-2">
-                          <span class="text-3xl font-bold text-base-content">
-                            {format_number(@peak_concurrency.max_concurrent)}
-                          </span>
-                          <span class="text-sm text-base-content/60">
-                            requests simultáneos
-                          </span>
-                        </div>
-                        <p class="text-xs text-base-content/50 mt-1">
-                          Estimado desde los logs · {format_bucket(
+                        <p class="mt-2 text-2xl font-bold text-base-content">
+                          {format_number(@peak_concurrency.max_concurrent)}
+                        </p>
+                        <p class="text-xs text-base-content/40 mt-1">
+                          requests simultáneos · {format_bucket(
                             @peak_concurrency.at,
                             @timezone
                           )}
                         </p>
                       <% else %>
-                        <p class="text-sm text-base-content/40 py-4 text-center">
-                          Sin datos en este período.
+                        <p class="text-sm text-base-content/40 mt-2">
+                          Sin datos
                         </p>
                       <% end %>
                     </div>
                   </div>
                 <% end %>
 
-                <div class="card bg-base-100 border border-base-300 shadow-sm" id="busiest-hours">
-                  <div class="card-body">
-                    <h2 class="card-title text-base">
-                      <.icon name="hero-fire" class="w-5 h-5 text-base-content/60" /> Horas pico
-                    </h2>
+                <div id="busiest-hours" class="card bg-base-100 border border-base-300 shadow-sm">
+                  <div class="card-body p-5">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                        Horas pico
+                      </span>
+                      <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-warning/10">
+                        <.icon name="hero-fire" class="w-5 h-5 text-warning" />
+                      </span>
+                    </div>
                     <%= if has_data?(@busiest_hours) do %>
                       <ul class="mt-2 space-y-1">
                         <li
@@ -429,21 +430,23 @@
                         </li>
                       </ul>
                     <% else %>
-                      <p class="text-sm text-base-content/40 py-4 text-center">
-                        Sin datos en este período.
+                      <p class="text-sm text-base-content/40 mt-2">
+                        Sin datos
                       </p>
                     <% end %>
                   </div>
                 </div>
 
-                <div
-                  class="card bg-base-100 border border-base-300 shadow-sm"
-                  id="busiest-minutes"
-                >
-                  <div class="card-body">
-                    <h2 class="card-title text-base">
-                      <.icon name="hero-bolt" class="w-5 h-5 text-base-content/60" /> Minutos pico
-                    </h2>
+                <div id="busiest-minutes" class="card bg-base-100 border border-base-300 shadow-sm">
+                  <div class="card-body p-5">
+                    <div class="flex items-center justify-between">
+                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                        Minutos pico
+                      </span>
+                      <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-accent/10">
+                        <.icon name="hero-bolt" class="w-5 h-5 text-accent" />
+                      </span>
+                    </div>
                     <%= if has_data?(@busiest_minutes) do %>
                       <ul class="mt-2 space-y-1">
                         <li
@@ -458,8 +461,8 @@
                         </li>
                       </ul>
                     <% else %>
-                      <p class="text-sm text-base-content/40 py-4 text-center">
-                        Sin datos en este período.
+                      <p class="text-sm text-base-content/40 mt-2">
+                        Sin datos
                       </p>
                     <% end %>
                   </div>
