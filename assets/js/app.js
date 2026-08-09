@@ -124,6 +124,14 @@ topbar.config({barColors: {0: "#29d"}, shadowColor: "rgba(0, 0, 0, .3)"})
 window.addEventListener("phx:page-loading-start", _info => topbar.show(300))
 window.addEventListener("phx:page-loading-stop", _info => topbar.hide())
 
+// Preserve scroll position across LiveView patches. Action buttons get focus
+// on click, and stream resets replace the focused node — Chrome then loses
+// its scroll anchor and jumps to the top. Blurring on capture avoids it.
+document.addEventListener("click", (e) => {
+  const btn = e.target.closest("button")
+  if (btn && (btn.hasAttribute("phx-click") || btn.closest("form[phx-submit]"))) btn.blur()
+}, true)
+
 // connect if there are any LiveViews on the page
 liveSocket.connect()
 
