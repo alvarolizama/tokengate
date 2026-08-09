@@ -7,7 +7,8 @@ defmodule Tokengate.Periods do
   ago) and return them as UTC `DateTime`s, so queries keep filtering on the
   `inserted_at` column as-is.
 
-  Timezone strings are IANA names validated by `DateTime.now/1` (tzdata).
+  Timezone strings are IANA names validated by `DateTime.now/1` (via the
+  `tz` time zone database configured in config.exs).
   """
 
   @default_timezone "Etc/UTC"

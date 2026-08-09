@@ -90,7 +90,7 @@ config :phoenix, :filter_parameters, [
 ]
 
 # Configure the time zone database for DateTime.shift_zone/3
-config :elixir, :time_zone_database, Tzdata.TimeZoneDatabase
+config :elixir, :time_zone_database, Tz.TimeZoneDatabase
 
 # ── Included credential wait + sticky TTL ──────────────────────────────
 
