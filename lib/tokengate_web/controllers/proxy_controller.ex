@@ -37,7 +37,6 @@ defmodule TokengateWeb.ProxyController do
 
   import Ecto.Query, only: [from: 2]
 
-  alias Tokengate.Accounts
   alias Tokengate.Budgets.Manager, as: Budgets
   alias Tokengate.Limits.Manager, as: Limits
   alias Tokengate.Logs.WriteWorker
@@ -73,7 +72,7 @@ defmodule TokengateWeb.ProxyController do
     member = conn.assigns.current_team_member
     payload = conn.body_params
     model = payload["model"]
-    limits = Accounts.effective_limits(member)
+    limits = conn.assigns.effective_limits
     key_id = member.api_key.id
     request_start = System.monotonic_time(:millisecond)
 
@@ -162,7 +161,7 @@ defmodule TokengateWeb.ProxyController do
   defp simple_proxy(conn, payload, capability, adapter_fun, kind) do
     member = conn.assigns.current_team_member
     model = payload["model"]
-    limits = Accounts.effective_limits(member)
+    limits = conn.assigns.effective_limits
     key_id = member.api_key.id
     request_start = System.monotonic_time(:millisecond)
 
@@ -651,8 +650,8 @@ defmodule TokengateWeb.ProxyController do
     end)
   end
 
-  defp check_budget(member, _limits, route, _payload) do
-    member_monthly_budget = Accounts.effective_limits(member).monthly_budget_usd
+  defp check_budget(member, limits, route, _payload) do
+    member_monthly_budget = limits.monthly_budget_usd
     member_monthly_spend = Budgets.spend(member.id).monthly_usd
 
     # Since the 2026-07-30 refactor we no longer estimate the upstream cost
@@ -896,7 +895,11 @@ defmodule TokengateWeb.ProxyController do
 
             stream_loop(conn, pid, ref, first_chunk, route, member, payload, %{
               usage: nil,
-              completion: "",
+              # Completion deltas accumulate as iodata (a reversed list of
+              # binaries) — O(1) per chunk instead of O(n) binary append.
+              # Materialized once in finish_stream when the provider omits
+              # usage (token-estimator fallback).
+              completion: [],
               prompt_estimate: TokenEstimator.estimate_messages(payload["messages"] || []),
               ttft_ms: ttft_ms,
               latency_start: System.monotonic_time(:millisecond)
@@ -1096,12 +1099,24 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
+  # Fast path: the only chunk that needs decoding is the provider's final
+  # usage frame. Everything else (99%+ of chunks in a long stream) is
+  # forwarded untouched after a cheap binary scan — decoding every SSE
+  # payload just to detect usage used to burn CPU per emitted token.
   defp maybe_capture_usage(chunk, route, acc) do
+    if :binary.match(chunk, "\"usage\"") == :nomatch do
+      {chunk, acc}
+    else
+      decode_usage_chunk(chunk, route, acc)
+    end
+  end
+
+  defp decode_usage_chunk(chunk, route, acc) do
     case Jason.decode(chunk) do
       {:ok, decoded} ->
         case UsageNormalizer.from_openai_stream_chunk(decoded) do
           nil ->
-            {chunk, %{acc | completion: acc.completion <> extract_delta_text(decoded)}}
+            {chunk, %{acc | completion: [extract_delta_text(decoded) | acc.completion]}}
 
           usage ->
             cost = stream_cost(route, usage, decoded)
@@ -1138,9 +1153,11 @@ defmodule TokengateWeb.ProxyController do
         nil ->
           # Provider sent no usage — fall back to the chars/4 heuristic over
           # the accumulated completion so cost accounting still works.
+          completion_text = acc.completion |> Enum.reverse() |> IO.iodata_to_binary()
+
           usage = %{
             prompt_tokens: acc.prompt_estimate,
-            completion_tokens: TokenEstimator.estimate_completion(acc.completion),
+            completion_tokens: TokenEstimator.estimate_completion(completion_text),
             cache_read_tokens: 0,
             cache_creation_tokens: 0
           }

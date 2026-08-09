@@ -8,6 +8,7 @@ defmodule Tokengate.Accounts do
 
   alias Tokengate.Accounts.{
     ApiKey,
+    ApiKeyCache,
     Service,
     ServiceApiKey,
     ServiceSupervisor,
@@ -36,6 +37,7 @@ defmodule Tokengate.Accounts do
     team
     |> Team.changeset(attrs)
     |> Repo.update()
+    |> invalidate_team_auth_cache(team.id)
   end
 
   def delete_team(%Team{} = team) do
@@ -408,6 +410,7 @@ defmodule Tokengate.Accounts do
     team_member
     |> TeamMember.changeset(attrs)
     |> Repo.update()
+    |> invalidate_member_auth_cache(team_member.id)
   end
 
   def delete_team_member(%TeamMember{} = team_member) do
@@ -483,39 +486,53 @@ defmodule Tokengate.Accounts do
     {new_token, new_hash, new_prefix} = generate_api_key_material()
 
     team_member = Repo.preload(team_member, [:api_key])
+    old_hash = team_member.api_key && team_member.api_key.key_hash
 
-    if team_member.api_key do
-      team_member.api_key
-      |> ApiKey.changeset(%{
-        "key_hash" => new_hash,
-        "key_prefix" => new_prefix,
-        "status" => "active"
-      })
-      |> Repo.update()
-      |> case do
-        {:ok, api_key} -> {:ok, api_key, new_token}
-        {:error, changeset} -> {:error, changeset}
+    result =
+      if team_member.api_key do
+        team_member.api_key
+        |> ApiKey.changeset(%{
+          "key_hash" => new_hash,
+          "key_prefix" => new_prefix,
+          "status" => "active"
+        })
+        |> Repo.update()
+        |> case do
+          {:ok, api_key} -> {:ok, api_key, new_token}
+          {:error, changeset} -> {:error, changeset}
+        end
+      else
+        %ApiKey{}
+        |> ApiKey.changeset(%{
+          "team_member_id" => team_member_id,
+          "key_hash" => new_hash,
+          "key_prefix" => new_prefix,
+          "status" => "active"
+        })
+        |> Repo.insert()
+        |> case do
+          {:ok, api_key} -> {:ok, api_key, new_token}
+          {:error, changeset} -> {:error, changeset}
+        end
       end
-    else
-      %ApiKey{}
-      |> ApiKey.changeset(%{
-        "team_member_id" => team_member_id,
-        "key_hash" => new_hash,
-        "key_prefix" => new_prefix,
-        "status" => "active"
-      })
-      |> Repo.insert()
-      |> case do
-        {:ok, api_key} -> {:ok, api_key, new_token}
-        {:error, changeset} -> {:error, changeset}
-      end
+
+    case result do
+      {:ok, _api_key, _token} ->
+        ApiKeyCache.invalidate_hash(old_hash)
+        ApiKeyCache.invalidate_member(team_member_id)
+
+      _ ->
+        :ok
     end
+
+    result
   end
 
   def revoke_api_key(%ApiKey{} = api_key) do
     api_key
     |> ApiKey.changeset(%{status: "revoked"})
     |> Repo.update()
+    |> tap_invalidate_api_key(api_key)
   end
 
   def create_api_key(attrs) do
@@ -580,6 +597,7 @@ defmodule Tokengate.Accounts do
     service
     |> Service.changeset(attrs)
     |> Repo.update()
+    |> invalidate_member_auth_cache(service.id)
   end
 
   def delete_service(%Service{} = service) do
@@ -646,33 +664,46 @@ defmodule Tokengate.Accounts do
     {new_token, new_hash, new_prefix} = generate_api_key_material()
 
     service = Repo.preload(service, [:api_key])
+    old_hash = service.api_key && service.api_key.key_hash
 
-    if service.api_key do
-      service.api_key
-      |> ServiceApiKey.changeset(%{
-        "key_hash" => new_hash,
-        "key_prefix" => new_prefix,
-        "status" => "active"
-      })
-      |> Repo.update()
-      |> case do
-        {:ok, api_key} -> {:ok, api_key, new_token}
-        {:error, changeset} -> {:error, changeset}
+    result =
+      if service.api_key do
+        service.api_key
+        |> ServiceApiKey.changeset(%{
+          "key_hash" => new_hash,
+          "key_prefix" => new_prefix,
+          "status" => "active"
+        })
+        |> Repo.update()
+        |> case do
+          {:ok, api_key} -> {:ok, api_key, new_token}
+          {:error, changeset} -> {:error, changeset}
+        end
+      else
+        %ServiceApiKey{}
+        |> ServiceApiKey.changeset(%{
+          "service_id" => service_id,
+          "key_hash" => new_hash,
+          "key_prefix" => new_prefix,
+          "status" => "active"
+        })
+        |> Repo.insert()
+        |> case do
+          {:ok, api_key} -> {:ok, api_key, new_token}
+          {:error, changeset} -> {:error, changeset}
+        end
       end
-    else
-      %ServiceApiKey{}
-      |> ServiceApiKey.changeset(%{
-        "service_id" => service_id,
-        "key_hash" => new_hash,
-        "key_prefix" => new_prefix,
-        "status" => "active"
-      })
-      |> Repo.insert()
-      |> case do
-        {:ok, api_key} -> {:ok, api_key, new_token}
-        {:error, changeset} -> {:error, changeset}
-      end
+
+    case result do
+      {:ok, _api_key, _token} ->
+        ApiKeyCache.invalidate_hash(old_hash)
+        ApiKeyCache.invalidate_member(service_id)
+
+      _ ->
+        :ok
     end
+
+    result
   end
 
   @doc """
@@ -683,6 +714,7 @@ defmodule Tokengate.Accounts do
     api_key
     |> ServiceApiKey.changeset(%{status: "revoked"})
     |> Repo.update()
+    |> tap_invalidate_service_api_key(api_key)
   end
 
   # ---------------------------------------------------------------------------
@@ -825,8 +857,12 @@ defmodule Tokengate.Accounts do
     end
   end
 
-  def effective_limits(%TeamMember{} = team_member) do
+  def effective_limits(%TeamMember{team: %Ecto.Association.NotLoaded{}} = team_member) do
     team_member = Repo.preload(team_member, [:team])
+    effective_limits(team_member)
+  end
+
+  def effective_limits(%TeamMember{} = team_member) do
     team = team_member.team
 
     %{
@@ -878,5 +914,87 @@ defmodule Tokengate.Accounts do
   def hash_api_key(token) when is_binary(token) do
     :crypto.hash(:sha256, token)
     |> Base.encode16(case: :lower)
+  end
+
+  # ---------------------------------------------------------------------------
+  # API key auth cache — proxy hot path
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Resolves the auth entry (`%{member, limits}`) for a presented API key
+  token, served from `Tokengate.Accounts.ApiKeyCache` on hits.
+
+  Used by `TokengateWeb.Plugs.ApiAuth` — returns the entry map or `:error`
+  for unknown/inactive keys. Errors are never cached so brute-force probes
+  always pay a DB lookup and can't fill the cache with junk.
+  """
+  def resolve_auth_by_api_key(token) when is_binary(token) do
+    key_hash = hash_api_key(token)
+
+    ApiKeyCache.fetch(key_hash, fn ->
+      build_auth_entry(token)
+    end)
+  end
+
+  defp build_auth_entry(token) do
+    case get_team_member_by_api_key(token) do
+      {:ok, %TeamMember{} = member} ->
+        %{member: member, limits: effective_limits(member)}
+
+      _ ->
+        case get_service_by_api_key(token) do
+          {:ok, service} ->
+            member =
+              TokengateWeb.Plugs.ApiAuth.service_to_virtual_member(service)
+
+            %{member: member, limits: effective_limits(service)}
+
+          _ ->
+            :error
+        end
+    end
+  end
+
+  # Invalidation helpers — piped after Repo writes that change auth-relevant
+  # state. All are best-effort: the ETS table may not exist yet in early boot.
+  defp invalidate_member_auth_cache({:ok, _} = result, member_id) do
+    safe_invalidate(fn -> ApiKeyCache.invalidate_member(member_id) end)
+    result
+  end
+
+  defp invalidate_member_auth_cache(result, _member_id), do: result
+
+  defp invalidate_team_auth_cache({:ok, _} = result, team_id) do
+    safe_invalidate(fn -> ApiKeyCache.invalidate_team(team_id) end)
+    result
+  end
+
+  defp invalidate_team_auth_cache(result, _team_id), do: result
+
+  defp tap_invalidate_api_key({:ok, _} = result, %ApiKey{} = key) do
+    safe_invalidate(fn ->
+      ApiKeyCache.invalidate_hash(key.key_hash)
+      ApiKeyCache.invalidate_member(key.team_member_id)
+    end)
+
+    result
+  end
+
+  defp tap_invalidate_api_key(result, _key), do: result
+
+  defp tap_invalidate_service_api_key({:ok, _} = result, %ServiceApiKey{} = key) do
+    safe_invalidate(fn ->
+      ApiKeyCache.invalidate_hash(key.key_hash)
+      ApiKeyCache.invalidate_member(key.service_id)
+    end)
+
+    result
+  end
+
+  defp tap_invalidate_service_api_key(result, _key), do: result
+
+  defp safe_invalidate(fun) do
+    if :ets.whereis(ApiKeyCache.table()) != :undefined, do: fun.()
+    :ok
   end
 end

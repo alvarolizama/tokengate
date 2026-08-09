@@ -13,7 +13,21 @@ defmodule Tokengate.Application do
       {DNSCluster, query: Application.get_env(:tokengate, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Tokengate.PubSub},
       TokengateWeb.Presence,
-      {Finch, name: Tokengate.Finch},
+      # Finch: pools sized for upstream concurrency (defaults are 1 pool ×
+      # 50 conns per origin — tight when several providers share load).
+      # HTTP/2 preferred with HTTP/1.1 fallback: one socket multiplexes many
+      # SSE streams per provider instead of one connection per in-flight
+      # request. Idle conns live 60s to survive provider switches.
+      {Finch,
+       name: Tokengate.Finch,
+       pools: %{
+         :default => [
+           size: 32,
+           count: 2,
+           protocols: [:http2, :http1],
+           conn_max_idle_time: 60_000
+         ]
+       }},
       {Oban, Application.fetch_env!(:tokengate, Oban)},
       Tokengate.Routing.Supervisor,
       Tokengate.Routing.Cache,
@@ -21,6 +35,8 @@ defmodule Tokengate.Application do
       Tokengate.Budgets.Supervisor,
       Tokengate.Metrics.Supervisor,
       Tokengate.Logs.Inflight,
+      Tokengate.Accounts.ApiKeyCache,
+      TokengateWeb.Plugs.LoginRateLimit.TableKeeper,
       TokengateWeb.Endpoint
     ]
 

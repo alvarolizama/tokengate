@@ -26,10 +26,11 @@ defmodule TokengateWeb.Plugs.ApiAuth do
 
   def call(conn, _opts) do
     with [token] <- bearer_token(conn),
-         {:ok, member} <- fetch_member(token),
-         :ok <- active_membership(member) do
+         {:ok, entry} <- fetch_auth_entry(token),
+         :ok <- active_membership(entry.member) do
       conn
-      |> assign(:current_team_member, member)
+      |> assign(:current_team_member, entry.member)
+      |> assign(:effective_limits, entry.limits)
       |> assign(:api_key_hash, Accounts.hash_api_key(token))
       |> assign(:agent_type, agent_type(conn))
       |> assign(:client_agent, client_agent(conn))
@@ -47,20 +48,13 @@ defmodule TokengateWeb.Plugs.ApiAuth do
     end
   end
 
-  defp fetch_member(token) when is_binary(token) do
-    case Accounts.get_team_member_by_api_key(token) do
-      {:ok, %TeamMember{} = member} ->
-        {:ok, member}
-
-      _ ->
-        # Try service API key lookup
-        case Accounts.get_service_by_api_key(token) do
-          {:ok, service} ->
-            {:ok, service_to_virtual_member(service)}
-
-          _ ->
-            :invalid_key
-        end
+  # Resolved through the ETS auth cache (`Accounts.resolve_auth_by_api_key/1`):
+  # hits skip Postgres entirely; misses run the two lookup queries once and
+  # populate the cache. Invalid keys are never cached.
+  defp fetch_auth_entry(token) do
+    case Accounts.resolve_auth_by_api_key(token) do
+      %{member: %TeamMember{}} = entry -> {:ok, entry}
+      :error -> :invalid_key
     end
   end
 
