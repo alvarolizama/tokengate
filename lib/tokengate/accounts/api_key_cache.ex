@@ -61,9 +61,30 @@ defmodule Tokengate.Accounts.ApiKeyCache do
   `fun` on a miss. `fun` must return the entry map or `:error` (invalid key —
   NOT cached, so brute-force probes always cost a DB lookup and the table
   can't grow unboundedly with junk hashes).
+
+  Degrades gracefully: if the ETS table doesn't exist (hot code reload into
+  a running node whose supervision tree predates this module, or the cache
+  process being restarted), the lookup runs against the DB directly without
+  caching. The cache is an optimization, never a hard dependency — auth must
+  keep working even when it's gone.
   """
   @spec fetch(binary(), (-> map() | :error)) :: map() | :error
   def fetch(key_hash, fun) when is_binary(key_hash) and is_function(fun, 0) do
+    if :ets.whereis(@table) == :undefined do
+      fun.()
+    else
+      try do
+        cached_fetch(key_hash, fun)
+      rescue
+        # The table raced away between the whereis check and the lookup
+        # (owner process died / supervisor restart). Degrade to a direct
+        # uncached lookup — never break auth over a cache.
+        ArgumentError -> fun.()
+      end
+    end
+  end
+
+  defp cached_fetch(key_hash, fun) do
     case :ets.lookup(@table, key_hash) do
       [{^key_hash, entry, expires_at}] ->
         if System.monotonic_time(:millisecond) < expires_at do

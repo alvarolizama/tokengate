@@ -110,4 +110,22 @@ defmodule Tokengate.Accounts.ApiKeyCacheTest do
     assert %{limits: %{rpm_limit: 999}} = Accounts.resolve_auth_by_api_key(token)
     assert member.team_id == team.id
   end
+
+  test "degrades to a direct DB lookup when the ETS table is gone" do
+    %{token: token} = member_with_key()
+
+    # Simulate a node whose supervision tree predates the cache (hot code
+    # reload): kill the cache process and keep it dead so the table it owns
+    # is destroyed. Auth resolution must keep working — uncached — instead
+    # of crashing with ArgumentError.
+    :ok = Supervisor.terminate_child(Tokengate.Supervisor, ApiKeyCache)
+
+    try do
+      assert :ets.whereis(ApiKeyCache.table()) == :undefined
+      assert %{member: _} = Accounts.resolve_auth_by_api_key(token)
+      assert :error = Accounts.resolve_auth_by_api_key("tg-bogus-token")
+    after
+      {:ok, _pid} = Supervisor.restart_child(Tokengate.Supervisor, ApiKeyCache)
+    end
+  end
 end
