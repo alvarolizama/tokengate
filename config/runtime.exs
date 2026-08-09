@@ -136,10 +136,11 @@ if config_env() == :prod do
              # See the documentation on https://bandit.hexdocs.pm/Bandit.html#t:options/0
              # for details about using IPv6 vs IPv4 and loopback vs public addresses.
              ip: {0, 0, 0, 0, 0, 0, 0, 0},
-             # Gzip/deflate for clients that send accept-encoding (all the
-             # major LLM SDKs do) — big JSON completions and embeddings
-             # responses compress ~5-10x.
-             compress: true
+             # Gzip/deflate/zstd for clients that send accept-encoding (all
+             # the major LLM SDKs do) — big JSON completions and embeddings
+             # responses compress ~5-10x. compress is Bandit's default; we
+             # pin it explicitly so a config sweep never turns it off.
+             http_options: [compress: true]
            ],
            secret_key_base: secret_key_base
          ] ++ check_origin_config
