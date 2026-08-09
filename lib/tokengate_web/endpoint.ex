@@ -61,10 +61,15 @@ defmodule TokengateWeb.Endpoint do
   plug Plug.RequestId
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
+  # Explicit body-size caps: LLM proxy payloads (long contexts, embeddings
+  # batches) legitimately reach a few MB, but nothing should approach 10MB.
+  # Requests beyond the cap are rejected with 413 before full buffering.
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],
-    json_decoder: Phoenix.json_library()
+    json_decoder: Phoenix.json_library(),
+    length: 10_000_000,
+    read_length: 1_000_000
 
   plug Plug.MethodOverride
   plug Plug.Head

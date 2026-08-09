@@ -96,7 +96,10 @@
             <%!-- KPIs secundarios: concurrencia, horas y minutos pico --%>
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <%= if @current_user && @current_user.global_role == "admin" do %>
-                <div id="peak-concurrency" class="card bg-base-100 border border-base-300 shadow-sm">
+                <div
+                  id="peak-concurrency"
+                  class="card bg-base-100 border border-base-300 shadow-sm"
+                >
                   <div class="card-body p-5">
                     <div class="flex items-center justify-between">
                       <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
@@ -886,11 +889,15 @@
                               <%!-- Tooltip --%>
                               <div class="hidden group-hover:block absolute -top-1 -translate-y-full left-1/2 -translate-x-1/2 z-20 pointer-events-none">
                                 <div class="bg-base-300 text-base-content text-[10px] rounded-md px-2 py-1 shadow-lg whitespace-nowrap">
-                                  <div class="font-semibold">{Calendar.strftime(day, "%d %b")}</div>
+                                  <div class="font-semibold">
+                                    {Calendar.strftime(day, "%d %b")}
+                                  </div>
                                   <div :for={label <- labels} class="flex justify-between gap-2">
                                     <span class="truncate max-w-[100px]">{label}</span>
                                     <span class="tabular-nums">
-                                      {format_number(Map.get(pivoted.series[label] || %{}, day, 0))}
+                                      {format_number(
+                                        Map.get(pivoted.series[label] || %{}, day, 0)
+                                      )}
                                     </span>
                                   </div>
                                 </div>
@@ -900,7 +907,10 @@
                               <div class="w-full flex flex-col-reverse rounded-t overflow-hidden">
                                 <div
                                   :for={label <- labels}
-                                  class={["w-full", sparkline_color(Enum.find_index(labels, &(&1 == label)) || 0)]}
+                                  class={[
+                                    "w-full",
+                                    sparkline_color(Enum.find_index(labels, &(&1 == label)) || 0)
+                                  ]}
                                   style={"height: #{sparkline_bar_height(Map.get(pivoted.series[label] || %{}, day, 0), spark_max)}%"}
                                   title={"#{label}: #{format_number(Map.get(pivoted.series[label] || %{}, day, 0))}"}
                                 />
@@ -925,11 +935,16 @@
                             Proveedores
                           </div>
                           <div class="space-y-1.5">
-                            <div :for={{label, idx} <- Enum.with_index(labels)} class="flex items-center gap-1.5">
+                            <div
+                              :for={{label, idx} <- Enum.with_index(labels)}
+                              class="flex items-center gap-1.5"
+                            >
                               <span class={["w-2 h-2 rounded-sm shrink-0", sparkline_color(idx)]} />
                               <span class="text-[10px] truncate flex-1">{label}</span>
                               <span class="text-[9px] text-base-content/50 shrink-0">
-                                {format_number(sparkline_label_total(pivoted.series[label] || %{}))}
+                                {format_number(
+                                  sparkline_label_total(pivoted.series[label] || %{})
+                                )}
                               </span>
                             </div>
                           </div>
@@ -1649,11 +1664,15 @@
                               <%!-- Tooltip --%>
                               <div class="hidden group-hover:block absolute -top-1 -translate-y-full left-1/2 -translate-x-1/2 z-20 pointer-events-none">
                                 <div class="bg-base-300 text-base-content text-[10px] rounded-md px-2 py-1 shadow-lg whitespace-nowrap">
-                                  <div class="font-semibold">{Calendar.strftime(day, "%d %b")}</div>
+                                  <div class="font-semibold">
+                                    {Calendar.strftime(day, "%d %b")}
+                                  </div>
                                   <div :for={label <- labels} class="flex justify-between gap-2">
                                     <span class="truncate max-w-[100px]">{label}</span>
                                     <span class="tabular-nums">
-                                      {format_number(Map.get(pivoted.series[label] || %{}, day, 0))}
+                                      {format_number(
+                                        Map.get(pivoted.series[label] || %{}, day, 0)
+                                      )}
                                     </span>
                                   </div>
                                 </div>
@@ -1663,7 +1682,10 @@
                               <div class="w-full flex flex-col-reverse rounded-t overflow-hidden">
                                 <div
                                   :for={label <- labels}
-                                  class={["w-full", sparkline_color(Enum.find_index(labels, &(&1 == label)) || 0)]}
+                                  class={[
+                                    "w-full",
+                                    sparkline_color(Enum.find_index(labels, &(&1 == label)) || 0)
+                                  ]}
                                   style={"height: #{sparkline_bar_height(Map.get(pivoted.series[label] || %{}, day, 0), spark_max)}%"}
                                   title={"#{label}: #{format_number(Map.get(pivoted.series[label] || %{}, day, 0))}"}
                                 />
@@ -1688,11 +1710,16 @@
                             Modelos
                           </div>
                           <div class="space-y-1.5">
-                            <div :for={{label, idx} <- Enum.with_index(labels)} class="flex items-center gap-1.5">
+                            <div
+                              :for={{label, idx} <- Enum.with_index(labels)}
+                              class="flex items-center gap-1.5"
+                            >
                               <span class={["w-2 h-2 rounded-sm shrink-0", sparkline_color(idx)]} />
                               <span class="text-[10px] truncate flex-1">{label}</span>
                               <span class="text-[9px] text-base-content/50 shrink-0">
-                                {format_number(sparkline_label_total(pivoted.series[label] || %{}))}
+                                {format_number(
+                                  sparkline_label_total(pivoted.series[label] || %{})
+                                )}
                               </span>
                             </div>
                           </div>
@@ -2319,11 +2346,15 @@
                               <%!-- Tooltip --%>
                               <div class="hidden group-hover:block absolute -top-1 -translate-y-full left-1/2 -translate-x-1/2 z-20 pointer-events-none">
                                 <div class="bg-base-300 text-base-content text-[10px] rounded-md px-2 py-1 shadow-lg whitespace-nowrap">
-                                  <div class="font-semibold">{Calendar.strftime(day, "%d %b")}</div>
+                                  <div class="font-semibold">
+                                    {Calendar.strftime(day, "%d %b")}
+                                  </div>
                                   <div :for={label <- labels} class="flex justify-between gap-2">
                                     <span class="truncate max-w-[100px]">{label}</span>
                                     <span class="tabular-nums">
-                                      {format_number(Map.get(pivoted.series[label] || %{}, day, 0))}
+                                      {format_number(
+                                        Map.get(pivoted.series[label] || %{}, day, 0)
+                                      )}
                                     </span>
                                   </div>
                                 </div>
@@ -2333,7 +2364,10 @@
                               <div class="w-full flex flex-col-reverse rounded-t overflow-hidden">
                                 <div
                                   :for={label <- labels}
-                                  class={["w-full", sparkline_color(Enum.find_index(labels, &(&1 == label)) || 0)]}
+                                  class={[
+                                    "w-full",
+                                    sparkline_color(Enum.find_index(labels, &(&1 == label)) || 0)
+                                  ]}
                                   style={"height: #{sparkline_bar_height(Map.get(pivoted.series[label] || %{}, day, 0), spark_max)}%"}
                                   title={"#{label}: #{format_number(Map.get(pivoted.series[label] || %{}, day, 0))}"}
                                 />
@@ -2358,11 +2392,16 @@
                             Modelos
                           </div>
                           <div class="space-y-1.5">
-                            <div :for={{label, idx} <- Enum.with_index(labels)} class="flex items-center gap-1.5">
+                            <div
+                              :for={{label, idx} <- Enum.with_index(labels)}
+                              class="flex items-center gap-1.5"
+                            >
                               <span class={["w-2 h-2 rounded-sm shrink-0", sparkline_color(idx)]} />
                               <span class="text-[10px] truncate flex-1">{label}</span>
                               <span class="text-[9px] text-base-content/50 shrink-0">
-                                {format_number(sparkline_label_total(pivoted.series[label] || %{}))}
+                                {format_number(
+                                  sparkline_label_total(pivoted.series[label] || %{})
+                                )}
                               </span>
                             </div>
                           </div>

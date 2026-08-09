@@ -245,4 +245,58 @@ defmodule TokengateWeb.SessionControllerTest do
       assert get_session(conn, :user_id) == user.id
     end
   end
+
+  describe "POST /login rate limiting" do
+    setup do
+      # Tight window/limits for the test; restored on_exit.
+      Application.put_env(:tokengate, :login_rate_limit_max_attempts, 3)
+
+      on_exit(fn ->
+        Application.delete_env(:tokengate, :login_rate_limit_max_attempts)
+      end)
+
+      :ok
+    end
+
+    test "blocks after N attempts within the window", %{conn: conn} do
+      # Unique source IP per test run to avoid cross-test counter bleed.
+      ip = {10, 0, 0, rem(System.unique_integer([:positive]), 250) + 1}
+
+      for _ <- 1..3 do
+        conn
+        |> Map.put(:remote_ip, ip)
+        |> post(~p"/login", %{email: "nadie@example.com", password: "whatever-12345"})
+      end
+
+      conn =
+        conn
+        |> recycle()
+        |> Map.put(:remote_ip, ip)
+        |> post(~p"/login", %{email: "nadie@example.com", password: "whatever-12345"})
+
+      assert redirected_to(conn) == "/login"
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "Demasiados intentos"
+    end
+
+    test "successful login clears the counter", %{conn: conn} do
+      %{user: user, password: password} = user_fixture()
+      ip = {10, 1, 0, rem(System.unique_integer([:positive]), 250) + 1}
+
+      # Two failures (limit is 3) then a success — must not be blocked.
+      for _ <- 1..2 do
+        conn
+        |> Map.put(:remote_ip, ip)
+        |> post(~p"/login", %{email: user.email, password: "wrong-password-1"})
+      end
+
+      conn =
+        conn
+        |> recycle()
+        |> Map.put(:remote_ip, ip)
+        |> post(~p"/login", %{email: user.email, password: password})
+
+      assert redirected_to(conn) == "/dashboard"
+      assert get_session(conn, :user_id) == user.id
+    end
+  end
 end

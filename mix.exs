@@ -70,6 +70,9 @@ defmodule Tokengate.MixProject do
       {:dns_cluster, "~> 0.2.0"},
       {:bandit, "~> 1.5"},
       {:tzdata, "~> 1.1"},
+      # hackney 1.x (transitiva de tzdata) tiene 4 advisories abiertos
+      # (SSL sin timeout, SSRF bypass, CRLF injection) — se fija a 4.x.
+      {:hackney, "~> 4.0", override: true},
       {:mix_audit, "~> 2.1", only: [:dev, :test], runtime: false}
     ]
   end

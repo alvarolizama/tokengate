@@ -47,6 +47,9 @@ defmodule TokengateWeb.SessionController do
   def create(conn, %{"email" => email, "password" => password}) do
     case Accounts.authenticate_user(email, password) do
       {:ok, user} ->
+        # Reset the brute-force counter for this IP on success.
+        TokengateWeb.Plugs.LoginRateLimit.clear(conn)
+
         conn
         |> configure_session(renew: true)
         |> put_session(:user_id, user.id)

@@ -119,4 +119,44 @@ defmodule TokengateWeb.StatsExportControllerTest do
 
     assert response(conn, 200) =~ "modelo,requests"
   end
+
+  test "logs export neutralizes CSV formula injection in client_agent", %{conn: conn} do
+    u = unique()
+
+    {:ok, team} = Accounts.create_team(%{name: "Team #{u}"})
+    %{user: user, password: password} = register("user")
+
+    {:ok, member} =
+      Accounts.create_team_member(%{user_id: user.id, team_id: team.id, team_role: "user"})
+
+    {:ok, provider} =
+      Providers.create_provider(%{name: "P #{u}", base_url: "http://localhost:1"})
+
+    # Attacker-controlled value (arrives via the X-Title request header on
+    # real proxy traffic) that Excel would execute as a formula.
+    {:ok, _log} =
+      Logs.log_request(%{
+        team_member_id: member.id,
+        provider_id: provider.id,
+        model_alias_id: nil,
+        model_requested: "gpt-4o",
+        agent_type: "curl",
+        client_agent: "=cmd|'/c calc'!A1",
+        status_code: 200,
+        prompt_tokens: 1,
+        completion_tokens: 1,
+        provider_cost_usd: "0",
+        latency_ms: 1,
+        streaming: false
+      })
+
+    conn =
+      conn
+      |> login(user, password)
+      |> get(~p"/dashboard/stats/export?type=logs")
+
+    body = response(conn, 200)
+    # Prefixed with a single quote — renders as text, never as a formula.
+    assert body =~ "'=cmd|'/c calc'!A1"
+  end
 end

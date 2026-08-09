@@ -10,7 +10,7 @@ defmodule TokengateWeb.Router do
 
     plug :put_secure_browser_headers, %{
       "content-security-policy" =>
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' wss: ws:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' wss: ws:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
       "permissions-policy" =>
         "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()"
     }
@@ -45,7 +45,13 @@ defmodule TokengateWeb.Router do
     # a session but the plug just clears it if absent, so we keep both
     # in the plain :browser pipeline.
     get "/login", SessionController, :new
-    post "/login", SessionController, :create
+
+    scope "/" do
+      pipe_through TokengateWeb.Plugs.LoginRateLimit
+
+      post "/login", SessionController, :create
+    end
+
     delete "/logout", SessionController, :delete
 
     # Impersonation — guards live inside the controller actions (the start

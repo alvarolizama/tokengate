@@ -238,6 +238,18 @@ defmodule TokengateWeb.ProvidersLive do
 
       case Providers.update_credential(cred, cred_params) do
         {:ok, _cred} ->
+          Tokengate.Auditing.audit(
+            socket.assigns.current_user,
+            "credential.update",
+            "credential",
+            cred.id,
+            %{
+              "provider_id" => cred.provider_id,
+              "name" => cred.name,
+              "key_rotated" => Map.has_key?(cred_params, "api_key_encrypted")
+            }
+          )
+
           {:noreply,
            socket
            |> put_flash(:info, "Credencial actualizada.")
@@ -250,7 +262,15 @@ defmodule TokengateWeb.ProvidersLive do
       end
     else
       case Providers.create_credential(cred_params) do
-        {:ok, _cred} ->
+        {:ok, cred} ->
+          Tokengate.Auditing.audit(
+            socket.assigns.current_user,
+            "credential.create",
+            "credential",
+            cred.id,
+            %{"provider_id" => cred.provider_id, "name" => cred.name}
+          )
+
           {:noreply,
            socket
            |> put_flash(:info, "Credencial creada.")
@@ -275,6 +295,14 @@ defmodule TokengateWeb.ProvidersLive do
 
       case Providers.update_credential(cred, %{status: new_status}) do
         {:ok, _} ->
+          Tokengate.Auditing.audit(
+            socket.assigns.current_user,
+            "credential.toggle_status",
+            "credential",
+            cred.id,
+            %{"provider_id" => cred.provider_id, "name" => cred.name, "status" => new_status}
+          )
+
           {:noreply,
            socket
            |> put_flash(

@@ -62,6 +62,13 @@ defmodule TokengateWeb.SettingsLive do
   def handle_event("reset_logs", _params, socket) do
     Logs.truncate_request_logs()
 
+    Tokengate.Auditing.audit(
+      socket.assigns.current_user,
+      "settings.reset_logs",
+      "request_logs",
+      nil
+    )
+
     {:noreply,
      socket
      |> assign(:confirm_reset, false)
@@ -82,6 +89,13 @@ defmodule TokengateWeb.SettingsLive do
   @impl true
   def handle_event("reset_sticky_sessions", _params, socket) do
     StickyTracker.clear_all()
+
+    Tokengate.Auditing.audit(
+      socket.assigns.current_user,
+      "settings.reset_sticky_sessions",
+      "sticky_sessions",
+      nil
+    )
 
     {:noreply,
      socket
@@ -107,6 +121,14 @@ defmodule TokengateWeb.SettingsLive do
     field_atom = String.to_existing_atom(field)
     count = reset_member_extra(field_atom)
     new_count = count_members_with_extra(field_atom)
+
+    Tokengate.Auditing.audit(
+      socket.assigns.current_user,
+      "settings.reset_member_extra",
+      "team_member",
+      nil,
+      %{"field" => field, "affected" => count}
+    )
 
     count_assign =
       case field_atom do

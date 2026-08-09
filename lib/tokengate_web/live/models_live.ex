@@ -1064,8 +1064,11 @@ defmodule TokengateWeb.ModelsLive do
                             </td>
                             <td class="font-medium">
                               {provider_name(ap)}
+                              <%!-- Credential name and key suffix expose internal
+                                   topology — admins only. Non-admins see just the
+                                   provider name. --%>
                               <span
-                                :if={ap.credential && credential_named?(ap.credential)}
+                                :if={@is_admin && ap.credential && credential_named?(ap.credential)}
                                 class="badge badge-xs badge-outline font-normal ml-1"
                                 title={ap.credential.name}
                               >
@@ -1073,7 +1076,7 @@ defmodule TokengateWeb.ModelsLive do
                                 {ap.credential.name}
                               </span>
                               <span
-                                :if={ap.credential}
+                                :if={@is_admin && ap.credential}
                                 class="text-xs text-base-content/40 ml-1"
                               >
                                 {mask_key(ap.credential.api_key_encrypted)}

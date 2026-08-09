@@ -414,6 +414,14 @@ defmodule TokengateWeb.UsersLive do
 
     case Accounts.reset_user_password(user, user_params) do
       {:ok, _user} ->
+        Tokengate.Auditing.audit(
+          socket.assigns.current_user,
+          "user.reset_password",
+          "user",
+          user.id,
+          %{"email" => user.email}
+        )
+
         {:noreply,
          socket
          |> put_flash(:info, "Contraseña actualizada.")
@@ -438,6 +446,14 @@ defmodule TokengateWeb.UsersLive do
 
       case Accounts.admin_update_user(user, %{"status" => new_status}) do
         {:ok, _} ->
+          Tokengate.Auditing.audit(
+            socket.assigns.current_user,
+            "user.toggle_status",
+            "user",
+            user.id,
+            %{"email" => user.email, "status" => new_status}
+          )
+
           msg = if new_status == "active", do: "Usuario activado.", else: "Usuario suspendido."
           {:noreply, socket |> put_flash(:info, msg) |> load_users()}
 
@@ -481,6 +497,14 @@ defmodule TokengateWeb.UsersLive do
       true ->
         case Accounts.delete_user(user) do
           {:ok, _} ->
+            Tokengate.Auditing.audit(
+              socket.assigns.current_user,
+              "user.delete",
+              "user",
+              user.id,
+              %{"email" => user.email}
+            )
+
             {:noreply,
              socket
              |> put_flash(:info, "Usuario eliminado permanentemente. Toda su data fue borrada.")
@@ -525,6 +549,11 @@ defmodule TokengateWeb.UsersLive do
 
     case Accounts.admin_create_user(user_params) do
       {:ok, user} ->
+        Tokengate.Auditing.audit(socket.assigns.current_user, "user.create", "user", user.id, %{
+          "email" => user.email,
+          "global_role" => user.global_role
+        })
+
         # Create team memberships + API keys for each selected team
         results =
           Enum.map(team_ids, fn team_id ->
@@ -578,7 +607,18 @@ defmodule TokengateWeb.UsersLive do
     user_params = protect_root_user(user, user_params)
 
     case Accounts.admin_update_user(user, user_params) do
-      {:ok, _user} ->
+      {:ok, updated} ->
+        Tokengate.Auditing.audit(
+          socket.assigns.current_user,
+          "user.update",
+          "user",
+          updated.id,
+          %{
+            "email" => updated.email,
+            "changes" => Map.take(user_params, ["name", "global_role", "status"])
+          }
+        )
+
         {:noreply,
          socket
          |> put_flash(:info, "Usuario actualizado.")

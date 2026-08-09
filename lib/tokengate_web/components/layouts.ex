@@ -432,5 +432,4 @@ defmodule TokengateWeb.Layouts do
     </div>
     """
   end
-
 end
