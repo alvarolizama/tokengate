@@ -15,16 +15,17 @@ defmodule Tokengate.Application do
       TokengateWeb.Presence,
       # Finch: pools sized for upstream concurrency (defaults are 1 pool ×
       # 50 conns per origin — tight when several providers share load).
-      # HTTP/2 preferred with HTTP/1.1 fallback: one socket multiplexes many
-      # SSE streams per provider instead of one connection per in-flight
-      # request. Idle conns live 60s to survive provider switches.
+      # Pure HTTP/1.1 pools on purpose: SSE streams hold one connection for
+      # their whole duration, and listing :http2 alongside :http1 does NOT
+      # multiplex (Finch docs) — it only makes ALPN-negotiated h2 connections
+      # misbehave in an HTTP1 pool (connection leak → "excess queuing" 500s
+      # in prod). Idle conns live 60s to survive provider switches.
       {Finch,
        name: Tokengate.Finch,
        pools: %{
          :default => [
            size: 32,
            count: 2,
-           protocols: [:http2, :http1],
            conn_max_idle_time: 60_000
          ]
        }},
