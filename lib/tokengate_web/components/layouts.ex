@@ -234,6 +234,7 @@ defmodule TokengateWeb.Layouts do
                 href={~p"/dashboard/providers"}
                 label="Proveedores"
                 icon="hero-server-stack"
+                badge={@alert_count}
               />
               <.sidebar_link
                 href={~p"/dashboard/models"}
@@ -268,7 +269,6 @@ defmodule TokengateWeb.Layouts do
                 href={~p"/dashboard/logs"}
                 label="Logs"
                 icon="hero-document-text"
-                badge={@alert_count}
               />
             </div>
 

@@ -435,6 +435,21 @@ defmodule TokengateWeb.ProvidersLive do
   def breaker_label(:half_open), do: "Half-Open"
   def breaker_label(_), do: "—"
 
+  @doc """
+  Row highlight class for credentials that need attention: error status,
+  open/half-open circuit breaker (red), or manually disabled (muted).
+  """
+  def credential_row_class(%Credential{status: "error"}, _breaker),
+    do: "bg-error/10 hover:bg-error/20"
+
+  def credential_row_class(_cred, breaker) when breaker in [:open, :half_open],
+    do: "bg-error/10 hover:bg-error/20"
+
+  def credential_row_class(%Credential{status: "disabled"}, _breaker),
+    do: "bg-warning/10 hover:bg-warning/20"
+
+  def credential_row_class(_cred, _breaker), do: nil
+
   ## Render ----------------------------------------------------------------
 
   @impl true
@@ -655,7 +670,13 @@ defmodule TokengateWeb.ProvidersLive do
                       </tr>
                     </thead>
                     <tbody>
-                      <tr :for={cred <- credentials_for(provider)} id={"credential-#{cred.id}"}>
+                      <tr
+                        :for={cred <- credentials_for(provider)}
+                        id={"credential-#{cred.id}"}
+                        class={
+                          credential_row_class(cred, Map.get(@breaker_statuses, cred.id, :closed))
+                        }
+                      >
                         <td>
                           {cred.name || "—"}
                         </td>
