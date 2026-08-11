@@ -85,7 +85,7 @@
       <div class="card bg-base-100 border border-base-300 shadow-sm" id="monitor-chart">
         <div class="card-body space-y-1 p-4 sm:p-6">
           <%!-- Table header: 3 zonas - nombre | data hora | data vuelo --%>
-          <div class="hidden md:grid grid-cols-[1fr_auto_1fr_auto_1fr_auto] gap-3 px-2 pb-2 border-b border-base-200 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
+          <div class="hidden md:grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 px-2 pb-2 border-b border-base-200 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
             <%!-- Zona 1: Modelo --%>
             <span>Modelo</span>
             <span class="w-px bg-base-200"></span>
@@ -112,7 +112,7 @@
             <button
               type="button"
               class={[
-                "w-full grid grid-cols-[1fr_auto_1fr_auto_1fr_auto] gap-3 items-center px-2 py-2 rounded-lg transition-colors text-left",
+                "w-full grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 items-center px-2 py-2 rounded-lg transition-colors text-left",
                 @expanded_model == ticket.alias_id && "bg-base-200/50",
                 "hover:bg-base-200/30"
               ]}
