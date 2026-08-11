@@ -62,6 +62,11 @@ defmodule TokengateWeb.ModelsLive do
       |> load_aliases()
       |> assign_form_data()
       |> load_scope_data()
+      |> assign_credential_spends()
+
+    if connected?(socket) and is_admin do
+      Tokengate.Budgets.Manager.subscribe_credential_budgets()
+    end
 
     {:ok, socket}
   end
@@ -69,28 +74,44 @@ defmodule TokengateWeb.ModelsLive do
   ## Data loading ---------------------------------------------------------
 
   defp load_aliases(socket) do
-    # Providers are grouped by scope first — global, then team-exclusive,
-    # then member-exclusive — and ordered by priority within each group.
-    aliases =
-      from(ma in ModelAlias,
-        left_join: aps in assoc(ma, :model_providers),
-        preload: [model_providers: {aps, [credential: :provider]}],
-        order_by: [
-          asc: ma.name,
-          asc:
-            fragment(
-              "CASE WHEN ? IS NOT NULL THEN 2 WHEN ? IS NOT NULL THEN 1 ELSE 0 END",
-              aps.exclusive_to_team_member_id,
-              aps.exclusive_to_team_id
-            ),
-          asc_nulls_last: aps.priority
-        ]
-      )
-      |> Repo.all()
+    aliases = aliases_with_providers_query() |> Repo.all()
 
     socket
     |> stream(:aliases, aliases, reset: true)
     |> assign(:aliases_empty?, aliases == [])
+  end
+
+  # Providers are grouped by scope first — global, then team-exclusive,
+  # then member-exclusive — and ordered by priority within each group.
+  defp aliases_with_providers_query do
+    from(ma in ModelAlias,
+      left_join: aps in assoc(ma, :model_providers),
+      preload: [model_providers: {aps, [credential: :provider]}],
+      order_by: [
+        asc: ma.name,
+        asc:
+          fragment(
+            "CASE WHEN ? IS NOT NULL THEN 2 WHEN ? IS NOT NULL THEN 1 ELSE 0 END",
+            aps.exclusive_to_team_member_id,
+            aps.exclusive_to_team_id
+          ),
+        asc_nulls_last: aps.priority
+      ]
+    )
+  end
+
+  # Aliases that route through the given credential (via any of their
+  # model_providers) — used to re-render just those stream rows when the
+  # credential's daily spend changes.
+  defp aliases_for_credential(credential_id) do
+    alias_ids =
+      from(ap in ModelProvider,
+        where: ap.credential_id == ^credential_id,
+        select: ap.model_alias_id
+      )
+
+    from(ma in aliases_with_providers_query(), where: ma.id in subquery(alias_ids))
+    |> Repo.all()
   end
 
   defp assign_form_data(socket) do
@@ -106,6 +127,22 @@ defmodule TokengateWeb.ModelsLive do
 
     socket
     |> assign(:credentials_for_select, credentials)
+  end
+
+  # Daily spend (UTC) for every credential that has a spending cap — powers
+  # the "$ spent / $ limit hoy" indicator in the providers table. Read from
+  # the ETS budget counters (no DB hit beyond the first lazy load of the
+  # day per credential).
+  defp assign_credential_spends(socket) do
+    spends =
+      from(c in Tokengate.Providers.Credential,
+        where: not is_nil(c.daily_limit_usd),
+        select: c.id
+      )
+      |> Repo.all()
+      |> Tokengate.Budgets.Manager.credential_spends()
+
+    assign(socket, :credential_spends, spends)
   end
 
   defp load_scope_data(socket) do
@@ -688,6 +725,34 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
+  # Live credential-spend updates from the proxy hot path (PubSub). Only
+  # tracked when the credential has a cap. Stream items don't re-render on
+  # plain assign changes, so the affected aliases are re-inserted into the
+  # stream to pick up the new amounts.
+  def handle_info({:credential_spend_updated, credential_id}, socket) do
+    if Map.has_key?(socket.assigns.credential_spends, credential_id) do
+      spends =
+        Map.put(
+          socket.assigns.credential_spends,
+          credential_id,
+          Tokengate.Budgets.Manager.credential_spend(credential_id)
+        )
+
+      socket =
+        socket
+        |> assign(:credential_spends, spends)
+        |> then(fn s ->
+          Enum.reduce(aliases_for_credential(credential_id), s, fn model_alias, acc ->
+            stream_insert(acc, :aliases, model_alias)
+          end)
+        end)
+
+      {:noreply, socket}
+    else
+      {:noreply, socket}
+    end
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   defp save_model_provider(socket, :new, ap_params) do
@@ -842,6 +907,29 @@ defmodule TokengateWeb.ModelsLive do
 
   def fmt_price(nil), do: "—"
   def fmt_price(%Decimal{} = d), do: "$#{Decimal.round(d, 2) |> Decimal.to_string()}"
+
+  @doc """
+  Text color for the credential daily-spend indicator, by how close the
+  spend is to the cap: green under 70%, amber 70–90%, red from 90% up
+  (and when exhausted).
+  """
+  def budget_spend_color(%Decimal{} = spend, %Decimal{} = limit) do
+    if Decimal.compare(limit, Decimal.new(0)) == :eq do
+      "text-error"
+    else
+      pct =
+        spend
+        |> Decimal.div(limit)
+        |> Decimal.mult(100)
+        |> Decimal.to_float()
+
+      cond do
+        pct >= 90.0 -> "text-error"
+        pct >= 70.0 -> "text-warning"
+        true -> "text-success"
+      end
+    end
+  end
 
   @doc "Scope badge CSS class"
   def scope_badge(%ModelProvider{exclusive_to_team_member_id: id}) when not is_nil(id),
@@ -1157,6 +1245,35 @@ defmodule TokengateWeb.ModelsLive do
                                 class="text-xs text-base-content/40 ml-1"
                               >
                                 {mask_key(ap.credential.api_key_encrypted)}
+                              </span>
+                              <%!-- Daily spending-cap indicator: only for
+                                   admins, only when the credential has a
+                                   limit. Color shifts green → amber → red
+                                   as spend approaches the cap. --%>
+                              <span
+                                :if={
+                                  @is_admin && ap.credential &&
+                                    ap.credential.daily_limit_usd
+                                }
+                                class="block text-xs mt-0.5"
+                              >
+                                <% spend =
+                                  Map.get(
+                                    @credential_spends,
+                                    ap.credential.id,
+                                    Decimal.new(0)
+                                  ) %>
+                                <% exhausted? =
+                                  Decimal.compare(
+                                    spend,
+                                    ap.credential.daily_limit_usd
+                                  ) != :lt %>
+                                <span class={budget_spend_color(spend, ap.credential.daily_limit_usd)}>
+                                  {fmt_price(spend)} / {fmt_price(ap.credential.daily_limit_usd)} hoy
+                                </span>
+                                <span :if={exhausted?} class="badge badge-xs badge-error ml-1">
+                                  Agotada
+                                </span>
                               </span>
                             </td>
                             <td><code class="text-sm">{ap.provider_model}</code></td>

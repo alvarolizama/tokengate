@@ -45,6 +45,7 @@ defmodule Tokengate.Logs.WriteWorker do
       effort: args["effort"],
       api_key_prefix: args["api_key_prefix"],
       credential_name: args["credential_name"],
+      credential_id: args["credential_id"],
       client_agent: args["client_agent"],
       provider_key_prefix: args["provider_key_prefix"],
       inserted_at: parse_inserted_at(args["inserted_at"])

@@ -51,6 +51,8 @@ defmodule Tokengate.Budgets.Manager do
 
   @table :tokengate_budgets
   @micro 1_000_000
+  @pubsub Tokengate.PubSub
+  @credential_budgets_topic "credential_budgets"
 
   # ---------------------------------------------------------------------------
   # Public API
@@ -153,6 +155,102 @@ defmodule Tokengate.Budgets.Manager do
   end
 
   @doc """
+  Records actual spend for a provider credential by atomically incrementing
+  its daily ETS counter by `provider_cost_usd` (in micro-USD).
+
+  This powers the per-credential daily spending cap: the router reads the
+  counter via `credential_exhausted?/2` and stops routing through a
+  credential whose accumulated daily spend reached its `daily_limit_usd`.
+
+  Zero/nil costs are a no-op (providers that don't report cost leave no
+  trace on the counter). After updating, enqueues a debounced
+  `Budgets.SyncWorker` drift-correction job and broadcasts a PubSub
+  `{:credential_spend_updated, credential_id}` for live dashboards.
+  """
+  @spec record_credential_spend(term(), Decimal.t() | nil) :: :ok
+  def record_credential_spend(credential_id, provider_cost_usd) do
+    case to_micro(provider_cost_usd) do
+      0 ->
+        :ok
+
+      micro ->
+        subject = {:credential, credential_id}
+        ensure_loaded(subject, :daily)
+        bump_counter({subject, :daily}, micro)
+        maybe_enqueue_sync(subject)
+        broadcast_credential_spend(credential_id)
+        :ok
+    end
+  end
+
+  @doc """
+  Returns the credential's current daily spend (UTC day) in USD as a
+  Decimal. Lazy-loads from the DB on first touch or day rollover.
+  """
+  @spec credential_spend(term()) :: Decimal.t()
+  def credential_spend(credential_id) do
+    subject = {:credential, credential_id}
+    ensure_loaded(subject, :daily)
+    from_micro(read_counter({subject, :daily}))
+  end
+
+  @doc """
+  Batch read of daily spend for a list of credential ids:
+  `%{credential_id => Decimal.t()}`. Used by dashboards.
+  """
+  @spec credential_spends([term()]) :: %{term() => Decimal.t()}
+  def credential_spends(credential_ids) when is_list(credential_ids) do
+    Map.new(credential_ids, &{&1, credential_spend(&1)})
+  end
+
+  @doc """
+  Whether the credential has reached its daily spending cap for the
+  current UTC day. A `nil` limit means unlimited — always `false`.
+  """
+  @spec credential_exhausted?(term(), Decimal.t() | nil) :: boolean()
+  def credential_exhausted?(_credential_id, nil), do: false
+
+  def credential_exhausted?(credential_id, %Decimal{} = limit) do
+    subject = {:credential, credential_id}
+    ensure_loaded(subject, :daily)
+    read_counter({subject, :daily}) >= to_micro(limit)
+  end
+
+  @doc """
+  Resets the credential's daily ETS counter to the micro-USD value
+  recomputed from the DB by `Budgets.SyncWorker`.
+  """
+  @spec set_credential_from_db(term(), integer()) :: :ok
+  def set_credential_from_db(credential_id, daily_micro) do
+    GenServer.call(__MODULE__, {:set_credential_from_db, credential_id, daily_micro})
+  end
+
+  @doc """
+  Loads the credential's spend since `from` from the DB
+  (`Tokengate.Logs.cost_summary/1` filtered by `credential_id`) and
+  returns it as integer micro-USD. Caller-side DB read, same contract as
+  `load_from_db/2`.
+  """
+  @spec load_credential_from_db(term(), DateTime.t()) :: integer()
+  def load_credential_from_db(credential_id, from) do
+    summary =
+      Tokengate.Logs.cost_summary(%{
+        credential_id: credential_id,
+        from: from
+      })
+
+    to_micro(summary.total_cost_usd)
+  end
+
+  @doc "Topic for live credential-spend updates (dashboards subscribe here)."
+  def credential_budgets_topic, do: @credential_budgets_topic
+
+  @doc "Subscribes the caller to credential spend updates."
+  def subscribe_credential_budgets do
+    Phoenix.PubSub.subscribe(@pubsub, @credential_budgets_topic)
+  end
+
+  @doc """
   Resets the daily and monthly ETS counters for `member_id` to the given
   micro-USD values, as recomputed by `Budgets.SyncWorker` from the DB.
 
@@ -252,6 +350,13 @@ defmodule Tokengate.Budgets.Manager do
     {:reply, :ok, state}
   end
 
+  @impl true
+  def handle_call({:set_credential_from_db, credential_id, daily_micro}, _from, state) do
+    key = {{:credential, credential_id}, :daily}
+    :ets.insert(@table, {key, daily_micro, true, current_period_stamp(:daily)})
+    {:reply, :ok, state}
+  end
+
   # ---------------------------------------------------------------------------
   # Internal — table lifecycle
   # ---------------------------------------------------------------------------
@@ -312,6 +417,12 @@ defmodule Tokengate.Budgets.Manager do
 
   defp stale?(:monthly, {y, m}, {ty, tm}), do: y != ty or m != tm
 
+  defp seed_from_db({:credential, credential_id} = subject, period) do
+    from = period_start(period)
+    micro = load_credential_from_db(credential_id, from)
+    seed(subject, period, micro)
+  end
+
   defp seed_from_db(member_id, period) do
     from = period_start(period)
     micro = load_from_db(member_id, from)
@@ -351,6 +462,19 @@ defmodule Tokengate.Budgets.Manager do
   # Internal — debounced SyncWorker enqueue
   # ---------------------------------------------------------------------------
 
+  defp maybe_enqueue_sync({:credential, credential_id} = subject) do
+    key = {:sync_pending, subject}
+
+    if :ets.insert_new(@table, {key, true}) do
+      _ =
+        %{credential_id: credential_id}
+        |> Tokengate.Budgets.SyncWorker.new()
+        |> Oban.insert()
+    end
+
+    :ok
+  end
+
   defp maybe_enqueue_sync(member_id) do
     key = {:sync_pending, member_id}
 
@@ -364,7 +488,24 @@ defmodule Tokengate.Budgets.Manager do
     :ok
   end
 
+  # ---------------------------------------------------------------------------
+  # Internal — PubSub broadcast for live dashboards
+  # ---------------------------------------------------------------------------
+
+  defp broadcast_credential_spend(credential_id) do
+    Phoenix.PubSub.broadcast(
+      @pubsub,
+      @credential_budgets_topic,
+      {:credential_spend_updated, credential_id}
+    )
+  end
+
   @doc false
+  def clear_sync_pending({:credential, _credential_id} = subject) do
+    :ets.delete(@table, {:sync_pending, subject})
+    :ok
+  end
+
   def clear_sync_pending(member_id) do
     :ets.delete(@table, {:sync_pending, member_id})
     :ok

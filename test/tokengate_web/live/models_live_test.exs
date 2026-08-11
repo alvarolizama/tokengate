@@ -627,4 +627,64 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/models")
   end
+
+  # -- Credential daily spending cap indicator -------------------------------
+
+  test "admin sees spend/limit indicator on providers of a capped credential", %{conn: conn} do
+    provider = create_provider()
+    model_alias = create_alias()
+    ap = create_model_provider(model_alias, provider)
+
+    credential = Repo.get!(Providers.Credential, ap.credential_id)
+    {:ok, _} = Providers.update_credential(credential, %{daily_limit_usd: "100.00"})
+
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, _view, html} = live(conn, ~p"/dashboard/models")
+
+    assert html =~ "$0.00 / $100.00 hoy"
+    refute html =~ "Agotada"
+  end
+
+  test "indicator shows live spend and Agotada badge when the cap is reached", %{conn: conn} do
+    provider = create_provider()
+    model_alias = create_alias()
+    ap = create_model_provider(model_alias, provider)
+
+    credential = Repo.get!(Providers.Credential, ap.credential_id)
+    {:ok, _} = Providers.update_credential(credential, %{daily_limit_usd: "10.00"})
+
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, html} = live(conn, ~p"/dashboard/models")
+    assert html =~ "$0.00 / $10.00 hoy"
+
+    # Spend under the cap → the amount updates live via PubSub.
+    :ok = Tokengate.Budgets.Manager.record_credential_spend(credential.id, Decimal.new("4.20"))
+    html = render(view)
+    assert html =~ "$4.20 / $10.00 hoy"
+    refute html =~ "Agotada"
+
+    # Reaching the cap → Agotada badge appears.
+    :ok = Tokengate.Budgets.Manager.record_credential_spend(credential.id, Decimal.new("6.00"))
+    html = render(view)
+    assert html =~ "$10.20 / $10.00 hoy"
+    assert html =~ "Agotada"
+  end
+
+  test "no indicator when the credential has no limit", %{conn: conn} do
+    provider = create_provider()
+    model_alias = create_alias()
+    _ap = create_model_provider(model_alias, provider)
+
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, _view, html} = live(conn, ~p"/dashboard/models")
+
+    refute html =~ "hoy"
+    refute html =~ "Agotada"
+  end
 end

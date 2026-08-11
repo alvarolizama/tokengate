@@ -382,6 +382,7 @@ defmodule TokengateWeb.ProxyController do
     cost = CostCalculator.provider_cost(route.model_provider.billing_mode, provider_reported)
 
     Budgets.record_spend(member.id, cost)
+    Budgets.record_credential_spend(route.credential.id, cost)
 
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
@@ -1167,6 +1168,7 @@ defmodule TokengateWeb.ProxyController do
       end
 
     Budgets.record_spend(member.id, cost)
+    Budgets.record_credential_spend(route.credential.id, cost)
 
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
@@ -1208,6 +1210,7 @@ defmodule TokengateWeb.ProxyController do
 
     # Hot-path state updates (ETS only)
     Budgets.record_spend(member.id, cost)
+    Budgets.record_credential_spend(route.credential.id, cost)
 
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
@@ -1303,6 +1306,7 @@ defmodule TokengateWeb.ProxyController do
       "effort" => Keyword.get(extra, :effort),
       "api_key_prefix" => member.api_key && member.api_key.key_prefix,
       "credential_name" => route.credential.name,
+      "credential_id" => route.credential.id,
       "provider_key_prefix" => provider_key_prefix(route.credential)
     }
     |> WriteWorker.new()
@@ -1399,6 +1403,7 @@ defmodule TokengateWeb.ProxyController do
       "effort" => conn.assigns[:effort],
       "api_key_prefix" => member.api_key && member.api_key.key_prefix,
       "credential_name" => route.credential.name,
+      "credential_id" => route.credential.id,
       "provider_key_prefix" => provider_key_prefix(route.credential)
     }
     |> WriteWorker.new()

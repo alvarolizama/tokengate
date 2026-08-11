@@ -248,7 +248,11 @@ defmodule Tokengate.Routing.Router do
         mp.billing_mode == "included" and
           mp.credential != nil and
           mp.credential.status == "active" and
-          mp.credential.id != exclude_credential_id
+          mp.credential.id != exclude_credential_id and
+          not Tokengate.Budgets.Manager.credential_exhausted?(
+            mp.credential.id,
+            mp.credential.daily_limit_usd
+          )
       end)
     end
   end
@@ -294,6 +298,9 @@ defmodule Tokengate.Routing.Router do
       # Member-exclusive rows are also dropped for non-owners: the cached
       # list is keyed by team, so without this filter a teammate would see
       # the owner's exclusive provider.
+      # Budget-exhausted credentials (daily spend >= daily_limit_usd) are
+      # excluded too — traffic fails over to the next credential and the
+      # exhausted one rejoins the pool on the next UTC day.
       candidates =
         model_providers
         |> Enum.filter(fn mp ->
@@ -301,7 +308,11 @@ defmodule Tokengate.Routing.Router do
             mp.credential.status == "active" and
             not MapSet.member?(disabled_ids, mp.credential.id) and
             mp.credential.id not in exclude and
-            visible_to_member?(mp, team_member)
+            visible_to_member?(mp, team_member) and
+            not Tokengate.Budgets.Manager.credential_exhausted?(
+              mp.credential.id,
+              mp.credential.daily_limit_usd
+            )
         end)
 
       if candidates == [] do
