@@ -69,6 +69,7 @@ defmodule Tokengate.Periods do
     * `"today"` — start of local day → now
     * `"week"`   — start of local week (Monday) → now
     * `"month"`  — start of local month → now
+    * `"7d"`     — start of local day 6 days ago → now
     * `"30d"`    — start of local day 29 days ago → now
     * `"90d"`    — start of local day 89 days ago → now
   """
@@ -78,6 +79,7 @@ defmodule Tokengate.Periods do
         "today" -> start_of_day_utc(tz)
         "week" -> start_of_week_utc(tz)
         "month" -> start_of_month_utc(tz)
+        "7d" -> start_of_n_days_ago_utc(6, tz)
         "30d" -> start_of_n_days_ago_utc(29, tz)
         "90d" -> start_of_n_days_ago_utc(89, tz)
         _ -> start_of_day_utc(tz)

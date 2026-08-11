@@ -159,4 +159,111 @@ defmodule TokengateWeb.StatsExportControllerTest do
     # Prefixed with a single quote — renders as text, never as a formula.
     assert body =~ "'=cmd|'/c calc'!A1"
   end
+
+  describe "logs export period coverage" do
+    # The UI list is capped at 500 rows; exports must NOT be, otherwise a
+    # busy day alone would eat the whole CSV and 30d/90d exports would only
+    # contain today's data.
+    test "30d export includes logs older than the 500-row UI cap", %{conn: conn} do
+      u = unique()
+      {:ok, team} = Accounts.create_team(%{name: "Team #{u}"})
+      %{user: user, password: password} = register("user")
+
+      {:ok, member} =
+        Accounts.create_team_member(%{user_id: user.id, team_id: team.id, team_role: "user"})
+
+      # 510 rows from 10 days ago — more than the old list_logs/1 cap of 500,
+      # so the buggy export (ordered newest-first, capped at 500) would never
+      # reach them when today has traffic.
+      ten_days_ago =
+        DateTime.utc_now() |> DateTime.add(-10 * 86_400, :second) |> DateTime.truncate(:second)
+
+      old_rows =
+        for i <- 1..510 do
+          %{
+            id: Ecto.UUID.generate(),
+            inserted_at: DateTime.add(ten_days_ago, i, :second),
+            team_member_id: member.id,
+            model_requested: "gpt-4o",
+            agent_type: "api",
+            status_code: 200,
+            prompt_tokens: 10,
+            completion_tokens: 5,
+            latency_ms: 20,
+            streaming: false,
+            think: false
+          }
+        end
+
+      {510, _} = Tokengate.Repo.insert_all(Tokengate.Logs.RequestLog, old_rows)
+
+      # One row from today — newest-first ordering puts it at the top of the
+      # buggy 500-row window.
+      {:ok, _log} =
+        Logs.log_request(%{
+          team_member_id: member.id,
+          model_requested: "gpt-4o",
+          agent_type: "api",
+          status_code: 200,
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          latency_ms: 20,
+          streaming: false
+        })
+
+      conn =
+        conn
+        |> login(user, password)
+        |> get(~p"/dashboard/stats/export?type=logs&period=30d")
+
+      body = response(conn, 200)
+      data_rows = body |> String.split("\n") |> Enum.drop(1) |> Enum.reject(&(&1 == ""))
+      assert length(data_rows) == 511
+    end
+
+    test "logs export defaults to 7d and respects today/week/month periods", %{conn: conn} do
+      %{owner: owner, owner_password: password} = team_with_log()
+      %{user: _user, password: _pw} = register("user")
+
+      conn =
+        conn
+        |> login(owner, password)
+        |> get(~p"/dashboard/stats/export?type=logs&period=today")
+
+      body = response(conn, 200)
+      assert body =~ "fecha,estado"
+      assert body =~ "gpt-4o"
+    end
+
+    test "errors export only includes status >= 400 across the period", %{conn: conn} do
+      %{owner: owner, owner_password: password, member: member} = team_with_log()
+
+      for status <- [400, 429, 500, 502] do
+        {:ok, _} =
+          Logs.log_request(%{
+            team_member_id: member.id,
+            model_requested: "gpt-4o",
+            agent_type: "api",
+            status_code: status,
+            error_reason: "test_error",
+            prompt_tokens: 1,
+            completion_tokens: 1,
+            latency_ms: 5,
+            streaming: false
+          })
+      end
+
+      conn =
+        conn
+        |> login(owner, password)
+        |> get(~p"/dashboard/stats/export?type=errors&period=30d")
+
+      body = response(conn, 200)
+      assert body =~ "test_error"
+
+      # 200-row from team_with_log() must NOT appear in the errors export
+      lines = body |> String.split("\n") |> Enum.drop(1) |> Enum.reject(&(&1 == ""))
+      assert length(lines) == 4
+    end
+  end
 end

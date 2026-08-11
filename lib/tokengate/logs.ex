@@ -21,6 +21,9 @@ defmodule Tokengate.Logs do
 
   @default_limit 50
   @max_limit 500
+  # CSV exports need far more rows than the paginated UI; a dedicated cap
+  # keeps `list_logs/1` bounded at 500 while exports can stream up to 50k.
+  @export_limit 50_000
 
   # ---------------------------------------------------------------------------
   # Insert
@@ -87,6 +90,33 @@ defmodule Tokengate.Logs do
   end
 
   @doc """
+  Lists request logs for CSV export with a much higher row cap than the
+  paginated UI (`list_logs/1` is capped at #{@max_limit}).
+
+  Same filters as `list_logs/1`. The cap is `#{@export_limit}` rows — an
+  explicit `:limit` filter is honored up to that bound.
+
+  NOTE: the preload of user/team makes this expensive at scale; it is only
+  meant for one-off export requests, never the paginated UI path.
+  """
+  def list_logs_for_export(filters \\ %{}) do
+    limit =
+      case Map.get(filters, :limit) || Map.get(filters, "limit") do
+        nil -> @export_limit
+        n when is_integer(n) and n > 0 -> min(n, @export_limit)
+        _ -> @export_limit
+      end
+
+    RequestLog
+    |> apply_log_filters(filters)
+    |> order_by([rl], desc: rl.inserted_at)
+    |> limit(^limit)
+    |> preload(team_member: [:user, :team])
+    |> preload(:provider)
+    |> Repo.all()
+  end
+
+  @doc """
   Lists request logs with `inserted_at` strictly after `since` (DateTime),
   ordered newest-first. Used by the LogsLive real-time subscription to
   fetch new logs appended after page load.
@@ -142,6 +172,7 @@ defmodule Tokengate.Logs do
     |> maybe_where_member_ids(filters)
     |> maybe_where_team_id(filters)
     |> maybe_where(:provider_id, filters)
+    |> maybe_where(:credential_id, filters)
     |> maybe_where(:model_alias_id, filters)
     |> maybe_where(:agent_type, filters)
     |> maybe_where(:status_code, filters)
@@ -197,6 +228,7 @@ defmodule Tokengate.Logs do
       "2xx" -> where(query, [rl], rl.status_code >= 200 and rl.status_code < 300)
       "4xx" -> where(query, [rl], rl.status_code >= 400 and rl.status_code < 500)
       "5xx" -> where(query, [rl], rl.status_code >= 500 and rl.status_code < 600)
+      "errors" -> where(query, [rl], rl.status_code >= 400)
       _ -> query
     end
   end

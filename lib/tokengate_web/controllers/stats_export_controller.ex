@@ -4,7 +4,7 @@ defmodule TokengateWeb.StatsExportController do
 
   Accepts query params:
     * `type`   — `models`, `teams`, `errors`, or `logs` (required)
-    * `period` — `7d`, `30d`, `90d` (default: `7d`)
+    * `period` — `today`, `week`, `month`, `7d`, `30d`, `90d` (default: `7d`)
     * `model_id` — filter by model (for models type only)
     * `team_id`  — filter by team (for teams type only)
 
@@ -135,15 +135,11 @@ defmodule TokengateWeb.StatsExportController do
     filters =
       opts
       |> Map.new()
-      |> Map.put(:status_code, nil)
-      |> Map.put(:limit, 500)
+      |> Map.put(:status_class, "errors")
+      |> Map.put(:limit, 50_000)
       |> Map.put(:team_member_ids, Accounts.scope_member_ids(user))
 
-    filters = Map.put(filters, :error_reason, nil)
-
-    rows =
-      Logs.list_logs(filters)
-      |> Enum.filter(&(&1.status_code && &1.status_code >= 400))
+    rows = Logs.list_logs_for_export(filters)
 
     header =
       ~w(fecha estado modelo proveedor usuario equipo api_key error_reason prov_status latencia_ms costo_usd)
@@ -165,7 +161,7 @@ defmodule TokengateWeb.StatsExportController do
       |> Map.put(:limit, 50_000)
       |> Map.put(:team_member_ids, Accounts.scope_member_ids(user))
 
-    rows = Logs.list_logs(filters)
+    rows = Logs.list_logs_for_export(filters)
 
     header =
       ~w(fecha estado modelo usuario equipo agente api_key proveedor prov_key prov_status error_reason error_message streaming think effort tokens_in tokens_out cache_read cache_creation latencia_ms ttft_ms costo_usd)
@@ -318,6 +314,6 @@ defmodule TokengateWeb.StatsExportController do
   defp load_team_breakdown(_, _), do: []
 
   defp parse_period(nil), do: "7d"
-  defp parse_period(period) when period in ~w(7d 30d 90d), do: period
+  defp parse_period(period) when period in ~w(today week month 7d 30d 90d), do: period
   defp parse_period(_), do: "7d"
 end
