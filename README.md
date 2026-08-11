@@ -112,7 +112,7 @@ resp = client.chat.completions.create(
 | --- | --- | --- |
 | `PORT` | `4000` | HTTP port (`4001` in the Docker image) |
 | `POOL_SIZE` | `10` | DB connection pool |
-| `SESSION_MAX_AGE_SECONDS` | `14400` | Idle session lifetime (sliding) |
+| `SESSION_MAX_AGE_SECONDS` | `31536000` | Idle session lifetime (sliding, default 1 year) |
 | `PROXY_RECEIVE_TIMEOUT_MS` | `60000` | Upstream read timeout (per-credential override available) |
 | `FIRST_TOKEN_TIMEOUT_MS` | `30000` | Streaming: max wait for first chunk before fallback |
 | `CIRCUIT_BREAKER_THRESHOLD` | `3` | Failures before a credential's breaker opens |

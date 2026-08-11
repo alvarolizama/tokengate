@@ -23,10 +23,10 @@ defmodule TokengateWeb.Endpoint do
                      # Sliding expiration: `renew: true` re-issues the cookie
                      # with a fresh max_age on every authenticated request, so
                      # an active user stays signed in while an idle browser
-                     # expires after SESSION_MAX_AGE_SECONDS (default 4h).
+                     # expires after SESSION_MAX_AGE_SECONDS (default 1 year).
                      renew: true,
                      max_age:
-                       String.to_integer(System.get_env("SESSION_MAX_AGE_SECONDS", "14400"))
+                       String.to_integer(System.get_env("SESSION_MAX_AGE_SECONDS", "31536000"))
                    ] ++ session_secure
 
   socket "/live", Phoenix.LiveView.Socket,
