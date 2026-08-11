@@ -95,6 +95,7 @@ defmodule TokengateWeb.KpiHelpers do
   # ---------------------------------------------------------------------
 
   attr :metrics, :map, required: true
+  attr :deltas, :map, default: nil
 
   def kpi_cards(assigns) do
     ~H"""
@@ -112,9 +113,18 @@ defmodule TokengateWeb.KpiHelpers do
           <p class="mt-2 text-2xl font-bold text-base-content">
             {format_decimal(@metrics.cost_usd)}
           </p>
-          <p class="text-xs text-base-content/40 mt-1">
-            Reportado por el proveedor
-          </p>
+          <div class="text-xs text-base-content/40 mt-1 flex items-center gap-1.5">
+            <span>Reportado por el proveedor</span>
+            <span
+              :if={@deltas && @deltas[:cost_usd] != nil}
+              class={[
+                "font-medium tabular-nums",
+                delta_color(@deltas[:cost_usd])
+              ]}
+            >
+              {delta_arrow(@deltas[:cost_usd])} {abs_float(@deltas[:cost_usd])}%
+            </span>
+          </div>
         </div>
       </div>
 
@@ -131,6 +141,20 @@ defmodule TokengateWeb.KpiHelpers do
           <p class="mt-2 text-2xl font-bold text-base-content">
             {format_number(@metrics.requests_total)}
           </p>
+          <div class="text-xs text-base-content/40 mt-1">
+            <span
+              :if={@deltas && @deltas[:requests_total] != nil}
+              class={[
+                "font-medium tabular-nums",
+                delta_color(@deltas[:requests_total])
+              ]}
+            >
+              {delta_arrow(@deltas[:requests_total])} {abs_float(@deltas[:requests_total])}%
+            </span>
+            <span :if={!@deltas || @deltas[:requests_total] == nil} class="text-base-content/40">
+              vs período anterior
+            </span>
+          </div>
         </div>
       </div>
 
@@ -164,26 +188,26 @@ defmodule TokengateWeb.KpiHelpers do
               </p>
               <p class="text-xs text-base-content/50">out</p>
             </div>
-            <span class="text-base-content/30">/</span>
-            <div>
-              <p
-                class="text-lg font-bold text-base-content"
-                title={
-                  format_number(
-                    (@metrics[:cache_read_tokens] || 0) + (@metrics[:cache_creation_tokens] || 0)
-                  )
-                }
-              >
-                {format_compact(
-                  (@metrics[:cache_read_tokens] || 0) + (@metrics[:cache_creation_tokens] || 0)
-                )}
-              </p>
-              <p class="text-xs text-base-content/50">
-                cache · {format_hit_rate(
-                  cache_hit_rate(@metrics[:cache_read_tokens], @metrics.prompt_tokens)
-                )} hit
-              </p>
-            </div>
+          </div>
+          <div class="text-xs text-base-content/40 mt-1 flex items-center gap-2">
+            <span
+              :if={@deltas && @deltas[:prompt_tokens] != nil}
+              class={[
+                "font-medium tabular-nums",
+                delta_color(@deltas[:prompt_tokens])
+              ]}
+            >
+              {delta_arrow(@deltas[:prompt_tokens])} {abs_float(@deltas[:prompt_tokens])}% in
+            </span>
+            <span
+              :if={@deltas && @deltas[:completion_tokens] != nil}
+              class={[
+                "font-medium tabular-nums",
+                delta_color(@deltas[:completion_tokens])
+              ]}
+            >
+              {delta_arrow(@deltas[:completion_tokens])} {abs_float(@deltas[:completion_tokens])}% out
+            </span>
           </div>
         </div>
       </div>
@@ -247,6 +271,21 @@ defmodule TokengateWeb.KpiHelpers do
   def format_tps(nil), do: "—"
   def format_tps(n) when is_float(n), do: Float.round(n, 1) |> Float.to_string()
   def format_tps(n) when is_integer(n), do: to_string(n)
+
+  @doc "Color class for a delta value: green for up, red for down."
+  def delta_color(nil), do: ""
+  def delta_color(delta) when is_number(delta) and delta >= 0, do: "text-success"
+  def delta_color(delta) when is_number(delta), do: "text-error"
+
+  @doc "Arrow symbol for a delta value: ↑ for up, ↓ for down."
+  def delta_arrow(nil), do: ""
+  def delta_arrow(delta) when is_number(delta) and delta >= 0, do: "↑"
+  def delta_arrow(_delta), do: "↓"
+
+  @doc "Absolute value of a float, formatted to 1 decimal place."
+  def abs_float(nil), do: ""
+  def abs_float(n) when is_float(n), do: Float.round(abs(n), 1) |> Float.to_string()
+  def abs_float(n) when is_integer(n), do: abs(n) |> Integer.to_string()
 
   @doc """
   Cache hit rate: percentage of input tokens served from cache

@@ -53,10 +53,6 @@ defmodule TokengateWeb.MonitorLive do
       |> assign(:expanded_model, nil)
       |> assign(:credential_rows, [])
       |> assign(:total_inflight, 0)
-      |> assign(:active_tab, "model")
-      |> assign(:credential_tickets, [])
-      |> assign(:expanded_credential, nil)
-      |> assign(:credential_model_rows, [])
       |> assign(:is_admin, true)
       |> assign(:error_credentials, [])
       |> assign(:breaker_alerts, [])
@@ -315,52 +311,47 @@ defmodule TokengateWeb.MonitorLive do
     socket =
       socket
       |> assign(:expanded_model, new_expanded)
-      |> refresh_credential_rows(new_expanded)
-
-    {:noreply, socket}
-  end
-
-  def handle_event("switch-tab", %{"tab" => tab}, socket) do
-    socket = assign(socket, :active_tab, tab)
-    {:noreply, refresh_data(socket)}
-  end
-
-  def handle_event("toggle-expand-credential", %{"credential-name" => cred_name}, socket) do
-    new_expanded =
-      if socket.assigns[:expanded_credential] == cred_name, do: nil, else: cred_name
-
-    socket =
-      socket
-      |> assign(:expanded_credential, new_expanded)
-      |> refresh_credential_model_rows(new_expanded)
-
-    {:noreply, socket}
-  end
-
-  defp refresh_credential_rows(socket, nil), do: assign(socket, :credential_rows, [])
-
-  defp refresh_credential_rows(socket, model_id),
-    do:
-      assign(
-        socket,
+      |> assign(
         :credential_rows,
-        Rollup.breakdown_by_credential(model_id, from: one_hour_ago())
+        if new_expanded do
+          Rollup.breakdown_by_credential(new_expanded, from: one_hour_ago())
+        else
+          []
+        end
       )
 
-  defp refresh_credential_model_rows(socket, nil), do: assign(socket, :credential_model_rows, [])
-
-  defp refresh_credential_model_rows(socket, cred_name),
-    do:
-      assign(
-        socket,
-        :credential_model_rows,
-        Rollup.breakdown_by_model_for_credential(cred_name, from: one_hour_ago())
-      )
+    {:noreply, socket}
+  end
 
   defp refresh_data(socket) do
     snapshot = Collector.snapshot()
     window = Window.snapshot()
     inflight_entries = Inflight.list()
+
+    # ── Hour + day aggregates from Postgres (durable source of truth) ──
+    hour_from = one_hour_ago()
+
+    day_from =
+      DateTime.utc_now() |> DateTime.add(-24 * 3600, :second) |> DateTime.truncate(:second)
+
+    hour_stats =
+      from(rl in RequestLog,
+        where: rl.inserted_at >= ^hour_from,
+        select: %{
+          requests: count(rl.id),
+          errors: fragment("COUNT(*) FILTER (WHERE status_code >= 400)"),
+          cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)")
+        }
+      )
+      |> Repo.one()
+
+    hour_cost = Decimal.new(to_string(hour_stats.cost_usd))
+    hour_requests = hour_stats.requests
+    hour_errors = hour_stats.errors
+
+    # Per-model cost for last hour + last day
+    model_hour_cost = per_model_cost(hour_from)
+    model_day_cost = per_model_cost(day_from)
 
     # Resolve model alias ids → names
     aliases = Providers.list_model_aliases()
@@ -398,6 +389,8 @@ defmodule TokengateWeb.MonitorLive do
           alias_id: alias_id,
           model_name: model_name,
           total_requests: total_count,
+          cost_hour: Map.get(model_hour_cost, alias_id, Decimal.new("0")),
+          cost_day: Map.get(model_day_cost, alias_id, Decimal.new("0")),
           sparkline: sparkline,
           inflight: length(model_inflight),
           providers: provider_segments
@@ -408,18 +401,28 @@ defmodule TokengateWeb.MonitorLive do
     # Indices strip
     total_inflight = length(inflight_entries)
 
-    # Last-minute RPM: sum of last bucket across all models
-    current_rpm =
-      window
-      |> Enum.map(fn {_id, counts} -> List.last(counts, 0) end)
-      |> Enum.sum()
+    # Inflight distinct counts (realtime)
+    inflight_providers =
+      inflight_entries
+      |> Enum.reject(&is_nil(&1.provider_name))
+      |> Enum.map(& &1.provider_name)
+      |> Enum.uniq()
+      |> length()
+
+    inflight_users =
+      inflight_entries
+      |> Enum.reject(&is_nil(&1.user_email))
+      |> Enum.map(& &1.user_email)
+      |> Enum.uniq()
+      |> length()
 
     indices = %{
-      rps: Float.round(current_rpm / 60.0, 1),
       inflight: total_inflight,
-      error_rate: snapshot.error_rate,
-      total_requests: snapshot.requests_total,
-      cost_usd: snapshot.cost_usd
+      inflight_providers: inflight_providers,
+      inflight_users: inflight_users,
+      hour_requests: hour_requests,
+      hour_error_rate: if(hour_requests > 0, do: hour_errors / hour_requests * 1.0, else: 0.0),
+      hour_cost: hour_cost
     }
 
     # Refresh credential rows if a model is expanded
@@ -434,88 +437,10 @@ defmodule TokengateWeb.MonitorLive do
         socket
       end
 
-    # Build credential tickets for the "Por API key" tab
-    cred_window = Window.snapshot_by_credential()
-
-    inflight_by_cred =
-      inflight_entries
-      |> Enum.reject(&is_nil(&1.credential_name))
-      |> Enum.group_by(& &1.credential_name)
-
-    # Resolve provider names for credentials from inflight
-    cred_provider_names =
-      inflight_entries
-      |> Enum.reject(fn e -> is_nil(e.credential_name) or is_nil(e.provider_name) end)
-      |> Enum.map(fn e -> {e.credential_name, e.provider_name} end)
-      |> Enum.uniq()
-      |> Map.new()
-
-    # Breaker details for open/half-open breakers
-    breaker_details = CircuitBreakerManager.open_breakers()
-
-    # Resolve credential IDs by name for breaker lookup
-    cred_name_to_id =
-      (Map.keys(cred_window) ++ Enum.map(inflight_by_cred, fn {k, _} -> k end))
-      |> Enum.uniq()
-      |> then(fn names ->
-        if names == [] do
-          %{}
-        else
-          Tokengate.Providers.Credential
-          |> where([c], c.name in ^names)
-          |> select([c], {c.name, c.id})
-          |> Repo.all()
-          |> Map.new()
-        end
-      end)
-
-    credential_tickets =
-      cred_window
-      |> Enum.map(fn {cred_name, counts} ->
-        cred_inflight = Map.get(inflight_by_cred, cred_name, [])
-
-        # Users currently in flight via this credential, with counts
-        inflight_users =
-          cred_inflight
-          |> Enum.group_by(&(&1.user_email || "desconocido"))
-          |> Enum.map(fn {user, entries} -> %{name: user, count: length(entries)} end)
-          |> Enum.sort_by(& &1.count, :desc)
-
-        # Breaker status
-        cred_id = Map.get(cred_name_to_id, cred_name)
-        breaker = Map.get(breaker_details, cred_id)
-
-        %{
-          credential_name: cred_name,
-          provider_name: Map.get(cred_provider_names, cred_name, "—"),
-          sparkline: counts,
-          total_requests: Enum.sum(counts),
-          inflight: length(cred_inflight),
-          inflight_users: inflight_users,
-          breaker_state: breaker && breaker.state,
-          breaker_reason: breaker && breaker.last_reason,
-          breaker_message: breaker && breaker.last_error_message
-        }
-      end)
-      |> Enum.sort_by(& &1.total_requests, :desc)
-
-    # Refresh credential model rows if a credential is expanded
-    socket =
-      if expanded_cred = socket.assigns[:expanded_credential] do
-        assign(
-          socket,
-          :credential_model_rows,
-          Rollup.breakdown_by_model_for_credential(expanded_cred, from: one_hour_ago())
-        )
-      else
-        socket
-      end
-
     socket
     |> assign(:tickets, tickets)
     |> assign(:indices, indices)
     |> assign(:total_inflight, total_inflight)
-    |> assign(:credential_tickets, credential_tickets)
   end
 
   # ── Helpers ──────────────────────────────────────────────────────────────
@@ -524,6 +449,21 @@ defmodule TokengateWeb.MonitorLive do
     DateTime.utc_now()
     |> DateTime.add(-3600, :second)
     |> DateTime.truncate(:second)
+  end
+
+  defp per_model_cost(from) do
+    from(rl in RequestLog,
+      where: rl.inserted_at >= ^from and not is_nil(rl.model_alias_id),
+      group_by: rl.model_alias_id,
+      select: %{
+        model_alias_id: rl.model_alias_id,
+        cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)")
+      }
+    )
+    |> Repo.all()
+    |> Map.new(fn row ->
+      {row.model_alias_id, Decimal.new(to_string(row.cost_usd))}
+    end)
   end
 
   # Sparkline SVG points: takes [0, 3, 5, 2, 0, ...] → "0,150 10,120 ..."
@@ -662,19 +602,6 @@ defmodule TokengateWeb.MonitorLive do
   def breaker_dot_class(:half_open), do: "bg-warning"
   def breaker_dot_class(_), do: "bg-base-content/30"
 
-  def breaker_badge_class(nil), do: "badge-ghost"
-  def breaker_badge_class(:closed), do: "badge-ghost"
-  def breaker_badge_class(:open), do: "badge-error"
-  def breaker_badge_class(:half_open), do: "badge-warning"
-  def breaker_badge_class(_), do: "badge-ghost"
-
-  def breaker_reason_label(nil), do: ""
-  def breaker_reason_label(:timeout), do: "timeout"
-  def breaker_reason_label(:rate_limited), do: "rate_limited"
-  def breaker_reason_label(:auth_error), do: "auth_error"
-  def breaker_reason_label(:server_error), do: "server_error"
-  def breaker_reason_label(other), do: to_string(other)
-
   # ── Function Components ──────────────────────────────────────────────────
 
   attr :label, :string, required: true
@@ -776,79 +703,6 @@ defmodule TokengateWeb.MonitorLive do
           <div class="flex items-center justify-center gap-1">
             <span class={["w-2 h-2 rounded-full", breaker_dot_class(nil)]} />
           </div>
-        </div>
-      <% end %>
-    </div>
-    """
-  end
-
-  # ── Credential model drilldown (for the "Por API key" tab) ────────────────
-  attr :rows, :list, default: []
-
-  def credential_model_drilldown(assigns) do
-    ~H"""
-    <div class="ml-6 md:ml-10 mt-1 mb-2 rounded-lg border border-base-200 bg-base-100/50 overflow-hidden">
-      <%!-- Sub-header --%>
-      <div class="hidden md:grid grid-cols-[1fr_1fr_1fr_64px_72px_72px_72px] gap-2 px-3 py-1.5 bg-base-200/30 text-[9px] font-semibold uppercase tracking-wider text-base-content/40">
-        <span>Modelo</span>
-        <span>Key suffix</span>
-        <span>Usuarios</span>
-        <span class="text-right">Req</span>
-        <span class="text-right">p95</span>
-        <span class="text-right">Err</span>
-        <span class="text-right">$</span>
-      </div>
-
-      <%= if @rows == [] do %>
-        <p class="text-[11px] text-base-content/40 px-3 py-2">
-          Sin datos de modelos para esta API key en la última hora.
-        </p>
-      <% else %>
-        <div
-          :for={row <- @rows}
-          class="grid grid-cols-[1fr_auto] md:grid-cols-[1fr_1fr_1fr_64px_72px_72px_72px] gap-2 px-3 py-1.5 items-center text-[11px] hover:bg-base-200/20 transition-colors border-b border-base-200/30 last:border-b-0"
-        >
-          <%!-- Model name --%>
-          <span class="font-medium text-base-content/70 truncate">
-            {row.model_name}
-          </span>
-
-          <%!-- Key suffix --%>
-          <span class="font-mono text-base-content/50 truncate hidden md:block">
-            {if row[:provider_key_prefix], do: "····#{row.provider_key_prefix}", else: "—"}
-          </span>
-
-          <%!-- Users --%>
-          <div class="flex flex-wrap gap-1">
-            <span :for={m <- row[:members] || []} class="badge badge-xs badge-ghost">
-              {m.name}
-            </span>
-          </div>
-
-          <%!-- Request count --%>
-          <span class="text-right tabular-nums text-base-content/60">
-            {format_number(row.request_count)}
-          </span>
-
-          <%!-- p95 latency --%>
-          <span class="text-right tabular-nums text-base-content/50 hidden md:block">
-            {if row.p95_latency_ms, do: "#{row.p95_latency_ms}ms", else: "—"}
-          </span>
-
-          <%!-- Error rate --%>
-          <span class={[
-            "text-right tabular-nums hidden md:block",
-            row.error_rate > 0.05 && "text-error",
-            row.error_rate > 0 && row.error_rate <= 0.05 && "text-warning",
-            row.error_rate == 0 && "text-base-content/40"
-          ]}>
-            {Float.round(row.error_rate * 100, 1)}%
-          </span>
-
-          <%!-- Cost --%>
-          <span class="text-right tabular-nums text-base-content/50 hidden md:block">
-            {format_cost(row.cost_usd)}
-          </span>
         </div>
       <% end %>
     </div>

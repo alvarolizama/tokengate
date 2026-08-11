@@ -477,6 +477,146 @@ defmodule Tokengate.ProvidersTest do
       assert global_mp.id in ids
       assert team_mp.id in ids
     end
+
+    @tag :hermes_verify
+    test "same credential can serve multiple scope buckets for the same model" do
+      alias_ = model_alias_fixture(%{name: "verify-cross-scope"})
+      team_a = team_fixture(%{name: "Team A"})
+      team_b = team_fixture(%{name: "Team B"})
+      member_a = team_member_fixture(team_a)
+      member_b = team_member_fixture(team_b)
+      provider = provider_fixture()
+      cred = credential_fixture(provider, %{status: "active"})
+
+      # Global row
+      {:ok, _} =
+        Providers.create_model_provider(%{
+          model_alias_id: alias_.id,
+          credential_id: cred.id,
+          provider_model: "global-model",
+          priority: 1,
+          enabled: true
+        })
+
+      # Team-A exclusive — same cred
+      {:ok, _} =
+        Providers.create_model_provider(%{
+          model_alias_id: alias_.id,
+          credential_id: cred.id,
+          provider_model: "team-a-model",
+          priority: 1,
+          enabled: true,
+          exclusive_to_team_id: team_a.id
+        })
+
+      # Team-B exclusive — same cred
+      {:ok, _} =
+        Providers.create_model_provider(%{
+          model_alias_id: alias_.id,
+          credential_id: cred.id,
+          provider_model: "team-b-model",
+          priority: 1,
+          enabled: true,
+          exclusive_to_team_id: team_b.id
+        })
+
+      # Member-A exclusive — same cred
+      {:ok, _} =
+        Providers.create_model_provider(%{
+          model_alias_id: alias_.id,
+          credential_id: cred.id,
+          provider_model: "member-a-model",
+          priority: 1,
+          enabled: true,
+          exclusive_to_team_member_id: member_a.id
+        })
+
+      # Member-B exclusive — same cred
+      {:ok, _} =
+        Providers.create_model_provider(%{
+          model_alias_id: alias_.id,
+          credential_id: cred.id,
+          provider_model: "member-b-model",
+          priority: 1,
+          enabled: true,
+          exclusive_to_team_member_id: member_b.id
+        })
+
+      all = Providers.list_all_model_providers(alias_.id)
+      cred_rows = Enum.filter(all, &(&1.credential_id == cred.id))
+      assert length(cred_rows) == 5
+    end
+
+    @tag :hermes_verify
+    test "duplicate in the same scope bucket is still rejected" do
+      alias_ = model_alias_fixture(%{name: "verify-dup"})
+      team = team_fixture(%{name: "Team D"})
+      provider = provider_fixture()
+      cred = credential_fixture(provider, %{status: "active"})
+
+      {:ok, _} =
+        Providers.create_model_provider(%{
+          model_alias_id: alias_.id,
+          credential_id: cred.id,
+          provider_model: "dup-1",
+          priority: 1,
+          enabled: true,
+          exclusive_to_team_id: team.id
+        })
+
+      {:error, changeset} =
+        Providers.create_model_provider(%{
+          model_alias_id: alias_.id,
+          credential_id: cred.id,
+          provider_model: "dup-2",
+          priority: 1,
+          enabled: true,
+          exclusive_to_team_id: team.id
+        })
+
+      refute changeset.valid?
+      assert changeset.errors[:credential_id] != nil
+    end
+
+    @tag :hermes_verify
+    test "list_available_credentials_for_scope excludes same-scope duplicates" do
+      alias_ = model_alias_fixture(%{name: "verify-reuse"})
+      team_a = team_fixture(%{name: "Team E"})
+      team_b = team_fixture(%{name: "Team F"})
+      provider = provider_fixture()
+      cred = credential_fixture(provider, %{status: "active"})
+
+      # Cred is already team-A exclusive for this model
+      {:ok, _} =
+        Providers.create_model_provider(%{
+          model_alias_id: alias_.id,
+          credential_id: cred.id,
+          provider_model: "team-a-model",
+          priority: 1,
+          enabled: true,
+          exclusive_to_team_id: team_a.id
+        })
+
+      # A DIFFERENT cred should be available for team-B exclusive assignment
+      cred2 = credential_fixture(provider, %{status: "active"})
+
+      {:ok, _} =
+        Providers.create_model_provider(%{
+          model_alias_id: alias_.id,
+          credential_id: cred2.id,
+          provider_model: "team-b-model",
+          priority: 1,
+          enabled: true,
+          exclusive_to_team_id: team_b.id
+        })
+
+      # The first cred is excluded from team-scope list (already team-exclusive)
+      available = Providers.list_available_credentials_for_scope(alias_.id, "team")
+      available_ids = Enum.map(available, & &1.id)
+
+      refute cred.id in available_ids
+      refute cred2.id in available_ids
+    end
   end
 
   # ---------------------------------------------------------------------------

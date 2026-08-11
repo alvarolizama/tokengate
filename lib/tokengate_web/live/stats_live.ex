@@ -7,7 +7,7 @@ defmodule TokengateWeb.StatsLive do
     * `:models` — per-model breakdown + drill-down (provider, team, member)
     * `:teams`  — per-team breakdown + drill-down (members, models)
 
-  Periods: Hoy, 7d, 30d, 90d.
+  Periods: Hoy, Esta semana, Este mes, 30d, 90d.
 
   Scoping by role:
     * admin   — org-wide
@@ -82,7 +82,7 @@ defmodule TokengateWeb.StatsLive do
 
   @impl true
   def handle_event("set_period", %{"period" => period}, socket)
-      when period in ~w(today 7d 30d 90d) do
+      when period in ~w(today week month 30d 90d) do
     {:noreply, socket |> assign(:period, period) |> start_data_load()}
   end
 
@@ -183,11 +183,31 @@ defmodule TokengateWeb.StatsLive do
 
     summary_task = fn -> {:metrics, summary_to_metrics(fetch_summary(params, opts))} end
 
-    [summary_task | breakdown_tasks(params, opts)]
+    prev_summary_task = fn ->
+      prev = previous_summary(params, params.period, params.timezone)
+      {:prev_metrics, summary_to_metrics(prev)}
+    end
+
+    [summary_task, prev_summary_task | breakdown_tasks(params, opts)]
     |> run_parallel()
     |> Map.new()
     |> apply_sorting(params)
+    |> merge_prev_metrics()
   end
+
+  # Fetch the previous period's summary for delta comparison.
+  defp previous_summary(params, period, timezone) do
+    %{from: prev_from, to: prev_to} = Periods.previous_period_bounds(period, timezone)
+    prev_opts = [from: prev_from, to: prev_to, timezone: timezone]
+    fetch_summary(params, prev_opts)
+  end
+
+  # Merge prev_metrics into the :metrics map as delta percentages.
+  defp merge_prev_metrics(%{metrics: metrics, prev_metrics: prev} = data) do
+    Map.put(data, :metrics, Map.put(metrics, :deltas, compute_deltas(metrics, prev)))
+  end
+
+  defp merge_prev_metrics(data), do: data
 
   # Run every query function concurrently and collect results in order.
   # Queries share the Repo pool, so wall time is pool rounds, not the sum of
@@ -204,10 +224,42 @@ defmodule TokengateWeb.StatsLive do
       cost_usd: summary.total_cost_usd,
       prompt_tokens: summary.total_prompt_tokens,
       completion_tokens: summary.total_completion_tokens,
-      cache_read_tokens: Map.get(summary, :total_cache_read_tokens, 0),
-      cache_creation_tokens: Map.get(summary, :total_cache_creation_tokens, 0),
       avg_tps: Map.get(summary, :avg_tps)
     }
+  end
+
+  # Delta percentages for KPI comparison vs the previous period.
+  # Returns nil when the previous value was zero (can't compute % change).
+  defp compute_deltas(current, prev) do
+    %{
+      requests_total: pct_delta(current.requests_total, prev.requests_total),
+      cost_usd: decimal_pct_delta(current.cost_usd, prev.cost_usd),
+      prompt_tokens: pct_delta(current.prompt_tokens, prev.prompt_tokens),
+      completion_tokens: pct_delta(current.completion_tokens, prev.completion_tokens)
+    }
+  end
+
+  defp pct_delta(_current, 0), do: nil
+  defp pct_delta(_current, nil), do: nil
+
+  defp pct_delta(current, prev) when is_number(prev) and prev != 0 do
+    Float.round((current - prev) / abs(prev) * 100, 1)
+  end
+
+  defp decimal_pct_delta(_current, %Decimal{coef: 0}), do: nil
+  defp decimal_pct_delta(_current, nil), do: nil
+
+  defp decimal_pct_delta(current, prev) do
+    if Decimal.equal?(prev, Decimal.new(0)) do
+      nil
+    else
+      current
+      |> Decimal.sub(prev)
+      |> Decimal.div(Decimal.abs(prev))
+      |> Decimal.mult(Decimal.from_float(100.0))
+      |> Decimal.round(1)
+      |> Decimal.to_float()
+    end
   end
 
   # Each task returns {assign_key, rows} so results can be applied without
@@ -446,7 +498,7 @@ defmodule TokengateWeb.StatsLive do
   ## Helpers --------------------------------------------------------------
 
   defp parse_period(nil), do: "today"
-  defp parse_period(period) when period in ~w(today 7d 30d 90d), do: period
+  defp parse_period(period) when period in ~w(today week month 30d 90d), do: period
   defp parse_period(_), do: "today"
 
   defp empty_metrics do
@@ -455,7 +507,13 @@ defmodule TokengateWeb.StatsLive do
       cost_usd: Decimal.new(0),
       prompt_tokens: 0,
       completion_tokens: 0,
-      avg_tps: nil
+      avg_tps: nil,
+      deltas: %{
+        requests_total: nil,
+        cost_usd: nil,
+        prompt_tokens: nil,
+        completion_tokens: nil
+      }
     }
   end
 
@@ -464,8 +522,6 @@ defmodule TokengateWeb.StatsLive do
       total_cost_usd: Decimal.new(0),
       total_prompt_tokens: 0,
       total_completion_tokens: 0,
-      total_cache_read_tokens: 0,
-      total_cache_creation_tokens: 0,
       request_count: 0,
       avg_tps: nil
     }
@@ -522,10 +578,11 @@ defmodule TokengateWeb.StatsLive do
   def format_tps(n) when is_integer(n), do: to_string(n)
 
   def period_label("today"), do: "Hoy"
-  def period_label("7d"), do: "7 días"
+  def period_label("week"), do: "Esta semana"
+  def period_label("month"), do: "Este mes"
   def period_label("30d"), do: "30 días"
   def period_label("90d"), do: "90 días"
-  def period_label(_), do: "7 días"
+  def period_label(_), do: "Hoy"
 
   def period_active?(current, target), do: current == target
 

@@ -21,7 +21,7 @@
         ></span>
         <div class="join" id="period-selector" role="tablist">
           <button
-            :for={period <- ~w(today 7d 30d 90d)}
+            :for={period <- ~w(today week month 30d 90d)}
             phx-click="set_period"
             phx-value-period={period}
             class={[
@@ -91,7 +91,7 @@
         <% @live_action == :index -> %>
           <div class="space-y-6">
             <%!-- KPI cards --%>
-            <.kpi_cards metrics={@metrics} />
+            <.kpi_cards metrics={@metrics} deltas={@metrics[:deltas]} />
 
             <%!-- KPIs secundarios: concurrencia, horas y minutos pico --%>
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">

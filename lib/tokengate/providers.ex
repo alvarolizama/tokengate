@@ -387,17 +387,24 @@ defmodule Tokengate.Providers do
   @doc """
   Returns active credentials available for scope assignment.
 
+  A credential can now serve multiple scope buckets for the same model
+  (global + team-exclusive + member-exclusive), so we no longer exclude
+  credentials simply because they appear in another model_provider row.
+
   Filters:
   - Only active credentials
-  - Excludes credentials already in use by other model_providers (unless
-    the model_provider is the one being edited, passed as exclude_id)
-  - When scope is "member": excludes credentials already exclusive to
-    another member for the same model_alias
-  - When scope is "team": excludes credentials already exclusive to
-    another team for the same model_alias
+  - Excludes credentials already assigned to the **same scope bucket**
+    for this model alias (preventing exact-duplicate rows). When editing
+    an existing model_provider, the row being edited is excluded from
+    the duplicate check.
   """
   def list_available_credentials_for_scope(model_alias_id, scope, opts \\ []) do
     exclude_model_provider_id = Keyword.get(opts, :exclude_model_provider_id)
+
+    # Convert string UUIDs to binaries so fragment EXISTS checks match the
+    # binary_id columns without Postgrex encode errors.
+    ma_id = dump_uuid!(model_alias_id)
+    exclude_id = exclude_model_provider_id && dump_uuid!(exclude_model_provider_id)
 
     base_query =
       from(c in Credential,
@@ -405,53 +412,76 @@ defmodule Tokengate.Providers do
         preload: [:provider]
       )
 
-    # Exclude credentials already used by other model_providers
-    base_query =
-      if exclude_model_provider_id do
-        from(c in base_query,
-          where:
-            not fragment(
-              "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.id != ?)",
-              c.id,
-              ^exclude_model_provider_id
-            )
-        )
-      else
-        from(c in base_query,
-          where:
-            not fragment(
-              "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ?)",
-              c.id
-            )
-        )
-      end
-
-    # Additional scope-specific exclusions
+    # Exclude credentials already in the SAME scope bucket for this model,
+    # preventing exact-duplicate rows within one bucket. Cross-bucket reuse
+    # (global + team-exclusive + member-exclusive) is allowed.
     case scope do
       "member" ->
-        # Exclude credentials already exclusive to another member for this model
-        from(c in base_query,
-          where:
-            not fragment(
-              "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_alias_id = ? AND mp.exclusive_to_team_member_id IS NOT NULL)",
-              c.id,
-              ^model_alias_id
-            )
-        )
+        if exclude_id do
+          from(c in base_query,
+            where:
+              not fragment(
+                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_alias_id = ? AND mp.exclusive_to_team_member_id IS NOT NULL AND mp.id != ?)",
+                c.id,
+                ^ma_id,
+                ^exclude_id
+              )
+          )
+        else
+          from(c in base_query,
+            where:
+              not fragment(
+                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_alias_id = ? AND mp.exclusive_to_team_member_id IS NOT NULL)",
+                c.id,
+                ^ma_id
+              )
+          )
+        end
 
       "team" ->
-        # Exclude credentials already exclusive to another team for this model
-        from(c in base_query,
-          where:
-            not fragment(
-              "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_alias_id = ? AND mp.exclusive_to_team_id IS NOT NULL)",
-              c.id,
-              ^model_alias_id
-            )
-        )
+        if exclude_id do
+          from(c in base_query,
+            where:
+              not fragment(
+                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_alias_id = ? AND mp.exclusive_to_team_id IS NOT NULL AND mp.id != ?)",
+                c.id,
+                ^ma_id,
+                ^exclude_id
+              )
+          )
+        else
+          from(c in base_query,
+            where:
+              not fragment(
+                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_alias_id = ? AND mp.exclusive_to_team_id IS NOT NULL)",
+                c.id,
+                ^ma_id
+              )
+          )
+        end
 
       _ ->
-        base_query
+        # Global scope
+        if exclude_id do
+          from(c in base_query,
+            where:
+              not fragment(
+                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_alias_id = ? AND mp.exclusive_to_team_member_id IS NULL AND mp.exclusive_to_team_id IS NULL AND mp.id != ?)",
+                c.id,
+                ^ma_id,
+                ^exclude_id
+              )
+          )
+        else
+          from(c in base_query,
+            where:
+              not fragment(
+                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_alias_id = ? AND mp.exclusive_to_team_member_id IS NULL AND mp.exclusive_to_team_id IS NULL)",
+                c.id,
+                ^ma_id
+              )
+          )
+        end
     end
     |> Repo.all()
     |> Enum.sort_by(fn credential ->
@@ -669,4 +699,11 @@ defmodule Tokengate.Providers do
     do: {:error, :already_granted}
 
   defp normalize_unique_error(error), do: error
+
+  # Convert a string UUID to its 16-byte binary representation so it can be
+  # used in raw SQL fragments against :binary_id columns.
+  defp dump_uuid!(uuid) do
+    {:ok, binary} = Ecto.UUID.dump(uuid)
+    binary
+  end
 end

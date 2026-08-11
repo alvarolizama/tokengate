@@ -34,6 +34,8 @@ defmodule Tokengate.Routing.Router do
     * Member-exclusive — only the specified team member sees it.
     * Team-exclusive — only members of the specified team see it.
 
+  A credential can appear in multiple scope rows for the same model
+  (global + multiple team-exclusive + multiple member-exclusive).
   Exclusive providers are injected with priority -1 (always first) for
   the matching scope. If they fail, the normal fallback pool takes over.
 

@@ -119,7 +119,7 @@ defmodule TokengateWeb.MonitorLiveTest do
     assert has_element?(view, "#alert-budget-credits-#{member.id}")
   end
 
-  test "summary card counts members without credit", %{conn: conn} do
+  test "budget exhausted member appears in the budget table", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     {member, _member_user, _team} = broke_member_fixture()
 
@@ -128,7 +128,7 @@ defmodule TokengateWeb.MonitorLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/monitor")
 
-    assert has_element?(view, "#alert-count-budgets", "1")
+    assert has_element?(view, "#alert-budget-#{member.id}")
   end
 
   test "member under the limit does not appear in the budget section", %{conn: conn} do

@@ -121,10 +121,11 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#nav-models")
     assert has_element?(view, "#nav-teams")
     assert has_element?(view, "#period-selector")
-    assert has_element?(view, "#period-7d")
+    assert has_element?(view, "#period-today")
+    assert has_element?(view, "#period-week")
+    assert has_element?(view, "#period-month")
     assert has_element?(view, "#period-30d")
     assert has_element?(view, "#period-90d")
-    assert has_element?(view, "#period-today")
   end
 
   test "admin sees KPI cards and top tables on index", %{conn: conn} do
