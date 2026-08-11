@@ -351,6 +351,9 @@ defmodule TokengateWeb.MonitorLive do
     model_hour_cost = per_model_cost(hour_from)
     model_day_cost = per_model_cost(today_from)
 
+    # Per-model average latency (last hour)
+    model_avg_latency = per_model_avg_latency(hour_from)
+
     # Resolve model alias ids → names
     aliases = Providers.list_model_aliases()
 
@@ -389,8 +392,10 @@ defmodule TokengateWeb.MonitorLive do
           total_requests: total_count,
           cost_hour: Map.get(model_hour_cost, alias_id, Decimal.new("0")),
           cost_day: Map.get(model_day_cost, alias_id, Decimal.new("0")),
+          avg_latency_ms: Map.get(model_avg_latency, alias_id),
           sparkline: sparkline,
           inflight: length(model_inflight),
+          inflight_providers: length(provider_segments),
           providers: provider_segments
         }
       end)
@@ -516,6 +521,29 @@ defmodule TokengateWeb.MonitorLive do
     |> Repo.all()
     |> Map.new(fn row ->
       {row.model_alias_id, Decimal.new(to_string(row.cost_usd))}
+    end)
+  end
+
+  # Average latency (ms) per model alias in the last hour.
+  defp per_model_avg_latency(from) do
+    from(rl in RequestLog,
+      where: rl.inserted_at >= ^from and not is_nil(rl.model_alias_id),
+      group_by: rl.model_alias_id,
+      select: %{
+        model_alias_id: rl.model_alias_id,
+        avg_latency: fragment("AVG(latency_ms)")
+      }
+    )
+    |> Repo.all()
+    |> Map.new(fn row ->
+      latency =
+        case row.avg_latency do
+          %Decimal{} = d -> Decimal.round(d, 0) |> Decimal.to_integer()
+          nil -> nil
+          val -> trunc(val * 1.0)
+        end
+
+      {row.model_alias_id, latency}
     end)
   end
 
