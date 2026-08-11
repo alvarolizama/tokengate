@@ -29,6 +29,7 @@
 - **Fallback matrix + circuit breaker** — auth errors (401/402/403) disable the credential and fall back; timeouts and first-token timeouts fall back immediately; fast errors (5xx/429) retry before moving on. Per-credential circuit breaker with configurable threshold/cooldown.
 - **Two-gate throttling** — per-user limits (team defaults + per-member overrides: RPM, concurrency) protect TokenGate; per-credential limits (`max_rpm`, `max_concurrent`, `max_concurrent_per_user`) protect the upstream key.
 - **Monthly USD budgets** — per team member (team default + member extra) and per service. ETS hot counters checked pre-flight; Postgres `request_logs` is the durable truth.
+- **Daily spending limit per credential** — a provider credential can carry a daily USD cap; once reached, the router skips it and fails over to the next credential until the next UTC day. Live spend/limit indicator on the Models page.
 - **Cost tracking** — the provider-reported `usage.cost` is recorded per request and returned in the `X-Tokengate-Cost` response header. Subscription providers (`billing_mode: included`) count as $0.
 - **Agent identification headers** (OpenRouter-style) — `X-Agent-Type`, `X-Title`, `HTTP-Referer`, `User-Agent` feed metrics and limits.
 
