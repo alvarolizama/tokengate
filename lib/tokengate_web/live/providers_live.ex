@@ -460,8 +460,11 @@ defmodule TokengateWeb.ProvidersLive do
   # compares decimals numerically, so 25.50 "equals" 25.500000.
   defp normalize_daily_limit(changeset) do
     case Ecto.Changeset.get_field(changeset, :daily_limit_usd) do
-      nil -> changeset
-      %Decimal{} = d -> Ecto.Changeset.force_change(changeset, :daily_limit_usd, Decimal.round(d, 2))
+      nil ->
+        changeset
+
+      %Decimal{} = d ->
+        Ecto.Changeset.force_change(changeset, :daily_limit_usd, Decimal.round(d, 2))
     end
   end
 

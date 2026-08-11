@@ -740,6 +740,7 @@ defmodule Tokengate.Routing.RouterTest do
       {:ok, _} = Providers.grant_alias_to_team(team.id, model_alias.id)
 
       capped_provider = provider_fixture()
+
       capped_cred =
         credential_fixture(capped_provider, %{status: "active", daily_limit_usd: "10.00"})
 

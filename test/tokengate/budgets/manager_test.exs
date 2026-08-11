@@ -632,6 +632,7 @@ defmodule Tokengate.Budgets.ManagerTest do
       credential_id = Ecto.UUID.generate()
 
       yesterday = Date.add(Date.utc_today(), -1)
+
       log_spend(tm.id, "8.00",
         credential_id: credential_id,
         inserted_at: DateTime.new!(yesterday, ~T[23:59:59], "Etc/UTC")

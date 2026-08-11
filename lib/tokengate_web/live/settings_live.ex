@@ -235,7 +235,11 @@ defmodule TokengateWeb.SettingsLive do
               <%= if @global_daily_cap && @global_daily_pct do %>
                 <progress
                   class="progress w-full mt-1"
-                  class={if @global_daily_pct >= 90, do: "progress progress-error w-full mt-1", else: "progress progress-warning w-full mt-1"}
+                  class={
+                    if @global_daily_pct >= 90,
+                      do: "progress progress-error w-full mt-1",
+                      else: "progress progress-warning w-full mt-1"
+                  }
                   value={@global_daily_pct}
                   max="100"
                 />
@@ -504,7 +508,10 @@ defmodule TokengateWeb.SettingsLive do
       end
 
     socket
-    |> assign(:global_form, to_form(GlobalSettings.changeset(settings, %{}), as: :global_settings))
+    |> assign(
+      :global_form,
+      to_form(GlobalSettings.changeset(settings, %{}), as: :global_settings)
+    )
     |> assign(:global_daily_spend, daily_spend)
     |> assign(:global_daily_cap, daily_cap)
     |> assign(:global_daily_pct, daily_pct)

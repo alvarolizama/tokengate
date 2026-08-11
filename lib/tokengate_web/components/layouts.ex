@@ -286,12 +286,6 @@ defmodule TokengateWeb.Layouts do
         </nav>
 
         <.timezone_selector current_scope={@current_scope} />
-
-        <div class="p-3 border-t border-base-300">
-          <p class="text-xs text-base-content/40 px-3">
-            v{Application.spec(:tokengate, :vsn) |> to_string()}
-          </p>
-        </div>
       </div>
     </aside>
     """
