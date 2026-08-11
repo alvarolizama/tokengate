@@ -7,7 +7,7 @@
         <:subtitle>
           <span class="inline-flex items-center gap-2">
             <.icon name="hero-signal" class="w-4 h-4 text-base-content/50" />
-            Terminal de actividad · última hora
+            Terminal de actividad · tiempo real
           </span>
         </:subtitle>
       </.header>
@@ -47,22 +47,26 @@
         color="text-secondary"
       />
       <.index_card
-        label="Requests (1h)"
-        value={format_number(@indices[:hour_requests] || 0)}
+        label="Requests hoy"
+        value={format_number(@indices[:today_requests] || 0)}
         icon="hero-bolt"
         color="text-primary"
+        delta={@indices[:delta_requests]}
       />
       <.index_card
-        label="% Error (1h)"
-        value={"#{Float.round((@indices[:hour_error_rate] || 0.0) * 100, 1)}%"}
+        label="% Error hoy"
+        value={"#{Float.round((@indices[:today_error_rate] || 0.0) * 100, 1)}%"}
         icon="hero-exclamation-triangle"
-        color={health_class(@indices[:hour_error_rate] || 0.0)}
+        color={health_class(@indices[:today_error_rate] || 0.0)}
+        delta={@indices[:delta_error_rate]}
+        delta_suffix="pp"
       />
       <.index_card
-        label="Costo (1h)"
-        value={"$#{format_cost(@indices[:hour_cost] || Decimal.new(0))}"}
+        label="Costo hoy"
+        value={"$#{format_cost(@indices[:today_cost] || Decimal.new(0))}"}
         icon="hero-banknotes"
         color="text-success"
+        delta={@indices[:delta_cost]}
       />
     </div>
 

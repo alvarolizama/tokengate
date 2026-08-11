@@ -29,6 +29,7 @@ defmodule TokengateWeb.MonitorLive do
   alias Tokengate.Logs.Inflight
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Metrics.{Collector, Rollup, Window}
+  alias Tokengate.Periods
   alias Tokengate.Providers
   alias Tokengate.Routing.CircuitBreakerManager
   alias Tokengate.Repo
@@ -328,30 +329,27 @@ defmodule TokengateWeb.MonitorLive do
     window = Window.snapshot()
     inflight_entries = Inflight.list()
 
-    # ── Hour + day aggregates from Postgres (durable source of truth) ──
+    # ── Day aggregates from Postgres (today vs yesterday) ──
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
+    today_from = Periods.start_of_day_utc(timezone)
+    yesterday_from = Periods.previous_period_bounds("today", timezone).from
+
     hour_from = one_hour_ago()
 
-    day_from =
-      DateTime.utc_now() |> DateTime.add(-24 * 3600, :second) |> DateTime.truncate(:second)
+    today_stats = day_stats_query(today_from)
+    yesterday_stats = day_stats_query(yesterday_from)
 
-    hour_stats =
-      from(rl in RequestLog,
-        where: rl.inserted_at >= ^hour_from,
-        select: %{
-          requests: count(rl.id),
-          errors: fragment("COUNT(*) FILTER (WHERE status_code >= 400)"),
-          cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)")
-        }
-      )
-      |> Repo.one()
+    today_cost = Decimal.new(to_string(today_stats.cost_usd))
+    today_requests = today_stats.requests
+    today_errors = today_stats.errors
 
-    hour_cost = Decimal.new(to_string(hour_stats.cost_usd))
-    hour_requests = hour_stats.requests
-    hour_errors = hour_stats.errors
+    yesterday_cost = Decimal.new(to_string(yesterday_stats.cost_usd))
+    yesterday_requests = yesterday_stats.requests
+    yesterday_errors = yesterday_stats.errors
 
     # Per-model cost for last hour + last day
     model_hour_cost = per_model_cost(hour_from)
-    model_day_cost = per_model_cost(day_from)
+    model_day_cost = per_model_cost(today_from)
 
     # Resolve model alias ids → names
     aliases = Providers.list_model_aliases()
@@ -420,9 +418,14 @@ defmodule TokengateWeb.MonitorLive do
       inflight: total_inflight,
       inflight_providers: inflight_providers,
       inflight_users: inflight_users,
-      hour_requests: hour_requests,
-      hour_error_rate: if(hour_requests > 0, do: hour_errors / hour_requests * 1.0, else: 0.0),
-      hour_cost: hour_cost
+      today_requests: today_requests,
+      today_error_rate:
+        if(today_requests > 0, do: today_errors / today_requests * 1.0, else: 0.0),
+      today_cost: today_cost,
+      delta_requests: pct_delta(today_requests, yesterday_requests),
+      delta_cost: decimal_pct_delta(today_cost, yesterday_cost),
+      delta_error_rate:
+        error_rate_delta(today_errors, today_requests, yesterday_errors, yesterday_requests)
     }
 
     # Refresh credential rows if a model is expanded
@@ -449,6 +452,56 @@ defmodule TokengateWeb.MonitorLive do
     DateTime.utc_now()
     |> DateTime.add(-3600, :second)
     |> DateTime.truncate(:second)
+  end
+
+  # Aggregate request stats from a given timestamp → now.
+  defp day_stats_query(from) do
+    from(rl in RequestLog,
+      where: rl.inserted_at >= ^from,
+      select: %{
+        requests: count(rl.id),
+        errors: fragment("COUNT(*) FILTER (WHERE status_code >= 400)"),
+        cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)")
+      }
+    )
+    |> Repo.one()
+  end
+
+  # ── Delta helpers (today vs yesterday) ───────────────────────────────────
+
+  defp pct_delta(_current, 0), do: nil
+  defp pct_delta(_current, nil), do: nil
+
+  defp pct_delta(current, prev) when is_integer(prev) and prev != 0 do
+    Float.round((current - prev) / abs(prev) * 100, 1)
+  end
+
+  defp decimal_pct_delta(_current, %Decimal{coef: 0}), do: nil
+
+  defp decimal_pct_delta(current, prev) do
+    if Decimal.equal?(prev, Decimal.new(0)) do
+      nil
+    else
+      current
+      |> Decimal.sub(prev)
+      |> Decimal.div(Decimal.abs(prev))
+      |> Decimal.mult(Decimal.from_float(100.0))
+      |> Decimal.round(1)
+      |> Decimal.to_float()
+    end
+  end
+
+  # Error-rate delta in percentage points (not relative %): today's rate minus
+  # yesterday's rate, expressed as pp. e.g. 3.2% today vs 2.0% yesterday = +1.2pp.
+  defp error_rate_delta(today_errors, today_requests, y_errors, y_requests) do
+    today_rate = if today_requests > 0, do: today_errors / today_requests * 100.0, else: 0.0
+    y_rate = if y_requests > 0, do: y_errors / y_requests * 100.0, else: 0.0
+
+    if y_requests > 0 or today_requests > 0 do
+      Float.round(today_rate - y_rate, 1)
+    else
+      nil
+    end
   end
 
   defp per_model_cost(from) do
@@ -507,6 +560,20 @@ defmodule TokengateWeb.MonitorLive do
   def health_dot_class(error_rate) when error_rate >= 0.05, do: "bg-error"
   def health_dot_class(error_rate) when error_rate >= 0.01, do: "bg-warning"
   def health_dot_class(_), do: "bg-success"
+
+  # ── Delta display helpers (shared with index_card) ───────────────────────
+
+  def delta_color(nil), do: ""
+  def delta_color(delta) when is_number(delta) and delta >= 0, do: "text-success"
+  def delta_color(_delta), do: "text-error"
+
+  def delta_arrow(nil), do: ""
+  def delta_arrow(delta) when is_number(delta) and delta >= 0, do: "↑"
+  def delta_arrow(_delta), do: "↓"
+
+  def abs_float(nil), do: ""
+  def abs_float(n) when is_float(n), do: Float.round(abs(n), 1) |> Float.to_string()
+  def abs_float(n) when is_integer(n), do: abs(n) |> Integer.to_string()
 
   def inflight_badge_class(0), do: "badge-ghost"
   def inflight_badge_class(n) when n > 0, do: "badge-primary"
@@ -608,6 +675,8 @@ defmodule TokengateWeb.MonitorLive do
   attr :value, :string, required: true
   attr :icon, :string, required: true
   attr :color, :string, default: "text-base-content/60"
+  attr :delta, :float, default: nil
+  attr :delta_suffix, :string, default: "%"
 
   def index_card(assigns) do
     ~H"""
@@ -617,9 +686,20 @@ defmodule TokengateWeb.MonitorLive do
           <.icon name={@icon} class={["w-3.5 h-3.5", @color]} />
           {@label}
         </div>
-        <p class={["text-xl sm:text-2xl font-bold tabular-nums mt-1", @color]}>
-          {@value}
-        </p>
+        <div class="flex items-baseline gap-2 mt-1">
+          <p class={["text-xl sm:text-2xl font-bold tabular-nums", @color]}>
+            {@value}
+          </p>
+          <span
+            :if={@delta != nil}
+            class={[
+              "text-[10px] font-medium tabular-nums",
+              delta_color(@delta)
+            ]}
+          >
+            {delta_arrow(@delta)}{abs_float(@delta)}{@delta_suffix}
+          </span>
+        </div>
       </div>
     </div>
     """
