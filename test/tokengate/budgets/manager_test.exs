@@ -661,4 +661,87 @@ defmodule Tokengate.Budgets.ManagerTest do
       refute_received {:credential_spend_updated, ^credential_id}
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Global daily cap — record/spend/exhausted + lazy DB load
+  # ---------------------------------------------------------------------------
+
+  describe "global daily cap" do
+    setup do
+      # Clean the global counter so each test starts from a known state.
+      :ets.delete(@table, {:global, :daily})
+      :ok
+    end
+
+    test "record_spend accumulates global daily spend" do
+      {tm1, _} = team_member_fixture()
+      {tm2, _} = team_member_fixture()
+
+      assert :ok = Manager.record_spend(tm1.id, Decimal.new("10.00"))
+      assert :ok = Manager.record_spend(tm2.id, Decimal.new("20.00"))
+
+      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("30.00"))
+    end
+
+    test "record_credential_spend also accumulates global daily spend" do
+      credential_id = Ecto.UUID.generate()
+
+      assert :ok = Manager.record_credential_spend(credential_id, Decimal.new("5.00"))
+
+      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("5.00"))
+    end
+
+    test "global_exhausted? with nil cap is always false" do
+      {tm, _} = team_member_fixture()
+      assert :ok = Manager.record_spend(tm.id, Decimal.new("999.00"))
+
+      refute Manager.global_exhausted?(nil)
+    end
+
+    test "global_exhausted? flips when spend reaches the cap" do
+      {tm, _} = team_member_fixture()
+      cap = Decimal.new("10.00")
+
+      refute Manager.global_exhausted?(cap)
+
+      assert :ok = Manager.record_spend(tm.id, Decimal.new("9.99"))
+      refute Manager.global_exhausted?(cap)
+
+      assert :ok = Manager.record_spend(tm.id, Decimal.new("0.02"))
+      assert Manager.global_exhausted?(cap)
+    end
+
+    test "lazy-loads today's total spend from request_logs on first touch" do
+      {tm, _team} = team_member_fixture()
+
+      log_spend(tm.id, "4.00")
+      log_spend(tm.id, "6.00")
+
+      # Clear ETS global entry to force lazy load.
+      :ets.delete(@table, {:global, :daily})
+
+      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("10.00"))
+    end
+
+    test "yesterday's logs don't count (UTC day rollover)" do
+      {tm, _team} = team_member_fixture()
+
+      yesterday = Date.add(Date.utc_today(), -1)
+      log_spend(tm.id, "8.00", inserted_at: DateTime.new!(yesterday, ~T[23:59:59], "Etc/UTC"))
+
+      # Clear ETS global entry to force lazy load.
+      :ets.delete(@table, {:global, :daily})
+
+      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("0"))
+    end
+
+    test "set_global_from_db resets the counter" do
+      {tm, _} = team_member_fixture()
+
+      assert :ok = Manager.record_spend(tm.id, Decimal.new("5.00"))
+      assert :ok = Manager.set_global_from_db(2_000_000)
+
+      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("2.00"))
+    end
+  end
 end

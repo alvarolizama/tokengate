@@ -38,6 +38,7 @@ defmodule TokengateWeb.ProxyController do
   import Ecto.Query, only: [from: 2]
 
   alias Tokengate.Budgets.Manager, as: Budgets
+  alias Tokengate.GlobalSettings
   alias Tokengate.Limits.Manager, as: Limits
   alias Tokengate.Logs.WriteWorker
   alias Tokengate.Metrics.Collector
@@ -84,7 +85,8 @@ defmodule TokengateWeb.ProxyController do
       |> assign(:effort, effort)
 
     with :ok <- require_model(model),
-         :ok <- acquire_team_limits(key_id, limits) do
+         :ok <- acquire_team_limits(key_id, limits),
+         :ok <- check_global_daily_cap() do
       try do
         case route_and_acquire(member, payload, conn.assigns.api_key_hash, limits) do
           {:ok, route} ->
@@ -166,7 +168,8 @@ defmodule TokengateWeb.ProxyController do
     request_start = System.monotonic_time(:millisecond)
 
     with :ok <- require_model(model),
-         :ok <- acquire_team_limits(key_id, limits) do
+         :ok <- acquire_team_limits(key_id, limits),
+         :ok <- check_global_daily_cap() do
       try do
         case route_and_acquire(member, payload, conn.assigns.api_key_hash, limits, [],
                capability: capability
@@ -649,6 +652,16 @@ defmodule TokengateWeb.ProxyController do
     Enum.find_value(tiers, 30_000, fn {threshold, timeout} ->
       if remaining <= threshold, do: timeout
     end)
+  end
+
+  defp check_global_daily_cap do
+    cap = GlobalSettings.get_daily_cap()
+
+    if Budgets.global_exhausted?(cap) do
+      {:error, {:budget_exceeded, %{period: :daily_global, available: Decimal.new(0)}}}
+    else
+      :ok
+    end
   end
 
   defp check_budget(member, limits, route, _payload) do
@@ -1527,6 +1540,9 @@ defmodule TokengateWeb.ProxyController do
     do:
       {429, "rate_limit_error", "provider_concurrency_exceeded",
        "Too many concurrent requests to provider"}
+
+  defp error_details({:budget_exceeded, %{period: :daily_global}}),
+    do: {402, "billing_error", "budget_exceeded", "Global daily spending cap reached"}
 
   defp error_details({:budget_exceeded, %{period: period}}),
     do: {402, "billing_error", "budget_exceeded", "Budget exceeded (#{period})"}

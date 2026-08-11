@@ -54,6 +54,32 @@ defmodule TokengateWeb.SettingsLiveTest do
   end
 
   describe "admin access" do
+    test "global daily cap section renders with current state", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/dashboard/settings")
+
+      assert has_element?(view, "#global-cap-form")
+      assert has_element?(view, "#save-global-cap-btn")
+      assert render(view) =~ "Límite de gasto diario global"
+      assert render(view) =~ "Gastado hoy"
+    end
+
+    test "saving global daily cap updates the setting", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/dashboard/settings")
+
+      view
+      |> form("#global-cap-form", global_settings: %{daily_max_spend_usd: "50.00"})
+      |> render_submit()
+
+      assert render(view) =~ "Límite diario global actualizado"
+      assert render(view) =~ "$50.00"
+    end
+
     test "reset sticky sessions clears all sticky entries", %{conn: conn} do
       %{user: admin, password: pass} = register("admin")
 

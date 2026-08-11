@@ -53,6 +53,7 @@ defmodule Tokengate.Budgets.Manager do
   @micro 1_000_000
   @pubsub Tokengate.PubSub
   @credential_budgets_topic "credential_budgets"
+  @global_key {:global, :daily}
 
   # ---------------------------------------------------------------------------
   # Public API
@@ -125,6 +126,7 @@ defmodule Tokengate.Budgets.Manager do
     # Atomic increments. Position 2 = amount_micro.
     bump_counter({member_id, :daily}, micro)
     bump_counter({member_id, :monthly}, micro)
+    bump_counter(@global_key, micro)
 
     # Debounced drift-correction enqueue: instead of one Oban job per request,
     # we mark `{:sync_pending, member_id}` with insert_new and only enqueue when
@@ -177,6 +179,7 @@ defmodule Tokengate.Budgets.Manager do
         subject = {:credential, credential_id}
         ensure_loaded(subject, :daily)
         bump_counter({subject, :daily}, micro)
+        bump_counter(@global_key, micro)
         maybe_enqueue_sync(subject)
         broadcast_credential_spend(credential_id)
         :ok
@@ -248,6 +251,41 @@ defmodule Tokengate.Budgets.Manager do
   @doc "Subscribes the caller to credential spend updates."
   def subscribe_credential_budgets do
     Phoenix.PubSub.subscribe(@pubsub, @credential_budgets_topic)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Global daily cap
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Returns the total daily spend across every member and credential (UTC day)
+  in USD as a Decimal. Lazy-loads from the DB on first touch or day rollover.
+  """
+  @spec global_daily_spend() :: Decimal.t()
+  def global_daily_spend do
+    ensure_loaded_global()
+    from_micro(read_counter(@global_key))
+  end
+
+  @doc """
+  Whether the global daily spending cap has been reached for the current
+  UTC day. A `nil` cap means unlimited — always `false`.
+  """
+  @spec global_exhausted?(Decimal.t() | nil) :: boolean()
+  def global_exhausted?(nil), do: false
+
+  def global_exhausted?(%Decimal{} = cap) do
+    ensure_loaded_global()
+    read_counter(@global_key) >= to_micro(cap)
+  end
+
+  @doc """
+  Resets the global daily ETS counter to the micro-USD value recomputed
+  from the DB by `Budgets.SyncWorker`.
+  """
+  @spec set_global_from_db(integer()) :: :ok
+  def set_global_from_db(daily_micro) do
+    GenServer.call(__MODULE__, {:set_global_from_db, daily_micro})
   end
 
   @doc """
@@ -357,6 +395,18 @@ defmodule Tokengate.Budgets.Manager do
     {:reply, :ok, state}
   end
 
+  @impl true
+  def handle_call({:set_global_from_db, daily_micro}, _from, state) do
+    :ets.insert(@table, {@global_key, daily_micro, true, current_period_stamp(:daily)})
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call({:seed_global, micro}, _from, state) do
+    :ets.insert(@table, {@global_key, micro, true, current_period_stamp(:daily)})
+    {:reply, :ok, state}
+  end
+
   # ---------------------------------------------------------------------------
   # Internal — table lifecycle
   # ---------------------------------------------------------------------------
@@ -416,6 +466,36 @@ defmodule Tokengate.Budgets.Manager do
   defp stale?(:daily, stored_day, today), do: stored_day != today
 
   defp stale?(:monthly, {y, m}, {ty, tm}), do: y != ty or m != tm
+
+  # Ensures the global daily entry exists and is current. Same lazy-load
+  # pattern as per-member/credential entries but keyed by @global_key.
+  # Degrades gracefully if the ETS table doesn't exist yet (hot-reload).
+  defp ensure_loaded_global do
+    case :ets.whereis(@table) do
+      :undefined ->
+        :ok
+
+      _ ->
+        case :ets.lookup(@table, @global_key) do
+          [] ->
+            seed_global_from_db()
+
+          [{@global_key, _micro, _loaded?, stored_day}] ->
+            if stored_day != Date.utc_today() do
+              seed_global_from_db()
+            end
+        end
+    end
+  rescue
+    ArgumentError -> :ok
+  end
+
+  defp seed_global_from_db do
+    from = period_start(:daily)
+    summary = Tokengate.Logs.cost_summary(%{from: from})
+    micro = to_micro(summary.total_cost_usd)
+    GenServer.call(__MODULE__, {:seed_global, micro})
+  end
 
   defp seed_from_db({:credential, credential_id} = subject, period) do
     from = period_start(period)
