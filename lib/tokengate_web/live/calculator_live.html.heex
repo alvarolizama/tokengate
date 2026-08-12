@@ -202,7 +202,7 @@
         </div>
 
         <%!-- Token breakdown ───────────────────────────────────────────────── --%>
-        <div class="grid grid-cols-3 gap-3">
+        <div class="grid grid-cols-2 gap-3">
           <div class="card bg-base-100 border border-base-300 shadow-sm">
             <div class="card-body p-3 sm:p-4">
               <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
@@ -220,16 +220,6 @@
               </div>
               <p class="text-sm font-bold tabular-nums text-base-content/70">
                 {format_number(@summary.total_completion)}
-              </p>
-            </div>
-          </div>
-          <div class="card bg-base-100 border border-base-300 shadow-sm">
-            <div class="card-body p-3 sm:p-4">
-              <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-                Cache Reads
-              </div>
-              <p class="text-sm font-bold tabular-nums text-base-content/70">
-                {format_number(@summary.total_cache)}
               </p>
             </div>
           </div>

@@ -128,28 +128,22 @@ defmodule TokengateWeb.CalculatorLive do
     chart_data =
       Enum.map(series, fn row ->
         prompt = row.prompt_tokens
-        cache_read = row.cache_read_tokens
         completion = row.completion_tokens
 
-        # If the provider reports cache_read_tokens > 0, use them directly
-        # at the cache price. If not, optionally simulate cache hits with
-        # the user's hit_rate (0% by default = no simulation).
-        {fresh_at_input_price, cache_at_cache_price} =
-          if cache_read > 0 do
-            {prompt, cache_read}
-          else
-            sim_cache = trunc(prompt * hit_rate)
-            {prompt - sim_cache, sim_cache}
-          end
+        # hit_rate simulates what % of input tokens would read from cache
+        # at the cache price instead of the full input price.
+        # 0% = no cache, everything at input price.
+        cache_tokens = trunc(prompt * hit_rate)
+        fresh_tokens = prompt - cache_tokens
 
         est_input =
           cost_input
-          |> Decimal.mult(Decimal.new(fresh_at_input_price))
+          |> Decimal.mult(Decimal.new(fresh_tokens))
           |> Decimal.mult(per_million)
 
         est_cache =
           cost_cache
-          |> Decimal.mult(Decimal.new(cache_at_cache_price))
+          |> Decimal.mult(Decimal.new(cache_tokens))
           |> Decimal.mult(per_million)
 
         est_output =
@@ -168,8 +162,7 @@ defmodule TokengateWeb.CalculatorLive do
           real_cost: row.cost_usd,
           estimated_cost: estimated_cost,
           prompt_tokens: prompt,
-          completion_tokens: completion,
-          cache_read_tokens: cache_read
+          completion_tokens: completion
         }
       end)
 
@@ -191,8 +184,7 @@ defmodule TokengateWeb.CalculatorLive do
       difference: difference,
       total_requests: summary_data.request_count,
       total_prompt: summary_data.total_prompt_tokens,
-      total_completion: summary_data.total_completion_tokens,
-      total_cache: summary_data.total_cache_read_tokens
+      total_completion: summary_data.total_completion_tokens
     }
 
     socket
