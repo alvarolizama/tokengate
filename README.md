@@ -24,36 +24,43 @@
 ### Gateway
 
 - **OpenAI-compatible proxy API** — `POST /v1/chat/completions` (streaming SSE + non-streaming), `POST /v1/embeddings`, `POST /v1/rerank`, `GET /v1/models`. Keep using the OpenAI SDK; just change the base URL and the key.
-- **Model aliases** — clients ask for an alias (e.g. `gpt-4o`); TokenGate maps it to one or more provider credentials. Switching backends is an admin operation, not a client deploy.
-- **Priority routing + sticky sessions** — providers are ordered by priority; an API key sticks to the same credential to preserve prompt caches. A slow-but-answering credential is marked "degraded" and sinks to the bottom of its tier until it recovers.
-- **Fallback matrix + circuit breaker** — auth errors (401/402/403) disable the credential and fall back; timeouts and first-token timeouts fall back immediately; fast errors (5xx/429) retry before moving on. Per-credential circuit breaker with configurable threshold/cooldown.
+- **Model aliases + type routing** — clients ask for an alias (e.g. `gpt-4o`); TokenGate maps it to one or more provider credentials. Each alias has a `model_type` (`llm`, `embedding`, `rerank`) that routes to the correct endpoint. Switching backends is an admin operation, not a client deploy.
+- **Tiered priority routing + sticky sessions** — providers are ordered by priority and grouped into tiers: healthy subscriptions (`included`) first, then degraded subscriptions, then healthy pay-per-token, then degraded pay-per-token. An API key sticks to the same credential to preserve prompt caches, with per-provider sticky TTL overrides (configurable in seconds). A slow-but-answering credential is marked "degraded" and sinks to the bottom of its tier until it recovers.
+- **FIFO queue for saturated included credentials** — when a subscription credential hits its concurrency limit, requests queue FIFO (with tiered timeouts) instead of immediately falling back to pay-per-token, maximizing subscription utilization.
+- **Fallback matrix + circuit breaker** — auth errors (401/402/403) disable the credential and fall back; timeouts and first-token timeouts fall back immediately; fast errors (5xx/429) retry before moving on. Per-credential circuit breaker with configurable threshold/cooldown. Included (subscription) credentials tolerate 429s with a soft degrade instead of tripping the breaker.
 - **Two-gate throttling** — per-user limits (team defaults + per-member overrides: RPM, concurrency) protect TokenGate; per-credential limits (`max_rpm`, `max_concurrent`, `max_concurrent_per_user`) protect the upstream key.
 - **Monthly USD budgets** — per team member (team default + member extra) and per service. ETS hot counters checked pre-flight; Postgres `request_logs` is the durable truth.
 - **Daily spending limit per credential** — a provider credential can carry a daily USD cap; once reached, the router skips it and fails over to the next credential until the next UTC day. Live spend/limit indicator on the Models page.
-- **Cost tracking** — the provider-reported `usage.cost` is recorded per request and returned in the `X-Tokengate-Cost` response header. Subscription providers (`billing_mode: included`) count as $0.
+- **Global daily spending cap (kill-switch)** — instance-wide daily USD limit in Settings; once total spend across all members and credentials reaches the cap, all proxy requests are rejected until 00:00 UTC. `nil` means unlimited (default).
+- **Cost tracking** — the provider-reported `usage.cost` is recorded per request and returned in the `X-Tokengate-Cost` response header. LiteLLM upstreams are supported via the `x-litellm-response-cost` header. Subscription providers (`billing_mode: included`) count as $0. When the upstream doesn't report a cost, TokenGate records $0 (honest fallback, no phantom estimates).
+- **Pre-flight prompt optimization** — system messages are hoisted to the front and deduped (`stable_prefix`); long or repeated tool-output messages are trimmed and collapsed (`lazy_cleanup`). Both passes are pure and side-effect-free.
+- **Reasoning/thinking flag parsing** — normalizes `reasoning_effort` (OpenAI), `reasoning` (new OpenAI), and `thinking` (Anthropic/GLM) into a unified `{think, effort}` tuple across providers.
 - **Agent identification headers** (OpenRouter-style) — `X-Agent-Type`, `X-Title`, `HTTP-Referer`, `User-Agent` feed metrics and limits.
 
 ### Admin UI (LiveView)
 
 - **Personal dashboard** (`/dashboard`) — every user sees their own live consumption (requests, cost, tokens, tokens/sec), period selector (today/7d/30d/90d), their API key with rotate/revoke, and the model catalog available to them with usage-tier badges.
-- **Stats** (`/dashboard/stats`) — drill-downs by model, team, service, and member; scoped by role (admin sees org-wide, managers their teams, users themselves). CSV export included.
-- **Monitor** (`/dashboard/monitor`) — trading-terminal view: one ticket per model alias with 60-minute sparklines, RPM, error rate, cost, in-flight requests, and per-credential drill-down with circuit-breaker state.
-- **Logs** (`/dashboard/logs`) — live request log with filters and currently in-flight requests.
+- **Stats** (`/dashboard/stats`) — drill-downs by model, team, service, and member; scoped by role (admin sees org-wide, managers their teams, users themselves). Period comparison with vs-yesterday deltas, daily sparkline charts, sortable breakdown tables, and CSV export.
+- **Monitor** (`/dashboard/monitor`) — trading-terminal view: one ticket per model alias with 60-minute sparklines, RPM, error rate, cost, in-flight requests, and per-credential drill-down with circuit-breaker state. "Por API Key" tab with per-credential sparklines and in-flight users. KPIs from last-hour to today with vs-yesterday deltas.
+- **Logs** (`/dashboard/logs`) — live request log with filters, in-flight requests merged into the main table, and CSV export (30d / 90d).
 - **Credits** (`/dashboard/credits`) — every member's spend against their effective budget, live from the ETS counters, with progress bars.
-- **Teams** (`/dashboard/teams`) — team CRUD with default budgets/limits, per-team model-alias grants, and per-team observability webhook destinations.
-- **Team members** (`/dashboard/teams/:id/members`) — add members by email (auto-generates their API key), per-member extras: extra budget, concurrency, RPM, and individual model-alias grants with optional per-model daily budget.
+- **Calculator** (`/dashboard/calculator`) — compare real provider spend vs estimated cost using custom pricing parameters (input/output price per million tokens). Period and model selector. Uses the same cost source as Stats for consistency.
+- **Teams** (`/dashboard/teams`) — team CRUD with default budgets/limits, per-team model-alias grants, and per-team observability webhook destinations. Dynamic card grid (1/2/3 cols based on team count).
+- **Team members** (`/dashboard/teams/:id/members`) — add members by email (auto-generates their API key), per-member extras: extra budget, concurrency, RPM, and individual model-alias grants with optional per-model daily budget. Search filter by name and email.
 - **Services** (`/dashboard/services`) — machine-to-machine API keys (not tied to a user) with their own monthly budget, concurrency, RPM, and model grants. **Supervisors** get a read-only view (`/dashboard/services/supervised`).
-- **Providers** (`/dashboard/providers`) — provider CRUD with multiple credentials each (encrypted key, rate/concurrency limits, status).
-- **Models** (`/dashboard/models`) — model-alias CRUD; assign providers with priority, `billing_mode` (`pay_per_token` / `included`), and exclusive scope (global / member / team).
-- **Users** (`/dashboard/users`) — user CRUD, suspend/activate, password reset, per-user stats (`/dashboard/users/:user_id/stats`), and **impersonation** (view the app as any user; start/stop is persisted to the audit log).
-- **Settings** (`/dashboard/settings`) — read-only config overview plus a Danger Zone (reset request logs, sticky sessions, member extras).
+- **Providers** (`/dashboard/providers`) — provider CRUD with multiple credentials each (encrypted key, rate/concurrency limits, status, icon toggle). Per-provider sticky TTL override in seconds. Provider health surfaced in sidebar with failing credentials highlighted.
+- **Models** (`/dashboard/models`) — model-alias CRUD; assign providers with priority, `billing_mode` (`pay_per_token` / `included`), `model_type` (`llm` / `embedding` / `rerank`), and exclusive scope (global / member / team).
+- **Users** (`/dashboard/users`) — user CRUD, suspend/activate, password reset, per-user stats (`/dashboard/users/:user_id/stats`), **impersonation**, filter by today's spend, group by team, and sortable columns.
+- **Settings** (`/dashboard/settings`) — read-only config overview plus a Danger Zone (reset request logs, sticky sessions, member extras). Global daily spending cap kill-switch lives here.
 
 ### Platform
 
 - **Observability webhooks** — every request log is delivered to per-team destinations as an OTLP/JSON span, HMAC-signed (`X-Tokengate-Signature: sha256=…`), via Oban.
-- **Hot path on ETS** — auth, limits, budgets, and routing read from ETS only; Postgres is written asynchronously (Oban workers).
-- **Postgres** — teams, users, services, sha256-hashed API keys, providers, credentials, aliases, daily RANGE-partitioned `request_logs`, audit logs, Oban jobs.
-- **Auth** — email/password (Bcrypt) plus optional Google OAuth (enabled when `GOOGLE_OAUTH_CLIENT_ID`/`SECRET` are set; auto-registration restricted by `GOOGLE_OAUTH_ALLOWED_DOMAINS`). Sliding-expiration session cookies (4h idle default).
+- **Hot path on ETS** — auth, limits, budgets, routing, and metrics read from ETS only; Postgres is written asynchronously (Oban workers). Named ETS tables degrade gracefully when absent (hot-reload safe).
+- **Postgres** — teams, users, services, sha256-hashed API keys, providers, credentials, aliases, daily RANGE-partitioned `request_logs`, audit logs, Oban jobs. Provider ranking by failures + latency with tiers S/A/B/C/D.
+- **Auth** — email/password (Bcrypt) plus optional Google OAuth (enabled when `GOOGLE_OAUTH_CLIENT_ID`/`SECRET` are set; auto-registration restricted by `GOOGLE_OAUTH_ALLOWED_DOMAINS`). Sliding-expiration session cookies (default 1 year idle).
+- **Usage normalization** — provider usage payloads are normalized into a unified internal shape (`prompt_tokens`, `completion_tokens`, `cache_read_tokens`, `cache_creation_tokens`), handling the semantic differences between OpenAI (cached tokens included in `prompt_tokens`, subtracted) and Anthropic (already excluded). This keeps cost arithmetic uniform regardless of upstream format.
+- **Per-user timezone** — dashboard data is bucketed by each user's configured timezone; session-scoped timezone selector for LiveViews.
 
 ## Requirements
 
