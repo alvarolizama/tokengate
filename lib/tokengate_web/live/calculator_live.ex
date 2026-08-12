@@ -322,5 +322,17 @@ defmodule TokengateWeb.CalculatorLive do
 
   def abs_decimal(%Decimal{} = d), do: Decimal.abs(d) |> Decimal.to_string(:normal)
 
+  def difference_pct(%{difference: diff, total_real: real}) do
+    if Decimal.equal?(real, Decimal.new(0)) do
+      nil
+    else
+      diff
+      |> Decimal.div(real)
+      |> Decimal.mult(100)
+      |> Decimal.round(1)
+      |> Decimal.to_string(:normal)
+    end
+  end
+
   def periods, do: @periods
 end

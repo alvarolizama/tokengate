@@ -17,7 +17,7 @@
     <div class="card bg-base-100 border border-base-300 shadow-sm">
       <div class="card-body space-y-4 p-4 sm:p-6">
         <.form for={%{}} id="calculator-form" phx-change="calculate" phx-submit="calculate">
-          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
             <%!-- Model selector --%>
             <div class="space-y-1.5">
               <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
@@ -141,6 +141,14 @@
               ]}>
                 {difference_sign(@summary.difference)}${abs_decimal(@summary.difference)}
               </p>
+              <%= if difference_pct(@summary) do %>
+                <p class={[
+                  "text-[10px] font-medium tabular-nums mt-0.5",
+                  difference_class(@summary.difference)
+                ]}>
+                  {difference_sign(@summary.difference)}{difference_pct(@summary)}%
+                </p>
+              <% end %>
             </div>
           </div>
 
