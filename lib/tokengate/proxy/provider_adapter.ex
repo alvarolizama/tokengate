@@ -43,13 +43,13 @@ defmodule Tokengate.Proxy.ProviderAdapter do
           | :auth_error
 
   @type chat_result ::
-          {:ok, body :: map(), latency_ms :: non_neg_integer()}
+          {:ok, body :: map(), latency_ms :: non_neg_integer(), resp_headers :: [{String.t(), String.t()}]}
           | {:error, failure_reason(), status :: non_neg_integer() | nil}
 
   @doc """
   Sends a non-streaming chat completion request to the provider.
 
-  Returns `{:ok, decoded_body, latency_ms}` on a 2xx response, or
+  Returns `{:ok, decoded_body, latency_ms, resp_headers}` on a 2xx response, or
   `{:error, failure_reason, status}` on any failure (non-2xx status,
   timeout, or transport error with `status` set to `nil`).
   """

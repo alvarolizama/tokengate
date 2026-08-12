@@ -68,28 +68,52 @@ defmodule Tokengate.Proxy.UsageNormalizer do
   def normalize(_provider, _body), do: nil
 
   @doc """
-  Extracts the cost reported by the provider in its response body, if any.
+  Extracts the cost reported by the provider, if any.
 
-  OpenRouter includes `body["usage"]["cost"]` as a float (USD).
-  Other OpenAI-compatible providers may include it under `body["cost"]`.
+  Checks, in order of preference:
+    1. Body: `body["usage"]["cost"]` (OpenRouter) or `body["cost"]` (some providers)
+    2. Headers: `x-litellm-response-cost` (LiteLLM proxy)
 
   Returns a `Decimal.t()` or `nil` when the provider doesn't report a cost.
+
+  ## The `resp_headers` argument
+
+  Pass the upstream's HTTP response headers (as a list of `{binary, binary}`
+  tuples, lowercase keys). When `nil`, only the body is searched — matching
+  the original behaviour before the LiteLLM header support was added.
   """
-  @spec extract_reported_cost(:openai | :anthropic, map()) :: Decimal.t() | nil
-  def extract_reported_cost(:openai, body) do
-    cost =
+  @spec extract_reported_cost(:openai | :anthropic, map(), [{String.t(), String.t()}] | nil) ::
+          Decimal.t() | nil
+  def extract_reported_cost(provider, body, resp_headers \\ nil)
+
+  def extract_reported_cost(:openai, body, resp_headers) do
+    body_cost =
       get_in(body, ["usage", "cost"]) ||
         Map.get(body, "cost")
 
-    to_decimal(cost)
+    to_decimal(body_cost) || extract_header_cost(resp_headers)
   end
 
-  def extract_reported_cost(:anthropic, body) do
-    cost = get_in(body, ["usage", "cost"]) || Map.get(body, "cost")
-    to_decimal(cost)
+  def extract_reported_cost(:anthropic, body, resp_headers) do
+    to_decimal(get_in(body, ["usage", "cost"]) || Map.get(body, "cost")) ||
+      extract_header_cost(resp_headers)
   end
 
-  def extract_reported_cost(_provider, _body), do: nil
+  def extract_reported_cost(_provider, _body, _resp_headers), do: nil
+
+  # Extracts cost from LiteLLM proxy response headers.
+  # LiteLLM injects `x-litellm-response-cost` (USD as a float string, e.g.
+  # "4.608e-05"). Returns nil when the header is absent or unparseable.
+  @litellm_cost_header "x-litellm-response-cost"
+
+  defp extract_header_cost(nil), do: nil
+
+  defp extract_header_cost(headers) when is_list(headers) do
+    case List.keyfind(headers, @litellm_cost_header, 0) do
+      {@litellm_cost_header, value} -> to_decimal(value)
+      _ -> nil
+    end
+  end
 
   defp to_decimal(nil), do: nil
   defp to_decimal(%Decimal{} = d), do: d

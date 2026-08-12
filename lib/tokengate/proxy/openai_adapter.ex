@@ -68,10 +68,10 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
     start = System.monotonic_time(:millisecond)
 
     case Finch.request(request, finch_name(), receive_timeout: receive_timeout) do
-      {:ok, %Finch.Response{status: status, body: resp_body}} when status in 200..299 ->
+      {:ok, %Finch.Response{status: status, body: resp_body, headers: resp_headers}} when status in 200..299 ->
         latency = System.monotonic_time(:millisecond) - start
         decoded = decode!(resp_body)
-        {:ok, decoded, latency}
+        {:ok, decoded, latency, normalize_headers(resp_headers)}
 
       {:ok, %Finch.Response{status: status, body: resp_body}} ->
         {:error, ProviderAdapter.classify_status(status), status,
@@ -105,7 +105,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
 
     {:ok, pid} =
       Task.start(fn ->
-        acc = %{caller: caller, buffer: "", done: false, status: nil}
+        acc = %{caller: caller, buffer: "", done: false, status: nil, headers: []}
 
         result =
           Finch.stream_while(
@@ -123,8 +123,10 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
                     {:halt, %{acc | status: status, done: true}}
                   end
 
-                {:headers, _headers} ->
-                  {:cont, acc}
+                {:headers, headers} ->
+                  normalized = normalize_headers(headers)
+                  send(caller, {:sse_headers, normalized})
+                  {:cont, %{acc | headers: normalized}}
 
                 {:data, data} ->
                   case forward_sse(acc, data) do
@@ -337,6 +339,18 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   end
 
   defp finch_name, do: Tokengate.Finch
+
+  # Normalizes Finch's header format (which may return charlists or binaries
+  # depending on HTTP version) into a list of lowercase {binary, binary} tuples.
+  # This ensures consistent header lookups downstream (e.g. cost extraction
+  # from x-litellm-response-cost).
+  defp normalize_headers(headers) do
+    Enum.map(headers, fn
+      {k, v} when is_list(k) -> {String.downcase(to_string(k)), to_string(v)}
+      {k, v} when is_binary(k) -> {String.downcase(k), to_string(v)}
+      other -> other
+    end)
+  end
 
   defp decode!(body) do
     case Jason.decode(body) do

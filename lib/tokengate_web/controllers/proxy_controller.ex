@@ -260,9 +260,9 @@ defmodule TokengateWeb.ProxyController do
            receive_timeout: receive_timeout,
            forwarded_headers: extract_forwarded_headers(conn)
          ) do
-      {:ok, body, latency_ms} ->
+      {:ok, body, latency_ms, resp_headers} ->
         Router.record_outcome(route, :success, latency_ms: latency_ms)
-        finalize_simple_success(conn, route, body, latency_ms, member, kind)
+        finalize_simple_success(conn, route, body, latency_ms, member, kind, resp_headers)
 
       {:error, :auth_error, status, error_message} ->
         disable_credential_async(route.credential, "auth_error_#{status}", error_message)
@@ -378,9 +378,9 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
-  defp finalize_simple_success(conn, route, body, latency_ms, member, kind) do
+  defp finalize_simple_success(conn, route, body, latency_ms, member, kind, resp_headers) do
     {usage, body} = simple_usage(conn.body_params, body, kind)
-    provider_reported = UsageNormalizer.extract_reported_cost(:openai, body)
+    provider_reported = UsageNormalizer.extract_reported_cost(:openai, body, resp_headers)
 
     cost = CostCalculator.provider_cost(route.model_provider.billing_mode, provider_reported)
 
@@ -734,9 +734,9 @@ defmodule TokengateWeb.ProxyController do
            receive_timeout: receive_timeout,
            forwarded_headers: extract_forwarded_headers(conn)
          ) do
-      {:ok, body, latency_ms} ->
+      {:ok, body, latency_ms, resp_headers} ->
         Router.record_outcome(route, :success, latency_ms: latency_ms)
-        finalize_success(conn, route, body, latency_ms, member)
+        finalize_success(conn, route, body, latency_ms, member, resp_headers)
 
       {:error, :auth_error, status, error_message} ->
         # 401/402/403: the credential is bad (invalid key, insufficient credit,
@@ -897,7 +897,7 @@ defmodule TokengateWeb.ProxyController do
         ref = Process.monitor(pid)
 
         case await_first_chunk(pid, ref) do
-          {:ok, first_chunk} ->
+          {:ok, first_chunk, resp_headers} ->
             ttft_ms = System.monotonic_time(:millisecond) - request_start
             Router.record_outcome(route, :success, latency_ms: ttft_ms)
 
@@ -916,7 +916,8 @@ defmodule TokengateWeb.ProxyController do
               completion: [],
               prompt_estimate: TokenEstimator.estimate_messages(payload["messages"] || []),
               ttft_ms: ttft_ms,
-              latency_start: System.monotonic_time(:millisecond)
+              latency_start: System.monotonic_time(:millisecond),
+              resp_headers: resp_headers
             })
 
           {:error, reason, status} ->
@@ -1062,6 +1063,27 @@ defmodule TokengateWeb.ProxyController do
     timeout = Application.get_env(:tokengate, :first_token_timeout_ms, 15_000)
 
     receive do
+      {:sse_headers, headers} ->
+        # Headers arrive before any data chunk — keep waiting for the first
+        # actual content chunk, but stash the headers for the caller to pick up.
+        case await_first_chunk_after_headers(pid, ref, timeout) do
+          {:ok, chunk} -> {:ok, chunk, headers}
+          error -> error
+        end
+
+      {:sse_chunk, chunk} -> {:ok, chunk, []}
+      {:sse_done} -> {:error, :empty_stream, nil}
+      {:sse_error, {reason, status}} -> {:error, stream_error_reason(reason), status}
+      {:sse_error, reason} -> {:error, stream_error_reason(reason), nil}
+      {:DOWN, ^ref, :process, ^pid, reason} -> {:error, stream_error_reason(reason), nil}
+    after
+      timeout -> {:error, :timeout, nil}
+    end
+  end
+
+  # Waits for the first data chunk after headers have been received.
+  defp await_first_chunk_after_headers(pid, ref, timeout) do
+    receive do
       {:sse_chunk, chunk} -> {:ok, chunk}
       {:sse_done} -> {:error, :empty_stream, nil}
       {:sse_error, {reason, status}} -> {:error, stream_error_reason(reason), status}
@@ -1133,7 +1155,7 @@ defmodule TokengateWeb.ProxyController do
             {chunk, %{acc | completion: [extract_delta_text(decoded) | acc.completion]}}
 
           usage ->
-            cost = stream_cost(route, usage, decoded)
+            cost = stream_cost(route, usage, decoded, acc.resp_headers)
             injected = inject_usage_costs(decoded, usage, cost)
             {Jason.encode!(injected), %{acc | usage: {usage, cost}}}
         end
@@ -1176,7 +1198,7 @@ defmodule TokengateWeb.ProxyController do
             cache_creation_tokens: 0
           }
 
-          cost = stream_cost(route, usage, nil)
+          cost = stream_cost(route, usage, nil, acc.resp_headers)
           {usage, cost}
       end
 
@@ -1206,18 +1228,25 @@ defmodule TokengateWeb.ProxyController do
     conn
   end
 
-  defp stream_cost(route, _usage, body) do
+  defp stream_cost(route, _usage, body, resp_headers) do
     provider_reported =
-      if body, do: UsageNormalizer.extract_reported_cost(:openai, body), else: nil
+      if body, do: UsageNormalizer.extract_reported_cost(:openai, body, resp_headers), else: nil
 
-    CostCalculator.provider_cost(route.model_provider.billing_mode, provider_reported)
+    if provider_reported do
+      CostCalculator.provider_cost(route.model_provider.billing_mode, provider_reported)
+    else
+      # Body had no cost — try headers alone (LiteLLM proxies report cost only
+      # in headers, not in the streaming body).
+      header_cost = UsageNormalizer.extract_reported_cost(:openai, %{}, resp_headers)
+      CostCalculator.provider_cost(route.model_provider.billing_mode, header_cost)
+    end
   end
 
   ## Success finalization #######################################################
 
-  defp finalize_success(conn, route, body, latency_ms, member) do
+  defp finalize_success(conn, route, body, latency_ms, member, resp_headers) do
     usage = UsageNormalizer.normalize(:openai, body) || fallback_usage(conn.body_params, body)
-    provider_reported = UsageNormalizer.extract_reported_cost(:openai, body)
+    provider_reported = UsageNormalizer.extract_reported_cost(:openai, body, resp_headers)
 
     cost = CostCalculator.provider_cost(route.model_provider.billing_mode, provider_reported)
 
