@@ -25,6 +25,10 @@ defmodule Tokengate.Proxy.CostCalculator do
       cost = (non_cached × input_rate + cache_read_tokens × cache_rate
               + completion_tokens × output_rate) / 1_000_000
 
+  `prompt_tokens` follows the OpenAI convention: it INCLUDES cached tokens
+  (`UsageNormalizer` keeps the provider's raw total), so the formula
+  subtracts the cached subset to price it at the cache rate.
+
   When `cache_cost_per_million` is nil but input+output are set, the formula
   degrades to 2 terms (all prompt tokens at input rate — overestimates slightly
   when there are cache hits, but better than $0).
@@ -62,12 +66,11 @@ defmodule Tokengate.Proxy.CostCalculator do
 
   def provider_cost("pay_per_token", nil, opts) do
     case Keyword.get(opts, :manual_pricing) do
-      %{input_cost_per_million: %Decimal{} = inp, output_cost_per_million: %Decimal{} = out}
-      when inp != nil and out != nil ->
+      %{input_cost_per_million: %Decimal{} = inp, output_cost_per_million: %Decimal{} = out} ->
         usage = Keyword.get(opts, :usage, %{})
 
         case Map.get(opts[:manual_pricing], :cache_cost_per_million) do
-          %Decimal{} = cache_cost when cache_cost != nil ->
+          %Decimal{} = cache_cost ->
             manual_cost_3term(usage, inp, cache_cost, out)
 
           _ ->

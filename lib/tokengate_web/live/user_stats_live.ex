@@ -364,7 +364,9 @@ defmodule TokengateWeb.UserStatsLive do
             label="Input tokens (5d)"
             value={format_number(@summary_5d.total_prompt_tokens)}
             sub={
-              "prompt + cache_read · hit " <>
+              "cached " <>
+                format_number(@summary_5d.total_cache_read_tokens) <>
+                " · hit " <>
                 KpiHelpers.format_hit_rate(
                   KpiHelpers.cache_hit_rate(
                     @summary_5d.total_cache_read_tokens,

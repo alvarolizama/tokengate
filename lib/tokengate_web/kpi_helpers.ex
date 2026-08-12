@@ -289,17 +289,17 @@ defmodule TokengateWeb.KpiHelpers do
 
   @doc """
   Cache hit rate: percentage of input tokens served from cache
-  (`cache_read / (prompt + cache_read)`). Cache creation tokens are
-  excluded — they are a write cost, not a hit.
+  (`cache_read / prompt_tokens`). `prompt_tokens` is the provider's raw
+  total and INCLUDES cached tokens (OpenAI convention), so it is the full
+  input denominator. Cache creation tokens are excluded — they are a write
+  cost, not a hit.
 
   Returns `nil` when there is no input traffic at all, so callers can
   render "—" instead of a misleading 0.0%.
   """
   def cache_hit_rate(read, prompt) when is_integer(read) and is_integer(prompt) do
-    total = prompt + read
-
-    if total > 0 do
-      Float.round(read / total * 100, 1)
+    if prompt > 0 do
+      Float.round(read / prompt * 100, 1)
     end
   end
 

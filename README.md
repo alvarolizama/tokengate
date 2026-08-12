@@ -59,7 +59,7 @@
 - **Hot path on ETS** — auth, limits, budgets, routing, and metrics read from ETS only; Postgres is written asynchronously (Oban workers). Named ETS tables degrade gracefully when absent (hot-reload safe).
 - **Postgres** — teams, users, services, sha256-hashed API keys, providers, credentials, aliases, daily RANGE-partitioned `request_logs`, audit logs, Oban jobs. Provider ranking by failures + latency with tiers S/A/B/C/D.
 - **Auth** — email/password (Bcrypt) plus optional Google OAuth (enabled when `GOOGLE_OAUTH_CLIENT_ID`/`SECRET` are set; auto-registration restricted by `GOOGLE_OAUTH_ALLOWED_DOMAINS`). Sliding-expiration session cookies (default 1 year idle).
-- **Usage normalization** — provider usage payloads are normalized into a unified internal shape (`prompt_tokens`, `completion_tokens`, `cache_read_tokens`, `cache_creation_tokens`), handling the semantic differences between OpenAI (cached tokens included in `prompt_tokens`, subtracted) and Anthropic (already excluded). This keeps cost arithmetic uniform regardless of upstream format.
+- **Usage normalization** — OpenAI-compatible usage payloads are normalized into a unified internal shape (`prompt_tokens`, `completion_tokens`, `cache_read_tokens`, `cache_creation_tokens`). `prompt_tokens` keeps the provider's raw total (cached tokens included); `cache_read_tokens` is the cached subset, priced separately at the cache rate by the cost calculator.
 - **Per-user timezone** — dashboard data is bucketed by each user's configured timezone; session-scoped timezone selector for LiveViews.
 
 ## Requirements

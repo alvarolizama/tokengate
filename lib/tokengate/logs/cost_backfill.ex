@@ -11,9 +11,10 @@ defmodule Tokengate.Logs.CostBackfill do
       wrong and needs to be re-applied to everything.
 
   For each affected log, joins to `model_providers` to get the manual pricing
-  fields. When all three (input + cache + output) are set, uses the 3-term
-  formula. When only input + output are set (cache is nil), uses the 2-term
-  formula. The `cache_read_tokens` column is used as the cached token count.
+  fields and delegates the math to `Tokengate.Proxy.CostCalculator` — the
+  single implementation of the pricing formula (3-term when cache pricing is
+  set, 2-term otherwise). The `cache_read_tokens` column is used as the
+  cached token count.
 
   Only affects rows where:
     * `model_provider_id` is not null
@@ -25,9 +26,9 @@ defmodule Tokengate.Logs.CostBackfill do
 
   import Ecto.Query, only: [from: 2]
 
+  alias Tokengate.Proxy.CostCalculator
   alias Tokengate.Repo
 
-  @million Decimal.new(1_000_000)
   @zero Decimal.new(0)
 
   @doc """
@@ -95,30 +96,18 @@ defmodule Tokengate.Logs.CostBackfill do
   end
 
   defp compute_cost(row) do
-    prompt = Decimal.new("#{row.prompt_tokens}")
-    cached = Decimal.new("#{row.cache_read_tokens || 0}")
-    completion = Decimal.new("#{row.completion_tokens}")
-
-    # 3-term if cache_cost is set, else 2-term
-    if row.cache_cost != nil and %Decimal{} == row.cache_cost do
-      non_cached = prompt |> Decimal.sub(cached) |> Decimal.max(@zero)
-
-      input_cost = non_cached |> Decimal.div(@million) |> Decimal.mult(row.input_cost)
-      cache_cost = cached |> Decimal.div(@million) |> Decimal.mult(row.cache_cost)
-      output_cost = completion |> Decimal.div(@million) |> Decimal.mult(row.output_cost)
-
-      input_cost
-      |> Decimal.add(cache_cost)
-      |> Decimal.add(output_cost)
-      |> Decimal.round(6)
-    else
-      input_cost = prompt |> Decimal.div(@million) |> Decimal.mult(row.input_cost)
-      output_cost = completion |> Decimal.div(@million) |> Decimal.mult(row.output_cost)
-
-      input_cost
-      |> Decimal.add(output_cost)
-      |> Decimal.round(6)
-    end
+    CostCalculator.provider_cost("pay_per_token", nil,
+      manual_pricing: %{
+        input_cost_per_million: row.input_cost,
+        output_cost_per_million: row.output_cost,
+        cache_cost_per_million: row.cache_cost
+      },
+      usage: %{
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens,
+        cache_read_tokens: row.cache_read_tokens || 0
+      }
+    )
   end
 
   @doc """
