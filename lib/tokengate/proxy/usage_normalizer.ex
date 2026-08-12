@@ -43,13 +43,13 @@ defmodule Tokengate.Proxy.UsageNormalizer do
   """
   @spec normalize(:openai | :anthropic, map()) :: usage() | nil
   def normalize(:openai, %{"usage" => usage}) when is_map(usage) do
+    # Cache tokens are saved for observability but NOT subtracted from
+    # prompt_tokens — providers charge on the total, so cost calculations
+    # must use the raw prompt_tokens value.
     cached = get_in_int(usage, ["prompt_tokens_details", "cached_tokens"])
-    # OpenAI's prompt_tokens INCLUDES cached tokens — subtract them so
-    # prompt_tokens is regular (non-cached) input, matching Anthropic.
-    regular_input = max(get_int(usage, "prompt_tokens") - cached, 0)
 
     %{
-      prompt_tokens: regular_input,
+      prompt_tokens: get_int(usage, "prompt_tokens"),
       completion_tokens: get_int(usage, "completion_tokens"),
       cache_read_tokens: cached,
       cache_creation_tokens: 0
@@ -57,13 +57,14 @@ defmodule Tokengate.Proxy.UsageNormalizer do
   end
 
   def normalize(:anthropic, %{"usage" => usage}) when is_map(usage) do
-    %{
-      prompt_tokens: get_int(usage, "input_tokens"),
-      completion_tokens: get_int(usage, "output_tokens"),
-      cache_read_tokens: get_int(usage, "cache_read_input_tokens"),
-      cache_creation_tokens: get_int(usage, "cache_creation_input_tokens")
-    }
-  end
+      # Cache tokens saved for observability, not subtracted from prompt.
+      %{
+        prompt_tokens: get_int(usage, "input_tokens"),
+        completion_tokens: get_int(usage, "output_tokens"),
+        cache_read_tokens: get_int(usage, "cache_read_input_tokens"),
+        cache_creation_tokens: get_int(usage, "cache_creation_input_tokens")
+      }
+    end
 
   def normalize(_provider, _body), do: nil
 

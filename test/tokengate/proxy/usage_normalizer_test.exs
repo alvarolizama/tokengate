@@ -13,10 +13,9 @@ defmodule Tokengate.Proxy.UsageNormalizerTest do
         }
       }
 
-      # OpenAI's prompt_tokens includes cached tokens — prompt_tokens is
-      # normalized to regular (non-cached) input: 100 - 20 = 80.
+      # Cache tokens saved for observability, NOT subtracted from prompt_tokens.
       assert UsageNormalizer.normalize(:openai, body) == %{
-               prompt_tokens: 80,
+               prompt_tokens: 100,
                completion_tokens: 50,
                cache_read_tokens: 20,
                cache_creation_tokens: 0
@@ -50,6 +49,7 @@ defmodule Tokengate.Proxy.UsageNormalizerTest do
         }
       }
 
+      # Cache tokens saved for observability, NOT subtracted from prompt.
       assert UsageNormalizer.normalize(:anthropic, body) == %{
                prompt_tokens: 200,
                completion_tokens: 80,
@@ -110,6 +110,7 @@ defmodule Tokengate.Proxy.UsageNormalizerTest do
 
       acc = UsageNormalizer.apply_anthropic_event(acc, %{"type" => "content_block_delta"})
 
+      # Cache tokens saved for observability, NOT subtracted from prompt.
       assert UsageNormalizer.finalize_anthropic(acc) == %{
                prompt_tokens: 42,
                completion_tokens: 15,
