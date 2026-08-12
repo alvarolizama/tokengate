@@ -31,7 +31,9 @@ defmodule TokengateWeb.SettingsLive do
       |> assign(:extras_reset_type, nil)
       |> assign(:confirm_backfill, false)
       |> assign(:backfill_running, false)
-      |> assign(:backfill_count, CostBackfill.count_eligible())
+      |> assign(:backfill_mode, nil)
+      |> assign(:backfill_count, CostBackfill.count_eligible(mode: :zero_only))
+      |> assign(:backfill_all_count, CostBackfill.count_eligible(mode: :all))
       |> assign(:log_count, count_logs())
       |> assign(:sticky_count, sticky_count())
       |> assign(:extras_budget_count, count_members_with_extra(:extra_monthly_budget_usd))
@@ -186,31 +188,35 @@ defmodule TokengateWeb.SettingsLive do
   ## Cost backfill ----------------------------------------------------------
 
   @impl true
-  def handle_event("show_backfill_confirm", _params, socket) do
-    {:noreply, assign(socket, :confirm_backfill, true)}
+  def handle_event("show_backfill_confirm", %{"mode" => mode}, socket)
+      when mode in ["zero_only", "all"] do
+    {:noreply, assign(socket, confirm_backfill: true, backfill_mode: String.to_existing_atom(mode))}
   end
 
   @impl true
   def handle_event("cancel_backfill", _params, socket) do
-    {:noreply, assign(socket, :confirm_backfill, false)}
+    {:noreply, assign(socket, confirm_backfill: false, backfill_mode: nil)}
   end
 
   @impl true
   def handle_event("run_backfill", _params, socket) do
-    {:ok, {updated, _skipped}} = CostBackfill.run()
+    mode = socket.assigns[:backfill_mode] || :zero_only
+    {:ok, {updated, _skipped}} = CostBackfill.run(mode: mode)
 
     Tokengate.Auditing.audit(
       socket.assigns.current_user,
       "settings.backfill_costs",
       "request_logs",
       nil,
-      %{"updated" => updated}
+      %{"updated" => updated, "mode" => to_string(mode)}
     )
 
     {:noreply,
      socket
      |> assign(:confirm_backfill, false)
-     |> assign(:backfill_count, 0)
+     |> assign(:backfill_mode, nil)
+     |> assign(:backfill_count, CostBackfill.count_eligible(mode: :zero_only))
+     |> assign(:backfill_all_count, CostBackfill.count_eligible(mode: :all))
      |> put_flash(:info, "Costo recalculado en #{updated} logs.")}
   end
 
@@ -410,25 +416,38 @@ defmodule TokengateWeb.SettingsLive do
               <div>
                 <h3 class="font-semibold text-base-content">Recalcular costos históricos</h3>
                 <p class="text-sm text-base-content/60">
-                  Recalcula el costo de logs pasados que quedaron en $0 porque el
-                  proveedor no reportó costo (ej. LiteLLM streaming). Usa los
-                  precios manuales de entrada/salida configurados en cada provider.
+                  Recalcula el costo de logs usando los precios manuales
+                  (input + cache + output) configurados en cada provider.
                   Solo afecta logs con <code>billing_mode = pay_per_token</code>
-                  que tengan ambos precios configurados.
+                  que tengan input y output configurados.
                 </p>
                 <p class="text-sm text-base-content/60 mt-1">
-                  Hay <span class="font-mono font-semibold">{@backfill_count}</span> logs elegibles.
+                  <span class="font-mono font-semibold">{@backfill_count}</span> logs en $0 elegibles
+                  · <span class="font-mono font-semibold">{@backfill_all_count}</span> logs totales elegibles.
                 </p>
               </div>
-              <button
-                type="button"
-                phx-click="show_backfill_confirm"
-                class="btn btn-primary btn-outline btn-sm"
-                id="backfill-costs-btn"
-                disabled={@backfill_count == 0}
-              >
-                Recalcular
-              </button>
+              <div class="flex gap-2">
+                <button
+                  type="button"
+                  phx-click="show_backfill_confirm"
+                  phx-value-mode="zero_only"
+                  class="btn btn-primary btn-outline btn-sm"
+                  id="backfill-costs-btn"
+                  disabled={@backfill_count == 0}
+                >
+                  Recalcular $0
+                </button>
+                <button
+                  type="button"
+                  phx-click="show_backfill_confirm"
+                  phx-value-mode="all"
+                  class="btn btn-warning btn-outline btn-sm"
+                  id="backfill-all-costs-btn"
+                  disabled={@backfill_all_count == 0}
+                >
+                  Recalcular todo
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -557,17 +576,26 @@ defmodule TokengateWeb.SettingsLive do
             <h3 class="card-title flex items-center gap-2">
               <.icon name="hero-currency-dollar" class="w-5 h-5" /> ¿Recalcular costos históricos?
             </h3>
-            <p class="text-sm text-base-content/70 mt-2">
-              Se actualizarán <strong>{@backfill_count}</strong> logs que tienen
-              <code>provider_cost_usd = $0</code>, usando los precios manuales
-              de entrada y salida configurados en cada provider.
-            </p>
+            <%= if @backfill_mode == :all do %>
+              <p class="text-sm text-base-content/70 mt-2">
+                Se recalcularán <strong>{@backfill_all_count}</strong> logs usando los precios
+                manuales (input + cache + output) configurados en cada provider.
+                Esto <strong>sobrescribe</strong> los costos existentes, incluyendo los que
+                ya tenían un valor del proveedor.
+              </p>
+            <% else %>
+              <p class="text-sm text-base-content/70 mt-2">
+                Se actualizarán <strong>{@backfill_count}</strong> logs que tienen
+                <code>provider_cost_usd = $0</code>, usando los precios manuales
+                (input + cache + output) configurados en cada provider.
+              </p>
+              <p class="text-sm text-base-content/70 mt-1">
+                Los logs con costo ya reportado no se tocan.
+              </p>
+            <% end %>
             <p class="text-sm text-base-content/70 mt-1">
-              Solo se actualizan logs donde el provider tenga ambos precios
-              configurados y <code>billing_mode = pay_per_token</code>.
-              Los logs con costo ya reportado no se tocan.
-            </p>
-            <p class="text-sm text-base-content/70 mt-1">
+              Solo afecta logs con <code>billing_mode = pay_per_token</code>
+              que tengan input y output configurados.
               Esta acción <strong>no se puede deshacer</strong>.
             </p>
             <div class="flex gap-2 mt-4 justify-end">

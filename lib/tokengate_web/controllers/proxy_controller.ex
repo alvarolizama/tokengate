@@ -1249,7 +1249,7 @@ defmodule TokengateWeb.ProxyController do
   end
 
   # Computes cost using the full fallback chain: reported cost first, then
-  # manual pricing (input_cost + output_cost × token counts), then $0.
+  # manual pricing (input + cache + output × token counts), then $0.
   # Used by finalize_simple_success and finalize_success (non-streaming).
   defp cost_with_fallback(route, provider_reported, usage) do
     mp = route.model_provider
@@ -1257,7 +1257,8 @@ defmodule TokengateWeb.ProxyController do
     CostCalculator.provider_cost(mp.billing_mode, provider_reported,
       manual_pricing: %{
         input_cost_per_million: mp.input_cost_per_million,
-        output_cost_per_million: mp.output_cost_per_million
+        output_cost_per_million: mp.output_cost_per_million,
+        cache_cost_per_million: mp.cache_cost_per_million
       },
       usage: usage
     )
@@ -1271,7 +1272,8 @@ defmodule TokengateWeb.ProxyController do
     CostCalculator.provider_cost(mp.billing_mode, nil,
       manual_pricing: %{
         input_cost_per_million: mp.input_cost_per_million,
-        output_cost_per_million: mp.output_cost_per_million
+        output_cost_per_million: mp.output_cost_per_million,
+        cache_cost_per_million: mp.cache_cost_per_million
       },
       usage: usage
     )

@@ -50,6 +50,7 @@ defmodule Tokengate.Providers.ModelProvider do
     # doesn't report a cost (e.g. LiteLLM streaming). NULL = not set.
     field :input_cost_per_million, :decimal
     field :output_cost_per_million, :decimal
+    field :cache_cost_per_million, :decimal
     # Virtual mirror of `sticky_ttl_ms` in seconds — exposed to the LiveView
     # form so operators can type `900` instead of `900_000`. Synced by
     # `sync_sticky_ttl_fields/1` before saving.
@@ -78,6 +79,7 @@ defmodule Tokengate.Providers.ModelProvider do
       :sticky_ttl_seconds,
       :input_cost_per_million,
       :output_cost_per_million,
+      :cache_cost_per_million,
       :exclusive_to_team_member_id,
       :exclusive_to_team_id
     ])
