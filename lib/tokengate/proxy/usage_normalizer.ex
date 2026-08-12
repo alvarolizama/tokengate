@@ -57,14 +57,14 @@ defmodule Tokengate.Proxy.UsageNormalizer do
   end
 
   def normalize(:anthropic, %{"usage" => usage}) when is_map(usage) do
-      # Cache tokens saved for observability, not subtracted from prompt.
-      %{
-        prompt_tokens: get_int(usage, "input_tokens"),
-        completion_tokens: get_int(usage, "output_tokens"),
-        cache_read_tokens: get_int(usage, "cache_read_input_tokens"),
-        cache_creation_tokens: get_int(usage, "cache_creation_input_tokens")
-      }
-    end
+    # Cache tokens saved for observability, not subtracted from prompt.
+    %{
+      prompt_tokens: get_int(usage, "input_tokens"),
+      completion_tokens: get_int(usage, "output_tokens"),
+      cache_read_tokens: get_int(usage, "cache_read_input_tokens"),
+      cache_creation_tokens: get_int(usage, "cache_creation_input_tokens")
+    }
+  end
 
   def normalize(_provider, _body), do: nil
 

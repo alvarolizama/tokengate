@@ -1071,11 +1071,20 @@ defmodule TokengateWeb.ProxyController do
           error -> error
         end
 
-      {:sse_chunk, chunk} -> {:ok, chunk, []}
-      {:sse_done} -> {:error, :empty_stream, nil}
-      {:sse_error, {reason, status}} -> {:error, stream_error_reason(reason), status}
-      {:sse_error, reason} -> {:error, stream_error_reason(reason), nil}
-      {:DOWN, ^ref, :process, ^pid, reason} -> {:error, stream_error_reason(reason), nil}
+      {:sse_chunk, chunk} ->
+        {:ok, chunk, []}
+
+      {:sse_done} ->
+        {:error, :empty_stream, nil}
+
+      {:sse_error, {reason, status}} ->
+        {:error, stream_error_reason(reason), status}
+
+      {:sse_error, reason} ->
+        {:error, stream_error_reason(reason), nil}
+
+      {:DOWN, ^ref, :process, ^pid, reason} ->
+        {:error, stream_error_reason(reason), nil}
     after
       timeout -> {:error, :timeout, nil}
     end

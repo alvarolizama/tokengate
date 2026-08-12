@@ -279,6 +279,7 @@ defmodule Tokengate.Metrics.Rollup do
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+        cache_read_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_read_tokens),
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
       })
 
@@ -291,6 +292,7 @@ defmodule Tokengate.Metrics.Rollup do
         cost_usd: Decimal.new(to_string(row.cost_usd)),
         prompt_tokens: row.prompt_tokens,
         completion_tokens: row.completion_tokens,
+        cache_read_tokens: row.cache_read_tokens,
         avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
       }
     end)
@@ -616,6 +618,7 @@ defmodule Tokengate.Metrics.Rollup do
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+        cache_read_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_read_tokens),
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
       })
 
@@ -630,6 +633,7 @@ defmodule Tokengate.Metrics.Rollup do
         cost_usd: Decimal.new(to_string(row.cost_usd)),
         prompt_tokens: row.prompt_tokens,
         completion_tokens: row.completion_tokens,
+        cache_read_tokens: row.cache_read_tokens,
         avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
       }
     end)

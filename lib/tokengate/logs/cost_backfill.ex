@@ -78,13 +78,13 @@ defmodule Tokengate.Logs.CostBackfill do
         cost = compute_cost(row)
 
         case Repo.update_all(
-              from(rl in Tokengate.Logs.RequestLog,
-                where:
-                  rl.id == ^row.id and
-                    rl.inserted_at == ^row.inserted_at
-              ),
-              set: [provider_cost_usd: cost]
-            ) do
+               from(rl in Tokengate.Logs.RequestLog,
+                 where:
+                   rl.id == ^row.id and
+                     rl.inserted_at == ^row.inserted_at
+               ),
+               set: [provider_cost_usd: cost]
+             ) do
           {1, _} -> acc + 1
           _ -> acc
         end

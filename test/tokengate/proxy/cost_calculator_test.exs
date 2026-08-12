@@ -6,7 +6,11 @@ defmodule Tokengate.Proxy.CostCalculatorTest do
   describe "provider_cost/3 — included billing mode" do
     test "included: always $0 regardless of reported cost" do
       assert Decimal.equal?(CostCalculator.provider_cost("included", nil, []), Decimal.new(0))
-      assert Decimal.equal?(CostCalculator.provider_cost("included", Decimal.new("0.5"), []), Decimal.new(0))
+
+      assert Decimal.equal?(
+               CostCalculator.provider_cost("included", Decimal.new("0.5"), []),
+               Decimal.new(0)
+             )
     end
 
     test "included: ignores manual pricing even if set" do

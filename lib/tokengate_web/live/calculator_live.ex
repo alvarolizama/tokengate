@@ -29,7 +29,7 @@ defmodule TokengateWeb.CalculatorLive do
     # Use the timezone already assigned by UserAuth on_mount — the sidebar
     # selector can change it dynamically, so prefer socket assigns over the
     # user record.
-    timezone = socket.assigns[:timezone] || user && user.timezone || Periods.default_timezone()
+    timezone = socket.assigns[:timezone] || (user && user.timezone) || Periods.default_timezone()
 
     models =
       Providers.list_model_aliases()
@@ -242,8 +242,8 @@ defmodule TokengateWeb.CalculatorLive do
         |> Enum.with_index()
         |> Enum.map(fn {row, i} ->
           x = pad_left + i * step_x
-          real_y = pad_top + plot_h - (Decimal.to_float(row.real_cost) / max_val * plot_h)
-          est_y = pad_top + plot_h - (Decimal.to_float(row.estimated_cost) / max_val * plot_h)
+          real_y = pad_top + plot_h - Decimal.to_float(row.real_cost) / max_val * plot_h
+          est_y = pad_top + plot_h - Decimal.to_float(row.estimated_cost) / max_val * plot_h
 
           {Float.round(x, 1), Float.round(real_y, 1), Float.round(est_y, 1)}
         end)
@@ -276,7 +276,7 @@ defmodule TokengateWeb.CalculatorLive do
   defp build_y_ticks(max_val, plot_h, pad_top, pad_left) do
     for i <- 0..4 do
       val = max_val * i / 4
-      y = pad_top + plot_h - (val / max_val * plot_h)
+      y = pad_top + plot_h - val / max_val * plot_h
       %{value: format_tick(val), y: Float.round(y, 1), x: pad_left}
     end
   end
@@ -298,7 +298,7 @@ defmodule TokengateWeb.CalculatorLive do
     |> Enum.filter(fn {_row, i} -> rem(i, step) == 0 end)
     |> Enum.map(fn {row, i} ->
       label = format_hour_label(row.hour)
-      x = pad_left + (if count > 1, do: i / (count - 1) * plot_w, else: 0)
+      x = pad_left + if count > 1, do: i / (count - 1) * plot_w, else: 0
       %{label: label, x: Float.round(x, 1)}
     end)
   end

@@ -190,7 +190,8 @@ defmodule TokengateWeb.SettingsLive do
   @impl true
   def handle_event("show_backfill_confirm", %{"mode" => mode}, socket)
       when mode in ["zero_only", "all"] do
-    {:noreply, assign(socket, confirm_backfill: true, backfill_mode: String.to_existing_atom(mode))}
+    {:noreply,
+     assign(socket, confirm_backfill: true, backfill_mode: String.to_existing_atom(mode))}
   end
 
   @impl true
@@ -422,8 +423,10 @@ defmodule TokengateWeb.SettingsLive do
                   que tengan input y output configurados.
                 </p>
                 <p class="text-sm text-base-content/60 mt-1">
-                  <span class="font-mono font-semibold">{@backfill_count}</span> logs en $0 elegibles
-                  · <span class="font-mono font-semibold">{@backfill_all_count}</span> logs totales elegibles.
+                  <span class="font-mono font-semibold">{@backfill_count}</span>
+                  logs en $0 elegibles
+                  · <span class="font-mono font-semibold">{@backfill_all_count}</span>
+                  logs totales elegibles.
                 </p>
               </div>
               <div class="flex gap-2">
@@ -585,8 +588,8 @@ defmodule TokengateWeb.SettingsLive do
               </p>
             <% else %>
               <p class="text-sm text-base-content/70 mt-2">
-                Se actualizarán <strong>{@backfill_count}</strong> logs que tienen
-                <code>provider_cost_usd = $0</code>, usando los precios manuales
+                Se actualizarán <strong>{@backfill_count}</strong>
+                logs que tienen <code>provider_cost_usd = $0</code>, usando los precios manuales
                 (input + cache + output) configurados en cada provider.
               </p>
               <p class="text-sm text-base-content/70 mt-1">

@@ -125,7 +125,9 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
     } do
       payload = %{"model" => "gpt-4o", "messages" => [%{"role" => "user", "content" => "hola"}]}
 
-      assert {:ok, body, latency, _resp_headers} = OpenAIAdapter.chat_completion(provider, credential, payload)
+      assert {:ok, body, latency, _resp_headers} =
+               OpenAIAdapter.chat_completion(provider, credential, payload)
+
       assert body["usage"]["prompt_tokens"] == 10
       assert is_integer(latency) and latency >= 0
     end
@@ -145,7 +147,9 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
         "metadata" => %{"custom_field" => "preserved"}
       }
 
-      assert {:ok, _body, _latency, _resp_headers} = OpenAIAdapter.chat_completion(provider, credential, payload)
+      assert {:ok, _body, _latency, _resp_headers} =
+               OpenAIAdapter.chat_completion(provider, credential, payload)
+
       assert_receive {:captured, %{body: raw, auth: ["Bearer sk-test-key"]}}
       assert Jason.decode!(raw) == payload
     end

@@ -48,15 +48,30 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   `task`). Served natively by oMLX and Fireworks. Providers without a
   rerank surface (e.g. OpenRouter) will answer 404, which the caller's
   fallback logic handles like any other upstream failure.
+
+  Providers with a non-Cohere rerank dialect (DashScope) are translated:
+  the payload is encoded to the native format before sending and the
+  response decoded back to the Cohere shape. The endpoint URL honours
+  the provider's `rerank_base_url` override when present.
   """
   def rerank(provider, credential, payload, opts \\ []) do
-    post_json(provider, credential, "/rerank", payload, opts)
+    url = rerank_url(provider)
+
+    case Tokengate.Proxy.RerankDialect.dialect_for(provider) do
+      :passthrough ->
+        post_json(provider, credential, url, payload, opts)
+
+      {encode, decode} ->
+        provider
+        |> post_json(credential, url, encode.(payload), opts)
+        |> decode_response(decode)
+    end
   end
 
   # Shared non-streaming POST transport: identical headers, timeout and
   # error classification regardless of the endpoint segment.
   defp post_json(provider, credential, path, payload, opts) do
-    url = base_url(provider) <> path
+    url = build_url(provider, path)
     api_key = Map.get(credential, :api_key_encrypted) || Map.get(credential, "api_key_encrypted")
     receive_timeout = Keyword.get(opts, :receive_timeout, @default_receive_timeout)
     forwarded_headers = Keyword.get(opts, :forwarded_headers, %{})
@@ -68,7 +83,8 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
     start = System.monotonic_time(:millisecond)
 
     case Finch.request(request, finch_name(), receive_timeout: receive_timeout) do
-      {:ok, %Finch.Response{status: status, body: resp_body, headers: resp_headers}} when status in 200..299 ->
+      {:ok, %Finch.Response{status: status, body: resp_body, headers: resp_headers}}
+      when status in 200..299 ->
         latency = System.monotonic_time(:millisecond) - start
         decoded = decode!(resp_body)
         {:ok, decoded, latency, normalize_headers(resp_headers)}
@@ -309,10 +325,36 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
     base_url(provider) <> "/models"
   end
 
+  # Rerank endpoint URL. Providers may override the rerank surface with
+  # `rerank_base_url` (e.g. DashScope's native services path differs from
+  # the compatible-mode base). When unset, appends `/rerank` to base_url —
+  # the standard Cohere surface served by oMLX and Fireworks.
+  defp rerank_url(provider) do
+    case Map.get(provider, :rerank_base_url) || Map.get(provider, "rerank_base_url") do
+      nil -> base_url(provider) <> "/rerank"
+      url -> String.trim_trailing(url, "/")
+    end
+  end
+
+  # Applies a response decoder to a successful upstream result. Non-2xx
+  # errors (4-tuples) pass through untouched — the caller's fallback logic
+  # owns them.
+  defp decode_response({:ok, body, latency_ms, resp_headers}, decode),
+    do: {:ok, decode.(body), latency_ms, resp_headers}
+
+  defp decode_response(other, _decode), do: other
+
   defp base_url(provider) do
     (Map.get(provider, :base_url) || Map.get(provider, "base_url") || "")
     |> String.trim_trailing("/")
   end
+
+  # Builds a URL from a provider and a path segment. If the path is already
+  # an absolute URL (https://...), returns it directly — this lets
+  # rerank_base_url override the full endpoint when it differs from base_url.
+  defp build_url(_provider, "http://" <> _ = url), do: url
+  defp build_url(_provider, "https://" <> _ = url), do: url
+  defp build_url(provider, path), do: base_url(provider) <> path
 
   @forwarded_header_keys ~w(user-agent http-referer x-title)
 

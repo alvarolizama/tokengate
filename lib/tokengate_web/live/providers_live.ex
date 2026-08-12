@@ -509,6 +509,13 @@ defmodule TokengateWeb.ProvidersLive do
                   placeholder="https://api.openai.com/v1"
                   hint="URL base de la API del proveedor, incluyendo el API base path (ej. /v1, /api/v1). Sin slash final."
                 />
+                <.input
+                  field={@form[:rerank_base_url]}
+                  type="text"
+                  label="Rerank Base URL (opcional)"
+                  placeholder="https://dashscope-intl.aliyuncs.com/api/v1/services/rerank/text-rerank"
+                  hint="Solo si el endpoint de rerank difiere del Base URL (ej. DashScope). Vacío = se usa Base URL + /rerank."
+                />
                 <div class="flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
                     Cancelar

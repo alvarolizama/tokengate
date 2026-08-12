@@ -43,7 +43,8 @@ defmodule Tokengate.Proxy.ProviderAdapter do
           | :auth_error
 
   @type chat_result ::
-          {:ok, body :: map(), latency_ms :: non_neg_integer(), resp_headers :: [{String.t(), String.t()}]}
+          {:ok, body :: map(), latency_ms :: non_neg_integer(),
+           resp_headers :: [{String.t(), String.t()}]}
           | {:error, failure_reason(), status :: non_neg_integer() | nil}
 
   @doc """

@@ -887,6 +887,18 @@ defmodule TokengateWeb.StatsLive do
 
   defp pad2(n), do: n |> Integer.to_string() |> String.pad_leading(2, "0")
 
+  @doc """
+  Cache hit percentage: cache_read_tokens / prompt_tokens × 100.
+  Returns "—" when prompt_tokens is 0 or nil.
+  """
+  def cache_hit_pct(prompt_tokens, cache_read_tokens)
+      when is_integer(prompt_tokens) and is_integer(cache_read_tokens) and prompt_tokens > 0 and cache_read_tokens > 0 do
+    pct = cache_read_tokens / prompt_tokens * 100
+    "#{:erlang.float_to_binary(Float.round(pct, 1), [:compact, {:decimals, 1}])}%"
+  end
+
+  def cache_hit_pct(_prompt_tokens, _cache_read_tokens), do: "—"
+
   # ── Drill-down sparkline helpers ─────────────────────────────────────────
 
   @doc """

@@ -67,8 +67,11 @@ defmodule Tokengate.Proxy.CostCalculator do
         usage = Keyword.get(opts, :usage, %{})
 
         case Map.get(opts[:manual_pricing], :cache_cost_per_million) do
-          %Decimal{} = cache_cost when cache_cost != nil -> manual_cost_3term(usage, inp, cache_cost, out)
-          _ -> manual_cost_2term(usage, inp, out)
+          %Decimal{} = cache_cost when cache_cost != nil ->
+            manual_cost_3term(usage, inp, cache_cost, out)
+
+          _ ->
+            manual_cost_2term(usage, inp, out)
         end
 
       _ ->
