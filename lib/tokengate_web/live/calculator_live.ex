@@ -8,10 +8,15 @@ defmodule TokengateWeb.CalculatorLive do
   API keys (included + pay_per_token) and overlays it with a
   calculated estimate so operators can see whether they're paying more
   or less than expected.
+
+  The real-cost totals use the same source as StatsLive
+  (`Logs.cost_summary/1` with `model_alias_id` filter), so the numbers
+  always match the stats page for the same period + timezone.
   """
 
   use TokengateWeb, :live_view
 
+  alias Tokengate.Logs
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Periods
   alias Tokengate.Providers
@@ -21,7 +26,10 @@ defmodule TokengateWeb.CalculatorLive do
   @impl true
   def mount(_params, _session, socket) do
     user = socket.assigns[:current_user]
-    timezone = (user && user.timezone) || Periods.default_timezone()
+    # Use the timezone already assigned by UserAuth on_mount — the sidebar
+    # selector can change it dynamically, so prefer socket assigns over the
+    # user record.
+    timezone = socket.assigns[:timezone] || user && user.timezone || Periods.default_timezone()
 
     models =
       Providers.list_model_aliases()
@@ -66,15 +74,7 @@ defmodule TokengateWeb.CalculatorLive do
 
     socket =
       if model_id && model_id != "" do
-        load_chart_data(
-          socket,
-          model_id,
-          period,
-          cost_input,
-          cost_cache,
-          cost_output,
-          hit_rate_str
-        )
+        load_chart_data(socket, model_id, period, cost_input, cost_cache, cost_output, hit_rate_str)
       else
         socket
         |> assign(:chart_data, [])
@@ -100,6 +100,16 @@ defmodule TokengateWeb.CalculatorLive do
     timezone = socket.assigns.timezone
     bounds = Periods.period_bounds(period, timezone)
 
+    # Source of truth for totals: the same cost_summary that Stats uses,
+    # with the same from/to/filter. This guarantees identical numbers.
+    summary_data =
+      Logs.cost_summary(%{
+        model_alias_id: model_id,
+        from: bounds.from,
+        to: bounds.to
+      })
+
+    # Hourly series for the chart breakdown only.
     series =
       Rollup.hourly_series_for_model(model_id,
         from: bounds.from,
@@ -127,9 +137,7 @@ defmodule TokengateWeb.CalculatorLive do
         # Apply the user's hit_rate to the total input to simulate what the
         # cost *would* be if hit_rate% of all input read from cache.
         total_input = fresh_input + cache_read
-        # simulated cache hits = total_input * hit_rate
         sim_cache_tokens = trunc(total_input * hit_rate)
-        # simulated fresh tokens = total_input - sim_cache_tokens
         sim_fresh_tokens = total_input - sim_cache_tokens
 
         est_input =
@@ -163,42 +171,31 @@ defmodule TokengateWeb.CalculatorLive do
         }
       end)
 
-    socket
-    |> assign(:chart_data, chart_data)
-    |> assign(:summary, build_summary(chart_data))
-  end
-
-  defp build_summary([]), do: nil
-
-  defp build_summary(chart_data) do
-    total_real =
-      Enum.reduce(chart_data, Decimal.new(0), fn row, acc ->
-        Decimal.add(acc, row.real_cost)
-      end)
-      |> Decimal.round(4)
-
+    # Total estimated cost (sum of per-hour estimates)
     total_estimated =
       Enum.reduce(chart_data, Decimal.new(0), fn row, acc ->
         Decimal.add(acc, row.estimated_cost)
       end)
       |> Decimal.round(4)
 
-    total_requests = Enum.sum_by(chart_data, & &1.request_count)
-    total_prompt = Enum.sum_by(chart_data, & &1.prompt_tokens)
-    total_completion = Enum.sum_by(chart_data, & &1.completion_tokens)
-    total_cache = Enum.sum_by(chart_data, & &1.cache_read_tokens)
+    # Total real cost from cost_summary (same source as Stats)
+    total_real = Decimal.round(summary_data.total_cost_usd, 4)
 
     difference = Decimal.sub(total_estimated, total_real) |> Decimal.round(4)
 
-    %{
+    summary = %{
       total_real: total_real,
       total_estimated: total_estimated,
       difference: difference,
-      total_requests: total_requests,
-      total_prompt: total_prompt,
-      total_completion: total_completion,
-      total_cache: total_cache
+      total_requests: summary_data.request_count,
+      total_prompt: summary_data.total_prompt_tokens,
+      total_completion: summary_data.total_completion_tokens,
+      total_cache: summary_data.total_cache_read_tokens
     }
+
+    socket
+    |> assign(:chart_data, chart_data)
+    |> assign(:summary, summary)
   end
 
   # ── Parsing helpers ────────────────────────────────────────────────────────
@@ -279,8 +276,8 @@ defmodule TokengateWeb.CalculatorLive do
         |> Enum.with_index()
         |> Enum.map(fn {row, i} ->
           x = pad_left + i * step_x
-          real_y = pad_top + plot_h - Decimal.to_float(row.real_cost) / max_val * plot_h
-          est_y = pad_top + plot_h - Decimal.to_float(row.estimated_cost) / max_val * plot_h
+          real_y = pad_top + plot_h - (Decimal.to_float(row.real_cost) / max_val * plot_h)
+          est_y = pad_top + plot_h - (Decimal.to_float(row.estimated_cost) / max_val * plot_h)
 
           {Float.round(x, 1), Float.round(real_y, 1), Float.round(est_y, 1)}
         end)
@@ -313,7 +310,7 @@ defmodule TokengateWeb.CalculatorLive do
   defp build_y_ticks(max_val, plot_h, pad_top, pad_left) do
     for i <- 0..4 do
       val = max_val * i / 4
-      y = pad_top + plot_h - val / max_val * plot_h
+      y = pad_top + plot_h - (val / max_val * plot_h)
       %{value: format_tick(val), y: Float.round(y, 1), x: pad_left}
     end
   end
@@ -335,7 +332,7 @@ defmodule TokengateWeb.CalculatorLive do
     |> Enum.filter(fn {_row, i} -> rem(i, step) == 0 end)
     |> Enum.map(fn {row, i} ->
       label = format_hour_label(row.hour)
-      x = pad_left + if count > 1, do: i / (count - 1) * plot_w, else: 0
+      x = pad_left + (if count > 1, do: i / (count - 1) * plot_w, else: 0)
       %{label: label, x: Float.round(x, 1)}
     end)
   end
