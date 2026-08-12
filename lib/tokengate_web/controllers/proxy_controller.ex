@@ -382,7 +382,7 @@ defmodule TokengateWeb.ProxyController do
     {usage, body} = simple_usage(conn.body_params, body, kind)
     provider_reported = UsageNormalizer.extract_reported_cost(:openai, body, resp_headers)
 
-    cost = CostCalculator.provider_cost(route.model_provider.billing_mode, provider_reported)
+    cost = cost_with_fallback(route, provider_reported, usage)
 
     Budgets.record_spend(member.id, cost)
     Budgets.record_credential_spend(route.credential.id, cost)
@@ -675,7 +675,7 @@ defmodule TokengateWeb.ProxyController do
     # If yes, reject. If not, let the request through; the post-pipeline
     # records the real reported cost and `record_spend` keeps the counter in
     # sync. A subsequent request will see the updated spend and reject.
-    projected_cost = CostCalculator.provider_cost(route.model_provider.billing_mode, nil)
+    projected_cost = CostCalculator.provider_cost(route.model_provider.billing_mode, nil, [])
 
     case Budgets.check_ladder(
            member_monthly_budget,
@@ -1228,7 +1228,7 @@ defmodule TokengateWeb.ProxyController do
     conn
   end
 
-  defp stream_cost(route, _usage, body, resp_headers) do
+  defp stream_cost(route, usage, body, resp_headers) do
     provider_reported =
       if body, do: UsageNormalizer.extract_reported_cost(:openai, body, resp_headers), else: nil
 
@@ -1238,8 +1238,43 @@ defmodule TokengateWeb.ProxyController do
       # Body had no cost — try headers alone (LiteLLM proxies report cost only
       # in headers, not in the streaming body).
       header_cost = UsageNormalizer.extract_reported_cost(:openai, %{}, resp_headers)
-      CostCalculator.provider_cost(route.model_provider.billing_mode, header_cost)
+
+      if header_cost do
+        CostCalculator.provider_cost(route.model_provider.billing_mode, header_cost)
+      else
+        # Neither body nor headers reported a cost — try manual pricing fallback.
+        manual_cost(route, usage)
+      end
     end
+  end
+
+  # Computes cost using the full fallback chain: reported cost first, then
+  # manual pricing (input_cost + output_cost × token counts), then $0.
+  # Used by finalize_simple_success and finalize_success (non-streaming).
+  defp cost_with_fallback(route, provider_reported, usage) do
+    mp = route.model_provider
+
+    CostCalculator.provider_cost(mp.billing_mode, provider_reported,
+      manual_pricing: %{
+        input_cost_per_million: mp.input_cost_per_million,
+        output_cost_per_million: mp.output_cost_per_million
+      },
+      usage: usage
+    )
+  end
+
+  # Computes cost from manual pricing alone. Used by stream_cost when neither
+  # body nor headers reported a cost.
+  defp manual_cost(route, usage) do
+    mp = route.model_provider
+
+    CostCalculator.provider_cost(mp.billing_mode, nil,
+      manual_pricing: %{
+        input_cost_per_million: mp.input_cost_per_million,
+        output_cost_per_million: mp.output_cost_per_million
+      },
+      usage: usage
+    )
   end
 
   ## Success finalization #######################################################
@@ -1248,7 +1283,7 @@ defmodule TokengateWeb.ProxyController do
     usage = UsageNormalizer.normalize(:openai, body) || fallback_usage(conn.body_params, body)
     provider_reported = UsageNormalizer.extract_reported_cost(:openai, body, resp_headers)
 
-    cost = CostCalculator.provider_cost(route.model_provider.billing_mode, provider_reported)
+    cost = cost_with_fallback(route, provider_reported, usage)
 
     # Hot-path state updates (ETS only)
     Budgets.record_spend(member.id, cost)

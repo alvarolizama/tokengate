@@ -1819,6 +1819,25 @@ defmodule TokengateWeb.ModelsLive do
                   />
                 </div>
 
+                <div :if={@current_billing_mode == "pay_per_token"} class="grid grid-cols-2 gap-3">
+                  <.input
+                    field={@provider_form[:input_cost_per_million]}
+                    type="number"
+                    step="0.000001"
+                    min="0"
+                    label="Costo input (USD / 1M tokens)"
+                    hint="Precio por millón de tokens de entrada. Fallback cuando el proveedor no reporta costo (ej. LiteLLM streaming). Vacío = usar costo del proveedor o $0."
+                  />
+                  <.input
+                    field={@provider_form[:output_cost_per_million]}
+                    type="number"
+                    step="0.000001"
+                    min="0"
+                    label="Costo output (USD / 1M tokens)"
+                    hint="Precio por millón de tokens de salida. Mismo fallback que input. Vacío = usar costo del proveedor o $0."
+                  />
+                </div>
+
                 <.input
                   field={@provider_form[:sticky_ttl_seconds]}
                   type="number"

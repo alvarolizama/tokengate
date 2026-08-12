@@ -46,6 +46,10 @@ defmodule Tokengate.Providers.ModelProvider do
     field :enabled, :boolean, default: true
     field :billing_mode, :string, default: "pay_per_token"
     field :sticky_ttl_ms, :integer
+    # Manual pricing fallback (USD per 1M tokens). Used when the upstream
+    # doesn't report a cost (e.g. LiteLLM streaming). NULL = not set.
+    field :input_cost_per_million, :decimal
+    field :output_cost_per_million, :decimal
     # Virtual mirror of `sticky_ttl_ms` in seconds — exposed to the LiveView
     # form so operators can type `900` instead of `900_000`. Synced by
     # `sync_sticky_ttl_fields/1` before saving.
@@ -72,6 +76,8 @@ defmodule Tokengate.Providers.ModelProvider do
       :billing_mode,
       :sticky_ttl_ms,
       :sticky_ttl_seconds,
+      :input_cost_per_million,
+      :output_cost_per_million,
       :exclusive_to_team_member_id,
       :exclusive_to_team_id
     ])
