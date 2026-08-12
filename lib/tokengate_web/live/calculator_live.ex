@@ -111,32 +111,35 @@ defmodule TokengateWeb.CalculatorLive do
     cost_cache = parse_decimal(cost_cache_str, Decimal.new("0.30"))
     cost_output = parse_decimal(cost_output_str, Decimal.new("15.00"))
     hit_rate = parse_float(hit_rate_str, 90.0) / 100.0
-    miss_rate = 1.0 - hit_rate
 
-    # Per-million multiplier: price is per 1M tokens
+    # Per-million multiplier: price is per 1M tokens → cost = tokens * price * 1e-6
     per_million = Decimal.new("0.000001")
 
     chart_data =
       Enum.map(series, fn row ->
-        prompt = row.prompt_tokens
+        # UsageNormalizer already subtracts cached tokens from prompt_tokens,
+        # so prompt_tokens in the DB is *non-cached* input. The total input
+        # (what the model saw) is prompt_tokens + cache_read_tokens.
+        fresh_input = row.prompt_tokens
+        cache_read = row.cache_read_tokens
         completion = row.completion_tokens
 
-        # Estimated cost:
-        #   fresh_input  = prompt_tokens * (1 - hit_rate)  ×  cost_input
-        #   cache_input  = prompt_tokens * hit_rate         ×  cost_cache
-        #   output       = completion_tokens                ×  cost_output
-        # All per 1M tokens.
-        fresh_tokens = trunc(prompt * miss_rate)
-        cache_tokens = prompt - fresh_tokens
+        # Apply the user's hit_rate to the total input to simulate what the
+        # cost *would* be if hit_rate% of all input read from cache.
+        total_input = fresh_input + cache_read
+        # simulated cache hits = total_input * hit_rate
+        sim_cache_tokens = trunc(total_input * hit_rate)
+        # simulated fresh tokens = total_input - sim_cache_tokens
+        sim_fresh_tokens = total_input - sim_cache_tokens
 
         est_input =
           cost_input
-          |> Decimal.mult(Decimal.new(fresh_tokens))
+          |> Decimal.mult(Decimal.new(sim_fresh_tokens))
           |> Decimal.mult(per_million)
 
         est_cache =
           cost_cache
-          |> Decimal.mult(Decimal.new(cache_tokens))
+          |> Decimal.mult(Decimal.new(sim_cache_tokens))
           |> Decimal.mult(per_million)
 
         est_output =
@@ -154,9 +157,9 @@ defmodule TokengateWeb.CalculatorLive do
           request_count: row.request_count,
           real_cost: row.cost_usd,
           estimated_cost: estimated_cost,
-          prompt_tokens: prompt,
+          prompt_tokens: fresh_input,
           completion_tokens: completion,
-          cache_read_tokens: row.cache_read_tokens
+          cache_read_tokens: cache_read
         }
       end)
 

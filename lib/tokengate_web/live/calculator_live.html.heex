@@ -140,6 +140,11 @@
               <p class="text-xl sm:text-2xl font-bold tabular-nums text-success">
                 ${format_cost(@summary.total_real)}
               </p>
+              <%= if Decimal.compare(@summary.total_real, 0) == :eq and @summary.total_requests > 0 do %>
+                <p class="text-[10px] text-base-content/40 mt-0.5">
+                  El proveedor no reporta costo
+                </p>
+              <% end %>
             </div>
           </div>
 
