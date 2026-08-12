@@ -45,9 +45,7 @@ defmodule TokengateWeb.CalculatorLive do
       |> assign(:selected_model_id, nil)
       |> assign(:period, "7d")
       |> assign(:cost_input, "3.00")
-      |> assign(:cost_cache, "0.30")
       |> assign(:cost_output, "15.00")
-      |> assign(:hit_rate, "0")
       |> assign(:chart_data, [])
       |> assign(:summary, nil)
 
@@ -59,22 +57,18 @@ defmodule TokengateWeb.CalculatorLive do
     model_id = params["model_id"]
     period = params["period"] || "7d"
     cost_input = params["cost_input"] || "3.00"
-    cost_cache = params["cost_cache"] || "0.30"
     cost_output = params["cost_output"] || "15.00"
-    hit_rate_str = params["hit_rate"] || "90"
 
     socket =
       socket
       |> assign(:selected_model_id, model_id)
       |> assign(:period, period)
       |> assign(:cost_input, cost_input)
-      |> assign(:cost_cache, cost_cache)
       |> assign(:cost_output, cost_output)
-      |> assign(:hit_rate, hit_rate_str)
 
     socket =
       if model_id && model_id != "" do
-        load_chart_data(socket, model_id, period, cost_input, cost_cache, cost_output, hit_rate_str)
+        load_chart_data(socket, model_id, period, cost_input, cost_output)
       else
         socket
         |> assign(:chart_data, [])
@@ -93,9 +87,7 @@ defmodule TokengateWeb.CalculatorLive do
          model_id,
          period,
          cost_input_str,
-         cost_cache_str,
-         cost_output_str,
-         hit_rate_str
+         cost_output_str
        ) do
     timezone = socket.assigns.timezone
     bounds = Periods.period_bounds(period, timezone)
@@ -118,9 +110,7 @@ defmodule TokengateWeb.CalculatorLive do
       )
 
     cost_input = parse_decimal(cost_input_str, Decimal.new("3.00"))
-    cost_cache = parse_decimal(cost_cache_str, Decimal.new("0.30"))
     cost_output = parse_decimal(cost_output_str, Decimal.new("15.00"))
-    hit_rate = parse_float(hit_rate_str, 0.0) / 100.0
 
     # Per-million multiplier: price is per 1M tokens → cost = tokens * price * 1e-6
     per_million = Decimal.new("0.000001")
@@ -130,20 +120,9 @@ defmodule TokengateWeb.CalculatorLive do
         prompt = row.prompt_tokens
         completion = row.completion_tokens
 
-        # hit_rate simulates what % of input tokens would read from cache
-        # at the cache price instead of the full input price.
-        # 0% = no cache, everything at input price.
-        cache_tokens = trunc(prompt * hit_rate)
-        fresh_tokens = prompt - cache_tokens
-
         est_input =
           cost_input
-          |> Decimal.mult(Decimal.new(fresh_tokens))
-          |> Decimal.mult(per_million)
-
-        est_cache =
-          cost_cache
-          |> Decimal.mult(Decimal.new(cache_tokens))
+          |> Decimal.mult(Decimal.new(prompt))
           |> Decimal.mult(per_million)
 
         est_output =
@@ -152,7 +131,7 @@ defmodule TokengateWeb.CalculatorLive do
           |> Decimal.mult(per_million)
 
         estimated_cost =
-          [est_input, est_cache, est_output]
+          [est_input, est_output]
           |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
           |> Decimal.round(6)
 
@@ -197,13 +176,6 @@ defmodule TokengateWeb.CalculatorLive do
   defp parse_decimal(str, default) do
     case Decimal.parse(str || "") do
       {d, ""} -> d
-      _ -> default
-    end
-  end
-
-  defp parse_float(str, default) do
-    case Float.parse(str || "") do
-      {f, ""} -> f
       _ -> default
     end
   end

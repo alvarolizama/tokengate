@@ -53,22 +53,6 @@
               </select>
             </div>
 
-            <%!-- Cache hit rate --%>
-            <div class="space-y-1.5">
-              <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                Hit Rate (cache) %
-              </label>
-              <input
-                type="number"
-                name="hit_rate"
-                value={@hit_rate}
-                min="0"
-                max="100"
-                step="1"
-                class="input input-bordered input-sm w-full"
-              />
-            </div>
-
             <%!-- Cost input per 1M tokens --%>
             <div class="space-y-1.5">
               <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
@@ -78,21 +62,6 @@
                 type="number"
                 name="cost_input"
                 value={@cost_input}
-                min="0"
-                step="0.01"
-                class="input input-bordered input-sm w-full"
-              />
-            </div>
-
-            <%!-- Cost cache per 1M tokens --%>
-            <div class="space-y-1.5">
-              <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                Costo cache $/1M tokens
-              </label>
-              <input
-                type="number"
-                name="cost_cache"
-                value={@cost_cache}
                 min="0"
                 step="0.01"
                 class="input input-bordered input-sm w-full"
