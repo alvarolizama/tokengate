@@ -99,6 +99,7 @@ defmodule TokengateWeb.Router do
       live "/dashboard/users/:user_id/stats", UserStatsLive
       live "/dashboard/models", ModelsLive
       live "/dashboard/credits", CreditsLive
+      live "/dashboard/calculator", CalculatorLive
       live "/dashboard/settings", SettingsLive
     end
   end

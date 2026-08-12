@@ -2022,6 +2022,94 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   # -----------------------------------------------------------------------
+  # hourly_series_for_model/2
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Returns an hour-bucketed series for a specific model alias, including
+  token breakdown and cost. Used by the cost calculator to compare real
+  spend vs estimated spend.
+
+  Each row is:
+
+      %{
+        hour: DateTime,
+        request_count: integer,
+        prompt_tokens: integer,
+        completion_tokens: integer,
+        cache_read_tokens: integer,
+        cache_creation_tokens: integer,
+        cost_usd: Decimal   # real provider cost (included + pay_per_token)
+      }
+
+  ## Options
+
+    * `:from` — `inserted_at >= from` (DateTime)
+    * `:to`   — `inserted_at <= to` (DateTime)
+    * `:timezone` — IANA zone for local-hour bucketing; default `"Etc/UTC"`
+  """
+  @spec hourly_series_for_model(String.t() | nil, keyword()) :: [map()]
+  def hourly_series_for_model(model_alias_id, opts \\ [])
+
+  def hourly_series_for_model(nil, _opts), do: []
+
+  def hourly_series_for_model(model_alias_id, opts) when is_binary(model_alias_id) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+    timezone = Keyword.get(opts, :timezone, "Etc/UTC")
+
+    bucketed =
+      RequestLog
+      |> where([rl], rl.model_alias_id == ^model_alias_id)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> select([rl], %{
+        bucket:
+          fragment(
+            "date_trunc('hour', ? AT TIME ZONE ?) AT TIME ZONE ?",
+            rl.inserted_at,
+            ^timezone,
+            ^timezone
+          ),
+        id: rl.id,
+        provider_cost_usd: rl.provider_cost_usd,
+        prompt_tokens: rl.prompt_tokens,
+        completion_tokens: rl.completion_tokens,
+        cache_read_tokens: rl.cache_read_tokens,
+        cache_creation_tokens: rl.cache_creation_tokens
+      })
+      |> subquery()
+
+    query =
+      from(b in bucketed,
+        group_by: b.bucket,
+        order_by: b.bucket,
+        select: %{
+          hour: b.bucket,
+          request_count: count(b.id),
+          cost_usd: fragment("COALESCE(SUM(?), 0)", b.provider_cost_usd),
+          prompt_tokens: coalesce(sum(b.prompt_tokens), 0),
+          completion_tokens: coalesce(sum(b.completion_tokens), 0),
+          cache_read_tokens: coalesce(sum(b.cache_read_tokens), 0),
+          cache_creation_tokens: coalesce(sum(b.cache_creation_tokens), 0)
+        }
+      )
+
+    Repo.all(query)
+    |> Enum.map(fn row ->
+      %{
+        hour: to_utc_datetime(row.hour),
+        request_count: row.request_count,
+        cost_usd: Decimal.new(to_string(row.cost_usd)),
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens,
+        cache_read_tokens: row.cache_read_tokens,
+        cache_creation_tokens: row.cache_creation_tokens
+      }
+    end)
+  end
+
+  # -----------------------------------------------------------------------
   # Internals
   # -----------------------------------------------------------------------
 

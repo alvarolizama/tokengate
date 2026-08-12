@@ -222,6 +222,11 @@ defmodule TokengateWeb.Layouts do
             <%= if admin?(@current_scope) do %>
               <.sidebar_link href={~p"/dashboard/stats"} label="Estadísticas" icon="hero-chart-pie" />
               <.sidebar_link href={~p"/dashboard/credits"} label="Créditos" icon="hero-banknotes" />
+              <.sidebar_link
+                href={~p"/dashboard/calculator"}
+                label="Calculadora"
+                icon="hero-calculator"
+              />
             <% end %>
           </div>
 
