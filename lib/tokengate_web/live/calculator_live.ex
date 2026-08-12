@@ -47,7 +47,7 @@ defmodule TokengateWeb.CalculatorLive do
       |> assign(:cost_input, "3.00")
       |> assign(:cost_cache, "0.30")
       |> assign(:cost_output, "15.00")
-      |> assign(:hit_rate, "90")
+      |> assign(:hit_rate, "0")
       |> assign(:chart_data, [])
       |> assign(:summary, nil)
 
@@ -120,24 +120,20 @@ defmodule TokengateWeb.CalculatorLive do
     cost_input = parse_decimal(cost_input_str, Decimal.new("3.00"))
     cost_cache = parse_decimal(cost_cache_str, Decimal.new("0.30"))
     cost_output = parse_decimal(cost_output_str, Decimal.new("15.00"))
-    hit_rate = parse_float(hit_rate_str, 90.0) / 100.0
+    hit_rate = parse_float(hit_rate_str, 0.0) / 100.0
 
     # Per-million multiplier: price is per 1M tokens → cost = tokens * price * 1e-6
     per_million = Decimal.new("0.000001")
 
     chart_data =
       Enum.map(series, fn row ->
-        # prompt_tokens in DB = non-cached input (normalizer subtracts cache).
-        # cache_read_tokens = tokens served from cache at discount price.
-        # cache_creation_tokens = tokens written to cache, charged at input price.
         prompt = row.prompt_tokens
         cache_read = row.cache_read_tokens
-        cache_creation = row.cache_creation_tokens
         completion = row.completion_tokens
 
-        # When the provider reports cache_read_tokens > 0, use them directly.
-        # When it doesn't (0), simulate: hit_rate% of prompt_tokens would have
-        # read from cache at the cache price instead of the full input price.
+        # If the provider reports cache_read_tokens > 0, use them directly
+        # at the cache price. If not, optionally simulate cache hits with
+        # the user's hit_rate (0% by default = no simulation).
         {fresh_at_input_price, cache_at_cache_price} =
           if cache_read > 0 do
             {prompt, cache_read}
@@ -146,12 +142,9 @@ defmodule TokengateWeb.CalculatorLive do
             {prompt - sim_cache, sim_cache}
           end
 
-        # cache_creation_tokens are input tokens → charged at input price.
-        total_at_input_price = fresh_at_input_price + cache_creation
-
         est_input =
           cost_input
-          |> Decimal.mult(Decimal.new(total_at_input_price))
+          |> Decimal.mult(Decimal.new(fresh_at_input_price))
           |> Decimal.mult(per_million)
 
         est_cache =
@@ -176,8 +169,7 @@ defmodule TokengateWeb.CalculatorLive do
           estimated_cost: estimated_cost,
           prompt_tokens: prompt,
           completion_tokens: completion,
-          cache_read_tokens: cache_read,
-          cache_creation_tokens: cache_creation
+          cache_read_tokens: cache_read
         }
       end)
 
