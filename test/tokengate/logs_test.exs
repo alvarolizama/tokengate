@@ -168,6 +168,35 @@ defmodule Tokengate.LogsTest do
   end
 
   # ---------------------------------------------------------------------------
+  # WriteWorker.perform/1 — regression: cache tokens must survive the Oban
+  # round-trip. The worker rebuilds the attrs map from job args; an earlier
+  # version dropped cache_read_tokens / cache_creation_tokens, so the columns
+  # silently defaulted to 0 and the dashboard showed "—" even when the provider
+  # reported a cache hit.
+  # ---------------------------------------------------------------------------
+
+  describe "WriteWorker.perform/1" do
+    test "persists cache_read_tokens and cache_creation_tokens from args" do
+      {team_member, _team} = team_member_fixture()
+
+      args = %{
+        "team_member_id" => team_member.id,
+        "model_requested" => "deepseek-chat",
+        "prompt_tokens" => 2350,
+        "completion_tokens" => 1,
+        "cache_read_tokens" => 2304,
+        "cache_creation_tokens" => 0
+      }
+
+      assert :ok = Tokengate.Logs.WriteWorker.perform(%Oban.Job{args: args})
+
+      [log] = Logs.list_logs(%{team_member_id: team_member.id})
+      assert log.cache_read_tokens == 2304
+      assert log.cache_creation_tokens == 0
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # list_logs/1
   # ---------------------------------------------------------------------------
 

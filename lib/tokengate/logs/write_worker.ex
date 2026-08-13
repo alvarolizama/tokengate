@@ -36,6 +36,8 @@ defmodule Tokengate.Logs.WriteWorker do
       error_message: args["error_message"],
       prompt_tokens: args["prompt_tokens"] || 0,
       completion_tokens: args["completion_tokens"] || 0,
+      cache_read_tokens: args["cache_read_tokens"] || 0,
+      cache_creation_tokens: args["cache_creation_tokens"] || 0,
       provider_cost_usd: args["provider_cost_usd"],
       latency_ms: args["latency_ms"],
       ttft_ms: args["ttft_ms"],
