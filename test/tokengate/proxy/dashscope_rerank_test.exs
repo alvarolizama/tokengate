@@ -1,20 +1,53 @@
 defmodule Tokengate.Proxy.DashScopeRerankTest do
-  @moduledoc "Unit tests for DashScope rerank response translation."
+  @moduledoc "Unit tests for Cohere ↔ DashScope rerank translation."
   use ExUnit.Case, async: true
 
   alias Tokengate.Proxy.DashScopeRerank
 
   describe "encode/1" do
-    test "is identity — the DashScope rerank request is already Cohere-shaped" do
+    test "wraps query and documents into input" do
       payload = %{
         "model" => "qwen3-rerank",
         "query" => "chaos",
-        "documents" => ["doc cero", "doc uno"],
+        "documents" => ["doc cero", "doc uno"]
+      }
+
+      assert DashScopeRerank.encode(payload) == %{
+               "model" => "qwen3-rerank",
+               "input" => %{"query" => "chaos", "documents" => ["doc cero", "doc uno"]}
+             }
+    end
+
+    test "moves top_n and return_documents into parameters" do
+      payload = %{
+        "model" => "qwen3-rerank",
+        "query" => "q",
+        "documents" => ["d"],
         "top_n" => 3,
         "return_documents" => true
       }
 
-      assert DashScopeRerank.encode(payload) == payload
+      encoded = DashScopeRerank.encode(payload)
+
+      assert encoded["parameters"] == %{"top_n" => 3, "return_documents" => true}
+      refute Map.has_key?(encoded, "query")
+      refute Map.has_key?(encoded, "top_n")
+    end
+
+    test "omits parameters when no optional fields present" do
+      encoded = DashScopeRerank.encode(%{"query" => "q", "documents" => ["d"]})
+      refute Map.has_key?(encoded, "parameters")
+    end
+
+    test "preserves task when present" do
+      encoded =
+        DashScopeRerank.encode(%{
+          "query" => "q",
+          "documents" => ["d"],
+          "task" => "qa"
+        })
+
+      assert encoded["parameters"] == %{"task" => "qa"}
     end
   end
 

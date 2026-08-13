@@ -1211,7 +1211,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert log.status_code == 200
   end
 
-  test "rerank with DashScope format: upstream receives flat Cohere-shaped payload",
+  test "rerank with DashScope format: upstream receives nested input/parameters payload",
        %{conn: conn} do
     %{token: token, alias: model_alias} = proxy_fixture()
     update_alias_type(model_alias, "rerank")
@@ -1237,14 +1237,14 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     assert %{"results" => [_ | _]} = json_response(conn, 200)
 
-    # DashScope's rerank request is already Cohere-shaped (flat), so the
-    # upstream receives the payload unchanged (no input/parameters nesting).
+    # DashScope's native rerank endpoint expects the nested input/parameters
+    # format, so the upstream receives that shape.
     assert_received {:provider_request, upstream_body}
 
-    assert %{"query" => "chaos", "documents" => ["doc cero", "doc uno"]} = upstream_body
-    assert %{"top_n" => 3, "return_documents" => true} = upstream_body
-    refute Map.has_key?(upstream_body, "input")
-    refute Map.has_key?(upstream_body, "parameters")
+    assert %{"input" => %{"query" => "chaos", "documents" => ["doc cero", "doc uno"]}} =
+             upstream_body
+
+    assert %{"parameters" => %{"top_n" => 3, "return_documents" => true}} = upstream_body
   end
 
   test "GET /v1/models includes model_type", %{conn: conn} do

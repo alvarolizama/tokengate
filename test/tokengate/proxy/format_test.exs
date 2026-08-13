@@ -19,9 +19,10 @@ defmodule Tokengate.Proxy.FormatTest do
       assert is_function(encode, 1)
       assert is_function(decode, 1)
 
-      # encode is identity (flat request), decode unwraps output.results
+      # encode nests into input/parameters, decode unwraps output.results
       encoded = encode.(%{"query" => "q", "documents" => ["d"]})
-      assert encoded["query"] == "q"
+      assert encoded["input"]["query"] == "q"
+      assert encoded["input"]["documents"] == ["d"]
 
       decoded = decode.(%{"output" => %{"results" => []}})
       assert decoded["results"] == []
