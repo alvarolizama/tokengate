@@ -17,34 +17,16 @@ defmodule Tokengate.Budgets.SyncWorker do
 
   ## Dedup
 
-  `unique: [period: 60, keys: [:member_id, :credential_id]]` prevents
-  rapid-fire duplicate jobs for the same member or credential within a
-  60-second window.
-
-  ## Credential mode
-
-  When enqueued with `credential_id` (by `Manager.record_credential_spend/2`),
-  only the credential's **daily** counter is drift-corrected — credentials
-  have no monthly counter.
+  `unique: [period: 60, keys: [:member_id]]` prevents rapid-fire duplicate
+  jobs for the same member within a 60-second window.
   """
 
   use Oban.Worker,
     queue: :budgets,
     max_attempts: 3,
-    unique: [period: 60, keys: [:member_id, :credential_id]]
+    unique: [period: 60, keys: [:member_id]]
 
   @impl true
-  def perform(%Oban.Job{args: %{"credential_id" => credential_id}}) do
-    Tokengate.Budgets.Manager.clear_sync_pending({:credential, credential_id})
-
-    daily_micro =
-      Tokengate.Budgets.Manager.load_credential_from_db(credential_id, period_start(:daily))
-
-    Tokengate.Budgets.Manager.set_credential_from_db(credential_id, daily_micro)
-
-    :ok
-  end
-
   def perform(%Oban.Job{args: %{"member_id" => member_id}}) do
     member_id = normalize_member_id(member_id)
 
@@ -63,10 +45,6 @@ defmodule Tokengate.Budgets.SyncWorker do
   end
 
   # Helper to allow direct invocation in tests with atom-keyed args.
-  def perform(%{credential_id: credential_id}) do
-    perform(%Oban.Job{args: %{"credential_id" => credential_id}})
-  end
-
   def perform(%{member_id: member_id}) do
     perform(%Oban.Job{args: %{"member_id" => member_id}})
   end

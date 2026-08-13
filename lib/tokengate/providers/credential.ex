@@ -27,7 +27,6 @@ defmodule Tokengate.Providers.Credential do
     field :max_concurrent, :integer
     field :max_concurrent_per_user, :integer
     field :receive_timeout_ms, :integer
-    field :daily_limit_usd, :decimal
     field :status, :string, default: "active"
     field :error_reason, :string
     field :error_message, :string
@@ -40,7 +39,7 @@ defmodule Tokengate.Providers.Credential do
   end
 
   @shared ~w(provider_id name max_rpm max_concurrent max_concurrent_per_user receive_timeout_ms
-    daily_limit_usd status error_reason error_message error_at)a
+    status error_reason error_message error_at)a
 
   @doc false
   def create_changeset(credential, attrs) do
@@ -48,7 +47,6 @@ defmodule Tokengate.Providers.Credential do
     |> cast(attrs, @shared ++ [:api_key_encrypted])
     |> validate_required([:provider_id, :api_key_encrypted, :status])
     |> validate_inclusion(:status, @statuses)
-    |> validate_daily_limit()
     |> foreign_key_constraint(:provider_id)
   end
 
@@ -58,23 +56,11 @@ defmodule Tokengate.Providers.Credential do
     |> cast(attrs, @shared ++ [:api_key_encrypted])
     |> validate_required([:provider_id, :status])
     |> validate_inclusion(:status, @statuses)
-    |> validate_daily_limit()
     |> foreign_key_constraint(:provider_id)
   end
 
   @doc false
   def changeset(credential, attrs), do: create_changeset(credential, attrs)
-
-  # nil = unlimited; when set, must be a non-negative amount.
-  defp validate_daily_limit(changeset) do
-    validate_change(changeset, :daily_limit_usd, fn :daily_limit_usd, value ->
-      if Decimal.compare(value, Decimal.new(0)) == :lt do
-        [daily_limit_usd: "debe ser mayor o igual a 0"]
-      else
-        []
-      end
-    end)
-  end
 
   @doc "List of valid status values"
   def statuses, do: @statuses

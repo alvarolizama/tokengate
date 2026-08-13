@@ -561,109 +561,6 @@ defmodule Tokengate.Budgets.ManagerTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Credential daily budget — record/spend/exhausted + lazy DB load
-  # ---------------------------------------------------------------------------
-
-  describe "credential daily budget" do
-    test "record_credential_spend accumulates daily spend" do
-      credential_id = Ecto.UUID.generate()
-
-      assert :ok = Manager.record_credential_spend(credential_id, Decimal.new("7.50"))
-      assert :ok = Manager.record_credential_spend(credential_id, Decimal.new("2.50"))
-
-      assert Decimal.equal?(Manager.credential_spend(credential_id), Decimal.new("10.00"))
-    end
-
-    test "zero and nil costs are a no-op" do
-      credential_id = Ecto.UUID.generate()
-
-      assert :ok = Manager.record_credential_spend(credential_id, nil)
-      assert :ok = Manager.record_credential_spend(credential_id, Decimal.new("0"))
-
-      assert Decimal.equal?(Manager.credential_spend(credential_id), Decimal.new("0"))
-    end
-
-    test "credential_exhausted? with nil limit is always false" do
-      credential_id = Ecto.UUID.generate()
-      assert :ok = Manager.record_credential_spend(credential_id, Decimal.new("999.00"))
-
-      refute Manager.credential_exhausted?(credential_id, nil)
-    end
-
-    test "credential_exhausted? flips when spend reaches the cap" do
-      credential_id = Ecto.UUID.generate()
-      limit = Decimal.new("10.00")
-
-      refute Manager.credential_exhausted?(credential_id, limit)
-
-      assert :ok = Manager.record_credential_spend(credential_id, Decimal.new("9.99"))
-      refute Manager.credential_exhausted?(credential_id, limit)
-
-      assert :ok = Manager.record_credential_spend(credential_id, Decimal.new("0.02"))
-      assert Manager.credential_exhausted?(credential_id, limit)
-    end
-
-    test "credential_spends/1 batch reads a list of ids" do
-      id1 = Ecto.UUID.generate()
-      id2 = Ecto.UUID.generate()
-
-      assert :ok = Manager.record_credential_spend(id1, Decimal.new("1.00"))
-      assert :ok = Manager.record_credential_spend(id2, Decimal.new("2.00"))
-
-      spends = Manager.credential_spends([id1, id2])
-      assert Decimal.equal?(spends[id1], Decimal.new("1.00"))
-      assert Decimal.equal?(spends[id2], Decimal.new("2.00"))
-    end
-
-    test "lazy-loads today's spend from request_logs on first touch" do
-      {tm, _team} = team_member_fixture()
-      credential_id = Ecto.UUID.generate()
-
-      log_spend(tm.id, "4.00", credential_id: credential_id)
-      log_spend(tm.id, "6.00", credential_id: credential_id)
-      # A log for a DIFFERENT credential must not leak in.
-      log_spend(tm.id, "100.00", credential_id: Ecto.UUID.generate())
-
-      assert Decimal.equal?(Manager.credential_spend(credential_id), Decimal.new("10.00"))
-    end
-
-    test "yesterday's logs don't count (UTC day rollover)" do
-      {tm, _team} = team_member_fixture()
-      credential_id = Ecto.UUID.generate()
-
-      yesterday = Date.add(Date.utc_today(), -1)
-
-      log_spend(tm.id, "8.00",
-        credential_id: credential_id,
-        inserted_at: DateTime.new!(yesterday, ~T[23:59:59], "Etc/UTC")
-      )
-
-      assert Decimal.equal?(Manager.credential_spend(credential_id), Decimal.new("0"))
-    end
-
-    test "set_credential_from_db resets the counter" do
-      credential_id = Ecto.UUID.generate()
-
-      assert :ok = Manager.record_credential_spend(credential_id, Decimal.new("5.00"))
-      assert :ok = Manager.set_credential_from_db(credential_id, 2_000_000)
-
-      assert Decimal.equal?(Manager.credential_spend(credential_id), Decimal.new("2.00"))
-    end
-
-    test "broadcasts {:credential_spend_updated, id} on real spend" do
-      credential_id = Ecto.UUID.generate()
-      Manager.subscribe_credential_budgets()
-
-      assert :ok = Manager.record_credential_spend(credential_id, Decimal.new("1.00"))
-      assert_received {:credential_spend_updated, ^credential_id}
-
-      # Zero-cost spend does not broadcast.
-      assert :ok = Manager.record_credential_spend(credential_id, Decimal.new("0"))
-      refute_received {:credential_spend_updated, ^credential_id}
-    end
-  end
-
-  # ---------------------------------------------------------------------------
   # Global daily cap — record/spend/exhausted + lazy DB load
   # ---------------------------------------------------------------------------
 
@@ -684,10 +581,10 @@ defmodule Tokengate.Budgets.ManagerTest do
       assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("30.00"))
     end
 
-    test "record_credential_spend also accumulates global daily spend" do
-      credential_id = Ecto.UUID.generate()
+    test "record_spend also accumulates global daily spend" do
+      {tm, _} = team_member_fixture()
 
-      assert :ok = Manager.record_credential_spend(credential_id, Decimal.new("5.00"))
+      assert :ok = Manager.record_spend(tm.id, Decimal.new("5.00"))
 
       assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("5.00"))
     end

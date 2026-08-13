@@ -385,7 +385,6 @@ defmodule TokengateWeb.ProxyController do
     cost = cost_with_fallback(route, provider_reported, usage)
 
     Budgets.record_spend(member.id, cost)
-    Budgets.record_credential_spend(route.credential.id, cost)
 
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
@@ -1212,7 +1211,6 @@ defmodule TokengateWeb.ProxyController do
       end
 
     Budgets.record_spend(member.id, cost)
-    Budgets.record_credential_spend(route.credential.id, cost)
 
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
@@ -1298,7 +1296,6 @@ defmodule TokengateWeb.ProxyController do
 
     # Hot-path state updates (ETS only)
     Budgets.record_spend(member.id, cost)
-    Budgets.record_credential_spend(route.credential.id, cost)
 
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,

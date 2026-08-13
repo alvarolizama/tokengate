@@ -214,7 +214,6 @@ defmodule TokengateWeb.ProvidersLive do
     changeset =
       cred
       |> Providers.change_credential()
-      |> normalize_daily_limit()
 
     {:noreply,
      socket
@@ -454,20 +453,6 @@ defmodule TokengateWeb.ProvidersLive do
 
   def credential_row_class(_cred, _breaker), do: nil
 
-  # numeric(12,6) Decimals render with full scale in number inputs
-  # ("25.500000") — round to cents so the field shows "25.50" instead.
-  # `force_change/3` because `put_change/3` skips it: Ecto.Type.equal?/3
-  # compares decimals numerically, so 25.50 "equals" 25.500000.
-  defp normalize_daily_limit(changeset) do
-    case Ecto.Changeset.get_field(changeset, :daily_limit_usd) do
-      nil ->
-        changeset
-
-      %Decimal{} = d ->
-        Ecto.Changeset.force_change(changeset, :daily_limit_usd, Decimal.round(d, 2))
-    end
-  end
-
   ## Render ----------------------------------------------------------------
 
   @impl true
@@ -585,14 +570,6 @@ defmodule TokengateWeb.ProvidersLive do
                     type="number"
                     label="Timeout (ms)"
                     hint="Tiempo máximo de espera por respuesta. Vacío = default global (60s)."
-                  />
-                  <.input
-                    field={@credential_form[:daily_limit_usd]}
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    label="Límite de gasto diario (USD)"
-                    hint="Máximo que esta key puede gastar por día (UTC). Al agotarse deja de rotear hasta mañana. Vacío = sin límite."
                   />
                 </div>
                 <div class="flex gap-2 mt-4 justify-end">
