@@ -40,6 +40,7 @@ defmodule TokengateWeb.ModelsLive do
       socket
       |> assign(:page_title, "Modelos · Tokengate")
       |> assign(:is_admin, is_admin)
+      |> assign(:model_type_filter, "all")
       |> assign(:form, nil)
       |> assign(:editing_alias_id, nil)
       |> assign(:guard_rails_form, nil)
@@ -69,12 +70,20 @@ defmodule TokengateWeb.ModelsLive do
   ## Data loading ---------------------------------------------------------
 
   defp load_aliases(socket) do
-    aliases = aliases_with_providers_query() |> Repo.all()
+    filter = socket.assigns.model_type_filter
+
+    aliases =
+      aliases_with_providers_query()
+      |> Repo.all()
+      |> filter_by_type(filter)
 
     socket
     |> stream(:aliases, aliases, reset: true)
     |> assign(:aliases_empty?, aliases == [])
   end
+
+  defp filter_by_type(aliases, "all"), do: aliases
+  defp filter_by_type(aliases, type), do: Enum.filter(aliases, &(&1.model_type == type))
 
   # Providers are grouped by scope first — global, then team-exclusive,
   # then member-exclusive — and ordered by priority within each group.
@@ -146,6 +155,13 @@ defmodule TokengateWeb.ModelsLive do
      socket
      |> assign(:form, nil)
      |> assign(:editing_alias_id, nil)}
+  end
+
+  def handle_event("filter_model_type", %{"type" => type}, socket) do
+    {:noreply,
+     socket
+     |> assign(:model_type_filter, type)
+     |> load_aliases()}
   end
 
   def handle_event("edit_guard_rails", %{"id" => alias_id}, socket) do
@@ -994,6 +1010,22 @@ defmodule TokengateWeb.ModelsLive do
             </button>
           </:actions>
         </.header>
+
+        <%!-- Model type filter tabs --%>
+        <div class="join" id="model-type-tabs" role="tablist">
+          <button
+            :for={{label, value} <- [{"Todos", "all"}, {"LLM", "llm"}, {"Embedding", "embedding"}, {"Rerank", "rerank"}]}
+            phx-click="filter_model_type"
+            phx-value-type={value}
+            class={[
+              "join-item btn btn-sm",
+              if(@model_type_filter == value, do: "btn-primary", else: "btn-ghost")
+            ]}
+            id={"model-type-#{value}"}
+          >
+            {label}
+          </button>
+        </div>
 
         <%!-- Alias list --%>
         <%!-- The empty state must live OUTSIDE the stream container:
