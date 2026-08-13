@@ -350,7 +350,6 @@ defmodule TokengateWeb.SupervisedServicesLive do
                       :for={alias <- alias_names_for(@granted_aliases, service.id, @aliases)}
                       id={"alias-badge-#{service.id}-#{alias.id}"}
                       class="badge badge-primary badge-sm"
-                      title={alias.display_name}
                     >
                       {alias.name}
                     </span>

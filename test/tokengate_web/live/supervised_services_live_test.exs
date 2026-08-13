@@ -71,7 +71,6 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
     {:ok, alias_} =
       Providers.create_model_alias(%{
         name: "sup-alias-#{u}",
-        display_name: "Sup Alias #{u}",
         context_window: 128_000
       })
 

@@ -323,7 +323,7 @@ defmodule TokengateWeb.LogsLive do
 
   defp model_options do
     Providers.list_model_aliases()
-    |> Enum.map(fn alias_ -> {alias_.display_name || alias_.name, alias_.name} end)
+    |> Enum.map(fn alias_ -> {alias_.name, alias_.name} end)
     |> Enum.sort_by(&elem(&1, 0))
   end
 

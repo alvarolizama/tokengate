@@ -227,6 +227,78 @@ defmodule Tokengate.Budgets.ManagerTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Per-model daily spend + caps
+  # ---------------------------------------------------------------------------
+
+  describe "record_spend/3 and per-model daily caps" do
+    test "record_spend/3 accumulates per-user and total model spend" do
+      {tm, _} = team_member_fixture()
+      model_id = Ecto.UUID.generate()
+
+      assert :ok = Manager.record_spend(tm.id, model_id, Decimal.new("10.00"))
+
+      assert Decimal.equal?(
+               Manager.model_per_user_daily_spend(tm.id, model_id),
+               Decimal.new("10.00")
+             )
+
+      assert Decimal.equal?(Manager.model_total_daily_spend(model_id), Decimal.new("10.00"))
+    end
+
+    test "per-user cap is not reached while under the limit" do
+      {tm, _} = team_member_fixture()
+      model_id = Ecto.UUID.generate()
+
+      Manager.record_spend(tm.id, model_id, Decimal.new("3.00"))
+
+      refute Manager.model_per_user_exhausted?(tm.id, model_id, Decimal.new("10.00"))
+    end
+
+    test "per-user cap trips once total spend reaches the limit" do
+      {tm, _} = team_member_fixture()
+      model_id = Ecto.UUID.generate()
+
+      Manager.record_spend(tm.id, model_id, Decimal.new("10.00"))
+
+      assert Manager.model_per_user_exhausted?(tm.id, model_id, Decimal.new("10.00"))
+    end
+
+    test "model total cap aggregates across users" do
+      {tm1, _} = team_member_fixture()
+      {tm2, _} = team_member_fixture()
+      model_id = Ecto.UUID.generate()
+
+      Manager.record_spend(tm1.id, model_id, Decimal.new("6.00"))
+      Manager.record_spend(tm2.id, model_id, Decimal.new("6.00"))
+
+      assert Manager.model_total_exhausted?(model_id, Decimal.new("10.00"))
+    end
+
+    test "nil and zero caps are treated as unlimited" do
+      {tm, _} = team_member_fixture()
+      model_id = Ecto.UUID.generate()
+
+      Manager.record_spend(tm.id, model_id, Decimal.new("999.00"))
+
+      refute Manager.model_per_user_exhausted?(tm.id, model_id, nil)
+      refute Manager.model_per_user_exhausted?(tm.id, model_id, Decimal.new("0"))
+      refute Manager.model_per_user_exhausted?(tm.id, model_id, 0)
+      refute Manager.model_total_exhausted?(model_id, nil)
+      refute Manager.model_total_exhausted?(model_id, Decimal.new("0"))
+    end
+
+    test "record_spend/2 does not touch per-model counters" do
+      {tm, _} = team_member_fixture()
+      model_id = Ecto.UUID.generate()
+
+      assert :ok = Manager.record_spend(tm.id, Decimal.new("5.00"))
+
+      assert Decimal.equal?(Manager.model_per_user_daily_spend(tm.id, model_id), Decimal.new("0"))
+      assert Decimal.equal?(Manager.model_total_daily_spend(model_id), Decimal.new("0"))
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Lazy load — ETS seeded from request_logs on first touch
   # ---------------------------------------------------------------------------
 

@@ -219,8 +219,9 @@ defmodule TokengateWeb.ProxyControllerTest do
     {:ok, model_alias} =
       Providers.create_model_alias(%{
         name: "gpt-4o-#{u}",
-        display_name: "GPT 4o",
-        context_window: 128_000
+        context_window: 128_000,
+        daily_limit_per_user_usd: Map.get(opts, :model_per_user_cap),
+        daily_limit_total_usd: Map.get(opts, :model_total_cap)
       })
 
     {:ok, _grant} = Providers.grant_alias_to_team(team.id, model_alias.id)
@@ -230,7 +231,8 @@ defmodule TokengateWeb.ProxyControllerTest do
         model_alias_id: model_alias.id,
         credential_id: credential.id,
         provider_model: "gpt-4o-real-#{u}",
-        priority: 1
+        priority: 1,
+        billing_mode: Map.get(opts, :billing_mode, "pay_per_token")
       })
 
     %{
@@ -358,6 +360,57 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     assert %{"error" => %{"code" => "budget_exceeded", "type" => "billing_error"}} =
              json_response(conn, 402)
+  end
+
+  test "402 when a model's per-user daily cap is already reached", %{conn: conn} do
+    %{token: token, alias: model_alias, member: member} =
+      proxy_fixture(%{model_per_user_cap: "0.0001"})
+
+    # Pre-seed the per-user model spend to trip the cap.
+    Budgets.record_spend(member.id, model_alias.id, Decimal.new("0.0002"))
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+
+    assert %{"error" => %{"code" => "budget_exceeded", "type" => "billing_error"}} =
+             json_response(conn, 402)
+  end
+
+  test "402 when a model's total daily cap is reached across the org", %{conn: conn} do
+    %{token: token, alias: model_alias, member: member} =
+      proxy_fixture(%{model_total_cap: "0.0001"})
+
+    # Seed the shared model-total counter so the gate trips on any member.
+    Budgets.record_spend(member.id, model_alias.id, Decimal.new("0.0002"))
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+
+    assert %{"error" => %{"code" => "budget_exceeded", "type" => "billing_error"}} =
+             json_response(conn, 402)
+  end
+
+  test "included provider bypasses exhausted per-user and total model caps", %{conn: conn} do
+    %{token: token, alias: model_alias, member: member} =
+      proxy_fixture(%{
+        model_per_user_cap: "0.0001",
+        model_total_cap: "0.0001",
+        billing_mode: "included"
+      })
+
+    # Exhaust both model caps; an `included` provider must still serve.
+    Budgets.record_spend(member.id, model_alias.id, Decimal.new("0.0002"))
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+
+    assert json_response(conn, 200)
   end
 
   test "402 when estimated cost exceeds the daily budget (nil team budget is unlimited)", %{

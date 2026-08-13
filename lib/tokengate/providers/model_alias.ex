@@ -14,13 +14,13 @@ defmodule Tokengate.Providers.ModelAlias do
 
   schema "model_aliases" do
     field :name, :string
-    field :display_name, :string
-    field :description, :string
     field :context_window, :integer
     field :model_type, :string, default: "llm"
     field :guard_rails, :string
     field :prompt_cache_enabled, :boolean, default: false
     field :lazy_cleanup_enabled, :boolean, default: false
+    field :daily_limit_per_user_usd, :decimal
+    field :daily_limit_total_usd, :decimal
 
     has_many :model_providers, Tokengate.Providers.ModelProvider
 
@@ -32,15 +32,17 @@ defmodule Tokengate.Providers.ModelAlias do
     model_alias
     |> cast(attrs, [
       :name,
-      :display_name,
-      :description,
       :context_window,
       :model_type,
       :guard_rails,
       :prompt_cache_enabled,
-      :lazy_cleanup_enabled
+      :lazy_cleanup_enabled,
+      :daily_limit_per_user_usd,
+      :daily_limit_total_usd
     ])
-    |> validate_required([:name, :display_name, :context_window])
+    |> validate_required([:name, :context_window])
+    |> validate_number(:daily_limit_per_user_usd, greater_than_or_equal_to: 0)
+    |> validate_number(:daily_limit_total_usd, greater_than_or_equal_to: 0)
     |> validate_inclusion(:model_type, @model_types)
     |> unique_constraint(:name)
   end

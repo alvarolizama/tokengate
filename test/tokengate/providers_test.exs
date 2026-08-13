@@ -159,7 +159,6 @@ defmodule Tokengate.ProvidersTest do
     attrs =
       Enum.into(attrs, %{
         name: "gpt-4-#{unique}",
-        display_name: "GPT-4",
         context_window: 128_000
       })
 
@@ -320,7 +319,6 @@ defmodule Tokengate.ProvidersTest do
       {:error, changeset} =
         Providers.create_model_alias(%{
           name: "gpt-4",
-          display_name: "GPT-4",
           context_window: 1000
         })
 

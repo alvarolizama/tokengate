@@ -1070,7 +1070,6 @@ defmodule TokengateWeb.ModelsLive do
                         {model_alias.model_type}
                       </span>
                     </div>
-                    <p class="text-sm text-base-content/60 mt-1">{model_alias.display_name}</p>
                   </div>
 
                   <div class="flex gap-2 shrink-0">
@@ -1290,19 +1289,6 @@ defmodule TokengateWeb.ModelsLive do
                   hint="Nombre interno del modelo, ej. gpt-4o. Debe ser único."
                 />
                 <.input
-                  field={@form[:display_name]}
-                  type="text"
-                  label="Nombre para mostrar"
-                  required
-                  hint="Nombre visible para los usuarios en /v1/models."
-                />
-                <.input
-                  field={@form[:description]}
-                  type="textarea"
-                  label="Descripción"
-                  hint="Descripción corta del modelo para el catálogo del dashboard."
-                />
-                <.input
                   field={@form[:context_window]}
                   type="number"
                   label="Ventana de contexto (tokens)"
@@ -1335,6 +1321,24 @@ defmodule TokengateWeb.ModelsLive do
                     hint="Dedupe de tool outputs y recorte de bloques largos. 100% determinista, sin inferencia."
                   />
                 </div>
+
+                <div class="divider my-3 text-xs text-base-content/50">Límites de gasto diario</div>
+
+                <.input
+                  field={@form[:daily_limit_per_user_usd]}
+                  type="number"
+                  step="0.000001"
+                  label="Límite diario por usuario (USD)"
+                  hint="Tope de gasto diario de cada usuario en este modelo. Vacío o 0 = ilimitado. No aplica a proveedores included."
+                />
+
+                <.input
+                  field={@form[:daily_limit_total_usd]}
+                  type="number"
+                  step="0.000001"
+                  label="Límite diario total del modelo (USD)"
+                  hint="Tope de gasto diario de todos los usuarios en este modelo. Vacío o 0 = ilimitado. No aplica a proveedores included."
+                />
 
                 <div class="flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">

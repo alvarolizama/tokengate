@@ -384,7 +384,7 @@ defmodule TokengateWeb.ProxyController do
 
     cost = cost_with_fallback(route, provider_reported, usage)
 
-    Budgets.record_spend(member.id, cost)
+    Budgets.record_spend(member.id, route.model_alias.id, cost)
 
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
@@ -592,7 +592,7 @@ defmodule TokengateWeb.ProxyController do
     }
 
     with {:ok, route} <- Router.route(model_requested, member, request_context),
-         :ok <- check_budget(member, limits, route, payload) do
+         :ok <- check_spending(member, limits, route) do
       case acquire_credential_limits(route.credential, key_id) do
         :ok ->
           {:ok, route}
@@ -665,7 +665,23 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
-  defp check_budget(member, limits, route, _payload) do
+  defp check_spending(member, limits, route) do
+    # `included` providers cost $0 (subscription / RPM-limited) — they never
+    # consume a spending budget, so no spending gate applies to them. This is
+    # what lets a model (or a user) keep using its `included` providers even
+    # after every spending cap is exhausted.
+    if route.model_provider.billing_mode == "included" do
+      :ok
+    else
+      with :ok <- check_monthly_budget(member, limits, route),
+           :ok <- check_model_total_cap(route),
+           :ok <- check_model_per_user_cap(member, route) do
+        :ok
+      end
+    end
+  end
+
+  defp check_monthly_budget(member, limits, route) do
     member_monthly_budget = limits.monthly_budget_usd
     member_monthly_spend = Budgets.spend(member.id).monthly_usd
 
@@ -685,6 +701,29 @@ defmodule TokengateWeb.ProxyController do
          ) do
       :ok -> :ok
       {:error, :budget_exceeded, details} -> {:error, {:budget_exceeded, details}}
+    end
+  end
+
+  defp check_model_total_cap(route) do
+    if Budgets.model_total_exhausted?(
+         route.model_alias.id,
+         route.model_alias.daily_limit_total_usd
+       ) do
+      {:error, {:budget_exceeded, %{period: :daily_model_total, available: Decimal.new(0)}}}
+    else
+      :ok
+    end
+  end
+
+  defp check_model_per_user_cap(member, route) do
+    if Budgets.model_per_user_exhausted?(
+         member.id,
+         route.model_alias.id,
+         route.model_alias.daily_limit_per_user_usd
+       ) do
+      {:error, {:budget_exceeded, %{period: :daily_model_per_user, available: Decimal.new(0)}}}
+    else
+      :ok
     end
   end
 
@@ -1212,7 +1251,7 @@ defmodule TokengateWeb.ProxyController do
           {usage, cost}
       end
 
-    Budgets.record_spend(member.id, cost)
+    Budgets.record_spend(member.id, route.model_alias.id, cost)
 
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
@@ -1297,7 +1336,7 @@ defmodule TokengateWeb.ProxyController do
     cost = cost_with_fallback(route, provider_reported, usage)
 
     # Hot-path state updates (ETS only)
-    Budgets.record_spend(member.id, cost)
+    Budgets.record_spend(member.id, route.model_alias.id, cost)
 
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
@@ -1617,6 +1656,12 @@ defmodule TokengateWeb.ProxyController do
 
   defp error_details({:budget_exceeded, %{period: :daily_global}}),
     do: {402, "billing_error", "budget_exceeded", "Global daily spending cap reached"}
+
+  defp error_details({:budget_exceeded, %{period: :daily_model_total}}),
+    do: {402, "billing_error", "budget_exceeded", "Model daily spending cap reached"}
+
+  defp error_details({:budget_exceeded, %{period: :daily_model_per_user}}),
+    do: {402, "billing_error", "budget_exceeded", "Daily spending cap reached for this model"}
 
   defp error_details({:budget_exceeded, %{period: period}}),
     do: {402, "billing_error", "budget_exceeded", "Budget exceeded (#{period})"}

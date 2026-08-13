@@ -50,7 +50,6 @@ defmodule TokengateWeb.LogsLiveTest do
     {:ok, model_alias} =
       Providers.create_model_alias(%{
         name: "model-#{u}",
-        display_name: "Model #{u}",
         context_window: 128_000
       })
 

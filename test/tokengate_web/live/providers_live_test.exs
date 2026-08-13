@@ -154,7 +154,6 @@ defmodule TokengateWeb.ProvidersLiveTest do
     {:ok, alias_} =
       Providers.create_model_alias(%{
         name: "gpt-4o-#{u}",
-        display_name: "GPT-4o #{u}",
         context_window: 128_000
       })
 

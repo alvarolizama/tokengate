@@ -85,7 +85,6 @@ defmodule Tokengate.Metrics.RollupTest do
         Map.merge(
           %{
             "name" => "gpt-#{System.unique_integer([:positive])}",
-            "display_name" => "GPT Test",
             "context_window" => 128_000
           },
           attrs

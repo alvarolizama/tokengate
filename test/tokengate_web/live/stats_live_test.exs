@@ -71,7 +71,6 @@ defmodule TokengateWeb.StatsLiveTest do
     {:ok, ma} =
       Providers.create_model_alias(%{
         name: "model-#{u}",
-        display_name: "Model #{u}",
         context_window: 128_000
       })
 
@@ -272,7 +271,6 @@ defmodule TokengateWeb.StatsLiveTest do
     {:ok, expensive} =
       Providers.create_model_alias(%{
         name: "model-expensive-#{u}",
-        display_name: "Expensive #{u}",
         context_window: 128_000
       })
 

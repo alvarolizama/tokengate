@@ -35,7 +35,6 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     {:ok, model_alias} =
       Providers.create_model_alias(%{
         name: "gpt-#{u}",
-        display_name: "GPT #{u}",
         context_window: 128_000
       })
 

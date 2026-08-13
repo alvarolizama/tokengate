@@ -171,7 +171,6 @@ defmodule Tokengate.Routing.RouterTest do
     attrs =
       Enum.into(attrs, %{
         name: "model-#{unique}",
-        display_name: "Model #{unique}",
         context_window: 128_000
       })
 
@@ -202,7 +201,7 @@ defmodule Tokengate.Routing.RouterTest do
     member = team_member_fixture(team)
 
     alias_name = Keyword.get(opts, :alias_name, "gpt-4")
-    model_alias = model_alias_fixture(%{name: alias_name, display_name: alias_name})
+    model_alias = model_alias_fixture(%{name: alias_name})
     {:ok, _} = Providers.grant_alias_to_team(team.id, model_alias.id)
 
     provider = provider_fixture()
@@ -263,7 +262,7 @@ defmodule Tokengate.Routing.RouterTest do
       member = team_member_fixture(team)
 
       # Alias exists but is NOT granted to the team.
-      model_alias = model_alias_fixture(%{name: "claude", display_name: "Claude"})
+      model_alias = model_alias_fixture(%{name: "claude"})
 
       member = Repo.preload(member, [:team])
 
@@ -275,7 +274,7 @@ defmodule Tokengate.Routing.RouterTest do
       member = team_member_fixture(team)
 
       # Alias not granted to team...
-      model_alias = model_alias_fixture(%{name: "claude", display_name: "Claude"})
+      model_alias = model_alias_fixture(%{name: "claude"})
       # ...but granted as an extra alias to the member directly.
       {:ok, _} = Providers.grant_extra_alias(member.id, model_alias.id)
 
@@ -322,7 +321,7 @@ defmodule Tokengate.Routing.RouterTest do
       team = team_fixture()
       member = team_member_fixture(team)
 
-      model_alias = model_alias_fixture(%{name: "gpt-4", display_name: "GPT-4"})
+      model_alias = model_alias_fixture(%{name: "gpt-4"})
       {:ok, _} = Providers.grant_alias_to_team(team.id, model_alias.id)
 
       provider = provider_fixture()
@@ -534,12 +533,11 @@ defmodule Tokengate.Routing.RouterTest do
       member = team_member_fixture(team)
 
       alias1 =
-        model_alias_fixture(%{name: "gpt-4", display_name: "GPT-4", context_window: 128_000})
+        model_alias_fixture(%{name: "gpt-4", context_window: 128_000})
 
       _alias2 =
         model_alias_fixture(%{
           name: "claude-3",
-          display_name: "Claude 3",
           context_window: 200_000
         })
 
@@ -565,12 +563,11 @@ defmodule Tokengate.Routing.RouterTest do
       member = team_member_fixture(team)
 
       alias1 =
-        model_alias_fixture(%{name: "gpt-4", display_name: "GPT-4", context_window: 128_000})
+        model_alias_fixture(%{name: "gpt-4", context_window: 128_000})
 
       alias2 =
         model_alias_fixture(%{
           name: "claude-3",
-          display_name: "Claude 3",
           context_window: 200_000
         })
 
@@ -597,7 +594,7 @@ defmodule Tokengate.Routing.RouterTest do
       team_b = team_fixture(%{name: "Team B"})
       member_b = team_member_fixture(team_b)
 
-      model_alias = model_alias_fixture(%{name: "gpt-4", display_name: "GPT-4"})
+      model_alias = model_alias_fixture(%{name: "gpt-4"})
       {:ok, _} = Providers.grant_alias_to_team(team_a.id, model_alias.id)
       {:ok, _} = Providers.grant_alias_to_team(team_b.id, model_alias.id)
 
@@ -636,7 +633,7 @@ defmodule Tokengate.Routing.RouterTest do
       team_a = team_fixture(%{name: "Team A"})
       member_a = team_member_fixture(team_a)
 
-      model_alias = model_alias_fixture(%{name: "gpt-4", display_name: "GPT-4"})
+      model_alias = model_alias_fixture(%{name: "gpt-4"})
       {:ok, _} = Providers.grant_alias_to_team(team_a.id, model_alias.id)
 
       # Global provider (would win by priority 1 without exclusive boost)
@@ -675,7 +672,7 @@ defmodule Tokengate.Routing.RouterTest do
       owner = team_member_fixture(team)
       teammate = team_member_fixture(team)
 
-      model_alias = model_alias_fixture(%{name: "gpt-4", display_name: "GPT-4"})
+      model_alias = model_alias_fixture(%{name: "gpt-4"})
       {:ok, _} = Providers.grant_alias_to_team(team.id, model_alias.id)
 
       global_provider = provider_fixture()

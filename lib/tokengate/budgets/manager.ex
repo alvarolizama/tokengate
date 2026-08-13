@@ -116,15 +116,36 @@ defmodule Tokengate.Budgets.Manager do
   """
   @spec record_spend(member_id :: term(), provider_cost_usd :: Decimal.t() | nil) :: :ok
   def record_spend(member_id, provider_cost_usd) do
+    record_spend(member_id, nil, provider_cost_usd)
+  end
+
+  @spec record_spend(
+          member_id :: term(),
+          model_alias_id :: term(),
+          provider_cost_usd :: Decimal.t() | nil
+        ) :: :ok
+  def record_spend(member_id, model_alias_id, provider_cost_usd) do
     micro = to_micro(provider_cost_usd)
 
     ensure_loaded(member_id, :daily)
     ensure_loaded(member_id, :monthly)
 
+    # Per-model counters only when a model is in scope. `nil` model_alias_id
+    # (the /2 convenience used by tests) tracks member-level + global only.
+    if model_alias_id do
+      ensure_loaded({member_id, model_alias_id}, :daily)
+      ensure_loaded({:model, model_alias_id}, :daily)
+    end
+
     # Atomic increments. Position 2 = amount_micro.
     bump_counter({member_id, :daily}, micro)
     bump_counter({member_id, :monthly}, micro)
     bump_counter(@global_key, micro)
+
+    if model_alias_id do
+      bump_counter({{member_id, model_alias_id}, :daily}, micro)
+      bump_counter({{:model, model_alias_id}, :daily}, micro)
+    end
 
     # Debounced drift-correction enqueue: instead of one Oban job per request,
     # we mark `{:sync_pending, member_id}` with insert_new and only enqueue when
@@ -189,6 +210,70 @@ defmodule Tokengate.Budgets.Manager do
     GenServer.call(__MODULE__, {:set_global_from_db, daily_micro})
   end
 
+  # ---------------------------------------------------------------------------
+  # Per-model daily caps
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Returns the current daily spend for a specific model across ALL users
+  (UTC day) in USD as a Decimal. Lazy-loads from the DB on first touch or
+  day rollover.
+  """
+  @spec model_total_daily_spend(model_alias_id :: term()) :: Decimal.t()
+  def model_total_daily_spend(model_alias_id) do
+    ensure_loaded({:model, model_alias_id}, :daily)
+    from_micro(read_counter({{:model, model_alias_id}, :daily}))
+  end
+
+  @doc """
+  Returns the current daily spend for `member_id` on a specific model
+  (UTC day) in USD as a Decimal. Lazy-loads from the DB on first touch or
+  day rollover.
+  """
+  @spec model_per_user_daily_spend(member_id :: term(), model_alias_id :: term()) :: Decimal.t()
+  def model_per_user_daily_spend(member_id, model_alias_id) do
+    ensure_loaded({member_id, model_alias_id}, :daily)
+    from_micro(read_counter({{member_id, model_alias_id}, :daily}))
+  end
+
+  @doc """
+  Whether the model's total daily cap (across all users) has been reached
+  for the current UTC day. A `nil` or `0` cap means unlimited — always
+  `false`.
+  """
+  @spec model_total_exhausted?(model_alias_id :: term(), cap :: Decimal.t() | number() | nil) ::
+          boolean()
+  def model_total_exhausted?(model_alias_id, cap) do
+    case normalize_cap(cap) do
+      nil ->
+        false
+
+      %Decimal{} = limit ->
+        ensure_loaded({:model, model_alias_id}, :daily)
+        read_counter({{:model, model_alias_id}, :daily}) >= to_micro(limit)
+    end
+  end
+
+  @doc """
+  Whether the member's per-user daily cap on the model has been reached for
+  the current UTC day. A `nil` or `0` cap means unlimited — always `false`.
+  """
+  @spec model_per_user_exhausted?(
+          member_id :: term(),
+          model_alias_id :: term(),
+          cap :: Decimal.t() | number() | nil
+        ) :: boolean()
+  def model_per_user_exhausted?(member_id, model_alias_id, cap) do
+    case normalize_cap(cap) do
+      nil ->
+        false
+
+      %Decimal{} = limit ->
+        ensure_loaded({member_id, model_alias_id}, :daily)
+        read_counter({{member_id, model_alias_id}, :daily}) >= to_micro(limit)
+    end
+  end
+
   @doc """
   Resets the daily and monthly ETS counters for `member_id` to the given
   micro-USD values, as recomputed by `Budgets.SyncWorker` from the DB.
@@ -216,8 +301,15 @@ defmodule Tokengate.Budgets.Manager do
   end
 
   @doc """
-  Loads the spend for `member_id` over the given period from the DB
+  Loads the spend for `subject` over the given period from the DB
   (`Tokengate.Logs.cost_summary/1`) and returns it as integer micro-USD.
+
+  `subject` may be:
+
+    * a member id (binary) — member-level daily/monthly spend;
+    * `{member_id, model_alias_id}` — per-user per-model daily spend;
+    * `{:model, model_alias_id}` — per-model daily spend across all users;
+    * `{:credential, credential_id}` — per-credential spend.
 
   This reads `total_cost_usd` — what TokenGate actually paid — so the
   budget counters stay in the same currency as the dashboard's
@@ -230,14 +322,10 @@ defmodule Tokengate.Budgets.Manager do
   `from` is a `DateTime.t()` marking the start of the period (e.g. start
   of today for daily, start of month for monthly).
   """
-  @spec load_from_db(member_id :: term(), from :: DateTime.t()) :: integer()
-  def load_from_db(member_id, from) do
-    summary =
-      Tokengate.Logs.cost_summary(%{
-        team_member_id: member_id,
-        from: from
-      })
-
+  @spec load_from_db(subject :: term(), from :: DateTime.t()) :: integer()
+  def load_from_db(subject, from) do
+    filters = subject_filters(subject) |> Map.put(:from, from)
+    summary = Tokengate.Logs.cost_summary(filters)
     to_micro(summary.total_cost_usd)
   end
 
@@ -494,4 +582,29 @@ defmodule Tokengate.Budgets.Manager do
     |> Decimal.new()
     |> Decimal.div(Decimal.new(@micro))
   end
+
+  # ---------------------------------------------------------------------------
+  # Internal — subject → cost_summary filter mapping
+  # ---------------------------------------------------------------------------
+
+  # Maps a budget subject to the `Tokengate.Logs.cost_summary/1` filters used
+  # to lazy-load its spend from the durable `request_logs` table. More specific
+  # tuple shapes must match before the generic `{member_id, model_alias_id}`.
+  defp subject_filters(subject) when is_binary(subject), do: %{team_member_id: subject}
+  defp subject_filters({:credential, credential_id}), do: %{credential_id: credential_id}
+  defp subject_filters({:model, model_alias_id}), do: %{model_alias_id: model_alias_id}
+
+  defp subject_filters({member_id, model_alias_id}),
+    do: %{team_member_id: member_id, model_alias_id: model_alias_id}
+
+  # ---------------------------------------------------------------------------
+  # Internal — cap normalization (nil/0 = unlimited)
+  # ---------------------------------------------------------------------------
+
+  # A cap of `nil` or `0` (in any numeric representation) means "unlimited" and
+  # normalizes to `nil`. Anything else returns a `Decimal` limit.
+  defp normalize_cap(nil), do: nil
+  defp normalize_cap(%Decimal{} = d), do: if(Decimal.equal?(d, Decimal.new(0)), do: nil, else: d)
+  defp normalize_cap(n) when is_number(n), do: if(n == 0, do: nil, else: Decimal.new(n))
+  defp normalize_cap(_), do: nil
 end

@@ -54,7 +54,6 @@ defmodule TokengateWeb.ModelsLiveTest do
         Map.merge(
           %{
             name: "alias-#{u}",
-            display_name: "Alias #{u}",
             context_window: 128_000
           },
           attrs
@@ -133,7 +132,6 @@ defmodule TokengateWeb.ModelsLiveTest do
       |> form("#alias-form", %{
         model_alias: %{
           name: "gpt-4o-test",
-          display_name: "GPT-4o Test",
           context_window: 128_000,
           prompt_cache_enabled: "true",
           lazy_cleanup_enabled: "true"
@@ -164,15 +162,14 @@ defmodule TokengateWeb.ModelsLiveTest do
       view
       |> form("#alias-form", %{
         model_alias: %{
-          name: alias_record.name,
-          display_name: "Updated Display Name",
+          name: "gpt-4o-renamed",
           context_window: 200_000
         }
       })
       |> render_submit()
 
     assert html =~ "Modelo actualizado"
-    assert html =~ "Updated Display Name"
+    assert html =~ "gpt-4o-renamed"
   end
 
   test "admin can delete an alias without providers", %{conn: conn} do
