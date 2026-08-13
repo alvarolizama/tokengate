@@ -39,7 +39,17 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   string, list of strings, or provider-specific multimodal blocks.
   """
   def embeddings(provider, credential, payload, opts \\ []) do
-    post_json(provider, credential, "/embeddings", payload, opts)
+    url = embedding_url(provider)
+
+    case Tokengate.Proxy.Format.embedding_dialect_for(provider) do
+      :passthrough ->
+        post_json(provider, credential, url, payload, opts)
+
+      {encode, decode} ->
+        provider
+        |> post_json(credential, url, encode.(payload), opts)
+        |> decode_response(decode)
+    end
   end
 
   @doc """
@@ -57,7 +67,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   def rerank(provider, credential, payload, opts \\ []) do
     url = rerank_url(provider)
 
-    case Tokengate.Proxy.RerankDialect.dialect_for(provider) do
+    case Tokengate.Proxy.Format.rerank_dialect_for(provider) do
       :passthrough ->
         post_json(provider, credential, url, payload, opts)
 
@@ -323,6 +333,16 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
 
   defp models_url(provider) do
     base_url(provider) <> "/models"
+  end
+
+  # Embedding endpoint URL. Providers may override the embeddings surface
+  # with `embedding_base_url` (e.g. DashScope's native services path). When
+  # unset, appends `/embeddings` to base_url.
+  defp embedding_url(provider) do
+    case Map.get(provider, :embedding_base_url) || Map.get(provider, "embedding_base_url") do
+      nil -> base_url(provider) <> "/embeddings"
+      url -> String.trim_trailing(url, "/")
+    end
   end
 
   # Rerank endpoint URL. Providers may override the rerank surface with

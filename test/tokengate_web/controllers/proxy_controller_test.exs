@@ -1181,7 +1181,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     {:ok, _provider} =
       Providers.update_provider(model_provider.credential.provider, %{
         rerank_base_url: "http://localhost:#{@port}/rerank-dashscope",
-        rerank_dialect: "dashscope"
+        rerank_format: "dashscope"
       })
 
     conn =
@@ -1211,7 +1211,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert log.status_code == 200
   end
 
-  test "rerank with DashScope dialect: upstream receives nested input/parameters payload",
+  test "rerank with DashScope format: upstream receives flat Cohere-shaped payload",
        %{conn: conn} do
     %{token: token, alias: model_alias} = proxy_fixture()
     update_alias_type(model_alias, "rerank")
@@ -1221,7 +1221,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     {:ok, _provider} =
       Providers.update_provider(model_provider.credential.provider, %{
         rerank_base_url: "http://localhost:#{@port}/rerank-dashscope",
-        rerank_dialect: "dashscope"
+        rerank_format: "dashscope"
       })
 
     conn =
@@ -1237,13 +1237,14 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     assert %{"results" => [_ | _]} = json_response(conn, 200)
 
-    # The upstream received the DashScope native format (input/parameters)
+    # DashScope's rerank request is already Cohere-shaped (flat), so the
+    # upstream receives the payload unchanged (no input/parameters nesting).
     assert_received {:provider_request, upstream_body}
 
-    assert %{"input" => %{"query" => "chaos", "documents" => ["doc cero", "doc uno"]}} =
-             upstream_body
-
-    assert %{"parameters" => %{"top_n" => 3, "return_documents" => true}} = upstream_body
+    assert %{"query" => "chaos", "documents" => ["doc cero", "doc uno"]} = upstream_body
+    assert %{"top_n" => 3, "return_documents" => true} = upstream_body
+    refute Map.has_key?(upstream_body, "input")
+    refute Map.has_key?(upstream_body, "parameters")
   end
 
   test "GET /v1/models includes model_type", %{conn: conn} do

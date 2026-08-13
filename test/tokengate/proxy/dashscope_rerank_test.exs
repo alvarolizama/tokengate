@@ -1,53 +1,20 @@
 defmodule Tokengate.Proxy.DashScopeRerankTest do
-  @moduledoc "Unit tests for Cohere ↔ DashScope rerank translation."
+  @moduledoc "Unit tests for DashScope rerank response translation."
   use ExUnit.Case, async: true
 
   alias Tokengate.Proxy.DashScopeRerank
 
   describe "encode/1" do
-    test "wraps query and documents into input" do
+    test "is identity — the DashScope rerank request is already Cohere-shaped" do
       payload = %{
         "model" => "qwen3-rerank",
         "query" => "chaos",
-        "documents" => ["doc cero", "doc uno"]
-      }
-
-      assert DashScopeRerank.encode(payload) == %{
-               "model" => "qwen3-rerank",
-               "input" => %{"query" => "chaos", "documents" => ["doc cero", "doc uno"]}
-             }
-    end
-
-    test "moves top_n and return_documents into parameters" do
-      payload = %{
-        "model" => "qwen3-rerank",
-        "query" => "q",
-        "documents" => ["d"],
+        "documents" => ["doc cero", "doc uno"],
         "top_n" => 3,
         "return_documents" => true
       }
 
-      encoded = DashScopeRerank.encode(payload)
-
-      assert encoded["parameters"] == %{"top_n" => 3, "return_documents" => true}
-      refute Map.has_key?(encoded, "query")
-      refute Map.has_key?(encoded, "top_n")
-    end
-
-    test "omits parameters when no optional fields present" do
-      encoded = DashScopeRerank.encode(%{"query" => "q", "documents" => ["d"]})
-      refute Map.has_key?(encoded, "parameters")
-    end
-
-    test "preserves task when present" do
-      encoded =
-        DashScopeRerank.encode(%{
-          "query" => "q",
-          "documents" => ["d"],
-          "task" => "qa"
-        })
-
-      assert encoded["parameters"] == %{"task" => "qa"}
+      assert DashScopeRerank.encode(payload) == payload
     end
   end
 
@@ -68,8 +35,7 @@ defmodule Tokengate.Proxy.DashScopeRerankTest do
       assert [
                %{"index" => 1, "relevance_score" => 0.9},
                %{"index" => 0, "relevance_score" => 0.2}
-             ] =
-               decoded["results"]
+             ] = decoded["results"]
 
       refute Map.has_key?(decoded, "output")
       # DashScope total_tokens mapped to prompt_tokens for cost estimation

@@ -490,16 +490,37 @@ defmodule TokengateWeb.ProvidersLive do
                 <.input
                   field={@form[:base_url]}
                   type="text"
-                  label="Base URL"
+                  label="Base URL (LLM)"
                   placeholder="https://api.openai.com/v1"
-                  hint="URL base de la API del proveedor, incluyendo el API base path (ej. /v1, /api/v1). Sin slash final."
+                  hint="URL base del proveedor para chat. El adapter agrega /chat/completions. Sin slash final."
+                />
+                <.input
+                  field={@form[:embedding_base_url]}
+                  type="text"
+                  label="Embedding URL"
+                  placeholder="https://api.fireworks.ai/inference/v1/embeddings"
+                  hint="URL completa del endpoint de embeddings. Vacío = Base URL + /embeddings."
+                />
+                <.input
+                  field={@form[:embedding_format]}
+                  type="select"
+                  label="Formato embedding"
+                  options={[{"OpenAI (Fireworks, oMLX)", "openai"}, {"Qwen Cloud (DashScope)", "dashscope"}]}
+                  hint="Formato del endpoint de embeddings del proveedor."
                 />
                 <.input
                   field={@form[:rerank_base_url]}
                   type="text"
-                  label="Rerank Base URL (opcional)"
-                  placeholder="https://dashscope-intl.aliyuncs.com/api/v1/services/rerank/text-rerank"
-                  hint="Solo si el endpoint de rerank difiere del Base URL (ej. DashScope). Vacío = se usa Base URL + /rerank."
+                  label="Rerank URL"
+                  placeholder="https://api.fireworks.ai/inference/v1/rerank"
+                  hint="URL completa del endpoint de rerank. Vacío = Base URL + /rerank."
+                />
+                <.input
+                  field={@form[:rerank_format]}
+                  type="select"
+                  label="Formato rerank"
+                  options={[{"Cohere (Fireworks, oMLX)", "cohere"}, {"Qwen Cloud (DashScope)", "dashscope"}]}
+                  hint="Formato del endpoint de rerank del proveedor."
                 />
                 <div class="flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
