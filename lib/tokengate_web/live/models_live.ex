@@ -1014,7 +1014,14 @@ defmodule TokengateWeb.ModelsLive do
         <%!-- Model type filter tabs --%>
         <div class="join" id="model-type-tabs" role="tablist">
           <button
-            :for={{label, value} <- [{"Todos", "all"}, {"LLM", "llm"}, {"Embedding", "embedding"}, {"Rerank", "rerank"}]}
+            :for={
+              {label, value} <- [
+                {"Todos", "all"},
+                {"LLM", "llm"},
+                {"Embedding", "embedding"},
+                {"Rerank", "rerank"}
+              ]
+            }
             phx-click="filter_model_type"
             phx-value-type={value}
             class={[

@@ -43,10 +43,12 @@ defmodule Tokengate.Proxy.DashScopeEmbeddingTest do
       decoded = DashScopeEmbedding.decode(body)
 
       assert decoded["object"] == "list"
+
       assert decoded["data"] == [
                %{"index" => 0, "embedding" => [0.1, 0.2], "object" => "embedding"},
                %{"index" => 1, "embedding" => [0.5, 0.6], "object" => "embedding"}
              ]
+
       assert decoded["usage"] == %{"total_tokens" => 12, "prompt_tokens" => 12}
     end
 

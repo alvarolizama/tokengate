@@ -505,7 +505,10 @@ defmodule TokengateWeb.ProvidersLive do
                   field={@form[:embedding_format]}
                   type="select"
                   label="Formato embedding"
-                  options={[{"OpenAI (Fireworks, oMLX)", "openai"}, {"Qwen Cloud (DashScope)", "dashscope"}]}
+                  options={[
+                    {"OpenAI (Fireworks, oMLX)", "openai"},
+                    {"Qwen Cloud (DashScope)", "dashscope"}
+                  ]}
                   hint="Formato del endpoint de embeddings del proveedor."
                 />
                 <.input
@@ -519,7 +522,10 @@ defmodule TokengateWeb.ProvidersLive do
                   field={@form[:rerank_format]}
                   type="select"
                   label="Formato rerank"
-                  options={[{"Cohere (Fireworks, oMLX)", "cohere"}, {"Qwen Cloud (DashScope)", "dashscope"}]}
+                  options={[
+                    {"Cohere (Fireworks, oMLX)", "cohere"},
+                    {"Qwen Cloud (DashScope)", "dashscope"}
+                  ]}
                   hint="Formato del endpoint de rerank del proveedor."
                 />
                 <div class="flex gap-2 mt-4 justify-end">

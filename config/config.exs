@@ -100,8 +100,8 @@ config :tokengate, :proxy,
   # es el timeout en milisegundos. Se toma el primer tier cuyo threshold
   # sea <= al número de included restantes (por eso 0 siempre matchea).
   included_wait_tiers: [
-    {2, 3_000},
-    {1, 5_000},
+    {2, 10_000},
+    {1, 20_000},
     {0, 30_000}
   ],
   # TTL por defecto del sticky routing según billing_mode.

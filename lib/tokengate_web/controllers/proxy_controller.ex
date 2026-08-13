@@ -647,9 +647,11 @@ defmodule TokengateWeb.ProxyController do
       |> Keyword.get(:included_wait_tiers, [])
 
     # Recorre tiers en orden; el primero cuyo threshold <= remaining da el timeout.
-    # El tier {0, 30_000} siempre matchea como fallback.
+    # A más included restantes, menos se espera en la actual. El tier {0, _}
+    # siempre matchea (0 <= remaining) y actúa como fallback para la última
+    # included de la cascada.
     Enum.find_value(tiers, 30_000, fn {threshold, timeout} ->
-      if remaining <= threshold, do: timeout
+      if threshold <= remaining, do: timeout
     end)
   end
 
