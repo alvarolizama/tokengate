@@ -434,7 +434,7 @@ defmodule TokengateWeb.SettingsLive do
                   type="button"
                   phx-click="show_backfill_confirm"
                   phx-value-mode="zero_only"
-                  class="btn btn-primary btn-outline btn-sm"
+                  class="btn btn-primary btn-outline btn-sm flex-1"
                   id="backfill-costs-btn"
                   disabled={@backfill_count == 0}
                 >
@@ -444,7 +444,7 @@ defmodule TokengateWeb.SettingsLive do
                   type="button"
                   phx-click="show_backfill_confirm"
                   phx-value-mode="all"
-                  class="btn btn-warning btn-outline btn-sm"
+                  class="btn btn-warning btn-outline btn-sm flex-1"
                   id="backfill-all-costs-btn"
                   disabled={@backfill_all_count == 0}
                 >

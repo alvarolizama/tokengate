@@ -32,6 +32,7 @@ defmodule TokengateWeb.CalculatorLiveTest do
 
     assert html =~ "Calculadora de Costos"
     assert html =~ "Costo entrada"
+    assert html =~ "Costo cache"
     assert html =~ "Costo salida"
   end
 

@@ -45,6 +45,7 @@ defmodule TokengateWeb.CalculatorLive do
       |> assign(:selected_model_id, nil)
       |> assign(:period, "7d")
       |> assign(:cost_input, "3.00")
+      |> assign(:cost_cache, "0.30")
       |> assign(:cost_output, "15.00")
       |> assign(:chart_data, [])
       |> assign(:summary, nil)
@@ -57,6 +58,7 @@ defmodule TokengateWeb.CalculatorLive do
     model_id = params["model_id"]
     period = params["period"] || "7d"
     cost_input = params["cost_input"] || "3.00"
+    cost_cache = params["cost_cache"] || "0.30"
     cost_output = params["cost_output"] || "15.00"
 
     socket =
@@ -64,11 +66,12 @@ defmodule TokengateWeb.CalculatorLive do
       |> assign(:selected_model_id, model_id)
       |> assign(:period, period)
       |> assign(:cost_input, cost_input)
+      |> assign(:cost_cache, cost_cache)
       |> assign(:cost_output, cost_output)
 
     socket =
       if model_id && model_id != "" do
-        load_chart_data(socket, model_id, period, cost_input, cost_output)
+        load_chart_data(socket, model_id, period, cost_input, cost_cache, cost_output)
       else
         socket
         |> assign(:chart_data, [])
@@ -87,6 +90,7 @@ defmodule TokengateWeb.CalculatorLive do
          model_id,
          period,
          cost_input_str,
+         cost_cache_str,
          cost_output_str
        ) do
     timezone = socket.assigns.timezone
@@ -110,6 +114,7 @@ defmodule TokengateWeb.CalculatorLive do
       )
 
     cost_input = parse_decimal(cost_input_str, Decimal.new("3.00"))
+    cost_cache = parse_decimal(cost_cache_str, Decimal.new("0.30"))
     cost_output = parse_decimal(cost_output_str, Decimal.new("15.00"))
 
     # Per-million multiplier: price is per 1M tokens → cost = tokens * price * 1e-6
@@ -119,10 +124,18 @@ defmodule TokengateWeb.CalculatorLive do
       Enum.map(series, fn row ->
         prompt = row.prompt_tokens
         completion = row.completion_tokens
+        cached = row.cache_read_tokens
+        non_cached = max(prompt - cached, 0)
 
+        # 3-term: non-cached × input + cached × cache + completion × output
         est_input =
           cost_input
-          |> Decimal.mult(Decimal.new(prompt))
+          |> Decimal.mult(Decimal.new(non_cached))
+          |> Decimal.mult(per_million)
+
+        est_cache =
+          cost_cache
+          |> Decimal.mult(Decimal.new(cached))
           |> Decimal.mult(per_million)
 
         est_output =
@@ -131,7 +144,7 @@ defmodule TokengateWeb.CalculatorLive do
           |> Decimal.mult(per_million)
 
         estimated_cost =
-          [est_input, est_output]
+          [est_input, est_cache, est_output]
           |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
           |> Decimal.round(6)
 
@@ -141,7 +154,8 @@ defmodule TokengateWeb.CalculatorLive do
           real_cost: row.cost_usd,
           estimated_cost: estimated_cost,
           prompt_tokens: prompt,
-          completion_tokens: completion
+          completion_tokens: completion,
+          cache_read_tokens: cached
         }
       end)
 
@@ -163,7 +177,8 @@ defmodule TokengateWeb.CalculatorLive do
       difference: difference,
       total_requests: summary_data.request_count,
       total_prompt: summary_data.total_prompt_tokens,
-      total_completion: summary_data.total_completion_tokens
+      total_completion: summary_data.total_completion_tokens,
+      total_cache_read: summary_data.total_cache_read_tokens
     }
 
     socket
