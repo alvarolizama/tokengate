@@ -17,8 +17,8 @@
     <div class="card bg-base-100 border border-base-300 shadow-sm">
       <div class="card-body space-y-4 p-4 sm:p-6">
         <.form for={%{}} id="calculator-form" phx-change="calculate" phx-submit="calculate">
-          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-            <%!-- Model selector --%>
+          <%!-- Row 1: model + period --%>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div class="space-y-1.5">
               <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
                 Modelo
@@ -36,7 +36,6 @@
               </select>
             </div>
 
-            <%!-- Period selector --%>
             <div class="space-y-1.5">
               <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
                 Periodo
@@ -52,11 +51,13 @@
                 <% end %>
               </select>
             </div>
+          </div>
 
-            <%!-- Cost input per 1M tokens --%>
+          <%!-- Row 2: pricing --%>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div class="space-y-1.5">
               <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                Costo entrada $/1M tokens
+                Entrada $/1M
               </label>
               <input
                 type="number"
@@ -68,10 +69,9 @@
               />
             </div>
 
-            <%!-- Cost cache per 1M tokens --%>
             <div class="space-y-1.5">
               <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                Costo cache $/1M tokens
+                Cache $/1M
               </label>
               <input
                 type="number"
@@ -83,10 +83,9 @@
               />
             </div>
 
-            <%!-- Cost output per 1M tokens --%>
             <div class="space-y-1.5">
               <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                Costo salida $/1M tokens
+                Salida $/1M
               </label>
               <input
                 type="number"

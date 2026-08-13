@@ -31,9 +31,9 @@ defmodule TokengateWeb.CalculatorLiveTest do
     {:ok, _view, html} = live(conn, ~p"/dashboard/calculator")
 
     assert html =~ "Calculadora de Costos"
-    assert html =~ "Costo entrada"
-    assert html =~ "Costo cache"
-    assert html =~ "Costo salida"
+    assert html =~ "Entrada $/1M"
+    assert html =~ "Cache $/1M"
+    assert html =~ "Salida $/1M"
   end
 
   test "regular user is redirected from calculator", %{conn: conn} do
