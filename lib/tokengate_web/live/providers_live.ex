@@ -37,6 +37,7 @@ defmodule TokengateWeb.ProvidersLive do
       |> assign(:editing_credential_id, nil)
       |> assign(:is_admin, user && user.global_role == "admin")
       |> assign(:provider_inflight, %{})
+      |> assign(:credential_inflight, %{})
       |> require_admin_hook()
       |> load_providers()
 
@@ -121,11 +122,17 @@ defmodule TokengateWeb.ProvidersLive do
   # Live in-flight counts per provider (open upstream connections), recomputed
   # on every `:inflight_started`/`:inflight_done` PubSub event without a DB hit.
   defp assign_inflight(socket) do
-    counts =
+    provider_counts =
       Tokengate.Logs.Inflight.count_by_provider()
       |> Map.new(fn %{provider: name, count: n} -> {name, n} end)
 
-    assign(socket, :provider_inflight, counts)
+    credential_counts =
+      Tokengate.Logs.Inflight.count_by_credential()
+      |> Map.new(fn %{credential_id: id, count: n} -> {id, n} end)
+
+    socket
+    |> assign(:provider_inflight, provider_counts)
+    |> assign(:credential_inflight, credential_counts)
   end
 
   ## Live in-flight refresh -------------------------------------------------
@@ -734,6 +741,7 @@ defmodule TokengateWeb.ProvidersLive do
                       <tr>
                         <th>Alias</th>
                         <th>Key</th>
+                        <th>En vuelo</th>
                         <th>Max RPM</th>
                         <th>Max conc.</th>
                         <th>Conc./usuario</th>
@@ -755,6 +763,15 @@ defmodule TokengateWeb.ProvidersLive do
                         </td>
                         <td>
                           <code class="text-sm font-mono">{mask_key(cred.api_key_encrypted)}</code>
+                        </td>
+                        <td>
+                          <% inflight = Map.get(@credential_inflight, cred.id, 0) %>
+                          <span class={[
+                            "badge badge-sm",
+                            if(inflight > 0, do: "badge-primary", else: "badge-ghost")
+                          ]}>
+                            {inflight}
+                          </span>
                         </td>
                         <td>{cred.max_rpm || "—"}</td>
                         <td>{cred.max_concurrent || "—"}</td>

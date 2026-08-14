@@ -576,6 +576,7 @@ defmodule TokengateWeb.ProxyController do
       provider_name: route.model_provider.credential.provider.name,
       api_key_prefix: member.api_key && member.api_key.key_prefix,
       credential_name: route.credential.name,
+      credential_id: route.credential.id,
       provider_key_suffix: provider_key_prefix(route.credential)
     })
   end

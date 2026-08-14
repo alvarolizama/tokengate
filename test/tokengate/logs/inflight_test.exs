@@ -121,6 +121,38 @@ defmodule Tokengate.Logs.InflightTest do
     end
   end
 
+  describe "count_by_credential/1" do
+    test "agrupa por credential_id y ordena por count desc" do
+      c1 = Ecto.UUID.generate()
+      c2 = Ecto.UUID.generate()
+
+      Inflight.start_request(attrs(%{credential_id: c1, model_requested: "m1"}))
+      Inflight.start_request(attrs(%{credential_id: c1, model_requested: "m2"}))
+      Inflight.start_request(attrs(%{credential_id: c2, model_requested: "m3"}))
+
+      assert [
+               %{credential_id: ^c1, count: 2},
+               %{credential_id: ^c2, count: 1}
+             ] = Inflight.count_by_credential()
+    end
+
+    test "ignora entradas sin credential_id" do
+      Inflight.start_request(attrs(%{credential_id: nil, model_requested: "m1"}))
+
+      assert [] = Inflight.count_by_credential()
+    end
+
+    test "respeta el limit" do
+      c1 = Ecto.UUID.generate()
+
+      Inflight.start_request(attrs(%{credential_id: c1}))
+      Inflight.start_request(attrs(%{credential_id: c1}))
+      Inflight.start_request(attrs(%{credential_id: Ecto.UUID.generate()}))
+
+      assert [%{credential_id: ^c1, count: 2}] = Inflight.count_by_credential(1)
+    end
+  end
+
   describe "sweep" do
     test "elimina entradas más viejas que el TTL y broadcast done" do
       Phoenix.PubSub.subscribe(Tokengate.PubSub, Inflight.topic())

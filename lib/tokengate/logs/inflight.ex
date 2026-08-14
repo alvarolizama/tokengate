@@ -52,6 +52,7 @@ defmodule Tokengate.Logs.Inflight do
           provider_name: String.t() | nil,
           api_key_prefix: String.t() | nil,
           credential_name: String.t() | nil,
+          credential_id: String.t() | nil,
           provider_key_suffix: String.t() | nil,
           started_at: DateTime.t()
         }
@@ -87,6 +88,7 @@ defmodule Tokengate.Logs.Inflight do
       provider_name: Map.get(attrs, :provider_name),
       api_key_prefix: Map.get(attrs, :api_key_prefix),
       credential_name: Map.get(attrs, :credential_name),
+      credential_id: Map.get(attrs, :credential_id),
       provider_key_suffix: Map.get(attrs, :provider_key_suffix),
       started_at: DateTime.utc_now() |> DateTime.truncate(:second)
     }
@@ -245,6 +247,31 @@ defmodule Tokengate.Logs.Inflight do
     |> Enum.reject(&is_nil/1)
     |> Enum.frequencies()
     |> Enum.map(fn {provider, count} -> %{provider: provider, count: count} end)
+    |> Enum.sort_by(& &1.count, :desc)
+    |> then(fn entries -> if limit, do: Enum.take(entries, limit), else: entries end)
+  end
+
+  @doc """
+  In-flight count per credential — groups current entries by `credential_id`.
+  Returns a list of maps sorted by count descending. Each map has:
+
+    * `:credential_id` — the credential id
+    * `:count` — number of in-flight requests
+
+  Pass an integer to cap the result, or `nil` (default) for all credentials.
+  Entries without a `credential_id` are ignored.
+  """
+  @spec count_by_credential(non_neg_integer() | nil) :: [
+          %{credential_id: String.t(), count: non_neg_integer()}
+        ]
+  def count_by_credential(limit \\ nil) do
+    ensure_table()
+
+    @table
+    |> :ets.select([{{:"$1", %{credential_id: :"$2"}, :"$3"}, [], [:"$2"]}])
+    |> Enum.reject(&is_nil/1)
+    |> Enum.frequencies()
+    |> Enum.map(fn {credential_id, count} -> %{credential_id: credential_id, count: count} end)
     |> Enum.sort_by(& &1.count, :desc)
     |> then(fn entries -> if limit, do: Enum.take(entries, limit), else: entries end)
   end
