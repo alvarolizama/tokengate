@@ -21,6 +21,7 @@ defmodule Tokengate.Providers.ModelAlias do
     field :lazy_cleanup_enabled, :boolean, default: false
     field :daily_limit_per_user_usd, :decimal
     field :daily_limit_total_usd, :decimal
+    field :pinned, :boolean, default: false
 
     has_many :model_providers, Tokengate.Providers.ModelProvider
 
@@ -38,7 +39,8 @@ defmodule Tokengate.Providers.ModelAlias do
       :prompt_cache_enabled,
       :lazy_cleanup_enabled,
       :daily_limit_per_user_usd,
-      :daily_limit_total_usd
+      :daily_limit_total_usd,
+      :pinned
     ])
     |> validate_required([:name, :context_window])
     |> validate_number(:daily_limit_per_user_usd, greater_than_or_equal_to: 0)

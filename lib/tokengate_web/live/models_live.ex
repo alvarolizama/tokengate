@@ -40,7 +40,7 @@ defmodule TokengateWeb.ModelsLive do
       socket
       |> assign(:page_title, "Modelos · Tokengate")
       |> assign(:is_admin, is_admin)
-      |> assign(:model_type_filter, "all")
+      |> assign(:model_type_filter, "llm")
       |> assign(:form, nil)
       |> assign(:editing_alias_id, nil)
       |> assign(:guard_rails_form, nil)
@@ -92,6 +92,7 @@ defmodule TokengateWeb.ModelsLive do
       left_join: aps in assoc(ma, :model_providers),
       preload: [model_providers: {aps, [credential: :provider]}],
       order_by: [
+        desc: ma.pinned,
         asc: ma.name,
         asc:
           fragment(
@@ -162,6 +163,23 @@ defmodule TokengateWeb.ModelsLive do
      socket
      |> assign(:model_type_filter, type)
      |> load_aliases()}
+  end
+
+  def handle_event("toggle_pin", %{"id" => alias_id}, socket) do
+    if socket.assigns.is_admin do
+      model_alias = Providers.get_model_alias!(alias_id)
+      new_pinned = !model_alias.pinned
+
+      case Providers.update_model_alias(model_alias, %{pinned: new_pinned}) do
+        {:ok, _updated} ->
+          {:noreply, load_aliases(socket)}
+
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, "No se pudo actualizar el modelo.")}
+      end
+    else
+      {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+    end
   end
 
   def handle_event("edit_guard_rails", %{"id" => alias_id}, socket) do
@@ -905,6 +923,16 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   @doc """
+  Client-side toggle for an alias card's providers section. Kept in JS so the
+  collapse/expand state lives purely in the DOM — server round-trips (and the
+  associated stream re-render) are unnecessary for a show/hide toggle.
+  """
+  def toggle_providers_js(id) do
+    JS.toggle(to: "#alias-providers-#{id}", display: "block")
+    |> JS.toggle_class("rotate-90", to: "#alias-chevron-#{id}")
+  end
+
+  @doc """
   Group key for scope grouping in the UI: 0 = global, 1 = team-exclusive,
   2 = member-exclusive. Matches the SQL ordering in load_aliases/1.
   """
@@ -1016,10 +1044,10 @@ defmodule TokengateWeb.ModelsLive do
           <button
             :for={
               {label, value} <- [
-                {"Todos", "all"},
                 {"LLM", "llm"},
                 {"Embedding", "embedding"},
-                {"Rerank", "rerank"}
+                {"Rerank", "rerank"},
+                {"Todos", "all"}
               ]
             }
             phx-click="filter_model_type"
@@ -1052,8 +1080,19 @@ defmodule TokengateWeb.ModelsLive do
             <div class="card bg-base-100 border border-base-300 shadow-sm">
               <div class="card-body p-5">
                 <div class="flex items-start justify-between gap-4">
-                  <div class="flex-1 min-w-0">
+                  <div
+                    class="flex-1 min-w-0 cursor-pointer"
+                    id={"alias-header-#{model_alias.id}"}
+                    phx-click={toggle_providers_js(model_alias.id)}
+                    title="Expandir / colapsar proveedores"
+                  >
                     <div class="flex items-center gap-2 flex-wrap">
+                      <span
+                        id={"alias-chevron-#{model_alias.id}"}
+                        class="text-base-content/40 transition-transform"
+                      >
+                        <.icon name="hero-chevron-right" class="w-4 h-4" />
+                      </span>
                       <h3 class="font-semibold text-base-content truncate">
                         {model_alias.name}
                       </h3>
@@ -1074,6 +1113,18 @@ defmodule TokengateWeb.ModelsLive do
 
                   <div class="flex gap-2 shrink-0">
                     <%= if @is_admin do %>
+                      <button
+                        phx-click="toggle_pin"
+                        phx-value-id={model_alias.id}
+                        class="btn btn-sm btn-ghost"
+                        id={"pin-alias-#{model_alias.id}"}
+                        title={if model_alias.pinned, do: "Quitar pin", else: "Pinear al inicio"}
+                      >
+                        <.icon
+                          name={if model_alias.pinned, do: "hero-star-solid", else: "hero-star"}
+                          class={["w-4 h-4", model_alias.pinned && "text-warning"]}
+                        />
+                      </button>
                       <button
                         phx-click="edit_guard_rails"
                         phx-value-id={model_alias.id}
@@ -1104,7 +1155,11 @@ defmodule TokengateWeb.ModelsLive do
                 </div>
 
                 <%!-- Alias providers list (inline) --%>
-                <div class="mt-4 pt-4 border-t border-base-200">
+                <div
+                  id={"alias-providers-#{model_alias.id}"}
+                  class="mt-4 pt-4 border-t border-base-200"
+                  style="display: none"
+                >
                   <div class="flex items-center justify-between mb-2">
                     <h4 class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
                       Proveedores asignados

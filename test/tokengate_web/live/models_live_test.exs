@@ -458,7 +458,9 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, _view, html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+
+    html = render(view)
 
     assert html =~ "prod-openrouter"
   end
@@ -586,7 +588,9 @@ defmodule TokengateWeb.ModelsLiveTest do
     ap = create_model_provider(alias_record, provider)
     conn = login(conn, admin, password)
 
-    {:ok, view, html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+
+    html = render(view)
     assert html =~ ap.provider_model
 
     view |> element("#delete-ap-#{ap.id}") |> render_click()
@@ -626,4 +630,80 @@ defmodule TokengateWeb.ModelsLiveTest do
   end
 
   # -- Credential daily spending cap indicator -------------------------------
+
+  # -- Pin to top -----------------------------------------------------------
+
+  test "admin can pin a model to the top", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    _alias_a = create_alias(%{name: "aa-pinned-test"})
+    alias_b = create_alias(%{name: "bb-pinned-test"})
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+
+    html = render(view)
+    assert order_before?(html, "aa-pinned-test", "bb-pinned-test")
+
+    view |> element("#pin-alias-#{alias_b.id}") |> render_click()
+
+    assert Tokengate.Providers.get_model_alias!(alias_b.id).pinned == true
+
+    html = render(view)
+    assert order_before?(html, "bb-pinned-test", "aa-pinned-test")
+  end
+
+  test "admin can unpin a model", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    alias_record = create_alias(%{name: "pinned-then-unpinned", pinned: true})
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+
+    view |> element("#pin-alias-#{alias_record.id}") |> render_click()
+
+    assert Tokengate.Providers.get_model_alias!(alias_record.id).pinned == false
+  end
+
+  # -- Collapsed providers section ------------------------------------------
+
+  test "providers section is collapsed by default", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    alias_record = create_alias()
+    create_model_provider(alias_record, provider)
+    conn = login(conn, admin, password)
+
+    {:ok, _view, html} = live(conn, ~p"/dashboard/models")
+
+    assert html =~ ~s(id="alias-providers-#{alias_record.id}")
+    assert html =~ ~s(style="display: none")
+  end
+
+  # -- Default filter -------------------------------------------------------
+
+  test "default filter is llm; embeddings hidden until Todos selected", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    _llm = create_alias(%{name: "llm-default-model", model_type: "llm"})
+    _emb = create_alias(%{name: "emb-default-model", model_type: "embedding"})
+    conn = login(conn, admin, password)
+
+    {:ok, view, html} = live(conn, ~p"/dashboard/models")
+
+    assert html =~ "llm-default-model"
+    refute html =~ "emb-default-model"
+
+    view |> element("#model-type-all") |> render_click()
+
+    html = render(view)
+    assert html =~ "emb-default-model"
+  end
+
+  defp order_before?(html, first, second) do
+    with {first_pos, _len} <- :binary.match(html, first),
+         {second_pos, _len} <- :binary.match(html, second) do
+      first_pos < second_pos
+    else
+      _ -> false
+    end
+  end
 end
