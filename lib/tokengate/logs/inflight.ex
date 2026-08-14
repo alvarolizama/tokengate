@@ -225,6 +225,30 @@ defmodule Tokengate.Logs.Inflight do
     |> Enum.take(limit)
   end
 
+  @doc """
+  In-flight count per provider — groups current entries by `provider_name`.
+  Returns a list of maps sorted by count descending. Each map has:
+
+    * `:provider` — the provider name
+    * `:count` — number of in-flight requests
+
+  Pass an integer to cap the result, or `nil` (default) for all providers.
+  """
+  @spec count_by_provider(non_neg_integer() | nil) :: [
+          %{provider: String.t(), count: non_neg_integer()}
+        ]
+  def count_by_provider(limit \\ nil) do
+    ensure_table()
+
+    @table
+    |> :ets.select([{{:"$1", %{provider_name: :"$2"}, :"$3"}, [], [:"$2"]}])
+    |> Enum.reject(&is_nil/1)
+    |> Enum.frequencies()
+    |> Enum.map(fn {provider, count} -> %{provider: provider, count: count} end)
+    |> Enum.sort_by(& &1.count, :desc)
+    |> then(fn entries -> if limit, do: Enum.take(entries, limit), else: entries end)
+  end
+
   @doc false
   # Test helper: ages an entry past the TTL so the sweep picks it up.
   def backdate_for_test(id, ms) do

@@ -246,7 +246,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     assert updated.max_concurrent == 5
 
     # Toggle it off
-    html = view |> element("#toggle-credential-#{cred.id}") |> render_click()
+    html = view |> element("#toggle-credential-btn-#{cred.id}") |> render_click()
     assert html =~ "desactivada"
 
     # Delete it

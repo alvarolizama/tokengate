@@ -24,6 +24,10 @@ defmodule TokengateWeb.ProvidersLive do
   def mount(_params, _session, socket) do
     user = socket.assigns[:current_user]
 
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(Tokengate.PubSub, Tokengate.Logs.Inflight.topic())
+    end
+
     socket =
       socket
       |> assign(:page_title, "Proveedores · Tokengate")
@@ -32,6 +36,7 @@ defmodule TokengateWeb.ProvidersLive do
       |> assign(:credential_form, nil)
       |> assign(:editing_credential_id, nil)
       |> assign(:is_admin, user && user.global_role == "admin")
+      |> assign(:provider_inflight, %{})
       |> require_admin_hook()
       |> load_providers()
 
@@ -110,7 +115,31 @@ defmodule TokengateWeb.ProvidersLive do
     |> assign(:providers_empty?, providers == [])
     |> assign(:provider_model_counts, provider_model_counts)
     |> assign(:breaker_statuses, breaker_statuses)
+    |> assign_inflight()
   end
+
+  # Live in-flight counts per provider (open upstream connections), recomputed
+  # on every `:inflight_started`/`:inflight_done` PubSub event without a DB hit.
+  defp assign_inflight(socket) do
+    counts =
+      Tokengate.Logs.Inflight.count_by_provider()
+      |> Map.new(fn %{provider: name, count: n} -> {name, n} end)
+
+    assign(socket, :provider_inflight, counts)
+  end
+
+  ## Live in-flight refresh -------------------------------------------------
+
+  @impl true
+  def handle_info({:inflight_started, _entry}, socket) do
+    {:noreply, assign_inflight(socket)}
+  end
+
+  def handle_info({:inflight_done, _id}, socket) do
+    {:noreply, assign_inflight(socket)}
+  end
+
+  def handle_info(_msg, socket), do: {:noreply, socket}
 
   ## Events — provider CRUD ------------------------------------------------
 
@@ -644,6 +673,14 @@ defmodule TokengateWeb.ProvidersLive do
                   <p class="text-xs text-base-content/50 mt-0.5">
                     {length(credentials_for(provider))} credenciales
                   </p>
+                  <p
+                    :if={Map.get(@provider_inflight, provider.name, 0) > 0}
+                    class="mt-1.5"
+                  >
+                    <span class="badge badge-sm badge-primary">
+                      {Map.get(@provider_inflight, provider.name, 0)} en vuelo
+                    </span>
+                  </p>
                 </div>
                 <div class="flex gap-2 items-center">
                   <button
@@ -701,7 +738,6 @@ defmodule TokengateWeb.ProvidersLive do
                         <th>Max conc.</th>
                         <th>Conc./usuario</th>
                         <th>Timeout</th>
-                        <th>Estado</th>
                         <th>Breaker</th>
                         <th></th>
                       </tr>
@@ -724,40 +760,6 @@ defmodule TokengateWeb.ProvidersLive do
                         <td>{cred.max_concurrent || "—"}</td>
                         <td>{cred.max_concurrent_per_user || "—"}</td>
                         <td class="font-mono text-xs">{cred.receive_timeout_ms || 60_000} ms</td>
-                        <td>
-                          <%= cond do %>
-                            <% cred.status == "active" -> %>
-                              <label class={[
-                                "cursor-pointer",
-                                provider.status == "disabled" && "opacity-50 pointer-events-none"
-                              ]}>
-                                <input
-                                  type="checkbox"
-                                  class="toggle toggle-sm toggle-success"
-                                  phx-click="toggle_credential"
-                                  phx-value-id={cred.id}
-                                  checked={cred.status == "active"}
-                                  id={"toggle-credential-#{cred.id}"}
-                                />
-                              </label>
-                            <% cred.status == "error" -> %>
-                              <div class="flex flex-col gap-1">
-                                <span class="badge badge-sm badge-error">
-                                  Error
-                                </span>
-                                <span class="text-xs text-base-content/50" title={cred.error_reason}>
-                                  {cred.error_reason || "auth_error"}
-                                </span>
-                                <span :if={cred.error_at} class="text-xs text-base-content/40">
-                                  {fmt_dt(cred.error_at, @timezone)}
-                                </span>
-                              </div>
-                            <% true -> %>
-                              <span class="badge badge-sm badge-ghost">
-                                Desactivada
-                              </span>
-                          <% end %>
-                        </td>
                         <td>
                           <% breaker = Map.get(@breaker_statuses, cred.id, :closed) %>
                           <div class="flex items-center gap-2">

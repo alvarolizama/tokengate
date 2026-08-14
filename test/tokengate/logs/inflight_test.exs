@@ -94,6 +94,33 @@ defmodule Tokengate.Logs.InflightTest do
     end
   end
 
+  describe "count_by_provider/1" do
+    test "agrupa por provider_name y ordena por count desc" do
+      Inflight.start_request(attrs(%{provider_name: "Provider A", model_requested: "m1"}))
+      Inflight.start_request(attrs(%{provider_name: "Provider A", model_requested: "m2"}))
+      Inflight.start_request(attrs(%{provider_name: "Provider B", model_requested: "m3"}))
+
+      assert [
+               %{provider: "Provider A", count: 2},
+               %{provider: "Provider B", count: 1}
+             ] = Inflight.count_by_provider()
+    end
+
+    test "ignora entradas sin provider_name" do
+      Inflight.start_request(attrs(%{provider_name: nil, model_requested: "m1"}))
+
+      assert [] = Inflight.count_by_provider()
+    end
+
+    test "respeta el limit" do
+      Inflight.start_request(attrs(%{provider_name: "Provider A"}))
+      Inflight.start_request(attrs(%{provider_name: "Provider A"}))
+      Inflight.start_request(attrs(%{provider_name: "Provider B"}))
+
+      assert [%{provider: "Provider A", count: 2}] = Inflight.count_by_provider(1)
+    end
+  end
+
   describe "sweep" do
     test "elimina entradas más viejas que el TTL y broadcast done" do
       Phoenix.PubSub.subscribe(Tokengate.PubSub, Inflight.topic())
