@@ -36,7 +36,6 @@ defmodule TokengateWeb.ProvidersLive do
       |> assign(:credential_form, nil)
       |> assign(:editing_credential_id, nil)
       |> assign(:is_admin, user && user.global_role == "admin")
-      |> assign(:provider_inflight, %{})
       |> assign(:credential_inflight, %{})
       |> require_admin_hook()
       |> load_providers()
@@ -119,20 +118,14 @@ defmodule TokengateWeb.ProvidersLive do
     |> assign_inflight()
   end
 
-  # Live in-flight counts per provider (open upstream connections), recomputed
+  # Live in-flight counts per credential (open upstream connections), recomputed
   # on every `:inflight_started`/`:inflight_done` PubSub event without a DB hit.
   defp assign_inflight(socket) do
-    provider_counts =
-      Tokengate.Logs.Inflight.count_by_provider()
-      |> Map.new(fn %{provider: name, count: n} -> {name, n} end)
-
     credential_counts =
       Tokengate.Logs.Inflight.count_by_credential()
       |> Map.new(fn %{credential_id: id, count: n} -> {id, n} end)
 
-    socket
-    |> assign(:provider_inflight, provider_counts)
-    |> assign(:credential_inflight, credential_counts)
+    assign(socket, :credential_inflight, credential_counts)
   end
 
   ## Live in-flight refresh -------------------------------------------------
@@ -679,14 +672,6 @@ defmodule TokengateWeb.ProvidersLive do
                   <p class="text-xs text-base-content/50 mt-1 font-mono">{provider.base_url}</p>
                   <p class="text-xs text-base-content/50 mt-0.5">
                     {length(credentials_for(provider))} credenciales
-                  </p>
-                  <p
-                    :if={Map.get(@provider_inflight, provider.name, 0) > 0}
-                    class="mt-1.5"
-                  >
-                    <span class="badge badge-sm badge-primary">
-                      {Map.get(@provider_inflight, provider.name, 0)} en vuelo
-                    </span>
                   </p>
                 </div>
                 <div class="flex gap-2 items-center">
