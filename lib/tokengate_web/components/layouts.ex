@@ -271,6 +271,11 @@ defmodule TokengateWeb.Layouts do
                 icon="hero-signal"
               />
               <.sidebar_link
+                href={~p"/dashboard/benchmarks"}
+                label="Benchmarks"
+                icon="hero-chart-bar"
+              />
+              <.sidebar_link
                 href={~p"/dashboard/logs"}
                 label="Logs"
                 icon="hero-document-text"

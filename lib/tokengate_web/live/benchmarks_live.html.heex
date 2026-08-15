@@ -1,0 +1,374 @@
+<Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
+  <div class="space-y-6">
+    <%!-- Header ──────────────────────────────────────────────────────── --%>
+    <div class="flex items-center justify-between flex-wrap gap-4">
+      <.header>
+        Benchmarks
+        <:subtitle>
+          <span class="inline-flex items-center gap-2">
+            <.icon name="hero-chart-bar" class="w-4 h-4 text-base-content/50" />
+            Compara proveedores · TTFT · TPS · Latencia
+          </span>
+        </:subtitle>
+      </.header>
+
+      <div class="flex items-center gap-3">
+        <%= if @running do %>
+          <span class="inline-flex items-center gap-2 text-sm text-base-content/60">
+            <.icon name="hero-arrow-path" class="w-4 h-4 animate-spin" /> Corriendo…
+          </span>
+        <% else %>
+          <button
+            phx-click="run_benchmarks"
+            disabled={@targets == [] or @running}
+            class="btn btn-primary btn-sm gap-2"
+          >
+            <.icon name="hero-play" class="w-4 h-4" /> Correr benchmarks
+          </button>
+          <%= if has_results?(@targets) do %>
+            <button phx-click="clear_results" class="btn btn-ghost btn-sm">
+              Limpiar
+            </button>
+          <% end %>
+        <% end %>
+      </div>
+    </div>
+
+    <%!-- ──────────────────────────────────────────────────────────────── --%>
+    <%!-- CONFIG: PROMPT + SETTINGS                                      --%>
+    <%!-- ──────────────────────────────────────────────────────────────── --%>
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+      <%!-- Prompt --%>
+      <div class="card bg-base-100 border border-base-300 shadow-sm lg:col-span-2">
+        <div class="card-body p-4 sm:p-6">
+          <label class="text-xs font-semibold uppercase tracking-wide text-base-content/40 mb-2">
+            Prompt compartido
+          </label>
+          <.form for={%{}} phx-change="update_prompt" id="prompt-form" class="w-full">
+            <textarea
+              name="prompt"
+              class="textarea textarea-bordered w-full h-24 text-sm"
+              placeholder="Escribe el prompt que se enviará a todos los proveedores…"
+            >{@prompt}</textarea>
+          </.form>
+        </div>
+      </div>
+
+      <%!-- Settings --%>
+      <div class="card bg-base-100 border border-base-300 shadow-sm">
+        <div class="card-body p-4 sm:p-6 space-y-3">
+          <label class="text-xs font-semibold uppercase tracking-wide text-base-content/40">
+            Configuración
+          </label>
+          <.form for={%{}} phx-change="update_settings" id="settings-form" class="space-y-3">
+            <div>
+              <label class="text-xs text-base-content/60 block mb-1">Max tokens</label>
+              <input
+                type="number"
+                name="settings[max_tokens]"
+                value={@max_tokens}
+                min="1"
+                max="4096"
+                class="input input-bordered input-sm w-full"
+              />
+            </div>
+            <div>
+              <label class="text-xs text-base-content/60 block mb-1">Runs (promedio)</label>
+              <input
+                type="number"
+                name="settings[runs]"
+                value={@runs}
+                min="1"
+                max="10"
+                class="input input-bordered input-sm w-full"
+              />
+            </div>
+          </.form>
+        </div>
+      </div>
+    </div>
+
+    <%!-- ──────────────────────────────────────────────────────────────── --%>
+    <%!-- TARGETS: ADD + LIST                                            --%>
+    <%!-- ──────────────────────────────────────────────────────────────── --%>
+    <div class="card bg-base-100 border border-base-300 shadow-sm">
+      <div class="card-body p-4 sm:p-6 space-y-4">
+        <div class="flex items-center justify-between">
+          <h3 class="text-sm font-semibold text-base-content">Proveedores a comparar</h3>
+          <span class="badge badge-sm badge-ghost">{length(@targets)}</span>
+        </div>
+
+        <%!-- Add target form --%>
+        <.form
+          for={%{}}
+          phx-submit="add_target"
+          id="add-target-form"
+          class="grid grid-cols-1 sm:grid-cols-4 gap-2"
+        >
+          <input
+            type="text"
+            name="target[base_url]"
+            value={@new_target["base_url"]}
+            placeholder="https://api.openai.com/v1"
+            class="input input-bordered input-sm"
+          />
+          <input
+            type="password"
+            name="target[api_key]"
+            value={@new_target["api_key"]}
+            placeholder="sk-…"
+            class="input input-bordered input-sm"
+          />
+          <input
+            type="text"
+            name="target[model]"
+            value={@new_target["model"]}
+            placeholder="gpt-4o"
+            class="input input-bordered input-sm"
+          />
+          <button type="submit" class="btn btn-ghost btn-sm gap-2">
+            <.icon name="hero-plus" class="w-4 h-4" /> Agregar
+          </button>
+        </.form>
+
+        <%!-- Target list --%>
+        <%= if @targets == [] do %>
+          <p class="text-sm text-base-content/40 py-4 text-center">
+            Sin proveedores. Agrega uno arriba para empezar.
+          </p>
+        <% else %>
+          <div class="overflow-x-auto">
+            <table class="table table-sm">
+              <thead>
+                <tr class="text-[10px] uppercase tracking-wider text-base-content/40">
+                  <th>Base URL</th>
+                  <th>API Key</th>
+                  <th>Modelo</th>
+                  <th>Estado</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr :for={target <- @targets}>
+                  <td class="text-xs font-mono text-base-content/70 truncate max-w-[200px]">
+                    {target.base_url}
+                  </td>
+                  <td class="text-xs font-mono text-base-content/50">
+                    {mask_key(target.api_key)}
+                  </td>
+                  <td class="text-xs font-medium text-base-content/80">
+                    {target.model}
+                  </td>
+                  <td>
+                    <%= cond do %>
+                      <% target.running? -> %>
+                        <span class="badge badge-sm badge-warning gap-1">
+                          <.icon name="hero-arrow-path" class="w-3 h-3 animate-spin" /> Corriendo
+                        </span>
+                      <% target.error -> %>
+                        <span class="badge badge-sm badge-error" title={target.error}>
+                          Error
+                        </span>
+                      <% target.result -> %>
+                        <span class="badge badge-sm badge-success">OK</span>
+                      <% true -> %>
+                        <span class="badge badge-sm badge-ghost">—</span>
+                    <% end %>
+                  </td>
+                  <td>
+                    <button
+                      phx-click="remove_target"
+                      phx-value-id={target.id}
+                      class="btn btn-ghost btn-xs text-error"
+                    >
+                      <.icon name="hero-x-mark" class="w-3 h-3" />
+                    </button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        <% end %>
+      </div>
+    </div>
+
+    <%!-- ──────────────────────────────────────────────────────────────── --%>
+    <%!-- RESULTS                                                        --%>
+    <%!-- ──────────────────────────────────────────────────────────────── --%>
+    <%= if has_results?(@targets) do %>
+      <% winner = winner(@targets) %>
+      <% best_ttft_t = best_ttft(@targets) %>
+      <% best_lat_t = best_latency(@targets) %>
+      <% max_t = max_tps(@targets) %>
+      <% max_ttft_v = max_ttft(@targets) %>
+      <% max_lat_v = max_latency(@targets) %>
+      <% max_tok_v = max_tokens_count(@targets) %>
+
+      <%!-- Winner banner --%>
+      <%= if winner do %>
+        <div class="alert alert-success border border-success/30 shadow-sm">
+          <.icon name="hero-trophy" class="w-5 h-5" />
+          <div>
+            <h3 class="text-sm font-bold">Ganador: {winner.model}</h3>
+            <p class="text-xs text-base-content/60">
+              {fmt_tps(winner.result.tps)} · TTFT {fmt_ms(winner.result.ttft_ms)} · {fmt_tokens(
+                winner.result.tokens
+              )} tokens
+            </p>
+          </div>
+        </div>
+      <% end %>
+
+      <%!-- Charts grid --%>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <%!-- TPS Chart --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-4 sm:p-6">
+            <h3 class="text-sm font-semibold text-base-content mb-3 flex items-center gap-2">
+              <.icon name="hero-bolt" class="w-4 h-4 text-primary" /> Tokens por segundo
+            </h3>
+            <div class="space-y-2">
+              <div :for={t <- @results} :if={t.result} class="space-y-1">
+                <div class="flex items-center justify-between text-xs">
+                  <span class={["font-medium", t.id == winner.id && "text-success font-bold"]}>
+                    {t.model}
+                  </span>
+                  <span class="tabular-nums text-base-content/60">
+                    {fmt_tps(t.result.tps)}
+                  </span>
+                </div>
+                <div class="h-3 bg-base-200 rounded-full overflow-hidden">
+                  <div
+                    class="h-full rounded-full transition-all duration-500"
+                    style={"width: #{bar_width(t.result.tps, max_t)}%; background-color: #{if t.id == winner.id, do: "oklch(var(--s))", else: "oklch(var(--p))"}"}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <%!-- TTFT Chart --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-4 sm:p-6">
+            <h3 class="text-sm font-semibold text-base-content mb-3 flex items-center gap-2">
+              <.icon name="hero-clock" class="w-4 h-4 text-secondary" /> Time to First Token
+            </h3>
+            <div class="space-y-2">
+              <div :for={t <- @results} :if={t.result} class="space-y-1">
+                <div class="flex items-center justify-between text-xs">
+                  <span class={["font-medium", t.id == best_ttft_t.id && "text-success font-bold"]}>
+                    {t.model}
+                  </span>
+                  <span class="tabular-nums text-base-content/60">
+                    {fmt_ms(t.result.ttft_ms)}
+                  </span>
+                </div>
+                <div class="h-3 bg-base-200 rounded-full overflow-hidden">
+                  <div
+                    class="h-full rounded-full transition-all duration-500"
+                    style={"width: #{bar_width(t.result.ttft_ms, max_ttft_v)}%; background-color: #{if t.id == best_ttft_t.id, do: "oklch(var(--s))", else: "oklch(var(--se))"}"}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <%!-- Latency Chart --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-4 sm:p-6">
+            <h3 class="text-sm font-semibold text-base-content mb-3 flex items-center gap-2">
+              <.icon name="hero-timer" class="w-4 h-4 text-accent" /> Latencia total
+            </h3>
+            <div class="space-y-2">
+              <div :for={t <- @results} :if={t.result} class="space-y-1">
+                <div class="flex items-center justify-between text-xs">
+                  <span class={["font-medium", t.id == best_lat_t.id && "text-success font-bold"]}>
+                    {t.model}
+                  </span>
+                  <span class="tabular-nums text-base-content/60">
+                    {fmt_ms(t.result.total_ms)}
+                  </span>
+                </div>
+                <div class="h-3 bg-base-200 rounded-full overflow-hidden">
+                  <div
+                    class="h-full rounded-full transition-all duration-500"
+                    style={"width: #{bar_width(t.result.total_ms, max_lat_v)}%; background-color: #{if t.id == best_lat_t.id, do: "oklch(var(--s))", else: "oklch(var(--a))"}"}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <%!-- Tokens Chart --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-4 sm:p-6">
+            <h3 class="text-sm font-semibold text-base-content mb-3 flex items-center gap-2">
+              <.icon name="hero-document-text" class="w-4 h-4 text-info" /> Tokens generados
+            </h3>
+            <div class="space-y-2">
+              <div :for={t <- @results} :if={t.result} class="space-y-1">
+                <div class="flex items-center justify-between text-xs">
+                  <span class="font-medium text-base-content/80">
+                    {t.model}
+                  </span>
+                  <span class="tabular-nums text-base-content/60">
+                    {fmt_tokens(t.result.tokens)}
+                  </span>
+                </div>
+                <div class="h-3 bg-base-200 rounded-full overflow-hidden">
+                  <div
+                    class="h-full rounded-full transition-all duration-500 bg-info"
+                    style={"width: #{bar_width(t.result.tokens, max_tok_v)}%"}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <%!-- Detailed table --%>
+      <div class="card bg-base-100 border border-base-300 shadow-sm">
+        <div class="card-body p-4 sm:p-6">
+          <h3 class="text-sm font-semibold text-base-content mb-3">Tabla comparativa</h3>
+          <div class="overflow-x-auto">
+            <table class="table table-sm">
+              <thead>
+                <tr class="text-[10px] uppercase tracking-wider text-base-content/40">
+                  <th>Modelo</th>
+                  <th class="text-right">TTFT</th>
+                  <th class="text-right">TPS</th>
+                  <th class="text-right">Latencia</th>
+                  <th class="text-right">Tokens</th>
+                  <th class="text-right">Runs</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr :for={t <- @results}>
+                  <td class="text-xs font-medium">
+                    <span :if={t.id == winner.id} class="text-success">★ </span>
+                    {t.model}
+                  </td>
+                  <%= if t.result do %>
+                    <td class="text-right text-xs tabular-nums">{fmt_ms(t.result.ttft_ms)}</td>
+                    <td class="text-right text-xs tabular-nums">{fmt_tps(t.result.tps)}</td>
+                    <td class="text-right text-xs tabular-nums">{fmt_ms(t.result.total_ms)}</td>
+                    <td class="text-right text-xs tabular-nums">{fmt_tokens(t.result.tokens)}</td>
+                    <td class="text-right text-xs tabular-nums text-base-content/40">
+                      {t.result.runs}
+                    </td>
+                  <% else %>
+                    <td colspan="5" class="text-xs text-error/70">{t.error || "—"}</td>
+                  <% end %>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    <% end %>
+  </div>
+</Layouts.dashboard>
