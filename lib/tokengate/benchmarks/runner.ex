@@ -222,7 +222,7 @@ defmodule Tokengate.Benchmarks.Runner do
         _ -> false
       end)
 
-    {:cont, %{acc | chunk_count: acc.chunk_count + deltas}}
+    %{acc | chunk_count: acc.chunk_count + deltas}
   end
 
   defp count_delta_tokens(acc, _chunk), do: acc
