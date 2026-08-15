@@ -54,7 +54,8 @@ defmodule TokengateWeb.ModelsLiveTest do
         Map.merge(
           %{
             name: "alias-#{u}",
-            context_window: 128_000
+            context_window: 128_000,
+            pinned: true
           },
           attrs
         )
@@ -140,6 +141,10 @@ defmodule TokengateWeb.ModelsLiveTest do
       |> render_submit()
 
     assert html =~ "Modelo creado"
+
+    # New aliases are created unpinned, so the default Favoritos view hides them.
+    view |> element("#model-type-all") |> render_click()
+    html = render(view)
     assert html =~ "gpt-4o-test"
 
     alias_record = Tokengate.Providers.get_alias_by_name("gpt-4o-test")
@@ -609,8 +614,14 @@ defmodule TokengateWeb.ModelsLiveTest do
     # have created aliases already. Wipe them so the empty state holds.
     Repo.delete_all(Providers.ModelAlias)
 
-    {:ok, _view, html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, html} = live(conn, ~p"/dashboard/models")
 
+    # Default filter is Favoritos → favorites-specific empty message.
+    assert html =~ "No hay modelos pineados"
+
+    view |> element("#model-type-all") |> render_click()
+
+    html = render(view)
     assert html =~ "No hay modelos configurados"
   end
 
@@ -635,11 +646,13 @@ defmodule TokengateWeb.ModelsLiveTest do
 
   test "admin can pin a model to the top", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    _alias_a = create_alias(%{name: "aa-pinned-test"})
-    alias_b = create_alias(%{name: "bb-pinned-test"})
+    _alias_a = create_alias(%{name: "aa-pinned-test", pinned: false})
+    alias_b = create_alias(%{name: "bb-pinned-test", pinned: false})
     conn = login(conn, admin, password)
 
     {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+
+    view |> element("#model-type-all") |> render_click()
 
     html = render(view)
     assert order_before?(html, "aa-pinned-test", "bb-pinned-test")
@@ -681,21 +694,36 @@ defmodule TokengateWeb.ModelsLiveTest do
 
   # -- Default filter -------------------------------------------------------
 
-  test "default filter is llm; embeddings hidden until Todos selected", %{conn: conn} do
+  test "default filter is favorites; pinned shown, unpinned hidden", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    _llm = create_alias(%{name: "llm-default-model", model_type: "llm"})
-    _emb = create_alias(%{name: "emb-default-model", model_type: "embedding"})
+    _pinned = create_alias(%{name: "fav-default-model", pinned: true})
+    _unpinned = create_alias(%{name: "unpinned-default-model", pinned: false})
     conn = login(conn, admin, password)
 
     {:ok, view, html} = live(conn, ~p"/dashboard/models")
 
-    assert html =~ "llm-default-model"
-    refute html =~ "emb-default-model"
+    assert html =~ "fav-default-model"
+    refute html =~ "unpinned-default-model"
 
     view |> element("#model-type-all") |> render_click()
 
     html = render(view)
-    assert html =~ "emb-default-model"
+    assert html =~ "unpinned-default-model"
+  end
+
+  test "Favoritos tab shows only pinned models", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    _pinned = create_alias(%{name: "fav-pinned-model", pinned: true})
+    _unpinned = create_alias(%{name: "fav-unpinned-model", pinned: false})
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+
+    view |> element("#model-type-favorites") |> render_click()
+
+    html = render(view)
+    assert html =~ "fav-pinned-model"
+    refute html =~ "fav-unpinned-model"
   end
 
   defp order_before?(html, first, second) do

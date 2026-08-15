@@ -40,7 +40,7 @@ defmodule TokengateWeb.ModelsLive do
       socket
       |> assign(:page_title, "Modelos · Tokengate")
       |> assign(:is_admin, is_admin)
-      |> assign(:model_type_filter, "llm")
+      |> assign(:model_type_filter, "favorites")
       |> assign(:form, nil)
       |> assign(:editing_alias_id, nil)
       |> assign(:guard_rails_form, nil)
@@ -83,6 +83,7 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   defp filter_by_type(aliases, "all"), do: aliases
+  defp filter_by_type(aliases, "favorites"), do: Enum.filter(aliases, & &1.pinned)
   defp filter_by_type(aliases, type), do: Enum.filter(aliases, &(&1.model_type == type))
 
   # Providers are grouped by scope first — global, then team-exclusive,
@@ -863,6 +864,16 @@ defmodule TokengateWeb.ModelsLive do
   def fmt_dec(%Decimal{} = d), do: Decimal.to_string(d)
   def fmt_dec(n), do: to_string(n)
 
+  @doc "Empty-state message for the active model type filter"
+  def empty_state_message("favorites"),
+    do: "No hay modelos pineados. Pinea un modelo para verlo aquí."
+
+  def empty_state_message("all"), do: "No hay modelos configurados."
+  def empty_state_message("llm"), do: "No hay modelos LLM."
+  def empty_state_message("embedding"), do: "No hay modelos de embedding."
+  def empty_state_message("rerank"), do: "No hay modelos de rerank."
+  def empty_state_message(_), do: "No hay modelos configurados."
+
   def format_compact(n) when is_integer(n) and n >= 1_000_000_000,
     do: "#{Float.round(n / 1_000_000_000, 1)}B"
 
@@ -1044,6 +1055,7 @@ defmodule TokengateWeb.ModelsLive do
           <button
             :for={
               {label, value} <- [
+                {"Favoritos", "favorites"},
                 {"LLM", "llm"},
                 {"Embedding", "embedding"},
                 {"Rerank", "rerank"},
@@ -1072,7 +1084,7 @@ defmodule TokengateWeb.ModelsLive do
           class="text-center py-12 text-base-content/40"
         >
           <.icon name="hero-cpu-chip" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-          <p>No hay modelos configurados.</p>
+          <p>{empty_state_message(@model_type_filter)}</p>
         </div>
 
         <div id="aliases" phx-update="stream" class="space-y-3">
