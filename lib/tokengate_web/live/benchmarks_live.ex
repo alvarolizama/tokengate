@@ -17,7 +17,9 @@ defmodule TokengateWeb.BenchmarksLive do
   alias Tokengate.Providers
   alias Tokengate.Repo
 
-  @default_prompt "Escribe un poema corto sobre el vacío fértil del que nace todo."
+  @default_prompt "Dame la receta de la cochinita"
+  @default_max_tokens 262_144
+  @default_runs 3
 
   @impl true
   def mount(_params, _session, socket) do
@@ -33,8 +35,8 @@ defmodule TokengateWeb.BenchmarksLive do
       |> assign(:page_title, "Benchmarks · Tokengate")
       |> assign(:targets, [])
       |> assign(:prompt, @default_prompt)
-      |> assign(:max_tokens, 256)
-      |> assign(:runs, 1)
+      |> assign(:max_tokens, @default_max_tokens)
+      |> assign(:runs, @default_runs)
       |> assign(:running, false)
       |> assign(:results, [])
       |> assign(:providers, providers)
@@ -151,7 +153,7 @@ defmodule TokengateWeb.BenchmarksLive do
   end
 
   def handle_event("update_settings", %{"settings" => params}, socket) do
-    max_tokens = parse_int(params["max_tokens"], 256, 1, 4096)
+    max_tokens = parse_int(params["max_tokens"], @default_max_tokens, 1, 1_048_576)
     runs = parse_int(params["runs"], 1, 1, 10)
 
     {:noreply, socket |> assign(:max_tokens, max_tokens) |> assign(:runs, runs)}

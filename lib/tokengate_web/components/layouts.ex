@@ -227,6 +227,11 @@ defmodule TokengateWeb.Layouts do
                 label="Calculadora"
                 icon="hero-calculator"
               />
+              <.sidebar_link
+                href={~p"/dashboard/benchmarks"}
+                label="Benchmarks"
+                icon="hero-chart-bar"
+              />
             <% end %>
           </div>
 
@@ -274,11 +279,6 @@ defmodule TokengateWeb.Layouts do
                 href={~p"/dashboard/logs"}
                 label="Logs"
                 icon="hero-document-text"
-              />
-              <.sidebar_link
-                href={~p"/dashboard/benchmarks"}
-                label="Benchmarks"
-                icon="hero-chart-bar"
               />
             </div>
 
