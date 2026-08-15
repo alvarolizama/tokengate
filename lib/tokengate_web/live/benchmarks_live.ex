@@ -3,8 +3,9 @@ defmodule TokengateWeb.BenchmarksLive do
   Provider benchmarks — compare LLM providers head-to-head on
   TTFT, TPS, latency and token count using the same prompt.
 
-  Targets are built from existing TokenGate providers + credentials
-  (no manual base_url / api_key entry). Admin-only.
+  Targets are built from existing TokenGate providers + credentials.
+  Cascading selects: provider → credential (filtered) → model (fetched
+  from the provider's /models endpoint). Admin-only.
   """
 
   use TokengateWeb, :live_view
@@ -12,6 +13,7 @@ defmodule TokengateWeb.BenchmarksLive do
   import Ecto.Query, only: [from: 2]
 
   alias Tokengate.Benchmarks.{Runner, Target}
+  alias Tokengate.Proxy.OpenAIAdapter
   alias Tokengate.Providers
   alias Tokengate.Repo
 
@@ -19,6 +21,13 @@ defmodule TokengateWeb.BenchmarksLive do
 
   @impl true
   def mount(_params, _session, socket) do
+    providers =
+      from(p in Providers.Provider,
+        where: p.status == "active",
+        order_by: p.name
+      )
+      |> Repo.all()
+
     socket =
       socket
       |> assign(:page_title, "Benchmarks · Tokengate")
@@ -28,13 +37,75 @@ defmodule TokengateWeb.BenchmarksLive do
       |> assign(:runs, 1)
       |> assign(:running, false)
       |> assign(:results, [])
-      |> assign(:new_model, "")
-      |> load_providers_with_credentials()
+      |> assign(:providers, providers)
+      |> assign(:selected_provider_id, nil)
+      |> assign(:available_credentials, [])
+      |> assign(:selected_credential_id, nil)
+      |> assign(:available_models, [])
+      |> assign(:loading_models, false)
+      |> assign(:selected_model, nil)
 
     {:ok, socket}
   end
 
+  # ── Cascading select events ───────────────────────────────────────────
+
   @impl true
+  def handle_event("select_provider", %{"target" => %{"provider_id" => provider_id}}, socket) do
+    credentials =
+      if provider_id != "" do
+        from(c in Providers.Credential,
+          where: c.provider_id == ^provider_id and c.status == "active",
+          order_by: [asc: c.name]
+        )
+        |> Repo.all()
+      else
+        []
+      end
+
+    {:noreply,
+     socket
+     |> assign(:selected_provider_id, if(provider_id == "", do: nil, else: provider_id))
+     |> assign(:available_credentials, credentials)
+     |> assign(:selected_credential_id, nil)
+     |> assign(:available_models, [])
+     |> assign(:selected_model, nil)
+     |> assign(:loading_models, false)}
+  end
+
+  def handle_event(
+        "select_credential",
+        %{"target" => %{"credential_id" => credential_id}},
+        socket
+      ) do
+    if credential_id == "" do
+      {:noreply,
+       socket
+       |> assign(:selected_credential_id, nil)
+       |> assign(:available_models, [])
+       |> assign(:selected_model, nil)}
+    else
+      provider_id = socket.assigns.selected_provider_id
+
+      if provider_id do
+        send(self(), {:fetch_models, provider_id, credential_id})
+      end
+
+      {:noreply,
+       socket
+       |> assign(:selected_credential_id, credential_id)
+       |> assign(:available_models, [])
+       |> assign(:selected_model, nil)
+       |> assign(:loading_models, true)}
+    end
+  end
+
+  def handle_event("select_model", %{"target" => %{"model" => model}}, socket) do
+    {:noreply, assign(socket, :selected_model, if(model == "", do: nil, else: model))}
+  end
+
+  # ── Add / remove targets ──────────────────────────────────────────────
+
   def handle_event("add_target", %{"target" => params}, socket) do
     provider_id = params["provider_id"] || ""
     credential_id = params["credential_id"] || ""
@@ -48,7 +119,7 @@ defmodule TokengateWeb.BenchmarksLive do
         {:noreply, put_flash(socket, :error, "Selecciona una credencial.")}
 
       model == "" ->
-        {:noreply, put_flash(socket, :error, "Escribe el modelo a probar.")}
+        {:noreply, put_flash(socket, :error, "Selecciona un modelo.")}
 
       true ->
         case build_target(provider_id, credential_id, model) do
@@ -56,7 +127,8 @@ defmodule TokengateWeb.BenchmarksLive do
             {:noreply,
              socket
              |> assign(:targets, socket.assigns.targets ++ [target])
-             |> assign(:new_model, "")}
+             |> assign(:selected_model, nil)
+             |> assign(:available_models, [])}
 
           {:error, reason} ->
             {:noreply, put_flash(socket, :error, reason)}
@@ -69,6 +141,8 @@ defmodule TokengateWeb.BenchmarksLive do
     {:noreply, assign(socket, :targets, targets)}
   end
 
+  # ── Prompt + settings ─────────────────────────────────────────────────
+
   def handle_event("update_prompt", %{"prompt" => prompt}, socket) do
     {:noreply, assign(socket, :prompt, prompt)}
   end
@@ -79,6 +153,8 @@ defmodule TokengateWeb.BenchmarksLive do
 
     {:noreply, socket |> assign(:max_tokens, max_tokens) |> assign(:runs, runs)}
   end
+
+  # ── Run benchmarks ────────────────────────────────────────────────────
 
   def handle_event("run_benchmarks", _params, socket) do
     targets = socket.assigns.targets
@@ -115,7 +191,29 @@ defmodule TokengateWeb.BenchmarksLive do
     {:noreply, socket |> assign(:targets, targets) |> assign(:results, [])}
   end
 
+  # ── Async info handlers ───────────────────────────────────────────────
+
   @impl true
+  def handle_info({:fetch_models, provider_id, credential_id}, socket) do
+    provider = Providers.get_provider(provider_id)
+    credential = Providers.get_credential(credential_id)
+
+    models =
+      if provider && credential do
+        case OpenAIAdapter.list_models(provider, credential) do
+          {:ok, models} -> models
+          {:error, _} -> []
+        end
+      else
+        []
+      end
+
+    {:noreply,
+     socket
+     |> assign(:available_models, models)
+     |> assign(:loading_models, false)}
+  end
+
   def handle_info({:run_benchmarks, targets, prompt}, socket) do
     opts = [max_tokens: socket.assigns.max_tokens, runs: socket.assigns.runs]
 
@@ -139,33 +237,7 @@ defmodule TokengateWeb.BenchmarksLive do
     {:noreply, socket}
   end
 
-  # ── Data loading ──────────────────────────────────────────────────────
-
-  defp load_providers_with_credentials(socket) do
-    providers =
-      from(p in Providers.Provider,
-        where: p.status == "active",
-        order_by: p.name,
-        preload: [:credentials]
-      )
-      |> Repo.all()
-
-    # Build a map of provider_id => [active credentials]
-    credentials_by_provider =
-      providers
-      |> Map.new(fn p ->
-        active_creds =
-          p.credentials
-          |> Enum.filter(&(&1.status == "active"))
-          |> Enum.sort_by(&(&1.name || ""))
-
-        {p.id, active_creds}
-      end)
-
-    socket
-    |> assign(:providers, providers)
-    |> assign(:credentials_by_provider, credentials_by_provider)
-  end
+  # ── Target building ───────────────────────────────────────────────────
 
   defp build_target(provider_id, credential_id, model) do
     provider = Providers.get_provider(provider_id)
