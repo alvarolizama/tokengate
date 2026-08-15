@@ -106,10 +106,13 @@ defmodule TokengateWeb.BenchmarksLive do
 
   # ── Add / remove targets ──────────────────────────────────────────────
 
-  def handle_event("add_target", %{"target" => params}, socket) do
-    provider_id = params["provider_id"] || ""
-    credential_id = params["credential_id"] || ""
-    model = String.trim(params["model"] || "")
+  def handle_event("add_target", params, socket) do
+    # Params arrive flat from phx-value-* on the button, or nested under
+    # "target" from a form submit. Normalize to flat.
+    target = Map.get(params, "target", params)
+    provider_id = target["provider_id"] || ""
+    credential_id = target["credential_id"] || ""
+    model = String.trim(target["model"] || "")
 
     cond do
       provider_id == "" ->
