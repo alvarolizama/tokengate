@@ -3,12 +3,17 @@ defmodule TokengateWeb.BenchmarksLive do
   Provider benchmarks — compare LLM providers head-to-head on
   TTFT, TPS, latency and token count using the same prompt.
 
-  Admin-only (same guard as MonitorLive).
+  Targets are built from existing TokenGate providers + credentials
+  (no manual base_url / api_key entry). Admin-only.
   """
 
   use TokengateWeb, :live_view
 
+  import Ecto.Query, only: [from: 2]
+
   alias Tokengate.Benchmarks.{Runner, Target}
+  alias Tokengate.Providers
+  alias Tokengate.Repo
 
   @default_prompt "Escribe un poema corto sobre el vacío fértil del que nace todo."
 
@@ -23,27 +28,39 @@ defmodule TokengateWeb.BenchmarksLive do
       |> assign(:runs, 1)
       |> assign(:running, false)
       |> assign(:results, [])
-      |> assign(:new_target, empty_new_target())
+      |> assign(:new_model, "")
+      |> load_providers_with_credentials()
 
     {:ok, socket}
   end
 
   @impl true
   def handle_event("add_target", %{"target" => params}, socket) do
-    base_url = String.trim(params["base_url"] || "")
-    api_key = String.trim(params["api_key"] || "")
+    provider_id = params["provider_id"] || ""
+    credential_id = params["credential_id"] || ""
     model = String.trim(params["model"] || "")
 
     cond do
-      base_url == "" or api_key == "" or model == "" ->
-        {:noreply, put_flash(socket, :error, "Completa todos los campos.")}
+      provider_id == "" ->
+        {:noreply, put_flash(socket, :error, "Selecciona un proveedor.")}
+
+      credential_id == "" ->
+        {:noreply, put_flash(socket, :error, "Selecciona una credencial.")}
+
+      model == "" ->
+        {:noreply, put_flash(socket, :error, "Escribe el modelo a probar.")}
 
       true ->
-        target = Target.new(%{base_url: base_url, api_key: api_key, model: model})
+        case build_target(provider_id, credential_id, model) do
+          {:ok, target} ->
+            {:noreply,
+             socket
+             |> assign(:targets, socket.assigns.targets ++ [target])
+             |> assign(:new_model, "")}
 
-        {:noreply,
-         assign(socket, :targets, socket.assigns.targets ++ [target])
-         |> assign(:new_target, empty_new_target())}
+          {:error, reason} ->
+            {:noreply, put_flash(socket, :error, reason)}
+        end
     end
   end
 
@@ -59,6 +76,7 @@ defmodule TokengateWeb.BenchmarksLive do
   def handle_event("update_settings", %{"settings" => params}, socket) do
     max_tokens = parse_int(params["max_tokens"], 256, 1, 4096)
     runs = parse_int(params["runs"], 1, 1, 10)
+
     {:noreply, socket |> assign(:max_tokens, max_tokens) |> assign(:runs, runs)}
   end
 
@@ -80,7 +98,10 @@ defmodule TokengateWeb.BenchmarksLive do
         marked = Enum.map(targets, &Target.running/1)
 
         socket =
-          assign(socket, :targets, marked) |> assign(:running, true) |> assign(:results, [])
+          socket
+          |> assign(:targets, marked)
+          |> assign(:running, true)
+          |> assign(:results, [])
 
         send(self(), {:run_benchmarks, targets, prompt})
 
@@ -90,6 +111,7 @@ defmodule TokengateWeb.BenchmarksLive do
 
   def handle_event("clear_results", _params, socket) do
     targets = Enum.map(socket.assigns.targets, &%{&1 | result: nil, error: nil, running?: false})
+
     {:noreply, socket |> assign(:targets, targets) |> assign(:results, [])}
   end
 
@@ -99,7 +121,6 @@ defmodule TokengateWeb.BenchmarksLive do
 
     results = Runner.run(targets, prompt, opts)
 
-    # Map results back to targets by position (Runner preserves order)
     updated_targets =
       targets
       |> Enum.zip(results)
@@ -107,7 +128,6 @@ defmodule TokengateWeb.BenchmarksLive do
         %{original | result: result.result, error: result.error, running?: false}
       end)
 
-    # Sort results by TPS descending for the winner table
     sorted = sort_by_metric(updated_targets, :tps, :desc)
 
     socket =
@@ -119,9 +139,62 @@ defmodule TokengateWeb.BenchmarksLive do
     {:noreply, socket}
   end
 
-  # ── Helpers for template ──────────────────────────────────────────────
+  # ── Data loading ──────────────────────────────────────────────────────
 
-  def empty_new_target, do: %{"base_url" => "", "api_key" => "", "model" => ""}
+  defp load_providers_with_credentials(socket) do
+    providers =
+      from(p in Providers.Provider,
+        where: p.status == "active",
+        order_by: p.name,
+        preload: [:credentials]
+      )
+      |> Repo.all()
+
+    # Build a map of provider_id => [active credentials]
+    credentials_by_provider =
+      providers
+      |> Map.new(fn p ->
+        active_creds =
+          p.credentials
+          |> Enum.filter(&(&1.status == "active"))
+          |> Enum.sort_by(&(&1.name || ""))
+
+        {p.id, active_creds}
+      end)
+
+    socket
+    |> assign(:providers, providers)
+    |> assign(:credentials_by_provider, credentials_by_provider)
+  end
+
+  defp build_target(provider_id, credential_id, model) do
+    provider = Providers.get_provider(provider_id)
+    credential = Providers.get_credential(credential_id)
+
+    cond do
+      is_nil(provider) ->
+        {:error, "Proveedor no encontrado."}
+
+      is_nil(credential) ->
+        {:error, "Credencial no encontrada."}
+
+      credential.provider_id != provider.id ->
+        {:error, "La credencial no pertenece a este proveedor."}
+
+      true ->
+        target =
+          Target.new(%{
+            base_url: provider.base_url,
+            api_key: credential.api_key_encrypted,
+            model: model,
+            label: "#{provider.name} · #{model}"
+          })
+
+        {:ok, target}
+    end
+  end
+
+  # ── Helpers for template ──────────────────────────────────────────────
 
   def has_results?(targets), do: Enum.any?(targets, &Target.done?/1)
 

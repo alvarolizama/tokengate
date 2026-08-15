@@ -98,32 +98,34 @@
           <span class="badge badge-sm badge-ghost">{length(@targets)}</span>
         </div>
 
-        <%!-- Add target form --%>
+        <%!-- Add target form — selects from existing providers/credentials --%>
         <.form
           for={%{}}
           phx-submit="add_target"
           id="add-target-form"
           class="grid grid-cols-1 sm:grid-cols-4 gap-2"
         >
-          <input
-            type="text"
-            name="target[base_url]"
-            value={@new_target["base_url"]}
-            placeholder="https://api.openai.com/v1"
-            class="input input-bordered input-sm"
-          />
-          <input
-            type="password"
-            name="target[api_key]"
-            value={@new_target["api_key"]}
-            placeholder="sk-…"
-            class="input input-bordered input-sm"
-          />
+          <select name="target[provider_id]" class="select select-bordered select-sm">
+            <option value="">Proveedor…</option>
+            <%= for provider <- @providers do %>
+              <option value={provider.id}>{provider.name}</option>
+            <% end %>
+          </select>
+
+          <select name="target[credential_id]" class="select select-bordered select-sm">
+            <option value="">Credencial…</option>
+            <%= for provider <- @providers, credential <- @credentials_by_provider[provider.id] || [] do %>
+              <option value={credential.id}>
+                {provider.name} · {credential.name || "sin nombre"}
+              </option>
+            <% end %>
+          </select>
+
           <input
             type="text"
             name="target[model]"
-            value={@new_target["model"]}
-            placeholder="gpt-4o"
+            value={@new_model}
+            placeholder="modelo (ej: gpt-4o)"
             class="input input-bordered input-sm"
           />
           <button type="submit" class="btn btn-ghost btn-sm gap-2">
@@ -141,23 +143,23 @@
             <table class="table table-sm">
               <thead>
                 <tr class="text-[10px] uppercase tracking-wider text-base-content/40">
-                  <th>Base URL</th>
-                  <th>API Key</th>
+                  <th>Proveedor</th>
                   <th>Modelo</th>
+                  <th>API Key</th>
                   <th>Estado</th>
                   <th></th>
                 </tr>
               </thead>
               <tbody>
                 <tr :for={target <- @targets}>
-                  <td class="text-xs font-mono text-base-content/70 truncate max-w-[200px]">
-                    {target.base_url}
+                  <td class="text-xs font-medium text-base-content/80">
+                    {target.label}
+                  </td>
+                  <td class="text-xs font-mono text-base-content/70">
+                    {target.model}
                   </td>
                   <td class="text-xs font-mono text-base-content/50">
                     {mask_key(target.api_key)}
-                  </td>
-                  <td class="text-xs font-medium text-base-content/80">
-                    {target.model}
                   </td>
                   <td>
                     <%= cond do %>
@@ -231,7 +233,7 @@
               <div :for={t <- @results} :if={t.result} class="space-y-1">
                 <div class="flex items-center justify-between text-xs">
                   <span class={["font-medium", t.id == winner.id && "text-success font-bold"]}>
-                    {t.model}
+                    {t.label}
                   </span>
                   <span class="tabular-nums text-base-content/60">
                     {fmt_tps(t.result.tps)}
@@ -258,7 +260,7 @@
               <div :for={t <- @results} :if={t.result} class="space-y-1">
                 <div class="flex items-center justify-between text-xs">
                   <span class={["font-medium", t.id == best_ttft_t.id && "text-success font-bold"]}>
-                    {t.model}
+                    {t.label}
                   </span>
                   <span class="tabular-nums text-base-content/60">
                     {fmt_ms(t.result.ttft_ms)}
@@ -285,7 +287,7 @@
               <div :for={t <- @results} :if={t.result} class="space-y-1">
                 <div class="flex items-center justify-between text-xs">
                   <span class={["font-medium", t.id == best_lat_t.id && "text-success font-bold"]}>
-                    {t.model}
+                    {t.label}
                   </span>
                   <span class="tabular-nums text-base-content/60">
                     {fmt_ms(t.result.total_ms)}
@@ -312,7 +314,7 @@
               <div :for={t <- @results} :if={t.result} class="space-y-1">
                 <div class="flex items-center justify-between text-xs">
                   <span class="font-medium text-base-content/80">
-                    {t.model}
+                    {t.label}
                   </span>
                   <span class="tabular-nums text-base-content/60">
                     {fmt_tokens(t.result.tokens)}
@@ -338,6 +340,7 @@
             <table class="table table-sm">
               <thead>
                 <tr class="text-[10px] uppercase tracking-wider text-base-content/40">
+                  <th>Proveedor</th>
                   <th>Modelo</th>
                   <th class="text-right">TTFT</th>
                   <th class="text-right">TPS</th>
@@ -350,8 +353,9 @@
                 <tr :for={t <- @results}>
                   <td class="text-xs font-medium">
                     <span :if={t.id == winner.id} class="text-success">★ </span>
-                    {t.model}
+                    {t.label}
                   </td>
+                  <td class="text-xs font-mono text-base-content/60">{t.model}</td>
                   <%= if t.result do %>
                     <td class="text-right text-xs tabular-nums">{fmt_ms(t.result.ttft_ms)}</td>
                     <td class="text-right text-xs tabular-nums">{fmt_tps(t.result.tps)}</td>
