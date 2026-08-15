@@ -121,7 +121,7 @@
             <select
               name="target[credential_id]"
               class="select select-bordered select-sm"
-              disabled={not @selected_provider_id}
+              disabled={is_nil(@selected_provider_id)}
             >
               <option value="">Credencial…</option>
               <%= for cred <- @available_credentials do %>
@@ -137,7 +137,7 @@
             <select
               name="target[model]"
               class="select select-bordered select-sm"
-              disabled={not @selected_credential_id}
+              disabled={is_nil(@selected_credential_id)}
             >
               <%= if @loading_models do %>
                 <option value="">Cargando modelos…</option>
@@ -159,7 +159,8 @@
             phx-value-credential_id={@selected_credential_id}
             phx-value-model={@selected_model}
             disabled={
-              not @selected_provider_id or not @selected_credential_id or not @selected_model
+              is_nil(@selected_provider_id) or is_nil(@selected_credential_id) or
+                is_nil(@selected_model)
             }
             class="btn btn-ghost btn-sm gap-2"
           >
