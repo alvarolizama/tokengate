@@ -48,9 +48,9 @@ defmodule Tokengate.Benchmarks.Runner do
     )
     |> Enum.zip(targets)
     |> Enum.map(fn
-      {:ok, result}, _target -> result
-      {:exit, :timeout}, target -> Target.error(target, "Timeout")
-      {:exit, reason}, target -> Target.error(target, "Crashed: #{inspect(reason)}")
+      {{:ok, result}, _target} -> result
+      {{:exit, :timeout}, target} -> Target.error(target, "Timeout")
+      {{:exit, reason}, target} -> Target.error(target, "Crashed: #{inspect(reason)}")
     end)
   end
 
