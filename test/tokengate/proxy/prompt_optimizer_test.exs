@@ -201,6 +201,25 @@ defmodule Tokengate.Proxy.PromptOptimizerTest do
                [%{"role" => "user", "content" => content}]
     end
 
+    test "truncado en frontera multi-byte no produce UTF-8 inválido" do
+      # 39_999 bytes ASCII + un codepoint de 2 bytes ("é") + relleno: el byte
+      # 40_000 cae en medio de "é". Con binary_part/3 quedaría un lead byte
+      # colgante (0xC3) y Jason.encode! reventaría con "invalid byte".
+      content = String.duplicate("a", 39_999) <> "é" <> String.duplicate("a", 100)
+
+      assert byte_size(content) > 40_000
+
+      [%{"role" => "user", "content" => trimmed}] =
+        PromptOptimizer.lazy_cleanup([%{"role" => "user", "content" => content}])
+
+      assert String.valid?(trimmed)
+      # "é" sobrevive intacto en la frontera de corte.
+      assert String.starts_with?(trimmed, String.duplicate("a", 39_999) <> "é")
+      assert trimmed |> String.ends_with?("\n[... truncated]")
+      # Re-codificable a JSON sin error (regresión del bug en producción).
+      assert Jason.encode!([trimmed])
+    end
+
     test "colapsa 3+ newlines a exactamente 2" do
       messages = [
         %{"role" => "user", "content" => "a\n\n\nb\n\n\n\n\nc"}
