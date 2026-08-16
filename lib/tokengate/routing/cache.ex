@@ -8,6 +8,10 @@ defmodule Tokengate.Routing.Cache do
     * `{:model_providers, model_alias_id, team_id}` — the ordered list of
       `ModelProvider` structs (with credential + provider preloaded) visible to
       that scope. `team_id` may be `:global` for service/virtual members.
+    * `{:accessible_aliases, team_id, member_id}` — the list of `ModelAlias`
+      structs a team member may route to (team grants ∪ individual extra
+      grants ∪ service grants). `team_id`/`member_id` may be `:global` for
+      service/virtual members.
     * `{:disabled_credentials, MapSet.t()}` — credential ids that are NOT
       `status == "active"`. A request only reads this set; the write side
       (Oban job, admin UI) invalidates it.
@@ -55,6 +59,40 @@ defmodule Tokengate.Routing.Cache do
       [{^key, providers, _expires_at}] -> providers
       [] -> put_new(key, fun.())
     end
+  end
+
+  @doc """
+  Returns the cached accessible aliases for a team member, computing and
+  caching the result on a miss.
+
+  `team_id` may be `nil` for service/virtual members (the cache key uses
+  `:global`). `fun` is the DB query — it is only executed on a cache miss.
+  """
+  @spec fetch_accessible_aliases(term(), term() | nil, (-> [term()])) :: [term()]
+  def fetch_accessible_aliases(team_id, member_id, fun) when is_function(fun, 0) do
+    key = {:accessible_aliases, team_id || :global, member_id || :global}
+
+    case :ets.lookup(@table, key) do
+      [{^key, aliases, _expires_at}] -> aliases
+      [] -> put_new(key, fun.())
+    end
+  end
+
+  @doc """
+  Drops the cached accessible aliases for a team member — or a whole team.
+
+  `nil` acts as a wildcard on either side:
+
+    * `(team_id, member_id)` — clears the single exact key.
+    * `(team_id, nil)` — clears every cached entry for members of that team
+      (after a `TeamModelAlias` grant/revoke).
+    * `(nil, member_id)` — clears every entry for that member regardless of
+      team (after a `TeamMemberExtraAlias` / `ServiceModelAlias` change).
+  """
+  @spec invalidate_accessible_aliases(term() | nil, term() | nil) :: :ok
+  def invalidate_accessible_aliases(team_id, member_id) do
+    :ets.match_delete(@table, {{:accessible_aliases, team_id || :_, member_id || :_}, :_, :_})
+    :ok
   end
 
   @doc """

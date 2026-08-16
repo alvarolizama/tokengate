@@ -300,7 +300,13 @@ defmodule Tokengate.Logs.Inflight do
   defp ensure_table do
     case :ets.whereis(@table) do
       :undefined ->
-        :ets.new(@table, [:named_table, :public, :set, write_concurrency: true])
+        :ets.new(@table, [
+          :named_table,
+          :public,
+          :set,
+          write_concurrency: true,
+          read_concurrency: true
+        ])
 
       _tid ->
         @table

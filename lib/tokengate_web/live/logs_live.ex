@@ -10,8 +10,8 @@ defmodule TokengateWeb.LogsLive do
   @pubsub Tokengate.PubSub
   @logs_topic "logs:new"
   @summary_refresh_interval_ms 2_000
-  @summary_tick_interval_ms 5_000
   @inflight_refresh_interval_ms 3_000
+  @top_card_cache_ms 3_500
 
   @impl true
   def mount(_params, _session, socket) do
@@ -30,6 +30,8 @@ defmodule TokengateWeb.LogsLive do
       |> assign(:summary, empty_summary())
       |> assign(:top_models, [])
       |> assign(:top_users, [])
+      |> assign(:top_models_cache, nil)
+      |> assign(:top_users_cache, nil)
       |> assign(:summary_refresh_scheduled, false)
       |> assign(:last_seen_at, DateTime.utc_now() |> DateTime.truncate(:second))
       |> assign(:pending, [])
@@ -46,16 +48,15 @@ defmodule TokengateWeb.LogsLive do
 
       send(self(), :refresh_inflight)
 
-      # Rolling-window KPIs decay with time (req/min drops even when no new
-      # logs arrive), so refresh them on a fixed tick, not only on new logs.
-      :timer.send_interval(@summary_tick_interval_ms, :refresh_summary)
-
       pending = visible_pending(socket.assigns)
+
+      {socket, top_models} = top_models_cached(socket)
+      {socket, top_users} = top_users_cached(socket)
 
       socket =
         socket
-        |> assign(:top_models, top_models_card(socket.assigns))
-        |> assign(:top_users, top_users_card(socket.assigns))
+        |> assign(:top_models, top_models)
+        |> assign(:top_users, top_users)
         |> assign(:pending, pending)
 
       # Insert existing pending entries at the top of the logs stream
@@ -113,10 +114,13 @@ defmodule TokengateWeb.LogsLive do
   def handle_info(:refresh_inflight, socket) do
     Process.send_after(self(), :refresh_inflight, @inflight_refresh_interval_ms)
 
+    {socket, top_models} = top_models_cached(socket)
+    {socket, top_users} = top_users_cached(socket)
+
     {:noreply,
      socket
-     |> assign(:top_models, top_models_card(socket.assigns))
-     |> assign(:top_users, top_users_card(socket.assigns))}
+     |> assign(:top_models, top_models)
+     |> assign(:top_users, top_users)}
   end
 
   def handle_info({:inflight_started, entry}, socket) do
@@ -254,6 +258,35 @@ defmodule TokengateWeb.LogsLive do
 
   defp top_users_card(assigns) do
     Logs.top_users_last_minutes(1, 3, top_card_filters(assigns))
+  end
+
+  # Top-model / top-user cards are recomputed on every :refresh_inflight
+  # (3s cadence). Cache results in assigns with a TTL just above the cadence
+  # so the periodic tick and bursts hit the cache instead of Postgres.
+  defp top_models_cached(socket) do
+    now = System.monotonic_time(:millisecond)
+
+    case socket.assigns[:top_models_cache] do
+      {data, fetched_at} when now - fetched_at < @top_card_cache_ms ->
+        {socket, data}
+
+      _ ->
+        data = top_models_card(socket.assigns)
+        {assign(socket, :top_models_cache, {data, now}), data}
+    end
+  end
+
+  defp top_users_cached(socket) do
+    now = System.monotonic_time(:millisecond)
+
+    case socket.assigns[:top_users_cache] do
+      {data, fetched_at} when now - fetched_at < @top_card_cache_ms ->
+        {socket, data}
+
+      _ ->
+        data = top_users_card(socket.assigns)
+        {assign(socket, :top_users_cache, {data, now}), data}
+    end
   end
 
   # Converts an Inflight entry to the log shape so it renders inside the
@@ -552,6 +585,8 @@ defmodule TokengateWeb.LogsLive do
       |> assign(:filters, filter_params)
       |> assign(:form, to_form(filter_params, as: :filter))
       |> assign(:cursor, nil)
+      |> assign(:top_models_cache, nil)
+      |> assign(:top_users_cache, nil)
       |> assign(
         :pending,
         visible_pending(%{

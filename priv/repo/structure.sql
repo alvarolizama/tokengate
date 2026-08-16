@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict UreA7k9w56Nig8JdokEiUO2fgHaVBODCWt6VRWUAFGgPChcy76dwCqaHdNBh5zs
+\restrict dYQm7GT90LpDRJQScKFbEWa1Xa6CgBTIVWoVbzwyjc45epprIV1aedRvRFvLQq7
 
 -- Dumped from database version 18.3 (Homebrew)
 -- Dumped by pg_dump version 18.3 (Homebrew)
@@ -70,16 +70,35 @@ CREATE TABLE public.audit_logs (
 
 
 --
+-- Name: global_settings; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.global_settings (
+    id integer DEFAULT 1 NOT NULL,
+    daily_max_spend_usd numeric,
+    inserted_at timestamp(0) without time zone NOT NULL,
+    updated_at timestamp(0) without time zone NOT NULL
+);
+
+
+--
 -- Name: model_aliases; Type: TABLE; Schema: public; Owner: -
 --
 
 CREATE TABLE public.model_aliases (
     id uuid NOT NULL,
     name character varying(255) NOT NULL,
-    display_name character varying(255) NOT NULL,
     context_window integer NOT NULL,
     inserted_at timestamp(0) without time zone NOT NULL,
-    updated_at timestamp(0) without time zone NOT NULL
+    updated_at timestamp(0) without time zone NOT NULL,
+    guard_rails text,
+    prompt_cache_enabled boolean DEFAULT false NOT NULL,
+    lazy_cleanup_enabled boolean DEFAULT false NOT NULL,
+    model_type character varying(255) DEFAULT 'llm'::character varying NOT NULL,
+    daily_limit_per_user_usd numeric(12,6),
+    daily_limit_total_usd numeric(12,6),
+    pinned boolean DEFAULT false NOT NULL,
+    CONSTRAINT model_aliases_model_type_check CHECK (((model_type)::text = ANY ((ARRAY['llm'::character varying, 'embedding'::character varying, 'rerank'::character varying])::text[])))
 );
 
 
@@ -97,9 +116,12 @@ CREATE TABLE public.model_providers (
     updated_at timestamp(0) without time zone NOT NULL,
     credential_id uuid NOT NULL,
     billing_mode character varying(255) DEFAULT 'pay_per_token'::character varying NOT NULL,
-    context_window integer,
     exclusive_to_team_member_id uuid,
-    exclusive_to_team_id uuid
+    exclusive_to_team_id uuid,
+    sticky_ttl_ms integer,
+    input_cost_per_million numeric(12,6),
+    output_cost_per_million numeric(12,6),
+    cache_cost_per_million numeric(12,6)
 );
 
 
@@ -221,7 +243,11 @@ CREATE TABLE public.providers (
     billing_type character varying(255) DEFAULT 'pay_per_token'::character varying NOT NULL,
     inserted_at timestamp(0) without time zone NOT NULL,
     updated_at timestamp(0) without time zone NOT NULL,
-    status character varying(255) DEFAULT 'active'::character varying NOT NULL
+    status character varying(255) DEFAULT 'active'::character varying NOT NULL,
+    rerank_base_url character varying(255),
+    rerank_format character varying(255) DEFAULT 'cohere'::character varying,
+    embedding_base_url character varying(255),
+    embedding_format character varying(255) DEFAULT 'openai'::character varying
 );
 
 
@@ -251,7 +277,14 @@ CREATE TABLE public.request_logs (
     api_key_prefix character varying(255),
     credential_name character varying(255),
     provider_status_code integer,
-    error_reason character varying(255)
+    error_reason character varying(255),
+    client_agent character varying(255),
+    provider_key_prefix character varying(255),
+    cache_read_tokens integer DEFAULT 0 NOT NULL,
+    cache_creation_tokens integer DEFAULT 0 NOT NULL,
+    request_type character varying(255) DEFAULT 'chat'::character varying NOT NULL,
+    error_message character varying(255),
+    credential_id uuid
 )
 PARTITION BY RANGE (inserted_at);
 
@@ -282,7 +315,14 @@ CREATE TABLE public.request_logs_2026_07_26 (
     api_key_prefix character varying(255),
     credential_name character varying(255),
     provider_status_code integer,
-    error_reason character varying(255)
+    error_reason character varying(255),
+    client_agent character varying(255),
+    provider_key_prefix character varying(255),
+    cache_read_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_read_tokens_not_null NOT NULL,
+    cache_creation_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_creation_tokens_not_null NOT NULL,
+    request_type character varying(255) DEFAULT 'chat'::character varying CONSTRAINT request_logs_request_type_not_null NOT NULL,
+    error_message character varying(255),
+    credential_id uuid
 );
 
 
@@ -312,7 +352,14 @@ CREATE TABLE public.request_logs_default (
     api_key_prefix character varying(255),
     credential_name character varying(255),
     provider_status_code integer,
-    error_reason character varying(255)
+    error_reason character varying(255),
+    client_agent character varying(255),
+    provider_key_prefix character varying(255),
+    cache_read_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_read_tokens_not_null NOT NULL,
+    cache_creation_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_creation_tokens_not_null NOT NULL,
+    request_type character varying(255) DEFAULT 'chat'::character varying CONSTRAINT request_logs_request_type_not_null NOT NULL,
+    error_message character varying(255),
+    credential_id uuid
 );
 
 
@@ -349,6 +396,19 @@ CREATE TABLE public.service_model_aliases (
     id uuid NOT NULL,
     service_id uuid NOT NULL,
     model_alias_id uuid NOT NULL,
+    inserted_at timestamp(0) without time zone NOT NULL,
+    updated_at timestamp(0) without time zone NOT NULL
+);
+
+
+--
+-- Name: service_supervisors; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.service_supervisors (
+    id uuid NOT NULL,
+    service_id uuid NOT NULL,
+    user_id uuid NOT NULL,
     inserted_at timestamp(0) without time zone NOT NULL,
     updated_at timestamp(0) without time zone NOT NULL
 );
@@ -442,7 +502,8 @@ CREATE TABLE public.users (
     updated_at timestamp(0) without time zone NOT NULL,
     status character varying(255) DEFAULT 'active'::character varying NOT NULL,
     google_id character varying(255),
-    avatar_url character varying(255)
+    avatar_url character varying(255),
+    timezone character varying(255) DEFAULT 'Etc/UTC'::character varying NOT NULL
 );
 
 
@@ -481,6 +542,14 @@ ALTER TABLE ONLY public.api_keys
 
 ALTER TABLE ONLY public.audit_logs
     ADD CONSTRAINT audit_logs_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: global_settings global_settings_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.global_settings
+    ADD CONSTRAINT global_settings_pkey PRIMARY KEY (id);
 
 
 --
@@ -596,6 +665,14 @@ ALTER TABLE ONLY public.service_model_aliases
 
 
 --
+-- Name: service_supervisors service_supervisors_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.service_supervisors
+    ADD CONSTRAINT service_supervisors_pkey PRIMARY KEY (id);
+
+
+--
 -- Name: services services_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -686,10 +763,17 @@ CREATE UNIQUE INDEX model_aliases_name_index ON public.model_aliases USING btree
 
 
 --
--- Name: model_providers_credential_id_unique_index; Type: INDEX; Schema: public; Owner: -
+-- Name: model_providers_global_credential_unique_index; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX model_providers_credential_id_unique_index ON public.model_providers USING btree (credential_id);
+CREATE UNIQUE INDEX model_providers_global_credential_unique_index ON public.model_providers USING btree (credential_id, model_alias_id) WHERE ((exclusive_to_team_member_id IS NULL) AND (exclusive_to_team_id IS NULL));
+
+
+--
+-- Name: model_providers_member_exclusive_credential_unique_index; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX model_providers_member_exclusive_credential_unique_index ON public.model_providers USING btree (credential_id, model_alias_id, exclusive_to_team_member_id) WHERE (exclusive_to_team_member_id IS NOT NULL);
 
 
 --
@@ -697,6 +781,13 @@ CREATE UNIQUE INDEX model_providers_credential_id_unique_index ON public.model_p
 --
 
 CREATE INDEX model_providers_model_alias_id_index ON public.model_providers USING btree (model_alias_id);
+
+
+--
+-- Name: model_providers_team_exclusive_credential_unique_index; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX model_providers_team_exclusive_credential_unique_index ON public.model_providers USING btree (credential_id, model_alias_id, exclusive_to_team_id) WHERE (exclusive_to_team_id IS NOT NULL);
 
 
 --
@@ -749,6 +840,20 @@ CREATE INDEX provider_credentials_provider_id_index ON public.provider_credentia
 
 
 --
+-- Name: request_logs_credential_inserted_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_credential_inserted_idx ON ONLY public.request_logs USING btree (credential_id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_07_26_credential_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_07_26_credential_id_inserted_at_idx ON public.request_logs_2026_07_26 USING btree (credential_id, inserted_at);
+
+
+--
 -- Name: request_logs_inserted_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -760,6 +865,34 @@ CREATE INDEX request_logs_inserted_idx ON ONLY public.request_logs USING btree (
 --
 
 CREATE INDEX request_logs_2026_07_26_inserted_at_idx ON public.request_logs_2026_07_26 USING btree (inserted_at);
+
+
+--
+-- Name: request_logs_model_alias_inserted_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_model_alias_inserted_idx ON ONLY public.request_logs USING btree (model_alias_id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_07_26_model_alias_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_07_26_model_alias_id_inserted_at_idx ON public.request_logs_2026_07_26 USING btree (model_alias_id, inserted_at);
+
+
+--
+-- Name: request_logs_model_alias_inserted_desc_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_model_alias_inserted_desc_idx ON ONLY public.request_logs USING btree (model_alias_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_2026_07_26_model_alias_id_inserted_at_idx1; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_07_26_model_alias_id_inserted_at_idx1 ON public.request_logs_2026_07_26 USING btree (model_alias_id, inserted_at DESC);
 
 
 --
@@ -777,6 +910,20 @@ CREATE INDEX request_logs_2026_07_26_model_provider_id_idx ON public.request_log
 
 
 --
+-- Name: request_logs_provider_inserted_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_provider_inserted_idx ON ONLY public.request_logs USING btree (provider_id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_07_26_provider_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_07_26_provider_id_inserted_at_idx ON public.request_logs_2026_07_26 USING btree (provider_id, inserted_at);
+
+
+--
 -- Name: request_logs_team_member_inserted_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -791,6 +938,13 @@ CREATE INDEX request_logs_2026_07_26_team_member_id_inserted_at_idx ON public.re
 
 
 --
+-- Name: request_logs_default_credential_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_default_credential_id_inserted_at_idx ON public.request_logs_default USING btree (credential_id, inserted_at);
+
+
+--
 -- Name: request_logs_default_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -798,10 +952,31 @@ CREATE INDEX request_logs_default_inserted_at_idx ON public.request_logs_default
 
 
 --
+-- Name: request_logs_default_model_alias_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_default_model_alias_id_inserted_at_idx ON public.request_logs_default USING btree (model_alias_id, inserted_at);
+
+
+--
+-- Name: request_logs_default_model_alias_id_inserted_at_idx1; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_default_model_alias_id_inserted_at_idx1 ON public.request_logs_default USING btree (model_alias_id, inserted_at DESC);
+
+
+--
 -- Name: request_logs_default_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX request_logs_default_model_provider_id_idx ON public.request_logs_default USING btree (model_provider_id);
+
+
+--
+-- Name: request_logs_default_provider_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_default_provider_id_inserted_at_idx ON public.request_logs_default USING btree (provider_id, inserted_at);
 
 
 --
@@ -830,6 +1005,20 @@ CREATE UNIQUE INDEX service_api_keys_service_id_index ON public.service_api_keys
 --
 
 CREATE UNIQUE INDEX service_model_aliases_service_id_model_alias_id_index ON public.service_model_aliases USING btree (service_id, model_alias_id);
+
+
+--
+-- Name: service_supervisors_service_id_user_id_index; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX service_supervisors_service_id_user_id_index ON public.service_supervisors USING btree (service_id, user_id);
+
+
+--
+-- Name: service_supervisors_user_id_index; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX service_supervisors_user_id_index ON public.service_supervisors USING btree (user_id);
 
 
 --
@@ -875,10 +1064,31 @@ CREATE UNIQUE INDEX users_google_id_index ON public.users USING btree (google_id
 
 
 --
+-- Name: request_logs_2026_07_26_credential_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_credential_inserted_idx ATTACH PARTITION public.request_logs_2026_07_26_credential_id_inserted_at_idx;
+
+
+--
 -- Name: request_logs_2026_07_26_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
 ALTER INDEX public.request_logs_inserted_idx ATTACH PARTITION public.request_logs_2026_07_26_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_07_26_model_alias_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_model_alias_inserted_idx ATTACH PARTITION public.request_logs_2026_07_26_model_alias_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_07_26_model_alias_id_inserted_at_idx1; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_model_alias_inserted_desc_idx ATTACH PARTITION public.request_logs_2026_07_26_model_alias_id_inserted_at_idx1;
 
 
 --
@@ -896,6 +1106,13 @@ ALTER INDEX public.request_logs_pkey ATTACH PARTITION public.request_logs_2026_0
 
 
 --
+-- Name: request_logs_2026_07_26_provider_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_provider_inserted_idx ATTACH PARTITION public.request_logs_2026_07_26_provider_id_inserted_at_idx;
+
+
+--
 -- Name: request_logs_2026_07_26_team_member_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
@@ -903,10 +1120,31 @@ ALTER INDEX public.request_logs_team_member_inserted_idx ATTACH PARTITION public
 
 
 --
+-- Name: request_logs_default_credential_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_credential_inserted_idx ATTACH PARTITION public.request_logs_default_credential_id_inserted_at_idx;
+
+
+--
 -- Name: request_logs_default_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
 ALTER INDEX public.request_logs_inserted_idx ATTACH PARTITION public.request_logs_default_inserted_at_idx;
+
+
+--
+-- Name: request_logs_default_model_alias_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_model_alias_inserted_idx ATTACH PARTITION public.request_logs_default_model_alias_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_default_model_alias_id_inserted_at_idx1; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_model_alias_inserted_desc_idx ATTACH PARTITION public.request_logs_default_model_alias_id_inserted_at_idx1;
 
 
 --
@@ -921,6 +1159,13 @@ ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.
 --
 
 ALTER INDEX public.request_logs_pkey ATTACH PARTITION public.request_logs_default_pkey;
+
+
+--
+-- Name: request_logs_default_provider_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_provider_inserted_idx ATTACH PARTITION public.request_logs_default_provider_id_inserted_at_idx;
 
 
 --
@@ -1043,6 +1288,22 @@ ALTER TABLE ONLY public.service_model_aliases
 
 
 --
+-- Name: service_supervisors service_supervisors_service_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.service_supervisors
+    ADD CONSTRAINT service_supervisors_service_id_fkey FOREIGN KEY (service_id) REFERENCES public.services(id) ON DELETE CASCADE;
+
+
+--
+-- Name: service_supervisors service_supervisors_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.service_supervisors
+    ADD CONSTRAINT service_supervisors_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
 -- Name: team_member_extra_aliases team_member_extra_aliases_model_alias_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -1094,7 +1355,7 @@ ALTER TABLE ONLY public.team_model_aliases
 -- PostgreSQL database dump complete
 --
 
-\unrestrict UreA7k9w56Nig8JdokEiUO2fgHaVBODCWt6VRWUAFGgPChcy76dwCqaHdNBh5zs
+\unrestrict dYQm7GT90LpDRJQScKFbEWa1Xa6CgBTIVWoVbzwyjc45epprIV1aedRvRFvLQq7
 
 INSERT INTO public."schema_migrations" (version) VALUES (20260725210000);
 INSERT INTO public."schema_migrations" (version) VALUES (20260725220000);
@@ -1147,3 +1408,31 @@ INSERT INTO public."schema_migrations" (version) VALUES (20260729232802);
 INSERT INTO public."schema_migrations" (version) VALUES (20260730212621);
 INSERT INTO public."schema_migrations" (version) VALUES (20260731000001);
 INSERT INTO public."schema_migrations" (version) VALUES (20260731044440);
+INSERT INTO public."schema_migrations" (version) VALUES (20260731072524);
+INSERT INTO public."schema_migrations" (version) VALUES (20260731080000);
+INSERT INTO public."schema_migrations" (version) VALUES (20260731215806);
+INSERT INTO public."schema_migrations" (version) VALUES (20260801011415);
+INSERT INTO public."schema_migrations" (version) VALUES (20260801014104);
+INSERT INTO public."schema_migrations" (version) VALUES (20260801184912);
+INSERT INTO public."schema_migrations" (version) VALUES (20260801192304);
+INSERT INTO public."schema_migrations" (version) VALUES (20260802003203);
+INSERT INTO public."schema_migrations" (version) VALUES (20260802044536);
+INSERT INTO public."schema_migrations" (version) VALUES (20260802185404);
+INSERT INTO public."schema_migrations" (version) VALUES (20260802185818);
+INSERT INTO public."schema_migrations" (version) VALUES (20260805025828);
+INSERT INTO public."schema_migrations" (version) VALUES (20260805025829);
+INSERT INTO public."schema_migrations" (version) VALUES (20260805191213);
+INSERT INTO public."schema_migrations" (version) VALUES (20260808055508);
+INSERT INTO public."schema_migrations" (version) VALUES (20260808062225);
+INSERT INTO public."schema_migrations" (version) VALUES (20260811024436);
+INSERT INTO public."schema_migrations" (version) VALUES (20260811081628);
+INSERT INTO public."schema_migrations" (version) VALUES (20260811120000);
+INSERT INTO public."schema_migrations" (version) VALUES (20260811120001);
+INSERT INTO public."schema_migrations" (version) VALUES (20260812130000);
+INSERT INTO public."schema_migrations" (version) VALUES (20260812140000);
+INSERT INTO public."schema_migrations" (version) VALUES (20260813034138);
+INSERT INTO public."schema_migrations" (version) VALUES (20260813192309);
+INSERT INTO public."schema_migrations" (version) VALUES (20260813193646);
+INSERT INTO public."schema_migrations" (version) VALUES (20260814000000);
+INSERT INTO public."schema_migrations" (version) VALUES (20260814013243);
+INSERT INTO public."schema_migrations" (version) VALUES (20260816000000);

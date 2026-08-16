@@ -49,6 +49,8 @@ defmodule Tokengate.Budgets.Manager do
 
   use GenServer
 
+  require Logger
+
   @table :tokengate_budgets
   @micro 1_000_000
   @global_key {:global, :daily}
@@ -298,6 +300,11 @@ defmodule Tokengate.Budgets.Manager do
   @spec seed(member_id :: term(), period :: :daily | :monthly, micro :: integer()) :: :ok
   def seed(member_id, period, micro) do
     GenServer.call(__MODULE__, {:seed, member_id, period, micro})
+    # Clear the single-flight loading marker now that the real entry is in
+    # place (see `seed_from_db_single_flight/3`). Idempotent — the marker may
+    # already have been removed by the caller's `after` block.
+    :ets.delete(@table, {:loading, {member_id, period}})
+    :ok
   end
 
   @doc """
@@ -434,11 +441,11 @@ defmodule Tokengate.Budgets.Manager do
 
     case :ets.lookup(@table, key) do
       [] ->
-        seed_from_db(member_id, period)
+        seed_from_db_single_flight(member_id, period, key)
 
       [{^key, _micro, _loaded?, stored_period}] ->
         if stale?(period, stored_period, current) do
-          seed_from_db(member_id, period)
+          seed_from_db_single_flight(member_id, period, key)
         else
           :ok
         end
@@ -485,6 +492,46 @@ defmodule Tokengate.Budgets.Manager do
     seed(member_id, period, micro)
   end
 
+  # Single-flight wrapper around `seed_from_db/2`: concurrent callers for the
+  # same key (thundering herd on a brand-new member or day rollover) park on
+  # the ETS `{:loading, key}` marker instead of all hitting the DB at once.
+  # The marker is removed in the `after` block (crash-safe) and again in
+  # `seed/3` after the real entry is inserted (idempotent no-op).
+  defp seed_from_db_single_flight(member_id, period, key) do
+    loading_key = {:loading, key}
+
+    case :ets.insert_new(@table, {loading_key, true}) do
+      true ->
+        try do
+          seed_from_db(member_id, period)
+        after
+          :ets.delete(@table, loading_key)
+        end
+
+      false ->
+        # Someone else is loading this key — wait briefly for them to finish,
+        # then proceed either way. If the loader crashed, the `after` block
+        # removes the marker so the next caller retries the seed.
+        wait_for_load(key, 0)
+    end
+  end
+
+  # Polls for the real entry to appear. Gives up after 10 × 5ms = 50ms and
+  # proceeds anyway — `bump_counter` / `read_counter` tolerate a missing
+  # entry, so worst case we seed from 0 for this request.
+  defp wait_for_load(_key, attempts) when attempts >= 10, do: :ok
+
+  defp wait_for_load(key, attempts) do
+    case :ets.lookup(@table, key) do
+      [] ->
+        Process.sleep(5)
+        wait_for_load(key, attempts + 1)
+
+      [_] ->
+        :ok
+    end
+  end
+
   defp period_start(:daily) do
     today = Date.utc_today()
     DateTime.new!(today, ~T[00:00:00], "Etc/UTC")
@@ -511,7 +558,18 @@ defmodule Tokengate.Budgets.Manager do
     # between ensure_loaded and here.
     period = elem(key, 1)
     default = {key, 0, false, current_period_stamp(period)}
-    :ets.update_counter(@table, key, {2, inc}, default)
+
+    case :ets.lookup(@table, key) do
+      [] ->
+        Logger.warning(
+          "Budget entry evicted before bump_counter for #{inspect(key)} — reseeding from 0"
+        )
+
+        :ets.update_counter(@table, key, {2, inc}, default)
+
+      [_] ->
+        :ets.update_counter(@table, key, {2, inc}, default)
+    end
   end
 
   # ---------------------------------------------------------------------------

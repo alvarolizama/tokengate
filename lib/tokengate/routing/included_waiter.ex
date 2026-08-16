@@ -63,7 +63,13 @@ defmodule Tokengate.Routing.IncludedWaiter do
 
   defp ensure_table do
     if :ets.whereis(@table) == :undefined do
-      :ets.new(@table, [:ordered_set, :public, :named_table, write_concurrency: true])
+      :ets.new(@table, [
+        :ordered_set,
+        :public,
+        :named_table,
+        write_concurrency: true,
+        read_concurrency: true
+      ])
     end
   end
 

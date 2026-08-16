@@ -265,7 +265,13 @@ defmodule Tokengate.Metrics.Window do
   defp ensure_table do
     case :ets.whereis(@table) do
       :undefined ->
-        :ets.new(@table, [:named_table, :public, :set, write_concurrency: true])
+        :ets.new(@table, [
+          :named_table,
+          :public,
+          :set,
+          read_concurrency: true,
+          write_concurrency: true
+        ])
 
       _tid ->
         @table
@@ -275,7 +281,13 @@ defmodule Tokengate.Metrics.Window do
   defp ensure_credential_table do
     case :ets.whereis(@credential_table) do
       :undefined ->
-        :ets.new(@credential_table, [:named_table, :public, :set, write_concurrency: true])
+        :ets.new(@credential_table, [
+          :named_table,
+          :public,
+          :set,
+          read_concurrency: true,
+          write_concurrency: true
+        ])
 
       _tid ->
         @credential_table

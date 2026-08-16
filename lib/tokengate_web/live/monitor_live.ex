@@ -28,7 +28,7 @@ defmodule TokengateWeb.MonitorLive do
 
   alias Tokengate.Logs.Inflight
   alias Tokengate.Logs.RequestLog
-  alias Tokengate.Metrics.{Collector, Rollup, Window}
+  alias Tokengate.Metrics.{Collector, DashboardCache, Rollup, Window}
   alias Tokengate.Periods
   alias Tokengate.Providers
   alias Tokengate.Routing.CircuitBreakerManager
@@ -60,6 +60,8 @@ defmodule TokengateWeb.MonitorLive do
       |> assign(:cred_error_counts, [])
       |> assign(:budget_exhausted, [])
       |> assign(:budget_activity, %{})
+      |> assign(:refresh_pending, false)
+      |> assign(:model_aliases, model_aliases_map())
 
     socket = load_alert_data(socket)
 
@@ -68,28 +70,25 @@ defmodule TokengateWeb.MonitorLive do
 
   @impl true
   def handle_info(:refresh, socket) do
+    socket = assign(socket, :refresh_pending, false)
     Process.send_after(self(), :refresh, @refresh_ms)
     {:noreply, refresh_data(socket)}
   end
 
   def handle_info({:metrics_updated, _lite}, socket) do
-    Process.send_after(self(), :refresh, 200)
-    {:noreply, socket}
+    {:noreply, schedule_refresh(socket)}
   end
 
   def handle_info({:inflight_started, _entry}, socket) do
-    Process.send_after(self(), :refresh, 200)
-    {:noreply, socket}
+    {:noreply, schedule_refresh(socket)}
   end
 
   def handle_info({:inflight_done, _id}, socket) do
-    Process.send_after(self(), :refresh, 200)
-    {:noreply, socket}
+    {:noreply, schedule_refresh(socket)}
   end
 
   def handle_info(:window_rotated, socket) do
-    Process.send_after(self(), :refresh, 200)
-    {:noreply, socket}
+    {:noreply, schedule_refresh(socket)}
   end
 
   # ── Alert handlers ────────────────────────────────────────────────────────
@@ -103,6 +102,17 @@ defmodule TokengateWeb.MonitorLive do
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
+
+  # Coalesce PubSub-triggered refreshes: bursts of :metrics_updated /
+  # inflight messages within a few hundred ms only schedule one :refresh.
+  defp schedule_refresh(socket) do
+    if socket.assigns[:refresh_pending] do
+      socket
+    else
+      Process.send_after(self(), :refresh, 200)
+      assign(socket, :refresh_pending, true)
+    end
+  end
 
   # ── Alert data loading ────────────────────────────────────────────────────
 
@@ -200,10 +210,16 @@ defmodule TokengateWeb.MonitorLive do
         {member_id, top.provider_id}
       end)
 
+    top_provider_ids = top_providers |> Map.values() |> Enum.uniq()
+
     provider_names =
-      from(p in Providers.Provider, select: p)
-      |> Repo.all()
-      |> Map.new(fn p -> {p.id, p.name} end)
+      if top_provider_ids == [] do
+        %{}
+      else
+        from(p in Providers.Provider, where: p.id in ^top_provider_ids, select: {p.id, p.name})
+        |> Repo.all()
+        |> Map.new()
+      end
 
     activity_data
     |> Map.new(fn {member_id, activity} ->
@@ -336,8 +352,15 @@ defmodule TokengateWeb.MonitorLive do
 
     hour_from = one_hour_ago()
 
-    today_stats = day_stats_query(today_from)
-    yesterday_stats = day_stats_query(yesterday_from)
+    today_stats =
+      DashboardCache.fetch_or_compute({:monitor_day_stats, today_from}, fn ->
+        day_stats_query(today_from)
+      end)
+
+    yesterday_stats =
+      DashboardCache.fetch_or_compute({:monitor_day_stats, yesterday_from}, fn ->
+        day_stats_query(yesterday_from)
+      end)
 
     today_cost = Decimal.new(to_string(today_stats.cost_usd))
     today_requests = today_stats.requests
@@ -348,18 +371,24 @@ defmodule TokengateWeb.MonitorLive do
     yesterday_errors = yesterday_stats.errors
 
     # Per-model cost for last hour + last day
-    model_hour_cost = per_model_cost(hour_from)
-    model_day_cost = per_model_cost(today_from)
+    model_hour_cost =
+      DashboardCache.fetch_or_compute({:monitor_model_cost, hour_from}, fn ->
+        per_model_cost(hour_from)
+      end)
+
+    model_day_cost =
+      DashboardCache.fetch_or_compute({:monitor_model_cost, today_from}, fn ->
+        per_model_cost(today_from)
+      end)
 
     # Per-model average latency (last hour)
-    model_avg_latency = per_model_avg_latency(hour_from)
+    model_avg_latency =
+      DashboardCache.fetch_or_compute({:monitor_model_avg_latency, hour_from}, fn ->
+        per_model_avg_latency(hour_from)
+      end)
 
-    # Resolve model alias ids → names
-    aliases = Providers.list_model_aliases()
-
-    alias_names =
-      aliases
-      |> Map.new(&{&1.id, &1.name})
+    # Resolve model alias ids → names (loaded once at mount, not per refresh)
+    alias_names = socket.assigns[:model_aliases]
 
     inflight_by_model =
       inflight_entries
@@ -452,6 +481,11 @@ defmodule TokengateWeb.MonitorLive do
   end
 
   # ── Helpers ──────────────────────────────────────────────────────────────
+
+  defp model_aliases_map do
+    Providers.list_model_aliases()
+    |> Map.new(&{&1.id, &1.name})
+  end
 
   defp one_hour_ago do
     DateTime.utc_now()

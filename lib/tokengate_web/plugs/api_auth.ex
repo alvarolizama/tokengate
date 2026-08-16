@@ -87,7 +87,7 @@ defmodule TokengateWeb.Plugs.ApiAuth do
 
   defp agent_type(conn) do
     case get_req_header(conn, "x-agent-type") do
-      [type | _] when byte_size(type) > 0 -> type
+      [type | _] when byte_size(type) > 0 -> String.slice(type, 0, 255)
       _ -> "unknown"
     end
   end

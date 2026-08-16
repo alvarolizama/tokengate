@@ -386,8 +386,13 @@ defmodule Tokengate.Routing.Router do
   end
 
   defp maybe_preload_team(team_member) do
-    # Always force-preload the team association to guarantee it's populated.
-    Tokengate.Repo.preload(team_member, [:team], force: true)
+    cond do
+      team_member.team != nil and Ecto.assoc_loaded?(team_member.team) ->
+        team_member
+
+      true ->
+        Tokengate.Repo.preload(team_member, [:team], force: true)
+    end
   end
 
   defp exclude_ids(request_context, opts) do

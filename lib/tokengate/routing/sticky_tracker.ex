@@ -66,7 +66,7 @@ defmodule Tokengate.Routing.StickyTracker do
     else
       [{_, {model_provider_id, inserted_at, ttl_ms}}] ->
         if expired?(inserted_at, ttl_ms) do
-          GenServer.cast(__MODULE__, {:delete, {api_key_hash, model_alias_id}})
+          delete_entry({api_key_hash, model_alias_id})
           nil
         else
           model_provider_id
@@ -77,7 +77,7 @@ defmodule Tokengate.Routing.StickyTracker do
       # unchanged across deploys.
       [{_, {model_provider_id, inserted_at}}] ->
         if expired?(inserted_at, @default_ttl_ms) do
-          GenServer.cast(__MODULE__, {:delete, {api_key_hash, model_alias_id}})
+          delete_entry({api_key_hash, model_alias_id})
           nil
         else
           model_provider_id
@@ -289,6 +289,18 @@ defmodule Tokengate.Routing.StickyTracker do
   # the natural TTL elapses (or the next write overwrites them).
   defp normalize_value({id, at, ttl}), do: {id, at, ttl}
   defp normalize_value({id, at}), do: {id, at, @default_ttl_ms}
+
+  # Deletes an expired entry directly from the public ETS table instead of
+  # casting to the GenServer — under heavy traffic the per-request cast storm
+  # is thousands of messages. The table may be gone during hot-reload;
+  # `:ets.delete/2` then raises ArgumentError, which is a best-effort no-op.
+  defp delete_entry(key) do
+    try do
+      :ets.delete(@table, key)
+    rescue
+      ArgumentError -> :ok
+    end
+  end
 
   defp expired?(inserted_at, ttl_ms),
     do: expired?(inserted_at, ttl_ms, System.monotonic_time(:millisecond))

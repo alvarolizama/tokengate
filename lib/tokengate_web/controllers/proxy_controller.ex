@@ -581,7 +581,26 @@ defmodule TokengateWeb.ProxyController do
     })
   end
 
+  @max_route_retries 20
+
   defp route_and_acquire(member, payload, api_key_hash, limits, exclude \\ [], route_opts \\ []) do
+    route_and_acquire(member, payload, api_key_hash, limits, exclude, route_opts, 0)
+  end
+
+  defp route_and_acquire(
+         _member,
+         _payload,
+         _api_key_hash,
+         _limits,
+         _exclude,
+         _route_opts,
+         attempt
+       )
+       when attempt >= @max_route_retries do
+    {:error, :provider_concurrency_exceeded}
+  end
+
+  defp route_and_acquire(member, payload, api_key_hash, limits, exclude, route_opts, attempt) do
     key_id = member.api_key.id
     model_requested = payload["model"]
 
@@ -607,21 +626,53 @@ defmodule TokengateWeb.ProxyController do
                 {:ok, route}
 
               {:error, :queue_timeout} ->
-                route_and_acquire(member, payload, api_key_hash, limits, [
-                  route.credential.id | exclude
-                ])
+                route_and_acquire(
+                  member,
+                  payload,
+                  api_key_hash,
+                  limits,
+                  [
+                    route.credential.id | exclude
+                  ],
+                  route_opts,
+                  attempt + 1
+                )
             end
           else
-            route_and_acquire(member, payload, api_key_hash, limits, [
-              route.credential.id | exclude
-            ])
+            route_and_acquire(
+              member,
+              payload,
+              api_key_hash,
+              limits,
+              [
+                route.credential.id | exclude
+              ],
+              route_opts,
+              attempt + 1
+            )
           end
 
         {:error, :provider_user_concurrency_exceeded} ->
-          route_and_acquire(member, payload, api_key_hash, limits, [route.credential.id | exclude])
+          route_and_acquire(
+            member,
+            payload,
+            api_key_hash,
+            limits,
+            [route.credential.id | exclude],
+            route_opts,
+            attempt + 1
+          )
 
         {:error, {:provider_rate_limited, _retry_ms}} ->
-          route_and_acquire(member, payload, api_key_hash, limits, [route.credential.id | exclude])
+          route_and_acquire(
+            member,
+            payload,
+            api_key_hash,
+            limits,
+            [route.credential.id | exclude],
+            route_opts,
+            attempt + 1
+          )
       end
     else
       {:error, :no_available_provider} when exclude != [] ->
@@ -1190,7 +1241,8 @@ defmodule TokengateWeb.ProxyController do
   # forwarded untouched after a cheap binary scan — decoding every SSE
   # payload just to detect usage used to burn CPU per emitted token.
   defp maybe_capture_usage(chunk, route, acc) do
-    if :binary.match(chunk, "\"usage\"") == :nomatch do
+    if :binary.match(chunk, "\"usage\"") == :nomatch or
+         not String.starts_with?(String.trim(chunk), "{") do
       {chunk, acc}
     else
       decode_usage_chunk(chunk, route, acc)
@@ -1202,7 +1254,11 @@ defmodule TokengateWeb.ProxyController do
       {:ok, decoded} ->
         case UsageNormalizer.from_openai_stream_chunk(decoded) do
           nil ->
-            {chunk, %{acc | completion: [extract_delta_text(decoded) | acc.completion]}}
+            if acc.usage == nil do
+              {chunk, %{acc | completion: [extract_delta_text(decoded) | acc.completion]}}
+            else
+              {chunk, acc}
+            end
 
           usage ->
             cost = stream_cost(route, usage, decoded, acc.resp_headers)

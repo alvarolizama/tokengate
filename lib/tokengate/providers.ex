@@ -224,6 +224,14 @@ defmodule Tokengate.Providers do
     model_alias
     |> ModelAlias.changeset(attrs)
     |> Repo.update()
+    |> case do
+      {:ok, _ma} = ok ->
+        Tokengate.Routing.Cache.invalidate_all()
+        ok
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
   end
 
   def delete_model_alias(%ModelAlias{} = model_alias) do
@@ -234,6 +242,14 @@ defmodule Tokengate.Providers do
       message: "el modelo tiene logs de uso y no se puede eliminar"
     )
     |> Repo.delete()
+    |> case do
+      {:ok, _ma} = ok ->
+        Tokengate.Routing.Cache.invalidate_all()
+        ok
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
   end
 
   def change_model_alias(%ModelAlias{} = model_alias, attrs \\ %{}),
@@ -526,7 +542,14 @@ defmodule Tokengate.Providers do
       model_alias_id: model_alias_id
     })
     |> Repo.insert()
-    |> normalize_unique_error()
+    |> case do
+      {:ok, _tmea} = ok ->
+        Tokengate.Routing.Cache.invalidate_accessible_aliases(nil, team_member_id)
+        ok
+
+      other ->
+        normalize_unique_error(other)
+    end
   end
 
   @doc """
@@ -537,8 +560,18 @@ defmodule Tokengate.Providers do
            team_member_id: team_member_id,
            model_alias_id: model_alias_id
          ) do
-      nil -> {:error, :not_found}
-      record -> Repo.delete(record)
+      nil ->
+        {:error, :not_found}
+
+      record ->
+        case Repo.delete(record) do
+          {:ok, _tmea} = ok ->
+            Tokengate.Routing.Cache.invalidate_accessible_aliases(nil, team_member_id)
+            ok
+
+          {:error, changeset} ->
+            {:error, changeset}
+        end
     end
   end
 
@@ -553,6 +586,14 @@ defmodule Tokengate.Providers do
     %TeamModelAlias{}
     |> TeamModelAlias.changeset(%{team_id: team_id, model_alias_id: model_alias_id})
     |> Repo.insert()
+    |> case do
+      {:ok, _tma} = ok ->
+        Tokengate.Routing.Cache.invalidate_accessible_aliases(team_id, nil)
+        ok
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
   end
 
   def revoke_alias_from_team(team_id, model_alias_id) do
@@ -560,8 +601,18 @@ defmodule Tokengate.Providers do
            team_id: team_id,
            model_alias_id: model_alias_id
          ) do
-      nil -> {:ok, nil}
-      tma -> Repo.delete(tma)
+      nil ->
+        {:ok, nil}
+
+      tma ->
+        case Repo.delete(tma) do
+          {:ok, _} = ok ->
+            Tokengate.Routing.Cache.invalidate_accessible_aliases(team_id, nil)
+            ok
+
+          {:error, changeset} ->
+            {:error, changeset}
+        end
     end
   end
 
@@ -573,6 +624,14 @@ defmodule Tokengate.Providers do
     %ServiceModelAlias{}
     |> ServiceModelAlias.changeset(%{service_id: service_id, model_alias_id: model_alias_id})
     |> Repo.insert()
+    |> case do
+      {:ok, _sma} = ok ->
+        Tokengate.Routing.Cache.invalidate_accessible_aliases(nil, service_id)
+        ok
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
   end
 
   def revoke_alias_from_service(service_id, model_alias_id) do
@@ -580,8 +639,18 @@ defmodule Tokengate.Providers do
            service_id: service_id,
            model_alias_id: model_alias_id
          ) do
-      nil -> {:ok, nil}
-      sma -> Repo.delete(sma)
+      nil ->
+        {:ok, nil}
+
+      sma ->
+        case Repo.delete(sma) do
+          {:ok, _} = ok ->
+            Tokengate.Routing.Cache.invalidate_accessible_aliases(nil, service_id)
+            ok
+
+          {:error, changeset} ->
+            {:error, changeset}
+        end
     end
   end
 
@@ -692,8 +761,6 @@ defmodule Tokengate.Providers do
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
-
-  defp normalize_unique_error({:ok, _} = ok), do: ok
 
   defp normalize_unique_error({:error, %{errors: [unique: _]}}),
     do: {:error, :already_granted}
