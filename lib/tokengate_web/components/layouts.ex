@@ -227,6 +227,21 @@ defmodule TokengateWeb.Layouts do
                 label="Benchmarks"
                 icon="hero-chart-bar"
               />
+              <.sidebar_link
+                href={~p"/dashboard/monitor"}
+                label="Monitor"
+                icon="hero-signal"
+              />
+              <.sidebar_link
+                href={~p"/dashboard/calculator"}
+                label="Calculadora"
+                icon="hero-calculator"
+              />
+              <.sidebar_link
+                href={~p"/dashboard/logs"}
+                label="Logs"
+                icon="hero-document-text"
+              />
             <% end %>
           </div>
 
@@ -256,36 +271,9 @@ defmodule TokengateWeb.Layouts do
 
             <div class="space-y-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
-                Acceso
-              </p>
-              <.sidebar_link href={~p"/dashboard/users"} label="Usuarios" icon="hero-users" />
-            </div>
-
-            <div class="space-y-1">
-              <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
-                Monitoreo
-              </p>
-              <.sidebar_link
-                href={~p"/dashboard/monitor"}
-                label="Monitor"
-                icon="hero-signal"
-              />
-              <.sidebar_link
-                href={~p"/dashboard/calculator"}
-                label="Calculadora"
-                icon="hero-calculator"
-              />
-              <.sidebar_link
-                href={~p"/dashboard/logs"}
-                label="Logs"
-                icon="hero-document-text"
-              />
-            </div>
-
-            <div class="space-y-1">
-              <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
                 Sistema
               </p>
+              <.sidebar_link href={~p"/dashboard/users"} label="Usuarios" icon="hero-users" />
               <.sidebar_link
                 href={~p"/dashboard/settings"}
                 label="Configuración"
