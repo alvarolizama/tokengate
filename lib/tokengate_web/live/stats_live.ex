@@ -18,7 +18,8 @@ defmodule TokengateWeb.StatsLive do
   """
   use TokengateWeb, :live_view
 
-  import TokengateWeb.KpiHelpers, only: [kpi_cards: 1]
+  import TokengateWeb.KpiHelpers,
+    only: [kpi_cards: 1, format_cache_value: 2, format_hit_rate: 1, cache_hit_rate: 2]
 
   alias Tokengate.Accounts
   alias Tokengate.Logs
@@ -224,6 +225,8 @@ defmodule TokengateWeb.StatsLive do
       cost_usd: summary.total_cost_usd,
       prompt_tokens: summary.total_prompt_tokens,
       completion_tokens: summary.total_completion_tokens,
+      cache_read_tokens: Map.get(summary, :total_cache_read_tokens, 0),
+      cache_creation_tokens: Map.get(summary, :total_cache_creation_tokens, 0),
       avg_tps: Map.get(summary, :avg_tps)
     }
   end
@@ -507,6 +510,8 @@ defmodule TokengateWeb.StatsLive do
       cost_usd: Decimal.new(0),
       prompt_tokens: 0,
       completion_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0,
       avg_tps: nil,
       deltas: %{
         requests_total: nil,
@@ -606,7 +611,8 @@ defmodule TokengateWeb.StatsLive do
       request_count: Enum.reduce(rows, 0, &(&1.request_count + &2)),
       cost_usd: Enum.reduce(rows, Decimal.new(0), fn r, acc -> Decimal.add(acc, r.cost_usd) end),
       prompt_tokens: Enum.reduce(rows, 0, &(&1.prompt_tokens + &2)),
-      completion_tokens: Enum.reduce(rows, 0, &(&1.completion_tokens + &2))
+      completion_tokens: Enum.reduce(rows, 0, &(&1.completion_tokens + &2)),
+      cache_read_tokens: Enum.reduce(rows, 0, &(Map.get(&1, :cache_read_tokens, 0) + &2))
     }
   end
 

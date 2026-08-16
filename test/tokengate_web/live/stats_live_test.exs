@@ -87,8 +87,10 @@ defmodule TokengateWeb.StatsLiveTest do
           model_responded: "model-#{u}",
           agent_type: "api",
           status_code: 200,
-          prompt_tokens: 100,
-          completion_tokens: 50,
+          prompt_tokens: Map.get(opts, :prompt_tokens, 100),
+          completion_tokens: Map.get(opts, :completion_tokens, 50),
+          cache_read_tokens: Map.get(opts, :cache_read_tokens, 0),
+          cache_creation_tokens: Map.get(opts, :cache_creation_tokens, 0),
           provider_cost_usd: cost,
           latency_ms: 42,
           streaming: false,
@@ -140,6 +142,26 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#kpi-tokens")
     assert has_element?(view, "#kpi-tps")
     assert has_element?(view, "#model-ranking")
+  end
+
+  test "tokens KPI shows cache (read + creation) with hit rate", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    team_with_log(%{
+      cost: "0.005",
+      prompt_tokens: 1000,
+      cache_read_tokens: 800,
+      cache_creation_tokens: 200
+    })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
+    wait_stats_loaded(view)
+
+    html = render(view)
+
+    # cache read + creation = 1,000 → "1.0K"; hit rate = 800/1000 = 80.0%
+    assert html =~ "cache · 80.0% hit"
   end
 
   test "admin sees provider ranking on index", %{conn: conn} do

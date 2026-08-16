@@ -546,6 +546,26 @@ defmodule Tokengate.Metrics.RollupTest do
       assert length(results) == 1
       assert hd(results).team_member_id == tm1.id
     end
+
+    test "aggregates cache_read_tokens" do
+      {tm, _team} = team_member_fixture()
+
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
+        cost_usd: Decimal.new("1.000000"),
+        prompt_tokens: 100,
+        cache_read_tokens: 60
+      })
+
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
+        cost_usd: Decimal.new("1.000000"),
+        prompt_tokens: 100,
+        cache_read_tokens: 40
+      })
+
+      results = Rollup.breakdown_by_member(nil, from: DateTime.add(DateTime.utc_now(), -10, :day))
+      row = Enum.find(results, fn r -> r.team_member_id == tm.id end)
+      assert row.cache_read_tokens == 100
+    end
   end
 
   # ---------------------------------------------------------------------
@@ -577,6 +597,26 @@ defmodule Tokengate.Metrics.RollupTest do
       # Use a far-future :from so no logs (from any async test) can fall in the window.
       results = Rollup.breakdown_by_team(from: ~U[2099-01-01 00:00:00Z])
       assert results == []
+    end
+
+    test "aggregates cache_read_tokens" do
+      {tm, team} = team_member_fixture()
+
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
+        cost_usd: Decimal.new("1.000000"),
+        prompt_tokens: 100,
+        cache_read_tokens: 60
+      })
+
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
+        cost_usd: Decimal.new("1.000000"),
+        prompt_tokens: 100,
+        cache_read_tokens: 40
+      })
+
+      results = Rollup.breakdown_by_team(from: DateTime.add(DateTime.utc_now(), -10, :day))
+      row = Enum.find(results, fn r -> r.team_id == team.id end)
+      assert row.cache_read_tokens == 100
     end
   end
 

@@ -188,6 +188,28 @@ defmodule TokengateWeb.KpiHelpers do
               </p>
               <p class="text-xs text-base-content/50">out</p>
             </div>
+            <span class="text-base-content/30">/</span>
+            <div>
+              <p
+                class="text-lg font-bold text-base-content"
+                title={
+                  format_number(
+                    (@metrics.cache_read_tokens || 0) +
+                      (@metrics.cache_creation_tokens || 0)
+                  )
+                }
+              >
+                {format_cache_value(
+                  @metrics.cache_read_tokens,
+                  @metrics.cache_creation_tokens
+                )}
+              </p>
+              <p class="text-xs text-base-content/50">
+                cache · {format_hit_rate(
+                  cache_hit_rate(@metrics.cache_read_tokens, @metrics.prompt_tokens)
+                )} hit
+              </p>
+            </div>
           </div>
           <div class="text-xs text-base-content/40 mt-1 flex items-center gap-2">
             <span
@@ -309,4 +331,16 @@ defmodule TokengateWeb.KpiHelpers do
   def format_hit_rate(nil), do: "—"
   def format_hit_rate(rate) when is_float(rate), do: "#{rate}%"
   def format_hit_rate(rate) when is_integer(rate), do: "#{rate}.0%"
+
+  @doc """
+  Compact value for the cache KPI: shows the sum (read + creation) when
+  either is > 0, otherwise returns "—" so the slot stays visually empty.
+  """
+  def format_cache_value(read, creation)
+      when read in [nil, 0] and creation in [nil, 0],
+      do: "—"
+
+  def format_cache_value(read, creation) do
+    format_compact((read || 0) + (creation || 0))
+  end
 end

@@ -840,6 +840,12 @@
                           @metrics.completion_tokens
                         )}
                       </p>
+                      <p class="text-xs text-base-content/50 mt-1">
+                        cache · {cache_hit_pct(
+                          @metrics.prompt_tokens,
+                          @metrics.cache_read_tokens
+                        )} hit
+                      </p>
                     </div>
                   </div>
                   <div
@@ -1037,6 +1043,12 @@
                                   />
                                 </button>
                               </th>
+                              <th
+                                class="text-right"
+                                title="Porcentaje de prompt tokens con cache hit"
+                              >
+                                Cache %
+                              </th>
                               <th class="text-right">
                                 <button
                                   phx-click="sort"
@@ -1083,6 +1095,12 @@
                               <td class="text-right font-mono">
                                 {format_number(row.completion_tokens)}
                               </td>
+                              <td class="text-right font-mono">
+                                {cache_hit_pct(
+                                  row.prompt_tokens,
+                                  Map.get(row, :cache_read_tokens, 0)
+                                )}
+                              </td>
                               <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                             </tr>
                           </tbody>
@@ -1102,6 +1120,12 @@
                               </td>
                               <td class="text-right font-mono">
                                 {format_number(provider_total.completion_tokens)}
+                              </td>
+                              <td class="text-right font-mono">
+                                {cache_hit_pct(
+                                  provider_total.prompt_tokens,
+                                  provider_total.cache_read_tokens
+                                )}
                               </td>
                               <td></td>
                             </tr>
@@ -1634,6 +1658,28 @@
                           </p>
                           <p class="text-xs text-base-content/50">out</p>
                         </div>
+                        <span class="text-base-content/30">/</span>
+                        <div>
+                          <p
+                            class="text-lg font-bold"
+                            title={
+                              format_number(
+                                (@metrics.cache_read_tokens || 0) +
+                                  (@metrics.cache_creation_tokens || 0)
+                              )
+                            }
+                          >
+                            {format_cache_value(
+                              @metrics.cache_read_tokens,
+                              @metrics.cache_creation_tokens
+                            )}
+                          </p>
+                          <p class="text-xs text-base-content/50">
+                            cache · {format_hit_rate(
+                              cache_hit_rate(@metrics.cache_read_tokens, @metrics.prompt_tokens)
+                            )} hit
+                          </p>
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1831,6 +1877,12 @@
                                   />
                                 </button>
                               </th>
+                              <th
+                                class="text-right"
+                                title="Porcentaje de prompt tokens con cache hit"
+                              >
+                                Cache %
+                              </th>
                               <th class="text-right">
                                 <button
                                   phx-click="sort"
@@ -1876,6 +1928,12 @@
                               <td class="text-right font-mono">
                                 {format_number(row.completion_tokens)}
                               </td>
+                              <td class="text-right font-mono">
+                                {cache_hit_pct(
+                                  row.prompt_tokens,
+                                  Map.get(row, :cache_read_tokens, 0)
+                                )}
+                              </td>
                               <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                             </tr>
                           </tbody>
@@ -1893,6 +1951,12 @@
                               </td>
                               <td class="text-right font-mono">
                                 {format_number(model_total.completion_tokens)}
+                              </td>
+                              <td class="text-right font-mono">
+                                {cache_hit_pct(
+                                  model_total.prompt_tokens,
+                                  model_total.cache_read_tokens
+                                )}
                               </td>
                               <td></td>
                             </tr>
@@ -1988,6 +2052,12 @@
                                   />
                                 </button>
                               </th>
+                              <th
+                                class="text-right"
+                                title="Porcentaje de prompt tokens con cache hit"
+                              >
+                                Cache %
+                              </th>
                               <th class="text-right">
                                 <button
                                   phx-click="sort"
@@ -2029,6 +2099,12 @@
                               <td class="text-right font-mono">
                                 {format_number(row.completion_tokens)}
                               </td>
+                              <td class="text-right font-mono">
+                                {cache_hit_pct(
+                                  row.prompt_tokens,
+                                  Map.get(row, :cache_read_tokens, 0)
+                                )}
+                              </td>
                               <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                             </tr>
                           </tbody>
@@ -2046,6 +2122,12 @@
                               </td>
                               <td class="text-right font-mono">
                                 {format_number(member_total.completion_tokens)}
+                              </td>
+                              <td class="text-right font-mono">
+                                {cache_hit_pct(
+                                  member_total.prompt_tokens,
+                                  member_total.cache_read_tokens
+                                )}
                               </td>
                               <td></td>
                             </tr>
@@ -2150,6 +2232,12 @@
                                 />
                               </button>
                             </th>
+                            <th
+                              class="text-right"
+                              title="Porcentaje de prompt tokens con cache hit"
+                            >
+                              Cache %
+                            </th>
                             <th class="text-right">
                               <button
                                 phx-click="sort"
@@ -2188,6 +2276,12 @@
                             <td class="text-right font-mono">
                               {format_number(row.completion_tokens)}
                             </td>
+                            <td class="text-right font-mono">
+                              {cache_hit_pct(
+                                row.prompt_tokens,
+                                Map.get(row, :cache_read_tokens, 0)
+                              )}
+                            </td>
                             <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                           </tr>
                         </tbody>
@@ -2205,6 +2299,12 @@
                             </td>
                             <td class="text-right font-mono">
                               {format_number(team_total.completion_tokens)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {cache_hit_pct(
+                                team_total.prompt_tokens,
+                                team_total.cache_read_tokens
+                              )}
                             </td>
                             <td></td>
                           </tr>
@@ -2312,6 +2412,28 @@
                             {format_compact(@metrics.completion_tokens)}
                           </p>
                           <p class="text-xs text-base-content/50">out</p>
+                        </div>
+                        <span class="text-base-content/30">/</span>
+                        <div>
+                          <p
+                            class="text-lg font-bold"
+                            title={
+                              format_number(
+                                (@metrics.cache_read_tokens || 0) +
+                                  (@metrics.cache_creation_tokens || 0)
+                              )
+                            }
+                          >
+                            {format_cache_value(
+                              @metrics.cache_read_tokens,
+                              @metrics.cache_creation_tokens
+                            )}
+                          </p>
+                          <p class="text-xs text-base-content/50">
+                            cache · {format_hit_rate(
+                              cache_hit_rate(@metrics.cache_read_tokens, @metrics.prompt_tokens)
+                            )} hit
+                          </p>
                         </div>
                       </div>
                     </div>
@@ -2513,6 +2635,12 @@
                                   />
                                 </button>
                               </th>
+                              <th
+                                class="text-right"
+                                title="Porcentaje de prompt tokens con cache hit"
+                              >
+                                Cache %
+                              </th>
                               <th class="text-right">
                                 <button
                                   phx-click="sort"
@@ -2558,6 +2686,12 @@
                               <td class="text-right font-mono">
                                 {format_number(row.completion_tokens)}
                               </td>
+                              <td class="text-right font-mono">
+                                {cache_hit_pct(
+                                  row.prompt_tokens,
+                                  Map.get(row, :cache_read_tokens, 0)
+                                )}
+                              </td>
                               <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                             </tr>
                           </tbody>
@@ -2575,6 +2709,12 @@
                               </td>
                               <td class="text-right font-mono">
                                 {format_number(model_total.completion_tokens)}
+                              </td>
+                              <td class="text-right font-mono">
+                                {cache_hit_pct(
+                                  model_total.prompt_tokens,
+                                  model_total.cache_read_tokens
+                                )}
                               </td>
                               <td></td>
                             </tr>
@@ -2679,6 +2819,12 @@
                                 />
                               </button>
                             </th>
+                            <th
+                              class="text-right"
+                              title="Porcentaje de prompt tokens con cache hit"
+                            >
+                              Cache %
+                            </th>
                             <th class="text-right">
                               <button
                                 phx-click="sort"
@@ -2717,6 +2863,12 @@
                             <td class="text-right font-mono">
                               {format_number(row.completion_tokens)}
                             </td>
+                            <td class="text-right font-mono">
+                              {cache_hit_pct(
+                                row.prompt_tokens,
+                                Map.get(row, :cache_read_tokens, 0)
+                              )}
+                            </td>
                             <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                           </tr>
                         </tbody>
@@ -2734,6 +2886,12 @@
                             </td>
                             <td class="text-right font-mono">
                               {format_number(service_total.completion_tokens)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {cache_hit_pct(
+                                service_total.prompt_tokens,
+                                service_total.cache_read_tokens
+                              )}
                             </td>
                             <td></td>
                           </tr>
@@ -2786,6 +2944,12 @@
                             <th class="text-right">Costo</th>
                             <th class="text-right">Tokens in</th>
                             <th class="text-right">Tokens out</th>
+                            <th
+                              class="text-right"
+                              title="Porcentaje de prompt tokens con cache hit"
+                            >
+                              Cache %
+                            </th>
                             <th class="text-right">TPS</th>
                           </tr>
                         </thead>
@@ -2817,6 +2981,12 @@
                             </td>
                             <td class="text-right font-mono">
                               {format_number(row.completion_tokens)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {cache_hit_pct(
+                                row.prompt_tokens,
+                                Map.get(row, :cache_read_tokens, 0)
+                              )}
                             </td>
                             <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
                           </tr>
