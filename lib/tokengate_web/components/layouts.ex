@@ -228,14 +228,14 @@ defmodule TokengateWeb.Layouts do
                 icon="hero-chart-bar"
               />
               <.sidebar_link
-                href={~p"/dashboard/monitor"}
-                label="Monitor"
-                icon="hero-signal"
-              />
-              <.sidebar_link
                 href={~p"/dashboard/calculator"}
                 label="Calculadora"
                 icon="hero-calculator"
+              />
+              <.sidebar_link
+                href={~p"/dashboard/monitor"}
+                label="Monitor"
+                icon="hero-signal"
               />
               <.sidebar_link
                 href={~p"/dashboard/logs"}
