@@ -376,7 +376,9 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   defp build_url(_provider, "https://" <> _ = url), do: url
   defp build_url(provider, path), do: base_url(provider) <> path
 
-  @forwarded_header_keys ~w(user-agent http-referer x-title)
+  # Includes "idempotency-key": the gateway generates one per client request
+  # (see ProxyController) and reuses it across retries/fallbacks.
+  @forwarded_header_keys ~w(user-agent http-referer x-title idempotency-key)
 
   defp headers(api_key) do
     [

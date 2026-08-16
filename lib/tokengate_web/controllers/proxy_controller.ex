@@ -83,6 +83,11 @@ defmodule TokengateWeb.ProxyController do
       conn
       |> assign(:think, think)
       |> assign(:effort, effort)
+      # Stable per-request idempotency key: every upstream attempt of this
+      # request (retries and provider fallbacks included) carries the same
+      # Idempotency-Key header, so a provider that processed an attempt but
+      # lost the response can deduplicate the replay.
+      |> assign(:idempotency_key, Ecto.UUID.generate())
 
     with :ok <- require_model(model),
          :ok <- acquire_team_limits(key_id, limits),
@@ -161,6 +166,9 @@ defmodule TokengateWeb.ProxyController do
   # registry, fallback matrix and cost accounting as chat — minus the
   # chat-only payload transforms (guard rails, prompt optimizer, reasoning).
   defp simple_proxy(conn, payload, capability, adapter_fun, kind) do
+    # Same stable idempotency key as the chat path — shared by every
+    # upstream attempt of this request.
+    conn = assign(conn, :idempotency_key, Ecto.UUID.generate())
     member = conn.assigns.current_team_member
     model = payload["model"]
     limits = conn.assigns.effective_limits
@@ -790,7 +798,9 @@ defmodule TokengateWeb.ProxyController do
       |> Keyword.get(:receive_timeout_ms, 60_000)
   end
 
-  # Extracts whitelisted client headers to forward upstream.
+  # Extracts whitelisted client headers to forward upstream, plus the
+  # gateway-generated Idempotency-Key (stable across all attempts of the
+  # same client request).
   @forwarded_header_keys %{
     "user-agent" => "user-agent",
     "http-referer" => "http-referer",
@@ -798,13 +808,16 @@ defmodule TokengateWeb.ProxyController do
   }
 
   defp extract_forwarded_headers(conn) do
-    @forwarded_header_keys
-    |> Enum.reduce(%{}, fn {client_key, upstream_key}, acc ->
-      case Plug.Conn.get_req_header(conn, client_key) do
-        [value | _] -> Map.put(acc, upstream_key, value)
-        [] -> acc
-      end
-    end)
+    forwarded =
+      @forwarded_header_keys
+      |> Enum.reduce(%{}, fn {client_key, upstream_key}, acc ->
+        case Plug.Conn.get_req_header(conn, client_key) do
+          [value | _] -> Map.put(acc, upstream_key, value)
+          [] -> acc
+        end
+      end)
+
+    Map.put(forwarded, "idempotency-key", conn.assigns.idempotency_key)
   end
 
   defp execute(conn, route, payload, member, attempts_left, exclude) do

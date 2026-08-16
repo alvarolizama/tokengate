@@ -30,6 +30,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
       if pid = :persistent_term.get({__MODULE__, :test_pid}, nil) do
         send(pid, {:provider_request, Jason.decode!(body)})
+        send(pid, {:provider_request_headers, conn.req_headers})
       end
 
       cond do
@@ -693,6 +694,87 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     down_hits = Enum.count(hits, fn payload -> payload["model"] =~ "gpt-4o-real" end)
     assert down_hits >= 2, "expected the down provider to be retried, got #{down_hits} hit(s)"
+  end
+
+  ## Idempotency-Key #########################################################
+
+  @uuid_regex ~r/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+  defp idempotency_key_from(headers) do
+    Enum.find_value(headers, fn
+      {"idempotency-key", value} -> value
+      _ -> nil
+    end)
+  end
+
+  # Drains every {:provider_request_headers, _} message from the mailbox.
+  defp collect_upstream_headers do
+    for _ <- 1..100 do
+      receive do
+        {:provider_request_headers, headers} -> headers
+      after
+        0 -> nil
+      end
+    end
+    |> Enum.reject(&is_nil/1)
+  end
+
+  test "every upstream attempt carries the same Idempotency-Key", %{conn: conn} do
+    %{token: token, alias: model_alias} = proxy_fixture(%{})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+
+    assert json_response(conn, 200)
+
+    [headers] = collect_upstream_headers()
+    key = idempotency_key_from(headers)
+    assert is_binary(key), "expected an Idempotency-Key header upstream"
+    assert key =~ @uuid_regex
+  end
+
+  test "retries and provider fallback reuse the same Idempotency-Key", %{conn: conn} do
+    u = unique()
+    %{token: token, alias: model_alias} = proxy_fixture(%{down: true})
+    add_healthy_fallback(model_alias, u)
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+
+    assert json_response(conn, 200)
+
+    # Down provider gets the initial attempt + retries, then the healthy
+    # provider answers — all of them must carry one and the same key.
+    keys =
+      collect_upstream_headers()
+      |> Enum.map(&idempotency_key_from/1)
+
+    assert length(keys) >= 2, "expected multiple upstream attempts, got #{length(keys)}"
+    assert Enum.all?(keys, &is_binary/1), "every attempt must carry the key"
+    assert Enum.uniq(keys) |> length() == 1, "expected one stable key across attempts"
+  end
+
+  test "embeddings requests also carry an Idempotency-Key", %{conn: conn} do
+    %{token: token, alias: model_alias} = proxy_fixture(%{})
+    update_alias_type(model_alias, "embedding")
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/embeddings", %{
+        "model" => model_alias.name,
+        "input" => ["hola mundo"]
+      })
+
+    assert json_response(conn, 200)
+
+    [headers] = collect_upstream_headers()
+    key = idempotency_key_from(headers)
+    assert is_binary(key) and key =~ @uuid_regex
   end
 
   test "concurrency fallback: saturated credential falls back to second credential", %{conn: conn} do
