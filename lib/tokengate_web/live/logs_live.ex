@@ -929,19 +929,19 @@ defmodule TokengateWeb.LogsLive do
                   Proveedor
                 </th>
                 <th
-                  colspan="5"
+                  colspan="4"
                   class="text-[10px] uppercase tracking-wider text-accent/70 bg-accent/5 border-r border-base-200"
                 >
                   Respuesta
                 </th>
                 <th
-                  colspan="5"
+                  colspan="6"
                   class="text-[10px] uppercase tracking-wider text-info/70 bg-info/5 border-r border-base-200"
                 >
                   Rendimiento
                 </th>
                 <th
-                  colspan="4"
+                  colspan="1"
                   class="text-[10px] uppercase tracking-wider text-success/70 bg-success/5"
                 >
                   Costos
@@ -979,7 +979,7 @@ defmodule TokengateWeb.LogsLive do
             </thead>
             <tbody id="logs" phx-update="stream">
               <tr id="logs-empty" class="hidden only:table-row">
-                <td colspan="25" class="text-center py-8 text-base-content/40">
+                <td colspan="22" class="text-center py-8 text-base-content/40">
                   No hay logs que coincidan con los filtros.
                 </td>
               </tr>

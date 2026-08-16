@@ -3,7 +3,7 @@ defmodule TokengateWeb.UserStatsLiveTest do
 
   import Phoenix.LiveViewTest
 
-  alias Tokengate.{Accounts, Logs, Repo}
+  alias Tokengate.{Accounts, Logs}
 
   defp unique, do: System.unique_integer([:positive])
 
