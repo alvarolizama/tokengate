@@ -223,11 +223,6 @@ defmodule TokengateWeb.Layouts do
               <.sidebar_link href={~p"/dashboard/stats"} label="Estadísticas" icon="hero-chart-pie" />
               <.sidebar_link href={~p"/dashboard/credits"} label="Créditos" icon="hero-banknotes" />
               <.sidebar_link
-                href={~p"/dashboard/calculator"}
-                label="Calculadora"
-                icon="hero-calculator"
-              />
-              <.sidebar_link
                 href={~p"/dashboard/benchmarks"}
                 label="Benchmarks"
                 icon="hero-chart-bar"
@@ -274,6 +269,11 @@ defmodule TokengateWeb.Layouts do
                 href={~p"/dashboard/monitor"}
                 label="Monitor"
                 icon="hero-signal"
+              />
+              <.sidebar_link
+                href={~p"/dashboard/calculator"}
+                label="Calculadora"
+                icon="hero-calculator"
               />
               <.sidebar_link
                 href={~p"/dashboard/logs"}
