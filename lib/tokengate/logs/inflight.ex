@@ -40,6 +40,8 @@ defmodule Tokengate.Logs.Inflight do
   @type entry :: %{
           id: String.t(),
           team_member_id: term(),
+          subject_type: String.t() | nil,
+          service_name: String.t() | nil,
           user_email: String.t() | nil,
           team_name: String.t() | nil,
           model_requested: String.t() | nil,
@@ -76,6 +78,8 @@ defmodule Tokengate.Logs.Inflight do
     entry = %{
       id: Map.get(attrs, :id) || Ecto.UUID.generate(),
       team_member_id: Map.get(attrs, :team_member_id),
+      subject_type: Map.get(attrs, :subject_type),
+      service_name: Map.get(attrs, :service_name),
       user_email: Map.get(attrs, :user_email),
       team_name: Map.get(attrs, :team_name),
       model_requested: Map.get(attrs, :model_requested),

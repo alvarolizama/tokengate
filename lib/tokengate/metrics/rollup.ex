@@ -265,7 +265,7 @@ defmodule Tokengate.Metrics.Rollup do
     query =
       RequestLog
       |> maybe_join_team(team_id)
-      |> maybe_team_member_id(Keyword.get(opts, :team_member_id))
+      |> maybe_service_id(Keyword.get(opts, :service_id))
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
@@ -457,11 +457,10 @@ defmodule Tokengate.Metrics.Rollup do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
-    # Services are virtual team members with team_id = nil and user_id = nil
-    # Their logs have team_member_id = service.id
+    # Services have a dedicated `service_id` column (team_member_id is null).
     query =
       RequestLog
-      |> join(:inner, [rl], s in Tokengate.Accounts.Service, on: rl.team_member_id == s.id)
+      |> join(:inner, [rl], s in Tokengate.Accounts.Service, on: rl.service_id == s.id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> group_by([rl, s], s.id)
@@ -2170,11 +2169,11 @@ defmodule Tokengate.Metrics.Rollup do
     where(query, [rl], rl.team_member_id in ^member_ids)
   end
 
-  # Single team_member_id filter (used for service drill-down).
-  defp maybe_team_member_id(query, nil), do: query
+  # Single service_id filter (used for service drill-down).
+  defp maybe_service_id(query, nil), do: query
 
-  defp maybe_team_member_id(query, team_member_id) when is_binary(team_member_id) do
-    where(query, [rl], rl.team_member_id == ^team_member_id)
+  defp maybe_service_id(query, service_id) when is_binary(service_id) do
+    where(query, [rl], rl.service_id == ^service_id)
   end
 
   # -----------------------------------------------------------------------
@@ -2300,19 +2299,19 @@ defmodule Tokengate.Metrics.Rollup do
   # Daily request count per model for a specific service (team_member_id).
   # Used by the services drill-down sparkline chart.
 
-  def daily_series_by_model_for_service(team_member_id, opts \\ [])
+  def daily_series_by_model_for_service(service_id, opts \\ [])
 
   def daily_series_by_model_for_service(nil, _opts), do: []
 
-  def daily_series_by_model_for_service(team_member_id, opts)
-      when is_binary(team_member_id) do
+  def daily_series_by_model_for_service(service_id, opts)
+      when is_binary(service_id) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
     timezone = Keyword.get(opts, :timezone, "Etc/UTC")
 
     bucketed =
       RequestLog
-      |> where([rl], rl.team_member_id == ^team_member_id)
+      |> where([rl], rl.service_id == ^service_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> select([rl], %{

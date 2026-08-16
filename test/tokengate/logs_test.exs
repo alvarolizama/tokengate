@@ -59,6 +59,15 @@ defmodule Tokengate.LogsTest do
     {team_member, team}
   end
 
+  defp service_fixture(attrs \\ %{}) do
+    {:ok, service} =
+      Accounts.create_service(
+        Map.merge(%{"name" => "Service #{System.unique_integer([:positive])}"}, attrs)
+      )
+
+    service
+  end
+
   # Fixed-at-load timestamp so all inserts share the same exact value.
   # Re-evaluating DateTime.utc_now() on each access would introduce microsecond drift.
   @timestamp DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.truncate(:second)
@@ -153,6 +162,36 @@ defmodule Tokengate.LogsTest do
 
       assert errors_on(changeset).team_member_id
       assert errors_on(changeset).model_requested
+    end
+
+    test "inserts a service log with service_id and null team_member_id" do
+      service = service_fixture()
+
+      {:ok, log} =
+        Logs.log_request(%{
+          subject_type: "service",
+          service_id: service.id,
+          model_requested: "gpt-4",
+          inserted_at: @timestamp
+        })
+
+      assert log.subject_type == "service"
+      assert log.service_id == service.id
+      assert log.team_member_id == nil
+    end
+
+    test "requires service_id when subject_type is service" do
+      {:error, changeset} =
+        Logs.log_request(%{subject_type: "service", model_requested: "gpt-4"})
+
+      assert errors_on(changeset).service_id
+    end
+
+    test "requires team_member_id when subject_type is user" do
+      {:error, changeset} =
+        Logs.log_request(%{subject_type: "user", model_requested: "gpt-4"})
+
+      assert errors_on(changeset).team_member_id
     end
 
     test "never stores prompt or completion content — metadata only" do
@@ -269,6 +308,60 @@ defmodule Tokengate.LogsTest do
       logs = Logs.list_logs(%{streaming: true})
       assert length(logs) == 1
       assert hd(logs).streaming == true
+    end
+
+    test "filters by subject_type" do
+      service = service_fixture()
+      {_user_log, _} = log_fixture()
+
+      {:ok, _service_log} =
+        Logs.log_request(%{
+          subject_type: "service",
+          service_id: service.id,
+          model_requested: "gpt-4",
+          inserted_at: @timestamp
+        })
+
+      logs = Logs.list_logs(%{subject_type: "service"})
+      assert length(logs) == 1
+      assert hd(logs).subject_type == "service"
+      assert hd(logs).service_id == service.id
+    end
+
+    test "filters by service_id" do
+      service = service_fixture()
+      {_user_log, _} = log_fixture()
+
+      {:ok, _service_log} =
+        Logs.log_request(%{
+          subject_type: "service",
+          service_id: service.id,
+          model_requested: "gpt-4",
+          inserted_at: @timestamp
+        })
+
+      logs = Logs.list_logs(%{service_id: service.id})
+      assert length(logs) == 1
+      assert hd(logs).service_id == service.id
+    end
+
+    test "filters by subject_id (matches member or service)" do
+      service = service_fixture()
+      {member_log, _} = log_fixture()
+
+      {:ok, service_log} =
+        Logs.log_request(%{
+          subject_type: "service",
+          service_id: service.id,
+          model_requested: "gpt-4",
+          inserted_at: @timestamp
+        })
+
+      member_rows = Logs.list_logs(%{subject_id: member_log.team_member_id})
+      assert Enum.any?(member_rows, &(&1.id == member_log.id))
+
+      service_rows = Logs.list_logs(%{subject_id: service.id})
+      assert Enum.any?(service_rows, &(&1.id == service_log.id))
     end
 
     test "filters by from/to inserted_at range" do

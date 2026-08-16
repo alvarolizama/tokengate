@@ -85,6 +85,7 @@ defmodule Tokengate.Logs do
     |> order_by([rl], desc: rl.inserted_at)
     |> limit(^limit)
     |> preload(team_member: [:user, :team])
+    |> preload(:service)
     |> preload(:provider)
     |> Repo.all()
   end
@@ -112,6 +113,7 @@ defmodule Tokengate.Logs do
     |> order_by([rl], desc: rl.inserted_at)
     |> limit(^limit)
     |> preload(team_member: [:user, :team])
+    |> preload(:service)
     |> preload(:provider)
     |> Repo.all()
   end
@@ -145,6 +147,7 @@ defmodule Tokengate.Logs do
     |> order_by([rl], desc: rl.inserted_at)
     |> limit(^limit)
     |> preload(team_member: [:user, :team])
+    |> preload(:service)
     |> preload(:provider)
     |> Repo.all()
   end
@@ -169,6 +172,9 @@ defmodule Tokengate.Logs do
   defp apply_log_filters(query, filters) do
     query
     |> maybe_where(:team_member_id, filters)
+    |> maybe_where(:service_id, filters)
+    |> maybe_where_subject_id(filters)
+    |> maybe_where(:subject_type, filters)
     |> maybe_where_member_ids(filters)
     |> maybe_where_team_id(filters)
     |> maybe_where(:provider_id, filters)
@@ -218,6 +224,17 @@ defmodule Tokengate.Logs do
     case value do
       nil -> query
       ids when is_list(ids) -> where(query, [rl], rl.team_member_id in ^ids)
+    end
+  end
+
+  # Matches a log whose subject is *either* a team member or a service with
+  # the given id. Used by `Budgets.Manager` (which keys both member and service
+  # spend by a single binary subject id) to lazily load spend from the durable
+  # log table without knowing which kind of subject it is.
+  defp maybe_where_subject_id(query, filters) do
+    case Map.get(filters, :subject_id) || Map.get(filters, "subject_id") do
+      nil -> query
+      id -> where(query, [rl], rl.team_member_id == ^id or rl.service_id == ^id)
     end
   end
 

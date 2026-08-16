@@ -75,18 +75,18 @@ defmodule TokengateWeb.ServicesLive do
       from(ma in ModelAlias, order_by: [asc: ma.name])
       |> Repo.all()
 
-    # Load monthly stats per service (team_member_id = service_id for services)
+    # Load monthly stats per service (service_id column).
     service_ids = Enum.map(services, & &1.id)
     timezone = socket.assigns[:timezone] || "Etc/UTC"
     thirty_days_ago = Tokengate.Periods.period_bounds("30d", timezone).from
 
     stats =
       from(l in Tokengate.Logs.RequestLog,
-        where: l.team_member_id in ^service_ids,
+        where: l.service_id in ^service_ids,
         where: l.inserted_at >= ^thirty_days_ago,
-        group_by: l.team_member_id,
+        group_by: l.service_id,
         select: %{
-          service_id: l.team_member_id,
+          service_id: l.service_id,
           total_cost: sum(l.provider_cost_usd),
           total_requests: count(l.id),
           total_input_tokens: sum(l.prompt_tokens),

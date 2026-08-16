@@ -38,6 +38,7 @@ defmodule TokengateWeb.ProxyController do
   import Ecto.Query, only: [from: 2]
 
   alias Tokengate.Budgets.Manager, as: Budgets
+  alias Tokengate.Accounts.TeamMember
   alias Tokengate.GlobalSettings
   alias Tokengate.Limits.Manager, as: Limits
   alias Tokengate.Logs.WriteWorker
@@ -572,6 +573,8 @@ defmodule TokengateWeb.ProxyController do
   defp register_inflight(conn, member, payload, route) do
     Tokengate.Logs.Inflight.start_request(%{
       team_member_id: member.id,
+      subject_type: if(member.user_id == nil, do: "service", else: "user"),
+      service_name: member.service_name,
       user_email: member.user && member.user.email,
       team_name: member.team && member.team.name,
       team_id: member.team_id,
@@ -1466,6 +1469,17 @@ defmodule TokengateWeb.ProxyController do
     }
   end
 
+  # Resolves the subject identity for a durable log. Services arrive as
+  # "virtual" members (`user_id == nil`) — their logs store `service_id` and a
+  # null `team_member_id`, while real team members store `team_member_id`.
+  defp log_subject(%TeamMember{user_id: nil} = member) do
+    %{subject_type: "service", team_member_id: nil, service_id: member.id}
+  end
+
+  defp log_subject(%TeamMember{} = member) do
+    %{subject_type: "user", team_member_id: member.id, service_id: nil}
+  end
+
   defp enqueue_log(
          route,
          member,
@@ -1477,8 +1491,12 @@ defmodule TokengateWeb.ProxyController do
          streaming,
          extra
        ) do
+    subject = log_subject(member)
+
     %{
-      "team_member_id" => member.id,
+      "team_member_id" => subject.team_member_id,
+      "service_id" => subject.service_id,
+      "subject_type" => subject.subject_type,
       "provider_id" => route.model_provider.credential.provider_id,
       "model_provider_id" => route.model_provider.id,
       "model_alias_id" => route.model_alias.id,
@@ -1575,8 +1593,12 @@ defmodule TokengateWeb.ProxyController do
   end
 
   defp enqueue_error_log(conn, route, member, opts) do
+    subject = log_subject(member)
+
     %{
-      "team_member_id" => member.id,
+      "team_member_id" => subject.team_member_id,
+      "service_id" => subject.service_id,
+      "subject_type" => subject.subject_type,
       "provider_id" => route.model_provider.credential.provider_id,
       "model_provider_id" => route.model_provider.id,
       "model_alias_id" => route.model_alias.id,
@@ -1607,8 +1629,12 @@ defmodule TokengateWeb.ProxyController do
   end
 
   defp enqueue_gate_error_log(member, model, agent_type, opts) do
+    subject = log_subject(member)
+
     %{
-      "team_member_id" => member.id,
+      "team_member_id" => subject.team_member_id,
+      "service_id" => subject.service_id,
+      "subject_type" => subject.subject_type,
       "model_alias_id" => alias_id_for_name(model),
       "model_requested" => model,
       "agent_type" => agent_type,

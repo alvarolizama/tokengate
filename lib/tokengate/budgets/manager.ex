@@ -648,12 +648,14 @@ defmodule Tokengate.Budgets.Manager do
   # Maps a budget subject to the `Tokengate.Logs.cost_summary/1` filters used
   # to lazy-load its spend from the durable `request_logs` table. More specific
   # tuple shapes must match before the generic `{member_id, model_alias_id}`.
-  defp subject_filters(subject) when is_binary(subject), do: %{team_member_id: subject}
+  # A binary subject may be a team member *or* a service (both keyed by their
+  # id), so we use the combined `:subject_id` filter that matches either.
+  defp subject_filters(subject) when is_binary(subject), do: %{subject_id: subject}
   defp subject_filters({:credential, credential_id}), do: %{credential_id: credential_id}
   defp subject_filters({:model, model_alias_id}), do: %{model_alias_id: model_alias_id}
 
   defp subject_filters({member_id, model_alias_id}),
-    do: %{team_member_id: member_id, model_alias_id: model_alias_id}
+    do: %{subject_id: member_id, model_alias_id: model_alias_id}
 
   # ---------------------------------------------------------------------------
   # Internal — cap normalization (nil/0 = unlimited)

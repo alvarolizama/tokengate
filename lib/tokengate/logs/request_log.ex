@@ -35,6 +35,7 @@ defmodule Tokengate.Logs.RequestLog do
     field :model_provider_id, :binary_id
     field :credential_id, :binary_id
     field :model_alias_id, :binary_id
+    field :subject_type, :string, default: "user"
     field :model_requested, :string
     field :model_responded, :string
     field :agent_type, :string, default: "unknown"
@@ -63,20 +64,25 @@ defmodule Tokengate.Logs.RequestLog do
       foreign_key: :team_member_id,
       type: :binary_id
 
+    belongs_to :service, Tokengate.Accounts.Service,
+      references: :id,
+      foreign_key: :service_id,
+      type: :binary_id
+
     belongs_to :provider, Tokengate.Providers.Provider,
       references: :id,
       foreign_key: :provider_id,
       type: :binary_id
   end
 
-  @permitted ~w(team_member_id provider_id model_provider_id credential_id model_alias_id
+  @permitted ~w(team_member_id service_id subject_type provider_id model_provider_id credential_id model_alias_id
     model_requested model_responded agent_type status_code provider_status_code
     error_reason error_message prompt_tokens completion_tokens cache_read_tokens
     cache_creation_tokens provider_cost_usd
     latency_ms ttft_ms streaming request_type think effort api_key_prefix
     credential_name client_agent provider_key_prefix inserted_at)a
 
-  @required ~w(team_member_id model_requested inserted_at)a
+  @required ~w(model_requested inserted_at subject_type)a
 
   @doc false
   def changeset(request_log, attrs) do
@@ -89,6 +95,19 @@ defmodule Tokengate.Logs.RequestLog do
     # `provider_cost_usd` always takes precedence.
     |> merge_legacy_cost_keys(attrs)
     |> validate_required(@required)
+    |> validate_inclusion(:subject_type, ["user", "service"])
+    |> validate_subject_id()
+  end
+
+  # A log must reference its subject: `team_member_id` for users, `service_id`
+  # for services. `team_member_id` is nullable at the DB level only so that
+  # service rows can store a null — the relevant id is enforced here instead.
+  defp validate_subject_id(changeset) do
+    case get_field(changeset, :subject_type) do
+      "user" -> validate_required(changeset, [:team_member_id])
+      "service" -> validate_required(changeset, [:service_id])
+      _ -> changeset
+    end
   end
 
   defp merge_legacy_cost_keys(%Ecto.Changeset{} = cs, attrs) do

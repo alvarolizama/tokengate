@@ -172,6 +172,7 @@ defmodule TokengateWeb.LogsLive do
     streaming = filters["streaming"]
     model_search = filters["model_search"]
     team_id = filters["team_id"]
+    subject_type = filters["subject_type"]
     error_reason = filters["error_reason"]
 
     agent in ["", nil, log.agent_type] and
@@ -179,6 +180,7 @@ defmodule TokengateWeb.LogsLive do
       streaming_match?(log.streaming, streaming) and
       model_match?(log, model_search) and
       team_id_match?(log, team_id) and
+      subject_type_match?(log, subject_type) and
       error_reason_match?(log, error_reason) and
       date_range_match?(log.inserted_at, filters["from"], filters["to"], timezone)
   end
@@ -189,6 +191,10 @@ defmodule TokengateWeb.LogsLive do
   defp team_id_match?(log, team_id) do
     log.team_member && log.team_member.team && log.team_member.team.id == team_id
   end
+
+  defp subject_type_match?(_log, ""), do: true
+  defp subject_type_match?(_log, nil), do: true
+  defp subject_type_match?(log, subject_type), do: log.subject_type == subject_type
 
   defp error_reason_match?(_log, ""), do: true
   defp error_reason_match?(_log, nil), do: true
@@ -297,6 +303,8 @@ defmodule TokengateWeb.LogsLive do
       inserted_at: entry.started_at,
       model_requested: entry.model_requested,
       model_responded: nil,
+      subject_type: entry.subject_type,
+      service: if(entry.service_name, do: %{name: entry.service_name}, else: nil),
       team_member: %{user: %{email: entry.user_email}, team: %{name: entry.team_name}},
       client_agent: entry.client_agent,
       api_key_prefix: entry.api_key_prefix,
@@ -333,12 +341,14 @@ defmodule TokengateWeb.LogsLive do
     streaming = filters["streaming"]
     model_search = filters["model_search"]
     team_id = filters["team_id"]
+    subject_type = filters["subject_type"]
 
     in_scope and
       agent in ["", nil, entry.agent_type] and
       streaming_match?(entry.streaming, streaming) and
       pending_model_match?(entry, model_search) and
       team_id in ["", nil, entry.team_id] and
+      subject_type in ["", nil, entry.subject_type] and
       date_range_match?(
         entry.started_at,
         filters["from"],
@@ -484,6 +494,7 @@ defmodule TokengateWeb.LogsLive do
       "to" => "",
       "model_search" => "",
       "team_id" => "",
+      "subject_type" => "",
       "error_reason" => ""
     }
   end
@@ -500,6 +511,7 @@ defmodule TokengateWeb.LogsLive do
       |> maybe_put(:streaming, parse_bool(form_filters["streaming"]))
       |> maybe_put(:model_search, form_filters["model_search"])
       |> maybe_put_team_id(form_filters["team_id"])
+      |> maybe_put(:subject_type, form_filters["subject_type"])
       |> maybe_put(:error_reason, form_filters["error_reason"])
       |> maybe_put(:from, parse_from_date(form_filters["from"], timezone))
       |> maybe_put(:to, parse_to_date(form_filters["to"], timezone))
@@ -688,6 +700,13 @@ defmodule TokengateWeb.LogsLive do
   defp member_email(%{team_member: %{user: %{email: email}}}), do: email
   defp member_email(_), do: "—"
 
+  # The "Usuario" cell shows the service name for service requests and the
+  # user email for regular members. `service` is a preloaded `%Service{}` on
+  # durable logs, or a `%{name: ...}` map on pending (in-flight) rows.
+  defp member_display(%{subject_type: "service", service: %{name: name}}), do: name
+  defp member_display(%{subject_type: "service"}), do: "—"
+  defp member_display(log), do: member_email(log)
+
   defp member_team(%{team_member: %{team: %{name: name}}}), do: name
   defp member_team(_), do: "—"
 
@@ -832,7 +851,7 @@ defmodule TokengateWeb.LogsLive do
           for={@form}
           id="logs-filter-form"
           phx-change="filter"
-          class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-7 gap-3"
+          class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-8 gap-3"
         >
           <.input
             field={@form[:status_class]}
@@ -861,6 +880,13 @@ defmodule TokengateWeb.LogsLive do
             prompt="Todos"
             options={@team_options}
             label="Equipo"
+          />
+          <.input
+            field={@form[:subject_type]}
+            type="select"
+            prompt="Todos"
+            options={[{"Usuario", "user"}, {"Servicio", "service"}]}
+            label="Tipo"
           />
           <.input
             field={@form[:error_reason]}
@@ -917,7 +943,7 @@ defmodule TokengateWeb.LogsLive do
             <thead>
               <tr class="border-b-0">
                 <th
-                  colspan="6"
+                  colspan="7"
                   class="text-[10px] uppercase tracking-wider text-primary/70 bg-primary/5 border-r border-base-200"
                 >
                   Cliente
@@ -950,6 +976,7 @@ defmodule TokengateWeb.LogsLive do
               <tr>
                 <th>Fecha</th>
                 <th>Modelo</th>
+                <th>Tipo</th>
                 <th>Usuario</th>
                 <th>Equipo</th>
                 <th>Agente</th>
@@ -979,7 +1006,7 @@ defmodule TokengateWeb.LogsLive do
             </thead>
             <tbody id="logs" phx-update="stream">
               <tr id="logs-empty" class="hidden only:table-row">
-                <td colspan="22" class="text-center py-8 text-base-content/40">
+                <td colspan="23" class="text-center py-8 text-base-content/40">
                   No hay logs que coincidan con los filtros.
                 </td>
               </tr>
@@ -1000,7 +1027,18 @@ defmodule TokengateWeb.LogsLive do
                     </span>
                   </td>
                   <td class="text-sm">{log.model_requested}</td>
-                  <td class="text-sm">{member_email(log)}</td>
+                  <td class="text-sm">
+                    <span
+                      :if={log.subject_type == "service"}
+                      class="badge badge-sm badge-info"
+                    >
+                      Servicio
+                    </span>
+                    <span :if={log.subject_type != "service"} class="badge badge-sm badge-ghost">
+                      Usuario
+                    </span>
+                  </td>
+                  <td class="text-sm">{member_display(log)}</td>
                   <td class="text-sm">{member_team(log)}</td>
                   <td class="text-sm">{log.client_agent || "—"}</td>
                   <td class="text-sm">{log.api_key_prefix || "—"}</td>
@@ -1029,7 +1067,18 @@ defmodule TokengateWeb.LogsLive do
                     {format_datetime(log.inserted_at, @timezone)}
                   </td>
                   <td class="text-sm">{model_display(log.model_requested, log.model_responded)}</td>
-                  <td class="text-sm">{member_email(log)}</td>
+                  <td class="text-sm">
+                    <span
+                      :if={log.subject_type == "service"}
+                      class="badge badge-sm badge-info"
+                    >
+                      Servicio
+                    </span>
+                    <span :if={log.subject_type != "service"} class="badge badge-sm badge-ghost">
+                      Usuario
+                    </span>
+                  </td>
+                  <td class="text-sm">{member_display(log)}</td>
                   <td class="text-sm">{member_team(log)}</td>
                   <td class="text-sm" title={log.agent_type}>
                     {log.client_agent || "—"}

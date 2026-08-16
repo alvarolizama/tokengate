@@ -344,13 +344,13 @@ defmodule TokengateWeb.StatsLive do
         service_id = params.service_filter
         admin? = params.user.global_role == "admin"
 
-        # Services are virtual team members — filter by team_member_id, not team_id.
+        # Services have a dedicated service_id column.
         [fn -> {:breakdown_service, breakdown_by_service_if_admin(admin?, opts)} end] ++
           if service_id && admin? do
             [
               fn ->
                 {:breakdown_model,
-                 Rollup.breakdown_by_model(nil, Keyword.put(opts, :team_member_id, service_id))}
+                 Rollup.breakdown_by_model(nil, Keyword.put(opts, :service_id, service_id))}
               end,
               fn ->
                 {:drilldown_series, Rollup.daily_series_by_model_for_service(service_id, opts)}
@@ -491,7 +491,7 @@ defmodule TokengateWeb.StatsLive do
         Map.put(base, :team_id, params.team_filter)
 
       params.service_filter ->
-        Map.put(base, :team_member_id, params.service_filter)
+        Map.put(base, :service_id, params.service_filter)
 
       true ->
         base

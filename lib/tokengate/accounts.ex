@@ -939,7 +939,7 @@ defmodule Tokengate.Accounts do
   defp build_auth_entry(token) do
     case get_team_member_by_api_key(token) do
       {:ok, %TeamMember{} = member} ->
-        %{member: member, limits: effective_limits(member)}
+        %{member: member, limits: effective_limits(member), subject_type: "user"}
 
       _ ->
         case get_service_by_api_key(token) do
@@ -947,7 +947,7 @@ defmodule Tokengate.Accounts do
             member =
               TokengateWeb.Plugs.ApiAuth.service_to_virtual_member(service)
 
-            %{member: member, limits: effective_limits(service)}
+            %{member: member, limits: effective_limits(service), subject_type: "service"}
 
           _ ->
             :error

@@ -30,6 +30,7 @@ defmodule TokengateWeb.Plugs.ApiAuth do
          :ok <- active_membership(entry.member) do
       conn
       |> assign(:current_team_member, entry.member)
+      |> assign(:subject_type, entry.subject_type)
       |> assign(:effective_limits, entry.limits)
       |> assign(:api_key_hash, Accounts.hash_api_key(token))
       |> assign(:agent_type, agent_type(conn))
@@ -75,6 +76,7 @@ defmodule TokengateWeb.Plugs.ApiAuth do
       extra_concurrency: nil,
       extra_rpm: nil,
       status: "active",
+      service_name: service.name,
       # Preloaded associations (virtual)
       team: nil,
       user: nil,

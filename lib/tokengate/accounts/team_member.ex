@@ -19,6 +19,11 @@ defmodule Tokengate.Accounts.TeamMember do
     field :extra_rpm, :integer
     field :status, :string, default: "active"
 
+    # Virtual field populated only on the service "virtual member" built by
+    # `TokengateWeb.Plugs.ApiAuth.service_to_virtual_member/1`. Carries the
+    # service name so the proxy can snapshot it into in-flight entries.
+    field :service_name, :string, virtual: true
+
     has_one :api_key, Tokengate.Accounts.ApiKey
 
     timestamps(type: :utc_datetime)
