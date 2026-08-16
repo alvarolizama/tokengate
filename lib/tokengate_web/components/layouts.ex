@@ -222,15 +222,11 @@ defmodule TokengateWeb.Layouts do
             <%= if admin?(@current_scope) do %>
               <.sidebar_link href={~p"/dashboard/stats"} label="Estadísticas" icon="hero-chart-pie" />
               <.sidebar_link href={~p"/dashboard/credits"} label="Créditos" icon="hero-banknotes" />
+              <.sidebar_link href={~p"/dashboard/teams"} label="Equipos" icon="hero-user-group" />
               <.sidebar_link
-                href={~p"/dashboard/benchmarks"}
-                label="Benchmarks"
-                icon="hero-chart-bar"
-              />
-              <.sidebar_link
-                href={~p"/dashboard/calculator"}
-                label="Calculadora"
-                icon="hero-calculator"
+                href={~p"/dashboard/services"}
+                label="Servicios"
+                icon="hero-wrench-screwdriver"
               />
               <.sidebar_link
                 href={~p"/dashboard/monitor"}
@@ -242,13 +238,23 @@ defmodule TokengateWeb.Layouts do
                 label="Logs"
                 icon="hero-document-text"
               />
+              <.sidebar_link
+                href={~p"/dashboard/benchmarks"}
+                label="Benchmarks"
+                icon="hero-chart-bar"
+              />
+              <.sidebar_link
+                href={~p"/dashboard/calculator"}
+                label="Calculadora"
+                icon="hero-calculator"
+              />
             <% end %>
           </div>
 
           <%= if admin?(@current_scope) do %>
             <div class="space-y-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
-                Configuración
+                Sistema
               </p>
               <.sidebar_link
                 href={~p"/dashboard/providers"}
@@ -261,18 +267,6 @@ defmodule TokengateWeb.Layouts do
                 label="Modelos"
                 icon="hero-rectangle-stack"
               />
-              <.sidebar_link href={~p"/dashboard/teams"} label="Equipos" icon="hero-user-group" />
-              <.sidebar_link
-                href={~p"/dashboard/services"}
-                label="Servicios"
-                icon="hero-wrench-screwdriver"
-              />
-            </div>
-
-            <div class="space-y-1">
-              <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
-                Sistema
-              </p>
               <.sidebar_link href={~p"/dashboard/users"} label="Usuarios" icon="hero-users" />
               <.sidebar_link
                 href={~p"/dashboard/settings"}
