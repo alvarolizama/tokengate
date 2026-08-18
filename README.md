@@ -1,21 +1,20 @@
-<p align="center">
-  <img src="priv/static/images/logo.svg" width="120" alt="TokenGate">
-</p>
+<div align="center">
 
-<h1 align="center">TokenGate</h1>
+# 🚪 TokenGate
 
-<p align="center">
-  An OpenAI-compatible <strong>LLM API gateway</strong> built with <strong>Phoenix 1.8 + LiveView</strong>.
-  It sits between your agents/apps and the model providers: clients call TokenGate with a TokenGate
-  API key, and TokenGate routes each request to the best provider credential — with budgets,
-  rate limits, circuit breakers, and full cost accounting in between.
-</p>
+### OpenAI-compatible LLM API Gateway
 
-<p align="center">
-  Think "LiteLLM, but as an Elixir app with a real admin UI".
-</p>
+An **LLM API gateway** built with **Phoenix 1.8 + LiveView**. It sits between your agents/apps and the model providers: clients call TokenGate with a TokenGate API key, and TokenGate routes each request to the best provider credential — with budgets, rate limits, circuit breakers, and full cost accounting in between.
 
-<img src="docs/screenshots/dashboard.png" alt="TokenGate dashboard" width="100%">
+Think "LiteLLM, but as an Elixir app with a real admin UI".
+
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+[![Elixir](https://img.shields.io/badge/Elixir-1.18+-4B275F?logo=elixir&logoColor=white)](https://elixir-lang.org)
+[![Phoenix](https://img.shields.io/badge/Phoenix-LiveView-FD4F00?logo=phoenixframework&logoColor=white)](https://www.phoenixframework.org)
+
+![TokenGate](docs/headers/tokengate-header.png)
+
+</div>
 
 > **Note:** the admin UI language is Spanish; the proxy API and this README are English.
 
