@@ -35,3 +35,6 @@ tokengate-*.tar
 npm-debug.log
 /assets/node_modules/
 
+
+# Riel ledger (local state)
+.riel/
