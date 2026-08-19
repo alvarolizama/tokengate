@@ -37,6 +37,8 @@ defmodule Tokengate.Logs.CostBackfill do
   ## Options
 
     * `:mode` — `:zero_only` (default) or `:all`
+
+  Returns `{:ok, {updated_count, skipped_count}}`.
   """
   @spec run(keyword()) :: {:ok, {non_neg_integer, non_neg_integer}}
   def run(opts \\ []) do

@@ -13,8 +13,9 @@ defmodule Tokengate.Proxy.DashScopeRerank do
   Transforms a Cohere-format rerank request into DashScope's native format.
 
   Recognized Cohere top-level keys: `query`, `documents`, `top_n`,
-  `return_documents`, `task`. Everything else is dropped — DashScope's
-  rerank API only accepts `model`, `input` and `parameters`.
+  `return_documents`, `task`; `model` is forwarded as-is. Everything else
+  is dropped — DashScope's rerank API only accepts `model`, `input` and
+  `parameters`.
   """
   @spec encode(map()) :: map()
   def encode(payload) do

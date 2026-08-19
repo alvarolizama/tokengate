@@ -65,8 +65,6 @@ defmodule Tokengate.Routing.Router do
 
   ## Options (`request_context`)
 
-    * `"messages"` – list of OpenAI-style messages, used for routing-rule
-      condition evaluation (context length, image presence).
     * `:api_key_hash` – opaque hash identifying the API key (for sticky
       routing under the priority strategy). May be nil.
     * `:exclude_credential_ids` – list of credential ids to exclude from
@@ -86,7 +84,7 @@ defmodule Tokengate.Routing.Router do
     * `{:error, :model_not_found}` – no accessible alias with that name.
     * `{:error, :model_type_mismatch}` – alias exists but serves a
       different capability than requested.
-    * `{:error, :no_providers_configured}` – alias has no enabled alias providers.
+    * `{:error, :no_providers_configured}` – alias has no configured model providers.
     * `{:error, :no_available_provider}` – all candidates were filtered out
       (no active credential, breaker open, or excluded).
 
@@ -148,7 +146,7 @@ defmodule Tokengate.Routing.Router do
   error to the client.
 
   `reason` is one of `:server_error`, `:timeout`, `:rate_limited`,
-  `:client_error`.
+  `:client_error`, `:auth_error`.
 
   ## Options
 
@@ -219,11 +217,11 @@ defmodule Tokengate.Routing.Router do
   end
 
   @doc """
-  Cuántas credentials `included` quedan disponibles para `team_member` y
-  `model_requested` después de excluir `credential_id`.
+  How many `included` credentials remain available for `team_member` and
+  `model_requested` after excluding `credential_id`.
 
-  Se usa para decidir el timeout de la cola FIFO: a más included restantes,
-  menos tiempo se espera en la actual.
+  Used to decide the FIFO wait timeout: the more included credentials
+  remain, the less time is spent waiting on the current one.
   """
   @spec count_remaining_included(String.t(), map(), term()) :: non_neg_integer()
   def count_remaining_included(model_requested, team_member, exclude_credential_id) do
@@ -254,7 +252,7 @@ defmodule Tokengate.Routing.Router do
   end
 
   # ---------------------------------------------------------------------------
-  # Internal: alias resolution + routing-rule evaluation
+  # Internal: alias resolution
   # ---------------------------------------------------------------------------
 
   defp route_alias(model_alias, team_member, _accessible, request_context, breaker, exclude) do

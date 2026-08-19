@@ -36,7 +36,7 @@ defmodule Tokengate.Budgets.Manager do
 
   ## API summary
 
-    * `check/4` — pre-flight budget check (current_spend + estimated vs limit).
+    * `check_ladder/3` — pre-flight budget check (current spend + estimated vs limit).
     * `record_spend/2` — post-request accumulation (atomic counter bump +
       SyncWorker enqueue).
     * `spend/1` — read-back of current daily/monthly spend in USD.
@@ -112,9 +112,11 @@ defmodule Tokengate.Budgets.Manager do
   lazy-loaded from the DB first (read in the caller, seeded via the
   GenServer) before the counter bump.
 
-  After updating the counters, enqueues a `Budgets.SyncWorker` Oban job
-  for drift correction. In the test environment Oban runs in `:manual`
-  mode, so the job is only enqueued (assert with `assert_enqueued/1`).
+  After updating the counters, enqueues a debounced `Budgets.SyncWorker`
+  Oban job for drift correction — at most one job enqueued per member until
+  the worker clears the pending mark (see `maybe_enqueue_sync/1`). In the
+  test environment Oban runs in `:manual` mode, so the job is only enqueued
+  (assert with `assert_enqueued/1`).
   """
   @spec record_spend(member_id :: term(), provider_cost_usd :: Decimal.t() | nil) :: :ok
   def record_spend(member_id, provider_cost_usd) do
@@ -163,8 +165,9 @@ defmodule Tokengate.Budgets.Manager do
   Returns the current daily and monthly spend for `member_id` as Decimals
   (USD), converting from the internal micro-USD representation.
 
-  Triggers lazy load from the DB if the entry is missing or stale (day/month
-  rollover). Missing entries are seeded to 0 (no spend yet this period).
+  Triggers a lazy load from the DB if the entry is missing or stale (day/month
+  rollover). The DB read happens in the caller; the GenServer then seeds the
+  entry (see `load_from_db/2` and `seed/3`).
   """
   @spec spend(member_id :: term()) :: %{daily_usd: Decimal.t(), monthly_usd: Decimal.t()}
   def spend(member_id) do
@@ -603,7 +606,7 @@ defmodule Tokengate.Budgets.Manager do
   end
 
   # ---------------------------------------------------------------------------
-  # Internal — PubSub broadcast for live dashboards
+  # Internal — sync-pending debounce marker
   # ---------------------------------------------------------------------------
 
   @doc false

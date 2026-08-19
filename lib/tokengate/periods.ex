@@ -95,6 +95,7 @@ defmodule Tokengate.Periods do
     * `"today"` → yesterday
     * `"week"`  → previous week (Mon–Sun)
     * `"month"` → previous calendar month
+    * `"7d"`    → the 7 days before the last 7 days
     * `"30d"`   → the 30 days before the last 30 days
     * `"90d"`   → the 90 days before the last 90 days
   """

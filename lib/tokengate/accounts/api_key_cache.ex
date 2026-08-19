@@ -11,7 +11,7 @@ defmodule Tokengate.Accounts.ApiKeyCache do
 
   ## Entry shape
 
-      %{member: %TeamMember{}, limits: %{monthly_budget_usd:, concurrency_limit:, rpm_limit:}}
+      %{member: %TeamMember{}, limits: %{monthly_budget_usd:, concurrency_limit:, rpm_limit:}, subject_type: "user" | "service"}
 
   Caching the limits alongside the member avoids the extra preload/query
   `Accounts.effective_limits/1` performs for service-backed members.
@@ -26,8 +26,10 @@ defmodule Tokengate.Accounts.ApiKeyCache do
       `revoke_service_api_key/1` invalidate by key hash (and by member so
       every hash of that member drops).
     * membership/service/team edits (status, limits) — `update_team_member/1`,
-      `delete_team_member/1`, `update_service/2`, `delete_service/1`,
-      `update_team/2`, `delete_team/1` invalidate by id (team invalidates
+      `update_service/2`, `update_team/2` invalidate by id (team invalidates
+      every member of the team).
+    * membership/service/team deletion — `delete_team_member/1`,
+      `delete_service/1`, `delete_team/1` invalidate by id (team invalidates
       every member of the team).
 
   A stale entry can survive at most `@ttl_ms`; that window bounds how long a

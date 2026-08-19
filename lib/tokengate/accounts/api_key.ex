@@ -27,8 +27,8 @@ defmodule Tokengate.Accounts.ApiKey do
     |> cast(attrs, @permitted)
     |> validate_required(@required)
     |> validate_inclusion(:status, ["active", "revoked"])
-    # Only one *active* api key per team_member at a time; revoked keys may
-    # coexist (partial unique index `api_keys_team_member_id_index`).
+    # One api key per team_member (full unique index
+    # `api_keys_team_member_id_index`); `replace_api_key/1` rotates in place.
     |> unique_constraint(:team_member_id)
     |> unique_constraint(:key_hash)
     |> assoc_constraint(:team_member)

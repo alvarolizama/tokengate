@@ -7,17 +7,10 @@ defmodule TokengateWeb.Plugs.LoginRateLimit do
   a 429 (rendered as the login form with an error flash) until the window
   resets. Successful logins clear the counter for that IP.
 
-  The table is owned by the endpoint process via `Plug.Session`-style
-  persistence: we lazily create a named public table on first use (the
-  creating process is the caller, so we hand ownership to a `:heir` —
-  the endpoint — is overkill). Instead the table is created with
-  `read_concurrency`/`write_concurrency` from whichever request process
-  first arrives, and kept alive by registering it under
-  `Tokengate.LoginRateLimit.TableKeeper`, a tiny GenServer started in the
-  application supervisor that takes ownership via `:ets.give_away`.
-
-  Simpler: the table is created by the keeper GenServer itself when the
-  plug calls `ensure_table/0` — the keeper holds it for the app's lifetime.
+  The ETS table is owned by `TokengateWeb.Plugs.LoginRateLimit.TableKeeper`,
+  a tiny GenServer started in the application supervisor. The keeper creates
+  the table at init and holds it for the app's lifetime — individual request
+  processes never create or own the table.
   """
 
   import Plug.Conn

@@ -5,15 +5,17 @@ defmodule Tokengate.Routing.Priority do
   Selection algorithm:
 
     1. Sort candidates by `{tier, priority}`: healthy subscription
-       (`billing_mode == "included"`) providers form the top tier, degraded
-       (slow) subscriptions next, then healthy pay-per-token, then degraded
-       pay-per-token. Within a tier, `priority` ASC NULLS LAST decides; the
-       sort is stable so original order is preserved within ties. A
-       credential is "degraded" when `Tokengate.Routing.CredentialHealth`
-       has a live slow mark for it.
+       (`billing_mode == "included"`) providers form the top tier, then
+       healthy pay-per-token, then degraded (slow) subscriptions, then
+       degraded pay-per-token. Within a tier, `priority` ASC NULLS LAST
+       decides; the sort is stable so original order is preserved within
+       ties. A credential is "degraded" when
+       `Tokengate.Routing.CredentialHealth` has a live slow mark for it.
     2. If `opts[:api_key_hash]` is present: look up the sticky entry in
        `StickyTracker`. If the stuck `model_provider_id` is among the
-       candidates **and** satisfies `available?.(ap)`, return it immediately.
+       candidates, satisfies `available?.(ap)`, **and** is not degraded,
+       return it immediately (a degraded stuck provider releases the stick
+       so traffic flows back to a healthy tier).
     3. Otherwise pick the first available candidate in tier+priority order,
        stick to it (only when `opts[:api_key_hash]` is present), and return it.
     4. If no candidate is available, return `{:error, :no_available_provider}`.

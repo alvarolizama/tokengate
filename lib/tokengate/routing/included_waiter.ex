@@ -1,17 +1,18 @@
 defmodule Tokengate.Routing.IncludedWaiter do
   @moduledoc """
-  Cola FIFO por credential para requests esperando slot en una included saturada.
+  FIFO queue per credential for requests waiting for a slot on a saturated
+  `included` credential.
 
-  Cuando una credential `included` está al máximo de concurrencia, los requests
-  no caen inmediatamente a pay-per-token — se registran en esta cola y esperan
-  a que otro request libere un slot. El timeout depende de cuántas included
-  queden en la cascada (config `:included_wait_tiers`).
+  When an `included` credential is at max concurrency, requests don't fall
+  through to pay-per-token immediately — they register in this queue and
+  wait for another request to free a slot. The timeout depends on how many
+  included credentials remain in the cascade (config `:included_wait_tiers`).
 
-      * Se registra el proceso actual con {credential_id, timestamp, ref}
-      * Al liberar un slot (`Limits.Manager.release/1`), se notifica al waiter
-        más antiguo (FIFO estricto).
-      * Si el proceso muere mientras espera, su entrada se limpia en la
-        siguiente notificación.
+      * The current process registers with {credential_id, timestamp, ref}
+      * When a slot is freed (`Limits.Manager.release/1`), the oldest waiter
+        is notified (strict FIFO).
+      * If a process dies while waiting, its entry is cleaned up on the next
+        notification.
   """
 
   @table :tokengate_included_waiters
@@ -19,13 +20,13 @@ defmodule Tokengate.Routing.IncludedWaiter do
   # ── Public API ─────────────────────────────────────────────────────────
 
   @doc """
-  Espera hasta `timeout_ms` por un slot en `credential_id`.
+  Waits up to `timeout_ms` for a slot on `credential_id`.
 
-  Intenta adquirir concurrencia inmediatamente; si falla, se registra en la
-  cola FIFO de esta credential y bloquea hasta que otro request libere un slot
-  o el timeout expire.
+  Tries to acquire concurrency immediately; if it fails, registers in this
+  credential's FIFO queue and blocks until another request frees a slot or
+  the timeout expires.
 
-  Retorna `:ok` cuando se adquirió el slot, o `{:error, :queue_timeout}`.
+  Returns `:ok` when a slot was acquired, or `{:error, :queue_timeout}`.
   """
   @spec wait_for_slot(
           credential_id :: term(),
@@ -46,10 +47,10 @@ defmodule Tokengate.Routing.IncludedWaiter do
   end
 
   @doc """
-  Notifica al waiter más antiguo de `credential_id` que un slot se liberó.
+  Notifies the oldest waiter for `credential_id` that a slot was freed.
 
-  Llamado por `Tokengate.Limits.Manager.release/1` cada vez que se libera
-  concurrencia. Es idempotente: si no hay waiters, no hace nada.
+  Called by `Tokengate.Limits.Manager.release/1` each time concurrency is
+  released. Idempotent: if there are no waiters, it does nothing.
   """
   @spec notify_slot(credential_id :: term()) :: :ok
   def notify_slot(credential_id) do
@@ -104,8 +105,8 @@ defmodule Tokengate.Routing.IncludedWaiter do
   end
 
   defp do_notify(credential_id) do
-    # Busca todas las entradas para esta credential, elige la más antigua
-    # (menor timestamp), la borra y notifica al proceso.
+    # Selects all entries for this credential, picks the oldest (lowest
+    # timestamp), deletes it and notifies the process.
     spec = [
       {{{credential_id, :"$1", :"$2"}, :"$3"}, [], [{{:"$1", :"$2", :"$3"}}]}
     ]
@@ -113,7 +114,7 @@ defmodule Tokengate.Routing.IncludedWaiter do
     entries = :ets.select(@table, spec)
 
     if entries != [] do
-      # Enum.min_by en el timestamp (primer elemento de cada tupla)
+      # Enum.min_by over the timestamp (first element of each tuple)
       {ts, ref, pid} = Enum.min_by(entries, fn {ts, _ref, _pid} -> ts end)
       key = {credential_id, ts, ref}
 
@@ -121,7 +122,7 @@ defmodule Tokengate.Routing.IncludedWaiter do
         :ets.delete(@table, key)
         send(pid, {:slot_available, ref})
       else
-        # Proceso muerto — limpiar entrada huérfana y probar el siguiente
+        # Process dead — clean up the orphan entry and try the next one
         :ets.delete(@table, key)
         do_notify(credential_id)
       end

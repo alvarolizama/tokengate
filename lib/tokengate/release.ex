@@ -9,9 +9,10 @@ defmodule Tokengate.Release do
     * `seed/0`    — run `priv/repo/seeds.exs` (creates the admin user;
       idempotent).
 
-  Any function that touches a repo wraps the work in
-  `Ecto.Migrator.with_repo/2` — during `bin/tokengate eval` the full
-  supervision tree (including the Repo) is not started.
+  All migration/seed/rollback work is wrapped in `Ecto.Migrator.with_repo/2`
+  — during `bin/tokengate eval` the full supervision tree (including the
+  Repo) is not started. `create/0` talks to the adapter directly via
+  `storage_up/1` and does not need the Repo started.
   """
 
   require Logger
@@ -86,7 +87,10 @@ defmodule Tokengate.Release do
         Logger.info("[release] created database for #{inspect(repo)}")
         :ok
 
-      # Ecto 3.14+ returns a bare atom; older versions return a tuple.
+      # storage_up/1 creates the DB when missing and returns {:error,
+      # :already_up} (tuple) when it already existed — confirmed against
+      # the pinned ecto_sql 3.14. Older Ecto versions returned other
+      # shapes, hence the legacy tuple clause below.
       {:error, :already_up} ->
         Logger.info("[release] database already exists for #{inspect(repo)}, skipping create")
         :ok

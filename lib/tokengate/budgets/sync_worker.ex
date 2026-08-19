@@ -10,10 +10,10 @@ defmodule Tokengate.Budgets.SyncWorker do
 
   ## Scheduling
 
-  A cron schedule enqueuing this worker every 5 minutes is intended (to be
-  wired into `config/config.exs` Oban `:crontab` by the parent task). The
-  worker is also enqueued inline by `Budgets.Manager.record_spend/2` after
-  each spend recording.
+  The worker is enqueued by `Budgets.Manager.record_spend/2` after each
+  spend recording, debounced to at most one pending job per member (see
+  the manager's `maybe_enqueue_sync/1`). There is no cron schedule wired
+  for it in `config/config.exs`.
 
   ## Dedup
 

@@ -356,14 +356,14 @@ defmodule Tokengate.Metrics.Rollup do
 
       %{
         team_member_id: binary,
+        user_id: binary,
         team_name: String.t(),
         user_email: String.t(),
         request_count: integer,
         cost_usd: Decimal,  # what the upstream charged for the request
-        provider_
-        estimated_
         prompt_tokens: integer,
         completion_tokens: integer,
+        cache_read_tokens: integer,
         avg_tps: float | nil
       }
 
@@ -431,7 +431,8 @@ defmodule Tokengate.Metrics.Rollup do
   @doc """
   Returns per-service aggregate metrics ranked by total cost (descending).
 
-  Services are virtual team members (service.id = team_member_id in logs).
+  Services have a dedicated `service_id` column on `request_logs`
+  (team_member_id is null).
 
   Each row is:
 
@@ -505,10 +506,9 @@ defmodule Tokengate.Metrics.Rollup do
         team_name: String.t(),
         request_count: integer,
         cost_usd: Decimal,  # what the upstream charged for the request
-        provider_
-        estimated_
         prompt_tokens: integer,
         completion_tokens: integer,
+        cache_read_tokens: integer,
         avg_tps: float | nil
       }
 
@@ -658,12 +658,11 @@ defmodule Tokengate.Metrics.Rollup do
 
       %{
         team_member_id: binary,
+        user_id: binary,
         team_name: String.t(),
         user_email: String.t(),
         request_count: integer,
         cost_usd: Decimal,  # what the upstream charged for the request
-        provider_
-        estimated_
         prompt_tokens: integer,
         completion_tokens: integer,
         avg_tps: float | nil
@@ -741,8 +740,6 @@ defmodule Tokengate.Metrics.Rollup do
         team_name: String.t(),
         request_count: integer,
         cost_usd: Decimal,  # what the upstream charged for the request
-        provider_
-        estimated_
         prompt_tokens: integer,
         completion_tokens: integer,
         avg_tps: float | nil

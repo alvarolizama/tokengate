@@ -113,7 +113,7 @@ defmodule TokengateWeb.DashboardLive do
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   # ---------------------------------------------------------------------------
-  # Events — API key management --------------------------------------------
+  # Scope helpers ----------------------------------------------------------
   # ---------------------------------------------------------------------------
 
   # User-wide scope: EVERY user (admin included) sees only their own
@@ -650,7 +650,7 @@ defmodule TokengateWeb.DashboardLive do
   def model_type_badge_class("rerank"), do: "badge-warning"
   def model_type_badge_class(_), do: "badge-ghost"
 
-  ## Key helpers (from ApiKeysLive) ---------------------------------------
+  ## Key helpers -----------------------------------------------------------
 
   def masked_key(%{api_key: %{key_prefix: prefix}}) when is_binary(prefix) do
     "#{prefix}••••"

@@ -316,8 +316,8 @@ defmodule Tokengate.Providers do
     do: ModelProvider.changeset(model_provider, attrs)
 
   @doc """
-  Returns enabled model_providers for a model_alias (global only),
-  ordered by priority ASC with NULLS LAST, preloading credential (with provider).
+  Returns enabled model_providers for a model_alias, ordered by priority ASC
+  with NULLS LAST, preloading credential (with provider).
   Used by the admin UI — shows all providers regardless of scope.
   """
   def list_model_providers(model_alias_id) when is_binary(model_alias_id) do
@@ -355,8 +355,9 @@ defmodule Tokengate.Providers do
   - Providers exclusive to this member
   - Providers exclusive to this member's team
 
-  Returns providers ordered by: exclusive_to_team_member_id DESC (member
-  first), then priority ASC. The router uses this to inject exclusive
+  Returns providers ordered by `exclusive_to_team_member_id` ASC with NULLS
+  LAST (member-exclusive rows sort before the NULL `global` rows), then
+  priority ASC. The router uses this to inject exclusive
   providers with priority -1.
   """
   def list_model_providers_for_member(model_alias_id, team_member_id, team_id)

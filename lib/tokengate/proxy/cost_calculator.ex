@@ -48,8 +48,8 @@ defmodule Tokengate.Proxy.CostCalculator do
     * `billing_mode` — `"pay_per_token"` or `"included"` from the
       `model_providers` row.
     * `provider_reported_cost` — Decimal/number/string the upstream returned
-      via `usage.cost` / `usage.total_cost` / top-level `cost` (when present),
-      or `nil` when the upstream doesn't report a cost.
+      via `usage.cost` / top-level `cost` (when present), or `nil` when the
+      upstream doesn't report a cost.
     * `manual_pricing` — optional map with `:input_cost_per_million`,
       `:output_cost_per_million`, and `:cache_cost_per_million` (Decimal or nil).
     * `usage` — optional map with `:prompt_tokens`, `:completion_tokens`, and

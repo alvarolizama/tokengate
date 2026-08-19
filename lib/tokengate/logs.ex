@@ -2,8 +2,11 @@ defmodule Tokengate.Logs do
   @moduledoc """
   The Logs context: append-only request log entries.
 
-  This context only **inserts** and **queries** request logs — never updates
-  or deletes. The `request_logs` table is a native Postgres RANGE-partitioned
+  In normal operation this context only **inserts** and **queries** request
+  logs — never updates or deletes. The deliberate exceptions are the admin
+  utilities `truncate_request_logs/0` (destructive maintenance TRUNCATE) and
+  `Tokengate.Logs.CostBackfill` (recomputes `provider_cost_usd` from manual
+  pricing). The `request_logs` table is a native Postgres RANGE-partitioned
   table on `inserted_at` (daily granularity).
 
   ## Privacy
@@ -125,7 +128,8 @@ defmodule Tokengate.Logs do
 
   Same filter support as `list_logs/1` (scope, status, agent, etc.), but
   the `before` cursor is ignored. A defensive `limit` caps how many new
-  logs are returned in a single real-time refresh (default 500).
+  logs are returned in a single real-time refresh (default 500 — or 100
+  when no `since` cursor is supplied).
   """
   def list_logs_after(since, filters \\ %{})
 
@@ -363,11 +367,10 @@ defmodule Tokengate.Logs do
 
   Returns the same shape as `cost_summary/1`:
     * `:total_cost_usd`
-    * `:total_provider_cost_usd`
-    * `:total_savings_usd`
-    * `:total_estimated_cost_usd`
     * `:total_prompt_tokens`
     * `:total_completion_tokens`
+    * `:total_cache_read_tokens`
+    * `:total_cache_creation_tokens`
     * `:request_count`
 
   ## Options
@@ -481,11 +484,10 @@ defmodule Tokengate.Logs do
 
   Returns a map with:
     * `:total_cost_usd`
-    * `:total_provider_cost_usd`
-    * `:total_savings_usd`
-    * `:total_estimated_cost_usd`
     * `:total_prompt_tokens`
     * `:total_completion_tokens`
+    * `:total_cache_read_tokens`
+    * `:total_cache_creation_tokens`
     * `:request_count`
     * `:avg_latency_ms` — mean latency over matched rows (`nil` when none)
     * `:avg_tps` — approximate tokens-per-second: `SUM(completion_tokens) /
@@ -627,11 +629,11 @@ defmodule Tokengate.Logs do
   stats page). Pass a list to consolidate across multiple memberships.
 
   Combines:
-    * lifetime + 5d/30d cost & token totals (5d/30d via `:from` opts),
+    * cost & token totals over the given range (the whole lifetime unless
+      `:from`/`:to` are passed), plus a `realtime_5min` rolling window,
     * request_count and per-status-class breakdown,
     * top 5 models used (by request count, descending),
-    * last request timestamp (or `nil`),
-    * avg latency / avg tps / avg ttft over the lifetime of the member.
+    * last request timestamp (or `nil`).
 
   Filters out logs with `team_member_id == nil` (services etc.).
 

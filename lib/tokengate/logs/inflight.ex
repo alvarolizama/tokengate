@@ -134,9 +134,8 @@ defmodule Tokengate.Logs.Inflight do
 
   @doc """
   Number of currently in-flight requests — the count the dashboard's
-  "En vuelo" badge and the logs page render. Equal to `length(list/0)`
-  but reads the table directly so it stays O(n) on the entry count
-  without building the full entries.
+  "En vuelo" badge and the logs page render. Reads the ETS table size
+  directly, so it avoids building the full entry list.
   """
   @spec count() :: non_neg_integer()
   def count do

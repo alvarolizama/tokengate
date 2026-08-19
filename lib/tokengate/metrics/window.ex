@@ -20,9 +20,8 @@ defmodule Tokengate.Metrics.Window do
   (`System.system_time(:minute)`). Rotation deletes keys whose minute
   index is older than `window_minutes` ago.
 
-  On first `snapshot/0` (or GenServer boot) the window is backfilled
-  from `request_logs` so the sparkline doesn't start empty after a
-  restart.
+  On GenServer boot the window is backfilled from `request_logs` so the
+  sparkline doesn't start empty after a restart.
   """
 
   use GenServer

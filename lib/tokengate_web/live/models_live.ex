@@ -11,10 +11,13 @@ defmodule TokengateWeb.ModelsLive do
 
   ## Cost model (2026-07-30)
 
-  Since we trust the upstream to report what it actually charged via
-  `usage.cost`, there is no per-provider pricing form anymore. The only
-  cost-relevant attribute on a model_provider is `billing_mode`:
-  `"pay_per_token"` or `"included"` (subscription / RPM-limited).
+  The primary cost source is the upstream provider's `usage.cost` report.
+  Manual per-provider pricing (input + cache + output per million tokens)
+  serves as a fallback when the upstream omits cost — the fields appear in
+  the provider-form when `billing_mode` is `"pay_per_token"`.
+
+  `billing_mode`: `"pay_per_token"` or `"included"` (subscription /
+  RPM-limited).
 
   ## Exclusive scope
 

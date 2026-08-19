@@ -203,7 +203,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
   end
 
   # --------------------------------------------------------------------------
-  # Overrides (extra_monthly_budget_usd, extra_monthly_budget_usd, extra_concurrency)
+  # Overrides (extra_monthly_budget_usd, extra_concurrency)
   # --------------------------------------------------------------------------
 
   test "admin edits and saves overrides", %{conn: conn} do

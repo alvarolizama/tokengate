@@ -111,7 +111,6 @@ defmodule Tokengate.Metrics.DashboardCacheTest do
   describe "TTL expiry" do
     @tag :ttl
     test "entry expires after TTL and recomputes" do
-      # Use a 1ms TTL for testing via config override
       # We can't easily override the config, so we test the read logic
       # directly: insert with an artificially old timestamp.
       key = DashboardCache.build_key("user-ttl", "today", "Etc/UTC")

@@ -115,11 +115,11 @@ defmodule Tokengate.Proxy.PromptOptimizer do
   end
 
   defp truncate_if_long(content) when byte_size(content) > @max_content_length do
-    # Slice por graphemas, no por bytes: binary_part/3 corta en un offset de
-    # bytes crudo y puede caer en medio de un carácter multi-byte (em-dash,
-    # emoji, acento), dejando un lead byte colgante que convierte el string
-    # en UTF-8 inválido. Eso revienta Jason.encode!/2 aguas abajo con
-    # "invalid byte 0x…" al re-codificar el payload para el proveedor.
+    # Slice by graphemes, not by bytes: binary_part/3 cuts at a raw byte
+    # offset and can land mid multi-byte character (em-dash, emoji, accent),
+    # leaving a dangling lead byte that makes the string invalid UTF-8. That
+    # breaks Jason.encode!/2 downstream with "invalid byte 0x…" when the
+    # payload is re-encoded for the provider.
     String.slice(content, 0, @max_content_length) <> @truncation_marker
   end
 

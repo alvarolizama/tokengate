@@ -78,6 +78,7 @@ defmodule Tokengate.Accounts do
         {:error, changeset} -> Repo.rollback(changeset)
       end
     end)
+    |> invalidate_team_auth_cache(team.id)
   end
 
   def change_team(%Team{} = team, attrs \\ %{}) do
@@ -398,7 +399,7 @@ defmodule Tokengate.Accounts do
 
   @doc """
   Creates a team member. No API key is generated automatically;
-  use `replace_api_key/1` or `generate_api_key/1` to provision one.
+  use `replace_api_key/1` to provision one.
   """
   def create_team_member(attrs) do
     %TeamMember{}
@@ -436,6 +437,7 @@ defmodule Tokengate.Accounts do
         {:error, changeset} -> Repo.rollback(changeset)
       end
     end)
+    |> invalidate_member_auth_cache(team_member.id)
   end
 
   def change_team_member(%TeamMember{} = team_member, attrs \\ %{}) do
@@ -476,11 +478,10 @@ defmodule Tokengate.Accounts do
   Revokes the existing API key for the team member and issues a new one,
   returning the new plaintext token.
 
-  Because of the unique constraint on `team_member_id` (one key per member),
-  this replaces the key material in place within a single transaction: the
-  old token is invalidated (its hash/prefix are overwritten) and a new
-  token is generated. Returns `{:ok, api_key, new_token}` or
-  `{:error, changeset}`.
+  Because of the unique constraint on `team_member_id` (one active key per
+  member), this replaces the key material in place: the old token is
+  invalidated (its hash/prefix are overwritten) and a new token is
+  generated. Returns `{:ok, api_key, new_token}` or `{:error, changeset}`.
   """
   def replace_api_key(%TeamMember{id: team_member_id} = team_member) do
     {new_token, new_hash, new_prefix} = generate_api_key_material()
@@ -621,6 +622,7 @@ defmodule Tokengate.Accounts do
         {:error, changeset} -> Repo.rollback(changeset)
       end
     end)
+    |> invalidate_member_auth_cache(service.id)
   end
 
   def change_service(%Service{} = service, attrs \\ %{}) do
@@ -843,7 +845,6 @@ defmodule Tokengate.Accounts do
   - `rpm_limit`: team's `default_rpm_limit` + member's `extra_rpm` (when not
     nil). The team default is always present (defaults to 60).
 
-  @doc \"""
   Returns a map with `:monthly_budget_usd`, `:concurrency_limit`, and `:rpm_limit` keys.
 
   Service virtual members (TeamMember with team: nil) are resolved to their

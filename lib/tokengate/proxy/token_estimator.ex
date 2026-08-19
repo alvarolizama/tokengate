@@ -15,6 +15,7 @@ defmodule Tokengate.Proxy.TokenEstimator do
 
   @chars_per_token 4
   @per_message_overhead 4
+  # OpenAI's published estimate for a low-detail image part (detail: "low").
   @image_part_tokens 85
 
   @doc """

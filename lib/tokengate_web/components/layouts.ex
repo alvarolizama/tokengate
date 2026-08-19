@@ -76,8 +76,8 @@ defmodule TokengateWeb.Layouts do
 
   @doc """
   Renders the dashboard (ops console) layout — a dark, premium sidebar +
-  topbar shell used by authenticated LiveViews (DashboardLive, future
-  admin LiveViews).
+  topbar shell used by authenticated LiveViews (DashboardLive and the
+  admin LiveViews under the `:admin` live_session).
 
   ## Examples
 

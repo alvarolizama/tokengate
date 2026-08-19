@@ -8,9 +8,11 @@ defmodule TokengateWeb.SessionController do
 
   Routes (wired in `TokengateWeb.Router`):
 
-      GET    /login   -> :new    (renders the login form)
-      POST   /login   -> :create (authenticate, put_session, redirect)
-      DELETE /logout  -> :delete (clear session, redirect to /login)
+      GET    /login                  -> :new              (renders the login form)
+      POST   /login                  -> :create           (authenticate, put_session, redirect)
+      DELETE /logout                 -> :delete           (clear session, redirect to /login)
+      POST   /impersonate/:user_id   -> :impersonate      (admin starts impersonation)
+      DELETE /impersonate            -> :stop_impersonating (end impersonation, restore admin)
   """
 
   require Logger

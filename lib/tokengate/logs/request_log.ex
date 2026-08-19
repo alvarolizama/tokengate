@@ -3,8 +3,10 @@ defmodule Tokengate.Logs.RequestLog do
   A request log entry for an API request routed through TokenGate.
 
   This table is a native Postgres RANGE-partitioned table on `inserted_at`
-  (daily granularity). It is **append-only**: the context only inserts and
-  queries — never updates or deletes.
+  (daily granularity). It is **append-only** in normal operation: the
+  context only inserts and queries — the deliberate exceptions are the
+  manual-pricing backfill in `Tokengate.Logs.CostBackfill` (rewrites
+  `provider_cost_usd`) and `Tokengate.Logs.truncate_request_logs/0`.
 
   ## Cost
 
@@ -91,8 +93,8 @@ defmodule Tokengate.Logs.RequestLog do
     # Accept legacy `:cost_usd`/`:savings_usd`/`:estimated_cost_usd` keys in
     # attrs (from test fixtures and any external callers written before the
     # 2026-07-30 refactor) and fold them onto the single surviving column
-    # `provider_cost_usd`. The first non-nil value wins; explicit
-    # `provider_cost_usd` always takes precedence.
+    # `provider_cost_usd`. The keys are applied in list order, so the last
+    # non-nil value wins; explicit `provider_cost_usd` always takes precedence.
     |> merge_legacy_cost_keys(attrs)
     |> validate_required(@required)
     |> validate_inclusion(:subject_type, ["user", "service"])

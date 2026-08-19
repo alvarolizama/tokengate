@@ -15,6 +15,7 @@ defmodule Tokengate.GlobalSettings do
 
   alias Tokengate.Repo
 
+  # Fixed primary key of the single singleton row (seeded in a migration).
   @singleton_id 1
 
   schema "global_settings" do

@@ -8,6 +8,10 @@ defmodule TokengateWeb.ProxyController do
       provider with full cost tracking. The response `usage` object gains
       `estimated_cost_usd` (market price) and `cost_usd` (provider price),
       plus `X-Tokengate-Cost` / `X-Tokengate-Savings` headers.
+    * `POST /v1/embeddings` — embeddings (OpenAI format). Non-streaming
+      only. Works against oMLX, OpenRouter and Fireworks.
+    * `POST /v1/rerank` — rerank (Cohere format). Normalizes oMLX and
+      Fireworks responses to a single Cohere-shaped contract.
 
   ## Two-gate throttling
 

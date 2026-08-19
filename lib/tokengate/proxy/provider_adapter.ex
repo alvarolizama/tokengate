@@ -73,7 +73,7 @@ defmodule Tokengate.Proxy.ProviderAdapter do
     * `{:sse_done}` — the upstream sent `data: [DONE]`. The stream process
       exits `:normal` immediately after.
     * `{:sse_error, term}` — a transport or parsing failure occurred. The
-      stream process exits with a non-normal reason shortly after.
+      stream process ends shortly after.
 
   First-token and overall stream timeouts are the caller's responsibility,
   not the adapter's.
@@ -98,9 +98,11 @@ defmodule Tokengate.Proxy.ProviderAdapter do
 
     * `401`, `402`, `403` -> `:auth_error` (credential is bad — disable it
       permanently and fall back to the next provider).
-    * `429`, `529` -> `:rate_limited` (cooldown 10 min, fall back).
+    * `429`, `529` -> `:rate_limited` (selects the short rate-limit cooldown
+      of the circuit breaker, then falls back).
     * other `4xx` -> `:client_error` (caller's fault — surface, don't switch).
-    * `5xx` -> `:server_error` (cooldown 30 min, fall back).
+    * `5xx` -> `:server_error` (selects the standard circuit-breaker cooldown,
+      then falls back).
 
   `nil` (no status, e.g. transport failure) is not a status and is not
   classified here — see `classify_error/1`.

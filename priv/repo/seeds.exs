@@ -2,7 +2,8 @@
 #
 # Run with: mix run priv/repo/seeds.exs (also part of `mix ecto.setup`)
 #
-# The admin password can be overridden with TOKENGATE_ADMIN_PASSWORD.
+# The admin credentials can be overridden with TOKENGATE_ADMIN_EMAIL /
+# TOKENGATE_ADMIN_PASSWORD.
 # This seed is idempotent — it won't duplicate the user on re-run.
 
 alias Tokengate.Accounts

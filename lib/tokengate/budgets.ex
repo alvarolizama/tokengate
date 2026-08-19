@@ -87,10 +87,10 @@ defmodule Tokengate.Budgets do
   end
 
   @typedoc """
-  Team-level budget rollup: the daily cap is the SUM of each member's
-  effective daily limit (tope diario × miembros), and the spend is the
-  SUM of each member's daily spend (real). Members without a daily
-  limit don't add to the cap and set `has_unlimited?`.
+  Team-level budget rollup: the monthly cap is the SUM of each member's
+  effective monthly limit, and the spend is the SUM of each member's
+  monthly spend (real). Members without a monthly limit don't add to the
+  cap and set `has_unlimited?`.
   """
   @type team_budget :: %{
           team: Tokengate.Accounts.Team.t(),

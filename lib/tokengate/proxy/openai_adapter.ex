@@ -15,6 +15,11 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   adapter only ensures it is present so a misconfigured caller still gets a
   stream rather than a buffered body.
 
+  Embeddings and rerank are the exception: when a provider declares a
+  non-passthrough dialect, those payloads are translated to the provider's
+  native format before sending and the response decoded back (see
+  `embeddings/4` and `rerank/4`).
+
   Uses `Tokengate.Finch` for all HTTP. Streaming needs raw chunk control
   (SSE framing), so the adapter calls `Finch.stream_while/5` directly rather
   than going through `Finch.request/3`.
@@ -36,7 +41,10 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   @doc """
   Generates embeddings via the provider's OpenAI-compatible `/embeddings`
   endpoint. The payload is forwarded exactly as received — input may be a
-  string, list of strings, or provider-specific multimodal blocks.
+  string, list of strings, or provider-specific multimodal blocks. When the
+  provider declares a non-passthrough embeddings dialect (e.g. DashScope),
+  the payload is encoded to the native format before sending and the
+  response decoded back to the OpenAI shape.
   """
   def embeddings(provider, credential, payload, opts \\ []) do
     url = embedding_url(provider)
@@ -427,8 +435,8 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   # Providers return different shapes; we try the most common ones.
   # The message is scrubbed before returning: some providers (notably
   # OpenAI) echo a fragment of the offending API key in their 401 error
-  # envelope, and this message is persisted to provider_credentials and
-  # rendered in the admin alerts page.
+  # envelope, and this message is persisted to request_logs and surfaced in
+  # the logs page.
   defp extract_error_message(body) when is_binary(body) do
     case Jason.decode(body) do
       {:ok, %{"error" => %{"message" => msg}}} when is_binary(msg) -> sanitize_msg(msg)
