@@ -262,7 +262,9 @@ defmodule TokengateWeb.PromptInspectorLive do
                   </td>
                   <td class="font-mono text-xs">{entry.model_requested || "—"}</td>
                   <td>{entry.agent_type || "—"}</td>
-                  <td class="max-w-xs truncate text-xs text-base-content/70">{entry.preview}</td>
+                  <td class="max-w-xs truncate text-xs text-base-content/70">
+                    {last_message_preview(entry.messages)}
+                  </td>
                   <td class="text-right">
                     <.icon name="hero-chevron-right" class="w-4 h-4 text-base-content/40" />
                   </td>
@@ -302,6 +304,28 @@ defmodule TokengateWeb.PromptInspectorLive do
               <span class="font-semibold text-base-content">Time:</span>
               {Calendar.strftime(@modal_prompt.started_at, "%Y-%m-%d %H:%M:%S")}
             </p>
+            <p>
+              <span class="font-semibold text-base-content">Messages:</span>
+              {length(@modal_prompt.messages)}
+            </p>
+            <p>
+              <span class="font-semibold text-base-content">Size:</span>
+              {format_prompt_size(@modal_prompt.messages)}
+            </p>
+            <p>
+              <span class="font-semibold text-base-content">Agent:</span>
+              {@modal_prompt.agent_type || "—"}
+            </p>
+            <p>
+              <span class="font-semibold text-base-content">Subject:</span>
+              <span class={badge_class(@modal_prompt.subject_type)}>
+                {@modal_prompt.subject_type || "—"}
+              </span>
+            </p>
+            <p>
+              <span class="font-semibold text-base-content">Client:</span>
+              {@modal_prompt.client_agent || "—"}
+            </p>
           </div>
           <div :if={@modal_prompt} class="bg-base-200 rounded-lg p-4 overflow-auto max-h-[55vh]">
             <pre class="text-xs text-base-content whitespace-pre-wrap break-words font-mono"><%= Jason.encode!(@modal_prompt.messages, pretty: true) %></pre>
@@ -326,4 +350,19 @@ defmodule TokengateWeb.PromptInspectorLive do
   defp badge_class("service"), do: "badge badge-sm badge-accent"
   defp badge_class("user"), do: "badge badge-sm badge-info"
   defp badge_class(_), do: "badge badge-sm"
+
+  defp last_message_preview([]), do: ""
+
+  defp last_message_preview(messages) do
+    case List.last(messages) do
+      %{"content" => content} when is_binary(content) -> String.slice(content, 0, 200)
+      _ -> ""
+    end
+  end
+
+  defp format_prompt_size(messages) do
+    size = messages |> Jason.encode!() |> byte_size()
+    kb = Float.round(size / 1024, 1)
+    "#{kb} KB"
+  end
 end
