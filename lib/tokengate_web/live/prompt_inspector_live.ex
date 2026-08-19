@@ -7,6 +7,7 @@ defmodule TokengateWeb.PromptInspectorLive do
 
   @pubsub Tokengate.PubSub
   @topic Cache.topic()
+  @max_rows 200
 
   @impl true
   def mount(_params, _session, socket) do
@@ -29,11 +30,11 @@ defmodule TokengateWeb.PromptInspectorLive do
 
       socket =
         socket
-        |> stream(:prompts, entries)
+        |> stream(:prompts, entries, limit: @max_rows)
 
       {:ok, socket}
     else
-      {:ok, stream(socket, :prompts, Cache.list())}
+      {:ok, stream(socket, :prompts, Cache.list(), limit: @max_rows)}
     end
   end
 
@@ -55,7 +56,7 @@ defmodule TokengateWeb.PromptInspectorLive do
   @impl true
   def handle_info({:prompt_captured, entry}, socket) do
     if entry_matches_filters?(entry, socket.assigns[:filters]) do
-      {:noreply, stream_insert(socket, :prompts, entry, at: 0)}
+      {:noreply, stream_insert(socket, :prompts, entry, at: 0, limit: @max_rows)}
     else
       {:noreply, socket}
     end
@@ -143,7 +144,7 @@ defmodule TokengateWeb.PromptInspectorLive do
   defp reset_stream_with_filters(socket) do
     all_entries = Cache.list()
     filtered = Enum.filter(all_entries, &entry_matches_filters?(&1, socket.assigns.filters))
-    stream(socket, :prompts, filtered, reset: true)
+    stream(socket, :prompts, filtered, reset: true, limit: @max_rows)
   end
 
   ## Render ----------------------------------------------------------------
@@ -265,7 +266,12 @@ defmodule TokengateWeb.PromptInspectorLive do
       </div>
 
       <%!-- Full prompt modal --%>
-      <dialog id="prompt-modal" class="modal" phx-hook="Modal">
+      <dialog
+        id="prompt-modal"
+        class="modal"
+        phx-hook="Modal"
+        data-open={if(@modal_prompt != nil, do: "true", else: "false")}
+      >
         <div class="modal-box max-w-3xl">
           <h3 class="text-lg font-bold text-base-content flex items-center gap-2">
             <.icon name="hero-command-line" class="w-5 h-5" /> Prompt completo

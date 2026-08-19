@@ -87,11 +87,26 @@ const Modal = {
   mounted() {
     this.handleEvent("open_modal", ({id}) => {
       const el = document.getElementById(id)
-      if (el && typeof el.showModal === "function") el.showModal()
+      if (el && typeof el.showModal === "function" && !el.open) el.showModal()
     })
     this.handleEvent("close_modal", ({id}) => {
       const el = document.getElementById(id)
       if (el && typeof el.close === "function") el.close()
+    })
+    // LiveView repaints (e.g. a new prompt arriving while the modal is open)
+    // destroy and re-mount this hook, which also closes the native <dialog>.
+    // When the server rendered the dialog as open (data-open="true"), re-open
+    // it so the modal survives the repaint.
+    if (this.el.dataset.open === "true" && typeof this.el.showModal === "function" && !this.el.open) {
+      this.el.showModal()
+    }
+    // Keep the server in sync when the user closes the dialog natively
+    // (Escape key or backdrop click) so a later repaint doesn't reopen it.
+    this.el.addEventListener("close", () => {
+      if (this.el.dataset.open === "true") {
+        this.el.dataset.open = "false"
+        this.pushEvent("close_modal", {})
+      }
     })
   }
 }
