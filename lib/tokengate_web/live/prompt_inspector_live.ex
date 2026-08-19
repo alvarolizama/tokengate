@@ -66,7 +66,7 @@ defmodule TokengateWeb.PromptInspectorLive do
   @impl true
   def handle_event("apply_filter", %{"filter" => filter_params}, socket) do
     filters =
-      Map.merge(default_filters(), fn _k, _v1, v2 -> v2 end, filter_params)
+      Map.merge(default_filters(), filter_params, fn _k, _v1, v2 -> v2 end)
 
     socket =
       socket
@@ -214,7 +214,7 @@ defmodule TokengateWeb.PromptInspectorLive do
                   class="input input-bordered input-sm w-32"
                 />
               </div>
-              <div class="form-control mt-auto">
+              <div class="form-control">
                 <div class="flex gap-2">
                   <button type="submit" class="btn btn-primary btn-sm">
                     <.icon name="hero-magnifying-glass" class="w-4 h-4" /> Filtrar
