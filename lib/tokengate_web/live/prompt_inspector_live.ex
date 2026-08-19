@@ -88,12 +88,26 @@ defmodule TokengateWeb.PromptInspectorLive do
   end
 
   def handle_event("show_prompt", %{"id" => id}, socket) do
-    entry = Enum.find(socket.assigns.prompts |> Map.values(), &(&1.id == id))
-    {:noreply, assign(socket, :modal_prompt, entry)}
+    # Look up the entry from the cache, not from assigns — the stream lives
+    # in assigns.streams.prompts (a %{dom_id => entry} map), so the flat
+    # assigns list is not a reliable source for a single entry by id.
+    entry = Enum.find(Cache.list(), &(&1.id == id))
+
+    if entry do
+      {:noreply,
+       socket
+       |> assign(:modal_prompt, entry)
+       |> push_event("open_modal", %{id: "prompt-modal"})}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_event("close_modal", _params, socket) do
-    {:noreply, assign(socket, :modal_prompt, nil)}
+    {:noreply,
+     socket
+     |> assign(:modal_prompt, nil)
+     |> push_event("close_modal", %{id: "prompt-modal"})}
   end
 
   ## Filtering -------------------------------------------------------------
@@ -141,194 +155,175 @@ defmodule TokengateWeb.PromptInspectorLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-      <div class="flex items-center justify-between mb-6">
-        <div>
-          <h1 class="text-2xl font-bold text-gray-900">Prompt Inspector</h1>
-          <p class="mt-1 text-sm text-gray-500">Real-time prompt capture from the proxy hot path</p>
+    <Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
+      <div class="space-y-6">
+        <.header>
+          Prompt Inspector
+          <:subtitle>Captura en tiempo real de los prompts que pasan por el proxy</:subtitle>
+        </.header>
+
+        <%!-- Filters --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-4">
+            <.form for={@form} phx-submit="apply_filter" class="flex flex-wrap gap-4 items-end">
+              <div class="form-control">
+                <label class="label py-1">
+                  <span class="label-text text-xs">Email</span>
+                </label>
+                <.input
+                  field={@form[:user_email]}
+                  type="text"
+                  placeholder="user@example.com"
+                  phx-debounce="300"
+                  class="input input-bordered input-sm w-48"
+                />
+              </div>
+              <div class="form-control">
+                <label class="label py-1">
+                  <span class="label-text text-xs">Subject</span>
+                </label>
+                <.input
+                  field={@form[:subject_type]}
+                  type="select"
+                  prompt="All"
+                  options={[{"User", "user"}, {"Service", "service"}]}
+                  class="select select-bordered select-sm w-32"
+                />
+              </div>
+              <div class="form-control">
+                <label class="label py-1">
+                  <span class="label-text text-xs">Model</span>
+                </label>
+                <.input
+                  field={@form[:model]}
+                  type="text"
+                  placeholder="gpt-4o"
+                  phx-debounce="300"
+                  class="input input-bordered input-sm w-40"
+                />
+              </div>
+              <div class="form-control">
+                <label class="label py-1">
+                  <span class="label-text text-xs">Agent</span>
+                </label>
+                <.input
+                  field={@form[:agent_type]}
+                  type="text"
+                  placeholder="api"
+                  phx-debounce="300"
+                  class="input input-bordered input-sm w-32"
+                />
+              </div>
+              <div class="form-control mt-auto">
+                <div class="flex gap-2">
+                  <button type="submit" class="btn btn-primary btn-sm">
+                    <.icon name="hero-magnifying-glass" class="w-4 h-4" /> Filtrar
+                  </button>
+                  <button type="button" phx-click="clear_filters" class="btn btn-ghost btn-sm">
+                    Limpiar
+                  </button>
+                </div>
+              </div>
+            </.form>
+          </div>
+        </div>
+
+        <%!-- Table --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm overflow-x-auto">
+          <div class="overflow-x-auto">
+            <table class="table table-zebra table-sm">
+              <thead>
+                <tr>
+                  <th>Time</th>
+                  <th>User</th>
+                  <th>Subject</th>
+                  <th>Model</th>
+                  <th>Agent</th>
+                  <th>Prompt</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="prompts-table" phx-update="stream">
+                <tr
+                  :for={{dom_id, entry} <- @streams.prompts}
+                  id={dom_id}
+                  class="cursor-pointer hover:bg-base-200"
+                  phx-click="show_prompt"
+                  phx-value-id={entry.id}
+                >
+                  <td class="whitespace-nowrap text-xs">
+                    {Calendar.strftime(entry.started_at, "%Y-%m-%d %H:%M:%S")}
+                  </td>
+                  <td>{entry.user_email || "—"}</td>
+                  <td>
+                    <span class={badge_class(entry.subject_type)}>
+                      {entry.subject_type || "—"}
+                    </span>
+                  </td>
+                  <td class="font-mono text-xs">{entry.model_requested || "—"}</td>
+                  <td>{entry.agent_type || "—"}</td>
+                  <td class="max-w-xs truncate text-xs text-base-content/70">{entry.preview}</td>
+                  <td class="text-right">
+                    <.icon name="hero-chevron-right" class="w-4 h-4 text-base-content/40" />
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+
+            <div
+              :if={@streams.prompts |> Map.values() |> length() == 0}
+              class="p-8 text-center text-sm text-base-content/50"
+            >
+              No prompts capturados todavía.
+            </div>
+          </div>
         </div>
       </div>
 
-      <%!-- Filters --%>
-      <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-4 mb-6">
-        <.form for={@form} phx-submit="apply_filter" class="flex flex-wrap gap-4 items-end">
-          <div>
-            <label class="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Email</label>
-            <.input
-              field={@form[:user_email]}
-              type="text"
-              placeholder="user@example.com"
-              phx-debounce="300"
-              class="w-48 text-sm"
-            />
+      <%!-- Full prompt modal --%>
+      <dialog id="prompt-modal" class="modal" phx-hook="Modal">
+        <div class="modal-box max-w-3xl">
+          <h3 class="text-lg font-bold text-base-content flex items-center gap-2">
+            <.icon name="hero-command-line" class="w-5 h-5" /> Prompt completo
+          </h3>
+          <div
+            :if={@modal_prompt}
+            class="py-4 text-sm text-base-content/70 space-y-2"
+          >
+            <p>
+              <span class="font-semibold text-base-content">Model:</span>
+              {@modal_prompt.model_requested || "—"}
+            </p>
+            <p>
+              <span class="font-semibold text-base-content">User:</span>
+              {@modal_prompt.user_email || "—"}
+            </p>
+            <p>
+              <span class="font-semibold text-base-content">Time:</span>
+              {Calendar.strftime(@modal_prompt.started_at, "%Y-%m-%d %H:%M:%S")}
+            </p>
           </div>
-          <div>
-            <label class="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Subject</label>
-            <.input
-              field={@form[:subject_type]}
-              type="select"
-              prompt="All"
-              options={[{"User", "user"}, {"Service", "service"}]}
-              class="w-32 text-sm"
-            />
+          <div :if={@modal_prompt} class="bg-base-200 rounded-lg p-4 overflow-auto max-h-[55vh]">
+            <pre class="text-xs text-base-content whitespace-pre-wrap break-words font-mono"><%= Jason.encode!(@modal_prompt.messages, pretty: true) %></pre>
           </div>
-          <div>
-            <label class="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Model</label>
-            <.input
-              field={@form[:model]}
-              type="text"
-              placeholder="gpt-4o"
-              phx-debounce="300"
-              class="w-40 text-sm"
-            />
-          </div>
-          <div>
-            <label class="block text-xs font-medium text-gray-500 uppercase tracking-wide mb-1">Agent</label>
-            <.input
-              field={@form[:agent_type]}
-              type="text"
-              placeholder="api"
-              phx-debounce="300"
-              class="w-32 text-sm"
-            />
-          </div>
-          <div class="flex gap-2">
-            <button
-              type="submit"
-              class="inline-flex items-center px-3 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-500"
-            >
-              <.icon name="hero-magnifying-glass" class="w-4 h-4" />
-            </button>
-            <button
-              type="button"
-              phx-click="clear_filters"
-              class="inline-flex items-center px-3 py-2 text-sm font-medium text-gray-700 bg-gray-100 rounded-lg hover:bg-gray-200"
-            >
-              Clear
-            </button>
-          </div>
-        </.form>
-      </div>
-
-      <%!-- Table --%>
-      <div class="bg-white rounded-lg shadow-sm border border-gray-200 overflow-hidden">
-        <table class="min-w-full divide-y divide-gray-200">
-          <thead class="bg-gray-50">
-            <tr>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Time
-              </th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-                User
-              </th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Subject
-              </th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Model
-              </th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Agent
-              </th>
-              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wide">
-                Prompt
-              </th>
-              <th class="px-4 py-3"></th>
-            </tr>
-          </thead>
-          <tbody id="prompts-table" phx-update="stream" class="bg-white divide-y divide-gray-100">
-            <tr
-              :for={{dom_id, entry} <- @streams.prompts}
-              id={dom_id}
-              class="hover:bg-gray-50 cursor-pointer"
-              phx-click="show_prompt"
-              phx-value-id={entry.id}
-            >
-              <td class="px-4 py-3 text-sm text-gray-500 whitespace-nowrap">
-                {Calendar.strftime(entry.started_at, "%Y-%m-%d %H:%M:%S")}
-              </td>
-              <td class="px-4 py-3 text-sm text-gray-900">
-                {entry.user_email || "—"}
-              </td>
-              <td class="px-4 py-3">
-                <span class={"inline-flex items-center px-2 py-0.5 rounded text-xs font-medium #{if entry.subject_type == "service", do: "bg-purple-100 text-purple-800", else: "bg-blue-100 text-blue-800"}"}>
-                  {entry.subject_type || "—"}
-                </span>
-              </td>
-              <td class="px-4 py-3 text-sm text-gray-900 font-mono">
-                {entry.model_requested || "—"}
-              </td>
-              <td class="px-4 py-3 text-sm text-gray-500">
-                {entry.agent_type || "—"}
-              </td>
-              <td class="px-4 py-3 text-sm text-gray-500 max-w-xs truncate">
-                {entry.preview}
-              </td>
-              <td class="px-4 py-3 text-right">
-                <.icon name="hero-chevron-right" class="w-4 h-4 text-gray-400" />
-              </td>
-            </tr>
-          </tbody>
-        </table>
-
-        <div
-          :if={@streams.prompts |> Map.values() |> length() == 0}
-          class="px-4 py-12 text-center text-sm text-gray-500"
-        >
-          No prompts captured yet.
-        </div>
-      </div>
-    </div>
-
-    <%!-- Modal --%>
-    <div
-      :if={@modal_prompt}
-      class="fixed inset-0 z-50 overflow-y-auto"
-      aria-labelledby="modal-title"
-      role="dialog"
-      aria-modal="true"
-    >
-      <div class="flex min-h-full items-end justify-center px-4 pt-4 pb-20 text-center sm:block sm:p-0">
-        <div
-          class="fixed inset-0 bg-gray-500 bg-opacity-75 transition-opacity"
-          aria-hidden="true"
-          phx-click="close_modal"
-        >
-        </div>
-        <div
-          class="inline-block transform overflow-hidden rounded-lg bg-white text-left align-bottom shadow-xl transition-all sm:my-8 sm:w-full sm:max-w-3xl"
-          onclick="event.stopPropagation()"
-        >
-          <div class="bg-white px-4 pt-5 pb-4 sm:p-6 sm:pb-4">
-            <div class="flex items-center justify-between mb-4">
-              <h3 class="text-lg font-semibold text-gray-900" id="modal-title">Full Prompt</h3>
-              <button type="button" phx-click="close_modal" class="text-gray-400 hover:text-gray-500">
-                <.icon name="hero-x-mark" class="w-6 h-6" />
-              </button>
-            </div>
-            <div class="mb-3 text-sm text-gray-500">
-              <span class="font-medium">Model:</span> {@modal_prompt.model_requested} ·
-              <span class="font-medium">User:</span> {@modal_prompt.user_email || "—"} ·
-              <span class="font-medium">Time:</span> {Calendar.strftime(
-                @modal_prompt.started_at,
-                "%Y-%m-%d %H:%M:%S"
-              )}
-            </div>
-            <div class="bg-gray-50 rounded-lg p-4 overflow-auto max-h-[60vh]">
-              <pre class="text-sm text-gray-800 whitespace-pre-wrap break-words font-mono"><%= Jason.encode!(@modal_prompt.messages, pretty: true) %></pre>
-            </div>
-          </div>
-          <div class="bg-gray-50 px-4 py-3 sm:flex sm:flex-row-reverse sm:px-6">
-            <a
-              href="/dashboard/logs"
-              class="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-500"
-            >
-              <.icon name="hero-document-text" class="w-4 h-4 mr-1" /> View in Logs
+          <div class="modal-action">
+            <form method="dialog">
+              <button class="btn btn-ghost btn-sm" phx-click="close_modal">Cerrar</button>
+            </form>
+            <a href="/dashboard/logs" class="btn btn-primary btn-sm">
+              <.icon name="hero-document-text" class="w-4 h-4" /> Ver en Logs
             </a>
           </div>
         </div>
-      </div>
-    </div>
+        <form method="dialog" class="modal-backdrop" phx-click="close_modal">
+          <button>close</button>
+        </form>
+      </dialog>
+    </Layouts.dashboard>
     """
   end
+
+  defp badge_class("service"), do: "badge badge-sm badge-accent"
+  defp badge_class("user"), do: "badge badge-sm badge-info"
+  defp badge_class(_), do: "badge badge-sm"
 end
