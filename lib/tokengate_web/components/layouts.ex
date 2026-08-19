@@ -239,6 +239,11 @@ defmodule TokengateWeb.Layouts do
                 icon="hero-document-text"
               />
               <.sidebar_link
+                href={~p"/dashboard/prompts"}
+                label="Prompt Inspector"
+                icon="hero-command-line"
+              />
+              <.sidebar_link
                 href={~p"/dashboard/benchmarks"}
                 label="Benchmarks"
                 icon="hero-chart-bar"
