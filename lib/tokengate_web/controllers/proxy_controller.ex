@@ -575,25 +575,46 @@ defmodule TokengateWeb.ProxyController do
   # Registers the request in the in-flight registry so the Logs UI shows it
   # as "Pending" while it executes. think/effort are already in conn assigns.
   defp register_inflight(conn, member, payload, route) do
-    Tokengate.Logs.Inflight.start_request(%{
-      team_member_id: member.id,
-      subject_type: if(member.user_id == nil, do: "service", else: "user"),
-      service_name: member.service_name,
-      user_email: member.user && member.user.email,
-      team_name: member.team && member.team.name,
-      team_id: member.team_id,
-      model_requested: payload["model"],
-      agent_type: conn.assigns.agent_type,
-      client_agent: conn.assigns.client_agent,
-      streaming: payload["stream"] == true,
-      think: conn.assigns[:think] || false,
-      effort: conn.assigns[:effort],
-      provider_name: route.model_provider.credential.provider.name,
-      api_key_prefix: member.api_key && member.api_key.key_prefix,
-      credential_name: route.credential.name,
-      credential_id: route.credential.id,
-      provider_key_suffix: provider_key_prefix(route.credential)
+    inflight =
+      Tokengate.Logs.Inflight.start_request(%{
+        team_member_id: member.id,
+        subject_type: if(member.user_id == nil, do: "service", else: "user"),
+        service_name: member.service_name,
+        user_email: member.user && member.user.email,
+        team_name: member.team && member.team.name,
+        team_id: member.team_id,
+        model_requested: payload["model"],
+        agent_type: conn.assigns.agent_type,
+        client_agent: conn.assigns.client_agent,
+        streaming: payload["stream"] == true,
+        think: conn.assigns[:think] || false,
+        effort: conn.assigns[:effort],
+        provider_name: route.model_provider.credential.provider.name,
+        api_key_prefix: member.api_key && member.api_key.key_prefix,
+        credential_name: route.credential.name,
+        credential_id: route.credential.id,
+        provider_key_suffix: provider_key_prefix(route.credential)
+      })
+
+    # Cache the prompt for the Prompt Inspector LiveView.
+    # Uses the same id as the inflight entry to link both records.
+    # Degrades gracefully: if the ETS table doesn't exist (hot-reload),
+    # capture is a silent no-op — proxy hot path is never blocked.
+    Tokengate.Prompts.Cache.capture(%{
+      id: inflight.id,
+      team_member_id: inflight.team_member_id,
+      subject_type: inflight.subject_type,
+      user_email: inflight.user_email,
+      service_name: inflight.service_name,
+      team_name: inflight.team_name,
+      team_id: inflight.team_id,
+      model_requested: inflight.model_requested,
+      agent_type: inflight.agent_type,
+      client_agent: inflight.client_agent,
+      messages: payload["messages"] || []
     })
+
+    inflight
   end
 
   @max_route_retries 20
