@@ -3,6 +3,7 @@ defmodule TokengateWeb.PromptInspectorLive do
   use TokengateWeb, :live_view
 
   alias Tokengate.Prompts.Cache
+  alias Tokengate.Providers
 
   @pubsub Tokengate.PubSub
   @topic Cache.topic()
@@ -18,6 +19,7 @@ defmodule TokengateWeb.PromptInspectorLive do
       |> assign(:filters, default_filters())
       |> assign(:form, to_form(default_filters(), as: :filter))
       |> assign(:modal_prompt, nil)
+      |> assign(:model_options, model_options())
       |> require_admin_hook()
 
     if connected?(socket) do
@@ -116,16 +118,14 @@ defmodule TokengateWeb.PromptInspectorLive do
     %{
       "user_email" => "",
       "subject_type" => "",
-      "model" => "",
-      "agent_type" => ""
+      "model" => ""
     }
   end
 
   defp entry_matches_filters?(entry, filters) do
     email_match?(entry.user_email, filters["user_email"]) and
       subject_type_match?(entry.subject_type, filters["subject_type"]) and
-      model_match?(entry.model_requested, filters["model"]) and
-      agent_type_match?(entry.agent_type, filters["agent_type"])
+      model_match?(entry.model_requested, filters["model"])
   end
 
   defp email_match?(_email, ""), do: true
@@ -136,13 +136,9 @@ defmodule TokengateWeb.PromptInspectorLive do
   defp subject_type_match?(type, type), do: true
   defp subject_type_match?(_, _), do: false
 
-  defp agent_type_match?(_type, ""), do: true
-  defp agent_type_match?(nil, _), do: true
-  defp agent_type_match?(type, search), do: String.contains?(type, search)
-
   defp model_match?(_model, ""), do: true
-  defp model_match?(nil, _), do: true
-  defp model_match?(model, search), do: String.contains?(model, search)
+  defp model_match?(model, model), do: true
+  defp model_match?(_, _), do: false
 
   defp reset_stream_with_filters(socket) do
     all_entries = Cache.list()
@@ -196,26 +192,14 @@ defmodule TokengateWeb.PromptInspectorLive do
                 </label>
                 <.input
                   field={@form[:model]}
-                  type="text"
-                  placeholder="gpt-4o"
-                  phx-debounce="300"
-                  class="input input-bordered input-sm w-40"
+                  type="select"
+                  prompt="All"
+                  options={@model_options}
+                  class="select select-bordered select-sm w-40"
                 />
               </div>
               <div class="form-control">
-                <label class="label py-1">
-                  <span class="label-text text-xs">Agent</span>
-                </label>
-                <.input
-                  field={@form[:agent_type]}
-                  type="text"
-                  placeholder="api"
-                  phx-debounce="300"
-                  class="input input-bordered input-sm w-32"
-                />
-              </div>
-              <div class="form-control">
-                <div class="flex gap-2">
+                <div class="flex gap-2 mb-2">
                   <button type="submit" class="btn btn-primary btn-sm">
                     <.icon name="hero-magnifying-glass" class="w-4 h-4" /> Filtrar
                   </button>
@@ -238,7 +222,6 @@ defmodule TokengateWeb.PromptInspectorLive do
                   <th>User</th>
                   <th>Subject</th>
                   <th>Model</th>
-                  <th>Agent</th>
                   <th>Prompt</th>
                   <th></th>
                 </tr>
@@ -261,7 +244,6 @@ defmodule TokengateWeb.PromptInspectorLive do
                     </span>
                   </td>
                   <td class="font-mono text-xs">{entry.model_requested || "—"}</td>
-                  <td>{entry.agent_type || "—"}</td>
                   <td class="max-w-xs truncate text-xs text-base-content/70">
                     {last_message_preview(entry.messages)}
                   </td>
@@ -350,6 +332,12 @@ defmodule TokengateWeb.PromptInspectorLive do
   defp badge_class("service"), do: "badge badge-sm badge-accent"
   defp badge_class("user"), do: "badge badge-sm badge-info"
   defp badge_class(_), do: "badge badge-sm"
+
+  defp model_options do
+    Providers.list_model_aliases()
+    |> Enum.map(fn alias_ -> {alias_.name, alias_.name} end)
+    |> Enum.sort_by(&elem(&1, 0))
+  end
 
   defp last_message_preview([]), do: ""
 
