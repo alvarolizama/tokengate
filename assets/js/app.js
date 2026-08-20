@@ -83,6 +83,21 @@ const SortableProviders = {
 // Open/close DaisyUI <dialog> modals via push_event from LiveView.
 // Usage: push_event("open_modal", %{id: "my-modal"})
 //        push_event("close_modal", %{id: "my-modal"})
+//
+// Design notes:
+// - The native <dialog> fires a "close" event on Escape, backdrop click,
+//   or <form method="dialog"> submit. We listen for it and sync the server
+//   so a later repaint doesn't reopen a dialog the user already dismissed.
+// - LiveView repaints (e.g. a new prompt arriving via PubSub) destroy and
+//   re-mount this hook. On re-mount, if the server still says data-open="true",
+//   we re-open the dialog so it survives the repaint.
+// - The backdrop is a sibling <div class="modal-backdrop"> (NOT a
+//   <form method="dialog">) so scrolling inside the modal-box can never
+//   accidentally submit a form and close the dialog.
+// - Backdrop click-to-close is opt-in via mousedown+mouseup guard: only
+//   closes if BOTH mousedown and mouseup land directly on the backdrop.
+//   This prevents a scroll-drag that ends on the backdrop from closing the
+//   modal — the most common cause of "modal se desbindea al hacer scroll".
 const Modal = {
   mounted() {
     this.handleEvent("open_modal", ({id}) => {
@@ -93,21 +108,39 @@ const Modal = {
       const el = document.getElementById(id)
       if (el && typeof el.close === "function") el.close()
     })
-    // LiveView repaints (e.g. a new prompt arriving while the modal is open)
-    // destroy and re-mount this hook, which also closes the native <dialog>.
-    // When the server rendered the dialog as open (data-open="true"), re-open
-    // it so the modal survives the repaint.
+
+    // Re-open after a LiveView repaint if the server says it should be open.
     if (this.el.dataset.open === "true" && typeof this.el.showModal === "function" && !this.el.open) {
       this.el.showModal()
     }
-    // Keep the server in sync when the user closes the dialog natively
-    // (Escape key or backdrop click) so a later repaint doesn't reopen it.
+
+    // Sync native closes (Escape key) back to the server so a later repaint
+    // doesn't reopen a dialog the user already dismissed.
     this.el.addEventListener("close", () => {
       if (this.el.dataset.open === "true") {
         this.el.dataset.open = "false"
         this.pushEvent("close_modal", {})
       }
     })
+
+    // Backdrop click-to-close with mousedown+mouseup guard.
+    // A click only counts if BOTH mousedown and mouseup land directly on the
+    // backdrop element — a scroll-drag that ends on the backdrop won't close.
+    const backdrop = this.el.querySelector(".modal-backdrop")
+    if (backdrop) {
+      let mouseDownOnBackdrop = false
+
+      backdrop.addEventListener("mousedown", (e) => {
+        mouseDownOnBackdrop = (e.target === backdrop)
+      })
+
+      backdrop.addEventListener("mouseup", (e) => {
+        if (mouseDownOnBackdrop && e.target === backdrop) {
+          this.el.close()
+        }
+        mouseDownOnBackdrop = false
+      })
+    }
   }
 }
 

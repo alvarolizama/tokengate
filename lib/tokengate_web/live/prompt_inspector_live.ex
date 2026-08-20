@@ -300,17 +300,13 @@ defmodule TokengateWeb.PromptInspectorLive do
             <pre class="text-xs text-base-content whitespace-pre-wrap break-words font-mono"><%= Jason.encode!(@modal_prompt.messages, pretty: true) %></pre>
           </div>
           <div class="modal-action">
-            <form method="dialog">
-              <button class="btn btn-ghost btn-sm" phx-click="close_modal">Cerrar</button>
-            </form>
+            <button class="btn btn-ghost btn-sm" phx-click="close_modal">Cerrar</button>
             <a href="/dashboard/logs" class="btn btn-primary btn-sm">
               <.icon name="hero-document-text" class="w-4 h-4" /> Ver en Logs
             </a>
           </div>
         </div>
-        <form method="dialog" class="modal-backdrop" phx-click="close_modal">
-          <button>close</button>
-        </form>
+        <div class="modal-backdrop"></div>
       </dialog>
     </Layouts.dashboard>
     """
