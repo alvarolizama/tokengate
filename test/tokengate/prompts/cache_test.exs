@@ -111,6 +111,60 @@ defmodule Tokengate.Prompts.CacheTest do
     end
   end
 
+  describe "list_recent/2" do
+    test "devuelve filas ligeras sin messages, más recientes primero, limitadas" do
+      old = Cache.capture(attrs(%{model_requested: "old"}))
+      Process.sleep(1100)
+      new = Cache.capture(attrs(%{model_requested: "new"}))
+
+      [first, second] = Cache.list_recent(10)
+      assert first.id == new.id
+      assert second.id == old.id
+      # Las filas ligeras NO traen el payload de messages
+      refute Map.has_key?(first, :messages)
+      assert first.last_preview != ""
+    end
+
+    test "respeta el límite" do
+      Enum.each(1..5, fn i -> Cache.capture(attrs(%{model_requested: "m#{i}"})) end)
+      assert length(Cache.list_recent(3)) == 3
+    end
+
+    test "filtra por email, subject_type y model" do
+      Cache.capture(attrs(%{user_email: "a@example.com", model_requested: "gpt-4o"}))
+      Cache.capture(attrs(%{user_email: "b@example.com", model_requested: "claude"}))
+
+      Cache.capture(
+        attrs(%{user_email: "a@example.com", subject_type: "service", model_requested: "claude"})
+      )
+
+      assert length(Cache.list_recent(10, %{"user_email" => "a@example.com"})) == 2
+      assert length(Cache.list_recent(10, %{"model" => "claude"})) == 2
+      assert length(Cache.list_recent(10, %{"subject_type" => "service"})) == 1
+      assert length(Cache.list_recent(10, %{"user_email" => "zzz"})) == 0
+    end
+  end
+
+  describe "get/1" do
+    test "devuelve la entrada completa con messages por id" do
+      messages = [
+        %{"role" => "user", "content" => "Tell me a story"},
+        %{"role" => "assistant", "content" => "Once upon a time..."}
+      ]
+
+      entry = Cache.capture(attrs(%{messages: messages}))
+
+      fetched = Cache.get(entry.id)
+      assert fetched.id == entry.id
+      assert fetched.messages == messages
+      assert fetched.last_preview == "Once upon a time..."
+    end
+
+    test "devuelve nil para id desconocido" do
+      assert Cache.get("no-existe") == nil
+    end
+  end
+
   describe "sweep" do
     test "elimina entradas más viejas que el TTL" do
       stale = Cache.capture(attrs(%{model_requested: "stale"}))

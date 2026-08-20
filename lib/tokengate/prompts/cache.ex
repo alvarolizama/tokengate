@@ -5,9 +5,23 @@ defmodule Tokengate.Prompts.Cache do
   ## Concurrency model
 
   Same pattern as `Tokengate.Logs.Inflight` and `Tokengate.Accounts.ApiKeyCache`:
-  the GenServer only owns the public named ETS table and runs the TTL sweep.
-  `capture/1`, `list/0` and `delete/1` run in the caller's process directly
-  against the table — no GenServer bottleneck on the hot path.
+  the GenServer only owns the public named ETS tables and runs the TTL sweep.
+  `capture/1`, `list_recent/2`, `get/1`, `list/0` and `delete/1` run in the
+  caller's process directly against the tables — no GenServer bottleneck on
+  the hot path.
+
+  ## Two tables: rows (light) + full entries
+
+  * `:tokengate_prompts_cache` — full entries, including the complete
+    `messages` payload. Read only by `get/1`, when the Inspector modal opens.
+  * `:tokengate_prompts_rows` — the same entries WITHOUT `messages`, plus a
+    `last_preview` field. Read by `list_recent/2` (table + filters) and
+    broadcast over PubSub on capture.
+
+  Keeping `messages` out of the list/broadcast path means the LiveView never
+  materializes full prompt bodies in memory just to render the table, and the
+  WebSocket only ever carries lightweight rows. The full entry is fetched by
+  id on demand (`get/1`).
 
   ## TTL sweep
 
@@ -17,16 +31,17 @@ defmodule Tokengate.Prompts.Cache do
 
   ## Degradation graceful
 
-  If the ETS table doesn't exist (hot code reload, GenServer restart), all
+  If the ETS tables don't exist (hot code reload, GenServer restart), all
   operations degrade gracefully: `capture/1` returns the entry without
-  inserting; `list/0` returns `[]`. The cache is an optimization, never
-  a hard dependency — the proxy hot path must keep working without it.
+  inserting; `list_recent/2` and `list/0` return `[]`; `get/1` returns `nil`.
+  The cache is an optimization, never a hard dependency — the proxy hot path
+  must keep working without it.
 
   ## PubSub
 
   Topic `prompts:new`:
 
-    * `{:prompt_captured, entry}` — on `capture/1`
+    * `{:prompt_captured, row}` — on `capture/1` (lightweight row, no messages)
   """
 
   use GenServer
@@ -34,6 +49,7 @@ defmodule Tokengate.Prompts.Cache do
   require Logger
 
   @table :tokengate_prompts_cache
+  @rows_table :tokengate_prompts_rows
   @pubsub Tokengate.PubSub
   @topic "prompts:new"
   @ttl_ms 1 * 60 * 60 * 1_000
@@ -43,7 +59,7 @@ defmodule Tokengate.Prompts.Cache do
   # 100 MB in words (Erlang word size on 64-bit = 8 bytes)
   @memory_limit_words (100 * 1024 * 1024) |> div(8)
 
-  @typedoc "A captured prompt entry."
+  @typedoc "A captured prompt entry (full, includes `messages`)."
   @type entry :: %{
           id: String.t(),
           team_member_id: term(),
@@ -57,8 +73,12 @@ defmodule Tokengate.Prompts.Cache do
           client_agent: String.t() | nil,
           messages: [map()],
           preview: String.t(),
+          last_preview: String.t(),
           started_at: DateTime.t()
         }
+
+  @typedoc "A lightweight row (no `messages`), used for the table and PubSub."
+  @type row :: map()
 
   ## Public API (caller process) -----------------------------------------
 
@@ -73,22 +93,15 @@ defmodule Tokengate.Prompts.Cache do
 
   @doc """
   Captures a prompt entry. Returns the entry with `id` (UUID),
-  `started_at`, and `preview` (truncated first-message content to 200 chars).
-  Broadcasts `{:prompt_captured, entry}` on the prompts:new topic.
+  `started_at`, `preview` (first-message content, 200 chars) and
+  `last_preview` (last-message content, 200 chars).
+  Stores the full entry plus a lightweight row, and broadcasts
+  `{:prompt_captured, row}` on the prompts:new topic.
   Degrades gracefully: if the table doesn't exist, returns entry without inserting.
   """
   @spec capture(map()) :: entry()
   def capture(attrs) do
     messages = Map.get(attrs, :messages) || Map.get(attrs, "messages") || []
-
-    # Preview: first user message content, truncated to 200 chars
-    preview =
-      messages
-      |> Enum.find_value("", fn
-        %{"content" => content} when is_binary(content) -> content
-        _ -> nil
-      end)
-      |> String.slice(0, 200)
 
     entry = %{
       id: Map.get(attrs, :id) || Ecto.UUID.generate(),
@@ -102,7 +115,8 @@ defmodule Tokengate.Prompts.Cache do
       agent_type: Map.get(attrs, :agent_type),
       client_agent: Map.get(attrs, :client_agent),
       messages: messages,
-      preview: preview,
+      preview: first_message_preview(messages),
+      last_preview: last_message_preview(messages),
       started_at: DateTime.utc_now() |> DateTime.truncate(:second)
     }
 
@@ -110,7 +124,60 @@ defmodule Tokengate.Prompts.Cache do
     entry
   end
 
-  @doc "All captured prompt entries, most recent first."
+  @doc """
+  The most recent `limit` rows (lightweight, no `messages`), newest first.
+
+  `filters` is an optional map with `user_email` / `subject_type` / `model`
+  keys; empty values match everything. Filtering happens in memory over the
+  lightweight rows, so it never touches full prompt bodies.
+  """
+  @spec list_recent(pos_integer(), map() | nil) :: [row()]
+  def list_recent(limit, filters \\ nil) do
+    if :ets.whereis(@rows_table) == :undefined do
+      []
+    else
+      rows =
+        @rows_table
+        |> :ets.select([{{:"$1", :"$2", :"$3"}, [], [{{:"$2", :"$3"}}]}])
+        |> Enum.map(fn {row, _mono} -> row end)
+
+      rows =
+        if filters, do: Enum.filter(rows, &matches_filters?(&1, filters)), else: rows
+
+      rows
+      |> Enum.sort_by(& &1.started_at, {:desc, DateTime})
+      |> Enum.take(limit)
+    end
+  rescue
+    ArgumentError -> []
+  end
+
+  @doc "True when `row` matches the given filter map (empty values match everything)."
+  @spec matches_filters?(row(), map() | nil) :: boolean()
+  def matches_filters?(_row, nil), do: true
+
+  def matches_filters?(row, filters) do
+    email_match?(row.user_email, Map.get(filters, "user_email")) and
+      subject_type_match?(row.subject_type, Map.get(filters, "subject_type")) and
+      model_match?(row.model_requested, Map.get(filters, "model"))
+  end
+
+  @doc "Fetch a single full entry by id (includes `messages`). Returns nil if missing."
+  @spec get(String.t()) :: entry() | nil
+  def get(id) do
+    if :ets.whereis(@table) == :undefined do
+      nil
+    else
+      case :ets.lookup(@table, id) do
+        [{^id, entry, _mono}] -> entry
+        [] -> nil
+      end
+    end
+  rescue
+    ArgumentError -> nil
+  end
+
+  @doc "All captured prompt entries (full, with messages), most recent first."
   @spec list() :: [entry()]
   def list do
     if :ets.whereis(@table) == :undefined do
@@ -125,11 +192,11 @@ defmodule Tokengate.Prompts.Cache do
     ArgumentError -> []
   end
 
-  @doc "Delete a single entry by id. Idempotent."
+  @doc "Delete a single entry by id (from both tables). Idempotent."
   @spec delete(String.t()) :: :ok
   def delete(id) do
     if :ets.whereis(@table) != :undefined do
-      :ets.delete(@table, id)
+      purge(id)
     end
 
     :ok
@@ -184,9 +251,14 @@ defmodule Tokengate.Prompts.Cache do
   ## Internals -------------------------------------------------------------
 
   defp ensure_table do
-    case :ets.whereis(@table) do
+    ensure_named_table(@table)
+    ensure_named_table(@rows_table)
+  end
+
+  defp ensure_named_table(name) do
+    case :ets.whereis(name) do
       :undefined ->
-        :ets.new(@table, [
+        :ets.new(name, [
           :named_table,
           :public,
           :set,
@@ -195,19 +267,25 @@ defmodule Tokengate.Prompts.Cache do
         ])
 
       _tid ->
-        @table
+        name
     end
   end
 
-  # Insert with graceful degradation: if table is gone, return without crash.
-  # This mirrors ApiKeyCache.fetch/2 — cache is optimization, never dependency.
+  # Insert with graceful degradation: if any table is gone, return without
+  # crashing. This mirrors ApiKeyCache.fetch/2 — cache is optimization, never
+  # dependency. Both tables must exist so we never end up with a full entry
+  # but no row (or vice versa) after a partial hot reload.
   defp safe_insert(entry) do
-    if :ets.whereis(@table) == :undefined do
+    if :ets.whereis(@table) == :undefined or :ets.whereis(@rows_table) == :undefined do
       :ok
     else
       try do
+        row = row_for(entry)
         :ets.insert(@table, {entry.id, entry, mono_now()})
-        Phoenix.PubSub.broadcast(@pubsub, @topic, {:prompt_captured, entry})
+        :ets.insert(@rows_table, {entry.id, row, mono_now()})
+        # Broadcast the lightweight row (no messages) so LiveViews never
+        # receive full prompt bodies over PubSub / the WebSocket.
+        Phoenix.PubSub.broadcast(@pubsub, @topic, {:prompt_captured, row})
       rescue
         # Table raced away between whereis and insert (owner died / restart).
         # Degrade silently — proxy keeps working, prompt not cached this time.
@@ -216,13 +294,17 @@ defmodule Tokengate.Prompts.Cache do
     end
   end
 
+  defp row_for(entry) do
+    Map.delete(entry, :messages)
+  end
+
   defp sweep_expired do
     cutoff = mono_now() - @ttl_ms
 
     if :ets.whereis(@table) != :undefined do
       @table
       |> :ets.select([{{:"$1", :"$2", :"$3"}, [{:<, :"$3", cutoff}], [:"$1"]}])
-      |> Enum.each(fn id -> :ets.delete(@table, id) end)
+      |> Enum.each(&purge/1)
     end
   rescue
     ArgumentError -> :ok
@@ -241,7 +323,7 @@ defmodule Tokengate.Prompts.Cache do
           |> Enum.sort_by(fn {_id, mono} -> mono end)
           |> Enum.take(count - @max_entries)
 
-        Enum.each(excess, fn {id, _} -> :ets.delete(@table, id) end)
+        Enum.each(excess, fn {id, _} -> purge(id) end)
       end
     end
   rescue
@@ -270,11 +352,49 @@ defmodule Tokengate.Prompts.Cache do
 
         entries
         |> Enum.take(purge_count)
-        |> Enum.each(fn {id, _} -> :ets.delete(@table, id) end)
+        |> Enum.each(fn {id, _} -> purge(id) end)
       end
     end
   rescue
     ArgumentError -> :ok
+  end
+
+  # Delete an id from both tables (full entries + rows) so they stay in sync.
+  defp purge(id) do
+    :ets.delete(@table, id)
+    :ets.delete(@rows_table, id)
+  end
+
+  defp email_match?(_email, search) when search in [nil, ""], do: true
+  defp email_match?(nil, _search), do: true
+  defp email_match?(email, search), do: String.contains?(email, search)
+
+  defp subject_type_match?(_type, search) when search in [nil, ""], do: true
+  defp subject_type_match?(type, type), do: true
+  defp subject_type_match?(_, _), do: false
+
+  defp model_match?(_model, search) when search in [nil, ""], do: true
+  defp model_match?(model, model), do: true
+  defp model_match?(_, _), do: false
+
+  # First message content, truncated to 200 chars.
+  defp first_message_preview(messages) do
+    messages
+    |> Enum.find_value("", fn
+      %{"content" => content} when is_binary(content) -> content
+      _ -> nil
+    end)
+    |> String.slice(0, 200)
+  end
+
+  # Last message content, truncated to 200 chars — what the table shows.
+  defp last_message_preview([]), do: ""
+
+  defp last_message_preview(messages) do
+    case List.last(messages) do
+      %{"content" => content} when is_binary(content) -> String.slice(content, 0, 200)
+      _ -> ""
+    end
   end
 
   defp schedule_sweep, do: Process.send_after(self(), :sweep, @sweep_ms)

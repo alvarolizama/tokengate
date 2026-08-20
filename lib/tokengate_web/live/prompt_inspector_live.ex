@@ -26,7 +26,7 @@ defmodule TokengateWeb.PromptInspectorLive do
     if connected?(socket) do
       Phoenix.PubSub.subscribe(@pubsub, @topic)
 
-      entries = Cache.list()
+      entries = Cache.list_recent(@max_rows)
 
       socket =
         socket
@@ -34,7 +34,7 @@ defmodule TokengateWeb.PromptInspectorLive do
 
       {:ok, socket}
     else
-      {:ok, stream(socket, :prompts, Cache.list(), limit: @max_rows)}
+      {:ok, stream(socket, :prompts, Cache.list_recent(@max_rows), limit: @max_rows)}
     end
   end
 
@@ -54,9 +54,9 @@ defmodule TokengateWeb.PromptInspectorLive do
   ## Real-time -------------------------------------------------------------
 
   @impl true
-  def handle_info({:prompt_captured, entry}, socket) do
-    if entry_matches_filters?(entry, socket.assigns[:filters]) do
-      {:noreply, stream_insert(socket, :prompts, entry, at: 0, limit: @max_rows)}
+  def handle_info({:prompt_captured, row}, socket) do
+    if Cache.matches_filters?(row, socket.assigns[:filters]) do
+      {:noreply, stream_insert(socket, :prompts, row, at: 0, limit: @max_rows)}
     else
       {:noreply, socket}
     end
@@ -94,7 +94,7 @@ defmodule TokengateWeb.PromptInspectorLive do
     # Look up the entry from the cache, not from assigns — the stream lives
     # in assigns.streams.prompts (a %{dom_id => entry} map), so the flat
     # assigns list is not a reliable source for a single entry by id.
-    entry = Enum.find(Cache.list(), &(&1.id == id))
+    entry = Cache.get(id)
 
     if entry do
       {:noreply,
@@ -123,28 +123,9 @@ defmodule TokengateWeb.PromptInspectorLive do
     }
   end
 
-  defp entry_matches_filters?(entry, filters) do
-    email_match?(entry.user_email, filters["user_email"]) and
-      subject_type_match?(entry.subject_type, filters["subject_type"]) and
-      model_match?(entry.model_requested, filters["model"])
-  end
-
-  defp email_match?(_email, ""), do: true
-  defp email_match?(nil, _), do: true
-  defp email_match?(email, search), do: String.contains?(email, search)
-
-  defp subject_type_match?(_type, ""), do: true
-  defp subject_type_match?(type, type), do: true
-  defp subject_type_match?(_, _), do: false
-
-  defp model_match?(_model, ""), do: true
-  defp model_match?(model, model), do: true
-  defp model_match?(_, _), do: false
-
   defp reset_stream_with_filters(socket) do
-    all_entries = Cache.list()
-    filtered = Enum.filter(all_entries, &entry_matches_filters?(&1, socket.assigns.filters))
-    stream(socket, :prompts, filtered, reset: true, limit: @max_rows)
+    entries = Cache.list_recent(@max_rows, socket.assigns.filters)
+    stream(socket, :prompts, entries, reset: true, limit: @max_rows)
   end
 
   ## Render ----------------------------------------------------------------
@@ -246,7 +227,7 @@ defmodule TokengateWeb.PromptInspectorLive do
                   </td>
                   <td class="font-mono text-xs">{entry.model_requested || "—"}</td>
                   <td class="max-w-xs truncate text-xs text-base-content/70">
-                    {last_message_preview(entry.messages)}
+                    {entry.last_preview || ""}
                   </td>
                   <td class="text-right">
                     <.icon name="hero-chevron-right" class="w-4 h-4 text-base-content/40" />
@@ -343,15 +324,6 @@ defmodule TokengateWeb.PromptInspectorLive do
     Providers.list_model_aliases()
     |> Enum.map(fn alias_ -> {alias_.name, alias_.name} end)
     |> Enum.sort_by(&elem(&1, 0))
-  end
-
-  defp last_message_preview([]), do: ""
-
-  defp last_message_preview(messages) do
-    case List.last(messages) do
-      %{"content" => content} when is_binary(content) -> String.slice(content, 0, 200)
-      _ -> ""
-    end
   end
 
   defp format_prompt_size(messages) do
