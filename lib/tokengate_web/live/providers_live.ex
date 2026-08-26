@@ -553,7 +553,8 @@ defmodule TokengateWeb.ProvidersLive do
                   label="Formato rerank"
                   options={[
                     {"Cohere (Fireworks, oMLX)", "cohere"},
-                    {"Qwen Cloud (DashScope)", "dashscope"}
+                    {"Qwen Cloud (DashScope)", "dashscope"},
+                    {"RunInfra", "runinfra"}
                   ]}
                   hint="Formato del endpoint de rerank del proveedor."
                 />

@@ -11,7 +11,7 @@ defmodule Tokengate.Providers.Provider do
   @foreign_key_type :binary_id
 
   @statuses ~w(active disabled)
-  @rerank_formats ~w(cohere dashscope)
+  @rerank_formats ~w(cohere dashscope runinfra)
   @embedding_formats ~w(openai dashscope)
 
   schema "providers" do

@@ -50,6 +50,17 @@ defmodule Tokengate.Providers.ProviderTest do
       assert %{rerank_format: ["is invalid"]} = errors_on(changeset)
     end
 
+    test "accepts runinfra rerank_format" do
+      changeset =
+        Provider.changeset(%Provider{}, %{
+          name: "runinfra",
+          base_url: "https://api.runinfra.ai/v1",
+          rerank_format: "runinfra"
+        })
+
+      assert Ecto.Changeset.get_field(changeset, :rerank_format) == "runinfra"
+    end
+
     test "rejects invalid embedding_format" do
       changeset =
         Provider.changeset(%Provider{}, %{

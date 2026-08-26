@@ -12,7 +12,7 @@ defmodule Tokengate.Proxy.Format do
   a new dialect means registering its encode/decode pair here.
   """
 
-  alias Tokengate.Proxy.{DashScopeEmbedding, DashScopeRerank}
+  alias Tokengate.Proxy.{DashScopeEmbedding, DashScopeRerank, RuninfraRerank}
 
   @type dialect :: :passthrough | {encode_fun, decode_fun}
   @type encode_fun :: (map() -> map())
@@ -32,6 +32,7 @@ defmodule Tokengate.Proxy.Format do
   def rerank_dialect_for(provider) do
     case format(provider, :rerank_format) do
       "dashscope" -> {&DashScopeRerank.encode/1, &DashScopeRerank.decode/1}
+      "runinfra" -> {&RuninfraRerank.encode/1, &RuninfraRerank.decode/1}
       _ -> :passthrough
     end
   end
