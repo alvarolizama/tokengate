@@ -375,10 +375,6 @@ defmodule TokengateWeb.ModelsLive do
        |> assign(:current_scope_member_id, ap.exclusive_to_team_member_id)
        |> assign(:scope_team_search, team_label)
        |> assign(:scope_member_search, member_label)
-       # Open the dropdowns in edit mode so the admin can re-pick without
-       # having to clear the field first.
-       |> assign(:scope_team_open, scope == "team")
-       |> assign(:scope_member_open, scope == "member")
        |> assign(:provider_models_loading, true)
        |> fetch_provider_models(ap.credential_id)}
     else
@@ -494,49 +490,88 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
-  # Legacy single-select — used by the edit form (one existing row).
-  def handle_event("select_scope_member", %{"member_id" => member_id}, socket) do
-    if socket.assigns.is_admin do
-      {:noreply, assign(socket, :current_scope_member_id, member_id)}
-    else
-      {:noreply, socket}
-    end
-  end
+  # Scope pickers behave as autocomplete combos: open on focus, close on
+  # pick / click-away / Escape. The search inputs live inside the provider
+  # form; on phx-change LiveView serializes only that input, so the
+  # single-select (edit) ones send their value nested as
+  # model_provider[...] while the create-mode ones send %{"value"} —
+  # resolve_scope_search/1 accepts both shapes.
+  def handle_event("scope_team_search", params, socket) do
+    %{search: search} = resolve_scope_search(params)
 
-  def handle_event("select_scope_team", %{"team_id" => team_id}, socket) do
-    if socket.assigns.is_admin do
-      {:noreply, assign(socket, :current_scope_team_id, team_id)}
-    else
-      {:noreply, socket}
-    end
-  end
-
-  def handle_event("scope_team_search", %{"value" => search}, socket) do
     {:noreply,
      socket
      |> assign(:scope_team_search, search)
      |> assign(:scope_team_open, search != "")}
   end
 
-  def handle_event("scope_member_search", %{"value" => search}, socket) do
+  def handle_event("scope_member_search", params, socket) do
+    %{search: search} = resolve_scope_search(params)
+
     {:noreply,
      socket
      |> assign(:scope_member_search, search)
      |> assign(:scope_member_open, search != "")}
   end
 
-  # Single-select pick — used when editing an existing row (one target).
-  def handle_event("select_scope_team_item", %{"team_id" => team_id}, socket) do
+  # Single-select picks — used when editing an existing row (one target).
+  # Reflect the picked label into the search input and close the dropdown.
+  def handle_event(
+        "select_scope_team_item",
+        %{"team_id" => team_id, "team_label" => team_label},
+        socket
+      ) do
     if socket.assigns.is_admin do
-      {:noreply, assign(socket, :current_scope_team_id, team_id)}
+      {:noreply,
+       socket
+       |> assign(:current_scope_team_id, team_id)
+       |> assign(:scope_team_search, team_label)
+       |> assign(:scope_team_open, false)}
     else
       {:noreply, socket}
     end
   end
 
-  def handle_event("select_scope_member_item", %{"member_id" => member_id}, socket) do
+  def handle_event(
+        "select_scope_member_item",
+        %{"member_id" => member_id, "member_label" => member_label},
+        socket
+      ) do
     if socket.assigns.is_admin do
-      {:noreply, assign(socket, :current_scope_member_id, member_id)}
+      {:noreply,
+       socket
+       |> assign(:current_scope_member_id, member_id)
+       |> assign(:scope_member_search, member_label)
+       |> assign(:scope_member_open, false)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("open_scope_picker", %{"picker" => "team"}, socket) do
+    if socket.assigns.is_admin do
+      {:noreply, assign(socket, :scope_team_open, true)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("open_scope_picker", %{"picker" => "member"}, socket) do
+    if socket.assigns.is_admin do
+      {:noreply, assign(socket, :scope_member_open, true)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  # Shared closer: fired by phx-click-away on each picker wrapper and by
+  # Escape (form-level phx-window-keydown filtered to phx-key="Escape").
+  def handle_event("close_scope_pickers", _params, socket) do
+    if socket.assigns.is_admin do
+      {:noreply,
+       socket
+       |> assign(:scope_team_open, false)
+       |> assign(:scope_member_open, false)}
     else
       {:noreply, socket}
     end
@@ -652,6 +687,22 @@ defmodule TokengateWeb.ModelsLive do
 
   ## Private helpers — model_provider save ---------------------------------
 
+  # Search events arrive from inputs inside the provider form: create-mode
+  # pickers carry %{"value"}, while the named edit-mode ones arrive nested
+  # under their model_provider[...] field name.
+  defp resolve_scope_search(%{"value" => search}), do: %{search: search}
+
+  defp resolve_scope_search(%{"model_provider" => %{"value" => search}}),
+    do: %{search: search}
+
+  defp resolve_scope_search(%{"model_provider" => %{"scope_member_id_display" => search}}),
+    do: %{search: search || ""}
+
+  defp resolve_scope_search(%{"model_provider" => %{"scope_team_id_display" => search}}),
+    do: %{search: search || ""}
+
+  defp resolve_scope_search(_params), do: %{search: ""}
+
   defp inject_scope_params(ap_params, assigns) do
     scope = assigns[:current_scope] || "global"
     editing? = is_binary(assigns[:editing_ap_id]) and assigns[:editing_ap_id] != :new
@@ -696,7 +747,7 @@ defmodule TokengateWeb.ModelsLive do
 
       Task.start(fn ->
         result = Tokengate.Proxy.OpenAIAdapter.list_models(provider, credential)
-        send(lv_pid, {:provider_models_result, result})
+        send(lv_pid, {:provider_models_result, credential_id, result})
       end)
 
       socket
@@ -709,22 +760,30 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   @impl true
-  def handle_info({:provider_models_result, result}, socket) do
-    case result do
-      {:ok, models} ->
-        {:noreply,
-         socket
-         |> assign(:provider_models, models)
-         |> assign(:provider_models_loading, false)
-         |> assign(:provider_model_search, "")}
+  def handle_info(
+        {:provider_models_result, credential_id, result},
+        %{assigns: assigns} = socket
+      ) do
+    # Discard stale responses: only the most recent credential change wins.
+    if credential_id == assigns[:provider_form_credential_id] do
+      case result do
+        {:ok, models} ->
+          {:noreply,
+           socket
+           |> assign(:provider_models, models)
+           |> assign(:provider_models_loading, false)
+           |> assign(:provider_model_search, "")}
 
-      {:error, _reason} ->
-        {:noreply,
-         socket
-         |> assign(:provider_models, [])
-         |> assign(:provider_models_loading, false)
-         |> assign(:provider_model_search, "")
-         |> put_flash(:error, "No se pudieron cargar los modelos del proveedor.")}
+        {:error, _reason} ->
+          {:noreply,
+           socket
+           |> assign(:provider_models, [])
+           |> assign(:provider_models_loading, false)
+           |> assign(:provider_model_search, "")
+           |> put_flash(:error, "No se pudieron cargar los modelos del proveedor.")}
+      end
+    else
+      {:noreply, socket}
     end
   end
 
@@ -1344,73 +1403,78 @@ defmodule TokengateWeb.ModelsLive do
         <%!-- Alias form (new/edit) --%>
         <div :if={@form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div class="absolute inset-0 bg-black/50" phx-click="cancel_form" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
+          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-3xl">
             <div class="card-body p-6">
               <h2 class="text-lg font-semibold mb-4">
                 {if @editing_alias_id == :new, do: "Nuevo Modelo", else: "Editar Modelo"}
               </h2>
 
               <.form for={@form} id="alias-form" phx-submit="save_alias">
-                <.input
-                  field={@form[:name]}
-                  type="text"
-                  label="Nombre (identificador)"
-                  required
-                  hint="Nombre interno del modelo, ej. gpt-4o. Debe ser único."
-                />
-                <.input
-                  field={@form[:context_window]}
-                  type="number"
-                  label="Ventana de contexto (tokens)"
-                  required
-                  hint="Tamaño máximo de contexto del modelo en tokens."
-                />
+                <div class="grid md:grid-cols-2 gap-x-8 gap-y-1">
+                  <div>
+                    <.input
+                      field={@form[:name]}
+                      type="text"
+                      label="Nombre (identificador)"
+                      required
+                      hint="Nombre interno del modelo, ej. gpt-4o. Debe ser único."
+                    />
+                    <.input
+                      field={@form[:model_type]}
+                      type="select"
+                      label="Tipo de modelo"
+                      options={[
+                        {"LLM (chat)", "llm"},
+                        {"Embedding", "embedding"},
+                        {"Rerank", "rerank"}
+                      ]}
+                      hint="Define qué endpoint lo sirve: /v1/chat/completions, /v1/embeddings o /v1/rerank."
+                    />
 
-                <.input
-                  field={@form[:model_type]}
-                  type="select"
-                  label="Tipo de modelo"
-                  options={[{"LLM (chat)", "llm"}, {"Embedding", "embedding"}, {"Rerank", "rerank"}]}
-                  hint="Define qué endpoint lo sirve: /v1/chat/completions, /v1/embeddings o /v1/rerank."
-                />
+                    <div :if={@form[:model_type].value in [nil, "llm", ""]}>
+                      <.input
+                        field={@form[:prompt_cache_enabled]}
+                        type="checkbox"
+                        label="Prompt caching (prefix estable)"
+                        hint="Reordena system prompts al frente y dedupe para maximizar cache hits del proveedor."
+                      />
 
-                <div :if={@form[:model_type].value in [nil, "llm", ""]}>
-                  <div class="divider my-3 text-xs text-base-content/50">Optimización</div>
+                      <.input
+                        field={@form[:lazy_cleanup_enabled]}
+                        type="checkbox"
+                        label="Limpieza perezosa sin LLM"
+                        hint="Dedupe de tool outputs y recorte de bloques largos. 100% determinista, sin inferencia."
+                      />
+                    </div>
+                  </div>
 
-                  <.input
-                    field={@form[:prompt_cache_enabled]}
-                    type="checkbox"
-                    label="Prompt caching (prefix estable)"
-                    hint="Reordena system prompts al frente y dedupe para maximizar cache hits del proveedor."
-                  />
+                  <div class="space-y-1">
+                    <.input
+                      field={@form[:context_window]}
+                      type="number"
+                      label="Ventana de contexto (tokens)"
+                      required
+                      hint="Tamaño máximo de contexto del modelo en tokens."
+                    />
+                    <.input
+                      field={@form[:daily_limit_per_user_usd]}
+                      type="number"
+                      step="0.000001"
+                      label="Límite diario por usuario (USD)"
+                      hint="Tope de gasto diario de cada usuario en este modelo. Vacío o 0 = ilimitado. No aplica a facturación incluida."
+                    />
 
-                  <.input
-                    field={@form[:lazy_cleanup_enabled]}
-                    type="checkbox"
-                    label="Limpieza perezosa sin LLM"
-                    hint="Dedupe de tool outputs y recorte de bloques largos. 100% determinista, sin inferencia."
-                  />
+                    <.input
+                      field={@form[:daily_limit_total_usd]}
+                      type="number"
+                      step="0.000001"
+                      label="Límite diario total del modelo (USD)"
+                      hint="Tope de gasto diario de todos los usuarios en este modelo. Vacío o 0 = ilimitado. No aplica a facturación incluida."
+                    />
+                  </div>
                 </div>
 
-                <div class="divider my-3 text-xs text-base-content/50">Límites de gasto diario</div>
-
-                <.input
-                  field={@form[:daily_limit_per_user_usd]}
-                  type="number"
-                  step="0.000001"
-                  label="Límite diario por usuario (USD)"
-                  hint="Tope de gasto diario de cada usuario en este modelo. Vacío o 0 = ilimitado. No aplica a proveedores included."
-                />
-
-                <.input
-                  field={@form[:daily_limit_total_usd]}
-                  type="number"
-                  step="0.000001"
-                  label="Límite diario total del modelo (USD)"
-                  hint="Tope de gasto diario de todos los usuarios en este modelo. Vacío o 0 = ilimitado. No aplica a proveedores included."
-                />
-
-                <div class="flex gap-2 mt-4 justify-end">
+                <div class="md:col-span-2 flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
                     Cancelar
                   </button>
@@ -1462,7 +1526,7 @@ defmodule TokengateWeb.ModelsLive do
         <%!-- Alias provider form (new/edit) --%>
         <div :if={@provider_form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div class="absolute inset-0 bg-black/50" phx-click="cancel_model_provider" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
+          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-5xl">
             <div class="card-body p-6">
               <h2 class="text-lg font-semibold mb-4">
                 {if @editing_ap_id == :new, do: "Asignar Proveedor", else: "Editar Proveedor"}
@@ -1473,389 +1537,415 @@ defmodule TokengateWeb.ModelsLive do
                 id="alias-provider-form"
                 phx-submit="save_model_provider"
                 phx-change="provider_form_changed"
+                phx-window-keydown="close_scope_pickers"
+                phx-key="Escape"
               >
-                <.input
-                  field={@provider_form[:credential_id]}
-                  type="select"
-                  label="Credencial (API Key)"
-                  options={credential_options(@credentials_for_select)}
-                  prompt="Selecciona una credencial"
-                  required
-                  hint="La API key específica que servirá este modelo. Cada credencial tiene su propio circuit breaker y prioridad."
-                />
+                <div class="grid md:grid-cols-2 gap-x-8 gap-y-1">
+                  <div>
+                    <.input
+                      field={@provider_form[:credential_id]}
+                      type="select"
+                      label="Credencial (API Key)"
+                      options={credential_options(@credentials_for_select)}
+                      prompt="Selecciona una credencial"
+                      required
+                      hint="La API key específica que servirá este modelo. Cada credencial tiene su propio circuit breaker y prioridad."
+                    />
 
-                <%= if @provider_models_loading do %>
-                  <div class="flex items-center gap-2 text-sm text-base-content/50 py-2">
-                    <span class="loading loading-spinner loading-xs"></span>
-                    Cargando modelos del proveedor…
+                    <%= if @provider_models_loading do %>
+                      <div class="flex items-center gap-2 text-sm text-base-content/50 py-2">
+                        <span class="loading loading-spinner loading-xs"></span>
+                        Cargando modelos del proveedor…
+                      </div>
+                    <% end %>
+
+                    <.input
+                      field={@provider_form[:provider_model]}
+                      type="text"
+                      label="Modelo del proveedor"
+                      required
+                      placeholder="Escribe o selecciona el modelo (ej. glm-5.2:dedicated)"
+                      hint="Sugerencias del catálogo del proveedor. Puedes escribir cualquier valor para tiers dedicados o privados."
+                    />
+                    <%= if @provider_models != [] and !@provider_models_loading do %>
+                      <% search = String.downcase(@provider_model_search || "") %>
+                      <% filtered =
+                        Enum.filter(@provider_models, fn m ->
+                          String.contains?(String.downcase(m), search)
+                        end) %>
+                      <%= if filtered != [] do %>
+                        <div class="mt-1 max-h-32 overflow-y-auto rounded-lg border border-base-300 bg-base-200/50">
+                          <button
+                            :for={model <- filtered}
+                            type="button"
+                            phx-click="select_provider_model"
+                            phx-value-model={model}
+                            class="block w-full text-left px-3 py-1.5 text-sm font-mono hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0"
+                          >
+                            {model}
+                          </button>
+                        </div>
+                      <% end %>
+                    <% end %>
                   </div>
-                <% end %>
 
-                <.input
-                  field={@provider_form[:provider_model]}
-                  type="text"
-                  label="Modelo del proveedor"
-                  required
-                  placeholder="Escribe o selecciona el modelo (ej. glm-5.2:dedicated)"
-                  hint="Sugerencias del catálogo del proveedor. Puedes escribir cualquier valor para tiers dedicados o privados."
-                />
-                <%= if @provider_models != [] and !@provider_models_loading do %>
-                  <% search = String.downcase(@provider_model_search || "") %>
-                  <% filtered =
-                    Enum.filter(@provider_models, fn m ->
-                      String.contains?(String.downcase(m), search)
-                    end) %>
-                  <%= if filtered != [] do %>
-                    <div class="mt-1 max-h-32 overflow-y-auto rounded-lg border border-base-300 bg-base-200/50">
-                      <button
-                        :for={model <- filtered}
-                        type="button"
-                        phx-click="select_provider_model"
-                        phx-value-model={model}
-                        class="block w-full text-left px-3 py-1.5 text-sm font-mono hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0"
-                      >
-                        {model}
-                      </button>
+                  <div class="space-y-1">
+                    <%!-- Scope selector --%>
+                    <div class="mb-2">
+                      <label class="text-sm font-medium text-base-content">Alcance (Scope)</label>
+                      <p class="text-xs text-base-content/50 mb-2">
+                        Global = todos los miembros con acceso. Exclusivo = solo el miembro o equipo seleccionado.
+                      </p>
+                      <div class="flex gap-2">
+                        <button
+                          type="button"
+                          phx-click="change_scope"
+                          phx-value-scope="global"
+                          class={["btn btn-sm", @current_scope == "global" && "btn-primary"]}
+                        >
+                          <.icon name="hero-globe-alt" class="w-4 h-4" /> Global
+                        </button>
+                        <button
+                          type="button"
+                          phx-click="change_scope"
+                          phx-value-scope="team"
+                          class={["btn btn-sm", @current_scope == "team" && "btn-info"]}
+                        >
+                          <.icon name="hero-users" class="w-4 h-4" /> Equipo
+                        </button>
+                        <button
+                          type="button"
+                          phx-click="change_scope"
+                          phx-value-scope="member"
+                          class={["btn btn-sm", @current_scope == "member" && "btn-warning"]}
+                        >
+                          <.icon name="hero-user" class="w-4 h-4" /> Usuario
+                        </button>
+                      </div>
                     </div>
-                  <% end %>
-                <% end %>
 
-                <%!-- Scope selector --%>
-                <div class="mt-4 mb-2">
-                  <label class="text-sm font-medium text-base-content">Alcance (Scope)</label>
-                  <p class="text-xs text-base-content/50 mb-2">
-                    Global = todos los miembros con acceso. Exclusivo = solo el miembro o equipo seleccionado.
-                  </p>
-                  <div class="flex gap-2">
-                    <button
-                      type="button"
-                      phx-click="change_scope"
-                      phx-value-scope="global"
-                      class={["btn btn-sm", @current_scope == "global" && "btn-primary"]}
-                    >
-                      <.icon name="hero-globe-alt" class="w-4 h-4" /> Global
-                    </button>
-                    <button
-                      type="button"
-                      phx-click="change_scope"
-                      phx-value-scope="team"
-                      class={["btn btn-sm", @current_scope == "team" && "btn-info"]}
-                    >
-                      <.icon name="hero-users" class="w-4 h-4" /> Equipo
-                    </button>
-                    <button
-                      type="button"
-                      phx-click="change_scope"
-                      phx-value-scope="member"
-                      class={["btn btn-sm", @current_scope == "member" && "btn-warning"]}
-                    >
-                      <.icon name="hero-user" class="w-4 h-4" /> Usuario
-                    </button>
-                  </div>
-                </div>
+                    <%= if @current_scope == "member" do %>
+                      <% is_new? = @editing_ap_id == :new %>
+                      <div class="relative" phx-click-away="close_scope_pickers">
+                        <label class="text-sm font-medium text-base-content">Usuario exclusivo</label>
+                        <p class="text-xs text-base-content/50 mb-1">
+                          <%= if is_new? do %>
+                            Puedes seleccionar múltiples usuarios. Se creará un proveedor exclusivo por cada uno.
+                          <% else %>
+                            Solo este usuario podrá usar esta API key para este modelo.
+                          <% end %>
+                        </p>
+                        <%= if is_new? do %>
+                          <%!-- Multi-select chips for create mode --%>
+                          <% members_filtered =
+                            members_with_model_access(@members_for_select, @provider_form_alias_id)
+                            |> Enum.filter(fn m ->
+                              search = String.downcase(@scope_member_search || "")
+                              email = if m.user, do: String.downcase(m.user.email), else: ""
 
-                <%= if @current_scope == "member" do %>
-                  <% is_new? = @editing_ap_id == :new %>
-                  <div class="relative">
-                    <label class="text-sm font-medium text-base-content">Usuario exclusivo</label>
-                    <p class="text-xs text-base-content/50 mb-1">
-                      <%= if is_new? do %>
-                        Puedes seleccionar múltiples usuarios. Se creará un proveedor exclusivo por cada uno.
-                      <% else %>
-                        Solo este usuario podrá usar esta API key para este modelo.
-                      <% end %>
-                    </p>
-                    <%= if is_new? do %>
-                      <%!-- Multi-select chips for create mode --%>
-                      <% members_filtered =
-                        members_with_model_access(@members_for_select, @provider_form_alias_id)
-                        |> Enum.filter(fn m ->
-                          search = String.downcase(@scope_member_search || "")
-                          email = if m.user, do: String.downcase(m.user.email), else: ""
-                          name = if m.user && m.user.name, do: String.downcase(m.user.name), else: ""
+                              name =
+                                if m.user && m.user.name, do: String.downcase(m.user.name), else: ""
 
-                          search == "" or String.contains?(email, search) or
-                            String.contains?(name, search)
-                        end) %>
-                      <input
-                        type="text"
-                        value={@scope_member_search}
-                        placeholder="Escribe para buscar usuario…"
-                        phx-keyup="scope_member_search"
-                        phx-debounce="200"
-                        class="input input-sm w-full"
-                        autocomplete="off"
-                      />
-                      <%= if @scope_member_open and members_filtered != [] do %>
-                        <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
-                          <button
-                            :for={m <- Enum.take(members_filtered, 15)}
-                            type="button"
-                            phx-click="toggle_scope_member"
-                            phx-value-member_id={m.id}
-                            class={[
-                              "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
-                              m.id in (@current_scope_member_ids || []) &&
-                                "bg-primary/10 font-semibold"
-                            ]}
-                          >
-                            <span class="text-sm font-medium">{m.user.email}</span>
-                            <span :if={m.user.name} class="text-xs text-base-content/50 ml-1">({m.user.name})</span>
+                              search == "" or String.contains?(email, search) or
+                                String.contains?(name, search)
+                            end) %>
+                          <input
+                            type="text"
+                            name="model_provider[scope_member_id_display]"
+                            value={@scope_member_search}
+                            placeholder="Escribe para buscar usuario…"
+                            phx-focus="open_scope_picker"
+                            phx-value-picker="member"
+                            phx-change="scope_member_search"
+                            phx-debounce="200"
+                            class="input input-sm w-full"
+                            autocomplete="off"
+                          />
+                          <%= if @scope_member_open and members_filtered != [] do %>
+                            <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                              <button
+                                :for={m <- Enum.take(members_filtered, 15)}
+                                type="button"
+                                phx-click="toggle_scope_member"
+                                phx-value-member_id={m.id}
+                                class={[
+                                  "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
+                                  m.id in (@current_scope_member_ids || []) &&
+                                    "bg-primary/10 font-semibold"
+                                ]}
+                              >
+                                <span class="text-sm font-medium">{m.user.email}</span>
+                                <span :if={m.user.name} class="text-xs text-base-content/50 ml-1">({m.user.name})</span>
+                                <span
+                                  :if={m.id in (@current_scope_member_ids || [])}
+                                  class="text-xs text-primary ml-2"
+                                >
+                                  ✓
+                                </span>
+                              </button>
+                            </div>
+                          <% end %>
+                          <%!-- Selected chips --%>
+                          <div :if={@current_scope_member_ids != []} class="flex flex-wrap gap-1 mt-2">
                             <span
-                              :if={m.id in (@current_scope_member_ids || [])}
-                              class="text-xs text-primary ml-2"
+                              :for={mid <- @current_scope_member_ids}
+                              class="badge badge-warning badge-sm gap-1 cursor-pointer"
+                              phx-click="toggle_scope_member"
+                              phx-value-member_id={mid}
                             >
-                              ✓
+                              {case Enum.find(@members_for_select || [], &(&1.id == mid)) do
+                                %{user: %{email: e}} -> e
+                                _ -> mid
+                              end}
+                              <.icon name="hero-x-mark" class="w-3 h-3" />
                             </span>
-                          </button>
-                        </div>
-                      <% end %>
-                      <%!-- Selected chips --%>
-                      <div :if={@current_scope_member_ids != []} class="flex flex-wrap gap-1 mt-2">
-                        <span
-                          :for={mid <- @current_scope_member_ids}
-                          class="badge badge-warning badge-sm gap-1 cursor-pointer"
-                          phx-click="toggle_scope_member"
-                          phx-value-member_id={mid}
-                        >
-                          {case Enum.find(@members_for_select || [], &(&1.id == mid)) do
-                            %{user: %{email: e}} -> e
-                            _ -> mid
-                          end}
-                          <.icon name="hero-x-mark" class="w-3 h-3" />
-                        </span>
+                          </div>
+                        <% else %>
+                          <%!-- Single-select for edit mode --%>
+                          <input
+                            type="text"
+                            name="model_provider[scope_member_id_display]"
+                            value={@scope_member_search}
+                            placeholder="Escribe para buscar usuario…"
+                            phx-focus="open_scope_picker"
+                            phx-value-picker="member"
+                            phx-change="scope_member_search"
+                            phx-debounce="200"
+                            class="input input-sm w-full"
+                            autocomplete="off"
+                          />
+                          <% members_filtered =
+                            members_with_model_access(@members_for_select, @provider_form_alias_id)
+                            |> Enum.filter(fn m ->
+                              search = String.downcase(@scope_member_search || "")
+                              email = if m.user, do: String.downcase(m.user.email), else: ""
+
+                              name =
+                                if m.user && m.user.name, do: String.downcase(m.user.name), else: ""
+
+                              search == "" or String.contains?(email, search) or
+                                String.contains?(name, search)
+                            end) %>
+                          <%= if @scope_member_open and members_filtered != [] do %>
+                            <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                              <button
+                                :for={m <- Enum.take(members_filtered, 10)}
+                                type="button"
+                                phx-click="select_scope_member_item"
+                                phx-value-member_id={m.id}
+                                phx-value-member_label={if(m.user, do: m.user.email, else: m.id)}
+                                class={[
+                                  "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
+                                  m.id == @current_scope_member_id && "bg-primary/10 font-semibold"
+                                ]}
+                              >
+                                <span class="text-sm font-medium">{m.user.email}</span>
+                                <span :if={m.user.name} class="text-xs text-base-content/50 ml-1">({m.user.name})</span>
+                                <span
+                                  :if={m.id == @current_scope_member_id}
+                                  class="text-xs text-primary ml-2"
+                                >
+                                  (actual)
+                                </span>
+                              </button>
+                            </div>
+                          <% end %>
+                          <input
+                            type="hidden"
+                            name="model_provider[scope_member_id]"
+                            value={@current_scope_member_id}
+                          />
+                        <% end %>
                       </div>
-                    <% else %>
-                      <%!-- Single-select for edit mode --%>
-                      <input
-                        type="text"
-                        name="model_provider[scope_member_id_display]"
-                        value={@scope_member_search}
-                        placeholder="Escribe para buscar usuario…"
-                        phx-keyup="scope_member_search"
-                        phx-debounce="200"
-                        class="input input-sm w-full"
-                        autocomplete="off"
-                      />
-                      <% members_filtered =
-                        members_with_model_access(@members_for_select, @provider_form_alias_id)
-                        |> Enum.filter(fn m ->
-                          search = String.downcase(@scope_member_search || "")
-                          email = if m.user, do: String.downcase(m.user.email), else: ""
-                          name = if m.user && m.user.name, do: String.downcase(m.user.name), else: ""
+                    <% end %>
 
-                          search == "" or String.contains?(email, search) or
-                            String.contains?(name, search)
-                        end) %>
-                      <%= if @scope_member_open and members_filtered != [] do %>
-                        <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
-                          <button
-                            :for={m <- Enum.take(members_filtered, 10)}
-                            type="button"
-                            phx-click="select_scope_member_item"
-                            phx-value-member_id={m.id}
-                            class={[
-                              "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
-                              m.id == @current_scope_member_id && "bg-primary/10 font-semibold"
-                            ]}
-                          >
-                            <span class="text-sm font-medium">{m.user.email}</span>
-                            <span :if={m.user.name} class="text-xs text-base-content/50 ml-1">({m.user.name})</span>
+                    <%= if @current_scope == "team" do %>
+                      <% is_new? = @editing_ap_id == :new %>
+                      <div class="relative" phx-click-away="close_scope_pickers">
+                        <label class="text-sm font-medium text-base-content">Equipo exclusivo</label>
+                        <p class="text-xs text-base-content/50 mb-1">
+                          <%= if is_new? do %>
+                            Puedes seleccionar múltiples equipos. Se creará un proveedor exclusivo por cada uno.
+                          <% else %>
+                            Solo los miembros de este equipo podrán usar esta API key para este modelo.
+                          <% end %>
+                        </p>
+                        <%= if is_new? do %>
+                          <%!-- Multi-select chips for create mode --%>
+                          <% teams_filtered =
+                            teams_with_model_access(@teams_for_select, @provider_form_alias_id)
+                            |> Enum.filter(fn t ->
+                              search = String.downcase(@scope_team_search || "")
+                              name = String.downcase(t.name || "")
+                              search == "" or String.contains?(name, search)
+                            end) %>
+                          <input
+                            type="text"
+                            name="model_provider[scope_team_id_display]"
+                            value={@scope_team_search}
+                            placeholder="Escribe para buscar equipo…"
+                            phx-focus="open_scope_picker"
+                            phx-value-picker="team"
+                            phx-change="scope_team_search"
+                            phx-debounce="200"
+                            class="input input-sm w-full"
+                            autocomplete="off"
+                          />
+                          <%= if @scope_team_open and teams_filtered != [] do %>
+                            <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                              <button
+                                :for={t <- Enum.take(teams_filtered, 15)}
+                                type="button"
+                                phx-click="toggle_scope_team"
+                                phx-value-team_id={t.id}
+                                class={[
+                                  "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
+                                  t.id in (@current_scope_team_ids || []) &&
+                                    "bg-primary/10 font-semibold"
+                                ]}
+                              >
+                                <span class="text-sm font-medium">{t.name}</span>
+                                <span
+                                  :if={t.id in (@current_scope_team_ids || [])}
+                                  class="text-xs text-primary ml-2"
+                                >
+                                  ✓
+                                </span>
+                              </button>
+                            </div>
+                          <% end %>
+                          <%!-- Selected chips --%>
+                          <div :if={@current_scope_team_ids != []} class="flex flex-wrap gap-1 mt-2">
                             <span
-                              :if={m.id == @current_scope_member_id}
-                              class="text-xs text-primary ml-2"
+                              :for={tid <- @current_scope_team_ids}
+                              class="badge badge-info badge-sm gap-1 cursor-pointer"
+                              phx-click="toggle_scope_team"
+                              phx-value-team_id={tid}
                             >
-                              (actual)
+                              {case Enum.find(@teams_for_select || [], &(&1.id == tid)) do
+                                %{name: n} -> n
+                                _ -> tid
+                              end}
+                              <.icon name="hero-x-mark" class="w-3 h-3" />
                             </span>
-                          </button>
-                        </div>
-                      <% end %>
-                      <input
-                        type="hidden"
-                        name="model_provider[scope_member_id]"
-                        value={@current_scope_member_id}
-                      />
+                          </div>
+                        <% else %>
+                          <%!-- Single-select for edit mode --%>
+                          <input
+                            type="text"
+                            name="model_provider[scope_team_id_display]"
+                            value={@scope_team_search}
+                            placeholder="Escribe para buscar equipo…"
+                            phx-focus="open_scope_picker"
+                            phx-value-picker="team"
+                            phx-change="scope_team_search"
+                            phx-debounce="200"
+                            class="input input-sm w-full"
+                            autocomplete="off"
+                          />
+                          <% teams_filtered =
+                            teams_with_model_access(@teams_for_select, @provider_form_alias_id)
+                            |> Enum.filter(fn t ->
+                              search = String.downcase(@scope_team_search || "")
+                              name = String.downcase(t.name || "")
+                              search == "" or String.contains?(name, search)
+                            end) %>
+                          <%= if @scope_team_open and teams_filtered != [] do %>
+                            <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
+                              <button
+                                :for={t <- Enum.take(teams_filtered, 10)}
+                                type="button"
+                                phx-click="select_scope_team_item"
+                                phx-value-team_id={t.id}
+                                phx-value-team_label={t.name}
+                                class={[
+                                  "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
+                                  t.id == @current_scope_team_id && "bg-primary/10 font-semibold"
+                                ]}
+                              >
+                                <span class="text-sm font-medium">{t.name}</span>
+                                <span
+                                  :if={t.id == @current_scope_team_id}
+                                  class="text-xs text-primary ml-2"
+                                >
+                                  (actual)
+                                </span>
+                              </button>
+                            </div>
+                          <% end %>
+                          <input
+                            type="hidden"
+                            name="model_provider[scope_team_id]"
+                            value={@current_scope_team_id}
+                          />
+                        <% end %>
+                      </div>
                     <% end %>
                   </div>
-                <% end %>
 
-                <%= if @current_scope == "team" do %>
-                  <% is_new? = @editing_ap_id == :new %>
-                  <div class="relative">
-                    <label class="text-sm font-medium text-base-content">Equipo exclusivo</label>
-                    <p class="text-xs text-base-content/50 mb-1">
-                      <%= if is_new? do %>
-                        Puedes seleccionar múltiples equipos. Se creará un proveedor exclusivo por cada uno.
-                      <% else %>
-                        Solo los miembros de este equipo podrán usar esta API key para este modelo.
-                      <% end %>
-                    </p>
-                    <%= if is_new? do %>
-                      <%!-- Multi-select chips for create mode --%>
-                      <% teams_filtered =
-                        teams_with_model_access(@teams_for_select, @provider_form_alias_id)
-                        |> Enum.filter(fn t ->
-                          search = String.downcase(@scope_team_search || "")
-                          name = String.downcase(t.name || "")
-                          search == "" or String.contains?(name, search)
-                        end) %>
-                      <input
-                        type="text"
-                        value={@scope_team_search}
-                        placeholder="Escribe para buscar equipo…"
-                        phx-keyup="scope_team_search"
-                        phx-debounce="200"
-                        class="input input-sm w-full"
-                        autocomplete="off"
+                  <div class="md:col-span-2">
+                    <div class="grid grid-cols-3 gap-3">
+                      <.input
+                        field={@provider_form[:priority]}
+                        type="number"
+                        label="Prioridad"
+                        hint="Menor = se intenta primero."
                       />
-                      <%= if @scope_team_open and teams_filtered != [] do %>
-                        <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
-                          <button
-                            :for={t <- Enum.take(teams_filtered, 15)}
-                            type="button"
-                            phx-click="toggle_scope_team"
-                            phx-value-team_id={t.id}
-                            class={[
-                              "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
-                              t.id in (@current_scope_team_ids || []) && "bg-primary/10 font-semibold"
-                            ]}
-                          >
-                            <span class="text-sm font-medium">{t.name}</span>
-                            <span
-                              :if={t.id in (@current_scope_team_ids || [])}
-                              class="text-xs text-primary ml-2"
-                            >
-                              ✓
-                            </span>
-                          </button>
-                        </div>
-                      <% end %>
-                      <%!-- Selected chips --%>
-                      <div :if={@current_scope_team_ids != []} class="flex flex-wrap gap-1 mt-2">
-                        <span
-                          :for={tid <- @current_scope_team_ids}
-                          class="badge badge-info badge-sm gap-1 cursor-pointer"
-                          phx-click="toggle_scope_team"
-                          phx-value-team_id={tid}
-                        >
-                          {case Enum.find(@teams_for_select || [], &(&1.id == tid)) do
-                            %{name: n} -> n
-                            _ -> tid
-                          end}
-                          <.icon name="hero-x-mark" class="w-3 h-3" />
-                        </span>
-                      </div>
-                    <% else %>
-                      <%!-- Single-select for edit mode --%>
-                      <input
-                        type="text"
-                        name="model_provider[scope_team_id_display]"
-                        value={@scope_team_search}
-                        placeholder="Escribe para buscar equipo…"
-                        phx-keyup="scope_team_search"
-                        phx-debounce="200"
-                        class="input input-sm w-full"
-                        autocomplete="off"
+                      <.input
+                        field={@provider_form[:billing_mode]}
+                        type="select"
+                        label="Facturación"
+                        options={[
+                          {"Pay per token", "pay_per_token"},
+                          {"Facturación incluida", "included"}
+                        ]}
+                        hint="Pay per token: cobra por uso. Facturación incluida: suscripción/RPM = $0."
                       />
-                      <% teams_filtered =
-                        teams_with_model_access(@teams_for_select, @provider_form_alias_id)
-                        |> Enum.filter(fn t ->
-                          search = String.downcase(@scope_team_search || "")
-                          name = String.downcase(t.name || "")
-                          search == "" or String.contains?(name, search)
-                        end) %>
-                      <%= if @scope_team_open and teams_filtered != [] do %>
-                        <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
-                          <button
-                            :for={t <- Enum.take(teams_filtered, 10)}
-                            type="button"
-                            phx-click="select_scope_team_item"
-                            phx-value-team_id={t.id}
-                            class={[
-                              "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
-                              t.id == @current_scope_team_id && "bg-primary/10 font-semibold"
-                            ]}
-                          >
-                            <span class="text-sm font-medium">{t.name}</span>
-                            <span
-                              :if={t.id == @current_scope_team_id}
-                              class="text-xs text-primary ml-2"
-                            >
-                              (actual)
-                            </span>
-                          </button>
-                        </div>
-                      <% end %>
-                      <input
-                        type="hidden"
-                        name="model_provider[scope_team_id]"
-                        value={@current_scope_team_id}
+                      <.input
+                        field={@provider_form[:sticky_ttl_seconds]}
+                        type="number"
+                        label="TTL sticky (segundos)"
+                        hint="Vacío usa el default según facturación: included → 900 s (15 min), pay-per-token → 180 s (3 min). Si pones un valor, siempre se usa ese. Mínimo 1 s, máximo 86 400 s (24 h). Se guarda en milisegundos."
                       />
-                    <% end %>
+                    </div>
+
+                    <div :if={@current_billing_mode == "pay_per_token"} class="grid grid-cols-3 gap-3">
+                      <.input
+                        field={@provider_form[:input_cost_per_million]}
+                        type="number"
+                        step="0.000001"
+                        min="0"
+                        label="Costo input (USD / 1M)"
+                        hint="Tokens de entrada no-caché. Fallback cuando el proveedor no reporta costo."
+                      />
+                      <.input
+                        field={@provider_form[:cache_cost_per_million]}
+                        type="number"
+                        step="0.000001"
+                        min="0"
+                        label="Costo cache (USD / 1M)"
+                        hint="Tokens de entrada con cache hit (más barato). Vacío = usa precio de input para todos."
+                      />
+                      <.input
+                        field={@provider_form[:output_cost_per_million]}
+                        type="number"
+                        step="0.000001"
+                        min="0"
+                        label="Costo output (USD / 1M)"
+                        hint="Tokens de salida. Mismo fallback que input."
+                      />
+                    </div>
+
+                    <.input
+                      field={@provider_form[:enabled]}
+                      type="checkbox"
+                      label="Habilitado"
+                      hint="Si está apagado, este provider no recibe tráfico del modelo."
+                    />
                   </div>
-                <% end %>
-
-                <div class="grid grid-cols-2 gap-3">
-                  <.input
-                    field={@provider_form[:priority]}
-                    type="number"
-                    label="Prioridad"
-                    hint="Menor = se intenta primero."
-                  />
-                  <.input
-                    field={@provider_form[:billing_mode]}
-                    type="select"
-                    label="Facturación"
-                    options={[
-                      {"Pay per token", "pay_per_token"},
-                      {"Incluida (suscripción)", "included"}
-                    ]}
-                    hint="Pay per token: cobra por uso. Incluida: suscripción/RPM = $0."
-                  />
                 </div>
 
-                <div :if={@current_billing_mode == "pay_per_token"} class="grid grid-cols-3 gap-3">
-                  <.input
-                    field={@provider_form[:input_cost_per_million]}
-                    type="number"
-                    step="0.000001"
-                    min="0"
-                    label="Costo input (USD / 1M)"
-                    hint="Tokens de entrada no-caché. Fallback cuando el proveedor no reporta costo."
-                  />
-                  <.input
-                    field={@provider_form[:cache_cost_per_million]}
-                    type="number"
-                    step="0.000001"
-                    min="0"
-                    label="Costo cache (USD / 1M)"
-                    hint="Tokens de entrada con cache hit (más barato). Vacío = usa precio de input para todos."
-                  />
-                  <.input
-                    field={@provider_form[:output_cost_per_million]}
-                    type="number"
-                    step="0.000001"
-                    min="0"
-                    label="Costo output (USD / 1M)"
-                    hint="Tokens de salida. Mismo fallback que input."
-                  />
-                </div>
-
-                <.input
-                  field={@provider_form[:sticky_ttl_seconds]}
-                  type="number"
-                  label="TTL sticky (segundos)"
-                  hint="Vacío usa el default según facturación: included → 900 s (15 min), pay-per-token → 180 s (3 min).\nSi pones un valor, siempre se usa ese. Mínimo 1 s, máximo 86 400 s (24 h).\nSe guarda en milisegundos."
-                />
-
-                <.input
-                  field={@provider_form[:enabled]}
-                  type="checkbox"
-                  label="Habilitado"
-                  hint="Si está apagado, este provider no recibe tráfico del modelo."
-                />
-
-                <div class="flex gap-2 mt-4 justify-end">
+                <div class="md:col-span-2 flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_model_provider" class="btn btn-ghost btn-sm">
                     Cancelar
                   </button>

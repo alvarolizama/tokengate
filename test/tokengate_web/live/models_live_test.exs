@@ -523,25 +523,212 @@ defmodule TokengateWeb.ModelsLiveTest do
     # not a single character, so the user sees who is bound.
     assert html =~ ~s(value="#{target.email}")
 
-    # Dropdown should auto-open in edit mode so the admin can re-pick
-    # without clearing the field. The currently-bound member must appear
-    # in the dropdown, marked as (actual) — they were filtered out before.
-    assert html =~ "value=\"#{target.email}\""
-
-    # The currently-bound member must appear in the dropdown, marked as
-    # (actual) — they were filtered out before. Assert the email appears
-    # in the dropdown region (between the member search input and the end
-    # of the form) and that the (actual) tag is rendered.
     assert has_element?(
              view,
              ~s(input[name="model_provider[scope_member_id_display]"])
            )
 
-    # The (actual) marker confirms the bound member is rendered as an
-    # item in the dropdown (not excluded by Enum.reject).
-    assert html =~ "(actual)"
+    # The dropdown must start CLOSED in edit mode: opening the modal never
+    # auto-expands it anymore.
+    refute html =~ "(actual)"
+
+    # Opening the picker renders the currently-bound member as an item,
+    # marked as (actual).
+    view |> render_click("open_scope_picker", %{"picker" => "member"})
+    assert render(view) =~ "(actual)"
+
+    # Picking the item reflects its label into the search input and closes
+    # the dropdown.
+    view
+    |> render_click("select_scope_member_item", %{
+      "member_id" => team_member.id,
+      "member_label" => target.email
+    })
+
+    html = render(view)
+    assert html =~ ~s(value="#{target.email}")
+    refute html =~ "(actual)"
+
+    # Click-away / Escape share the same closer and are safe when already
+    # closed.
+    view |> render_click("close_scope_pickers", %{})
+
+    # Typing in the edit-mode picker filters via phx-change: being a named
+    # input inside the form, its value arrives nested under its
+    # model_provider[...] field name (not as %{"value"}).
+    view
+    |> render_change("scope_member_search", %{
+      "model_provider" => %{"scope_member_id_display" => target.email}
+    })
+
+    html = render(view)
+    assert html =~ ~s(value="#{target.email}")
+
+    # Clearing the input closes the list until the field regains focus.
+    view
+    |> render_change("scope_member_search", %{
+      "model_provider" => %{"scope_member_id_display" => ""}
+    })
+
+    refute render(view) =~ "(actual)"
 
     refute html =~ ~s(value="a")
+  end
+
+  test "edit pre-fills the team search input and the picker closes on pick", %{
+    conn: conn
+  } do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    alias_record = create_alias()
+    {:ok, team} = Accounts.create_team(%{name: "Scope #{unique()}"})
+
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        api_key_encrypted: "sk-test",
+        status: "active"
+      })
+
+    {:ok, ap} =
+      Providers.create_model_provider(%{
+        model_alias_id: alias_record.id,
+        credential_id: credential.id,
+        provider_model: "gpt-4o-team",
+        priority: 1,
+        enabled: true,
+        exclusive_to_team_id: team.id
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+
+    view |> element("#edit-ap-#{ap.id}") |> render_click()
+
+    html = render(view)
+
+    # Prefilled with the bound team's name, dropdown born closed.
+    assert has_element?(view, ~s(input[name="model_provider[scope_team_id_display]"]))
+    assert html =~ ~s(value="#{team.name}")
+    refute html =~ "(actual)"
+
+    # Opening renders the bound team marked as (actual).
+    view |> render_click("open_scope_picker", %{"picker" => "team"})
+    assert render(view) =~ "(actual)"
+
+    # Picking reflects the label into the input and closes the dropdown.
+    view
+    |> render_click("select_scope_team_item", %{
+      "team_id" => team.id,
+      "team_label" => team.name
+    })
+
+    html = render(view)
+    assert html =~ ~s(value="#{team.name}")
+    refute html =~ "(actual)"
+  end
+
+  test "creating with multiple members builds one exclusive provider per member", %{
+    conn: conn
+  } do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    alias_record = create_alias()
+
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        api_key_encrypted: "sk-test",
+        status: "active"
+      })
+
+    {:ok, team} = Accounts.create_team(%{name: "Team #{unique()}"})
+    {:ok, tm_a} = Accounts.create_team_member(%{team_id: team.id, user_id: admin.id})
+
+    %{user: other, password: _} = register("user2")
+    {:ok, tm_b} = Accounts.create_team_member(%{team_id: team.id, user_id: other.id})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    view |> element("#new-ap-#{alias_record.id}") |> render_click()
+
+    # Multi-select flow: pick the member scope, accumulate two members,
+    # submit once.
+    view |> render_click("change_scope", %{"scope" => "member"})
+    view |> render_click("toggle_scope_member", %{"member_id" => tm_a.id})
+    view |> render_click("toggle_scope_member", %{"member_id" => tm_b.id})
+
+    html =
+      view
+      |> form("#alias-provider-form", %{
+        model_provider: %{
+          credential_id: credential.id,
+          provider_model: "gpt-4o-multi",
+          priority: 1,
+          enabled: true
+        }
+      })
+      |> render_submit()
+
+    assert html =~ "2 proveedores asignados"
+
+    bound_member_ids =
+      Repo.all(
+        from mp in Tokengate.Providers.ModelProvider,
+          where: mp.model_alias_id == ^alias_record.id,
+          select: mp.exclusive_to_team_member_id
+      )
+
+    assert Enum.sort(bound_member_ids) == Enum.sort([tm_a.id, tm_b.id])
+  end
+
+  test "stale provider models results are discarded when credential changes", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    alias_record = create_alias()
+
+    {:ok, c1} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        api_key_encrypted: "sk-test-1",
+        status: "active"
+      })
+
+    {:ok, c2} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        api_key_encrypted: "sk-test-2",
+        status: "active"
+      })
+
+    # Provider currently bound to c2: opening the editor sets c2 as the
+    # expected credential for models results. Created before live/3 so it
+    # is part of the initially-mounted stream.
+    {:ok, ap} =
+      Providers.create_model_provider(%{
+        model_alias_id: alias_record.id,
+        credential_id: c2.id,
+        provider_model: "gpt-4o-race",
+        priority: 1,
+        enabled: true
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+
+    view |> element("#edit-ap-#{ap.id}") |> render_click()
+
+    # An old credential's slow response arrives late: it must be ignored.
+    send(
+      view.pid,
+      {:provider_models_result, c1.id, {:ok, ["stale-model-a", "stale-model-b"]}}
+    )
+
+    refute render(view) =~ "stale-model-a"
+
+    # Current credential's response is still accepted.
+    send(view.pid, {:provider_models_result, c2.id, {:ok, ["fresh-model"]}})
+    assert render(view) =~ "fresh-model"
   end
 
   test "model_provider row surfaces credential disabled state in /dashboard/models", %{conn: conn} do
