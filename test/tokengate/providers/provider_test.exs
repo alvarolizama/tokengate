@@ -4,26 +4,40 @@ defmodule Tokengate.Providers.ProviderTest do
 
   alias Tokengate.Providers.Provider
 
-  describe "changeset/2 format handling" do
-    test "defaults embedding_format to openai and rerank_format to cohere" do
-      changeset =
-        Provider.changeset(%Provider{}, %{name: "test", base_url: "https://api.openai.com/v1"})
-
-      assert Ecto.Changeset.get_field(changeset, :embedding_format) == "openai"
-      assert Ecto.Changeset.get_field(changeset, :rerank_format) == "cohere"
+  describe "changeset/2" do
+    test "requires name and base_url" do
+      changeset = Provider.changeset(%Provider{}, %{})
+      refute changeset.valid?
+      assert %{name: [_], base_url: [_]} = errors_on(changeset)
     end
 
-    test "accepts explicit formats" do
+    test "accepts valid provider attributes" do
       changeset =
         Provider.changeset(%Provider{}, %{
-          name: "dashscope",
-          base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-          embedding_format: "dashscope",
-          rerank_format: "dashscope"
+          name: "openrouter",
+          base_url: "https://openrouter.ai/api/v1",
+          embedding_base_url: "https://openrouter.ai/api/v1/embeddings",
+          rerank_base_url: "https://openrouter.ai/api/v1/rerank"
         })
 
-      assert Ecto.Changeset.get_field(changeset, :embedding_format) == "dashscope"
-      assert Ecto.Changeset.get_field(changeset, :rerank_format) == "dashscope"
+      assert changeset.valid?
+
+      assert Ecto.Changeset.get_field(changeset, :embedding_base_url) ==
+               "https://openrouter.ai/api/v1/embeddings"
+
+      assert Ecto.Changeset.get_field(changeset, :rerank_base_url) ==
+               "https://openrouter.ai/api/v1/rerank"
+    end
+
+    test "rejects invalid status" do
+      changeset =
+        Provider.changeset(%Provider{}, %{
+          name: "test",
+          base_url: "https://api.example.com/v1",
+          status: "bogus"
+        })
+
+      assert %{status: [_]} = errors_on(changeset)
     end
 
     test "normalizes empty-string URL overrides to nil" do
@@ -37,39 +51,6 @@ defmodule Tokengate.Providers.ProviderTest do
 
       assert Ecto.Changeset.get_field(changeset, :embedding_base_url) == nil
       assert Ecto.Changeset.get_field(changeset, :rerank_base_url) == nil
-    end
-
-    test "rejects invalid rerank_format" do
-      changeset =
-        Provider.changeset(%Provider{}, %{
-          name: "test",
-          base_url: "https://api.example.com/v1",
-          rerank_format: "invalid"
-        })
-
-      assert %{rerank_format: ["is invalid"]} = errors_on(changeset)
-    end
-
-    test "accepts runinfra rerank_format" do
-      changeset =
-        Provider.changeset(%Provider{}, %{
-          name: "runinfra",
-          base_url: "https://api.runinfra.ai/v1",
-          rerank_format: "runinfra"
-        })
-
-      assert Ecto.Changeset.get_field(changeset, :rerank_format) == "runinfra"
-    end
-
-    test "rejects invalid embedding_format" do
-      changeset =
-        Provider.changeset(%Provider{}, %{
-          name: "test",
-          base_url: "https://api.example.com/v1",
-          embedding_format: "invalid"
-        })
-
-      assert %{embedding_format: ["is invalid"]} = errors_on(changeset)
     end
   end
 

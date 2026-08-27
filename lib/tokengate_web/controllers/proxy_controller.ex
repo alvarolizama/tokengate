@@ -8,10 +8,12 @@ defmodule TokengateWeb.ProxyController do
       provider with full cost tracking. The response `usage` object gains
       `estimated_cost_usd` (market price) and `cost_usd` (provider price),
       plus `X-Tokengate-Cost` / `X-Tokengate-Savings` headers.
-    * `POST /v1/embeddings` — embeddings (OpenAI format). Non-streaming
-      only. Works against oMLX, OpenRouter and Fireworks.
-    * `POST /v1/rerank` — rerank (Cohere format). Normalizes oMLX and
-      Fireworks responses to a single Cohere-shaped contract.
+    * `POST /v1/embeddings` — embeddings passthrough. Non-streaming only.
+      The request is forwarded as received and the upstream response is
+      returned untouched; TokenGate only adds auth and cost tracking.
+    * `POST /v1/rerank` — rerank passthrough. The request is forwarded as
+      received and the upstream response is returned untouched; TokenGate
+      only adds auth and cost tracking.
 
   ## Two-gate throttling
 
@@ -128,12 +130,13 @@ defmodule TokengateWeb.ProxyController do
   end
 
   @doc """
-  Proxies an embeddings request (OpenAI format) to the routed provider.
+  Proxies an embeddings request to the routed provider.
 
-  Non-streaming only. Works against any OpenAI-compatible `/embeddings`
-  surface — oMLX, OpenRouter and Fireworks all speak the same shape and
-  report `usage.prompt_tokens`; when the upstream omits usage, token counts
-  fall back to the chars/4 estimator over the inputs.
+  Non-streaming only. Passthrough: the request is forwarded as received
+  and the upstream response is returned untouched — TokenGate only adds
+  authentication (provider API key) and cost tracking. When the upstream
+  omits usage, token counts fall back to the chars/4 estimator over the
+  inputs.
   """
   def embeddings(conn, _params) do
     payload = conn.body_params
@@ -146,14 +149,12 @@ defmodule TokengateWeb.ProxyController do
   end
 
   @doc """
-  Proxies a rerank request (Cohere format: `query`, `documents[]`,
-  optional `top_n` / `return_documents` / `task`) to the routed provider.
+  Proxies a rerank request to the routed provider.
 
-  Providers disagree on the response list key: oMLX answers Cohere-style
-  `results`, Fireworks answers Jina-style `data`. TokenGate normalizes
-  every upstream response to the Cohere shape (`results`) so clients see
-  one stable contract regardless of backend. Fireworks reports usage;
-  oMLX does not (falls back to the estimator).
+  Passthrough: the request is forwarded as received and the upstream
+  response is returned untouched. TokenGate only adds authentication
+  (provider API key) and cost tracking. When the upstream omits usage,
+  token counts fall back to the chars/4 estimator over query + documents.
   """
   def rerank(conn, _params) do
     payload = conn.body_params
@@ -424,13 +425,10 @@ defmodule TokengateWeb.ProxyController do
 
   # Resolves usage for non-chat responses, returning {usage, response_body}.
   #
-  # :embedding — OpenAI shape; usage comes from the upstream when present,
-  #   otherwise estimated over the inputs. The body passes through untouched.
-  # :rerank — the response body is normalized to the Cohere shape
-  #   (`results`) so clients see one contract across oMLX and Fireworks.
-  #   Usage is read BEFORE stripping the provider's usage key (Fireworks
-  #   reports real prompt_tokens; oMLX reports nothing → estimate over
-  #   query + documents).
+  # Both kinds are pure passthrough — the upstream response body is
+  # returned untouched. Usage is read from the upstream `usage` object when
+  # present; otherwise it's estimated over the request payload (inputs for
+  # :embedding, query + documents for :rerank).
   defp simple_usage(payload, body, :embedding) do
     usage = UsageNormalizer.normalize(:openai, body) || estimate_embedding_usage(payload)
     {usage, body}
@@ -438,7 +436,7 @@ defmodule TokengateWeb.ProxyController do
 
   defp simple_usage(payload, body, :rerank) do
     usage = UsageNormalizer.normalize(:openai, body) || estimate_rerank_usage(payload)
-    {usage, normalize_rerank_body(body)}
+    {usage, body}
   end
 
   defp estimate_embedding_usage(payload) do
@@ -471,21 +469,6 @@ defmodule TokengateWeb.ProxyController do
       cache_creation_tokens: 0
     }
   end
-
-  # Normalizes provider-specific rerank responses to the Cohere shape.
-  # oMLX already answers with `results`; Fireworks answers Jina-style with
-  # `object: "list"` + `data`. Item fields (`index`, `relevance_score`,
-  # optional `document`) are identical across providers.
-  defp normalize_rerank_body(%{"results" => _} = body), do: body
-
-  defp normalize_rerank_body(%{"data" => data} = body) when is_list(data) do
-    body
-    |> Map.delete("data")
-    |> Map.delete("object")
-    |> Map.put("results", data)
-  end
-
-  defp normalize_rerank_body(body), do: body
 
   ## Pipeline steps ############################################################
 

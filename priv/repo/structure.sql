@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict dYQm7GT90LpDRJQScKFbEWa1Xa6CgBTIVWoVbzwyjc45epprIV1aedRvRFvLQq7
+\restrict 30MinjvKwDTVIdZfvaXMuaBUkmVSeSAEf0YOJpbID6hCdsXkzoQMgQUSgElZGsa
 
 -- Dumped from database version 18.3 (Homebrew)
 -- Dumped by pg_dump version 18.3 (Homebrew)
@@ -245,9 +245,7 @@ CREATE TABLE public.providers (
     updated_at timestamp(0) without time zone NOT NULL,
     status character varying(255) DEFAULT 'active'::character varying NOT NULL,
     rerank_base_url character varying(255),
-    rerank_format character varying(255) DEFAULT 'cohere'::character varying,
-    embedding_base_url character varying(255),
-    embedding_format character varying(255) DEFAULT 'openai'::character varying
+    embedding_base_url character varying(255)
 );
 
 
@@ -257,7 +255,7 @@ CREATE TABLE public.providers (
 
 CREATE TABLE public.request_logs (
     id uuid NOT NULL,
-    team_member_id uuid NOT NULL,
+    team_member_id uuid,
     provider_id uuid,
     model_alias_id uuid,
     model_requested character varying(255) NOT NULL,
@@ -284,7 +282,9 @@ CREATE TABLE public.request_logs (
     cache_creation_tokens integer DEFAULT 0 NOT NULL,
     request_type character varying(255) DEFAULT 'chat'::character varying NOT NULL,
     error_message character varying(255),
-    credential_id uuid
+    credential_id uuid,
+    service_id uuid,
+    subject_type character varying(255) DEFAULT 'user'::character varying NOT NULL
 )
 PARTITION BY RANGE (inserted_at);
 
@@ -295,7 +295,7 @@ PARTITION BY RANGE (inserted_at);
 
 CREATE TABLE public.request_logs_2026_07_26 (
     id uuid CONSTRAINT request_logs_id_not_null NOT NULL,
-    team_member_id uuid CONSTRAINT request_logs_team_member_id_not_null NOT NULL,
+    team_member_id uuid,
     provider_id uuid,
     model_alias_id uuid,
     model_requested character varying(255) CONSTRAINT request_logs_model_requested_not_null NOT NULL,
@@ -322,7 +322,243 @@ CREATE TABLE public.request_logs_2026_07_26 (
     cache_creation_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_creation_tokens_not_null NOT NULL,
     request_type character varying(255) DEFAULT 'chat'::character varying CONSTRAINT request_logs_request_type_not_null NOT NULL,
     error_message character varying(255),
-    credential_id uuid
+    credential_id uuid,
+    service_id uuid,
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+);
+
+
+--
+-- Name: request_logs_2026_07_27; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.request_logs_2026_07_27 (
+    id uuid CONSTRAINT request_logs_id_not_null NOT NULL,
+    team_member_id uuid,
+    provider_id uuid,
+    model_alias_id uuid,
+    model_requested character varying(255) CONSTRAINT request_logs_model_requested_not_null NOT NULL,
+    model_responded character varying(255),
+    agent_type character varying(255) DEFAULT 'unknown'::character varying CONSTRAINT request_logs_agent_type_not_null NOT NULL,
+    status_code integer,
+    prompt_tokens integer DEFAULT 0 CONSTRAINT request_logs_prompt_tokens_not_null NOT NULL,
+    completion_tokens integer DEFAULT 0 CONSTRAINT request_logs_completion_tokens_not_null NOT NULL,
+    provider_cost_usd numeric(12,6),
+    latency_ms integer,
+    streaming boolean DEFAULT false CONSTRAINT request_logs_streaming_not_null NOT NULL,
+    inserted_at timestamp(0) without time zone CONSTRAINT request_logs_inserted_at_not_null NOT NULL,
+    ttft_ms integer,
+    model_provider_id uuid,
+    think boolean DEFAULT false CONSTRAINT request_logs_think_not_null NOT NULL,
+    effort character varying(255),
+    api_key_prefix character varying(255),
+    credential_name character varying(255),
+    provider_status_code integer,
+    error_reason character varying(255),
+    client_agent character varying(255),
+    provider_key_prefix character varying(255),
+    cache_read_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_read_tokens_not_null NOT NULL,
+    cache_creation_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_creation_tokens_not_null NOT NULL,
+    request_type character varying(255) DEFAULT 'chat'::character varying CONSTRAINT request_logs_request_type_not_null NOT NULL,
+    error_message character varying(255),
+    credential_id uuid,
+    service_id uuid,
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+);
+
+
+--
+-- Name: request_logs_2026_08_05; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.request_logs_2026_08_05 (
+    id uuid CONSTRAINT request_logs_id_not_null NOT NULL,
+    team_member_id uuid,
+    provider_id uuid,
+    model_alias_id uuid,
+    model_requested character varying(255) CONSTRAINT request_logs_model_requested_not_null NOT NULL,
+    model_responded character varying(255),
+    agent_type character varying(255) DEFAULT 'unknown'::character varying CONSTRAINT request_logs_agent_type_not_null NOT NULL,
+    status_code integer,
+    prompt_tokens integer DEFAULT 0 CONSTRAINT request_logs_prompt_tokens_not_null NOT NULL,
+    completion_tokens integer DEFAULT 0 CONSTRAINT request_logs_completion_tokens_not_null NOT NULL,
+    provider_cost_usd numeric(12,6),
+    latency_ms integer,
+    streaming boolean DEFAULT false CONSTRAINT request_logs_streaming_not_null NOT NULL,
+    inserted_at timestamp(0) without time zone CONSTRAINT request_logs_inserted_at_not_null NOT NULL,
+    ttft_ms integer,
+    model_provider_id uuid,
+    think boolean DEFAULT false CONSTRAINT request_logs_think_not_null NOT NULL,
+    effort character varying(255),
+    api_key_prefix character varying(255),
+    credential_name character varying(255),
+    provider_status_code integer,
+    error_reason character varying(255),
+    client_agent character varying(255),
+    provider_key_prefix character varying(255),
+    cache_read_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_read_tokens_not_null NOT NULL,
+    cache_creation_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_creation_tokens_not_null NOT NULL,
+    request_type character varying(255) DEFAULT 'chat'::character varying CONSTRAINT request_logs_request_type_not_null NOT NULL,
+    error_message character varying(255),
+    credential_id uuid,
+    service_id uuid,
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+);
+
+
+--
+-- Name: request_logs_2026_08_27; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.request_logs_2026_08_27 (
+    id uuid CONSTRAINT request_logs_id_not_null NOT NULL,
+    team_member_id uuid,
+    provider_id uuid,
+    model_alias_id uuid,
+    model_requested character varying(255) CONSTRAINT request_logs_model_requested_not_null NOT NULL,
+    model_responded character varying(255),
+    agent_type character varying(255) DEFAULT 'unknown'::character varying CONSTRAINT request_logs_agent_type_not_null NOT NULL,
+    status_code integer,
+    prompt_tokens integer DEFAULT 0 CONSTRAINT request_logs_prompt_tokens_not_null NOT NULL,
+    completion_tokens integer DEFAULT 0 CONSTRAINT request_logs_completion_tokens_not_null NOT NULL,
+    provider_cost_usd numeric(12,6),
+    latency_ms integer,
+    streaming boolean DEFAULT false CONSTRAINT request_logs_streaming_not_null NOT NULL,
+    inserted_at timestamp(0) without time zone CONSTRAINT request_logs_inserted_at_not_null NOT NULL,
+    ttft_ms integer,
+    model_provider_id uuid,
+    think boolean DEFAULT false CONSTRAINT request_logs_think_not_null NOT NULL,
+    effort character varying(255),
+    api_key_prefix character varying(255),
+    credential_name character varying(255),
+    provider_status_code integer,
+    error_reason character varying(255),
+    client_agent character varying(255),
+    provider_key_prefix character varying(255),
+    cache_read_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_read_tokens_not_null NOT NULL,
+    cache_creation_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_creation_tokens_not_null NOT NULL,
+    request_type character varying(255) DEFAULT 'chat'::character varying CONSTRAINT request_logs_request_type_not_null NOT NULL,
+    error_message character varying(255),
+    credential_id uuid,
+    service_id uuid,
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+);
+
+
+--
+-- Name: request_logs_2026_08_28; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.request_logs_2026_08_28 (
+    id uuid CONSTRAINT request_logs_id_not_null NOT NULL,
+    team_member_id uuid,
+    provider_id uuid,
+    model_alias_id uuid,
+    model_requested character varying(255) CONSTRAINT request_logs_model_requested_not_null NOT NULL,
+    model_responded character varying(255),
+    agent_type character varying(255) DEFAULT 'unknown'::character varying CONSTRAINT request_logs_agent_type_not_null NOT NULL,
+    status_code integer,
+    prompt_tokens integer DEFAULT 0 CONSTRAINT request_logs_prompt_tokens_not_null NOT NULL,
+    completion_tokens integer DEFAULT 0 CONSTRAINT request_logs_completion_tokens_not_null NOT NULL,
+    provider_cost_usd numeric(12,6),
+    latency_ms integer,
+    streaming boolean DEFAULT false CONSTRAINT request_logs_streaming_not_null NOT NULL,
+    inserted_at timestamp(0) without time zone CONSTRAINT request_logs_inserted_at_not_null NOT NULL,
+    ttft_ms integer,
+    model_provider_id uuid,
+    think boolean DEFAULT false CONSTRAINT request_logs_think_not_null NOT NULL,
+    effort character varying(255),
+    api_key_prefix character varying(255),
+    credential_name character varying(255),
+    provider_status_code integer,
+    error_reason character varying(255),
+    client_agent character varying(255),
+    provider_key_prefix character varying(255),
+    cache_read_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_read_tokens_not_null NOT NULL,
+    cache_creation_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_creation_tokens_not_null NOT NULL,
+    request_type character varying(255) DEFAULT 'chat'::character varying CONSTRAINT request_logs_request_type_not_null NOT NULL,
+    error_message character varying(255),
+    credential_id uuid,
+    service_id uuid,
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+);
+
+
+--
+-- Name: request_logs_2026_08_29; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.request_logs_2026_08_29 (
+    id uuid CONSTRAINT request_logs_id_not_null NOT NULL,
+    team_member_id uuid,
+    provider_id uuid,
+    model_alias_id uuid,
+    model_requested character varying(255) CONSTRAINT request_logs_model_requested_not_null NOT NULL,
+    model_responded character varying(255),
+    agent_type character varying(255) DEFAULT 'unknown'::character varying CONSTRAINT request_logs_agent_type_not_null NOT NULL,
+    status_code integer,
+    prompt_tokens integer DEFAULT 0 CONSTRAINT request_logs_prompt_tokens_not_null NOT NULL,
+    completion_tokens integer DEFAULT 0 CONSTRAINT request_logs_completion_tokens_not_null NOT NULL,
+    provider_cost_usd numeric(12,6),
+    latency_ms integer,
+    streaming boolean DEFAULT false CONSTRAINT request_logs_streaming_not_null NOT NULL,
+    inserted_at timestamp(0) without time zone CONSTRAINT request_logs_inserted_at_not_null NOT NULL,
+    ttft_ms integer,
+    model_provider_id uuid,
+    think boolean DEFAULT false CONSTRAINT request_logs_think_not_null NOT NULL,
+    effort character varying(255),
+    api_key_prefix character varying(255),
+    credential_name character varying(255),
+    provider_status_code integer,
+    error_reason character varying(255),
+    client_agent character varying(255),
+    provider_key_prefix character varying(255),
+    cache_read_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_read_tokens_not_null NOT NULL,
+    cache_creation_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_creation_tokens_not_null NOT NULL,
+    request_type character varying(255) DEFAULT 'chat'::character varying CONSTRAINT request_logs_request_type_not_null NOT NULL,
+    error_message character varying(255),
+    credential_id uuid,
+    service_id uuid,
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+);
+
+
+--
+-- Name: request_logs_2026_08_30; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.request_logs_2026_08_30 (
+    id uuid CONSTRAINT request_logs_id_not_null NOT NULL,
+    team_member_id uuid,
+    provider_id uuid,
+    model_alias_id uuid,
+    model_requested character varying(255) CONSTRAINT request_logs_model_requested_not_null NOT NULL,
+    model_responded character varying(255),
+    agent_type character varying(255) DEFAULT 'unknown'::character varying CONSTRAINT request_logs_agent_type_not_null NOT NULL,
+    status_code integer,
+    prompt_tokens integer DEFAULT 0 CONSTRAINT request_logs_prompt_tokens_not_null NOT NULL,
+    completion_tokens integer DEFAULT 0 CONSTRAINT request_logs_completion_tokens_not_null NOT NULL,
+    provider_cost_usd numeric(12,6),
+    latency_ms integer,
+    streaming boolean DEFAULT false CONSTRAINT request_logs_streaming_not_null NOT NULL,
+    inserted_at timestamp(0) without time zone CONSTRAINT request_logs_inserted_at_not_null NOT NULL,
+    ttft_ms integer,
+    model_provider_id uuid,
+    think boolean DEFAULT false CONSTRAINT request_logs_think_not_null NOT NULL,
+    effort character varying(255),
+    api_key_prefix character varying(255),
+    credential_name character varying(255),
+    provider_status_code integer,
+    error_reason character varying(255),
+    client_agent character varying(255),
+    provider_key_prefix character varying(255),
+    cache_read_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_read_tokens_not_null NOT NULL,
+    cache_creation_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_creation_tokens_not_null NOT NULL,
+    request_type character varying(255) DEFAULT 'chat'::character varying CONSTRAINT request_logs_request_type_not_null NOT NULL,
+    error_message character varying(255),
+    credential_id uuid,
+    service_id uuid,
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
 );
 
 
@@ -332,7 +568,7 @@ CREATE TABLE public.request_logs_2026_07_26 (
 
 CREATE TABLE public.request_logs_default (
     id uuid CONSTRAINT request_logs_id_not_null NOT NULL,
-    team_member_id uuid CONSTRAINT request_logs_team_member_id_not_null NOT NULL,
+    team_member_id uuid,
     provider_id uuid,
     model_alias_id uuid,
     model_requested character varying(255) CONSTRAINT request_logs_model_requested_not_null NOT NULL,
@@ -359,7 +595,48 @@ CREATE TABLE public.request_logs_default (
     cache_creation_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_creation_tokens_not_null NOT NULL,
     request_type character varying(255) DEFAULT 'chat'::character varying CONSTRAINT request_logs_request_type_not_null NOT NULL,
     error_message character varying(255),
-    credential_id uuid
+    credential_id uuid,
+    service_id uuid,
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+);
+
+
+--
+-- Name: request_logs_proto; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.request_logs_proto (
+    id uuid CONSTRAINT request_logs_id_not_null NOT NULL,
+    team_member_id uuid,
+    provider_id uuid,
+    model_alias_id uuid,
+    model_requested character varying(255) CONSTRAINT request_logs_model_requested_not_null NOT NULL,
+    model_responded character varying(255),
+    agent_type character varying(255) DEFAULT 'unknown'::character varying CONSTRAINT request_logs_agent_type_not_null NOT NULL,
+    status_code integer,
+    prompt_tokens integer DEFAULT 0 CONSTRAINT request_logs_prompt_tokens_not_null NOT NULL,
+    completion_tokens integer DEFAULT 0 CONSTRAINT request_logs_completion_tokens_not_null NOT NULL,
+    provider_cost_usd numeric(12,6),
+    latency_ms integer,
+    streaming boolean DEFAULT false CONSTRAINT request_logs_streaming_not_null NOT NULL,
+    inserted_at timestamp(0) without time zone CONSTRAINT request_logs_inserted_at_not_null NOT NULL,
+    ttft_ms integer,
+    model_provider_id uuid,
+    think boolean DEFAULT false CONSTRAINT request_logs_think_not_null NOT NULL,
+    effort character varying(255),
+    api_key_prefix character varying(255),
+    credential_name character varying(255),
+    provider_status_code integer,
+    error_reason character varying(255),
+    client_agent character varying(255),
+    provider_key_prefix character varying(255),
+    cache_read_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_read_tokens_not_null NOT NULL,
+    cache_creation_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_creation_tokens_not_null NOT NULL,
+    request_type character varying(255) DEFAULT 'chat'::character varying CONSTRAINT request_logs_request_type_not_null NOT NULL,
+    error_message character varying(255),
+    credential_id uuid,
+    service_id uuid,
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
 );
 
 
@@ -515,6 +792,48 @@ ALTER TABLE ONLY public.request_logs ATTACH PARTITION public.request_logs_2026_0
 
 
 --
+-- Name: request_logs_2026_07_27; Type: TABLE ATTACH; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.request_logs ATTACH PARTITION public.request_logs_2026_07_27 FOR VALUES FROM ('2026-07-27 00:00:00') TO ('2026-07-28 00:00:00');
+
+
+--
+-- Name: request_logs_2026_08_05; Type: TABLE ATTACH; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.request_logs ATTACH PARTITION public.request_logs_2026_08_05 FOR VALUES FROM ('2026-08-05 00:00:00') TO ('2026-08-06 00:00:00');
+
+
+--
+-- Name: request_logs_2026_08_27; Type: TABLE ATTACH; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.request_logs ATTACH PARTITION public.request_logs_2026_08_27 FOR VALUES FROM ('2026-08-27 00:00:00') TO ('2026-08-28 00:00:00');
+
+
+--
+-- Name: request_logs_2026_08_28; Type: TABLE ATTACH; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.request_logs ATTACH PARTITION public.request_logs_2026_08_28 FOR VALUES FROM ('2026-08-28 00:00:00') TO ('2026-08-29 00:00:00');
+
+
+--
+-- Name: request_logs_2026_08_29; Type: TABLE ATTACH; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.request_logs ATTACH PARTITION public.request_logs_2026_08_29 FOR VALUES FROM ('2026-08-29 00:00:00') TO ('2026-08-30 00:00:00');
+
+
+--
+-- Name: request_logs_2026_08_30; Type: TABLE ATTACH; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.request_logs ATTACH PARTITION public.request_logs_2026_08_30 FOR VALUES FROM ('2026-08-30 00:00:00') TO ('2026-08-31 00:00:00');
+
+
+--
 -- Name: request_logs_default; Type: TABLE ATTACH; Schema: public; Owner: -
 --
 
@@ -633,11 +952,67 @@ ALTER TABLE ONLY public.request_logs_2026_07_26
 
 
 --
+-- Name: request_logs_2026_07_27 request_logs_2026_07_27_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.request_logs_2026_07_27
+    ADD CONSTRAINT request_logs_2026_07_27_pkey PRIMARY KEY (id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_05 request_logs_2026_08_05_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.request_logs_2026_08_05
+    ADD CONSTRAINT request_logs_2026_08_05_pkey PRIMARY KEY (id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_27 request_logs_2026_08_27_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.request_logs_2026_08_27
+    ADD CONSTRAINT request_logs_2026_08_27_pkey PRIMARY KEY (id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_28 request_logs_2026_08_28_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.request_logs_2026_08_28
+    ADD CONSTRAINT request_logs_2026_08_28_pkey PRIMARY KEY (id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_29 request_logs_2026_08_29_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.request_logs_2026_08_29
+    ADD CONSTRAINT request_logs_2026_08_29_pkey PRIMARY KEY (id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_30 request_logs_2026_08_30_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.request_logs_2026_08_30
+    ADD CONSTRAINT request_logs_2026_08_30_pkey PRIMARY KEY (id, inserted_at);
+
+
+--
 -- Name: request_logs_default request_logs_default_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
 ALTER TABLE ONLY public.request_logs_default
     ADD CONSTRAINT request_logs_default_pkey PRIMARY KEY (id, inserted_at);
+
+
+--
+-- Name: request_logs_proto request_logs_proto_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.request_logs_proto
+    ADD CONSTRAINT request_logs_proto_pkey PRIMARY KEY (id, inserted_at);
 
 
 --
@@ -840,6 +1215,20 @@ CREATE INDEX provider_credentials_provider_id_index ON public.provider_credentia
 
 
 --
+-- Name: request_logs_agent_type_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_agent_type_idx ON ONLY public.request_logs USING btree (agent_type, inserted_at) WHERE (agent_type IS NOT NULL);
+
+
+--
+-- Name: request_logs_2026_07_26_agent_type_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_07_26_agent_type_inserted_at_idx ON public.request_logs_2026_07_26 USING btree (agent_type, inserted_at) WHERE (agent_type IS NOT NULL);
+
+
+--
 -- Name: request_logs_credential_inserted_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -854,6 +1243,20 @@ CREATE INDEX request_logs_2026_07_26_credential_id_inserted_at_idx ON public.req
 
 
 --
+-- Name: request_logs_credential_name_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_credential_name_idx ON ONLY public.request_logs USING btree (credential_name, inserted_at);
+
+
+--
+-- Name: request_logs_2026_07_26_credential_name_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_07_26_credential_name_inserted_at_idx ON public.request_logs_2026_07_26 USING btree (credential_name, inserted_at);
+
+
+--
 -- Name: request_logs_inserted_idx; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -865,20 +1268,6 @@ CREATE INDEX request_logs_inserted_idx ON ONLY public.request_logs USING btree (
 --
 
 CREATE INDEX request_logs_2026_07_26_inserted_at_idx ON public.request_logs_2026_07_26 USING btree (inserted_at);
-
-
---
--- Name: request_logs_model_alias_inserted_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_model_alias_inserted_idx ON ONLY public.request_logs USING btree (model_alias_id, inserted_at);
-
-
---
--- Name: request_logs_2026_07_26_model_alias_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_2026_07_26_model_alias_id_inserted_at_idx ON public.request_logs_2026_07_26 USING btree (model_alias_id, inserted_at);
 
 
 --
@@ -924,17 +1313,472 @@ CREATE INDEX request_logs_2026_07_26_provider_id_inserted_at_idx ON public.reque
 
 
 --
--- Name: request_logs_team_member_inserted_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: request_logs_service_inserted_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX request_logs_team_member_inserted_idx ON ONLY public.request_logs USING btree (team_member_id, inserted_at);
+CREATE INDEX request_logs_service_inserted_idx ON ONLY public.request_logs USING btree (service_id, inserted_at DESC);
 
 
 --
--- Name: request_logs_2026_07_26_team_member_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: request_logs_2026_07_26_service_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX request_logs_2026_07_26_team_member_id_inserted_at_idx ON public.request_logs_2026_07_26 USING btree (team_member_id, inserted_at);
+CREATE INDEX request_logs_2026_07_26_service_id_inserted_at_idx ON public.request_logs_2026_07_26 USING btree (service_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_errors_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_errors_idx ON ONLY public.request_logs USING btree (status_code) WHERE (status_code >= 400);
+
+
+--
+-- Name: request_logs_2026_07_26_status_code_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_07_26_status_code_idx ON public.request_logs_2026_07_26 USING btree (status_code) WHERE (status_code >= 400);
+
+
+--
+-- Name: request_logs_member_inserted_covering_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_member_inserted_covering_idx ON ONLY public.request_logs USING btree (team_member_id, inserted_at) INCLUDE (id, provider_cost_usd, prompt_tokens, completion_tokens, cache_read_tokens, cache_creation_tokens);
+
+
+--
+-- Name: request_logs_2026_07_26_team_member_id_inserted_at_id_provi_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_07_26_team_member_id_inserted_at_id_provi_idx ON public.request_logs_2026_07_26 USING btree (team_member_id, inserted_at) INCLUDE (id, provider_cost_usd, prompt_tokens, completion_tokens, cache_read_tokens, cache_creation_tokens);
+
+
+--
+-- Name: request_logs_2026_07_27_agent_type_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_07_27_agent_type_inserted_at_idx ON public.request_logs_2026_07_27 USING btree (agent_type, inserted_at) WHERE (agent_type IS NOT NULL);
+
+
+--
+-- Name: request_logs_2026_07_27_credential_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_07_27_credential_id_inserted_at_idx ON public.request_logs_2026_07_27 USING btree (credential_id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_07_27_credential_name_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_07_27_credential_name_inserted_at_idx ON public.request_logs_2026_07_27 USING btree (credential_name, inserted_at);
+
+
+--
+-- Name: request_logs_2026_07_27_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_07_27_inserted_at_idx ON public.request_logs_2026_07_27 USING btree (inserted_at);
+
+
+--
+-- Name: request_logs_2026_07_27_model_alias_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_07_27_model_alias_id_inserted_at_idx ON public.request_logs_2026_07_27 USING btree (model_alias_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_2026_07_27_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_07_27_model_provider_id_idx ON public.request_logs_2026_07_27 USING btree (model_provider_id);
+
+
+--
+-- Name: request_logs_2026_07_27_provider_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_07_27_provider_id_inserted_at_idx ON public.request_logs_2026_07_27 USING btree (provider_id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_07_27_service_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_07_27_service_id_inserted_at_idx ON public.request_logs_2026_07_27 USING btree (service_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_2026_07_27_status_code_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_07_27_status_code_idx ON public.request_logs_2026_07_27 USING btree (status_code) WHERE (status_code >= 400);
+
+
+--
+-- Name: request_logs_2026_07_27_team_member_id_inserted_at_id_provi_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_07_27_team_member_id_inserted_at_id_provi_idx ON public.request_logs_2026_07_27 USING btree (team_member_id, inserted_at) INCLUDE (id, provider_cost_usd, prompt_tokens, completion_tokens, cache_read_tokens, cache_creation_tokens);
+
+
+--
+-- Name: request_logs_2026_08_05_agent_type_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_05_agent_type_inserted_at_idx ON public.request_logs_2026_08_05 USING btree (agent_type, inserted_at) WHERE (agent_type IS NOT NULL);
+
+
+--
+-- Name: request_logs_2026_08_05_credential_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_05_credential_id_inserted_at_idx ON public.request_logs_2026_08_05 USING btree (credential_id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_05_credential_name_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_05_credential_name_inserted_at_idx ON public.request_logs_2026_08_05 USING btree (credential_name, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_05_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_05_inserted_at_idx ON public.request_logs_2026_08_05 USING btree (inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_05_model_alias_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_05_model_alias_id_inserted_at_idx ON public.request_logs_2026_08_05 USING btree (model_alias_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_2026_08_05_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_05_model_provider_id_idx ON public.request_logs_2026_08_05 USING btree (model_provider_id);
+
+
+--
+-- Name: request_logs_2026_08_05_provider_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_05_provider_id_inserted_at_idx ON public.request_logs_2026_08_05 USING btree (provider_id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_05_service_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_05_service_id_inserted_at_idx ON public.request_logs_2026_08_05 USING btree (service_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_2026_08_05_status_code_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_05_status_code_idx ON public.request_logs_2026_08_05 USING btree (status_code) WHERE (status_code >= 400);
+
+
+--
+-- Name: request_logs_2026_08_05_team_member_id_inserted_at_id_provi_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_05_team_member_id_inserted_at_id_provi_idx ON public.request_logs_2026_08_05 USING btree (team_member_id, inserted_at) INCLUDE (id, provider_cost_usd, prompt_tokens, completion_tokens, cache_read_tokens, cache_creation_tokens);
+
+
+--
+-- Name: request_logs_2026_08_27_agent_type_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_27_agent_type_inserted_at_idx ON public.request_logs_2026_08_27 USING btree (agent_type, inserted_at) WHERE (agent_type IS NOT NULL);
+
+
+--
+-- Name: request_logs_2026_08_27_credential_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_27_credential_id_inserted_at_idx ON public.request_logs_2026_08_27 USING btree (credential_id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_27_credential_name_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_27_credential_name_inserted_at_idx ON public.request_logs_2026_08_27 USING btree (credential_name, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_27_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_27_inserted_at_idx ON public.request_logs_2026_08_27 USING btree (inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_27_model_alias_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_27_model_alias_id_inserted_at_idx ON public.request_logs_2026_08_27 USING btree (model_alias_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_2026_08_27_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_27_model_provider_id_idx ON public.request_logs_2026_08_27 USING btree (model_provider_id);
+
+
+--
+-- Name: request_logs_2026_08_27_provider_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_27_provider_id_inserted_at_idx ON public.request_logs_2026_08_27 USING btree (provider_id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_27_service_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_27_service_id_inserted_at_idx ON public.request_logs_2026_08_27 USING btree (service_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_2026_08_27_status_code_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_27_status_code_idx ON public.request_logs_2026_08_27 USING btree (status_code) WHERE (status_code >= 400);
+
+
+--
+-- Name: request_logs_2026_08_27_team_member_id_inserted_at_id_provi_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_27_team_member_id_inserted_at_id_provi_idx ON public.request_logs_2026_08_27 USING btree (team_member_id, inserted_at) INCLUDE (id, provider_cost_usd, prompt_tokens, completion_tokens, cache_read_tokens, cache_creation_tokens);
+
+
+--
+-- Name: request_logs_2026_08_28_agent_type_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_28_agent_type_inserted_at_idx ON public.request_logs_2026_08_28 USING btree (agent_type, inserted_at) WHERE (agent_type IS NOT NULL);
+
+
+--
+-- Name: request_logs_2026_08_28_credential_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_28_credential_id_inserted_at_idx ON public.request_logs_2026_08_28 USING btree (credential_id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_28_credential_name_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_28_credential_name_inserted_at_idx ON public.request_logs_2026_08_28 USING btree (credential_name, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_28_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_28_inserted_at_idx ON public.request_logs_2026_08_28 USING btree (inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_28_model_alias_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_28_model_alias_id_inserted_at_idx ON public.request_logs_2026_08_28 USING btree (model_alias_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_2026_08_28_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_28_model_provider_id_idx ON public.request_logs_2026_08_28 USING btree (model_provider_id);
+
+
+--
+-- Name: request_logs_2026_08_28_provider_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_28_provider_id_inserted_at_idx ON public.request_logs_2026_08_28 USING btree (provider_id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_28_service_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_28_service_id_inserted_at_idx ON public.request_logs_2026_08_28 USING btree (service_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_2026_08_28_status_code_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_28_status_code_idx ON public.request_logs_2026_08_28 USING btree (status_code) WHERE (status_code >= 400);
+
+
+--
+-- Name: request_logs_2026_08_28_team_member_id_inserted_at_id_provi_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_28_team_member_id_inserted_at_id_provi_idx ON public.request_logs_2026_08_28 USING btree (team_member_id, inserted_at) INCLUDE (id, provider_cost_usd, prompt_tokens, completion_tokens, cache_read_tokens, cache_creation_tokens);
+
+
+--
+-- Name: request_logs_2026_08_29_agent_type_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_29_agent_type_inserted_at_idx ON public.request_logs_2026_08_29 USING btree (agent_type, inserted_at) WHERE (agent_type IS NOT NULL);
+
+
+--
+-- Name: request_logs_2026_08_29_credential_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_29_credential_id_inserted_at_idx ON public.request_logs_2026_08_29 USING btree (credential_id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_29_credential_name_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_29_credential_name_inserted_at_idx ON public.request_logs_2026_08_29 USING btree (credential_name, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_29_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_29_inserted_at_idx ON public.request_logs_2026_08_29 USING btree (inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_29_model_alias_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_29_model_alias_id_inserted_at_idx ON public.request_logs_2026_08_29 USING btree (model_alias_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_2026_08_29_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_29_model_provider_id_idx ON public.request_logs_2026_08_29 USING btree (model_provider_id);
+
+
+--
+-- Name: request_logs_2026_08_29_provider_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_29_provider_id_inserted_at_idx ON public.request_logs_2026_08_29 USING btree (provider_id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_29_service_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_29_service_id_inserted_at_idx ON public.request_logs_2026_08_29 USING btree (service_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_2026_08_29_status_code_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_29_status_code_idx ON public.request_logs_2026_08_29 USING btree (status_code) WHERE (status_code >= 400);
+
+
+--
+-- Name: request_logs_2026_08_29_team_member_id_inserted_at_id_provi_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_29_team_member_id_inserted_at_id_provi_idx ON public.request_logs_2026_08_29 USING btree (team_member_id, inserted_at) INCLUDE (id, provider_cost_usd, prompt_tokens, completion_tokens, cache_read_tokens, cache_creation_tokens);
+
+
+--
+-- Name: request_logs_2026_08_30_agent_type_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_30_agent_type_inserted_at_idx ON public.request_logs_2026_08_30 USING btree (agent_type, inserted_at) WHERE (agent_type IS NOT NULL);
+
+
+--
+-- Name: request_logs_2026_08_30_credential_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_30_credential_id_inserted_at_idx ON public.request_logs_2026_08_30 USING btree (credential_id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_30_credential_name_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_30_credential_name_inserted_at_idx ON public.request_logs_2026_08_30 USING btree (credential_name, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_30_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_30_inserted_at_idx ON public.request_logs_2026_08_30 USING btree (inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_30_model_alias_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_30_model_alias_id_inserted_at_idx ON public.request_logs_2026_08_30 USING btree (model_alias_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_2026_08_30_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_30_model_provider_id_idx ON public.request_logs_2026_08_30 USING btree (model_provider_id);
+
+
+--
+-- Name: request_logs_2026_08_30_provider_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_30_provider_id_inserted_at_idx ON public.request_logs_2026_08_30 USING btree (provider_id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_08_30_service_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_30_service_id_inserted_at_idx ON public.request_logs_2026_08_30 USING btree (service_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_2026_08_30_status_code_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_30_status_code_idx ON public.request_logs_2026_08_30 USING btree (status_code) WHERE (status_code >= 400);
+
+
+--
+-- Name: request_logs_2026_08_30_team_member_id_inserted_at_id_provi_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_08_30_team_member_id_inserted_at_id_provi_idx ON public.request_logs_2026_08_30 USING btree (team_member_id, inserted_at) INCLUDE (id, provider_cost_usd, prompt_tokens, completion_tokens, cache_read_tokens, cache_creation_tokens);
+
+
+--
+-- Name: request_logs_default_agent_type_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_default_agent_type_inserted_at_idx ON public.request_logs_default USING btree (agent_type, inserted_at) WHERE (agent_type IS NOT NULL);
 
 
 --
@@ -945,17 +1789,17 @@ CREATE INDEX request_logs_default_credential_id_inserted_at_idx ON public.reques
 
 
 --
+-- Name: request_logs_default_credential_name_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_default_credential_name_inserted_at_idx ON public.request_logs_default USING btree (credential_name, inserted_at);
+
+
+--
 -- Name: request_logs_default_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
 --
 
 CREATE INDEX request_logs_default_inserted_at_idx ON public.request_logs_default USING btree (inserted_at);
-
-
---
--- Name: request_logs_default_model_alias_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE INDEX request_logs_default_model_alias_id_inserted_at_idx ON public.request_logs_default USING btree (model_alias_id, inserted_at);
 
 
 --
@@ -980,10 +1824,94 @@ CREATE INDEX request_logs_default_provider_id_inserted_at_idx ON public.request_
 
 
 --
--- Name: request_logs_default_team_member_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+-- Name: request_logs_default_service_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE INDEX request_logs_default_team_member_id_inserted_at_idx ON public.request_logs_default USING btree (team_member_id, inserted_at);
+CREATE INDEX request_logs_default_service_id_inserted_at_idx ON public.request_logs_default USING btree (service_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_default_status_code_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_default_status_code_idx ON public.request_logs_default USING btree (status_code) WHERE (status_code >= 400);
+
+
+--
+-- Name: request_logs_default_team_member_id_inserted_at_id_provider_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_default_team_member_id_inserted_at_id_provider_idx ON public.request_logs_default USING btree (team_member_id, inserted_at) INCLUDE (id, provider_cost_usd, prompt_tokens, completion_tokens, cache_read_tokens, cache_creation_tokens);
+
+
+--
+-- Name: request_logs_proto_agent_type_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_proto_agent_type_inserted_at_idx ON public.request_logs_proto USING btree (agent_type, inserted_at) WHERE (agent_type IS NOT NULL);
+
+
+--
+-- Name: request_logs_proto_credential_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_proto_credential_id_inserted_at_idx ON public.request_logs_proto USING btree (credential_id, inserted_at);
+
+
+--
+-- Name: request_logs_proto_credential_name_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_proto_credential_name_inserted_at_idx ON public.request_logs_proto USING btree (credential_name, inserted_at);
+
+
+--
+-- Name: request_logs_proto_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_proto_inserted_at_idx ON public.request_logs_proto USING btree (inserted_at);
+
+
+--
+-- Name: request_logs_proto_model_alias_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_proto_model_alias_id_inserted_at_idx ON public.request_logs_proto USING btree (model_alias_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_proto_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_proto_model_provider_id_idx ON public.request_logs_proto USING btree (model_provider_id);
+
+
+--
+-- Name: request_logs_proto_provider_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_proto_provider_id_inserted_at_idx ON public.request_logs_proto USING btree (provider_id, inserted_at);
+
+
+--
+-- Name: request_logs_proto_service_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_proto_service_id_inserted_at_idx ON public.request_logs_proto USING btree (service_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_proto_status_code_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_proto_status_code_idx ON public.request_logs_proto USING btree (status_code) WHERE (status_code >= 400);
+
+
+--
+-- Name: request_logs_proto_team_member_id_inserted_at_id_provider_c_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_proto_team_member_id_inserted_at_id_provider_c_idx ON public.request_logs_proto USING btree (team_member_id, inserted_at) INCLUDE (id, provider_cost_usd, prompt_tokens, completion_tokens, cache_read_tokens, cache_creation_tokens);
 
 
 --
@@ -1064,6 +1992,13 @@ CREATE UNIQUE INDEX users_google_id_index ON public.users USING btree (google_id
 
 
 --
+-- Name: request_logs_2026_07_26_agent_type_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_agent_type_idx ATTACH PARTITION public.request_logs_2026_07_26_agent_type_inserted_at_idx;
+
+
+--
 -- Name: request_logs_2026_07_26_credential_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
@@ -1071,17 +2006,17 @@ ALTER INDEX public.request_logs_credential_inserted_idx ATTACH PARTITION public.
 
 
 --
+-- Name: request_logs_2026_07_26_credential_name_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_credential_name_idx ATTACH PARTITION public.request_logs_2026_07_26_credential_name_inserted_at_idx;
+
+
+--
 -- Name: request_logs_2026_07_26_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
 ALTER INDEX public.request_logs_inserted_idx ATTACH PARTITION public.request_logs_2026_07_26_inserted_at_idx;
-
-
---
--- Name: request_logs_2026_07_26_model_alias_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_alias_inserted_idx ATTACH PARTITION public.request_logs_2026_07_26_model_alias_id_inserted_at_idx;
 
 
 --
@@ -1113,10 +2048,493 @@ ALTER INDEX public.request_logs_provider_inserted_idx ATTACH PARTITION public.re
 
 
 --
--- Name: request_logs_2026_07_26_team_member_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+-- Name: request_logs_2026_07_26_service_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
-ALTER INDEX public.request_logs_team_member_inserted_idx ATTACH PARTITION public.request_logs_2026_07_26_team_member_id_inserted_at_idx;
+ALTER INDEX public.request_logs_service_inserted_idx ATTACH PARTITION public.request_logs_2026_07_26_service_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_07_26_status_code_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_errors_idx ATTACH PARTITION public.request_logs_2026_07_26_status_code_idx;
+
+
+--
+-- Name: request_logs_2026_07_26_team_member_id_inserted_at_id_provi_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_member_inserted_covering_idx ATTACH PARTITION public.request_logs_2026_07_26_team_member_id_inserted_at_id_provi_idx;
+
+
+--
+-- Name: request_logs_2026_07_27_agent_type_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_agent_type_idx ATTACH PARTITION public.request_logs_2026_07_27_agent_type_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_07_27_credential_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_credential_inserted_idx ATTACH PARTITION public.request_logs_2026_07_27_credential_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_07_27_credential_name_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_credential_name_idx ATTACH PARTITION public.request_logs_2026_07_27_credential_name_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_07_27_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_inserted_idx ATTACH PARTITION public.request_logs_2026_07_27_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_07_27_model_alias_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_model_alias_inserted_desc_idx ATTACH PARTITION public.request_logs_2026_07_27_model_alias_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_07_27_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_07_27_model_provider_id_idx;
+
+
+--
+-- Name: request_logs_2026_07_27_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_pkey ATTACH PARTITION public.request_logs_2026_07_27_pkey;
+
+
+--
+-- Name: request_logs_2026_07_27_provider_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_provider_inserted_idx ATTACH PARTITION public.request_logs_2026_07_27_provider_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_07_27_service_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_service_inserted_idx ATTACH PARTITION public.request_logs_2026_07_27_service_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_07_27_status_code_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_errors_idx ATTACH PARTITION public.request_logs_2026_07_27_status_code_idx;
+
+
+--
+-- Name: request_logs_2026_07_27_team_member_id_inserted_at_id_provi_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_member_inserted_covering_idx ATTACH PARTITION public.request_logs_2026_07_27_team_member_id_inserted_at_id_provi_idx;
+
+
+--
+-- Name: request_logs_2026_08_05_agent_type_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_agent_type_idx ATTACH PARTITION public.request_logs_2026_08_05_agent_type_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_05_credential_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_credential_inserted_idx ATTACH PARTITION public.request_logs_2026_08_05_credential_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_05_credential_name_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_credential_name_idx ATTACH PARTITION public.request_logs_2026_08_05_credential_name_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_05_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_inserted_idx ATTACH PARTITION public.request_logs_2026_08_05_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_05_model_alias_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_model_alias_inserted_desc_idx ATTACH PARTITION public.request_logs_2026_08_05_model_alias_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_05_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_08_05_model_provider_id_idx;
+
+
+--
+-- Name: request_logs_2026_08_05_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_pkey ATTACH PARTITION public.request_logs_2026_08_05_pkey;
+
+
+--
+-- Name: request_logs_2026_08_05_provider_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_provider_inserted_idx ATTACH PARTITION public.request_logs_2026_08_05_provider_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_05_service_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_service_inserted_idx ATTACH PARTITION public.request_logs_2026_08_05_service_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_05_status_code_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_errors_idx ATTACH PARTITION public.request_logs_2026_08_05_status_code_idx;
+
+
+--
+-- Name: request_logs_2026_08_05_team_member_id_inserted_at_id_provi_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_member_inserted_covering_idx ATTACH PARTITION public.request_logs_2026_08_05_team_member_id_inserted_at_id_provi_idx;
+
+
+--
+-- Name: request_logs_2026_08_27_agent_type_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_agent_type_idx ATTACH PARTITION public.request_logs_2026_08_27_agent_type_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_27_credential_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_credential_inserted_idx ATTACH PARTITION public.request_logs_2026_08_27_credential_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_27_credential_name_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_credential_name_idx ATTACH PARTITION public.request_logs_2026_08_27_credential_name_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_27_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_inserted_idx ATTACH PARTITION public.request_logs_2026_08_27_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_27_model_alias_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_model_alias_inserted_desc_idx ATTACH PARTITION public.request_logs_2026_08_27_model_alias_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_27_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_08_27_model_provider_id_idx;
+
+
+--
+-- Name: request_logs_2026_08_27_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_pkey ATTACH PARTITION public.request_logs_2026_08_27_pkey;
+
+
+--
+-- Name: request_logs_2026_08_27_provider_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_provider_inserted_idx ATTACH PARTITION public.request_logs_2026_08_27_provider_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_27_service_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_service_inserted_idx ATTACH PARTITION public.request_logs_2026_08_27_service_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_27_status_code_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_errors_idx ATTACH PARTITION public.request_logs_2026_08_27_status_code_idx;
+
+
+--
+-- Name: request_logs_2026_08_27_team_member_id_inserted_at_id_provi_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_member_inserted_covering_idx ATTACH PARTITION public.request_logs_2026_08_27_team_member_id_inserted_at_id_provi_idx;
+
+
+--
+-- Name: request_logs_2026_08_28_agent_type_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_agent_type_idx ATTACH PARTITION public.request_logs_2026_08_28_agent_type_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_28_credential_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_credential_inserted_idx ATTACH PARTITION public.request_logs_2026_08_28_credential_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_28_credential_name_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_credential_name_idx ATTACH PARTITION public.request_logs_2026_08_28_credential_name_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_28_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_inserted_idx ATTACH PARTITION public.request_logs_2026_08_28_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_28_model_alias_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_model_alias_inserted_desc_idx ATTACH PARTITION public.request_logs_2026_08_28_model_alias_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_28_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_08_28_model_provider_id_idx;
+
+
+--
+-- Name: request_logs_2026_08_28_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_pkey ATTACH PARTITION public.request_logs_2026_08_28_pkey;
+
+
+--
+-- Name: request_logs_2026_08_28_provider_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_provider_inserted_idx ATTACH PARTITION public.request_logs_2026_08_28_provider_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_28_service_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_service_inserted_idx ATTACH PARTITION public.request_logs_2026_08_28_service_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_28_status_code_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_errors_idx ATTACH PARTITION public.request_logs_2026_08_28_status_code_idx;
+
+
+--
+-- Name: request_logs_2026_08_28_team_member_id_inserted_at_id_provi_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_member_inserted_covering_idx ATTACH PARTITION public.request_logs_2026_08_28_team_member_id_inserted_at_id_provi_idx;
+
+
+--
+-- Name: request_logs_2026_08_29_agent_type_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_agent_type_idx ATTACH PARTITION public.request_logs_2026_08_29_agent_type_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_29_credential_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_credential_inserted_idx ATTACH PARTITION public.request_logs_2026_08_29_credential_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_29_credential_name_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_credential_name_idx ATTACH PARTITION public.request_logs_2026_08_29_credential_name_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_29_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_inserted_idx ATTACH PARTITION public.request_logs_2026_08_29_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_29_model_alias_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_model_alias_inserted_desc_idx ATTACH PARTITION public.request_logs_2026_08_29_model_alias_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_29_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_08_29_model_provider_id_idx;
+
+
+--
+-- Name: request_logs_2026_08_29_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_pkey ATTACH PARTITION public.request_logs_2026_08_29_pkey;
+
+
+--
+-- Name: request_logs_2026_08_29_provider_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_provider_inserted_idx ATTACH PARTITION public.request_logs_2026_08_29_provider_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_29_service_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_service_inserted_idx ATTACH PARTITION public.request_logs_2026_08_29_service_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_29_status_code_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_errors_idx ATTACH PARTITION public.request_logs_2026_08_29_status_code_idx;
+
+
+--
+-- Name: request_logs_2026_08_29_team_member_id_inserted_at_id_provi_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_member_inserted_covering_idx ATTACH PARTITION public.request_logs_2026_08_29_team_member_id_inserted_at_id_provi_idx;
+
+
+--
+-- Name: request_logs_2026_08_30_agent_type_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_agent_type_idx ATTACH PARTITION public.request_logs_2026_08_30_agent_type_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_30_credential_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_credential_inserted_idx ATTACH PARTITION public.request_logs_2026_08_30_credential_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_30_credential_name_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_credential_name_idx ATTACH PARTITION public.request_logs_2026_08_30_credential_name_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_30_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_inserted_idx ATTACH PARTITION public.request_logs_2026_08_30_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_30_model_alias_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_model_alias_inserted_desc_idx ATTACH PARTITION public.request_logs_2026_08_30_model_alias_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_30_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_08_30_model_provider_id_idx;
+
+
+--
+-- Name: request_logs_2026_08_30_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_pkey ATTACH PARTITION public.request_logs_2026_08_30_pkey;
+
+
+--
+-- Name: request_logs_2026_08_30_provider_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_provider_inserted_idx ATTACH PARTITION public.request_logs_2026_08_30_provider_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_30_service_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_service_inserted_idx ATTACH PARTITION public.request_logs_2026_08_30_service_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_08_30_status_code_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_errors_idx ATTACH PARTITION public.request_logs_2026_08_30_status_code_idx;
+
+
+--
+-- Name: request_logs_2026_08_30_team_member_id_inserted_at_id_provi_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_member_inserted_covering_idx ATTACH PARTITION public.request_logs_2026_08_30_team_member_id_inserted_at_id_provi_idx;
+
+
+--
+-- Name: request_logs_default_agent_type_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_agent_type_idx ATTACH PARTITION public.request_logs_default_agent_type_inserted_at_idx;
 
 
 --
@@ -1127,17 +2545,17 @@ ALTER INDEX public.request_logs_credential_inserted_idx ATTACH PARTITION public.
 
 
 --
+-- Name: request_logs_default_credential_name_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_credential_name_idx ATTACH PARTITION public.request_logs_default_credential_name_inserted_at_idx;
+
+
+--
 -- Name: request_logs_default_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
 ALTER INDEX public.request_logs_inserted_idx ATTACH PARTITION public.request_logs_default_inserted_at_idx;
-
-
---
--- Name: request_logs_default_model_alias_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
---
-
-ALTER INDEX public.request_logs_model_alias_inserted_idx ATTACH PARTITION public.request_logs_default_model_alias_id_inserted_at_idx;
 
 
 --
@@ -1169,10 +2587,24 @@ ALTER INDEX public.request_logs_provider_inserted_idx ATTACH PARTITION public.re
 
 
 --
--- Name: request_logs_default_team_member_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+-- Name: request_logs_default_service_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
-ALTER INDEX public.request_logs_team_member_inserted_idx ATTACH PARTITION public.request_logs_default_team_member_id_inserted_at_idx;
+ALTER INDEX public.request_logs_service_inserted_idx ATTACH PARTITION public.request_logs_default_service_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_default_status_code_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_errors_idx ATTACH PARTITION public.request_logs_default_status_code_idx;
+
+
+--
+-- Name: request_logs_default_team_member_id_inserted_at_id_provider_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_member_inserted_covering_idx ATTACH PARTITION public.request_logs_default_team_member_id_inserted_at_id_provider_idx;
 
 
 --
@@ -1253,6 +2685,14 @@ ALTER TABLE public.request_logs
 
 ALTER TABLE public.request_logs
     ADD CONSTRAINT request_logs_provider_id_fkey FOREIGN KEY (provider_id) REFERENCES public.providers(id) ON DELETE SET NULL;
+
+
+--
+-- Name: request_logs request_logs_service_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE public.request_logs
+    ADD CONSTRAINT request_logs_service_id_fkey FOREIGN KEY (service_id) REFERENCES public.services(id) ON DELETE CASCADE;
 
 
 --
@@ -1355,7 +2795,7 @@ ALTER TABLE ONLY public.team_model_aliases
 -- PostgreSQL database dump complete
 --
 
-\unrestrict dYQm7GT90LpDRJQScKFbEWa1Xa6CgBTIVWoVbzwyjc45epprIV1aedRvRFvLQq7
+\unrestrict 30MinjvKwDTVIdZfvaXMuaBUkmVSeSAEf0YOJpbID6hCdsXkzoQMgQUSgElZGsa
 
 INSERT INTO public."schema_migrations" (version) VALUES (20260725210000);
 INSERT INTO public."schema_migrations" (version) VALUES (20260725220000);
@@ -1435,4 +2875,11 @@ INSERT INTO public."schema_migrations" (version) VALUES (20260813192309);
 INSERT INTO public."schema_migrations" (version) VALUES (20260813193646);
 INSERT INTO public."schema_migrations" (version) VALUES (20260814000000);
 INSERT INTO public."schema_migrations" (version) VALUES (20260814013243);
+INSERT INTO public."schema_migrations" (version) VALUES (20260815233004);
+INSERT INTO public."schema_migrations" (version) VALUES (20260815233006);
+INSERT INTO public."schema_migrations" (version) VALUES (20260815233007);
+INSERT INTO public."schema_migrations" (version) VALUES (20260815233008);
 INSERT INTO public."schema_migrations" (version) VALUES (20260816000000);
+INSERT INTO public."schema_migrations" (version) VALUES (20260816184212);
+INSERT INTO public."schema_migrations" (version) VALUES (20260827045151);
+INSERT INTO public."schema_migrations" (version) VALUES (20260827054110);

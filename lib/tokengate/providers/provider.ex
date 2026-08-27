@@ -11,8 +11,6 @@ defmodule Tokengate.Providers.Provider do
   @foreign_key_type :binary_id
 
   @statuses ~w(active disabled)
-  @rerank_formats ~w(cohere dashscope runinfra)
-  @embedding_formats ~w(openai dashscope)
 
   schema "providers" do
     field :name, :string
@@ -22,15 +20,9 @@ defmodule Tokengate.Providers.Provider do
     # Optional full-URL override for the embeddings endpoint. When nil, the
     # adapter appends /embeddings to base_url.
     field :embedding_base_url, :string
-    # Payload/response format for embeddings: "openai" (passthrough) or
-    # "dashscope" (native input.texts / output.embeddings).
-    field :embedding_format, :string, default: "openai"
     # Optional full-URL override for the rerank endpoint. When nil, the
     # adapter appends /rerank to base_url.
     field :rerank_base_url, :string
-    # Payload/response format for rerank: "cohere" (passthrough) or
-    # "dashscope" (native output.results).
-    field :rerank_format, :string, default: "cohere"
     field :status, :string, default: "active"
 
     has_many :credentials, Tokengate.Providers.Credential
@@ -45,27 +37,17 @@ defmodule Tokengate.Providers.Provider do
       :name,
       :base_url,
       :embedding_base_url,
-      :embedding_format,
       :rerank_base_url,
-      :rerank_format,
       :status
     ])
     |> validate_required([:name, :base_url])
     |> validate_inclusion(:status, @statuses)
-    |> validate_inclusion(:embedding_format, @embedding_formats)
-    |> validate_inclusion(:rerank_format, @rerank_formats)
     |> normalize_urls()
     |> unique_constraint(:name)
   end
 
   @doc "List of valid status values"
   def statuses, do: @statuses
-
-  @doc "List of valid rerank formats"
-  def rerank_formats, do: @rerank_formats
-
-  @doc "List of valid embedding formats"
-  def embedding_formats, do: @embedding_formats
 
   # Normalize empty-string URL overrides to nil so the adapter falls back to
   # the base_url-derived path.

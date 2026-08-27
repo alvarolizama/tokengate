@@ -62,26 +62,6 @@ defmodule TokengateWeb.ProxyControllerTest do
             ]
           })
 
-        "rerank-dashscope" in conn.path_info ->
-          # DashScope native response: wrapped in output.results
-          json(conn, 200, %{
-            "output" => %{
-              "results" => [
-                %{
-                  "index" => 1,
-                  "relevance_score" => 0.9,
-                  "document" => %{"text" => "doc uno"}
-                },
-                %{
-                  "index" => 0,
-                  "relevance_score" => 0.2,
-                  "document" => %{"text" => "doc cero"}
-                }
-              ]
-            },
-            "usage" => %{"total_tokens" => 42}
-          })
-
         "rerank" in conn.path_info ->
           # Fireworks-style response: Jina shape with usage
           json(conn, 200, %{
@@ -1210,7 +1190,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
   ## Rerank ####################################################################
 
-  test "rerank with Fireworks-style upstream normalizes to Cohere shape", %{conn: conn} do
+  test "rerank with Fireworks-style upstream passes response through untouched", %{conn: conn} do
     %{token: token, alias: model_alias, member: member} = proxy_fixture()
     update_alias_type(model_alias, "rerank")
 
@@ -1225,11 +1205,11 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     body = json_response(conn, 200)
 
-    # data → results normalization; scores and ordering intact
+    # Passthrough: the Jina-style `data` key comes back untouched
     assert [%{"index" => 1, "relevance_score" => 0.9}, %{"index" => 0, "relevance_score" => 0.2}] =
-             body["results"]
+             body["data"]
 
-    refute Map.has_key?(body, "data")
+    refute Map.has_key?(body, "results")
 
     # Fireworks-reported usage drives cost
     assert get_resp_header(conn, "x-tokengate-cost") == ["0.000042"]
@@ -1305,81 +1285,6 @@ defmodule TokengateWeb.ProxyControllerTest do
       })
 
     assert %{"error" => %{"code" => "model_type_mismatch"}} = json_response(conn, 400)
-  end
-
-  test "rerank with DashScope dialect translates native format to Cohere", %{conn: conn} do
-    %{token: token, alias: model_alias, member: member} = proxy_fixture()
-    update_alias_type(model_alias, "rerank")
-
-    [model_provider] = Providers.list_model_providers(model_alias.id)
-
-    {:ok, _provider} =
-      Providers.update_provider(model_provider.credential.provider, %{
-        rerank_base_url: "http://localhost:#{@port}/rerank-dashscope",
-        rerank_format: "dashscope"
-      })
-
-    conn =
-      conn
-      |> authed_conn(token)
-      |> post(~p"/v1/rerank", %{
-        "model" => model_alias.name,
-        "query" => "chaos",
-        "documents" => ["doc cero", "doc uno"]
-      })
-
-    body = json_response(conn, 200)
-
-    # DashScope's output.results unwrapped to Cohere shape
-    assert [%{"index" => 1, "relevance_score" => 0.9}, %{"index" => 0, "relevance_score" => 0.2}] =
-             body["results"]
-
-    refute Map.has_key?(body, "output")
-
-    # Usage estimated (DashScope total_tokens not mapped to prompt_tokens)
-    assert_enqueued(worker: WriteWorker)
-    assert %{success: 1} = Oban.drain_queue(queue: :logs)
-
-    log = Repo.one(from l in RequestLog, where: l.team_member_id == ^member.id)
-    assert log.request_type == "rerank"
-    assert log.prompt_tokens > 0
-    assert log.status_code == 200
-  end
-
-  test "rerank with DashScope format: upstream receives nested input/parameters payload",
-       %{conn: conn} do
-    %{token: token, alias: model_alias} = proxy_fixture()
-    update_alias_type(model_alias, "rerank")
-
-    [model_provider] = Providers.list_model_providers(model_alias.id)
-
-    {:ok, _provider} =
-      Providers.update_provider(model_provider.credential.provider, %{
-        rerank_base_url: "http://localhost:#{@port}/rerank-dashscope",
-        rerank_format: "dashscope"
-      })
-
-    conn =
-      conn
-      |> authed_conn(token)
-      |> post(~p"/v1/rerank", %{
-        "model" => model_alias.name,
-        "query" => "chaos",
-        "documents" => ["doc cero", "doc uno"],
-        "top_n" => 3,
-        "return_documents" => true
-      })
-
-    assert %{"results" => [_ | _]} = json_response(conn, 200)
-
-    # DashScope's native rerank endpoint expects the nested input/parameters
-    # format, so the upstream receives that shape.
-    assert_received {:provider_request, upstream_body}
-
-    assert %{"input" => %{"query" => "chaos", "documents" => ["doc cero", "doc uno"]}} =
-             upstream_body
-
-    assert %{"parameters" => %{"top_n" => 3, "return_documents" => true}} = upstream_body
   end
 
   test "GET /v1/models includes model_type", %{conn: conn} do

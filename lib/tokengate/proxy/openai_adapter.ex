@@ -15,10 +15,10 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   adapter only ensures it is present so a misconfigured caller still gets a
   stream rather than a buffered body.
 
-  Embeddings and rerank are the exception: when a provider declares a
-  non-passthrough dialect, those payloads are translated to the provider's
-  native format before sending and the response decoded back (see
-  `embeddings/4` and `rerank/4`).
+  Embeddings and rerank follow the same passthrough rule: the payload is
+  forwarded exactly as received and the upstream response is returned
+  untouched. TokenGate only authenticates with the provider's API key — it
+  never translates request or response shapes.
 
   Uses `Tokengate.Finch` for all HTTP. Streaming needs raw chunk control
   (SSE framing), so the adapter calls `Finch.stream_while/5` directly rather
@@ -39,51 +39,27 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   end
 
   @doc """
-  Generates embeddings via the provider's OpenAI-compatible `/embeddings`
-  endpoint. The payload is forwarded exactly as received — input may be a
-  string, list of strings, or provider-specific multimodal blocks. When the
-  provider declares a non-passthrough embeddings dialect (e.g. DashScope),
-  the payload is encoded to the native format before sending and the
-  response decoded back to the OpenAI shape.
+  Generates embeddings via the provider's `/embeddings` endpoint. The
+  payload is forwarded exactly as received — input may be a string, list of
+  strings, or provider-specific multimodal blocks — and the upstream
+  response is returned untouched. TokenGate only authenticates with the
+  provider's API key.
   """
   def embeddings(provider, credential, payload, opts \\ []) do
-    url = embedding_url(provider)
-
-    case Tokengate.Proxy.Format.embedding_dialect_for(provider) do
-      :passthrough ->
-        post_json(provider, credential, url, payload, opts)
-
-      {encode, decode} ->
-        provider
-        |> post_json(credential, url, encode.(payload), opts)
-        |> decode_response(decode)
-    end
+    post_json(provider, credential, embedding_url(provider), payload, opts)
   end
 
   @doc """
-  Reranks documents via the provider's `/rerank` endpoint (Cohere-style
-  request: `query`, `documents`, optional `top_n` / `return_documents` /
-  `task`). Served natively by oMLX and Fireworks. Providers without a
-  rerank surface (e.g. OpenRouter) will answer 404, which the caller's
-  fallback logic handles like any other upstream failure.
+  Reranks documents via the provider's rerank endpoint. The payload is
+  forwarded exactly as received and the upstream response is returned
+  untouched — TokenGate only authenticates with the provider's API key.
 
-  Providers with a non-Cohere rerank dialect (DashScope) are translated:
-  the payload is encoded to the native format before sending and the
-  response decoded back to the Cohere shape. The endpoint URL honours
-  the provider's `rerank_base_url` override when present.
+  Providers without a rerank surface will answer 404, which the caller's
+  fallback logic handles like any other upstream failure. The endpoint URL
+  honours the provider's `rerank_base_url` override when present.
   """
   def rerank(provider, credential, payload, opts \\ []) do
-    url = rerank_url(provider)
-
-    case Tokengate.Proxy.Format.rerank_dialect_for(provider) do
-      :passthrough ->
-        post_json(provider, credential, url, payload, opts)
-
-      {encode, decode} ->
-        provider
-        |> post_json(credential, url, encode.(payload), opts)
-        |> decode_response(decode)
-    end
+    post_json(provider, credential, rerank_url(provider), payload, opts)
   end
 
   # Shared non-streaming POST transport: identical headers, timeout and
@@ -344,8 +320,8 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   end
 
   # Embedding endpoint URL. Providers may override the embeddings surface
-  # with `embedding_base_url` (e.g. DashScope's native services path). When
-  # unset, appends `/embeddings` to base_url.
+  # with `embedding_base_url` (e.g. Qwen Cloud's compatible-mode path).
+  # When unset, appends `/embeddings` to base_url.
   defp embedding_url(provider) do
     case Map.get(provider, :embedding_base_url) || Map.get(provider, "embedding_base_url") do
       nil -> base_url(provider) <> "/embeddings"
@@ -354,23 +330,14 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   end
 
   # Rerank endpoint URL. Providers may override the rerank surface with
-  # `rerank_base_url` (e.g. DashScope's native services path differs from
-  # the compatible-mode base). When unset, appends `/rerank` to base_url —
-  # the standard Cohere surface served by oMLX and Fireworks.
+  # `rerank_base_url` (e.g. Qwen Cloud's compatible-api reranks path). When
+  # unset, appends `/rerank` to base_url.
   defp rerank_url(provider) do
     case Map.get(provider, :rerank_base_url) || Map.get(provider, "rerank_base_url") do
       nil -> base_url(provider) <> "/rerank"
       url -> String.trim_trailing(url, "/")
     end
   end
-
-  # Applies a response decoder to a successful upstream result. Non-2xx
-  # errors (4-tuples) pass through untouched — the caller's fallback logic
-  # owns them.
-  defp decode_response({:ok, body, latency_ms, resp_headers}, decode),
-    do: {:ok, decode.(body), latency_ms, resp_headers}
-
-  defp decode_response(other, _decode), do: other
 
   defp base_url(provider) do
     (Map.get(provider, :base_url) || Map.get(provider, "base_url") || "")
