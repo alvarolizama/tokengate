@@ -828,7 +828,9 @@ defmodule TokengateWeb.ProxyController do
         end
       end)
 
-    Map.put(forwarded, "idempotency-key", conn.assigns.idempotency_key)
+    forwarded
+    |> Map.put("idempotency-key", conn.assigns.idempotency_key)
+    |> Map.put("x-session-affinity", conn.assigns.api_key_hash)
   end
 
   defp execute(conn, route, payload, member, attempts_left, exclude) do
@@ -1151,29 +1153,27 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
-  # Applies the model_alias's prompt-pre-flight transforms to the payload.
-  # Both passes are pure and return a fresh messages list; the input is never
-  # mutated. When neither flag is set, returns the payload unchanged so the
-  # pipeline stays a zero-cost passthrough.
-  defp maybe_optimize(payload, model_alias) do
-    cond do
-      model_alias.prompt_cache_enabled and model_alias.lazy_cleanup_enabled ->
-        messages = payload["messages"] || []
+  # Applies the mandatory prompt-pre-flight transforms for LLM (chat)
+  # aliases: system messages are hoisted to the front and deduped
+  # (stable_prefix), then noisy tool output is trimmed and deduped
+  # (lazy_cleanup). Both passes are pure and return fresh lists; the input
+  # is never mutated. These transforms used to be opt-in via the
+  # `prompt_cache_enabled` / `lazy_cleanup_enabled` alias flags and are now
+  # ALWAYS on for chat models — stable prefixes are what make provider
+  # prefix-cache hits possible, so they belong to the gateway itself, not
+  # to per-model configuration. The flag columns remain in the schema for
+  # backwards compatibility but no longer gate anything. Non-LLM aliases
+  # (and embeddings/rerank routes, which never call this function) pass
+  # through unchanged.
+  defp maybe_optimize(payload, %{model_type: "llm"}) do
+    messages = payload["messages"] || []
 
-        payload
-        |> Map.put("messages", PromptOptimizer.stable_prefix(messages))
-        |> Map.update!("messages", &PromptOptimizer.lazy_cleanup/1)
-
-      model_alias.prompt_cache_enabled ->
-        Map.put(payload, "messages", PromptOptimizer.stable_prefix(payload["messages"] || []))
-
-      model_alias.lazy_cleanup_enabled ->
-        Map.put(payload, "messages", PromptOptimizer.lazy_cleanup(payload["messages"] || []))
-
-      true ->
-        payload
-    end
+    payload
+    |> Map.put("messages", PromptOptimizer.stable_prefix(messages))
+    |> Map.update!("messages", &PromptOptimizer.lazy_cleanup/1)
   end
+
+  defp maybe_optimize(payload, _model_alias), do: payload
 
   defp await_first_chunk(pid, ref) do
     timeout = Application.get_env(:tokengate, :first_token_timeout_ms, 15_000)

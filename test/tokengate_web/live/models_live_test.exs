@@ -125,17 +125,13 @@ defmodule TokengateWeb.ModelsLiveTest do
     view |> element("#new-model-btn") |> render_click()
 
     assert has_element?(view, "#alias-form")
-    assert has_element?(view, "#model_alias_prompt_cache_enabled")
-    assert has_element?(view, "#model_alias_lazy_cleanup_enabled")
 
     html =
       view
       |> form("#alias-form", %{
         model_alias: %{
           name: "gpt-4o-test",
-          context_window: 128_000,
-          prompt_cache_enabled: "true",
-          lazy_cleanup_enabled: "true"
+          context_window: 128_000
         }
       })
       |> render_submit()
@@ -148,8 +144,10 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert html =~ "gpt-4o-test"
 
     alias_record = Tokengate.Providers.get_alias_by_name("gpt-4o-test")
-    assert alias_record.prompt_cache_enabled == true
-    assert alias_record.lazy_cleanup_enabled == true
+    # The optimization checkboxes are gone from the form: the transforms are
+    # mandatory for chat models, so the schema defaults simply hold.
+    assert alias_record.prompt_cache_enabled == false
+    assert alias_record.lazy_cleanup_enabled == false
   end
 
   test "admin can edit an existing alias", %{conn: conn} do

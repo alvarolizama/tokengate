@@ -699,6 +699,31 @@ defmodule TokengateWeb.ProxyControllerTest do
     |> Enum.reject(&is_nil/1)
   end
 
+  test "every upstream request carries x-session-affinity with the API key hash", %{
+    conn: conn
+  } do
+    %{token: token, alias: model_alias} = proxy_fixture(%{})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+
+    assert json_response(conn, 200)
+
+    [headers] = collect_upstream_headers()
+
+    affinity =
+      Enum.find_value(headers, fn
+        {"x-session-affinity", value} -> value
+        _ -> nil
+      end)
+
+    # Stable per API key (sha256 of the presented token) — this is the hint
+    # providers use to group a session's requests onto their cached prefix.
+    assert affinity == Tokengate.Accounts.hash_api_key(token)
+  end
+
   test "every upstream attempt carries the same Idempotency-Key", %{conn: conn} do
     %{token: token, alias: model_alias} = proxy_fixture(%{})
 
@@ -855,7 +880,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     Limits.release(cred.id)
   end
 
-  ## Prompt optimization flags ################################################
+  ## Prompt pre-flight (mandatory for LLM aliases) #############################
 
   # Reusable noisy payload: has duplicate consecutive tool messages, redundant
   # whitespace runs, and a system message that is NOT at the front — exactly the
@@ -899,27 +924,43 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert Enum.map(tool_messages, & &1["content"]) == ["tool output A", "tool output B"]
   end
 
-  test "lazy_cleanup_enabled: false passes the original payload through unchanged", %{
+  test "pre-flight transforms apply even with both legacy flags off (mandatory)", %{
     conn: conn
   } do
     %{token: token, alias: model_alias} = proxy_fixture()
 
-    # The default is already false, but set it explicitly so the test is
-    # self-documenting and resilient to future schema default changes.
-    {:ok, alias_passthrough} =
-      Providers.update_model_alias(model_alias, %{lazy_cleanup_enabled: false})
+    # The legacy flags are explicitly OFF: they no longer gate anything, the
+    # gateway applies both passes to every LLM request.
+    {:ok, alias_default} =
+      Providers.update_model_alias(model_alias, %{
+        lazy_cleanup_enabled: false,
+        prompt_cache_enabled: false
+      })
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", noisy_payload(alias_passthrough.name))
+      |> post(~p"/v1/chat/completions", noisy_payload(alias_default.name))
 
     assert json_response(conn, 200)
 
-    # Forwarded messages must equal the original payload byte-for-byte,
-    # including the duplicate tool messages and the mid-list system message.
     assert_receive {:provider_request, provider_payload}
-    assert provider_payload["messages"] == noisy_payload(alias_passthrough.name)["messages"]
+
+    assert Enum.map(provider_payload["messages"], & &1["role"]) == [
+             "system",
+             "user",
+             "tool",
+             "tool",
+             "assistant"
+           ]
+
+    assert Enum.map(provider_payload["messages"], & &1["content"]) == [
+             "you are a helper",
+             "first prompt",
+             "tool output A",
+             "tool output B",
+             "ack"
+           ]
   end
 
   test "prompt_cache_enabled: true hoists every system message to the front", %{conn: conn} do
@@ -944,12 +985,13 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert hd(forwarded_messages)["content"] == "you are a helper"
 
     # The rest of the messages preserve their original relative order.
+    # Both passes are mandatory now, so lazy_cleanup also ran and the
+    # duplicated consecutive tool message arrives already collapsed.
     rest = tl(forwarded_messages)
-    assert Enum.map(rest, & &1["role"]) == ["user", "tool", "tool", "tool", "assistant"]
+    assert Enum.map(rest, & &1["role"]) == ["user", "tool", "tool", "assistant"]
 
     assert Enum.map(rest, & &1["content"]) == [
              "first prompt",
-             "tool output A",
              "tool output A",
              "tool output B",
              "ack"

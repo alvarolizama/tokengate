@@ -1430,22 +1430,6 @@ defmodule TokengateWeb.ModelsLive do
                       ]}
                       hint="Define qué endpoint lo sirve: /v1/chat/completions, /v1/embeddings o /v1/rerank."
                     />
-
-                    <div :if={@form[:model_type].value in [nil, "llm", ""]}>
-                      <.input
-                        field={@form[:prompt_cache_enabled]}
-                        type="checkbox"
-                        label="Prompt caching (prefix estable)"
-                        hint="Reordena system prompts al frente y dedupe para maximizar cache hits del proveedor."
-                      />
-
-                      <.input
-                        field={@form[:lazy_cleanup_enabled]}
-                        type="checkbox"
-                        label="Limpieza perezosa sin LLM"
-                        hint="Dedupe de tool outputs y recorte de bloques largos. 100% determinista, sin inferencia."
-                      />
-                    </div>
                   </div>
 
                   <div class="space-y-1">
