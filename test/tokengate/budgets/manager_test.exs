@@ -14,6 +14,7 @@ defmodule Tokengate.Budgets.ManagerTest do
 
   alias Tokengate.Budgets.Manager
   alias Tokengate.Accounts
+  alias Tokengate.Budgets.Exemptions
   alias Tokengate.Logs
 
   @table :tokengate_budgets
@@ -712,6 +713,57 @@ defmodule Tokengate.Budgets.ManagerTest do
       assert :ok = Manager.set_global_from_db(2_000_000)
 
       assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("2.00"))
+    end
+
+    test "record_spend/4 skips the global counter for global_daily-exempt subjects" do
+      {tm, team} = team_member_fixture()
+
+      {:ok, _} =
+        Exemptions.add(%{
+          "scope" => "global_daily",
+          "subject_type" => "user",
+          "user_id" => tm.user_id
+        })
+
+      subjects = %{subject: %{type: "user", id: tm.user_id}, team: %{type: "team", id: team.id}}
+      :ok = Manager.record_spend(tm.id, nil, Decimal.new("5.00"), subjects)
+
+      # Own counters still bump; the global counter does not.
+      assert Decimal.equal?(Manager.spend(tm.id).daily_usd, Decimal.new("5.00"))
+      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("0"))
+    end
+
+    test "record_spend/4 still bumps the global counter for non-exempt subjects" do
+      {tm, team} = team_member_fixture()
+
+      subjects = %{subject: %{type: "user", id: tm.user_id}, team: %{type: "team", id: team.id}}
+      :ok = Manager.record_spend(tm.id, nil, Decimal.new("5.00"), subjects)
+
+      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("5.00"))
+    end
+
+    test "user_daily_exhausted? gates on the member's own daily counter" do
+      {tm, _} = team_member_fixture()
+      cap = Decimal.new("4.00")
+
+      refute Manager.user_daily_exhausted?(tm.id, cap)
+
+      assert :ok = Manager.record_spend(tm.id, Decimal.new("3.99"))
+      refute Manager.user_daily_exhausted?(tm.id, cap)
+
+      assert :ok = Manager.record_spend(tm.id, Decimal.new("0.02"))
+      assert Manager.user_daily_exhausted?(tm.id, cap)
+
+      # nil cap = unlimited.
+      refute Manager.user_daily_exhausted?(tm.id, nil)
+    end
+
+    test "user_daily_exhausted? treats a 0 cap as unlimited" do
+      {tm, _} = team_member_fixture()
+
+      assert :ok = Manager.record_spend(tm.id, Decimal.new("1.00"))
+
+      refute Manager.user_daily_exhausted?(tm.id, Decimal.new("0"))
     end
   end
 end

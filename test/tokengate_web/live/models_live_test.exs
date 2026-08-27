@@ -150,6 +150,48 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert alias_record.lazy_cleanup_enabled == false
   end
 
+  test "alias form renders informational market prices and persists them", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+
+    view |> element("#new-model-btn") |> render_click()
+
+    assert has_element?(view, "#model_alias_market_input_price_per_1m")
+    assert has_element?(view, "#model_alias_market_output_price_per_1m")
+    assert has_element?(view, "#model_alias_market_cache_price_per_1m")
+
+    html =
+      view
+      |> form("#alias-form", %{
+        model_alias: %{
+          name: "gpt-4o-market",
+          context_window: 128_000,
+          market_input_price_per_1m: "1.25",
+          market_output_price_per_1m: "10",
+          market_cache_price_per_1m: "0.125"
+        }
+      })
+      |> render_submit()
+
+    assert html =~ "Modelo creado"
+
+    # Market prices surface on the alias card row (display-only): the alias
+    # lives in the "all" tab because it is unpinned, not in Favoritos.
+    view |> element("#model-type-all") |> render_click()
+    html = render(view)
+    assert html =~ "gpt-4o-market"
+    # Exact single-line render (HEEx must not split "$" from the value).
+    assert html =~ "· in $1.25 · out $10 · cache $0.125 /1M"
+
+    alias_record = Tokengate.Providers.get_alias_by_name("gpt-4o-market")
+
+    assert Decimal.eq?(alias_record.market_input_price_per_1m, Decimal.new("1.25"))
+    assert Decimal.eq?(alias_record.market_output_price_per_1m, Decimal.new("10"))
+    assert Decimal.eq?(alias_record.market_cache_price_per_1m, Decimal.new("0.125"))
+  end
+
   test "admin can edit an existing alias", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     alias_record = create_alias()

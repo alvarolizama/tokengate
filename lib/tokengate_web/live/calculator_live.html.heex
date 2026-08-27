@@ -34,6 +34,13 @@
                   </option>
                 <% end %>
               </select>
+              <p
+                :if={@market_prices}
+                class="text-[11px] text-base-content/50 tabular-nums"
+                title="Precio de mercado de referencia (informativo — no se usa para facturación)"
+              >
+                Mercado: {market_line(@market_prices)}
+              </p>
             </div>
 
             <div class="space-y-1.5">
@@ -57,7 +64,7 @@
           <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
             <div class="space-y-1.5">
               <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                Entrada $/1M
+                Entrada $/1M (custom)
               </label>
               <input
                 type="number"
@@ -71,7 +78,7 @@
 
             <div class="space-y-1.5">
               <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                Cache $/1M
+                Cache $/1M (custom)
               </label>
               <input
                 type="number"
@@ -85,7 +92,7 @@
 
             <div class="space-y-1.5">
               <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                Salida $/1M
+                Salida $/1M (custom)
               </label>
               <input
                 type="number"
@@ -101,8 +108,141 @@
       </div>
     </div>
 
+    <%!-- Summary cards (render whenever a model is selected, even with zero traffic) --%>
+    <%= if @summary do %>
+      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+        <%!-- Total real --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-3 sm:p-4">
+            <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
+              <.icon name="hero-banknotes" class="w-3.5 h-3.5 text-success" /> Gasto Real
+            </div>
+            <p class="text-xl sm:text-2xl font-bold tabular-nums text-success">
+              ${format_cost(@summary.total_real)}
+            </p>
+            <%= if Decimal.compare(@summary.total_real, 0) == :eq and @summary.total_requests > 0 do %>
+              <p class="text-[10px] text-base-content/40 mt-0.5">
+                El proveedor no reporta costo
+              </p>
+            <% end %>
+          </div>
+        </div>
+
+        <%!-- Total estimated with custom pricing --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-3 sm:p-4">
+            <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
+              <.icon name="hero-calculator" class="w-3.5 h-3.5 text-primary" />
+              Gasto Estimado (custom)
+            </div>
+            <p class="text-xl sm:text-2xl font-bold tabular-nums text-primary">
+              ${format_cost(@summary.total_estimated)}
+            </p>
+          </div>
+        </div>
+
+        <%!-- Total estimated with market pricing (only when the alias documents it) --%>
+        <div
+          :if={@summary.has_market_pricing}
+          class="card bg-base-100 border border-base-300 shadow-sm"
+        >
+          <div class="card-body p-3 sm:p-4">
+            <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
+              <.icon name="hero-arrow-trending-up" class="w-3.5 h-3.5 text-info" />
+              Estimado Mercado
+            </div>
+            <p class="text-xl sm:text-2xl font-bold tabular-nums text-info">
+              ${format_cost(@summary.total_market_estimated)}
+            </p>
+          </div>
+        </div>
+
+        <%!-- Difference --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-3 sm:p-4">
+            <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
+              <.icon name="hero-scale" class="w-3.5 h-3.5 text-base-content/50" /> Diferencia
+            </div>
+            <p class={[
+              "text-xl sm:text-2xl font-bold tabular-nums",
+              difference_class(@summary.difference)
+            ]}>
+              {difference_sign(@summary.difference)}${abs_decimal(@summary.difference)}
+            </p>
+            <%= if difference_pct(@summary) do %>
+              <p class={[
+                "text-[10px] font-medium tabular-nums mt-0.5",
+                difference_class(@summary.difference)
+              ]}>
+                {difference_sign(@summary.difference)}{difference_pct(@summary)}%
+              </p>
+            <% end %>
+          </div>
+        </div>
+
+        <%!-- Total requests --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-3 sm:p-4">
+            <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
+              <.icon name="hero-bolt" class="w-3.5 h-3.5 text-secondary" /> Requests
+            </div>
+            <p class="text-xl sm:text-2xl font-bold tabular-nums text-base-content">
+              {format_number(@summary.total_requests)}
+            </p>
+          </div>
+        </div>
+
+        <%!-- Total tokens --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-3 sm:p-4">
+            <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
+              <.icon name="hero-credit-card" class="w-3.5 h-3.5 text-base-content/50" />
+              Tokens Total
+            </div>
+            <p class="text-xl sm:text-2xl font-bold tabular-nums text-base-content">
+              {format_number(@summary.total_prompt + @summary.total_completion)}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <%!-- Token breakdown ───────────────────────────────────────────────── --%>
+      <div class="grid grid-cols-3 gap-3">
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-3 sm:p-4">
+            <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
+              Tokens Entrada
+            </div>
+            <p class="text-sm font-bold tabular-nums text-base-content/70">
+              {format_number(@summary.total_prompt)}
+            </p>
+          </div>
+        </div>
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-3 sm:p-4">
+            <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
+              Tokens Cache
+            </div>
+            <p class="text-sm font-bold tabular-nums text-base-content/70">
+              {format_number(@summary.total_cache_read)}
+            </p>
+          </div>
+        </div>
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-3 sm:p-4">
+            <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
+              Tokens Salida
+            </div>
+            <p class="text-sm font-bold tabular-nums text-base-content/70">
+              {format_number(@summary.total_completion)}
+            </p>
+          </div>
+        </div>
+      </div>
+    <% end %>
+
+    <%!-- No data ──────────────────────────────────────────────────────────── --%>
     <%= if @chart_data == [] and @selected_model_id do %>
-      <%!-- No data ──────────────────────────────────────────────────────── --%>
       <div class="card bg-base-100 border border-base-300 shadow-sm">
         <div class="card-body">
           <p class="text-sm text-base-content/40 py-8 text-center">
@@ -110,257 +250,141 @@
           </p>
         </div>
       </div>
-    <% else %>
-      <%!-- Summary cards ──────────────────────────────────────────────────── --%>
-      <%= if @summary do %>
-        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-          <%!-- Total real --%>
-          <div class="card bg-base-100 border border-base-300 shadow-sm">
-            <div class="card-body p-3 sm:p-4">
-              <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-                <.icon name="hero-banknotes" class="w-3.5 h-3.5 text-success" /> Gasto Real
-              </div>
-              <p class="text-xl sm:text-2xl font-bold tabular-nums text-success">
-                ${format_cost(@summary.total_real)}
-              </p>
-              <%= if Decimal.compare(@summary.total_real, 0) == :eq and @summary.total_requests > 0 do %>
-                <p class="text-[10px] text-base-content/40 mt-0.5">
-                  El proveedor no reporta costo
-                </p>
-              <% end %>
+    <% end %>
+
+    <%!-- Chart ──────────────────────────────────────────────────────────── --%>
+    <%= if @chart_data != [] do %>
+      <% chart = chart_points(@chart_data) %>
+      <div class="card bg-base-100 border border-base-300 shadow-sm">
+        <div class="card-body space-y-3 p-4 sm:p-6">
+          <div class="flex items-center justify-between flex-wrap gap-2">
+            <h3 class="text-sm font-semibold text-base-content">
+              Comparativa: Gasto Real vs Estimado
+            </h3>
+            <div class="flex items-center gap-4 text-xs">
+              <span class="inline-flex items-center gap-1.5">
+                <span class="w-3 h-3 rounded-sm bg-success"></span>
+                <span class="text-base-content/60">Real</span>
+              </span>
+              <span class="inline-flex items-center gap-1.5">
+                <span class="w-3 h-3 rounded-sm bg-primary"></span>
+                <span class="text-base-content/60">Estimado (custom)</span>
+              </span>
             </div>
           </div>
 
-          <%!-- Total estimated --%>
-          <div class="card bg-base-100 border border-base-300 shadow-sm">
-            <div class="card-body p-3 sm:p-4">
-              <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-                <.icon name="hero-calculator" class="w-3.5 h-3.5 text-primary" /> Gasto Estimado
-              </div>
-              <p class="text-xl sm:text-2xl font-bold tabular-nums text-primary">
-                ${format_cost(@summary.total_estimated)}
-              </p>
-            </div>
-          </div>
-
-          <%!-- Difference --%>
-          <div class="card bg-base-100 border border-base-300 shadow-sm">
-            <div class="card-body p-3 sm:p-4">
-              <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-                <.icon name="hero-scale" class="w-3.5 h-3.5 text-base-content/50" /> Diferencia
-              </div>
-              <p class={[
-                "text-xl sm:text-2xl font-bold tabular-nums",
-                difference_class(@summary.difference)
-              ]}>
-                {difference_sign(@summary.difference)}${abs_decimal(@summary.difference)}
-              </p>
-              <%= if difference_pct(@summary) do %>
-                <p class={[
-                  "text-[10px] font-medium tabular-nums mt-0.5",
-                  difference_class(@summary.difference)
-                ]}>
-                  {difference_sign(@summary.difference)}{difference_pct(@summary)}%
-                </p>
-              <% end %>
-            </div>
-          </div>
-
-          <%!-- Total requests --%>
-          <div class="card bg-base-100 border border-base-300 shadow-sm">
-            <div class="card-body p-3 sm:p-4">
-              <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-                <.icon name="hero-bolt" class="w-3.5 h-3.5 text-secondary" /> Requests
-              </div>
-              <p class="text-xl sm:text-2xl font-bold tabular-nums text-base-content">
-                {format_number(@summary.total_requests)}
-              </p>
-            </div>
-          </div>
-
-          <%!-- Total tokens --%>
-          <div class="card bg-base-100 border border-base-300 shadow-sm">
-            <div class="card-body p-3 sm:p-4">
-              <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-                <.icon name="hero-credit-card" class="w-3.5 h-3.5 text-base-content/50" />
-                Tokens Total
-              </div>
-              <p class="text-xl sm:text-2xl font-bold tabular-nums text-base-content">
-                {format_number(@summary.total_prompt + @summary.total_completion)}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <%!-- Token breakdown ───────────────────────────────────────────────── --%>
-        <div class="grid grid-cols-3 gap-3">
-          <div class="card bg-base-100 border border-base-300 shadow-sm">
-            <div class="card-body p-3 sm:p-4">
-              <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-                Tokens Entrada
-              </div>
-              <p class="text-sm font-bold tabular-nums text-base-content/70">
-                {format_number(@summary.total_prompt)}
-              </p>
-            </div>
-          </div>
-          <div class="card bg-base-100 border border-base-300 shadow-sm">
-            <div class="card-body p-3 sm:p-4">
-              <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-                Tokens Cache
-              </div>
-              <p class="text-sm font-bold tabular-nums text-base-content/70">
-                {format_number(@summary.total_cache_read)}
-              </p>
-            </div>
-          </div>
-          <div class="card bg-base-100 border border-base-300 shadow-sm">
-            <div class="card-body p-3 sm:p-4">
-              <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-                Tokens Salida
-              </div>
-              <p class="text-sm font-bold tabular-nums text-base-content/70">
-                {format_number(@summary.total_completion)}
-              </p>
-            </div>
-          </div>
-        </div>
-      <% end %>
-
-      <%!-- Chart ──────────────────────────────────────────────────────────── --%>
-      <%= if @chart_data != [] do %>
-        <% chart = chart_points(@chart_data) %>
-        <div class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body space-y-3 p-4 sm:p-6">
-            <div class="flex items-center justify-between flex-wrap gap-2">
-              <h3 class="text-sm font-semibold text-base-content">
-                Comparativa: Gasto Real vs Estimado
-              </h3>
-              <div class="flex items-center gap-4 text-xs">
-                <span class="inline-flex items-center gap-1.5">
-                  <span class="w-3 h-3 rounded-sm bg-success"></span>
-                  <span class="text-base-content/60">Real</span>
-                </span>
-                <span class="inline-flex items-center gap-1.5">
-                  <span class="w-3 h-3 rounded-sm bg-primary"></span>
-                  <span class="text-base-content/60">Estimado</span>
-                </span>
-              </div>
-            </div>
-
-            <div class="w-full overflow-x-auto">
-              <svg
-                viewBox="0 0 800 220"
-                class="w-full h-auto min-w-[600px]"
-                preserveAspectRatio="xMidYMid meet"
-              >
-                <%!-- Y-axis grid lines + labels --%>
-                <%= for tick <- chart.y_ticks do %>
-                  <line
-                    x1={chart[:pad_left] || 70}
-                    y1={tick.y}
-                    x2="790"
-                    y2={tick.y}
-                    class="stroke-base-200"
-                    stroke-width="0.5"
-                  />
-                  <text
-                    x={(chart[:pad_left] || 70) - 5}
-                    y={tick.y + 4}
-                    text-anchor="end"
-                    class="fill-base-content/40 text-[9px]"
-                  >
-                    ${tick.value}
-                  </text>
-                <% end %>
-
-                <%!-- Real cost area fill --%>
-                <path d={chart.real_area} class="fill-success/10" />
-
-                <%!-- Real cost line --%>
-                <polyline
-                  points={chart.real_points}
-                  fill="none"
-                  class="stroke-success"
-                  stroke-width="2"
-                  stroke-linejoin="round"
-                  stroke-linecap="round"
-                />
-
-                <%!-- Estimated cost line --%>
-                <polyline
-                  points={chart.est_points}
-                  fill="none"
-                  class="stroke-primary"
-                  stroke-width="2"
-                  stroke-linejoin="round"
-                  stroke-linecap="round"
-                  stroke-dasharray="4,2"
-                />
-
-                <%!-- X-axis line --%>
+          <div class="w-full overflow-x-auto">
+            <svg
+              viewBox="0 0 800 220"
+              class="w-full h-auto min-w-[600px]"
+              preserveAspectRatio="xMidYMid meet"
+            >
+              <%!-- Y-axis grid lines + labels --%>
+              <%= for tick <- chart.y_ticks do %>
                 <line
                   x1={chart[:pad_left] || 70}
-                  y1={(chart[:pad_top] || 10) + (chart[:plot_h] || 175)}
+                  y1={tick.y}
                   x2="790"
-                  y2={(chart[:pad_top] || 10) + (chart[:plot_h] || 175)}
-                  class="stroke-base-300"
-                  stroke-width="1"
+                  y2={tick.y}
+                  class="stroke-base-200"
+                  stroke-width="0.5"
                 />
+                <text
+                  x={(chart[:pad_left] || 70) - 5}
+                  y={tick.y + 4}
+                  text-anchor="end"
+                  class="fill-base-content/40 text-[9px]"
+                >
+                  ${tick.value}
+                </text>
+              <% end %>
 
-                <%!-- X-axis labels --%>
-                <%= for label <- chart.x_labels do %>
-                  <text
-                    x={label.x}
-                    y="215"
-                    text-anchor="middle"
-                    class="fill-base-content/40 text-[8px]"
-                  >
-                    {label.label}
-                  </text>
-                <% end %>
-              </svg>
+              <%!-- Real cost area fill --%>
+              <path d={chart.real_area} class="fill-success/10" />
+
+              <%!-- Real cost line --%>
+              <polyline
+                points={chart.real_points}
+                fill="none"
+                class="stroke-success"
+                stroke-width="2"
+                stroke-linejoin="round"
+                stroke-linecap="round"
+              />
+
+              <%!-- Estimated cost line --%>
+              <polyline
+                points={chart.est_points}
+                fill="none"
+                class="stroke-primary"
+                stroke-width="2"
+                stroke-linejoin="round"
+                stroke-linecap="round"
+                stroke-dasharray="4,2"
+              />
+
+              <%!-- X-axis line --%>
+              <line
+                x1={chart[:pad_left] || 70}
+                y1={(chart[:pad_top] || 10) + (chart[:plot_h] || 175)}
+                x2="790"
+                y2={(chart[:pad_top] || 10) + (chart[:plot_h] || 175)}
+                class="stroke-base-300"
+                stroke-width="1"
+              />
+
+              <%!-- X-axis labels --%>
+              <%= for label <- chart.x_labels do %>
+                <text
+                  x={label.x}
+                  y="215"
+                  text-anchor="middle"
+                  class="fill-base-content/40 text-[8px]"
+                >
+                  {label.label}
+                </text>
+              <% end %>
+            </svg>
+          </div>
+
+          <%!-- Hourly breakdown table ─────────────────────────────────────── --%>
+          <div class="mt-4 overflow-x-auto">
+            <div class="hidden md:grid grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1fr] gap-2 px-2 pb-2 border-b border-base-200 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
+              <span>Hora</span>
+              <span class="text-right">Requests</span>
+              <span class="text-right">Entrada</span>
+              <span class="text-right">Cache</span>
+              <span class="text-right">Salida</span>
+              <span class="text-right">Real</span>
+              <span class="text-right">Estimado (custom)</span>
             </div>
-
-            <%!-- Hourly breakdown table ─────────────────────────────────────── --%>
-            <div class="mt-4 overflow-x-auto">
-              <div class="hidden md:grid grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1fr] gap-2 px-2 pb-2 border-b border-base-200 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-                <span>Hora</span>
-                <span class="text-right">Requests</span>
-                <span class="text-right">Entrada</span>
-                <span class="text-right">Cache</span>
-                <span class="text-right">Salida</span>
-                <span class="text-right">Real</span>
-                <span class="text-right">Estimado</span>
-              </div>
-              <div
-                :for={row <- @chart_data}
-                class="grid grid-cols-[1fr_auto] md:grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1fr] gap-2 px-2 py-1.5 items-center text-[11px] tabular-nums hover:bg-base-200/20 border-b border-base-200/30 last:border-b-0"
-              >
-                <span class="text-base-content/60 truncate">
-                  {Calendar.strftime(row.hour, "%d/%m %H:%M")}
-                </span>
-                <span class="text-right text-base-content/60 hidden md:block">{format_number(
-                  row.request_count
-                )}</span>
-                <span class="text-right text-base-content/50 hidden md:block">{format_number(
-                  row.prompt_tokens
-                )}</span>
-                <span class="text-right text-base-content/50 hidden md:block">{format_number(
-                  row.cache_read_tokens
-                )}</span>
-                <span class="text-right text-base-content/50 hidden md:block">{format_number(
-                  row.completion_tokens
-                )}</span>
-                <span class="text-right font-medium text-success/70">${format_cost(row.real_cost)}</span>
-                <span class="text-right font-medium text-primary/70">${format_cost(
-                  row.estimated_cost
-                )}</span>
-              </div>
+            <div
+              :for={row <- @chart_data}
+              class="grid grid-cols-[1fr_auto] md:grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1fr] gap-2 px-2 py-1.5 items-center text-[11px] tabular-nums hover:bg-base-200/20 border-b border-base-200/30 last:border-b-0"
+            >
+              <span class="text-base-content/60 truncate">
+                {Calendar.strftime(row.hour, "%d/%m %H:%M")}
+              </span>
+              <span class="text-right text-base-content/60 hidden md:block">{format_number(
+                row.request_count
+              )}</span>
+              <span class="text-right text-base-content/50 hidden md:block">{format_number(
+                row.prompt_tokens
+              )}</span>
+              <span class="text-right text-base-content/50 hidden md:block">{format_number(
+                row.cache_read_tokens
+              )}</span>
+              <span class="text-right text-base-content/50 hidden md:block">{format_number(
+                row.completion_tokens
+              )}</span>
+              <span class="text-right font-medium text-success/70">${format_cost(row.real_cost)}</span>
+              <span class="text-right font-medium text-primary/70">${format_cost(
+                row.estimated_cost
+              )}</span>
             </div>
           </div>
         </div>
-      <% end %>
+      </div>
     <% end %>
   </div>
 </Layouts.dashboard>

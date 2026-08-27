@@ -51,6 +51,8 @@ defmodule Tokengate.Budgets.Manager do
 
   require Logger
 
+  alias Tokengate.Budgets.Exemptions
+
   @table :tokengate_budgets
   @micro 1_000_000
   @global_key {:global, :daily}
@@ -129,6 +131,25 @@ defmodule Tokengate.Budgets.Manager do
           provider_cost_usd :: Decimal.t() | nil
         ) :: :ok
   def record_spend(member_id, model_alias_id, provider_cost_usd) do
+    record_spend(member_id, model_alias_id, provider_cost_usd, nil)
+  end
+
+  @doc """
+  Records actual spend, optionally skipping the global daily counter when
+  the spending subject is exempt from the global cap.
+
+  `exemption_subjects` is the map built by the proxy's
+  `exemption_subjects/1` (`%{subject: ..., team: ...}`) or `nil` when the
+  caller doesn't know the subject (tests, backfills) — in that case the
+  global counter always gets bumped (legacy /3 behavior).
+  """
+  @spec record_spend(
+          member_id :: term(),
+          model_alias_id :: term(),
+          provider_cost_usd :: Decimal.t() | nil,
+          exemption_subjects :: %{subject: map(), team: map() | nil} | nil
+        ) :: :ok
+  def record_spend(member_id, model_alias_id, provider_cost_usd, exemption_subjects) do
     micro = to_micro(provider_cost_usd)
 
     ensure_loaded(member_id, :daily)
@@ -144,7 +165,18 @@ defmodule Tokengate.Budgets.Manager do
     # Atomic increments. Position 2 = amount_micro.
     bump_counter({member_id, :daily}, micro)
     bump_counter({member_id, :monthly}, micro)
-    bump_counter(@global_key, micro)
+
+    # Exempt subjects still spend (their own counters above), but their
+    # spend doesn't count toward the global daily cap.
+    global_exempt? =
+      exemption_subjects != nil and
+        Exemptions.exempt?(
+          "global_daily",
+          exemption_subjects.subject,
+          exemption_subjects.team
+        )
+
+    unless global_exempt?, do: bump_counter(@global_key, micro)
 
     if model_alias_id do
       bump_counter({{member_id, model_alias_id}, :daily}, micro)
@@ -204,6 +236,27 @@ defmodule Tokengate.Budgets.Manager do
   def global_exhausted?(%Decimal{} = cap) do
     ensure_loaded_global()
     read_counter(@global_key) >= to_micro(cap)
+  end
+
+  @doc """
+  Whether the member's (or service's) daily spend has reached the per-user
+  daily cap for the current UTC day. A `nil` cap means unlimited — always
+  `false`. Reads the same per-member daily counter that `record_spend`
+  already maintains, so no extra bookkeeping is needed.
+  """
+  @spec user_daily_exhausted?(member_id :: term(), cap :: Decimal.t() | number() | nil) ::
+          boolean()
+  def user_daily_exhausted?(_member_id, nil), do: false
+
+  def user_daily_exhausted?(member_id, cap) do
+    case normalize_cap(cap) do
+      nil ->
+        false
+
+      %Decimal{} = limit ->
+        ensure_loaded(member_id, :daily)
+        read_counter({member_id, :daily}) >= to_micro(limit)
+    end
   end
 
   @doc """

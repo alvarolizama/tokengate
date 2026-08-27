@@ -44,6 +44,7 @@ defmodule TokengateWeb.ProxyController do
   import Ecto.Query, only: [from: 2]
 
   alias Tokengate.Budgets.Manager, as: Budgets
+  alias Tokengate.Budgets.Exemptions
   alias Tokengate.Accounts.TeamMember
   alias Tokengate.GlobalSettings
   alias Tokengate.Limits.Manager, as: Limits
@@ -98,7 +99,8 @@ defmodule TokengateWeb.ProxyController do
 
     with :ok <- require_model(model),
          :ok <- acquire_team_limits(key_id, limits),
-         :ok <- check_global_daily_cap() do
+         :ok <- check_user_daily_cap(member),
+         :ok <- check_global_daily_cap(member) do
       try do
         case route_and_acquire(member, payload, conn.assigns.api_key_hash, limits) do
           {:ok, route} ->
@@ -183,7 +185,8 @@ defmodule TokengateWeb.ProxyController do
 
     with :ok <- require_model(model),
          :ok <- acquire_team_limits(key_id, limits),
-         :ok <- check_global_daily_cap() do
+         :ok <- check_user_daily_cap(member),
+         :ok <- check_global_daily_cap(member) do
       try do
         case route_and_acquire(member, payload, conn.assigns.api_key_hash, limits, [],
                capability: capability
@@ -398,7 +401,7 @@ defmodule TokengateWeb.ProxyController do
 
     cost = cost_with_fallback(route, provider_reported, usage)
 
-    Budgets.record_spend(member.id, route.model_alias.id, cost)
+    Budgets.record_spend(member.id, route.model_alias.id, cost, exemption_subjects(member))
 
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
@@ -726,13 +729,66 @@ defmodule TokengateWeb.ProxyController do
     end)
   end
 
-  defp check_global_daily_cap do
+  # Budget-exemption subject for this request. Services authenticate as
+  # virtual TeamMembers (service_name set, user/team nil) — see
+  # ApiAuth.service_to_virtual_member/1. Team members check their own user
+  # row AND their team's exemptions.
+  defp budget_subject(%TeamMember{service_name: name} = member) when not is_nil(name),
+    do: %{type: "service", id: member.id}
+
+  defp budget_subject(%TeamMember{} = member), do: %{type: "user", id: member.user_id}
+
+  defp team_subject(%TeamMember{service_name: nil} = member),
+    do: %{type: "team", id: member.team_id}
+
+  defp team_subject(_service_member), do: nil
+
+  defp exemption_subjects(member) do
+    %{subject: budget_subject(member), team: team_subject(member)}
+  end
+
+  defp exempt_from?(scope, member) do
+    subjects = exemption_subjects(member)
+    Exemptions.exempt?(scope, subjects.subject, subjects.team)
+  end
+
+  defp check_global_daily_cap(member) do
     cap = GlobalSettings.get_daily_cap()
 
-    if Budgets.global_exhausted?(cap) do
-      {:error, {:budget_exceeded, %{period: :daily_global, available: Decimal.new(0)}}}
-    else
-      :ok
+    cond do
+      is_nil(cap) ->
+        :ok
+
+      exempt_from?("global_daily", member) ->
+        :ok
+
+      Budgets.global_exhausted?(cap) ->
+        {:error, {:budget_exceeded, %{period: :daily_global, available: Decimal.new(0)}}}
+
+      true ->
+        :ok
+    end
+  end
+
+  # Per-user daily cap — evaluated BEFORE the global cap so a per-user limit
+  # tighter than the global one kicks in first. Applies to users and
+  # services alike (services are virtual members); exemptions via the
+  # "user_daily" scope.
+  defp check_user_daily_cap(member) do
+    cap = GlobalSettings.get_per_user_daily_cap()
+
+    cond do
+      is_nil(cap) ->
+        :ok
+
+      exempt_from?("user_daily", member) ->
+        :ok
+
+      Budgets.user_daily_exhausted?(member.id, cap) ->
+        {:error, {:budget_exceeded, %{period: :daily_per_user, available: Decimal.new(0)}}}
+
+      true ->
+        :ok
     end
   end
 
@@ -1332,7 +1388,7 @@ defmodule TokengateWeb.ProxyController do
           {usage, cost}
       end
 
-    Budgets.record_spend(member.id, route.model_alias.id, cost)
+    Budgets.record_spend(member.id, route.model_alias.id, cost, exemption_subjects(member))
 
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,
@@ -1417,7 +1473,7 @@ defmodule TokengateWeb.ProxyController do
     cost = cost_with_fallback(route, provider_reported, usage)
 
     # Hot-path state updates (ETS only)
-    Budgets.record_spend(member.id, route.model_alias.id, cost)
+    Budgets.record_spend(member.id, route.model_alias.id, cost, exemption_subjects(member))
 
     Collector.record_request(%{
       model_alias_id: route.model_alias.id,

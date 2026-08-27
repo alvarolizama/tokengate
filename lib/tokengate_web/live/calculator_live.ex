@@ -49,6 +49,7 @@ defmodule TokengateWeb.CalculatorLive do
       |> assign(:cost_output, "15.00")
       |> assign(:chart_data, [])
       |> assign(:summary, nil)
+      |> assign(:market_prices, nil)
 
     {:ok, socket}
   end
@@ -68,6 +69,7 @@ defmodule TokengateWeb.CalculatorLive do
       |> assign(:cost_input, cost_input)
       |> assign(:cost_cache, cost_cache)
       |> assign(:cost_output, cost_output)
+      |> assign(:market_prices, market_pricing(socket.assigns.models, model_id))
 
     socket =
       if model_id && model_id != "" do
@@ -117,6 +119,9 @@ defmodule TokengateWeb.CalculatorLive do
     cost_cache = parse_decimal(cost_cache_str, Decimal.new("0.30"))
     cost_output = parse_decimal(cost_output_str, Decimal.new("15.00"))
 
+    # Market pricing of the selected alias (nil when not set).
+    market = market_pricing(socket.assigns.models, model_id)
+
     # Per-million multiplier: price is per 1M tokens → cost = tokens * price * 1e-6
     per_million = Decimal.new("0.000001")
 
@@ -153,6 +158,7 @@ defmodule TokengateWeb.CalculatorLive do
           request_count: row.request_count,
           real_cost: row.cost_usd,
           estimated_cost: estimated_cost,
+          market_estimated_cost: market_estimate(market, prompt, cached, completion),
           prompt_tokens: prompt,
           completion_tokens: completion,
           cache_read_tokens: cached
@@ -166,6 +172,17 @@ defmodule TokengateWeb.CalculatorLive do
       end)
       |> Decimal.round(4)
 
+    # Total estimated cost using the alias's market prices (nil when the
+    # alias has no market pricing configured).
+    total_market_estimated =
+      if market do
+        chart_data
+        |> Enum.reduce(Decimal.new(0), fn row, acc ->
+          Decimal.add(acc, row.market_estimated_cost)
+        end)
+        |> Decimal.round(4)
+      end
+
     # Total real cost from cost_summary (same source as Stats)
     total_real = Decimal.round(summary_data.total_cost_usd, 4)
 
@@ -174,6 +191,8 @@ defmodule TokengateWeb.CalculatorLive do
     summary = %{
       total_real: total_real,
       total_estimated: total_estimated,
+      total_market_estimated: total_market_estimated,
+      has_market_pricing: not is_nil(market),
       difference: difference,
       total_requests: summary_data.request_count,
       total_prompt: summary_data.total_prompt_tokens,
@@ -193,6 +212,45 @@ defmodule TokengateWeb.CalculatorLive do
       {d, ""} -> d
       _ -> default
     end
+  end
+
+  # Market prices for the selected model, or nil when unset. The cache rate
+  # degrades to the input rate when only input+output are documented (the
+  # same 2-term fallback convention as CostCalculator).
+  defp market_pricing(models, model_id) do
+    case Enum.find(models, &(&1.id == model_id)) do
+      %{
+        market_input_price_per_1m: %Decimal{} = input,
+        market_output_price_per_1m: %Decimal{} = output
+      } = alias ->
+        cache =
+          case alias.market_cache_price_per_1m do
+            %Decimal{} = cache_price -> cache_price
+            _ -> input
+          end
+
+        %{input: input, cache: cache, output: output}
+
+      _ ->
+        nil
+    end
+  end
+
+  # 3-term estimate (non-cached × input + cached × cache + completion × output)
+  # using the alias's market prices. Returns 0 when market pricing is unset —
+  # the total is gated by has_market_pricing so the 0 never renders.
+  defp market_estimate(nil, _prompt, _cached, _completion), do: Decimal.new(0)
+
+  defp market_estimate(%{input: input, cache: cache, output: output}, prompt, cached, completion) do
+    non_cached = max(prompt - cached, 0)
+    per_million = Decimal.new("0.000001")
+
+    input
+    |> Decimal.mult(Decimal.new(non_cached))
+    |> Decimal.mult(per_million)
+    |> Decimal.add(cache |> Decimal.mult(Decimal.new(cached)) |> Decimal.mult(per_million))
+    |> Decimal.add(output |> Decimal.mult(Decimal.new(completion)) |> Decimal.mult(per_million))
+    |> Decimal.round(6)
   end
 
   # ── Template helpers ──────────────────────────────────────────────────────
@@ -350,4 +408,31 @@ defmodule TokengateWeb.CalculatorLive do
   end
 
   def periods, do: @periods
+
+  @doc """
+  Market-price line for the selected model, rendered under the Model select.
+  One string built in Elixir so HEEx cannot inject whitespace between "$"
+  and the value.
+  """
+  def market_line(%{input: input, cache: cache, output: output}) do
+    "in $" <>
+      fmt_price(input) <>
+      " · cache $" <>
+      fmt_price(cache) <>
+      " · out $" <> fmt_price(output) <> " /1M"
+  end
+
+  def fmt_price(nil), do: "—"
+
+  # Trim trailing zeros without Decimal.normalize, which emits scientific
+  # notation for whole numbers ("10.000000" -> "1E+1").
+  def fmt_price(%Decimal{} = d) do
+    s = Decimal.to_string(d)
+
+    if String.contains?(s, ".") do
+      s |> String.trim_trailing("0") |> String.trim_trailing(".")
+    else
+      s
+    end
+  end
 end

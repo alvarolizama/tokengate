@@ -926,6 +926,45 @@ defmodule TokengateWeb.ModelsLive do
   def fmt_dec(%Decimal{} = d), do: Decimal.to_string(d)
   def fmt_dec(n), do: to_string(n)
 
+  @doc """
+  Format a market price compactly for the alias card row: trims trailing
+  zeros ("1.250000" -> "1.25"). Display-only. Deliberately avoids
+  Decimal.normalize, which emits scientific notation for whole numbers
+  ("10.000000" -> "1E+1").
+  """
+  def fmt_price(nil), do: "—"
+
+  def fmt_price(%Decimal{} = d) do
+    s = Decimal.to_string(d)
+
+    if String.contains?(s, ".") do
+      s |> String.trim_trailing("0") |> String.trim_trailing(".")
+    else
+      s
+    end
+  end
+
+  def fmt_price(n), do: fmt_dec(n)
+
+  @doc "True when at least one market price is set (Decimals may be nil)."
+  def has_market_prices?(model_alias) do
+    not is_nil(model_alias.market_input_price_per_1m) or
+      not is_nil(model_alias.market_output_price_per_1m) or
+      not is_nil(model_alias.market_cache_price_per_1m)
+  end
+
+  @doc """
+  Full market-price line for the alias card row. Built as ONE string in
+  Elixir so HEEx cannot inject whitespace between "$" and the value.
+  """
+  def market_line(model_alias) do
+    "· in $" <>
+      fmt_price(model_alias.market_input_price_per_1m) <>
+      " · out $" <>
+      fmt_price(model_alias.market_output_price_per_1m) <>
+      " · cache $" <> fmt_price(model_alias.market_cache_price_per_1m) <> " /1M"
+  end
+
   @doc "Empty-state message for the active model type filter"
   def empty_state_message("favorites"),
     do: "No hay modelos pineados. Pinea un modelo para verlo aquí."
@@ -1175,6 +1214,13 @@ defmodule TokengateWeb.ModelsLive do
                         title={"#{model_alias.context_window} tokens"}
                       >
                         · {format_compact(model_alias.context_window)} ctx
+                      </span>
+                      <span
+                        :if={has_market_prices?(model_alias)}
+                        class="text-xs text-base-content/50 tabular-nums"
+                        title="Precio de mercado de referencia (informativo — no se usa para facturación)"
+                      >
+                        {market_line(model_alias)}
                       </span>
                       <span
                         :if={model_alias.model_type != "llm"}
@@ -1430,6 +1476,39 @@ defmodule TokengateWeb.ModelsLive do
                       ]}
                       hint="Define qué endpoint lo sirve: /v1/chat/completions, /v1/embeddings o /v1/rerank."
                     />
+
+                    <div class="divider my-2 text-xs text-base-content/50">
+                      Precio de mercado de referencia (informativo)
+                    </div>
+                    <%!--
+                      Display-only market prices: they document what the
+                      model roughly costs per 1M tokens. They are NOT used by
+                      the cost engine — billing comes from upstream-reported
+                      usage or the provider's manual fallback rates.
+                    --%>
+                    <div class="grid grid-cols-3 gap-2">
+                      <.input
+                        field={@form[:market_input_price_per_1m]}
+                        type="number"
+                        step="0.000001"
+                        min="0"
+                        label="Entrada $/1M"
+                      />
+                      <.input
+                        field={@form[:market_output_price_per_1m]}
+                        type="number"
+                        step="0.000001"
+                        min="0"
+                        label="Salida $/1M"
+                      />
+                      <.input
+                        field={@form[:market_cache_price_per_1m]}
+                        type="number"
+                        step="0.000001"
+                        min="0"
+                        label="Cache $/1M"
+                      />
+                    </div>
                   </div>
 
                   <div class="space-y-1">

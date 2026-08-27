@@ -22,6 +22,13 @@ defmodule Tokengate.Providers.ModelAlias do
     field :daily_limit_per_user_usd, :decimal
     field :daily_limit_total_usd, :decimal
     field :pinned, :boolean, default: false
+    # Informational market prices (USD per 1M tokens). Display-only:
+    # the billing chain (CostCalculator / manual_pricing / backfill) never
+    # reads these — it uses provider-reported costs plus the per-provider
+    # manual fallback on model_providers.
+    field :market_input_price_per_1m, :decimal
+    field :market_output_price_per_1m, :decimal
+    field :market_cache_price_per_1m, :decimal
 
     has_many :model_providers, Tokengate.Providers.ModelProvider
 
@@ -40,7 +47,10 @@ defmodule Tokengate.Providers.ModelAlias do
       :lazy_cleanup_enabled,
       :daily_limit_per_user_usd,
       :daily_limit_total_usd,
-      :pinned
+      :pinned,
+      :market_input_price_per_1m,
+      :market_output_price_per_1m,
+      :market_cache_price_per_1m
     ])
     |> validate_required([:name, :context_window])
     |> validate_number(:daily_limit_per_user_usd, greater_than_or_equal_to: 0)

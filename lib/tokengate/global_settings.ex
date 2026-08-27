@@ -20,14 +20,19 @@ defmodule Tokengate.GlobalSettings do
 
   schema "global_settings" do
     field :daily_max_spend_usd, :decimal
+    # Per-user daily cap — every member/service gets this daily budget
+    # unless exempted (see Budgets.Exemptions). Evaluated BEFORE the global
+    # cap. nil = unlimited.
+    field :daily_max_per_user_usd, :decimal
 
     timestamps(type: :utc_datetime)
   end
 
   def changeset(settings, attrs) do
     settings
-    |> cast(attrs, [:daily_max_spend_usd])
+    |> cast(attrs, [:daily_max_spend_usd, :daily_max_per_user_usd])
     |> validate_number(:daily_max_spend_usd, greater_than_or_equal_to: 0)
+    |> validate_number(:daily_max_per_user_usd, greater_than_or_equal_to: 0)
   end
 
   @doc "Returns the singleton global settings row."
@@ -36,6 +41,11 @@ defmodule Tokengate.GlobalSettings do
   @doc "Returns the global daily spending cap (nil = unlimited)."
   def get_daily_cap(id \\ @singleton_id) do
     get!(id).daily_max_spend_usd
+  end
+
+  @doc "Returns the per-user daily spending cap (nil = unlimited)."
+  def get_per_user_daily_cap(id \\ @singleton_id) do
+    get!(id).daily_max_per_user_usd
   end
 
   @doc "Updates the singleton global settings row."

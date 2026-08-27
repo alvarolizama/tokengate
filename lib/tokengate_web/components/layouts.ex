@@ -246,7 +246,7 @@ defmodule TokengateWeb.Layouts do
           <%= if admin?(@current_scope) do %>
             <div class="space-y-1">
               <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
-                Sistema
+                Administración
               </p>
               <.sidebar_link
                 href={~p"/dashboard/providers"}
@@ -267,8 +267,13 @@ defmodule TokengateWeb.Layouts do
                 icon="hero-wrench-screwdriver"
               />
               <.sidebar_link
-                href={~p"/dashboard/settings"}
-                label="Configuración"
+                href={~p"/dashboard/budgets"}
+                label="Budget"
+                icon="hero-banknotes"
+              />
+              <.sidebar_link
+                href={~p"/dashboard/maintenance"}
+                label="Mantenimiento"
                 icon="hero-cog-6-tooth"
               />
             </div>
@@ -286,7 +291,7 @@ defmodule TokengateWeb.Layouts do
               />
               <.sidebar_link
                 href={~p"/dashboard/benchmarks"}
-                label="Benchmarks"
+                label="Providers Benchmarks"
                 icon="hero-chart-bar"
               />
               <.sidebar_link
