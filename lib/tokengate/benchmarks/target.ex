@@ -13,6 +13,10 @@ defmodule Tokengate.Benchmarks.Target do
     :base_url,
     :api_key,
     :model,
+    :provider_name,
+    :credential_name,
+    :credential_id,
+    :priority,
     :result,
     :error,
     :running?
@@ -26,6 +30,10 @@ defmodule Tokengate.Benchmarks.Target do
       base_url: attrs[:base_url] || attrs["base_url"],
       api_key: attrs[:api_key] || attrs["api_key"],
       model: attrs[:model] || attrs["model"],
+      provider_name: attrs[:provider_name] || attrs["provider_name"],
+      credential_name: attrs[:credential_name] || attrs["credential_name"],
+      credential_id: attrs[:credential_id] || attrs["credential_id"],
+      priority: attrs[:priority] || attrs["priority"],
       running?: false
     }
   end

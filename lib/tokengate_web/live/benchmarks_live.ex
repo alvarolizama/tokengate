@@ -1,21 +1,18 @@
 defmodule TokengateWeb.BenchmarksLive do
   @moduledoc """
-  Provider benchmarks — compare LLM providers head-to-head on
-  TTFT, TPS, latency and token count using the same prompt.
+  Provider benchmarks — pick a model alias and compare every provider
+  serving it on TTFT, TPS, latency and token count using the same prompt.
 
-  Targets are built from existing TokenGate providers + credentials.
-  Cascading selects: provider → credential (filtered) → model (fetched
-  from the provider's /models endpoint). Admin-only.
+  Targets are built from the existing `model_providers` data — no provider
+  `/models` calls. Each credential is measured individually; the UI averages
+  credentials that share a provider and presents them as one provider with
+  an expandable per-credential breakdown. Admin-only.
   """
 
   use TokengateWeb, :live_view
 
-  import Ecto.Query, only: [from: 2]
-
   alias Tokengate.Benchmarks.{Runner, Target}
-  alias Tokengate.Proxy.OpenAIAdapter
   alias Tokengate.Providers
-  alias Tokengate.Repo
 
   @default_prompt "Dame la receta de la cochinita"
   @default_max_tokens 262_144
@@ -23,127 +20,36 @@ defmodule TokengateWeb.BenchmarksLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    providers =
-      from(p in Providers.Provider,
-        where: p.status == "active",
-        order_by: p.name
-      )
-      |> Repo.all()
+    model_aliases =
+      Providers.list_model_aliases()
+      |> Enum.filter(&(&1.model_type == "llm"))
+      |> Enum.sort_by(& &1.name)
 
     socket =
       socket
-      |> assign(:page_title, "Benchmarks · Tokengate")
+      |> assign(:page_title, "Providers Benchmarks · Tokengate")
+      |> assign(:model_aliases, model_aliases)
+      |> assign(:selected_alias, nil)
       |> assign(:targets, [])
       |> assign(:prompt, @default_prompt)
       |> assign(:max_tokens, @default_max_tokens)
       |> assign(:runs, @default_runs)
       |> assign(:running, false)
-      |> assign(:results, [])
-      |> assign(:providers, providers)
-      |> assign(:selected_provider_id, nil)
-      |> assign(:available_credentials, [])
-      |> assign(:selected_credential_id, nil)
-      |> assign(:available_models, [])
-      |> assign(:loading_models, false)
-      |> assign(:selected_model, nil)
 
     {:ok, socket}
   end
 
-  # ── Cascading select events ───────────────────────────────────────────
+  # ── Model alias selection ─────────────────────────────────────────────
 
   @impl true
-  def handle_event("select_provider", %{"target" => %{"provider_id" => provider_id}}, socket) do
-    credentials =
-      if provider_id != "" do
-        from(c in Providers.Credential,
-          where: c.provider_id == ^provider_id and c.status == "active",
-          order_by: [asc: c.name]
-        )
-        |> Repo.all()
-      else
-        []
-      end
+  def handle_event("select_alias", %{"alias_id" => alias_id}, socket) do
+    selected = Enum.find(socket.assigns.model_aliases, &(&1.id == alias_id))
+    targets = if selected, do: build_targets(alias_id), else: []
 
     {:noreply,
      socket
-     |> assign(:selected_provider_id, if(provider_id == "", do: nil, else: provider_id))
-     |> assign(:available_credentials, credentials)
-     |> assign(:selected_credential_id, nil)
-     |> assign(:available_models, [])
-     |> assign(:selected_model, nil)
-     |> assign(:loading_models, false)}
-  end
-
-  def handle_event(
-        "select_credential",
-        %{"target" => %{"credential_id" => credential_id}},
-        socket
-      ) do
-    if credential_id == "" do
-      {:noreply,
-       socket
-       |> assign(:selected_credential_id, nil)
-       |> assign(:available_models, [])
-       |> assign(:selected_model, nil)}
-    else
-      provider_id = socket.assigns.selected_provider_id
-
-      if provider_id do
-        send(self(), {:fetch_models, provider_id, credential_id})
-      end
-
-      {:noreply,
-       socket
-       |> assign(:selected_credential_id, credential_id)
-       |> assign(:available_models, [])
-       |> assign(:selected_model, nil)
-       |> assign(:loading_models, true)}
-    end
-  end
-
-  def handle_event("select_model", %{"target" => %{"model" => model}}, socket) do
-    {:noreply, assign(socket, :selected_model, if(model == "", do: nil, else: model))}
-  end
-
-  # ── Add / remove targets ──────────────────────────────────────────────
-
-  def handle_event("add_target", params, socket) do
-    # Params arrive flat from phx-value-* on the button, or nested under
-    # "target" from a form submit. Normalize to flat.
-    target = Map.get(params, "target", params)
-    provider_id = target["provider_id"] || ""
-    credential_id = target["credential_id"] || ""
-    model = String.trim(target["model"] || "")
-
-    cond do
-      provider_id == "" ->
-        {:noreply, put_flash(socket, :error, "Selecciona un proveedor.")}
-
-      credential_id == "" ->
-        {:noreply, put_flash(socket, :error, "Selecciona una credencial.")}
-
-      model == "" ->
-        {:noreply, put_flash(socket, :error, "Selecciona un modelo.")}
-
-      true ->
-        case build_target(provider_id, credential_id, model) do
-          {:ok, target} ->
-            {:noreply,
-             socket
-             |> assign(:targets, socket.assigns.targets ++ [target])
-             |> assign(:selected_model, nil)
-             |> assign(:available_models, [])}
-
-          {:error, reason} ->
-            {:noreply, put_flash(socket, :error, reason)}
-        end
-    end
-  end
-
-  def handle_event("remove_target", %{"id" => id}, socket) do
-    targets = Enum.reject(socket.assigns.targets, &(&1.id == id))
-    {:noreply, assign(socket, :targets, targets)}
+     |> assign(:selected_alias, selected)
+     |> assign(:targets, targets)}
   end
 
   # ── Prompt + settings ─────────────────────────────────────────────────
@@ -162,29 +68,25 @@ defmodule TokengateWeb.BenchmarksLive do
   # ── Run benchmarks ────────────────────────────────────────────────────
 
   def handle_event("run_benchmarks", _params, socket) do
-    targets = socket.assigns.targets
-    prompt = socket.assigns.prompt
-
     cond do
       socket.assigns.running ->
         {:noreply, socket}
 
-      targets == [] ->
-        {:noreply, put_flash(socket, :error, "Agrega al menos un proveedor.")}
+      socket.assigns.targets == [] ->
+        {:noreply, put_flash(socket, :error, "Selecciona un modelo con proveedores.")}
 
-      String.trim(prompt) == "" ->
+      String.trim(socket.assigns.prompt) == "" ->
         {:noreply, put_flash(socket, :error, "Escribe un prompt.")}
 
       true ->
-        marked = Enum.map(targets, &Target.running/1)
+        marked = Enum.map(socket.assigns.targets, &Target.running/1)
 
         socket =
           socket
           |> assign(:targets, marked)
           |> assign(:running, true)
-          |> assign(:results, [])
 
-        send(self(), {:run_benchmarks, targets, prompt})
+        send(self(), {:run_benchmarks, marked, socket.assigns.prompt})
 
         {:noreply, socket}
     end
@@ -192,33 +94,12 @@ defmodule TokengateWeb.BenchmarksLive do
 
   def handle_event("clear_results", _params, socket) do
     targets = Enum.map(socket.assigns.targets, &%{&1 | result: nil, error: nil, running?: false})
-
-    {:noreply, socket |> assign(:targets, targets) |> assign(:results, [])}
+    {:noreply, assign(socket, :targets, targets)}
   end
 
   # ── Async info handlers ───────────────────────────────────────────────
 
   @impl true
-  def handle_info({:fetch_models, provider_id, credential_id}, socket) do
-    provider = Providers.get_provider(provider_id)
-    credential = Providers.get_credential(credential_id)
-
-    models =
-      if provider && credential do
-        case OpenAIAdapter.list_models(provider, credential) do
-          {:ok, models} -> models
-          {:error, _} -> []
-        end
-      else
-        []
-      end
-
-    {:noreply,
-     socket
-     |> assign(:available_models, models)
-     |> assign(:loading_models, false)}
-  end
-
   def handle_info({:run_benchmarks, targets, prompt}, socket) do
     opts = [max_tokens: socket.assigns.max_tokens, runs: socket.assigns.runs]
 
@@ -231,66 +112,134 @@ defmodule TokengateWeb.BenchmarksLive do
         %{original | result: result.result, error: result.error, running?: false}
       end)
 
-    sorted = sort_by_metric(updated_targets, :tps, :desc)
-
-    socket =
-      socket
-      |> assign(:targets, updated_targets)
-      |> assign(:results, sorted)
-      |> assign(:running, false)
-
-    {:noreply, socket}
+    {:noreply,
+     socket
+     |> assign(:targets, updated_targets)
+     |> assign(:running, false)}
   end
 
   # ── Target building ───────────────────────────────────────────────────
 
-  defp build_target(provider_id, credential_id, model) do
-    provider = Providers.get_provider(provider_id)
-    credential = Providers.get_credential(credential_id)
+  # One target per model_provider row (credential × provider_model). Rows
+  # can repeat the same credential across scope buckets (global / team /
+  # member exclusive) — identical endpoint + key + model, so dedupe.
+  defp build_targets(alias_id) do
+    alias_id
+    |> Providers.list_model_providers()
+    |> Enum.uniq_by(&{&1.credential_id, &1.provider_model})
+    |> Enum.map(&build_target/1)
+  end
 
-    cond do
-      is_nil(provider) ->
-        {:error, "Proveedor no encontrado."}
+  defp build_target(mp) do
+    provider = mp.credential.provider
 
-      is_nil(credential) ->
-        {:error, "Credencial no encontrada."}
+    Target.new(%{
+      base_url: provider.base_url,
+      api_key: mp.credential.api_key_encrypted,
+      model: mp.provider_model,
+      label: "#{provider.name} · #{mp.provider_model}",
+      provider_name: provider.name,
+      credential_name: mp.credential.name,
+      credential_id: mp.credential_id,
+      priority: mp.priority
+    })
+  end
 
-      credential.provider_id != provider.id ->
-        {:error, "La credencial no pertenece a este proveedor."}
+  # ── Grouping for template ─────────────────────────────────────────────
+  # Credentials are measured individually; the comparison layer averages
+  # them per provider. Groups with results sort by avg TPS desc, failures
+  # (no successful credential) go last alphabetically.
 
-      true ->
-        target =
-          Target.new(%{
-            base_url: provider.base_url,
-            api_key: credential.api_key_encrypted,
-            model: model,
-            label: "#{provider.name} · #{model}"
-          })
+  def group_results(targets) do
+    groups =
+      targets
+      |> Enum.group_by(& &1.provider_name)
+      |> Enum.map(fn {provider, rows} -> summarize_group(provider, rows) end)
 
-        {:ok, target}
+    successes =
+      groups
+      |> Enum.filter(&(&1.success_count > 0))
+      |> Enum.sort_by(&(-&1.avg_tps))
+
+    failures =
+      groups
+      |> Enum.reject(&(&1.success_count > 0))
+      |> Enum.sort_by(& &1.provider)
+
+    successes ++ failures
+  end
+
+  defp summarize_group(provider, rows) do
+    successes = Enum.filter(rows, &Target.success?/1)
+    n = length(successes)
+
+    avg = fn key ->
+      if n == 0 do
+        nil
+      else
+        successes
+        |> Enum.map(&Map.fetch!(&1.result, key))
+        |> Enum.sum()
+        |> Kernel./(n)
+      end
     end
+
+    %{
+      provider: provider,
+      rows: Enum.sort_by(rows, &(&1.priority || 9_999_999)),
+      key_count: length(rows),
+      success_count: n,
+      error_count: length(rows) - n,
+      avg_tps: round2(avg.(:tps)),
+      avg_ttft: avg_int(avg.(:ttft_ms)),
+      avg_total: avg_int(avg.(:total_ms)),
+      avg_tokens: avg_int(avg.(:tokens))
+    }
+  end
+
+  defp round2(nil), do: nil
+  defp round2(value), do: Float.round(value, 2)
+
+  defp avg_int(nil), do: nil
+  defp avg_int(value), do: round(value)
+
+  def successful_groups(groups), do: Enum.filter(groups, &(&1.success_count > 0))
+
+  def winner_group(groups) do
+    groups
+    |> successful_groups()
+    |> Enum.max_by(& &1.avg_tps, fn -> nil end)
+  end
+
+  def best_ttft_group(groups) do
+    groups
+    |> successful_groups()
+    |> Enum.min_by(& &1.avg_ttft, fn -> nil end)
+  end
+
+  def best_latency_group(groups) do
+    groups
+    |> successful_groups()
+    |> Enum.min_by(& &1.avg_total, fn -> nil end)
   end
 
   # ── Helpers for template ──────────────────────────────────────────────
 
   def has_results?(targets), do: Enum.any?(targets, &Target.done?/1)
 
-  def winner(targets) do
+  def provider_names(targets) do
     targets
-    |> Enum.filter(&Target.success?/1)
-    |> Enum.max_by(fn t -> t.result.tps end, fn -> nil end)
+    |> Enum.map(& &1.provider_name)
+    |> Enum.uniq()
   end
 
-  def best_ttft(targets) do
-    targets
-    |> Enum.filter(&Target.success?/1)
-    |> Enum.min_by(fn t -> t.result.ttft_ms end, fn -> nil end)
-  end
+  def selected_alias?(%{id: id}, %{id: id}), do: true
+  def selected_alias?(_, _), do: false
 
-  def best_latency(targets) do
-    targets
-    |> Enum.filter(&Target.success?/1)
-    |> Enum.min_by(fn t -> t.result.total_ms end, fn -> nil end)
+  def max_metric(groups, key) do
+    groups
+    |> Enum.map(&Map.fetch!(&1, key))
+    |> Enum.max(fn -> 0 end)
   end
 
   def bar_width(value, max_value) when max_value > 0 do
@@ -299,39 +248,14 @@ defmodule TokengateWeb.BenchmarksLive do
 
   def bar_width(_, _), do: 0.0
 
-  def max_tps(targets) do
-    targets
-    |> Enum.filter(&Target.success?/1)
-    |> Enum.map(& &1.result.tps)
-    |> Enum.max(fn -> 0 end)
-  end
-
-  def max_ttft(targets) do
-    targets
-    |> Enum.filter(&Target.success?/1)
-    |> Enum.map(& &1.result.ttft_ms)
-    |> Enum.max(fn -> 0 end)
-  end
-
-  def max_latency(targets) do
-    targets
-    |> Enum.filter(&Target.success?/1)
-    |> Enum.map(& &1.result.total_ms)
-    |> Enum.max(fn -> 0 end)
-  end
-
-  def max_tokens_count(targets) do
-    targets
-    |> Enum.filter(&Target.success?/1)
-    |> Enum.map(& &1.result.tokens)
-    |> Enum.max(fn -> 0 end)
-  end
-
   def fmt_ms(ms) when is_number(ms), do: "#{round(ms)}ms"
   def fmt_ms(_), do: "—"
 
-  def fmt_tps(tps), do: "#{Float.round(tps, 1)} t/s"
-  def fmt_tokens(n), do: "#{n}"
+  def fmt_tps(tps) when is_number(tps), do: "#{Float.round(tps, 1)} t/s"
+  def fmt_tps(_), do: "—"
+
+  def fmt_tokens(n) when is_number(n), do: "#{n}"
+  def fmt_tokens(_), do: "—"
 
   def mask_key(key) when is_binary(key) and byte_size(key) > 8 do
     String.slice(key, 0, 4) <> "…" <> String.slice(key, -4, 4)
@@ -348,19 +272,5 @@ defmodule TokengateWeb.BenchmarksLive do
       {n, _} when n > max -> max
       _ -> default
     end
-  end
-
-  defp sort_by_metric(targets, metric, direction) do
-    valid = Enum.filter(targets, &Target.success?/1)
-    invalid = Enum.reject(targets, &Target.success?/1)
-
-    sorted =
-      case metric do
-        :tps -> Enum.sort_by(valid, & &1.result.tps, direction)
-        :ttft -> Enum.sort_by(valid, & &1.result.ttft_ms, direction)
-        :latency -> Enum.sort_by(valid, & &1.result.total_ms, direction)
-      end
-
-    sorted ++ invalid
   end
 end

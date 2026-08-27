@@ -3,11 +3,11 @@
     <%!-- Header ──────────────────────────────────────────────────────── --%>
     <div class="flex items-center justify-between flex-wrap gap-4">
       <.header>
-        Benchmarks
+        Providers Benchmarks
         <:subtitle>
           <span class="inline-flex items-center gap-2">
             <.icon name="hero-chart-bar" class="w-4 h-4 text-base-content/50" />
-            Compara proveedores · TTFT · TPS · Latencia
+            Selecciona un modelo y compara sus proveedores · TTFT · TPS · Latencia
           </span>
         </:subtitle>
       </.header>
@@ -35,7 +35,35 @@
     </div>
 
     <%!-- ──────────────────────────────────────────────────────────────── --%>
-    <%!-- CONFIG: PROMPT + SETTINGS                                      --%>
+    <%!-- MODEL SELECTOR                                                  --%>
+    <%!-- ──────────────────────────────────────────────────────────────── --%>
+    <div class="card bg-base-100 border border-base-300 shadow-sm">
+      <div class="card-body p-4 sm:p-6">
+        <.form for={%{}} phx-change="select_alias" id="alias-form">
+          <label class="text-xs font-semibold uppercase tracking-wide text-base-content/40 block mb-2">
+            Modelo a comparar
+          </label>
+          <select name="alias_id" class="select select-bordered select-sm w-full max-w-md">
+            <option value="">Selecciona un modelo…</option>
+            <%= for alias <- @model_aliases do %>
+              <option value={alias.id} selected={selected_alias?(alias, @selected_alias)}>
+                {alias.name}
+              </option>
+            <% end %>
+          </select>
+        </.form>
+
+        <%= if @selected_alias && @targets != [] do %>
+          <p class="text-xs text-base-content/50 mt-2">
+            {length(provider_names(@targets))} proveedores · {length(@targets)} credenciales en
+            carrera
+          </p>
+        <% end %>
+      </div>
+    </div>
+
+    <%!-- ──────────────────────────────────────────────────────────────── --%>
+    <%!-- CONFIG: PROMPT + SETTINGS                                       --%>
     <%!-- ──────────────────────────────────────────────────────────────── --%>
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
       <div class="card bg-base-100 border border-base-300 shadow-sm lg:col-span-2">
@@ -87,280 +115,270 @@
     </div>
 
     <%!-- ──────────────────────────────────────────────────────────────── --%>
-    <%!-- TARGETS: CASCADING SELECTS + LIST                              --%>
+    <%!-- TARGETS                                                         --%>
     <%!-- ──────────────────────────────────────────────────────────────── --%>
     <div class="card bg-base-100 border border-base-300 shadow-sm">
       <div class="card-body p-4 sm:p-6 space-y-4">
         <div class="flex items-center justify-between">
-          <h3 class="text-sm font-semibold text-base-content">Proveedores a comparar</h3>
+          <h3 class="text-sm font-semibold text-base-content">Proveedores en carrera</h3>
           <span class="badge badge-sm badge-ghost">{length(@targets)}</span>
         </div>
 
-        <%!-- Cascading selects: Provider → Credential → Model --%>
-        <div class="grid grid-cols-1 sm:grid-cols-4 gap-2">
-          <%!-- Step 1: Provider --%>
-          <.form
-            for={%{}}
-            phx-change="select_provider"
-            phx-submit="add_target"
-            id="provider-form"
-            class="contents"
-          >
-            <select name="target[provider_id]" class="select select-bordered select-sm">
-              <option value="">Proveedor…</option>
-              <%= for provider <- @providers do %>
-                <option value={provider.id} selected={@selected_provider_id == provider.id}>
-                  {provider.name}
-                </option>
-              <% end %>
-            </select>
-          </.form>
-
-          <%!-- Step 2: Credential (only for selected provider) --%>
-          <.form for={%{}} phx-change="select_credential" id="credential-form" class="contents">
-            <select
-              name="target[credential_id]"
-              class="select select-bordered select-sm"
-              disabled={is_nil(@selected_provider_id)}
-            >
-              <option value="">Credencial…</option>
-              <%= for cred <- @available_credentials do %>
-                <option value={cred.id} selected={@selected_credential_id == cred.id}>
-                  {cred.name || "sin nombre"}
-                </option>
-              <% end %>
-            </select>
-          </.form>
-
-          <%!-- Step 3: Model (fetched from provider's /models) --%>
-          <.form for={%{}} phx-change="select_model" id="model-form" class="contents">
-            <select
-              name="target[model]"
-              class="select select-bordered select-sm"
-              disabled={is_nil(@selected_credential_id)}
-            >
-              <%= if @loading_models do %>
-                <option value="">Cargando modelos…</option>
-              <% else %>
-                <option value="">Modelo…</option>
-                <%= for model <- @available_models do %>
-                  <option value={model} selected={@selected_model == model}>
-                    {model}
-                  </option>
-                <% end %>
-              <% end %>
-            </select>
-          </.form>
-
-          <%!-- Add button --%>
-          <button
-            phx-click="add_target"
-            phx-value-provider_id={@selected_provider_id}
-            phx-value-credential_id={@selected_credential_id}
-            phx-value-model={@selected_model}
-            disabled={
-              is_nil(@selected_provider_id) or is_nil(@selected_credential_id) or
-                is_nil(@selected_model)
-            }
-            class="btn btn-ghost btn-sm gap-2"
-          >
-            <.icon name="hero-plus" class="w-4 h-4" /> Agregar
-          </button>
-        </div>
-
-        <%!-- Target list --%>
-        <%= if @targets == [] do %>
-          <p class="text-sm text-base-content/40 py-4 text-center">
-            Sin proveedores. Selecciona uno arriba para empezar.
-          </p>
-        <% else %>
-          <div class="overflow-x-auto">
-            <table class="table table-sm">
-              <thead>
-                <tr class="text-[10px] uppercase tracking-wider text-base-content/40">
-                  <th>Proveedor</th>
-                  <th>Modelo</th>
-                  <th>API Key</th>
-                  <th>Estado</th>
-                  <th></th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr :for={target <- @targets}>
-                  <td class="text-xs font-medium text-base-content/80">
-                    {target.label}
-                  </td>
-                  <td class="text-xs font-mono text-base-content/70">
-                    {target.model}
-                  </td>
-                  <td class="text-xs font-mono text-base-content/50">
-                    {mask_key(target.api_key)}
-                  </td>
-                  <td>
-                    <%= cond do %>
-                      <% target.running? -> %>
-                        <span class="badge badge-sm badge-warning gap-1">
-                          <.icon name="hero-arrow-path" class="w-3 h-3 animate-spin" /> Corriendo
-                        </span>
-                      <% target.error -> %>
-                        <span class="badge badge-sm badge-error" title={target.error}>
-                          Error
-                        </span>
-                      <% target.result -> %>
-                        <span class="badge badge-sm badge-success">OK</span>
-                      <% true -> %>
-                        <span class="badge badge-sm badge-ghost">—</span>
-                    <% end %>
-                  </td>
-                  <td>
-                    <button
-                      phx-click="remove_target"
-                      phx-value-id={target.id}
-                      class="btn btn-ghost btn-xs text-error"
-                    >
-                      <.icon name="hero-x-mark" class="w-3 h-3" />
-                    </button>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+        <%= cond do %>
+          <% is_nil(@selected_alias) -> %>
+            <p class="text-sm text-base-content/40 py-4 text-center">
+              Selecciona un modelo arriba para cargar sus proveedores.
+            </p>
+          <% @targets == [] -> %>
+            <p class="text-sm text-base-content/40 py-4 text-center">
+              Este modelo no tiene proveedores activos.
+            </p>
+          <% true -> %>
+            <div class="overflow-x-auto">
+              <table class="table table-sm">
+                <thead>
+                  <tr class="text-[10px] uppercase tracking-wider text-base-content/40">
+                    <th>Proveedor</th>
+                    <th>Credencial</th>
+                    <th>Modelo</th>
+                    <th>API Key</th>
+                    <th>Prioridad</th>
+                    <th>Estado</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr :for={target <- @targets}>
+                    <td class="text-xs font-medium text-base-content/80">
+                      {target.provider_name}
+                    </td>
+                    <td class="text-xs text-base-content/70">
+                      {target.credential_name || "sin nombre"}
+                    </td>
+                    <td class="text-xs font-mono text-base-content/70">
+                      {target.model}
+                    </td>
+                    <td class="text-xs font-mono text-base-content/50">
+                      {mask_key(target.api_key)}
+                    </td>
+                    <td class="text-xs tabular-nums text-base-content/50">
+                      {target.priority || "—"}
+                    </td>
+                    <td>
+                      <%= cond do %>
+                        <% target.running? -> %>
+                          <span class="badge badge-sm badge-warning gap-1">
+                            <.icon name="hero-arrow-path" class="w-3 h-3 animate-spin" />
+                            Corriendo
+                          </span>
+                        <% target.error -> %>
+                          <span class="badge badge-sm badge-error" title={target.error}>
+                            Error
+                          </span>
+                        <% target.result -> %>
+                          <span class="badge badge-sm badge-success">OK</span>
+                        <% true -> %>
+                          <span class="badge badge-sm badge-ghost">—</span>
+                      <% end %>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
         <% end %>
       </div>
     </div>
 
     <%!-- ──────────────────────────────────────────────────────────────── --%>
-    <%!-- RESULTS                                                        --%>
+    <%!-- RESULTS                                                         --%>
     <%!-- ──────────────────────────────────────────────────────────────── --%>
     <%= if has_results?(@targets) do %>
-      <% winner = winner(@targets) %>
-      <% best_ttft_t = best_ttft(@targets) %>
-      <% best_lat_t = best_latency(@targets) %>
-      <% max_t = max_tps(@targets) %>
-      <% max_ttft_v = max_ttft(@targets) %>
-      <% max_lat_v = max_latency(@targets) %>
-      <% max_tok_v = max_tokens_count(@targets) %>
+      <% groups = group_results(@targets) %>
+      <% winner = winner_group(groups) %>
+      <% best_ttft_g = best_ttft_group(groups) %>
+      <% best_lat_g = best_latency_group(groups) %>
+      <% ok_groups = successful_groups(groups) %>
+      <% max_tps_v = max_metric(ok_groups, :avg_tps) %>
+      <% max_ttft_v = max_metric(ok_groups, :avg_ttft) %>
+      <% max_lat_v = max_metric(ok_groups, :avg_total) %>
 
       <%= if winner do %>
         <div class="alert alert-success border border-success/30 shadow-sm">
           <.icon name="hero-trophy" class="w-5 h-5" />
           <div>
-            <h3 class="text-sm font-bold">Ganador: {winner.model}</h3>
+            <h3 class="text-sm font-bold">Ganador: {winner.provider}</h3>
             <p class="text-xs opacity-80">
-              {fmt_tps(winner.result.tps)} · TTFT {fmt_ms(winner.result.ttft_ms)} · {fmt_tokens(
-                winner.result.tokens
-              )} tokens
+              {fmt_tps(winner.avg_tps)} · TTFT {fmt_ms(winner.avg_ttft)} · {winner.success_count}
+              {if winner.key_count == 1, do: "credencial", else: "credenciales"} promediadas
             </p>
           </div>
         </div>
       <% end %>
 
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <%!-- TPS card --%>
         <div class="card bg-base-100 border border-base-300 shadow-sm">
           <div class="card-body p-4 sm:p-6">
             <h3 class="text-sm font-semibold text-base-content mb-3 flex items-center gap-2">
               <.icon name="hero-bolt" class="w-4 h-4 text-primary" /> Tokens por segundo
             </h3>
-            <div class="space-y-2">
-              <div :for={t <- @results} :if={t.result} class="space-y-1">
-                <div class="flex items-center justify-between text-xs">
-                  <span class={["font-medium", t.id == winner.id && "text-success font-bold"]}>
-                    {t.label}
-                  </span>
-                  <span class="tabular-nums text-base-content/60">
-                    {fmt_tps(t.result.tps)}
-                  </span>
-                </div>
-                <div class="h-3 bg-base-200 rounded-full overflow-hidden">
-                  <div
-                    class="h-full rounded-full transition-all duration-500"
-                    style={"width: #{bar_width(t.result.tps, max_t)}%; background-color: #{if t.id == winner.id, do: "oklch(var(--s))", else: "oklch(var(--p))"}"}
-                  />
-                </div>
-              </div>
+            <div class="space-y-3">
+              <%= for g <- ok_groups do %>
+                <details>
+                  <summary class="cursor-pointer list-none [&::-webkit-details-marker]:hidden space-y-1">
+                    <div class="flex items-center justify-between text-xs">
+                      <span class={[
+                        "font-medium inline-flex items-center gap-2",
+                        g == winner && "text-success font-bold"
+                      ]}>
+                        <span :if={g == winner}>★</span>
+                        {g.provider}
+                        <span class="badge badge-ghost badge-xs">{g.key_count} keys</span>
+                      </span>
+                      <span class="tabular-nums text-base-content/60">
+                        {fmt_tps(g.avg_tps)}
+                      </span>
+                    </div>
+                    <div class="h-3 bg-base-200 rounded-full overflow-hidden">
+                      <div
+                        class="h-full rounded-full transition-all duration-500"
+                        style={"width: #{bar_width(g.avg_tps, max_tps_v)}%; background-color: #{if g == winner, do: "oklch(var(--s))", else: "oklch(var(--p))"}"}
+                      />
+                    </div>
+                  </summary>
+                  <div class="mt-2 space-y-1 pl-3 border-l-2 border-base-300">
+                    <%= for t <- g.rows do %>
+                      <div class="flex items-center justify-between text-[11px]">
+                        <span class="font-mono text-base-content/60 truncate">
+                          {t.credential_name || mask_key(t.api_key)}
+                        </span>
+                        <%= if t.result do %>
+                          <span class="tabular-nums text-base-content/60">
+                            {fmt_tps(t.result.tps)}
+                          </span>
+                        <% else %>
+                          <span class="text-error/70 truncate max-w-[50%]" title={t.error}>
+                            {t.error}
+                          </span>
+                        <% end %>
+                      </div>
+                    <% end %>
+                  </div>
+                </details>
+              <% end %>
             </div>
           </div>
         </div>
 
+        <%!-- TTFT card --%>
         <div class="card bg-base-100 border border-base-300 shadow-sm">
           <div class="card-body p-4 sm:p-6">
             <h3 class="text-sm font-semibold text-base-content mb-3 flex items-center gap-2">
               <.icon name="hero-clock" class="w-4 h-4 text-secondary" /> Time to First Token
             </h3>
-            <div class="space-y-2">
-              <div :for={t <- @results} :if={t.result} class="space-y-1">
-                <div class="flex items-center justify-between text-xs">
-                  <span class={["font-medium", t.id == best_ttft_t.id && "text-success font-bold"]}>
-                    {t.label}
-                  </span>
-                  <span class="tabular-nums text-base-content/60">
-                    {fmt_ms(t.result.ttft_ms)}
-                  </span>
-                </div>
-                <div class="h-3 bg-base-200 rounded-full overflow-hidden">
-                  <div
-                    class="h-full rounded-full transition-all duration-500"
-                    style={"width: #{bar_width(t.result.ttft_ms, max_ttft_v)}%; background-color: #{if t.id == best_ttft_t.id, do: "oklch(var(--s))", else: "oklch(var(--se))"}"}
-                  />
-                </div>
-              </div>
+            <div class="space-y-3">
+              <%= for g <- ok_groups do %>
+                <details>
+                  <summary class="cursor-pointer list-none [&::-webkit-details-marker]:hidden space-y-1">
+                    <div class="flex items-center justify-between text-xs">
+                      <span class={[
+                        "font-medium inline-flex items-center gap-2",
+                        g == best_ttft_g && "text-success font-bold"
+                      ]}>
+                        <span :if={g == best_ttft_g}>★</span>
+                        {g.provider}
+                        <span class="badge badge-ghost badge-xs">{g.key_count} keys</span>
+                      </span>
+                      <span class="tabular-nums text-base-content/60">
+                        {fmt_ms(g.avg_ttft)}
+                      </span>
+                    </div>
+                    <div class="h-3 bg-base-200 rounded-full overflow-hidden">
+                      <div
+                        class="h-full rounded-full transition-all duration-500"
+                        style={"width: #{bar_width(g.avg_ttft, max_ttft_v)}%; background-color: #{if g == best_ttft_g, do: "oklch(var(--s))", else: "oklch(var(--se))"}"}
+                      />
+                    </div>
+                  </summary>
+                  <div class="mt-2 space-y-1 pl-3 border-l-2 border-base-300">
+                    <%= for t <- g.rows do %>
+                      <div class="flex items-center justify-between text-[11px]">
+                        <span class="font-mono text-base-content/60 truncate">
+                          {t.credential_name || mask_key(t.api_key)}
+                        </span>
+                        <%= if t.result do %>
+                          <span class="tabular-nums text-base-content/60">
+                            {fmt_ms(t.result.ttft_ms)}
+                          </span>
+                        <% else %>
+                          <span class="text-error/70 truncate max-w-[50%]" title={t.error}>
+                            {t.error}
+                          </span>
+                        <% end %>
+                      </div>
+                    <% end %>
+                  </div>
+                </details>
+              <% end %>
             </div>
           </div>
         </div>
 
+        <%!-- Latency card --%>
         <div class="card bg-base-100 border border-base-300 shadow-sm">
           <div class="card-body p-4 sm:p-6">
             <h3 class="text-sm font-semibold text-base-content mb-3 flex items-center gap-2">
               <.icon name="hero-timer" class="w-4 h-4 text-accent" /> Latencia total
             </h3>
-            <div class="space-y-2">
-              <div :for={t <- @results} :if={t.result} class="space-y-1">
-                <div class="flex items-center justify-between text-xs">
-                  <span class={["font-medium", t.id == best_lat_t.id && "text-success font-bold"]}>
-                    {t.label}
-                  </span>
-                  <span class="tabular-nums text-base-content/60">
-                    {fmt_ms(t.result.total_ms)}
-                  </span>
-                </div>
-                <div class="h-3 bg-base-200 rounded-full overflow-hidden">
-                  <div
-                    class="h-full rounded-full transition-all duration-500"
-                    style={"width: #{bar_width(t.result.total_ms, max_lat_v)}%; background-color: #{if t.id == best_lat_t.id, do: "oklch(var(--s))", else: "oklch(var(--a))"}"}
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-4 sm:p-6">
-            <h3 class="text-sm font-semibold text-base-content mb-3 flex items-center gap-2">
-              <.icon name="hero-document-text" class="w-4 h-4 text-info" /> Tokens generados
-            </h3>
-            <div class="space-y-2">
-              <div :for={t <- @results} :if={t.result} class="space-y-1">
-                <div class="flex items-center justify-between text-xs">
-                  <span class="font-medium text-base-content/80">
-                    {t.label}
-                  </span>
-                  <span class="tabular-nums text-base-content/60">
-                    {fmt_tokens(t.result.tokens)}
-                  </span>
-                </div>
-                <div class="h-3 bg-base-200 rounded-full overflow-hidden">
-                  <div
-                    class="h-full rounded-full transition-all duration-500 bg-info"
-                    style={"width: #{bar_width(t.result.tokens, max_tok_v)}%"}
-                  />
-                </div>
-              </div>
+            <div class="space-y-3">
+              <%= for g <- ok_groups do %>
+                <details>
+                  <summary class="cursor-pointer list-none [&::-webkit-details-marker]:hidden space-y-1">
+                    <div class="flex items-center justify-between text-xs">
+                      <span class={[
+                        "font-medium inline-flex items-center gap-2",
+                        g == best_lat_g && "text-success font-bold"
+                      ]}>
+                        <span :if={g == best_lat_g}>★</span>
+                        {g.provider}
+                        <span class="badge badge-ghost badge-xs">{g.key_count} keys</span>
+                      </span>
+                      <span class="tabular-nums text-base-content/60">
+                        {fmt_ms(g.avg_total)}
+                      </span>
+                    </div>
+                    <div class="h-3 bg-base-200 rounded-full overflow-hidden">
+                      <div
+                        class="h-full rounded-full transition-all duration-500"
+                        style={"width: #{bar_width(g.avg_total, max_lat_v)}%; background-color: #{if g == best_lat_g, do: "oklch(var(--s))", else: "oklch(var(--a))"}"}
+                      />
+                    </div>
+                  </summary>
+                  <div class="mt-2 space-y-1 pl-3 border-l-2 border-base-300">
+                    <%= for t <- g.rows do %>
+                      <div class="flex items-center justify-between text-[11px]">
+                        <span class="font-mono text-base-content/60 truncate">
+                          {t.credential_name || mask_key(t.api_key)}
+                        </span>
+                        <%= if t.result do %>
+                          <span class="tabular-nums text-base-content/60">
+                            {fmt_ms(t.result.total_ms)}
+                          </span>
+                        <% else %>
+                          <span class="text-error/70 truncate max-w-[50%]" title={t.error}>
+                            {t.error}
+                          </span>
+                        <% end %>
+                      </div>
+                    <% end %>
+                  </div>
+                </details>
+              <% end %>
             </div>
           </div>
         </div>
       </div>
 
+      <%!-- Comparative table: provider averages with per-credential rows --%>
       <div class="card bg-base-100 border border-base-300 shadow-sm">
         <div class="card-body p-4 sm:p-6">
           <h3 class="text-sm font-semibold text-base-content mb-3">Tabla comparativa</h3>
@@ -369,34 +387,73 @@
               <thead>
                 <tr class="text-[10px] uppercase tracking-wider text-base-content/40">
                   <th>Proveedor</th>
+                  <th>Credencial</th>
                   <th>Modelo</th>
                   <th class="text-right">TTFT</th>
                   <th class="text-right">TPS</th>
                   <th class="text-right">Latencia</th>
                   <th class="text-right">Tokens</th>
-                  <th class="text-right">Runs</th>
                 </tr>
               </thead>
-              <tbody>
-                <tr :for={t <- @results}>
-                  <td class="text-xs font-medium">
-                    <span :if={t.id == winner.id} class="text-success">★ </span>
-                    {t.label}
-                  </td>
-                  <td class="text-xs font-mono text-base-content/60">{t.model}</td>
-                  <%= if t.result do %>
-                    <td class="text-right text-xs tabular-nums">{fmt_ms(t.result.ttft_ms)}</td>
-                    <td class="text-right text-xs tabular-nums">{fmt_tps(t.result.tps)}</td>
-                    <td class="text-right text-xs tabular-nums">{fmt_ms(t.result.total_ms)}</td>
-                    <td class="text-right text-xs tabular-nums">{fmt_tokens(t.result.tokens)}</td>
-                    <td class="text-right text-xs tabular-nums text-base-content/40">
-                      {t.result.runs}
+              <%= for g <- groups do %>
+                <tbody>
+                  <%!-- Provider average row --%>
+                  <tr class="bg-base-200/40">
+                    <td class="text-xs font-semibold">
+                      <span :if={g == winner} class="text-success">★ </span>
+                      {g.provider}
+                      <span class="badge badge-ghost badge-xs ml-1">{g.key_count} keys</span>
                     </td>
-                  <% else %>
-                    <td colspan="5" class="text-xs text-error/70">{t.error || "—"}</td>
-                  <% end %>
-                </tr>
-              </tbody>
+                    <td colspan="2" class="text-xs text-base-content/50 italic">
+                      {if g.success_count > 0, do: "promedio", else: "sin resultados"}
+                    </td>
+                    <%= if g.success_count > 0 do %>
+                      <td class="text-right text-xs tabular-nums font-semibold">
+                        {fmt_ms(g.avg_ttft)}
+                      </td>
+                      <td class="text-right text-xs tabular-nums font-semibold">
+                        {fmt_tps(g.avg_tps)}
+                      </td>
+                      <td class="text-right text-xs tabular-nums font-semibold">
+                        {fmt_ms(g.avg_total)}
+                      </td>
+                      <td class="text-right text-xs tabular-nums font-semibold">
+                        {fmt_tokens(g.avg_tokens)}
+                      </td>
+                    <% else %>
+                      <td colspan="4" class="text-right text-xs text-error/70">
+                        todas las credenciales fallaron
+                      </td>
+                    <% end %>
+                  </tr>
+                  <%!-- Per-credential rows --%>
+                  <tr :for={t <- g.rows} class="border-base-200">
+                    <td></td>
+                    <td class="text-xs font-mono text-base-content/60">
+                      {t.credential_name || mask_key(t.api_key)}
+                    </td>
+                    <td class="text-xs font-mono text-base-content/60">{t.model}</td>
+                    <%= if t.result do %>
+                      <td class="text-right text-xs tabular-nums text-base-content/70">
+                        {fmt_ms(t.result.ttft_ms)}
+                      </td>
+                      <td class="text-right text-xs tabular-nums text-base-content/70">
+                        {fmt_tps(t.result.tps)}
+                      </td>
+                      <td class="text-right text-xs tabular-nums text-base-content/70">
+                        {fmt_ms(t.result.total_ms)}
+                      </td>
+                      <td class="text-right text-xs tabular-nums text-base-content/70">
+                        {fmt_tokens(t.result.tokens)}
+                      </td>
+                    <% else %>
+                      <td colspan="4" class="text-right text-xs text-error/70">
+                        {t.error || "—"}
+                      </td>
+                    <% end %>
+                  </tr>
+                </tbody>
+              <% end %>
             </table>
           </div>
         </div>
