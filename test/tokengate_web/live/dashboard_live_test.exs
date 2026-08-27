@@ -243,10 +243,36 @@ defmodule TokengateWeb.DashboardLiveTest do
 
     # Default period is today — chart title reflects it
     assert html =~ "Costo por hora"
-    # Switch to 30d
-    view |> element("#period-30d") |> render_click()
-    html = render(view)
+
+    # Switch to 30d — the click replies instantly with a loading state
+    # (micro-spinner on the active button); the bundle lands async.
+    html = view |> element("#period-30d") |> render_click()
+    assert html =~ ~s(class="loading loading-spinner loading-xs")
+
+    html = render_async(view)
     assert html =~ "Costo por día (30d)"
+    refute html =~ ~s(class="loading loading-spinner loading-xs")
+  end
+
+  test "period switch keeps stale data visible while loading", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    Collector.reset()
+
+    team_with_log(%{cost: "0.005", user: admin})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    # Mid-flight switch: previous bundle stays on screen (dimmed), and the
+    # chart titles still describe the displayed ("today") period.
+    html = view |> element("#period-30d") |> render_click()
+    assert html =~ "opacity-60"
+    assert html =~ "Costo por hora"
+
+    # Once the async bundle lands, titles switch and the dim goes away.
+    html = render_async(view)
+    assert html =~ "Costo por día (30d)"
+    refute html =~ "opacity-60"
   end
 
   test "today period excludes logs from the previous local day", %{conn: conn} do

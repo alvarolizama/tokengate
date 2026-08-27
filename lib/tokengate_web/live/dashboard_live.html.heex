@@ -23,6 +23,10 @@
           ]}
           id={"period-#{period}"}
         >
+          <span
+            :if={@loading and period_active?(@period, period)}
+            class="loading loading-spinner loading-xs"
+          ></span>
           {period_label(period)}
         </button>
       </div>
@@ -206,389 +210,412 @@
     </section>
 
     <%= if @has_access do %>
-      <%!-- Metrics section --%>
-      <%= if @loading do %>
+      <%!-- Metrics section. The full-screen spinner shows only on the very
+           first load; period switches keep the previous bundle visible
+           (dimmed) until the new one lands, so the click feels instant. --%>
+      <%= if @loading and @displayed_period == nil do %>
         <div class="flex items-center justify-center py-20">
           <span class="loading loading-spinner loading-lg text-primary"></span>
           <span class="ml-3 text-base-content/60">Cargando métricas…</span>
         </div>
       <% else %>
-        <%= if @metrics.requests_total == 0 do %>
-          <div
-            id="empty-state"
-            class="flex flex-col items-center justify-center py-12 text-center"
-          >
-            <div class="w-20 h-20 rounded-full bg-base-300 flex items-center justify-center mb-4">
-              <.icon name="hero-chart-bar" class="w-10 h-10 text-base-content/40" />
-            </div>
-            <h3 class="text-lg font-semibold text-base-content">Aún no hay requests</h3>
-            <p class="mt-2 text-sm text-base-content/60 max-w-md">
-              Manda tu primer request al proxy para ver métricas aquí.
-            </p>
-          </div>
-        <% else %>
-          <!-- Metric cards: KPIs -->
-          <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <%!-- Costo (lo que el proveedor reportó por cada request) --%>
+        <% title_period = @displayed_period || @period %>
+        <div class={["space-y-6 transition-opacity duration-200", @loading && "opacity-60"]}>
+          <%= if @metrics.requests_total == 0 do %>
             <div
-              id="cost-card"
-              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+              id="empty-state"
+              class="flex flex-col items-center justify-center py-12 text-center"
             >
-              <div class="card-body p-5">
-                <div class="flex items-center justify-between">
-                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                    Costo
-                  </span>
-                  <span class={[
-                    "flex items-center justify-center w-9 h-9 rounded-lg",
-                    accent_bg("accent")
-                  ]}>
-                    <.icon name="hero-currency-dollar" class={["w-5 h-5", accent_text("accent")]} />
-                  </span>
-                </div>
-                <p class="mt-2 text-2xl font-bold text-base-content">
-                  ${format_decimal(@metrics.cost_usd)}
-                </p>
-                <p class="text-xs text-base-content/40 mt-1">
-                  Reportado por el proveedor
-                </p>
+              <div class="w-20 h-20 rounded-full bg-base-300 flex items-center justify-center mb-4">
+                <.icon name="hero-chart-bar" class="w-10 h-10 text-base-content/40" />
               </div>
+              <h3 class="text-lg font-semibold text-base-content">Aún no hay requests</h3>
+              <p class="mt-2 text-sm text-base-content/60 max-w-md">
+                Manda tu primer request al proxy para ver métricas aquí.
+              </p>
             </div>
-
-            <%!-- Requests --%>
-            <div
-              id="requests-card"
-              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-            >
-              <div class="card-body p-5">
-                <div class="flex items-center justify-between">
-                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                    Requests
-                  </span>
-                  <span class={[
-                    "flex items-center justify-center w-9 h-9 rounded-lg",
-                    accent_bg("primary")
-                  ]}>
-                    <.icon
-                      name="hero-arrow-trending-up"
-                      class={["w-5 h-5", accent_text("primary")]}
-                    />
-                  </span>
-                </div>
-                <p class="mt-2 text-2xl font-bold text-base-content">
-                  {format_number(@metrics.requests_total)}
-                </p>
-              </div>
-            </div>
-
-            <%!-- Tokens (prompt + completion) --%>
-            <div
-              id="tokens-card"
-              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-            >
-              <div class="card-body p-5">
-                <div class="flex items-center justify-between">
-                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                    Tokens
-                  </span>
-                  <span class={[
-                    "flex items-center justify-center w-9 h-9 rounded-lg",
-                    accent_bg("primary")
-                  ]}>
-                    <.icon name="hero-cpu-chip" class={["w-5 h-5", accent_text("primary")]} />
-                  </span>
-                </div>
-                <div class="mt-2 flex items-baseline gap-3">
-                  <div>
-                    <p
-                      class="text-lg font-bold text-base-content"
-                      title={format_number(@metrics.prompt_tokens)}
-                    >
-                      {format_compact(@metrics.prompt_tokens)}
-                    </p>
-                    <p class="text-xs text-base-content/50">in</p>
+          <% else %>
+            <!-- Metric cards: KPIs -->
+            <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+              <%!-- Costo (lo que el proveedor reportó por cada request) --%>
+              <div
+                id="cost-card"
+                class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+              >
+                <div class="card-body p-5">
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                      Costo
+                    </span>
+                    <span class={[
+                      "flex items-center justify-center w-9 h-9 rounded-lg",
+                      accent_bg("accent")
+                    ]}>
+                      <.icon
+                        name="hero-currency-dollar"
+                        class={["w-5 h-5", accent_text("accent")]}
+                      />
+                    </span>
                   </div>
-                  <span class="text-base-content/30">/</span>
-                  <div>
-                    <p
-                      class="text-lg font-bold text-base-content"
-                      title={format_number(@metrics.completion_tokens)}
-                    >
-                      {format_compact(@metrics.completion_tokens)}
-                    </p>
-                    <p class="text-xs text-base-content/50">out</p>
+                  <p class="mt-2 text-2xl font-bold text-base-content">
+                    ${format_decimal(@metrics.cost_usd)}
+                  </p>
+                  <p class="text-xs text-base-content/40 mt-1">
+                    Reportado por el proveedor
+                  </p>
+                </div>
+              </div>
+
+              <%!-- Requests --%>
+              <div
+                id="requests-card"
+                class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+              >
+                <div class="card-body p-5">
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                      Requests
+                    </span>
+                    <span class={[
+                      "flex items-center justify-center w-9 h-9 rounded-lg",
+                      accent_bg("primary")
+                    ]}>
+                      <.icon
+                        name="hero-arrow-trending-up"
+                        class={["w-5 h-5", accent_text("primary")]}
+                      />
+                    </span>
                   </div>
-                  <span class="text-base-content/30">/</span>
-                  <div>
-                    <p
-                      class="text-lg font-bold text-base-content"
-                      title={
-                        format_number(
-                          (@metrics.cache_read_tokens || 0) +
-                            (@metrics.cache_creation_tokens || 0)
-                        )
-                      }
-                    >
-                      {format_cache_value(
-                        @metrics.cache_read_tokens,
-                        @metrics.cache_creation_tokens
-                      )}
-                    </p>
-                    <p class="text-xs text-base-content/50">
-                      cache · {format_hit_rate(
-                        cache_hit_rate(@metrics.cache_read_tokens, @metrics.prompt_tokens)
-                      )} hit
-                    </p>
+                  <p class="mt-2 text-2xl font-bold text-base-content">
+                    {format_number(@metrics.requests_total)}
+                  </p>
+                </div>
+              </div>
+
+              <%!-- Tokens (prompt + completion) --%>
+              <div
+                id="tokens-card"
+                class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+              >
+                <div class="card-body p-5">
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                      Tokens
+                    </span>
+                    <span class={[
+                      "flex items-center justify-center w-9 h-9 rounded-lg",
+                      accent_bg("primary")
+                    ]}>
+                      <.icon name="hero-cpu-chip" class={["w-5 h-5", accent_text("primary")]} />
+                    </span>
                   </div>
+                  <div class="mt-2 flex items-baseline gap-3">
+                    <div>
+                      <p
+                        class="text-lg font-bold text-base-content"
+                        title={format_number(@metrics.prompt_tokens)}
+                      >
+                        {format_compact(@metrics.prompt_tokens)}
+                      </p>
+                      <p class="text-xs text-base-content/50">in</p>
+                    </div>
+                    <span class="text-base-content/30">/</span>
+                    <div>
+                      <p
+                        class="text-lg font-bold text-base-content"
+                        title={format_number(@metrics.completion_tokens)}
+                      >
+                        {format_compact(@metrics.completion_tokens)}
+                      </p>
+                      <p class="text-xs text-base-content/50">out</p>
+                    </div>
+                    <span class="text-base-content/30">/</span>
+                    <div>
+                      <p
+                        class="text-lg font-bold text-base-content"
+                        title={
+                          format_number(
+                            (@metrics.cache_read_tokens || 0) +
+                              (@metrics.cache_creation_tokens || 0)
+                          )
+                        }
+                      >
+                        {format_cache_value(
+                          @metrics.cache_read_tokens,
+                          @metrics.cache_creation_tokens
+                        )}
+                      </p>
+                      <p class="text-xs text-base-content/50">
+                        cache · {format_hit_rate(
+                          cache_hit_rate(@metrics.cache_read_tokens, @metrics.prompt_tokens)
+                        )} hit
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <%!-- TPS promedio --%>
+              <div
+                id="tps-card"
+                class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
+              >
+                <div class="card-body p-5">
+                  <div class="flex items-center justify-between">
+                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                      TPS promedio
+                    </span>
+                    <span class={[
+                      "flex items-center justify-center w-9 h-9 rounded-lg",
+                      accent_bg("accent")
+                    ]}>
+                      <.icon name="hero-bolt" class={["w-5 h-5", accent_text("accent")]} />
+                    </span>
+                  </div>
+                  <p class="mt-2 text-2xl font-bold text-base-content">
+                    {format_tps(@metrics.avg_tps)}
+                  </p>
+                  <p class="text-xs text-base-content/40 mt-1">
+                    {format_latency(@metrics.avg_latency_ms)}
+                    <span
+                      :if={@metrics[:avg_ttft_ms]}
+                      title="Time to first token promedio (streaming)"
+                    >
+                      · TTFT {format_latency(@metrics.avg_ttft_ms)}
+                    </span>
+                  </p>
                 </div>
               </div>
             </div>
 
-            <%!-- TPS promedio --%>
-            <div
-              id="tps-card"
-              class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-            >
-              <div class="card-body p-5">
-                <div class="flex items-center justify-between">
-                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                    TPS promedio
-                  </span>
-                  <span class={[
-                    "flex items-center justify-center w-9 h-9 rounded-lg",
-                    accent_bg("accent")
-                  ]}>
-                    <.icon name="hero-bolt" class={["w-5 h-5", accent_text("accent")]} />
-                  </span>
-                </div>
-                <p class="mt-2 text-2xl font-bold text-base-content">
-                  {format_tps(@metrics.avg_tps)}
-                </p>
-                <p class="text-xs text-base-content/40 mt-1">
-                  {format_latency(@metrics.avg_latency_ms)}
-                  <span
-                    :if={@metrics[:avg_ttft_ms]}
-                    title="Time to first token promedio (streaming)"
-                  >
-                    · TTFT {format_latency(@metrics.avg_ttft_ms)}
-                  </span>
-                </p>
-              </div>
-            </div>
-          </div>
-
-          <!-- Breakdown tabs -->
-          <div class="card bg-base-100 border border-base-300 shadow-sm">
-            <div class="card-body">
-              <div class="flex items-center justify-between flex-wrap gap-2">
-                <h2 class="card-title text-base">
-                  <.icon name="hero-chart-bar-square" class="w-5 h-5 text-base-content/60" />
-                  Desglose
-                </h2>
-                <div class="join" id="breakdown-tabs" role="tablist">
-                  <button
-                    phx-click="set_breakdown"
-                    phx-value-tab="model"
-                    class={[
-                      "join-item btn btn-sm",
-                      if(breakdown_tab_active?(@active_breakdown, "model"),
-                        do: "btn-primary",
-                        else: "btn-ghost"
-                      )
-                    ]}
-                    id="tab-model"
-                  >
-                    Por modelo
-                  </button>
-                  <button
-                    phx-click="set_breakdown"
-                    phx-value-tab="member"
-                    class={[
-                      "join-item btn btn-sm",
-                      if(breakdown_tab_active?(@active_breakdown, "member"),
-                        do: "btn-primary",
-                        else: "btn-ghost"
-                      )
-                    ]}
-                    id="tab-member"
-                  >
-                    Por API key
-                  </button>
-                  <%= if has_breakdown_data?(@breakdown_team) do %>
+            <!-- Breakdown tabs -->
+            <div class="card bg-base-100 border border-base-300 shadow-sm">
+              <div class="card-body">
+                <div class="flex items-center justify-between flex-wrap gap-2">
+                  <h2 class="card-title text-base">
+                    <.icon name="hero-chart-bar-square" class="w-5 h-5 text-base-content/60" />
+                    Desglose
+                  </h2>
+                  <div class="join" id="breakdown-tabs" role="tablist">
                     <button
                       phx-click="set_breakdown"
-                      phx-value-tab="team"
+                      phx-value-tab="model"
                       class={[
                         "join-item btn btn-sm",
-                        if(breakdown_tab_active?(@active_breakdown, "team"),
+                        if(breakdown_tab_active?(@active_breakdown, "model"),
                           do: "btn-primary",
                           else: "btn-ghost"
                         )
                       ]}
-                      id="tab-team"
+                      id="tab-model"
                     >
-                      Por equipo
+                      Por modelo
                     </button>
-                  <% end %>
+                    <button
+                      phx-click="set_breakdown"
+                      phx-value-tab="member"
+                      class={[
+                        "join-item btn btn-sm",
+                        if(breakdown_tab_active?(@active_breakdown, "member"),
+                          do: "btn-primary",
+                          else: "btn-ghost"
+                        )
+                      ]}
+                      id="tab-member"
+                    >
+                      Por API key
+                    </button>
+                    <%= if has_breakdown_data?(@breakdown_team) do %>
+                      <button
+                        phx-click="set_breakdown"
+                        phx-value-tab="team"
+                        class={[
+                          "join-item btn btn-sm",
+                          if(breakdown_tab_active?(@active_breakdown, "team"),
+                            do: "btn-primary",
+                            else: "btn-ghost"
+                          )
+                        ]}
+                        id="tab-team"
+                      >
+                        Por equipo
+                      </button>
+                    <% end %>
+                  </div>
                 </div>
+
+                <%!-- Model breakdown --%>
+                <%= if @active_breakdown == "model" do %>
+                  <%= if has_breakdown_data?(@breakdown_model) do %>
+                    <div class="overflow-x-auto mt-3">
+                      <table class="table table-sm table-zebra">
+                        <thead>
+                          <tr>
+                            <th>Modelo</th>
+                            <th class="text-right">Requests</th>
+                            <th class="text-right">Costo</th>
+                            <th class="text-right">Tokens in</th>
+                            <th class="text-right">Tokens out</th>
+                            <th class="text-right">TPS</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr
+                            :for={row <- @breakdown_model}
+                            id={"bd-model-#{row.model_id || "unknown"}"}
+                          >
+                            <td class="font-medium">{row.model_name}</td>
+                            <td class="text-right font-mono">
+                              {format_number(row.request_count)}
+                            </td>
+                            <td class="text-right font-mono">
+                              ${format_decimal(row.cost_usd)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {format_number(row.prompt_tokens)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {format_number(row.completion_tokens)}
+                            </td>
+                            <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  <% else %>
+                    <p class="text-sm text-base-content/40 py-6 text-center">
+                      Sin datos para este periodo.
+                    </p>
+                  <% end %>
+                <% end %>
+
+                <%!-- Member (API key) breakdown --%>
+                <%= if @active_breakdown == "member" do %>
+                  <%= if has_breakdown_data?(@breakdown_member) do %>
+                    <div class="overflow-x-auto mt-3">
+                      <table class="table table-sm table-zebra">
+                        <thead>
+                          <tr>
+                            <th>Equipo</th>
+                            <th>Usuario</th>
+                            <th class="text-right">Requests</th>
+                            <th class="text-right">Costo</th>
+                            <th class="text-right">Tokens in</th>
+                            <th class="text-right">Tokens out</th>
+                            <th class="text-right">TPS</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr
+                            :for={row <- @breakdown_member}
+                            id={"bd-member-#{row.team_member_id}"}
+                          >
+                            <td>{row.team_name}</td>
+                            <td class="font-mono text-sm">{row.user_email}</td>
+                            <td class="text-right font-mono">
+                              {format_number(row.request_count)}
+                            </td>
+                            <td class="text-right font-mono">
+                              ${format_decimal(row.cost_usd)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {format_number(row.prompt_tokens)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {format_number(row.completion_tokens)}
+                            </td>
+                            <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  <% else %>
+                    <p class="text-sm text-base-content/40 py-6 text-center">
+                      Sin datos para este periodo.
+                    </p>
+                  <% end %>
+                <% end %>
+
+                <%!-- Team breakdown --%>
+                <%= if @active_breakdown == "team" do %>
+                  <%= if has_breakdown_data?(@breakdown_team) do %>
+                    <div class="overflow-x-auto mt-3">
+                      <table class="table table-sm table-zebra">
+                        <thead>
+                          <tr>
+                            <th>Equipo</th>
+                            <th class="text-right">Requests</th>
+                            <th class="text-right">Costo</th>
+                            <th class="text-right">Tokens in</th>
+                            <th class="text-right">Tokens out</th>
+                            <th class="text-right">TPS</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr :for={row <- @breakdown_team} id={"bd-team-#{row.team_id}"}>
+                            <td class="font-medium">{row.team_name}</td>
+                            <td class="text-right font-mono">
+                              {format_number(row.request_count)}
+                            </td>
+                            <td class="text-right font-mono">
+                              ${format_decimal(row.cost_usd)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {format_number(row.prompt_tokens)}
+                            </td>
+                            <td class="text-right font-mono">
+                              {format_number(row.completion_tokens)}
+                            </td>
+                            <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  <% else %>
+                    <p class="text-sm text-base-content/40 py-6 text-center">
+                      Sin datos para este periodo.
+                    </p>
+                  <% end %>
+                <% end %>
               </div>
-
-              <%!-- Model breakdown --%>
-              <%= if @active_breakdown == "model" do %>
-                <%= if has_breakdown_data?(@breakdown_model) do %>
-                  <div class="overflow-x-auto mt-3">
-                    <table class="table table-sm table-zebra">
-                      <thead>
-                        <tr>
-                          <th>Modelo</th>
-                          <th class="text-right">Requests</th>
-                          <th class="text-right">Costo</th>
-                          <th class="text-right">Tokens in</th>
-                          <th class="text-right">Tokens out</th>
-                          <th class="text-right">TPS</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr
-                          :for={row <- @breakdown_model}
-                          id={"bd-model-#{row.model_id || "unknown"}"}
-                        >
-                          <td class="font-medium">{row.model_name}</td>
-                          <td class="text-right font-mono">{format_number(row.request_count)}</td>
-                          <td class="text-right font-mono">
-                            ${format_decimal(row.cost_usd)}
-                          </td>
-                          <td class="text-right font-mono">{format_number(row.prompt_tokens)}</td>
-                          <td class="text-right font-mono">
-                            {format_number(row.completion_tokens)}
-                          </td>
-                          <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                <% else %>
-                  <p class="text-sm text-base-content/40 py-6 text-center">
-                    Sin datos para este periodo.
-                  </p>
-                <% end %>
-              <% end %>
-
-              <%!-- Member (API key) breakdown --%>
-              <%= if @active_breakdown == "member" do %>
-                <%= if has_breakdown_data?(@breakdown_member) do %>
-                  <div class="overflow-x-auto mt-3">
-                    <table class="table table-sm table-zebra">
-                      <thead>
-                        <tr>
-                          <th>Equipo</th>
-                          <th>Usuario</th>
-                          <th class="text-right">Requests</th>
-                          <th class="text-right">Costo</th>
-                          <th class="text-right">Tokens in</th>
-                          <th class="text-right">Tokens out</th>
-                          <th class="text-right">TPS</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr :for={row <- @breakdown_member} id={"bd-member-#{row.team_member_id}"}>
-                          <td>{row.team_name}</td>
-                          <td class="font-mono text-sm">{row.user_email}</td>
-                          <td class="text-right font-mono">{format_number(row.request_count)}</td>
-                          <td class="text-right font-mono">
-                            ${format_decimal(row.cost_usd)}
-                          </td>
-                          <td class="text-right font-mono">{format_number(row.prompt_tokens)}</td>
-                          <td class="text-right font-mono">
-                            {format_number(row.completion_tokens)}
-                          </td>
-                          <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                <% else %>
-                  <p class="text-sm text-base-content/40 py-6 text-center">
-                    Sin datos para este periodo.
-                  </p>
-                <% end %>
-              <% end %>
-
-              <%!-- Team breakdown --%>
-              <%= if @active_breakdown == "team" do %>
-                <%= if has_breakdown_data?(@breakdown_team) do %>
-                  <div class="overflow-x-auto mt-3">
-                    <table class="table table-sm table-zebra">
-                      <thead>
-                        <tr>
-                          <th>Equipo</th>
-                          <th class="text-right">Requests</th>
-                          <th class="text-right">Costo</th>
-                          <th class="text-right">Tokens in</th>
-                          <th class="text-right">Tokens out</th>
-                          <th class="text-right">TPS</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        <tr :for={row <- @breakdown_team} id={"bd-team-#{row.team_id}"}>
-                          <td class="font-medium">{row.team_name}</td>
-                          <td class="text-right font-mono">{format_number(row.request_count)}</td>
-                          <td class="text-right font-mono">
-                            ${format_decimal(row.cost_usd)}
-                          </td>
-                          <td class="text-right font-mono">{format_number(row.prompt_tokens)}</td>
-                          <td class="text-right font-mono">
-                            {format_number(row.completion_tokens)}
-                          </td>
-                          <td class="text-right font-mono">{format_tps(row.avg_tps)}</td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
-                <% else %>
-                  <p class="text-sm text-base-content/40 py-6 text-center">
-                    Sin datos para este periodo.
-                  </p>
-                <% end %>
-              <% end %>
             </div>
-          </div>
 
-          <%!-- Charts: cost / requests / tokens per hour --%>
-          <div class="grid grid-cols-4 gap-4" id="charts-grid">
-            <.bar_chart
-              id="cost-chart"
-              title={chart_title(@period)}
-              icon="hero-currency-dollar"
-              series={@cost_series}
-              bar_class="fill-accent/70 hover:fill-accent"
-              empty_label={"Sin datos para #{String.downcase(period_label(@period))}."}
-            />
-            <.bar_chart
-              id="requests-chart"
-              title={requests_title(@period)}
-              icon="hero-arrow-trending-up"
-              series={@requests_series}
-              bar_class="fill-primary/70 hover:fill-primary"
-              empty_label={"Sin datos para #{String.downcase(period_label(@period))}."}
-            />
-            <.stacked_bar_chart
-              id="tokens-chart"
-              title={tokens_title(@period)}
-              icon="hero-cpu-chip"
-              series={@tokens_series}
-              empty_label={"Sin datos para #{String.downcase(period_label(@period))}."}
-            />
-            <.bar_chart
-              id="tps-chart"
-              title={tps_title(@period)}
-              icon="hero-bolt"
-              series={@tps_series}
-              bar_class="fill-success/70 hover:fill-success"
-              empty_label={"Sin datos para #{String.downcase(period_label(@period))}."}
-            />
-          </div>
-        <% end %>
+            <%!-- Charts: cost / requests / tokens per hour --%>
+            <div class="grid grid-cols-4 gap-4" id="charts-grid">
+              <.bar_chart
+                id="cost-chart"
+                title={chart_title(title_period)}
+                icon="hero-currency-dollar"
+                series={@cost_series}
+                bar_class="fill-accent/70 hover:fill-accent"
+                empty_label={"Sin datos para #{String.downcase(period_label(title_period))}."}
+              />
+              <.bar_chart
+                id="requests-chart"
+                title={requests_title(title_period)}
+                icon="hero-arrow-trending-up"
+                series={@requests_series}
+                bar_class="fill-primary/70 hover:fill-primary"
+                empty_label={"Sin datos para #{String.downcase(period_label(title_period))}."}
+              />
+              <.stacked_bar_chart
+                id="tokens-chart"
+                title={tokens_title(title_period)}
+                icon="hero-cpu-chip"
+                series={@tokens_series}
+                empty_label={"Sin datos para #{String.downcase(period_label(title_period))}."}
+              />
+              <.bar_chart
+                id="tps-chart"
+                title={tps_title(title_period)}
+                icon="hero-bolt"
+                series={@tps_series}
+                bar_class="fill-success/70 hover:fill-success"
+                empty_label={"Sin datos para #{String.downcase(period_label(title_period))}."}
+              />
+            </div>
+          <% end %>
+        </div>
       <% end %>
     <% end %>
   </div>

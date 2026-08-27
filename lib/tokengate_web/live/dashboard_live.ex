@@ -47,6 +47,7 @@ defmodule TokengateWeb.DashboardLive do
       |> assign(:page_title, "Dashboard · Tokengate")
       |> assign(:is_admin, user.global_role == "admin")
       |> assign(:loading, true)
+      |> assign(:displayed_period, nil)
       |> assign(:reload_scheduled, false)
       |> assign(:period, "today")
       |> assign(:metrics, empty_metrics())
@@ -72,7 +73,10 @@ defmodule TokengateWeb.DashboardLive do
       Phoenix.PubSub.subscribe(@pubsub, @metrics_topic)
     end
 
-    socket = load_metrics(socket, user)
+    # Mount is synchronous: the static render and the test client both
+    # expect data to be present right after `live/2`. The async path is
+    # reserved for period switches and background reloads (below).
+    socket = load_metrics_sync(socket, user)
 
     {:ok, socket}
   end
@@ -81,11 +85,30 @@ defmodule TokengateWeb.DashboardLive do
   def handle_params(unsigned_params, _uri, socket) do
     case Map.get(unsigned_params, "period") do
       period when period in ~w(today 7d 30d 90d) ->
-        {:noreply, socket |> assign(:period, period) |> load_metrics(socket.assigns.current_user)}
+        {:noreply,
+         socket |> assign(:period, period) |> load_metrics_async(socket.assigns.current_user)}
 
       _ ->
         {:noreply, socket}
     end
+  end
+
+  @impl true
+  def handle_async(:metrics_bundle, {:ok, {period, bundle}}, socket) do
+    # Stale-result guard: the user may have switched periods again while this
+    # task was in flight. The newest request owns the socket; late arrivals
+    # are dropped so an older period never overwrites a newer one.
+    if socket.assigns[:period] == period do
+      {:noreply, apply_metrics_bundle(socket, bundle)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_async(:metrics_bundle, {:exit, reason}, socket) do
+    require Logger
+    Logger.warning("dashboard metrics async load failed: #{inspect(reason)}")
+    {:noreply, assign(socket, :loading, false)}
   end
 
   @impl true
@@ -107,7 +130,7 @@ defmodule TokengateWeb.DashboardLive do
     {:noreply,
      socket
      |> assign(:reload_scheduled, false)
-     |> load_metrics(user)}
+     |> load_metrics_async(user)}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -195,7 +218,7 @@ defmodule TokengateWeb.DashboardLive do
   def handle_event("set_period", %{"period" => period}, socket)
       when period in ~w(today 7d 30d 90d) do
     user = socket.assigns[:current_user]
-    {:noreply, socket |> assign(:period, period) |> load_metrics(user)}
+    {:noreply, socket |> assign(:period, period) |> load_metrics_async(user)}
   end
 
   def handle_event("set_breakdown", %{"tab" => tab}, socket)
@@ -233,29 +256,65 @@ defmodule TokengateWeb.DashboardLive do
     |> assign(:has_access, has_access)
   end
 
-  defp load_metrics(socket, user) do
+  # Synchronous load used at mount (static render + tests need the data
+  # right after `live/2`). Cache hit applies directly; miss computes inline.
+  defp load_metrics_sync(socket, user) do
     period = socket.assigns[:period] || "today"
     timezone = socket.assigns[:timezone] || "Etc/UTC"
     cache_key = DashboardCache.build_key(user.id, period, timezone)
+    member_ids = socket.assigns[:scope_member_ids] || []
 
-    cached =
+    bundle =
       DashboardCache.fetch_or_compute(cache_key, fn ->
-        compute_metrics_bundle(user, period, timezone, socket.assigns)
+        compute_metrics_bundle(member_ids, period, timezone)
       end)
 
-    apply_metrics_bundle(socket, cached)
+    apply_metrics_bundle(socket, bundle)
+  end
+
+  # Event-path load (period switches + background reloads).
+  #
+  # Fast path: a DashboardCache hit applies the bundle synchronously — zero
+  # Postgres queries, so the click reply carries the fresh render.
+  #
+  # Slow path: a cache miss (every first visit to a period within the 5s
+  # TTL) dispatches the Postgres work to `start_async/3` so the click
+  # replies instantly while `loading: true`; the bundle lands via
+  # `handle_async/3`. The task closure captures only plain values (user id,
+  # period, timezone, member ids) — never the socket.
+  defp load_metrics_async(socket, user) do
+    period = socket.assigns[:period] || "today"
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
+    cache_key = DashboardCache.build_key(user.id, period, timezone)
+    member_ids = socket.assigns[:scope_member_ids] || []
+
+    case DashboardCache.fetch(cache_key) do
+      {:ok, bundle} ->
+        apply_metrics_bundle(socket, bundle)
+
+      :miss ->
+        socket
+        |> assign(:loading, true)
+        |> start_async(:metrics_bundle, fn ->
+          bundle =
+            DashboardCache.fetch_or_compute(cache_key, fn ->
+              compute_metrics_bundle(member_ids, period, timezone)
+            end)
+
+          {period, bundle}
+        end)
+    end
   end
 
   # Computes the full metrics bundle from Postgres. This is the expensive
-  # path — called only on cache miss.
-  defp compute_metrics_bundle(user, period, timezone, assigns) do
+  # path — called only on cache miss, inside the async task. Runs on plain
+  # values (no socket) so it is safe to execute in another process.
+  defp compute_metrics_bundle(member_ids, period, timezone) do
     %{from: from, to: to} = Periods.period_bounds(period, timezone)
     opts = [from: from, to: to]
 
-    member_ids = assigns[:scope_member_ids] || []
-
     # Summary
-    summary = fetch_summary(user, opts)
+    summary = fetch_summary(member_ids, opts)
 
     metrics = %{
       requests_total: summary.request_count,
@@ -320,7 +379,11 @@ defmodule TokengateWeb.DashboardLive do
   end
 
   # Applies the cached (or freshly computed) metrics bundle to the socket.
-  # This is the cheap path — no Postgres queries, just assigns.
+  # This is the cheap path — no Postgres queries, just assigns. Also records
+  # which period is now on screen: the template shows the full-screen
+  # spinner only on the very first load (`displayed_period == nil`); later
+  # period switches and background reloads keep the old data visible while
+  # the new bundle arrives.
   defp apply_metrics_bundle(socket, bundle) do
     socket
     |> assign(:metrics, bundle.metrics)
@@ -334,13 +397,14 @@ defmodule TokengateWeb.DashboardLive do
     |> assign(:top_members, bundle.top_members)
     |> assign(:breakdown_team, [])
     |> assign(:top_teams, [])
+    |> assign(:displayed_period, socket.assigns[:period])
     |> assign(:loading, false)
   end
 
   # User-wide: every user (admin included) sees only their own consumption.
-  defp fetch_summary(user, opts) do
-    member_ids = Enum.map(Accounts.list_team_members_for_user(user.id), & &1.id)
-
+  # `member_ids` arrive pre-resolved from the socket assigns (computed once
+  # at mount), so no extra membership query is needed inside the bundle.
+  defp fetch_summary(member_ids, opts) do
     Logs.cost_summary_for_members(member_ids, Map.new(opts))
     |> Map.merge(%{avg_latency_ms: nil, avg_ttft_ms: nil, avg_tps: nil})
   end
