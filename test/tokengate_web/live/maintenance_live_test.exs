@@ -54,37 +54,20 @@ defmodule TokengateWeb.SettingsLiveTest do
   end
 
   describe "admin access" do
-    test "global daily cap section renders with current state", %{conn: conn} do
+    test "danger zone renders", %{conn: conn} do
       %{user: admin, password: pass} = register("admin")
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/dashboard/settings")
+      {:ok, _view, html} = live(conn, ~p"/dashboard/maintenance")
 
-      assert has_element?(view, "#global-cap-form")
-      assert has_element?(view, "#save-global-cap-btn")
-      assert render(view) =~ "Límite de gasto diario global"
-      assert render(view) =~ "Gastado hoy"
-    end
-
-    test "saving global daily cap updates the setting", %{conn: conn} do
-      %{user: admin, password: pass} = register("admin")
-
-      conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/dashboard/settings")
-
-      view
-      |> form("#global-cap-form", global_settings: %{daily_max_spend_usd: "50.00"})
-      |> render_submit()
-
-      assert render(view) =~ "Límite diario global actualizado"
-      assert render(view) =~ "$50.00"
+      assert html =~ "Zona de peligro"
     end
 
     test "reset sticky sessions clears all sticky entries", %{conn: conn} do
       %{user: admin, password: pass} = register("admin")
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/dashboard/settings")
+      {:ok, view, _html} = live(conn, ~p"/dashboard/maintenance")
 
       # Click reset sticky → confirmation modal appears
       view |> element("#reset-sticky-btn") |> render_click()
@@ -102,7 +85,7 @@ defmodule TokengateWeb.SettingsLiveTest do
       assert Logs.list_logs(%{limit: 1000}) |> length() > 0
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/dashboard/settings")
+      {:ok, view, _html} = live(conn, ~p"/dashboard/maintenance")
 
       # Click reset → confirmation modal appears
       view |> element("#reset-logs-btn") |> render_click()
@@ -121,7 +104,7 @@ defmodule TokengateWeb.SettingsLiveTest do
       %{user: user, password: pass} = register("user")
 
       conn = login(conn, user, pass)
-      {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/settings")
+      {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/maintenance")
     end
   end
 end

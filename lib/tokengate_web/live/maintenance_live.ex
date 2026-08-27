@@ -1,6 +1,6 @@
-defmodule TokengateWeb.SettingsLive do
+defmodule TokengateWeb.MaintenanceLive do
   @moduledoc """
-  Admin settings page — read-only config overview plus Danger Zone actions.
+  Admin maintenance page — read-only config overview plus Danger Zone actions.
 
   Currently supports:
     * Reset all request logs (truncate `request_logs` table)
@@ -14,9 +14,7 @@ defmodule TokengateWeb.SettingsLive do
   alias Tokengate.Logs
   alias Tokengate.Logs.CostBackfill
   alias Tokengate.Repo
-  alias Tokengate.GlobalSettings
   alias Tokengate.Routing.StickyTracker
-  alias Tokengate.Budgets.Manager, as: Budgets
 
   @impl true
   def mount(_params, _session, socket) do
@@ -24,7 +22,7 @@ defmodule TokengateWeb.SettingsLive do
 
     socket =
       socket
-      |> assign(:page_title, "Configuración · Tokengate")
+      |> assign(:page_title, "Mantenimiento · Tokengate")
       |> assign(:is_admin, user && user.global_role == "admin")
       |> assign(:confirm_reset, false)
       |> assign(:confirm_sticky_reset, false)
@@ -39,7 +37,6 @@ defmodule TokengateWeb.SettingsLive do
       |> assign(:extras_budget_count, count_members_with_extra(:extra_monthly_budget_usd))
       |> assign(:extras_concurrency_count, count_members_with_extra(:extra_concurrency))
       |> assign(:extras_rpm_count, count_members_with_extra(:extra_rpm))
-      |> assign_global_settings()
       |> require_admin_hook()
 
     {:ok, socket}
@@ -56,28 +53,6 @@ defmodule TokengateWeb.SettingsLive do
   end
 
   ## Events -----------------------------------------------------------------
-
-  @impl true
-  def handle_event("save_global_cap", %{"global_settings" => params}, socket) do
-    case GlobalSettings.update(params) do
-      {:ok, _settings} ->
-        Tokengate.Auditing.audit(
-          socket.assigns.current_user,
-          "settings.update_global_daily_cap",
-          "global_settings",
-          nil,
-          params
-        )
-
-        {:noreply,
-         socket
-         |> assign_global_settings()
-         |> put_flash(:info, "Límite diario global actualizado.")}
-
-      {:error, changeset} ->
-        {:noreply, assign(socket, :global_form, to_form(changeset, as: :global_settings))}
-    end
-  end
 
   @impl true
   def handle_event("show_reset_confirm", _params, socket) do
@@ -229,65 +204,10 @@ defmodule TokengateWeb.SettingsLive do
     <Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
       <div class="max-w-3xl mx-auto space-y-8">
         <div>
-          <h1 class="text-2xl font-bold text-base-content">Configuración</h1>
+          <h1 class="text-2xl font-bold text-base-content">Mantenimiento</h1>
           <p class="text-sm text-base-content/60 mt-1">
             Administra configuraciones avanzadas y acciones destructivas.
           </p>
-        </div>
-
-        <%!-- Global Daily Cap --%>
-        <div class="card bg-base-100 border border-base-300">
-          <div class="card-body">
-            <h2 class="card-title flex items-center gap-2">
-              <.icon name="hero-banknotes" class="w-5 h-5" /> Límite de gasto diario global
-            </h2>
-            <p class="text-sm text-base-content/60">
-              Tope máximo de gasto total por día (UTC). Cuando se alcanza,
-              toda nueva request se rechaza con 402 hasta el día siguiente.
-              Tiene prioridad sobre los límites mensuales y por credential.
-              Vacío = sin límite.
-            </p>
-
-            <.form for={@global_form} id="global-cap-form" phx-submit="save_global_cap">
-              <.input
-                field={@global_form[:daily_max_spend_usd]}
-                type="number"
-                step="0.01"
-                min="0"
-                label="USD por día"
-                hint="Ej: 50.00 — se corta todo cuando el gasto total del día llega a este monto."
-              />
-              <div class="flex gap-2 mt-3">
-                <button type="submit" class="btn btn-primary btn-sm" id="save-global-cap-btn">
-                  Guardar
-                </button>
-              </div>
-            </.form>
-
-            <div class="mt-4">
-              <div class="flex justify-between text-sm">
-                <span class="text-base-content/60">Gastado hoy</span>
-                <span class="font-mono font-semibold">
-                  ${Decimal.round(@global_daily_spend, 2)}
-                  <%= if @global_daily_cap do %>
-                    / ${Decimal.round(@global_daily_cap, 2)}
-                  <% end %>
-                </span>
-              </div>
-              <%= if @global_daily_cap && @global_daily_pct do %>
-                <progress
-                  class="progress w-full mt-1"
-                  class={
-                    if @global_daily_pct >= 90,
-                      do: "progress progress-error w-full mt-1",
-                      else: "progress progress-warning w-full mt-1"
-                  }
-                  value={@global_daily_pct}
-                  max="100"
-                />
-              <% end %>
-            </div>
-          </div>
         </div>
 
         <%!-- Danger Zone --%>
@@ -622,31 +542,6 @@ defmodule TokengateWeb.SettingsLive do
   end
 
   ## Helpers ----------------------------------------------------------------
-
-  defp assign_global_settings(socket) do
-    settings = GlobalSettings.get!()
-    daily_spend = Budgets.global_daily_spend()
-    daily_cap = settings.daily_max_spend_usd
-
-    daily_pct =
-      if daily_cap && Decimal.compare(daily_cap, Decimal.new(0)) == :gt do
-        Decimal.div(daily_spend, daily_cap)
-        |> Decimal.mult(Decimal.new(100))
-        |> Decimal.round(1)
-        |> Decimal.to_float()
-      else
-        nil
-      end
-
-    socket
-    |> assign(
-      :global_form,
-      to_form(GlobalSettings.changeset(settings, %{}), as: :global_settings)
-    )
-    |> assign(:global_daily_spend, daily_spend)
-    |> assign(:global_daily_cap, daily_cap)
-    |> assign(:global_daily_pct, daily_pct)
-  end
 
   defp count_logs do
     import Ecto.Query
