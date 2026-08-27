@@ -763,6 +763,164 @@ defmodule Tokengate.Metrics.RollupTest do
   end
 
   # ---------------------------------------------------------------------
+  # benchmark_by_provider_for_model/2
+  # ---------------------------------------------------------------------
+
+  describe "benchmark_by_provider_for_model/2" do
+    test "one row per provider with latency/tps/cost aggregates" do
+      {tm, _team} = team_member_fixture()
+      ma = model_alias_fixture(%{"name" => "gpt-4o"})
+
+      {:ok, fast} =
+        Providers.create_provider(%{name: "FastCo", base_url: "http://localhost:1"})
+
+      {:ok, slow} =
+        Providers.create_provider(%{name: "SlowCo", base_url: "http://localhost:2"})
+
+      mp_fast = model_provider_fixture(ma, fast, %{provider_model: "gpt-4o-fast"})
+      mp_slow = model_provider_fixture(ma, slow, %{provider_model: "gpt-4o-slow"})
+
+      # FastCo: 2 requests, ttft 200ms, latency 400ms, 80 completion tokens
+      # → avg_ttft 200, avg_latency 400, tps = 80 tokens / 0.8s = 100.0
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -60, :second), %{
+        model_alias_id: ma.id,
+        provider_id: fast.id,
+        model_provider_id: mp_fast.id,
+        ttft_ms: 200,
+        latency_ms: 400,
+        completion_tokens: 40,
+        status_code: 200,
+        cost_usd: Decimal.new("0.100000")
+      })
+
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -120, :second), %{
+        model_alias_id: ma.id,
+        provider_id: fast.id,
+        model_provider_id: mp_fast.id,
+        ttft_ms: 200,
+        latency_ms: 400,
+        completion_tokens: 40,
+        status_code: 200,
+        cost_usd: Decimal.new("0.300000")
+      })
+
+      # SlowCo: 1 request with a 4xx — error_rate 100.0, tps = 50 / 2.0 = 25.0
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -180, :second), %{
+        model_alias_id: ma.id,
+        provider_id: slow.id,
+        model_provider_id: mp_slow.id,
+        ttft_ms: 900,
+        latency_ms: 2000,
+        completion_tokens: 50,
+        status_code: 429,
+        cost_usd: Decimal.new("0.000000")
+      })
+
+      results = Rollup.benchmark_by_provider_for_model(ma.id, from: hours_ago(1))
+
+      assert length(results) == 2
+
+      [first, second] = results
+      assert first.provider_name == "FastCo"
+      assert first.request_count == 2
+      assert first.error_count == 0
+      assert first.error_rate == 0.0
+      assert first.avg_ttft_ms == 200
+      assert first.avg_latency_ms == 400
+      assert first.avg_tps == 100.0
+      assert Decimal.equal?(first.total_cost_usd, Decimal.new("0.400000"))
+      assert first.completion_tokens == 80
+
+      assert second.provider_name == "SlowCo"
+      assert second.request_count == 1
+      assert second.error_count == 1
+      assert second.error_rate == 100.0
+      assert second.avg_ttft_ms == 900
+      assert second.avg_latency_ms == 2000
+      assert second.avg_tps == 25.0
+    end
+
+    test "merges two model providers under the same provider" do
+      {tm, _team} = team_member_fixture()
+      ma = model_alias_fixture(%{"name" => "gpt-4o"})
+
+      {:ok, provider} =
+        Providers.create_provider(%{name: "OpenAI", base_url: "http://localhost:1"})
+
+      mp1 = model_provider_fixture(ma, provider, %{provider_model: "gpt-4o"})
+      mp2 = model_provider_fixture(ma, provider, %{provider_model: "gpt-4o-mini"})
+
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -60, :second), %{
+        model_alias_id: ma.id,
+        provider_id: provider.id,
+        model_provider_id: mp1.id,
+        latency_ms: 1000,
+        completion_tokens: 50
+      })
+
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -120, :second), %{
+        model_alias_id: ma.id,
+        provider_id: provider.id,
+        model_provider_id: mp2.id,
+        latency_ms: 1000,
+        completion_tokens: 50
+      })
+
+      results = Rollup.benchmark_by_provider_for_model(ma.id, from: hours_ago(1))
+
+      assert length(results) == 1
+      [row] = results
+      assert row.provider_name == "OpenAI"
+      assert row.request_count == 2
+      # tps over the merged window: 100 tokens / 2.0s = 50.0
+      assert row.avg_tps == 50.0
+    end
+
+    test "excludes logs without provider_id and from other aliases" do
+      {tm, _team} = team_member_fixture()
+      ma = model_alias_fixture(%{"name" => "gpt-4o"})
+      ma_other = model_alias_fixture(%{"name" => "claude-3"})
+
+      {:ok, provider} =
+        Providers.create_provider(%{name: "OpenAI", base_url: "http://localhost:1"})
+
+      # legacy log without provider_id → excluded
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -60, :second), %{
+        model_alias_id: ma.id,
+        latency_ms: 1000,
+        completion_tokens: 50
+      })
+
+      # other alias → excluded
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -60, :second), %{
+        model_alias_id: ma_other.id,
+        provider_id: provider.id,
+        latency_ms: 1000,
+        completion_tokens: 50
+      })
+
+      # in-window log for ma → included
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -60, :second), %{
+        model_alias_id: ma.id,
+        provider_id: provider.id,
+        latency_ms: 1000,
+        completion_tokens: 50
+      })
+
+      results = Rollup.benchmark_by_provider_for_model(ma.id, from: hours_ago(1))
+
+      assert length(results) == 1
+      [row] = results
+      assert row.request_count == 1
+      assert row.provider_name == "OpenAI"
+    end
+
+    test "returns empty list for nil model_alias_id" do
+      assert Rollup.benchmark_by_provider_for_model(nil) == []
+    end
+  end
+
+  # ---------------------------------------------------------------------
   # breakdown_by_member_for_model/2
   # ---------------------------------------------------------------------
 

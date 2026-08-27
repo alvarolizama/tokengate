@@ -647,6 +647,104 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   # -----------------------------------------------------------------------
+  # benchmark_by_provider_for_model/2
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Benchmarks reales por **proveedor** para un modelo alias, agregando la
+  data de `request_logs` de una ventana de tiempo (7/30/60 días).
+
+  A diferencia de `breakdown_by_provider_for_model/2` (nivel
+  `model_provider` / credencial), esta query agrupa al nivel `provider_id`
+  — una fila por proveedor, sin desglose por credencial — para responder
+  "¿qué proveedor sirve mejor este modelo según su uso real?".
+
+  Excluye logs legacy sin `provider_id` (misma decisión que
+  `provider_ranking/2`).
+
+  Each row is:
+
+      %{
+        provider_id: binary | nil,
+        provider_name: String.t(),
+        request_count: integer,
+        error_count: integer,
+        error_rate: float,
+        avg_ttft_ms: integer | nil,
+        avg_latency_ms: integer | nil,
+        p95_latency_ms: integer | nil,
+        avg_tps: float | nil,
+        total_cost_usd: Decimal,
+        prompt_tokens: integer,
+        completion_tokens: integer
+      }
+
+  `model_alias_id` of `nil` returns an empty list.
+
+  ## Options
+
+    * `:from` — `inserted_at >= from` (DateTime)
+    * `:to`   — `inserted_at <= to` (DateTime)
+  """
+  @spec benchmark_by_provider_for_model(String.t() | nil, keyword()) :: [map()]
+  def benchmark_by_provider_for_model(model_alias_id, opts \\ [])
+
+  def benchmark_by_provider_for_model(nil, _opts), do: []
+
+  def benchmark_by_provider_for_model(model_alias_id, opts)
+      when is_binary(model_alias_id) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    rows =
+      RequestLog
+      |> where([rl], rl.model_alias_id == ^model_alias_id)
+      |> where([rl], not is_nil(rl.provider_id))
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> join(:inner, [rl], p in Tokengate.Providers.Provider, on: rl.provider_id == p.id)
+      |> group_by([rl, p], [rl.provider_id, p.name])
+      |> select([rl, p], %{
+        provider_id: rl.provider_id,
+        provider_name: p.name,
+        request_count: count(rl.id),
+        error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
+        avg_ttft_ms: fragment("AVG(?)", rl.ttft_ms),
+        avg_latency_ms: fragment("AVG(?)", rl.latency_ms),
+        p95_latency_ms:
+          fragment("percentile_cont(0.95) WITHIN GROUP (ORDER BY ?)", rl.latency_ms),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms),
+        total_cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens)
+      })
+      |> Repo.all()
+
+    rows
+    |> Enum.map(fn row ->
+      %{
+        provider_id: row.provider_id,
+        provider_name: row.provider_name,
+        request_count: row.request_count,
+        error_count: row.error_count,
+        error_rate:
+          if(row.request_count > 0,
+            do: Float.round(row.error_count / row.request_count * 100, 1),
+            else: 0.0
+          ),
+        avg_ttft_ms: row.avg_ttft_ms && round(to_float!(row.avg_ttft_ms)),
+        avg_latency_ms: row.avg_latency_ms && round(to_float!(row.avg_latency_ms)),
+        p95_latency_ms: row.p95_latency_ms && round(to_float!(row.p95_latency_ms)),
+        avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms),
+        total_cost_usd: Decimal.new(to_string(row.total_cost_usd)),
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens
+      }
+    end)
+    |> Enum.sort_by(& &1.provider_name)
+  end
+
+  # -----------------------------------------------------------------------
   # breakdown_by_member_for_model/2
   # -----------------------------------------------------------------------
 
