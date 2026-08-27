@@ -70,10 +70,19 @@ config :tokengate, Oban,
     {Oban.Plugins.Pruner, max_age: 60 * 60 * 24 * 7},
     {Oban.Plugins.Cron,
      crontab: [
-       {"0 0 1 * *", Tokengate.Budgets.ResetWorker}
+       {"0 0 1 * *", Tokengate.Budgets.ResetWorker},
+       # Daily request_logs partition maintenance: create upcoming daily
+       # partitions, backfill stray days out of the default partition, drop
+       # partitions past retention. (fixes.md C1)
+       {"5 0 * * *", Tokengate.Logs.PartitionWorker}
      ]}
   ],
   queues: [default: 10, logs: 20, webhooks: 10, budgets: 5]
+
+# At-boot partition ensure (Tokengate.Logs.PartitionWorker.ensure_on_boot/0).
+# Disabled in test.exs — fixtures insert arbitrary historical dates that must
+# stay in the default partition.
+config :tokengate, :partition_boot_ensure, true
 
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason

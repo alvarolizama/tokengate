@@ -30,6 +30,14 @@ defmodule Tokengate.Application do
          ]
        }},
       {Oban, Application.fetch_env!(:tokengate, Oban)},
+      # Ensure upcoming request_logs partitions exist at boot so today's
+      # inserts hit a real partition before the nightly cron runs. One-shot,
+      # idempotent, never raises (no-op when :partition_boot_ensure is false).
+      Supervisor.child_spec(
+        {Task, fn -> Tokengate.Logs.PartitionWorker.ensure_on_boot() end},
+        id: :partition_boot_ensure,
+        restart: :temporary
+      ),
       Tokengate.Routing.Supervisor,
       Tokengate.Routing.Cache,
       Tokengate.Limits.Supervisor,

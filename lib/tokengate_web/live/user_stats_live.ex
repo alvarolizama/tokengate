@@ -19,6 +19,7 @@ defmodule TokengateWeb.UserStatsLive do
 
   alias Tokengate.Accounts
   alias Tokengate.Logs
+  alias Tokengate.Metrics.DashboardCache
   alias TokengateWeb.KpiHelpers
 
   @page_size 50
@@ -139,10 +140,26 @@ defmodule TokengateWeb.UserStatsLive do
 
   defp load_summary(socket) do
     ids = socket.assigns.team_member_ids
+    user_id = socket.assigns.user.id
 
+    # The two member_stats calls are the expensive part of every PubSub
+    # refresh here (each runs ~4 Postgres aggregates). Wrap them in the
+    # shared DashboardCache ETS (5s TTL, keyed per user + window) so N
+    # admins watching this page share one recompute every ~5s instead of
+    # each running both windows on every coalesced refresh.
     socket
-    |> assign(:summary_5d, Logs.member_stats(ids, from: days_ago(5)))
-    |> assign(:summary_30d, Logs.member_stats(ids, from: days_ago(30)))
+    |> assign(
+      :summary_5d,
+      DashboardCache.fetch_or_compute({:member_stats, user_id, "5d"}, fn ->
+        Logs.member_stats(ids, from: days_ago(5))
+      end)
+    )
+    |> assign(
+      :summary_30d,
+      DashboardCache.fetch_or_compute({:member_stats, user_id, "30d"}, fn ->
+        Logs.member_stats(ids, from: days_ago(30))
+      end)
+    )
   end
 
   defp load_logs(socket, mode) do

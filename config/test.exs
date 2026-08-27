@@ -26,6 +26,10 @@ config :tokengate, Tokengate.Mailer, adapter: Swoosh.Adapters.Test
 # Oban in manual testing mode — jobs run only when drained explicitly
 config :tokengate, Oban, testing: :manual
 
+# Partition tests manage partitions explicitly with far-future dates;
+# boot-time ensure would pollute the test DB with real-date partitions.
+config :tokengate, :partition_boot_ensure, false
+
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false
 
