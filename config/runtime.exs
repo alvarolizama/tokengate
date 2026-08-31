@@ -113,7 +113,7 @@ if config_env() == :prod do
   # can only be disabled at BUILD time with DISABLE_FORCE_SSL=1
   # (see config/prod.exs and the Dockerfile ARG).
   # CHECK_ORIGINS: comma-separated list of allowed origins for CSRF/WS
-  # checks, e.g. "https://tokengate.example.com,http://10.0.0.5:4001".
+  # checks, e.g. "https://tokengate.example.com,http://10.0.0.5:4000".
   # Needed when the app is served from more than one scheme/host/port
   # (e.g. HTTPS public + plain HTTP over VPN) — the CSRF origin check
   # rejects POSTs whose Origin doesn't match, returning 403 on /login.

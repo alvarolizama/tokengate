@@ -118,7 +118,7 @@ resp = client.chat.completions.create(
 
 | Var | Default | What it tunes |
 | --- | --- | --- |
-| `PORT` | `4000` | HTTP port (`4001` in the Docker image) |
+| `PORT` | `4000` | HTTP port (`4000` in the Docker image) |
 | `POOL_SIZE` | `10` | DB connection pool |
 | `SESSION_MAX_AGE_SECONDS` | `31536000` | Idle session lifetime (sliding, default 1 year) |
 | `PROXY_RECEIVE_TIMEOUT_MS` | `60000` | Upstream read timeout (per-credential override available) |
@@ -138,11 +138,11 @@ resp = client.chat.completions.create(
 
 ## Production (Docker)
 
-Multi-stage **Dockerfile** included: prebuilt hexpm Elixir image → slim Debian runtime, non-root `app` user, port `4001`. The entrypoint applies migrations and seeds the admin before boot; `SKIP_MIGRATIONS=1` bypasses.
+Multi-stage **Dockerfile** included: prebuilt hexpm Elixir image → slim Debian runtime, non-root `app` user, port `4000`. The entrypoint applies migrations and seeds the admin before boot; `SKIP_MIGRATIONS=1` bypasses.
 
 ```bash
 docker build -t tokengate .
-docker run -p 4001:4001 --env-file .env tokengate
+docker run -p 4000:4000 --env-file .env tokengate
 ```
 
 - **`DISABLE_FORCE_SSL=1`** (default build ARG) — `force_ssl` is compile-time in Phoenix; the default image serves plain HTTP (VPN/reverse-proxy deploys). Rebuild with an empty value to re-enable TLS redirects.
