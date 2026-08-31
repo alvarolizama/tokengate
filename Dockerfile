@@ -95,7 +95,7 @@ RUN chmod +x /app/entrypoint.sh
 
 USER app
 
-ENV HOME=/app MIX_ENV=prod PHX_SERVER=true PORT=4001
+ENV HOME=/app MIX_ENV=prod PHX_SERVER=true PORT=4000
 
 # Propagate DISABLE_FORCE_SSL to runtime. NOTE: force_ssl is compile-time,
 # so this runtime value does NOT toggle Plug.SSL — it documents the build
@@ -104,6 +104,6 @@ ENV HOME=/app MIX_ENV=prod PHX_SERVER=true PORT=4001
 ARG DISABLE_FORCE_SSL="1"
 ENV DISABLE_FORCE_SSL=${DISABLE_FORCE_SSL}
 
-EXPOSE 4001
+EXPOSE 4000
 
 ENTRYPOINT ["/app/entrypoint.sh"]
