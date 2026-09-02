@@ -713,7 +713,10 @@ defmodule Tokengate.ProvidersTest do
              )
     end
 
-    test "delete_provider/1 sets request_logs.provider_id to NULL (keeps history)" do
+    # provider_id / model_alias_id no longer carry FKs (they made provider
+    # deletion O(all referenced log rows) and time out in production). The
+    # ids are kept as historical data on the log rows.
+    test "delete_provider/1 keeps request_logs.provider_id (no FK)" do
       member = team_member_fixture()
       provider = provider_fixture()
 
@@ -729,10 +732,10 @@ defmodule Tokengate.ProvidersTest do
 
       reloaded = Repo.get_by(RequestLog, id: log.id, inserted_at: log.inserted_at)
       assert reloaded != nil
-      assert reloaded.provider_id == nil
+      assert reloaded.provider_id == provider.id
     end
 
-    test "delete_model_alias/1 sets request_logs.model_alias_id to NULL (keeps history)" do
+    test "delete_model_alias/1 keeps request_logs.model_alias_id (no FK)" do
       member = team_member_fixture()
       alias_ = model_alias_fixture()
 
@@ -748,7 +751,7 @@ defmodule Tokengate.ProvidersTest do
 
       reloaded = Repo.get_by(RequestLog, id: log.id, inserted_at: log.inserted_at)
       assert reloaded != nil
-      assert reloaded.model_alias_id == nil
+      assert reloaded.model_alias_id == alias_.id
     end
   end
 end

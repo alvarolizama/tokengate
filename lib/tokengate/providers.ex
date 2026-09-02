@@ -235,12 +235,12 @@ defmodule Tokengate.Providers do
   end
 
   def delete_model_alias(%ModelAlias{} = model_alias) do
+    # request_logs no longer carries an FK on model_alias_id (dropped in
+    # 20260901161239 — the SET NULL made alias deletion O(referenced logs)
+    # and timed out in production), so there is nothing to declare here:
+    # deletion cannot violate referential integrity and log rows keep the
+    # alias id as historical data.
     model_alias
-    |> Ecto.Changeset.change()
-    |> Ecto.Changeset.foreign_key_constraint(:model_alias_id,
-      name: "request_logs_model_alias_id_fkey",
-      message: "el modelo tiene logs de uso y no se puede eliminar"
-    )
     |> Repo.delete()
     |> case do
       {:ok, _ma} = ok ->

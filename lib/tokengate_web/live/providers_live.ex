@@ -14,6 +14,8 @@ defmodule TokengateWeb.ProvidersLive do
 
   use TokengateWeb, :live_view
 
+  require Logger
+
   import Ecto.Query, only: [from: 2]
 
   alias Tokengate.Providers
@@ -175,34 +177,17 @@ defmodule TokengateWeb.ProvidersLive do
   end
 
   def handle_event("delete_provider", %{"id" => provider_id}, socket) do
-    provider = Providers.get_provider!(provider_id)
+    # Soft guard: a concurrent delete (double click on a stale row) must
+    # flash, not crash with Ecto.NoResultsError.
+    case Providers.get_provider(provider_id) do
+      nil ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "El proveedor ya no existe.")
+         |> load_providers()}
 
-    referenced? =
-      Repo.exists?(
-        from(mp in ModelProvider,
-          join: c in assoc(mp, :credential),
-          where: c.provider_id == ^provider_id
-        )
-      )
-
-    if referenced? do
-      {:noreply,
-       put_flash(
-         socket,
-         :error,
-         "No se puede eliminar: el proveedor está en uso por uno o más modelos."
-       )}
-    else
-      case Providers.delete_provider(provider) do
-        {:ok, _} ->
-          {:noreply,
-           socket
-           |> put_flash(:info, "Proveedor eliminado.")
-           |> load_providers()}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudo eliminar el proveedor.")}
-      end
+      provider ->
+        delete_provider(socket, provider)
     end
   end
 
@@ -395,6 +380,52 @@ defmodule TokengateWeb.ProvidersLive do
   end
 
   ## Private helpers — provider save --------------------------------------
+
+  defp delete_provider(socket, provider) do
+    referenced? =
+      Repo.exists?(
+        from(mp in ModelProvider,
+          join: c in assoc(mp, :credential),
+          where: c.provider_id == ^provider.id
+        )
+      )
+
+    if referenced? do
+      {:noreply,
+       put_flash(
+         socket,
+         :error,
+         "No se puede eliminar: el proveedor está en uso por uno o más modelos."
+       )}
+    else
+      # Slow deletes surface as exceptions, not {:error, _}: a client-side
+      # timeout raises DBConnection.ConnectionError; a server-side
+      # statement_timeout or deadlock raises Postgrex.Error (query_canceled /
+      # 40P01). Without this the LiveView crashes and the user sees nothing.
+      try do
+        case Providers.delete_provider(provider) do
+          {:ok, _} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Proveedor eliminado.")
+             |> load_providers()}
+
+          {:error, _} ->
+            {:noreply, put_flash(socket, :error, "No se pudo eliminar el proveedor.")}
+        end
+      rescue
+        e in [DBConnection.ConnectionError, Postgrex.Error] ->
+          Logger.warning("delete_provider/1 DB error for #{provider.id}: #{Exception.message(e)}")
+
+          {:noreply,
+           put_flash(
+             socket,
+             :error,
+             "La eliminación falló en la base de datos (timeout o bloqueo). Reintenta; si persiste, contacta al administrador."
+           )}
+      end
+    end
+  end
 
   defp save_provider(socket, :new, provider_params) do
     case Providers.create_provider(provider_params) do
