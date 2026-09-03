@@ -88,9 +88,11 @@ const SortableProviders = {
 // - The native <dialog> fires a "close" event on Escape, backdrop click,
 //   or <form method="dialog"> submit. We listen for it and sync the server
 //   so a later repaint doesn't reopen a dialog the user already dismissed.
-// - LiveView repaints (e.g. a new prompt arriving via PubSub) destroy and
-//   re-mount this hook. On re-mount, if the server still says data-open="true",
-//   we re-open the dialog so it survives the repaint.
+// - The server renders the <dialog> WITHOUT `open` (it is set client-side
+//   by showModal()). LiveView patches (e.g. a new prompt arriving via
+//   PubSub) make morphdom strip `open` — which closes the dialog natively
+//   WITHOUT firing `close` — so beforeUpdate()/updated() re-open it when
+//   the patch itself closed it (data-open="true", see below).
 // - The backdrop is a sibling <div class="modal-backdrop"> (NOT a
 //   <form method="dialog">) so scrolling inside the modal-box can never
 //   accidentally submit a form and close the dialog.
@@ -140,6 +142,41 @@ const Modal = {
         }
         mouseDownOnBackdrop = false
       })
+    }
+  },
+
+  // beforeUpdate runs synchronously before morphdom touches this element, so
+  // it records whether the dialog was open pre-patch. updated() then re-opens
+  // ONLY when the patch itself removed `open` (modal was open pre-patch). If
+  // the user closed the dialog and a stream patch lands while close_modal is
+  // still in flight, __wasOpen is false and the stale data-open="true" from
+  // the server does not pop the modal back open.
+  beforeUpdate() {
+    this.__wasOpen = this.el.open
+  },
+
+  // The server always renders the <dialog> WITHOUT the `open` attribute
+  // (dialogs are opened client-side via showModal()). LiveView patches make
+  // morphdom sync attributes and REMOVE `open`, which closes the dialog
+  // natively but does NOT fire a `close` event, so neither the close-sync in
+  // mounted() nor the mounted() re-open (the node is morphed in place, never
+  // re-mounted) can react. updated() fires synchronously right after the
+  // patch that morphed this element — re-opening there keeps the modal open
+  // through stream_insert patches with no flicker. A user-initiated close
+  // (Escape / backdrop / botón) involves no patch, so updated() never fires
+  // and the modal stays closed; the close_modal round-trip patches with
+  // data-open="false", which this guard ignores. A MutationObserver is NOT
+  // equivalent: it runs as a microtask BEFORE the queued `close` event task,
+  // so it re-opens the dialog during user-initiated closes (verified in the
+  // adversarial review of this fix).
+  updated() {
+    if (
+      this.__wasOpen &&
+      this.el.dataset.open === "true" &&
+      !this.el.open &&
+      typeof this.el.showModal === "function"
+    ) {
+      this.el.showModal()
     }
   }
 }
