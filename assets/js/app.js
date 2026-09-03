@@ -163,12 +163,14 @@ const Modal = {
   // re-mounted) can react. updated() fires synchronously right after the
   // patch that morphed this element — re-opening there keeps the modal open
   // through stream_insert patches with no flicker. A user-initiated close
-  // (Escape / backdrop / botón) involves no patch, so updated() never fires
-  // and the modal stays closed; the close_modal round-trip patches with
-  // data-open="false", which this guard ignores. A MutationObserver is NOT
-  // equivalent: it runs as a microtask BEFORE the queued `close` event task,
-  // so it re-opens the dialog during user-initiated closes (verified in the
-  // adversarial review of this fix).
+  // via Escape or backdrop closes the dialog natively (fires `close`), and
+  // the close-sync in mounted() flips data-open to "false" synchronously, so
+  // __wasOpen is false and updated() is a no-op (stale server data-open
+  // does not pop the modal back open). The botón "Cerrar" (phx-click
+  // close_modal) is NOT optimistic: between the click and the round-trip
+  // (~<100ms) __wasOpen is still true, so a stream patch could re-open the
+  // modal transiently — the close_modal patch with data-open="false" then
+  // lands and closes it again, self-correcting.
   updated() {
     if (
       this.__wasOpen &&
