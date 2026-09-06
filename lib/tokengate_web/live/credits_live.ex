@@ -9,8 +9,15 @@ defmodule TokengateWeb.CreditsLive do
 
   use TokengateWeb, :live_view
   alias Tokengate.Budgets
+  alias Tokengate.Metrics.DashboardCache
 
-  @reload_interval_ms 1_000
+  # Reload cadence after a `logs:new` broadcast. load_budgets runs 4+
+  # aggregates over request_logs (spend per member, last request per
+  # inactive member); 1s was too aggressive under sustained proxy traffic.
+  # 3s matches LogsLive's inflight cadence, and the DashboardCache bundle
+  # in load_budgets makes concurrent Credits tabs share one computation
+  # per TTL window.
+  @reload_interval_ms 3_000
   @per_page 10
 
   @impl true
@@ -88,16 +95,32 @@ defmodule TokengateWeb.CreditsLive do
 
   defp load_budgets(socket) do
     timezone = socket.assigns[:timezone] || "Etc/UTC"
-    budgets = Budgets.list_member_budgets(timezone)
-    # Reuse the already-loaded member budgets for the team rollup instead of
-    # list_team_budgets/1, which would re-query members + spend.
-    team_budgets = Budgets.rollup_team_budgets(budgets)
+
+    # Whole-page bundle behind a short TTL: `list_member_budgets/1` preloads
+    # every team member and runs 2 Postgres aggregates, and
+    # `inactive_members/2` runs a lifetime MAX(inserted_at) per inactive
+    # member. Under sustained proxy traffic this view reloaded on every
+    # broadcast; now connected tabs share one computation per TTL window
+    # (same pattern as DashboardLive).
+    bundle =
+      DashboardCache.fetch_or_compute({:credits_budgets, timezone}, fn ->
+        budgets = Budgets.list_member_budgets(timezone)
+
+        # Reuse the already-loaded member budgets for the team rollup instead
+        # of list_team_budgets/1, which would re-query members + spend.
+        %{
+          budgets: budgets,
+          budgets_by_team: Enum.group_by(budgets, fn b -> b.member.team.id end),
+          team_budgets: Budgets.rollup_team_budgets(budgets),
+          inactive_by_team: inactive_members(budgets, timezone)
+        }
+      end)
 
     socket
-    |> assign(:budgets, budgets)
-    |> assign(:budgets_by_team, Enum.group_by(budgets, fn b -> b.member.team.id end))
-    |> assign(:team_budgets, team_budgets)
-    |> assign(:inactive_by_team, inactive_members(budgets, timezone))
+    |> assign(:budgets, bundle.budgets)
+    |> assign(:budgets_by_team, bundle.budgets_by_team)
+    |> assign(:team_budgets, bundle.team_budgets)
+    |> assign(:inactive_by_team, bundle.inactive_by_team)
   end
 
   ## Template helpers --------------------------------------------------------
