@@ -53,8 +53,16 @@ defmodule Tokengate.DataCase do
 
   @doc """
   Sets up the sandbox based on the test tags.
+
+  Also flushes the `DashboardCache` ETS table. That cache is global (a named
+  public table owned by the app tree, not the sandbox) and several LiveViews
+  (Users, Credits, Dashboard, UserStats, Monitor) store whole-page bundles
+  keyed by timezone/period. Its TTL outlives a single fast test, so without
+  this flush a later test sharing a cache key could read the previous test's
+  rows. Every affected LiveView test is `async: false`, so the flush is race-free.
   """
   def setup_sandbox(tags) do
+    Tokengate.Metrics.DashboardCache.invalidate_all()
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(Tokengate.Repo, shared: not tags[:async])
     on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
   end

@@ -17,6 +17,7 @@ defmodule TokengateWeb.UsersLive do
 
   alias Tokengate.Accounts
   alias Tokengate.Accounts.User
+  alias Tokengate.Metrics.DashboardCache
 
   @impl true
   def mount(_params, _session, socket) do
@@ -84,8 +85,22 @@ defmodule TokengateWeb.UsersLive do
         end)
       end
 
-    spend_by_user = Tokengate.Budgets.spend_by_user(timezone)
-    total_spend_by_user = Tokengate.Logs.total_spend_by_user()
+    # Both spend maps are whole-table aggregates over request_logs (the
+    # lifetime one joins every partition) and `load_users/1` re-runs on
+    # every search keystroke, sort click and filter toggle. Cache them in
+    # DashboardCache (5s TTL) so interactive events reuse one shared entry
+    # per timezone instead of re-scanning the log table per event — same
+    # pattern as DashboardLive.
+    spend_by_user =
+      DashboardCache.fetch_or_compute({:users_spend_by_user, timezone}, fn ->
+        Tokengate.Budgets.spend_by_user(timezone)
+      end)
+
+    total_spend_by_user =
+      DashboardCache.fetch_or_compute({:users_total_spend_by_user}, fn ->
+        Tokengate.Logs.total_spend_by_user()
+      end)
+
     user_teams = load_user_teams(filtered)
 
     # Filter by today's spend when toggle is active
