@@ -108,6 +108,34 @@ defmodule Tokengate.Metrics.DashboardCacheTest do
     end
   end
 
+  describe "sweep_expired/0" do
+    test "removes entries past TTL and keeps fresh ones" do
+      fresh_key = {:sweep_test, "fresh"}
+      stale_key = {:sweep_test, "stale"}
+
+      _ = DashboardCache.fetch_or_compute(fresh_key, fn -> %{fresh: true} end)
+
+      # Age one entry past the TTL (same trick as the TTL-expiry test:
+      # monotonic timestamp relative to now, epoch-agnostic).
+      expired_ts = System.monotonic_time(:millisecond) - DashboardCache.ttl_ms() - 1
+      :ets.insert(:tokengate_dashboard_cache, {stale_key, %{stale: true}, expired_ts})
+
+      # Note: the owning GenServer also sweeps on its own timer, so we can't
+      # assert on the returned count (it may have reaped the stale entry
+      # first). The invariant is: after sweep_expired/0, stale is gone and
+      # fresh survives.
+      _removed = DashboardCache.sweep_expired()
+
+      assert DashboardCache.fetch(fresh_key) == {:ok, %{fresh: true}}
+      assert DashboardCache.fetch(stale_key) == :miss
+    end
+
+    test "is safe to call on an empty table" do
+      DashboardCache.invalidate_all()
+      assert DashboardCache.sweep_expired() == 0
+    end
+  end
+
   describe "TTL expiry" do
     @tag :ttl
     test "entry expires after TTL and recomputes" do

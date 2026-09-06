@@ -487,10 +487,22 @@ defmodule TokengateWeb.MonitorLive do
     |> Map.new(&{&1.id, &1.name})
   end
 
+  # "Last hour" lower bound, quantized to the minute.
+  #
+  # The Monitor refreshes every @refresh_ms and caches its per-model cost /
+  # latency aggregates in DashboardCache keyed on this timestamp. Truncating
+  # only to the *second* produced a brand-new key on every refresh, so the
+  # cache could never hit (3 Postgres aggregates per tick, per connected
+  # Monitor) and the dead entries piled up in ETS without bound. Quantizing
+  # to the minute keeps the key stable across ~12 refreshes, lets every
+  # connected Monitor share one entry, and bounds the key space — the
+  # DashboardCache sweep then reaps the once-a-minute stale keys.
+  @hour_window_bucket_s 60
+
   defp one_hour_ago do
-    DateTime.utc_now()
-    |> DateTime.add(-3600, :second)
-    |> DateTime.truncate(:second)
+    unix = DateTime.utc_now() |> DateTime.truncate(:second) |> DateTime.to_unix()
+    from_unix = unix - 3600
+    DateTime.from_unix!(from_unix - rem(from_unix, @hour_window_bucket_s))
   end
 
   # Aggregate request stats from a given timestamp → now.

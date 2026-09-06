@@ -29,6 +29,10 @@ defmodule Tokengate.Metrics.DashboardCache do
   the dashboard may show data up to `@ttl_ms` stale, which is acceptable
   for a metrics overview.
 
+  Expired entries are swept periodically by the owning GenServer, so
+  bounded key spaces (user × period × timezone, or fixed monitor keys)
+  never accumulate dead rows in the table.
+
   With a 5s TTL and 2s debounce, a single dashboard hits Postgres every
   ~5-6s instead of every ~2s — a ~60% reduction. Multiple dashboards for
   the same user share one cache entry.
@@ -38,6 +42,8 @@ defmodule Tokengate.Metrics.DashboardCache do
 
   @table :tokengate_dashboard_cache
   @default_ttl_ms 5_000
+  # Sweep cadence: how often the owning GenServer purges expired entries.
+  @sweep_interval_ms 5_000
 
   ## Public API ---------------------------------------------------------------
 
@@ -100,7 +106,7 @@ defmodule Tokengate.Metrics.DashboardCache do
   @doc "Invalidates all cache entries."
   @spec invalidate_all() :: :ok
   def invalidate_all do
-    :ets.delete_all_objects(@table)
+    if :ets.whereis(@table) != :undefined, do: :ets.delete_all_objects(@table)
     :ok
   end
 
@@ -108,15 +114,42 @@ defmodule Tokengate.Metrics.DashboardCache do
   @spec ttl_ms() :: non_neg_integer()
   def ttl_ms, do: Application.get_env(:tokengate, :dashboard_cache_ttl_ms, @default_ttl_ms)
 
+  @doc """
+  Deletes every entry whose TTL has elapsed. Run periodically by the owning
+  GenServer; safe to call directly (tests, maintenance). Returns the number
+  of entries removed, or 0 when the table doesn't exist yet.
+  """
+  @spec sweep_expired() :: non_neg_integer()
+  def sweep_expired do
+    if :ets.whereis(@table) == :undefined do
+      0
+    else
+      cutoff = System.monotonic_time(:millisecond) - ttl_ms()
+      :ets.select_delete(@table, [{{:_, :_, :"$1"}, [{:<, :"$1", cutoff}], [true]}])
+    end
+  end
+
   ## GenServer callbacks ------------------------------------------------------
 
   @impl true
   def init(_opts) do
     ensure_table()
+    schedule_sweep()
     {:ok, %{}}
   end
 
+  @impl true
+  def handle_info(:sweep, state) do
+    sweep_expired()
+    schedule_sweep()
+    {:noreply, state}
+  end
+
+  def handle_info(_msg, state), do: {:noreply, state}
+
   ## Internals ---------------------------------------------------------------
+
+  defp schedule_sweep, do: Process.send_after(self(), :sweep, @sweep_interval_ms)
 
   defp ensure_table do
     if :ets.whereis(@table) == :undefined do
