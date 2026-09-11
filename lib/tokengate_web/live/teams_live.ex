@@ -43,6 +43,7 @@ defmodule TokengateWeb.TeamsLive do
         |> assign(:webhook_form, nil)
         |> assign(:editing_webhook_team_id, nil)
         |> assign(:editing_webhook_id, nil)
+        |> assign(:editing_aliases_team_id, nil)
         |> assign(:team_search, "")
         |> load_teams()
 
@@ -65,26 +66,16 @@ defmodule TokengateWeb.TeamsLive do
 
   ## Data loading ---------------------------------------------------------
 
+  # Loads the full dataset ONCE per mount (and after data mutations that
+  # change teams themselves). Search and modal toggles must NOT come through
+  # here — they filter in-memory / touch no data (see the assign-only handlers).
   defp load_teams(socket) do
-    search = socket.assigns[:team_search] || ""
-
     teams =
       from(t in Team,
         preload: [:team_members],
         order_by: [asc: t.name]
       )
       |> Repo.all()
-      |> then(fn teams ->
-        if search == "" do
-          teams
-        else
-          search_down = String.downcase(search)
-
-          Enum.filter(teams, fn t ->
-            String.contains?(String.downcase(t.name), search_down)
-          end)
-        end
-      end)
 
     granted_aliases =
       from(tma in TeamModelAlias, select: {tma.team_id, tma.model_alias_id})
@@ -103,15 +94,6 @@ defmodule TokengateWeb.TeamsLive do
     # Budget + spend rollup per team and per member
     timezone = socket.assigns[:timezone] || "Etc/UTC"
     member_budgets = Budgets.list_member_budgets(timezone)
-
-    # Usage tiers per team (last 30 days)
-    usage_tiers_by_team =
-      teams
-      |> Enum.map(& &1.id)
-      |> Map.new(fn team_id ->
-        tiers = Tokengate.Metrics.Rollup.member_usage_tiers(team_id, from: days_ago(30))
-        {team_id, tiers}
-      end)
 
     team_budgets =
       member_budgets
@@ -155,24 +137,35 @@ defmodule TokengateWeb.TeamsLive do
       end)
 
     socket
-    |> stream(:teams, teams, reset: true)
+    |> assign(:all_teams, teams)
+    |> stream_teams()
     |> assign(:teams_empty?, teams == [])
     |> assign(:granted_aliases, granted_aliases)
     |> assign(:aliases_by_org, aliases_by_org)
     |> assign(:destinations_by_team, destinations_by_team)
     |> assign(:team_budgets, team_budgets)
-    |> assign(:usage_tiers_by_team, usage_tiers_by_team)
   end
 
-  defp days_ago(n) do
-    DateTime.add(DateTime.utc_now(), -n * 86400, :second)
+  # Re-streams the (already loaded) teams filtered by the current search.
+  # Pure assign work: zero queries.
+  defp stream_teams(socket) do
+    search = socket.assigns[:team_search] || ""
+    search_down = String.downcase(search)
+
+    filtered =
+      Enum.filter(socket.assigns.all_teams, fn t ->
+        search == "" or String.contains?(String.downcase(t.name), search_down)
+      end)
+
+    stream(socket, :teams, filtered, reset: true)
   end
 
   ## Events — team CRUD ---------------------------------------------------
 
   @impl true
   def handle_event("search_teams", %{"team_search" => search}, socket) do
-    {:noreply, socket |> assign(:team_search, search) |> load_teams()}
+    # Teams are already in memory — filter + re-stream, no queries.
+    {:noreply, socket |> assign(:team_search, search) |> stream_teams()}
   end
 
   @impl true
@@ -190,6 +183,14 @@ defmodule TokengateWeb.TeamsLive do
      socket
      |> assign(:form, nil)
      |> assign(:editing_team_id, nil)}
+  end
+
+  def handle_event("edit_aliases", %{"id" => team_id}, socket) do
+    {:noreply, assign(socket, :editing_aliases_team_id, team_id)}
+  end
+
+  def handle_event("close_aliases", _params, socket) do
+    {:noreply, assign(socket, :editing_aliases_team_id, nil)}
   end
 
   def handle_event("edit_team", %{"id" => team_id}, socket) do
@@ -246,7 +247,7 @@ defmodule TokengateWeb.TeamsLive do
         {:noreply,
          socket
          |> put_flash(:info, "Aliases actualizados.")
-         |> load_teams()}
+         |> refresh_granted_aliases()}
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, "No se pudo actualizar el alias.")}
@@ -259,12 +260,12 @@ defmodule TokengateWeb.TeamsLive do
     team_id = params["team-id"] || params["team_id"]
     changeset = Observability.change_destination(%Destination{})
 
+    # Modal-only change: no data touched, skip the full reload.
     {:noreply,
      socket
      |> assign(:webhook_form, to_form(changeset, as: :destination))
      |> assign(:editing_webhook_team_id, team_id)
-     |> assign(:editing_webhook_id, :new)
-     |> load_teams()}
+     |> assign(:editing_webhook_id, :new)}
   end
 
   def handle_event("edit_webhook", params, socket) do
@@ -277,17 +278,16 @@ defmodule TokengateWeb.TeamsLive do
      socket
      |> assign(:webhook_form, to_form(changeset, as: :destination))
      |> assign(:editing_webhook_team_id, team_id)
-     |> assign(:editing_webhook_id, webhook_id)
-     |> load_teams()}
+     |> assign(:editing_webhook_id, webhook_id)}
   end
 
   def handle_event("cancel_webhook", _params, socket) do
+    # Modal-only change: no data touched, skip the full reload.
     {:noreply,
      socket
      |> assign(:webhook_form, nil)
      |> assign(:editing_webhook_team_id, nil)
-     |> assign(:editing_webhook_id, nil)
-     |> load_teams()}
+     |> assign(:editing_webhook_id, nil)}
   end
 
   def handle_event("save_webhook", %{"destination" => destination_params}, socket) do
@@ -328,7 +328,7 @@ defmodule TokengateWeb.TeamsLive do
          |> assign(:webhook_form, nil)
          |> assign(:editing_webhook_team_id, nil)
          |> assign(:editing_webhook_id, nil)
-         |> load_teams()}
+         |> refresh_destinations()}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, assign(socket, :webhook_form, to_form(changeset, as: :destination))}
@@ -344,11 +344,28 @@ defmodule TokengateWeb.TeamsLive do
         {:noreply,
          socket
          |> put_flash(:info, "Webhook eliminado.")
-         |> load_teams()}
+         |> refresh_destinations()}
 
       {:error, _} ->
         {:noreply, put_flash(socket, :error, "No se pudo eliminar el webhook.")}
     end
+  end
+
+  # Surgical refresh: only the table that actually changed, instead of the
+  # full load_teams() (teams + members + aliases + destinations + 2 spend
+  # aggregates).
+  defp refresh_granted_aliases(socket) do
+    granted_aliases =
+      from(tma in TeamModelAlias, select: {tma.team_id, tma.model_alias_id})
+      |> Repo.all()
+      |> Enum.group_by(fn {team_id, _} -> team_id end, fn {_, alias_id} -> alias_id end)
+
+    assign(socket, :granted_aliases, granted_aliases)
+  end
+
+  defp refresh_destinations(socket) do
+    team_ids = Enum.map(socket.assigns.all_teams, & &1.id)
+    assign(socket, :destinations_by_team, Observability.list_destinations_for_teams(team_ids))
   end
 
   ## Private helpers — save ----------------------------------------------
@@ -386,20 +403,6 @@ defmodule TokengateWeb.TeamsLive do
   end
 
   ## Template helpers -----------------------------------------------------
-
-  def granted_alias_ids(granted_aliases, team_id) do
-    Map.get(granted_aliases, team_id, [])
-  end
-
-  def get_member_tier(usage_tiers_by_team, team_id, member_id) do
-    tiers = Map.get(usage_tiers_by_team, team_id, [])
-    Enum.find(tiers, &(&1.team_member_id == member_id))
-  end
-
-  def tier_badge_class("alto"), do: "badge-error"
-  def tier_badge_class("regular"), do: "badge-warning"
-  def tier_badge_class("bajo"), do: "badge-ghost"
-  def tier_badge_class(_), do: "badge-ghost"
 
   def format_decimal(%Decimal{} = d), do: d |> Decimal.round(2) |> Decimal.to_string()
   def format_decimal(nil), do: "—"
@@ -491,6 +494,59 @@ defmodule TokengateWeb.TeamsLive do
                   <button type="submit" class="btn btn-primary btn-sm" id="save-team-btn">Guardar</button>
                 </div>
               </.form>
+            </div>
+          </div>
+        </div>
+
+        <%!-- Aliases modal — manage model alias grants per team --%>
+        <div
+          :if={@editing_aliases_team_id}
+          class="fixed inset-0 z-50 flex items-center justify-center p-4"
+          id={"aliases-modal-#{@editing_aliases_team_id}"}
+        >
+          <div class="absolute inset-0 bg-black/50" phx-click="close_aliases" />
+          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
+            <div class="card-body p-6">
+              <h2 class="text-lg font-semibold mb-4">Aliases de modelos</h2>
+              <p class="text-sm text-base-content/60 -mt-2 mb-4">
+                Toca un alias para otorgarlo o revocarlo al equipo.
+              </p>
+              <div class="flex flex-wrap gap-2" id={"alias-picker-#{@editing_aliases_team_id}"}>
+                <button
+                  :for={alias <- Map.get(@aliases_by_org, "all", [])}
+                  type="button"
+                  phx-click="toggle_alias"
+                  phx-value-team-id={@editing_aliases_team_id}
+                  phx-value-alias-id={alias.id}
+                  class={[
+                    "badge badge-sm cursor-pointer transition-all",
+                    if(
+                      alias.id in Map.get(@granted_aliases, @editing_aliases_team_id, []),
+                      do: "badge-primary",
+                      else: "badge-outline"
+                    )
+                  ]}
+                  id={"alias-#{@editing_aliases_team_id}-#{alias.id}"}
+                >
+                  {alias.name}
+                </button>
+                <p
+                  :if={Map.get(@aliases_by_org, "all", []) == []}
+                  class="text-xs text-base-content/40"
+                >
+                  No hay aliases disponibles.
+                </p>
+              </div>
+              <div class="flex justify-end mt-4">
+                <button
+                  type="button"
+                  phx-click="close_aliases"
+                  class="btn btn-primary btn-sm"
+                  id="close-aliases-btn"
+                >
+                  Listo
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -587,6 +643,24 @@ defmodule TokengateWeb.TeamsLive do
                     id={"edit-#{team.id}"}
                   >
                     Editar
+                  </button>
+                  <button
+                    phx-click="edit_aliases"
+                    phx-value-id={team.id}
+                    class="btn btn-sm btn-ghost"
+                    id={"edit-aliases-#{team.id}"}
+                    title="Gestionar aliases de modelos"
+                  >
+                    Aliases
+                  </button>
+                  <button
+                    phx-click="new_webhook"
+                    phx-value-team-id={team.id}
+                    class="btn btn-sm btn-ghost gap-1"
+                    id={"new-webhook-#{team.id}"}
+                    title="Agregar webhook de observabilidad"
+                  >
+                    <.icon name="hero-bell-alert" class="w-4 h-4" /> Webhook
                   </button>
                   <button
                     phx-click="delete_team"
@@ -735,112 +809,12 @@ defmodule TokengateWeb.TeamsLive do
                 </div>
               </div>
 
-              <div :if={tb.member_budgets != []} class="mt-4 pt-4 border-t border-base-300">
-                <h4 class="text-sm font-semibold mb-2">Consumo por miembro</h4>
-                <div class="overflow-x-auto">
-                  <table class="table table-sm">
-                    <thead>
-                      <tr>
-                        <th>Usuario</th>
-                        <th class="text-center">Tier</th>
-                        <th class="text-right">Concurrencia</th>
-                        <th class="text-right">RPM</th>
-                        <th class="text-right">Gasto/mes</th>
-                        <th class="text-right">Budget/mes</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr
-                        :for={mb <- tb.member_budgets}
-                        id={"member-budget-#{team.id}-#{mb.member.id}"}
-                      >
-                        <td class="font-medium">{mb.member.user.email}</td>
-                        <td class="text-center">
-                          <% tier = get_member_tier(@usage_tiers_by_team, team.id, mb.member.id) %>
-                          <%= if tier do %>
-                            <span
-                              class={[
-                                "badge badge-sm",
-                                tier_badge_class(tier.tier)
-                              ]}
-                              title={"Score: #{tier.score} | Peak RPM: #{tier.peak_rpm} | Días activos: #{tier.active_days}"}
-                            >
-                              {String.capitalize(tier.tier)}
-                            </span>
-                          <% else %>
-                            <span class="badge badge-sm badge-ghost" title="Sin actividad en 30 días">—</span>
-                          <% end %>
-                        </td>
-                        <td class="text-right font-mono">
-                          {team.default_concurrency_limit}
-                          <span :if={mb.member.extra_concurrency} class="text-success">
-                            +{mb.member.extra_concurrency}
-                          </span>
-                        </td>
-                        <td class="text-right font-mono">
-                          {team.default_rpm_limit}
-                          <span :if={mb.member.extra_rpm} class="text-success">
-                            +{mb.member.extra_rpm}
-                          </span>
-                        </td>
-                        <td class="text-right font-mono">${format_decimal(mb.monthly_spend_usd)}</td>
-                        <td class="text-right font-mono">
-                          ${format_decimal(mb.monthly_limit_usd)}
-                          <span :if={mb.member.extra_monthly_budget_usd} class="text-success">
-                            +{format_decimal(mb.member.extra_monthly_budget_usd)}
-                          </span>
-                        </td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
+              <%!-- Webhooks section --%>
               <div class="mt-4 pt-4 border-t border-base-300">
-                <h4 class="text-sm font-semibold mb-2">Aliases de modelos</h4>
-                <div class="flex flex-wrap gap-2" id={"aliases-#{team.id}"}>
-                  <button
-                    :for={alias <- Map.get(@aliases_by_org, "all", [])}
-                    type="button"
-                    phx-click="toggle_alias"
-                    phx-value-team-id={team.id}
-                    phx-value-alias-id={alias.id}
-                    class={[
-                      "badge badge-sm cursor-pointer transition-all",
-                      if(alias.id in granted_alias_ids(@granted_aliases, team.id),
-                        do: "badge-primary",
-                        else: "badge-outline"
-                      )
-                    ]}
-                    id={"alias-#{team.id}-#{alias.id}"}
-                  >
-                    {alias.name}
-                  </button>
-                  <p
-                    :if={Map.get(@aliases_by_org, "all", []) == []}
-                    class="text-xs text-base-content/40"
-                  >
-                    No hay aliases disponibles.
-                  </p>
-                </div>
-              </div>
-
-              <!-- Webhooks section -->
-              <div class="mt-4 pt-4 border-t border-base-300">
-                <div class="flex items-center justify-between mb-3">
-                  <h4 class="text-sm font-semibold flex items-center gap-1.5">
-                    <.icon name="hero-bell-alert" class="w-4 h-4 opacity-70" />
-                    Webhooks de observabilidad
-                  </h4>
-                  <button
-                    phx-click="new_webhook"
-                    phx-value-team-id={team.id}
-                    class="btn btn-xs btn-ghost gap-1 transition-colors hover:text-primary"
-                    id={"new-webhook-#{team.id}"}
-                  >
-                    <.icon name="hero-plus" class="w-3.5 h-3.5" /> Agregar webhook
-                  </button>
-                </div>
+                <h4 class="text-sm font-semibold flex items-center gap-1.5 mb-3">
+                  <.icon name="hero-bell-alert" class="w-4 h-4 opacity-70" />
+                  Webhooks de observabilidad
+                </h4>
 
                 <!-- Destination list -->
                 <div id={"webhooks-list-#{team.id}"}>
