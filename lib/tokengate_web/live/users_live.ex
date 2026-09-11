@@ -26,7 +26,7 @@ defmodule TokengateWeb.UsersLive do
     socket =
       socket
       |> assign(:page_title, "Usuarios · Tokengate")
-      |> stream_configure(:users, dom_id: &stream_dom_id/1)
+      |> stream_configure(:users, dom_id: &"user-#{&1.id}")
       |> assign(:form, nil)
       |> assign(:editing_user_id, nil)
       |> assign(:reset_user_id, nil)
@@ -129,7 +129,7 @@ defmodule TokengateWeb.UsersLive do
     |> assign(:spend_by_user, spend_by_user)
     |> assign(:total_spend_by_user, total_spend_by_user)
     |> assign(:user_teams, user_teams)
-    |> stream(:users, build_grouped_rows(sorted, user_teams), reset: true)
+    |> stream(:users, sorted, reset: true)
   end
 
   defp load_user_teams(users) do
@@ -219,59 +219,6 @@ defmodule TokengateWeb.UsersLive do
       a < b -> :lt
       a > b -> :gt
       true -> :eq
-    end
-  end
-
-  ## Team grouping -----------------------------------------------------------
-
-  # Stream dom_ids: a user appears once per team they belong to, so the row id
-  # is namespaced per group; group header rows get their own prefix.
-  defp stream_dom_id({:group, %{id: id}}), do: "group-#{id}"
-  defp stream_dom_id({:user, %{id: id}, group_id}), do: "user-#{id}-#{group_id}"
-
-  # Builds the stream rows: one {:group, team} header row per team followed by
-  # its {:user, user, group_id} rows. A user appears in every team they belong
-  # to (intentional — the admin sees the full roster per team). Users with no
-  # membership land in the trailing "Sin equipo" group. Teams whose members
-  # were all filtered out by the search are omitted.
-  defp build_grouped_rows(sorted_users, user_teams) do
-    team_names_by_id = Map.new(Tokengate.Accounts.list_teams(), &{&1.id, &1.name})
-
-    users_by_team_id =
-      Enum.reduce(sorted_users, %{}, fn user, acc ->
-        teams = Map.get(user_teams, user.id, [])
-
-        Enum.reduce(teams, acc, fn team, acc2 ->
-          Map.update(acc2, team.id, [user], &[user | &1])
-        end)
-      end)
-
-    ordered_team_ids =
-      users_by_team_id
-      |> Map.keys()
-      |> Enum.sort_by(fn team_id -> String.downcase(Map.get(team_names_by_id, team_id, "")) end)
-
-    grouped =
-      Enum.flat_map(ordered_team_ids, fn team_id ->
-        # Members were prepended during accumulation — reverse to restore the
-        # sorted order from sorted_users.
-        members = Enum.reverse(users_by_team_id[team_id])
-
-        [
-          {:group,
-           %{id: team_id, name: Map.get(team_names_by_id, team_id, "—"), count: length(members)}}
-        ] ++
-          Enum.map(members, &{:user, &1, team_id})
-      end)
-
-    orphans = Enum.filter(sorted_users, fn u -> Map.get(user_teams, u.id, []) == [] end)
-
-    if orphans == [] do
-      grouped
-    else
-      grouped ++
-        [{:group, %{id: "none", name: "Sin equipo", count: length(orphans)}}] ++
-        Enum.map(orphans, &{:user, &1, "none"})
     end
   end
 
@@ -888,29 +835,15 @@ defmodule TokengateWeb.UsersLive do
               </tr>
             </thead>
             <tbody id="users" phx-update="stream">
-              <tr :for={{id, row} <- @streams.users} id={id}>
-                <%= case row do %>
-                  <% {:group, group} -> %>
-                    <td colspan="9" class="bg-base-200/60 border-y border-base-300 py-2">
-                      <div class="flex items-center gap-2">
-                        <.icon name="hero-user-group" class="w-4 h-4 text-base-content/60" />
-                        <span class="text-xs font-semibold uppercase tracking-wide text-base-content/70">
-                          {group.name}
-                        </span>
-                        <span class="badge badge-xs badge-ghost">{group.count}</span>
-                      </div>
-                    </td>
-                  <% {:user, user, group_id} -> %>
-                    <.user_row
-                      user={user}
-                      group_id={group_id}
-                      user_teams={@user_teams}
-                      spend_by_user={@spend_by_user}
-                      total_spend_by_user={@total_spend_by_user}
-                      current_user={@current_user}
-                      timezone={@timezone}
-                    />
-                <% end %>
+              <tr :for={{id, user} <- @streams.users} id={id}>
+                <.user_row
+                  user={user}
+                  user_teams={@user_teams}
+                  spend_by_user={@spend_by_user}
+                  total_spend_by_user={@total_spend_by_user}
+                  current_user={@current_user}
+                  timezone={@timezone}
+                />
               </tr>
             </tbody>
           </table>
@@ -1046,7 +979,6 @@ defmodule TokengateWeb.UsersLive do
   end
 
   attr :user, :map, required: true
-  attr :group_id, :string, required: true
   attr :user_teams, :map, required: true
   attr :spend_by_user, :map, required: true
   attr :total_spend_by_user, :map, required: true
@@ -1085,7 +1017,7 @@ defmodule TokengateWeb.UsersLive do
           phx-click="edit_teams"
           phx-value-id={@user.id}
           class="btn btn-xs btn-ghost"
-          id={"teams-#{@user.id}-#{@group_id}"}
+          id={"teams-#{@user.id}"}
           title="Editar equipos"
         >
           <.icon name="hero-pencil" class="w-3 h-3" />
@@ -1100,7 +1032,7 @@ defmodule TokengateWeb.UsersLive do
         <span class="text-xs text-base-content/30">—</span>
       <% end %>
     </td>
-    <td id={"spend-#{@user.id}-#{@group_id}"} class="text-right">
+    <td id={"spend-#{@user.id}"} class="text-right">
       <%= case Map.get(@spend_by_user, @user.id) do %>
         <% nil -> %>
           <span class="text-xs text-base-content/30">—</span>
@@ -1113,7 +1045,7 @@ defmodule TokengateWeb.UsersLive do
           <% end %>
       <% end %>
     </td>
-    <td id={"total-spend-#{@user.id}-#{@group_id}"} class="text-right">
+    <td id={"total-spend-#{@user.id}"} class="text-right">
       <%= case Map.get(@total_spend_by_user, @user.id) do %>
         <% nil -> %>
           <span class="text-xs text-base-content/30">—</span>
@@ -1133,7 +1065,7 @@ defmodule TokengateWeb.UsersLive do
           href={~p"/impersonate/#{@user.id}"}
           method="post"
           class="btn btn-xs btn-ghost"
-          id={"impersonate-#{@user.id}-#{@group_id}"}
+          id={"impersonate-#{@user.id}"}
           data-confirm={"¿Ver el dashboard como #{@user.email}?"}
           title="Ver como este usuario"
         >
@@ -1142,7 +1074,7 @@ defmodule TokengateWeb.UsersLive do
         <.link
           navigate={~p"/dashboard/users/#{@user.id}/stats"}
           class="btn btn-xs btn-ghost"
-          id={"stats-#{@user.id}-#{@group_id}"}
+          id={"stats-#{@user.id}"}
           title="Ver stats consolidados de este usuario"
         >
           <.icon name="hero-chart-bar" class="w-3 h-3" />
@@ -1151,7 +1083,7 @@ defmodule TokengateWeb.UsersLive do
           phx-click="edit_user"
           phx-value-id={@user.id}
           class="btn btn-xs btn-ghost"
-          id={"edit-#{@user.id}-#{@group_id}"}
+          id={"edit-#{@user.id}"}
         >
           <.icon name="hero-pencil" class="w-3 h-3" />
         </button>
@@ -1159,7 +1091,7 @@ defmodule TokengateWeb.UsersLive do
           phx-click="reset_password"
           phx-value-id={@user.id}
           class="btn btn-xs btn-ghost"
-          id={"pwd-#{@user.id}-#{@group_id}"}
+          id={"pwd-#{@user.id}"}
         >
           <.icon name="hero-key" class="w-3 h-3" />
         </button>
@@ -1167,7 +1099,7 @@ defmodule TokengateWeb.UsersLive do
           phx-click="toggle_status"
           phx-value-id={@user.id}
           class="btn btn-xs btn-ghost"
-          id={"status-#{@user.id}-#{@group_id}"}
+          id={"status-#{@user.id}"}
           data-confirm={
             if @user.status == "active",
               do: "¿Suspender usuario?",
@@ -1186,7 +1118,7 @@ defmodule TokengateWeb.UsersLive do
           phx-value-id={@user.id}
           phx-value-email={@user.email}
           class="btn btn-xs btn-ghost text-error"
-          id={"delete-#{@user.id}-#{@group_id}"}
+          id={"delete-#{@user.id}"}
           title="Eliminar usuario"
         >
           <.icon name="hero-trash" class="w-3 h-3" />
