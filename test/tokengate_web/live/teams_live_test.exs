@@ -204,15 +204,20 @@ defmodule TokengateWeb.TeamsLiveTest do
   # Team model alias assignment
   # --------------------------------------------------------------------------
 
-  test "admin toggles a model alias grant on a team", %{conn: conn} do
+  test "admin toggles a model alias grant on a team via the aliases modal", %{conn: conn} do
     %{team: team, model_alias: alias_} = team_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
     {:ok, view, html} = live(conn, ~p"/dashboard/teams")
 
-    # The checkbox should be present and unchecked
-    assert html =~ alias_.name
+    # The alias picker is NOT in the card — only inside the aliases modal
+    refute html =~ "Aliases de modelos</h4>"
+    refute has_element?(view, "#alias-#{team.id}-#{alias_.id}")
+
+    # Open the aliases modal from the team card header
+    view |> element("#edit-aliases-#{team.id}") |> render_click()
+    assert has_element?(view, "#aliases-modal-#{team.id}")
     assert has_element?(view, "#alias-#{team.id}-#{alias_.id}")
 
     # Grant the alias

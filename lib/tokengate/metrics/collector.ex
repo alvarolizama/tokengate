@@ -125,10 +125,6 @@ defmodule Tokengate.Metrics.Collector do
     # Latency histogram: atomic bucket increment + running sum/count.
     record_latency(latency_ms)
 
-    # Rolling per-model window for the Monitor sparklines
-    Tokengate.Metrics.Window.record_request(attrs)
-    Tokengate.Metrics.Window.record_request_credential(attrs)
-
     lite = snapshot_lite()
     PubSub.broadcast(@pubsub, @topic, {:metrics_updated, lite})
 

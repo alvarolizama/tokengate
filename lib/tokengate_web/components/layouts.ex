@@ -231,11 +231,6 @@ defmodule TokengateWeb.Layouts do
                 Monitoreo
               </p>
               <.sidebar_link
-                href={~p"/dashboard/monitor"}
-                label="Monitor"
-                icon="hero-signal"
-              />
-              <.sidebar_link
                 href={~p"/dashboard/logs"}
                 label="Logs"
                 icon="hero-document-text"
@@ -284,16 +279,6 @@ defmodule TokengateWeb.Layouts do
               <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
                 Herramientas
               </p>
-              <.sidebar_link
-                href={~p"/dashboard/prompts"}
-                label="Prompt Inspector"
-                icon="hero-command-line"
-              />
-              <.sidebar_link
-                href={~p"/dashboard/benchmarks"}
-                label="Providers Benchmarks"
-                icon="hero-chart-bar"
-              />
               <.sidebar_link
                 href={~p"/dashboard/calculator"}
                 label="Calculadora"

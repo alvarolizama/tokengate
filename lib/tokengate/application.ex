@@ -44,7 +44,6 @@ defmodule Tokengate.Application do
       Tokengate.Budgets.Supervisor,
       Tokengate.Metrics.Supervisor,
       Tokengate.Logs.Inflight,
-      Tokengate.Prompts.Cache,
       Tokengate.Accounts.ApiKeyCache,
       TokengateWeb.Plugs.LoginRateLimit.TableKeeper,
       TokengateWeb.Endpoint

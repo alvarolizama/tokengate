@@ -56,7 +56,7 @@ defmodule Tokengate.DataCase do
 
   Also flushes the `DashboardCache` ETS table. That cache is global (a named
   public table owned by the app tree, not the sandbox) and several LiveViews
-  (Users, Credits, Dashboard, UserStats, Monitor) store whole-page bundles
+  (Users, Credits, Dashboard, UserStats) store whole-page bundles
   keyed by timezone/period. Its TTL outlives a single fast test, so without
   this flush a later test sharing a cache key could read the previous test's
   rows. Every affected LiveView test is `async: false`, so the flush is race-free.

@@ -40,7 +40,6 @@ Think "LiteLLM, but as an Elixir app with a real admin UI".
 
 - **Personal dashboard** (`/dashboard`) — every user sees their own live consumption (requests, cost, tokens, tokens/sec), period selector (today/7d/30d/90d), their API key with rotate/revoke, and the model catalog available to them with usage-tier badges.
 - **Stats** (`/dashboard/stats`) — drill-downs by model, team, service, and member; scoped by role (admin sees org-wide, managers their teams, users themselves). Period comparison with vs-yesterday deltas, daily sparkline charts, sortable breakdown tables, and CSV export.
-- **Monitor** (`/dashboard/monitor`) — trading-terminal view: one ticket per model alias with 60-minute sparklines, RPM, error rate, cost, in-flight requests, and per-credential drill-down with circuit-breaker state. "Por API Key" tab with per-credential sparklines and in-flight users. KPIs from last-hour to today with vs-yesterday deltas.
 - **Logs** (`/dashboard/logs`) — live request log with filters, in-flight requests merged into the main table, and CSV export (30d / 90d).
 - **Credits** (`/dashboard/credits`) — every member's spend against their effective budget, live from the ETS counters, with progress bars.
 - **Calculator** (`/dashboard/calculator`) — compare real provider spend vs estimated cost using custom pricing parameters (input/output price per million tokens). Period and model selector. Uses the same cost source as Stats for consistency.

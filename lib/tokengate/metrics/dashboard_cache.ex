@@ -15,7 +15,7 @@ defmodule Tokengate.Metrics.DashboardCache do
 
   ## Concurrency model
 
-  Same pattern as `Metrics.Collector` and `Metrics.Window`: the GenServer
+  Same pattern as `Metrics.Collector`: the GenServer
   only owns the public named ETS table. `fetch_or_compute/2` runs in the
   caller's process — reads are direct ETS lookups, writes are atomic
   inserts. No GenServer bottleneck on the hot path.

@@ -269,7 +269,7 @@ defmodule TokengateWeb.LogsLiveTest do
     assert html =~ "summary-req-per-min"
   end
 
-  ## Alerts moved to /dashboard/monitor ----------------------------------------
+  ## Alerts --------------------------------------------------------------------
 
   test "error_reason filter filters logs", %{conn: conn} do
     %{user: admin, password: password} = register("admin")

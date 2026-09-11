@@ -582,24 +582,6 @@ defmodule TokengateWeb.ProxyController do
         provider_key_suffix: provider_key_prefix(route.credential)
       })
 
-    # Cache the prompt for the Prompt Inspector LiveView.
-    # Uses the same id as the inflight entry to link both records.
-    # Degrades gracefully: if the ETS table doesn't exist (hot-reload),
-    # capture is a silent no-op — proxy hot path is never blocked.
-    Tokengate.Prompts.Cache.capture(%{
-      id: inflight.id,
-      team_member_id: inflight.team_member_id,
-      subject_type: inflight.subject_type,
-      user_email: inflight.user_email,
-      service_name: inflight.service_name,
-      team_name: inflight.team_name,
-      team_id: inflight.team_id,
-      model_requested: inflight.model_requested,
-      agent_type: inflight.agent_type,
-      client_agent: inflight.client_agent,
-      messages: payload["messages"] || []
-    })
-
     inflight
   end
 

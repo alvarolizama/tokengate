@@ -92,10 +92,7 @@ defmodule TokengateWeb.Router do
       live "/dashboard/teams", TeamsLive
       live "/dashboard/teams/:id/members", TeamMembersLive
       live "/dashboard/services", ServicesLive
-      live "/dashboard/monitor", MonitorLive
-      live "/dashboard/benchmarks", BenchmarksLive
       live "/dashboard/logs", LogsLive
-      live "/dashboard/prompts", PromptInspectorLive
       live "/dashboard/providers", ProvidersLive
       live "/dashboard/users", UsersLive
       live "/dashboard/users/:user_id/stats", UserStatsLive
