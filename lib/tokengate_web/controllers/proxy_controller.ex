@@ -783,7 +783,6 @@ defmodule TokengateWeb.ProxyController do
       :ok
     else
       with :ok <- check_monthly_budget(member, limits, route),
-           :ok <- check_model_total_cap(route),
            :ok <- check_model_per_user_cap(member, route) do
         :ok
       end
@@ -810,17 +809,6 @@ defmodule TokengateWeb.ProxyController do
          ) do
       :ok -> :ok
       {:error, :budget_exceeded, details} -> {:error, {:budget_exceeded, details}}
-    end
-  end
-
-  defp check_model_total_cap(route) do
-    if Budgets.model_total_exhausted?(
-         route.model_alias.id,
-         route.model_alias.daily_limit_total_usd
-       ) do
-      {:error, {:budget_exceeded, %{period: :daily_model_total, available: Decimal.new(0)}}}
-    else
-      :ok
     end
   end
 
@@ -1798,9 +1786,6 @@ defmodule TokengateWeb.ProxyController do
 
   defp error_details({:budget_exceeded, %{period: :daily_global}}),
     do: {402, "billing_error", "budget_exceeded", "Global daily spending cap reached"}
-
-  defp error_details({:budget_exceeded, %{period: :daily_model_total}}),
-    do: {402, "billing_error", "budget_exceeded", "Model daily spending cap reached"}
 
   defp error_details({:budget_exceeded, %{period: :daily_model_per_user}}),
     do: {402, "billing_error", "budget_exceeded", "Daily spending cap reached for this model"}

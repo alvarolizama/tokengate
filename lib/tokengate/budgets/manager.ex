@@ -159,7 +159,6 @@ defmodule Tokengate.Budgets.Manager do
     # (the /2 convenience used by tests) tracks member-level + global only.
     if model_alias_id do
       ensure_loaded({member_id, model_alias_id}, :daily)
-      ensure_loaded({:model, model_alias_id}, :daily)
     end
 
     # Atomic increments. Position 2 = amount_micro.
@@ -180,7 +179,6 @@ defmodule Tokengate.Budgets.Manager do
 
     if model_alias_id do
       bump_counter({{member_id, model_alias_id}, :daily}, micro)
-      bump_counter({{:model, model_alias_id}, :daily}, micro)
     end
 
     # Debounced drift-correction enqueue: instead of one Oban job per request,
@@ -273,17 +271,6 @@ defmodule Tokengate.Budgets.Manager do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Returns the current daily spend for a specific model across ALL users
-  (UTC day) in USD as a Decimal. Lazy-loads from the DB on first touch or
-  day rollover.
-  """
-  @spec model_total_daily_spend(model_alias_id :: term()) :: Decimal.t()
-  def model_total_daily_spend(model_alias_id) do
-    ensure_loaded({:model, model_alias_id}, :daily)
-    from_micro(read_counter({{:model, model_alias_id}, :daily}))
-  end
-
-  @doc """
   Returns the current daily spend for `member_id` on a specific model
   (UTC day) in USD as a Decimal. Lazy-loads from the DB on first touch or
   day rollover.
@@ -292,24 +279,6 @@ defmodule Tokengate.Budgets.Manager do
   def model_per_user_daily_spend(member_id, model_alias_id) do
     ensure_loaded({member_id, model_alias_id}, :daily)
     from_micro(read_counter({{member_id, model_alias_id}, :daily}))
-  end
-
-  @doc """
-  Whether the model's total daily cap (across all users) has been reached
-  for the current UTC day. A `nil` or `0` cap means unlimited — always
-  `false`.
-  """
-  @spec model_total_exhausted?(model_alias_id :: term(), cap :: Decimal.t() | number() | nil) ::
-          boolean()
-  def model_total_exhausted?(model_alias_id, cap) do
-    case normalize_cap(cap) do
-      nil ->
-        false
-
-      %Decimal{} = limit ->
-        ensure_loaded({:model, model_alias_id}, :daily)
-        read_counter({{:model, model_alias_id}, :daily}) >= to_micro(limit)
-    end
   end
 
   @doc """
@@ -371,7 +340,6 @@ defmodule Tokengate.Budgets.Manager do
 
     * a member id (binary) — member-level daily/monthly spend;
     * `{member_id, model_alias_id}` — per-user per-model daily spend;
-    * `{:model, model_alias_id}` — per-model daily spend across all users;
     * `{:credential, credential_id}` — per-credential spend.
 
   This reads `total_cost_usd` — what TokenGate actually paid — so the
@@ -708,7 +676,6 @@ defmodule Tokengate.Budgets.Manager do
   # id), so we use the combined `:subject_id` filter that matches either.
   defp subject_filters(subject) when is_binary(subject), do: %{subject_id: subject}
   defp subject_filters({:credential, credential_id}), do: %{credential_id: credential_id}
-  defp subject_filters({:model, model_alias_id}), do: %{model_alias_id: model_alias_id}
 
   defp subject_filters({member_id, model_alias_id}),
     do: %{subject_id: member_id, model_alias_id: model_alias_id}

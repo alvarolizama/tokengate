@@ -201,8 +201,7 @@ defmodule TokengateWeb.ProxyControllerTest do
       Providers.create_model_alias(%{
         name: "gpt-4o-#{u}",
         context_window: 128_000,
-        daily_limit_per_user_usd: Map.get(opts, :model_per_user_cap),
-        daily_limit_total_usd: Map.get(opts, :model_total_cap)
+        daily_limit_per_user_usd: Map.get(opts, :model_per_user_cap)
       })
 
     {:ok, _grant} = Providers.grant_alias_to_team(team.id, model_alias.id)

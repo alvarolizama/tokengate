@@ -1526,14 +1526,6 @@ defmodule TokengateWeb.ModelsLive do
                       label="Límite diario por usuario (USD)"
                       hint="Tope de gasto diario de cada usuario en este modelo. Vacío o 0 = ilimitado. No aplica a facturación incluida."
                     />
-
-                    <.input
-                      field={@form[:daily_limit_total_usd]}
-                      type="number"
-                      step="0.000001"
-                      label="Límite diario total del modelo (USD)"
-                      hint="Tope de gasto diario de todos los usuarios en este modelo. Vacío o 0 = ilimitado. No aplica a facturación incluida."
-                    />
                   </div>
                 </div>
 
