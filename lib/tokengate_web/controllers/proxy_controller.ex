@@ -98,9 +98,9 @@ defmodule TokengateWeb.ProxyController do
       |> assign(:idempotency_key, Ecto.UUID.generate())
 
     with :ok <- require_model(model),
-         :ok <- acquire_team_limits(key_id, limits),
          :ok <- check_user_daily_cap(member),
-         :ok <- check_global_daily_cap(member) do
+         :ok <- check_global_daily_cap(member),
+         :ok <- acquire_team_limits(key_id, limits) do
       try do
         case route_and_acquire(member, payload, conn.assigns.api_key_hash, limits) do
           {:ok, route} ->
@@ -184,9 +184,9 @@ defmodule TokengateWeb.ProxyController do
     request_start = System.monotonic_time(:millisecond)
 
     with :ok <- require_model(model),
-         :ok <- acquire_team_limits(key_id, limits),
          :ok <- check_user_daily_cap(member),
-         :ok <- check_global_daily_cap(member) do
+         :ok <- check_global_daily_cap(member),
+         :ok <- acquire_team_limits(key_id, limits) do
       try do
         case route_and_acquire(member, payload, conn.assigns.api_key_hash, limits, [],
                capability: capability

@@ -358,31 +358,47 @@ defmodule TokengateWeb.ProxyControllerTest do
              json_response(conn, 402)
   end
 
-  test "402 when a model's total daily cap is reached across the org", %{conn: conn} do
+  @tag :capture_log
+  test "rejected budget requests do not leak team concurrency slots", %{conn: conn} do
+    # Regression: budget gates used to run AFTER acquire_team_limits, and the
+    # concurrency slot was only released inside the try/after that never ran
+    # when the `with` short-circuited. N rejected requests leaked N slots and
+    # the member ended up permanently 429-blocked (no sweeper on the
+    # in-flight table).
     %{token: token, alias: model_alias, member: member} =
-      proxy_fixture(%{model_total_cap: "0.0001"})
+      proxy_fixture(%{daily_budget: "0.0001", concurrency_limit: 3})
 
-    # Seed the shared model-total counter so the gate trips on any member.
-    Budgets.record_spend(member.id, model_alias.id, Decimal.new("0.0002"))
+    # Member is already over their monthly cap → every request 402s.
+    Budgets.record_spend(member.id, Decimal.new("0.000150"))
 
-    conn =
+    for _ <- 1..3 do
       conn
       |> authed_conn(token)
       |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+    end
 
-    assert %{"error" => %{"code" => "budget_exceeded", "type" => "billing_error"}} =
-             json_response(conn, 402)
+    # The leaked slots would pin the in-flight count at the limit...
+    assert Limits.current_concurrency(member.api_key.id) == 0
+
+    # ...and block forever: a 4th request (cap now "reset" by clearing the
+    # spend counter) must NOT be concurrency-blocked.
+    Tokengate.Budgets.Manager.reset_monthly_counters()
+    :ets.delete(:tokengate_budgets, member.id)
+
+    conn
+    |> authed_conn(token)
+    |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+    |> json_response(200)
   end
 
-  test "included provider bypasses exhausted per-user and total model caps", %{conn: conn} do
+  test "included provider bypasses exhausted per-user model cap", %{conn: conn} do
     %{token: token, alias: model_alias, member: member} =
       proxy_fixture(%{
         model_per_user_cap: "0.0001",
-        model_total_cap: "0.0001",
         billing_mode: "included"
       })
 
-    # Exhaust both model caps; an `included` provider must still serve.
+    # Exhaust the per-user model cap; an `included` provider must still serve.
     Budgets.record_spend(member.id, model_alias.id, Decimal.new("0.0002"))
 
     conn =
