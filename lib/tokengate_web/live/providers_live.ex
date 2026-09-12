@@ -65,6 +65,10 @@ defmodule TokengateWeb.ProvidersLive do
       from(p in Provider,
         left_join: c in assoc(p, :credentials),
         preload: [credentials: c],
+        # Only providers in use: those with at least one credential.
+        # Seeded builtins without API keys stay invisible until a
+        # credential attaches to them.
+        where: not is_nil(c.id) or p.source == "custom",
         order_by: [asc: p.name]
       )
       |> Repo.all()
@@ -112,8 +116,25 @@ defmodule TokengateWeb.ProvidersLive do
         |> Map.new(fn cred -> {cred.id, Map.get(all, cred.id, :closed)} end)
       end)
 
+    # Catalog builtins with no credentials yet — offered in the "activar
+    # proveedor" menu grouped by billing surface (subscription first).
+    inactive_builtins =
+      from(p in Provider,
+        left_join: c in assoc(p, :credentials),
+        where: p.source == "builtin" and is_nil(c.id),
+        order_by: [asc: p.name],
+        distinct: true,
+        select: %{id: p.id, name: p.name, key: p.key, capabilities: p.capabilities}
+      )
+      |> Repo.all()
+      |> Enum.map(fn b ->
+        entry = Tokengate.Providers.Catalog.get(b.key)
+        Map.put(b, :billing, entry && entry.billing)
+      end)
+
     socket
     |> assign(:providers, providers)
+    |> assign(:inactive_builtins, inactive_builtins)
     |> assign(:providers_empty?, providers == [])
     |> assign(:provider_model_counts, provider_model_counts)
     |> assign(:breaker_statuses, breaker_statuses)
@@ -146,13 +167,36 @@ defmodule TokengateWeb.ProvidersLive do
   ## Events — provider CRUD ------------------------------------------------
 
   @impl true
-  def handle_event("new_provider", _params, socket) do
-    changeset = Providers.change_provider(%Provider{})
+  # Custom provider creation — reachable from the "Activar proveedor"
+  # dropdown (last entry). Every custom is OpenAI-compatible; capabilities
+  # and per-service URLs are configurable.
+  def handle_event("new_custom_provider", _params, socket) do
+    changeset =
+      Providers.change_provider(%Provider{
+        source: "custom",
+        dialect: "openai",
+        capabilities: ["llm"]
+      })
 
     {:noreply,
      socket
      |> assign(:form, to_form(changeset, as: :provider))
      |> assign(:editing_provider_id, :new)}
+  end
+
+  # Opens the credential modal for a builtin that isn't shown in the list
+  # (it has no credentials yet) — the fastest way to "activate" a catalog
+  # provider: attach an API key to it.
+  def handle_event("activate_builtin", %{"id" => provider_id}, socket) do
+    provider = Providers.get_provider!(provider_id)
+
+    changeset =
+      Providers.change_credential(%Credential{provider_id: provider.id, status: "active"})
+
+    {:noreply,
+     socket
+     |> assign(:credential_form, to_form(changeset, as: :credential))
+     |> assign(:editing_credential_id, nil)}
   end
 
   def handle_event("cancel_form", _params, socket) do
@@ -177,16 +221,24 @@ defmodule TokengateWeb.ProvidersLive do
   end
 
   def handle_event("delete_provider", %{"id" => provider_id}, socket) do
-    # Soft guard: a concurrent delete (double click on a stale row) must
-    # flash, not crash with Ecto.NoResultsError.
-    case Providers.get_provider(provider_id) do
-      nil ->
-        {:noreply,
-         socket
-         |> put_flash(:error, "El proveedor ya no existe.")
-         |> load_providers()}
+    provider = Enum.find(socket.assigns.providers, &(&1.id == provider_id))
 
-      provider ->
+    cond do
+      is_nil(provider) ->
+        {:noreply, socket}
+
+      provider.source == "builtin" ->
+        # Builtins come from the compile-time catalog: deleting them would
+        # lose their credentials, and the boot sync would re-insert the row
+        # anyway. Disable instead.
+        {:noreply,
+         put_flash(
+           socket,
+           :error,
+           "Los proveedores del catálogo no se pueden eliminar — desactívalo para sacarlo del routing (vuelve a crearse en cada arranque)."
+         )}
+
+      true ->
         delete_provider(socket, provider)
     end
   end
@@ -427,7 +479,12 @@ defmodule TokengateWeb.ProvidersLive do
     end
   end
 
+  # Capabilities are derived, not chosen: a custom serves embeddings iff an
+  # embeddings URL resolves (explicit override or base-url derivation is
+  # decided by what the user typed — an explicit Embeddings URL means yes).
   defp save_provider(socket, :new, provider_params) do
+    provider_params = derive_capabilities(provider_params)
+
     case Providers.create_provider(provider_params) do
       {:ok, _provider} ->
         {:noreply,
@@ -444,6 +501,7 @@ defmodule TokengateWeb.ProvidersLive do
 
   defp save_provider(socket, provider_id, provider_params) when is_binary(provider_id) do
     provider = Providers.get_provider!(provider_id)
+    provider_params = derive_capabilities(provider_params)
 
     case Providers.update_provider(provider, provider_params) do
       {:ok, _provider} ->
@@ -457,6 +515,18 @@ defmodule TokengateWeb.ProvidersLive do
       {:error, changeset} ->
         {:noreply, assign(socket, :form, to_form(changeset, as: :provider))}
     end
+  end
+
+  # Derives capabilities from what the user actually configured: embeddings
+  # iff an explicit embeddings_url is set (llm always — chat is the primary
+  # surface of a custom provider).
+  defp derive_capabilities(provider_params) do
+    has_embeddings =
+      provider_params
+      |> Map.get("embeddings_url", "")
+      |> then(&(&1 not in [nil, ""]))
+
+    Map.put(provider_params, "capabilities", if(has_embeddings, do: ["llm", "embedding"], else: ["llm"]))
   end
 
   ## Helpers ---------------------------------------------------------------
@@ -526,41 +596,107 @@ defmodule TokengateWeb.ProvidersLive do
         </.header>
 
         <div class="flex justify-end">
-          <button phx-click="new_provider" class="btn btn-primary btn-sm" id="new-provider-btn">
-            <.icon name="hero-plus" class="w-4 h-4" /> Nuevo proveedor
-          </button>
+          <div class="dropdown dropdown-end">
+            <div tabindex="0" role="button" class="btn btn-primary btn-sm" id="activate-builtin-btn">
+              <.icon name="hero-bolt" class="w-4 h-4" /> Activar proveedor
+            </div>
+            <div tabindex="0" class="dropdown-content z-50 menu bg-base-100 border border-base-300 rounded-box w-80 p-2 shadow-lg">
+              <div
+                :for={{label, group} <- [
+                  {"Suscripción (plan incluido)", Enum.filter(@inactive_builtins, &(&1.billing == "subscription"))},
+                  {"Pay-per-token", Enum.filter(@inactive_builtins, &(&1.billing == "pay_per_token"))}
+                ]}
+                :if={group != []}
+              >
+                <div class="px-2 pt-1 pb-1 text-xs font-semibold opacity-60">
+                  {label}
+                </div>
+                <button
+                  :for={b <- group}
+                  phx-click="activate_builtin"
+                  phx-value-id={b.id}
+                  class="text-left px-2 py-1.5 rounded hover:bg-base-200 text-sm flex items-center gap-2"
+                  id={"activate-#{b.id}"}
+                >
+                  <span class="truncate flex-1">{b.name}</span>
+                  <span class="flex gap-1 shrink-0">
+                    <span
+                      :for={cap <- b.capabilities}
+                      class="text-[10px] uppercase tracking-wide badge badge-ghost badge-sm"
+                    >
+                      {cap}
+                    </span>
+                  </span>
+                </button>
+                <div class="border-t border-base-300 my-1"></div>
+              </div>
+
+              <button
+                phx-click="new_custom_provider"
+                class="text-left px-2 py-1.5 rounded hover:bg-base-200 text-sm flex justify-between items-center"
+                id="new-custom-provider-btn"
+              >
+                <span>Custom provider</span>
+                <span class="text-xs opacity-50">OPENAI-COMPATIBLE</span>
+              </button>
+            </div>
+          </div>
         </div>
 
         <%!-- Provider form (create / edit) — modal --%>
         <div :if={@form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div class="absolute inset-0 bg-black/50" phx-click="cancel_form" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
+          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-3xl">
             <div class="card-body p-6">
               <h2 class="text-lg font-semibold mb-4">
                 {if @editing_provider_id == :new, do: "Nuevo proveedor", else: "Editar proveedor"}
               </h2>
               <.form for={@form} id="provider-form" phx-submit="save_provider">
-                <.input
-                  field={@form[:name]}
-                  type="text"
-                  label="Nombre"
-                  placeholder="openai"
-                  hint="Identificador único del proveedor."
-                />
-                <.input
-                  field={@form[:base_url]}
-                  type="text"
-                  label="Base URL (LLM)"
-                  placeholder="https://api.openai.com/v1"
-                  hint="URL base del proveedor para chat. El adapter agrega /chat/completions. Sin slash final."
-                />
-                <.input
-                  field={@form[:embedding_base_url]}
-                  type="text"
-                  label="Embedding URL"
-                  placeholder="https://api.fireworks.ai/inference/v1/embeddings"
-                  hint="URL completa del endpoint de embeddings. Vacío = Base URL + /embeddings."
-                />
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                  <div class="space-y-3">
+                    <.input
+                      field={@form[:name]}
+                      type="text"
+                      label="Nombre"
+                      placeholder="mi-relay"
+                      hint="Identificador único del proveedor custom."
+                    />
+                    <.input
+                      field={@form[:base_url]}
+                      type="text"
+                      label="Base URL"
+                      placeholder="https://relay.example.com/v1"
+                      hint="URL base (OpenAI-compatible). El adapter agrega /chat/completions, /models y /embeddings."
+                    />
+                  </div>
+
+                  <div class="space-y-3 border-t sm:border-t-0 sm:border-l border-base-300 sm:pl-6">
+                    <p class="text-xs opacity-60">
+                      URLs por servicio (opcional) — vacío = derivar del Base URL.
+                    </p>
+                    <.input
+                      field={@form[:chat_url]}
+                      type="text"
+                      label="Chat URL"
+                      placeholder="https://relay.example.com/api/chat/completions"
+                      hint="Vacío = Base URL + /chat/completions."
+                    />
+                    <.input
+                      field={@form[:models_url]}
+                      type="text"
+                      label="Models URL"
+                      placeholder="https://relay.example.com/api/models"
+                      hint="Vacío = Base URL + /models."
+                    />
+                    <.input
+                      field={@form[:embeddings_url]}
+                      type="text"
+                      label="Embeddings URL"
+                      placeholder="https://relay.example.com/api/embeddings"
+                      hint="Vacío = Base URL + /embeddings."
+                    />
+                  </div>
+                </div>
                 <div class="flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
                     Cancelar

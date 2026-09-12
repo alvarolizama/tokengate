@@ -39,20 +39,62 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   end
 
   @doc """
-  Generates embeddings via the provider's `/embeddings` endpoint. The
-  payload is forwarded exactly as received — input may be a string, list of
-  strings, or provider-specific multimodal blocks — and the upstream
-  response is returned untouched. TokenGate only authenticates with the
-  provider's API key.
+  Generates embeddings via the provider's `/embeddings` endpoint — always
+  derived from the single `base_url`; per-endpoint URL overrides are gone.
+  The payload is forwarded exactly as received — input may be a string,
+  list of strings, or provider-specific multimodal blocks — and the
+  upstream response is returned untouched. TokenGate only authenticates
+  with the provider's API key.
   """
+  @impl true
   def embeddings(provider, credential, payload, opts \\ []) do
-    post_json(provider, credential, embedding_url(provider), payload, opts)
+    post_json(provider, credential, "/embeddings", payload, opts)
+  end
+
+  @doc """
+  Lists the provider's embedding model ids from the default OpenAI
+  surface (`/models`). Dialects with a separate embedding catalogue
+  (OpenRouter) override this in their adapter.
+  """
+  @impl true
+  def list_embedding_models(provider, credential) do
+    list_models_at(provider, credential, "/models")
+  end
+
+  @doc """
+  Lists model ids from an arbitrary path segment under the provider's
+  base_url — the shared engine behind `list_models/2` and the dialect
+  adapters' `list_embedding_models/2`.
+  """
+  def list_models_at(provider, credential, path) do
+    url = build_url(provider, path)
+    api_key = Map.get(credential, :api_key_encrypted) || Map.get(credential, "api_key_encrypted")
+    request = Finch.build(:get, url, headers(api_key))
+
+    case Finch.request(request, finch_name(), receive_timeout: @default_receive_timeout) do
+      {:ok, %Finch.Response{status: status, body: resp_body}} when status in 200..299 ->
+        decoded = decode!(resp_body)
+        {:ok, extract_model_ids(decoded)}
+
+      {:ok, %Finch.Response{status: status}} ->
+        {:error, ProviderAdapter.classify_status(status)}
+
+      {:error, error} ->
+        {:error, ProviderAdapter.classify_error(error)}
+    end
   end
 
   # Shared non-streaming POST transport: identical headers, timeout and
-  # error classification regardless of the endpoint segment.
+  # error classification regardless of the endpoint segment. A custom
+  # provider may pin the full URL per service (chat_url/embeddings_url);
+  # nil falls through to base_url + path.
   defp post_json(provider, credential, path, payload, opts) do
-    url = build_url(provider, path)
+    url =
+      case override_url(provider, path) do
+        nil -> build_url(provider, path)
+        full -> full
+      end
+
     api_key = Map.get(credential, :api_key_encrypted) || Map.get(credential, "api_key_encrypted")
     receive_timeout = Keyword.get(opts, :receive_timeout, @default_receive_timeout)
     forwarded_headers = Keyword.get(opts, :forwarded_headers, %{})
@@ -299,22 +341,26 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   ## URL & header helpers #####################################################
 
   defp chat_completions_url(provider) do
-    base_url(provider) <> "/chat/completions"
+    override_url(provider, "/chat/completions") || base_url(provider) <> "/chat/completions"
   end
 
   defp models_url(provider) do
-    base_url(provider) <> "/models"
+    override_url(provider, "/models") || base_url(provider) <> "/models"
   end
 
-  # Embedding endpoint URL. Providers may override the embeddings surface
-  # with `embedding_base_url` (e.g. Qwen Cloud's compatible-mode path).
-  # When unset, appends `/embeddings` to base_url.
-  defp embedding_url(provider) do
-    case Map.get(provider, :embedding_base_url) || Map.get(provider, "embedding_base_url") do
-      nil -> base_url(provider) <> "/embeddings"
-      url -> String.trim_trailing(url, "/")
-    end
-  end
+  # Per-service full-URL override for custom providers (nil = none).
+  # "/chat/completions" -> chat_url, "/models" -> models_url,
+  # "/embeddings" -> embeddings_url; any other path derives from base_url.
+  defp override_url(provider, "/chat/completions"),
+    do: Map.get(provider, :chat_url) || Map.get(provider, "chat_url")
+
+  defp override_url(provider, "/models"),
+    do: Map.get(provider, :models_url) || Map.get(provider, "models_url")
+
+  defp override_url(provider, "/embeddings"),
+    do: Map.get(provider, :embeddings_url) || Map.get(provider, "embeddings_url")
+
+  defp override_url(_provider, _path), do: nil
 
   defp base_url(provider) do
     (Map.get(provider, :base_url) || Map.get(provider, "base_url") || "")

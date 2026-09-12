@@ -52,6 +52,7 @@ defmodule TokengateWeb.ProxyController do
   alias Tokengate.Proxy.{
     CostCalculator,
     OpenAIAdapter,
+    ProviderAdapter,
     PromptOptimizer,
     TokenEstimator,
     UsageNormalizer
@@ -133,18 +134,23 @@ defmodule TokengateWeb.ProxyController do
 
   Non-streaming only. Passthrough: the request is forwarded as received
   and the upstream response is returned untouched — TokenGate only adds
-  authentication (provider API key) and cost tracking. When the upstream
-  omits usage, token counts fall back to the chars/4 estimator over the
-  inputs.
+  authentication (provider API key) and cost tracking. The adapter is
+  resolved from the routed provider's dialect, so the single OpenAI
+  embeddings contract works across every provider.
   """
   def embeddings(conn, _params) do
     payload = conn.body_params
 
     with :ok <- require_input(payload) do
-      simple_proxy(conn, payload, "embedding", &OpenAIAdapter.embeddings/4, :embedding)
+      simple_proxy(conn, payload, "embedding", &adapter_embeddings/4, :embedding)
     else
       {:error, error} -> render_proxy_error(conn, error)
     end
+  end
+
+  # Embeddings through the dialect adapter of the routed provider.
+  defp adapter_embeddings(provider, credential, payload, opts) do
+    ProviderAdapter.dispatch(provider).embeddings(provider, credential, payload, opts)
   end
 
   # Shared gate pipeline for non-streaming, non-chat endpoints (embeddings):

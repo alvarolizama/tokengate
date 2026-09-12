@@ -94,6 +94,33 @@ defmodule Tokengate.Proxy.ProviderAdapter do
               :ok | {:error, failure_reason()}
 
   @doc """
+  Generates embeddings via the provider's `/embeddings` endpoint
+  (derived from the single `base_url`). The gateway's contract is the
+  OpenAI embeddings shape — the adapter translates request and response
+  when the provider's dialect needs it.
+
+  Returns the same 4-tuple shape as `chat_completion/4`.
+  """
+  @callback embeddings(
+              provider :: map(),
+              credential :: map(),
+              payload :: map(),
+              opts :: keyword()
+            ) ::
+              {:ok, body :: map(), latency_ms :: non_neg_integer(),
+               resp_headers :: [{String.t(), String.t()}]}
+              | {:error, failure_reason(), status :: non_neg_integer() | nil,
+                 error_message :: String.t() | nil}
+
+  @doc """
+  Lists the model ids the provider exposes for embeddings. Dialects vary:
+  OpenAI-compatible exposes them under `/models`, OpenRouter under
+  `/embeddings/models`. Returns `{:ok, [model_id]}` or `{:error, reason}`.
+  """
+  @callback list_embedding_models(provider :: map(), credential :: map()) ::
+              {:ok, [String.t()]} | {:error, failure_reason()}
+
+  @doc """
   Classifies an HTTP status code into a failure reason.
 
     * `401`, `402`, `403` -> `:auth_error` (credential is bad — disable it
@@ -139,18 +166,21 @@ defmodule Tokengate.Proxy.ProviderAdapter do
   @doc """
   Resolves the adapter module for a provider.
 
-  `adapter` may be a module (returned as-is), an atom name, a string name,
-  or `nil`. The OpenAI-compatible API is the lingua franca, so every known
-  name ("openai", "openai-compatible") and every unknown name alike map to
-  `Tokengate.Proxy.OpenAIAdapter`.
-
-  A provider map with no `:adapter` / `:name` field also defaults to
-  `OpenAIAdapter`.
+  Resolution order: an explicit `:dialect` field on the provider map wins
+  (`"openrouter"` → `OpenRouterAdapter`, `"openai"` → `OpenAIAdapter`);
+  everything else — module atoms, `adapter`/`name` strings, nil — falls
+  back through the legacy name-based resolution to `OpenAIAdapter`, the
+  lingua franca.
   """
   @spec dispatch(atom() | String.t() | map() | nil) :: module()
   def dispatch(module) when is_atom(module) and not is_nil(module) do
     if Code.ensure_loaded?(module), do: module, else: resolve(nil)
   end
+
+  def dispatch(%{dialect: "openrouter"}), do: Tokengate.Proxy.OpenRouterAdapter
+  def dispatch(%{dialect: "openai"}), do: Tokengate.Proxy.OpenAIAdapter
+  def dispatch(%{"dialect" => "openrouter"}), do: Tokengate.Proxy.OpenRouterAdapter
+  def dispatch(%{"dialect" => "openai"}), do: Tokengate.Proxy.OpenAIAdapter
 
   def dispatch(%{adapter: adapter}) when is_binary(adapter), do: resolve(adapter)
 

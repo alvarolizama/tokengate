@@ -38,6 +38,10 @@ defmodule Tokengate.Application do
         id: :partition_boot_ensure,
         restart: :temporary
       ),
+      # Materialize the builtin provider catalog (upsert by key, never
+      # touches custom rows). One-shot, idempotent, failures logged not
+      # raised — the app must boot.
+      Tokengate.Providers.CatalogSync,
       Tokengate.Routing.Supervisor,
       Tokengate.Routing.Cache,
       Tokengate.Limits.Supervisor,

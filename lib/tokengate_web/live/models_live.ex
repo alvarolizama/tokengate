@@ -89,6 +89,14 @@ defmodule TokengateWeb.ModelsLive do
   defp filter_by_type(aliases, "favorites"), do: Enum.filter(aliases, & &1.pinned)
   defp filter_by_type(aliases, type), do: Enum.filter(aliases, &(&1.model_type == type))
 
+  # The model_type of the alias being edited (edit_model_provider path).
+  defp get_alias_type(_socket, alias_id) do
+    case Tokengate.Repo.get(Tokengate.Providers.ModelAlias, alias_id) do
+      nil -> "llm"
+      alias_ -> alias_.model_type || "llm"
+    end
+  end
+
   # Providers are grouped by scope first — global, then team-exclusive,
   # then member-exclusive — and ordered by priority within each group.
   defp aliases_with_providers_query do
@@ -743,10 +751,28 @@ defmodule TokengateWeb.ModelsLive do
 
     if credential do
       provider = credential.provider
+
+      # Which catalogue to list depends on the alias being edited: the
+      # active filter when creating, the edited alias's type otherwise.
+      alias_type =
+        case socket.assigns.editing_alias_id do
+          :new -> socket.assigns.model_type_filter
+          nil -> socket.assigns.model_type_filter
+          id -> get_alias_type(socket, id)
+        end
+
       lv_pid = self()
 
       Task.start(fn ->
-        result = Tokengate.Proxy.OpenAIAdapter.list_models(provider, credential)
+        adapter = Tokengate.Proxy.ProviderAdapter.dispatch(provider)
+
+        result =
+          if alias_type == "embedding" do
+            adapter.list_embedding_models(provider, credential)
+          else
+            Tokengate.Proxy.OpenAIAdapter.list_models(provider, credential)
+          end
+
         send(lv_pid, {:provider_models_result, credential_id, result})
       end)
 
