@@ -66,7 +66,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     }
   end
 
-  defp team_url(team), do: "/dashboard/teams/#{team.id}/members"
+  defp team_url(team), do: "/admin/teams/#{team.id}/members"
 
   # --------------------------------------------------------------------------
   # Access control

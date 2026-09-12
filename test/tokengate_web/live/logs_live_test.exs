@@ -93,7 +93,7 @@ defmodule TokengateWeb.LogsLiveTest do
   ## Auth ---------------------------------------------------------------------
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
-    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/dashboard/logs")
+    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/admin/logs")
   end
 
   ## User / team / think / effort columns ---------------------------------------
@@ -103,7 +103,7 @@ defmodule TokengateWeb.LogsLiveTest do
     %{team: team, owner: owner} = member_with_log(think: true, effort: "high")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
+    {:ok, view, _html} = live(conn, ~p"/admin/logs")
 
     html = render(view)
     assert html =~ owner.email
@@ -118,7 +118,7 @@ defmodule TokengateWeb.LogsLiveTest do
     %{member: member} = member_with_log()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
+    {:ok, view, _html} = live(conn, ~p"/admin/logs")
 
     entry =
       Inflight.start_request(%{
@@ -150,7 +150,7 @@ defmodule TokengateWeb.LogsLiveTest do
     %{member: member, model: model} = member_with_log()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
+    {:ok, view, _html} = live(conn, ~p"/admin/logs")
 
     # Filtrar por el modelo del test: el pending usa otro modelo y debe ocultarse
     view
@@ -177,7 +177,7 @@ defmodule TokengateWeb.LogsLiveTest do
     member_with_log()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
+    {:ok, view, _html} = live(conn, ~p"/admin/logs")
 
     assert has_element?(view, "#logs-filter-form select[name='filter[model_search]']")
   end
@@ -197,7 +197,7 @@ defmodule TokengateWeb.LogsLiveTest do
     anchor = owner.email
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard/logs")
+    {:ok, view, html} = live(conn, ~p"/admin/logs")
 
     # Sin filtro el log aparece
     assert html =~ anchor
@@ -240,7 +240,7 @@ defmodule TokengateWeb.LogsLiveTest do
     %{log: log} = member_with_log()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
+    {:ok, view, _html} = live(conn, ~p"/admin/logs")
 
     assert has_element?(view, "#summary-req-per-min")
     assert has_element?(view, "#summary-latency")
@@ -260,7 +260,7 @@ defmodule TokengateWeb.LogsLiveTest do
     member_with_log()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
+    {:ok, view, _html} = live(conn, ~p"/admin/logs")
 
     # Simulate a periodic tick — the view must re-query and stay consistent
     send(view.pid, :refresh_summary)
@@ -286,7 +286,7 @@ defmodule TokengateWeb.LogsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard/logs")
+    {:ok, view, html} = live(conn, ~p"/admin/logs")
 
     assert html =~ "err-model"
 
@@ -312,8 +312,8 @@ defmodule TokengateWeb.LogsLiveTest do
 
     conn = login(conn, user, password)
 
-    # The whole /dashboard/logs lives behind live_session :admin, so a plain
+    # The whole /admin/logs lives behind live_session :admin, so a plain
     # user never even mounts the view — they get bounced to /dashboard.
-    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/logs")
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/admin/logs")
   end
 end

@@ -231,7 +231,7 @@ defmodule TokengateWeb.Layouts do
                 Monitoreo
               </p>
               <.sidebar_link
-                href={~p"/dashboard/logs"}
+                href={~p"/admin/logs"}
                 label="Logs"
                 icon="hero-document-text"
               />
@@ -244,30 +244,30 @@ defmodule TokengateWeb.Layouts do
                 Administración
               </p>
               <.sidebar_link
-                href={~p"/dashboard/providers"}
+                href={~p"/admin/providers"}
                 label="Proveedores"
                 icon="hero-server-stack"
                 badge={@alert_count}
               />
               <.sidebar_link
-                href={~p"/dashboard/models"}
+                href={~p"/admin/models"}
                 label="Modelos"
                 icon="hero-rectangle-stack"
               />
               <.sidebar_link href={~p"/dashboard/users"} label="Usuarios" icon="hero-users" />
-              <.sidebar_link href={~p"/dashboard/teams"} label="Equipos" icon="hero-user-group" />
+              <.sidebar_link href={~p"/admin/teams"} label="Equipos" icon="hero-user-group" />
               <.sidebar_link
                 href={~p"/dashboard/services"}
                 label="Servicios"
                 icon="hero-wrench-screwdriver"
               />
               <.sidebar_link
-                href={~p"/dashboard/budgets"}
+                href={~p"/admin/budgets"}
                 label="Budget"
                 icon="hero-banknotes"
               />
               <.sidebar_link
-                href={~p"/dashboard/maintenance"}
+                href={~p"/admin/maintenance"}
                 label="Mantenimiento"
                 icon="hero-cog-6-tooth"
               />

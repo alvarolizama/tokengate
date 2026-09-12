@@ -93,14 +93,14 @@ defmodule TokengateWeb.ModelsLiveTest do
   # -- Permissions ----------------------------------------------------------
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
-    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/dashboard/models")
+    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/admin/models")
   end
 
   test "admin sees the create button", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
 
-    {:ok, view, html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, html} = live(conn, ~p"/admin/models")
 
     assert has_element?(view, "#new-model-btn")
     assert html =~ "Modelos"
@@ -110,7 +110,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     %{user: user, password: password} = register("user")
     conn = login(conn, user, password)
 
-    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/models")
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/admin/models")
   end
 
   # -- Alias CRUD -----------------------------------------------------------
@@ -119,7 +119,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
 
     view |> element("#new-model-btn") |> render_click()
 
@@ -153,7 +153,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
 
     view |> element("#new-model-btn") |> render_click()
 
@@ -196,7 +196,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     model_record = create_model()
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
 
     view |> element("#edit-model-#{model_record.id}") |> render_click()
 
@@ -221,7 +221,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     model_record = create_model()
     conn = login(conn, admin, password)
 
-    {:ok, view, html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, html} = live(conn, ~p"/admin/models")
     assert html =~ model_record.name
 
     view |> element("#delete-model-#{model_record.id}") |> render_click()
@@ -238,7 +238,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     create_model_provider(model_record, provider)
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
 
     view |> element("#delete-model-#{model_record.id}") |> render_click()
 
@@ -263,7 +263,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
 
     # The new_model_provider button is inline in each model card
     assert has_element?(view, "#new-ap-#{model_record.id}")
@@ -302,7 +302,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
     view |> element("#new-ap-#{model_record.id}") |> render_click()
 
     # Form input is in seconds; the column is stored in ms.
@@ -343,7 +343,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
     view |> element("#new-ap-#{model_record.id}") |> render_click()
 
     html =
@@ -378,7 +378,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
     view |> element("#new-ap-#{model_record.id}") |> render_click()
 
     html =
@@ -422,7 +422,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
     view |> element("#edit-ap-#{ap.id}") |> render_click()
 
     # Form should be open with 300 (seconds) pre-filled, not 300_000.
@@ -442,7 +442,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     ap3 = create_model_provider(model_record, provider, %{priority: 3})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
 
     # Drag ap3 to the top
     render_hook(view, "reorder_providers", %{
@@ -465,7 +465,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     ap_b = create_model_provider(model_b, provider, %{priority: 7})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
 
     render_hook(view, "reorder_providers", %{
       "model_id" => model_a.id,
@@ -502,7 +502,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
 
     html = render(view)
 
@@ -516,7 +516,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     ap = create_model_provider(model_record, provider)
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
 
     view |> element("#toggle-ap-#{ap.id}") |> render_click()
 
@@ -552,7 +552,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
 
     view |> element("#edit-ap-#{ap.id}") |> render_click()
 
@@ -640,7 +640,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
 
     view |> element("#edit-ap-#{ap.id}") |> render_click()
 
@@ -688,7 +688,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     {:ok, tm_b} = Accounts.create_team_member(%{team_id: team.id, user_id: other.id})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
     view |> element("#new-ap-#{model_record.id}") |> render_click()
 
     # Multi-select flow: pick the member scope, accumulate two members,
@@ -753,7 +753,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
 
     view |> element("#edit-ap-#{ap.id}") |> render_click()
 
@@ -770,7 +770,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert render(view) =~ "fresh-model"
   end
 
-  test "model_provider row surfaces credential disabled state in /dashboard/models", %{conn: conn} do
+  test "model_provider row surfaces credential disabled state in /admin/models", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
     model_record = create_model()
@@ -792,11 +792,11 @@ defmodule TokengateWeb.ModelsLiveTest do
         enabled: true
       })
 
-    # Now flip the credential to "disabled" (what /dashboard/providers does).
+    # Now flip the credential to "disabled" (what /admin/providers does).
     {:ok, _} = Providers.update_credential(credential, %{status: "disabled"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
 
     html = render(view)
 
@@ -807,7 +807,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert html =~ "credential desactivada"
 
     # The toggle should show the play icon (it would not actually re-enable the
-    # credential — admin must go to /dashboard/providers for that).
+    # credential — admin must go to /admin/providers for that).
     assert has_element?(view, "#toggle-ap-#{ap.id} span.hero-play")
     refute has_element?(view, "#toggle-ap-#{ap.id} span.hero-pause")
   end
@@ -819,7 +819,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     ap = create_model_provider(model_record, provider)
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
 
     html = render(view)
     assert html =~ ap.provider_model
@@ -840,7 +840,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     # have created models already. Wipe them so the empty state holds.
     Repo.delete_all(Providers.Model)
 
-    {:ok, view, html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, html} = live(conn, ~p"/admin/models")
 
     # Default filter is Favoritos → favorites-specific empty message.
     assert html =~ "No hay modelos pineados"
@@ -857,13 +857,13 @@ defmodule TokengateWeb.ModelsLiveTest do
     %{user: admin, password: admin_password} = register("admin")
     _alias_record = create_model()
     conn = login(conn, admin, admin_password)
-    {:ok, _view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, _view, _html} = live(conn, ~p"/admin/models")
 
     # Now login as regular user — should be redirected
     %{user: user, password: password} = register("user")
     conn = login(Phoenix.ConnTest.build_conn(), user, password)
 
-    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/models")
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/admin/models")
   end
 
   # -- Credential daily spending cap indicator -------------------------------
@@ -876,7 +876,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     model_b = create_model(%{name: "bb-pinned-test", pinned: false})
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
 
     view |> element("#model-type-all") |> render_click()
 
@@ -896,7 +896,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     model_record = create_model(%{name: "pinned-then-unpinned", pinned: true})
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
 
     view |> element("#pin-model-#{model_record.id}") |> render_click()
 
@@ -912,7 +912,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     create_model_provider(model_record, provider)
     conn = login(conn, admin, password)
 
-    {:ok, _view, html} = live(conn, ~p"/dashboard/models")
+    {:ok, _view, html} = live(conn, ~p"/admin/models")
 
     assert html =~ ~s(id="model-providers-#{model_record.id}")
     assert html =~ ~s(style="display: none")
@@ -926,7 +926,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     _unpinned = create_model(%{name: "unpinned-default-model", pinned: false})
     conn = login(conn, admin, password)
 
-    {:ok, view, html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, html} = live(conn, ~p"/admin/models")
 
     assert html =~ "fav-default-model"
     refute html =~ "unpinned-default-model"
@@ -943,7 +943,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     _unpinned = create_model(%{name: "fav-unpinned-model", pinned: false})
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/dashboard/models")
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
 
     view |> element("#model-type-favorites") |> render_click()
 

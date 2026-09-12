@@ -47,14 +47,14 @@ defmodule TokengateWeb.TeamsLiveTest do
   # --------------------------------------------------------------------------
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
-    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/dashboard/teams")
+    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/admin/teams")
   end
 
   test "non-admin authenticated users are redirected to /dashboard", %{conn: conn} do
     %{user: user, password: password} = register("user")
 
     conn = login(conn, user, password)
-    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/teams")
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/admin/teams")
   end
 
   # --------------------------------------------------------------------------
@@ -65,7 +65,7 @@ defmodule TokengateWeb.TeamsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard/teams")
+    {:ok, view, html} = live(conn, ~p"/admin/teams")
 
     assert html =~ "Equipos"
     assert has_element?(view, "#new-team-btn")
@@ -82,7 +82,7 @@ defmodule TokengateWeb.TeamsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard/teams")
+    {:ok, view, html} = live(conn, ~p"/admin/teams")
 
     assert html =~ team.name
     assert has_element?(view, "#edit-#{team.id}")
@@ -97,7 +97,7 @@ defmodule TokengateWeb.TeamsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/teams")
+    {:ok, view, _html} = live(conn, ~p"/admin/teams")
 
     view |> element("#new-team-btn") |> render_click()
     assert has_element?(view, "#team-form")
@@ -124,7 +124,7 @@ defmodule TokengateWeb.TeamsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/teams")
+    {:ok, view, _html} = live(conn, ~p"/admin/teams")
 
     view |> element("#new-team-btn") |> render_click()
 
@@ -151,7 +151,7 @@ defmodule TokengateWeb.TeamsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/teams")
+    {:ok, view, _html} = live(conn, ~p"/admin/teams")
 
     view |> element("#edit-#{team.id}") |> render_click()
     assert has_element?(view, "#team-form")
@@ -171,7 +171,7 @@ defmodule TokengateWeb.TeamsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/teams")
+    {:ok, view, _html} = live(conn, ~p"/admin/teams")
 
     view |> element("#new-team-btn") |> render_click()
     assert has_element?(view, "#team-form")
@@ -189,7 +189,7 @@ defmodule TokengateWeb.TeamsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/teams")
+    {:ok, view, _html} = live(conn, ~p"/admin/teams")
 
     assert has_element?(view, "#delete-#{team.id}")
 
@@ -208,7 +208,7 @@ defmodule TokengateWeb.TeamsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard/teams")
+    {:ok, view, html} = live(conn, ~p"/admin/teams")
 
     # The model picker is NOT in the card — only inside the models modal
     refute html =~ "Modelos del equipo</h4>"
@@ -257,7 +257,7 @@ defmodule TokengateWeb.TeamsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/teams")
+    {:ok, view, _html} = live(conn, ~p"/admin/teams")
 
     assert has_element?(view, "#members-link-#{team.id}")
   end
@@ -271,7 +271,7 @@ defmodule TokengateWeb.TeamsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/teams")
+    {:ok, view, _html} = live(conn, ~p"/admin/teams")
 
     assert has_element?(view, "#new-webhook-#{team.id}")
 

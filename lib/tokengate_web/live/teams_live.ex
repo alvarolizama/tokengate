@@ -629,7 +629,7 @@ defmodule TokengateWeb.TeamsLive do
                 </div>
                 <div class="flex gap-2">
                   <.link
-                    navigate={~p"/dashboard/teams/#{team}/members"}
+                    navigate={~p"/admin/teams/#{team}/members"}
                     class="btn btn-sm btn-ghost"
                     id={"members-link-#{team.id}"}
                   >

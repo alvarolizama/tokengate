@@ -89,18 +89,18 @@ defmodule TokengateWeb.Router do
       live "/dashboard/stats/teams", StatsLive, :teams
       live "/dashboard/stats/services", StatsLive, :services
       live "/dashboard/stats/members/:member_id", StatsLive, :member
-      live "/dashboard/teams", TeamsLive
-      live "/dashboard/teams/:id/members", TeamMembersLive
       live "/dashboard/services", ServicesLive
-      live "/dashboard/logs", LogsLive
-      live "/dashboard/providers", ProvidersLive
       live "/dashboard/users", UsersLive
       live "/dashboard/users/:user_id/stats", UserStatsLive
-      live "/dashboard/models", ModelsLive
       live "/dashboard/credits", CreditsLive
       live "/dashboard/calculator", CalculatorLive
-      live "/dashboard/budgets", BudgetsLive
-      live "/dashboard/maintenance", MaintenanceLive
+      live "/admin/logs", LogsLive
+      live "/admin/providers", ProvidersLive
+      live "/admin/models", ModelsLive
+      live "/admin/teams", TeamsLive
+      live "/admin/teams/:id/members", TeamMembersLive
+      live "/admin/budgets", BudgetsLive
+      live "/admin/maintenance", MaintenanceLive
     end
   end
 

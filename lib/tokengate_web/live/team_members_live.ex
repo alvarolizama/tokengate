@@ -588,7 +588,7 @@ defmodule TokengateWeb.TeamMembersLive do
           Miembros de {@team.name}
           <:subtitle>Añade miembros, gestiona roles y extras</:subtitle>
           <:actions>
-            <.link navigate={~p"/dashboard/teams"} class="btn btn-ghost" id="back-to-teams">
+            <.link navigate={~p"/admin/teams"} class="btn btn-ghost" id="back-to-teams">
               <.icon name="hero-arrow-left" class="w-4 h-4" /> Volver
             </.link>
           </:actions>

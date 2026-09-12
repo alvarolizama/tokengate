@@ -60,14 +60,14 @@ defmodule TokengateWeb.ProvidersLiveTest do
   ## Permissions -----------------------------------------------------------
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
-    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/dashboard/providers")
+    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/admin/providers")
   end
 
   test "non-admin users are redirected to /dashboard", %{conn: conn} do
     %{user: user, password: password} = register_user()
 
     conn = login(conn, user, password)
-    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/providers")
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/admin/providers")
   end
 
   test "admin sees the provider list with a created provider", %{conn: conn} do
@@ -76,7 +76,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard/providers")
+    {:ok, view, html} = live(conn, ~p"/admin/providers")
 
     assert html =~ "Proveedores"
     assert has_element?(view, "#providers-#{provider.id}")
@@ -89,7 +89,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/providers")
+    {:ok, view, _html} = live(conn, ~p"/admin/providers")
 
     view |> element("#new-custom-provider-btn") |> render_click()
     assert has_element?(view, "#provider-form")
@@ -114,7 +114,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/providers")
+    {:ok, view, _html} = live(conn, ~p"/admin/providers")
 
     view |> element("#edit-#{provider.id}") |> render_click()
     assert has_element?(view, "#provider-form")
@@ -138,7 +138,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/providers")
+    {:ok, view, _html} = live(conn, ~p"/admin/providers")
 
     html = view |> element("#delete-#{provider.id}") |> render_click()
 
@@ -175,7 +175,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/providers")
+    {:ok, view, _html} = live(conn, ~p"/admin/providers")
 
     html = view |> element("#delete-#{provider.id}") |> render_click()
 
@@ -190,7 +190,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/providers")
+    {:ok, view, _html} = live(conn, ~p"/admin/providers")
 
     # Credentials panel is always open
     assert has_element?(view, "#credentials-panel-#{provider.id}")

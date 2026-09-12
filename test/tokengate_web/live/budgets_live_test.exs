@@ -36,7 +36,7 @@ defmodule TokengateWeb.BudgetsLiveTest do
       %{user: admin, password: pass} = register("admin")
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/dashboard/budgets")
+      {:ok, view, _html} = live(conn, ~p"/admin/budgets")
 
       assert has_element?(view, "#global-cap-form")
       assert has_element?(view, "#per-user-cap-form")
@@ -51,7 +51,7 @@ defmodule TokengateWeb.BudgetsLiveTest do
       %{user: user, password: pass} = register("user")
 
       conn = login(conn, user, pass)
-      {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/budgets")
+      {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/admin/budgets")
     end
   end
 
@@ -60,7 +60,7 @@ defmodule TokengateWeb.BudgetsLiveTest do
       %{user: admin, password: pass} = register("admin")
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/dashboard/budgets")
+      {:ok, view, _html} = live(conn, ~p"/admin/budgets")
 
       view
       |> form("#global-cap-form", global_settings: %{daily_max_spend_usd: "50.00"})
@@ -75,7 +75,7 @@ defmodule TokengateWeb.BudgetsLiveTest do
       %{user: admin, password: pass} = register("admin")
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/dashboard/budgets")
+      {:ok, view, _html} = live(conn, ~p"/admin/budgets")
 
       view
       |> form("#per-user-cap-form", global_settings: %{daily_max_per_user_usd: "5.00"})
@@ -100,7 +100,7 @@ defmodule TokengateWeb.BudgetsLiveTest do
         })
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/dashboard/budgets")
+      {:ok, view, _html} = live(conn, ~p"/admin/budgets")
 
       view
       |> form("#global-exemption-form", global_subject: %{subject_type: "user"})
@@ -131,7 +131,7 @@ defmodule TokengateWeb.BudgetsLiveTest do
       {:ok, team} = Accounts.create_team(%{name: "Budget Team #{unique()}"})
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/dashboard/budgets")
+      {:ok, view, _html} = live(conn, ~p"/admin/budgets")
 
       # Switch the subject_type select to "team" so the subject select
       # re-renders with team options before submitting.
@@ -160,7 +160,7 @@ defmodule TokengateWeb.BudgetsLiveTest do
         })
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/dashboard/budgets")
+      {:ok, view, _html} = live(conn, ~p"/admin/budgets")
 
       submit = fn view ->
         view

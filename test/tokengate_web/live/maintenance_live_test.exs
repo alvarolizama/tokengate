@@ -57,7 +57,7 @@ defmodule TokengateWeb.SettingsLiveTest do
       %{user: admin, password: pass} = register("admin")
 
       conn = login(conn, admin, pass)
-      {:ok, _view, html} = live(conn, ~p"/dashboard/maintenance")
+      {:ok, _view, html} = live(conn, ~p"/admin/maintenance")
 
       assert html =~ "Zona de peligro"
     end
@@ -66,7 +66,7 @@ defmodule TokengateWeb.SettingsLiveTest do
       %{user: admin, password: pass} = register("admin")
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/dashboard/maintenance")
+      {:ok, view, _html} = live(conn, ~p"/admin/maintenance")
 
       # Click reset sticky → confirmation modal appears
       view |> element("#reset-sticky-btn") |> render_click()
@@ -84,7 +84,7 @@ defmodule TokengateWeb.SettingsLiveTest do
       assert Logs.list_logs(%{limit: 1000}) |> length() > 0
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/dashboard/maintenance")
+      {:ok, view, _html} = live(conn, ~p"/admin/maintenance")
 
       # Click reset → confirmation modal appears
       view |> element("#reset-logs-btn") |> render_click()
@@ -103,7 +103,7 @@ defmodule TokengateWeb.SettingsLiveTest do
       %{user: user, password: pass} = register("user")
 
       conn = login(conn, user, pass)
-      {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/maintenance")
+      {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/admin/maintenance")
     end
   end
 end
