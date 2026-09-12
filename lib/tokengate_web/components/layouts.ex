@@ -254,13 +254,7 @@ defmodule TokengateWeb.Layouts do
                 label="Modelos"
                 icon="hero-rectangle-stack"
               />
-              <.sidebar_link href={~p"/dashboard/users"} label="Usuarios" icon="hero-users" />
               <.sidebar_link href={~p"/admin/teams"} label="Equipos" icon="hero-user-group" />
-              <.sidebar_link
-                href={~p"/dashboard/services"}
-                label="Servicios"
-                icon="hero-wrench-screwdriver"
-              />
               <.sidebar_link
                 href={~p"/admin/budgets"}
                 label="Budget"
@@ -270,6 +264,12 @@ defmodule TokengateWeb.Layouts do
                 href={~p"/admin/maintenance"}
                 label="Mantenimiento"
                 icon="hero-cog-6-tooth"
+              />
+              <.sidebar_link href={~p"/dashboard/users"} label="Usuarios" icon="hero-users" />
+              <.sidebar_link
+                href={~p"/dashboard/services"}
+                label="Servicios"
+                icon="hero-wrench-screwdriver"
               />
             </div>
           <% end %>
