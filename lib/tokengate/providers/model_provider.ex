@@ -23,9 +23,11 @@ defmodule Tokengate.Providers.ModelProvider do
       specified group member sees this provider for the model.
     * `exclusive_to_group_id` set — **group exclusive**: only members of
       the specified group see this provider for the model.
+    * `exclusive_to_service_id` set — **service exclusive**: only the
+      specified service sees this provider for the model.
 
-  The two exclusive fields are mutually exclusive — you cannot set both.
-  A credential can be used across different models, and can appear
+  The exclusive fields are mutually exclusive — you cannot set more than
+  one. A credential can be used across different models, and can appear
   in multiple scope rows for the same model model (global, multiple
   group-exclusive, multiple member-exclusive) — each scope bucket has its
   own partial unique index preventing duplicates within that bucket.
@@ -38,7 +40,7 @@ defmodule Tokengate.Providers.ModelProvider do
   @foreign_key_type :binary_id
 
   @billing_modes ~w(pay_per_token included)
-  @scopes ~w(global member group)
+  @scopes ~w(global member group service)
 
   schema "model_providers" do
     field :provider_model, :string
@@ -60,6 +62,7 @@ defmodule Tokengate.Providers.ModelProvider do
     belongs_to :credential, Tokengate.Providers.Credential
     belongs_to :exclusive_to_group_member, Tokengate.Accounts.GroupMember
     belongs_to :exclusive_to_group, Tokengate.Accounts.Group
+    belongs_to :exclusive_to_service, Tokengate.Accounts.Service
 
     timestamps(type: :utc_datetime)
   end
@@ -79,7 +82,8 @@ defmodule Tokengate.Providers.ModelProvider do
       :output_cost_per_million,
       :cache_cost_per_million,
       :exclusive_to_group_member_id,
-      :exclusive_to_group_id
+      :exclusive_to_group_id,
+      :exclusive_to_service_id
     ])
     |> validate_required([:model_id, :credential_id, :provider_model, :enabled])
     |> validate_number(:sticky_ttl_ms,
@@ -96,6 +100,7 @@ defmodule Tokengate.Providers.ModelProvider do
     |> foreign_key_constraint(:credential_id)
     |> foreign_key_constraint(:exclusive_to_group_member_id)
     |> foreign_key_constraint(:exclusive_to_group_id)
+    |> foreign_key_constraint(:exclusive_to_service_id)
     # Three partial unique indexes replace the old single composite index,
     # allowing the same credential to serve multiple scope buckets (global +
     # group-exclusive + member-exclusive) for the same model model.
@@ -144,17 +149,17 @@ defmodule Tokengate.Providers.ModelProvider do
   defp validate_exclusive_scope(changeset) do
     member_id = get_field(changeset, :exclusive_to_group_member_id)
     group_id = get_field(changeset, :exclusive_to_group_id)
+    service_id = get_field(changeset, :exclusive_to_service_id)
+    set = Enum.count([member_id, group_id, service_id], &(&1 != nil))
 
-    cond do
-      member_id != nil and group_id != nil ->
-        add_error(
-          changeset,
-          :exclusive_to_group_member_id,
-          "no se puede asignar a miembro y grupo al mismo tiempo"
-        )
-
-      true ->
-        changeset
+    if set > 1 do
+      add_error(
+        changeset,
+        :exclusive_to_group_member_id,
+        "solo se puede asignar un scope exclusivo a la vez"
+      )
+    else
+      changeset
     end
   end
 
@@ -163,11 +168,13 @@ defmodule Tokengate.Providers.ModelProvider do
   defp sync_scope_field(changeset) do
     member_id = get_field(changeset, :exclusive_to_group_member_id)
     group_id = get_field(changeset, :exclusive_to_group_id)
+    service_id = get_field(changeset, :exclusive_to_service_id)
 
     scope =
       cond do
         member_id != nil -> "member"
         group_id != nil -> "group"
+        service_id != nil -> "service"
         true -> "global"
       end
 

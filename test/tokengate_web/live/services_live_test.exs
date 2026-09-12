@@ -27,9 +27,13 @@ defmodule TokengateWeb.ServicesLiveTest do
   end
 
   defp service_fixture do
+    {:ok, group} =
+      Accounts.create_group(%{name: "Svc Group #{System.unique_integer([:positive])}"})
+
     {:ok, service} =
       Accounts.create_service(%{
         name: "Service #{System.unique_integer([:positive])}",
+        group_id: group.id,
         monthly_budget_usd: "100.00",
         concurrency_limit: 5,
         rpm_limit: 60

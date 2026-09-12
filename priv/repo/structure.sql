@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict ufvcimWO37mXKFgEh1rrsVEovyxSUfcGj41cPpi2P60P9ZrNbRFQgLSaZ35SWf6
+\restrict vejjCGY6Q6W9lkLbEKaEYQBkdhkoRp055yfPQyvxVRAdmPCund1fbrjSSOxu0T7
 
 -- Dumped from database version 18.3 (Homebrew)
 -- Dumped by pg_dump version 18.3 (Homebrew)
@@ -45,12 +45,14 @@ SET default_table_access_method = heap;
 
 CREATE TABLE public.api_keys (
     id uuid NOT NULL,
-    group_member_id uuid NOT NULL,
+    group_member_id uuid,
     key_hash character varying(255) NOT NULL,
     key_prefix character varying(255) NOT NULL,
     status character varying(255) DEFAULT 'active'::character varying NOT NULL,
     inserted_at timestamp(0) without time zone NOT NULL,
-    updated_at timestamp(0) without time zone NOT NULL
+    updated_at timestamp(0) without time zone NOT NULL,
+    subject_type character varying(255) DEFAULT 'member'::character varying NOT NULL,
+    service_id uuid
 );
 
 
@@ -120,7 +122,6 @@ CREATE TABLE public.group_members (
     id uuid NOT NULL,
     user_id uuid NOT NULL,
     group_id uuid NOT NULL,
-    group_role character varying(255) DEFAULT 'user'::character varying NOT NULL,
     extra_monthly_budget_usd numeric(12,2),
     extra_concurrency integer,
     status character varying(255) DEFAULT 'active'::character varying NOT NULL,
@@ -176,7 +177,8 @@ CREATE TABLE public.model_providers (
     sticky_ttl_ms integer,
     input_cost_per_million numeric(12,6),
     output_cost_per_million numeric(12,6),
-    cache_cost_per_million numeric(12,6)
+    cache_cost_per_million numeric(12,6),
+    exclusive_to_service_id uuid
 );
 
 
@@ -1383,21 +1385,6 @@ CREATE TABLE public.schema_migrations (
 
 
 --
--- Name: service_api_keys; Type: TABLE; Schema: public; Owner: -
---
-
-CREATE TABLE public.service_api_keys (
-    id uuid NOT NULL,
-    service_id uuid NOT NULL,
-    key_hash character varying(255) NOT NULL,
-    key_prefix character varying(255) NOT NULL,
-    status character varying(255) DEFAULT 'active'::character varying NOT NULL,
-    inserted_at timestamp(0) without time zone NOT NULL,
-    updated_at timestamp(0) without time zone NOT NULL
-);
-
-
---
 -- Name: service_models; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -1434,7 +1421,8 @@ CREATE TABLE public.services (
     concurrency_limit integer DEFAULT 5 NOT NULL,
     rpm_limit integer DEFAULT 60 NOT NULL,
     inserted_at timestamp(0) without time zone NOT NULL,
-    updated_at timestamp(0) without time zone NOT NULL
+    updated_at timestamp(0) without time zone NOT NULL,
+    group_id uuid NOT NULL
 );
 
 
@@ -1993,14 +1981,6 @@ ALTER TABLE ONLY public.schema_migrations
 
 
 --
--- Name: service_api_keys service_api_keys_pkey; Type: CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.service_api_keys
-    ADD CONSTRAINT service_api_keys_pkey PRIMARY KEY (id);
-
-
---
 -- Name: service_models service_models_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2033,10 +2013,10 @@ ALTER TABLE ONLY public.users
 
 
 --
--- Name: api_keys_group_member_id_index; Type: INDEX; Schema: public; Owner: -
+-- Name: api_keys_group_member_active_index; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX api_keys_group_member_id_index ON public.api_keys USING btree (group_member_id);
+CREATE UNIQUE INDEX api_keys_group_member_active_index ON public.api_keys USING btree (group_member_id) WHERE (((subject_type)::text = 'member'::text) AND ((status)::text = 'active'::text));
 
 
 --
@@ -2044,6 +2024,13 @@ CREATE UNIQUE INDEX api_keys_group_member_id_index ON public.api_keys USING btre
 --
 
 CREATE UNIQUE INDEX api_keys_key_hash_index ON public.api_keys USING btree (key_hash);
+
+
+--
+-- Name: api_keys_service_id_active_index; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX api_keys_service_id_active_index ON public.api_keys USING btree (service_id) WHERE (((subject_type)::text = 'service'::text) AND ((status)::text = 'active'::text));
 
 
 --
@@ -2068,13 +2055,6 @@ CREATE INDEX audit_logs_user_id_index ON public.audit_logs USING btree (user_id)
 
 
 --
--- Name: budget_exemptions_global_daily_group_unique; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX budget_exemptions_global_daily_group_unique ON public.budget_exemptions USING btree (group_id) WHERE (((scope)::text = 'global_daily'::text) AND ((subject_type)::text = 'group'::text) AND (group_id IS NOT NULL));
-
-
---
 -- Name: budget_exemptions_global_daily_service_unique; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -2093,13 +2073,6 @@ CREATE UNIQUE INDEX budget_exemptions_global_daily_user_unique ON public.budget_
 --
 
 CREATE INDEX budget_exemptions_scope_index ON public.budget_exemptions USING btree (scope);
-
-
---
--- Name: budget_exemptions_user_daily_group_unique; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX budget_exemptions_user_daily_group_unique ON public.budget_exemptions USING btree (user_id) WHERE (((scope)::text = 'user_daily'::text) AND ((subject_type)::text = 'group'::text) AND (group_id IS NOT NULL));
 
 
 --
@@ -2170,6 +2143,13 @@ CREATE UNIQUE INDEX model_providers_member_exclusive_credential_unique_index ON 
 --
 
 CREATE INDEX model_providers_model_id_index ON public.model_providers USING btree (model_id);
+
+
+--
+-- Name: model_providers_service_exclusive_credential_unique_index; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE UNIQUE INDEX model_providers_service_exclusive_credential_unique_index ON public.model_providers USING btree (credential_id, model_id, exclusive_to_service_id) WHERE (exclusive_to_service_id IS NOT NULL);
 
 
 --
@@ -4084,20 +4064,6 @@ CREATE INDEX request_metrics_hourly_provider_idx ON public.request_metrics_hourl
 
 
 --
--- Name: service_api_keys_key_hash_index; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX service_api_keys_key_hash_index ON public.service_api_keys USING btree (key_hash);
-
-
---
--- Name: service_api_keys_service_id_index; Type: INDEX; Schema: public; Owner: -
---
-
-CREATE UNIQUE INDEX service_api_keys_service_id_index ON public.service_api_keys USING btree (service_id);
-
-
---
 -- Name: service_models_service_id_model_id_index; Type: INDEX; Schema: public; Owner: -
 --
 
@@ -5989,6 +5955,14 @@ ALTER TABLE ONLY public.api_keys
 
 
 --
+-- Name: api_keys api_keys_service_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.api_keys
+    ADD CONSTRAINT api_keys_service_id_fkey FOREIGN KEY (service_id) REFERENCES public.services(id) ON DELETE CASCADE;
+
+
+--
 -- Name: audit_logs audit_logs_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6093,6 +6067,14 @@ ALTER TABLE ONLY public.model_providers
 
 
 --
+-- Name: model_providers model_providers_exclusive_to_service_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.model_providers
+    ADD CONSTRAINT model_providers_exclusive_to_service_id_fkey FOREIGN KEY (exclusive_to_service_id) REFERENCES public.services(id) ON DELETE CASCADE;
+
+
+--
 -- Name: model_providers model_providers_model_alias_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6133,14 +6115,6 @@ ALTER TABLE public.request_logs
 
 
 --
--- Name: service_api_keys service_api_keys_service_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
---
-
-ALTER TABLE ONLY public.service_api_keys
-    ADD CONSTRAINT service_api_keys_service_id_fkey FOREIGN KEY (service_id) REFERENCES public.services(id) ON DELETE CASCADE;
-
-
---
 -- Name: service_models service_model_aliases_model_alias_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6173,10 +6147,18 @@ ALTER TABLE ONLY public.service_supervisors
 
 
 --
+-- Name: services services_group_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.services
+    ADD CONSTRAINT services_group_id_fkey FOREIGN KEY (group_id) REFERENCES public.groups(id) ON DELETE RESTRICT;
+
+
+--
 -- PostgreSQL database dump complete
 --
 
-\unrestrict ufvcimWO37mXKFgEh1rrsVEovyxSUfcGj41cPpi2P60P9ZrNbRFQgLSaZ35SWf6
+\unrestrict vejjCGY6Q6W9lkLbEKaEYQBkdhkoRp055yfPQyvxVRAdmPCund1fbrjSSOxu0T7
 
 INSERT INTO public."schema_migrations" (version) VALUES (20260725210000);
 INSERT INTO public."schema_migrations" (version) VALUES (20260725220000);
@@ -6276,3 +6258,4 @@ INSERT INTO public."schema_migrations" (version) VALUES (20260912181518);
 INSERT INTO public."schema_migrations" (version) VALUES (20260912190432);
 INSERT INTO public."schema_migrations" (version) VALUES (20260912193233);
 INSERT INTO public."schema_migrations" (version) VALUES (20260912202852);
+INSERT INTO public."schema_migrations" (version) VALUES (20260912213521);

@@ -301,7 +301,6 @@ defmodule TokengateWeb.UsersLive do
              Accounts.create_group_member(%{
                user_id: user_id,
                group_id: group_id,
-               group_role: "user",
                status: "active"
              }),
            {:ok, _api_key, _token} <- Accounts.replace_api_key(member) do
@@ -522,7 +521,6 @@ defmodule TokengateWeb.UsersLive do
                    Accounts.create_group_member(%{
                      user_id: user.id,
                      group_id: group_id,
-                     group_role: "user",
                      status: "active"
                    }),
                  {:ok, _api_key, _token} <- Accounts.replace_api_key(member) do

@@ -59,9 +59,15 @@ defmodule Tokengate.LogsTest do
   end
 
   defp service_fixture(attrs \\ %{}) do
+    {:ok, group} =
+      Accounts.create_group(%{name: "SVC Group #{System.unique_integer([:positive])}"})
+
     {:ok, service} =
       Accounts.create_service(
-        Map.merge(%{"name" => "Service #{System.unique_integer([:positive])}"}, attrs)
+        Map.merge(
+          %{"name" => "Service #{System.unique_integer([:positive])}", "group_id" => group.id},
+          attrs
+        )
       )
 
     service

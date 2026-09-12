@@ -29,9 +29,12 @@ defmodule Tokengate.Budgets.ExemptionsTest do
   end
 
   defp service_fixture do
+    {:ok, group} = Accounts.create_group(%{name: "Exempt Group #{unique()}"})
+
     {:ok, service} =
       Accounts.create_service(%{
         "name" => "Exempt Service #{unique()}",
+        "group_id" => group.id,
         "concurrency_limit" => 5,
         "rpm_limit" => 60
       })

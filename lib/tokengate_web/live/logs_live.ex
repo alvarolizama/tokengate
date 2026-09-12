@@ -702,7 +702,12 @@ defmodule TokengateWeb.LogsLive do
   defp member_display(%{subject_type: "service"}), do: "—"
   defp member_display(log), do: member_email(log)
 
+  # The "Grupo" cell resolves from the member's group (user requests) or the
+  # service's group (service requests — including in-flight rows that carry
+  # group_name from the virtual member).
   defp member_group(%{group_member: %{group: %{name: name}}}), do: name
+  defp member_group(%{subject_type: "service", service: %{group: %{name: name}}}), do: name
+  defp member_group(%{group_member: %{group_name: name}}) when is_binary(name), do: name
   defp member_group(_), do: "—"
 
   defp provider_name(%{provider: %{name: name}}), do: name

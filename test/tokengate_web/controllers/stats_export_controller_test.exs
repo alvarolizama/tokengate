@@ -43,7 +43,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
       })
 
     {:ok, member} =
-      Accounts.create_group_member(%{user_id: owner.id, group_id: group.id, group_role: "user"})
+      Accounts.create_group_member(%{user_id: owner.id, group_id: group.id})
 
     {:ok, provider} =
       Providers.create_provider(%{name: "P #{u}", base_url: "http://localhost:1"})
@@ -126,7 +126,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
     %{user: user, password: password} = register("user")
 
     {:ok, member} =
-      Accounts.create_group_member(%{user_id: user.id, group_id: group.id, group_role: "user"})
+      Accounts.create_group_member(%{user_id: user.id, group_id: group.id})
 
     {:ok, provider} =
       Providers.create_provider(%{name: "P #{u}", base_url: "http://localhost:1"})
@@ -169,7 +169,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
       %{user: user, password: password} = register("user")
 
       {:ok, member} =
-        Accounts.create_group_member(%{user_id: user.id, group_id: group.id, group_role: "user"})
+        Accounts.create_group_member(%{user_id: user.id, group_id: group.id})
 
       # 510 rows from 10 days ago — more than the old list_logs/1 cap of 500,
       # so the buggy export (ordered newest-first, capped at 500) would never

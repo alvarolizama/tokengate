@@ -148,7 +148,6 @@ defmodule TokengateWeb.ProxyControllerTest do
       Accounts.create_group_member(%{
         user_id: user.id,
         group_id: group.id,
-        group_role: "user",
         extra_monthly_budget_usd: Map.get(opts, :extra_daily_budget),
         extra_concurrency: Map.get(opts, :extra_concurrency),
         extra_rpm: Map.get(opts, :extra_rpm)

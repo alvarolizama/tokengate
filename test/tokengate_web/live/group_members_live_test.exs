@@ -49,8 +49,7 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     {:ok, member} =
       Accounts.create_group_member(%{
         user_id: owner.id,
-        group_id: group.id,
-        group_role: "user"
+        group_id: group.id
       })
 
     # Provision API key for the member (required for proxy + UI display)

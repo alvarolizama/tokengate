@@ -10,7 +10,6 @@ defmodule Tokengate.Accounts do
     ApiKey,
     ApiKeyCache,
     Service,
-    ServiceApiKey,
     ServiceSupervisor,
     Group,
     GroupMember,
@@ -505,6 +504,7 @@ defmodule Tokengate.Accounts do
       else
         %ApiKey{}
         |> ApiKey.changeset(%{
+          "subject_type" => "member",
           "group_member_id" => group_member_id,
           "key_hash" => new_hash,
           "key_prefix" => new_prefix,
@@ -630,18 +630,18 @@ defmodule Tokengate.Accounts do
   end
 
   # ---------------------------------------------------------------------------
-  # Service API keys
+  # Service API keys (tabla unificada api_keys, subject_type "service")
   # ---------------------------------------------------------------------------
 
-  def get_service_api_key!(id), do: Repo.get!(ServiceApiKey, id)
+  def get_service_api_key!(id), do: Repo.get!(ApiKey, id)
 
-  def get_service_api_key(id), do: Repo.get(ServiceApiKey, id)
+  def get_service_api_key(id), do: Repo.get(ApiKey, id)
 
   @doc """
   Looks up a service by a presented API key token.
-  Returns `{:ok, service}` only when the token matches an active API key.
-  The returned service has `:api_key` preloaded. Returns
-  `{:error, :not_found}` otherwise.
+  Returns `{:ok, service}` only when the token matches an active API key
+  of subject_type "service". The returned service has `:api_key` and
+  `:group` preloaded. Returns `{:error, :not_found}` otherwise.
   """
   def get_service_by_api_key(token) when is_binary(token) do
     key_hash = hash_api_key(token)
@@ -649,8 +649,10 @@ defmodule Tokengate.Accounts do
     query =
       from s in Service,
         join: ak in assoc(s, :api_key),
-        where: ak.key_hash == ^key_hash and ak.status == "active",
-        preload: [:api_key]
+        where:
+          ak.key_hash == ^key_hash and ak.status == "active" and
+            ak.subject_type == "service",
+        preload: [:api_key, :group]
 
     case Repo.one(query) do
       %Service{} = service -> {:ok, service}
@@ -671,7 +673,7 @@ defmodule Tokengate.Accounts do
     result =
       if service.api_key do
         service.api_key
-        |> ServiceApiKey.changeset(%{
+        |> ApiKey.changeset(%{
           "key_hash" => new_hash,
           "key_prefix" => new_prefix,
           "status" => "active"
@@ -682,8 +684,9 @@ defmodule Tokengate.Accounts do
           {:error, changeset} -> {:error, changeset}
         end
       else
-        %ServiceApiKey{}
-        |> ServiceApiKey.changeset(%{
+        %ApiKey{}
+        |> ApiKey.changeset(%{
+          "subject_type" => "service",
           "service_id" => service_id,
           "key_hash" => new_hash,
           "key_prefix" => new_prefix,
@@ -712,9 +715,9 @@ defmodule Tokengate.Accounts do
   Revokes the API key for a service.
   Returns `{:ok, api_key}` or `{:error, changeset}`.
   """
-  def revoke_service_api_key(%ServiceApiKey{} = api_key) do
+  def revoke_service_api_key(%ApiKey{} = api_key) do
     api_key
-    |> ServiceApiKey.changeset(%{status: "revoked"})
+    |> ApiKey.changeset(%{status: "revoked"})
     |> Repo.update()
     |> tap_invalidate_service_api_key(api_key)
   end
@@ -847,14 +850,28 @@ defmodule Tokengate.Accounts do
 
   Returns a map with `:monthly_budget_usd`, `:concurrency_limit`, and `:rpm_limit` keys.
 
-  Service virtual members (GroupMember with group: nil) are resolved to their
-  backing Service limits so the proxy controller can use a single code path.
+  Service virtual members (GroupMember with the backing Service's id) are
+  resolved to their Service limits so the proxy controller can use a single
+  code path. A service is a mandatory group member: its own limit fields
+  act as extras on top of the group defaults.
   """
-  # Service virtual member — no group, look up the backing service limits.
+  # Service virtual member — resolve the backing service and combine its
+  # extras with its group defaults.
   def effective_limits(%GroupMember{group: nil, id: id}) do
     case get_service(id) do
       %Service{} = service -> effective_limits(service)
       nil -> %{monthly_budget_usd: nil, concurrency_limit: 5, rpm_limit: 60}
+    end
+  end
+
+  # Service virtual member with its real group loaded: the extras live on
+  # the backing Service, not on the virtual member's nil extra fields, so
+  # delegate to the Service branch.
+  def effective_limits(%GroupMember{service_name: name} = member)
+      when is_binary(name) do
+    case get_service(member.id) do
+      %Service{} = service -> effective_limits(service)
+      nil -> effective_limits(%{member | service_name: nil})
     end
   end
 
@@ -876,10 +893,15 @@ defmodule Tokengate.Accounts do
   end
 
   def effective_limits(%Service{} = service) do
+    service = Repo.preload(service, [:group])
+    group = service.group
+
     %{
-      monthly_budget_usd: service.monthly_budget_usd,
-      concurrency_limit: service.concurrency_limit,
-      rpm_limit: service.rpm_limit
+      monthly_budget_usd:
+        combine_decimal(group.monthly_budget_per_user_usd, service.monthly_budget_usd),
+      concurrency_limit:
+        combine_integer(group.default_concurrency_limit, service.concurrency_limit),
+      rpm_limit: combine_integer(group.default_rpm_limit, service.rpm_limit)
     }
   end
 
@@ -983,7 +1005,7 @@ defmodule Tokengate.Accounts do
 
   defp tap_invalidate_api_key(result, _key), do: result
 
-  defp tap_invalidate_service_api_key({:ok, _} = result, %ServiceApiKey{} = key) do
+  defp tap_invalidate_service_api_key({:ok, _} = result, %ApiKey{} = key) do
     safe_invalidate(fn ->
       ApiKeyCache.invalidate_hash(key.key_hash)
       ApiKeyCache.invalidate_member(key.service_id)

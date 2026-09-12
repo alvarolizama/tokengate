@@ -235,7 +235,6 @@ defmodule TokengateWeb.DashboardLive do
         %{
           membership: membership,
           group: membership.group,
-          group_role: membership.group_role,
           api_key: membership.api_key,
           monthly_limit: limits.monthly_budget_usd,
           monthly_spend: spend.monthly_usd

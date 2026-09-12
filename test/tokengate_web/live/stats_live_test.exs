@@ -62,7 +62,7 @@ defmodule TokengateWeb.StatsLiveTest do
       })
 
     {:ok, member} =
-      Accounts.create_group_member(%{user_id: owner.id, group_id: group.id, group_role: "user"})
+      Accounts.create_group_member(%{user_id: owner.id, group_id: group.id})
 
     {:ok, provider} =
       Providers.create_provider(%{name: "Prov #{u}", base_url: "http://localhost:1"})

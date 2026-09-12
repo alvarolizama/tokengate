@@ -44,17 +44,20 @@ defmodule Tokengate.AccountsTest do
     Map.merge(
       %{
         "user_id" => user.id,
-        "group_id" => group.id,
-        "group_role" => "user"
+        "group_id" => group.id
       },
       attrs
     )
   end
 
   defp valid_service_attrs(attrs) do
+    {:ok, group} =
+      Accounts.create_group(%{name: "Svc Group #{System.unique_integer([:positive])}"})
+
     Map.merge(
       %{
         "name" => "Service #{System.unique_integer([:positive])}",
+        "group_id" => group.id,
         "monthly_budget_usd" => "100.00",
         "concurrency_limit" => 5,
         "rpm_limit" => 60
@@ -266,18 +269,16 @@ defmodule Tokengate.AccountsTest do
       assert "has already been taken" in errors_on(changeset).group_id
     end
 
-    test "validates group_role and status inclusion" do
+    test "validates status inclusion" do
       group = group_fixture()
       user = user_fixture()
 
       attrs =
         valid_group_member_attrs(user, group, %{
-          "group_role" => "invalid",
           "status" => "invalid"
         })
 
       assert {:error, changeset} = Accounts.create_group_member(attrs)
-      assert "is invalid" in errors_on(changeset).group_role
       assert "is invalid" in errors_on(changeset).status
     end
 
@@ -360,7 +361,7 @@ defmodule Tokengate.AccountsTest do
           "key_prefix" => "tg-somet"
         })
 
-      assert "has already been taken" in errors_on(changeset).group_member_id
+      assert "ya existe una key activa para este miembro" in errors_on(changeset).group_member_id
     end
   end
 
@@ -483,9 +484,18 @@ defmodule Tokengate.AccountsTest do
       assert limits.monthly_budget_usd == Decimal.new("25.00")
     end
 
-    test "service virtual member returns service limits (not group defaults)" do
+    test "service virtual member combines group defaults with service extras" do
+      # Group defaults: 20 budget, 5 conc, 60 rpm. Service extras on top.
+      group =
+        group_fixture(%{
+          "monthly_budget_per_user_usd" => "20.00",
+          "default_concurrency_limit" => 5,
+          "default_rpm_limit" => 60
+        })
+
       service =
         service_fixture(%{
+          "group_id" => group.id,
           "monthly_budget_usd" => "50.00",
           "concurrency_limit" => 3,
           "rpm_limit" => 30
@@ -497,9 +507,9 @@ defmodule Tokengate.AccountsTest do
       # The virtual member must NOT crash effective_limits (was a nil.group crash)
       limits = Accounts.effective_limits(member)
 
-      assert limits.monthly_budget_usd == Decimal.new("50.00")
-      assert limits.concurrency_limit == 3
-      assert limits.rpm_limit == 30
+      assert limits.monthly_budget_usd == Decimal.new("70.00")
+      assert limits.concurrency_limit == 8
+      assert limits.rpm_limit == 90
     end
 
     test "service virtual member with no backing service returns safe defaults" do
@@ -508,7 +518,6 @@ defmodule Tokengate.AccountsTest do
         id: Ecto.UUID.generate(),
         group_id: nil,
         user_id: nil,
-        group_role: "user",
         status: "active",
         group: nil,
         user: nil,

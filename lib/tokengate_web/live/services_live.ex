@@ -60,9 +60,13 @@ defmodule TokengateWeb.ServicesLive do
   defp load_services(socket) do
     services =
       from(s in Service,
-        preload: [:api_key],
+        preload: [:api_key, :group],
         order_by: [asc: s.name]
       )
+      |> Repo.all()
+
+    groups =
+      from(g in Tokengate.Accounts.Group, order_by: [asc: g.name])
       |> Repo.all()
 
     granted_models =
@@ -99,6 +103,7 @@ defmodule TokengateWeb.ServicesLive do
     socket
     |> assign(:services, services)
     |> assign(:services_empty?, services == [])
+    |> assign(:groups, groups)
     |> assign(:granted_models, granted_models)
     |> assign(:models, models)
     |> assign(:service_stats, stats)
@@ -432,25 +437,34 @@ defmodule TokengateWeb.ServicesLive do
                   label="Nombre"
                   hint={"Nombre identificativo del servicio. Ej.: \"Bot de Telegram\", \"Webhook de Shopify\"."}
                 />
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div class="mt-3">
+                  <.input
+                    field={@form[:group_id]}
+                    type="select"
+                    label="Grupo"
+                    options={Enum.map(@groups, &{&1.name, &1.id})}
+                    hint="Grupo del que hereda catálogo, presupuesto y límites."
+                  />
+                </div>
+                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
                   <.input
                     field={@form[:monthly_budget_usd]}
                     type="number"
-                    label="Budget mensual (USD)"
+                    label="Budget extra (USD/mes)"
                     step="any"
-                    hint="Presupuesto mensual. Vacío = sin límite."
+                    hint="Extra sobre el default del grupo. Vacío = solo el default."
                   />
                   <.input
                     field={@form[:concurrency_limit]}
                     type="number"
-                    label="Concurrencia"
-                    hint="Peticiones simultáneas."
+                    label="Concurrencia extra"
+                    hint="Extra sobre el default del grupo."
                   />
                   <.input
                     field={@form[:rpm_limit]}
                     type="number"
-                    label="RPM"
-                    hint="Requests por minuto."
+                    label="RPM extra"
+                    hint="Extra sobre el default del grupo."
                   />
                 </div>
                 <div class="flex gap-2 mt-4 justify-end">
@@ -482,15 +496,18 @@ defmodule TokengateWeb.ServicesLive do
               <div class="flex items-start justify-between">
                 <div>
                   <h3 class="font-semibold text-base-content">{service.name}</h3>
+                  <p class="text-xs text-base-content/50 mt-0.5">
+                    Grupo: {service.group && service.group.name}
+                  </p>
                   <div class="flex flex-wrap gap-2 mt-2">
                     <span class="badge badge-outline badge-sm">
-                      {format_decimal(service.monthly_budget_usd)} USD/mes
+                      +{format_decimal(service.monthly_budget_usd)} USD/mes
                     </span>
                     <span class="badge badge-outline badge-sm">
-                      {service.concurrency_limit} conc.
+                      +{service.concurrency_limit} conc.
                     </span>
                     <span class="badge badge-outline badge-sm">
-                      {service.rpm_limit} RPM
+                      +{service.rpm_limit} RPM
                     </span>
                   </div>
                 </div>

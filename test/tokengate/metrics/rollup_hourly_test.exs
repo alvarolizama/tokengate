@@ -63,8 +63,7 @@ defmodule Tokengate.Metrics.RollupHourlyTest do
     {:ok, group_member} =
       Accounts.create_group_member(%{
         "group_id" => group.id,
-        "user_id" => user.id,
-        "group_role" => "user"
+        "user_id" => user.id
       })
 
     {group_member, group}

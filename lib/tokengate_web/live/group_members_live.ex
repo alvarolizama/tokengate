@@ -254,7 +254,6 @@ defmodule TokengateWeb.GroupMembersLive do
       attrs = %{
         user_id: user.id,
         group_id: group.id,
-        group_role: "user",
         extra_monthly_budget_usd: monthly,
         extra_concurrency: concurrency,
         extra_rpm: rpm

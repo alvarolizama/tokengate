@@ -156,7 +156,9 @@ defmodule TokengateWeb.GroupsLive do
         search == "" or String.contains?(String.downcase(t.name), search_down)
       end)
 
-    stream(socket, :groups, filtered, reset: true)
+    socket
+    |> stream(:groups, filtered, reset: true)
+    |> assign(:groups_empty?, filtered == [])
   end
 
   ## Events — group CRUD ---------------------------------------------------

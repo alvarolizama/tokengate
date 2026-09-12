@@ -17,6 +17,11 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
 
   defp unique, do: System.unique_integer([:positive])
 
+  defp svc_group_id do
+    {:ok, group} = Accounts.create_group(%{name: "Svc Group #{unique()}"})
+    group.id
+  end
+
   defp register(role) do
     u = unique()
 
@@ -45,6 +50,7 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
 
     base_attrs = %{
       "name" => "Svc #{u}",
+      "group_id" => svc_group_id(),
       "monthly_budget_usd" => "50.00",
       "concurrency_limit" => 5,
       "rpm_limit" => 60
@@ -112,6 +118,7 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
     {:ok, _service} =
       Accounts.create_service(%{
         "name" => "Unrelated Svc #{u}",
+        "group_id" => svc_group_id(),
         "monthly_budget_usd" => "10.00"
       })
 

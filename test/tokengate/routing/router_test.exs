@@ -82,7 +82,6 @@ defmodule Tokengate.Routing.RouterTest do
     @foreign_key_type :binary_id
 
     schema "group_members" do
-      field :group_role, :string, default: "user"
       field :extra_monthly_budget_usd, :decimal
       field :extra_concurrency, :integer
       field :status, :string, default: "active"
@@ -93,7 +92,7 @@ defmodule Tokengate.Routing.RouterTest do
 
     def changeset(member, attrs) do
       member
-      |> cast(attrs, [:group_id, :user_id, :group_role, :status])
+      |> cast(attrs, [:group_id, :user_id, :status])
       |> validate_required([:group_id, :user_id])
     end
   end

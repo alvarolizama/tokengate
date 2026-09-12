@@ -87,7 +87,7 @@ defmodule Tokengate.Logs do
     |> order_by([rl], desc: rl.inserted_at)
     |> limit(^limit)
     |> preload(group_member: [:user, :group])
-    |> preload(:service)
+    |> preload(service: :group)
     |> preload(:provider)
     |> Repo.all()
   end
@@ -115,7 +115,7 @@ defmodule Tokengate.Logs do
     |> order_by([rl], desc: rl.inserted_at)
     |> limit(^limit)
     |> preload(group_member: [:user, :group])
-    |> preload(:service)
+    |> preload(service: :group)
     |> preload(:provider)
     |> Repo.all()
   end
@@ -150,7 +150,7 @@ defmodule Tokengate.Logs do
     |> order_by([rl], desc: rl.inserted_at)
     |> limit(^limit)
     |> preload(group_member: [:user, :group])
-    |> preload(:service)
+    |> preload(service: :group)
     |> preload(:provider)
     |> Repo.all()
   end

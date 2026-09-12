@@ -263,6 +263,7 @@ defmodule Tokengate.Routing.Router do
     # separate ETS set refreshed every 60s. Both are stale-tolerant because
     # the fallback matrix re-routes on a dead credential anyway.
     group_id = group_member && group_member.group && group_member.group.id
+    service_id = service_id_of(group_member)
 
     model_providers =
       Tokengate.Routing.Cache.fetch_model_providers(model.id, group_id, fn ->
@@ -273,10 +274,10 @@ defmodule Tokengate.Routing.Router do
           Providers.list_model_providers_for_member(
             model.id,
             group_member.id,
-            group_id
+            group_id,
+            service_id
           )
         else
-          # Fallback: no group context (e.g. service members), global only
           Providers.list_model_providers(model.id)
         end
       end)
@@ -346,7 +347,8 @@ defmodule Tokengate.Routing.Router do
   # first by the priority strategy. Global providers keep their configured priority.
   defp inject_exclusive_priority(candidates) do
     Enum.map(candidates, fn mp ->
-      if mp.exclusive_to_group_member_id != nil || mp.exclusive_to_group_id != nil do
+      if mp.exclusive_to_group_member_id != nil || mp.exclusive_to_group_id != nil ||
+           mp.exclusive_to_service_id != nil do
         %{mp | priority: -1}
       else
         mp
@@ -374,15 +376,28 @@ defmodule Tokengate.Routing.Router do
 
   # Member-exclusive scoping for the cached provider list. A cached entry is
   # keyed by (model_id, group_id), so the raw list may contain a provider
-  # exclusive to a *different* member of the same group. Global rows (both
-  # scope fields nil) and group-exclusive rows are visible to everyone in the
-  # group; member-exclusive rows only to their owner.
+  # exclusive to a *different* member of the same group. Global rows (all
+  # exclusive fields nil) and group-exclusive rows are visible to everyone in
+  # the group; member-exclusive rows only to their owner; service-exclusive
+  # rows only to their service.
   defp visible_to_member?(mp, group_member) do
-    case mp.exclusive_to_group_member_id do
-      nil -> true
-      member_id -> group_member != nil and group_member.id == member_id
+    cond do
+      mp.exclusive_to_service_id != nil ->
+        service_id_of(group_member) == mp.exclusive_to_service_id
+
+      true ->
+        case mp.exclusive_to_group_member_id do
+          nil -> true
+          member_id -> group_member != nil and group_member.id == member_id
+        end
     end
   end
+
+  # Service virtual members carry the service's id as their group_member id.
+  defp service_id_of(%{service_name: name} = group_member) when is_binary(name),
+    do: group_member.id
+
+  defp service_id_of(_), do: nil
 
   defp maybe_preload_group(group_member) do
     cond do

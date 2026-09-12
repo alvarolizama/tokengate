@@ -51,7 +51,7 @@ defmodule TokengateWeb.DashboardLiveTest do
       end
 
     {:ok, member} =
-      Accounts.create_group_member(%{user_id: owner.id, group_id: group.id, group_role: "user"})
+      Accounts.create_group_member(%{user_id: owner.id, group_id: group.id})
 
     if cost = Map.get(opts, :cost) do
       {:ok, provider} =
@@ -90,7 +90,7 @@ defmodule TokengateWeb.DashboardLiveTest do
     %{group: group, owner: owner, member: member, owner_password: password}
   end
 
-  defp group_with_member(_opts) do
+  defp group_with_member(opts \\ %{}) do
     u = unique()
 
     {:ok, group} = Accounts.create_group(%{name: "Group #{u}"})
@@ -103,7 +103,7 @@ defmodule TokengateWeb.DashboardLiveTest do
       })
 
     {:ok, member} =
-      Accounts.create_group_member(%{user_id: owner.id, group_id: group.id, group_role: "user"})
+      Accounts.create_group_member(%{user_id: owner.id, group_id: group.id})
 
     {:ok, _api_key, _token} = Accounts.replace_api_key(member)
 
@@ -362,7 +362,7 @@ defmodule TokengateWeb.DashboardLiveTest do
 
   test "user sees their own API key on dashboard", %{conn: conn} do
     %{group: group, owner: owner, member: member, owner_password: password} =
-      group_with_member(%{group_role: "user"})
+      group_with_member()
 
     conn = login(conn, owner, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")
@@ -375,7 +375,7 @@ defmodule TokengateWeb.DashboardLiveTest do
 
   test "user can replace their key from dashboard", %{conn: conn} do
     %{owner: owner, member: member, owner_password: password} =
-      group_with_member(%{group_role: "user"})
+      group_with_member()
 
     conn = login(conn, owner, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
@@ -389,7 +389,7 @@ defmodule TokengateWeb.DashboardLiveTest do
 
   test "user can revoke their key from dashboard", %{conn: conn} do
     %{owner: owner, member: member, owner_password: password} =
-      group_with_member(%{group_role: "user"})
+      group_with_member()
 
     conn = login(conn, owner, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")
@@ -402,8 +402,8 @@ defmodule TokengateWeb.DashboardLiveTest do
   end
 
   test "user cannot revoke another member's key from dashboard", %{conn: conn} do
-    %{owner: owner, owner_password: password} = group_with_member(%{group_role: "user"})
-    %{member: other_member} = group_with_member(%{group_role: "user"})
+    %{owner: owner, owner_password: password} = group_with_member()
+    %{member: other_member} = group_with_member()
 
     conn = login(conn, owner, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
@@ -431,7 +431,7 @@ defmodule TokengateWeb.DashboardLiveTest do
 
   test "user sees their group budget with spend bars", %{conn: conn} do
     %{group: group, owner: owner, member: member, owner_password: password} =
-      group_with_member(%{group_role: "user"})
+      group_with_member()
 
     conn = login(conn, owner, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")

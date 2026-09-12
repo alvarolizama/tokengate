@@ -19,7 +19,7 @@ defmodule Tokengate.Accounts.ApiKeyCacheTest do
       })
 
     {:ok, member} =
-      Accounts.create_group_member(%{user_id: user.id, group_id: group.id, group_role: "user"})
+      Accounts.create_group_member(%{user_id: user.id, group_id: group.id})
 
     {:ok, _api_key, token} = Accounts.replace_api_key(member)
 
