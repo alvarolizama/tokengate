@@ -30,6 +30,10 @@ config :tokengate, Oban, testing: :manual
 # boot-time ensure would pollute the test DB with real-date partitions.
 config :tokengate, :partition_boot_ensure, false
 
+# Tests populate the rollup explicitly via HourlyAggregate; the background
+# refresh tick would fight the sandbox.
+config :tokengate, Tokengate.Metrics.RollupWorker, enabled: false
+
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false
 

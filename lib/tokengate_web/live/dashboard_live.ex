@@ -24,12 +24,9 @@ defmodule TokengateWeb.DashboardLive do
 
   alias Tokengate.Accounts
   alias Tokengate.Budgets.Manager, as: Budgets
-  alias Tokengate.Logs
-  alias Tokengate.Logs.RequestLog
   alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Periods
-  alias Tokengate.Repo
   alias TokengateWeb.KpiHelpers
 
   import Ecto.Query
@@ -404,69 +401,22 @@ defmodule TokengateWeb.DashboardLive do
   # User-wide: every user (admin included) sees only their own consumption.
   # `member_ids` arrive pre-resolved from the socket assigns (computed once
   # at mount), so no extra membership query is needed inside the bundle.
+  # Rollup-first (`request_metrics_hourly`), request_logs fallback built in.
   defp fetch_summary(member_ids, opts) do
-    Logs.cost_summary_for_members(member_ids, Map.new(opts))
-    |> Map.merge(%{avg_latency_ms: nil, avg_ttft_ms: nil, avg_tps: nil})
+    Rollup.summary_for_members(
+      from: Keyword.fetch!(opts, :from),
+      to: Keyword.get(opts, :to),
+      member_ids: member_ids
+    )
   end
 
+  # Hour-bucketed chart series. Rollup-first via
+  # `Rollup.hourly_series_for_members/3` (`request_metrics_hourly`), with
+  # the request_logs fallback built in — the exact query this LiveView used
+  # before the rollup existed now lives in `Rollup` for parity testing.
   defp hourly_series_for_members(member_ids, opts, timezone) do
-    from = Keyword.fetch!(opts, :from)
-    to = Keyword.get(opts, :to)
-
-    # Bucket by LOCAL hour (see Rollup.hourly_series/2 for the subquery
-    # rationale: Postgres rejects parametrized GROUP BY vs SELECT).
-    bucketed =
-      RequestLog
-      |> where([rl], rl.team_member_id in ^member_ids and rl.inserted_at >= ^from)
-      |> maybe_to(to)
-      |> select([rl], %{
-        bucket:
-          fragment(
-            "date_trunc('hour', ? AT TIME ZONE ?) AT TIME ZONE ?",
-            rl.inserted_at,
-            ^timezone,
-            ^timezone
-          ),
-        id: rl.id,
-        provider_cost_usd: rl.provider_cost_usd,
-        prompt_tokens: rl.prompt_tokens,
-        completion_tokens: rl.completion_tokens,
-        latency_ms: rl.latency_ms
-      })
-      |> subquery()
-
-    query =
-      from(b in bucketed,
-        group_by: b.bucket,
-        order_by: b.bucket,
-        select: %{
-          hour: b.bucket,
-          request_count: count(b.id),
-          cost_usd: fragment("COALESCE(SUM(?), 0)", b.provider_cost_usd),
-          prompt_tokens: coalesce(sum(b.prompt_tokens), 0),
-          completion_tokens: coalesce(sum(b.completion_tokens), 0),
-          total_latency_ms: coalesce(sum(b.latency_ms), 0)
-        }
-      )
-
-    Repo.all(query)
-    |> Enum.map(fn row ->
-      %{
-        hour: to_utc_datetime(row.hour),
-        request_count: row.request_count,
-        cost_usd: Decimal.new(to_string(row.cost_usd)),
-        prompt_tokens: row.prompt_tokens,
-        completion_tokens: row.completion_tokens,
-        total_latency_ms: row.total_latency_ms
-      }
-    end)
+    Rollup.hourly_series_for_members(member_ids, opts, timezone)
   end
-
-  defp to_utc_datetime(%DateTime{} = dt), do: dt
-  defp to_utc_datetime(%NaiveDateTime{} = ndt), do: DateTime.from_naive!(ndt, "Etc/UTC")
-
-  defp maybe_to(query, nil), do: query
-  defp maybe_to(query, to), do: where(query, [rl], rl.inserted_at <= ^to)
 
   defp to_token_points(series, period, timezone) do
     Enum.map(series, fn row ->

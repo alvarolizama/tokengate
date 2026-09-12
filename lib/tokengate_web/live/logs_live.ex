@@ -656,13 +656,9 @@ defmodule TokengateWeb.LogsLive do
 
   defp format_number(_), do: "0"
 
-  defp format_cache_tokens(read, creation)
-       when read in [nil, 0] and creation in [nil, 0],
-       do: "—"
-
-  defp format_cache_tokens(read, creation) do
-    "#{format_number(read || 0)} / #{format_number(creation || 0)}"
-  end
+  defp format_cache_tokens(nil), do: "—"
+  defp format_cache_tokens(0), do: "—"
+  defp format_cache_tokens(read), do: format_number(read)
 
   defp model_display(model_requested, model_responded) do
     if model_requested == model_responded do
@@ -997,7 +993,7 @@ defmodule TokengateWeb.LogsLive do
                 <th class="border-r border-base-200">Streaming</th>
                 <th class="text-right">Input</th>
                 <th class="text-right">Output</th>
-                <th class="text-right" title="Cache read / Cache creation">Cache R/C</th>
+                <th class="text-right" title="Cache read">Cache R</th>
                 <th class="text-right">TPS</th>
                 <th title="Time to first token — solo streaming">TTFT</th>
                 <th class="border-r border-base-200">Latencia</th>
@@ -1134,7 +1130,7 @@ defmodule TokengateWeb.LogsLive do
                     {format_number(log.completion_tokens)}
                   </td>
                   <td class="text-sm text-right tabular-nums">
-                    {format_cache_tokens(log.cache_read_tokens, log.cache_creation_tokens)}
+                    {format_cache_tokens(log.cache_read_tokens)}
                   </td>
                   <td class="text-sm text-right tabular-nums text-base-content/70">
                     {tps(log.completion_tokens, log.latency_ms)}

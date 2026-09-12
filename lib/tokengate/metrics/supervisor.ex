@@ -24,7 +24,8 @@ defmodule Tokengate.Metrics.Supervisor do
   def init(_opts) do
     children = [
       Tokengate.Metrics.Collector,
-      Tokengate.Metrics.DashboardCache
+      Tokengate.Metrics.DashboardCache,
+      Tokengate.Metrics.RollupWorker
     ]
 
     Supervisor.init(children, strategy: :one_for_one)

@@ -24,8 +24,10 @@ defmodule Tokengate.Metrics.Rollup do
 
   import Ecto.Query, warn: false
 
-  alias Tokengate.Logs.RequestLog
   alias Tokengate.Accounts.TeamMember
+  alias Tokengate.Logs
+  alias Tokengate.Logs.RequestLog
+  alias Tokengate.Metrics.RequestMetricsHourly
   alias Tokengate.Providers.ModelAlias
   alias Tokengate.Repo
 
@@ -1746,6 +1748,335 @@ defmodule Tokengate.Metrics.Rollup do
         cache_creation_tokens: row.cache_creation_tokens
       }
     end)
+  end
+
+  # -----------------------------------------------------------------------
+  # Rollup-backed reads (request_metrics_hourly)
+  #
+  # All of these are rollup-first with a request_logs fallback when the
+  # rollup returns no rows for the range (fresh deploy before the initial
+  # backfill, or genuinely no traffic — in both cases the fallback query
+  # is cheap). Once `Metrics.RollupWorker` / the backfill has populated
+  # the range, reads sum ≤ 24×days×dimensions rollup rows instead of
+  # scanning every request log in range.
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Member-scoped hour-bucketed series, served from the
+  `request_metrics_hourly` rollup with a `request_logs` fallback.
+
+  Same row shape as `hourly_series/2`:
+
+      %{hour: DateTime, request_count: integer, cost_usd: Decimal,
+        prompt_tokens: integer, completion_tokens: integer,
+        total_latency_ms: integer}
+
+  `member_ids` of `[]` short-circuits to `[]` (same contract as the old
+  DashboardLive implementation).
+
+  ## Options
+
+    * `:from` — DateTime (required)
+    * `:to`   — DateTime (optional upper bound)
+    * `:timezone` — IANA zone for local-hour bucketing; default `"Etc/UTC"`
+  """
+  @spec hourly_series_for_members([term()], keyword(), String.t()) :: [map()]
+  def hourly_series_for_members(member_ids, opts \\ [], timezone \\ "Etc/UTC")
+      when is_list(member_ids) do
+    case hourly_series_from_rollup(
+           Keyword.merge(opts, timezone: timezone, member_ids: member_ids)
+         ) do
+      [] when member_ids != [] ->
+        request_logs_series_for_members(member_ids, opts, timezone)
+
+      [] ->
+        []
+
+      rows ->
+        rows
+    end
+  end
+
+  @doc """
+  Hour-bucketed series served directly from the `request_metrics_hourly`
+  rollup table (no fallback). See `hourly_series_for_members/3`.
+
+  ## Options
+
+    * `:from` — DateTime (required)
+    * `:to`   — DateTime (optional)
+    * `:timezone` — IANA zone; default `"Etc/UTC"`
+    * `:member_ids` — restrict to these team-member ids; `nil` = org-wide
+  """
+  @spec hourly_series_from_rollup(keyword()) :: [map()]
+  def hourly_series_from_rollup(opts \\ []) do
+    from = Keyword.fetch!(opts, :from)
+    to = Keyword.get(opts, :to)
+    timezone = Keyword.get(opts, :timezone, "Etc/UTC")
+    member_ids = Keyword.get(opts, :member_ids)
+
+    bucketed =
+      RequestMetricsHourly
+      |> maybe_rollup_from(from)
+      |> maybe_rollup_to(to)
+      |> maybe_rollup_member_ids(member_ids)
+      |> select([m], %{
+        bucket:
+          fragment(
+            "date_trunc('hour', ? AT TIME ZONE 'Etc/UTC') AT TIME ZONE ?",
+            m.hour_utc,
+            ^timezone
+          ),
+        request_count: m.request_count,
+        cost_micro: m.cost_micro,
+        prompt_tokens: m.prompt_tokens,
+        completion_tokens: m.completion_tokens,
+        total_latency_ms: m.total_latency_ms
+      })
+      |> subquery()
+
+    from(b in bucketed,
+      group_by: b.bucket,
+      order_by: b.bucket,
+      select: %{
+        hour: b.bucket,
+        request_count: fragment("COALESCE(SUM(?), 0)::bigint", b.request_count),
+        cost_usd: fragment("COALESCE(SUM(?), 0)::bigint", b.cost_micro),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", b.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", b.completion_tokens),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)::bigint", b.total_latency_ms)
+      }
+    )
+    |> Repo.all()
+    |> Enum.map(fn row ->
+      %{
+        hour: to_utc_datetime(row.hour),
+        request_count: row.request_count,
+        cost_usd: micro_to_decimal(row.cost_usd),
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens,
+        total_latency_ms: row.total_latency_ms
+      }
+    end)
+  end
+
+  # request_logs fallback for hourly_series_for_members/3 — the exact query
+  # DashboardLive used before the rollup existed. Kept here (not in the
+  # LiveView) so the parity is testable in one place.
+  defp request_logs_series_for_members(member_ids, opts, timezone) do
+    from = Keyword.fetch!(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    # Bucket by LOCAL hour (same subquery rationale as hourly_series/2:
+    # Postgres rejects parametrized GROUP BY vs SELECT).
+    bucketed =
+      RequestLog
+      |> where([rl], rl.team_member_id in ^member_ids and rl.inserted_at >= ^from)
+      |> maybe_to(to)
+      |> select([rl], %{
+        bucket:
+          fragment(
+            "date_trunc('hour', ? AT TIME ZONE ?) AT TIME ZONE ?",
+            rl.inserted_at,
+            ^timezone,
+            ^timezone
+          ),
+        id: rl.id,
+        provider_cost_usd: rl.provider_cost_usd,
+        prompt_tokens: rl.prompt_tokens,
+        completion_tokens: rl.completion_tokens,
+        latency_ms: rl.latency_ms
+      })
+      |> subquery()
+
+    query =
+      from(b in bucketed,
+        group_by: b.bucket,
+        order_by: b.bucket,
+        select: %{
+          hour: b.bucket,
+          request_count: count(b.id),
+          cost_usd: fragment("COALESCE(SUM(?), 0)", b.provider_cost_usd),
+          prompt_tokens: coalesce(sum(b.prompt_tokens), 0),
+          completion_tokens: coalesce(sum(b.completion_tokens), 0),
+          total_latency_ms: coalesce(sum(b.latency_ms), 0)
+        }
+      )
+
+    Repo.all(query)
+    |> Enum.map(fn row ->
+      %{
+        hour: to_utc_datetime(row.hour),
+        request_count: row.request_count,
+        cost_usd: Decimal.new(to_string(row.cost_usd)),
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens,
+        total_latency_ms: row.total_latency_ms
+      }
+    end)
+  end
+
+  @doc """
+  Member-scoped cost/token summary, rollup-first with a request_logs
+  fallback. Same shape as `Logs.cost_summary_for_members/2` plus
+  `:error_count`:
+
+      %{total_cost_usd: Decimal, ..., request_count: integer, error_count: integer}
+
+  ## Options
+
+    * `:from` / `:to` — DateTime range (`:from` required)
+    * `:member_ids` — `nil` = org-wide; `[]` returns zeroes without querying
+  """
+  @spec summary_for_members(keyword()) :: map()
+  def summary_for_members(opts \\ []) do
+    from = Keyword.fetch!(opts, :from)
+    to = Keyword.get(opts, :to)
+    member_ids = Keyword.get(opts, :member_ids)
+
+    cond do
+      member_ids == [] ->
+        zero_summary()
+
+      true ->
+        summary = summary_from_rollup(from: from, to: to, member_ids: member_ids)
+
+        if summary.request_count == 0 do
+          # No rollup rows for the range (fresh deploy before the initial
+          # backfill, or genuinely no traffic) — fall back to the
+          # request_logs aggregation, same contract as before the rollup.
+          fallback_summary_for_members(member_ids, from, to)
+        else
+          summary
+        end
+    end
+  end
+
+  defp fallback_summary_for_members(member_ids, from, to) do
+    member_ids
+    |> Logs.cost_summary_for_members(%{from: from, to: to})
+    |> Map.merge(%{error_count: 0})
+  end
+
+  @doc """
+  Summary served directly from the `request_metrics_hourly` rollup (no
+  fallback). Costs are exact-integer micro-USD sums converted back to
+  Decimal — bounded rounding error of 1 micro-dollar per
+  hour-bucket-dimension, invisible at dashboard precision.
+
+  ## Options
+
+    * `:from` / `:to` — DateTime range
+    * `:member_ids` — `nil` = org-wide
+  """
+  @spec summary_from_rollup(keyword()) :: map()
+  def summary_from_rollup(opts \\ []) do
+    from = Keyword.fetch!(opts, :from)
+    to = Keyword.get(opts, :to)
+    member_ids = Keyword.get(opts, :member_ids)
+
+    result =
+      RequestMetricsHourly
+      |> maybe_rollup_from(from)
+      |> maybe_rollup_to(to)
+      |> maybe_rollup_member_ids(member_ids)
+      |> select([m], %{
+        total_cost_micro: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro),
+        total_prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.prompt_tokens),
+        total_completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.completion_tokens),
+        total_cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.cache_read_tokens),
+        total_cache_creation_tokens:
+          fragment("COALESCE(SUM(?), 0)::bigint", m.cache_creation_tokens),
+        request_count: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count),
+        error_count: fragment("COALESCE(SUM(?), 0)::bigint", m.error_count),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)::bigint", m.total_latency_ms),
+        latency_count: fragment("COALESCE(SUM(?), 0)::bigint", m.latency_count)
+      })
+      |> Repo.one()
+
+    avg_latency_ms =
+      if result.latency_count > 0,
+        do: Float.round(result.total_latency_ms / result.latency_count, 1),
+        else: nil
+
+    %{
+      total_cost_usd: micro_to_decimal(result.total_cost_micro),
+      total_prompt_tokens: result.total_prompt_tokens,
+      total_completion_tokens: result.total_completion_tokens,
+      total_cache_read_tokens: result.total_cache_read_tokens,
+      total_cache_creation_tokens: result.total_cache_creation_tokens,
+      request_count: result.request_count,
+      error_count: result.error_count,
+      total_latency_ms: result.total_latency_ms,
+      avg_latency_ms: avg_latency_ms,
+      avg_tps: compute_tps(result.total_completion_tokens, result.total_latency_ms),
+      avg_ttft_ms: nil
+    }
+  end
+
+  defp zero_summary do
+    %{
+      total_cost_usd: Decimal.new(0),
+      total_prompt_tokens: 0,
+      total_completion_tokens: 0,
+      total_cache_read_tokens: 0,
+      total_cache_creation_tokens: 0,
+      request_count: 0,
+      error_count: 0,
+      total_latency_ms: 0,
+      avg_latency_ms: nil,
+      avg_tps: nil,
+      avg_ttft_ms: nil
+    }
+  end
+
+  @doc """
+  Top HTTP error codes from the rollup — sums `error_count` grouped by
+  nothing (the rollup has no `status_code` dimension), so this returns a
+  single aggregate row instead of per-code rows.
+
+  Kept deliberately: the dashboard only renders the total error count
+  alongside the summary. Per-code error listings stay on
+  `top_errors/2` (request_logs).
+  """
+  @spec total_errors_from_rollup(keyword()) :: non_neg_integer()
+  def total_errors_from_rollup(opts \\ []) do
+    from = Keyword.fetch!(opts, :from)
+    to = Keyword.get(opts, :to)
+    member_ids = Keyword.get(opts, :member_ids)
+
+    RequestMetricsHourly
+    |> maybe_rollup_from(from)
+    |> maybe_rollup_to(to)
+    |> maybe_rollup_member_ids(member_ids)
+    |> select([m], fragment("COALESCE(SUM(?), 0)::bigint", m.error_count))
+    |> Repo.one()
+  end
+
+  # Rollup-table filter helpers (day ranges are inclusive on `day`).
+  defp maybe_rollup_from(query, nil), do: query
+
+  defp maybe_rollup_from(query, %DateTime{} = from) do
+    where(query, [m], m.hour_utc >= ^from)
+  end
+
+  defp maybe_rollup_to(query, nil), do: query
+
+  defp maybe_rollup_to(query, %DateTime{} = to) do
+    where(query, [m], m.hour_utc <= ^to)
+  end
+
+  defp maybe_rollup_member_ids(query, nil), do: query
+
+  defp maybe_rollup_member_ids(query, member_ids) when is_list(member_ids) do
+    where(query, [m], m.team_member_id in ^member_ids)
+  end
+
+  # Integer micro-USD → Decimal USD (6dp), same convention as the Collector.
+  defp micro_to_decimal(micro) when is_integer(micro) do
+    micro
+    |> Decimal.new()
+    |> Decimal.div(Decimal.new(1_000_000))
   end
 
   # -----------------------------------------------------------------------
