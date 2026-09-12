@@ -158,7 +158,7 @@ defmodule TokengateWeb.SessionControllerTest do
       conn = login(conn, admin, "password-secret-#{u}1")
       conn = conn |> recycle() |> post(~p"/impersonate/#{admin.id}")
 
-      assert redirected_to(conn) == "/dashboard/users"
+      assert redirected_to(conn) == "/admin/users"
       assert get_session(conn, :user_id) == admin.id
       assert get_session(conn, :impersonator_id) == nil
     end
@@ -201,7 +201,7 @@ defmodule TokengateWeb.SessionControllerTest do
       conn = login(conn, admin, "password-secret-#{u}1")
       conn = conn |> recycle() |> post(~p"/impersonate/#{Ecto.UUID.generate()}")
 
-      assert redirected_to(conn) == "/dashboard/users"
+      assert redirected_to(conn) == "/admin/users"
       assert get_session(conn, :user_id) == admin.id
       assert get_session(conn, :impersonator_id) == nil
     end

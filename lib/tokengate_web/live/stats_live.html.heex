@@ -1334,7 +1334,7 @@
                               <td>{row.team_name}</td>
                               <td class="font-mono text-sm">
                                 <.link
-                                  navigate={~p"/dashboard/users/#{row.user_id}/stats"}
+                                  navigate={~p"/admin/users/#{row.user_id}/stats"}
                                   class="link link-hover"
                                 >
                                   {row.user_email}
@@ -2081,7 +2081,7 @@
                             >
                               <td class="font-mono text-sm">
                                 <.link
-                                  navigate={~p"/dashboard/users/#{row.user_id}/stats"}
+                                  navigate={~p"/admin/users/#{row.user_id}/stats"}
                                   class="link link-hover"
                                 >
                                   {row.user_email}

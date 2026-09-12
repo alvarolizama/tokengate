@@ -51,7 +51,7 @@ defmodule TokengateWeb.UserStatsLiveTest do
       {_, user} = fixture_user_with_memberships()
 
       assert {:error, {:redirect, %{to: "/login"}}} =
-               live(conn, ~p"/dashboard/users/#{user.id}/stats")
+               live(conn, ~p"/admin/users/#{user.id}/stats")
     end
 
     test "regular user is redirected to /dashboard (admin-only)", %{conn: conn} do
@@ -60,7 +60,7 @@ defmodule TokengateWeb.UserStatsLiveTest do
       conn = login(conn, regular, password)
 
       assert {:error, {:redirect, %{to: "/dashboard"}}} =
-               live(conn, ~p"/dashboard/users/#{user.id}/stats")
+               live(conn, ~p"/admin/users/#{user.id}/stats")
     end
   end
 
@@ -70,7 +70,7 @@ defmodule TokengateWeb.UserStatsLiveTest do
       %{user: admin, password: password} = register("admin")
       conn = login(conn, admin, password)
 
-      {:ok, _view, html} = live(conn, ~p"/dashboard/users/#{user.id}/stats")
+      {:ok, _view, html} = live(conn, ~p"/admin/users/#{user.id}/stats")
 
       assert html =~ user.email
       assert html =~ "1 membresía"
@@ -109,7 +109,7 @@ defmodule TokengateWeb.UserStatsLiveTest do
           latency_ms: 100
         })
 
-      {:ok, _view, html} = live(conn, ~p"/dashboard/users/#{user.id}/stats")
+      {:ok, _view, html} = live(conn, ~p"/admin/users/#{user.id}/stats")
 
       assert html =~ "gpt-4o-stats"
       assert html =~ "200"
@@ -135,7 +135,7 @@ defmodule TokengateWeb.UserStatsLiveTest do
         latency_ms: 300
       })
 
-      {:ok, _view, html} = live(conn, ~p"/dashboard/users/#{user.id}/stats")
+      {:ok, _view, html} = live(conn, ~p"/admin/users/#{user.id}/stats")
 
       # Cost card renders with the dollar sign and at least some digits.
       assert html =~ "Costo (5d)"
@@ -149,7 +149,7 @@ defmodule TokengateWeb.UserStatsLiveTest do
       %{user: admin, password: password} = register("admin")
       conn = login(conn, admin, password)
 
-      {:ok, _view, html} = live(conn, ~p"/dashboard/users")
+      {:ok, _view, html} = live(conn, ~p"/admin/users")
       assert html =~ ~s(id="stats-#{user.id}")
     end
   end

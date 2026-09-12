@@ -265,9 +265,9 @@ defmodule TokengateWeb.Layouts do
                 label="Mantenimiento"
                 icon="hero-cog-6-tooth"
               />
-              <.sidebar_link href={~p"/dashboard/users"} label="Usuarios" icon="hero-users" />
+              <.sidebar_link href={~p"/admin/users"} label="Usuarios" icon="hero-users" />
               <.sidebar_link
-                href={~p"/dashboard/services"}
+                href={~p"/admin/services"}
                 label="Servicios"
                 icon="hero-wrench-screwdriver"
               />

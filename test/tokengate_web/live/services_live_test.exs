@@ -44,7 +44,7 @@ defmodule TokengateWeb.ServicesLiveTest do
     %{user: user} = register("user")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/services")
+    {:ok, view, _html} = live(conn, ~p"/admin/services")
 
     # Open the supervisor form
     view

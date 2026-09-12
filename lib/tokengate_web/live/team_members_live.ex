@@ -979,7 +979,7 @@ defmodule TokengateWeb.TeamMembersLive do
                   <% end %>
                   <span class="badge badge-sm badge-ghost capitalize">{member.status}</span>
                   <.link
-                    navigate={~p"/dashboard/users/#{member.user_id}/stats"}
+                    navigate={~p"/admin/users/#{member.user_id}/stats"}
                     class="btn btn-sm btn-ghost"
                     id={"stats-#{member.id}"}
                     title="Ver stats consolidados de este usuario"

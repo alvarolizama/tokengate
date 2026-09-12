@@ -8,7 +8,7 @@ defmodule TokengateWeb.UserStatsLive do
   logs across all memberships. Real-time updates via the same `logs:new`
   PubSub as `/admin/logs`.
 
-  Path: `/dashboard/users/:user_id/stats`
+  Path: `/admin/users/:user_id/stats`
 
   Admin-only by router; defense-in-depth `require_admin_hook/1` rejects
   event traffic from non-admins (a malicious client could otherwise
@@ -343,7 +343,7 @@ defmodule TokengateWeb.UserStatsLive do
         <header class="flex items-center justify-between gap-6 pb-4">
           <div>
             <div class="flex items-center gap-2 text-xs text-base-content/60">
-              <.link navigate={~p"/dashboard/users"} class="hover:underline">Usuarios</.link>
+              <.link navigate={~p"/admin/users"} class="hover:underline">Usuarios</.link>
               <span>›</span>
               <span>Stats</span>
             </div>

@@ -29,13 +29,13 @@ defmodule TokengateWeb.UsersLiveTest do
   ## Auth -------------------------------------------------------------------
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
-    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/dashboard/users")
+    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/admin/users")
   end
 
   test "regular user is redirected to /dashboard (admin-only)", %{conn: conn} do
     %{user: user, password: password} = register("user")
     conn = login(conn, user, password)
-    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/users")
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/admin/users")
   end
 
   ## Admin views ------------------------------------------------------------
@@ -43,7 +43,7 @@ defmodule TokengateWeb.UsersLiveTest do
   test "admin sees users list with create button", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, html} = live(conn, ~p"/admin/users")
 
     assert html =~ "Usuarios"
     assert has_element?(view, "#new-user-btn")
@@ -53,7 +53,7 @@ defmodule TokengateWeb.UsersLiveTest do
     %{user: admin, password: password} = register("admin")
     _other = register("user")
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     assert has_element?(view, "#users")
     assert has_element?(view, "#new-user-btn")
@@ -81,7 +81,7 @@ defmodule TokengateWeb.UsersLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     assert has_element?(view, "#spend-#{member_user.id}", "$7.25")
     assert has_element?(view, "#spend-#{admin.id}", "—")
@@ -109,7 +109,7 @@ defmodule TokengateWeb.UsersLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     assert has_element?(view, "#spend-#{member_user.id}", "sin crédito")
   end
@@ -121,7 +121,7 @@ defmodule TokengateWeb.UsersLiveTest do
     %{team: team, owner: _owner} = team_with_log()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     # No group header rows — the table is a flat alphabetical list.
     refute has_element?(view, "tr#group-#{team.id}")
@@ -140,7 +140,7 @@ defmodule TokengateWeb.UsersLiveTest do
     {:ok, _} = Accounts.create_team_member(%{user_id: multi.id, team_id: team_b.id})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     # Single row for the user, showing both team badges.
     assert has_element?(view, "tr#user-#{multi.id}", team_a.name)
@@ -172,7 +172,7 @@ defmodule TokengateWeb.UsersLiveTest do
     {:ok, _} = Accounts.create_team_member(%{user_id: alpha.id, team_id: team.id})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     row_order = fn view ->
       Regex.scan(~r/<tr[^>]+id="(user-[^"]+)"/, render(view))
@@ -197,7 +197,7 @@ defmodule TokengateWeb.UsersLiveTest do
   test "admin can create a new user without teams", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     view |> element("#new-user-btn") |> render_click()
     assert has_element?(view, "#user-form")
@@ -224,7 +224,7 @@ defmodule TokengateWeb.UsersLiveTest do
     {:ok, team_b} = Accounts.create_team(%{name: "Team B #{unique()}"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     view |> element("#new-user-btn") |> render_click()
     assert has_element?(view, "#user-form")
@@ -262,7 +262,7 @@ defmodule TokengateWeb.UsersLiveTest do
   test "admin cannot create user with weak password", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     view |> element("#new-user-btn") |> render_click()
 
@@ -287,7 +287,7 @@ defmodule TokengateWeb.UsersLiveTest do
     %{user: admin, password: admin_password} = register("admin")
     %{user: target} = register("user")
     conn = login(conn, admin, admin_password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     view |> element("#edit-#{target.id}") |> render_click()
     assert has_element?(view, "#user-edit-form")
@@ -311,7 +311,7 @@ defmodule TokengateWeb.UsersLiveTest do
     %{user: admin, password: admin_password} = register("admin")
     %{user: target} = register("user")
     conn = login(conn, admin, admin_password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     html = view |> element("#status-#{target.id}") |> render_click()
     assert html =~ "Usuario suspendido"
@@ -324,7 +324,7 @@ defmodule TokengateWeb.UsersLiveTest do
     %{user: admin, password: admin_password} = register("admin")
     %{user: target, password: target_password} = register("user")
     conn = login(conn, admin, admin_password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
     view |> element("#status-#{target.id}") |> render_click()
 
     # Now try to login as the suspended user. The flash is deliberately
@@ -342,7 +342,7 @@ defmodule TokengateWeb.UsersLiveTest do
     %{user: admin, password: admin_password} = register("admin")
     %{user: target} = register("user")
     conn = login(conn, admin, admin_password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     view |> element("#pwd-#{target.id}") |> render_click()
     assert has_element?(view, "#user-reset-form")
@@ -366,7 +366,7 @@ defmodule TokengateWeb.UsersLiveTest do
     %{user: admin, password: admin_password} = register("admin")
     %{user: target} = register("user")
     conn = login(conn, admin, admin_password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     assert has_element?(view, "#impersonate-#{target.id}")
     refute has_element?(view, "#impersonate-#{admin.id}")
@@ -389,7 +389,7 @@ defmodule TokengateWeb.UsersLiveTest do
       end
 
     conn = login(conn, admin, admin_password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     refute has_element?(view, "#impersonate-#{root.id}")
   end
@@ -447,7 +447,7 @@ defmodule TokengateWeb.UsersLiveTest do
     %{user: admin, password: admin_password} = register("admin")
     %{user: target} = register("user")
     conn = login(conn, admin, admin_password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     assert has_element?(view, "#delete-#{target.id}")
     refute has_element?(view, "#delete-#{admin.id}")
@@ -468,7 +468,7 @@ defmodule TokengateWeb.UsersLiveTest do
       end
 
     conn = login(conn, admin, admin_password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     refute has_element?(view, "#delete-#{root.id}")
   end
@@ -477,7 +477,7 @@ defmodule TokengateWeb.UsersLiveTest do
     %{user: admin, password: admin_password} = register("admin")
     %{user: target} = register("user")
     conn = login(conn, admin, admin_password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     view |> element("#delete-#{target.id}") |> render_click()
 
@@ -495,7 +495,7 @@ defmodule TokengateWeb.UsersLiveTest do
     assert Accounts.list_team_members_for_user(target.id) != []
 
     conn = login(conn, admin, admin_password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     # Open modal then confirm
     view |> element("#delete-#{target.id}") |> render_click()
@@ -516,7 +516,7 @@ defmodule TokengateWeb.UsersLiveTest do
   test "admin cannot delete self", %{conn: conn} do
     %{user: admin, password: admin_password} = register("admin")
     conn = login(conn, admin, admin_password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/users")
+    {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     # No delete button for self
     refute has_element?(view, "#delete-#{admin.id}")
