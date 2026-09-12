@@ -561,13 +561,6 @@ defmodule TokengateWeb.ProvidersLive do
                   placeholder="https://api.fireworks.ai/inference/v1/embeddings"
                   hint="URL completa del endpoint de embeddings. Vacío = Base URL + /embeddings."
                 />
-                <.input
-                  field={@form[:rerank_base_url]}
-                  type="text"
-                  label="Rerank URL"
-                  placeholder="https://api.fireworks.ai/inference/v1/rerank"
-                  hint="URL completa del endpoint de rerank. Vacío = Base URL + /rerank."
-                />
                 <div class="flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
                     Cancelar

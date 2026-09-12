@@ -711,7 +711,6 @@ defmodule TokengateWeb.DashboardLive do
   def tier_badge_class(_), do: "badge-ghost"
 
   def model_type_badge_class("embedding"), do: "badge-info"
-  def model_type_badge_class("rerank"), do: "badge-warning"
   def model_type_badge_class(_), do: "badge-ghost"
 
   ## Key helpers -----------------------------------------------------------

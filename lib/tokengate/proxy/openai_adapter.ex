@@ -15,7 +15,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   adapter only ensures it is present so a misconfigured caller still gets a
   stream rather than a buffered body.
 
-  Embeddings and rerank follow the same passthrough rule: the payload is
+  Embeddings follow the passthrough rule: the payload is
   forwarded exactly as received and the upstream response is returned
   untouched. TokenGate only authenticates with the provider's API key — it
   never translates request or response shapes.
@@ -47,19 +47,6 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   """
   def embeddings(provider, credential, payload, opts \\ []) do
     post_json(provider, credential, embedding_url(provider), payload, opts)
-  end
-
-  @doc """
-  Reranks documents via the provider's rerank endpoint. The payload is
-  forwarded exactly as received and the upstream response is returned
-  untouched — TokenGate only authenticates with the provider's API key.
-
-  Providers without a rerank surface will answer 404, which the caller's
-  fallback logic handles like any other upstream failure. The endpoint URL
-  honours the provider's `rerank_base_url` override when present.
-  """
-  def rerank(provider, credential, payload, opts \\ []) do
-    post_json(provider, credential, rerank_url(provider), payload, opts)
   end
 
   # Shared non-streaming POST transport: identical headers, timeout and
@@ -329,16 +316,6 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
     end
   end
 
-  # Rerank endpoint URL. Providers may override the rerank surface with
-  # `rerank_base_url` (e.g. Qwen Cloud's compatible-api reranks path). When
-  # unset, appends `/rerank` to base_url.
-  defp rerank_url(provider) do
-    case Map.get(provider, :rerank_base_url) || Map.get(provider, "rerank_base_url") do
-      nil -> base_url(provider) <> "/rerank"
-      url -> String.trim_trailing(url, "/")
-    end
-  end
-
   defp base_url(provider) do
     (Map.get(provider, :base_url) || Map.get(provider, "base_url") || "")
     |> String.trim_trailing("/")
@@ -346,7 +323,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
 
   # Builds a URL from a provider and a path segment. If the path is already
   # an absolute URL (https://...), returns it directly — this lets
-  # rerank_base_url override the full endpoint when it differs from base_url.
+  # embedding_base_url override the full endpoint when it differs from base_url.
   defp build_url(_provider, "http://" <> _ = url), do: url
   defp build_url(_provider, "https://" <> _ = url), do: url
   defp build_url(provider, path), do: base_url(provider) <> path

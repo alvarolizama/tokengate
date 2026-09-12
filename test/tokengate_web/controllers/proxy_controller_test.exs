@@ -53,27 +53,6 @@ defmodule TokengateWeb.ProxyControllerTest do
             "usage" => %{"prompt_tokens" => 11, "total_tokens" => 11, "cost" => 0.000011}
           })
 
-        "rerank-cohere" in conn.path_info ->
-          # oMLX-style response: Cohere shape, no usage
-          json(conn, 200, %{
-            "results" => [
-              %{"index" => 1, "relevance_score" => 0.9},
-              %{"index" => 0, "relevance_score" => 0.2}
-            ]
-          })
-
-        "rerank" in conn.path_info ->
-          # Fireworks-style response: Jina shape with usage
-          json(conn, 200, %{
-            "object" => "list",
-            "model" => "fireworks/qwen3-reranker-8b",
-            "data" => [
-              %{"index" => 1, "relevance_score" => 0.9, "document" => "doc uno"},
-              %{"index" => 0, "relevance_score" => 0.2, "document" => "doc cero"}
-            ],
-            "usage" => %{"prompt_tokens" => 42, "total_tokens" => 42, "cost" => 0.000042}
-          })
-
         "slowstream" in conn.path_info ->
           Process.sleep(300)
           stream(conn)
@@ -1241,105 +1220,6 @@ defmodule TokengateWeb.ProxyControllerTest do
       conn
       |> authed_conn(token)
       |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
-
-    assert %{"error" => %{"code" => "model_type_mismatch"}} = json_response(conn, 400)
-  end
-
-  ## Rerank ####################################################################
-
-  test "rerank with Fireworks-style upstream passes response through untouched", %{conn: conn} do
-    %{token: token, alias: model_alias, member: member} = proxy_fixture()
-    update_alias_type(model_alias, "rerank")
-
-    conn =
-      conn
-      |> authed_conn(token)
-      |> post(~p"/v1/rerank", %{
-        "model" => model_alias.name,
-        "query" => "chaos",
-        "documents" => ["doc cero", "doc uno"]
-      })
-
-    body = json_response(conn, 200)
-
-    # Passthrough: the Jina-style `data` key comes back untouched
-    assert [%{"index" => 1, "relevance_score" => 0.9}, %{"index" => 0, "relevance_score" => 0.2}] =
-             body["data"]
-
-    refute Map.has_key?(body, "results")
-
-    # Fireworks-reported usage drives cost
-    assert get_resp_header(conn, "x-tokengate-cost") == ["0.000042"]
-
-    spend = Budgets.spend(member.id)
-    assert Decimal.equal?(spend.monthly_usd, Decimal.new("0.000042"))
-
-    assert_enqueued(worker: WriteWorker)
-    assert %{success: 1} = Oban.drain_queue(queue: :logs)
-
-    log = Repo.one(from l in RequestLog, where: l.team_member_id == ^member.id)
-    assert log.request_type == "rerank"
-    assert log.prompt_tokens == 42
-    assert log.status_code == 200
-  end
-
-  test "rerank with oMLX-style upstream passes through and estimates usage", %{conn: conn} do
-    %{token: token, alias: model_alias, member: member} = proxy_fixture()
-    update_alias_type(model_alias, "rerank")
-
-    [model_provider] = Providers.list_model_providers(model_alias.id)
-
-    {:ok, _provider} =
-      Providers.update_provider(model_provider.credential.provider, %{
-        base_url: "http://localhost:#{@port}/rerank-cohere"
-      })
-
-    conn =
-      conn
-      |> authed_conn(token)
-      |> post(~p"/v1/rerank", %{
-        "model" => model_alias.name,
-        "query" => "chaos",
-        "documents" => ["doc cero", "doc uno"]
-      })
-
-    body = json_response(conn, 200)
-    assert [%{"index" => 1, "relevance_score" => 0.9} | _] = body["results"]
-
-    # No upstream usage → estimated prompt_tokens > 0, zero cost (pay_per_token
-    # with no reported cost is the honest-zero policy)
-    assert_enqueued(worker: WriteWorker)
-    assert %{success: 1} = Oban.drain_queue(queue: :logs)
-
-    log = Repo.one(from l in RequestLog, where: l.team_member_id == ^member.id)
-    assert log.request_type == "rerank"
-    assert log.prompt_tokens > 0
-    assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0"))
-  end
-
-  test "rerank 400 without documents", %{conn: conn} do
-    %{token: token, alias: model_alias} = proxy_fixture()
-    update_alias_type(model_alias, "rerank")
-
-    conn =
-      conn
-      |> authed_conn(token)
-      |> post(~p"/v1/rerank", %{"model" => model_alias.name, "query" => "q"})
-
-    assert %{"error" => %{"code" => "invalid_request"}} = json_response(conn, 400)
-  end
-
-  test "rerank 400 model_type_mismatch against an llm alias", %{conn: conn} do
-    %{token: token, alias: model_alias} = proxy_fixture()
-
-    conn =
-      conn
-      |> authed_conn(token)
-      |> post(~p"/v1/rerank", %{
-        "model" => model_alias.name,
-        "query" => "q",
-        "documents" => ["d"]
-      })
 
     assert %{"error" => %{"code" => "model_type_mismatch"}} = json_response(conn, 400)
   end

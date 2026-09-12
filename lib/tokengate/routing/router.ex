@@ -74,7 +74,7 @@ defmodule Tokengate.Routing.Router do
       (`allow?/1`, `record_success/1`, `record_failure/2`) used in place of
       `CircuitBreakerManager` (test injection). Defaults to the real manager.
     * `:capability` – the required `model_type` of the alias (`"llm"`,
-      `"embedding"`, `"rerank"`). Defaults to `"llm"` (chat completions).
+      `"embedding"`). Defaults to `"llm"` (chat completions).
       When the alias exists but its `model_type` differs, returns
       `{:error, :model_type_mismatch}`.
 

@@ -972,7 +972,6 @@ defmodule TokengateWeb.ModelsLive do
   def empty_state_message("all"), do: "No hay modelos configurados."
   def empty_state_message("llm"), do: "No hay modelos LLM."
   def empty_state_message("embedding"), do: "No hay modelos de embedding."
-  def empty_state_message("rerank"), do: "No hay modelos de rerank."
   def empty_state_message(_), do: "No hay modelos configurados."
 
   def format_compact(n) when is_integer(n) and n >= 1_000_000_000,
@@ -1159,7 +1158,6 @@ defmodule TokengateWeb.ModelsLive do
                 {"Favoritos", "favorites"},
                 {"LLM", "llm"},
                 {"Embedding", "embedding"},
-                {"Rerank", "rerank"},
                 {"Todos", "all"}
               ]
             }
@@ -1471,10 +1469,9 @@ defmodule TokengateWeb.ModelsLive do
                       label="Tipo de modelo"
                       options={[
                         {"LLM (chat)", "llm"},
-                        {"Embedding", "embedding"},
-                        {"Rerank", "rerank"}
+                        {"Embedding", "embedding"}
                       ]}
-                      hint="Define qué endpoint lo sirve: /v1/chat/completions, /v1/embeddings o /v1/rerank."
+                      hint="Define qué endpoint lo sirve: /v1/chat/completions o /v1/embeddings."
                     />
 
                     <div class="divider my-2 text-xs text-base-content/50">

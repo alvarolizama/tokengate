@@ -16,17 +16,13 @@ defmodule Tokengate.Providers.ProviderTest do
         Provider.changeset(%Provider{}, %{
           name: "openrouter",
           base_url: "https://openrouter.ai/api/v1",
-          embedding_base_url: "https://openrouter.ai/api/v1/embeddings",
-          rerank_base_url: "https://openrouter.ai/api/v1/rerank"
+          embedding_base_url: "https://openrouter.ai/api/v1/embeddings"
         })
 
       assert changeset.valid?
 
       assert Ecto.Changeset.get_field(changeset, :embedding_base_url) ==
                "https://openrouter.ai/api/v1/embeddings"
-
-      assert Ecto.Changeset.get_field(changeset, :rerank_base_url) ==
-               "https://openrouter.ai/api/v1/rerank"
     end
 
     test "rejects invalid status" do
@@ -45,12 +41,10 @@ defmodule Tokengate.Providers.ProviderTest do
         Provider.changeset(%Provider{}, %{
           name: "test",
           base_url: "https://api.openai.com/v1",
-          embedding_base_url: "",
-          rerank_base_url: ""
+          embedding_base_url: ""
         })
 
       assert Ecto.Changeset.get_field(changeset, :embedding_base_url) == nil
-      assert Ecto.Changeset.get_field(changeset, :rerank_base_url) == nil
     end
   end
 

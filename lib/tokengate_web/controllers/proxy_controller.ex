@@ -11,9 +11,6 @@ defmodule TokengateWeb.ProxyController do
     * `POST /v1/embeddings` — embeddings passthrough. Non-streaming only.
       The request is forwarded as received and the upstream response is
       returned untouched; TokenGate only adds auth and cost tracking.
-    * `POST /v1/rerank` — rerank passthrough. The request is forwarded as
-      received and the upstream response is returned untouched; TokenGate
-      only adds auth and cost tracking.
 
   ## Two-gate throttling
 
@@ -150,27 +147,8 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
-  @doc """
-  Proxies a rerank request to the routed provider.
-
-  Passthrough: the request is forwarded as received and the upstream
-  response is returned untouched. TokenGate only adds authentication
-  (provider API key) and cost tracking. When the upstream omits usage,
-  token counts fall back to the chars/4 estimator over query + documents.
-  """
-  def rerank(conn, _params) do
-    payload = conn.body_params
-
-    with :ok <- require_query(payload),
-         :ok <- require_documents(payload) do
-      simple_proxy(conn, payload, "rerank", &OpenAIAdapter.rerank/4, :rerank)
-    else
-      {:error, error} -> render_proxy_error(conn, error)
-    end
-  end
-
-  # Shared gate pipeline for non-streaming, non-chat endpoints (embeddings,
-  # rerank): same two-gate throttle, routing, budget check, inflight
+  # Shared gate pipeline for non-streaming, non-chat endpoints (embeddings):
+  # same two-gate throttle, routing, budget check, inflight
   # registry, fallback matrix and cost accounting as chat — minus the
   # chat-only payload transforms (guard rails, prompt optimizer, reasoning).
   defp simple_proxy(conn, payload, capability, adapter_fun, kind) do
@@ -219,14 +197,6 @@ defmodule TokengateWeb.ProxyController do
 
   defp require_input(%{"input" => input}) when is_binary(input) or is_list(input), do: :ok
   defp require_input(_), do: {:error, {:invalid_request, "input is required (string or array)"}}
-
-  defp require_query(%{"query" => query}) when is_binary(query), do: :ok
-  defp require_query(_), do: {:error, {:invalid_request, "query is required (string)"}}
-
-  defp require_documents(%{"documents" => docs}) when is_list(docs) and docs != [], do: :ok
-
-  defp require_documents(_),
-    do: {:error, {:invalid_request, "documents is required (non-empty array)"}}
 
   # Non-streaming execution with the same fallback matrix as chat's
   # execute/6: auth errors disable the credential, other 4xx surface
@@ -428,17 +398,11 @@ defmodule TokengateWeb.ProxyController do
 
   # Resolves usage for non-chat responses, returning {usage, response_body}.
   #
-  # Both kinds are pure passthrough — the upstream response body is
-  # returned untouched. Usage is read from the upstream `usage` object when
-  # present; otherwise it's estimated over the request payload (inputs for
-  # :embedding, query + documents for :rerank).
+  # Pure passthrough — the upstream response body is returned untouched.
+  # Usage is read from the upstream `usage` object when present; otherwise
+  # it's estimated over the request payload (inputs for :embedding).
   defp simple_usage(payload, body, :embedding) do
     usage = UsageNormalizer.normalize(:openai, body) || estimate_embedding_usage(payload)
-    {usage, body}
-  end
-
-  defp simple_usage(payload, body, :rerank) do
-    usage = UsageNormalizer.normalize(:openai, body) || estimate_rerank_usage(payload)
     {usage, body}
   end
 
@@ -452,25 +416,6 @@ defmodule TokengateWeb.ProxyController do
       end)
 
     %{prompt_tokens: tokens, completion_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0}
-  end
-
-  defp estimate_rerank_usage(payload) do
-    query_tokens = TokenEstimator.estimate_completion(payload["query"] || "")
-
-    doc_tokens =
-      payload["documents"]
-      |> List.wrap()
-      |> Enum.reduce(0, fn
-        s, acc when is_binary(s) -> acc + TokenEstimator.estimate_completion(s)
-        _, acc -> acc
-      end)
-
-    %{
-      prompt_tokens: query_tokens + doc_tokens,
-      completion_tokens: 0,
-      cache_read_tokens: 0,
-      cache_creation_tokens: 0
-    }
   end
 
   ## Pipeline steps ############################################################
@@ -491,7 +436,7 @@ defmodule TokengateWeb.ProxyController do
   end
 
   # Shared retry policy for all three execution paths (chat, streaming,
-  # embeddings/rerank). Decides whether the next attempt should re-select
+  # embeddings). Decides whether the next attempt should re-select
   # the same credential or exclude it so the router moves to the next
   # provider.
   #
@@ -1189,7 +1134,7 @@ defmodule TokengateWeb.ProxyController do
   # prefix-cache hits possible, so they belong to the gateway itself, not
   # to per-model configuration. The flag columns remain in the schema for
   # backwards compatibility but no longer gate anything. Non-LLM aliases
-  # (and embeddings/rerank routes, which never call this function) pass
+  # (and embeddings routes, which never call this function) pass
   # through unchanged.
   defp maybe_optimize(payload, %{model_type: "llm"}) do
     messages = payload["messages"] || []

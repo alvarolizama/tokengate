@@ -10,7 +10,7 @@ defmodule Tokengate.Providers.ModelAlias do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @model_types ~w(llm embedding rerank)
+  @model_types ~w(llm embedding)
 
   schema "model_aliases" do
     field :name, :string

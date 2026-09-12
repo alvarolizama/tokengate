@@ -20,9 +20,6 @@ defmodule Tokengate.Providers.Provider do
     # Optional full-URL override for the embeddings endpoint. When nil, the
     # adapter appends /embeddings to base_url.
     field :embedding_base_url, :string
-    # Optional full-URL override for the rerank endpoint. When nil, the
-    # adapter appends /rerank to base_url.
-    field :rerank_base_url, :string
     field :status, :string, default: "active"
 
     has_many :credentials, Tokengate.Providers.Credential
@@ -37,7 +34,6 @@ defmodule Tokengate.Providers.Provider do
       :name,
       :base_url,
       :embedding_base_url,
-      :rerank_base_url,
       :status
     ])
     |> validate_required([:name, :base_url])
@@ -52,9 +48,7 @@ defmodule Tokengate.Providers.Provider do
   # Normalize empty-string URL overrides to nil so the adapter falls back to
   # the base_url-derived path.
   defp normalize_urls(changeset) do
-    changeset
-    |> normalize_blank(:embedding_base_url)
-    |> normalize_blank(:rerank_base_url)
+    normalize_blank(changeset, :embedding_base_url)
   end
 
   defp normalize_blank(changeset, field) do
