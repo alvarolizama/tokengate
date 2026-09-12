@@ -1,6 +1,5 @@
 defmodule Tokengate.LogsTest do
   use Tokengate.DataCase, async: true
-
   alias Tokengate.Logs
   alias Tokengate.Accounts
 

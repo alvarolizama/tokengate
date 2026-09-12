@@ -1,6 +1,5 @@
 defmodule Tokengate.AccountsTest do
   use Tokengate.DataCase, async: true
-
   alias Tokengate.Accounts
   alias Tokengate.Accounts.{ApiKey, Service, ServiceSupervisor, Team, TeamMember, User}
 
@@ -117,7 +116,7 @@ defmodule Tokengate.AccountsTest do
       assert Accounts.get_team(team.id) == nil
     end
 
-    test "deletes a team and cascades cleanup of members, api keys, and extra aliases" do
+    test "deletes a team and cascades cleanup of members, api keys, and extra models" do
       team = team_fixture()
       user = user_fixture()
 

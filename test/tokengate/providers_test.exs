@@ -1,12 +1,11 @@
 defmodule Tokengate.ProvidersTest do
   use Tokengate.DataCase, async: true
-
   alias Tokengate.Providers
 
   alias Tokengate.Providers.{
     Provider,
     Credential,
-    ModelAlias,
+    Model,
     ModelProvider
   }
 
@@ -153,7 +152,7 @@ defmodule Tokengate.ProvidersTest do
     credential
   end
 
-  def model_alias_fixture(attrs \\ %{}) do
+  def model_fixture(attrs \\ %{}) do
     unique = System.unique_integer([:positive])
 
     attrs =
@@ -162,18 +161,18 @@ defmodule Tokengate.ProvidersTest do
         context_window: 128_000
       })
 
-    {:ok, model_alias} = Providers.create_model_alias(attrs)
-    model_alias
+    {:ok, model} = Providers.create_model(attrs)
+    model
   end
 
-  def model_provider_fixture(model_alias \\ nil, provider \\ nil, attrs \\ %{}) do
-    model_alias = model_alias || model_alias_fixture()
+  def model_provider_fixture(model \\ nil, provider \\ nil, attrs \\ %{}) do
+    model = model || model_fixture()
     provider = provider || provider_fixture()
     credential = credential_fixture(provider)
 
     attrs =
       Enum.into(attrs, %{
-        model_alias_id: model_alias.id,
+        model_id: model.id,
         credential_id: credential.id,
         provider_model: "gpt-4-turbo",
         enabled: true
@@ -303,21 +302,21 @@ defmodule Tokengate.ProvidersTest do
   end
 
   # ---------------------------------------------------------------------------
-  # ModelAlias tests
+  # Model tests
   # ---------------------------------------------------------------------------
 
-  describe "model_aliases" do
-    test "create_model_alias/1 with valid attrs" do
-      alias_ = model_alias_fixture()
-      assert %ModelAlias{} = alias_
-      assert alias_.name =~ "gpt-4"
+  describe "models" do
+    test "create_model/1 with valid attrs" do
+      model_ = model_fixture()
+      assert %Model{} = model_
+      assert model_.name =~ "gpt-4"
     end
 
     test "unique constraint on name" do
-      model_alias_fixture(%{name: "gpt-4"})
+      model_fixture(%{name: "gpt-4"})
 
       {:error, changeset} =
-        Providers.create_model_alias(%{
+        Providers.create_model(%{
           name: "gpt-4",
           context_window: 1000
         })
@@ -326,31 +325,31 @@ defmodule Tokengate.ProvidersTest do
     end
 
     test "informational market prices round-trip through create/update" do
-      alias_ =
-        model_alias_fixture(%{
+      model_ =
+        model_fixture(%{
           market_input_price_per_1m: Decimal.new("1.250000"),
           market_output_price_per_1m: Decimal.new("10.000000"),
           market_cache_price_per_1m: Decimal.new("0.125000")
         })
 
-      assert Decimal.eq?(alias_.market_input_price_per_1m, Decimal.new("1.25"))
-      assert Decimal.eq?(alias_.market_output_price_per_1m, Decimal.new("10"))
-      assert Decimal.eq?(alias_.market_cache_price_per_1m, Decimal.new("0.125"))
+      assert Decimal.eq?(model_.market_input_price_per_1m, Decimal.new("1.25"))
+      assert Decimal.eq?(model_.market_output_price_per_1m, Decimal.new("10"))
+      assert Decimal.eq?(model_.market_cache_price_per_1m, Decimal.new("0.125"))
 
       {:ok, updated} =
-        Providers.update_model_alias(alias_, %{market_cache_price_per_1m: nil})
+        Providers.update_model(model_, %{market_cache_price_per_1m: nil})
 
       assert is_nil(updated.market_cache_price_per_1m)
     end
 
-    test "get_alias_by_name/1 returns the alias by name" do
-      alias_ = model_alias_fixture(%{name: "unique-alias"})
+    test "get_model_by_name/1 returns the model by name" do
+      model_ = model_fixture(%{name: "unique-model"})
 
-      assert Providers.get_alias_by_name("unique-alias").id == alias_.id
+      assert Providers.get_model_by_name("unique-model").id == model_.id
     end
 
-    test "get_alias_by_name/1 returns nil for unknown name" do
-      assert Providers.get_alias_by_name("nonexistent") == nil
+    test "get_model_by_name/1 returns nil for unknown name" do
+      assert Providers.get_model_by_name("nonexistent") == nil
     end
   end
 
@@ -366,30 +365,30 @@ defmodule Tokengate.ProvidersTest do
     end
 
     test "list_model_providers/1 returns enabled, ordered priority ASC NULLS LAST" do
-      alias_ = model_alias_fixture()
+      model_ = model_fixture()
       provider = provider_fixture()
 
       # priority=5 (lower priority = runs later)
-      ap5 = model_provider_fixture(alias_, provider, %{priority: 5})
+      ap5 = model_provider_fixture(model_, provider, %{priority: 5})
       # no priority (nil) — should come last due to NULLS LAST
-      ap_nil = model_provider_fixture(alias_, provider, %{priority: nil})
+      ap_nil = model_provider_fixture(model_, provider, %{priority: nil})
       # priority=1 (highest priority — first)
-      ap1 = model_provider_fixture(alias_, provider, %{priority: 1})
+      ap1 = model_provider_fixture(model_, provider, %{priority: 1})
       # disabled — should be excluded
-      _disabled = model_provider_fixture(alias_, provider, %{enabled: false})
+      _disabled = model_provider_fixture(model_, provider, %{enabled: false})
 
-      result = Providers.list_model_providers(alias_.id)
+      result = Providers.list_model_providers(model_.id)
       ids = Enum.map(result, & &1.id)
 
       assert ids == [ap1.id, ap5.id, ap_nil.id]
     end
 
     test "list_model_providers/1 preloads credential with provider" do
-      alias_ = model_alias_fixture()
+      model_ = model_fixture()
       provider = provider_fixture()
-      model_provider_fixture(alias_, provider)
+      model_provider_fixture(model_, provider)
 
-      [result] = Providers.list_model_providers(alias_.id)
+      [result] = Providers.list_model_providers(model_.id)
       assert %Credential{} = result.credential
       assert %Provider{} = result.credential.provider
     end
@@ -409,13 +408,13 @@ defmodule Tokengate.ProvidersTest do
       member_a = team_member_fixture(team_a)
       member_b = team_member_fixture(team_b)
 
-      alias_ = model_alias_fixture()
+      model_ = model_fixture()
       provider = provider_fixture()
       credential = credential_fixture(provider)
 
       {:ok, mp} =
         Providers.create_model_provider(%{
-          model_alias_id: alias_.id,
+          model_id: model_.id,
           credential_id: credential.id,
           provider_model: "exclusive-model",
           priority: 1,
@@ -424,13 +423,13 @@ defmodule Tokengate.ProvidersTest do
         })
 
       # Same team → visible
-      visible_for_a = Providers.list_model_providers_for_member(alias_.id, member_a.id, team_a.id)
+      visible_for_a = Providers.list_model_providers_for_member(model_.id, member_a.id, team_a.id)
       assert Enum.map(visible_for_a, & &1.id) == [mp.id]
 
       # Other team → NOT visible. Regression: the "global" clause used to
       # check only exclusive_to_team_member_id, so team-exclusive providers
       # (member id nil) leaked to every other team.
-      visible_for_b = Providers.list_model_providers_for_member(alias_.id, member_b.id, team_b.id)
+      visible_for_b = Providers.list_model_providers_for_member(model_.id, member_b.id, team_b.id)
       assert visible_for_b == []
     end
 
@@ -439,13 +438,13 @@ defmodule Tokengate.ProvidersTest do
       member_a = team_member_fixture(team)
       member_b = team_member_fixture(team)
 
-      alias_ = model_alias_fixture()
+      model_ = model_fixture()
       provider = provider_fixture()
       credential = credential_fixture(provider)
 
       {:ok, mp} =
         Providers.create_model_provider(%{
-          model_alias_id: alias_.id,
+          model_id: model_.id,
           credential_id: credential.id,
           provider_model: "member-model",
           priority: 1,
@@ -453,24 +452,24 @@ defmodule Tokengate.ProvidersTest do
           exclusive_to_team_member_id: member_a.id
         })
 
-      visible_for_a = Providers.list_model_providers_for_member(alias_.id, member_a.id, team.id)
+      visible_for_a = Providers.list_model_providers_for_member(model_.id, member_a.id, team.id)
       assert Enum.map(visible_for_a, & &1.id) == [mp.id]
 
-      visible_for_b = Providers.list_model_providers_for_member(alias_.id, member_b.id, team.id)
+      visible_for_b = Providers.list_model_providers_for_member(model_.id, member_b.id, team.id)
       assert visible_for_b == []
     end
 
     test "global providers stay visible alongside matching exclusives" do
       team = team_fixture()
       member = team_member_fixture(team)
-      alias_ = model_alias_fixture()
+      model_ = model_fixture()
       provider = provider_fixture()
       global_cred = credential_fixture(provider)
       team_cred = credential_fixture(provider)
 
       {:ok, global_mp} =
         Providers.create_model_provider(%{
-          model_alias_id: alias_.id,
+          model_id: model_.id,
           credential_id: global_cred.id,
           provider_model: "global-model",
           priority: 1,
@@ -479,7 +478,7 @@ defmodule Tokengate.ProvidersTest do
 
       {:ok, team_mp} =
         Providers.create_model_provider(%{
-          model_alias_id: alias_.id,
+          model_id: model_.id,
           credential_id: team_cred.id,
           provider_model: "team-model",
           priority: 1,
@@ -487,7 +486,7 @@ defmodule Tokengate.ProvidersTest do
           exclusive_to_team_id: team.id
         })
 
-      visible = Providers.list_model_providers_for_member(alias_.id, member.id, team.id)
+      visible = Providers.list_model_providers_for_member(model_.id, member.id, team.id)
       ids = Enum.map(visible, & &1.id)
 
       assert global_mp.id in ids
@@ -496,7 +495,7 @@ defmodule Tokengate.ProvidersTest do
 
     @tag :hermes_verify
     test "same credential can serve multiple scope buckets for the same model" do
-      alias_ = model_alias_fixture(%{name: "verify-cross-scope"})
+      model_ = model_fixture(%{name: "verify-cross-scope"})
       team_a = team_fixture(%{name: "Team A"})
       team_b = team_fixture(%{name: "Team B"})
       member_a = team_member_fixture(team_a)
@@ -507,7 +506,7 @@ defmodule Tokengate.ProvidersTest do
       # Global row
       {:ok, _} =
         Providers.create_model_provider(%{
-          model_alias_id: alias_.id,
+          model_id: model_.id,
           credential_id: cred.id,
           provider_model: "global-model",
           priority: 1,
@@ -517,7 +516,7 @@ defmodule Tokengate.ProvidersTest do
       # Team-A exclusive — same cred
       {:ok, _} =
         Providers.create_model_provider(%{
-          model_alias_id: alias_.id,
+          model_id: model_.id,
           credential_id: cred.id,
           provider_model: "team-a-model",
           priority: 1,
@@ -528,7 +527,7 @@ defmodule Tokengate.ProvidersTest do
       # Team-B exclusive — same cred
       {:ok, _} =
         Providers.create_model_provider(%{
-          model_alias_id: alias_.id,
+          model_id: model_.id,
           credential_id: cred.id,
           provider_model: "team-b-model",
           priority: 1,
@@ -539,7 +538,7 @@ defmodule Tokengate.ProvidersTest do
       # Member-A exclusive — same cred
       {:ok, _} =
         Providers.create_model_provider(%{
-          model_alias_id: alias_.id,
+          model_id: model_.id,
           credential_id: cred.id,
           provider_model: "member-a-model",
           priority: 1,
@@ -550,7 +549,7 @@ defmodule Tokengate.ProvidersTest do
       # Member-B exclusive — same cred
       {:ok, _} =
         Providers.create_model_provider(%{
-          model_alias_id: alias_.id,
+          model_id: model_.id,
           credential_id: cred.id,
           provider_model: "member-b-model",
           priority: 1,
@@ -558,21 +557,21 @@ defmodule Tokengate.ProvidersTest do
           exclusive_to_team_member_id: member_b.id
         })
 
-      all = Providers.list_all_model_providers(alias_.id)
+      all = Providers.list_all_model_providers(model_.id)
       cred_rows = Enum.filter(all, &(&1.credential_id == cred.id))
       assert length(cred_rows) == 5
     end
 
     @tag :hermes_verify
     test "duplicate in the same scope bucket is still rejected" do
-      alias_ = model_alias_fixture(%{name: "verify-dup"})
+      model_ = model_fixture(%{name: "verify-dup"})
       team = team_fixture(%{name: "Team D"})
       provider = provider_fixture()
       cred = credential_fixture(provider, %{status: "active"})
 
       {:ok, _} =
         Providers.create_model_provider(%{
-          model_alias_id: alias_.id,
+          model_id: model_.id,
           credential_id: cred.id,
           provider_model: "dup-1",
           priority: 1,
@@ -582,7 +581,7 @@ defmodule Tokengate.ProvidersTest do
 
       {:error, changeset} =
         Providers.create_model_provider(%{
-          model_alias_id: alias_.id,
+          model_id: model_.id,
           credential_id: cred.id,
           provider_model: "dup-2",
           priority: 1,
@@ -596,7 +595,7 @@ defmodule Tokengate.ProvidersTest do
 
     @tag :hermes_verify
     test "list_available_credentials_for_scope excludes same-scope duplicates" do
-      alias_ = model_alias_fixture(%{name: "verify-reuse"})
+      model_ = model_fixture(%{name: "verify-reuse"})
       team_a = team_fixture(%{name: "Team E"})
       team_b = team_fixture(%{name: "Team F"})
       provider = provider_fixture()
@@ -605,7 +604,7 @@ defmodule Tokengate.ProvidersTest do
       # Cred is already team-A exclusive for this model
       {:ok, _} =
         Providers.create_model_provider(%{
-          model_alias_id: alias_.id,
+          model_id: model_.id,
           credential_id: cred.id,
           provider_model: "team-a-model",
           priority: 1,
@@ -618,7 +617,7 @@ defmodule Tokengate.ProvidersTest do
 
       {:ok, _} =
         Providers.create_model_provider(%{
-          model_alias_id: alias_.id,
+          model_id: model_.id,
           credential_id: cred2.id,
           provider_model: "team-b-model",
           priority: 1,
@@ -627,7 +626,7 @@ defmodule Tokengate.ProvidersTest do
         })
 
       # The first cred is excluded from team-scope list (already team-exclusive)
-      available = Providers.list_available_credentials_for_scope(alias_.id, "team")
+      available = Providers.list_available_credentials_for_scope(model_.id, "team")
       available_ids = Enum.map(available, & &1.id)
 
       refute cred.id in available_ids
@@ -639,36 +638,36 @@ defmodule Tokengate.ProvidersTest do
   # Team Model Aliases
   # ---------------------------------------------------------------------------
 
-  describe "team_model_aliases" do
-    test "grant_alias_to_team/2 creates a grant" do
+  describe "team_models" do
+    test "grant_model_to_team/2 creates a grant" do
       team = team_fixture()
-      alias_ = model_alias_fixture()
+      model_ = model_fixture()
 
-      assert {:ok, _} = Providers.grant_alias_to_team(team.id, alias_.id)
+      assert {:ok, _} = Providers.grant_model_to_team(team.id, model_.id)
     end
 
-    test "grant_alias_to_team/2 is idempotent (unique constraint)" do
+    test "grant_model_to_team/2 is idempotent (unique constraint)" do
       team = team_fixture()
-      alias_ = model_alias_fixture()
+      model_ = model_fixture()
 
-      {:ok, _} = Providers.grant_alias_to_team(team.id, alias_.id)
-      {:error, changeset} = Providers.grant_alias_to_team(team.id, alias_.id)
+      {:ok, _} = Providers.grant_model_to_team(team.id, model_.id)
+      {:error, changeset} = Providers.grant_model_to_team(team.id, model_.id)
       assert "has already been taken" in errors_on(changeset).team_id
     end
 
-    test "revoke_alias_from_team/2 removes grant" do
+    test "revoke_model_from_team/2 removes grant" do
       team = team_fixture()
-      alias_ = model_alias_fixture()
+      model_ = model_fixture()
 
-      {:ok, _} = Providers.grant_alias_to_team(team.id, alias_.id)
-      assert {:ok, _} = Providers.revoke_alias_from_team(team.id, alias_.id)
+      {:ok, _} = Providers.grant_model_to_team(team.id, model_.id)
+      assert {:ok, _} = Providers.revoke_model_from_team(team.id, model_.id)
     end
 
-    test "revoke_alias_from_team/2 is idempotent (nil-safe)" do
+    test "revoke_model_from_team/2 is idempotent (nil-safe)" do
       team = team_fixture()
-      alias_ = model_alias_fixture()
+      model_ = model_fixture()
 
-      assert {:ok, nil} = Providers.revoke_alias_from_team(team.id, alias_.id)
+      assert {:ok, nil} = Providers.revoke_model_from_team(team.id, model_.id)
     end
   end
 
@@ -679,41 +678,41 @@ defmodule Tokengate.ProvidersTest do
   describe "cascade deletes" do
     alias Tokengate.Logs
     alias Tokengate.Logs.RequestLog
-    alias Tokengate.Providers.{TeamModelAlias, TeamMemberExtraAlias}
+    alias Tokengate.Providers.{TeamModel, TeamMemberExtraModel}
 
     @log_timestamp ~U[2026-07-26 12:00:00Z]
 
-    test "delete_model_alias/1 cascades to team_model_aliases" do
+    test "delete_model/1 cascades to team_models" do
       team = team_fixture()
-      alias_ = model_alias_fixture()
-      {:ok, _} = Providers.grant_alias_to_team(team.id, alias_.id)
+      model_ = model_fixture()
+      {:ok, _} = Providers.grant_model_to_team(team.id, model_.id)
 
-      assert Repo.get_by(TeamModelAlias, team_id: team.id, model_alias_id: alias_.id)
+      assert Repo.get_by(TeamModel, team_id: team.id, model_id: model_.id)
 
-      {:ok, _} = Providers.delete_model_alias(alias_)
+      {:ok, _} = Providers.delete_model(model_)
 
-      refute Repo.get_by(TeamModelAlias, team_id: team.id, model_alias_id: alias_.id)
+      refute Repo.get_by(TeamModel, team_id: team.id, model_id: model_.id)
     end
 
-    test "delete_model_alias/1 cascades to team_member_extra_aliases" do
+    test "delete_model/1 cascades to team_member_extra_models" do
       member = team_member_fixture()
-      alias_ = model_alias_fixture()
-      {:ok, _} = Providers.grant_extra_alias(member.id, alias_.id)
+      model_ = model_fixture()
+      {:ok, _} = Providers.grant_extra_model(member.id, model_.id)
 
-      assert Repo.get_by(TeamMemberExtraAlias,
+      assert Repo.get_by(TeamMemberExtraModel,
                team_member_id: member.id,
-               model_alias_id: alias_.id
+               model_id: model_.id
              )
 
-      {:ok, _} = Providers.delete_model_alias(alias_)
+      {:ok, _} = Providers.delete_model(model_)
 
-      refute Repo.get_by(TeamMemberExtraAlias,
+      refute Repo.get_by(TeamMemberExtraModel,
                team_member_id: member.id,
-               model_alias_id: alias_.id
+               model_id: model_.id
              )
     end
 
-    # provider_id / model_alias_id no longer carry FKs (they made provider
+    # provider_id / model_id no longer carry FKs (they made provider
     # deletion O(all referenced log rows) and time out in production). The
     # ids are kept as historical data on the log rows.
     test "delete_provider/1 keeps request_logs.provider_id (no FK)" do
@@ -735,23 +734,23 @@ defmodule Tokengate.ProvidersTest do
       assert reloaded.provider_id == provider.id
     end
 
-    test "delete_model_alias/1 keeps request_logs.model_alias_id (no FK)" do
+    test "delete_model/1 keeps request_logs.model_id (no FK)" do
       member = team_member_fixture()
-      alias_ = model_alias_fixture()
+      model_ = model_fixture()
 
       {:ok, log} =
         Logs.log_request(%{
           team_member_id: member.id,
-          model_alias_id: alias_.id,
+          model_id: model_.id,
           model_requested: "gpt-4",
           inserted_at: @log_timestamp
         })
 
-      {:ok, _} = Providers.delete_model_alias(alias_)
+      {:ok, _} = Providers.delete_model(model_)
 
       reloaded = Repo.get_by(RequestLog, id: log.id, inserted_at: log.inserted_at)
       assert reloaded != nil
-      assert reloaded.model_alias_id == alias_.id
+      assert reloaded.model_id == model_.id
     end
   end
 end

@@ -25,7 +25,6 @@ defmodule Tokengate.Logs.CostBackfill do
   """
 
   import Ecto.Query, only: [from: 2]
-
   alias Tokengate.Proxy.CostCalculator
   alias Tokengate.Repo
 
@@ -48,10 +47,14 @@ defmodule Tokengate.Logs.CostBackfill do
       from(rl in Tokengate.Logs.RequestLog,
         join: mp in Tokengate.Providers.ModelProvider,
         on: rl.model_provider_id == mp.id,
+        join: c in Tokengate.Providers.Credential,
+        on: c.id == mp.credential_id,
+        left_join: p in Tokengate.Providers.Provider,
+        on: p.id == c.provider_id,
         where:
           not is_nil(mp.input_cost_per_million) and
             not is_nil(mp.output_cost_per_million) and
-            mp.billing_mode == "pay_per_token" and
+            p.billing_type != "subscription" and
             (rl.prompt_tokens > 0 or rl.completion_tokens > 0),
         select: %{
           id: rl.id,
@@ -123,10 +126,14 @@ defmodule Tokengate.Logs.CostBackfill do
       from(rl in Tokengate.Logs.RequestLog,
         join: mp in Tokengate.Providers.ModelProvider,
         on: rl.model_provider_id == mp.id,
+        join: c in Tokengate.Providers.Credential,
+        on: c.id == mp.credential_id,
+        left_join: p in Tokengate.Providers.Provider,
+        on: p.id == c.provider_id,
         where:
           not is_nil(mp.input_cost_per_million) and
             not is_nil(mp.output_cost_per_million) and
-            mp.billing_mode == "pay_per_token" and
+            p.billing_type != "subscription" and
             (rl.prompt_tokens > 0 or rl.completion_tokens > 0),
         select: count(rl.id)
       )

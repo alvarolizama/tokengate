@@ -1,6 +1,5 @@
 defmodule Tokengate.Routing.IncludedWaiterTest do
   use ExUnit.Case, async: true
-
   alias Tokengate.Routing.IncludedWaiter
 
   setup do

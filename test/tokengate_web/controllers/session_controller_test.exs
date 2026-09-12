@@ -1,6 +1,5 @@
 defmodule TokengateWeb.SessionControllerTest do
   use TokengateWeb.ConnCase, async: false
-
   alias Tokengate.Accounts
 
   defp user_fixture(attrs \\ %{}) do
@@ -68,7 +67,6 @@ defmodule TokengateWeb.SessionControllerTest do
   end
 
   ## Impersonation ----------------------------------------------------------
-
   alias Tokengate.Auditing.AuditLog
   alias Tokengate.Repo
 

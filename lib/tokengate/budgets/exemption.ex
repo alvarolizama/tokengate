@@ -17,7 +17,6 @@ defmodule Tokengate.Budgets.Exemption do
   use Ecto.Schema
 
   import Ecto.Changeset
-
   alias Tokengate.Accounts.{Service, Team, User}
 
   @primary_key {:id, :binary_id, autogenerate: true}

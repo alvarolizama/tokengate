@@ -12,7 +12,6 @@ defmodule Tokengate.Budgets.Exemptions do
   """
 
   import Ecto.Query
-
   alias Tokengate.Budgets.Exemption
   alias Tokengate.Repo
 

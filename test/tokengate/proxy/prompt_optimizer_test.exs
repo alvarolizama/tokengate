@@ -5,7 +5,6 @@ defmodule Tokengate.Proxy.PromptOptimizerTest do
   """
 
   use ExUnit.Case, async: true
-
   alias Tokengate.Proxy.PromptOptimizer
 
   describe "stable_prefix/1" do

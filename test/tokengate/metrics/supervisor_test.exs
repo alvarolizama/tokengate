@@ -5,7 +5,6 @@ defmodule Tokengate.Metrics.SupervisorTest do
   """
 
   use ExUnit.Case, async: false
-
   alias Tokengate.Metrics.Supervisor
   alias Tokengate.Metrics.Collector
 
@@ -23,7 +22,7 @@ defmodule Tokengate.Metrics.SupervisorTest do
     Collector.reset()
 
     Collector.record_request(%{
-      model_alias_id: "alias-x",
+      model_id: "model-x",
       provider_id: "prov-y",
       agent_type: "api",
       status: 200,
@@ -36,7 +35,7 @@ defmodule Tokengate.Metrics.SupervisorTest do
 
     snap = Collector.snapshot()
     assert snap.requests_total == 1
-    assert snap.by_alias == %{"alias-x" => 1}
+    assert snap.by_model == %{"model-x" => 1}
     assert Decimal.equal?(snap.cost_usd, Decimal.new("0.100000"))
   end
 end

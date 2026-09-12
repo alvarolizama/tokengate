@@ -5,7 +5,6 @@ defmodule Tokengate.Limits.SupervisorTest do
   """
 
   use ExUnit.Case, async: false
-
   alias Tokengate.Limits.Supervisor
   alias Tokengate.Limits.Manager
 

@@ -20,7 +20,7 @@ defmodule Tokengate.Metrics.Collector do
 
     * `{:requests, :total}`            — total request count
     * `{:requests, :errors}`           — count of requests with status >= 400
-    * `{:requests, {:alias, id}}`     — per `model_alias_id`
+    * `{:requests, {:model, id}}`     — per `model_id`
     * `{:requests, {:provider, id}}`   — per `provider_id`
     * `{:requests, {:agent, type}}`   — per `agent_type`
     * `{:tokens, :prompt}`             — total prompt tokens
@@ -41,7 +41,6 @@ defmodule Tokengate.Metrics.Collector do
   """
 
   use GenServer
-
   alias Phoenix.PubSub
 
   @table :tokengate_metrics
@@ -70,7 +69,7 @@ defmodule Tokengate.Metrics.Collector do
 
   `attrs` keys:
 
-    * `model_alias_id`  — term (usually binary id)
+    * `model_id`  — term (usually binary id)
     * `provider_id`     — term
     * `agent_type`      — string
     * `status`          — integer HTTP status
@@ -88,7 +87,7 @@ defmodule Tokengate.Metrics.Collector do
   """
   @spec record_request(map()) :: :ok
   def record_request(attrs) do
-    model_alias_id = Map.get(attrs, :model_alias_id)
+    model_id = Map.get(attrs, :model_id)
     provider_id = Map.get(attrs, :provider_id)
     agent_type = Map.get(attrs, :agent_type)
     status = Map.get(attrs, :status, 0)
@@ -102,8 +101,8 @@ defmodule Tokengate.Metrics.Collector do
     # Counters
     incr({:requests, :total})
 
-    unless is_nil(model_alias_id) do
-      incr({:requests, {:alias, model_alias_id}})
+    unless is_nil(model_id) do
+      incr({:requests, {:model, model_id}})
     end
 
     unless is_nil(provider_id) do
@@ -140,7 +139,7 @@ defmodule Tokengate.Metrics.Collector do
         requests_total: non_neg_integer(),
         errors_total: non_neg_integer(),
         error_rate: float(),
-        by_alias: %{id => n},
+        by_model: %{id => n},
         by_provider: %{id => n},
         by_agent: %{type => n},
         prompt_tokens: non_neg_integer(),
@@ -159,7 +158,7 @@ defmodule Tokengate.Metrics.Collector do
     requests_total = read_counter({:requests, :total})
     errors_total = read_counter({:requests, :errors})
 
-    by_alias = read_dimension({:requests, {:alias, :_}})
+    by_model = read_dimension({:requests, {:model, :_}})
     by_provider = read_dimension({:requests, {:provider, :_}})
     by_agent = read_dimension({:requests, {:agent, :_}})
 
@@ -174,7 +173,7 @@ defmodule Tokengate.Metrics.Collector do
       requests_total: requests_total,
       errors_total: errors_total,
       error_rate: error_rate(requests_total, errors_total),
-      by_alias: by_alias,
+      by_model: by_model,
       by_provider: by_provider,
       by_agent: by_agent,
       prompt_tokens: prompt_tokens,
@@ -249,8 +248,8 @@ defmodule Tokengate.Metrics.Collector do
   # Reads all counter keys matching the pattern `{:requests, {dim, _}}` and
   # returns a map of `value => count`. Builds the match spec per-dimension
   # because ETS match specs don't support runtime-bound atoms via ^pin.
-  defp read_dimension({:requests, {:alias, :_}}) do
-    select_dim(:alias)
+  defp read_dimension({:requests, {:model, :_}}) do
+    select_dim(:model)
   end
 
   defp read_dimension({:requests, {:provider, :_}}) do

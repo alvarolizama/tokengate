@@ -1,23 +1,22 @@
 defmodule TokengateWeb.ModelsLive do
   @moduledoc """
-  CRUD for model_aliases + per-model model_provider management.
+  CRUD for models + per-model model_provider management.
 
   Admins can create, edit, and delete models, and assign providers to each
-  model (provider_model, priority, enabled toggle, billing_mode, scope).
+  model (provider_model, priority, enabled toggle, scope).
   Managers and regular users see a read-only list.
 
   Models are global. Admins can create, edit, and delete models,
   and assign providers to each model.
 
-  ## Cost model (2026-07-30)
+  ## Cost model
 
   The primary cost source is the upstream provider's `usage.cost` report.
   Manual per-provider pricing (input + cache + output per million tokens)
-  serves as a fallback when the upstream omits cost — the fields appear in
-  the provider-form when `billing_mode` is `"pay_per_token"`.
-
-  `billing_mode`: `"pay_per_token"` or `"included"` (subscription /
-  RPM-limited).
+  serves as a fallback when the upstream omits cost. Billing is a
+  provider-level attribute (`providers.billing_type`): subscription
+  providers cost $0 and form the top routing tier; the effective mode is
+  derived via `ModelProvider.billing_mode/1`.
 
   ## Exclusive scope
 
@@ -31,7 +30,7 @@ defmodule TokengateWeb.ModelsLive do
   import Ecto.Query, only: [from: 2]
   alias Tokengate.Accounts
   alias Tokengate.Providers
-  alias Tokengate.Providers.{ModelAlias, ModelProvider}
+  alias Tokengate.Providers.{Model, ModelProvider}
   alias Tokengate.Repo
 
   @impl true
@@ -45,17 +44,16 @@ defmodule TokengateWeb.ModelsLive do
       |> assign(:is_admin, is_admin)
       |> assign(:model_type_filter, "favorites")
       |> assign(:form, nil)
-      |> assign(:editing_alias_id, nil)
+      |> assign(:editing_model_id, nil)
       |> assign(:guard_rails_form, nil)
-      |> assign(:guard_rails_alias_id, nil)
+      |> assign(:guard_rails_model_id, nil)
       |> assign(:provider_form, nil)
-      |> assign(:provider_form_alias_id, nil)
+      |> assign(:provider_form_model_id, nil)
       |> assign(:editing_ap_id, nil)
       |> assign(:provider_models, [])
       |> assign(:provider_models_loading, false)
       |> assign(:provider_model_search, "")
       |> assign(:provider_form_credential_id, nil)
-      |> assign(:current_billing_mode, "pay_per_token")
       |> assign(:current_scope, "global")
       |> assign(:current_scope_team_ids, [])
       |> assign(:current_scope_member_ids, [])
@@ -63,7 +61,7 @@ defmodule TokengateWeb.ModelsLive do
       |> assign(:scope_member_search, "")
       |> assign(:scope_team_open, false)
       |> assign(:scope_member_open, false)
-      |> load_aliases()
+      |> load_models()
       |> assign_form_data()
       |> load_scope_data()
 
@@ -72,35 +70,35 @@ defmodule TokengateWeb.ModelsLive do
 
   ## Data loading ---------------------------------------------------------
 
-  defp load_aliases(socket) do
+  defp load_models(socket) do
     filter = socket.assigns.model_type_filter
 
-    aliases =
+    models =
       aliases_with_providers_query()
       |> Repo.all()
       |> filter_by_type(filter)
 
     socket
-    |> stream(:aliases, aliases, reset: true)
-    |> assign(:aliases_empty?, aliases == [])
+    |> stream(:models, models, reset: true)
+    |> assign(:models_empty?, models == [])
   end
 
-  defp filter_by_type(aliases, "all"), do: aliases
-  defp filter_by_type(aliases, "favorites"), do: Enum.filter(aliases, & &1.pinned)
-  defp filter_by_type(aliases, type), do: Enum.filter(aliases, &(&1.model_type == type))
+  defp filter_by_type(models, "all"), do: models
+  defp filter_by_type(models, "favorites"), do: Enum.filter(models, & &1.pinned)
+  defp filter_by_type(models, type), do: Enum.filter(models, &(&1.model_type == type))
 
-  # The model_type of the alias being edited (edit_model_provider path).
-  defp get_alias_type(_socket, alias_id) do
-    case Tokengate.Repo.get(Tokengate.Providers.ModelAlias, alias_id) do
+  # The model_type of the model being edited (edit_model_provider path).
+  defp get_alias_type(_socket, model_id) do
+    case Tokengate.Repo.get(Tokengate.Providers.Model, model_id) do
       nil -> "llm"
-      alias_ -> alias_.model_type || "llm"
+      model_ -> model_.model_type || "llm"
     end
   end
 
   # Providers are grouped by scope first — global, then team-exclusive,
   # then member-exclusive — and ordered by priority within each group.
   defp aliases_with_providers_query do
-    from(ma in ModelAlias,
+    from(ma in Model,
       left_join: aps in assoc(ma, :model_providers),
       preload: [model_providers: {aps, [credential: :provider]}],
       order_by: [
@@ -147,17 +145,17 @@ defmodule TokengateWeb.ModelsLive do
     |> assign(:members_for_select, members)
   end
 
-  ## Events — alias CRUD ---------------------------------------------------
+  ## Events — model CRUD ---------------------------------------------------
 
   @impl true
-  def handle_event("new_alias", _params, socket) do
+  def handle_event("new_model", _params, socket) do
     if socket.assigns.is_admin do
-      changeset = Providers.change_model_alias(%ModelAlias{})
+      changeset = Providers.change_model(%Model{})
 
       {:noreply,
        socket
-       |> assign(:form, to_form(changeset, as: :model_alias))
-       |> assign(:editing_alias_id, :new)}
+       |> assign(:form, to_form(changeset, as: :model))
+       |> assign(:editing_model_id, :new)}
     else
       {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
     end
@@ -167,24 +165,24 @@ defmodule TokengateWeb.ModelsLive do
     {:noreply,
      socket
      |> assign(:form, nil)
-     |> assign(:editing_alias_id, nil)}
+     |> assign(:editing_model_id, nil)}
   end
 
   def handle_event("filter_model_type", %{"type" => type}, socket) do
     {:noreply,
      socket
      |> assign(:model_type_filter, type)
-     |> load_aliases()}
+     |> load_models()}
   end
 
-  def handle_event("toggle_pin", %{"id" => alias_id}, socket) do
+  def handle_event("toggle_pin", %{"id" => model_id}, socket) do
     if socket.assigns.is_admin do
-      model_alias = Providers.get_model_alias!(alias_id)
-      new_pinned = !model_alias.pinned
+      model = Providers.get_model!(model_id)
+      new_pinned = !model.pinned
 
-      case Providers.update_model_alias(model_alias, %{pinned: new_pinned}) do
+      case Providers.update_model(model, %{pinned: new_pinned}) do
         {:ok, _updated} ->
-          {:noreply, load_aliases(socket)}
+          {:noreply, load_models(socket)}
 
         {:error, _changeset} ->
           {:noreply, put_flash(socket, :error, "No se pudo actualizar el modelo.")}
@@ -194,15 +192,15 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
-  def handle_event("edit_guard_rails", %{"id" => alias_id}, socket) do
+  def handle_event("edit_guard_rails", %{"id" => model_id}, socket) do
     if socket.assigns.is_admin do
-      model_alias = Providers.get_model_alias!(alias_id)
-      changeset = Providers.change_model_alias(model_alias)
+      model = Providers.get_model!(model_id)
+      changeset = Providers.change_model(model)
 
       {:noreply,
        socket
-       |> assign(:guard_rails_form, to_form(changeset, as: :model_alias))
-       |> assign(:guard_rails_alias_id, model_alias.id)}
+       |> assign(:guard_rails_form, to_form(changeset, as: :model))
+       |> assign(:guard_rails_model_id, model.id)}
     else
       {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
     end
@@ -212,58 +210,58 @@ defmodule TokengateWeb.ModelsLive do
     {:noreply,
      socket
      |> assign(:guard_rails_form, nil)
-     |> assign(:guard_rails_alias_id, nil)}
+     |> assign(:guard_rails_model_id, nil)}
   end
 
-  def handle_event("save_guard_rails", %{"model_alias" => alias_params}, socket) do
+  def handle_event("save_guard_rails", %{"model" => model_params}, socket) do
     if socket.assigns.is_admin do
-      model_alias = Providers.get_model_alias!(socket.assigns.guard_rails_alias_id)
+      model = Providers.get_model!(socket.assigns.guard_rails_model_id)
 
-      case Providers.update_model_alias(model_alias, alias_params) do
+      case Providers.update_model(model, model_params) do
         {:ok, _updated} ->
           {:noreply,
            socket
            |> put_flash(:info, "Guard rails actualizados.")
            |> assign(:guard_rails_form, nil)
-           |> assign(:guard_rails_alias_id, nil)
-           |> load_aliases()}
+           |> assign(:guard_rails_model_id, nil)
+           |> load_models()}
 
         {:error, changeset} ->
-          {:noreply, assign(socket, :guard_rails_form, to_form(changeset, as: :model_alias))}
+          {:noreply, assign(socket, :guard_rails_form, to_form(changeset, as: :model))}
       end
     else
       {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
     end
   end
 
-  def handle_event("edit_alias", %{"id" => alias_id}, socket) do
+  def handle_event("edit_model", %{"id" => model_id}, socket) do
     if socket.assigns.is_admin do
-      model_alias = Providers.get_model_alias!(alias_id)
-      changeset = Providers.change_model_alias(model_alias)
+      model = Providers.get_model!(model_id)
+      changeset = Providers.change_model(model)
 
       {:noreply,
        socket
-       |> assign(:form, to_form(changeset, as: :model_alias))
-       |> assign(:editing_alias_id, model_alias.id)}
+       |> assign(:form, to_form(changeset, as: :model))
+       |> assign(:editing_model_id, model.id)}
     else
       {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
     end
   end
 
-  def handle_event("save_alias", %{"model_alias" => alias_params}, socket) do
+  def handle_event("save_model", %{"model" => model_params}, socket) do
     if socket.assigns.is_admin do
-      save_alias(socket, socket.assigns.editing_alias_id, alias_params)
+      save_model(socket, socket.assigns.editing_model_id, model_params)
     else
       {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
     end
   end
 
-  def handle_event("delete_alias", %{"id" => alias_id}, socket) do
+  def handle_event("delete_model", %{"id" => model_id}, socket) do
     if socket.assigns.is_admin do
-      alias_record = Providers.get_model_alias!(alias_id)
+      model_record = Providers.get_model!(model_id)
 
       has_providers? =
-        Repo.exists?(from(ap in ModelProvider, where: ap.model_alias_id == ^alias_id))
+        Repo.exists?(from(ap in ModelProvider, where: ap.model_id == ^model_id))
 
       if has_providers? do
         {:noreply,
@@ -273,12 +271,12 @@ defmodule TokengateWeb.ModelsLive do
            "No se puede eliminar: el modelo tiene proveedores asignados. Elimínalos primero."
          )}
       else
-        case Providers.delete_model_alias(alias_record) do
+        case Providers.delete_model(model_record) do
           {:ok, _} ->
             {:noreply,
              socket
              |> put_flash(:info, "Modelo eliminado.")
-             |> load_aliases()}
+             |> load_models()}
 
           {:error, _} ->
             {:noreply, put_flash(socket, :error, "No se pudo eliminar el modelo.")}
@@ -291,17 +289,17 @@ defmodule TokengateWeb.ModelsLive do
 
   ## Events — model_provider management -------------------------------------
 
-  def handle_event("new_model_provider", %{"alias_id" => alias_id}, socket) do
+  def handle_event("new_model_provider", %{"model_id" => model_id}, socket) do
     if socket.assigns.is_admin do
       changeset =
         Providers.change_model_provider(%ModelProvider{
-          model_alias_id: alias_id,
+          model_id: model_id,
           enabled: true
         })
 
       {:noreply,
        socket
-       |> assign(:provider_form_alias_id, alias_id)
+       |> assign(:provider_form_model_id, model_id)
        |> assign(:provider_form, to_form(changeset, as: :model_provider))
        |> assign(:editing_ap_id, :new)
        |> assign(:current_scope, "global")
@@ -325,7 +323,6 @@ defmodule TokengateWeb.ModelsLive do
      |> assign(:provider_models_loading, false)
      |> assign(:provider_model_search, "")
      |> assign(:provider_form_credential_id, nil)
-     |> assign(:current_billing_mode, "pay_per_token")
      |> assign(:current_scope, "global")
      |> assign(:current_scope_team_ids, [])
      |> assign(:current_scope_member_ids, [])
@@ -377,7 +374,6 @@ defmodule TokengateWeb.ModelsLive do
        |> assign(:provider_form, to_form(changeset, as: :model_provider))
        |> assign(:editing_ap_id, ap.id)
        |> assign(:provider_form_credential_id, ap.credential_id)
-       |> assign(:current_billing_mode, ap.billing_mode || "pay_per_token")
        |> assign(:current_scope, scope)
        |> assign(:current_scope_team_id, ap.exclusive_to_team_id)
        |> assign(:current_scope_member_id, ap.exclusive_to_team_member_id)
@@ -422,12 +418,8 @@ defmodule TokengateWeb.ModelsLive do
       credential_id = ap_params["credential_id"]
       model_search = ap_params["provider_model"] || ""
 
-      billing_mode =
-        ap_params["billing_mode"] || socket.assigns[:current_billing_mode] || "pay_per_token"
-
       socket =
         socket
-        |> assign(:current_billing_mode, billing_mode)
         |> assign(:provider_model_search, model_search)
 
       cond do
@@ -598,7 +590,7 @@ defmodule TokengateWeb.ModelsLive do
              :info,
              "Proveedor #{if new_enabled, do: "activado", else: "desactivado"}."
            )
-           |> load_aliases()}
+           |> load_models()}
 
         {:error, _} ->
           {:noreply, put_flash(socket, :error, "No se pudo actualizar el proveedor.")}
@@ -616,8 +608,8 @@ defmodule TokengateWeb.ModelsLive do
         {:ok, _} ->
           {:noreply,
            socket
-           |> put_flash(:info, "Proveedor eliminado del alias.")
-           |> load_aliases()}
+           |> put_flash(:info, "Proveedor eliminado del modelo.")
+           |> load_models()}
 
         {:error, _} ->
           {:noreply, put_flash(socket, :error, "No se pudo eliminar el proveedor.")}
@@ -627,10 +619,10 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
-  def handle_event("reorder_providers", %{"alias_id" => alias_id, "ids" => ids}, socket) do
+  def handle_event("reorder_providers", %{"model_id" => model_id, "ids" => ids}, socket) do
     if socket.assigns.is_admin do
       valid_ids =
-        from(ap in ModelProvider, where: ap.model_alias_id == ^alias_id, select: ap.id)
+        from(ap in ModelProvider, where: ap.model_id == ^model_id, select: ap.id)
         |> Repo.all()
         |> MapSet.new()
 
@@ -650,7 +642,7 @@ defmodule TokengateWeb.ModelsLive do
             end)
           end)
 
-        {:noreply, load_aliases(socket)}
+        {:noreply, load_models(socket)}
       else
         {:noreply, put_flash(socket, :error, "Orden inválido para este modelo.")}
       end
@@ -659,37 +651,37 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
-  ## Private helpers — alias save ------------------------------------------
+  ## Private helpers — model save ------------------------------------------
 
-  defp save_alias(socket, :new, alias_params) do
-    case Providers.create_model_alias(alias_params) do
-      {:ok, _alias} ->
+  defp save_model(socket, :new, model_params) do
+    case Providers.create_model(model_params) do
+      {:ok, _model} ->
         {:noreply,
          socket
          |> put_flash(:info, "Modelo creado.")
          |> assign(:form, nil)
-         |> assign(:editing_alias_id, nil)
-         |> load_aliases()}
+         |> assign(:editing_model_id, nil)
+         |> load_models()}
 
       {:error, changeset} ->
-        {:noreply, assign(socket, :form, to_form(changeset, as: :model_alias))}
+        {:noreply, assign(socket, :form, to_form(changeset, as: :model))}
     end
   end
 
-  defp save_alias(socket, alias_id, alias_params) when is_binary(alias_id) do
-    alias_record = Providers.get_model_alias!(alias_id)
+  defp save_model(socket, model_id, model_params) when is_binary(model_id) do
+    model_record = Providers.get_model!(model_id)
 
-    case Providers.update_model_alias(alias_record, alias_params) do
-      {:ok, _alias} ->
+    case Providers.update_model(model_record, model_params) do
+      {:ok, _model} ->
         {:noreply,
          socket
          |> put_flash(:info, "Modelo actualizado.")
          |> assign(:form, nil)
-         |> assign(:editing_alias_id, nil)
-         |> load_aliases()}
+         |> assign(:editing_model_id, nil)
+         |> load_models()}
 
       {:error, changeset} ->
-        {:noreply, assign(socket, :form, to_form(changeset, as: :model_alias))}
+        {:noreply, assign(socket, :form, to_form(changeset, as: :model))}
     end
   end
 
@@ -752,10 +744,10 @@ defmodule TokengateWeb.ModelsLive do
     if credential do
       provider = credential.provider
 
-      # Which catalogue to list depends on the alias being edited: the
-      # active filter when creating, the edited alias's type otherwise.
-      alias_type =
-        case socket.assigns.editing_alias_id do
+      # Which catalogue to list depends on the model being edited: the
+      # active filter when creating, the edited model's type otherwise.
+      model_type =
+        case socket.assigns.editing_model_id do
           :new -> socket.assigns.model_type_filter
           nil -> socket.assigns.model_type_filter
           id -> get_alias_type(socket, id)
@@ -767,7 +759,7 @@ defmodule TokengateWeb.ModelsLive do
         adapter = Tokengate.Proxy.ProviderAdapter.dispatch(provider)
 
         result =
-          if alias_type == "embedding" do
+          if model_type == "embedding" do
             adapter.list_embedding_models(provider, credential)
           else
             Tokengate.Proxy.OpenAIAdapter.list_models(provider, credential)
@@ -806,7 +798,7 @@ defmodule TokengateWeb.ModelsLive do
            |> assign(:provider_models, [])
            |> assign(:provider_models_loading, false)
            |> assign(:provider_model_search, "")
-           |> put_flash(:error, "No se pudieron cargar los modelos del proveedor.")}
+           |> put_flash(:error, "No se pudieron cargar los models del proveedor.")}
       end
     else
       {:noreply, socket}
@@ -816,7 +808,7 @@ defmodule TokengateWeb.ModelsLive do
   def handle_info(_event, socket), do: {:noreply, socket}
 
   defp save_model_provider(socket, :new, ap_params) do
-    ap_params = Map.put(ap_params, "model_alias_id", socket.assigns.provider_form_alias_id)
+    ap_params = Map.put(ap_params, "model_id", socket.assigns.provider_form_model_id)
 
     # Extract multi-select target lists (set by inject_scope_params for create mode)
     team_ids = Map.get(ap_params, "exclusive_to_team_ids", [])
@@ -892,7 +884,7 @@ defmodule TokengateWeb.ModelsLive do
            |> put_flash(:info, msg)
            |> assign(:provider_form, nil)
            |> assign(:editing_ap_id, nil)
-           |> load_aliases()}
+           |> load_models()}
         else
           # Show the first error's changeset on the form
           {:error, changeset} = hd(errors)
@@ -912,7 +904,7 @@ defmodule TokengateWeb.ModelsLive do
          |> put_flash(:info, "Proveedor actualizado.")
          |> assign(:provider_form, nil)
          |> assign(:editing_ap_id, nil)
-         |> load_aliases()}
+         |> load_models()}
 
       {:error, changeset} ->
         {:noreply, assign(socket, :provider_form, to_form(changeset, as: :model_provider))}
@@ -953,7 +945,7 @@ defmodule TokengateWeb.ModelsLive do
   def fmt_dec(n), do: to_string(n)
 
   @doc """
-  Format a market price compactly for the alias card row: trims trailing
+  Format a market price compactly for the model card row: trims trailing
   zeros ("1.250000" -> "1.25"). Display-only. Deliberately avoids
   Decimal.normalize, which emits scientific notation for whole numbers
   ("10.000000" -> "1E+1").
@@ -973,32 +965,32 @@ defmodule TokengateWeb.ModelsLive do
   def fmt_price(n), do: fmt_dec(n)
 
   @doc "True when at least one market price is set (Decimals may be nil)."
-  def has_market_prices?(model_alias) do
-    not is_nil(model_alias.market_input_price_per_1m) or
-      not is_nil(model_alias.market_output_price_per_1m) or
-      not is_nil(model_alias.market_cache_price_per_1m)
+  def has_market_prices?(model) do
+    not is_nil(model.market_input_price_per_1m) or
+      not is_nil(model.market_output_price_per_1m) or
+      not is_nil(model.market_cache_price_per_1m)
   end
 
   @doc """
-  Full market-price line for the alias card row. Built as ONE string in
+  Full market-price line for the model card row. Built as ONE string in
   Elixir so HEEx cannot inject whitespace between "$" and the value.
   """
-  def market_line(model_alias) do
+  def market_line(model) do
     "· in $" <>
-      fmt_price(model_alias.market_input_price_per_1m) <>
+      fmt_price(model.market_input_price_per_1m) <>
       " · out $" <>
-      fmt_price(model_alias.market_output_price_per_1m) <>
-      " · cache $" <> fmt_price(model_alias.market_cache_price_per_1m) <> " /1M"
+      fmt_price(model.market_output_price_per_1m) <>
+      " · cache $" <> fmt_price(model.market_cache_price_per_1m) <> " /1M"
   end
 
   @doc "Empty-state message for the active model type filter"
   def empty_state_message("favorites"),
     do: "No hay modelos pineados. Pinea un modelo para verlo aquí."
 
-  def empty_state_message("all"), do: "No hay modelos configurados."
-  def empty_state_message("llm"), do: "No hay modelos LLM."
-  def empty_state_message("embedding"), do: "No hay modelos de embedding."
-  def empty_state_message(_), do: "No hay modelos configurados."
+  def empty_state_message("all"), do: "No hay models configurados."
+  def empty_state_message("llm"), do: "No hay models LLM."
+  def empty_state_message("embedding"), do: "No hay models de embedding."
+  def empty_state_message(_), do: "No hay models configurados."
 
   def format_compact(n) when is_integer(n) and n >= 1_000_000_000,
     do: "#{Float.round(n / 1_000_000_000, 1)}B"
@@ -1055,23 +1047,23 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
-  def model_providers_for(model_alias) do
-    model_alias.model_providers || []
+  def model_providers_for(model) do
+    model.model_providers || []
   end
 
   @doc """
-  Client-side toggle for an alias card's providers section. Kept in JS so the
+  Client-side toggle for an model card's providers section. Kept in JS so the
   collapse/expand state lives purely in the DOM — server round-trips (and the
   associated stream re-render) are unnecessary for a show/hide toggle.
   """
   def toggle_providers_js(id) do
-    JS.toggle(to: "#alias-providers-#{id}", display: "block")
-    |> JS.toggle_class("rotate-90", to: "#alias-chevron-#{id}")
+    JS.toggle(to: "#model-providers-#{id}", display: "block")
+    |> JS.toggle_class("rotate-90", to: "#model-chevron-#{id}")
   end
 
   @doc """
   Group key for scope grouping in the UI: 0 = global, 1 = team-exclusive,
-  2 = member-exclusive. Matches the SQL ordering in load_aliases/1.
+  2 = member-exclusive. Matches the SQL ordering in load_models/1.
   """
   def scope_group(%ModelProvider{exclusive_to_team_member_id: id}) when not is_nil(id), do: 2
   def scope_group(%ModelProvider{exclusive_to_team_id: id}) when not is_nil(id), do: 1
@@ -1147,13 +1139,13 @@ defmodule TokengateWeb.ModelsLive do
 
   @doc "All teams — the form filter is the search string in the template.
   See members_with_model_access/2 for the rationale."
-  def teams_with_model_access(teams, _model_alias_id), do: teams
+  def teams_with_model_access(teams, _model_id), do: teams
 
   @doc "All members — the form filter is the search string in the template.
-  The previous access check (TeamModelAlias / TeamMemberExtraAlias) only
+  The previous access check (TeamModel / TeamMemberExtraModel) only
   matters for the create flow; in the edit form we want every member to
   appear so the admin can re-pick even if grants have lapsed."
-  def members_with_model_access(members, _model_alias_id), do: members
+  def members_with_model_access(members, _model_id), do: members
 
   ## Render ----------------------------------------------------------------
 
@@ -1164,10 +1156,10 @@ defmodule TokengateWeb.ModelsLive do
       <div class="space-y-6">
         <.header>
           Modelos
-          <:subtitle>Configura modelos y sus proveedores de routing</:subtitle>
+          <:subtitle>Configura models y sus proveedores de routing</:subtitle>
           <:actions :if={@is_admin}>
             <button
-              phx-click="new_alias"
+              phx-click="new_model"
               class="btn btn-primary btn-sm"
               id="new-model-btn"
             >
@@ -1204,53 +1196,53 @@ defmodule TokengateWeb.ModelsLive do
              phx-update="stream" only manages children keyed by stream ids,
              so a plain conditional div inside it never reaches the client. --%>
         <div
-          :if={@aliases_empty?}
-          id="aliases-empty"
+          :if={@models_empty?}
+          id="models-empty"
           class="text-center py-12 text-base-content/40"
         >
           <.icon name="hero-cpu-chip" class="w-10 h-10 mx-auto mb-2 opacity-40" />
           <p>{empty_state_message(@model_type_filter)}</p>
         </div>
 
-        <div id="aliases" phx-update="stream" class="space-y-3">
-          <div :for={{id, model_alias} <- @streams.aliases} id={id}>
+        <div id="models" phx-update="stream" class="space-y-3">
+          <div :for={{id, model} <- @streams.models} id={id}>
             <div class="card bg-base-100 border border-base-300 shadow-sm">
               <div class="card-body p-5">
                 <div class="flex items-start justify-between gap-4">
                   <div
                     class="flex-1 min-w-0 cursor-pointer"
-                    id={"alias-header-#{model_alias.id}"}
-                    phx-click={toggle_providers_js(model_alias.id)}
+                    id={"model-header-#{model.id}"}
+                    phx-click={toggle_providers_js(model.id)}
                     title="Expandir / colapsar proveedores"
                   >
                     <div class="flex items-center gap-2 flex-wrap">
                       <span
-                        id={"alias-chevron-#{model_alias.id}"}
+                        id={"model-chevron-#{model.id}"}
                         class="text-base-content/40 transition-transform"
                       >
                         <.icon name="hero-chevron-right" class="w-4 h-4" />
                       </span>
                       <h3 class="font-semibold text-base-content truncate">
-                        {model_alias.name}
+                        {model.name}
                       </h3>
                       <span
                         class="text-xs text-base-content/40"
-                        title={"#{model_alias.context_window} tokens"}
+                        title={"#{model.context_window} tokens"}
                       >
-                        · {format_compact(model_alias.context_window)} ctx
+                        · {format_compact(model.context_window)} ctx
                       </span>
                       <span
-                        :if={has_market_prices?(model_alias)}
+                        :if={has_market_prices?(model)}
                         class="text-xs text-base-content/50 tabular-nums"
                         title="Precio de mercado de referencia (informativo — no se usa para facturación)"
                       >
-                        {market_line(model_alias)}
+                        {market_line(model)}
                       </span>
                       <span
-                        :if={model_alias.model_type != "llm"}
+                        :if={model.model_type != "llm"}
                         class="badge badge-sm badge-outline badge-info"
                       >
-                        {model_alias.model_type}
+                        {model.model_type}
                       </span>
                     </div>
                   </div>
@@ -1259,38 +1251,38 @@ defmodule TokengateWeb.ModelsLive do
                     <%= if @is_admin do %>
                       <button
                         phx-click="toggle_pin"
-                        phx-value-id={model_alias.id}
+                        phx-value-id={model.id}
                         class="btn btn-sm btn-ghost"
-                        id={"pin-alias-#{model_alias.id}"}
-                        title={if model_alias.pinned, do: "Quitar pin", else: "Pinear al inicio"}
+                        id={"pin-model-#{model.id}"}
+                        title={if model.pinned, do: "Quitar pin", else: "Pinear al inicio"}
                       >
                         <.icon
-                          name={if model_alias.pinned, do: "hero-star-solid", else: "hero-star"}
-                          class={["w-4 h-4", model_alias.pinned && "text-warning"]}
+                          name={if model.pinned, do: "hero-star-solid", else: "hero-star"}
+                          class={["w-4 h-4", model.pinned && "text-warning"]}
                         />
                       </button>
                       <button
                         phx-click="edit_guard_rails"
-                        phx-value-id={model_alias.id}
+                        phx-value-id={model.id}
                         class="btn btn-sm btn-ghost"
-                        id={"guard-rails-#{model_alias.id}"}
+                        id={"guard-rails-#{model.id}"}
                       >
                         <.icon name="hero-shield-check" class="w-4 h-4" /> Guard Rails
                       </button>
                       <button
-                        phx-click="edit_alias"
-                        phx-value-id={model_alias.id}
+                        phx-click="edit_model"
+                        phx-value-id={model.id}
                         class="btn btn-sm btn-ghost"
-                        id={"edit-alias-#{model_alias.id}"}
+                        id={"edit-model-#{model.id}"}
                       >
                         <.icon name="hero-pencil-square" class="w-4 h-4" /> Editar
                       </button>
                       <button
-                        phx-click="delete_alias"
-                        phx-value-id={model_alias.id}
+                        phx-click="delete_model"
+                        phx-value-id={model.id}
                         data-confirm="¿Eliminar este modelo? Esta acción no se puede deshacer."
                         class="btn btn-sm btn-ghost text-error"
-                        id={"delete-alias-#{model_alias.id}"}
+                        id={"delete-model-#{model.id}"}
                       >
                         <.icon name="hero-trash" class="w-4 h-4" />
                       </button>
@@ -1300,7 +1292,7 @@ defmodule TokengateWeb.ModelsLive do
 
                 <%!-- Alias providers list (inline) --%>
                 <div
-                  id={"alias-providers-#{model_alias.id}"}
+                  id={"model-providers-#{model.id}"}
                   class="mt-4 pt-4 border-t border-base-200"
                   style="display: none"
                 >
@@ -1311,9 +1303,9 @@ defmodule TokengateWeb.ModelsLive do
                     <%= if @is_admin do %>
                       <button
                         phx-click="new_model_provider"
-                        phx-value-alias_id={model_alias.id}
+                        phx-value-model_id={model.id}
                         class="btn btn-xs btn-primary"
-                        id={"new-ap-#{model_alias.id}"}
+                        id={"new-ap-#{model.id}"}
                       >
                         <.icon name="hero-plus" class="w-3 h-3" /> Asignar Proveedor
                       </button>
@@ -1321,13 +1313,13 @@ defmodule TokengateWeb.ModelsLive do
                   </div>
 
                   <div
-                    :if={model_providers_for(model_alias) == []}
+                    :if={model_providers_for(model) == []}
                     class="text-sm text-base-content/40 py-2"
                   >
                     No hay proveedores asignados.
                   </div>
 
-                  <div :if={model_providers_for(model_alias) != []} class="overflow-x-auto">
+                  <div :if={model_providers_for(model) != []} class="overflow-x-auto">
                     <table class="table table-sm table-fixed w-full">
                       <thead>
                         <tr>
@@ -1345,11 +1337,11 @@ defmodule TokengateWeb.ModelsLive do
                         </tr>
                       </thead>
                       <tbody
-                        id={"ap-sortable-#{model_alias.id}"}
+                        id={"ap-sortable-#{model.id}"}
                         phx-hook="SortableProviders"
-                        data-alias-id={model_alias.id}
+                        data-model-id={model.id}
                       >
-                        <% providers = model_providers_for(model_alias) %>
+                        <% providers = model_providers_for(model) %>
                         <% groups = Enum.map(providers, &scope_group/1) %>
                         <% prev_groups = [nil | Enum.drop(groups, -1)] %>
                         <%= for {ap, prev_group} <- Enum.zip(providers, prev_groups) do %>
@@ -1367,7 +1359,7 @@ defmodule TokengateWeb.ModelsLive do
                             </tr>
                           <% end %>
                           <tr
-                            id={"alias-provider-#{ap.id}"}
+                            id={"model-provider-#{ap.id}"}
                             data-id={ap.id}
                             draggable={to_string(@is_admin)}
                             class={[@is_admin && "cursor-grab active:cursor-grabbing"]}
@@ -1397,8 +1389,12 @@ defmodule TokengateWeb.ModelsLive do
                             </td>
                             <td><code class="text-sm">{ap.provider_model}</code></td>
                             <td>
-                              <span class={["badge", "badge-sm", billing_badge(ap.billing_mode)]}>
-                                {billing_label(ap.billing_mode)}
+                              <span class={[
+                                "badge",
+                                "badge-sm",
+                                billing_badge(ModelProvider.billing_mode(ap))
+                              ]}>
+                                {billing_label(ModelProvider.billing_mode(ap))}
                               </span>
                             </td>
                             <td>
@@ -1476,10 +1472,10 @@ defmodule TokengateWeb.ModelsLive do
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-3xl">
             <div class="card-body p-6">
               <h2 class="text-lg font-semibold mb-4">
-                {if @editing_alias_id == :new, do: "Nuevo Modelo", else: "Editar Modelo"}
+                {if @editing_model_id == :new, do: "Nuevo Modelo", else: "Editar Modelo"}
               </h2>
 
-              <.form for={@form} id="alias-form" phx-submit="save_alias">
+              <.form for={@form} id="model-form" phx-submit="save_model">
                 <div class="grid md:grid-cols-2 gap-x-8 gap-y-1">
                   <div>
                     <.input
@@ -1556,7 +1552,7 @@ defmodule TokengateWeb.ModelsLive do
                   <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
                     Cancelar
                   </button>
-                  <button type="submit" class="btn btn-primary btn-sm" id="save-alias-btn">
+                  <button type="submit" class="btn btn-primary btn-sm" id="save-model-btn">
                     Guardar
                   </button>
                 </div>
@@ -1612,7 +1608,7 @@ defmodule TokengateWeb.ModelsLive do
 
               <.form
                 for={@provider_form}
-                id="alias-provider-form"
+                id="model-provider-form"
                 phx-submit="save_model_provider"
                 phx-change="provider_form_changed"
                 phx-window-keydown="close_scope_pickers"
@@ -1633,7 +1629,7 @@ defmodule TokengateWeb.ModelsLive do
                     <%= if @provider_models_loading do %>
                       <div class="flex items-center gap-2 text-sm text-base-content/50 py-2">
                         <span class="loading loading-spinner loading-xs"></span>
-                        Cargando modelos del proveedor…
+                        Cargando models del proveedor…
                       </div>
                     <% end %>
 
@@ -1716,7 +1712,7 @@ defmodule TokengateWeb.ModelsLive do
                         <%= if is_new? do %>
                           <%!-- Multi-select chips for create mode --%>
                           <% members_filtered =
-                            members_with_model_access(@members_for_select, @provider_form_alias_id)
+                            members_with_model_access(@members_for_select, @provider_form_model_id)
                             |> Enum.filter(fn m ->
                               search = String.downcase(@scope_member_search || "")
                               email = if m.user, do: String.downcase(m.user.email), else: ""
@@ -1793,7 +1789,7 @@ defmodule TokengateWeb.ModelsLive do
                             autocomplete="off"
                           />
                           <% members_filtered =
-                            members_with_model_access(@members_for_select, @provider_form_alias_id)
+                            members_with_model_access(@members_for_select, @provider_form_model_id)
                             |> Enum.filter(fn m ->
                               search = String.downcase(@scope_member_search || "")
                               email = if m.user, do: String.downcase(m.user.email), else: ""
@@ -1851,7 +1847,7 @@ defmodule TokengateWeb.ModelsLive do
                         <%= if is_new? do %>
                           <%!-- Multi-select chips for create mode --%>
                           <% teams_filtered =
-                            teams_with_model_access(@teams_for_select, @provider_form_alias_id)
+                            teams_with_model_access(@teams_for_select, @provider_form_model_id)
                             |> Enum.filter(fn t ->
                               search = String.downcase(@scope_team_search || "")
                               name = String.downcase(t.name || "")
@@ -1922,7 +1918,7 @@ defmodule TokengateWeb.ModelsLive do
                             autocomplete="off"
                           />
                           <% teams_filtered =
-                            teams_with_model_access(@teams_for_select, @provider_form_alias_id)
+                            teams_with_model_access(@teams_for_select, @provider_form_model_id)
                             |> Enum.filter(fn t ->
                               search = String.downcase(@scope_team_search || "")
                               name = String.downcase(t.name || "")
@@ -1962,22 +1958,12 @@ defmodule TokengateWeb.ModelsLive do
                   </div>
 
                   <div class="md:col-span-2">
-                    <div class="grid grid-cols-3 gap-3">
+                    <div class="grid grid-cols-2 gap-3">
                       <.input
                         field={@provider_form[:priority]}
                         type="number"
                         label="Prioridad"
                         hint="Menor = se intenta primero."
-                      />
-                      <.input
-                        field={@provider_form[:billing_mode]}
-                        type="select"
-                        label="Facturación"
-                        options={[
-                          {"Pay per token", "pay_per_token"},
-                          {"Facturación incluida", "included"}
-                        ]}
-                        hint="Pay per token: cobra por uso. Facturación incluida: suscripción/RPM = $0."
                       />
                       <.input
                         field={@provider_form[:sticky_ttl_seconds]}
@@ -1987,7 +1973,7 @@ defmodule TokengateWeb.ModelsLive do
                       />
                     </div>
 
-                    <div :if={@current_billing_mode == "pay_per_token"} class="grid grid-cols-3 gap-3">
+                    <div class="grid grid-cols-3 gap-3">
                       <.input
                         field={@provider_form[:input_cost_per_million]}
                         type="number"

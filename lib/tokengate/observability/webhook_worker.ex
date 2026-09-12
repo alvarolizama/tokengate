@@ -33,7 +33,6 @@ defmodule Tokengate.Observability.WebhookWorker do
     max_attempts: 5
 
   import Ecto.Query, warn: false
-
   alias Tokengate.Accounts.TeamMember
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Observability.Destination

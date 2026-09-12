@@ -1,26 +1,25 @@
 defmodule TokengateWeb.TeamsLive do
   @moduledoc """
-  Admin-only CRUD for teams + per-team model alias grants + observability webhooks.
+  Admin-only CRUD for teams + per-team model model grants + observability webhooks.
 
   Only admins (global_role == "admin") can access this page. Non-admins
   are redirected to /dashboard with an error flash.
 
   Teams carry default budgets and limits applied to all members. Model
-  aliases can be granted per-team via the team_model_aliases join table.
+  models can be granted per-team via the team_models join table.
   Observability destinations (webhooks) are managed per-team.
   """
 
   use TokengateWeb, :live_view
 
   import Ecto.Query, only: [from: 2]
-
   alias Tokengate.Accounts
   alias Tokengate.Accounts.Team
   alias Tokengate.Budgets
   alias Tokengate.Observability
   alias Tokengate.Observability.Destination
   alias Tokengate.Providers
-  alias Tokengate.Providers.{ModelAlias, TeamModelAlias}
+  alias Tokengate.Providers.{Model, TeamModel}
   alias Tokengate.Repo
 
   @impl true
@@ -43,7 +42,7 @@ defmodule TokengateWeb.TeamsLive do
         |> assign(:webhook_form, nil)
         |> assign(:editing_webhook_team_id, nil)
         |> assign(:editing_webhook_id, nil)
-        |> assign(:editing_aliases_team_id, nil)
+        |> assign(:editing_models_team_id, nil)
         |> assign(:team_search, "")
         |> load_teams()
 
@@ -77,13 +76,13 @@ defmodule TokengateWeb.TeamsLive do
       )
       |> Repo.all()
 
-    granted_aliases =
-      from(tma in TeamModelAlias, select: {tma.team_id, tma.model_alias_id})
+    granted_models =
+      from(tma in TeamModel, select: {tma.team_id, tma.model_id})
       |> Repo.all()
-      |> Enum.group_by(fn {team_id, _} -> team_id end, fn {_, alias_id} -> alias_id end)
+      |> Enum.group_by(fn {team_id, _} -> team_id end, fn {_, model_id} -> model_id end)
 
-    aliases_by_org =
-      from(ma in ModelAlias, order_by: [asc: ma.name])
+    models_by_org =
+      from(ma in Model, order_by: [asc: ma.name])
       |> Repo.all()
       |> Enum.group_by(fn _ma -> "all" end)
 
@@ -140,8 +139,8 @@ defmodule TokengateWeb.TeamsLive do
     |> assign(:all_teams, teams)
     |> stream_teams()
     |> assign(:teams_empty?, teams == [])
-    |> assign(:granted_aliases, granted_aliases)
-    |> assign(:aliases_by_org, aliases_by_org)
+    |> assign(:granted_models, granted_models)
+    |> assign(:models_by_org, models_by_org)
     |> assign(:destinations_by_team, destinations_by_team)
     |> assign(:team_budgets, team_budgets)
   end
@@ -185,12 +184,12 @@ defmodule TokengateWeb.TeamsLive do
      |> assign(:editing_team_id, nil)}
   end
 
-  def handle_event("edit_aliases", %{"id" => team_id}, socket) do
-    {:noreply, assign(socket, :editing_aliases_team_id, team_id)}
+  def handle_event("edit_models", %{"id" => team_id}, socket) do
+    {:noreply, assign(socket, :editing_models_team_id, team_id)}
   end
 
-  def handle_event("close_aliases", _params, socket) do
-    {:noreply, assign(socket, :editing_aliases_team_id, nil)}
+  def handle_event("close_models", _params, socket) do
+    {:noreply, assign(socket, :editing_models_team_id, nil)}
   end
 
   def handle_event("edit_team", %{"id" => team_id}, socket) do
@@ -230,27 +229,27 @@ defmodule TokengateWeb.TeamsLive do
     end
   end
 
-  ## Events — alias grants ------------------------------------------------
+  ## Events — model grants ------------------------------------------------
 
-  def handle_event("toggle_alias", %{"team-id" => team_id, "alias-id" => alias_id}, socket) do
-    team_alias_ids = Map.get(socket.assigns.granted_aliases, team_id, [])
+  def handle_event("toggle_model", %{"team-id" => team_id, "model-id" => model_id}, socket) do
+    team_alias_ids = Map.get(socket.assigns.granted_models, team_id, [])
 
     result =
-      if alias_id in team_alias_ids do
-        Providers.revoke_alias_from_team(team_id, alias_id)
+      if model_id in team_alias_ids do
+        Providers.revoke_model_from_team(team_id, model_id)
       else
-        Providers.grant_alias_to_team(team_id, alias_id)
+        Providers.grant_model_to_team(team_id, model_id)
       end
 
     case result do
       {:ok, _} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Aliases actualizados.")
-         |> refresh_granted_aliases()}
+         |> put_flash(:info, "Modelos actualizados.")
+         |> refresh_granted_models()}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo actualizar el alias.")}
+        {:noreply, put_flash(socket, :error, "No se pudo actualizar el modelo.")}
     end
   end
 
@@ -352,15 +351,15 @@ defmodule TokengateWeb.TeamsLive do
   end
 
   # Surgical refresh: only the table that actually changed, instead of the
-  # full load_teams() (teams + members + aliases + destinations + 2 spend
+  # full load_teams() (teams + members + models + destinations + 2 spend
   # aggregates).
-  defp refresh_granted_aliases(socket) do
-    granted_aliases =
-      from(tma in TeamModelAlias, select: {tma.team_id, tma.model_alias_id})
+  defp refresh_granted_models(socket) do
+    granted_models =
+      from(tma in TeamModel, select: {tma.team_id, tma.model_id})
       |> Repo.all()
-      |> Enum.group_by(fn {team_id, _} -> team_id end, fn {_, alias_id} -> alias_id end)
+      |> Enum.group_by(fn {team_id, _} -> team_id end, fn {_, model_id} -> model_id end)
 
-    assign(socket, :granted_aliases, granted_aliases)
+    assign(socket, :granted_models, granted_models)
   end
 
   defp refresh_destinations(socket) do
@@ -432,7 +431,7 @@ defmodule TokengateWeb.TeamsLive do
       <div class="space-y-6">
         <.header>
           Equipos
-          <:subtitle>Gestiona equipos, presupuestos, aliases de modelos y webhooks</:subtitle>
+          <:subtitle>Gestiona equipos, presupuestos, models de models y webhooks</:subtitle>
           <:actions>
             <div class="flex items-center gap-2">
               <input
@@ -498,51 +497,51 @@ defmodule TokengateWeb.TeamsLive do
           </div>
         </div>
 
-        <%!-- Aliases modal — manage model alias grants per team --%>
+        <%!-- Aliases modal — manage model grants per team per team --%>
         <div
-          :if={@editing_aliases_team_id}
+          :if={@editing_models_team_id}
           class="fixed inset-0 z-50 flex items-center justify-center p-4"
-          id={"aliases-modal-#{@editing_aliases_team_id}"}
+          id={"models-modal-#{@editing_models_team_id}"}
         >
-          <div class="absolute inset-0 bg-black/50" phx-click="close_aliases" />
+          <div class="absolute inset-0 bg-black/50" phx-click="close_models" />
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
             <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">Aliases de modelos</h2>
+              <h2 class="text-lg font-semibold mb-4">Modelos del equipo</h2>
               <p class="text-sm text-base-content/60 -mt-2 mb-4">
-                Toca un alias para otorgarlo o revocarlo al equipo.
+                Toca un modelo para otorgarlo o revocarlo al equipo.
               </p>
-              <div class="flex flex-wrap gap-2" id={"alias-picker-#{@editing_aliases_team_id}"}>
+              <div class="flex flex-wrap gap-2" id={"model-picker-#{@editing_models_team_id}"}>
                 <button
-                  :for={alias <- Map.get(@aliases_by_org, "all", [])}
+                  :for={model <- Map.get(@models_by_org, "all", [])}
                   type="button"
-                  phx-click="toggle_alias"
-                  phx-value-team-id={@editing_aliases_team_id}
-                  phx-value-alias-id={alias.id}
+                  phx-click="toggle_model"
+                  phx-value-team-id={@editing_models_team_id}
+                  phx-value-model-id={model.id}
                   class={[
                     "badge badge-sm cursor-pointer transition-all",
                     if(
-                      alias.id in Map.get(@granted_aliases, @editing_aliases_team_id, []),
+                      model.id in Map.get(@granted_models, @editing_models_team_id, []),
                       do: "badge-primary",
                       else: "badge-outline"
                     )
                   ]}
-                  id={"alias-#{@editing_aliases_team_id}-#{alias.id}"}
+                  id={"model-#{@editing_models_team_id}-#{model.id}"}
                 >
-                  {alias.name}
+                  {model.name}
                 </button>
                 <p
-                  :if={Map.get(@aliases_by_org, "all", []) == []}
+                  :if={Map.get(@models_by_org, "all", []) == []}
                   class="text-xs text-base-content/40"
                 >
-                  No hay aliases disponibles.
+                  No hay models disponibles.
                 </p>
               </div>
               <div class="flex justify-end mt-4">
                 <button
                   type="button"
-                  phx-click="close_aliases"
+                  phx-click="close_models"
                   class="btn btn-primary btn-sm"
-                  id="close-aliases-btn"
+                  id="close-models-btn"
                 >
                   Listo
                 </button>
@@ -645,11 +644,11 @@ defmodule TokengateWeb.TeamsLive do
                     Editar
                   </button>
                   <button
-                    phx-click="edit_aliases"
+                    phx-click="edit_models"
                     phx-value-id={team.id}
                     class="btn btn-sm btn-ghost"
-                    id={"edit-aliases-#{team.id}"}
-                    title="Gestionar aliases de modelos"
+                    id={"edit-models-#{team.id}"}
+                    title="Gestionar models de models"
                   >
                     Aliases
                   </button>

@@ -10,7 +10,6 @@ defmodule TokengateWeb.BudgetsLive do
   """
 
   use TokengateWeb, :live_view
-
   alias Tokengate.Accounts
   alias Tokengate.Budgets.Exemption
   alias Tokengate.Budgets.Exemptions

@@ -1,6 +1,5 @@
 defmodule Tokengate.Accounts.ApiKeyCacheTest do
   use Tokengate.DataCase, async: false
-
   alias Tokengate.Accounts
   alias Tokengate.Accounts.ApiKeyCache
 

@@ -1,7 +1,6 @@
 defmodule TokengateWeb.LogsLive do
   @moduledoc false
   use TokengateWeb, :live_view
-
   alias Tokengate.{Accounts, Logs}
   alias Tokengate.Logs.Inflight
   alias Tokengate.Providers
@@ -365,8 +364,8 @@ defmodule TokengateWeb.LogsLive do
   end
 
   defp model_options do
-    Providers.list_model_aliases()
-    |> Enum.map(fn alias_ -> {alias_.name, alias_.name} end)
+    Providers.list_models()
+    |> Enum.map(fn model_ -> {model_.name, model_.name} end)
     |> Enum.sort_by(&elem(&1, 0))
   end
 
@@ -978,7 +977,7 @@ defmodule TokengateWeb.LogsLive do
                 <th>Agente</th>
                 <th>API Key</th>
                 <th class="border-r border-base-200">Proveedor</th>
-                <th title="API key o alias del proveedor">Prov. Key</th>
+                <th title="API key o model del proveedor">Prov. Key</th>
                 <th title="Código HTTP del proveedor">Prov. Status</th>
                 <th
                   title="Razón del error del proveedor"

@@ -16,7 +16,6 @@ defmodule TokengateWeb.UserStatsLive do
   """
 
   use TokengateWeb, :live_view
-
   alias Tokengate.Accounts
   alias Tokengate.Logs
   alias Tokengate.Metrics.DashboardCache
@@ -418,7 +417,7 @@ defmodule TokengateWeb.UserStatsLive do
           />
         </div>
 
-        <%!-- Memberships + Status breakdown + Top modelos --%>
+        <%!-- Memberships + Status breakdown + Top models --%>
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
           <div class="card bg-base-100 border border-base-300 shadow-sm">
             <div class="card-body p-4">
@@ -466,7 +465,7 @@ defmodule TokengateWeb.UserStatsLive do
           </div>
           <div class="card bg-base-100 border border-base-300 shadow-sm">
             <div class="card-body p-4">
-              <h3 class="text-sm font-semibold mb-2">Top modelos (5d)</h3>
+              <h3 class="text-sm font-semibold mb-2">Top models (5d)</h3>
               <%= if @summary_5d.top_models == [] do %>
                 <p class="text-xs text-base-content/40">Sin requests en los últimos 5 días.</p>
               <% else %>

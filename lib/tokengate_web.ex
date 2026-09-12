@@ -10,7 +10,7 @@ defmodule TokengateWeb do
 
   The definitions below will be executed for every controller,
   component, etc, so keep them short and clean, focused
-  on imports, uses and aliases.
+  on imports, uses and models.
 
   Do NOT define functions inside the quoted expressions
   below. Instead, define additional modules and import

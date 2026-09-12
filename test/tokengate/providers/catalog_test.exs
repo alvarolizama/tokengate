@@ -5,7 +5,6 @@ defmodule Tokengate.Providers.CatalogTest do
   use Tokengate.DataCase, async: true
 
   import Ecto.Query
-
   alias Tokengate.Providers.{Catalog, CatalogSync, Provider}
   alias Tokengate.Proxy.ProviderAdapter
 

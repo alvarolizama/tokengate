@@ -17,7 +17,6 @@ defmodule Tokengate.Logs do
   """
 
   import Ecto.Query, warn: false
-
   alias Tokengate.Repo
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Accounts.TeamMember
@@ -72,7 +71,7 @@ defmodule Tokengate.Logs do
     * `:team_member_ids` — list of allowed team_member ids (OR)
     * `:team_id` — exact match, joined through `team_members`
     * `:provider_id` — exact match
-    * `:model_alias_id` — exact match
+    * `:model_id` — exact match
     * `:agent_type` — exact match
     * `:status_code` — exact match
     * `:streaming` — boolean
@@ -183,7 +182,7 @@ defmodule Tokengate.Logs do
     |> maybe_where_team_id(filters)
     |> maybe_where(:provider_id, filters)
     |> maybe_where(:credential_id, filters)
-    |> maybe_where(:model_alias_id, filters)
+    |> maybe_where(:model_id, filters)
     |> maybe_where(:agent_type, filters)
     |> maybe_where(:status_code, filters)
     |> maybe_status_class(filters)

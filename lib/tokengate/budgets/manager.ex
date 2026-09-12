@@ -50,7 +50,6 @@ defmodule Tokengate.Budgets.Manager do
   use GenServer
 
   require Logger
-
   alias Tokengate.Budgets.Exemptions
 
   @table :tokengate_budgets
@@ -127,11 +126,11 @@ defmodule Tokengate.Budgets.Manager do
 
   @spec record_spend(
           member_id :: term(),
-          model_alias_id :: term(),
+          model_id :: term(),
           provider_cost_usd :: Decimal.t() | nil
         ) :: :ok
-  def record_spend(member_id, model_alias_id, provider_cost_usd) do
-    record_spend(member_id, model_alias_id, provider_cost_usd, nil)
+  def record_spend(member_id, model_id, provider_cost_usd) do
+    record_spend(member_id, model_id, provider_cost_usd, nil)
   end
 
   @doc """
@@ -145,20 +144,20 @@ defmodule Tokengate.Budgets.Manager do
   """
   @spec record_spend(
           member_id :: term(),
-          model_alias_id :: term(),
+          model_id :: term(),
           provider_cost_usd :: Decimal.t() | nil,
           exemption_subjects :: %{subject: map(), team: map() | nil} | nil
         ) :: :ok
-  def record_spend(member_id, model_alias_id, provider_cost_usd, exemption_subjects) do
+  def record_spend(member_id, model_id, provider_cost_usd, exemption_subjects) do
     micro = to_micro(provider_cost_usd)
 
     ensure_loaded(member_id, :daily)
     ensure_loaded(member_id, :monthly)
 
-    # Per-model counters only when a model is in scope. `nil` model_alias_id
+    # Per-model counters only when a model is in scope. `nil` model_id
     # (the /2 convenience used by tests) tracks member-level + global only.
-    if model_alias_id do
-      ensure_loaded({member_id, model_alias_id}, :daily)
+    if model_id do
+      ensure_loaded({member_id, model_id}, :daily)
     end
 
     # Atomic increments. Position 2 = amount_micro.
@@ -177,8 +176,8 @@ defmodule Tokengate.Budgets.Manager do
 
     unless global_exempt?, do: bump_counter(@global_key, micro)
 
-    if model_alias_id do
-      bump_counter({{member_id, model_alias_id}, :daily}, micro)
+    if model_id do
+      bump_counter({{member_id, model_id}, :daily}, micro)
     end
 
     # Debounced drift-correction enqueue: instead of one Oban job per request,
@@ -275,10 +274,10 @@ defmodule Tokengate.Budgets.Manager do
   (UTC day) in USD as a Decimal. Lazy-loads from the DB on first touch or
   day rollover.
   """
-  @spec model_per_user_daily_spend(member_id :: term(), model_alias_id :: term()) :: Decimal.t()
-  def model_per_user_daily_spend(member_id, model_alias_id) do
-    ensure_loaded({member_id, model_alias_id}, :daily)
-    from_micro(read_counter({{member_id, model_alias_id}, :daily}))
+  @spec model_per_user_daily_spend(member_id :: term(), model_id :: term()) :: Decimal.t()
+  def model_per_user_daily_spend(member_id, model_id) do
+    ensure_loaded({member_id, model_id}, :daily)
+    from_micro(read_counter({{member_id, model_id}, :daily}))
   end
 
   @doc """
@@ -287,17 +286,17 @@ defmodule Tokengate.Budgets.Manager do
   """
   @spec model_per_user_exhausted?(
           member_id :: term(),
-          model_alias_id :: term(),
+          model_id :: term(),
           cap :: Decimal.t() | number() | nil
         ) :: boolean()
-  def model_per_user_exhausted?(member_id, model_alias_id, cap) do
+  def model_per_user_exhausted?(member_id, model_id, cap) do
     case normalize_cap(cap) do
       nil ->
         false
 
       %Decimal{} = limit ->
-        ensure_loaded({member_id, model_alias_id}, :daily)
-        read_counter({{member_id, model_alias_id}, :daily}) >= to_micro(limit)
+        ensure_loaded({member_id, model_id}, :daily)
+        read_counter({{member_id, model_id}, :daily}) >= to_micro(limit)
     end
   end
 
@@ -339,7 +338,7 @@ defmodule Tokengate.Budgets.Manager do
   `subject` may be:
 
     * a member id (binary) — member-level daily/monthly spend;
-    * `{member_id, model_alias_id}` — per-user per-model daily spend;
+    * `{member_id, model_id}` — per-user per-model daily spend;
     * `{:credential, credential_id}` — per-credential spend.
 
   This reads `total_cost_usd` — what TokenGate actually paid — so the
@@ -671,14 +670,14 @@ defmodule Tokengate.Budgets.Manager do
 
   # Maps a budget subject to the `Tokengate.Logs.cost_summary/1` filters used
   # to lazy-load its spend from the durable `request_logs` table. More specific
-  # tuple shapes must match before the generic `{member_id, model_alias_id}`.
+  # tuple shapes must match before the generic `{member_id, model_id}`.
   # A binary subject may be a team member *or* a service (both keyed by their
   # id), so we use the combined `:subject_id` filter that matches either.
   defp subject_filters(subject) when is_binary(subject), do: %{subject_id: subject}
   defp subject_filters({:credential, credential_id}), do: %{credential_id: credential_id}
 
-  defp subject_filters({member_id, model_alias_id}),
-    do: %{subject_id: member_id, model_alias_id: model_alias_id}
+  defp subject_filters({member_id, model_id}),
+    do: %{subject_id: member_id, model_id: model_id}
 
   # ---------------------------------------------------------------------------
   # Internal — cap normalization (nil/0 = unlimited)

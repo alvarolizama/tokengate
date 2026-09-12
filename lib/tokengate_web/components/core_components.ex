@@ -28,7 +28,6 @@ defmodule TokengateWeb.CoreComponents do
   """
   use Phoenix.Component
   use Gettext, backend: TokengateWeb.Gettext
-
   alias Phoenix.LiveView.JS
 
   @doc """

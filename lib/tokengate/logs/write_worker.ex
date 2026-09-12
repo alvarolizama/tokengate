@@ -13,7 +13,6 @@ defmodule Tokengate.Logs.WriteWorker do
   """
 
   use Oban.Worker, queue: :logs, max_attempts: 5
-
   alias Tokengate.Logs
   alias Tokengate.Observability.WebhookWorker
 
@@ -28,7 +27,7 @@ defmodule Tokengate.Logs.WriteWorker do
       subject_type: args["subject_type"] || "user",
       provider_id: args["provider_id"],
       model_provider_id: args["model_provider_id"],
-      model_alias_id: args["model_alias_id"],
+      model_id: args["model_id"],
       model_requested: args["model_requested"],
       model_responded: args["model_responded"],
       agent_type: args["agent_type"] || "unknown",

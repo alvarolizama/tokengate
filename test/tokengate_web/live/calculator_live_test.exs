@@ -2,7 +2,6 @@ defmodule TokengateWeb.CalculatorLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
-
   alias Tokengate.Providers
 
   defp unique, do: System.unique_integer([:positive])
@@ -28,8 +27,8 @@ defmodule TokengateWeb.CalculatorLiveTest do
   end
 
   defp market_alias_fixture do
-    {:ok, alias_} =
-      Providers.create_model_alias(%{
+    {:ok, model_} =
+      Providers.create_model(%{
         name: "calc-market-#{unique()}",
         context_window: 128_000,
         model_type: "llm",
@@ -38,7 +37,7 @@ defmodule TokengateWeb.CalculatorLiveTest do
         market_cache_price_per_1m: "0.125"
       })
 
-    alias_
+    model_
   end
 
   test "admin sees calculator page with form", %{conn: conn} do
@@ -61,7 +60,7 @@ defmodule TokengateWeb.CalculatorLiveTest do
 
   test "selecting a model with market prices shows the market line", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    alias_ = market_alias_fixture()
+    model_ = market_alias_fixture()
     conn = login(conn, admin, password)
 
     {:ok, view, _html} = live(conn, ~p"/dashboard/calculator")
@@ -69,7 +68,7 @@ defmodule TokengateWeb.CalculatorLiveTest do
     html =
       view
       |> form("#calculator-form", %{
-        model_id: alias_.id,
+        model_id: model_.id,
         period: "7d",
         cost_input: "3.00",
         cost_cache: "0.30",
@@ -83,7 +82,7 @@ defmodule TokengateWeb.CalculatorLiveTest do
 
   test "market estimate card renders alongside real and custom estimates", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    alias_ = market_alias_fixture()
+    model_ = market_alias_fixture()
     conn = login(conn, admin, password)
 
     {:ok, view, _html} = live(conn, ~p"/dashboard/calculator")
@@ -91,7 +90,7 @@ defmodule TokengateWeb.CalculatorLiveTest do
     html =
       view
       |> form("#calculator-form", %{
-        model_id: alias_.id,
+        model_id: model_.id,
         period: "7d",
         cost_input: "3.00",
         cost_cache: "0.30",
@@ -109,11 +108,11 @@ defmodule TokengateWeb.CalculatorLiveTest do
     assert html =~ ~s(value="15.00")
   end
 
-  test "market estimate card is hidden when the alias has no market prices", %{conn: conn} do
+  test "market estimate card is hidden when the model has no market prices", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
 
-    {:ok, alias_} =
-      Providers.create_model_alias(%{
+    {:ok, model_} =
+      Providers.create_model(%{
         name: "calc-plain-#{unique()}",
         context_window: 128_000,
         model_type: "llm"
@@ -124,7 +123,7 @@ defmodule TokengateWeb.CalculatorLiveTest do
 
     html =
       view
-      |> form("#calculator-form", %{model_id: alias_.id, period: "7d"})
+      |> form("#calculator-form", %{model_id: model_.id, period: "7d"})
       |> render_change()
 
     assert html =~ "Gasto Estimado (custom)"

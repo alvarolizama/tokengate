@@ -2,7 +2,6 @@ defmodule TokengateWeb.ModelsLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
-
   alias Tokengate.{Accounts, Providers}
   alias Tokengate.Repo
   import Ecto.Query
@@ -14,7 +13,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     {:ok, user} =
       Accounts.register_user(%{
-        email: "alias-#{u}@example.com",
+        email: "model-#{u}@example.com",
         name: "User #{u}",
         password: "password-secret-#{u}1",
         global_role: role
@@ -46,14 +45,14 @@ defmodule TokengateWeb.ModelsLiveTest do
     provider
   end
 
-  defp create_alias(attrs \\ %{}) do
+  defp create_model(attrs \\ %{}) do
     u = unique()
 
-    {:ok, alias_record} =
-      Providers.create_model_alias(
+    {:ok, model_record} =
+      Providers.create_model(
         Map.merge(
           %{
-            name: "alias-#{u}",
+            name: "model-#{u}",
             context_window: 128_000,
             pinned: true
           },
@@ -61,10 +60,10 @@ defmodule TokengateWeb.ModelsLiveTest do
         )
       )
 
-    alias_record
+    model_record
   end
 
-  defp create_model_provider(model_alias, provider, attrs \\ %{}) do
+  defp create_model_provider(model, provider, attrs \\ %{}) do
     u = unique()
 
     {:ok, credential} =
@@ -78,7 +77,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       Providers.create_model_provider(
         Map.merge(
           %{
-            model_alias_id: model_alias.id,
+            model_id: model.id,
             credential_id: credential.id,
             provider_model: "gpt-4o-#{u}",
             priority: 1,
@@ -116,7 +115,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
   # -- Alias CRUD -----------------------------------------------------------
 
-  test "admin can create a new alias", %{conn: conn} do
+  test "admin can create a new model", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
 
@@ -124,12 +123,12 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     view |> element("#new-model-btn") |> render_click()
 
-    assert has_element?(view, "#alias-form")
+    assert has_element?(view, "#model-form")
 
     html =
       view
-      |> form("#alias-form", %{
-        model_alias: %{
+      |> form("#model-form", %{
+        model: %{
           name: "gpt-4o-test",
           context_window: 128_000
         }
@@ -138,19 +137,19 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     assert html =~ "Modelo creado"
 
-    # New aliases are created unpinned, so the default Favoritos view hides them.
+    # New models are created unpinned, so the default Favoritos view hides them.
     view |> element("#model-type-all") |> render_click()
     html = render(view)
     assert html =~ "gpt-4o-test"
 
-    alias_record = Tokengate.Providers.get_alias_by_name("gpt-4o-test")
+    model_record = Tokengate.Providers.get_model_by_name("gpt-4o-test")
     # The optimization checkboxes are gone from the form: the transforms are
     # mandatory for chat models, so the schema defaults simply hold.
-    assert alias_record.prompt_cache_enabled == false
-    assert alias_record.lazy_cleanup_enabled == false
+    assert model_record.prompt_cache_enabled == false
+    assert model_record.lazy_cleanup_enabled == false
   end
 
-  test "alias form renders informational market prices and persists them", %{conn: conn} do
+  test "model form renders informational market prices and persists them", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
 
@@ -158,14 +157,14 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     view |> element("#new-model-btn") |> render_click()
 
-    assert has_element?(view, "#model_alias_market_input_price_per_1m")
-    assert has_element?(view, "#model_alias_market_output_price_per_1m")
-    assert has_element?(view, "#model_alias_market_cache_price_per_1m")
+    assert has_element?(view, "#model_market_input_price_per_1m")
+    assert has_element?(view, "#model_market_output_price_per_1m")
+    assert has_element?(view, "#model_market_cache_price_per_1m")
 
     html =
       view
-      |> form("#alias-form", %{
-        model_alias: %{
+      |> form("#model-form", %{
+        model: %{
           name: "gpt-4o-market",
           context_window: 128_000,
           market_input_price_per_1m: "1.25",
@@ -177,7 +176,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     assert html =~ "Modelo creado"
 
-    # Market prices surface on the alias card row (display-only): the alias
+    # Market prices surface on the model card row (display-only): the model
     # lives in the "all" tab because it is unpinned, not in Favoritos.
     view |> element("#model-type-all") |> render_click()
     html = render(view)
@@ -185,28 +184,28 @@ defmodule TokengateWeb.ModelsLiveTest do
     # Exact single-line render (HEEx must not split "$" from the value).
     assert html =~ "· in $1.25 · out $10 · cache $0.125 /1M"
 
-    alias_record = Tokengate.Providers.get_alias_by_name("gpt-4o-market")
+    model_record = Tokengate.Providers.get_model_by_name("gpt-4o-market")
 
-    assert Decimal.eq?(alias_record.market_input_price_per_1m, Decimal.new("1.25"))
-    assert Decimal.eq?(alias_record.market_output_price_per_1m, Decimal.new("10"))
-    assert Decimal.eq?(alias_record.market_cache_price_per_1m, Decimal.new("0.125"))
+    assert Decimal.eq?(model_record.market_input_price_per_1m, Decimal.new("1.25"))
+    assert Decimal.eq?(model_record.market_output_price_per_1m, Decimal.new("10"))
+    assert Decimal.eq?(model_record.market_cache_price_per_1m, Decimal.new("0.125"))
   end
 
-  test "admin can edit an existing alias", %{conn: conn} do
+  test "admin can edit an existing model", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    alias_record = create_alias()
+    model_record = create_model()
     conn = login(conn, admin, password)
 
     {:ok, view, _html} = live(conn, ~p"/dashboard/models")
 
-    view |> element("#edit-alias-#{alias_record.id}") |> render_click()
+    view |> element("#edit-model-#{model_record.id}") |> render_click()
 
-    assert has_element?(view, "#alias-form")
+    assert has_element?(view, "#model-form")
 
     html =
       view
-      |> form("#alias-form", %{
-        model_alias: %{
+      |> form("#model-form", %{
+        model: %{
           name: "gpt-4o-renamed",
           context_window: 200_000
         }
@@ -217,31 +216,31 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert html =~ "gpt-4o-renamed"
   end
 
-  test "admin can delete an alias without providers", %{conn: conn} do
+  test "admin can delete an model without providers", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    alias_record = create_alias()
+    model_record = create_model()
     conn = login(conn, admin, password)
 
     {:ok, view, html} = live(conn, ~p"/dashboard/models")
-    assert html =~ alias_record.name
+    assert html =~ model_record.name
 
-    view |> element("#delete-alias-#{alias_record.id}") |> render_click()
+    view |> element("#delete-model-#{model_record.id}") |> render_click()
 
     html = render(view)
     assert html =~ "Modelo eliminado"
-    refute html =~ alias_record.name
+    refute html =~ model_record.name
   end
 
-  test "admin cannot delete an alias with providers assigned", %{conn: conn} do
+  test "admin cannot delete an model with providers assigned", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
-    alias_record = create_alias()
-    create_model_provider(alias_record, provider)
+    model_record = create_model()
+    create_model_provider(model_record, provider)
     conn = login(conn, admin, password)
 
     {:ok, view, _html} = live(conn, ~p"/dashboard/models")
 
-    view |> element("#delete-alias-#{alias_record.id}") |> render_click()
+    view |> element("#delete-model-#{model_record.id}") |> render_click()
 
     html = render(view)
     assert html =~ "No se puede eliminar"
@@ -249,10 +248,10 @@ defmodule TokengateWeb.ModelsLiveTest do
 
   # -- Alias provider management -------------------------------------------
 
-  test "admin can assign a provider to an alias", %{conn: conn} do
+  test "admin can assign a provider to an model", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
-    alias_record = create_alias()
+    model_record = create_model()
 
     # Create credential before mounting LiveView so it appears in the select
     {:ok, credential} =
@@ -266,16 +265,16 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     {:ok, view, _html} = live(conn, ~p"/dashboard/models")
 
-    # The new_model_provider button is inline in each alias card
-    assert has_element?(view, "#new-ap-#{alias_record.id}")
+    # The new_model_provider button is inline in each model card
+    assert has_element?(view, "#new-ap-#{model_record.id}")
 
-    view |> element("#new-ap-#{alias_record.id}") |> render_click()
+    view |> element("#new-ap-#{model_record.id}") |> render_click()
 
-    assert has_element?(view, "#alias-provider-form")
+    assert has_element?(view, "#model-provider-form")
 
     html =
       view
-      |> form("#alias-provider-form", %{
+      |> form("#model-provider-form", %{
         model_provider: %{
           credential_id: credential.id,
           provider_model: "claude-3-opus",
@@ -292,7 +291,7 @@ defmodule TokengateWeb.ModelsLiveTest do
   test "admin can set sticky_ttl_ms when creating a model provider", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
-    alias_record = create_alias()
+    model_record = create_model()
 
     credential =
       Tokengate.Repo.insert!(%Tokengate.Providers.Credential{
@@ -304,12 +303,12 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/models")
-    view |> element("#new-ap-#{alias_record.id}") |> render_click()
+    view |> element("#new-ap-#{model_record.id}") |> render_click()
 
     # Form input is in seconds; the column is stored in ms.
     html =
       view
-      |> form("#alias-provider-form", %{
+      |> form("#model-provider-form", %{
         model_provider: %{
           credential_id: credential.id,
           provider_model: "gpt-4o-sticky",
@@ -324,7 +323,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     ap =
       Repo.one!(
-        from mp in Tokengate.Providers.ModelProvider, where: mp.model_alias_id == ^alias_record.id
+        from mp in Tokengate.Providers.ModelProvider, where: mp.model_id == ^model_record.id
       )
 
     assert ap.sticky_ttl_ms == 60_000
@@ -333,7 +332,7 @@ defmodule TokengateWeb.ModelsLiveTest do
   test "sticky_ttl_seconds below 1 second is rejected by the form", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
-    alias_record = create_alias()
+    model_record = create_model()
 
     credential =
       Tokengate.Repo.insert!(%Tokengate.Providers.Credential{
@@ -345,11 +344,11 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/models")
-    view |> element("#new-ap-#{alias_record.id}") |> render_click()
+    view |> element("#new-ap-#{model_record.id}") |> render_click()
 
     html =
       view
-      |> form("#alias-provider-form", %{
+      |> form("#model-provider-form", %{
         model_provider: %{
           credential_id: credential.id,
           provider_model: "gpt-4o-bad",
@@ -368,7 +367,7 @@ defmodule TokengateWeb.ModelsLiveTest do
   test "sticky_ttl_seconds above 24 h is rejected by the form", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
-    alias_record = create_alias()
+    model_record = create_model()
 
     credential =
       Tokengate.Repo.insert!(%Tokengate.Providers.Credential{
@@ -380,11 +379,11 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/models")
-    view |> element("#new-ap-#{alias_record.id}") |> render_click()
+    view |> element("#new-ap-#{model_record.id}") |> render_click()
 
     html =
       view
-      |> form("#alias-provider-form", %{
+      |> form("#model-provider-form", %{
         model_provider: %{
           credential_id: credential.id,
           provider_model: "gpt-4o-toobig",
@@ -402,7 +401,7 @@ defmodule TokengateWeb.ModelsLiveTest do
   test "editing a model provider pre-fills sticky_ttl_seconds from sticky_ttl_ms", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
-    alias_record = create_alias()
+    model_record = create_model()
 
     credential =
       Tokengate.Repo.insert!(%Tokengate.Providers.Credential{
@@ -414,7 +413,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     {:ok, ap} =
       Providers.create_model_provider(%{
-        model_alias_id: alias_record.id,
+        model_id: model_record.id,
         credential_id: credential.id,
         provider_model: "gpt-4o-edit",
         priority: 1,
@@ -428,7 +427,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     # Form should be open with 300 (seconds) pre-filled, not 300_000.
     html = render(view)
-    assert has_element?(view, "#alias-provider-form")
+    assert has_element?(view, "#model-provider-form")
     assert html =~ ~s(value="300")
     refute html =~ ~s(value="300000")
   end
@@ -436,18 +435,18 @@ defmodule TokengateWeb.ModelsLiveTest do
   test "admin can reorder provider priorities via drag-drop event", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
-    alias_record = create_alias()
+    model_record = create_model()
 
-    ap1 = create_model_provider(alias_record, provider, %{priority: 1})
-    ap2 = create_model_provider(alias_record, provider, %{priority: 2})
-    ap3 = create_model_provider(alias_record, provider, %{priority: 3})
+    ap1 = create_model_provider(model_record, provider, %{priority: 1})
+    ap2 = create_model_provider(model_record, provider, %{priority: 2})
+    ap3 = create_model_provider(model_record, provider, %{priority: 3})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/models")
 
     # Drag ap3 to the top
     render_hook(view, "reorder_providers", %{
-      "alias_id" => alias_record.id,
+      "model_id" => model_record.id,
       "ids" => [ap3.id, ap1.id, ap2.id]
     })
 
@@ -456,20 +455,20 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert Providers.get_model_provider!(ap2.id).priority == 3
   end
 
-  test "reorder rejects ids from another alias", %{conn: conn} do
+  test "reorder rejects ids from another model", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
-    alias_a = create_alias()
-    alias_b = create_alias()
+    model_a = create_model()
+    model_b = create_model()
 
-    ap_a = create_model_provider(alias_a, provider, %{priority: 1})
-    ap_b = create_model_provider(alias_b, provider, %{priority: 7})
+    ap_a = create_model_provider(model_a, provider, %{priority: 1})
+    ap_b = create_model_provider(model_b, provider, %{priority: 7})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/models")
 
     render_hook(view, "reorder_providers", %{
-      "alias_id" => alias_a.id,
+      "model_id" => model_a.id,
       "ids" => [ap_b.id]
     })
 
@@ -478,10 +477,10 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert Providers.get_model_provider!(ap_b.id).priority == 7
   end
 
-  test "shows credential alias badge when the credential has a name", %{conn: conn} do
+  test "shows credential model badge when the credential has a name", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
-    alias_record = create_alias()
+    model_record = create_model()
 
     u = unique()
 
@@ -495,7 +494,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     {:ok, _ap} =
       Providers.create_model_provider(%{
-        model_alias_id: alias_record.id,
+        model_id: model_record.id,
         credential_id: credential.id,
         provider_model: "gpt-4o-#{u}",
         priority: 1,
@@ -513,8 +512,8 @@ defmodule TokengateWeb.ModelsLiveTest do
   test "admin can toggle model_provider enabled state", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
-    alias_record = create_alias()
-    ap = create_model_provider(alias_record, provider)
+    model_record = create_model()
+    ap = create_model_provider(model_record, provider)
     conn = login(conn, admin, password)
 
     {:ok, view, _html} = live(conn, ~p"/dashboard/models")
@@ -529,7 +528,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     %{user: admin, password: password} = register("admin")
     %{user: target, password: _} = register("user")
     provider = create_provider()
-    alias_record = create_alias()
+    model_record = create_model()
 
     {:ok, credential} =
       Providers.create_credential(%{
@@ -544,7 +543,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     {:ok, ap} =
       Providers.create_model_provider(%{
-        model_alias_id: alias_record.id,
+        model_id: model_record.id,
         credential_id: credential.id,
         provider_model: "gpt-4o-exc",
         priority: 1,
@@ -620,7 +619,7 @@ defmodule TokengateWeb.ModelsLiveTest do
   } do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
-    alias_record = create_alias()
+    model_record = create_model()
     {:ok, team} = Accounts.create_team(%{name: "Scope #{unique()}"})
 
     {:ok, credential} =
@@ -632,7 +631,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     {:ok, ap} =
       Providers.create_model_provider(%{
-        model_alias_id: alias_record.id,
+        model_id: model_record.id,
         credential_id: credential.id,
         provider_model: "gpt-4o-team",
         priority: 1,
@@ -673,7 +672,7 @@ defmodule TokengateWeb.ModelsLiveTest do
   } do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
-    alias_record = create_alias()
+    model_record = create_model()
 
     {:ok, credential} =
       Providers.create_credential(%{
@@ -690,7 +689,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/models")
-    view |> element("#new-ap-#{alias_record.id}") |> render_click()
+    view |> element("#new-ap-#{model_record.id}") |> render_click()
 
     # Multi-select flow: pick the member scope, accumulate two members,
     # submit once.
@@ -700,7 +699,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     html =
       view
-      |> form("#alias-provider-form", %{
+      |> form("#model-provider-form", %{
         model_provider: %{
           credential_id: credential.id,
           provider_model: "gpt-4o-multi",
@@ -715,7 +714,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     bound_member_ids =
       Repo.all(
         from mp in Tokengate.Providers.ModelProvider,
-          where: mp.model_alias_id == ^alias_record.id,
+          where: mp.model_id == ^model_record.id,
           select: mp.exclusive_to_team_member_id
       )
 
@@ -725,7 +724,7 @@ defmodule TokengateWeb.ModelsLiveTest do
   test "stale provider models results are discarded when credential changes", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
-    alias_record = create_alias()
+    model_record = create_model()
 
     {:ok, c1} =
       Providers.create_credential(%{
@@ -746,7 +745,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     # is part of the initially-mounted stream.
     {:ok, ap} =
       Providers.create_model_provider(%{
-        model_alias_id: alias_record.id,
+        model_id: model_record.id,
         credential_id: c2.id,
         provider_model: "gpt-4o-race",
         priority: 1,
@@ -774,9 +773,9 @@ defmodule TokengateWeb.ModelsLiveTest do
   test "model_provider row surfaces credential disabled state in /dashboard/models", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
-    alias_record = create_alias()
+    model_record = create_model()
 
-    # Create credential under the alias's model_provider, then disable it.
+    # Create credential under the model's model_provider, then disable it.
     {:ok, credential} =
       Providers.create_credential(%{
         provider_id: provider.id,
@@ -786,7 +785,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     {:ok, ap} =
       Providers.create_model_provider(%{
-        model_alias_id: alias_record.id,
+        model_id: model_record.id,
         credential_id: credential.id,
         provider_model: "gpt-4o-dis",
         priority: 1,
@@ -816,8 +815,8 @@ defmodule TokengateWeb.ModelsLiveTest do
   test "admin can delete an model_provider", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
-    alias_record = create_alias()
-    ap = create_model_provider(alias_record, provider)
+    model_record = create_model()
+    ap = create_model_provider(model_record, provider)
     conn = login(conn, admin, password)
 
     {:ok, view, _html} = live(conn, ~p"/dashboard/models")
@@ -833,13 +832,13 @@ defmodule TokengateWeb.ModelsLiveTest do
 
   # -- Empty state ----------------------------------------------------------
 
-  test "shows empty state when no aliases exist", %{conn: conn} do
+  test "shows empty state when no models exist", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
 
     # The suite runs against a shared DB (async: false): other tests may
-    # have created aliases already. Wipe them so the empty state holds.
-    Repo.delete_all(Providers.ModelAlias)
+    # have created models already. Wipe them so the empty state holds.
+    Repo.delete_all(Providers.Model)
 
     {:ok, view, html} = live(conn, ~p"/dashboard/models")
 
@@ -849,14 +848,14 @@ defmodule TokengateWeb.ModelsLiveTest do
     view |> element("#model-type-all") |> render_click()
 
     html = render(view)
-    assert html =~ "No hay modelos configurados"
+    assert html =~ "No hay models configurados"
   end
 
-  # -- Read-only view shows alias data -------------------------------------
+  # -- Read-only view shows model data -------------------------------------
 
   test "regular user is redirected from models (admin-only)", %{conn: conn} do
     %{user: admin, password: admin_password} = register("admin")
-    _alias_record = create_alias()
+    _alias_record = create_model()
     conn = login(conn, admin, admin_password)
     {:ok, _view, _html} = live(conn, ~p"/dashboard/models")
 
@@ -873,8 +872,8 @@ defmodule TokengateWeb.ModelsLiveTest do
 
   test "admin can pin a model to the top", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    _alias_a = create_alias(%{name: "aa-pinned-test", pinned: false})
-    alias_b = create_alias(%{name: "bb-pinned-test", pinned: false})
+    _alias_a = create_model(%{name: "aa-pinned-test", pinned: false})
+    model_b = create_model(%{name: "bb-pinned-test", pinned: false})
     conn = login(conn, admin, password)
 
     {:ok, view, _html} = live(conn, ~p"/dashboard/models")
@@ -884,9 +883,9 @@ defmodule TokengateWeb.ModelsLiveTest do
     html = render(view)
     assert order_before?(html, "aa-pinned-test", "bb-pinned-test")
 
-    view |> element("#pin-alias-#{alias_b.id}") |> render_click()
+    view |> element("#pin-model-#{model_b.id}") |> render_click()
 
-    assert Tokengate.Providers.get_model_alias!(alias_b.id).pinned == true
+    assert Tokengate.Providers.get_model!(model_b.id).pinned == true
 
     html = render(view)
     assert order_before?(html, "bb-pinned-test", "aa-pinned-test")
@@ -894,14 +893,14 @@ defmodule TokengateWeb.ModelsLiveTest do
 
   test "admin can unpin a model", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    alias_record = create_alias(%{name: "pinned-then-unpinned", pinned: true})
+    model_record = create_model(%{name: "pinned-then-unpinned", pinned: true})
     conn = login(conn, admin, password)
 
     {:ok, view, _html} = live(conn, ~p"/dashboard/models")
 
-    view |> element("#pin-alias-#{alias_record.id}") |> render_click()
+    view |> element("#pin-model-#{model_record.id}") |> render_click()
 
-    assert Tokengate.Providers.get_model_alias!(alias_record.id).pinned == false
+    assert Tokengate.Providers.get_model!(model_record.id).pinned == false
   end
 
   # -- Collapsed providers section ------------------------------------------
@@ -909,13 +908,13 @@ defmodule TokengateWeb.ModelsLiveTest do
   test "providers section is collapsed by default", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
-    alias_record = create_alias()
-    create_model_provider(alias_record, provider)
+    model_record = create_model()
+    create_model_provider(model_record, provider)
     conn = login(conn, admin, password)
 
     {:ok, _view, html} = live(conn, ~p"/dashboard/models")
 
-    assert html =~ ~s(id="alias-providers-#{alias_record.id}")
+    assert html =~ ~s(id="model-providers-#{model_record.id}")
     assert html =~ ~s(style="display: none")
   end
 
@@ -923,8 +922,8 @@ defmodule TokengateWeb.ModelsLiveTest do
 
   test "default filter is favorites; pinned shown, unpinned hidden", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    _pinned = create_alias(%{name: "fav-default-model", pinned: true})
-    _unpinned = create_alias(%{name: "unpinned-default-model", pinned: false})
+    _pinned = create_model(%{name: "fav-default-model", pinned: true})
+    _unpinned = create_model(%{name: "unpinned-default-model", pinned: false})
     conn = login(conn, admin, password)
 
     {:ok, view, html} = live(conn, ~p"/dashboard/models")
@@ -940,8 +939,8 @@ defmodule TokengateWeb.ModelsLiveTest do
 
   test "Favoritos tab shows only pinned models", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    _pinned = create_alias(%{name: "fav-pinned-model", pinned: true})
-    _unpinned = create_alias(%{name: "fav-unpinned-model", pinned: false})
+    _pinned = create_model(%{name: "fav-pinned-model", pinned: true})
+    _unpinned = create_model(%{name: "fav-unpinned-model", pinned: false})
     conn = login(conn, admin, password)
 
     {:ok, view, _html} = live(conn, ~p"/dashboard/models")

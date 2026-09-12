@@ -2,7 +2,6 @@ defmodule TokengateWeb.StatsLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
-
   alias Tokengate.{Accounts, Logs, Periods, Providers}
 
   defp unique, do: System.unique_integer([:positive])
@@ -69,7 +68,7 @@ defmodule TokengateWeb.StatsLiveTest do
       Providers.create_provider(%{name: "Prov #{u}", base_url: "http://localhost:1"})
 
     {:ok, ma} =
-      Providers.create_model_alias(%{
+      Providers.create_model(%{
         name: "model-#{u}",
         context_window: 128_000
       })
@@ -82,7 +81,7 @@ defmodule TokengateWeb.StatsLiveTest do
         Logs.log_request(%{
           team_member_id: member.id,
           provider_id: provider.id,
-          model_alias_id: ma.id,
+          model_id: ma.id,
           model_requested: "model-#{u}",
           model_responded: "model-#{u}",
           agent_type: "api",
@@ -98,7 +97,7 @@ defmodule TokengateWeb.StatsLiveTest do
         })
     end
 
-    %{team: team, owner: owner, member: member, model_alias: ma, provider: provider}
+    %{team: team, owner: owner, member: member, model: ma, provider: provider}
   end
 
   ## Auth -------------------------------------------------------------------
@@ -221,7 +220,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
   test "selecting a model shows drill-down with provider breakdown", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    %{model_alias: ma} = team_with_log(%{cost: "0.005"})
+    %{model: ma} = team_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats/models?model_id=#{ma.id}")
@@ -283,15 +282,15 @@ defmodule TokengateWeb.StatsLiveTest do
   test "clicking a sort header re-orders the breakdown table rows", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
 
-    # Same team/member, two different model aliases with different costs so
+    # Same team/member, two different models with different costs so
     # the model breakdown has two sortable rows.
-    %{member: member, model_alias: cheap, provider: provider} =
+    %{member: member, model: cheap, provider: provider} =
       team_with_log(%{cost: "0.001"})
 
     u = unique()
 
     {:ok, expensive} =
-      Providers.create_model_alias(%{
+      Providers.create_model(%{
         name: "model-expensive-#{u}",
         context_window: 128_000
       })
@@ -300,7 +299,7 @@ defmodule TokengateWeb.StatsLiveTest do
       Logs.log_request(%{
         team_member_id: member.id,
         provider_id: provider.id,
-        model_alias_id: expensive.id,
+        model_id: expensive.id,
         model_requested: expensive.name,
         model_responded: expensive.name,
         agent_type: "api",
@@ -374,7 +373,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
     assert conn.status == 200
 
-    assert ["attachment; filename=\"estadisticas_modelos_" <> _] =
+    assert ["attachment; filename=\"estadisticas_models_" <> _] =
              get_resp_header(conn, "content-disposition")
 
     assert ["text/csv; charset=utf-8"] = get_resp_header(conn, "content-type")

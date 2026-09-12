@@ -5,7 +5,7 @@ defmodule Tokengate.Providers.Catalog do
   A provider's identity is code, not user data: its base URL, API dialect
   and capabilities belong in the repo, released with the app. The database
   only stores what the user contributes (credentials) and their relations
-  (aliases, routing, pricing). Custom providers created by operators are
+  (models, routing, pricing). Custom providers created by operators are
   first-class rows with `source: "custom"` and the same contract.
 
   ## Dialects

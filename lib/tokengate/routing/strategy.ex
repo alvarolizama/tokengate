@@ -13,7 +13,7 @@ defmodule Tokengate.Routing.Strategy do
 
     * `:api_key_hash`  – opaque binary identifying the API key (used for
       sticky / prompt-cache affinity). May be absent.
-    * `:model_alias_id` – binary id of the model alias being routed. Used as
+    * `:model_id` – binary id of the model model being routed. Used as
       part of the sticky key together with `:api_key_hash`.
     * `:available?` – `fn(model_provider) -> boolean`. Defaults to
       `fn _ -> true end`. The circuit breaker is injected here by the caller.

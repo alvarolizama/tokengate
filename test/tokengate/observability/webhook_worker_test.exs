@@ -8,7 +8,6 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
 
   use Tokengate.DataCase, async: false
   use Oban.Testing, repo: Tokengate.Repo
-
   alias Tokengate.Accounts
   alias Tokengate.Logs
   alias Tokengate.Observability

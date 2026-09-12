@@ -2,7 +2,6 @@ defmodule TokengateWeb.UserStatsLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
-
   alias Tokengate.{Accounts, Logs}
 
   defp unique, do: System.unique_integer([:positive])

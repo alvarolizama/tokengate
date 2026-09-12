@@ -5,7 +5,6 @@ defmodule TokengateWeb.KpiHelpers do
   reimplementing the query logic in every LiveView.
 
   Usage in a LiveView:
-
       alias TokengateWeb.KpiHelpers
 
       # in mount or handle_params:
@@ -21,7 +20,6 @@ defmodule TokengateWeb.KpiHelpers do
   use Phoenix.Component
 
   import TokengateWeb.CoreComponents, only: [icon: 1]
-
   alias Tokengate.Accounts
   alias Tokengate.Logs
   alias Tokengate.Metrics.DashboardCache

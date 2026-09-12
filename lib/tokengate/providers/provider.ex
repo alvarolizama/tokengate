@@ -19,7 +19,6 @@ defmodule Tokengate.Providers.Provider do
 
   use Ecto.Schema
   import Ecto.Changeset
-
   alias Tokengate.Providers.Catalog
 
   @primary_key {:id, :binary_id, autogenerate: true}
@@ -41,6 +40,11 @@ defmodule Tokengate.Providers.Provider do
     field :key, :string
     field :source, :string, default: "custom"
     field :dialect, :string, default: "openai"
+    # Billing surface of the provider: "subscription" (flat-rate plan,
+    # rate-limited) or "pay_per_token". Builtins get it from the catalog
+    # (CatalogSync); customs pick it once at creation. This is the single
+    # source of truth for routing tiers / cost / sticky defaults.
+    field :billing_type, :string, default: "pay_per_token"
     field :capabilities, {:array, :string}, default: ["llm"]
     field :status, :string, default: "active"
 
@@ -50,6 +54,10 @@ defmodule Tokengate.Providers.Provider do
   end
 
   @identity_fields [:name, :base_url, :dialect, :capabilities]
+
+  # Billing surface is not identity: customs choose it, builtins get it from
+  # the catalog. Both stay editable through the shared cast list.
+  @billing_types ~w(subscription pay_per_token)
 
   @doc false
   def changeset(provider, attrs) do
@@ -63,6 +71,7 @@ defmodule Tokengate.Providers.Provider do
       :key,
       :source,
       :dialect,
+      :billing_type,
       :capabilities,
       :status
     ])
@@ -70,6 +79,7 @@ defmodule Tokengate.Providers.Provider do
     |> validate_inclusion(:status, @statuses)
     |> validate_inclusion(:source, Catalog.sources())
     |> validate_inclusion(:dialect, Catalog.dialects())
+    |> validate_inclusion(:billing_type, @billing_types)
     |> validate_subset(:capabilities, Catalog.capabilities())
     |> put_default_source()
     |> normalize_urls()
@@ -80,6 +90,9 @@ defmodule Tokengate.Providers.Provider do
 
   @doc "List of valid status values"
   def statuses, do: @statuses
+
+  @doc "List of valid billing surfaces"
+  def billing_types, do: @billing_types
 
   # Fresh custom rows default to source custom / dialect openai / llm-only
   # when the attrs don't say otherwise.

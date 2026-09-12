@@ -10,7 +10,6 @@ defmodule TokengateWeb.ProxyControllerTest do
   use Oban.Testing, repo: Tokengate.Repo
 
   import Ecto.Query, only: [from: 2]
-
   alias Tokengate.{Accounts, Providers, Repo}
   alias Tokengate.Budgets.Manager, as: Budgets
   alias Tokengate.Limits.Manager, as: Limits
@@ -167,7 +166,8 @@ defmodule TokengateWeb.ProxyControllerTest do
     {:ok, provider} =
       Providers.create_provider(%{
         name: "Provider #{u}",
-        base_url: provider_url
+        base_url: provider_url,
+        billing_type: Map.get(opts, :billing_type, "pay_per_token")
       })
 
     {:ok, credential} =
@@ -176,22 +176,21 @@ defmodule TokengateWeb.ProxyControllerTest do
         api_key_encrypted: "sk-provider-#{u}"
       })
 
-    {:ok, model_alias} =
-      Providers.create_model_alias(%{
+    {:ok, model} =
+      Providers.create_model(%{
         name: "gpt-4o-#{u}",
         context_window: 128_000,
         daily_limit_per_user_usd: Map.get(opts, :model_per_user_cap)
       })
 
-    {:ok, _grant} = Providers.grant_alias_to_team(team.id, model_alias.id)
+    {:ok, _grant} = Providers.grant_model_to_team(team.id, model.id)
 
     {:ok, model_provider} =
       Providers.create_model_provider(%{
-        model_alias_id: model_alias.id,
+        model_id: model.id,
         credential_id: credential.id,
         provider_model: "gpt-4o-real-#{u}",
-        priority: 1,
-        billing_mode: Map.get(opts, :billing_mode, "pay_per_token")
+        priority: 1
       })
 
     %{
@@ -199,7 +198,7 @@ defmodule TokengateWeb.ProxyControllerTest do
       user: user,
       member: member,
       token: token,
-      alias: model_alias,
+      model: model,
       model_provider: model_provider
     }
   end
@@ -212,8 +211,8 @@ defmodule TokengateWeb.ProxyControllerTest do
     %{"model" => model, "messages" => [%{"role" => "user", "content" => "hola, ¿cómo vas?"}]}
   end
 
-  defp update_alias_type(model_alias, type) do
-    model_alias
+  defp update_alias_type(model, type) do
+    model
     |> Ecto.Changeset.change(model_type: type)
     |> Repo.update!()
   end
@@ -236,8 +235,8 @@ defmodule TokengateWeb.ProxyControllerTest do
 
   ## Models #####################################################################
 
-  test "GET /v1/models returns only accessible aliases with context_window", %{conn: conn} do
-    %{token: token, alias: model_alias} = proxy_fixture()
+  test "GET /v1/models returns only accessible models with context_window", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture()
 
     other = proxy_fixture()
 
@@ -248,10 +247,10 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     assert %{"object" => "list", "data" => models} = json_response(conn, 200)
     ids = Enum.map(models, & &1["id"])
-    assert model_alias.name in ids
-    refute other.alias.name in ids
+    assert model.name in ids
+    refute other.model.name in ids
 
-    entry = Enum.find(models, &(&1["id"] == model_alias.name))
+    entry = Enum.find(models, &(&1["id"] == model.name))
     assert entry["context_window"] == 128_000
     assert entry["owned_by"] == "tokengate"
   end
@@ -261,14 +260,14 @@ defmodule TokengateWeb.ProxyControllerTest do
   test "happy path: response carries cost info, headers, budget spend and async log", %{
     conn: conn
   } do
-    %{token: token, alias: model_alias, member: member, model_provider: model_provider} =
+    %{token: token, model: model, member: member, model_provider: model_provider} =
       proxy_fixture()
 
     conn =
       conn
       |> authed_conn(token)
       |> put_req_header("x-agent-type", "claude-code")
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     body = json_response(conn, 200)
 
@@ -294,7 +293,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     log = Repo.one(from l in RequestLog, where: l.team_member_id == ^member.id)
     assert log.agent_type == "claude-code"
-    assert log.model_requested == model_alias.name
+    assert log.model_requested == model.name
     assert log.model_responded =~ "gpt-4o-real"
     assert log.status_code == 200
     assert log.prompt_tokens == 20
@@ -306,7 +305,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     # Without market pricing the pre-check no longer estimates. To trip the
     # budget gate we set a tiny monthly cap and pre-load the ETS counter so
     # the next request is rejected before being dispatched.
-    %{token: token, alias: model_alias, member: member} =
+    %{token: token, model: model, member: member} =
       proxy_fixture(%{daily_budget: "0.0001"})
 
     # Pre-seed the spend counter so the member is already at/over their cap.
@@ -315,23 +314,23 @@ defmodule TokengateWeb.ProxyControllerTest do
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert %{"error" => %{"code" => "budget_exceeded", "type" => "billing_error"}} =
              json_response(conn, 402)
   end
 
   test "402 when a model's per-user daily cap is already reached", %{conn: conn} do
-    %{token: token, alias: model_alias, member: member} =
+    %{token: token, model: model, member: member} =
       proxy_fixture(%{model_per_user_cap: "0.0001"})
 
     # Pre-seed the per-user model spend to trip the cap.
-    Budgets.record_spend(member.id, model_alias.id, Decimal.new("0.0002"))
+    Budgets.record_spend(member.id, model.id, Decimal.new("0.0002"))
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert %{"error" => %{"code" => "budget_exceeded", "type" => "billing_error"}} =
              json_response(conn, 402)
@@ -344,7 +343,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     # when the `with` short-circuited. N rejected requests leaked N slots and
     # the member ended up permanently 429-blocked (no sweeper on the
     # in-flight table).
-    %{token: token, alias: model_alias, member: member} =
+    %{token: token, model: model, member: member} =
       proxy_fixture(%{daily_budget: "0.0001", concurrency_limit: 3})
 
     # Member is already over their monthly cap → every request 402s.
@@ -353,7 +352,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     for _ <- 1..3 do
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
     end
 
     # The leaked slots would pin the in-flight count at the limit...
@@ -366,24 +365,24 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     conn
     |> authed_conn(token)
-    |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+    |> post(~p"/v1/chat/completions", chat_body(model.name))
     |> json_response(200)
   end
 
   test "included provider bypasses exhausted per-user model cap", %{conn: conn} do
-    %{token: token, alias: model_alias, member: member} =
+    %{token: token, model: model, member: member} =
       proxy_fixture(%{
         model_per_user_cap: "0.0001",
-        billing_mode: "included"
+        billing_type: "subscription"
       })
 
     # Exhaust the per-user model cap; an `included` provider must still serve.
-    Budgets.record_spend(member.id, model_alias.id, Decimal.new("0.0002"))
+    Budgets.record_spend(member.id, model.id, Decimal.new("0.0002"))
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert json_response(conn, 200)
   end
@@ -392,12 +391,12 @@ defmodule TokengateWeb.ProxyControllerTest do
     conn: conn
   } do
     # Nil daily budget means unlimited pool — should pass.
-    %{token: token, alias: model_alias} = proxy_fixture(%{daily_budget: nil})
+    %{token: token, model: model} = proxy_fixture(%{daily_budget: nil})
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert json_response(conn, 200)
   end
@@ -405,19 +404,19 @@ defmodule TokengateWeb.ProxyControllerTest do
   test "member extra daily budget raises the effective team limit", %{conn: conn} do
     # Both caps allow the upstream-reported cost of $0.00015; the second
     # request also passes since daily spend ($0.00030) < team + member cap.
-    %{token: token, alias: model_alias} =
+    %{token: token, model: model} =
       proxy_fixture(%{daily_budget: "0.001", extra_daily_budget: "0.01"})
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert json_response(conn, 200)
   end
 
   test "429 when team concurrency limit is exceeded", %{conn: conn} do
-    %{token: token, alias: model_alias, member: member} =
+    %{token: token, model: model, member: member} =
       proxy_fixture(%{concurrency_limit: 1})
 
     # Simulate an in-flight request holding the only slot
@@ -426,7 +425,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert %{"error" => %{"code" => "concurrency_exceeded"}} = json_response(conn, 429)
 
@@ -434,19 +433,19 @@ defmodule TokengateWeb.ProxyControllerTest do
   end
 
   test "429 when RPM exceeded", %{conn: conn} do
-    %{token: token, alias: model_alias} = proxy_fixture(%{rpm_limit: 1})
+    %{token: token, model: model} = proxy_fixture(%{rpm_limit: 1})
 
     conn1 =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert json_response(conn1, 200)
 
     conn2 =
       build_conn()
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert %{"error" => %{"code" => "rate_limited"}} = json_response(conn2, 429)
   end
@@ -463,19 +462,19 @@ defmodule TokengateWeb.ProxyControllerTest do
   end
 
   test "503 when the only provider is down (breaker records the failure)", %{conn: conn} do
-    %{token: token, alias: model_alias} = proxy_fixture(%{down: true})
+    %{token: token, model: model} = proxy_fixture(%{down: true})
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert %{"error" => %{"type" => "service_unavailable"}} = json_response(conn, 503)
   end
 
   test "fallback: first provider 500, second provider answers", %{conn: conn} do
     u = unique()
-    %{token: token, alias: model_alias} = proxy_fixture(%{down: true})
+    %{token: token, model: model} = proxy_fixture(%{down: true})
 
     # Second, healthy provider at lower priority (higher number)
     {:ok, provider2} =
@@ -489,7 +488,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     {:ok, _ap2} =
       Providers.create_model_provider(%{
-        model_alias_id: model_alias.id,
+        model_id: model.id,
         credential_id: cred2.id,
         provider_model: "gpt-4o-healthy",
         priority: 2
@@ -498,14 +497,14 @@ defmodule TokengateWeb.ProxyControllerTest do
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert json_response(conn, 200)
   end
 
   test "fallback: the failed attempt log carries the upstream error message", %{conn: conn} do
     u = unique()
-    %{token: token, alias: model_alias} = proxy_fixture(%{down: true})
+    %{token: token, model: model} = proxy_fixture(%{down: true})
 
     # Second, healthy provider at lower priority (higher number)
     {:ok, provider2} =
@@ -519,7 +518,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     {:ok, _ap2} =
       Providers.create_model_provider(%{
-        model_alias_id: model_alias.id,
+        model_id: model.id,
         credential_id: cred2.id,
         provider_model: "gpt-4o-healthy",
         priority: 2
@@ -528,7 +527,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert json_response(conn, 200)
 
@@ -540,8 +539,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     fallback_logs =
       Repo.all(
         from l in RequestLog,
-          where:
-            l.model_alias_id == ^model_alias.id and l.error_reason == "provider_internal_error"
+          where: l.model_id == ^model.id and l.error_reason == "provider_internal_error"
       )
 
     assert fallback_logs != []
@@ -557,7 +555,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
   # Adds a second, healthy provider+credential at lower priority so the
   # router has somewhere to fall back to.
-  defp add_healthy_fallback(model_alias, u) do
+  defp add_healthy_fallback(model, u) do
     {:ok, provider2} =
       Providers.create_provider(%{
         name: "Healthy #{u}",
@@ -572,7 +570,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     {:ok, _ap2} =
       Providers.create_model_provider(%{
-        model_alias_id: model_alias.id,
+        model_id: model.id,
         credential_id: cred2.id,
         provider_model: "gpt-4o-healthy-#{u}",
         priority: 2
@@ -581,11 +579,11 @@ defmodule TokengateWeb.ProxyControllerTest do
     cred2
   end
 
-  # Points the alias's first (priority 1) credential's provider at the
+  # Points the model's first (priority 1) credential's provider at the
   # hanging endpoint with a short receive_timeout so tests stay fast.
-  defp make_first_provider_hang(model_alias) do
+  defp make_first_provider_hang(model) do
     [model_provider] =
-      Providers.list_model_providers(model_alias.id) |> Enum.sort_by(& &1.priority)
+      Providers.list_model_providers(model.id) |> Enum.sort_by(& &1.priority)
 
     {:ok, _credential} =
       Providers.update_credential(model_provider.credential, %{receive_timeout_ms: 200})
@@ -600,16 +598,16 @@ defmodule TokengateWeb.ProxyControllerTest do
     conn: conn
   } do
     u = unique()
-    %{token: token, alias: model_alias} = proxy_fixture()
-    make_first_provider_hang(model_alias)
-    add_healthy_fallback(model_alias, u)
+    %{token: token, model: model} = proxy_fixture()
+    make_first_provider_hang(model)
+    add_healthy_fallback(model, u)
 
     start = System.monotonic_time(:millisecond)
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     elapsed = System.monotonic_time(:millisecond) - start
 
@@ -622,15 +620,15 @@ defmodule TokengateWeb.ProxyControllerTest do
   end
 
   test "timeout with a single provider returns 503 after one attempt", %{conn: conn} do
-    %{token: token, alias: model_alias} = proxy_fixture()
-    make_first_provider_hang(model_alias)
+    %{token: token, model: model} = proxy_fixture()
+    make_first_provider_hang(model)
 
     start = System.monotonic_time(:millisecond)
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     elapsed = System.monotonic_time(:millisecond) - start
 
@@ -643,13 +641,13 @@ defmodule TokengateWeb.ProxyControllerTest do
 
   test "fast 500 errors still retry the same provider before falling back", %{conn: conn} do
     u = unique()
-    %{token: token, alias: model_alias} = proxy_fixture(%{down: true})
-    add_healthy_fallback(model_alias, u)
+    %{token: token, model: model} = proxy_fixture(%{down: true})
+    add_healthy_fallback(model, u)
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert json_response(conn, 200)
 
@@ -696,12 +694,12 @@ defmodule TokengateWeb.ProxyControllerTest do
   test "every upstream request carries x-session-affinity with the API key hash", %{
     conn: conn
   } do
-    %{token: token, alias: model_alias} = proxy_fixture(%{})
+    %{token: token, model: model} = proxy_fixture(%{})
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert json_response(conn, 200)
 
@@ -719,12 +717,12 @@ defmodule TokengateWeb.ProxyControllerTest do
   end
 
   test "every upstream attempt carries the same Idempotency-Key", %{conn: conn} do
-    %{token: token, alias: model_alias} = proxy_fixture(%{})
+    %{token: token, model: model} = proxy_fixture(%{})
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert json_response(conn, 200)
 
@@ -736,13 +734,13 @@ defmodule TokengateWeb.ProxyControllerTest do
 
   test "retries and provider fallback reuse the same Idempotency-Key", %{conn: conn} do
     u = unique()
-    %{token: token, alias: model_alias} = proxy_fixture(%{down: true})
-    add_healthy_fallback(model_alias, u)
+    %{token: token, model: model} = proxy_fixture(%{down: true})
+    add_healthy_fallback(model, u)
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert json_response(conn, 200)
 
@@ -758,14 +756,14 @@ defmodule TokengateWeb.ProxyControllerTest do
   end
 
   test "embeddings requests also carry an Idempotency-Key", %{conn: conn} do
-    %{token: token, alias: model_alias} = proxy_fixture(%{})
-    update_alias_type(model_alias, "embedding")
+    %{token: token, model: model} = proxy_fixture(%{})
+    update_alias_type(model, "embedding")
 
     conn =
       conn
       |> authed_conn(token)
       |> post(~p"/v1/embeddings", %{
-        "model" => model_alias.name,
+        "model" => model.name,
         "input" => ["hola mundo"]
       })
 
@@ -780,12 +778,12 @@ defmodule TokengateWeb.ProxyControllerTest do
     u = unique()
 
     # First credential with max_concurrent: 1
-    %{token: token, alias: model_alias} = proxy_fixture(%{})
+    %{token: token, model: model} = proxy_fixture(%{})
 
     # Saturate the first credential's only concurrency slot
     {:ok, cred1} =
       Providers.update_credential(
-        hd(Providers.list_model_providers(model_alias.id)).credential,
+        hd(Providers.list_model_providers(model.id)).credential,
         %{max_concurrent: 1}
       )
 
@@ -807,7 +805,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     {:ok, _ap2} =
       Providers.create_model_provider(%{
-        model_alias_id: model_alias.id,
+        model_id: model.id,
         credential_id: cred2.id,
         provider_model: "gpt-4o-healthy-#{u}",
         priority: 2
@@ -816,7 +814,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert json_response(conn, 200)
 
@@ -824,10 +822,10 @@ defmodule TokengateWeb.ProxyControllerTest do
   end
 
   test "429 provider_concurrency_exceeded when all credentials are saturated", %{conn: conn} do
-    %{token: token, alias: model_alias} = proxy_fixture(%{})
+    %{token: token, model: model} = proxy_fixture(%{})
 
     # Saturate the only credential's concurrency slot
-    [mp] = Providers.list_model_providers(model_alias.id)
+    [mp] = Providers.list_model_providers(model.id)
 
     {:ok, cred} = Providers.update_credential(mp.credential, %{max_concurrent: 1})
     :ok = Limits.acquire(cred.id, %{rpm_limit: nil, concurrency_limit: 1})
@@ -835,18 +833,18 @@ defmodule TokengateWeb.ProxyControllerTest do
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert %{"error" => %{"code" => "provider_concurrency_exceeded"}} = json_response(conn, 429)
 
     Limits.release(cred.id)
   end
 
-  test "gate error logs carry model_alias_id so per-model stats see them", %{conn: conn} do
-    %{token: token, alias: model_alias} = proxy_fixture(%{})
+  test "gate error logs carry model_id so per-model stats see them", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture(%{})
 
     # Saturate the only credential's concurrency slot → gate error
-    [mp] = Providers.list_model_providers(model_alias.id)
+    [mp] = Providers.list_model_providers(model.id)
 
     {:ok, cred} = Providers.update_credential(mp.credential, %{max_concurrent: 1})
     :ok = Limits.acquire(cred.id, %{rpm_limit: nil, concurrency_limit: 1})
@@ -854,7 +852,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert %{"error" => %{"code" => "provider_concurrency_exceeded"}} = json_response(conn, 429)
 
@@ -868,13 +866,13 @@ defmodule TokengateWeb.ProxyControllerTest do
           limit: 1
       )
 
-    assert log.model_alias_id == model_alias.id
-    assert log.model_requested == model_alias.name
+    assert log.model_id == model.id
+    assert log.model_requested == model.name
 
     Limits.release(cred.id)
   end
 
-  ## Prompt pre-flight (mandatory for LLM aliases) #############################
+  ## Prompt pre-flight (mandatory for LLM models) #############################
 
   # Reusable noisy payload: has duplicate consecutive tool messages, redundant
   # whitespace runs, and a system message that is NOT at the front — exactly the
@@ -896,16 +894,16 @@ defmodule TokengateWeb.ProxyControllerTest do
   test "lazy_cleanup_enabled: true dedupes duplicate tool messages before forwarding", %{
     conn: conn
   } do
-    %{token: token, alias: model_alias} = proxy_fixture()
+    %{token: token, model: model} = proxy_fixture()
 
-    # Flip the flag on the alias created by the fixture.
-    {:ok, alias_optimized} =
-      Providers.update_model_alias(model_alias, %{lazy_cleanup_enabled: true})
+    # Flip the flag on the model created by the fixture.
+    {:ok, model_optimized} =
+      Providers.update_model(model, %{lazy_cleanup_enabled: true})
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", noisy_payload(alias_optimized.name))
+      |> post(~p"/v1/chat/completions", noisy_payload(model_optimized.name))
 
     assert json_response(conn, 200)
 
@@ -921,12 +919,12 @@ defmodule TokengateWeb.ProxyControllerTest do
   test "pre-flight transforms apply even with both legacy flags off (mandatory)", %{
     conn: conn
   } do
-    %{token: token, alias: model_alias} = proxy_fixture()
+    %{token: token, model: model} = proxy_fixture()
 
     # The legacy flags are explicitly OFF: they no longer gate anything, the
     # gateway applies both passes to every LLM request.
-    {:ok, alias_default} =
-      Providers.update_model_alias(model_alias, %{
+    {:ok, model_default} =
+      Providers.update_model(model, %{
         lazy_cleanup_enabled: false,
         prompt_cache_enabled: false
       })
@@ -934,7 +932,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", noisy_payload(alias_default.name))
+      |> post(~p"/v1/chat/completions", noisy_payload(model_default.name))
 
     assert json_response(conn, 200)
 
@@ -958,15 +956,15 @@ defmodule TokengateWeb.ProxyControllerTest do
   end
 
   test "prompt_cache_enabled: true hoists every system message to the front", %{conn: conn} do
-    %{token: token, alias: model_alias} = proxy_fixture()
+    %{token: token, model: model} = proxy_fixture()
 
-    {:ok, alias_cached} =
-      Providers.update_model_alias(model_alias, %{prompt_cache_enabled: true})
+    {:ok, model_cached} =
+      Providers.update_model(model, %{prompt_cache_enabled: true})
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", noisy_payload(alias_cached.name))
+      |> post(~p"/v1/chat/completions", noisy_payload(model_cached.name))
 
     assert json_response(conn, 200)
 
@@ -997,10 +995,10 @@ defmodule TokengateWeb.ProxyControllerTest do
   test "modelo con prompt_cache_enabled y guard_rails combina guard_rails + reorder", %{
     conn: conn
   } do
-    %{token: token, alias: model_alias} = proxy_fixture()
+    %{token: token, model: model} = proxy_fixture()
 
     {:ok, _} =
-      Providers.update_model_alias(model_alias, %{
+      Providers.update_model(model, %{
         "prompt_cache_enabled" => true,
         "guard_rails" => "sé breve"
       })
@@ -1013,7 +1011,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", %{"model" => model_alias.name, "messages" => messages})
+      |> post(~p"/v1/chat/completions", %{"model" => model.name, "messages" => messages})
 
     assert json_response(conn, 200)
 
@@ -1032,12 +1030,12 @@ defmodule TokengateWeb.ProxyControllerTest do
   ## Streaming #################################################################
 
   test "stream: SSE passthrough with usage cost injection and async log", %{conn: conn} do
-    %{token: token, alias: model_alias, member: member} = proxy_fixture()
+    %{token: token, model: model, member: member} = proxy_fixture()
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", Map.put(chat_body(model_alias.name), "stream", true))
+      |> post(~p"/v1/chat/completions", Map.put(chat_body(model.name), "stream", true))
 
     assert conn.state == :chunked
     assert get_resp_header(conn, "content-type") |> hd() =~ "text/event-stream"
@@ -1084,10 +1082,10 @@ defmodule TokengateWeb.ProxyControllerTest do
         else: Application.delete_env(:tokengate, :first_token_timeout_ms)
     end)
 
-    %{token: token, alias: model_alias} = proxy_fixture()
+    %{token: token, model: model} = proxy_fixture()
 
     # Repoint the provider at the slow stream endpoint
-    [model_provider] = Providers.list_model_providers(model_alias.id)
+    [model_provider] = Providers.list_model_providers(model.id)
 
     {:ok, _provider} =
       Providers.update_provider(model_provider.credential.provider, %{
@@ -1097,7 +1095,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", Map.put(chat_body(model_alias.name), "stream", true))
+      |> post(~p"/v1/chat/completions", Map.put(chat_body(model.name), "stream", true))
 
     assert %{"error" => %{"type" => "service_unavailable"}} = json_response(conn, 503)
   end
@@ -1113,24 +1111,24 @@ defmodule TokengateWeb.ProxyControllerTest do
     end)
 
     u = unique()
-    %{token: token, alias: model_alias} = proxy_fixture()
+    %{token: token, model: model} = proxy_fixture()
 
     # First provider streams too slowly (300ms > 100ms first-token budget)
-    [model_provider] = Providers.list_model_providers(model_alias.id)
+    [model_provider] = Providers.list_model_providers(model.id)
 
     {:ok, _provider} =
       Providers.update_provider(model_provider.credential.provider, %{
         base_url: "http://localhost:#{@port}/slowstream"
       })
 
-    add_healthy_fallback(model_alias, u)
+    add_healthy_fallback(model, u)
 
     start = System.monotonic_time(:millisecond)
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", Map.put(chat_body(model_alias.name), "stream", true))
+      |> post(~p"/v1/chat/completions", Map.put(chat_body(model.name), "stream", true))
 
     elapsed = System.monotonic_time(:millisecond) - start
 
@@ -1147,13 +1145,13 @@ defmodule TokengateWeb.ProxyControllerTest do
   test "embeddings happy path: passthrough, cost from usage, log with request_type", %{
     conn: conn
   } do
-    %{token: token, alias: model_alias, member: member} = proxy_fixture()
-    update_alias_type(model_alias, "embedding")
+    %{token: token, model: model, member: member} = proxy_fixture()
+    update_alias_type(model, "embedding")
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/embeddings", %{"model" => model_alias.name, "input" => ["hola", "wey"]})
+      |> post(~p"/v1/embeddings", %{"model" => model.name, "input" => ["hola", "wey"]})
 
     body = json_response(conn, 200)
 
@@ -1178,55 +1176,55 @@ defmodule TokengateWeb.ProxyControllerTest do
   end
 
   test "embeddings accepts a bare string input", %{conn: conn} do
-    %{token: token, alias: model_alias} = proxy_fixture()
-    update_alias_type(model_alias, "embedding")
+    %{token: token, model: model} = proxy_fixture()
+    update_alias_type(model, "embedding")
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/embeddings", %{"model" => model_alias.name, "input" => "una sola"})
+      |> post(~p"/v1/embeddings", %{"model" => model.name, "input" => "una sola"})
 
     assert %{"data" => [%{"index" => 0}]} = json_response(conn, 200)
   end
 
   test "embeddings 400 without input", %{conn: conn} do
-    %{token: token, alias: model_alias} = proxy_fixture()
-    update_alias_type(model_alias, "embedding")
+    %{token: token, model: model} = proxy_fixture()
+    update_alias_type(model, "embedding")
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/embeddings", %{"model" => model_alias.name})
+      |> post(~p"/v1/embeddings", %{"model" => model.name})
 
     assert %{"error" => %{"code" => "invalid_request"}} = json_response(conn, 400)
   end
 
-  test "embeddings 400 model_type_mismatch against an llm alias", %{conn: conn} do
-    %{token: token, alias: model_alias} = proxy_fixture()
+  test "embeddings 400 model_type_mismatch against an llm model", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture()
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/embeddings", %{"model" => model_alias.name, "input" => "x"})
+      |> post(~p"/v1/embeddings", %{"model" => model.name, "input" => "x"})
 
     assert %{"error" => %{"code" => "model_type_mismatch"}} = json_response(conn, 400)
   end
 
-  test "chat completions 400 model_type_mismatch against an embedding alias", %{conn: conn} do
-    %{token: token, alias: model_alias} = proxy_fixture()
-    update_alias_type(model_alias, "embedding")
+  test "chat completions 400 model_type_mismatch against an embedding model", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture()
+    update_alias_type(model, "embedding")
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model_alias.name))
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
 
     assert %{"error" => %{"code" => "model_type_mismatch"}} = json_response(conn, 400)
   end
 
   test "GET /v1/models includes model_type", %{conn: conn} do
-    %{token: token, alias: model_alias} = proxy_fixture()
-    update_alias_type(model_alias, "embedding")
+    %{token: token, model: model} = proxy_fixture()
+    update_alias_type(model, "embedding")
 
     conn =
       conn
@@ -1234,7 +1232,7 @@ defmodule TokengateWeb.ProxyControllerTest do
       |> get(~p"/v1/models")
 
     assert %{"data" => models} = json_response(conn, 200)
-    entry = Enum.find(models, &(&1["id"] == model_alias.name))
+    entry = Enum.find(models, &(&1["id"] == model.name))
     assert entry["model_type"] == "embedding"
   end
 end

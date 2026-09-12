@@ -12,7 +12,6 @@ defmodule Tokengate.Budgets do
   """
 
   import Ecto.Query
-
   alias Tokengate.{Accounts, Repo}
   alias Tokengate.Accounts.TeamMember
   alias Tokengate.Budgets.Manager

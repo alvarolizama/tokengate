@@ -12,7 +12,6 @@ defmodule TokengateWeb.StatsExportController do
   """
 
   use TokengateWeb, :controller
-
   alias Tokengate.Accounts
   alias Tokengate.Logs
   alias Tokengate.Metrics.Rollup
@@ -98,7 +97,7 @@ defmodule TokengateWeb.StatsExportController do
       |> Enum.join("\n")
 
     suffix = if model_id, do: "_modelo", else: ""
-    {"estadisticas_modelos#{suffix}_#{Periods.local_today(timezone)}.csv", csv}
+    {"estadisticas_models#{suffix}_#{Periods.local_today(timezone)}.csv", csv}
   end
 
   ## Teams CSV ------------------------------------------------------------

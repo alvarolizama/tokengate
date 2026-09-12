@@ -1,6 +1,5 @@
 defmodule Tokengate.Routing.SupervisorTest do
   use ExUnit.Case, async: false
-
   alias Tokengate.Routing.StickyTracker
   alias Tokengate.Routing.Supervisor, as: RoutingSupervisor
 
@@ -31,9 +30,9 @@ defmodule Tokengate.Routing.SupervisorTest do
   end
 
   test "sticky routing works end-to-end through the supervisor" do
-    StickyTracker.put("sup-key", "sup-alias", "sup-ap")
+    StickyTracker.put("sup-key", "sup-model", "sup-ap")
     _ = :sys.get_state(StickyTracker)
 
-    assert StickyTracker.get("sup-key", "sup-alias") == "sup-ap"
+    assert StickyTracker.get("sup-key", "sup-model") == "sup-ap"
   end
 end

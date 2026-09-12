@@ -8,7 +8,6 @@ defmodule Tokengate.Routing.CredentialHealthTest do
   """
 
   use ExUnit.Case, async: false
-
   alias Tokengate.Routing.CredentialHealth
 
   @table :tokengate_credential_health

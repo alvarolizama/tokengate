@@ -150,7 +150,7 @@ defmodule Tokengate.Logs.Inflight do
 
     * `:model` — the model_requested string
     * `:count` — number of in-flight requests
-    * `:credential_name` — credential alias (if available)
+    * `:credential_name` — credential model (if available)
     * `:provider_key_suffix` — last 4 chars of the provider API key
   """
   @spec count_by_model(non_neg_integer()) :: [
@@ -194,7 +194,7 @@ defmodule Tokengate.Logs.Inflight do
 
     * `:user` — the user email (falls back to "desconocido" when nil)
     * `:count` — number of in-flight requests
-    * `:credential_name` — credential alias (if available)
+    * `:credential_name` — credential model (if available)
     * `:provider_key_suffix` — last 4 chars of the provider API key
   """
   @spec count_by_user(non_neg_integer()) :: [

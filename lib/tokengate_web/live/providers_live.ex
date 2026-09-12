@@ -17,7 +17,6 @@ defmodule TokengateWeb.ProvidersLive do
   require Logger
 
   import Ecto.Query, only: [from: 2]
-
   alias Tokengate.Providers
   alias Tokengate.Providers.{Provider, Credential, ModelProvider}
   alias Tokengate.Repo
@@ -526,7 +525,11 @@ defmodule TokengateWeb.ProvidersLive do
       |> Map.get("embeddings_url", "")
       |> then(&(&1 not in [nil, ""]))
 
-    Map.put(provider_params, "capabilities", if(has_embeddings, do: ["llm", "embedding"], else: ["llm"]))
+    Map.put(
+      provider_params,
+      "capabilities",
+      if(has_embeddings, do: ["llm", "embedding"], else: ["llm"])
+    )
   end
 
   ## Helpers ---------------------------------------------------------------
@@ -600,12 +603,19 @@ defmodule TokengateWeb.ProvidersLive do
             <div tabindex="0" role="button" class="btn btn-primary btn-sm" id="activate-builtin-btn">
               <.icon name="hero-bolt" class="w-4 h-4" /> Activar proveedor
             </div>
-            <div tabindex="0" class="dropdown-content z-50 menu bg-base-100 border border-base-300 rounded-box w-80 p-2 shadow-lg">
+            <div
+              tabindex="0"
+              class="dropdown-content z-50 menu bg-base-100 border border-base-300 rounded-box w-80 p-2 shadow-lg"
+            >
               <div
-                :for={{label, group} <- [
-                  {"Suscripción (plan incluido)", Enum.filter(@inactive_builtins, &(&1.billing == "subscription"))},
-                  {"Pay-per-token", Enum.filter(@inactive_builtins, &(&1.billing == "pay_per_token"))}
-                ]}
+                :for={
+                  {label, group} <- [
+                    {"Suscripción (plan incluido)",
+                     Enum.filter(@inactive_builtins, &(&1.billing == "subscription"))},
+                    {"Pay-per-token",
+                     Enum.filter(@inactive_builtins, &(&1.billing == "pay_per_token"))}
+                  ]
+                }
                 :if={group != []}
               >
                 <div class="px-2 pt-1 pb-1 text-xs font-semibold opacity-60">
@@ -667,6 +677,17 @@ defmodule TokengateWeb.ProvidersLive do
                       label="Base URL"
                       placeholder="https://relay.example.com/v1"
                       hint="URL base (OpenAI-compatible). El adapter agrega /chat/completions, /models y /embeddings."
+                    />
+                    <.input
+                      :if={@editing_provider_id == :new}
+                      field={@form[:billing_type]}
+                      type="select"
+                      label="Facturación"
+                      options={[
+                        {"Pay per token", "pay_per_token"},
+                        {"Suscripción (plan incluido)", "subscription"}
+                      ]}
+                      hint="Se elige una vez al crear el proveedor. Suscripción = costo $0 y prioridad de routing top."
                     />
                   </div>
 

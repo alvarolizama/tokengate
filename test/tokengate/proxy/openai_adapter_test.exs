@@ -6,7 +6,6 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
   """
 
   use ExUnit.Case, async: false
-
   alias Tokengate.Proxy.OpenAIAdapter
 
   @port 41234

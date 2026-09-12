@@ -7,7 +7,6 @@ defmodule TokengateWeb.BudgetsLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
-
   alias Tokengate.{Accounts, Budgets, GlobalSettings}
 
   defp unique, do: System.unique_integer([:positive])

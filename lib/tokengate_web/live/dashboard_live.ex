@@ -21,7 +21,6 @@ defmodule TokengateWeb.DashboardLive do
   """
 
   use TokengateWeb, :live_view
-
   alias Tokengate.Accounts
   alias Tokengate.Budgets.Manager, as: Budgets
   alias Tokengate.Metrics.DashboardCache

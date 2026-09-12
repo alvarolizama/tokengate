@@ -2,7 +2,6 @@ defmodule TokengateWeb.DashboardLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
-
   alias Tokengate.{Accounts, Logs, Periods, Providers}
   alias Tokengate.Metrics.Collector
 
@@ -68,7 +67,7 @@ defmodule TokengateWeb.DashboardLiveTest do
         Logs.log_request(%{
           team_member_id: member.id,
           provider_id: provider.id,
-          model_alias_id: nil,
+          model_id: nil,
           model_requested: "gpt-4o",
           model_responded: "gpt-4o",
           agent_type: "claude-code",

@@ -2,7 +2,6 @@ defmodule TokengateWeb.UsersLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
-
   alias Tokengate.{Accounts, Logs}
 
   defp unique, do: System.unique_integer([:positive])
@@ -396,7 +395,6 @@ defmodule TokengateWeb.UsersLiveTest do
   end
 
   ## Delete user -------------------------------------------------------------
-
   alias Tokengate.Logs
   alias Tokengate.Providers
 
@@ -421,7 +419,7 @@ defmodule TokengateWeb.UsersLiveTest do
       Providers.create_provider(%{name: "Prov #{u}", base_url: "http://localhost:1"})
 
     {:ok, ma} =
-      Providers.create_model_alias(%{
+      Providers.create_model(%{
         name: "model-#{u}",
         context_window: 128_000
       })
@@ -430,7 +428,7 @@ defmodule TokengateWeb.UsersLiveTest do
       Logs.log_request(%{
         team_member_id: member.id,
         provider_id: provider.id,
-        model_alias_id: ma.id,
+        model_id: ma.id,
         model_requested: "model-#{u}",
         model_responded: "model-#{u}",
         agent_type: "api",

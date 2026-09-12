@@ -8,7 +8,6 @@ defmodule Tokengate.Metrics.DashboardCacheTest do
   """
 
   use ExUnit.Case, async: false
-
   alias Tokengate.Metrics.DashboardCache
 
   setup do

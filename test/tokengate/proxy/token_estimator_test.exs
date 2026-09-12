@@ -1,6 +1,5 @@
 defmodule Tokengate.Proxy.TokenEstimatorTest do
   use ExUnit.Case, async: true
-
   alias Tokengate.Proxy.TokenEstimator
 
   describe "estimate_text/1" do

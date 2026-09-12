@@ -1,6 +1,6 @@
 defmodule Tokengate.Providers.ModelProvider do
   @moduledoc """
-  Joins a ModelAlias to a Credential, specifying the actual model name
+  Joins a Model to a Credential, specifying the actual model name
   at the provider (`provider_model`), priority for routing, and
   enabled flag.
 
@@ -8,11 +8,11 @@ defmodule Tokengate.Providers.ModelProvider do
   from the same provider to serve the same model with different
   priorities for fallback.
 
-  `billing_mode` is the only cost-relevant attribute left: it tells the
-  cost calculator whether the upstream is `pay_per_token` (use the
-  provider-reported cost from the response body) or `included`
-  (subscription/RPM — cost is $0). Per-provider pricing rows are gone;
-  we trust the upstream to report what it actually charged.
+  Billing lives on the provider (`providers.billing_type`, synced from the
+  catalog for builtins, chosen at creation for customs). Routing tiers,
+  cost calculation and sticky TTL defaults derive it via
+  `billing_mode/1`. Per-provider pricing rows are gone; we trust the
+  upstream to report what it actually charged.
 
   ## Exclusive scope
 
@@ -25,8 +25,8 @@ defmodule Tokengate.Providers.ModelProvider do
       the specified team see this provider for the model.
 
   The two exclusive fields are mutually exclusive — you cannot set both.
-  A credential can be used across different model aliases, and can appear
-  in multiple scope rows for the same model alias (global, multiple
+  A credential can be used across different models, and can appear
+  in multiple scope rows for the same model model (global, multiple
   team-exclusive, multiple member-exclusive) — each scope bucket has its
   own partial unique index preventing duplicates within that bucket.
   """
@@ -44,7 +44,6 @@ defmodule Tokengate.Providers.ModelProvider do
     field :provider_model, :string
     field :priority, :integer
     field :enabled, :boolean, default: true
-    field :billing_mode, :string, default: "pay_per_token"
     field :sticky_ttl_ms, :integer
     # Manual pricing fallback (USD per 1M tokens). Used when the upstream
     # doesn't report a cost (e.g. LiteLLM streaming). NULL = not set.
@@ -57,7 +56,7 @@ defmodule Tokengate.Providers.ModelProvider do
     field :sticky_ttl_seconds, :integer, virtual: true
     field :scope, :string, virtual: true, default: "global"
 
-    belongs_to :model_alias, Tokengate.Providers.ModelAlias
+    belongs_to :model, Tokengate.Providers.Model
     belongs_to :credential, Tokengate.Providers.Credential
     belongs_to :exclusive_to_team_member, Tokengate.Accounts.TeamMember
     belongs_to :exclusive_to_team, Tokengate.Accounts.Team
@@ -69,12 +68,11 @@ defmodule Tokengate.Providers.ModelProvider do
   def changeset(model_provider, attrs) do
     model_provider
     |> cast(attrs, [
-      :model_alias_id,
+      :model_id,
       :credential_id,
       :provider_model,
       :priority,
       :enabled,
-      :billing_mode,
       :sticky_ttl_ms,
       :sticky_ttl_seconds,
       :input_cost_per_million,
@@ -83,8 +81,7 @@ defmodule Tokengate.Providers.ModelProvider do
       :exclusive_to_team_member_id,
       :exclusive_to_team_id
     ])
-    |> validate_required([:model_alias_id, :credential_id, :provider_model, :enabled])
-    |> validate_inclusion(:billing_mode, @billing_modes)
+    |> validate_required([:model_id, :credential_id, :provider_model, :enabled])
     |> validate_number(:sticky_ttl_ms,
       greater_than_or_equal_to: 1_000,
       less_than_or_equal_to: 24 * 60 * 60 * 1000
@@ -95,13 +92,13 @@ defmodule Tokengate.Providers.ModelProvider do
     )
     |> sync_sticky_ttl_fields()
     |> validate_exclusive_scope()
-    |> foreign_key_constraint(:model_alias_id)
+    |> foreign_key_constraint(:model_id)
     |> foreign_key_constraint(:credential_id)
     |> foreign_key_constraint(:exclusive_to_team_member_id)
     |> foreign_key_constraint(:exclusive_to_team_id)
     # Three partial unique indexes replace the old single composite index,
     # allowing the same credential to serve multiple scope buckets (global +
-    # team-exclusive + member-exclusive) for the same model alias.
+    # team-exclusive + member-exclusive) for the same model model.
     |> unique_constraint(:credential_id,
       name: :model_providers_global_credential_unique_index,
       message: "esta credencial ya es global para este modelo"
@@ -117,8 +114,25 @@ defmodule Tokengate.Providers.ModelProvider do
     |> sync_scope_field()
   end
 
-  @doc "List of valid billing modes"
+  @doc "List of valid billing modes (derived from the provider surface)"
   def billing_modes, do: @billing_modes
+
+  @doc """
+  Effective billing mode for a model_provider, derived from its
+  credential's provider: a `subscription` provider maps to `"included"`
+  (cost $0, top routing tier); anything else is `"pay_per_token"`.
+
+  Handles not-loaded associations defensively (returns
+  `"pay_per_token"`), though production paths always preload
+  `credential: :provider`.
+  """
+  @spec billing_mode(map()) :: String.t()
+  def billing_mode(%__MODULE__{} = mp) do
+    case mp do
+      %__MODULE__{credential: %{provider: %{billing_type: "subscription"}}} -> "included"
+      _ -> "pay_per_token"
+    end
+  end
 
   @doc "List of valid scopes"
   def scopes, do: @scopes

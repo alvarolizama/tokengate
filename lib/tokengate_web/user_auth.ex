@@ -25,7 +25,6 @@ defmodule TokengateWeb.UserAuth do
   """
 
   import Phoenix.Component, only: [assign_new: 3]
-
   alias Tokengate.Accounts
 
   @session_key :user_id

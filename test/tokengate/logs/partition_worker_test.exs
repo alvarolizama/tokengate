@@ -11,7 +11,6 @@ defmodule Tokengate.Logs.PartitionWorkerTest do
   """
 
   use Tokengate.DataCase, async: false
-
   alias Tokengate.Logs.PartitionWorker
   alias Tokengate.Repo
 

@@ -6,7 +6,6 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
   """
 
   use ExUnit.Case, async: true
-
   alias Tokengate.Accounts.Team
   alias Tokengate.Accounts.TeamMember
   alias Tokengate.Accounts.User
@@ -51,7 +50,7 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
         inserted_at: ~U[2026-01-15 12:00:00Z],
         team_member_id: "tm-1",
         provider_id: "prov-1",
-        model_alias_id: "alias-1",
+        model_id: "model-1",
         model_requested: "gpt-4o",
         model_responded: "gpt-4o-2024-08-06",
         agent_type: "assistant",

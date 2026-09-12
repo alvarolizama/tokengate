@@ -11,7 +11,6 @@ defmodule Tokengate.Limits.ManagerTest do
   """
 
   use ExUnit.Case, async: false
-
   alias Tokengate.Limits.Manager
 
   @rpm_table :tokengate_rpm_buckets

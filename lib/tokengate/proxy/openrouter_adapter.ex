@@ -10,7 +10,6 @@ defmodule Tokengate.Proxy.OpenRouterAdapter do
   """
 
   @behaviour Tokengate.Proxy.ProviderAdapter
-
   alias Tokengate.Proxy.OpenAIAdapter
 
   @impl true

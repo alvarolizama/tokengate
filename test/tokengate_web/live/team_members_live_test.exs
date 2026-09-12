@@ -2,7 +2,6 @@ defmodule TokengateWeb.TeamMembersLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
-
   alias Tokengate.{Accounts, Providers}
   alias Tokengate.Repo
 
@@ -28,12 +27,12 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     |> recycle()
   end
 
-  # Builds org + team + model_alias. The "owner" user is a member of the team.
+  # Builds org + team + model. The "owner" user is a member of the team.
   defp team_with_member(_opts \\ %{}) do
     u = unique()
 
-    {:ok, model_alias} =
-      Providers.create_model_alias(%{
+    {:ok, model} =
+      Providers.create_model(%{
         name: "gpt-#{u}",
         context_window: 128_000
       })
@@ -60,7 +59,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
 
     %{
       team: team,
-      model_alias: model_alias,
+      model: model,
       owner: owner,
       member: member,
       owner_password: "password-secret-#{u}1"
@@ -268,32 +267,32 @@ defmodule TokengateWeb.TeamMembersLiveTest do
   end
 
   # --------------------------------------------------------------------------
-  # Extra alias grants (per-member)
+  # Extra model grants (per-member)
   # --------------------------------------------------------------------------
 
-  test "admin toggles an extra alias grant on a member", %{conn: conn} do
-    %{team: team, member: member, model_alias: alias_} = team_with_member()
+  test "admin toggles an extra model grant on a member", %{conn: conn} do
+    %{team: team, member: member, model: model_} = team_with_member()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, team_url(team))
 
     # The checkbox should be present and unchecked
-    assert has_element?(view, "#extra-alias-#{member.id}-#{alias_.id}")
+    assert has_element?(view, "#extra-model-#{member.id}-#{model_.id}")
 
-    # Grant the extra alias
+    # Grant the extra model
     html =
       view
-      |> element("#extra-alias-#{member.id}-#{alias_.id}")
+      |> element("#extra-model-#{member.id}-#{model_.id}")
       |> render_click()
 
-    assert html =~ "Aliases actualizados"
+    assert html =~ "Modelos actualizados"
 
     grant =
       Repo.get_by(
-        Tokengate.Providers.TeamMemberExtraAlias,
+        Tokengate.Providers.TeamMemberExtraModel,
         team_member_id: member.id,
-        model_alias_id: alias_.id
+        model_id: model_.id
       )
 
     assert grant != nil
@@ -301,35 +300,35 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     # Revoke
     html =
       view
-      |> element("#extra-alias-#{member.id}-#{alias_.id}")
+      |> element("#extra-model-#{member.id}-#{model_.id}")
       |> render_click()
 
-    assert html =~ "Aliases actualizados"
+    assert html =~ "Modelos actualizados"
 
     refute Repo.get_by(
-             Tokengate.Providers.TeamMemberExtraAlias,
+             Tokengate.Providers.TeamMemberExtraModel,
              team_member_id: member.id,
-             model_alias_id: alias_.id
+             model_id: model_.id
            )
   end
 
-  test "admin grants extra alias access (no per-model budget)", %{conn: conn} do
-    %{team: team, member: member, model_alias: alias_} = team_with_member()
+  test "admin grants extra model access (no per-model budget)", %{conn: conn} do
+    %{team: team, member: member, model: model_} = team_with_member()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, team_url(team))
 
-    # Grant the alias via checkbox toggle
+    # Grant the model via checkbox toggle
     view
-    |> element("#extra-alias-#{member.id}-#{alias_.id}")
+    |> element("#extra-model-#{member.id}-#{model_.id}")
     |> render_click()
 
     grant =
       Repo.get_by(
-        Tokengate.Providers.TeamMemberExtraAlias,
+        Tokengate.Providers.TeamMemberExtraModel,
         team_member_id: member.id,
-        model_alias_id: alias_.id
+        model_id: model_.id
       )
 
     assert grant != nil

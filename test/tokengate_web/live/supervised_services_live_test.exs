@@ -12,7 +12,6 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
-
   alias Tokengate.{Accounts, Providers}
   alias Tokengate.Repo
 
@@ -64,18 +63,18 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
     Repo.preload(service, :api_key)
   end
 
-  # Returns %{model_alias: alias}. Used to attach a granted alias to a service.
-  defp grant_alias_to_service(service) do
+  # Returns %{model: model}. Used to attach a granted model to a service.
+  defp grant_model_to_service(service) do
     u = unique()
 
-    {:ok, alias_} =
-      Providers.create_model_alias(%{
-        name: "sup-alias-#{u}",
+    {:ok, model_} =
+      Providers.create_model(%{
+        name: "sup-model-#{u}",
         context_window: 128_000
       })
 
-    {:ok, _} = Providers.grant_alias_to_service(service.id, alias_.id)
-    %{model_alias: alias_}
+    {:ok, _} = Providers.grant_model_to_service(service.id, model_.id)
+    %{model: model_}
   end
 
   # ----------------------------------------------------------------------
@@ -129,7 +128,7 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
   # Service card render with stats
   # ----------------------------------------------------------------------
 
-  test "supervisor sees their service with api_key status, stats, and aliases",
+  test "supervisor sees their service with api_key status, stats, and models",
        %{conn: conn} do
     %{user: user, password: password} = register("user")
 
@@ -137,7 +136,7 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
       supervised_service(user, %{"name" => "Bot de Telegram"})
       |> with_api_key()
 
-    %{model_alias: alias_} = grant_alias_to_service(service)
+    %{model: model_} = grant_model_to_service(service)
 
     conn = login(conn, user, password)
     {:ok, view, html} = live(conn, ~p"/dashboard/services/supervised")
@@ -161,10 +160,10 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
     assert html =~ "Tokens Out"
     assert html =~ "Latencia media"
 
-    # The granted alias appears as a badge, NOT as a clickable button
-    assert has_element?(view, "#aliases-#{service.id}")
-    assert has_element?(view, "#alias-badge-#{service.id}-#{alias_.id}")
-    assert html =~ alias_.name
+    # The granted model appears as a badge, NOT as a clickable button
+    assert has_element?(view, "#models-#{service.id}")
+    assert has_element?(view, "#model-badge-#{service.id}-#{model_.id}")
+    assert html =~ model_.name
   end
 
   test "supervisor sees ZERO mutating buttons (read-only contract)", %{conn: conn} do
@@ -180,7 +179,7 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
     refute html =~ "phx-click=\"delete_service\""
     refute html =~ "phx-click=\"generate_key\""
     refute html =~ "phx-click=\"revoke_key\""
-    refute html =~ "phx-click=\"toggle_alias\""
+    refute html =~ "phx-click=\"toggle_model\""
 
     # No forms inside the supervised view either
     refute has_element?(view, "#service-form")
@@ -210,14 +209,14 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
   # Alias visibility — granted vs not granted
   # ----------------------------------------------------------------------
 
-  test "service with no model aliases shows the empty aliases message", %{conn: conn} do
+  test "service with no models shows the empty models message", %{conn: conn} do
     %{user: user, password: password} = register("user")
     service = supervised_service(user)
 
     conn = login(conn, user, password)
     {:ok, view, html} = live(conn, ~p"/dashboard/services/supervised")
 
-    assert has_element?(view, "#aliases-#{service.id}")
-    assert html =~ "Este servicio no tiene modelos asignados."
+    assert has_element?(view, "#models-#{service.id}")
+    assert html =~ "Este servicio no tiene models asignados."
   end
 end

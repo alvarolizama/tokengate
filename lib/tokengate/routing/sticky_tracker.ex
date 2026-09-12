@@ -1,7 +1,7 @@
 defmodule Tokengate.Routing.StickyTracker do
   @moduledoc """
   GenServer that owns a public named ETS table (`:tokengate_sticky_routes`)
-  mapping `{api_key_hash, model_alias_id}` to `{model_provider_id, inserted_at, ttl_ms}`.
+  mapping `{api_key_hash, model_id}` to `{model_provider_id, inserted_at, ttl_ms}`.
 
   The same API key is kept sticky to the same provider so that prompt-cache
   affinity is preserved across requests.
@@ -50,7 +50,7 @@ defmodule Tokengate.Routing.StickyTracker do
   end
 
   @doc """
-  Returns the `model_provider_id` stuck for `{api_key_hash, model_alias_id}`,
+  Returns the `model_provider_id` stuck for `{api_key_hash, model_id}`,
   or `nil` when no sticky entry exists, the entry has expired, or the
   tracker is not running.
 
@@ -58,15 +58,15 @@ defmodule Tokengate.Routing.StickyTracker do
   Expired entries are deleted lazily on read. Honors the per-entry TTL.
   """
   @spec get(binary(), binary()) :: binary() | nil
-  def get(api_key_hash, model_alias_id) do
+  def get(api_key_hash, model_id) do
     try do
-      :ets.lookup(@table, {api_key_hash, model_alias_id})
+      :ets.lookup(@table, {api_key_hash, model_id})
     rescue
       ArgumentError -> nil
     else
       [{_, {model_provider_id, inserted_at, ttl_ms}}] ->
         if expired?(inserted_at, ttl_ms) do
-          delete_entry({api_key_hash, model_alias_id})
+          delete_entry({api_key_hash, model_id})
           nil
         else
           model_provider_id
@@ -77,7 +77,7 @@ defmodule Tokengate.Routing.StickyTracker do
       # unchanged across deploys.
       [{_, {model_provider_id, inserted_at}}] ->
         if expired?(inserted_at, @default_ttl_ms) do
-          delete_entry({api_key_hash, model_alias_id})
+          delete_entry({api_key_hash, model_id})
           nil
         else
           model_provider_id
@@ -89,39 +89,39 @@ defmodule Tokengate.Routing.StickyTracker do
   end
 
   @doc """
-  Sticks `{api_key_hash, model_alias_id}` to `model_provider_id` using the
+  Sticks `{api_key_hash, model_id}` to `model_provider_id` using the
   default TTL (15 minutes).
   """
   @spec put(binary(), binary(), binary()) :: :ok
-  def put(api_key_hash, model_alias_id, model_provider_id) do
-    put(api_key_hash, model_alias_id, model_provider_id, nil)
+  def put(api_key_hash, model_id, model_provider_id) do
+    put(api_key_hash, model_id, model_provider_id, nil)
   end
 
   @doc """
-  Sticks `{api_key_hash, model_alias_id}` to `model_provider_id` with an
+  Sticks `{api_key_hash, model_id}` to `model_provider_id` with an
   explicit per-entry TTL in milliseconds. When `ttl_ms` is nil, the
   default TTL (15 min) applies.
   """
   @spec put(binary(), binary(), binary(), non_neg_integer() | nil) :: :ok
-  def put(api_key_hash, model_alias_id, model_provider_id, ttl_ms)
-      when is_binary(api_key_hash) and is_binary(model_alias_id) and
+  def put(api_key_hash, model_id, model_provider_id, ttl_ms)
+      when is_binary(api_key_hash) and is_binary(model_id) and
              is_binary(model_provider_id) do
     GenServer.cast(
       __MODULE__,
-      {:put, api_key_hash, model_alias_id, model_provider_id, ttl_ms || @default_ttl_ms}
+      {:put, api_key_hash, model_id, model_provider_id, ttl_ms || @default_ttl_ms}
     )
   end
 
   @doc """
-  Removes the sticky entry for `{api_key_hash, model_alias_id}`.
+  Removes the sticky entry for `{api_key_hash, model_id}`.
   """
   @spec clear(binary(), binary()) :: :ok
-  def clear(api_key_hash, model_alias_id) do
-    GenServer.call(__MODULE__, {:clear, api_key_hash, model_alias_id})
+  def clear(api_key_hash, model_id) do
+    GenServer.call(__MODULE__, {:clear, api_key_hash, model_id})
   end
 
   @doc """
-  Drops all sticky entries for the given `api_key_hash` across every model alias.
+  Drops all sticky entries for the given `api_key_hash` across every model model.
 
   Useful when an admin wants to force a team member off their current provider
   so routing can rebalance them on the next request.
@@ -153,7 +153,7 @@ defmodule Tokengate.Routing.StickyTracker do
 
   @doc false
   # Test helper: ages the entry past its TTL so the next get/2 returns nil
-  # without `Process.sleep`. `key` is the full {api_key_hash, model_alias_id}
+  # without `Process.sleep`. `key` is the full {api_key_hash, model_id}
   # tuple. `ms` is how many milliseconds to add to the elapsed time.
   def backdate_for_test(key, ms) do
     case :ets.lookup(@table, key) do
@@ -184,13 +184,12 @@ defmodule Tokengate.Routing.StickyTracker do
 
   @impl true
   def handle_cast(
-        {:put, api_key_hash, model_alias_id, model_provider_id, ttl_ms},
+        {:put, api_key_hash, model_id, model_provider_id, ttl_ms},
         state
       ) do
     :ets.insert(
       @table,
-      {{api_key_hash, model_alias_id},
-       {model_provider_id, System.monotonic_time(:millisecond), ttl_ms}}
+      {{api_key_hash, model_id}, {model_provider_id, System.monotonic_time(:millisecond), ttl_ms}}
     )
 
     {:noreply, state}
@@ -203,15 +202,15 @@ defmodule Tokengate.Routing.StickyTracker do
   end
 
   @impl true
-  def handle_call({:clear, api_key_hash, model_alias_id}, _from, state) do
-    :ets.delete(@table, {api_key_hash, model_alias_id})
+  def handle_call({:clear, api_key_hash, model_id}, _from, state) do
+    :ets.delete(@table, {api_key_hash, model_id})
     {:reply, :ok, state}
   end
 
   @impl true
   def handle_call({:clear_all_for_api_key_hash, api_key_hash}, _from, state) do
     # ETS match pattern: delete every key that starts with this api_key_hash.
-    # The key is {api_key_hash, model_alias_id}; we match the first element.
+    # The key is {api_key_hash, model_id}; we match the first element.
     :ets.select_delete(@table, [{{{api_key_hash, :_}, :_}, [], [true]}])
     {:reply, :ok, state}
   end
@@ -223,8 +222,8 @@ defmodule Tokengate.Routing.StickyTracker do
 
     :ets.foldl(
       fn
-        {{api_key_hash, model_alias_id} = key, value}, acc
-        when is_binary(api_key_hash) and is_binary(model_alias_id) ->
+        {{api_key_hash, model_id} = key, value}, acc
+        when is_binary(api_key_hash) and is_binary(model_id) ->
           {model_provider_id, inserted_at, ttl_ms} = normalize_value(value)
           # Delete if the entry points at a cleared provider OR has expired.
           if MapSet.member?(id_set, model_provider_id) or expired?(inserted_at, ttl_ms, now) do

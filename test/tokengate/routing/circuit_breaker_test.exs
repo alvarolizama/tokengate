@@ -8,7 +8,6 @@ defmodule Tokengate.Routing.CircuitBreakerTest do
   """
 
   use ExUnit.Case, async: false
-
   alias Tokengate.Routing.CircuitBreaker
 
   # Test-scale config. Restored in on_exit so other async:false suites are

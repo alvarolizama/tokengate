@@ -2,7 +2,7 @@ defmodule TokengateWeb.ProxyController do
   @moduledoc """
   OpenAI-compatible proxy API.
 
-    * `GET /v1/models` — only the model aliases the API key can access
+    * `GET /v1/models` — only the models the API key can access
       (team grants + individual extras), each with its `context_window`.
     * `POST /v1/chat/completions` — transparent passthrough to the routed
       provider with full cost tracking. The response `usage` object gains
@@ -65,7 +65,7 @@ defmodule TokengateWeb.ProxyController do
   @max_retries_per_provider 3
 
   @doc """
-  Lists the model aliases accessible to the authenticated API key.
+  Lists the models accessible to the authenticated API key.
   """
   def models(conn, _params) do
     member = conn.assigns.current_team_member
@@ -340,7 +340,7 @@ defmodule TokengateWeb.ProxyController do
     # Per-provider retry: same policy as retry_with_fallback.
     {exclude, provider_retries} = next_candidate(route, exclude, provider_retries, reason)
 
-    case Router.route(route.model_alias.name, member, %{
+    case Router.route(route.model.name, member, %{
            :api_key_hash => conn.assigns.api_key_hash,
            :exclude_credential_ids => exclude,
            :capability => Keyword.get(route_opts, :capability, "llm")
@@ -377,10 +377,10 @@ defmodule TokengateWeb.ProxyController do
 
     cost = cost_with_fallback(route, provider_reported, usage)
 
-    Budgets.record_spend(member.id, route.model_alias.id, cost, exemption_subjects(member))
+    Budgets.record_spend(member.id, route.model.id, cost, exemption_subjects(member))
 
     Collector.record_request(%{
-      model_alias_id: route.model_alias.id,
+      model_id: route.model.id,
       provider_id: route.model_provider.credential.provider_id,
       credential_name: route.credential.name,
       agent_type: conn.assigns.agent_type,
@@ -575,7 +575,7 @@ defmodule TokengateWeb.ProxyController do
         {:error, :provider_concurrency_exceeded} ->
           # Si es included, esperar en cola FIFO con timeout según cuántas
           # included queden. Si es pay-per-token, fallback inmediato.
-          if route.model_provider.billing_mode == "included" do
+          if billing_mode(route.model_provider) == "included" do
             case maybe_wait_for_included(route, member, key_id, model_requested) do
               :ok ->
                 {:ok, route}
@@ -730,7 +730,7 @@ defmodule TokengateWeb.ProxyController do
     # consume a spending budget, so no spending gate applies to them. This is
     # what lets a model (or a user) keep using its `included` providers even
     # after every spending cap is exhausted.
-    if route.model_provider.billing_mode == "included" do
+    if billing_mode(route.model_provider) == "included" do
       :ok
     else
       with :ok <- check_monthly_budget(member, limits, route),
@@ -751,7 +751,7 @@ defmodule TokengateWeb.ProxyController do
     # If yes, reject. If not, let the request through; the post-pipeline
     # records the real reported cost and `record_spend` keeps the counter in
     # sync. A subsequent request will see the updated spend and reject.
-    projected_cost = CostCalculator.provider_cost(route.model_provider.billing_mode, nil, [])
+    projected_cost = CostCalculator.provider_cost(route.model_provider |> billing_mode(), nil, [])
 
     case Budgets.check_ladder(
            member_monthly_budget,
@@ -766,8 +766,8 @@ defmodule TokengateWeb.ProxyController do
   defp check_model_per_user_cap(member, route) do
     if Budgets.model_per_user_exhausted?(
          member.id,
-         route.model_alias.id,
-         route.model_alias.daily_limit_per_user_usd
+         route.model.id,
+         route.model.daily_limit_per_user_usd
        ) do
       {:error, {:budget_exceeded, %{period: :daily_model_per_user, available: Decimal.new(0)}}}
     else
@@ -816,12 +816,12 @@ defmodule TokengateWeb.ProxyController do
 
   defp execute(conn, route, payload, member, attempts_left, exclude, provider_retries) do
     provider = route.model_provider.credential.provider
-    # The client sends the alias name; the provider expects its own model id.
+    # The client sends the model name; the provider expects its own model id.
     payload =
       payload
       |> Map.put("model", route.model_responded)
-      |> inject_guard_rails(route.model_alias)
-      |> maybe_optimize(route.model_alias)
+      |> inject_guard_rails(route.model)
+      |> maybe_optimize(route.model)
 
     receive_timeout = receive_timeout(route.credential)
 
@@ -941,7 +941,7 @@ defmodule TokengateWeb.ProxyController do
       :exclude_credential_ids => exclude
     }
 
-    case Router.route(route.model_alias.name, member, request_context) do
+    case Router.route(route.model.name, member, request_context) do
       {:ok, new_route} ->
         execute(conn, new_route, payload, member, attempts_left - 1, exclude, provider_retries)
 
@@ -971,13 +971,13 @@ defmodule TokengateWeb.ProxyController do
 
   defp execute_stream(conn, route, payload, member, attempts_left, exclude, provider_retries) do
     provider = route.model_provider.credential.provider
-    # The client sends the alias name; the provider expects its own model id.
+    # The client sends the model name; the provider expects its own model id.
     payload =
       payload
       |> Map.put("model", route.model_responded)
       |> ensure_stream_options()
-      |> inject_guard_rails(route.model_alias)
-      |> maybe_optimize(route.model_alias)
+      |> inject_guard_rails(route.model)
+      |> maybe_optimize(route.model)
 
     # Measured just before the upstream call: TTFT is the time from this
     # point to the provider's first chunk.
@@ -1073,7 +1073,7 @@ defmodule TokengateWeb.ProxyController do
       :exclude_credential_ids => exclude
     }
 
-    case Router.route(route.model_alias.name, member, request_context) do
+    case Router.route(route.model.name, member, request_context) do
       {:ok, new_route} ->
         execute_stream(
           conn,
@@ -1102,11 +1102,11 @@ defmodule TokengateWeb.ProxyController do
     Map.put(payload, "stream_options", Map.put(options, "include_usage", true))
   end
 
-  # Injects the model_alias's guard_rails at the beginning of the system prompt.
+  # Injects the model's guard_rails at the beginning of the system prompt.
   # If there is no system message yet, creates one. If there is one, prepends
   # the guard_rails text. No-op when guard_rails is nil or empty.
-  defp inject_guard_rails(payload, model_alias) do
-    case model_alias.guard_rails do
+  defp inject_guard_rails(payload, model) do
+    case model.guard_rails do
       nil ->
         payload
 
@@ -1131,15 +1131,15 @@ defmodule TokengateWeb.ProxyController do
   end
 
   # Applies the mandatory prompt-pre-flight transforms for LLM (chat)
-  # aliases: system messages are hoisted to the front and deduped
+  # models: system messages are hoisted to the front and deduped
   # (stable_prefix), then noisy tool output is trimmed and deduped
   # (lazy_cleanup). Both passes are pure and return fresh lists; the input
   # is never mutated. These transforms used to be opt-in via the
-  # `prompt_cache_enabled` / `lazy_cleanup_enabled` alias flags and are now
+  # `prompt_cache_enabled` / `lazy_cleanup_enabled` model flags and are now
   # ALWAYS on for chat models — stable prefixes are what make provider
   # prefix-cache hits possible, so they belong to the gateway itself, not
   # to per-model configuration. The flag columns remain in the schema for
-  # backwards compatibility but no longer gate anything. Non-LLM aliases
+  # backwards compatibility but no longer gate anything. Non-LLM models
   # (and embeddings routes, which never call this function) pass
   # through unchanged.
   defp maybe_optimize(payload, %{model_type: "llm"}) do
@@ -1150,7 +1150,7 @@ defmodule TokengateWeb.ProxyController do
     |> Map.update!("messages", &PromptOptimizer.lazy_cleanup/1)
   end
 
-  defp maybe_optimize(payload, _model_alias), do: payload
+  defp maybe_optimize(payload, _model_model), do: payload
 
   defp await_first_chunk(pid, ref) do
     timeout = Application.get_env(:tokengate, :first_token_timeout_ms, 15_000)
@@ -1309,10 +1309,10 @@ defmodule TokengateWeb.ProxyController do
           {usage, cost}
       end
 
-    Budgets.record_spend(member.id, route.model_alias.id, cost, exemption_subjects(member))
+    Budgets.record_spend(member.id, route.model.id, cost, exemption_subjects(member))
 
     Collector.record_request(%{
-      model_alias_id: route.model_alias.id,
+      model_id: route.model.id,
       provider_id: route.model_provider.credential.provider_id,
       credential_name: route.credential.name,
       agent_type: conn.assigns.agent_type,
@@ -1339,14 +1339,14 @@ defmodule TokengateWeb.ProxyController do
       if body, do: UsageNormalizer.extract_reported_cost(:openai, body, resp_headers), else: nil
 
     if provider_reported do
-      CostCalculator.provider_cost(route.model_provider.billing_mode, provider_reported)
+      CostCalculator.provider_cost(route.model_provider |> billing_mode(), provider_reported)
     else
       # Body had no cost — try headers alone (LiteLLM proxies report cost only
       # in headers, not in the streaming body).
       header_cost = UsageNormalizer.extract_reported_cost(:openai, %{}, resp_headers)
 
       if header_cost do
-        CostCalculator.provider_cost(route.model_provider.billing_mode, header_cost)
+        CostCalculator.provider_cost(route.model_provider |> billing_mode(), header_cost)
       else
         # Neither body nor headers reported a cost — try manual pricing fallback.
         manual_cost(route, usage)
@@ -1360,7 +1360,7 @@ defmodule TokengateWeb.ProxyController do
   defp cost_with_fallback(route, provider_reported, usage) do
     mp = route.model_provider
 
-    CostCalculator.provider_cost(mp.billing_mode, provider_reported,
+    CostCalculator.provider_cost(mp |> billing_mode(), provider_reported,
       manual_pricing: %{
         input_cost_per_million: mp.input_cost_per_million,
         output_cost_per_million: mp.output_cost_per_million,
@@ -1375,7 +1375,7 @@ defmodule TokengateWeb.ProxyController do
   defp manual_cost(route, usage) do
     mp = route.model_provider
 
-    CostCalculator.provider_cost(mp.billing_mode, nil,
+    CostCalculator.provider_cost(mp |> billing_mode(), nil,
       manual_pricing: %{
         input_cost_per_million: mp.input_cost_per_million,
         output_cost_per_million: mp.output_cost_per_million,
@@ -1384,6 +1384,12 @@ defmodule TokengateWeb.ProxyController do
       usage: usage
     )
   end
+
+  # Effective billing mode derived from the credential's provider surface
+  # (subscription → "included", else "pay_per_token"). See
+  # Tokengate.Providers.ModelProvider.billing_mode/1.
+  defp billing_mode(%Tokengate.Providers.ModelProvider{} = mp),
+    do: Tokengate.Providers.ModelProvider.billing_mode(mp)
 
   ## Success finalization #######################################################
 
@@ -1394,10 +1400,10 @@ defmodule TokengateWeb.ProxyController do
     cost = cost_with_fallback(route, provider_reported, usage)
 
     # Hot-path state updates (ETS only)
-    Budgets.record_spend(member.id, route.model_alias.id, cost, exemption_subjects(member))
+    Budgets.record_spend(member.id, route.model.id, cost, exemption_subjects(member))
 
     Collector.record_request(%{
-      model_alias_id: route.model_alias.id,
+      model_id: route.model.id,
       provider_id: route.model_provider.credential.provider_id,
       credential_name: route.credential.name,
       agent_type: conn.assigns.agent_type,
@@ -1484,8 +1490,8 @@ defmodule TokengateWeb.ProxyController do
       "subject_type" => subject.subject_type,
       "provider_id" => route.model_provider.credential.provider_id,
       "model_provider_id" => route.model_provider.id,
-      "model_alias_id" => route.model_alias.id,
-      "model_requested" => route.model_alias.name,
+      "model_id" => route.model.id,
+      "model_requested" => route.model.name,
       "model_responded" => route.model_responded,
       "agent_type" => agent_type,
       "client_agent" => Keyword.get(extra, :client_agent),
@@ -1529,7 +1535,7 @@ defmodule TokengateWeb.ProxyController do
     )
 
     Collector.record_request(%{
-      model_alias_id: route.model_alias.id,
+      model_id: route.model.id,
       provider_id: route.model_provider.credential.provider_id,
       credential_name: route.credential.name,
       agent_type: conn.assigns.agent_type,
@@ -1546,7 +1552,7 @@ defmodule TokengateWeb.ProxyController do
 
   # Gate-level errors (before routing succeeded): no provider was contacted,
   # so there is no provider status to record. Still logs the failure — and
-  # resolves the model alias id so these rows show up in the per-model stats
+  # resolves the model id so these rows show up in the per-model stats
   # drill-down (stats page, provider breakdown). Without it, a burst of gate
   # errors (concurrency exceeded, rate limited) would leave the model's
   # stats page looking empty even though traffic hit the gateway.
@@ -1564,14 +1570,14 @@ defmodule TokengateWeb.ProxyController do
     render_proxy_error(conn, error)
   end
 
-  # Resolves the alias id by name for gate-error logs. Alias names are
+  # Resolves the model id by name for gate-error logs. Alias names are
   # globally unique. The gate path is cold (the request already failed), so a
   # single indexed lookup is acceptable; a miss (model_not_found) returns nil.
-  defp alias_id_for_name(nil), do: nil
+  defp model_id_for_name(nil), do: nil
 
-  defp alias_id_for_name(name) when is_binary(name) do
+  defp model_id_for_name(name) when is_binary(name) do
     Tokengate.Repo.one(
-      from ma in Tokengate.Providers.ModelAlias,
+      from ma in Tokengate.Providers.Model,
         where: ma.name == ^name,
         select: ma.id
     )
@@ -1586,8 +1592,8 @@ defmodule TokengateWeb.ProxyController do
       "subject_type" => subject.subject_type,
       "provider_id" => route.model_provider.credential.provider_id,
       "model_provider_id" => route.model_provider.id,
-      "model_alias_id" => route.model_alias.id,
-      "model_requested" => route.model_alias.name,
+      "model_id" => route.model.id,
+      "model_requested" => route.model.name,
       "model_responded" => route.model_responded,
       "agent_type" => conn.assigns.agent_type,
       "client_agent" => conn.assigns.client_agent,
@@ -1620,7 +1626,7 @@ defmodule TokengateWeb.ProxyController do
       "team_member_id" => subject.team_member_id,
       "service_id" => subject.service_id,
       "subject_type" => subject.subject_type,
-      "model_alias_id" => alias_id_for_name(model),
+      "model_id" => model_id_for_name(model),
       "model_requested" => model,
       "agent_type" => agent_type,
       "client_agent" => Keyword.get(opts, :client_agent),

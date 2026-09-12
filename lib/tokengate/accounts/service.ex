@@ -18,7 +18,7 @@ defmodule Tokengate.Accounts.Service do
     field :rpm_limit, :integer, default: 60
 
     has_one :api_key, Tokengate.Accounts.ServiceApiKey
-    has_many :model_aliases, Tokengate.Providers.ServiceModelAlias
+    has_many :models, Tokengate.Providers.ServiceModel
     has_many :supervisors, Tokengate.Accounts.ServiceSupervisor
     has_many :supervisor_users, through: [:supervisors, :user]
 

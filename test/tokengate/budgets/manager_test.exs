@@ -11,7 +11,6 @@ defmodule Tokengate.Budgets.ManagerTest do
 
   use Tokengate.DataCase, async: false
   use Oban.Testing, repo: Tokengate.Repo
-
   alias Tokengate.Budgets.Manager
   alias Tokengate.Accounts
   alias Tokengate.Budgets.Exemptions

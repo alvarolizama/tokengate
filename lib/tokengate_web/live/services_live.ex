@@ -1,6 +1,6 @@
 defmodule TokengateWeb.ServicesLive do
   @moduledoc """
-  Admin-only CRUD for services + per-service model alias grants.
+  Admin-only CRUD for services + per-service model model grants.
 
   Services are API keys not tied to a user. They have direct limits
   (monthly budget, concurrency, RPM) without the team/member hierarchy.
@@ -8,11 +8,10 @@ defmodule TokengateWeb.ServicesLive do
   use TokengateWeb, :live_view
 
   import Ecto.Query, only: [from: 2]
-
   alias Tokengate.Accounts
   alias Tokengate.Accounts.Service
   alias Tokengate.Providers
-  alias Tokengate.Providers.{ModelAlias, ServiceModelAlias}
+  alias Tokengate.Providers.{Model, ServiceModel}
   alias Tokengate.Repo
 
   @impl true
@@ -66,13 +65,13 @@ defmodule TokengateWeb.ServicesLive do
       )
       |> Repo.all()
 
-    granted_aliases =
-      from(sma in ServiceModelAlias, select: {sma.service_id, sma.model_alias_id})
+    granted_models =
+      from(sma in ServiceModel, select: {sma.service_id, sma.model_id})
       |> Repo.all()
-      |> Enum.group_by(fn {service_id, _} -> service_id end, fn {_, alias_id} -> alias_id end)
+      |> Enum.group_by(fn {service_id, _} -> service_id end, fn {_, model_id} -> model_id end)
 
-    aliases =
-      from(ma in ModelAlias, order_by: [asc: ma.name])
+    models =
+      from(ma in Model, order_by: [asc: ma.name])
       |> Repo.all()
 
     # Load monthly stats per service (service_id column).
@@ -100,8 +99,8 @@ defmodule TokengateWeb.ServicesLive do
     socket
     |> assign(:services, services)
     |> assign(:services_empty?, services == [])
-    |> assign(:granted_aliases, granted_aliases)
-    |> assign(:aliases, aliases)
+    |> assign(:granted_models, granted_models)
+    |> assign(:models, models)
     |> assign(:service_stats, stats)
     |> assign(:supervisors_map, build_supervisors_map(service_ids))
   end
@@ -227,27 +226,27 @@ defmodule TokengateWeb.ServicesLive do
     {:noreply, assign(socket, :new_token, nil)}
   end
 
-  ## Events — alias grants -----------------------------------------------
+  ## Events — model grants -----------------------------------------------
 
-  def handle_event("toggle_alias", %{"service-id" => service_id, "alias-id" => alias_id}, socket) do
-    service_alias_ids = Map.get(socket.assigns.granted_aliases, service_id, [])
+  def handle_event("toggle_model", %{"service-id" => service_id, "model-id" => model_id}, socket) do
+    service_alias_ids = Map.get(socket.assigns.granted_models, service_id, [])
 
     result =
-      if alias_id in service_alias_ids do
-        Providers.revoke_alias_from_service(service_id, alias_id)
+      if model_id in service_alias_ids do
+        Providers.revoke_model_from_service(service_id, model_id)
       else
-        Providers.grant_alias_to_service(service_id, alias_id)
+        Providers.grant_model_to_service(service_id, model_id)
       end
 
     case result do
       {:ok, _} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Aliases actualizados.")
+         |> put_flash(:info, "Modelos actualizados.")
          |> load_services()}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo actualizar el alias.")}
+        {:noreply, put_flash(socket, :error, "No se pudo actualizar el modelo.")}
     end
   end
 
@@ -360,8 +359,8 @@ defmodule TokengateWeb.ServicesLive do
 
   ## Template helpers -----------------------------------------------------
 
-  def granted_alias_ids(granted_aliases, service_id) do
-    Map.get(granted_aliases, service_id, [])
+  def granted_alias_ids(granted_models, service_id) do
+    Map.get(granted_models, service_id, [])
   end
 
   def format_decimal(%Decimal{} = d), do: d |> Decimal.round(2) |> Decimal.to_string()
@@ -507,7 +506,7 @@ defmodule TokengateWeb.ServicesLive do
                   <button
                     phx-click="delete_service"
                     phx-value-id={service.id}
-                    data-confirm="¿Eliminar este servicio? Se perderán la clave y los aliases."
+                    data-confirm="¿Eliminar este servicio? Se perderán la clave y los modelos."
                     class="btn btn-ghost btn-xs text-error"
                     title="Eliminar"
                   >
@@ -650,27 +649,27 @@ defmodule TokengateWeb.ServicesLive do
                 </div>
               </div>
 
-              <%!-- Model aliases section --%>
+              <%!-- Model models section --%>
               <div class="mt-4">
                 <p class="text-sm font-medium mb-2">Modelos permitidos</p>
                 <div class="flex flex-wrap gap-2">
                   <button
-                    :for={alias <- @aliases}
-                    phx-click="toggle_alias"
+                    :for={model <- @models}
+                    phx-click="toggle_model"
                     phx-value-service-id={service.id}
-                    phx-value-alias-id={alias.id}
+                    phx-value-model-id={model.id}
                     class={[
                       "badge badge-sm cursor-pointer transition-all",
-                      if(alias.id in granted_alias_ids(@granted_aliases, service.id),
+                      if(model.id in granted_alias_ids(@granted_models, service.id),
                         do: "badge-primary",
                         else: "badge-outline"
                       )
                     ]}
                   >
-                    {alias.name}
+                    {model.name}
                   </button>
-                  <%= if @aliases == [] do %>
-                    <p class="text-xs text-base-content/40">No hay aliases configurados</p>
+                  <%= if @models == [] do %>
+                    <p class="text-xs text-base-content/40">No hay models configurados</p>
                   <% end %>
                 </div>
               </div>

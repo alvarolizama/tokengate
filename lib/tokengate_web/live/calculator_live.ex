@@ -4,18 +4,17 @@ defmodule TokengateWeb.CalculatorLive do
   using custom pricing parameters (input, cache, output price per
   million tokens, and cache hit-rate).
 
-  Pulls hourly aggregated data for a selected model alias across ALL
+  Pulls hourly aggregated data for a selected model model across ALL
   API keys (included + pay_per_token) and overlays it with a
   calculated estimate so operators can see whether they're paying more
   or less than expected.
 
   The real-cost totals use the same source as StatsLive
-  (`Logs.cost_summary/1` with `model_alias_id` filter), so the numbers
+  (`Logs.cost_summary/1` with `model_id` filter), so the numbers
   always match the stats page for the same period + timezone.
   """
 
   use TokengateWeb, :live_view
-
   alias Tokengate.Logs
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Periods
@@ -32,7 +31,7 @@ defmodule TokengateWeb.CalculatorLive do
     timezone = socket.assigns[:timezone] || (user && user.timezone) || Periods.default_timezone()
 
     models =
-      Providers.list_model_aliases()
+      Providers.list_models()
       |> Enum.filter(fn m -> m.model_type == "llm" end)
       |> Enum.sort_by(& &1.name)
 
@@ -102,7 +101,7 @@ defmodule TokengateWeb.CalculatorLive do
     # with the same from/to/filter. This guarantees identical numbers.
     summary_data =
       Logs.cost_summary(%{
-        model_alias_id: model_id,
+        model_id: model_id,
         from: bounds.from,
         to: bounds.to
       })
@@ -119,7 +118,7 @@ defmodule TokengateWeb.CalculatorLive do
     cost_cache = parse_decimal(cost_cache_str, Decimal.new("0.30"))
     cost_output = parse_decimal(cost_output_str, Decimal.new("15.00"))
 
-    # Market pricing of the selected alias (nil when not set).
+    # Market pricing of the selected model (nil when not set).
     market = market_pricing(socket.assigns.models, model_id)
 
     # Per-million multiplier: price is per 1M tokens → cost = tokens * price * 1e-6
@@ -172,8 +171,8 @@ defmodule TokengateWeb.CalculatorLive do
       end)
       |> Decimal.round(4)
 
-    # Total estimated cost using the alias's market prices (nil when the
-    # alias has no market pricing configured).
+    # Total estimated cost using the model's market prices (nil when the
+    # model has no market pricing configured).
     total_market_estimated =
       if market do
         chart_data
@@ -222,9 +221,9 @@ defmodule TokengateWeb.CalculatorLive do
       %{
         market_input_price_per_1m: %Decimal{} = input,
         market_output_price_per_1m: %Decimal{} = output
-      } = alias ->
+      } = model ->
         cache =
-          case alias.market_cache_price_per_1m do
+          case model.market_cache_price_per_1m do
             %Decimal{} = cache_price -> cache_price
             _ -> input
           end
@@ -237,7 +236,7 @@ defmodule TokengateWeb.CalculatorLive do
   end
 
   # 3-term estimate (non-cached × input + cached × cache + completion × output)
-  # using the alias's market prices. Returns 0 when market pricing is unset —
+  # using the model's market prices. Returns 0 when market pricing is unset —
   # the total is gated by has_market_pricing so the 0 never renders.
   defp market_estimate(nil, _prompt, _cached, _completion), do: Decimal.new(0)
 

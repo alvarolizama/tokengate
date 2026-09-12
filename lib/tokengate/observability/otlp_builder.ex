@@ -10,7 +10,6 @@ defmodule Tokengate.Observability.OtlpBuilder do
   team member: `"#{team.name} - #{user.email}"`. When the team member
   association is not loaded, it falls back to `"tokengate"`.
   """
-
   alias Tokengate.Logs.RequestLog
 
   @scope_name "tokengate"

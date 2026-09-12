@@ -6,7 +6,6 @@ defmodule Tokengate.Budgets.ExemptionsTest do
   """
 
   use Tokengate.DataCase, async: false
-
   alias Tokengate.Accounts
   alias Tokengate.Budgets.Exemption
   alias Tokengate.Budgets.Exemptions

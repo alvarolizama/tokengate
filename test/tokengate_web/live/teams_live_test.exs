@@ -2,7 +2,6 @@ defmodule TokengateWeb.TeamsLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
-
   alias Tokengate.{Accounts, Providers}
   alias Tokengate.Repo
 
@@ -31,8 +30,8 @@ defmodule TokengateWeb.TeamsLiveTest do
   defp team_fixture(attrs \\ %{}) do
     u = unique()
 
-    {:ok, model_alias} =
-      Providers.create_model_alias(%{
+    {:ok, model} =
+      Providers.create_model(%{
         name: "gpt-#{u}",
         context_window: 128_000
       })
@@ -40,7 +39,7 @@ defmodule TokengateWeb.TeamsLiveTest do
     {:ok, team} =
       Accounts.create_team(Map.merge(%{name: "Team #{u}"}, attrs))
 
-    %{team: team, model_alias: model_alias}
+    %{team: team, model: model}
   end
 
   # --------------------------------------------------------------------------
@@ -201,39 +200,39 @@ defmodule TokengateWeb.TeamsLiveTest do
   end
 
   # --------------------------------------------------------------------------
-  # Team model alias assignment
+  # Team model model assignment
   # --------------------------------------------------------------------------
 
-  test "admin toggles a model alias grant on a team via the aliases modal", %{conn: conn} do
-    %{team: team, model_alias: alias_} = team_fixture()
+  test "admin toggles a model grant on a team via the models modal", %{conn: conn} do
+    %{team: team, model: model_} = team_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
     {:ok, view, html} = live(conn, ~p"/dashboard/teams")
 
-    # The alias picker is NOT in the card — only inside the aliases modal
-    refute html =~ "Aliases de modelos</h4>"
-    refute has_element?(view, "#alias-#{team.id}-#{alias_.id}")
+    # The model picker is NOT in the card — only inside the models modal
+    refute html =~ "Modelos del equipo</h4>"
+    refute has_element?(view, "#model-#{team.id}-#{model_.id}")
 
-    # Open the aliases modal from the team card header
-    view |> element("#edit-aliases-#{team.id}") |> render_click()
-    assert has_element?(view, "#aliases-modal-#{team.id}")
-    assert has_element?(view, "#alias-#{team.id}-#{alias_.id}")
+    # Open the models modal from the team card header
+    view |> element("#edit-models-#{team.id}") |> render_click()
+    assert has_element?(view, "#models-modal-#{team.id}")
+    assert has_element?(view, "#model-#{team.id}-#{model_.id}")
 
-    # Grant the alias
+    # Grant the model
     html =
       view
-      |> element("#alias-#{team.id}-#{alias_.id}")
+      |> element("#model-#{team.id}-#{model_.id}")
       |> render_click()
 
-    assert html =~ "Aliases actualizados"
+    assert html =~ "Modelos actualizados"
 
     # Verify the grant was persisted
     grant =
       Repo.get_by(
-        Tokengate.Providers.TeamModelAlias,
+        Tokengate.Providers.TeamModel,
         team_id: team.id,
-        model_alias_id: alias_.id
+        model_id: model_.id
       )
 
     assert grant != nil
@@ -241,15 +240,15 @@ defmodule TokengateWeb.TeamsLiveTest do
     # Toggle again to revoke
     html =
       view
-      |> element("#alias-#{team.id}-#{alias_.id}")
+      |> element("#model-#{team.id}-#{model_.id}")
       |> render_click()
 
-    assert html =~ "Aliases actualizados"
+    assert html =~ "Modelos actualizados"
 
     refute Repo.get_by(
-             Tokengate.Providers.TeamModelAlias,
+             Tokengate.Providers.TeamModel,
              team_id: team.id,
-             model_alias_id: alias_.id
+             model_id: model_.id
            )
   end
 

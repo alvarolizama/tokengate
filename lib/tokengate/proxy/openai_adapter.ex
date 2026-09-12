@@ -26,7 +26,6 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   """
 
   @behaviour Tokengate.Proxy.ProviderAdapter
-
   alias Tokengate.Proxy.ProviderAdapter
 
   @default_receive_timeout 180_000

@@ -23,7 +23,6 @@ defmodule TokengateWeb.Plugs.DashboardAuth do
 
   import Plug.Conn
   import Phoenix.Controller, only: [redirect: 2, put_flash: 3]
-
   alias Tokengate.Accounts
 
   @session_key :user_id

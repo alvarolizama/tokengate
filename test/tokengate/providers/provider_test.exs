@@ -1,7 +1,6 @@
 defmodule Tokengate.Providers.ProviderTest do
   @moduledoc "Unit tests for Provider changeset logic."
   use ExUnit.Case, async: true
-
   alias Tokengate.Providers.Provider
 
   describe "changeset/2" do

@@ -2,12 +2,12 @@ defmodule Tokengate.Providers do
   @moduledoc """
   The Providers context.
 
-  Manages the routing domain: providers, credentials, model aliases, alias
-  providers, and team/member alias grants.
+  Manages the routing domain: providers, credentials, models, model
+  providers, and team/member model grants.
 
   ## Cost model (since 2026-07-30)
 
-  Per-provider pricing rows (`model_pricing`) and per-alias market prices
+  Per-provider pricing rows (`model_pricing`) and per-model market prices
   have been removed. `provider_cost_usd` is whatever the upstream reports
   in its response body (`usage.cost` for OpenAI-compatible gateways). The
   only cost-relevant attribute remaining is `model_providers.billing_mode`:
@@ -24,11 +24,11 @@ defmodule Tokengate.Providers do
   alias Tokengate.Providers.{
     Provider,
     Credential,
-    ModelAlias,
+    Model,
     ModelProvider,
-    ServiceModelAlias,
-    TeamModelAlias,
-    TeamMemberExtraAlias
+    ServiceModel,
+    TeamModel,
+    TeamMemberExtraModel
   }
 
   # ---------------------------------------------------------------------------
@@ -201,28 +201,28 @@ defmodule Tokengate.Providers do
   # Model Aliases
   # ---------------------------------------------------------------------------
 
-  def list_model_aliases, do: Repo.all(ModelAlias)
+  def list_models, do: Repo.all(Model)
 
-  def get_model_alias!(id), do: Repo.get!(ModelAlias, id)
-  def get_model_alias(id), do: Repo.get(ModelAlias, id)
+  def get_model!(id), do: Repo.get!(Model, id)
+  def get_model(id), do: Repo.get(Model, id)
 
   @doc """
-  Returns the model alias with the given `name`, or nil.
+  Returns the model model with the given `name`, or nil.
   Alias names are unique.
   """
-  def get_alias_by_name(name) when is_binary(name) do
-    Repo.one(from(ma in ModelAlias, where: ma.name == ^name))
+  def get_model_by_name(name) when is_binary(name) do
+    Repo.one(from(ma in Model, where: ma.name == ^name))
   end
 
-  def create_model_alias(attrs) do
-    %ModelAlias{}
-    |> ModelAlias.changeset(attrs)
+  def create_model(attrs) do
+    %Model{}
+    |> Model.changeset(attrs)
     |> Repo.insert()
   end
 
-  def update_model_alias(%ModelAlias{} = model_alias, attrs) do
-    model_alias
-    |> ModelAlias.changeset(attrs)
+  def update_model(%Model{} = model, attrs) do
+    model
+    |> Model.changeset(attrs)
     |> Repo.update()
     |> case do
       {:ok, _ma} = ok ->
@@ -234,13 +234,13 @@ defmodule Tokengate.Providers do
     end
   end
 
-  def delete_model_alias(%ModelAlias{} = model_alias) do
-    # request_logs no longer carries an FK on model_alias_id (dropped in
-    # 20260901161239 — the SET NULL made alias deletion O(referenced logs)
+  def delete_model(%Model{} = model) do
+    # request_logs no longer carries an FK on model_id (dropped in
+    # 20260901161239 — the SET NULL made model deletion O(referenced logs)
     # and timed out in production), so there is nothing to declare here:
     # deletion cannot violate referential integrity and log rows keep the
-    # alias id as historical data.
-    model_alias
+    # model id as historical data.
+    model
     |> Repo.delete()
     |> case do
       {:ok, _ma} = ok ->
@@ -252,8 +252,8 @@ defmodule Tokengate.Providers do
     end
   end
 
-  def change_model_alias(%ModelAlias{} = model_alias, attrs \\ %{}),
-    do: ModelAlias.changeset(model_alias, attrs)
+  def change_model(%Model{} = model, attrs \\ %{}),
+    do: Model.changeset(model, attrs)
 
   # ---------------------------------------------------------------------------
   # Alias Providers
@@ -316,13 +316,13 @@ defmodule Tokengate.Providers do
     do: ModelProvider.changeset(model_provider, attrs)
 
   @doc """
-  Returns enabled model_providers for a model_alias, ordered by priority ASC
+  Returns enabled model_providers for a model, ordered by priority ASC
   with NULLS LAST, preloading credential (with provider).
   Used by the admin UI — shows all providers regardless of scope.
   """
-  def list_model_providers(model_alias_id) when is_binary(model_alias_id) do
+  def list_model_providers(model_id) when is_binary(model_id) do
     from(mp in ModelProvider,
-      where: mp.model_alias_id == ^model_alias_id and mp.enabled == true,
+      where: mp.model_id == ^model_id and mp.enabled == true,
       order_by: [asc_nulls_last: mp.priority],
       preload: [credential: :provider]
     )
@@ -330,13 +330,13 @@ defmodule Tokengate.Providers do
   end
 
   @doc """
-  Returns ALL model_providers for a model_alias (enabled and disabled),
+  Returns ALL model_providers for a model (enabled and disabled),
   preloading credential (with provider). Ordered by priority ASC with
   NULLS LAST.
   """
-  def list_all_model_providers(model_alias_id) when is_binary(model_alias_id) do
+  def list_all_model_providers(model_id) when is_binary(model_id) do
     from(mp in ModelProvider,
-      where: mp.model_alias_id == ^model_alias_id,
+      where: mp.model_id == ^model_id,
       order_by: [asc_nulls_last: mp.priority],
       preload: [credential: :provider]
     )
@@ -360,12 +360,12 @@ defmodule Tokengate.Providers do
   priority ASC. The router uses this to inject exclusive
   providers with priority -1.
   """
-  def list_model_providers_for_member(model_alias_id, team_member_id, team_id)
-      when is_binary(model_alias_id) and is_binary(team_member_id) and is_binary(team_id) do
-    # Build base query: enabled providers for this model alias
+  def list_model_providers_for_member(model_id, team_member_id, team_id)
+      when is_binary(model_id) and is_binary(team_member_id) and is_binary(team_id) do
+    # Build base query: enabled providers for this model model
     base_query =
       from(mp in ModelProvider,
-        where: mp.model_alias_id == ^model_alias_id and mp.enabled == true,
+        where: mp.model_id == ^model_id and mp.enabled == true,
         preload: [credential: :provider]
       )
 
@@ -411,16 +411,16 @@ defmodule Tokengate.Providers do
   Filters:
   - Only active credentials
   - Excludes credentials already assigned to the **same scope bucket**
-    for this model alias (preventing exact-duplicate rows). When editing
+    for this model model (preventing exact-duplicate rows). When editing
     an existing model_provider, the row being edited is excluded from
     the duplicate check.
   """
-  def list_available_credentials_for_scope(model_alias_id, scope, opts \\ []) do
+  def list_available_credentials_for_scope(model_id, scope, opts \\ []) do
     exclude_model_provider_id = Keyword.get(opts, :exclude_model_provider_id)
 
     # Convert string UUIDs to binaries so fragment EXISTS checks match the
     # binary_id columns without Postgrex encode errors.
-    ma_id = dump_uuid!(model_alias_id)
+    ma_id = dump_uuid!(model_id)
     exclude_id = exclude_model_provider_id && dump_uuid!(exclude_model_provider_id)
 
     base_query =
@@ -438,7 +438,7 @@ defmodule Tokengate.Providers do
           from(c in base_query,
             where:
               not fragment(
-                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_alias_id = ? AND mp.exclusive_to_team_member_id IS NOT NULL AND mp.id != ?)",
+                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_id = ? AND mp.exclusive_to_team_member_id IS NOT NULL AND mp.id != ?)",
                 c.id,
                 ^ma_id,
                 ^exclude_id
@@ -448,7 +448,7 @@ defmodule Tokengate.Providers do
           from(c in base_query,
             where:
               not fragment(
-                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_alias_id = ? AND mp.exclusive_to_team_member_id IS NOT NULL)",
+                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_id = ? AND mp.exclusive_to_team_member_id IS NOT NULL)",
                 c.id,
                 ^ma_id
               )
@@ -460,7 +460,7 @@ defmodule Tokengate.Providers do
           from(c in base_query,
             where:
               not fragment(
-                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_alias_id = ? AND mp.exclusive_to_team_id IS NOT NULL AND mp.id != ?)",
+                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_id = ? AND mp.exclusive_to_team_id IS NOT NULL AND mp.id != ?)",
                 c.id,
                 ^ma_id,
                 ^exclude_id
@@ -470,7 +470,7 @@ defmodule Tokengate.Providers do
           from(c in base_query,
             where:
               not fragment(
-                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_alias_id = ? AND mp.exclusive_to_team_id IS NOT NULL)",
+                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_id = ? AND mp.exclusive_to_team_id IS NOT NULL)",
                 c.id,
                 ^ma_id
               )
@@ -483,7 +483,7 @@ defmodule Tokengate.Providers do
           from(c in base_query,
             where:
               not fragment(
-                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_alias_id = ? AND mp.exclusive_to_team_member_id IS NULL AND mp.exclusive_to_team_id IS NULL AND mp.id != ?)",
+                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_id = ? AND mp.exclusive_to_team_member_id IS NULL AND mp.exclusive_to_team_id IS NULL AND mp.id != ?)",
                 c.id,
                 ^ma_id,
                 ^exclude_id
@@ -493,7 +493,7 @@ defmodule Tokengate.Providers do
           from(c in base_query,
             where:
               not fragment(
-                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_alias_id = ? AND mp.exclusive_to_team_member_id IS NULL AND mp.exclusive_to_team_id IS NULL)",
+                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_id = ? AND mp.exclusive_to_team_member_id IS NULL AND mp.exclusive_to_team_id IS NULL)",
                 c.id,
                 ^ma_id
               )
@@ -510,42 +510,42 @@ defmodule Tokengate.Providers do
   # Team Member Extra Aliases
   # ---------------------------------------------------------------------------
 
-  def get_team_member_extra_alias!(id), do: Repo.get!(TeamMemberExtraAlias, id)
+  def get_team_member_extra_model!(id), do: Repo.get!(TeamMemberExtraModel, id)
 
   @doc """
-  Returns model_alias ids granted as extra aliases to a specific team member.
+  Returns model ids granted as extra models to a specific team member.
   """
-  def list_extra_alias_ids_for_member(team_member_id) do
-    from(tmea in TeamMemberExtraAlias,
+  def list_extra_model_ids_for_member(team_member_id) do
+    from(tmea in TeamMemberExtraModel,
       where: tmea.team_member_id == ^team_member_id,
-      select: tmea.model_alias_id
+      select: tmea.model_id
     )
     |> Repo.all()
   end
 
   @doc """
-  Grants an extra model alias to an individual team member (access only, no
+  Grants an extra model model to an individual team member (access only, no
   per-model budget). Idempotent: returns `{:error, :already_granted}` if the
   grant already exists.
   """
-  def set_extra_alias(team_member_id, model_alias_id) do
-    grant_extra_alias(team_member_id, model_alias_id)
+  def set_extra_model(team_member_id, model_id) do
+    grant_extra_model(team_member_id, model_id)
   end
 
   @doc """
-  Grants an extra model alias to an individual team member with no budget.
+  Grants an extra model model to an individual team member with no budget.
   Idempotent: returns `{:error, :already_granted}` if the grant already exists.
   """
-  def grant_extra_alias(team_member_id, model_alias_id) do
-    %TeamMemberExtraAlias{}
-    |> TeamMemberExtraAlias.changeset(%{
+  def grant_extra_model(team_member_id, model_id) do
+    %TeamMemberExtraModel{}
+    |> TeamMemberExtraModel.changeset(%{
       team_member_id: team_member_id,
-      model_alias_id: model_alias_id
+      model_id: model_id
     })
     |> Repo.insert()
     |> case do
       {:ok, _tmea} = ok ->
-        Tokengate.Routing.Cache.invalidate_accessible_aliases(nil, team_member_id)
+        Tokengate.Routing.Cache.invalidate_accessible_models(nil, team_member_id)
         ok
 
       other ->
@@ -554,12 +554,12 @@ defmodule Tokengate.Providers do
   end
 
   @doc """
-  Revokes an extra model alias from a team member. Idempotent.
+  Revokes an extra model model from a team member. Idempotent.
   """
-  def revoke_extra_alias(team_member_id, model_alias_id) do
-    case Repo.get_by(TeamMemberExtraAlias,
+  def revoke_extra_model(team_member_id, model_id) do
+    case Repo.get_by(TeamMemberExtraModel,
            team_member_id: team_member_id,
-           model_alias_id: model_alias_id
+           model_id: model_id
          ) do
       nil ->
         {:error, :not_found}
@@ -567,7 +567,7 @@ defmodule Tokengate.Providers do
       record ->
         case Repo.delete(record) do
           {:ok, _tmea} = ok ->
-            Tokengate.Routing.Cache.invalidate_accessible_aliases(nil, team_member_id)
+            Tokengate.Routing.Cache.invalidate_accessible_models(nil, team_member_id)
             ok
 
           {:error, changeset} ->
@@ -576,20 +576,20 @@ defmodule Tokengate.Providers do
     end
   end
 
-  def change_team_member_extra_alias(%TeamMemberExtraAlias{} = tmea, attrs \\ %{}),
-    do: TeamMemberExtraAlias.changeset(tmea, attrs)
+  def change_team_member_extra_model(%TeamMemberExtraModel{} = tmea, attrs \\ %{}),
+    do: TeamMemberExtraModel.changeset(tmea, attrs)
 
   # ---------------------------------------------------------------------------
   # Team Model Aliases
   # ---------------------------------------------------------------------------
 
-  def grant_alias_to_team(team_id, model_alias_id) do
-    %TeamModelAlias{}
-    |> TeamModelAlias.changeset(%{team_id: team_id, model_alias_id: model_alias_id})
+  def grant_model_to_team(team_id, model_id) do
+    %TeamModel{}
+    |> TeamModel.changeset(%{team_id: team_id, model_id: model_id})
     |> Repo.insert()
     |> case do
       {:ok, _tma} = ok ->
-        Tokengate.Routing.Cache.invalidate_accessible_aliases(team_id, nil)
+        Tokengate.Routing.Cache.invalidate_accessible_models(team_id, nil)
         ok
 
       {:error, changeset} ->
@@ -597,10 +597,10 @@ defmodule Tokengate.Providers do
     end
   end
 
-  def revoke_alias_from_team(team_id, model_alias_id) do
-    case Repo.get_by(TeamModelAlias,
+  def revoke_model_from_team(team_id, model_id) do
+    case Repo.get_by(TeamModel,
            team_id: team_id,
-           model_alias_id: model_alias_id
+           model_id: model_id
          ) do
       nil ->
         {:ok, nil}
@@ -608,7 +608,7 @@ defmodule Tokengate.Providers do
       tma ->
         case Repo.delete(tma) do
           {:ok, _} = ok ->
-            Tokengate.Routing.Cache.invalidate_accessible_aliases(team_id, nil)
+            Tokengate.Routing.Cache.invalidate_accessible_models(team_id, nil)
             ok
 
           {:error, changeset} ->
@@ -621,13 +621,13 @@ defmodule Tokengate.Providers do
   # Service Model Aliases
   # ---------------------------------------------------------------------------
 
-  def grant_alias_to_service(service_id, model_alias_id) do
-    %ServiceModelAlias{}
-    |> ServiceModelAlias.changeset(%{service_id: service_id, model_alias_id: model_alias_id})
+  def grant_model_to_service(service_id, model_id) do
+    %ServiceModel{}
+    |> ServiceModel.changeset(%{service_id: service_id, model_id: model_id})
     |> Repo.insert()
     |> case do
       {:ok, _sma} = ok ->
-        Tokengate.Routing.Cache.invalidate_accessible_aliases(nil, service_id)
+        Tokengate.Routing.Cache.invalidate_accessible_models(nil, service_id)
         ok
 
       {:error, changeset} ->
@@ -635,10 +635,10 @@ defmodule Tokengate.Providers do
     end
   end
 
-  def revoke_alias_from_service(service_id, model_alias_id) do
-    case Repo.get_by(ServiceModelAlias,
+  def revoke_model_from_service(service_id, model_id) do
+    case Repo.get_by(ServiceModel,
            service_id: service_id,
-           model_alias_id: model_alias_id
+           model_id: model_id
          ) do
       nil ->
         {:ok, nil}
@@ -646,7 +646,7 @@ defmodule Tokengate.Providers do
       sma ->
         case Repo.delete(sma) do
           {:ok, _} = ok ->
-            Tokengate.Routing.Cache.invalidate_accessible_aliases(nil, service_id)
+            Tokengate.Routing.Cache.invalidate_accessible_models(nil, service_id)
             ok
 
           {:error, changeset} ->
@@ -660,58 +660,58 @@ defmodule Tokengate.Providers do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Returns the union of model aliases accessible to a team member:
-  those granted to their team plus any extra aliases granted individually.
-  Returns distinct ModelAlias structs.
+  Returns the union of models accessible to a team member:
+  those granted to their team plus any extra models granted individually.
+  Returns distinct Model structs.
 
   Expects a team_member struct with `:id` and `:team` preloaded (team must have `:id`).
   """
-  def list_accessible_aliases(%{team: nil} = member) do
-    # Service (virtual team member) — only service_model_aliases
+  def list_accessible_models(%{team: nil} = member) do
+    # Service (virtual team member) — only service_models
     service_id = member.id
 
-    from(sma in ServiceModelAlias,
+    from(sma in ServiceModel,
       where: sma.service_id == ^service_id,
-      join: ma in ModelAlias,
-      on: ma.id == sma.model_alias_id,
+      join: ma in Model,
+      on: ma.id == sma.model_id,
       select: ma
     )
     |> Repo.all()
   end
 
-  def list_accessible_aliases(team_member) do
+  def list_accessible_models(team_member) do
     member_id = team_member.id
     team_id = team_member.team.id
 
     team_alias_ids =
-      from(tma in TeamModelAlias,
+      from(tma in TeamModel,
         where: tma.team_id == ^team_id,
-        select: tma.model_alias_id
+        select: tma.model_id
       )
 
     member_alias_ids =
-      from(tmea in TeamMemberExtraAlias,
+      from(tmea in TeamMemberExtraModel,
         where: tmea.team_member_id == ^member_id,
-        select: tmea.model_alias_id
+        select: tmea.model_id
       )
 
     all_ids = team_alias_ids |> union(^member_alias_ids)
 
-    from(ma in ModelAlias,
+    from(ma in Model,
       join: id in subquery(all_ids),
-      on: ma.id == id.model_alias_id
+      on: ma.id == id.model_id
     )
     |> Repo.all()
     |> Enum.uniq_by(& &1.id)
   end
 
   @doc """
-  Batch variant of `list_accessible_aliases/1` for a list of team members
+  Batch variant of `list_accessible_models/1` for a list of team members
   (e.g. all memberships of one user). Runs a constant number of queries
   regardless of membership count — one for team grants, one for individual
-  grants, one for the aliases — instead of 2N+1.
+  grants, one for the models — instead of 2N+1.
   """
-  def list_accessible_aliases_for_members(members) when is_list(members) do
+  def list_accessible_models_for_members(members) when is_list(members) do
     {service_ids, real_members} = Enum.split_with(members, &(&1.team == nil))
 
     team_ids = real_members |> Enum.map(& &1.team.id) |> Enum.uniq()
@@ -722,9 +722,9 @@ defmodule Tokengate.Providers do
         []
       else
         Repo.all(
-          from tma in TeamModelAlias,
+          from tma in TeamModel,
             where: tma.team_id in ^team_ids,
-            select: tma.model_alias_id
+            select: tma.model_id
         )
       end
 
@@ -733,9 +733,9 @@ defmodule Tokengate.Providers do
         []
       else
         Repo.all(
-          from tmea in TeamMemberExtraAlias,
+          from tmea in TeamMemberExtraModel,
             where: tmea.team_member_id in ^member_ids,
-            select: tmea.model_alias_id
+            select: tmea.model_id
         )
       end
 
@@ -744,9 +744,9 @@ defmodule Tokengate.Providers do
         []
       else
         Repo.all(
-          from sma in ServiceModelAlias,
+          from sma in ServiceModel,
             where: sma.service_id in ^service_ids,
-            select: sma.model_alias_id
+            select: sma.model_id
         )
       end
 
@@ -755,7 +755,7 @@ defmodule Tokengate.Providers do
     if all_ids == [] do
       []
     else
-      Repo.all(from ma in ModelAlias, where: ma.id in ^all_ids)
+      Repo.all(from ma in Model, where: ma.id in ^all_ids)
     end
   end
 

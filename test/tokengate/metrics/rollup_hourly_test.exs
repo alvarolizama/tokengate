@@ -6,7 +6,6 @@ defmodule Tokengate.Metrics.RollupHourlyTest do
   """
 
   use Tokengate.DataCase, async: true
-
   alias Tokengate.Accounts
   alias Tokengate.Logs
   alias Tokengate.Metrics.Rollup

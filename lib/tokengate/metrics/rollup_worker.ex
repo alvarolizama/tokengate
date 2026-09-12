@@ -26,7 +26,6 @@ defmodule Tokengate.Metrics.RollupWorker do
 
   require Logger
   import Ecto.Query
-
   alias Tokengate.Metrics.Rollup.HourlyAggregate
   alias Tokengate.Metrics.RequestMetricsHourly
   alias Tokengate.Repo

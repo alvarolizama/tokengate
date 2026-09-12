@@ -3,9 +3,9 @@ defmodule TokengateWeb.SupervisedServicesLive do
   Read-only view of the services the current user supervises.
 
   Supervisors need visibility into spend, request volume, tokens, latency,
-  and current API-key / alias configuration for the services they own —
+  and current API-key / model configuration for the services they own —
   but they must NOT be able to mutate anything. All admin actions
-  (create / edit / delete / regenerate key / revoke key / toggle alias)
+  (create / edit / delete / regenerate key / revoke key / toggle model)
   live exclusively in `TokengateWeb.ServicesLive` behind the `:admin`
   live_session.
 
@@ -18,10 +18,9 @@ defmodule TokengateWeb.SupervisedServicesLive do
   use TokengateWeb, :live_view
 
   import Ecto.Query, only: [from: 2]
-
   alias Tokengate.Accounts
   alias Tokengate.Periods
-  alias Tokengate.Providers.{ModelAlias, ServiceModelAlias}
+  alias Tokengate.Providers.{Model, ServiceModel}
   alias Tokengate.Repo
 
   # Averaging latencies returns a Decimal/Number depending on the DB; we
@@ -70,25 +69,25 @@ defmodule TokengateWeb.SupervisedServicesLive do
     services = Accounts.services_for_supervisor(user_id)
     service_ids = Enum.map(services, & &1.id)
 
-    # granted_aliases: %{service_id => [model_alias_id, ...]} — scoped to the
+    # granted_models: %{service_id => [model_id, ...]} — scoped to the
     # supervisor's services only (never load the whole grant table into the
     # socket, even if the template only renders this supervisor's rows).
-    granted_aliases =
-      from(sma in ServiceModelAlias,
+    granted_models =
+      from(sma in ServiceModel,
         where: sma.service_id in ^service_ids,
-        select: {sma.service_id, sma.model_alias_id}
+        select: {sma.service_id, sma.model_id}
       )
       |> Repo.all()
-      |> Enum.group_by(fn {service_id, _} -> service_id end, fn {_, alias_id} -> alias_id end)
+      |> Enum.group_by(fn {service_id, _} -> service_id end, fn {_, model_id} -> model_id end)
 
-    # Only the aliases actually granted to these services — not the full catalog.
-    granted_alias_ids = granted_aliases |> Map.values() |> List.flatten() |> Enum.uniq()
+    # Only the models actually granted to these services — not the full catalog.
+    granted_alias_ids = granted_models |> Map.values() |> List.flatten() |> Enum.uniq()
 
-    aliases =
+    models =
       if granted_alias_ids == [] do
         []
       else
-        from(ma in ModelAlias, where: ma.id in ^granted_alias_ids, order_by: [asc: ma.name])
+        from(ma in Model, where: ma.id in ^granted_alias_ids, order_by: [asc: ma.name])
         |> Repo.all()
       end
 
@@ -115,8 +114,8 @@ defmodule TokengateWeb.SupervisedServicesLive do
     socket
     |> stream(:services, services, reset: true)
     |> assign(:services_empty?, services == [])
-    |> assign(:granted_aliases, granted_aliases)
-    |> assign(:aliases, aliases)
+    |> assign(:granted_models, granted_models)
+    |> assign(:models, models)
     |> assign(:service_stats, stats)
   end
 
@@ -126,13 +125,13 @@ defmodule TokengateWeb.SupervisedServicesLive do
   # Aliases for granted ids — reuses the helper signature from ServicesLive
   # so both views look identical from the outside.
 
-  def granted_alias_ids(granted_aliases, service_id) do
-    Map.get(granted_aliases, service_id, [])
+  def granted_alias_ids(granted_models, service_id) do
+    Map.get(granted_models, service_id, [])
   end
 
-  def alias_names_for(granted_aliases, service_id, all_aliases) do
-    granted_alias_ids(granted_aliases, service_id)
-    |> Enum.map(&Enum.find(all_aliases, fn a -> a.id == &1 end))
+  def model_names_for(granted_models, service_id, all_models) do
+    granted_alias_ids(granted_models, service_id)
+    |> Enum.map(&Enum.find(all_models, fn a -> a.id == &1 end))
     |> Enum.reject(&is_nil/1)
   end
 
@@ -340,18 +339,18 @@ defmodule TokengateWeb.SupervisedServicesLive do
 
               <div class="mt-4">
                 <p class="text-sm font-medium mb-2">Modelos permitidos</p>
-                <div class="flex flex-wrap gap-2" id={"aliases-#{service.id}"}>
-                  <%= if alias_names_for(@granted_aliases, service.id, @aliases) == [] do %>
+                <div class="flex flex-wrap gap-2" id={"models-#{service.id}"}>
+                  <%= if model_names_for(@granted_models, service.id, @models) == [] do %>
                     <p class="text-xs text-base-content/40">
-                      Este servicio no tiene modelos asignados.
+                      Este servicio no tiene models asignados.
                     </p>
                   <% else %>
                     <span
-                      :for={alias <- alias_names_for(@granted_aliases, service.id, @aliases)}
-                      id={"alias-badge-#{service.id}-#{alias.id}"}
+                      :for={model <- model_names_for(@granted_models, service.id, @models)}
+                      id={"model-badge-#{service.id}-#{model.id}"}
                       class="badge badge-primary badge-sm"
                     >
-                      {alias.name}
+                      {model.name}
                     </span>
                   <% end %>
                 </div>

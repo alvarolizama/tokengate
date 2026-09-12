@@ -41,20 +41,20 @@ defmodule Tokengate.Accounts do
   end
 
   def delete_team(%Team{} = team) do
-    alias Tokengate.Providers.{TeamModelAlias, TeamMemberExtraAlias}
+    alias Tokengate.Providers.{TeamModel, TeamMemberExtraModel}
 
     team = Repo.preload(team, team_members: :api_key)
 
     Repo.transaction(fn ->
-      # Delete team_model_aliases (FK team_id)
-      from(t in TeamModelAlias, where: t.team_id == ^team.id)
+      # Delete team_models (FK team_id)
+      from(t in TeamModel, where: t.team_id == ^team.id)
       |> Repo.delete_all()
 
-      # For each team_member: delete api_key, extra_aliases, then the member
+      # For each team_member: delete api_key, extra_models, then the member
       for member <- team.team_members do
         if member.api_key, do: Repo.delete!(member.api_key)
 
-        from(t in TeamMemberExtraAlias, where: t.team_member_id == ^member.id)
+        from(t in TeamMemberExtraModel, where: t.team_member_id == ^member.id)
         |> Repo.delete_all()
 
         member
@@ -415,14 +415,14 @@ defmodule Tokengate.Accounts do
   end
 
   def delete_team_member(%TeamMember{} = team_member) do
-    alias Tokengate.Providers.TeamMemberExtraAlias
+    alias Tokengate.Providers.TeamMemberExtraModel
 
     team_member = Repo.preload(team_member, :api_key)
 
     Repo.transaction(fn ->
       if team_member.api_key, do: Repo.delete!(team_member.api_key)
 
-      from(t in TeamMemberExtraAlias, where: t.team_member_id == ^team_member.id)
+      from(t in TeamMemberExtraModel, where: t.team_member_id == ^team_member.id)
       |> Repo.delete_all()
 
       team_member
@@ -602,13 +602,13 @@ defmodule Tokengate.Accounts do
   end
 
   def delete_service(%Service{} = service) do
-    alias Tokengate.Providers.ServiceModelAlias
+    alias Tokengate.Providers.ServiceModel
 
-    service = Repo.preload(service, [:api_key, :model_aliases])
+    service = Repo.preload(service, [:api_key, :models])
 
     Repo.transaction(fn ->
-      # Delete service_model_aliases
-      from(sma in ServiceModelAlias, where: sma.service_id == ^service.id)
+      # Delete service_models
+      from(sma in ServiceModel, where: sma.service_id == ^service.id)
       |> Repo.delete_all()
 
       # Delete api key

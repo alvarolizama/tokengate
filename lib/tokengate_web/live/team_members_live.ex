@@ -10,18 +10,17 @@ defmodule TokengateWeb.TeamMembersLive do
     - Add member by email (creates team_member + auto-generates API key).
     - Remove member.
     - Per-member extras: extra_monthly_budget_usd,
-      extra_concurrency, extra_rpm, extra_model_aliases (individual grants
-      beyond team aliases) with optional per-model daily budget.
+      extra_concurrency, extra_rpm, extra_model_models (individual grants
+      beyond team models) with optional per-model daily budget.
   """
 
   use TokengateWeb, :live_view
 
   import Ecto.Query, only: [from: 2]
-
   alias Tokengate.Accounts
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Providers
-  alias Tokengate.Providers.{ModelAlias, TeamMemberExtraAlias, TeamModelAlias}
+  alias Tokengate.Providers.{Model, TeamMemberExtraModel, TeamModel}
   alias Tokengate.Repo
 
   @impl true
@@ -83,37 +82,37 @@ defmodule TokengateWeb.TeamMembersLive do
         end)
       end
 
-    # Get all available model aliases
+    # Get all available models
     org_alias_ids =
-      from(ma in ModelAlias,
+      from(ma in Model,
         order_by: [asc: ma.name]
       )
       |> Repo.all()
 
-    # Get the team's own aliases (from team_model_aliases)
+    # Get the team's own models (from team_models)
     team_alias_ids =
-      from(tma in TeamModelAlias,
+      from(tma in TeamModel,
         where: tma.team_id == ^team.id,
-        select: tma.model_alias_id
+        select: tma.model_id
       )
       |> Repo.all()
       |> MapSet.new()
 
-    # Preload extra alias ids per member (access grants only, no budget)
-    extra_aliases =
-      from(tmea in TeamMemberExtraAlias,
+    # Preload extra model ids per member (access grants only, no budget)
+    extra_models =
+      from(tmea in TeamMemberExtraModel,
         where: tmea.team_member_id in ^Enum.map(members, & &1.id),
-        select: {tmea.team_member_id, tmea.model_alias_id}
+        select: {tmea.team_member_id, tmea.model_id}
       )
       |> Repo.all()
 
     extra_aliases_simple =
-      extra_aliases
-      |> Enum.group_by(fn {tm_id, _} -> tm_id end, fn {_, alias_id} -> alias_id end)
+      extra_models
+      |> Enum.group_by(fn {tm_id, _} -> tm_id end, fn {_, model_id} -> model_id end)
 
     # Member budgets with spend — one batched query for every member instead
     # of one SUM per member (N+1).
-    alias_map = Map.new(org_alias_ids, fn a -> {a.id, a.name} end)
+    model_map = Map.new(org_alias_ids, fn a -> {a.id, a.name} end)
 
     monthly_spend_by_member =
       members
@@ -156,10 +155,10 @@ defmodule TokengateWeb.TeamMembersLive do
     |> assign(:members, members)
     |> assign(:member_budgets, Map.new(member_budgets, fn b -> {b.member_id, b} end))
     |> assign(:members_empty?, members == [])
-    |> assign(:org_aliases, org_alias_ids)
+    |> assign(:org_models, org_alias_ids)
     |> assign(:team_alias_ids, team_alias_ids)
-    |> assign(:extra_aliases, extra_aliases_simple)
-    |> assign(:alias_map, alias_map)
+    |> assign(:extra_models, extra_aliases_simple)
+    |> assign(:model_map, model_map)
     |> assign(:team_monthly_spend, team_monthly_spend)
     |> assign(:estimated_monthly, estimated_monthly)
     |> assign(:estimated_monthly_extra, estimated_monthly_extra)
@@ -181,7 +180,7 @@ defmodule TokengateWeb.TeamMembersLive do
     exclusive_providers =
       from(mp in ModelProvider,
         where: mp.exclusive_to_team_member_id in ^member_ids,
-        preload: [credential: [:provider], model_alias: []]
+        preload: [credential: [:provider], model: []]
       )
       |> Repo.all()
 
@@ -439,12 +438,12 @@ defmodule TokengateWeb.TeamMembersLive do
     end
   end
 
-  ## Events — extra alias grants -----------------------------------------
+  ## Events — extra model grants -----------------------------------------
 
   @impl true
   def handle_event(
-        "toggle_extra_alias",
-        %{"member-id" => member_id, "alias-id" => alias_id},
+        "toggle_extra_model",
+        %{"member-id" => member_id, "model-id" => model_id},
         socket
       ) do
     member = Accounts.get_team_member!(member_id)
@@ -452,24 +451,24 @@ defmodule TokengateWeb.TeamMembersLive do
     if member.team_id != socket.assigns.team.id do
       {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
     else
-      existing = Map.get(socket.assigns.extra_aliases, member_id, [])
+      existing = Map.get(socket.assigns.extra_models, member_id, [])
 
       result =
-        if alias_id in existing do
-          Providers.revoke_extra_alias(member_id, alias_id)
+        if model_id in existing do
+          Providers.revoke_extra_model(member_id, model_id)
         else
-          Providers.grant_extra_alias(member_id, alias_id)
+          Providers.grant_extra_model(member_id, model_id)
         end
 
       case result do
         {:ok, _} ->
           {:noreply,
            socket
-           |> put_flash(:info, "Aliases actualizados.")
+           |> put_flash(:info, "Modelos actualizados.")
            |> load_data()}
 
         {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudo actualizar el alias.")}
+          {:noreply, put_flash(socket, :error, "No se pudo actualizar el modelo.")}
       end
     end
   end
@@ -477,18 +476,18 @@ defmodule TokengateWeb.TeamMembersLive do
   @impl true
   def handle_event(
         "save_alias_extra",
-        %{"alias_extra" => params},
+        %{"model_extra" => params},
         socket
       ) do
     member_id = params["member_id"]
-    alias_id = params["alias_id"]
+    model_id = params["model_id"]
 
     member = Accounts.get_team_member!(member_id)
 
     if member.team_id != socket.assigns.team.id do
       {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
     else
-      case Providers.set_extra_alias(member_id, alias_id) do
+      case Providers.set_extra_model(member_id, model_id) do
         {:ok, _} ->
           {:noreply,
            socket
@@ -496,7 +495,7 @@ defmodule TokengateWeb.TeamMembersLive do
            |> load_data()}
 
         {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudo actualizar el alias.")}
+          {:noreply, put_flash(socket, :error, "No se pudo actualizar el modelo.")}
       end
     end
   end
@@ -558,8 +557,8 @@ defmodule TokengateWeb.TeamMembersLive do
     Enum.join(errors, ", ")
   end
 
-  defp extra_alias_ids(extra_aliases, member_id) do
-    Map.get(extra_aliases, member_id, [])
+  defp extra_model_ids(extra_models, member_id) do
+    Map.get(extra_models, member_id, [])
   end
 
   defp format_decimal(%Decimal{} = d), do: d |> Decimal.round(2) |> Decimal.to_string()
@@ -1165,29 +1164,29 @@ defmodule TokengateWeb.TeamMembersLive do
                 >Eliminar</button>
               </div>
 
-              <%!-- Modelos — team aliases (locked) + extra grants (toggleable) --%>
-              <div :if={@org_aliases != []} class="mt-3 pt-3 border-t border-base-200">
+              <%!-- Modelos — team models (locked) + extra grants (toggleable) --%>
+              <div :if={@org_models != []} class="mt-3 pt-3 border-t border-base-200">
                 <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">Modelos</p>
                 <div class="flex flex-wrap gap-2">
                   <button
-                    :for={alias <- @org_aliases}
+                    :for={model <- @org_models}
                     type="button"
-                    phx-click={not MapSet.member?(@team_alias_ids, alias.id) and "toggle_extra_alias"}
+                    phx-click={not MapSet.member?(@team_alias_ids, model.id) and "toggle_extra_model"}
                     phx-value-member-id={member.id}
-                    phx-value-alias-id={alias.id}
+                    phx-value-model-id={model.id}
                     class={[
                       "badge badge-sm cursor-pointer transition-all",
                       cond do
-                        MapSet.member?(@team_alias_ids, alias.id) -> "badge-primary"
-                        alias.id in extra_alias_ids(@extra_aliases, member.id) -> "badge-accent"
+                        MapSet.member?(@team_alias_ids, model.id) -> "badge-primary"
+                        model.id in extra_model_ids(@extra_models, member.id) -> "badge-accent"
                         true -> "badge-outline"
                       end
                     ]}
-                    disabled={MapSet.member?(@team_alias_ids, alias.id)}
-                    id={"extra-alias-#{member.id}-#{alias.id}"}
+                    disabled={MapSet.member?(@team_alias_ids, model.id)}
+                    id={"extra-model-#{member.id}-#{model.id}"}
                   >
-                    {alias.name}
-                    <%= if MapSet.member?(@team_alias_ids, alias.id) do %>
+                    {model.name}
+                    <%= if MapSet.member?(@team_alias_ids, model.id) do %>
                       <span class="text-[10px] opacity-60 ml-0.5">equipo</span>
                     <% end %>
                   </button>
@@ -1210,7 +1209,7 @@ defmodule TokengateWeb.TeamMembersLive do
                     >
                       <div class="flex items-center gap-2 min-w-0">
                         <span class="badge badge-xs badge-warning">exclusiva</span>
-                        <span class="font-medium truncate">{mp.model_alias.name}</span>
+                        <span class="font-medium truncate">{mp.model.name}</span>
                         <span class="text-base-content/40">·</span>
                         <span class="text-base-content/50">
                           {if mp.credential && mp.credential.provider,

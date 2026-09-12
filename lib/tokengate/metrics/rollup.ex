@@ -23,12 +23,11 @@ defmodule Tokengate.Metrics.Rollup do
   """
 
   import Ecto.Query, warn: false
-
   alias Tokengate.Accounts.TeamMember
   alias Tokengate.Logs
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Metrics.RequestMetricsHourly
-  alias Tokengate.Providers.ModelAlias
+  alias Tokengate.Providers.Model
   alias Tokengate.Repo
 
   # -----------------------------------------------------------------------
@@ -271,10 +270,10 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
-      |> join(:left, [rl], ma in ModelAlias, on: rl.model_alias_id == ma.id, as: :model_alias)
-      |> group_by([model_alias: ma], ma.id)
+      |> join(:left, [rl], ma in Model, on: rl.model_id == ma.id, as: :model)
+      |> group_by([model: ma], ma.id)
       |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
-      |> select([rl, model_alias: ma], %{
+      |> select([rl, model: ma], %{
         model_id: ma.id,
         model_name: ma.name,
         request_count: count(rl.id),
@@ -322,10 +321,10 @@ defmodule Tokengate.Metrics.Rollup do
       |> where([rl], rl.team_member_id == ^member_id)
       |> maybe_from(from)
       |> maybe_to(to)
-      |> join(:left, [rl], ma in ModelAlias, on: rl.model_alias_id == ma.id, as: :model_alias)
-      |> group_by([model_alias: ma], ma.id)
+      |> join(:left, [rl], ma in Model, on: rl.model_id == ma.id, as: :model)
+      |> group_by([model: ma], ma.id)
       |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
-      |> select([rl, model_alias: ma], %{
+      |> select([rl, model: ma], %{
         model_id: ma.id,
         model_name: ma.name,
         request_count: count(rl.id),
@@ -565,7 +564,7 @@ defmodule Tokengate.Metrics.Rollup do
   # -----------------------------------------------------------------------
 
   @doc """
-  Returns per-model-provider aggregate metrics for a specific model alias,
+  Returns per-model-provider aggregate metrics for a specific model model,
   ranked by total provider cost (descending).
 
   Groups by the concrete provider model deployment (`ModelProvider`), so two
@@ -579,7 +578,7 @@ defmodule Tokengate.Metrics.Rollup do
         model_provider_id: binary | nil,
         provider_name: String.t(),
         provider_model: String.t() | nil,   # actual model name at the provider
-        credential_name: String.t() | nil,  # API key alias
+        credential_name: String.t() | nil,  # API key model
         request_count: integer,
         cost_usd: Decimal,  # what the upstream charged for the request
         prompt_tokens: integer,
@@ -587,7 +586,7 @@ defmodule Tokengate.Metrics.Rollup do
         avg_tps: float | nil
       }
 
-  `model_alias_id` of `nil` returns an empty list.
+  `model_id` of `nil` returns an empty list.
 
   ## Options
 
@@ -596,18 +595,18 @@ defmodule Tokengate.Metrics.Rollup do
     * `:member_ids` — restrict to logs of these team-member ids (scoping)
   """
   @spec breakdown_by_provider_for_model(String.t() | nil, keyword()) :: [map()]
-  def breakdown_by_provider_for_model(model_alias_id, opts \\ [])
+  def breakdown_by_provider_for_model(model_id, opts \\ [])
 
   def breakdown_by_provider_for_model(nil, _opts), do: []
 
-  def breakdown_by_provider_for_model(model_alias_id, opts)
-      when is_binary(model_alias_id) do
+  def breakdown_by_provider_for_model(model_id, opts)
+      when is_binary(model_id) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
     query =
       RequestLog
-      |> where([rl], rl.model_alias_id == ^model_alias_id)
+      |> where([rl], rl.model_id == ^model_id)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
       |> join(:left, [rl], mp in Tokengate.Providers.ModelProvider,
         on: rl.model_provider_id == mp.id
@@ -653,7 +652,7 @@ defmodule Tokengate.Metrics.Rollup do
   # -----------------------------------------------------------------------
 
   @doc """
-  Returns per-member aggregate metrics for a specific model alias,
+  Returns per-member aggregate metrics for a specific model model,
   ranked by total provider cost (descending).
 
   Each row is:
@@ -670,7 +669,7 @@ defmodule Tokengate.Metrics.Rollup do
         avg_tps: float | nil
       }
 
-  `model_alias_id` of `nil` returns an empty list.
+  `model_id` of `nil` returns an empty list.
 
   ## Options
 
@@ -679,18 +678,18 @@ defmodule Tokengate.Metrics.Rollup do
     * `:member_ids` — restrict to logs of these team-member ids (scoping)
   """
   @spec breakdown_by_member_for_model(String.t() | nil, keyword()) :: [map()]
-  def breakdown_by_member_for_model(model_alias_id, opts \\ [])
+  def breakdown_by_member_for_model(model_id, opts \\ [])
 
   def breakdown_by_member_for_model(nil, _opts), do: []
 
-  def breakdown_by_member_for_model(model_alias_id, opts)
-      when is_binary(model_alias_id) do
+  def breakdown_by_member_for_model(model_id, opts)
+      when is_binary(model_id) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
     query =
       RequestLog
-      |> where([rl], rl.model_alias_id == ^model_alias_id)
+      |> where([rl], rl.model_id == ^model_id)
       |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
       |> join(:inner, [_, tm], t in assoc(tm, :team))
       |> join(:inner, [_, tm], u in assoc(tm, :user))
@@ -732,7 +731,7 @@ defmodule Tokengate.Metrics.Rollup do
   # -----------------------------------------------------------------------
 
   @doc """
-  Returns per-team aggregate metrics for a specific model alias,
+  Returns per-team aggregate metrics for a specific model model,
   ranked by total provider cost (descending).
 
   Each row is:
@@ -747,7 +746,7 @@ defmodule Tokengate.Metrics.Rollup do
         avg_tps: float | nil
       }
 
-  `model_alias_id` of `nil` returns an empty list.
+  `model_id` of `nil` returns an empty list.
 
   ## Options
 
@@ -755,18 +754,18 @@ defmodule Tokengate.Metrics.Rollup do
     * `:to`   — `inserted_at <= to` (DateTime)
   """
   @spec breakdown_by_team_for_model(String.t() | nil, keyword()) :: [map()]
-  def breakdown_by_team_for_model(model_alias_id, opts \\ [])
+  def breakdown_by_team_for_model(model_id, opts \\ [])
 
   def breakdown_by_team_for_model(nil, _opts), do: []
 
-  def breakdown_by_team_for_model(model_alias_id, opts)
-      when is_binary(model_alias_id) do
+  def breakdown_by_team_for_model(model_id, opts)
+      when is_binary(model_id) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
     query =
       RequestLog
-      |> where([rl], rl.model_alias_id == ^model_alias_id)
+      |> where([rl], rl.model_id == ^model_id)
       |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
       |> join(:inner, [_, tm], t in assoc(tm, :team))
       |> maybe_from(from)
@@ -946,9 +945,9 @@ defmodule Tokengate.Metrics.Rollup do
   # -----------------------------------------------------------------------
 
   @doc """
-  Ranking de modelos por confiabilidad (fallos) y velocidad (latencia).
+  Ranking de models por confiabilidad (fallos) y velocidad (latencia).
 
-  Igual que `provider_ranking/2` pero agrupado por `ModelAlias` en vez de
+  Igual que `provider_ranking/2` pero agrupado por `Model` en vez de
   por proveedor. Devuelve filas con la misma forma para reutilizar el
   rendering del tier y score.
 
@@ -966,8 +965,8 @@ defmodule Tokengate.Metrics.Rollup do
 
     rows =
       RequestLog
-      |> where([rl], not is_nil(rl.model_alias_id))
-      |> join(:inner, [rl], ma in ModelAlias, on: rl.model_alias_id == ma.id)
+      |> where([rl], not is_nil(rl.model_id))
+      |> join(:inner, [rl], ma in Model, on: rl.model_id == ma.id)
       |> maybe_join_team(team_id)
       |> maybe_from(from)
       |> maybe_to(to)
@@ -1061,7 +1060,7 @@ defmodule Tokengate.Metrics.Rollup do
   @doc """
   Uso total por hora del día, con desglose por modelo.
 
-  Incluye TODOS los modelos (pay_per_token e included). Para cada hora:
+  Incluye TODOS los models (pay_per_token e included). Para cada hora:
 
       %{
         hour: 0..23,
@@ -1077,7 +1076,7 @@ defmodule Tokengate.Metrics.Rollup do
         ]
       }
 
-  La barra muestra `total_requests` (todos los modelos). El segmento
+  La barra muestra `total_requests` (todos los models). El segmento
   destacado es la proporción de requests de modelos pay_per_token.
 
   ## Options
@@ -1098,12 +1097,14 @@ defmodule Tokengate.Metrics.Rollup do
       |> join(:left, [rl], mp in Tokengate.Providers.ModelProvider,
         on: rl.model_provider_id == mp.id
       )
+      |> join(:left, [rl, mp], c in Tokengate.Providers.Credential, on: mp.credential_id == c.id)
+      |> join(:left, [rl, mp, c], p in Tokengate.Providers.Provider, on: c.provider_id == p.id)
       |> maybe_join_team(team_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
-      |> join(:left, [rl], ma in ModelAlias, on: rl.model_alias_id == ma.id)
-      |> select([rl, mp, ma], %{
+      |> join(:left, [rl], ma in Model, on: rl.model_id == ma.id)
+      |> select([rl, mp, c, p, ma], %{
         hour:
           fragment(
             "CAST(EXTRACT(hour FROM (? AT TIME ZONE 'Etc/UTC') AT TIME ZONE ?) AS integer)",
@@ -1111,7 +1112,11 @@ defmodule Tokengate.Metrics.Rollup do
             ^timezone
           ),
         model: fragment("COALESCE(?, ?)", ma.name, rl.model_requested),
-        billing_mode: fragment("COALESCE(?, 'unknown')", mp.billing_mode),
+        billing_mode:
+          fragment(
+            "CASE WHEN ? = 'subscription' THEN 'included' ELSE 'pay_per_token' END",
+            p.billing_type
+          ),
         cost_usd: rl.provider_cost_usd,
         id: rl.id
       })
@@ -1137,7 +1142,7 @@ defmodule Tokengate.Metrics.Rollup do
     for hour <- 0..23 do
       hour_rows = Map.get(by_hour, hour, [])
 
-      # Agrupar por (model, billing_mode) — un mismo model alias puede tener
+      # Agrupar por (model, billing_mode) — un mismo model model puede tener
       # providers incluidos y pay_per_token simultáneamente.
       by_model_billing =
         hour_rows
@@ -1194,9 +1199,9 @@ defmodule Tokengate.Metrics.Rollup do
   # -----------------------------------------------------------------------
 
   @doc """
-  Requests agrupados por model alias, con desglose por proveedor (ModelProvider).
+  Requests agrupados por model model, con desglose por proveedor (ModelProvider).
 
-  Devuelve una lista de modelos, cada uno con su total de requests y la lista
+  Devuelve una lista de models, cada uno con su total de requests y la lista
   de proveedores que lo sirvieron (con requests, billing_mode y costo).
 
   Las barras horizontales de la gráfica de stats usan esta data: una barra
@@ -1218,7 +1223,7 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
-      |> join(:left, [rl], ma in ModelAlias, on: rl.model_alias_id == ma.id)
+      |> join(:left, [rl], ma in Model, on: rl.model_id == ma.id)
       |> join(:left, [rl, ma], mp in Tokengate.Providers.ModelProvider,
         on: rl.model_provider_id == mp.id
       )
@@ -1230,7 +1235,7 @@ defmodule Tokengate.Metrics.Rollup do
       )
       |> group_by(
         [rl, ma, mp, c, p],
-        [ma.id, ma.name, mp.id, p.name, mp.billing_mode]
+        [ma.id, ma.name, mp.id, p.name, p.billing_type]
       )
       |> select(
         [rl, ma, mp, c, p],
@@ -1239,7 +1244,11 @@ defmodule Tokengate.Metrics.Rollup do
           model_name: ma.name,
           provider_id: mp.id,
           provider_name: p.name,
-          billing_mode: fragment("COALESCE(?, 'pay_per_token')", mp.billing_mode),
+          billing_mode:
+            fragment(
+              "CASE WHEN ? = 'subscription' THEN 'included' ELSE 'pay_per_token' END",
+              p.billing_type
+            ),
           request_count: count(rl.id),
           cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
         }
@@ -1667,7 +1676,7 @@ defmodule Tokengate.Metrics.Rollup do
   # -----------------------------------------------------------------------
 
   @doc """
-  Returns an hour-bucketed series for a specific model alias, including
+  Returns an hour-bucketed series for a specific model model, including
   token breakdown and cost. Used by the cost calculator to compare real
   spend vs estimated spend.
 
@@ -1690,18 +1699,18 @@ defmodule Tokengate.Metrics.Rollup do
     * `:timezone` — IANA zone for local-hour bucketing; default `"Etc/UTC"`
   """
   @spec hourly_series_for_model(String.t() | nil, keyword()) :: [map()]
-  def hourly_series_for_model(model_alias_id, opts \\ [])
+  def hourly_series_for_model(model_id, opts \\ [])
 
   def hourly_series_for_model(nil, _opts), do: []
 
-  def hourly_series_for_model(model_alias_id, opts) when is_binary(model_alias_id) do
+  def hourly_series_for_model(model_id, opts) when is_binary(model_id) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
     timezone = Keyword.get(opts, :timezone, "Etc/UTC")
 
     bucketed =
       RequestLog
-      |> where([rl], rl.model_alias_id == ^model_alias_id)
+      |> where([rl], rl.model_id == ^model_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> select([rl], %{
@@ -2138,22 +2147,22 @@ defmodule Tokengate.Metrics.Rollup do
   # -----------------------------------------------------------------------
   # daily_series_by_provider_for_model/2
   # -----------------------------------------------------------------------
-  # Daily request count per provider for a specific model alias.
+  # Daily request count per provider for a specific model model.
   # Used by the models drill-down sparkline chart.
 
-  def daily_series_by_provider_for_model(model_alias_id, opts \\ [])
+  def daily_series_by_provider_for_model(model_id, opts \\ [])
 
   def daily_series_by_provider_for_model(nil, _opts), do: []
 
-  def daily_series_by_provider_for_model(model_alias_id, opts)
-      when is_binary(model_alias_id) do
+  def daily_series_by_provider_for_model(model_id, opts)
+      when is_binary(model_id) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
     timezone = Keyword.get(opts, :timezone, "Etc/UTC")
 
     bucketed =
       RequestLog
-      |> where([rl], rl.model_alias_id == ^model_alias_id)
+      |> where([rl], rl.model_id == ^model_id)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
       |> join(:left, [rl], mp in Tokengate.Providers.ModelProvider,
         on: rl.model_provider_id == mp.id

@@ -1,6 +1,5 @@
 defmodule TokengateWeb.OAuthControllerTest do
   use TokengateWeb.ConnCase, async: false
-
   alias Tokengate.Accounts
 
   defp unique, do: System.unique_integer([:positive])

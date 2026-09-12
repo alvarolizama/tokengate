@@ -1,6 +1,5 @@
 defmodule Tokengate.ObservabilityTest do
   use Tokengate.DataCase, async: true
-
   alias Tokengate.Accounts
   alias Tokengate.Observability
   alias Tokengate.Observability.Destination

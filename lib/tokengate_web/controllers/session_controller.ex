@@ -18,7 +18,6 @@ defmodule TokengateWeb.SessionController do
   require Logger
 
   use TokengateWeb, :controller
-
   alias Tokengate.Accounts
 
   @doc """

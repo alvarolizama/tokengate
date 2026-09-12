@@ -15,7 +15,6 @@ defmodule Tokengate.Providers.CatalogSync do
   """
 
   require Logger
-
   alias Tokengate.Providers.Catalog
   alias Tokengate.Repo
 
@@ -30,6 +29,7 @@ defmodule Tokengate.Providers.CatalogSync do
             base_url: entry.base_url,
             source: "builtin",
             dialect: entry.dialect,
+            billing_type: entry.billing,
             capabilities: entry.capabilities,
             status: "active"
           )
@@ -41,6 +41,7 @@ defmodule Tokengate.Providers.CatalogSync do
             name: entry.name,
             base_url: entry.base_url,
             dialect: entry.dialect,
+            billing_type: entry.billing,
             capabilities: entry.capabilities
           )
           |> Repo.update()

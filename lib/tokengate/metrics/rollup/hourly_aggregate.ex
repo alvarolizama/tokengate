@@ -4,7 +4,7 @@ defmodule Tokengate.Metrics.Rollup.HourlyAggregate do
   `request_logs`.
 
   The single entry point is `aggregate_hours/1`: for a UTC hour range, it
-  groups `request_logs` by `(hour, team_member_id, model_alias_id,
+  groups `request_logs` by `(hour, team_member_id, model_id,
   provider_id)` and upserts the sums into the rollup table. Because each
   hour is **fully re-aggregated** (not incremented), the operation is
   idempotent: late-arriving logs, corrected rows, or a crashed run simply
@@ -23,7 +23,6 @@ defmodule Tokengate.Metrics.Rollup.HourlyAggregate do
   """
 
   import Ecto.Query, warn: false
-
   alias Tokengate.Repo
 
   @doc """
@@ -48,7 +47,7 @@ defmodule Tokengate.Metrics.Rollup.HourlyAggregate do
       SELECT
         date_trunc('hour', rl.inserted_at) AS hour_utc,
         rl.team_member_id,
-        rl.model_alias_id,
+        rl.model_id,
         rl.provider_id,
         rl.status_code,
         rl.prompt_tokens,
@@ -61,7 +60,7 @@ defmodule Tokengate.Metrics.Rollup.HourlyAggregate do
       WHERE rl.inserted_at >= $1 AND rl.inserted_at < $2
     )
     INSERT INTO request_metrics_hourly
-      (id, day, hour_utc, team_member_id, model_alias_id, provider_id,
+      (id, day, hour_utc, team_member_id, model_id, provider_id,
        request_count, error_count, prompt_tokens, completion_tokens,
        cache_read_tokens, cache_creation_tokens, cost_micro,
        total_latency_ms, latency_count, inserted_at, updated_at)
@@ -70,7 +69,7 @@ defmodule Tokengate.Metrics.Rollup.HourlyAggregate do
       b.hour_utc::date,
       b.hour_utc,
       b.team_member_id,
-      b.model_alias_id,
+      b.model_id,
       b.provider_id,
       COUNT(*),
       COUNT(*) FILTER (WHERE b.status_code >= 400),
@@ -84,8 +83,8 @@ defmodule Tokengate.Metrics.Rollup.HourlyAggregate do
       now(),
       now()
     FROM bucketed b
-    GROUP BY b.hour_utc, b.team_member_id, b.model_alias_id, b.provider_id
-    ON CONFLICT (day, hour_utc, team_member_id, model_alias_id, provider_id)
+    GROUP BY b.hour_utc, b.team_member_id, b.model_id, b.provider_id
+    ON CONFLICT (day, hour_utc, team_member_id, model_id, provider_id)
     DO UPDATE SET
       request_count = EXCLUDED.request_count,
       error_count = EXCLUDED.error_count,

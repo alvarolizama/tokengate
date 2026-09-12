@@ -1,6 +1,5 @@
 defmodule Tokengate.Proxy.UsageNormalizerTest do
   use ExUnit.Case, async: true
-
   alias Tokengate.Proxy.UsageNormalizer
 
   describe "normalize/2 openai" do

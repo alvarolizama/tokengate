@@ -4,7 +4,6 @@ defmodule Tokengate.Observability do
   """
 
   import Ecto.Query, warn: false
-
   alias Tokengate.Repo
   alias Tokengate.Observability.Destination
 

@@ -2,7 +2,6 @@ defmodule TokengateWeb.LogsLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
-
   alias Tokengate.{Accounts, Logs, Periods, Providers}
   alias Tokengate.Budgets.Manager
   alias Tokengate.Logs.Inflight
@@ -47,8 +46,8 @@ defmodule TokengateWeb.LogsLiveTest do
     {:ok, provider} =
       Providers.create_provider(%{name: "Prov #{u}", base_url: "http://localhost:1"})
 
-    {:ok, model_alias} =
-      Providers.create_model_alias(%{
+    {:ok, model} =
+      Providers.create_model(%{
         name: "model-#{u}",
         context_window: 128_000
       })
@@ -74,7 +73,7 @@ defmodule TokengateWeb.LogsLiveTest do
           Keyword.get(opts, :inserted_at, DateTime.utc_now() |> DateTime.truncate(:second))
       })
 
-    %{team: team, owner: owner, member: member, log: log, model_alias: model_alias}
+    %{team: team, owner: owner, member: member, log: log, model: model}
   end
 
   setup do
@@ -148,14 +147,14 @@ defmodule TokengateWeb.LogsLiveTest do
 
   test "pending respects model filter", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    %{member: member, model_alias: model_alias} = member_with_log()
+    %{member: member, model: model} = member_with_log()
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/logs")
 
-    # Filtrar por el alias del test: el pending usa otro modelo y debe ocultarse
+    # Filtrar por el modelo del test: el pending usa otro modelo y debe ocultarse
     view
-    |> form("#logs-filter-form", filter: %{model_search: model_alias.name})
+    |> form("#logs-filter-form", filter: %{model_search: model.name})
     |> render_change()
 
     entry =
@@ -173,7 +172,7 @@ defmodule TokengateWeb.LogsLiveTest do
 
   ## Model filter as select ------------------------------------------------------
 
-  test "model filter is a select with model aliases", %{conn: conn} do
+  test "model filter is a select with models", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     member_with_log()
 

@@ -485,7 +485,7 @@ defmodule TokengateWeb.StatsLive do
 
     cond do
       params.model_filter ->
-        Map.put(base, :model_alias_id, params.model_filter)
+        Map.put(base, :model_id, params.model_filter)
 
       params.team_filter ->
         Map.put(base, :team_id, params.team_filter)
@@ -716,7 +716,7 @@ defmodule TokengateWeb.StatsLive do
   Segmentos de barra para una hora: solo dos colores.
 
   - Gris (`bg-base-300/30`) = requests included
-  - Morado (`bg-primary`) = requests pay_per_token (todos los modelos combinados)
+  - Morado (`bg-primary`) = requests pay_per_token (todos los models combinados)
   """
   def bar_segments(hour_row) do
     hour_total = hour_row.total_requests

@@ -5,7 +5,6 @@ defmodule TokengateWeb.StatsExportControllerTest do
   """
 
   use TokengateWeb.ConnCase, async: false
-
   alias Tokengate.{Accounts, Logs, Providers}
 
   defp unique, do: System.unique_integer([:positive])
@@ -53,7 +52,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
       Logs.log_request(%{
         team_member_id: member.id,
         provider_id: provider.id,
-        model_alias_id: nil,
+        model_id: nil,
         model_requested: "gpt-4o",
         model_responded: "gpt-4o",
         agent_type: "claude-code",
@@ -138,7 +137,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
       Logs.log_request(%{
         team_member_id: member.id,
         provider_id: provider.id,
-        model_alias_id: nil,
+        model_id: nil,
         model_requested: "gpt-4o",
         agent_type: "curl",
         client_agent: "=cmd|'/c calc'!A1",

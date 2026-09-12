@@ -5,7 +5,6 @@ defmodule Tokengate.Metrics.RollupTest do
   """
 
   use Tokengate.DataCase, async: true
-
   alias Tokengate.Logs
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Accounts
@@ -79,9 +78,9 @@ defmodule Tokengate.Metrics.RollupTest do
     streaming: false
   }
 
-  defp model_alias_fixture(attrs) do
+  defp model_fixture(attrs) do
     {:ok, ma} =
-      Providers.create_model_alias(
+      Providers.create_model(
         Map.merge(
           %{
             "name" => "gpt-#{System.unique_integer([:positive])}",
@@ -94,7 +93,7 @@ defmodule Tokengate.Metrics.RollupTest do
     ma
   end
 
-  defp model_provider_fixture(model_alias, provider, attrs) do
+  defp model_provider_fixture(model, provider, attrs) do
     unique = System.unique_integer([:positive])
 
     {:ok, credential} =
@@ -109,7 +108,7 @@ defmodule Tokengate.Metrics.RollupTest do
       Providers.create_model_provider(
         Map.merge(
           %{
-            model_alias_id: model_alias.id,
+            model_id: model.id,
             credential_id: credential.id,
             provider_model: "gpt-4o-#{unique}",
             enabled: true
@@ -441,10 +440,10 @@ defmodule Tokengate.Metrics.RollupTest do
   describe "breakdown_by_model/2" do
     test "returns per-model aggregates ranked by cost descending" do
       {tm, team} = team_member_fixture()
-      ma = model_alias_fixture(%{"name" => "gpt-4o"})
+      ma = model_fixture(%{"name" => "gpt-4o"})
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
-        model_alias_id: ma.id,
+        model_id: ma.id,
         cost_usd: Decimal.new("1.000000"),
         prompt_tokens: 100,
         completion_tokens: 50,
@@ -452,7 +451,7 @@ defmodule Tokengate.Metrics.RollupTest do
       })
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
-        model_alias_id: ma.id,
+        model_id: ma.id,
         cost_usd: Decimal.new("2.000000"),
         prompt_tokens: 200,
         completion_tokens: 100,
@@ -476,16 +475,16 @@ defmodule Tokengate.Metrics.RollupTest do
 
     test "returns multiple models ranked by cost" do
       {tm, team} = team_member_fixture()
-      ma1 = model_alias_fixture(%{"name" => "cheap-model"})
-      ma2 = model_alias_fixture(%{"name" => "expensive-model"})
+      ma1 = model_fixture(%{"name" => "cheap-model"})
+      ma2 = model_fixture(%{"name" => "expensive-model"})
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
-        model_alias_id: ma1.id,
+        model_id: ma1.id,
         cost_usd: Decimal.new("0.500000")
       })
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
-        model_alias_id: ma2.id,
+        model_id: ma2.id,
         cost_usd: Decimal.new("5.000000")
       })
 
@@ -627,7 +626,7 @@ defmodule Tokengate.Metrics.RollupTest do
   describe "breakdown_by_provider_for_model/2" do
     test "groups by model provider (provider + provider model + credential)" do
       {tm, _team} = team_member_fixture()
-      ma = model_alias_fixture(%{"name" => "gpt-4o"})
+      ma = model_fixture(%{"name" => "gpt-4o"})
 
       {:ok, provider1} =
         Providers.create_provider(%{name: "OpenAI", base_url: "http://localhost:1"})
@@ -639,7 +638,7 @@ defmodule Tokengate.Metrics.RollupTest do
       mp2 = model_provider_fixture(ma, provider2, %{provider_model: "gpt-4o-azure"})
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
-        model_alias_id: ma.id,
+        model_id: ma.id,
         provider_id: provider1.id,
         model_provider_id: mp1.id,
         cost_usd: Decimal.new("0.800000"),
@@ -649,7 +648,7 @@ defmodule Tokengate.Metrics.RollupTest do
       })
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
-        model_alias_id: ma.id,
+        model_id: ma.id,
         provider_id: provider2.id,
         model_provider_id: mp2.id,
         cost_usd: Decimal.new("1.500000"),
@@ -678,7 +677,7 @@ defmodule Tokengate.Metrics.RollupTest do
 
     test "separates two model providers under the same provider" do
       {tm, _team} = team_member_fixture()
-      ma = model_alias_fixture(%{"name" => "gpt-4o"})
+      ma = model_fixture(%{"name" => "gpt-4o"})
 
       {:ok, provider} =
         Providers.create_provider(%{name: "OpenAI", base_url: "http://localhost:1"})
@@ -687,13 +686,13 @@ defmodule Tokengate.Metrics.RollupTest do
       mp2 = model_provider_fixture(ma, provider, %{provider_model: "gpt-4o-mini"})
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
-        model_alias_id: ma.id,
+        model_id: ma.id,
         provider_id: provider.id,
         model_provider_id: mp1.id
       })
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
-        model_alias_id: ma.id,
+        model_id: ma.id,
         provider_id: provider.id,
         model_provider_id: mp2.id
       })
@@ -707,18 +706,18 @@ defmodule Tokengate.Metrics.RollupTest do
 
     test "logs without model_provider_id group into a single unknown row" do
       {tm, _team} = team_member_fixture()
-      ma = model_alias_fixture(%{"name" => "gpt-4o"})
+      ma = model_fixture(%{"name" => "gpt-4o"})
 
       {:ok, provider} =
         Providers.create_provider(%{name: "OpenAI", base_url: "http://localhost:1"})
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
-        model_alias_id: ma.id,
+        model_id: ma.id,
         provider_id: provider.id
       })
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
-        model_alias_id: ma.id,
+        model_id: ma.id,
         provider_id: provider.id
       })
 
@@ -732,26 +731,26 @@ defmodule Tokengate.Metrics.RollupTest do
       assert row.request_count == 2
     end
 
-    test "returns empty list for nil model_alias_id" do
+    test "returns empty list for nil model_id" do
       assert Rollup.breakdown_by_provider_for_model(nil) == []
     end
 
     test "excludes logs from other models" do
       {tm, _team} = team_member_fixture()
-      ma1 = model_alias_fixture(%{"name" => "gpt-4o"})
-      ma2 = model_alias_fixture(%{"name" => "claude-3"})
+      ma1 = model_fixture(%{"name" => "gpt-4o"})
+      ma2 = model_fixture(%{"name" => "claude-3"})
 
       {:ok, provider} =
         Providers.create_provider(%{name: "OpenAI", base_url: "http://localhost:1"})
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
-        model_alias_id: ma1.id,
+        model_id: ma1.id,
         provider_id: provider.id,
         cost_usd: Decimal.new("1.000000")
       })
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
-        model_alias_id: ma2.id,
+        model_id: ma2.id,
         provider_id: provider.id,
         cost_usd: Decimal.new("5.000000")
       })
@@ -776,15 +775,15 @@ defmodule Tokengate.Metrics.RollupTest do
       {:ok, tm1} = Accounts.create_team_member(%{"user_id" => user1.id, "team_id" => team.id})
       {:ok, tm2} = Accounts.create_team_member(%{"user_id" => user2.id, "team_id" => team.id})
 
-      ma = model_alias_fixture(%{"name" => "gpt-4o"})
+      ma = model_fixture(%{"name" => "gpt-4o"})
 
       log_request(tm1.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
-        model_alias_id: ma.id,
+        model_id: ma.id,
         cost_usd: Decimal.new("0.800000")
       })
 
       log_request(tm2.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
-        model_alias_id: ma.id,
+        model_id: ma.id,
         cost_usd: Decimal.new("4.000000")
       })
 
@@ -798,7 +797,7 @@ defmodule Tokengate.Metrics.RollupTest do
       assert first.team_name == team.name
     end
 
-    test "returns empty list for nil model_alias_id" do
+    test "returns empty list for nil model_id" do
       assert Rollup.breakdown_by_member_for_model(nil) == []
     end
   end
@@ -812,15 +811,15 @@ defmodule Tokengate.Metrics.RollupTest do
       {tm1, _team1} = team_member_fixture()
       {tm2, _team2} = team_member_fixture()
 
-      ma = model_alias_fixture(%{"name" => "gpt-4o"})
+      ma = model_fixture(%{"name" => "gpt-4o"})
 
       log_request(tm1.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
-        model_alias_id: ma.id,
+        model_id: ma.id,
         cost_usd: Decimal.new("0.800000")
       })
 
       log_request(tm2.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
-        model_alias_id: ma.id,
+        model_id: ma.id,
         cost_usd: Decimal.new("4.000000")
       })
 
@@ -833,7 +832,7 @@ defmodule Tokengate.Metrics.RollupTest do
       assert first.team_name != nil
     end
 
-    test "returns empty list for nil model_alias_id" do
+    test "returns empty list for nil model_id" do
       assert Rollup.breakdown_by_team_for_model(nil) == []
     end
   end

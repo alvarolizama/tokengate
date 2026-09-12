@@ -5,7 +5,6 @@ defmodule Tokengate.Proxy.ReasoningTest do
   """
 
   use ExUnit.Case, async: true
-
   alias Tokengate.Proxy.Reasoning
 
   describe "parse/1" do

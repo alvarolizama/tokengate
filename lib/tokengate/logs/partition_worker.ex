@@ -53,7 +53,6 @@ defmodule Tokengate.Logs.PartitionWorker do
     max_attempts: 3
 
   require Logger
-
   alias Tokengate.Repo
 
   @lookahead_days 3

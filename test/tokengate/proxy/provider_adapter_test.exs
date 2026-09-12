@@ -7,7 +7,6 @@ defmodule Tokengate.Proxy.ProviderAdapterTest do
   """
 
   use ExUnit.Case, async: true
-
   alias Tokengate.Proxy.ProviderAdapter
 
   describe "classify_status/1" do

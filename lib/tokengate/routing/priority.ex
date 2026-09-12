@@ -26,7 +26,6 @@ defmodule Tokengate.Routing.Priority do
   """
 
   @behaviour Tokengate.Routing.Strategy
-
   alias Tokengate.Providers.ModelProvider
   alias Tokengate.Routing.CredentialHealth
   alias Tokengate.Routing.StickyTracker
@@ -35,13 +34,13 @@ defmodule Tokengate.Routing.Priority do
   def select(candidates, opts) when is_list(candidates) and is_map(opts) do
     available? = Map.get(opts, :available?, fn _ -> true end)
     api_key_hash = Map.get(opts, :api_key_hash)
-    model_alias_id = Map.get(opts, :model_alias_id)
+    model_id = Map.get(opts, :model_id)
 
     sorted = sort_by_priority(candidates)
 
     cond do
       api_key_hash != nil ->
-        select_with_stickiness(sorted, api_key_hash, model_alias_id, available?)
+        select_with_stickiness(sorted, api_key_hash, model_id, available?)
 
       true ->
         select_plain(sorted, available?)
@@ -57,15 +56,15 @@ defmodule Tokengate.Routing.Priority do
     end
   end
 
-  defp select_with_stickiness(sorted, api_key_hash, model_alias_id, available?) do
-    case sticky_get(api_key_hash, model_alias_id) do
+  defp select_with_stickiness(sorted, api_key_hash, model_id, available?) do
+    case sticky_get(api_key_hash, model_id) do
       nil ->
-        pick_and_stick(sorted, api_key_hash, model_alias_id, available?)
+        pick_and_stick(sorted, api_key_hash, model_id, available?)
 
       stuck_id ->
         case find_candidate(sorted, stuck_id) do
           nil ->
-            pick_and_stick(sorted, api_key_hash, model_alias_id, available?)
+            pick_and_stick(sorted, api_key_hash, model_id, available?)
 
           %ModelProvider{} = ap ->
             # Keep the stuck provider only while it's usable AND healthy. A
@@ -75,35 +74,36 @@ defmodule Tokengate.Routing.Priority do
             if available?.(ap) and not degraded_credential?(ap) do
               {:ok, ap}
             else
-              sticky_clear(api_key_hash, model_alias_id)
-              pick_and_stick(sorted, api_key_hash, model_alias_id, available?)
+              sticky_clear(api_key_hash, model_id)
+              pick_and_stick(sorted, api_key_hash, model_id, available?)
             end
         end
     end
   end
 
-  defp pick_and_stick(sorted, api_key_hash, model_alias_id, available?) do
+  defp pick_and_stick(sorted, api_key_hash, model_id, available?) do
     case Enum.find(sorted, available?) do
       nil ->
         {:error, :no_available_provider}
 
       %ModelProvider{} = ap ->
         ttl = sticky_ttl_for(ap)
-        sticky_put(api_key_hash, model_alias_id, ap.id, ttl)
+        sticky_put(api_key_hash, model_id, ap.id, ttl)
         {:ok, ap}
     end
   end
 
   # Stable sort by {tier, priority}: tier ranks the candidate pool so a
   # healthy provider always beats a degraded one, and among healthy ones a
-  # subscription ("included") always beats pay-per-token — regardless of raw
+  # subscription (provider `billing_type == "subscription"`, i.e. derived
+  # billing_mode "included") always beats pay-per-token — regardless of raw
   # priority. Within a tier, the configured priority ASC NULLS LAST decides,
   # exactly as before. Tiers:
   #
-  #   0 — healthy, billing_mode "included"   (use the paid-for subscription)
-  #   1 — healthy, billing_mode "pay_per_token" (spend money, but fast)
-  #   2 — degraded, billing_mode "included"  (slow subscription, last resort)
-  #   3 — degraded, billing_mode "pay_per_token"
+  #   0 — healthy, subscription   (use the paid-for plan)
+  #   1 — healthy, pay_per_token  (spend money, but fast)
+  #   2 — degraded, subscription  (slow plan, last resort)
+  #   3 — degraded, pay_per_token
   #
   # A degraded subscription sinks BELOW a healthy pay-per-token: a slow
   # "free" provider is worse than a fast paid one, because the whole point
@@ -126,7 +126,7 @@ defmodule Tokengate.Routing.Priority do
   defp tier(%ModelProvider{} = mp) do
     degraded = degraded_credential?(mp)
 
-    case {mp.billing_mode, degraded} do
+    case {ModelProvider.billing_mode(mp), degraded} do
       {"included", false} -> 0
       {"included", true} -> 2
       {_, false} -> 1
@@ -157,8 +157,8 @@ defmodule Tokengate.Routing.Priority do
   # StickyTracker may not be running in isolated tests. Any exit or
   # undefined-table error is treated as a miss.
 
-  defp sticky_get(api_key_hash, model_alias_id) do
-    StickyTracker.get(api_key_hash, model_alias_id)
+  defp sticky_get(api_key_hash, model_id) do
+    StickyTracker.get(api_key_hash, model_id)
   rescue
     ArgumentError -> nil
   catch
@@ -168,30 +168,30 @@ defmodule Tokengate.Routing.Priority do
   # Returns the sticky TTL for a model_provider:
   #
   #   1. If the model_provider has an explicit `sticky_ttl_ms`, use it.
-  #   2. Otherwise fall back to the billing_mode default from config
-  #      (included → 15 min, pay_per_token → 3 min).
+  #   2. Otherwise fall back to the billing default (derived from the
+  #      provider surface) from config (included → 15 min, pay_per_token → 3 min).
   #
   defp sticky_ttl_for(%ModelProvider{sticky_ttl_ms: ms}) when not is_nil(ms), do: ms
 
-  defp sticky_ttl_for(%ModelProvider{billing_mode: mode}) do
+  defp sticky_ttl_for(%ModelProvider{} = mp) do
     defaults =
       Application.get_env(:tokengate, :proxy, [])
       |> Keyword.get(:sticky_default_ttl_ms, %{})
 
-    Map.get(defaults, mode, 15 * 60 * 1000)
+    Map.get(defaults, ModelProvider.billing_mode(mp), 15 * 60 * 1000)
   end
 
-  defp sticky_put(api_key_hash, model_alias_id, model_provider_id, sticky_ttl_ms) do
+  defp sticky_put(api_key_hash, model_id, model_provider_id, sticky_ttl_ms) do
     try do
-      StickyTracker.put(api_key_hash, model_alias_id, model_provider_id, sticky_ttl_ms)
+      StickyTracker.put(api_key_hash, model_id, model_provider_id, sticky_ttl_ms)
     catch
       :exit, _ -> :ok
     end
   end
 
-  defp sticky_clear(api_key_hash, model_alias_id) do
+  defp sticky_clear(api_key_hash, model_id) do
     try do
-      StickyTracker.clear(api_key_hash, model_alias_id)
+      StickyTracker.clear(api_key_hash, model_id)
     catch
       :exit, _ -> :ok
     end

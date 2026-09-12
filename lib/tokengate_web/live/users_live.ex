@@ -14,7 +14,6 @@ defmodule TokengateWeb.UsersLive do
   """
 
   use TokengateWeb, :live_view
-
   alias Tokengate.Accounts
   alias Tokengate.Accounts.User
   alias Tokengate.Metrics.DashboardCache

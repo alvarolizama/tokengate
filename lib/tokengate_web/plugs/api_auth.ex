@@ -17,7 +17,6 @@ defmodule TokengateWeb.Plugs.ApiAuth do
   403 when the membership is not active.
   """
   import Plug.Conn
-
   alias Tokengate.Accounts
   alias Tokengate.Accounts.TeamMember
   alias Tokengate.Repo

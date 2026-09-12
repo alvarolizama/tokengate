@@ -2,7 +2,6 @@ defmodule TokengateWeb.ProvidersLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
-
   alias Tokengate.{Accounts, Providers}
 
   defp unique, do: System.unique_integer([:positive])
@@ -92,7 +91,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/providers")
 
-    view |> element("#new-provider-btn") |> render_click()
+    view |> element("#new-custom-provider-btn") |> render_click()
     assert has_element?(view, "#provider-form")
 
     html =
@@ -100,7 +99,8 @@ defmodule TokengateWeb.ProvidersLiveTest do
       |> form("#provider-form",
         provider: %{
           name: "anthropic",
-          base_url: "https://api.anthropic.com/v1"
+          base_url: "https://api.anthropic.com/v1",
+          billing_type: "pay_per_token"
         }
       )
       |> render_submit()
@@ -151,8 +151,8 @@ defmodule TokengateWeb.ProvidersLiveTest do
 
     u = unique()
 
-    {:ok, alias_} =
-      Providers.create_model_alias(%{
+    {:ok, model_} =
+      Providers.create_model(%{
         name: "gpt-4o-#{u}",
         context_window: 128_000
       })
@@ -166,7 +166,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
 
     {:ok, _ap} =
       Providers.create_model_provider(%{
-        model_alias_id: alias_.id,
+        model_id: model_.id,
         credential_id: credential.id,
         provider_model: "gpt-4o",
         priority: 1
@@ -219,7 +219,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
 
     [cred] = Providers.list_credentials_for_provider(provider.id)
 
-    # Edit the credential — cambiar alias y dejar API key vacío
+    # Edit the credential — cambiar model y dejar API key vacío
     view |> element("#edit-credential-#{cred.id}") |> render_click()
     assert has_element?(view, "#credential-form")
 

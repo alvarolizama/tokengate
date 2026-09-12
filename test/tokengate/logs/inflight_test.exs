@@ -7,7 +7,6 @@ defmodule Tokengate.Logs.InflightTest do
   """
 
   use Tokengate.DataCase, async: false
-
   alias Tokengate.Logs.Inflight
 
   setup do

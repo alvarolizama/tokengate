@@ -1,6 +1,5 @@
 defmodule Tokengate.Proxy.CostCalculatorTest do
   use ExUnit.Case, async: true
-
   alias Tokengate.Proxy.CostCalculator
 
   describe "provider_cost/3 — included billing mode" do

@@ -36,7 +36,7 @@ defmodule Tokengate.Logs.RequestLog do
 
     field :model_provider_id, :binary_id
     field :credential_id, :binary_id
-    field :model_alias_id, :binary_id
+    field :model_id, :binary_id
     field :subject_type, :string, default: "user"
     field :model_requested, :string
     field :model_responded, :string
@@ -77,7 +77,7 @@ defmodule Tokengate.Logs.RequestLog do
       type: :binary_id
   end
 
-  @permitted ~w(team_member_id service_id subject_type provider_id model_provider_id credential_id model_alias_id
+  @permitted ~w(team_member_id service_id subject_type provider_id model_provider_id credential_id model_id
     model_requested model_responded agent_type status_code provider_status_code
     error_reason error_message prompt_tokens completion_tokens cache_read_tokens
     cache_creation_tokens provider_cost_usd

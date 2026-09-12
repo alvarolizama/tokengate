@@ -5,7 +5,7 @@ defmodule Tokengate.Routing.Supervisor do
   Supervises:
 
     * `Tokengate.Routing.StickyTracker` – ETS-backed sticky-route GenServer
-      (`{api_key_hash, model_alias_id} -> model_provider_id`).
+      (`{api_key_hash, model_id} -> model_provider_id`).
     * `Tokengate.Routing.CredentialHealth` – ETS-backed soft health tracker
       per credential (slow-credential degradation).
     * `Registry` (`Tokengate.Routing.CircuitBreakerRegistry`) – name registry

@@ -1,6 +1,5 @@
 defmodule Tokengate.PeriodsTest do
   use ExUnit.Case, async: true
-
   alias Tokengate.Periods
 
   # America/Mexico_City = UTC-6 fijo (sin DST desde 2022)

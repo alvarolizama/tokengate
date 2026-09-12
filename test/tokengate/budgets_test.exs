@@ -8,7 +8,6 @@ defmodule Tokengate.BudgetsTest do
   """
 
   use Tokengate.DataCase, async: false
-
   alias Tokengate.{Accounts, Budgets}
   alias Tokengate.Budgets.Manager
   alias Tokengate.Logs

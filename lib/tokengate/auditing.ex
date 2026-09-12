@@ -7,7 +7,6 @@ defmodule Tokengate.Auditing do
   """
 
   import Ecto.Query, warn: false
-
   alias Tokengate.Repo
   alias Tokengate.Auditing.AuditLog
   alias Tokengate.Accounts.User

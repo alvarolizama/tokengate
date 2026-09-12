@@ -8,7 +8,6 @@ defmodule Tokengate.Metrics.CollectorTest do
   """
 
   use ExUnit.Case, async: false
-
   alias Tokengate.Metrics.Collector
 
   setup do
@@ -24,7 +23,7 @@ defmodule Tokengate.Metrics.CollectorTest do
   defp attrs(overrides \\ %{}) do
     Map.merge(
       %{
-        model_alias_id: "alias-1",
+        model_id: "model-1",
         provider_id: "provider-1",
         agent_type: "api",
         status: 200,
@@ -53,21 +52,15 @@ defmodule Tokengate.Metrics.CollectorTest do
     end
 
     test "increments per-dimension counters" do
-      Collector.record_request(
-        attrs(%{model_alias_id: "a1", provider_id: "p1", agent_type: "api"})
-      )
+      Collector.record_request(attrs(%{model_id: "a1", provider_id: "p1", agent_type: "api"}))
 
-      Collector.record_request(
-        attrs(%{model_alias_id: "a1", provider_id: "p2", agent_type: "sdk"})
-      )
+      Collector.record_request(attrs(%{model_id: "a1", provider_id: "p2", agent_type: "sdk"}))
 
-      Collector.record_request(
-        attrs(%{model_alias_id: "a2", provider_id: "p1", agent_type: "api"})
-      )
+      Collector.record_request(attrs(%{model_id: "a2", provider_id: "p1", agent_type: "api"}))
 
       snap = Collector.snapshot()
 
-      assert snap.by_alias == %{"a1" => 2, "a2" => 1}
+      assert snap.by_model == %{"a1" => 2, "a2" => 1}
       assert snap.by_provider == %{"p1" => 2, "p2" => 1}
       assert snap.by_agent == %{"api" => 2, "sdk" => 1}
     end
@@ -275,7 +268,7 @@ defmodule Tokengate.Metrics.CollectorTest do
       assert Map.has_key?(snap, :requests_total)
       assert Map.has_key?(snap, :errors_total)
       assert Map.has_key?(snap, :error_rate)
-      assert Map.has_key?(snap, :by_alias)
+      assert Map.has_key?(snap, :by_model)
       assert Map.has_key?(snap, :by_provider)
       assert Map.has_key?(snap, :by_agent)
       assert Map.has_key?(snap, :prompt_tokens)
@@ -306,7 +299,7 @@ defmodule Tokengate.Metrics.CollectorTest do
       assert snap.requests_total == 0
       assert snap.errors_total == 0
       assert snap.latency.count == 0
-      assert snap.by_alias == %{}
+      assert snap.by_model == %{}
     end
   end
 end

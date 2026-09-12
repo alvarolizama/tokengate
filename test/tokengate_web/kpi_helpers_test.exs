@@ -1,6 +1,5 @@
 defmodule TokengateWeb.KpiHelpersTest do
   use ExUnit.Case, async: true
-
   alias TokengateWeb.KpiHelpers
 
   describe "cache_hit_rate/2" do

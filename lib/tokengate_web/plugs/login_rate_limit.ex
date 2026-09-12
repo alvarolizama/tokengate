@@ -17,7 +17,6 @@ defmodule TokengateWeb.Plugs.LoginRateLimit do
   import Phoenix.Controller, only: [put_flash: 3, redirect: 2]
 
   require Logger
-
   alias TokengateWeb.Plugs.LoginRateLimit.TableKeeper
 
   @max_attempts 10

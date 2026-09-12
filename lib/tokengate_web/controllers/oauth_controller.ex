@@ -10,7 +10,6 @@ defmodule TokengateWeb.OAuthController do
   """
 
   use TokengateWeb, :controller
-
   alias Tokengate.Accounts
   alias TokengateWeb.OAuth.Google
 

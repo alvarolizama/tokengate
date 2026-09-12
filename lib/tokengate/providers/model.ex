@@ -1,6 +1,6 @@
-defmodule Tokengate.Providers.ModelAlias do
+defmodule Tokengate.Providers.Model do
   @moduledoc """
-  A model alias is a logical model name that maps to one or more
+  A model model is a logical model name that maps to one or more
   provider-backed models (model_providers).
   """
 
@@ -12,7 +12,7 @@ defmodule Tokengate.Providers.ModelAlias do
 
   @model_types ~w(llm embedding)
 
-  schema "model_aliases" do
+  schema "models" do
     field :name, :string
     field :context_window, :integer
     field :model_type, :string, default: "llm"
@@ -35,8 +35,8 @@ defmodule Tokengate.Providers.ModelAlias do
   end
 
   @doc false
-  def changeset(model_alias, attrs) do
-    model_alias
+  def changeset(model, attrs) do
+    model
     |> cast(attrs, [
       :name,
       :context_window,

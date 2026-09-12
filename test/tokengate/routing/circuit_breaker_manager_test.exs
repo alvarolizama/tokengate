@@ -4,7 +4,6 @@ defmodule Tokengate.Routing.CircuitBreakerManagerTest do
   """
 
   use ExUnit.Case, async: false
-
   alias Tokengate.Routing.CircuitBreakerManager
 
   @threshold 3
