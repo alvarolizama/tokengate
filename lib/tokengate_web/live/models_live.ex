@@ -21,9 +21,9 @@ defmodule TokengateWeb.ModelsLive do
   ## Exclusive scope
 
   A model_provider can be scoped to serve only specific consumers:
-    * Global — available to all team members with access.
-    * Member-exclusive — only the specified team member sees it.
-    * Team-exclusive — only members of the specified team see it.
+    * Global — available to all group members with access.
+    * Member-exclusive — only the specified group member sees it.
+    * Group-exclusive — only members of the specified group see it.
   """
   use TokengateWeb, :live_view
 
@@ -55,11 +55,11 @@ defmodule TokengateWeb.ModelsLive do
       |> assign(:provider_model_search, "")
       |> assign(:provider_form_credential_id, nil)
       |> assign(:current_scope, "global")
-      |> assign(:current_scope_team_ids, [])
+      |> assign(:current_scope_group_ids, [])
       |> assign(:current_scope_member_ids, [])
-      |> assign(:scope_team_search, "")
+      |> assign(:scope_group_search, "")
       |> assign(:scope_member_search, "")
-      |> assign(:scope_team_open, false)
+      |> assign(:scope_group_open, false)
       |> assign(:scope_member_open, false)
       |> load_models()
       |> assign_form_data()
@@ -95,7 +95,7 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
-  # Providers are grouped by scope first — global, then team-exclusive,
+  # Providers are grouped by scope first — global, then group-exclusive,
   # then member-exclusive — and ordered by priority within each group.
   defp aliases_with_providers_query do
     from(ma in Model,
@@ -107,8 +107,8 @@ defmodule TokengateWeb.ModelsLive do
         asc:
           fragment(
             "CASE WHEN ? IS NOT NULL THEN 2 WHEN ? IS NOT NULL THEN 1 ELSE 0 END",
-            aps.exclusive_to_team_member_id,
-            aps.exclusive_to_team_id
+            aps.exclusive_to_group_member_id,
+            aps.exclusive_to_group_id
           ),
         asc_nulls_last: aps.priority
       ]
@@ -131,17 +131,17 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   defp load_scope_data(socket) do
-    teams = Accounts.list_teams()
+    groups = Accounts.list_groups()
 
     members =
-      from(tm in Tokengate.Accounts.TeamMember,
+      from(tm in Tokengate.Accounts.GroupMember,
         preload: [:user],
         order_by: [asc: tm.id]
       )
       |> Repo.all()
 
     socket
-    |> assign(:teams_for_select, teams)
+    |> assign(:groups_for_select, groups)
     |> assign(:members_for_select, members)
   end
 
@@ -303,11 +303,11 @@ defmodule TokengateWeb.ModelsLive do
        |> assign(:provider_form, to_form(changeset, as: :model_provider))
        |> assign(:editing_ap_id, :new)
        |> assign(:current_scope, "global")
-       |> assign(:current_scope_team_ids, [])
+       |> assign(:current_scope_group_ids, [])
        |> assign(:current_scope_member_ids, [])
-       |> assign(:scope_team_search, "")
+       |> assign(:scope_group_search, "")
        |> assign(:scope_member_search, "")
-       |> assign(:scope_team_open, false)
+       |> assign(:scope_group_open, false)
        |> assign(:scope_member_open, false)}
     else
       {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
@@ -324,11 +324,11 @@ defmodule TokengateWeb.ModelsLive do
      |> assign(:provider_model_search, "")
      |> assign(:provider_form_credential_id, nil)
      |> assign(:current_scope, "global")
-     |> assign(:current_scope_team_ids, [])
+     |> assign(:current_scope_group_ids, [])
      |> assign(:current_scope_member_ids, [])
-     |> assign(:scope_team_search, "")
+     |> assign(:scope_group_search, "")
      |> assign(:scope_member_search, "")
-     |> assign(:scope_team_open, false)
+     |> assign(:scope_group_open, false)
      |> assign(:scope_member_open, false)}
   end
 
@@ -339,29 +339,32 @@ defmodule TokengateWeb.ModelsLive do
 
       scope =
         cond do
-          ap.exclusive_to_team_member_id != nil -> "member"
-          ap.exclusive_to_team_id != nil -> "team"
+          ap.exclusive_to_group_member_id != nil -> "member"
+          ap.exclusive_to_group_id != nil -> "group"
           true -> "global"
         end
 
       # Prefill the search inputs with the current selection's label so the
-      # user sees which team / member is bound to the provider.
-      team_label =
-        if ap.exclusive_to_team_id do
-          team =
-            Enum.find(socket.assigns.teams_for_select || [], &(&1.id == ap.exclusive_to_team_id))
+      # user sees which group / member is bound to the provider.
+      group_label =
+        if ap.exclusive_to_group_id do
+          group =
+            Enum.find(
+              socket.assigns.groups_for_select || [],
+              &(&1.id == ap.exclusive_to_group_id)
+            )
 
-          if team, do: team.name, else: ""
+          if group, do: group.name, else: ""
         else
           ""
         end
 
       member_label =
-        if ap.exclusive_to_team_member_id do
+        if ap.exclusive_to_group_member_id do
           member =
             Enum.find(
               socket.assigns.members_for_select || [],
-              &(&1.id == ap.exclusive_to_team_member_id)
+              &(&1.id == ap.exclusive_to_group_member_id)
             )
 
           if member && member.user, do: member.user.email, else: ""
@@ -375,9 +378,9 @@ defmodule TokengateWeb.ModelsLive do
        |> assign(:editing_ap_id, ap.id)
        |> assign(:provider_form_credential_id, ap.credential_id)
        |> assign(:current_scope, scope)
-       |> assign(:current_scope_team_id, ap.exclusive_to_team_id)
-       |> assign(:current_scope_member_id, ap.exclusive_to_team_member_id)
-       |> assign(:scope_team_search, team_label)
+       |> assign(:current_scope_group_id, ap.exclusive_to_group_id)
+       |> assign(:current_scope_member_id, ap.exclusive_to_group_member_id)
+       |> assign(:scope_group_search, group_label)
        |> assign(:scope_member_search, member_label)
        |> assign(:provider_models_loading, true)
        |> fetch_provider_models(ap.credential_id)}
@@ -446,30 +449,30 @@ defmodule TokengateWeb.ModelsLive do
       {:noreply,
        socket
        |> assign(:current_scope, scope)
-       |> assign(:current_scope_team_ids, [])
+       |> assign(:current_scope_group_ids, [])
        |> assign(:current_scope_member_ids, [])
-       |> assign(:scope_team_search, "")
+       |> assign(:scope_group_search, "")
        |> assign(:scope_member_search, "")
-       |> assign(:scope_team_open, false)
+       |> assign(:scope_group_open, false)
        |> assign(:scope_member_open, false)}
     else
       {:noreply, socket}
     end
   end
 
-  # Multi-select toggle for create mode — adds/removes a team from the
+  # Multi-select toggle for create mode — adds/removes a group from the
   # selection list. In edit mode (single existing row) the form uses
-  # select_scope_team_item instead.
-  def handle_event("toggle_scope_team", %{"team_id" => team_id}, socket) do
+  # select_scope_group_item instead.
+  def handle_event("toggle_scope_group", %{"group_id" => group_id}, socket) do
     if socket.assigns.is_admin do
-      ids = socket.assigns[:current_scope_team_ids] || []
+      ids = socket.assigns[:current_scope_group_ids] || []
 
       new_ids =
-        if team_id in ids,
-          do: List.delete(ids, team_id),
-          else: ids ++ [team_id]
+        if group_id in ids,
+          do: List.delete(ids, group_id),
+          else: ids ++ [group_id]
 
-      {:noreply, assign(socket, :current_scope_team_ids, new_ids)}
+      {:noreply, assign(socket, :current_scope_group_ids, new_ids)}
     else
       {:noreply, socket}
     end
@@ -496,13 +499,13 @@ defmodule TokengateWeb.ModelsLive do
   # single-select (edit) ones send their value nested as
   # model_provider[...] while the create-mode ones send %{"value"} —
   # resolve_scope_search/1 accepts both shapes.
-  def handle_event("scope_team_search", params, socket) do
+  def handle_event("scope_group_search", params, socket) do
     %{search: search} = resolve_scope_search(params)
 
     {:noreply,
      socket
-     |> assign(:scope_team_search, search)
-     |> assign(:scope_team_open, search != "")}
+     |> assign(:scope_group_search, search)
+     |> assign(:scope_group_open, search != "")}
   end
 
   def handle_event("scope_member_search", params, socket) do
@@ -517,16 +520,16 @@ defmodule TokengateWeb.ModelsLive do
   # Single-select picks — used when editing an existing row (one target).
   # Reflect the picked label into the search input and close the dropdown.
   def handle_event(
-        "select_scope_team_item",
-        %{"team_id" => team_id, "team_label" => team_label},
+        "select_scope_group_item",
+        %{"group_id" => group_id, "group_label" => group_label},
         socket
       ) do
     if socket.assigns.is_admin do
       {:noreply,
        socket
-       |> assign(:current_scope_team_id, team_id)
-       |> assign(:scope_team_search, team_label)
-       |> assign(:scope_team_open, false)}
+       |> assign(:current_scope_group_id, group_id)
+       |> assign(:scope_group_search, group_label)
+       |> assign(:scope_group_open, false)}
     else
       {:noreply, socket}
     end
@@ -548,9 +551,9 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
-  def handle_event("open_scope_picker", %{"picker" => "team"}, socket) do
+  def handle_event("open_scope_picker", %{"picker" => "group"}, socket) do
     if socket.assigns.is_admin do
-      {:noreply, assign(socket, :scope_team_open, true)}
+      {:noreply, assign(socket, :scope_group_open, true)}
     else
       {:noreply, socket}
     end
@@ -570,7 +573,7 @@ defmodule TokengateWeb.ModelsLive do
     if socket.assigns.is_admin do
       {:noreply,
        socket
-       |> assign(:scope_team_open, false)
+       |> assign(:scope_group_open, false)
        |> assign(:scope_member_open, false)}
     else
       {:noreply, socket}
@@ -698,7 +701,7 @@ defmodule TokengateWeb.ModelsLive do
   defp resolve_scope_search(%{"model_provider" => %{"scope_member_id_display" => search}}),
     do: %{search: search || ""}
 
-  defp resolve_scope_search(%{"model_provider" => %{"scope_team_id_display" => search}}),
+  defp resolve_scope_search(%{"model_provider" => %{"scope_group_id_display" => search}}),
     do: %{search: search || ""}
 
   defp resolve_scope_search(_params), do: %{search: ""}
@@ -711,29 +714,29 @@ defmodule TokengateWeb.ModelsLive do
       "member" ->
         if editing? do
           ap_params
-          |> Map.put("exclusive_to_team_member_id", assigns[:current_scope_member_id])
-          |> Map.put("exclusive_to_team_id", nil)
+          |> Map.put("exclusive_to_group_member_id", assigns[:current_scope_member_id])
+          |> Map.put("exclusive_to_group_id", nil)
         else
           ap_params
-          |> Map.put("exclusive_to_team_member_ids", assigns[:current_scope_member_ids] || [])
-          |> Map.put("exclusive_to_team_id", nil)
+          |> Map.put("exclusive_to_group_member_ids", assigns[:current_scope_member_ids] || [])
+          |> Map.put("exclusive_to_group_id", nil)
         end
 
-      "team" ->
+      "group" ->
         if editing? do
           ap_params
-          |> Map.put("exclusive_to_team_member_id", nil)
-          |> Map.put("exclusive_to_team_id", assigns[:current_scope_team_id])
+          |> Map.put("exclusive_to_group_member_id", nil)
+          |> Map.put("exclusive_to_group_id", assigns[:current_scope_group_id])
         else
           ap_params
-          |> Map.put("exclusive_to_team_member_id", nil)
-          |> Map.put("exclusive_to_team_ids", assigns[:current_scope_team_ids] || [])
+          |> Map.put("exclusive_to_group_member_id", nil)
+          |> Map.put("exclusive_to_group_ids", assigns[:current_scope_group_ids] || [])
         end
 
       _ ->
         ap_params
-        |> Map.put("exclusive_to_team_member_id", nil)
-        |> Map.put("exclusive_to_team_id", nil)
+        |> Map.put("exclusive_to_group_member_id", nil)
+        |> Map.put("exclusive_to_group_id", nil)
     end
   end
 
@@ -811,38 +814,38 @@ defmodule TokengateWeb.ModelsLive do
     ap_params = Map.put(ap_params, "model_id", socket.assigns.provider_form_model_id)
 
     # Extract multi-select target lists (set by inject_scope_params for create mode)
-    team_ids = Map.get(ap_params, "exclusive_to_team_ids", [])
-    member_ids = Map.get(ap_params, "exclusive_to_team_member_ids", [])
+    group_ids = Map.get(ap_params, "exclusive_to_group_ids", [])
+    member_ids = Map.get(ap_params, "exclusive_to_group_member_ids", [])
 
     # Clean the params — remove the plural keys before inserting
     ap_params =
       ap_params
-      |> Map.delete("exclusive_to_team_ids")
-      |> Map.delete("exclusive_to_team_member_ids")
+      |> Map.delete("exclusive_to_group_ids")
+      |> Map.delete("exclusive_to_group_member_ids")
 
-    # Build the list of insert targets: one set of params per team/member.
-    # Global scope = single insert with no exclusive FK. Team/member scope
+    # Build the list of insert targets: one set of params per group/member.
+    # Global scope = single insert with no exclusive FK. Group/member scope
     # with empty selection = error (must pick at least one).
     targets =
       cond do
-        team_ids != [] ->
-          Enum.map(team_ids, fn id ->
+        group_ids != [] ->
+          Enum.map(group_ids, fn id ->
             Map.merge(ap_params, %{
-              "exclusive_to_team_id" => id,
-              "exclusive_to_team_member_id" => nil
+              "exclusive_to_group_id" => id,
+              "exclusive_to_group_member_id" => nil
             })
           end)
 
         member_ids != [] ->
           Enum.map(member_ids, fn id ->
             Map.merge(ap_params, %{
-              "exclusive_to_team_id" => nil,
-              "exclusive_to_team_member_id" => id
+              "exclusive_to_group_id" => nil,
+              "exclusive_to_group_member_id" => id
             })
           end)
 
-        Map.get(ap_params, "exclusive_to_team_id") != nil or
-            Map.get(ap_params, "exclusive_to_team_member_id") != nil ->
+        Map.get(ap_params, "exclusive_to_group_id") != nil or
+            Map.get(ap_params, "exclusive_to_group_member_id") != nil ->
           # Single target from edit mode — already in singular keys
           [ap_params]
 
@@ -851,16 +854,16 @@ defmodule TokengateWeb.ModelsLive do
           [ap_params]
       end
 
-    # Validate: team/member scope must have at least one target selected
+    # Validate: group/member scope must have at least one target selected
     scope = socket.assigns[:current_scope] || "global"
 
     cond do
-      (scope == "team" or scope == "member") and targets == [] ->
+      (scope == "group" or scope == "member") and targets == [] ->
         {:noreply,
          put_flash(
            socket,
            :error,
-           "Selecciona al menos un equipo o usuario para el scope exclusivo."
+           "Selecciona al menos un grupo o usuario para el scope exclusivo."
          )}
 
       true ->
@@ -1006,41 +1009,41 @@ defmodule TokengateWeb.ModelsLive do
   def format_compact(_), do: "0"
 
   @doc "Scope badge CSS class"
-  def scope_badge(%ModelProvider{exclusive_to_team_member_id: id}) when not is_nil(id),
+  def scope_badge(%ModelProvider{exclusive_to_group_member_id: id}) when not is_nil(id),
     do: "badge-warning"
 
-  def scope_badge(%ModelProvider{exclusive_to_team_id: id}) when not is_nil(id),
+  def scope_badge(%ModelProvider{exclusive_to_group_id: id}) when not is_nil(id),
     do: "badge-info"
 
   def scope_badge(%ModelProvider{}), do: "badge-ghost"
   def scope_badge("member"), do: "badge-warning"
-  def scope_badge("team"), do: "badge-info"
+  def scope_badge("group"), do: "badge-info"
   def scope_badge(_), do: "badge-ghost"
 
   @doc "Scope badge label"
-  def scope_label(%ModelProvider{exclusive_to_team_member_id: id}) when not is_nil(id),
+  def scope_label(%ModelProvider{exclusive_to_group_member_id: id}) when not is_nil(id),
     do: "Exclusivo miembro"
 
-  def scope_label(%ModelProvider{exclusive_to_team_id: id}) when not is_nil(id),
-    do: "Exclusivo equipo"
+  def scope_label(%ModelProvider{exclusive_to_group_id: id}) when not is_nil(id),
+    do: "Exclusivo grupo"
 
   def scope_label(%ModelProvider{}), do: "Global"
   def scope_label("member"), do: "Exclusivo miembro"
-  def scope_label("team"), do: "Exclusivo equipo"
+  def scope_label("group"), do: "Exclusivo grupo"
   def scope_label(_), do: "Global"
 
   @doc "Resolve scope to human-readable label with target name"
   def scope_target_label(%ModelProvider{} = mp, assigns) do
     cond do
-      mp.exclusive_to_team_member_id ->
+      mp.exclusive_to_group_member_id ->
         member =
-          Enum.find(assigns.members_for_select || [], &(&1.id == mp.exclusive_to_team_member_id))
+          Enum.find(assigns.members_for_select || [], &(&1.id == mp.exclusive_to_group_member_id))
 
         if member && member.user, do: member.user.email, else: "Miembro"
 
-      mp.exclusive_to_team_id ->
-        team = Enum.find(assigns.teams_for_select || [], &(&1.id == mp.exclusive_to_team_id))
-        if team, do: team.name, else: "Equipo"
+      mp.exclusive_to_group_id ->
+        group = Enum.find(assigns.groups_for_select || [], &(&1.id == mp.exclusive_to_group_id))
+        if group, do: group.name, else: "Grupo"
 
       true ->
         "Todos"
@@ -1062,15 +1065,15 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   @doc """
-  Group key for scope grouping in the UI: 0 = global, 1 = team-exclusive,
+  Group key for scope grouping in the UI: 0 = global, 1 = group-exclusive,
   2 = member-exclusive. Matches the SQL ordering in load_models/1.
   """
-  def scope_group(%ModelProvider{exclusive_to_team_member_id: id}) when not is_nil(id), do: 2
-  def scope_group(%ModelProvider{exclusive_to_team_id: id}) when not is_nil(id), do: 1
+  def scope_group(%ModelProvider{exclusive_to_group_member_id: id}) when not is_nil(id), do: 2
+  def scope_group(%ModelProvider{exclusive_to_group_id: id}) when not is_nil(id), do: 1
   def scope_group(%ModelProvider{}), do: 0
 
   @doc "Group header label (nil for the global group — no header needed)"
-  def scope_group_label(1), do: "Exclusivos por equipo"
+  def scope_group_label(1), do: "Exclusivos por grupo"
   def scope_group_label(2), do: "Exclusivos por usuario"
   def scope_group_label(_), do: nil
 
@@ -1126,8 +1129,8 @@ defmodule TokengateWeb.ModelsLive do
       else: "Credential desactivada — activa en /admin/providers"
   end
 
-  def team_options(teams) do
-    Enum.map(teams, fn t -> {t.name, t.id} end)
+  def group_options(groups) do
+    Enum.map(groups, fn t -> {t.name, t.id} end)
   end
 
   def member_options(members) do
@@ -1137,12 +1140,12 @@ defmodule TokengateWeb.ModelsLive do
     end)
   end
 
-  @doc "All teams — the form filter is the search string in the template.
+  @doc "All groups — the form filter is the search string in the template.
   See members_with_model_access/2 for the rationale."
-  def teams_with_model_access(teams, _model_id), do: teams
+  def groups_with_model_access(groups, _model_id), do: groups
 
   @doc "All members — the form filter is the search string in the template.
-  The previous access check (TeamModel / TeamMemberExtraModel) only
+  The previous access check (GroupModel / GroupMemberExtraModel) only
   matters for the create flow; in the edit form we want every member to
   appear so the admin can re-pick even if grants have lapsed."
   def members_with_model_access(members, _model_id), do: members
@@ -1347,7 +1350,7 @@ defmodule TokengateWeb.ModelsLive do
                         <%= for {ap, prev_group} <- Enum.zip(providers, prev_groups) do %>
                           <% current_group = scope_group(ap) %>
                           <%!-- Group separator: a divider line + subtitle row when
-                               the scope group changes (global → team → member). --%>
+                               the scope group changes (global → group → member). --%>
                           <%= if current_group != prev_group && not is_nil(scope_group_label(current_group)) do %>
                             <tr class="pointer-events-none border-t-2 border-base-300">
                               <td
@@ -1404,7 +1407,7 @@ defmodule TokengateWeb.ModelsLive do
                               <span class={["badge", "badge-sm", scope_badge(ap)]}>
                                 {scope_label(ap)}
                               </span>
-                              <%= if ap.exclusive_to_team_member_id || ap.exclusive_to_team_id do %>
+                              <%= if ap.exclusive_to_group_member_id || ap.exclusive_to_group_id do %>
                                 <span class="text-xs text-base-content/40 ml-1">
                                   {scope_target_label(ap, assigns)}
                                 </span>
@@ -1668,7 +1671,7 @@ defmodule TokengateWeb.ModelsLive do
                     <div class="mb-2">
                       <label class="text-sm font-medium text-base-content">Alcance (Scope)</label>
                       <p class="text-xs text-base-content/50 mb-2">
-                        Global = todos los miembros con acceso. Exclusivo = solo el miembro o equipo seleccionado.
+                        Global = todos los miembros con acceso. Exclusivo = solo el miembro o grupo seleccionado.
                       </p>
                       <div class="flex gap-2">
                         <button
@@ -1682,10 +1685,10 @@ defmodule TokengateWeb.ModelsLive do
                         <button
                           type="button"
                           phx-click="change_scope"
-                          phx-value-scope="team"
-                          class={["btn btn-sm", @current_scope == "team" && "btn-info"]}
+                          phx-value-scope="group"
+                          class={["btn btn-sm", @current_scope == "group" && "btn-info"]}
                         >
-                          <.icon name="hero-users" class="w-4 h-4" /> Equipo
+                          <.icon name="hero-users" class="w-4 h-4" /> Grupo
                         </button>
                         <button
                           type="button"
@@ -1833,54 +1836,54 @@ defmodule TokengateWeb.ModelsLive do
                       </div>
                     <% end %>
 
-                    <%= if @current_scope == "team" do %>
+                    <%= if @current_scope == "group" do %>
                       <% is_new? = @editing_ap_id == :new %>
                       <div class="relative" phx-click-away="close_scope_pickers">
-                        <label class="text-sm font-medium text-base-content">Equipo exclusivo</label>
+                        <label class="text-sm font-medium text-base-content">Grupo exclusivo</label>
                         <p class="text-xs text-base-content/50 mb-1">
                           <%= if is_new? do %>
-                            Puedes seleccionar múltiples equipos. Se creará un proveedor exclusivo por cada uno.
+                            Puedes seleccionar múltiples grupos. Se creará un proveedor exclusivo por cada uno.
                           <% else %>
-                            Solo los miembros de este equipo podrán usar esta API key para este modelo.
+                            Solo los miembros de este grupo podrán usar esta API key para este modelo.
                           <% end %>
                         </p>
                         <%= if is_new? do %>
                           <%!-- Multi-select chips for create mode --%>
-                          <% teams_filtered =
-                            teams_with_model_access(@teams_for_select, @provider_form_model_id)
+                          <% groups_filtered =
+                            groups_with_model_access(@groups_for_select, @provider_form_model_id)
                             |> Enum.filter(fn t ->
-                              search = String.downcase(@scope_team_search || "")
+                              search = String.downcase(@scope_group_search || "")
                               name = String.downcase(t.name || "")
                               search == "" or String.contains?(name, search)
                             end) %>
                           <input
                             type="text"
-                            name="model_provider[scope_team_id_display]"
-                            value={@scope_team_search}
-                            placeholder="Escribe para buscar equipo…"
+                            name="model_provider[scope_group_id_display]"
+                            value={@scope_group_search}
+                            placeholder="Escribe para buscar grupo…"
                             phx-focus="open_scope_picker"
-                            phx-value-picker="team"
-                            phx-change="scope_team_search"
+                            phx-value-picker="group"
+                            phx-change="scope_group_search"
                             phx-debounce="200"
                             class="input input-sm w-full"
                             autocomplete="off"
                           />
-                          <%= if @scope_team_open and teams_filtered != [] do %>
+                          <%= if @scope_group_open and groups_filtered != [] do %>
                             <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
                               <button
-                                :for={t <- Enum.take(teams_filtered, 15)}
+                                :for={t <- Enum.take(groups_filtered, 15)}
                                 type="button"
-                                phx-click="toggle_scope_team"
-                                phx-value-team_id={t.id}
+                                phx-click="toggle_scope_group"
+                                phx-value-group_id={t.id}
                                 class={[
                                   "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
-                                  t.id in (@current_scope_team_ids || []) &&
+                                  t.id in (@current_scope_group_ids || []) &&
                                     "bg-primary/10 font-semibold"
                                 ]}
                               >
                                 <span class="text-sm font-medium">{t.name}</span>
                                 <span
-                                  :if={t.id in (@current_scope_team_ids || [])}
+                                  :if={t.id in (@current_scope_group_ids || [])}
                                   class="text-xs text-primary ml-2"
                                 >
                                   ✓
@@ -1889,14 +1892,14 @@ defmodule TokengateWeb.ModelsLive do
                             </div>
                           <% end %>
                           <%!-- Selected chips --%>
-                          <div :if={@current_scope_team_ids != []} class="flex flex-wrap gap-1 mt-2">
+                          <div :if={@current_scope_group_ids != []} class="flex flex-wrap gap-1 mt-2">
                             <span
-                              :for={tid <- @current_scope_team_ids}
+                              :for={tid <- @current_scope_group_ids}
                               class="badge badge-info badge-sm gap-1 cursor-pointer"
-                              phx-click="toggle_scope_team"
-                              phx-value-team_id={tid}
+                              phx-click="toggle_scope_group"
+                              phx-value-group_id={tid}
                             >
-                              {case Enum.find(@teams_for_select || [], &(&1.id == tid)) do
+                              {case Enum.find(@groups_for_select || [], &(&1.id == tid)) do
                                 %{name: n} -> n
                                 _ -> tid
                               end}
@@ -1907,39 +1910,39 @@ defmodule TokengateWeb.ModelsLive do
                           <%!-- Single-select for edit mode --%>
                           <input
                             type="text"
-                            name="model_provider[scope_team_id_display]"
-                            value={@scope_team_search}
-                            placeholder="Escribe para buscar equipo…"
+                            name="model_provider[scope_group_id_display]"
+                            value={@scope_group_search}
+                            placeholder="Escribe para buscar grupo…"
                             phx-focus="open_scope_picker"
-                            phx-value-picker="team"
-                            phx-change="scope_team_search"
+                            phx-value-picker="group"
+                            phx-change="scope_group_search"
                             phx-debounce="200"
                             class="input input-sm w-full"
                             autocomplete="off"
                           />
-                          <% teams_filtered =
-                            teams_with_model_access(@teams_for_select, @provider_form_model_id)
+                          <% groups_filtered =
+                            groups_with_model_access(@groups_for_select, @provider_form_model_id)
                             |> Enum.filter(fn t ->
-                              search = String.downcase(@scope_team_search || "")
+                              search = String.downcase(@scope_group_search || "")
                               name = String.downcase(t.name || "")
                               search == "" or String.contains?(name, search)
                             end) %>
-                          <%= if @scope_team_open and teams_filtered != [] do %>
+                          <%= if @scope_group_open and groups_filtered != [] do %>
                             <div class="absolute z-50 left-0 right-0 mt-1 bg-base-100 border border-base-300 rounded-lg shadow-lg max-h-40 overflow-y-auto">
                               <button
-                                :for={t <- Enum.take(teams_filtered, 10)}
+                                :for={t <- Enum.take(groups_filtered, 10)}
                                 type="button"
-                                phx-click="select_scope_team_item"
-                                phx-value-team_id={t.id}
-                                phx-value-team_label={t.name}
+                                phx-click="select_scope_group_item"
+                                phx-value-group_id={t.id}
+                                phx-value-group_label={t.name}
                                 class={[
                                   "block w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/50 last:border-0",
-                                  t.id == @current_scope_team_id && "bg-primary/10 font-semibold"
+                                  t.id == @current_scope_group_id && "bg-primary/10 font-semibold"
                                 ]}
                               >
                                 <span class="text-sm font-medium">{t.name}</span>
                                 <span
-                                  :if={t.id == @current_scope_team_id}
+                                  :if={t.id == @current_scope_group_id}
                                   class="text-xs text-primary ml-2"
                                 >
                                   (actual)
@@ -1949,8 +1952,8 @@ defmodule TokengateWeb.ModelsLive do
                           <% end %>
                           <input
                             type="hidden"
-                            name="model_provider[scope_team_id]"
-                            value={@current_scope_team_id}
+                            name="model_provider[scope_group_id]"
+                            value={@current_scope_group_id}
                           />
                         <% end %>
                       </div>

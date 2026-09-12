@@ -1,6 +1,6 @@
 defmodule TokengateWeb.StatsExportControllerTest do
   @moduledoc """
-  CSV export endpoint tests — focusing on authorization: the team drill-down
+  CSV export endpoint tests — focusing on authorization: the group drill-down
   exposes member-level data (emails, costs), so only admins may export it.
   """
 
@@ -29,11 +29,11 @@ defmodule TokengateWeb.StatsExportControllerTest do
     |> recycle()
   end
 
-  # Team with one member (owner) and one request log.
-  defp team_with_log do
+  # Group with one member (owner) and one request log.
+  defp group_with_log do
     u = unique()
 
-    {:ok, team} = Accounts.create_team(%{name: "Team #{u}"})
+    {:ok, group} = Accounts.create_group(%{name: "Group #{u}"})
 
     {:ok, owner} =
       Accounts.register_user(%{
@@ -43,14 +43,14 @@ defmodule TokengateWeb.StatsExportControllerTest do
       })
 
     {:ok, member} =
-      Accounts.create_team_member(%{user_id: owner.id, team_id: team.id, team_role: "user"})
+      Accounts.create_group_member(%{user_id: owner.id, group_id: group.id, group_role: "user"})
 
     {:ok, provider} =
       Providers.create_provider(%{name: "P #{u}", base_url: "http://localhost:1"})
 
     {:ok, _log} =
       Logs.log_request(%{
-        team_member_id: member.id,
+        group_member_id: member.id,
         provider_id: provider.id,
         model_id: nil,
         model_requested: "gpt-4o",
@@ -64,51 +64,51 @@ defmodule TokengateWeb.StatsExportControllerTest do
         streaming: false
       })
 
-    %{team: team, owner: owner, member: member, owner_password: "password-secret-#{u}1"}
+    %{group: group, owner: owner, member: member, owner_password: "password-secret-#{u}1"}
   end
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
-    conn = get(conn, ~p"/dashboard/stats/export?type=teams")
+    conn = get(conn, ~p"/dashboard/stats/export?type=groups")
     assert redirected_to(conn) =~ "/login"
   end
 
-  test "admin can export a team drill-down", %{conn: conn} do
-    %{team: team} = team_with_log()
+  test "admin can export a group drill-down", %{conn: conn} do
+    %{group: group} = group_with_log()
     %{user: admin, password: password} = register("admin")
 
     conn =
       conn
       |> login(admin, password)
-      |> get(~p"/dashboard/stats/export?type=teams&team_id=#{team.id}")
+      |> get(~p"/dashboard/stats/export?type=groups&group_id=#{group.id}")
 
-    assert response(conn, 200) =~ "usuario,equipo"
+    assert response(conn, 200) =~ "usuario,grupo"
   end
 
-  test "plain member of the team cannot export its drill-down", %{conn: conn} do
-    %{team: team, owner: owner, owner_password: password} = team_with_log()
+  test "plain member of the group cannot export its drill-down", %{conn: conn} do
+    %{group: group, owner: owner, owner_password: password} = group_with_log()
 
     conn =
       conn
       |> login(owner, password)
-      |> get(~p"/dashboard/stats/export?type=teams&team_id=#{team.id}")
+      |> get(~p"/dashboard/stats/export?type=groups&group_id=#{group.id}")
 
     assert json_response(conn, 403) == %{"error" => "no autorizado"}
   end
 
-  test "non-member user gets 403 on another team's drill-down", %{conn: conn} do
-    %{team: team} = team_with_log()
+  test "non-member user gets 403 on another group's drill-down", %{conn: conn} do
+    %{group: group} = group_with_log()
     %{user: outsider, password: password} = register("user")
 
     conn =
       conn
       |> login(outsider, password)
-      |> get(~p"/dashboard/stats/export?type=teams&team_id=#{team.id}")
+      |> get(~p"/dashboard/stats/export?type=groups&group_id=#{group.id}")
 
     assert json_response(conn, 403) == %{"error" => "no autorizado"}
   end
 
   test "models export works for any authenticated user", %{conn: conn} do
-    team_with_log()
+    group_with_log()
     %{user: user, password: password} = register("user")
 
     conn =
@@ -122,11 +122,11 @@ defmodule TokengateWeb.StatsExportControllerTest do
   test "logs export neutralizes CSV formula injection in client_agent", %{conn: conn} do
     u = unique()
 
-    {:ok, team} = Accounts.create_team(%{name: "Team #{u}"})
+    {:ok, group} = Accounts.create_group(%{name: "Group #{u}"})
     %{user: user, password: password} = register("user")
 
     {:ok, member} =
-      Accounts.create_team_member(%{user_id: user.id, team_id: team.id, team_role: "user"})
+      Accounts.create_group_member(%{user_id: user.id, group_id: group.id, group_role: "user"})
 
     {:ok, provider} =
       Providers.create_provider(%{name: "P #{u}", base_url: "http://localhost:1"})
@@ -135,7 +135,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
     # real proxy traffic) that Excel would execute as a formula.
     {:ok, _log} =
       Logs.log_request(%{
-        team_member_id: member.id,
+        group_member_id: member.id,
         provider_id: provider.id,
         model_id: nil,
         model_requested: "gpt-4o",
@@ -165,11 +165,11 @@ defmodule TokengateWeb.StatsExportControllerTest do
     # contain today's data.
     test "30d export includes logs older than the 500-row UI cap", %{conn: conn} do
       u = unique()
-      {:ok, team} = Accounts.create_team(%{name: "Team #{u}"})
+      {:ok, group} = Accounts.create_group(%{name: "Group #{u}"})
       %{user: user, password: password} = register("user")
 
       {:ok, member} =
-        Accounts.create_team_member(%{user_id: user.id, team_id: team.id, team_role: "user"})
+        Accounts.create_group_member(%{user_id: user.id, group_id: group.id, group_role: "user"})
 
       # 510 rows from 10 days ago — more than the old list_logs/1 cap of 500,
       # so the buggy export (ordered newest-first, capped at 500) would never
@@ -182,7 +182,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
           %{
             id: Ecto.UUID.generate(),
             inserted_at: DateTime.add(ten_days_ago, i, :second),
-            team_member_id: member.id,
+            group_member_id: member.id,
             model_requested: "gpt-4o",
             agent_type: "api",
             status_code: 200,
@@ -200,7 +200,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
       # buggy 500-row window.
       {:ok, _log} =
         Logs.log_request(%{
-          team_member_id: member.id,
+          group_member_id: member.id,
           model_requested: "gpt-4o",
           agent_type: "api",
           status_code: 200,
@@ -221,7 +221,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
     end
 
     test "logs export defaults to 7d and respects today/week/month periods", %{conn: conn} do
-      %{owner: owner, owner_password: password} = team_with_log()
+      %{owner: owner, owner_password: password} = group_with_log()
       %{user: _user, password: _pw} = register("user")
 
       conn =
@@ -235,12 +235,12 @@ defmodule TokengateWeb.StatsExportControllerTest do
     end
 
     test "errors export only includes status >= 400 across the period", %{conn: conn} do
-      %{owner: owner, owner_password: password, member: member} = team_with_log()
+      %{owner: owner, owner_password: password, member: member} = group_with_log()
 
       for status <- [400, 429, 500, 502] do
         {:ok, _} =
           Logs.log_request(%{
-            team_member_id: member.id,
+            group_member_id: member.id,
             model_requested: "gpt-4o",
             agent_type: "api",
             status_code: status,
@@ -260,7 +260,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
       body = response(conn, 200)
       assert body =~ "test_error"
 
-      # 200-row from team_with_log() must NOT appear in the errors export
+      # 200-row from group_with_log() must NOT appear in the errors export
       lines = body |> String.split("\n") |> Enum.drop(1) |> Enum.reject(&(&1 == ""))
       assert length(lines) == 4
     end

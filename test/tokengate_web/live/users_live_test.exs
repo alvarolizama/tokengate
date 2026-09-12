@@ -63,18 +63,18 @@ defmodule TokengateWeb.UsersLiveTest do
     %{user: admin, password: password} = register("admin")
     %{user: member_user} = register("user")
 
-    {:ok, team} =
-      Accounts.create_team(%{
-        "name" => "Spend Team #{unique()}",
+    {:ok, group} =
+      Accounts.create_group(%{
+        "name" => "Spend Group #{unique()}",
         "monthly_budget_per_user_usd" => "100.00"
       })
 
     {:ok, member} =
-      Accounts.create_team_member(%{"user_id" => member_user.id, "team_id" => team.id})
+      Accounts.create_group_member(%{"user_id" => member_user.id, "group_id" => group.id})
 
     {:ok, _log} =
       Logs.log_request(%{
-        team_member_id: member.id,
+        group_member_id: member.id,
         model_requested: "gpt-4",
         inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
         provider_cost_usd: Decimal.new("7.25")
@@ -91,18 +91,18 @@ defmodule TokengateWeb.UsersLiveTest do
     %{user: admin, password: password} = register("admin")
     %{user: member_user} = register("user")
 
-    {:ok, team} =
-      Accounts.create_team(%{
-        "name" => "Broke Team #{unique()}",
+    {:ok, group} =
+      Accounts.create_group(%{
+        "name" => "Broke Group #{unique()}",
         "monthly_budget_per_user_usd" => "100.00"
       })
 
     {:ok, member} =
-      Accounts.create_team_member(%{"user_id" => member_user.id, "team_id" => team.id})
+      Accounts.create_group_member(%{"user_id" => member_user.id, "group_id" => group.id})
 
     {:ok, _log} =
       Logs.log_request(%{
-        team_member_id: member.id,
+        group_member_id: member.id,
         model_requested: "gpt-4",
         inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
         provider_cost_usd: Decimal.new("100.00")
@@ -116,41 +116,41 @@ defmodule TokengateWeb.UsersLiveTest do
 
   ## Flat listing + sorting ----------------------------------------------------
 
-  test "users are listed flat (no team group headers), alphabetical by name", %{conn: conn} do
+  test "users are listed flat (no group group headers), alphabetical by name", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    %{team: team, owner: _owner} = team_with_log()
+    %{group: group, owner: _owner} = group_with_log()
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     # No group header rows — the table is a flat alphabetical list.
-    refute has_element?(view, "tr#group-#{team.id}")
-    refute has_element?(view, "tr#group-none", "Sin equipo")
-    # The admin (no team) still appears as a regular row.
+    refute has_element?(view, "tr#group-#{group.id}")
+    refute has_element?(view, "tr#group-none", "Sin grupo")
+    # The admin (no group) still appears as a regular row.
     assert has_element?(view, "tr#user-#{admin.id}")
   end
 
-  test "a user with two teams appears once, with all their team badges", %{conn: conn} do
+  test "a user with two groups appears once, with all their group badges", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     %{user: multi} = register("user")
 
-    {:ok, team_a} = Accounts.create_team(%{name: "Multi A #{unique()}"})
-    {:ok, team_b} = Accounts.create_team(%{name: "Multi B #{unique()}"})
-    {:ok, _} = Accounts.create_team_member(%{user_id: multi.id, team_id: team_a.id})
-    {:ok, _} = Accounts.create_team_member(%{user_id: multi.id, team_id: team_b.id})
+    {:ok, group_a} = Accounts.create_group(%{name: "Multi A #{unique()}"})
+    {:ok, group_b} = Accounts.create_group(%{name: "Multi B #{unique()}"})
+    {:ok, _} = Accounts.create_group_member(%{user_id: multi.id, group_id: group_a.id})
+    {:ok, _} = Accounts.create_group_member(%{user_id: multi.id, group_id: group_b.id})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/admin/users")
 
-    # Single row for the user, showing both team badges.
-    assert has_element?(view, "tr#user-#{multi.id}", team_a.name)
-    assert has_element?(view, "tr#user-#{multi.id}", team_b.name)
+    # Single row for the user, showing both group badges.
+    assert has_element?(view, "tr#user-#{multi.id}", group_a.name)
+    assert has_element?(view, "tr#user-#{multi.id}", group_b.name)
   end
 
   test "clicking the Usuario sort header re-orders rows alphabetically", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
 
-    {:ok, team} = Accounts.create_team(%{name: "Sort Team #{unique()}"})
+    {:ok, group} = Accounts.create_group(%{name: "Sort Group #{unique()}"})
 
     {:ok, zeta} =
       Accounts.register_user(%{
@@ -168,8 +168,8 @@ defmodule TokengateWeb.UsersLiveTest do
         global_role: "user"
       })
 
-    {:ok, _} = Accounts.create_team_member(%{user_id: zeta.id, team_id: team.id})
-    {:ok, _} = Accounts.create_team_member(%{user_id: alpha.id, team_id: team.id})
+    {:ok, _} = Accounts.create_group_member(%{user_id: zeta.id, group_id: group.id})
+    {:ok, _} = Accounts.create_group_member(%{user_id: alpha.id, group_id: group.id})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/admin/users")
@@ -194,7 +194,7 @@ defmodule TokengateWeb.UsersLiveTest do
 
   ## Create user ------------------------------------------------------------
 
-  test "admin can create a new user without teams", %{conn: conn} do
+  test "admin can create a new user without groups", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/admin/users")
@@ -214,47 +214,47 @@ defmodule TokengateWeb.UsersLiveTest do
       })
       |> render_submit()
 
-    assert html =~ "Usuario creado con 0 equipo(s)"
+    assert html =~ "Usuario creado con 0 grupo(s)"
   end
 
-  test "admin can create a new user with multiple teams", %{conn: conn} do
+  test "admin can create a new user with multiple groups", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
 
-    {:ok, team_a} = Accounts.create_team(%{name: "Team A #{unique()}"})
-    {:ok, team_b} = Accounts.create_team(%{name: "Team B #{unique()}"})
+    {:ok, group_a} = Accounts.create_group(%{name: "Group A #{unique()}"})
+    {:ok, group_b} = Accounts.create_group(%{name: "Group B #{unique()}"})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/admin/users")
 
     view |> element("#new-user-btn") |> render_click()
     assert has_element?(view, "#user-form")
-    assert has_element?(view, "select[name='user[team_ids][]']")
+    assert has_element?(view, "select[name='user[group_ids][]']")
 
     html =
       view
       |> form("#user-form", %{
         user: %{
-          email: "multiteam@example.com",
-          name: "Multi Team",
+          email: "multigroup@example.com",
+          name: "Multi Group",
           password: "valid-password-123",
           global_role: "user",
-          team_ids: [team_a.id, team_b.id]
+          group_ids: [group_a.id, group_b.id]
         }
       })
       |> render_submit()
 
-    assert html =~ "Usuario creado con 2 equipo(s)"
+    assert html =~ "Usuario creado con 2 grupo(s)"
 
     # Verify user was created and has 2 memberships with API keys
-    user = Accounts.get_user_by_email("multiteam@example.com")
+    user = Accounts.get_user_by_email("multigroup@example.com")
     assert user
 
-    memberships = Accounts.list_team_members_for_user(user.id)
+    memberships = Accounts.list_group_members_for_user(user.id)
     assert length(memberships) == 2
 
     for member <- memberships do
       assert member.api_key
-      assert member.team_role == "user"
+      assert member.group_role == "user"
       assert member.status == "active"
     end
   end
@@ -398,10 +398,10 @@ defmodule TokengateWeb.UsersLiveTest do
   alias Tokengate.Logs
   alias Tokengate.Providers
 
-  defp team_with_log do
+  defp group_with_log do
     u = unique()
 
-    {:ok, team} = Accounts.create_team(%{name: "Del Team #{u}"})
+    {:ok, group} = Accounts.create_group(%{name: "Del Group #{u}"})
 
     {:ok, owner} =
       Accounts.register_user(%{
@@ -411,7 +411,7 @@ defmodule TokengateWeb.UsersLiveTest do
       })
 
     {:ok, member} =
-      Accounts.create_team_member(%{user_id: owner.id, team_id: team.id, team_role: "user"})
+      Accounts.create_group_member(%{user_id: owner.id, group_id: group.id, group_role: "user"})
 
     {:ok, _api_key, _token} = Accounts.replace_api_key(member)
 
@@ -426,7 +426,7 @@ defmodule TokengateWeb.UsersLiveTest do
 
     {:ok, _log} =
       Logs.log_request(%{
-        team_member_id: member.id,
+        group_member_id: member.id,
         provider_id: provider.id,
         model_id: ma.id,
         model_requested: "model-#{u}",
@@ -440,7 +440,7 @@ defmodule TokengateWeb.UsersLiveTest do
         streaming: false
       })
 
-    %{team: team, owner: owner, member: member}
+    %{group: group, owner: owner, member: member}
   end
 
   test "admin sees delete button for other users", %{conn: conn} do
@@ -488,11 +488,11 @@ defmodule TokengateWeb.UsersLiveTest do
 
   test "confirming delete removes user and all associated data", %{conn: conn} do
     %{user: admin, password: admin_password} = register("admin")
-    %{team: _team, owner: target, member: member} = team_with_log()
+    %{group: _group, owner: target, member: member} = group_with_log()
 
     # Verify data exists before delete
     assert Accounts.get_user!(target.id)
-    assert Accounts.list_team_members_for_user(target.id) != []
+    assert Accounts.list_group_members_for_user(target.id) != []
 
     conn = login(conn, admin, admin_password)
     {:ok, view, _html} = live(conn, ~p"/admin/users")
@@ -506,8 +506,8 @@ defmodule TokengateWeb.UsersLiveTest do
     # User is gone
     assert Accounts.get_user(target.id) == nil
 
-    # Team member is gone (cascade)
-    refute Tokengate.Repo.get(Tokengate.Accounts.TeamMember, member.id)
+    # Group member is gone (cascade)
+    refute Tokengate.Repo.get(Tokengate.Accounts.GroupMember, member.id)
 
     # API key is gone (cascade)
     refute Tokengate.Repo.get(Tokengate.Accounts.ApiKey, member.id)

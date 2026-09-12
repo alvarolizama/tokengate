@@ -1,4 +1,4 @@
-defmodule TokengateWeb.TeamsLiveTest do
+defmodule TokengateWeb.GroupsLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
@@ -12,8 +12,8 @@ defmodule TokengateWeb.TeamsLiveTest do
 
     {:ok, user} =
       Accounts.register_user(%{
-        email: "teams-#{u}@example.com",
-        name: "Teams #{u}",
+        email: "groups-#{u}@example.com",
+        name: "Groups #{u}",
         password: "password-secret-#{u}1",
         global_role: role
       })
@@ -27,7 +27,7 @@ defmodule TokengateWeb.TeamsLiveTest do
     |> recycle()
   end
 
-  defp team_fixture(attrs \\ %{}) do
+  defp group_fixture(attrs \\ %{}) do
     u = unique()
 
     {:ok, model} =
@@ -36,10 +36,10 @@ defmodule TokengateWeb.TeamsLiveTest do
         context_window: 128_000
       })
 
-    {:ok, team} =
-      Accounts.create_team(Map.merge(%{name: "Team #{u}"}, attrs))
+    {:ok, group} =
+      Accounts.create_group(Map.merge(%{name: "Group #{u}"}, attrs))
 
-    %{team: team, model: model}
+    %{group: group, model: model}
   end
 
   # --------------------------------------------------------------------------
@@ -47,66 +47,66 @@ defmodule TokengateWeb.TeamsLiveTest do
   # --------------------------------------------------------------------------
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
-    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/admin/teams")
+    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/admin/groups")
   end
 
   test "non-admin authenticated users are redirected to /dashboard", %{conn: conn} do
     %{user: user, password: password} = register("user")
 
     conn = login(conn, user, password)
-    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/admin/teams")
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/admin/groups")
   end
 
   # --------------------------------------------------------------------------
   # Mount and render
   # --------------------------------------------------------------------------
 
-  test "admin sees the teams page with empty state via search filter", %{conn: conn} do
+  test "admin sees the groups page with empty state via search filter", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/admin/teams")
+    {:ok, view, html} = live(conn, ~p"/admin/groups")
 
-    assert html =~ "Equipos"
-    assert has_element?(view, "#new-team-btn")
+    assert html =~ "Grupos"
+    assert has_element?(view, "#new-group-btn")
 
-    # Type a search term that matches no team → triggers empty state deterministically
+    # Type a search term that matches no group → triggers empty state deterministically
     no_match_term = "zzz-no-match-#{System.unique_integer([:positive])}"
-    view |> element("input[name='team_search']") |> render_change(%{team_search: no_match_term})
+    view |> element("input[name='group_search']") |> render_change(%{group_search: no_match_term})
 
-    assert has_element?(view, "#teams-empty")
+    assert has_element?(view, "#groups-empty")
   end
 
-  test "admin sees existing teams in the stream", %{conn: conn} do
-    %{team: team} = team_fixture()
+  test "admin sees existing groups in the stream", %{conn: conn} do
+    %{group: group} = group_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/admin/teams")
+    {:ok, view, html} = live(conn, ~p"/admin/groups")
 
-    assert html =~ team.name
-    assert has_element?(view, "#edit-#{team.id}")
+    assert html =~ group.name
+    assert has_element?(view, "#edit-#{group.id}")
   end
 
   # --------------------------------------------------------------------------
   # CRUD — Create
   # --------------------------------------------------------------------------
 
-  test "admin creates a team", %{conn: conn} do
-    team_fixture()
+  test "admin creates a group", %{conn: conn} do
+    group_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/teams")
+    {:ok, view, _html} = live(conn, ~p"/admin/groups")
 
-    view |> element("#new-team-btn") |> render_click()
-    assert has_element?(view, "#team-form")
+    view |> element("#new-group-btn") |> render_click()
+    assert has_element?(view, "#group-form")
 
     html =
       view
-      |> form("#team-form", %{
-        team: %{
-          name: "Mi Nuevo Equipo",
+      |> form("#group-form", %{
+        group: %{
+          name: "Mi Nuevo Grupo",
           monthly_budget_per_user_usd: "10.50",
           default_concurrency_limit: 10,
           default_rpm_limit: 120
@@ -114,31 +114,31 @@ defmodule TokengateWeb.TeamsLiveTest do
       })
       |> render_submit()
 
-    assert html =~ "Equipo creado"
-    assert html =~ "Mi Nuevo Equipo"
+    assert html =~ "Grupo creado"
+    assert html =~ "Mi Nuevo Grupo"
     assert html =~ "10.5"
   end
 
   test "create with invalid params shows errors", %{conn: conn} do
-    team_fixture()
+    group_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/teams")
+    {:ok, view, _html} = live(conn, ~p"/admin/groups")
 
-    view |> element("#new-team-btn") |> render_click()
+    view |> element("#new-group-btn") |> render_click()
 
     html =
       view
-      |> form("#team-form", %{
-        team: %{
+      |> form("#group-form", %{
+        group: %{
           name: ""
         }
       })
       |> render_submit()
 
     # Form stays open with errors
-    assert has_element?(view, "#team-form")
+    assert has_element?(view, "#group-form")
     _ = html
   end
 
@@ -146,83 +146,83 @@ defmodule TokengateWeb.TeamsLiveTest do
   # CRUD — Update
   # --------------------------------------------------------------------------
 
-  test "admin edits a team", %{conn: conn} do
-    %{team: team} = team_fixture()
+  test "admin edits a group", %{conn: conn} do
+    %{group: group} = group_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/teams")
+    {:ok, view, _html} = live(conn, ~p"/admin/groups")
 
-    view |> element("#edit-#{team.id}") |> render_click()
-    assert has_element?(view, "#team-form")
+    view |> element("#edit-#{group.id}") |> render_click()
+    assert has_element?(view, "#group-form")
 
     html =
       view
-      |> form("#team-form", %{
-        team: %{name: "Equipo Renombrado"}
+      |> form("#group-form", %{
+        group: %{name: "Grupo Renombrado"}
       })
       |> render_submit()
 
-    assert html =~ "Equipo actualizado"
-    assert html =~ "Equipo Renombrado"
+    assert html =~ "Grupo actualizado"
+    assert html =~ "Grupo Renombrado"
   end
 
   test "cancel_form closes the form", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/teams")
+    {:ok, view, _html} = live(conn, ~p"/admin/groups")
 
-    view |> element("#new-team-btn") |> render_click()
-    assert has_element?(view, "#team-form")
+    view |> element("#new-group-btn") |> render_click()
+    assert has_element?(view, "#group-form")
 
     render_click(view, "cancel_form")
-    refute has_element?(view, "#team-form")
+    refute has_element?(view, "#group-form")
   end
 
   # --------------------------------------------------------------------------
   # CRUD — Delete
   # --------------------------------------------------------------------------
 
-  test "admin deletes a team", %{conn: conn} do
-    %{team: team} = team_fixture()
+  test "admin deletes a group", %{conn: conn} do
+    %{group: group} = group_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/teams")
+    {:ok, view, _html} = live(conn, ~p"/admin/groups")
 
-    assert has_element?(view, "#delete-#{team.id}")
+    assert has_element?(view, "#delete-#{group.id}")
 
-    html = view |> element("#delete-#{team.id}") |> render_click()
+    html = view |> element("#delete-#{group.id}") |> render_click()
 
-    assert html =~ "Equipo eliminado"
-    refute has_element?(view, "#delete-#{team.id}")
+    assert html =~ "Grupo eliminado"
+    refute has_element?(view, "#delete-#{group.id}")
   end
 
   # --------------------------------------------------------------------------
-  # Team model model assignment
+  # Group model model assignment
   # --------------------------------------------------------------------------
 
-  test "admin toggles a model grant on a team via the models modal", %{conn: conn} do
-    %{team: team, model: model_} = team_fixture()
+  test "admin toggles a model grant on a group via the models modal", %{conn: conn} do
+    %{group: group, model: model_} = group_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/admin/teams")
+    {:ok, view, html} = live(conn, ~p"/admin/groups")
 
     # The model picker is NOT in the card — only inside the models modal
-    refute html =~ "Modelos del equipo</h4>"
-    refute has_element?(view, "#model-#{team.id}-#{model_.id}")
+    refute html =~ "Modelos del grupo</h4>"
+    refute has_element?(view, "#model-#{group.id}-#{model_.id}")
 
-    # Open the models modal from the team card header
-    view |> element("#edit-models-#{team.id}") |> render_click()
-    assert has_element?(view, "#models-modal-#{team.id}")
-    assert has_element?(view, "#model-#{team.id}-#{model_.id}")
+    # Open the models modal from the group card header
+    view |> element("#edit-models-#{group.id}") |> render_click()
+    assert has_element?(view, "#models-modal-#{group.id}")
+    assert has_element?(view, "#model-#{group.id}-#{model_.id}")
 
     # Grant the model
     html =
       view
-      |> element("#model-#{team.id}-#{model_.id}")
+      |> element("#model-#{group.id}-#{model_.id}")
       |> render_click()
 
     assert html =~ "Modelos actualizados"
@@ -230,8 +230,8 @@ defmodule TokengateWeb.TeamsLiveTest do
     # Verify the grant was persisted
     grant =
       Repo.get_by(
-        Tokengate.Providers.TeamModel,
-        team_id: team.id,
+        Tokengate.Providers.GroupModel,
+        group_id: group.id,
         model_id: model_.id
       )
 
@@ -240,26 +240,26 @@ defmodule TokengateWeb.TeamsLiveTest do
     # Toggle again to revoke
     html =
       view
-      |> element("#model-#{team.id}-#{model_.id}")
+      |> element("#model-#{group.id}-#{model_.id}")
       |> render_click()
 
     assert html =~ "Modelos actualizados"
 
     refute Repo.get_by(
-             Tokengate.Providers.TeamModel,
-             team_id: team.id,
+             Tokengate.Providers.GroupModel,
+             group_id: group.id,
              model_id: model_.id
            )
   end
 
   test "link to members page is present", %{conn: conn} do
-    %{team: team} = team_fixture()
+    %{group: group} = group_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/teams")
+    {:ok, view, _html} = live(conn, ~p"/admin/groups")
 
-    assert has_element?(view, "#members-link-#{team.id}")
+    assert has_element?(view, "#members-link-#{group.id}")
   end
 
   # --------------------------------------------------------------------------
@@ -267,18 +267,18 @@ defmodule TokengateWeb.TeamsLiveTest do
   # --------------------------------------------------------------------------
 
   test "clicking new_webhook shows the form", %{conn: conn} do
-    %{team: team} = team_fixture()
+    %{group: group} = group_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/teams")
+    {:ok, view, _html} = live(conn, ~p"/admin/groups")
 
-    assert has_element?(view, "#new-webhook-#{team.id}")
+    assert has_element?(view, "#new-webhook-#{group.id}")
 
     view
-    |> element("#new-webhook-#{team.id}")
+    |> element("#new-webhook-#{group.id}")
     |> render_click()
 
-    assert has_element?(view, "#destination-form-#{team.id}")
+    assert has_element?(view, "#destination-form-#{group.id}")
   end
 end

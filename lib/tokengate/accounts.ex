@@ -1,6 +1,6 @@
 defmodule Tokengate.Accounts do
   @moduledoc """
-  The Accounts context: teams, users, team members, services, and API keys.
+  The Accounts context: groups, users, group members, services, and API keys.
   """
 
   import Ecto.Query
@@ -12,55 +12,55 @@ defmodule Tokengate.Accounts do
     Service,
     ServiceApiKey,
     ServiceSupervisor,
-    Team,
-    TeamMember,
+    Group,
+    GroupMember,
     User
   }
 
   # ---------------------------------------------------------------------------
-  # Teams
+  # Groups
   # ---------------------------------------------------------------------------
 
-  def list_teams, do: Repo.all(Team)
+  def list_groups, do: Repo.all(Group)
 
-  def get_team!(id), do: Repo.get!(Team, id)
+  def get_group!(id), do: Repo.get!(Group, id)
 
-  def get_team(id), do: Repo.get(Team, id)
+  def get_group(id), do: Repo.get(Group, id)
 
-  def create_team(attrs) do
-    %Team{}
-    |> Team.changeset(attrs)
+  def create_group(attrs) do
+    %Group{}
+    |> Group.changeset(attrs)
     |> Repo.insert()
   end
 
-  def update_team(%Team{} = team, attrs) do
-    team
-    |> Team.changeset(attrs)
+  def update_group(%Group{} = group, attrs) do
+    group
+    |> Group.changeset(attrs)
     |> Repo.update()
-    |> invalidate_team_auth_cache(team.id)
+    |> invalidate_group_auth_cache(group.id)
   end
 
-  def delete_team(%Team{} = team) do
-    alias Tokengate.Providers.{TeamModel, TeamMemberExtraModel}
+  def delete_group(%Group{} = group) do
+    alias Tokengate.Providers.{GroupModel, GroupMemberExtraModel}
 
-    team = Repo.preload(team, team_members: :api_key)
+    group = Repo.preload(group, group_members: :api_key)
 
     Repo.transaction(fn ->
-      # Delete team_models (FK team_id)
-      from(t in TeamModel, where: t.team_id == ^team.id)
+      # Delete group_models (FK group_id)
+      from(t in GroupModel, where: t.group_id == ^group.id)
       |> Repo.delete_all()
 
-      # For each team_member: delete api_key, extra_models, then the member
-      for member <- team.team_members do
+      # For each group_member: delete api_key, extra_models, then the member
+      for member <- group.group_members do
         if member.api_key, do: Repo.delete!(member.api_key)
 
-        from(t in TeamMemberExtraModel, where: t.team_member_id == ^member.id)
+        from(t in GroupMemberExtraModel, where: t.group_member_id == ^member.id)
         |> Repo.delete_all()
 
         member
         |> Ecto.Changeset.change()
-        |> Ecto.Changeset.foreign_key_constraint(:team_member_id,
-          name: "request_logs_team_member_id_fkey",
+        |> Ecto.Changeset.foreign_key_constraint(:group_member_id,
+          name: "request_logs_group_member_id_fkey",
           message: "el miembro tiene logs de uso y no se puede eliminar"
         )
         |> Repo.delete()
@@ -70,19 +70,19 @@ defmodule Tokengate.Accounts do
         end
       end
 
-      # Finally delete the team itself
-      team
+      # Finally delete the group itself
+      group
       |> Repo.delete()
       |> case do
-        {:ok, team} -> team
+        {:ok, group} -> group
         {:error, changeset} -> Repo.rollback(changeset)
       end
     end)
-    |> invalidate_team_auth_cache(team.id)
+    |> invalidate_group_auth_cache(group.id)
   end
 
-  def change_team(%Team{} = team, attrs \\ %{}) do
-    Team.changeset(team, attrs)
+  def change_group(%Group{} = group, attrs \\ %{}) do
+    Group.changeset(group, attrs)
   end
 
   # ---------------------------------------------------------------------------
@@ -153,9 +153,9 @@ defmodule Tokengate.Accounts do
   Permanently deletes a user and all associated data via DB-level
   CASCADE constraints:
 
-  - team_members (CASCADE)
-  - api_keys (CASCADE from team_members)
-  - request_logs (CASCADE from team_members — ALL consumption history)
+  - group_members (CASCADE)
+  - api_keys (CASCADE from group_members)
+  - request_logs (CASCADE from group_members — ALL consumption history)
   - audit_logs (SET NULL — audit trail kept, attribution lost)
 
   Returns `{:ok, user}` or `{:error, changeset}`.
@@ -323,54 +323,54 @@ defmodule Tokengate.Accounts do
   def authenticate_user(_email, _password), do: {:error, :unauthorized}
 
   # ---------------------------------------------------------------------------
-  # Team members
+  # Group members
   # ---------------------------------------------------------------------------
 
-  def get_team_member!(id), do: Repo.get!(TeamMember, id)
+  def get_group_member!(id), do: Repo.get!(GroupMember, id)
 
-  def get_team_member(id), do: Repo.get(TeamMember, id)
+  def get_group_member(id), do: Repo.get(GroupMember, id)
 
-  def get_team_member!(id, :with_assoc) do
+  def get_group_member!(id, :with_assoc) do
     Repo.one!(
-      from tm in TeamMember,
+      from tm in GroupMember,
         where: tm.id == ^id,
-        preload: [:user, :team, :api_key]
+        preload: [:user, :group, :api_key]
     )
   end
 
-  def list_team_members_for_team(team_id) do
-    Repo.all(from tm in TeamMember, where: tm.team_id == ^team_id, preload: [:user, :api_key])
+  def list_group_members_for_group(group_id) do
+    Repo.all(from tm in GroupMember, where: tm.group_id == ^group_id, preload: [:user, :api_key])
   end
 
-  @doc "Returns just the IDs of team members for a team (lightweight, no preloads)."
-  def list_member_ids_for_team(team_id) do
-    Repo.all(from tm in TeamMember, where: tm.team_id == ^team_id, select: tm.id)
+  @doc "Returns just the IDs of group members for a group (lightweight, no preloads)."
+  def list_member_ids_for_group(group_id) do
+    Repo.all(from tm in GroupMember, where: tm.group_id == ^group_id, select: tm.id)
   end
 
-  def list_team_members_for_user(user_id) do
-    Repo.all(from tm in TeamMember, where: tm.user_id == ^user_id, preload: [:team, :api_key])
+  def list_group_members_for_user(user_id) do
+    Repo.all(from tm in GroupMember, where: tm.user_id == ^user_id, preload: [:group, :api_key])
   end
 
   @doc """
-  Batch variant: returns a `%{user_id => [Team]}` map for a list of user ids
-  in a single query (with teams preloaded), instead of one query per user.
+  Batch variant: returns a `%{user_id => [Group]}` map for a list of user ids
+  in a single query (with groups preloaded), instead of one query per user.
   Users without memberships map to an empty list.
   """
-  def list_teams_by_user_ids(user_ids) when is_list(user_ids) do
+  def list_groups_by_user_ids(user_ids) when is_list(user_ids) do
     members =
       Repo.all(
-        from tm in TeamMember,
+        from tm in GroupMember,
           where: tm.user_id in ^user_ids,
-          preload: [:team]
+          preload: [:group]
       )
 
-    grouped = Enum.group_by(members, & &1.user_id, & &1.team)
+    grouped = Enum.group_by(members, & &1.user_id, & &1.group)
 
     Map.new(user_ids, fn id -> {id, Map.get(grouped, id, [])} end)
   end
 
   @doc """
-  Resolves the team-member ids whose consumption a user is allowed to see.
+  Resolves the group-member ids whose consumption a user is allowed to see.
 
     * admin — `nil` (org-wide, no filter)
     * user — ids of their own memberships only
@@ -381,54 +381,54 @@ defmodule Tokengate.Accounts do
   def scope_member_ids(%{global_role: "admin"}), do: nil
 
   def scope_member_ids(%{global_role: "user"} = user) do
-    memberships = list_team_members_for_user(user.id)
+    memberships = list_group_members_for_user(user.id)
     Enum.map(memberships, & &1.id)
   end
 
   def scope_member_ids(_), do: []
 
   @doc """
-  Team ids a user is allowed to drill into: all for admins (`nil` =
+  Group ids a user is allowed to drill into: all for admins (`nil` =
   unrestricted), empty for non-admins.
   """
-  def scope_team_ids(%{global_role: "admin"}), do: nil
+  def scope_group_ids(%{global_role: "admin"}), do: nil
 
-  def scope_team_ids(%{global_role: "user"}), do: []
+  def scope_group_ids(%{global_role: "user"}), do: []
 
-  def scope_team_ids(_), do: []
+  def scope_group_ids(_), do: []
 
   @doc """
-  Creates a team member. No API key is generated automatically;
+  Creates a group member. No API key is generated automatically;
   use `replace_api_key/1` to provision one.
   """
-  def create_team_member(attrs) do
-    %TeamMember{}
-    |> TeamMember.changeset(attrs)
+  def create_group_member(attrs) do
+    %GroupMember{}
+    |> GroupMember.changeset(attrs)
     |> Repo.insert()
   end
 
-  def update_team_member(%TeamMember{} = team_member, attrs) do
-    team_member
-    |> TeamMember.changeset(attrs)
+  def update_group_member(%GroupMember{} = group_member, attrs) do
+    group_member
+    |> GroupMember.changeset(attrs)
     |> Repo.update()
-    |> invalidate_member_auth_cache(team_member.id)
+    |> invalidate_member_auth_cache(group_member.id)
   end
 
-  def delete_team_member(%TeamMember{} = team_member) do
-    alias Tokengate.Providers.TeamMemberExtraModel
+  def delete_group_member(%GroupMember{} = group_member) do
+    alias Tokengate.Providers.GroupMemberExtraModel
 
-    team_member = Repo.preload(team_member, :api_key)
+    group_member = Repo.preload(group_member, :api_key)
 
     Repo.transaction(fn ->
-      if team_member.api_key, do: Repo.delete!(team_member.api_key)
+      if group_member.api_key, do: Repo.delete!(group_member.api_key)
 
-      from(t in TeamMemberExtraModel, where: t.team_member_id == ^team_member.id)
+      from(t in GroupMemberExtraModel, where: t.group_member_id == ^group_member.id)
       |> Repo.delete_all()
 
-      team_member
+      group_member
       |> Ecto.Changeset.change()
-      |> Ecto.Changeset.foreign_key_constraint(:team_member_id,
-        name: "request_logs_team_member_id_fkey",
+      |> Ecto.Changeset.foreign_key_constraint(:group_member_id,
+        name: "request_logs_group_member_id_fkey",
         message: "el miembro tiene logs de uso y no se puede eliminar"
       )
       |> Repo.delete()
@@ -437,11 +437,11 @@ defmodule Tokengate.Accounts do
         {:error, changeset} -> Repo.rollback(changeset)
       end
     end)
-    |> invalidate_member_auth_cache(team_member.id)
+    |> invalidate_member_auth_cache(group_member.id)
   end
 
-  def change_team_member(%TeamMember{} = team_member, attrs \\ %{}) do
-    TeamMember.changeset(team_member, attrs)
+  def change_group_member(%GroupMember{} = group_member, attrs \\ %{}) do
+    GroupMember.changeset(group_member, attrs)
   end
 
   # ---------------------------------------------------------------------------
@@ -453,45 +453,45 @@ defmodule Tokengate.Accounts do
   def get_api_key(id), do: Repo.get(ApiKey, id)
 
   @doc """
-  Looks up a team member by a presented API key token.
+  Looks up a group member by a presented API key token.
 
-  Returns `{:ok, team_member}` only when the token matches an active API key.
-  The returned team_member has `:team` and `:user` preloaded. Returns
+  Returns `{:ok, group_member}` only when the token matches an active API key.
+  The returned group_member has `:group` and `:user` preloaded. Returns
   `{:error, :not_found}` otherwise.
   """
-  def get_team_member_by_api_key(token) when is_binary(token) do
+  def get_group_member_by_api_key(token) when is_binary(token) do
     key_hash = hash_api_key(token)
 
     query =
-      from tm in TeamMember,
+      from tm in GroupMember,
         join: ak in assoc(tm, :api_key),
         where: ak.key_hash == ^key_hash and ak.status == "active",
-        preload: [:team, :user, :api_key]
+        preload: [:group, :user, :api_key]
 
     case Repo.one(query) do
-      %TeamMember{} = tm -> {:ok, tm}
+      %GroupMember{} = tm -> {:ok, tm}
       nil -> {:error, :not_found}
     end
   end
 
   @doc """
-  Revokes the existing API key for the team member and issues a new one,
+  Revokes the existing API key for the group member and issues a new one,
   returning the new plaintext token.
 
-  Because of the unique constraint on `team_member_id` (one active key per
+  Because of the unique constraint on `group_member_id` (one active key per
   member), this replaces the key material in place: the old token is
   invalidated (its hash/prefix are overwritten) and a new token is
   generated. Returns `{:ok, api_key, new_token}` or `{:error, changeset}`.
   """
-  def replace_api_key(%TeamMember{id: team_member_id} = team_member) do
+  def replace_api_key(%GroupMember{id: group_member_id} = group_member) do
     {new_token, new_hash, new_prefix} = generate_api_key_material()
 
-    team_member = Repo.preload(team_member, [:api_key])
-    old_hash = team_member.api_key && team_member.api_key.key_hash
+    group_member = Repo.preload(group_member, [:api_key])
+    old_hash = group_member.api_key && group_member.api_key.key_hash
 
     result =
-      if team_member.api_key do
-        team_member.api_key
+      if group_member.api_key do
+        group_member.api_key
         |> ApiKey.changeset(%{
           "key_hash" => new_hash,
           "key_prefix" => new_prefix,
@@ -505,7 +505,7 @@ defmodule Tokengate.Accounts do
       else
         %ApiKey{}
         |> ApiKey.changeset(%{
-          "team_member_id" => team_member_id,
+          "group_member_id" => group_member_id,
           "key_hash" => new_hash,
           "key_prefix" => new_prefix,
           "status" => "active"
@@ -520,7 +520,7 @@ defmodule Tokengate.Accounts do
     case result do
       {:ok, _api_key, _token} ->
         ApiKeyCache.invalidate_hash(old_hash)
-        ApiKeyCache.invalidate_member(team_member_id)
+        ApiKeyCache.invalidate_member(group_member_id)
 
       _ ->
         :ok
@@ -553,26 +553,26 @@ defmodule Tokengate.Accounts do
   end
 
   @doc """
-  Clears all sticky routing entries for a team member's API key.
+  Clears all sticky routing entries for a group member's API key.
 
   This forces the next requests from that member to re-evaluate provider
   availability instead of sticking to a potentially degraded provider.
   Returns `:ok` even when the member has no API key or no sticky entries.
   """
-  def clear_team_member_sticky_routes(%TeamMember{} = team_member) do
-    team_member = Repo.preload(team_member, [:api_key])
+  def clear_group_member_sticky_routes(%GroupMember{} = group_member) do
+    group_member = Repo.preload(group_member, [:api_key])
 
-    if team_member.api_key && team_member.api_key.key_hash do
-      Tokengate.Routing.StickyTracker.clear_all_for_api_key_hash(team_member.api_key.key_hash)
+    if group_member.api_key && group_member.api_key.key_hash do
+      Tokengate.Routing.StickyTracker.clear_all_for_api_key_hash(group_member.api_key.key_hash)
     end
 
     :ok
   end
 
-  def clear_team_member_sticky_routes(team_member_id) when is_binary(team_member_id) do
-    case get_team_member(team_member_id) do
+  def clear_group_member_sticky_routes(group_member_id) when is_binary(group_member_id) do
+    case get_group_member(group_member_id) do
       nil -> :ok
-      %TeamMember{} = tm -> clear_team_member_sticky_routes(tm)
+      %GroupMember{} = tm -> clear_group_member_sticky_routes(tm)
     end
   end
 
@@ -833,45 +833,45 @@ defmodule Tokengate.Accounts do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Computes the effective limits for a team member by combining team defaults
+  Computes the effective limits for a group member by combining group defaults
   with member overrides.
 
-  - `monthly_budget_usd`: team default + member's `extra_monthly_budget_usd`
-    (extra added when not nil). If the team default is `nil`, the result is
+  - `monthly_budget_usd`: group default + member's `extra_monthly_budget_usd`
+    (extra added when not nil). If the group default is `nil`, the result is
     `nil` (no limit) unless an extra is provided, in which case the result is
     just the extra.
-  - `concurrency_limit`: team default + member's `extra_concurrency` (when not
-    nil). The team default is always present (defaults to 5).
-  - `rpm_limit`: team's `default_rpm_limit` + member's `extra_rpm` (when not
-    nil). The team default is always present (defaults to 60).
+  - `concurrency_limit`: group default + member's `extra_concurrency` (when not
+    nil). The group default is always present (defaults to 5).
+  - `rpm_limit`: group's `default_rpm_limit` + member's `extra_rpm` (when not
+    nil). The group default is always present (defaults to 60).
 
   Returns a map with `:monthly_budget_usd`, `:concurrency_limit`, and `:rpm_limit` keys.
 
-  Service virtual members (TeamMember with team: nil) are resolved to their
+  Service virtual members (GroupMember with group: nil) are resolved to their
   backing Service limits so the proxy controller can use a single code path.
   """
-  # Service virtual member — no team, look up the backing service limits.
-  def effective_limits(%TeamMember{team: nil, id: id}) do
+  # Service virtual member — no group, look up the backing service limits.
+  def effective_limits(%GroupMember{group: nil, id: id}) do
     case get_service(id) do
       %Service{} = service -> effective_limits(service)
       nil -> %{monthly_budget_usd: nil, concurrency_limit: 5, rpm_limit: 60}
     end
   end
 
-  def effective_limits(%TeamMember{team: %Ecto.Association.NotLoaded{}} = team_member) do
-    team_member = Repo.preload(team_member, [:team])
-    effective_limits(team_member)
+  def effective_limits(%GroupMember{group: %Ecto.Association.NotLoaded{}} = group_member) do
+    group_member = Repo.preload(group_member, [:group])
+    effective_limits(group_member)
   end
 
-  def effective_limits(%TeamMember{} = team_member) do
-    team = team_member.team
+  def effective_limits(%GroupMember{} = group_member) do
+    group = group_member.group
 
     %{
       monthly_budget_usd:
-        combine_decimal(team.monthly_budget_per_user_usd, team_member.extra_monthly_budget_usd),
+        combine_decimal(group.monthly_budget_per_user_usd, group_member.extra_monthly_budget_usd),
       concurrency_limit:
-        combine_integer(team.default_concurrency_limit, team_member.extra_concurrency),
-      rpm_limit: combine_integer(team.default_rpm_limit, team_member.extra_rpm)
+        combine_integer(group.default_concurrency_limit, group_member.extra_concurrency),
+      rpm_limit: combine_integer(group.default_rpm_limit, group_member.extra_rpm)
     }
   end
 
@@ -938,8 +938,8 @@ defmodule Tokengate.Accounts do
   end
 
   defp build_auth_entry(token) do
-    case get_team_member_by_api_key(token) do
-      {:ok, %TeamMember{} = member} ->
+    case get_group_member_by_api_key(token) do
+      {:ok, %GroupMember{} = member} ->
         %{member: member, limits: effective_limits(member), subject_type: "user"}
 
       _ ->
@@ -965,17 +965,17 @@ defmodule Tokengate.Accounts do
 
   defp invalidate_member_auth_cache(result, _member_id), do: result
 
-  defp invalidate_team_auth_cache({:ok, _} = result, team_id) do
-    safe_invalidate(fn -> ApiKeyCache.invalidate_team(team_id) end)
+  defp invalidate_group_auth_cache({:ok, _} = result, group_id) do
+    safe_invalidate(fn -> ApiKeyCache.invalidate_group(group_id) end)
     result
   end
 
-  defp invalidate_team_auth_cache(result, _team_id), do: result
+  defp invalidate_group_auth_cache(result, _group_id), do: result
 
   defp tap_invalidate_api_key({:ok, _} = result, %ApiKey{} = key) do
     safe_invalidate(fn ->
       ApiKeyCache.invalidate_hash(key.key_hash)
-      ApiKeyCache.invalidate_member(key.team_member_id)
+      ApiKeyCache.invalidate_member(key.group_member_id)
     end)
 
     result

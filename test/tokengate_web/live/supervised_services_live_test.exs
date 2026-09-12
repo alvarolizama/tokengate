@@ -151,7 +151,7 @@ defmodule TokengateWeb.SupervisedServicesLiveTest do
     assert html =~ service.api_key.key_prefix
 
     # 30d stats row renders (zero values, since there's no log row —
-    # the FK enforces `team_member_id` points to team_members, not services,
+    # the FK enforces `group_member_id` points to group_members, not services,
     # so live service traffic is sparse and the empty-stats branch is the
     # realistic render path).
     assert html =~ "$0.00"

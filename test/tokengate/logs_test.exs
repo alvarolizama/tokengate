@@ -7,10 +7,10 @@ defmodule Tokengate.LogsTest do
   # Fixtures — create FK parents via the REAL Accounts/Providers contexts.
   # ---------------------------------------------------------------------------
 
-  defp valid_team_attrs(attrs) do
+  defp valid_group_attrs(attrs) do
     Map.merge(
       %{
-        "name" => "Platform Team",
+        "name" => "Platform Group",
         "monthly_budget_per_user_usd" => "100.00",
         "default_concurrency_limit" => 10,
         "default_rpm_limit" => 120
@@ -19,9 +19,9 @@ defmodule Tokengate.LogsTest do
     )
   end
 
-  defp team_fixture(attrs \\ %{}) do
-    {:ok, team} = Accounts.create_team(valid_team_attrs(attrs))
-    team
+  defp group_fixture(attrs \\ %{}) do
+    {:ok, group} = Accounts.create_group(valid_group_attrs(attrs))
+    group
   end
 
   defp user_fixture(attrs \\ %{}) do
@@ -40,22 +40,22 @@ defmodule Tokengate.LogsTest do
     user
   end
 
-  defp team_member_fixture(attrs \\ %{}) do
-    team = team_fixture()
+  defp group_member_fixture(attrs \\ %{}) do
+    group = group_fixture()
     user = user_fixture()
 
-    {:ok, team_member} =
-      Accounts.create_team_member(
+    {:ok, group_member} =
+      Accounts.create_group_member(
         Map.merge(
           %{
             "user_id" => user.id,
-            "team_id" => team.id
+            "group_id" => group.id
           },
           attrs
         )
       )
 
-    {team_member, team}
+    {group_member, group}
   end
 
   defp service_fixture(attrs \\ %{}) do
@@ -72,10 +72,10 @@ defmodule Tokengate.LogsTest do
   @timestamp DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.truncate(:second)
 
   defp log_fixture(attrs \\ %{}) do
-    {team_member, _team} = team_member_fixture()
+    {group_member, _group} = group_member_fixture()
 
     default_attrs = %{
-      team_member_id: team_member.id,
+      group_member_id: group_member.id,
       model_requested: "gpt-4",
       model_responded: "gpt-4-turbo",
       agent_type: "api",
@@ -90,7 +90,7 @@ defmodule Tokengate.LogsTest do
 
     attrs = Map.merge(default_attrs, attrs)
     {:ok, log} = Logs.log_request(attrs)
-    {log, team_member}
+    {log, group_member}
   end
 
   # ---------------------------------------------------------------------------
@@ -99,10 +99,10 @@ defmodule Tokengate.LogsTest do
 
   describe "log_request/1" do
     test "inserts a request log and returns it" do
-      {log, _team_member} = log_fixture()
+      {log, _group_member} = log_fixture()
 
       assert log.id
-      assert log.team_member_id
+      assert log.group_member_id
       assert log.model_requested == "gpt-4"
       assert log.model_responded == "gpt-4-turbo"
       assert log.agent_type == "api"
@@ -114,22 +114,22 @@ defmodule Tokengate.LogsTest do
     end
 
     test "lands in a real partition and is queryable" do
-      {log, _team_member} = log_fixture(%{inserted_at: ~U[2026-07-26 15:30:00Z]})
+      {log, _group_member} = log_fixture(%{inserted_at: ~U[2026-07-26 15:30:00Z]})
 
       # Query directly via Repo — should find the row
-      result = Logs.list_logs(%{team_member_id: log.team_member_id})
+      result = Logs.list_logs(%{group_member_id: log.group_member_id})
       assert length(result) == 1
       assert hd(result).id == log.id
     end
 
     test "generates id and inserted_at when not provided" do
-      {team_member, _team} = team_member_fixture()
+      {group_member, _group} = group_member_fixture()
 
       before = DateTime.utc_now() |> DateTime.truncate(:second)
 
       {:ok, log} =
         Logs.log_request(%{
-          team_member_id: team_member.id,
+          group_member_id: group_member.id,
           model_requested: "claude-3"
         })
 
@@ -142,11 +142,11 @@ defmodule Tokengate.LogsTest do
     end
 
     test "applies defaults for agent_type, tokens, and streaming" do
-      {team_member, _team} = team_member_fixture()
+      {group_member, _group} = group_member_fixture()
 
       {:ok, log} =
         Logs.log_request(%{
-          team_member_id: team_member.id,
+          group_member_id: group_member.id,
           model_requested: "test-model"
         })
 
@@ -156,14 +156,14 @@ defmodule Tokengate.LogsTest do
       assert log.streaming == false
     end
 
-    test "requires team_member_id and model_requested" do
+    test "requires group_member_id and model_requested" do
       {:error, changeset} = Logs.log_request(%{})
 
-      assert errors_on(changeset).team_member_id
+      assert errors_on(changeset).group_member_id
       assert errors_on(changeset).model_requested
     end
 
-    test "inserts a service log with service_id and null team_member_id" do
+    test "inserts a service log with service_id and null group_member_id" do
       service = service_fixture()
 
       {:ok, log} =
@@ -176,7 +176,7 @@ defmodule Tokengate.LogsTest do
 
       assert log.subject_type == "service"
       assert log.service_id == service.id
-      assert log.team_member_id == nil
+      assert log.group_member_id == nil
     end
 
     test "requires service_id when subject_type is service" do
@@ -186,15 +186,15 @@ defmodule Tokengate.LogsTest do
       assert errors_on(changeset).service_id
     end
 
-    test "requires team_member_id when subject_type is user" do
+    test "requires group_member_id when subject_type is user" do
       {:error, changeset} =
         Logs.log_request(%{subject_type: "user", model_requested: "gpt-4"})
 
-      assert errors_on(changeset).team_member_id
+      assert errors_on(changeset).group_member_id
     end
 
     test "never stores prompt or completion content — metadata only" do
-      {log, _team_member} = log_fixture()
+      {log, _group_member} = log_fixture()
 
       # The struct should not have any content fields
       refute Map.has_key?(log, :prompt)
@@ -215,10 +215,10 @@ defmodule Tokengate.LogsTest do
 
   describe "WriteWorker.perform/1" do
     test "persists cache_read_tokens and cache_creation_tokens from args" do
-      {team_member, _team} = team_member_fixture()
+      {group_member, _group} = group_member_fixture()
 
       args = %{
-        "team_member_id" => team_member.id,
+        "group_member_id" => group_member.id,
         "model_requested" => "deepseek-chat",
         "prompt_tokens" => 2350,
         "completion_tokens" => 1,
@@ -228,7 +228,7 @@ defmodule Tokengate.LogsTest do
 
       assert :ok = Tokengate.Logs.WriteWorker.perform(%Oban.Job{args: args})
 
-      [log] = Logs.list_logs(%{team_member_id: team_member.id})
+      [log] = Logs.list_logs(%{group_member_id: group_member.id})
       assert log.cache_read_tokens == 2304
       assert log.cache_creation_tokens == 0
     end
@@ -240,42 +240,42 @@ defmodule Tokengate.LogsTest do
 
   describe "list_logs/1" do
     test "returns logs ordered by inserted_at DESC" do
-      {team_member, _team} = team_member_fixture()
+      {group_member, _group} = group_member_fixture()
 
       {:ok, log1} =
         Logs.log_request(%{
-          team_member_id: team_member.id,
+          group_member_id: group_member.id,
           model_requested: "gpt-4",
           inserted_at: ~U[2026-07-26 10:00:00Z]
         })
 
       {:ok, log2} =
         Logs.log_request(%{
-          team_member_id: team_member.id,
+          group_member_id: group_member.id,
           model_requested: "gpt-4",
           inserted_at: ~U[2026-07-26 12:00:00Z]
         })
 
       {:ok, log3} =
         Logs.log_request(%{
-          team_member_id: team_member.id,
+          group_member_id: group_member.id,
           model_requested: "gpt-4",
           inserted_at: ~U[2026-07-26 11:00:00Z]
         })
 
-      # Scope to our own team_member so concurrent test inserts don't interfere
-      logs = Logs.list_logs(%{team_member_id: team_member.id})
+      # Scope to our own group_member so concurrent test inserts don't interfere
+      logs = Logs.list_logs(%{group_member_id: group_member.id})
       ids = Enum.map(logs, & &1.id)
 
       # Most recent first
       assert ids == [log2.id, log3.id, log1.id]
     end
 
-    test "filters by team_member_id" do
+    test "filters by group_member_id" do
       {log1, _} = log_fixture()
-      {log2, team_member2} = log_fixture(%{model_requested: "claude-3"})
+      {log2, group_member2} = log_fixture(%{model_requested: "claude-3"})
 
-      logs = Logs.list_logs(%{team_member_id: team_member2.id})
+      logs = Logs.list_logs(%{group_member_id: group_member2.id})
 
       assert length(logs) == 1
       assert hd(logs).id == log2.id
@@ -356,7 +356,7 @@ defmodule Tokengate.LogsTest do
           inserted_at: @timestamp
         })
 
-      member_rows = Logs.list_logs(%{subject_id: member_log.team_member_id})
+      member_rows = Logs.list_logs(%{subject_id: member_log.group_member_id})
       assert Enum.any?(member_rows, &(&1.id == member_log.id))
 
       service_rows = Logs.list_logs(%{subject_id: service.id})
@@ -379,88 +379,88 @@ defmodule Tokengate.LogsTest do
     end
 
     test "respects limit (default 50)" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       for i <- 1..10 do
         Logs.log_request(%{
-          team_member_id: tm.id,
+          group_member_id: tm.id,
           model_requested: "model-#{i}",
           inserted_at: ~U[2026-07-26 12:00:00Z]
         })
       end
 
       # Default limit returns all 10 (under 50)
-      assert length(Logs.list_logs(%{team_member_id: tm.id})) == 10
+      assert length(Logs.list_logs(%{group_member_id: tm.id})) == 10
 
       # Explicit limit of 3
-      assert length(Logs.list_logs(%{team_member_id: tm.id, limit: 3})) == 3
+      assert length(Logs.list_logs(%{group_member_id: tm.id, limit: 3})) == 3
     end
 
     test "clamps limit to max 500" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       {:ok, _} =
         Logs.log_request(%{
-          team_member_id: tm.id,
+          group_member_id: tm.id,
           model_requested: "model-1",
           inserted_at: ~U[2026-07-26 12:00:00Z]
         })
 
       # Requesting more than 500 should not raise — clamps to 500
-      logs = Logs.list_logs(%{team_member_id: tm.id, limit: 1000})
+      logs = Logs.list_logs(%{group_member_id: tm.id, limit: 1000})
       assert length(logs) == 1
     end
   end
 
   # ---------------------------------------------------------------------------
-  # list_logs_for_team/2
+  # list_logs_for_group/2
   # ---------------------------------------------------------------------------
 
-  describe "list_logs_for_team/2" do
-    test "returns logs entries for members of the specified team" do
-      team1 = team_fixture()
-      team2 = team_fixture(%{"name" => "Other Team"})
+  describe "list_logs_for_group/2" do
+    test "returns logs entries for members of the specified group" do
+      group1 = group_fixture()
+      group2 = group_fixture(%{"name" => "Other Group"})
 
       user1 = user_fixture()
       user2 = user_fixture()
 
-      {:ok, tm1} = Accounts.create_team_member(%{"user_id" => user1.id, "team_id" => team1.id})
-      {:ok, tm2} = Accounts.create_team_member(%{"user_id" => user2.id, "team_id" => team2.id})
+      {:ok, tm1} = Accounts.create_group_member(%{"user_id" => user1.id, "group_id" => group1.id})
+      {:ok, tm2} = Accounts.create_group_member(%{"user_id" => user2.id, "group_id" => group2.id})
 
       {:ok, _log1} =
         Logs.log_request(%{
-          team_member_id: tm1.id,
+          group_member_id: tm1.id,
           model_requested: "gpt-4",
           inserted_at: @timestamp
         })
 
       {:ok, _log2} =
         Logs.log_request(%{
-          team_member_id: tm2.id,
+          group_member_id: tm2.id,
           model_requested: "claude-3",
           inserted_at: @timestamp
         })
 
-      # team1 should only see tm1's logs
-      logs = Logs.list_logs_for_team(team1.id)
+      # group1 should only see tm1's logs
+      logs = Logs.list_logs_for_group(group1.id)
       assert length(logs) == 1
-      assert hd(logs).team_member_id == tm1.id
+      assert hd(logs).group_member_id == tm1.id
 
-      # team2 should only see tm2's logs
-      logs = Logs.list_logs_for_team(team2.id)
+      # group2 should only see tm2's logs
+      logs = Logs.list_logs_for_group(group2.id)
       assert length(logs) == 1
-      assert hd(logs).team_member_id == tm2.id
+      assert hd(logs).group_member_id == tm2.id
     end
 
     test "accepts additional filters" do
-      team = team_fixture()
+      group = group_fixture()
       user = user_fixture()
 
-      {:ok, tm} = Accounts.create_team_member(%{"user_id" => user.id, "team_id" => team.id})
+      {:ok, tm} = Accounts.create_group_member(%{"user_id" => user.id, "group_id" => group.id})
 
       {:ok, _} =
         Logs.log_request(%{
-          team_member_id: tm.id,
+          group_member_id: tm.id,
           model_requested: "gpt-4",
           agent_type: "api",
           status_code: 200,
@@ -469,7 +469,7 @@ defmodule Tokengate.LogsTest do
 
       {:ok, _} =
         Logs.log_request(%{
-          team_member_id: tm.id,
+          group_member_id: tm.id,
           model_requested: "gpt-4",
           agent_type: "sdk",
           status_code: 500,
@@ -477,7 +477,7 @@ defmodule Tokengate.LogsTest do
         })
 
       # Filter by status_code
-      logs = Logs.list_logs_for_team(team.id, %{status_code: 500})
+      logs = Logs.list_logs_for_group(group.id, %{status_code: 500})
       assert length(logs) == 1
       assert hd(logs).status_code == 500
     end
@@ -489,10 +489,10 @@ defmodule Tokengate.LogsTest do
 
   describe "cost_summary/1" do
     test "aggregates costs and tokens across matching logs" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       Logs.log_request(%{
-        team_member_id: tm.id,
+        group_member_id: tm.id,
         model_requested: "gpt-4",
         prompt_tokens: 100,
         completion_tokens: 50,
@@ -501,7 +501,7 @@ defmodule Tokengate.LogsTest do
       })
 
       Logs.log_request(%{
-        team_member_id: tm.id,
+        group_member_id: tm.id,
         model_requested: "gpt-4",
         prompt_tokens: 200,
         completion_tokens: 100,
@@ -509,7 +509,7 @@ defmodule Tokengate.LogsTest do
         inserted_at: @timestamp
       })
 
-      summary = Logs.cost_summary(%{team_member_id: tm.id})
+      summary = Logs.cost_summary(%{group_member_id: tm.id})
 
       assert Decimal.equal?(summary.total_cost_usd, Decimal.new("4.000000"))
       assert summary.total_prompt_tokens == 300
@@ -518,10 +518,10 @@ defmodule Tokengate.LogsTest do
     end
 
     test "handles nil cost fields with Decimal-safe sums" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       Logs.log_request(%{
-        team_member_id: tm.id,
+        group_member_id: tm.id,
         model_requested: "gpt-4",
         prompt_tokens: 100,
         completion_tokens: 50,
@@ -529,7 +529,7 @@ defmodule Tokengate.LogsTest do
         inserted_at: @timestamp
       })
 
-      summary = Logs.cost_summary(%{team_member_id: tm.id})
+      summary = Logs.cost_summary(%{group_member_id: tm.id})
 
       assert Decimal.equal?(summary.total_cost_usd, Decimal.new("0"))
       assert summary.total_prompt_tokens == 100
@@ -538,9 +538,9 @@ defmodule Tokengate.LogsTest do
     end
 
     test "returns zero counts when no logs match" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
-      summary = Logs.cost_summary(%{team_member_id: tm.id})
+      summary = Logs.cost_summary(%{group_member_id: tm.id})
 
       assert Decimal.equal?(summary.total_cost_usd, Decimal.new("0"))
       assert summary.total_prompt_tokens == 0
@@ -549,10 +549,10 @@ defmodule Tokengate.LogsTest do
     end
 
     test "avg_ttft_ms averages only streaming rows (NULLs skipped)" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       Logs.log_request(%{
-        team_member_id: tm.id,
+        group_member_id: tm.id,
         model_requested: "gpt-4",
         latency_ms: 2000,
         ttft_ms: 300,
@@ -561,7 +561,7 @@ defmodule Tokengate.LogsTest do
       })
 
       Logs.log_request(%{
-        team_member_id: tm.id,
+        group_member_id: tm.id,
         model_requested: "gpt-4",
         latency_ms: 4000,
         ttft_ms: 500,
@@ -571,31 +571,31 @@ defmodule Tokengate.LogsTest do
 
       # Non-streaming row: no ttft — must not affect the average.
       Logs.log_request(%{
-        team_member_id: tm.id,
+        group_member_id: tm.id,
         model_requested: "gpt-4",
         latency_ms: 9000,
         streaming: false,
         inserted_at: @timestamp
       })
 
-      summary = Logs.cost_summary(%{team_member_id: tm.id})
+      summary = Logs.cost_summary(%{group_member_id: tm.id})
 
       assert summary.avg_ttft_ms == 400.0
       assert summary.avg_latency_ms == 5000.0
     end
 
     test "avg_ttft_ms is nil when no streaming samples exist" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       Logs.log_request(%{
-        team_member_id: tm.id,
+        group_member_id: tm.id,
         model_requested: "gpt-4",
         latency_ms: 1000,
         streaming: false,
         inserted_at: @timestamp
       })
 
-      summary = Logs.cost_summary(%{team_member_id: tm.id})
+      summary = Logs.cost_summary(%{group_member_id: tm.id})
 
       assert summary.avg_ttft_ms == nil
     end
@@ -603,11 +603,11 @@ defmodule Tokengate.LogsTest do
 
   describe "log_request/1 with ttft_ms" do
     test "persists ttft_ms for streaming requests" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       assert {:ok, log} =
                Logs.log_request(%{
-                 team_member_id: tm.id,
+                 group_member_id: tm.id,
                  model_requested: "gpt-4",
                  latency_ms: 1500,
                  ttft_ms: 250,
@@ -632,7 +632,7 @@ defmodule Tokengate.LogsTest do
       # 1 hour ago — outside the default 5-minute window
       {_old, _} = log_fixture(%{inserted_at: recent(3600), latency_ms: 999})
 
-      summary = Logs.realtime_summary(%{team_member_id: tm.id})
+      summary = Logs.realtime_summary(%{group_member_id: tm.id})
 
       assert summary.request_count == 1
       assert summary.avg_latency_ms == 400.0
@@ -646,9 +646,11 @@ defmodule Tokengate.LogsTest do
 
     test "counts errors (status >= 400) and computes error rate" do
       {_ok, tm} = log_fixture(%{inserted_at: recent(10), status_code: 200})
-      {_err, _} = log_fixture(%{inserted_at: recent(20), status_code: 500, team_member_id: tm.id})
 
-      summary = Logs.realtime_summary(%{team_member_id: tm.id})
+      {_err, _} =
+        log_fixture(%{inserted_at: recent(20), status_code: 500, group_member_id: tm.id})
+
+      summary = Logs.realtime_summary(%{group_member_id: tm.id})
 
       assert summary.request_count == 2
       assert summary.error_count == 1
@@ -656,7 +658,7 @@ defmodule Tokengate.LogsTest do
     end
 
     test "empty window returns zeros and nil latency" do
-      summary = Logs.realtime_summary(%{team_member_id: Ecto.UUID.generate()})
+      summary = Logs.realtime_summary(%{group_member_id: Ecto.UUID.generate()})
 
       assert summary.request_count == 0
       assert summary.req_per_min == 0.0
@@ -667,9 +669,11 @@ defmodule Tokengate.LogsTest do
 
     test "respects filters like status_class" do
       {_ok, tm} = log_fixture(%{inserted_at: recent(10), status_code: 200})
-      {_err, _} = log_fixture(%{inserted_at: recent(20), status_code: 500, team_member_id: tm.id})
 
-      summary = Logs.realtime_summary(%{team_member_id: tm.id, status_class: "2xx"})
+      {_err, _} =
+        log_fixture(%{inserted_at: recent(20), status_code: 500, group_member_id: tm.id})
+
+      summary = Logs.realtime_summary(%{group_member_id: tm.id, status_class: "2xx"})
 
       assert summary.request_count == 1
       assert summary.error_count == 0
@@ -678,8 +682,8 @@ defmodule Tokengate.LogsTest do
     test "accepts a custom window in seconds" do
       {_log, tm} = log_fixture(%{inserted_at: recent(600)})
 
-      assert Logs.realtime_summary(%{team_member_id: tm.id}, 300).request_count == 0
-      assert Logs.realtime_summary(%{team_member_id: tm.id}, 900).request_count == 1
+      assert Logs.realtime_summary(%{group_member_id: tm.id}, 300).request_count == 0
+      assert Logs.realtime_summary(%{group_member_id: tm.id}, 900).request_count == 1
     end
   end
 end

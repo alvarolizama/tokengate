@@ -537,9 +537,9 @@ defmodule TokengateWeb.ModelsLiveTest do
         status: "active"
       })
 
-    # Add target as a team_member of any team so members_for_select can preload it.
-    {:ok, team} = Accounts.create_team(%{name: "Team #{unique()}"})
-    {:ok, team_member} = Accounts.create_team_member(%{team_id: team.id, user_id: target.id})
+    # Add target as a group_member of any group so members_for_select can preload it.
+    {:ok, group} = Accounts.create_group(%{name: "Group #{unique()}"})
+    {:ok, group_member} = Accounts.create_group_member(%{group_id: group.id, user_id: target.id})
 
     {:ok, ap} =
       Providers.create_model_provider(%{
@@ -548,7 +548,7 @@ defmodule TokengateWeb.ModelsLiveTest do
         provider_model: "gpt-4o-exc",
         priority: 1,
         enabled: true,
-        exclusive_to_team_member_id: team_member.id
+        exclusive_to_group_member_id: group_member.id
       })
 
     conn = login(conn, admin, password)
@@ -580,7 +580,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     # the dropdown.
     view
     |> render_click("select_scope_member_item", %{
-      "member_id" => team_member.id,
+      "member_id" => group_member.id,
       "member_label" => target.email
     })
 
@@ -614,13 +614,13 @@ defmodule TokengateWeb.ModelsLiveTest do
     refute html =~ ~s(value="a")
   end
 
-  test "edit pre-fills the team search input and the picker closes on pick", %{
+  test "edit pre-fills the group search input and the picker closes on pick", %{
     conn: conn
   } do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
     model_record = create_model()
-    {:ok, team} = Accounts.create_team(%{name: "Scope #{unique()}"})
+    {:ok, group} = Accounts.create_group(%{name: "Scope #{unique()}"})
 
     {:ok, credential} =
       Providers.create_credential(%{
@@ -633,10 +633,10 @@ defmodule TokengateWeb.ModelsLiveTest do
       Providers.create_model_provider(%{
         model_id: model_record.id,
         credential_id: credential.id,
-        provider_model: "gpt-4o-team",
+        provider_model: "gpt-4o-group",
         priority: 1,
         enabled: true,
-        exclusive_to_team_id: team.id
+        exclusive_to_group_id: group.id
       })
 
     conn = login(conn, admin, password)
@@ -646,24 +646,24 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     html = render(view)
 
-    # Prefilled with the bound team's name, dropdown born closed.
-    assert has_element?(view, ~s(input[name="model_provider[scope_team_id_display]"]))
-    assert html =~ ~s(value="#{team.name}")
+    # Prefilled with the bound group's name, dropdown born closed.
+    assert has_element?(view, ~s(input[name="model_provider[scope_group_id_display]"]))
+    assert html =~ ~s(value="#{group.name}")
     refute html =~ "(actual)"
 
-    # Opening renders the bound team marked as (actual).
-    view |> render_click("open_scope_picker", %{"picker" => "team"})
+    # Opening renders the bound group marked as (actual).
+    view |> render_click("open_scope_picker", %{"picker" => "group"})
     assert render(view) =~ "(actual)"
 
     # Picking reflects the label into the input and closes the dropdown.
     view
-    |> render_click("select_scope_team_item", %{
-      "team_id" => team.id,
-      "team_label" => team.name
+    |> render_click("select_scope_group_item", %{
+      "group_id" => group.id,
+      "group_label" => group.name
     })
 
     html = render(view)
-    assert html =~ ~s(value="#{team.name}")
+    assert html =~ ~s(value="#{group.name}")
     refute html =~ "(actual)"
   end
 
@@ -681,11 +681,11 @@ defmodule TokengateWeb.ModelsLiveTest do
         status: "active"
       })
 
-    {:ok, team} = Accounts.create_team(%{name: "Team #{unique()}"})
-    {:ok, tm_a} = Accounts.create_team_member(%{team_id: team.id, user_id: admin.id})
+    {:ok, group} = Accounts.create_group(%{name: "Group #{unique()}"})
+    {:ok, tm_a} = Accounts.create_group_member(%{group_id: group.id, user_id: admin.id})
 
     %{user: other, password: _} = register("user2")
-    {:ok, tm_b} = Accounts.create_team_member(%{team_id: team.id, user_id: other.id})
+    {:ok, tm_b} = Accounts.create_group_member(%{group_id: group.id, user_id: other.id})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/admin/models")
@@ -715,7 +715,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       Repo.all(
         from mp in Tokengate.Providers.ModelProvider,
           where: mp.model_id == ^model_record.id,
-          select: mp.exclusive_to_team_member_id
+          select: mp.exclusive_to_group_member_id
       )
 
     assert Enum.sort(bound_member_ids) == Enum.sort([tm_a.id, tm_b.id])

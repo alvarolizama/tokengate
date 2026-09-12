@@ -254,7 +254,7 @@ defmodule TokengateWeb.Layouts do
                 label="Modelos"
                 icon="hero-rectangle-stack"
               />
-              <.sidebar_link href={~p"/admin/teams"} label="Equipos" icon="hero-user-group" />
+              <.sidebar_link href={~p"/admin/groups"} label="Grupos" icon="hero-user-group" />
               <.sidebar_link
                 href={~p"/admin/budgets"}
                 label="Budget"

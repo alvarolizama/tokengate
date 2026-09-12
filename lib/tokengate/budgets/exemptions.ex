@@ -2,7 +2,7 @@ defmodule Tokengate.Budgets.Exemptions do
   @moduledoc """
   CRUD + hot-path lookup for budget exemptions (`budget_exemptions` table).
 
-  An exemption excludes a user, team or service from one of the daily
+  An exemption excludes a user, group or service from one of the daily
   spending caps (see `Tokengate.Budgets.Exemption` for the scope semantics).
 
   `exempt?/4` is called on the proxy pre-flight for every request — it does
@@ -15,30 +15,30 @@ defmodule Tokengate.Budgets.Exemptions do
   alias Tokengate.Budgets.Exemption
   alias Tokengate.Repo
 
-  @valid_types ~w(user team service)
+  @valid_types ~w(user group service)
 
   @doc """
   Whether `subject` is exempt from `scope` for this request.
 
-  `subject` is `%{type: "user", id: user_id}`, `%{type: "team", id: team_id}`
-  or `%{type: "service", id: service_id}`. A team member inherits their
-  team's exemptions: both `{"user", user_id}` and `{"team", team_id}` rows
-  are checked for members (the UI offers the team alternative exactly so
-  admins can exempt a whole team without touching each member).
+  `subject` is `%{type: "user", id: user_id}`, `%{type: "group", id: group_id}`
+  or `%{type: "service", id: service_id}`. A group member inherits their
+  group's exemptions: both `{"user", user_id}` and `{"group", group_id}` rows
+  are checked for members (the UI offers the group alternative exactly so
+  admins can exempt a whole group without touching each member).
 
   Unknown subject types are never exempt.
   """
   @spec exempt?(scope :: String.t(), map(), map() | nil) :: boolean()
-  def exempt?(scope, subject, team_subject)
+  def exempt?(scope, subject, group_subject)
 
-  def exempt?(scope, %{type: type, id: id}, team_subject) when type in @valid_types do
+  def exempt?(scope, %{type: type, id: id}, group_subject) when type in @valid_types do
     field = Exemption.subject_field(type)
 
     exempt_query(scope, field, id) or
-      (team_subject != nil and exempt_query(scope, :team_id, team_subject.id))
+      (group_subject != nil and exempt_query(scope, :group_id, group_subject.id))
   end
 
-  def exempt?(_scope, _subject, _team_subject), do: false
+  def exempt?(_scope, _subject, _group_subject), do: false
 
   defp exempt_query(scope, field, id) do
     from(e in Exemption,
@@ -55,7 +55,7 @@ defmodule Tokengate.Budgets.Exemptions do
     from(e in Exemption,
       where: e.scope == ^scope,
       order_by: [asc: e.inserted_at],
-      preload: [:user, :team, :service]
+      preload: [:user, :group, :service]
     )
     |> Repo.all()
   end
@@ -80,7 +80,7 @@ defmodule Tokengate.Budgets.Exemptions do
     "#{name} (#{email})"
   end
 
-  def subject_label(%Exemption{subject_type: "team", team: %{name: name}}), do: "Equipo: #{name}"
+  def subject_label(%Exemption{subject_type: "group", group: %{name: name}}), do: "Grupo: #{name}"
   def subject_label(%Exemption{subject_type: "service", service: %{name: name}}), do: name
   def subject_label(_), do: "sujeto eliminado"
 end

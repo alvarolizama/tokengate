@@ -96,11 +96,11 @@ defmodule TokengateWeb.SupervisedServicesLive do
 
     stats =
       from(l in Tokengate.Logs.RequestLog,
-        where: l.team_member_id in ^service_ids,
+        where: l.group_member_id in ^service_ids,
         where: l.inserted_at >= ^thirty_days_ago,
-        group_by: l.team_member_id,
+        group_by: l.group_member_id,
         select: %{
-          service_id: l.team_member_id,
+          service_id: l.group_member_id,
           total_cost: sum(l.provider_cost_usd),
           total_requests: count(l.id),
           total_input_tokens: sum(l.prompt_tokens),

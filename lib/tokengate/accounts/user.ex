@@ -28,7 +28,7 @@ defmodule Tokengate.Accounts.User do
     # Virtual
     field :password, :string, virtual: true
 
-    has_many :team_members, Tokengate.Accounts.TeamMember
+    has_many :group_members, Tokengate.Accounts.GroupMember
 
     timestamps(type: :utc_datetime)
   end

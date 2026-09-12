@@ -86,7 +86,7 @@ defmodule TokengateWeb.Router do
       on_mount: [{TokengateWeb.UserAuth, :require_admin}] do
       live "/dashboard/stats", StatsLive, :index
       live "/dashboard/stats/models", StatsLive, :models
-      live "/dashboard/stats/teams", StatsLive, :teams
+      live "/dashboard/stats/groups", StatsLive, :groups
       live "/dashboard/stats/services", StatsLive, :services
       live "/dashboard/stats/members/:member_id", StatsLive, :member
       live "/dashboard/credits", CreditsLive
@@ -94,8 +94,8 @@ defmodule TokengateWeb.Router do
       live "/admin/logs", LogsLive
       live "/admin/providers", ProvidersLive
       live "/admin/models", ModelsLive
-      live "/admin/teams", TeamsLive
-      live "/admin/teams/:id/members", TeamMembersLive
+      live "/admin/groups", GroupsLive
+      live "/admin/groups/:id/members", GroupMembersLive
       live "/admin/users", UsersLive
       live "/admin/users/:user_id/stats", UserStatsLive
       live "/admin/services", ServicesLive

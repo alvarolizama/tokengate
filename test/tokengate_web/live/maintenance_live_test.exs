@@ -27,7 +27,7 @@ defmodule TokengateWeb.SettingsLiveTest do
   end
 
   defp insert_log do
-    {:ok, team} = Accounts.create_team(%{name: "Settings Team #{unique()}"})
+    {:ok, group} = Accounts.create_group(%{name: "Settings Group #{unique()}"})
 
     {:ok, owner} =
       Accounts.register_user(%{
@@ -37,14 +37,14 @@ defmodule TokengateWeb.SettingsLiveTest do
       })
 
     {:ok, member} =
-      Accounts.create_team_member(%{user_id: owner.id, team_id: team.id})
+      Accounts.create_group_member(%{user_id: owner.id, group_id: group.id})
 
     {:ok, provider} =
       Providers.create_provider(%{name: "Prov #{unique()}", base_url: "http://localhost:1"})
 
     {:ok, _log} =
       Logs.log_request(%{
-        team_member_id: member.id,
+        group_member_id: member.id,
         provider_id: provider.id,
         model_requested: "gpt-4o",
         prompt_tokens: 10,

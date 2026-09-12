@@ -32,15 +32,15 @@ defmodule TokengateWeb.UsersLive do
       |> assign(:form_mode, nil)
       |> assign(:delete_target_id, nil)
       |> assign(:delete_target_email, nil)
-      |> assign(:all_teams, Accounts.list_teams())
+      |> assign(:all_groups, Accounts.list_groups())
       |> assign(:is_admin, user && user.global_role == "admin")
       |> assign(:search_query, "")
       |> assign(:sort_field, :name)
       |> assign(:sort_direction, :asc)
       |> assign(:filter_today_spend, false)
-      |> assign(:editing_teams_user_id, nil)
-      |> assign(:editing_teams_user_name, nil)
-      |> assign(:editing_team_ids, [])
+      |> assign(:editing_groups_user_id, nil)
+      |> assign(:editing_groups_user_name, nil)
+      |> assign(:editing_group_ids, [])
       |> require_admin_hook()
       |> load_users()
 
@@ -63,9 +63,9 @@ defmodule TokengateWeb.UsersLive do
   ## Data loading ---------------------------------------------------------
 
   # Sortable columns and their value extractors. Each function receives a
-  # user plus the lookup assigns (spend maps, team map) and returns a
+  # user plus the lookup assigns (spend maps, group map) and returns a
   # comparable value.
-  @sort_columns ~w(name role status teams monthly_spend total_spend inserted_at)a
+  @sort_columns ~w(name role status groups monthly_spend total_spend inserted_at)a
 
   defp load_users(socket) do
     search = socket.assigns[:search_query] || ""
@@ -100,7 +100,7 @@ defmodule TokengateWeb.UsersLive do
         Tokengate.Logs.total_spend_by_user()
       end)
 
-    user_teams = load_user_teams(filtered)
+    user_groups = load_user_groups(filtered)
 
     # Filter by today's spend when toggle is active
     filtered =
@@ -118,7 +118,7 @@ defmodule TokengateWeb.UsersLive do
     sort_ctx = %{
       spend_by_user: spend_by_user,
       total_spend_by_user: total_spend_by_user,
-      user_teams: user_teams
+      user_groups: user_groups
     }
 
     sorted =
@@ -127,14 +127,14 @@ defmodule TokengateWeb.UsersLive do
     socket
     |> assign(:spend_by_user, spend_by_user)
     |> assign(:total_spend_by_user, total_spend_by_user)
-    |> assign(:user_teams, user_teams)
+    |> assign(:user_groups, user_groups)
     |> stream(:users, sorted, reset: true)
   end
 
-  defp load_user_teams(users) do
+  defp load_user_groups(users) do
     users
     |> Enum.map(& &1.id)
-    |> Accounts.list_teams_by_user_ids()
+    |> Accounts.list_groups_by_user_ids()
   end
 
   ## Sorting ---------------------------------------------------------------
@@ -158,10 +158,10 @@ defmodule TokengateWeb.UsersLive do
   defp sort_value(user, :role, _ctx), do: user.global_role || ""
   defp sort_value(user, :status, _ctx), do: user.status || ""
 
-  defp sort_value(user, :teams, ctx) do
-    case Map.get(ctx.user_teams, user.id, []) do
+  defp sort_value(user, :groups, ctx) do
+    case Map.get(ctx.user_groups, user.id, []) do
       [] -> ""
-      teams -> teams |> Enum.map(&String.downcase(&1.name)) |> Enum.join(", ")
+      groups -> groups |> Enum.map(&String.downcase(&1.name)) |> Enum.join(", ")
     end
   end
 
@@ -178,7 +178,7 @@ defmodule TokengateWeb.UsersLive do
 
   defp sort_value(user, :inserted_at, _ctx), do: user.inserted_at
 
-  # nils always sort last, in both directions (users without spend/teams data).
+  # nils always sort last, in both directions (users without spend/groups data).
   defp compare_sort_values(a, b, direction) do
     case {a, b} do
       {nil, nil} ->
@@ -259,49 +259,49 @@ defmodule TokengateWeb.UsersLive do
     end
   end
 
-  ## Events — edit teams --------------------------------------------------
-  def handle_event("edit_teams", %{"id" => user_id}, socket) do
+  ## Events — edit groups --------------------------------------------------
+  def handle_event("edit_groups", %{"id" => user_id}, socket) do
     user = Accounts.get_user!(user_id)
-    memberships = Accounts.list_team_members_for_user(user_id)
-    team_ids = Enum.map(memberships, & &1.team_id)
+    memberships = Accounts.list_group_members_for_user(user_id)
+    group_ids = Enum.map(memberships, & &1.group_id)
 
     {:noreply,
      socket
-     |> assign(:editing_teams_user_id, user_id)
-     |> assign(:editing_teams_user_name, user.name || user.email)
-     |> assign(:editing_team_ids, team_ids)}
+     |> assign(:editing_groups_user_id, user_id)
+     |> assign(:editing_groups_user_name, user.name || user.email)
+     |> assign(:editing_group_ids, group_ids)}
   end
 
-  def handle_event("cancel_edit_teams", _params, socket) do
+  def handle_event("cancel_edit_groups", _params, socket) do
     {:noreply,
      socket
-     |> assign(:editing_teams_user_id, nil)
-     |> assign(:editing_teams_user_name, nil)
-     |> assign(:editing_team_ids, [])}
+     |> assign(:editing_groups_user_id, nil)
+     |> assign(:editing_groups_user_name, nil)
+     |> assign(:editing_group_ids, [])}
   end
 
-  def handle_event("save_teams", %{"team_ids" => team_ids}, socket) do
-    user_id = socket.assigns.editing_teams_user_id
+  def handle_event("save_groups", %{"group_ids" => group_ids}, socket) do
+    user_id = socket.assigns.editing_groups_user_id
     user = Accounts.get_user!(user_id)
-    team_ids = team_ids |> List.wrap() |> Enum.reject(&(&1 in ["", nil]))
+    group_ids = group_ids |> List.wrap() |> Enum.reject(&(&1 in ["", nil]))
 
     # Get current memberships
-    current = Accounts.list_team_members_for_user(user_id)
-    current_team_ids = Enum.map(current, & &1.team_id)
+    current = Accounts.list_group_members_for_user(user_id)
+    current_group_ids = Enum.map(current, & &1.group_id)
 
     # Remove memberships not in new list
-    to_remove = current |> Enum.filter(&(&1.team_id not in team_ids))
-    Enum.each(to_remove, &Accounts.delete_team_member/1)
+    to_remove = current |> Enum.filter(&(&1.group_id not in group_ids))
+    Enum.each(to_remove, &Accounts.delete_group_member/1)
 
     # Add new memberships
-    to_add = team_ids -- current_team_ids
+    to_add = group_ids -- current_group_ids
 
-    Enum.each(to_add, fn team_id ->
+    Enum.each(to_add, fn group_id ->
       with {:ok, member} <-
-             Accounts.create_team_member(%{
+             Accounts.create_group_member(%{
                user_id: user_id,
-               team_id: team_id,
-               team_role: "user",
+               group_id: group_id,
+               group_role: "user",
                status: "active"
              }),
            {:ok, _api_key, _token} <- Accounts.replace_api_key(member) do
@@ -311,10 +311,10 @@ defmodule TokengateWeb.UsersLive do
 
     {:noreply,
      socket
-     |> put_flash(:info, "Equipos actualizados para #{user.name || user.email}.")
-     |> assign(:editing_teams_user_id, nil)
-     |> assign(:editing_teams_user_name, nil)
-     |> assign(:editing_team_ids, [])
+     |> put_flash(:info, "Grupos actualizados para #{user.name || user.email}.")
+     |> assign(:editing_groups_user_id, nil)
+     |> assign(:editing_groups_user_name, nil)
+     |> assign(:editing_group_ids, [])
      |> load_users()}
   end
 
@@ -505,8 +505,8 @@ defmodule TokengateWeb.UsersLive do
   end
 
   defp save_new_user(socket, user_params) do
-    {team_ids, user_params} = Map.pop(user_params, "team_ids", [])
-    team_ids = team_ids |> List.wrap() |> Enum.reject(&(&1 in ["", nil]))
+    {group_ids, user_params} = Map.pop(user_params, "group_ids", [])
+    group_ids = group_ids |> List.wrap() |> Enum.reject(&(&1 in ["", nil]))
 
     case Accounts.admin_create_user(user_params) do
       {:ok, user} ->
@@ -515,14 +515,14 @@ defmodule TokengateWeb.UsersLive do
           "global_role" => user.global_role
         })
 
-        # Create team memberships + API keys for each selected team
+        # Create group memberships + API keys for each selected group
         results =
-          Enum.map(team_ids, fn team_id ->
+          Enum.map(group_ids, fn group_id ->
             with {:ok, member} <-
-                   Accounts.create_team_member(%{
+                   Accounts.create_group_member(%{
                      user_id: user.id,
-                     team_id: team_id,
-                     team_role: "user",
+                     group_id: group_id,
+                     group_role: "user",
                      status: "active"
                    }),
                  {:ok, _api_key, _token} <- Accounts.replace_api_key(member) do
@@ -535,23 +535,23 @@ defmodule TokengateWeb.UsersLive do
         if failed == [] do
           {:noreply,
            socket
-           |> put_flash(:info, "Usuario creado con #{length(team_ids)} equipo(s).")
+           |> put_flash(:info, "Usuario creado con #{length(group_ids)} grupo(s).")
            |> assign(:form, nil)
            |> assign(:editing_user_id, nil)
            |> assign(:form_mode, nil)
-           |> assign(:all_teams, Accounts.list_teams())
+           |> assign(:all_groups, Accounts.list_groups())
            |> load_users()}
         else
           {:noreply,
            socket
            |> put_flash(
              :warning,
-             "Usuario creado pero #{length(failed)} equipo(s) no se pudieron asignar."
+             "Usuario creado pero #{length(failed)} grupo(s) no se pudieron asignar."
            )
            |> assign(:form, nil)
            |> assign(:editing_user_id, nil)
            |> assign(:form_mode, nil)
-           |> assign(:all_teams, Accounts.list_teams())
+           |> assign(:all_groups, Accounts.list_groups())
            |> load_users()}
         end
 
@@ -694,12 +694,12 @@ defmodule TokengateWeb.UsersLive do
                   prompt="Selecciona un rol"
                 />
                 <.input
-                  field={@form[:team_ids]}
+                  field={@form[:group_ids]}
                   type="select"
                   multiple
-                  label="Equipos"
-                  options={Enum.map(@all_teams, fn t -> {t.name, t.id} end)}
-                  hint="Mantén Ctrl/Cmd para seleccionar múltiples equipos."
+                  label="Grupos"
+                  options={Enum.map(@all_groups, fn t -> {t.name, t.id} end)}
+                  hint="Mantén Ctrl/Cmd para seleccionar múltiples grupos."
                 />
                 <div class="flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
@@ -797,8 +797,8 @@ defmodule TokengateWeb.UsersLive do
                 </th>
                 <th>
                   <.sort_button
-                    field={:teams}
-                    label="Equipos"
+                    field={:groups}
+                    label="Grupos"
                     current={@sort_field}
                     direction={@sort_direction}
                   />
@@ -837,7 +837,7 @@ defmodule TokengateWeb.UsersLive do
               <tr :for={{id, user} <- @streams.users} id={id}>
                 <.user_row
                   user={user}
-                  user_teams={@user_teams}
+                  user_groups={@user_groups}
                   spend_by_user={@spend_by_user}
                   total_spend_by_user={@total_spend_by_user}
                   current_user={@current_user}
@@ -849,40 +849,40 @@ defmodule TokengateWeb.UsersLive do
         </div>
       </div>
 
-      <%!-- Teams editing modal --%>
+      <%!-- Groups editing modal --%>
       <div
-        :if={@editing_teams_user_id}
+        :if={@editing_groups_user_id}
         class="fixed inset-0 z-50 flex items-center justify-center p-4"
       >
-        <div class="absolute inset-0 bg-black/50" phx-click="cancel_edit_teams" />
+        <div class="absolute inset-0 bg-black/50" phx-click="cancel_edit_groups" />
         <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-md">
           <div class="card-body p-6">
             <h2 class="text-lg font-semibold mb-4">
-              Equipos de <span class="text-primary">{@editing_teams_user_name}</span>
+              Grupos de <span class="text-primary">{@editing_groups_user_name}</span>
             </h2>
-            <.form for={%{}} phx-submit="save_teams" id="edit-teams-form">
+            <.form for={%{}} phx-submit="save_groups" id="edit-groups-form">
               <div class="space-y-2">
-                <%= for team <- @all_teams do %>
+                <%= for group <- @all_groups do %>
                   <label class="flex items-center gap-3 p-2 rounded-lg hover:bg-base-200 cursor-pointer">
                     <input
                       type="checkbox"
-                      name="team_ids[]"
-                      value={team.id}
-                      checked={team.id in @editing_team_ids}
+                      name="group_ids[]"
+                      value={group.id}
+                      checked={group.id in @editing_group_ids}
                       class="checkbox checkbox-sm checkbox-primary"
                     />
-                    <span class="text-sm">{team.name}</span>
+                    <span class="text-sm">{group.name}</span>
                   </label>
                 <% end %>
-                <%= if @all_teams == [] do %>
-                  <p class="text-sm text-base-content/50 py-2">No hay equipos creados.</p>
+                <%= if @all_groups == [] do %>
+                  <p class="text-sm text-base-content/50 py-2">No hay grupos creados.</p>
                 <% end %>
               </div>
               <div class="flex gap-2 mt-4 justify-end">
-                <button type="button" phx-click="cancel_edit_teams" class="btn btn-ghost btn-sm">
+                <button type="button" phx-click="cancel_edit_groups" class="btn btn-ghost btn-sm">
                   Cancelar
                 </button>
-                <button type="submit" class="btn btn-primary btn-sm" id="save-teams-btn">
+                <button type="submit" class="btn btn-primary btn-sm" id="save-groups-btn">
                   Guardar
                 </button>
               </div>
@@ -909,7 +909,7 @@ defmodule TokengateWeb.UsersLive do
                   Se borrará permanentemente toda su data:
                 </p>
                 <ul class="mt-1 list-disc list-inside space-y-0.5 text-xs">
-                  <li>Membresías de equipos</li>
+                  <li>Membresías de grupos</li>
                   <li>Claves API</li>
                   <li>Todo el historial de consumo (request_logs)</li>
                   <li>Los logs de auditoría perderán la atribución al usuario</li>
@@ -978,7 +978,7 @@ defmodule TokengateWeb.UsersLive do
   end
 
   attr :user, :map, required: true
-  attr :user_teams, :map, required: true
+  attr :user_groups, :map, required: true
   attr :spend_by_user, :map, required: true
   attr :total_spend_by_user, :map, required: true
   attr :current_user, :map, required: true
@@ -1009,15 +1009,15 @@ defmodule TokengateWeb.UsersLive do
     </td>
     <td>
       <div class="flex flex-wrap items-center gap-1">
-        <%= for team <- Map.get(@user_teams, @user.id, []) do %>
-          <span class="badge badge-xs badge-outline">{team.name}</span>
+        <%= for group <- Map.get(@user_groups, @user.id, []) do %>
+          <span class="badge badge-xs badge-outline">{group.name}</span>
         <% end %>
         <button
-          phx-click="edit_teams"
+          phx-click="edit_groups"
           phx-value-id={@user.id}
           class="btn btn-xs btn-ghost"
-          id={"teams-#{@user.id}"}
-          title="Editar equipos"
+          id={"groups-#{@user.id}"}
+          title="Editar grupos"
         >
           <.icon name="hero-pencil" class="w-3 h-3" />
         </button>

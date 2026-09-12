@@ -82,7 +82,7 @@
               <label class="text-xs text-base-content/60 block mb-1">Tipo</label>
               <select name="global_subject[subject_type]" class="select select-bordered select-sm">
                 <option value="user" selected={@global_subject_type == "user"}>Usuario</option>
-                <option value="team" selected={@global_subject_type == "team"}>Equipo</option>
+                <option value="group" selected={@global_subject_type == "group"}>Grupo</option>
                 <option value="service" selected={@global_subject_type == "service"}>
                   Servicio
                 </option>
@@ -97,7 +97,7 @@
                 <option value="">
                   {if @global_subject_type == "user",
                     do: "Usuario…",
-                    else: if(@global_subject_type == "team", do: "Equipo…", else: "Servicio…")}
+                    else: if(@global_subject_type == "group", do: "Grupo…", else: "Servicio…")}
                 </option>
                 <%= for {label, id} <- subject_options(@global_subject_type, assigns) do %>
                   <option value={id}>{label}</option>
@@ -176,7 +176,7 @@
           </h3>
           <p class="text-sm text-base-content/60">
             Estos sujetos ignoran el límite diario por usuario. Excluir un
-            equipo libera a todos sus miembros.
+            grupo libera a todos sus miembros.
           </p>
 
           <.form
@@ -190,7 +190,7 @@
               <label class="text-xs text-base-content/60 block mb-1">Tipo</label>
               <select name="user_subject[subject_type]" class="select select-bordered select-sm">
                 <option value="user" selected={@user_subject_type == "user"}>Usuario</option>
-                <option value="team" selected={@user_subject_type == "team"}>Equipo</option>
+                <option value="group" selected={@user_subject_type == "group"}>Grupo</option>
                 <option value="service" selected={@user_subject_type == "service"}>
                   Servicio
                 </option>
@@ -205,7 +205,7 @@
                 <option value="">
                   {if @user_subject_type == "user",
                     do: "Usuario…",
-                    else: if(@user_subject_type == "team", do: "Equipo…", else: "Servicio…")}
+                    else: if(@user_subject_type == "group", do: "Grupo…", else: "Servicio…")}
                 </option>
                 <%= for {label, id} <- subject_options(@user_subject_type, assigns) do %>
                   <option value={id}>{label}</option>

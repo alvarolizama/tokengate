@@ -1,7 +1,7 @@
 defmodule Tokengate.Accounts.Service do
   @moduledoc """
   Schema for services — API keys not tied to a user.
-  Services have direct limits (no team hierarchy).
+  Services have direct limits (no group hierarchy).
   """
   use Ecto.Schema
 

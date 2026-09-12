@@ -7,7 +7,7 @@ defmodule Tokengate.Observability.OtlpBuilder do
   the OTLP spans built here.
 
   The `service.name` resource attribute is derived from the request log's
-  team member: `"#{team.name} - #{user.email}"`. When the team member
+  group member: `"#{group.name} - #{user.email}"`. When the group member
   association is not loaded, it falls back to `"tokengate"`.
   """
   alias Tokengate.Logs.RequestLog
@@ -51,7 +51,7 @@ defmodule Tokengate.Observability.OtlpBuilder do
 
   The `service.name` resource attribute uses the identity derived from the
   first request log in the batch. All logs in a batch are expected to belong
-  to the same team.
+  to the same group.
   """
   @spec build_payload([RequestLog.t()], term()) :: otlp_payload()
   def build_payload([], _destination) do
@@ -136,22 +136,22 @@ defmodule Tokengate.Observability.OtlpBuilder do
 
   @doc ~S"""
   Builds the identity string used for `service.name` and
-  `trace.metadata.openrouter.api_key_name` from the request log's team member.
+  `trace.metadata.openrouter.api_key_name` from the request log's group member.
 
-  Format: `"#{team.name} - #{user.email}"`
+  Format: `"#{group.name} - #{user.email}"`
 
-  Falls back to `"tokengate"` when the team member association is not loaded
+  Falls back to `"tokengate"` when the group member association is not loaded
   or is nil.
   """
   @spec build_identity(RequestLog.t()) :: String.t()
-  def build_identity(%RequestLog{team_member: %Tokengate.Accounts.TeamMember{} = tm}) do
-    team = Map.get(tm, :team)
+  def build_identity(%RequestLog{group_member: %Tokengate.Accounts.GroupMember{} = tm}) do
+    group = Map.get(tm, :group)
     user = Map.get(tm, :user)
 
-    case {team, user} do
-      {%Tokengate.Accounts.Team{name: team_name}, %Tokengate.Accounts.User{email: email}}
-      when is_binary(team_name) and is_binary(email) ->
-        "#{team_name} - #{email}"
+    case {group, user} do
+      {%Tokengate.Accounts.Group{name: group_name}, %Tokengate.Accounts.User{email: email}}
+      when is_binary(group_name) and is_binary(email) ->
+        "#{group_name} - #{email}"
 
       _ ->
         "tokengate"
@@ -181,7 +181,7 @@ defmodule Tokengate.Observability.OtlpBuilder do
       kv("tokengate.agent.client", request_log.client_agent),
       kv_bool("tokengate.streaming", request_log.streaming),
       kv_int("http.status_code", request_log.status_code),
-      kv("tokengate.team_member_id", to_string(request_log.team_member_id)),
+      kv("tokengate.group_member_id", to_string(request_log.group_member_id)),
       kv("trace.metadata.openrouter.api_key_name", build_identity(request_log))
     ]
   end

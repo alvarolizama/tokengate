@@ -4,9 +4,9 @@ defmodule Tokengate.Accounts.ApiKeyCacheTest do
   alias Tokengate.Accounts.ApiKeyCache
 
   defp member_with_key do
-    {:ok, team} =
-      Accounts.create_team(%{
-        "name" => "Cache Team #{System.unique_integer([:positive])}",
+    {:ok, group} =
+      Accounts.create_group(%{
+        "name" => "Cache Group #{System.unique_integer([:positive])}",
         "default_rpm_limit" => 120,
         "default_concurrency_limit" => 10
       })
@@ -19,11 +19,11 @@ defmodule Tokengate.Accounts.ApiKeyCacheTest do
       })
 
     {:ok, member} =
-      Accounts.create_team_member(%{user_id: user.id, team_id: team.id, team_role: "user"})
+      Accounts.create_group_member(%{user_id: user.id, group_id: group.id, group_role: "user"})
 
     {:ok, _api_key, token} = Accounts.replace_api_key(member)
 
-    %{member: member, token: token, team: team}
+    %{member: member, token: token, group: group}
   end
 
   setup do
@@ -38,7 +38,7 @@ defmodule Tokengate.Accounts.ApiKeyCacheTest do
 
     assert %{member: resolved, limits: limits} = entry
     assert resolved.id == member.id
-    assert resolved.team.id == member.team_id
+    assert resolved.group.id == member.group_id
     assert resolved.api_key.key_prefix == String.slice(token, 0, 8)
     assert limits.rpm_limit == 120
     assert limits.concurrency_limit == 10
@@ -86,12 +86,12 @@ defmodule Tokengate.Accounts.ApiKeyCacheTest do
     assert :error = Accounts.resolve_auth_by_api_key(token)
   end
 
-  test "update_team_member/1 drops the cached entry (status/limits change)" do
+  test "update_group_member/1 drops the cached entry (status/limits change)" do
     %{member: member, token: token} = member_with_key()
 
     assert %{member: _} = Accounts.resolve_auth_by_api_key(token)
 
-    {:ok, _suspended} = Accounts.update_team_member(member, %{"status" => "suspended"})
+    {:ok, _suspended} = Accounts.update_group_member(member, %{"status" => "suspended"})
 
     # Cache was invalidated: resolution re-queries and finds the suspended
     # membership — the plug then rejects with 403, but the entry itself is
@@ -99,15 +99,15 @@ defmodule Tokengate.Accounts.ApiKeyCacheTest do
     assert %{member: %{status: "suspended"}} = Accounts.resolve_auth_by_api_key(token)
   end
 
-  test "update_team/2 drops entries for every member of the team" do
-    %{member: member, token: token, team: team} = member_with_key()
+  test "update_group/2 drops entries for every member of the group" do
+    %{member: member, token: token, group: group} = member_with_key()
 
     assert %{limits: %{rpm_limit: 120}} = Accounts.resolve_auth_by_api_key(token)
 
-    {:ok, _team} = Accounts.update_team(team, %{"default_rpm_limit" => 999})
+    {:ok, _group} = Accounts.update_group(group, %{"default_rpm_limit" => 999})
 
     assert %{limits: %{rpm_limit: 999}} = Accounts.resolve_auth_by_api_key(token)
-    assert member.team_id == team.id
+    assert member.group_id == group.id
   end
 
   test "degrades to a direct DB lookup when the ETS table is gone" do

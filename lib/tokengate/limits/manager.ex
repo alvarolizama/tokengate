@@ -3,7 +3,7 @@ defmodule Tokengate.Limits.Manager do
   ETS-backed sliding-window RPM limiter and in-flight concurrency gate.
 
   Keyed by `api_key_id` (or any opaque string). The caller resolves the
-  concrete limits for a team member via `Tokengate.Accounts.effective_limits/1`
+  concrete limits for a group member via `Tokengate.Accounts.effective_limits/1`
   and hands them here; this module is a pure rate/concurrency gate.
 
   ## Tables

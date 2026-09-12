@@ -6,8 +6,8 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
   """
 
   use ExUnit.Case, async: true
-  alias Tokengate.Accounts.Team
-  alias Tokengate.Accounts.TeamMember
+  alias Tokengate.Accounts.Group
+  alias Tokengate.Accounts.GroupMember
   alias Tokengate.Accounts.User
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Observability.Destination
@@ -30,13 +30,13 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
     )
   end
 
-  defp team_member(attrs \\ %{}) do
+  defp group_member(attrs \\ %{}) do
     struct(
-      %TeamMember{
+      %GroupMember{
         id: "tm-1",
-        team_id: "team-1",
+        group_id: "group-1",
         user_id: "user-1",
-        team: %Team{id: "team-1", name: "Engineering"},
+        group: %Group{id: "group-1", name: "Engineering"},
         user: %User{id: "user-1", email: "alvaro@gobravo.io"}
       },
       attrs
@@ -48,7 +48,7 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
       %RequestLog{
         id: "01HXY000000000000000000001",
         inserted_at: ~U[2026-01-15 12:00:00Z],
-        team_member_id: "tm-1",
+        group_member_id: "tm-1",
         provider_id: "prov-1",
         model_id: "model-1",
         model_requested: "gpt-4o",
@@ -65,8 +65,8 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
     )
   end
 
-  defp request_log_with_team_member(attrs \\ %{}) do
-    request_log(Map.merge(%{team_member: team_member()}, attrs))
+  defp request_log_with_group_member(attrs \\ %{}) do
+    request_log(Map.merge(%{group_member: group_member()}, attrs))
   end
 
   # ---------------------------------------------------------------------------
@@ -186,9 +186,9 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
       assert find_attr(span, "http.status_code").value.intValue == 200
     end
 
-    test "tokengate.team_member_id always present" do
+    test "tokengate.group_member_id always present" do
       span = single_span()
-      attr = find_attr(span, "tokengate.team_member_id")
+      attr = find_attr(span, "tokengate.group_member_id")
       assert attr != nil
       assert attr.value.stringValue == "tm-1"
     end
@@ -199,8 +199,8 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
   # ---------------------------------------------------------------------------
 
   describe "build_span/2 — identity" do
-    test "service.name is 'Team - email' when team_member is loaded" do
-      log = request_log_with_team_member()
+    test "service.name is 'Group - email' when group_member is loaded" do
+      log = request_log_with_group_member()
       payload = OtlpBuilder.build_span(log, destination())
       rs = hd(payload.resourceSpans)
 
@@ -208,15 +208,15 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
       assert service_attr.value.stringValue == "Engineering - alvaro@gobravo.io"
     end
 
-    test "trace.metadata.openrouter.api_key_name is 'Team - email'" do
-      log = request_log_with_team_member()
+    test "trace.metadata.openrouter.api_key_name is 'Group - email'" do
+      log = request_log_with_group_member()
       span = single_span(log)
 
       attr = find_attr(span, "trace.metadata.openrouter.api_key_name")
       assert attr.value.stringValue == "Engineering - alvaro@gobravo.io"
     end
 
-    test "service.name falls back to 'tokengate' when team_member not loaded" do
+    test "service.name falls back to 'tokengate' when group_member not loaded" do
       payload = OtlpBuilder.build_span(request_log(), destination())
       rs = hd(payload.resourceSpans)
 

@@ -17,13 +17,13 @@ defmodule Tokengate.Observability.Destination do
     field :url, :string
     field :headers, :map, default: %{}
 
-    belongs_to :team, Tokengate.Accounts.Team
+    belongs_to :group, Tokengate.Accounts.Group
 
     timestamps(type: :utc_datetime)
   end
 
-  @permitted ~w(name type url headers team_id)a
-  @required ~w(name type team_id)a
+  @permitted ~w(name type url headers group_id)a
+  @required ~w(name type group_id)a
 
   @doc false
   def changeset(destination, attrs) do

@@ -5,7 +5,7 @@ defmodule Tokengate.Budgets do
   The enforcement hot path lives in `Tokengate.Budgets.Manager` (ETS
   counters). This context is the read side for dashboards: it combines
   `Tokengate.Accounts.effective_limits/1` with the manager's spend
-  counters into a single `member_budget` map per team member.
+  counters into a single `member_budget` map per group member.
 
   A member is **exhausted** when their daily or monthly spend reached the
   effective limit — the proxy already rejects their requests with 402.
@@ -13,7 +13,7 @@ defmodule Tokengate.Budgets do
 
   import Ecto.Query
   alias Tokengate.{Accounts, Repo}
-  alias Tokengate.Accounts.TeamMember
+  alias Tokengate.Accounts.GroupMember
   alias Tokengate.Budgets.Manager
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Periods
@@ -21,7 +21,7 @@ defmodule Tokengate.Budgets do
   @default_timezone "Etc/UTC"
 
   @type member_budget :: %{
-          member: TeamMember.t(),
+          member: GroupMember.t(),
           daily_spend_usd: Decimal.t(),
           monthly_spend_usd: Decimal.t(),
           daily_limit_usd: Decimal.t() | nil,
@@ -34,7 +34,7 @@ defmodule Tokengate.Budgets do
         }
 
   @doc """
-  Lists a `member_budget` map for every team member (user and team
+  Lists a `member_budget` map for every group member (user and group
   preloaded on `:member`), ordered by most recently created first.
 
   `list_member_budgets/1` computes daily/monthly spend from Postgres using
@@ -44,8 +44,8 @@ defmodule Tokengate.Budgets do
   """
   @spec list_member_budgets() :: [member_budget()]
   def list_member_budgets do
-    TeamMember
-    |> preload([:user, :team])
+    GroupMember
+    |> preload([:user, :group])
     |> order_by([tm], desc: tm.inserted_at)
     |> Repo.all()
     |> Enum.map(&member_budget/1)
@@ -54,8 +54,8 @@ defmodule Tokengate.Budgets do
   @spec list_member_budgets(String.t()) :: [member_budget()]
   def list_member_budgets(timezone) do
     members =
-      TeamMember
-      |> preload([:user, :team])
+      GroupMember
+      |> preload([:user, :group])
       |> order_by([tm], desc: tm.inserted_at)
       |> Repo.all()
 
@@ -86,13 +86,13 @@ defmodule Tokengate.Budgets do
   end
 
   @typedoc """
-  Team-level budget rollup: the monthly cap is the SUM of each member's
+  Group-level budget rollup: the monthly cap is the SUM of each member's
   effective monthly limit, and the spend is the SUM of each member's
   monthly spend (real). Members without a monthly limit don't add to the
   cap and set `has_unlimited?`.
   """
-  @type team_budget :: %{
-          team: Tokengate.Accounts.Team.t(),
+  @type group_budget :: %{
+          group: Tokengate.Accounts.Group.t(),
           member_count: non_neg_integer(),
           monthly_limit_usd: Decimal.t() | nil,
           monthly_spend_usd: Decimal.t(),
@@ -101,31 +101,31 @@ defmodule Tokengate.Budgets do
         }
 
   @doc """
-  Rolls `list_member_budgets/0` up to the team level. Teams without
+  Rolls `list_member_budgets/0` up to the group level. Groups without
   members don't appear. Ordered by highest monthly spend first.
 
-  `list_team_budgets/1` uses timezone-local spend from Postgres.
+  `list_group_budgets/1` uses timezone-local spend from Postgres.
   """
-  @spec list_team_budgets() :: [team_budget()]
-  def list_team_budgets do
-    list_member_budgets() |> rollup_team_budgets()
+  @spec list_group_budgets() :: [group_budget()]
+  def list_group_budgets do
+    list_member_budgets() |> rollup_group_budgets()
   end
 
-  @spec list_team_budgets(String.t()) :: [team_budget()]
-  def list_team_budgets(timezone) do
-    list_member_budgets(timezone) |> rollup_team_budgets()
+  @spec list_group_budgets(String.t()) :: [group_budget()]
+  def list_group_budgets(timezone) do
+    list_member_budgets(timezone) |> rollup_group_budgets()
   end
 
   @doc """
   Rolls a list of member budgets (from `list_member_budgets/0,1`) up to the
-  team level. Exposed so callers that already loaded member budgets (e.g.
-  CreditsLive) can derive the team rollup without re-querying members and
+  group level. Exposed so callers that already loaded member budgets (e.g.
+  CreditsLive) can derive the group rollup without re-querying members and
   recomputing spend.
   """
-  def rollup_team_budgets(member_budgets) do
+  def rollup_group_budgets(member_budgets) do
     member_budgets
-    |> Enum.group_by(fn mb -> mb.member.team_id end)
-    |> Enum.map(fn {_team_id, budgets} ->
+    |> Enum.group_by(fn mb -> mb.member.group_id end)
+    |> Enum.map(fn {_group_id, budgets} ->
       limits = Enum.map(budgets, & &1.monthly_limit_usd)
 
       monthly_limit_usd =
@@ -139,7 +139,7 @@ defmodule Tokengate.Budgets do
         Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.monthly_spend_usd, &2))
 
       %{
-        team: hd(budgets).member.team,
+        group: hd(budgets).member.group,
         member_count: length(budgets),
         monthly_limit_usd: monthly_limit_usd,
         monthly_spend_usd: monthly_spend_usd,
@@ -151,7 +151,7 @@ defmodule Tokengate.Budgets do
   end
 
   @doc """
-  Lists `member_budget` maps for every team membership of a single user —
+  Lists `member_budget` maps for every group membership of a single user —
   the per-user read behind the personal topbar chip (each user sees only
   their own data). Ordered by most recently created first.
 
@@ -159,9 +159,9 @@ defmodule Tokengate.Budgets do
   """
   @spec list_member_budgets_for_user(term()) :: [member_budget()]
   def list_member_budgets_for_user(user_id) do
-    TeamMember
+    GroupMember
     |> where([tm], tm.user_id == ^user_id)
-    |> preload([:user, :team])
+    |> preload([:user, :group])
     |> order_by([tm], desc: tm.inserted_at)
     |> Repo.all()
     |> Enum.map(&member_budget/1)
@@ -170,9 +170,9 @@ defmodule Tokengate.Budgets do
   @spec list_member_budgets_for_user(term(), String.t()) :: [member_budget()]
   def list_member_budgets_for_user(user_id, timezone) do
     members =
-      TeamMember
+      GroupMember
       |> where([tm], tm.user_id == ^user_id)
-      |> preload([:user, :team])
+      |> preload([:user, :group])
       |> order_by([tm], desc: tm.inserted_at)
       |> Repo.all()
 
@@ -181,7 +181,7 @@ defmodule Tokengate.Budgets do
   end
 
   @doc """
-  Per-user spend rollup across all their team memberships.
+  Per-user spend rollup across all their group memberships.
 
   Returns `%{user_id => %{daily_usd: Decimal, monthly_usd: Decimal,
   exhausted?: boolean}}` — used by the admin users page.
@@ -220,9 +220,9 @@ defmodule Tokengate.Budgets do
     end)
   end
 
-  @doc "Builds the budget status map for a single team member (ETS counters)."
-  @spec member_budget(TeamMember.t()) :: member_budget()
-  def member_budget(%TeamMember{} = member) do
+  @doc "Builds the budget status map for a single group member (ETS counters)."
+  @spec member_budget(GroupMember.t()) :: member_budget()
+  def member_budget(%GroupMember{} = member) do
     limits = Accounts.effective_limits(member)
     spend = Manager.spend(member.id)
 
@@ -244,7 +244,7 @@ defmodule Tokengate.Budgets do
 
   # Timezone-aware variant: spend comes from precomputed Postgres maps
   # (%{daily: %{member_id => Decimal}, monthly: %{member_id => Decimal}}).
-  defp member_budget(%TeamMember{} = member, spend) do
+  defp member_budget(%GroupMember{} = member, spend) do
     limits = Accounts.effective_limits(member)
     daily_usd = get_in(spend, [:daily, member.id]) || Decimal.new(0)
     monthly_usd = get_in(spend, [:monthly, member.id]) || Decimal.new(0)
@@ -299,9 +299,9 @@ defmodule Tokengate.Budgets do
 
   defp member_spend_map(member_ids, from) do
     RequestLog
-    |> where([rl], rl.team_member_id in ^member_ids and rl.inserted_at >= ^from)
-    |> group_by([rl], rl.team_member_id)
-    |> select([rl], {rl.team_member_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
+    |> where([rl], rl.group_member_id in ^member_ids and rl.inserted_at >= ^from)
+    |> group_by([rl], rl.group_member_id)
+    |> select([rl], {rl.group_member_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
     |> Repo.all()
     |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
   end
@@ -313,9 +313,9 @@ defmodule Tokengate.Budgets do
   @spec last_requests_by_member_ids([term()]) :: %{term() => DateTime.t()}
   def last_requests_by_member_ids(member_ids) do
     RequestLog
-    |> where([rl], rl.team_member_id in ^member_ids)
-    |> group_by([rl], rl.team_member_id)
-    |> select([rl], {rl.team_member_id, max(rl.inserted_at)})
+    |> where([rl], rl.group_member_id in ^member_ids)
+    |> group_by([rl], rl.group_member_id)
+    |> select([rl], {rl.group_member_id, max(rl.inserted_at)})
     |> Repo.all()
     |> Map.new()
   end

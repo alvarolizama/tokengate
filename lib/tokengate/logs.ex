@@ -19,7 +19,7 @@ defmodule Tokengate.Logs do
   import Ecto.Query, warn: false
   alias Tokengate.Repo
   alias Tokengate.Logs.RequestLog
-  alias Tokengate.Accounts.TeamMember
+  alias Tokengate.Accounts.GroupMember
 
   @default_limit 50
   @max_limit 500
@@ -67,9 +67,9 @@ defmodule Tokengate.Logs do
   Lists request logs with optional filters.
 
   ## Filters (all optional)
-    * `:team_member_id` — exact match
-    * `:team_member_ids` — list of allowed team_member ids (OR)
-    * `:team_id` — exact match, joined through `team_members`
+    * `:group_member_id` — exact match
+    * `:group_member_ids` — list of allowed group_member ids (OR)
+    * `:group_id` — exact match, joined through `group_members`
     * `:provider_id` — exact match
     * `:model_id` — exact match
     * `:agent_type` — exact match
@@ -86,7 +86,7 @@ defmodule Tokengate.Logs do
     |> apply_log_filters(filters)
     |> order_by([rl], desc: rl.inserted_at)
     |> limit(^limit)
-    |> preload(team_member: [:user, :team])
+    |> preload(group_member: [:user, :group])
     |> preload(:service)
     |> preload(:provider)
     |> Repo.all()
@@ -99,7 +99,7 @@ defmodule Tokengate.Logs do
   Same filters as `list_logs/1`. The cap is `#{@export_limit}` rows — an
   explicit `:limit` filter is honored up to that bound.
 
-  NOTE: the preload of user/team makes this expensive at scale; it is only
+  NOTE: the preload of user/group makes this expensive at scale; it is only
   meant for one-off export requests, never the paginated UI path.
   """
   def list_logs_for_export(filters \\ %{}) do
@@ -114,7 +114,7 @@ defmodule Tokengate.Logs do
     |> apply_log_filters(filters)
     |> order_by([rl], desc: rl.inserted_at)
     |> limit(^limit)
-    |> preload(team_member: [:user, :team])
+    |> preload(group_member: [:user, :group])
     |> preload(:service)
     |> preload(:provider)
     |> Repo.all()
@@ -149,23 +149,23 @@ defmodule Tokengate.Logs do
     |> apply_log_filters(filters)
     |> order_by([rl], desc: rl.inserted_at)
     |> limit(^limit)
-    |> preload(team_member: [:user, :team])
+    |> preload(group_member: [:user, :group])
     |> preload(:service)
     |> preload(:provider)
     |> Repo.all()
   end
 
   @doc """
-  Lists request logs for a specific team, joining through `team_members`.
+  Lists request logs for a specific group, joining through `group_members`.
 
   Filters are the same as `list_logs/1`.
   """
-  def list_logs_for_team(team_id, filters \\ %{}) do
+  def list_logs_for_group(group_id, filters \\ %{}) do
     limit = clamp_limit(Map.get(filters, :limit) || Map.get(filters, "limit"))
 
     RequestLog
-    |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
-    |> where([rl, tm], tm.team_id == ^team_id)
+    |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
+    |> where([rl, tm], tm.group_id == ^group_id)
     |> apply_log_filters(filters)
     |> order_by([rl], desc: rl.inserted_at)
     |> limit(^limit)
@@ -174,12 +174,12 @@ defmodule Tokengate.Logs do
 
   defp apply_log_filters(query, filters) do
     query
-    |> maybe_where(:team_member_id, filters)
+    |> maybe_where(:group_member_id, filters)
     |> maybe_where(:service_id, filters)
     |> maybe_where_subject_id(filters)
     |> maybe_where(:subject_type, filters)
     |> maybe_where_member_ids(filters)
-    |> maybe_where_team_id(filters)
+    |> maybe_where_group_id(filters)
     |> maybe_where(:provider_id, filters)
     |> maybe_where(:credential_id, filters)
     |> maybe_where(:model_id, filters)
@@ -195,22 +195,22 @@ defmodule Tokengate.Logs do
     |> maybe_after(filters)
   end
 
-  # Filter by team_id through the team_members join. When team_id is present we
-  # INNER JOIN team_members so the WHERE references both bindings.
-  defp maybe_where_team_id(query, filters) do
-    value = Map.get(filters, :team_id) || Map.get(filters, "team_id")
+  # Filter by group_id through the group_members join. When group_id is present we
+  # INNER JOIN group_members so the WHERE references both bindings.
+  defp maybe_where_group_id(query, filters) do
+    value = Map.get(filters, :group_id) || Map.get(filters, "group_id")
 
     case value do
       nil ->
         query
 
-      team_id ->
+      group_id ->
         tm =
-          TeamMember
-          |> where([tm], tm.team_id == ^team_id)
+          GroupMember
+          |> where([tm], tm.group_id == ^group_id)
           |> select([tm], tm.id)
 
-        where(query, [rl], rl.team_member_id in subquery(tm))
+        where(query, [rl], rl.group_member_id in subquery(tm))
     end
   end
 
@@ -222,22 +222,22 @@ defmodule Tokengate.Logs do
   end
 
   defp maybe_where_member_ids(query, filters) do
-    value = Map.get(filters, :team_member_ids) || Map.get(filters, "team_member_ids")
+    value = Map.get(filters, :group_member_ids) || Map.get(filters, "group_member_ids")
 
     case value do
       nil -> query
-      ids when is_list(ids) -> where(query, [rl], rl.team_member_id in ^ids)
+      ids when is_list(ids) -> where(query, [rl], rl.group_member_id in ^ids)
     end
   end
 
-  # Matches a log whose subject is *either* a team member or a service with
+  # Matches a log whose subject is *either* a group member or a service with
   # the given id. Used by `Budgets.Manager` (which keys both member and service
   # spend by a single binary subject id) to lazily load spend from the durable
   # log table without knowing which kind of subject it is.
   defp maybe_where_subject_id(query, filters) do
     case Map.get(filters, :subject_id) || Map.get(filters, "subject_id") do
       nil -> query
-      id -> where(query, [rl], rl.team_member_id == ^id or rl.service_id == ^id)
+      id -> where(query, [rl], rl.group_member_id == ^id or rl.service_id == ^id)
     end
   end
 
@@ -310,7 +310,7 @@ defmodule Tokengate.Logs do
 
   @doc """
   Top models by request count in the last N minutes (default 1, limit 3).
-  Accepts the same filter map as `list_logs/1` (team_member_ids, agent_type,
+  Accepts the same filter map as `list_logs/1` (group_member_ids, agent_type,
   model_search, etc.) so the cards respect the active filters.
   Returns [%{model: String.t(), count: integer}].
   """
@@ -339,7 +339,7 @@ defmodule Tokengate.Logs do
     RequestLog
     |> where([rl], rl.inserted_at >= ^cutoff)
     |> apply_log_filters(filters)
-    |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
+    |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
     |> join(:inner, [rl, tm], u in assoc(tm, :user))
     |> group_by([rl, tm, u], u.email)
     |> order_by([rl], desc: count(rl.id))
@@ -361,8 +361,8 @@ defmodule Tokengate.Logs do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Computes a cost summary over request logs for a specific team, joining
-  through `team_members`.
+  Computes a cost summary over request logs for a specific group, joining
+  through `group_members`.
 
   Returns the same shape as `cost_summary/1`:
     * `:total_cost_usd`
@@ -377,16 +377,16 @@ defmodule Tokengate.Logs do
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
   """
-  def cost_summary_for_team(team_id, opts \\ %{}) do
+  def cost_summary_for_group(group_id, opts \\ %{}) do
     from = Map.get(opts, :from)
     to = Map.get(opts, :to)
 
     query =
       RequestLog
-      |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
-      |> where([rl, tm], tm.team_id == ^team_id)
-      |> maybe_team_from(from)
-      |> maybe_team_to(to)
+      |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
+      |> where([rl, tm], tm.group_id == ^group_id)
+      |> maybe_group_from(from)
+      |> maybe_group_to(to)
       |> select([rl], %{
         total_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
         total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
@@ -408,14 +408,14 @@ defmodule Tokengate.Logs do
     }
   end
 
-  defp maybe_team_from(query, nil), do: query
-  defp maybe_team_from(query, from), do: where(query, [rl], rl.inserted_at >= ^from)
+  defp maybe_group_from(query, nil), do: query
+  defp maybe_group_from(query, from), do: where(query, [rl], rl.inserted_at >= ^from)
 
-  defp maybe_team_to(query, nil), do: query
-  defp maybe_team_to(query, to), do: where(query, [rl], rl.inserted_at <= ^to)
+  defp maybe_group_to(query, nil), do: query
+  defp maybe_group_to(query, to), do: where(query, [rl], rl.inserted_at <= ^to)
 
   @doc """
-  Computes a cost summary over request logs for a specific set of team
+  Computes a cost summary over request logs for a specific set of group
   members (by their ids).
 
   Returns the same shape as `cost_summary/1`. Used by the dashboard for
@@ -426,7 +426,7 @@ defmodule Tokengate.Logs do
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
   """
-  def cost_summary_for_members(team_member_ids, opts \\ %{})
+  def cost_summary_for_members(group_member_ids, opts \\ %{})
 
   def cost_summary_for_members([], _opts) do
     %{
@@ -439,13 +439,13 @@ defmodule Tokengate.Logs do
     }
   end
 
-  def cost_summary_for_members(team_member_ids, opts) when is_list(team_member_ids) do
+  def cost_summary_for_members(group_member_ids, opts) when is_list(group_member_ids) do
     from = Map.get(opts, :from)
     to = Map.get(opts, :to)
 
     query =
       RequestLog
-      |> where([rl], rl.team_member_id in ^team_member_ids)
+      |> where([rl], rl.group_member_id in ^group_member_ids)
       |> maybe_members_from(from)
       |> maybe_members_to(to)
       |> select([rl], %{
@@ -594,7 +594,7 @@ defmodule Tokengate.Logs do
   end
 
   @doc """
-  Per-user total historical spend across all team memberships.
+  Per-user total historical spend across all group memberships.
 
   Returns `%{user_id => Decimal.t()}` — the sum of `provider_cost_usd`
   (the real cost) from all `request_logs`, grouped by user.
@@ -603,7 +603,7 @@ defmodule Tokengate.Logs do
   @spec total_spend_by_user() :: %{term() => Decimal.t()}
   def total_spend_by_user do
     RequestLog
-    |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
+    |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
     |> group_by([_rl, tm], tm.user_id)
     |> select([rl, tm], {tm.user_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
     |> Repo.all()
@@ -624,7 +624,7 @@ defmodule Tokengate.Logs do
   end
 
   @doc """
-  Aggregated stats for a set of team_member_ids (used by the user-detail
+  Aggregated stats for a set of group_member_ids (used by the user-detail
   stats page). Pass a list to consolidate across multiple memberships.
 
   Combines:
@@ -634,7 +634,7 @@ defmodule Tokengate.Logs do
     * top 5 models used (by request count, descending),
     * last request timestamp (or `nil`).
 
-  Filters out logs with `team_member_id == nil` (services etc.).
+  Filters out logs with `group_member_id == nil` (services etc.).
 
   ## Options
 
@@ -642,9 +642,9 @@ defmodule Tokengate.Logs do
     * `:to`   — `inserted_at <= to` (DateTime). Optional.
   """
   @spec member_stats(binary() | [binary()], keyword() | map()) :: map()
-  def member_stats(team_member_ids, opts \\ [])
-      when is_list(team_member_ids) or is_binary(team_member_ids) do
-    ids = if is_binary(team_member_ids), do: [team_member_ids], else: team_member_ids
+  def member_stats(group_member_ids, opts \\ [])
+      when is_list(group_member_ids) or is_binary(group_member_ids) do
+    ids = if is_binary(group_member_ids), do: [group_member_ids], else: group_member_ids
 
     opts_map =
       cond do
@@ -688,7 +688,7 @@ defmodule Tokengate.Logs do
         nil
       else
         RequestLog
-        |> where([rl], rl.team_member_id in ^ids)
+        |> where([rl], rl.group_member_id in ^ids)
         |> apply_member_stats_range(range)
         |> select([rl], rl.inserted_at)
         |> order_by([rl], desc: rl.inserted_at)
@@ -701,7 +701,7 @@ defmodule Tokengate.Logs do
         %{request_count: 0, error_count: 0, avg_latency_ms: nil, error_rate: 0.0}
       else
         RequestLog
-        |> where([rl], rl.team_member_id in ^ids)
+        |> where([rl], rl.group_member_id in ^ids)
         |> apply_member_stats_range(range)
         |> realtime_summary_for_member()
       end
@@ -721,7 +721,7 @@ defmodule Tokengate.Logs do
   defp apply_member_stats_range(query, _), do: query
 
   @doc """
-  HTTP status-class breakdown (2xx/4xx/5xx) for a set of team_member_ids.
+  HTTP status-class breakdown (2xx/4xx/5xx) for a set of group_member_ids.
   Returns a map `%{"2xx" => n, "4xx" => n, "5xx" => n}`, with counts of 0
   for classes that never appeared.
   """
@@ -745,7 +745,7 @@ defmodule Tokengate.Logs do
     empty = %{"2xx" => 0, "4xx" => 0, "5xx" => 0}
 
     RequestLog
-    |> where([rl], rl.team_member_id in ^ids)
+    |> where([rl], rl.group_member_id in ^ids)
     |> apply_member_stats_range(range)
     |> group_by([rl], fragment("CASE WHEN ? BETWEEN 200 AND 299 THEN '2xx'
                                  WHEN ? BETWEEN 400 AND 499 THEN '4xx'
@@ -764,7 +764,7 @@ defmodule Tokengate.Logs do
   end
 
   @doc """
-  Top-N most-requested models for a set of team_member_ids. Returns a
+  Top-N most-requested models for a set of group_member_ids. Returns a
   list of `%{model_requested, count}` sorted descending.
   """
   @spec top_models_for_ids([binary()], pos_integer(), keyword() | map()) :: [
@@ -785,7 +785,7 @@ defmodule Tokengate.Logs do
       |> Map.new()
 
     RequestLog
-    |> where([rl], rl.team_member_id in ^ids)
+    |> where([rl], rl.group_member_id in ^ids)
     |> apply_member_stats_range(range)
     |> group_by([rl], rl.model_requested)
     |> select([rl], %{

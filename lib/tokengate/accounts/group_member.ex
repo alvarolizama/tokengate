@@ -1,4 +1,4 @@
-defmodule Tokengate.Accounts.TeamMember do
+defmodule Tokengate.Accounts.GroupMember do
   @moduledoc false
 
   use Ecto.Schema
@@ -10,10 +10,10 @@ defmodule Tokengate.Accounts.TeamMember do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  schema "team_members" do
+  schema "group_members" do
     belongs_to :user, Tokengate.Accounts.User
-    belongs_to :team, Tokengate.Accounts.Team
-    field :team_role, :string, default: "user"
+    belongs_to :group, Tokengate.Accounts.Group
+    field :group_role, :string, default: "user"
     field :extra_monthly_budget_usd, :decimal
     field :extra_concurrency, :integer
     field :extra_rpm, :integer
@@ -29,21 +29,21 @@ defmodule Tokengate.Accounts.TeamMember do
     timestamps(type: :utc_datetime)
   end
 
-  @permitted ~w(user_id team_id team_role extra_monthly_budget_usd
+  @permitted ~w(user_id group_id group_role extra_monthly_budget_usd
                 extra_concurrency extra_rpm status)a
-  @required ~w(user_id team_id)a
+  @required ~w(user_id group_id)a
 
-  def changeset(team_member, attrs) do
-    team_member
+  def changeset(group_member, attrs) do
+    group_member
     |> cast(attrs, @permitted)
     |> validate_required(@required)
-    |> validate_inclusion(:team_role, ["manager", "user"])
+    |> validate_inclusion(:group_role, ["manager", "user"])
     |> validate_inclusion(:status, ["active", "suspended"])
     |> validate_number(:extra_monthly_budget_usd, greater_than_or_equal_to: 0)
     |> validate_number(:extra_concurrency, greater_than: 0)
     |> validate_number(:extra_rpm, greater_than: 0)
-    |> unique_constraint(:team_id, name: :team_members_user_team_unique_index)
+    |> unique_constraint(:group_id, name: :group_members_user_group_unique_index)
     |> assoc_constraint(:user)
-    |> assoc_constraint(:team)
+    |> assoc_constraint(:group)
   end
 end

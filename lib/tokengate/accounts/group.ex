@@ -1,4 +1,4 @@
-defmodule Tokengate.Accounts.Team do
+defmodule Tokengate.Accounts.Group do
   @moduledoc false
 
   use Ecto.Schema
@@ -10,13 +10,13 @@ defmodule Tokengate.Accounts.Team do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  schema "teams" do
+  schema "groups" do
     field :name, :string
     field :monthly_budget_per_user_usd, :decimal
     field :default_concurrency_limit, :integer, default: 5
     field :default_rpm_limit, :integer, default: 60
 
-    has_many :team_members, Tokengate.Accounts.TeamMember
+    has_many :group_members, Tokengate.Accounts.GroupMember
 
     timestamps(type: :utc_datetime)
   end
@@ -25,8 +25,8 @@ defmodule Tokengate.Accounts.Team do
                 default_concurrency_limit default_rpm_limit)a
   @required ~w(name)a
 
-  def changeset(team, attrs) do
-    team
+  def changeset(group, attrs) do
+    group
     |> cast(attrs, @permitted)
     |> validate_required(@required)
     |> validate_number(:default_concurrency_limit, greater_than: 0)

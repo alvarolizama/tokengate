@@ -4,7 +4,7 @@ defmodule TokengateWeb.BudgetsLive do
 
   Holds the global daily cap (moved from Maintenance) and the per-user
   daily cap (evaluated by the proxy BEFORE the global cap). Each cap has
-  its own exclusion list: users, teams or services exempt from it. A
+  its own exclusion list: users, groups or services exempt from it. A
   subject exempt from the global cap still spends — its requests just
   don't count toward the global counter.
   """
@@ -25,7 +25,7 @@ defmodule TokengateWeb.BudgetsLive do
       |> assign(:page_title, "Budget · Tokengate")
       |> assign(:is_admin, user && user.global_role == "admin")
       |> assign(:users, Accounts.list_users())
-      |> assign(:teams, Accounts.list_teams())
+      |> assign(:groups, Accounts.list_groups())
       |> assign(:services, Accounts.list_services())
       |> assign(:global_subject_type, "user")
       |> assign(:user_subject_type, "user")
@@ -208,8 +208,8 @@ defmodule TokengateWeb.BudgetsLive do
     Enum.map(assigns.users, fn u -> {"#{u.name} — #{u.email}", u.id} end)
   end
 
-  def subject_options("team", assigns) do
-    Enum.map(assigns.teams, fn t -> {t.name, t.id} end)
+  def subject_options("group", assigns) do
+    Enum.map(assigns.groups, fn t -> {t.name, t.id} end)
   end
 
   def subject_options("service", assigns) do

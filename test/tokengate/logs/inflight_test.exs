@@ -24,9 +24,9 @@ defmodule Tokengate.Logs.InflightTest do
   defp attrs(overrides \\ %{}) do
     Map.merge(
       %{
-        team_member_id: Ecto.UUID.generate(),
+        group_member_id: Ecto.UUID.generate(),
         user_email: "user@example.com",
-        team_name: "Platform",
+        group_name: "Platform",
         model_requested: "gpt-4o",
         agent_type: "api",
         streaming: true,

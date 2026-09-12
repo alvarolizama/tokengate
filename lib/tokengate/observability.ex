@@ -11,19 +11,19 @@ defmodule Tokengate.Observability do
   # Destinations
   # ---------------------------------------------------------------------------
 
-  @doc "Returns all observability destinations for the given team."
-  def list_destinations(team_id) do
-    Repo.all(from d in Destination, where: d.team_id == ^team_id)
+  @doc "Returns all observability destinations for the given group."
+  def list_destinations(group_id) do
+    Repo.all(from d in Destination, where: d.group_id == ^group_id)
   end
 
   @doc """
-  Returns all observability destinations for the given teams in a single
-  query, grouped by team_id (`%{team_id => [Destination]}`). Teams without
+  Returns all observability destinations for the given groups in a single
+  query, grouped by group_id (`%{group_id => [Destination]}`). Groups without
   destinations are absent from the map — callers should default to `[]`.
   """
-  def list_destinations_for_teams(team_ids) when is_list(team_ids) do
-    Repo.all(from d in Destination, where: d.team_id in ^team_ids)
-    |> Enum.group_by(& &1.team_id)
+  def list_destinations_for_groups(group_ids) when is_list(group_ids) do
+    Repo.all(from d in Destination, where: d.group_id in ^group_ids)
+    |> Enum.group_by(& &1.group_id)
   end
 
   @doc "Gets a single destination. Raises if not found."

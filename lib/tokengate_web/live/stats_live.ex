@@ -1,17 +1,17 @@
 defmodule TokengateWeb.StatsLive do
   @moduledoc """
-  Analytics dashboard with drill-down by model and team.
+  Analytics dashboard with drill-down by model and group.
 
   Three views via `live_action`:
     * `:index`  — overview with top-N tables and KPI cards
-    * `:models` — per-model breakdown + drill-down (provider, team, member)
-    * `:teams`  — per-team breakdown + drill-down (members, models)
+    * `:models` — per-model breakdown + drill-down (provider, group, member)
+    * `:groups`  — per-group breakdown + drill-down (members, models)
 
   Periods: Hoy, Esta semana, Este mes, 30d, 90d.
 
   Scoping by role:
     * admin   — org-wide
-    * manager — only teams they manage
+    * manager — only groups they manage
     * user    — only their own consumption
 
   CSV export available via `/dashboard/stats/export` controller.
@@ -31,7 +31,7 @@ defmodule TokengateWeb.StatsLive do
   @sortable_breakdowns [
     :breakdown_model,
     :breakdown_member,
-    :breakdown_team,
+    :breakdown_group,
     :breakdown_provider,
     :breakdown_service,
     :member_models,
@@ -47,7 +47,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:page_title, "Estadísticas · Tokengate")
       |> assign(:period, "today")
       |> assign(:model_filter, nil)
-      |> assign(:team_filter, nil)
+      |> assign(:group_filter, nil)
       |> assign(:service_filter, nil)
       |> assign(:scope_label, scope_label_for(user))
       |> assign(:scope_member_ids, Accounts.scope_member_ids(user))
@@ -65,7 +65,7 @@ defmodule TokengateWeb.StatsLive do
   def handle_params(params, _uri, socket) do
     period = parse_period(params["period"])
     model_filter = params["model_id"]
-    team_filter = params["team_id"]
+    group_filter = params["group_id"]
     service_filter = params["service_id"]
     member_id = params["member_id"]
 
@@ -73,7 +73,7 @@ defmodule TokengateWeb.StatsLive do
       socket
       |> assign(:period, period)
       |> assign(:model_filter, model_filter)
-      |> assign(:team_filter, team_filter)
+      |> assign(:group_filter, group_filter)
       |> assign(:service_filter, service_filter)
       |> assign(:member_id, member_id)
       |> start_data_load()
@@ -143,7 +143,7 @@ defmodule TokengateWeb.StatsLive do
       user: assigns.current_user,
       period: assigns.period,
       model_filter: assigns.model_filter,
-      team_filter: assigns.team_filter,
+      group_filter: assigns.group_filter,
       service_filter: assigns.service_filter,
       member_id: assigns.member_id,
       scope_member_ids: assigns.scope_member_ids,
@@ -278,7 +278,7 @@ defmodule TokengateWeb.StatsLive do
           [
             fn -> {:breakdown_model, Rollup.breakdown_by_model(nil, opts)} end,
             fn -> {:breakdown_member, Rollup.breakdown_by_member(nil, opts)} end,
-            fn -> {:breakdown_team, breakdown_by_team_if_admin(admin?, opts)} end,
+            fn -> {:breakdown_group, breakdown_by_group_if_admin(admin?, opts)} end,
             fn -> {:top_errors, Rollup.top_errors(nil, opts)} end,
             fn -> {:hour_distribution, Rollup.usage_by_hour_of_day(nil, opts)} end,
             fn -> {:hour_usage_stacked, Rollup.usage_by_hour_of_day_stacked(nil, opts)} end,
@@ -297,7 +297,7 @@ defmodule TokengateWeb.StatsLive do
               {:breakdown_provider, Rollup.breakdown_by_provider_for_model(model_id, opts)}
             end,
             fn ->
-              {:breakdown_team, breakdown_team_for_model(params.user, model_id, opts)}
+              {:breakdown_group, breakdown_group_for_model(params.user, model_id, opts)}
             end,
             fn ->
               {:breakdown_member, Rollup.breakdown_by_member_for_model(model_id, opts)}
@@ -317,20 +317,22 @@ defmodule TokengateWeb.StatsLive do
           [fn -> {:breakdown_model, Rollup.breakdown_by_model(nil, opts)} end]
         end
 
-      :teams ->
-        team_id = params.team_filter
+      :groups ->
+        group_id = params.group_filter
         admin? = params.user.global_role == "admin"
-        allowed? = team_id && team_drilldown_allowed?(params.user, team_id)
+        allowed? = group_id && group_drilldown_allowed?(params.user, group_id)
 
-        [fn -> {:breakdown_team, breakdown_by_team_if_admin(admin?, opts)} end] ++
+        [fn -> {:breakdown_group, breakdown_by_group_if_admin(admin?, opts)} end] ++
           if allowed? do
             [
-              fn -> {:breakdown_member, Rollup.breakdown_by_member(team_id, opts)} end,
-              fn -> {:breakdown_model, Rollup.breakdown_by_model(team_id, opts)} end,
-              fn -> {:drilldown_series, Rollup.daily_series_by_model_for_team(team_id, opts)} end,
+              fn -> {:breakdown_member, Rollup.breakdown_by_member(group_id, opts)} end,
+              fn -> {:breakdown_model, Rollup.breakdown_by_model(group_id, opts)} end,
+              fn ->
+                {:drilldown_series, Rollup.daily_series_by_model_for_group(group_id, opts)}
+              end,
               fn ->
                 {:drilldown_series_labels,
-                 Rollup.daily_series_by_model_for_team(team_id, opts)
+                 Rollup.daily_series_by_model_for_group(group_id, opts)
                  |> Enum.map(& &1.label)
                  |> Enum.uniq()
                  |> Enum.sort()}
@@ -376,7 +378,7 @@ defmodule TokengateWeb.StatsLive do
 
         if allowed? do
           [
-            fn -> {:member, Accounts.get_team_member!(member_id, :with_assoc)} end,
+            fn -> {:member, Accounts.get_group_member!(member_id, :with_assoc)} end,
             fn -> {:member_models, Rollup.breakdown_by_model_for_member(member_id, opts)} end
           ]
         else
@@ -416,7 +418,7 @@ defmodule TokengateWeb.StatsLive do
       metrics: empty_metrics(),
       breakdown_model: [],
       breakdown_member: [],
-      breakdown_team: [],
+      breakdown_group: [],
       breakdown_provider: [],
       breakdown_service: [],
       top_errors: [],
@@ -438,24 +440,24 @@ defmodule TokengateWeb.StatsLive do
 
   ## Scoping helpers ------------------------------------------------------
 
-  defp team_drilldown_allowed?(user, team_id) do
-    case Accounts.scope_team_ids(user) do
+  defp group_drilldown_allowed?(user, group_id) do
+    case Accounts.scope_group_ids(user) do
       nil -> true
-      team_ids -> team_id in team_ids
+      group_ids -> group_id in group_ids
     end
   end
 
-  # Team table for a model drill-down: admins see every team; managers only
-  # teams they manage; regular users don't see team-level data at all.
-  defp breakdown_team_for_model(user, model_id, opts) do
-    case Accounts.scope_team_ids(user) do
-      nil -> Rollup.breakdown_by_team_for_model(model_id, opts)
+  # Group table for a model drill-down: admins see every group; managers only
+  # groups they manage; regular users don't see group-level data at all.
+  defp breakdown_group_for_model(user, model_id, opts) do
+    case Accounts.scope_group_ids(user) do
+      nil -> Rollup.breakdown_by_group_for_model(model_id, opts)
       [] -> []
     end
   end
 
-  defp breakdown_by_team_if_admin(true, opts), do: Rollup.breakdown_by_team(opts)
-  defp breakdown_by_team_if_admin(false, _opts), do: []
+  defp breakdown_by_group_if_admin(true, opts), do: Rollup.breakdown_by_group(opts)
+  defp breakdown_by_group_if_admin(false, _opts), do: []
 
   defp breakdown_by_service_if_admin(true, opts), do: Rollup.breakdown_by_service(opts)
   defp breakdown_by_service_if_admin(false, _opts), do: []
@@ -467,19 +469,19 @@ defmodule TokengateWeb.StatsLive do
   end
 
   defp fetch_summary(%{user: %{global_role: "user"} = user}, opts) do
-    memberships = Accounts.list_team_members_for_user(user.id)
+    memberships = Accounts.list_group_members_for_user(user.id)
     member_ids = Enum.map(memberships, & &1.id)
 
     opts
     |> Map.new()
-    |> Map.put(:team_member_ids, member_ids)
+    |> Map.put(:group_member_ids, member_ids)
     |> Logs.cost_summary()
   end
 
   defp fetch_summary(_params, _opts), do: empty_summary()
 
   # Build a filter map from the active stats page filter so cost_summary
-  # returns data scoped to the selected model / team / service.
+  # returns data scoped to the selected model / group / service.
   defp apply_stats_filters(opts, params) do
     base = Map.new(opts)
 
@@ -487,8 +489,8 @@ defmodule TokengateWeb.StatsLive do
       params.model_filter ->
         Map.put(base, :model_id, params.model_filter)
 
-      params.team_filter ->
-        Map.put(base, :team_id, params.team_filter)
+      params.group_filter ->
+        Map.put(base, :group_id, params.group_filter)
 
       params.service_filter ->
         Map.put(base, :service_id, params.service_filter)

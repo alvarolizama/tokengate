@@ -61,9 +61,9 @@ defmodule Tokengate.Budgets.Manager do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Pre-flight budget check for a team member's request.
+  Pre-flight budget check for a group member's request.
 
-  Single cap: member's monthly budget (team default + member extra) minus
+  Single cap: member's monthly budget (group default + member extra) minus
   current monthly spend. `nil` budget means unlimited.
 
   Returns `:ok` or `{:error, :budget_exceeded, %{available: Decimal.t()}}`.
@@ -138,7 +138,7 @@ defmodule Tokengate.Budgets.Manager do
   the spending subject is exempt from the global cap.
 
   `exemption_subjects` is the map built by the proxy's
-  `exemption_subjects/1` (`%{subject: ..., team: ...}`) or `nil` when the
+  `exemption_subjects/1` (`%{subject: ..., group: ...}`) or `nil` when the
   caller doesn't know the subject (tests, backfills) — in that case the
   global counter always gets bumped (legacy /3 behavior).
   """
@@ -146,7 +146,7 @@ defmodule Tokengate.Budgets.Manager do
           member_id :: term(),
           model_id :: term(),
           provider_cost_usd :: Decimal.t() | nil,
-          exemption_subjects :: %{subject: map(), team: map() | nil} | nil
+          exemption_subjects :: %{subject: map(), group: map() | nil} | nil
         ) :: :ok
   def record_spend(member_id, model_id, provider_cost_usd, exemption_subjects) do
     micro = to_micro(provider_cost_usd)
@@ -171,7 +171,7 @@ defmodule Tokengate.Budgets.Manager do
         Exemptions.exempt?(
           "global_daily",
           exemption_subjects.subject,
-          exemption_subjects.team
+          exemption_subjects.group
         )
 
     unless global_exempt?, do: bump_counter(@global_key, micro)
@@ -671,7 +671,7 @@ defmodule Tokengate.Budgets.Manager do
   # Maps a budget subject to the `Tokengate.Logs.cost_summary/1` filters used
   # to lazy-load its spend from the durable `request_logs` table. More specific
   # tuple shapes must match before the generic `{member_id, model_id}`.
-  # A binary subject may be a team member *or* a service (both keyed by their
+  # A binary subject may be a group member *or* a service (both keyed by their
   # id), so we use the combined `:subject_id` filter that matches either.
   defp subject_filters(subject) when is_binary(subject), do: %{subject_id: subject}
   defp subject_filters({:credential, credential_id}), do: %{credential_id: credential_id}

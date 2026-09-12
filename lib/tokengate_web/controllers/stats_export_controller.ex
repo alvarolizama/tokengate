@@ -3,10 +3,10 @@ defmodule TokengateWeb.StatsExportController do
   CSV export endpoint for stats data.
 
   Accepts query params:
-    * `type`   — `models`, `teams`, `errors`, or `logs` (required)
+    * `type`   — `models`, `groups`, `errors`, or `logs` (required)
     * `period` — `today`, `week`, `month`, `7d`, `30d`, `90d` (default: `7d`)
     * `model_id` — filter by model (for models type only)
-    * `team_id`  — filter by team (for teams type only)
+    * `group_id`  — filter by group (for groups type only)
 
   Returns a CSV file download with `Content-Disposition: attachment`.
   """
@@ -41,13 +41,13 @@ defmodule TokengateWeb.StatsExportController do
     end
   end
 
-  defp build_csv(user, "teams", params, opts, timezone) do
-    team_id = params["team_id"]
+  defp build_csv(user, "groups", params, opts, timezone) do
+    group_id = params["group_id"]
 
-    if team_id && not team_export_allowed?(user, team_id) do
+    if group_id && not group_export_allowed?(user, group_id) do
       {:error, :forbidden}
     else
-      {:ok, build_teams_csv(user, team_id, timezone, opts)}
+      {:ok, build_groups_csv(user, group_id, timezone, opts)}
     end
   end
 
@@ -63,16 +63,16 @@ defmodule TokengateWeb.StatsExportController do
     {:ok, build_models_csv(user, params["model_id"], timezone, opts)}
   end
 
-  # A team drill-down exposes every member's email and consumption, so only
+  # A group drill-down exposes every member's email and consumption, so only
   # admins may export it.
-  defp team_export_allowed?(%{global_role: "admin"}, _team_id), do: true
-  defp team_export_allowed?(_, _), do: false
+  defp group_export_allowed?(%{global_role: "admin"}, _group_id), do: true
+  defp group_export_allowed?(_, _), do: false
 
   ## Models CSV -----------------------------------------------------------
 
   defp build_models_csv(user, model_id, timezone, opts) do
     # Scoping: non-admin users only export consumption of their own scope
-    # (managed teams for managers, own memberships for regular users).
+    # (managed groups for managers, own memberships for regular users).
     opts = Keyword.put(opts, :member_ids, Accounts.scope_member_ids(user))
 
     rows =
@@ -100,32 +100,32 @@ defmodule TokengateWeb.StatsExportController do
     {"estadisticas_models#{suffix}_#{Periods.local_today(timezone)}.csv", csv}
   end
 
-  ## Teams CSV ------------------------------------------------------------
+  ## Groups CSV ------------------------------------------------------------
 
-  defp build_teams_csv(user, team_id, timezone, opts) do
+  defp build_groups_csv(user, group_id, timezone, opts) do
     rows =
-      if team_id do
-        # Drill-down: members of this team
-        Rollup.breakdown_by_member(team_id, opts)
+      if group_id do
+        # Drill-down: members of this group
+        Rollup.breakdown_by_member(group_id, opts)
       else
-        # Full table: all teams the user can see
-        load_team_breakdown(user, opts)
+        # Full table: all groups the user can see
+        load_group_breakdown(user, opts)
       end
 
     header =
-      if team_id do
-        ~w(usuario equipo requests costo tokens_in tokens_out tps)
+      if group_id do
+        ~w(usuario grupo requests costo tokens_in tokens_out tps)
       else
-        ~w(equipo requests costo tokens_in tokens_out tps)
+        ~w(grupo requests costo tokens_in tokens_out tps)
       end
 
     csv =
-      [header | Enum.map(rows, &row_to_csv_team/1)]
+      [header | Enum.map(rows, &row_to_csv_group/1)]
       |> Enum.map(&Enum.join(&1, ","))
       |> Enum.join("\n")
 
-    suffix = if team_id, do: "_equipo", else: ""
-    {"estadisticas_equipos#{suffix}_#{Periods.local_today(timezone)}.csv", csv}
+    suffix = if group_id, do: "_grupo", else: ""
+    {"estadisticas_grupos#{suffix}_#{Periods.local_today(timezone)}.csv", csv}
   end
 
   ## Errors CSV -----------------------------------------------------------
@@ -136,12 +136,12 @@ defmodule TokengateWeb.StatsExportController do
       |> Map.new()
       |> Map.put(:status_class, "errors")
       |> Map.put(:limit, 50_000)
-      |> Map.put(:team_member_ids, Accounts.scope_member_ids(user))
+      |> Map.put(:group_member_ids, Accounts.scope_member_ids(user))
 
     rows = Logs.list_logs_for_export(filters)
 
     header =
-      ~w(fecha estado modelo proveedor usuario equipo api_key error_reason prov_status latencia_ms costo_usd)
+      ~w(fecha estado modelo proveedor usuario grupo api_key error_reason prov_status latencia_ms costo_usd)
 
     csv =
       [header | Enum.map(rows, &row_to_csv_error/1)]
@@ -158,12 +158,12 @@ defmodule TokengateWeb.StatsExportController do
       opts
       |> Map.new()
       |> Map.put(:limit, 50_000)
-      |> Map.put(:team_member_ids, Accounts.scope_member_ids(user))
+      |> Map.put(:group_member_ids, Accounts.scope_member_ids(user))
 
     rows = Logs.list_logs_for_export(filters)
 
     header =
-      ~w(fecha estado modelo usuario equipo agente api_key proveedor prov_key prov_status error_reason error_message streaming think effort tokens_in tokens_out cache_read cache_creation latencia_ms ttft_ms costo_usd)
+      ~w(fecha estado modelo usuario grupo agente api_key proveedor prov_key prov_status error_reason error_message streaming think effort tokens_in tokens_out cache_read cache_creation latencia_ms ttft_ms costo_usd)
 
     csv =
       [header | Enum.map(rows, &row_to_csv_log/1)]
@@ -178,8 +178,8 @@ defmodule TokengateWeb.StatsExportController do
       csv_escape(format_datetime_csv(log.inserted_at)),
       log.status_code,
       csv_escape(model_display_csv(log.model_requested, log.model_responded)),
-      csv_escape(log.team_member && log.team_member.user && log.team_member.user.email),
-      csv_escape(log.team_member && log.team_member.team && log.team_member.team.name),
+      csv_escape(log.group_member && log.group_member.user && log.group_member.user.email),
+      csv_escape(log.group_member && log.group_member.group && log.group_member.group.name),
       csv_escape(log.client_agent),
       csv_escape(log.api_key_prefix),
       csv_escape(log.provider && log.provider.name),
@@ -210,8 +210,8 @@ defmodule TokengateWeb.StatsExportController do
       log.status_code,
       csv_escape(log.model_requested),
       csv_escape(log.provider && log.provider.name),
-      csv_escape(log.team_member && log.team_member.user && log.team_member.user.email),
-      csv_escape(log.team_member && log.team_member.team && log.team_member.team.name),
+      csv_escape(log.group_member && log.group_member.user && log.group_member.user.email),
+      csv_escape(log.group_member && log.group_member.group && log.group_member.group.name),
       csv_escape(log.api_key_prefix),
       csv_escape(log.error_reason),
       log.provider_status_code,
@@ -246,15 +246,15 @@ defmodule TokengateWeb.StatsExportController do
   defp row_label(row),
     do: Map.get(row, :provider_name) || Map.get(row, :model_name) || "—"
 
-  defp row_to_csv_team(row) do
-    # When team_id is set, rows are members (have user_email).
-    # When team_id is nil, rows are teams (have team_name).
+  defp row_to_csv_group(row) do
+    # When group_id is set, rows are members (have user_email).
+    # When group_id is nil, rows are groups (have group_name).
     has_email = Map.has_key?(row, :user_email)
 
     if has_email do
       [
         csv_escape(row.user_email),
-        csv_escape(Map.get(row, :team_name, "")),
+        csv_escape(Map.get(row, :group_name, "")),
         row.request_count,
         decimal_to_csv(Map.get(row, :cost_usd)),
         Map.get(row, :prompt_tokens, 0),
@@ -263,7 +263,7 @@ defmodule TokengateWeb.StatsExportController do
       ]
     else
       [
-        csv_escape(Map.get(row, :team_name, "—")),
+        csv_escape(Map.get(row, :group_name, "—")),
         row.request_count,
         decimal_to_csv(Map.get(row, :cost_usd)),
         Map.get(row, :prompt_tokens, 0),
@@ -306,11 +306,11 @@ defmodule TokengateWeb.StatsExportController do
 
   ## Scoping helpers (mirror StatsLive) ----------------------------------
 
-  defp load_team_breakdown(%{global_role: "admin"}, opts) do
-    Rollup.breakdown_by_team(opts)
+  defp load_group_breakdown(%{global_role: "admin"}, opts) do
+    Rollup.breakdown_by_group(opts)
   end
 
-  defp load_team_breakdown(_, _), do: []
+  defp load_group_breakdown(_, _), do: []
 
   defp parse_period(nil), do: "7d"
   defp parse_period(period) when period in ~w(today week month 7d 30d 90d), do: period

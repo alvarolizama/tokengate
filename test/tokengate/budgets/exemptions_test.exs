@@ -2,7 +2,7 @@ defmodule Tokengate.Budgets.ExemptionsTest do
   @moduledoc """
   Tests for the budget exemptions context and schema: CRUD, uniqueness per
   (scope, subject), subject validation, and the `exempt?/3` hot-path lookup
-  including team inheritance.
+  including group inheritance.
   """
 
   use Tokengate.DataCase, async: false
@@ -23,9 +23,9 @@ defmodule Tokengate.Budgets.ExemptionsTest do
     user
   end
 
-  defp team_fixture do
-    {:ok, team} = Accounts.create_team(%{"name" => "Exempt Team #{unique()}"})
-    team
+  defp group_fixture do
+    {:ok, group} = Accounts.create_group(%{"name" => "Exempt Group #{unique()}"})
+    group
   end
 
   defp service_fixture do
@@ -66,14 +66,14 @@ defmodule Tokengate.Budgets.ExemptionsTest do
 
     test "rejects multiple subjects" do
       user = user_fixture()
-      team = team_fixture()
+      group = group_fixture()
 
       changeset =
         Exemption.changeset(%Exemption{}, %{
           "scope" => "global_daily",
           "subject_type" => "user",
           "user_id" => user.id,
-          "team_id" => team.id
+          "group_id" => group.id
         })
 
       refute changeset.valid?
@@ -169,18 +169,22 @@ defmodule Tokengate.Budgets.ExemptionsTest do
       refute Exemptions.exempt?("user_daily", %{type: "user", id: user.id}, nil)
     end
 
-    test "team exemption applies to team members via team subject" do
+    test "group exemption applies to group members via group subject" do
       user = user_fixture()
-      team2 = team_fixture()
+      group2 = group_fixture()
 
-      Exemptions.add(%{"scope" => "user_daily", "subject_type" => "team", "team_id" => team2.id})
+      Exemptions.add(%{
+        "scope" => "user_daily",
+        "subject_type" => "group",
+        "group_id" => group2.id
+      })
 
       member_subject = %{type: "user", id: user.id}
 
-      assert Exemptions.exempt?("user_daily", member_subject, %{type: "team", id: team2.id})
+      assert Exemptions.exempt?("user_daily", member_subject, %{type: "group", id: group2.id})
 
       refute Exemptions.exempt?("user_daily", member_subject, %{
-               type: "team",
+               type: "group",
                id: Ecto.UUID.generate()
              })
     end

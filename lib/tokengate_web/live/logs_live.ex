@@ -35,7 +35,7 @@ defmodule TokengateWeb.LogsLive do
       |> assign(:last_seen_at, DateTime.utc_now() |> DateTime.truncate(:second))
       |> assign(:pending, [])
       |> assign(:model_options, model_options())
-      |> assign(:team_options, team_options())
+      |> assign(:group_options, group_options())
       |> assign(:is_admin, user.global_role == "admin")
       |> require_admin_hook()
 
@@ -162,7 +162,7 @@ defmodule TokengateWeb.LogsLive do
   defp log_in_scope?(_log, nil), do: true
 
   defp log_in_scope?(log, member_ids) when is_list(member_ids) do
-    log.team_member_id in member_ids
+    log.group_member_id in member_ids
   end
 
   defp log_matches_filters?(log, filters, timezone) do
@@ -170,7 +170,7 @@ defmodule TokengateWeb.LogsLive do
     status_class = filters["status_class"]
     streaming = filters["streaming"]
     model_search = filters["model_search"]
-    team_id = filters["team_id"]
+    group_id = filters["group_id"]
     subject_type = filters["subject_type"]
     error_reason = filters["error_reason"]
 
@@ -178,17 +178,17 @@ defmodule TokengateWeb.LogsLive do
       status_class_match?(log.status_code, status_class) and
       streaming_match?(log.streaming, streaming) and
       model_match?(log, model_search) and
-      team_id_match?(log, team_id) and
+      group_id_match?(log, group_id) and
       subject_type_match?(log, subject_type) and
       error_reason_match?(log, error_reason) and
       date_range_match?(log.inserted_at, filters["from"], filters["to"], timezone)
   end
 
-  defp team_id_match?(_log, ""), do: true
-  defp team_id_match?(_log, nil), do: true
+  defp group_id_match?(_log, ""), do: true
+  defp group_id_match?(_log, nil), do: true
 
-  defp team_id_match?(log, team_id) do
-    log.team_member && log.team_member.team && log.team_member.team.id == team_id
+  defp group_id_match?(log, group_id) do
+    log.group_member && log.group_member.group && log.group_member.group.id == group_id
   end
 
   defp subject_type_match?(_log, ""), do: true
@@ -230,7 +230,7 @@ defmodule TokengateWeb.LogsLive do
   end
 
   # Top-cards: build a filter map that combines the user's scope
-  # (team_member_ids) with the active UI filters so the cards never leak
+  # (group_member_ids) with the active UI filters so the cards never leak
   # rows the table would hide.
   defp top_card_filters(assigns) do
     filters = assigns[:filters] || %{}
@@ -238,13 +238,13 @@ defmodule TokengateWeb.LogsLive do
     base =
       case assigns[:scope_member_ids] do
         nil -> %{}
-        ids -> %{team_member_ids: ids}
+        ids -> %{group_member_ids: ids}
       end
 
     base
     |> maybe_put_filter(filters, "agent_type", :agent_type)
     |> maybe_put_filter(filters, "model_search", :model_search)
-    |> maybe_put_filter(filters, "team_id", :team_id)
+    |> maybe_put_filter(filters, "group_id", :group_id)
     |> maybe_put_filter(filters, "streaming", :streaming)
     |> maybe_put_filter(filters, "error_reason", :error_reason)
   end
@@ -304,7 +304,7 @@ defmodule TokengateWeb.LogsLive do
       model_responded: nil,
       subject_type: entry.subject_type,
       service: if(entry.service_name, do: %{name: entry.service_name}, else: nil),
-      team_member: %{user: %{email: entry.user_email}, team: %{name: entry.team_name}},
+      group_member: %{user: %{email: entry.user_email}, group: %{name: entry.group_name}},
       client_agent: entry.client_agent,
       api_key_prefix: entry.api_key_prefix,
       provider: %{name: entry.provider_name},
@@ -333,20 +333,20 @@ defmodule TokengateWeb.LogsLive do
     in_scope =
       case assigns[:scope_member_ids] do
         nil -> true
-        ids -> entry.team_member_id in ids
+        ids -> entry.group_member_id in ids
       end
 
     agent = filters["agent_type"]
     streaming = filters["streaming"]
     model_search = filters["model_search"]
-    team_id = filters["team_id"]
+    group_id = filters["group_id"]
     subject_type = filters["subject_type"]
 
     in_scope and
       agent in ["", nil, entry.agent_type] and
       streaming_match?(entry.streaming, streaming) and
       pending_model_match?(entry, model_search) and
-      team_id in ["", nil, entry.team_id] and
+      group_id in ["", nil, entry.group_id] and
       subject_type in ["", nil, entry.subject_type] and
       date_range_match?(
         entry.started_at,
@@ -369,9 +369,9 @@ defmodule TokengateWeb.LogsLive do
     |> Enum.sort_by(&elem(&1, 0))
   end
 
-  defp team_options do
-    Accounts.list_teams()
-    |> Enum.map(fn team -> {team.name, team.id} end)
+  defp group_options do
+    Accounts.list_groups()
+    |> Enum.map(fn group -> {group.name, group.id} end)
     |> Enum.sort_by(&elem(&1, 0))
   end
 
@@ -435,7 +435,7 @@ defmodule TokengateWeb.LogsLive do
   end
 
   defp resolve_scope_member_ids(user) do
-    memberships = Accounts.list_team_members_for_user(user.id)
+    memberships = Accounts.list_group_members_for_user(user.id)
     Enum.map(memberships, & &1.id)
   end
 
@@ -492,7 +492,7 @@ defmodule TokengateWeb.LogsLive do
       "from" => "",
       "to" => "",
       "model_search" => "",
-      "team_id" => "",
+      "group_id" => "",
       "subject_type" => "",
       "error_reason" => ""
     }
@@ -509,7 +509,7 @@ defmodule TokengateWeb.LogsLive do
       |> maybe_put(:status_class, form_filters["status_class"])
       |> maybe_put(:streaming, parse_bool(form_filters["streaming"]))
       |> maybe_put(:model_search, form_filters["model_search"])
-      |> maybe_put_team_id(form_filters["team_id"])
+      |> maybe_put_group_id(form_filters["group_id"])
       |> maybe_put(:subject_type, form_filters["subject_type"])
       |> maybe_put(:error_reason, form_filters["error_reason"])
       |> maybe_put(:from, parse_from_date(form_filters["from"], timezone))
@@ -530,12 +530,12 @@ defmodule TokengateWeb.LogsLive do
   defp maybe_put(map, _key, ""), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
-  defp maybe_put_team_id(map, ""), do: map
-  defp maybe_put_team_id(map, nil), do: map
-  defp maybe_put_team_id(map, team_id), do: Map.put(map, :team_id, team_id)
+  defp maybe_put_group_id(map, ""), do: map
+  defp maybe_put_group_id(map, nil), do: map
+  defp maybe_put_group_id(map, group_id), do: Map.put(map, :group_id, group_id)
 
   defp maybe_put_scope(map, nil), do: map
-  defp maybe_put_scope(map, ids), do: Map.put(map, :team_member_ids, ids)
+  defp maybe_put_scope(map, ids), do: Map.put(map, :group_member_ids, ids)
 
   defp parse_bool("true"), do: true
   defp parse_bool("false"), do: false
@@ -692,7 +692,7 @@ defmodule TokengateWeb.LogsLive do
   defp status_badge_class(status_code) when status_code >= 500, do: "badge-error"
   defp status_badge_class(_), do: "badge-ghost"
 
-  defp member_email(%{team_member: %{user: %{email: email}}}), do: email
+  defp member_email(%{group_member: %{user: %{email: email}}}), do: email
   defp member_email(_), do: "—"
 
   # The "Usuario" cell shows the service name for service requests and the
@@ -702,8 +702,8 @@ defmodule TokengateWeb.LogsLive do
   defp member_display(%{subject_type: "service"}), do: "—"
   defp member_display(log), do: member_email(log)
 
-  defp member_team(%{team_member: %{team: %{name: name}}}), do: name
-  defp member_team(_), do: "—"
+  defp member_group(%{group_member: %{group: %{name: name}}}), do: name
+  defp member_group(_), do: "—"
 
   defp provider_name(%{provider: %{name: name}}), do: name
   defp provider_name(_), do: "—"
@@ -870,11 +870,11 @@ defmodule TokengateWeb.LogsLive do
             label="Modelo"
           />
           <.input
-            field={@form[:team_id]}
+            field={@form[:group_id]}
             type="select"
             prompt="Todos"
-            options={@team_options}
-            label="Equipo"
+            options={@group_options}
+            label="Grupo"
           />
           <.input
             field={@form[:subject_type]}
@@ -973,7 +973,7 @@ defmodule TokengateWeb.LogsLive do
                 <th>Modelo</th>
                 <th>Tipo</th>
                 <th>Usuario</th>
-                <th>Equipo</th>
+                <th>Grupo</th>
                 <th>Agente</th>
                 <th>API Key</th>
                 <th class="border-r border-base-200">Proveedor</th>
@@ -1034,7 +1034,7 @@ defmodule TokengateWeb.LogsLive do
                     </span>
                   </td>
                   <td class="text-sm">{member_display(log)}</td>
-                  <td class="text-sm">{member_team(log)}</td>
+                  <td class="text-sm">{member_group(log)}</td>
                   <td class="text-sm">{log.client_agent || "—"}</td>
                   <td class="text-sm">{log.api_key_prefix || "—"}</td>
                   <td class="text-sm border-r border-base-200">{provider_name(log)}</td>
@@ -1074,7 +1074,7 @@ defmodule TokengateWeb.LogsLive do
                     </span>
                   </td>
                   <td class="text-sm">{member_display(log)}</td>
-                  <td class="text-sm">{member_team(log)}</td>
+                  <td class="text-sm">{member_group(log)}</td>
                   <td class="text-sm" title={log.agent_type}>
                     {log.client_agent || "—"}
                   </td>

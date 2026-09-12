@@ -27,12 +27,12 @@ defmodule TokengateWeb.DashboardLiveTest do
     |> recycle()
   end
 
-  # Builds org + team + member (+ api key) and returns the ids; optionally
+  # Builds org + group + member (+ api key) and returns the ids; optionally
   # inserts a request log for the member with the given cost.
-  defp team_with_log(opts) do
+  defp group_with_log(opts) do
     u = unique()
 
-    {:ok, team} = Accounts.create_team(%{name: "Team #{u}"})
+    {:ok, group} = Accounts.create_group(%{name: "Group #{u}"})
 
     owner =
       case Map.get(opts, :user) do
@@ -51,7 +51,7 @@ defmodule TokengateWeb.DashboardLiveTest do
       end
 
     {:ok, member} =
-      Accounts.create_team_member(%{user_id: owner.id, team_id: team.id, team_role: "user"})
+      Accounts.create_group_member(%{user_id: owner.id, group_id: group.id, group_role: "user"})
 
     if cost = Map.get(opts, :cost) do
       {:ok, provider} =
@@ -65,7 +65,7 @@ defmodule TokengateWeb.DashboardLiveTest do
 
       {:ok, _log} =
         Logs.log_request(%{
-          team_member_id: member.id,
+          group_member_id: member.id,
           provider_id: provider.id,
           model_id: nil,
           model_requested: "gpt-4o",
@@ -87,13 +87,13 @@ defmodule TokengateWeb.DashboardLiveTest do
         _ -> nil
       end
 
-    %{team: team, owner: owner, member: member, owner_password: password}
+    %{group: group, owner: owner, member: member, owner_password: password}
   end
 
-  defp team_with_member(_opts) do
+  defp group_with_member(_opts) do
     u = unique()
 
-    {:ok, team} = Accounts.create_team(%{name: "Team #{u}"})
+    {:ok, group} = Accounts.create_group(%{name: "Group #{u}"})
 
     {:ok, owner} =
       Accounts.register_user(%{
@@ -103,11 +103,11 @@ defmodule TokengateWeb.DashboardLiveTest do
       })
 
     {:ok, member} =
-      Accounts.create_team_member(%{user_id: owner.id, team_id: team.id, team_role: "user"})
+      Accounts.create_group_member(%{user_id: owner.id, group_id: group.id, group_role: "user"})
 
     {:ok, _api_key, _token} = Accounts.replace_api_key(member)
 
-    %{team: team, owner: owner, member: member, owner_password: "password-secret-#{u}1"}
+    %{group: group, owner: owner, member: member, owner_password: "password-secret-#{u}1"}
   end
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
@@ -146,7 +146,7 @@ defmodule TokengateWeb.DashboardLiveTest do
     Collector.reset()
 
     # Insert a log for the ADMIN's own membership (user-wide scope)
-    team_with_log(%{cost: "0.005", user: admin})
+    group_with_log(%{cost: "0.005", user: admin})
 
     conn = login(conn, admin, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")
@@ -164,7 +164,7 @@ defmodule TokengateWeb.DashboardLiveTest do
     Collector.reset()
 
     # Log belongs to ANOTHER user's membership — admin must NOT see it
-    team_with_log(%{cost: "0.005"})
+    group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")
@@ -197,7 +197,7 @@ defmodule TokengateWeb.DashboardLiveTest do
     %{user: admin, password: password} = register("admin")
     Collector.reset()
 
-    team_with_log(%{cost: "0.005", user: admin})
+    group_with_log(%{cost: "0.005", user: admin})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
@@ -205,15 +205,15 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert has_element?(view, "#breakdown-tabs")
     assert has_element?(view, "#tab-model")
     assert has_element?(view, "#tab-member")
-    # Team breakdown is not shown on the personal dashboard
-    refute has_element?(view, "#tab-team")
+    # Group breakdown is not shown on the personal dashboard
+    refute has_element?(view, "#tab-group")
   end
 
   test "switching breakdown tab shows the right table", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     Collector.reset()
 
-    team_with_log(%{cost: "0.005", user: admin})
+    group_with_log(%{cost: "0.005", user: admin})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
@@ -227,15 +227,15 @@ defmodule TokengateWeb.DashboardLiveTest do
     html = render(view)
     assert html =~ "bd-member-"
 
-    # Team tab is not rendered on the personal dashboard
-    refute has_element?(view, "#tab-team")
+    # Group tab is not rendered on the personal dashboard
+    refute has_element?(view, "#tab-group")
   end
 
   test "switching period reloads metrics", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     Collector.reset()
 
-    team_with_log(%{cost: "0.005", user: admin})
+    group_with_log(%{cost: "0.005", user: admin})
 
     conn = login(conn, admin, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")
@@ -257,7 +257,7 @@ defmodule TokengateWeb.DashboardLiveTest do
     %{user: admin, password: password} = register("admin")
     Collector.reset()
 
-    team_with_log(%{cost: "0.005", user: admin})
+    group_with_log(%{cost: "0.005", user: admin})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
@@ -282,7 +282,7 @@ defmodule TokengateWeb.DashboardLiveTest do
     # 23:00 del día anterior local (UTC-6) → NO cuenta en "Hoy" local
     today_start = Periods.start_of_day_utc("America/Mexico_City")
 
-    team_with_log(%{
+    group_with_log(%{
       cost: "0.005",
       user: admin,
       inserted_at: DateTime.add(today_start, -3600, :second)
@@ -308,7 +308,7 @@ defmodule TokengateWeb.DashboardLiveTest do
         do: candidate,
         else: DateTime.add(now, -60, :second)
 
-    team_with_log(%{cost: "0.005", user: admin, inserted_at: inserted_at})
+    group_with_log(%{cost: "0.005", user: admin, inserted_at: inserted_at})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
@@ -321,8 +321,8 @@ defmodule TokengateWeb.DashboardLiveTest do
     %{user: admin, password: password} = register("admin")
     Collector.reset()
 
-    # Admin needs their own team + member + log to see personal data
-    %{owner_password: _password} = team_with_log(%{cost: "0.005", user: admin})
+    # Admin needs their own group + member + log to see personal data
+    %{owner_password: _password} = group_with_log(%{cost: "0.005", user: admin})
 
     conn = login(conn, admin, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")
@@ -341,11 +341,11 @@ defmodule TokengateWeb.DashboardLiveTest do
   end
 
   test "user scope: sees only their own consumption", %{conn: conn} do
-    %{team: _team, owner: owner, member: member, owner_password: password} =
-      team_with_log(%{cost: "0.005"})
+    %{group: _group, owner: owner, member: member, owner_password: password} =
+      group_with_log(%{cost: "0.005"})
 
-    # Someone else's log in another team — must not leak into the user's scope
-    team_with_log(%{cost: "99.99"})
+    # Someone else's log in another group — must not leak into the user's scope
+    group_with_log(%{cost: "99.99"})
 
     conn = login(conn, owner, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
@@ -361,21 +361,21 @@ defmodule TokengateWeb.DashboardLiveTest do
   ## Personal keys on dashboard --------------------------------------------
 
   test "user sees their own API key on dashboard", %{conn: conn} do
-    %{team: team, owner: owner, member: member, owner_password: password} =
-      team_with_member(%{team_role: "user"})
+    %{group: group, owner: owner, member: member, owner_password: password} =
+      group_with_member(%{group_role: "user"})
 
     conn = login(conn, owner, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")
 
-    assert html =~ team.name
-    assert has_element?(view, "#team-#{team.id}")
+    assert html =~ group.name
+    assert has_element?(view, "#group-#{group.id}")
     assert html =~ "••••"
     _ = member
   end
 
   test "user can replace their key from dashboard", %{conn: conn} do
     %{owner: owner, member: member, owner_password: password} =
-      team_with_member(%{team_role: "user"})
+      group_with_member(%{group_role: "user"})
 
     conn = login(conn, owner, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
@@ -389,7 +389,7 @@ defmodule TokengateWeb.DashboardLiveTest do
 
   test "user can revoke their key from dashboard", %{conn: conn} do
     %{owner: owner, member: member, owner_password: password} =
-      team_with_member(%{team_role: "user"})
+      group_with_member(%{group_role: "user"})
 
     conn = login(conn, owner, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")
@@ -402,8 +402,8 @@ defmodule TokengateWeb.DashboardLiveTest do
   end
 
   test "user cannot revoke another member's key from dashboard", %{conn: conn} do
-    %{owner: owner, owner_password: password} = team_with_member(%{team_role: "user"})
-    %{member: other_member} = team_with_member(%{team_role: "user"})
+    %{owner: owner, owner_password: password} = group_with_member(%{group_role: "user"})
+    %{member: other_member} = group_with_member(%{group_role: "user"})
 
     conn = login(conn, owner, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
@@ -412,31 +412,31 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert html =~ "No autorizado."
   end
 
-  test "user without teams sees empty state, no General auto-created", %{conn: conn} do
+  test "user without groups sees empty state, no General auto-created", %{conn: conn} do
     %{user: user, password: password} = register("user")
 
     conn = login(conn, user, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")
 
-    # No team assigned — should show empty state, not auto-create General
-    assert has_element?(view, "#no-team-state")
-    assert html =~ "No tienes ningún equipo asignado"
-    refute html =~ "General", "should not auto-create General team"
-    refute html =~ "Endpoint de la API", "should not show endpoint info without team"
+    # No group assigned — should show empty state, not auto-create General
+    assert has_element?(view, "#no-group-state")
+    assert html =~ "No tienes ningún grupo asignado"
+    refute html =~ "General", "should not auto-create General group"
+    refute html =~ "Endpoint de la API", "should not show endpoint info without group"
     refute has_element?(view, "#api-usage-info")
     refute has_element?(view, "#period-selector")
   end
 
-  ## Teams & budgets on dashboard ------------------------------------------
+  ## Groups & budgets on dashboard ------------------------------------------
 
-  test "user sees their team budget with spend bars", %{conn: conn} do
-    %{team: team, owner: owner, member: member, owner_password: password} =
-      team_with_member(%{team_role: "user"})
+  test "user sees their group budget with spend bars", %{conn: conn} do
+    %{group: group, owner: owner, member: member, owner_password: password} =
+      group_with_member(%{group_role: "user"})
 
     conn = login(conn, owner, password)
     {:ok, view, html} = live(conn, ~p"/dashboard")
 
-    assert has_element?(view, "#team-#{team.id}")
+    assert has_element?(view, "#group-#{group.id}")
     assert html =~ "Gasto mensual"
     _ = member
   end

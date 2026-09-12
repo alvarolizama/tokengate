@@ -15,14 +15,14 @@ defmodule Tokengate.ProvidersTest do
   # compiled when this subagent runs in isolation.
   # ---------------------------------------------------------------------------
 
-  defmodule TestTeam do
+  defmodule TestGroup do
     use Ecto.Schema
     import Ecto.Changeset
 
     @primary_key {:id, :binary_id, autogenerate: true}
     @foreign_key_type :binary_id
 
-    schema "teams" do
+    schema "groups" do
       field :name, :string
       field :monthly_budget_per_user_usd, :decimal
       field :default_concurrency_limit, :integer, default: 5
@@ -30,8 +30,8 @@ defmodule Tokengate.ProvidersTest do
       timestamps(type: :utc_datetime)
     end
 
-    def changeset(team, attrs) do
-      team
+    def changeset(group, attrs) do
+      group
       |> cast(attrs, [:name, :default_concurrency_limit, :default_rpm_limit])
       |> validate_required([:name])
     end
@@ -59,27 +59,27 @@ defmodule Tokengate.ProvidersTest do
     end
   end
 
-  defmodule TestTeamMember do
+  defmodule TestGroupMember do
     use Ecto.Schema
     import Ecto.Changeset
 
     @primary_key {:id, :binary_id, autogenerate: true}
     @foreign_key_type :binary_id
 
-    schema "team_members" do
-      field :team_role, :string, default: "user"
+    schema "group_members" do
+      field :group_role, :string, default: "user"
       field :extra_monthly_budget_usd, :decimal
       field :extra_concurrency, :integer
       field :status, :string, default: "active"
-      belongs_to :team, TestTeam
+      belongs_to :group, TestGroup
       belongs_to :user, TestUser
       timestamps(type: :utc_datetime)
     end
 
     def changeset(member, attrs) do
       member
-      |> cast(attrs, [:team_id, :user_id, :team_role, :status])
-      |> validate_required([:team_id, :user_id])
+      |> cast(attrs, [:group_id, :user_id, :group_role, :status])
+      |> validate_required([:group_id, :user_id])
     end
   end
 
@@ -87,13 +87,13 @@ defmodule Tokengate.ProvidersTest do
   # Fixtures
   # ---------------------------------------------------------------------------
 
-  def team_fixture(attrs \\ %{}) do
-    {:ok, team} =
-      %TestTeam{}
-      |> TestTeam.changeset(Map.merge(%{name: "Engineering"}, attrs))
+  def group_fixture(attrs \\ %{}) do
+    {:ok, group} =
+      %TestGroup{}
+      |> TestGroup.changeset(Map.merge(%{name: "Engineering"}, attrs))
       |> Repo.insert()
 
-    team
+    group
   end
 
   def user_fixture(attrs \\ %{}) do
@@ -112,13 +112,13 @@ defmodule Tokengate.ProvidersTest do
     user
   end
 
-  def team_member_fixture(team \\ nil, attrs \\ %{}) do
-    team = team || team_fixture()
+  def group_member_fixture(group \\ nil, attrs \\ %{}) do
+    group = group || group_fixture()
     user = user_fixture()
 
     {:ok, member} =
-      %TestTeamMember{}
-      |> TestTeamMember.changeset(Map.merge(%{team_id: team.id, user_id: user.id}, attrs))
+      %TestGroupMember{}
+      |> TestGroupMember.changeset(Map.merge(%{group_id: group.id, user_id: user.id}, attrs))
       |> Repo.insert()
 
     member
@@ -402,11 +402,11 @@ defmodule Tokengate.ProvidersTest do
   end
 
   describe "model_providers exclusive scope" do
-    test "team-exclusive provider is visible only to members of that team" do
-      team_a = team_fixture(%{name: "Team A"})
-      team_b = team_fixture(%{name: "Team B"})
-      member_a = team_member_fixture(team_a)
-      member_b = team_member_fixture(team_b)
+    test "group-exclusive provider is visible only to members of that group" do
+      group_a = group_fixture(%{name: "Group A"})
+      group_b = group_fixture(%{name: "Group B"})
+      member_a = group_member_fixture(group_a)
+      member_b = group_member_fixture(group_b)
 
       model_ = model_fixture()
       provider = provider_fixture()
@@ -419,24 +419,28 @@ defmodule Tokengate.ProvidersTest do
           provider_model: "exclusive-model",
           priority: 1,
           enabled: true,
-          exclusive_to_team_id: team_a.id
+          exclusive_to_group_id: group_a.id
         })
 
-      # Same team → visible
-      visible_for_a = Providers.list_model_providers_for_member(model_.id, member_a.id, team_a.id)
+      # Same group → visible
+      visible_for_a =
+        Providers.list_model_providers_for_member(model_.id, member_a.id, group_a.id)
+
       assert Enum.map(visible_for_a, & &1.id) == [mp.id]
 
-      # Other team → NOT visible. Regression: the "global" clause used to
-      # check only exclusive_to_team_member_id, so team-exclusive providers
-      # (member id nil) leaked to every other team.
-      visible_for_b = Providers.list_model_providers_for_member(model_.id, member_b.id, team_b.id)
+      # Other group → NOT visible. Regression: the "global" clause used to
+      # check only exclusive_to_group_member_id, so group-exclusive providers
+      # (member id nil) leaked to every other group.
+      visible_for_b =
+        Providers.list_model_providers_for_member(model_.id, member_b.id, group_b.id)
+
       assert visible_for_b == []
     end
 
     test "member-exclusive provider is visible only to that member" do
-      team = team_fixture()
-      member_a = team_member_fixture(team)
-      member_b = team_member_fixture(team)
+      group = group_fixture()
+      member_a = group_member_fixture(group)
+      member_b = group_member_fixture(group)
 
       model_ = model_fixture()
       provider = provider_fixture()
@@ -449,23 +453,23 @@ defmodule Tokengate.ProvidersTest do
           provider_model: "member-model",
           priority: 1,
           enabled: true,
-          exclusive_to_team_member_id: member_a.id
+          exclusive_to_group_member_id: member_a.id
         })
 
-      visible_for_a = Providers.list_model_providers_for_member(model_.id, member_a.id, team.id)
+      visible_for_a = Providers.list_model_providers_for_member(model_.id, member_a.id, group.id)
       assert Enum.map(visible_for_a, & &1.id) == [mp.id]
 
-      visible_for_b = Providers.list_model_providers_for_member(model_.id, member_b.id, team.id)
+      visible_for_b = Providers.list_model_providers_for_member(model_.id, member_b.id, group.id)
       assert visible_for_b == []
     end
 
     test "global providers stay visible alongside matching exclusives" do
-      team = team_fixture()
-      member = team_member_fixture(team)
+      group = group_fixture()
+      member = group_member_fixture(group)
       model_ = model_fixture()
       provider = provider_fixture()
       global_cred = credential_fixture(provider)
-      team_cred = credential_fixture(provider)
+      group_cred = credential_fixture(provider)
 
       {:ok, global_mp} =
         Providers.create_model_provider(%{
@@ -476,30 +480,30 @@ defmodule Tokengate.ProvidersTest do
           enabled: true
         })
 
-      {:ok, team_mp} =
+      {:ok, group_mp} =
         Providers.create_model_provider(%{
           model_id: model_.id,
-          credential_id: team_cred.id,
-          provider_model: "team-model",
+          credential_id: group_cred.id,
+          provider_model: "group-model",
           priority: 1,
           enabled: true,
-          exclusive_to_team_id: team.id
+          exclusive_to_group_id: group.id
         })
 
-      visible = Providers.list_model_providers_for_member(model_.id, member.id, team.id)
+      visible = Providers.list_model_providers_for_member(model_.id, member.id, group.id)
       ids = Enum.map(visible, & &1.id)
 
       assert global_mp.id in ids
-      assert team_mp.id in ids
+      assert group_mp.id in ids
     end
 
     @tag :hermes_verify
     test "same credential can serve multiple scope buckets for the same model" do
       model_ = model_fixture(%{name: "verify-cross-scope"})
-      team_a = team_fixture(%{name: "Team A"})
-      team_b = team_fixture(%{name: "Team B"})
-      member_a = team_member_fixture(team_a)
-      member_b = team_member_fixture(team_b)
+      group_a = group_fixture(%{name: "Group A"})
+      group_b = group_fixture(%{name: "Group B"})
+      member_a = group_member_fixture(group_a)
+      member_b = group_member_fixture(group_b)
       provider = provider_fixture()
       cred = credential_fixture(provider, %{status: "active"})
 
@@ -513,26 +517,26 @@ defmodule Tokengate.ProvidersTest do
           enabled: true
         })
 
-      # Team-A exclusive — same cred
+      # Group-A exclusive — same cred
       {:ok, _} =
         Providers.create_model_provider(%{
           model_id: model_.id,
           credential_id: cred.id,
-          provider_model: "team-a-model",
+          provider_model: "group-a-model",
           priority: 1,
           enabled: true,
-          exclusive_to_team_id: team_a.id
+          exclusive_to_group_id: group_a.id
         })
 
-      # Team-B exclusive — same cred
+      # Group-B exclusive — same cred
       {:ok, _} =
         Providers.create_model_provider(%{
           model_id: model_.id,
           credential_id: cred.id,
-          provider_model: "team-b-model",
+          provider_model: "group-b-model",
           priority: 1,
           enabled: true,
-          exclusive_to_team_id: team_b.id
+          exclusive_to_group_id: group_b.id
         })
 
       # Member-A exclusive — same cred
@@ -543,7 +547,7 @@ defmodule Tokengate.ProvidersTest do
           provider_model: "member-a-model",
           priority: 1,
           enabled: true,
-          exclusive_to_team_member_id: member_a.id
+          exclusive_to_group_member_id: member_a.id
         })
 
       # Member-B exclusive — same cred
@@ -554,7 +558,7 @@ defmodule Tokengate.ProvidersTest do
           provider_model: "member-b-model",
           priority: 1,
           enabled: true,
-          exclusive_to_team_member_id: member_b.id
+          exclusive_to_group_member_id: member_b.id
         })
 
       all = Providers.list_all_model_providers(model_.id)
@@ -565,7 +569,7 @@ defmodule Tokengate.ProvidersTest do
     @tag :hermes_verify
     test "duplicate in the same scope bucket is still rejected" do
       model_ = model_fixture(%{name: "verify-dup"})
-      team = team_fixture(%{name: "Team D"})
+      group = group_fixture(%{name: "Group D"})
       provider = provider_fixture()
       cred = credential_fixture(provider, %{status: "active"})
 
@@ -576,7 +580,7 @@ defmodule Tokengate.ProvidersTest do
           provider_model: "dup-1",
           priority: 1,
           enabled: true,
-          exclusive_to_team_id: team.id
+          exclusive_to_group_id: group.id
         })
 
       {:error, changeset} =
@@ -586,7 +590,7 @@ defmodule Tokengate.ProvidersTest do
           provider_model: "dup-2",
           priority: 1,
           enabled: true,
-          exclusive_to_team_id: team.id
+          exclusive_to_group_id: group.id
         })
 
       refute changeset.valid?
@@ -596,37 +600,37 @@ defmodule Tokengate.ProvidersTest do
     @tag :hermes_verify
     test "list_available_credentials_for_scope excludes same-scope duplicates" do
       model_ = model_fixture(%{name: "verify-reuse"})
-      team_a = team_fixture(%{name: "Team E"})
-      team_b = team_fixture(%{name: "Team F"})
+      group_a = group_fixture(%{name: "Group E"})
+      group_b = group_fixture(%{name: "Group F"})
       provider = provider_fixture()
       cred = credential_fixture(provider, %{status: "active"})
 
-      # Cred is already team-A exclusive for this model
+      # Cred is already group-A exclusive for this model
       {:ok, _} =
         Providers.create_model_provider(%{
           model_id: model_.id,
           credential_id: cred.id,
-          provider_model: "team-a-model",
+          provider_model: "group-a-model",
           priority: 1,
           enabled: true,
-          exclusive_to_team_id: team_a.id
+          exclusive_to_group_id: group_a.id
         })
 
-      # A DIFFERENT cred should be available for team-B exclusive assignment
+      # A DIFFERENT cred should be available for group-B exclusive assignment
       cred2 = credential_fixture(provider, %{status: "active"})
 
       {:ok, _} =
         Providers.create_model_provider(%{
           model_id: model_.id,
           credential_id: cred2.id,
-          provider_model: "team-b-model",
+          provider_model: "group-b-model",
           priority: 1,
           enabled: true,
-          exclusive_to_team_id: team_b.id
+          exclusive_to_group_id: group_b.id
         })
 
-      # The first cred is excluded from team-scope list (already team-exclusive)
-      available = Providers.list_available_credentials_for_scope(model_.id, "team")
+      # The first cred is excluded from group-scope list (already group-exclusive)
+      available = Providers.list_available_credentials_for_scope(model_.id, "group")
       available_ids = Enum.map(available, & &1.id)
 
       refute cred.id in available_ids
@@ -635,39 +639,39 @@ defmodule Tokengate.ProvidersTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Team Model Aliases
+  # Group Model Aliases
   # ---------------------------------------------------------------------------
 
-  describe "team_models" do
-    test "grant_model_to_team/2 creates a grant" do
-      team = team_fixture()
+  describe "group_models" do
+    test "grant_model_to_group/2 creates a grant" do
+      group = group_fixture()
       model_ = model_fixture()
 
-      assert {:ok, _} = Providers.grant_model_to_team(team.id, model_.id)
+      assert {:ok, _} = Providers.grant_model_to_group(group.id, model_.id)
     end
 
-    test "grant_model_to_team/2 is idempotent (unique constraint)" do
-      team = team_fixture()
+    test "grant_model_to_group/2 is idempotent (unique constraint)" do
+      group = group_fixture()
       model_ = model_fixture()
 
-      {:ok, _} = Providers.grant_model_to_team(team.id, model_.id)
-      {:error, changeset} = Providers.grant_model_to_team(team.id, model_.id)
-      assert "has already been taken" in errors_on(changeset).team_id
+      {:ok, _} = Providers.grant_model_to_group(group.id, model_.id)
+      {:error, changeset} = Providers.grant_model_to_group(group.id, model_.id)
+      assert "has already been taken" in errors_on(changeset).group_id
     end
 
-    test "revoke_model_from_team/2 removes grant" do
-      team = team_fixture()
+    test "revoke_model_from_group/2 removes grant" do
+      group = group_fixture()
       model_ = model_fixture()
 
-      {:ok, _} = Providers.grant_model_to_team(team.id, model_.id)
-      assert {:ok, _} = Providers.revoke_model_from_team(team.id, model_.id)
+      {:ok, _} = Providers.grant_model_to_group(group.id, model_.id)
+      assert {:ok, _} = Providers.revoke_model_from_group(group.id, model_.id)
     end
 
-    test "revoke_model_from_team/2 is idempotent (nil-safe)" do
-      team = team_fixture()
+    test "revoke_model_from_group/2 is idempotent (nil-safe)" do
+      group = group_fixture()
       model_ = model_fixture()
 
-      assert {:ok, nil} = Providers.revoke_model_from_team(team.id, model_.id)
+      assert {:ok, nil} = Providers.revoke_model_from_group(group.id, model_.id)
     end
   end
 
@@ -678,36 +682,36 @@ defmodule Tokengate.ProvidersTest do
   describe "cascade deletes" do
     alias Tokengate.Logs
     alias Tokengate.Logs.RequestLog
-    alias Tokengate.Providers.{TeamModel, TeamMemberExtraModel}
+    alias Tokengate.Providers.{GroupModel, GroupMemberExtraModel}
 
     @log_timestamp ~U[2026-07-26 12:00:00Z]
 
-    test "delete_model/1 cascades to team_models" do
-      team = team_fixture()
+    test "delete_model/1 cascades to group_models" do
+      group = group_fixture()
       model_ = model_fixture()
-      {:ok, _} = Providers.grant_model_to_team(team.id, model_.id)
+      {:ok, _} = Providers.grant_model_to_group(group.id, model_.id)
 
-      assert Repo.get_by(TeamModel, team_id: team.id, model_id: model_.id)
+      assert Repo.get_by(GroupModel, group_id: group.id, model_id: model_.id)
 
       {:ok, _} = Providers.delete_model(model_)
 
-      refute Repo.get_by(TeamModel, team_id: team.id, model_id: model_.id)
+      refute Repo.get_by(GroupModel, group_id: group.id, model_id: model_.id)
     end
 
-    test "delete_model/1 cascades to team_member_extra_models" do
-      member = team_member_fixture()
+    test "delete_model/1 cascades to group_member_extra_models" do
+      member = group_member_fixture()
       model_ = model_fixture()
       {:ok, _} = Providers.grant_extra_model(member.id, model_.id)
 
-      assert Repo.get_by(TeamMemberExtraModel,
-               team_member_id: member.id,
+      assert Repo.get_by(GroupMemberExtraModel,
+               group_member_id: member.id,
                model_id: model_.id
              )
 
       {:ok, _} = Providers.delete_model(model_)
 
-      refute Repo.get_by(TeamMemberExtraModel,
-               team_member_id: member.id,
+      refute Repo.get_by(GroupMemberExtraModel,
+               group_member_id: member.id,
                model_id: model_.id
              )
     end
@@ -716,12 +720,12 @@ defmodule Tokengate.ProvidersTest do
     # deletion O(all referenced log rows) and time out in production). The
     # ids are kept as historical data on the log rows.
     test "delete_provider/1 keeps request_logs.provider_id (no FK)" do
-      member = team_member_fixture()
+      member = group_member_fixture()
       provider = provider_fixture()
 
       {:ok, log} =
         Logs.log_request(%{
-          team_member_id: member.id,
+          group_member_id: member.id,
           provider_id: provider.id,
           model_requested: "gpt-4",
           inserted_at: @log_timestamp
@@ -735,12 +739,12 @@ defmodule Tokengate.ProvidersTest do
     end
 
     test "delete_model/1 keeps request_logs.model_id (no FK)" do
-      member = team_member_fixture()
+      member = group_member_fixture()
       model_ = model_fixture()
 
       {:ok, log} =
         Logs.log_request(%{
-          team_member_id: member.id,
+          group_member_id: member.id,
           model_id: model_.id,
           model_requested: "gpt-4",
           inserted_at: @log_timestamp

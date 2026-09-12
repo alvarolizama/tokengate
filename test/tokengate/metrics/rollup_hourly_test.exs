@@ -23,12 +23,12 @@ defmodule Tokengate.Metrics.RollupHourlyTest do
     streaming: false
   }
 
-  defp team_fixture(attrs \\ %{}) do
-    {:ok, team} =
-      Accounts.create_team(
+  defp group_fixture(attrs \\ %{}) do
+    {:ok, group} =
+      Accounts.create_group(
         Map.merge(
           %{
-            "name" => "Platform Team",
+            "name" => "Platform Group",
             "monthly_budget_per_user_usd" => "100.00",
             "default_concurrency_limit" => 10,
             "default_rpm_limit" => 120
@@ -37,7 +37,7 @@ defmodule Tokengate.Metrics.RollupHourlyTest do
         )
       )
 
-    team
+    group
   end
 
   defp user_fixture(attrs \\ %{}) do
@@ -56,24 +56,24 @@ defmodule Tokengate.Metrics.RollupHourlyTest do
     user
   end
 
-  defp team_member_fixture(_attrs \\ %{}) do
-    team = team_fixture()
+  defp group_member_fixture(_attrs \\ %{}) do
+    group = group_fixture()
     user = user_fixture()
 
-    {:ok, team_member} =
-      Accounts.create_team_member(%{
-        "team_id" => team.id,
+    {:ok, group_member} =
+      Accounts.create_group_member(%{
+        "group_id" => group.id,
         "user_id" => user.id,
-        "team_role" => "user"
+        "group_role" => "user"
       })
 
-    {team_member, team}
+    {group_member, group}
   end
 
-  defp log_request(team_member_id, inserted_at, overrides) do
+  defp log_request(group_member_id, inserted_at, overrides) do
     attrs =
       Map.merge(@base_attrs, Map.new(overrides))
-      |> Map.put(:team_member_id, team_member_id)
+      |> Map.put(:group_member_id, group_member_id)
       |> Map.put(:inserted_at, inserted_at)
 
     {:ok, _log} = Logs.log_request(attrs)
@@ -96,7 +96,7 @@ defmodule Tokengate.Metrics.RollupHourlyTest do
 
   describe "aggregate_hours/2 + summary parity" do
     test "summary_from_rollup matches Logs.cost_summary_for_members" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
         cost_usd: Decimal.new("1.500000")
@@ -135,7 +135,7 @@ defmodule Tokengate.Metrics.RollupHourlyTest do
 
   describe "aggregate_hours/2 + series parity" do
     test "hourly_series_for_members matches the request_logs fallback numbers" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       now = DateTime.utc_now()
 
@@ -186,7 +186,7 @@ defmodule Tokengate.Metrics.RollupHourlyTest do
     end
 
     test "hourly_series_for_members falls back to request_logs when rollup is empty" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
         cost_usd: Decimal.new("1.500000")
@@ -204,7 +204,7 @@ defmodule Tokengate.Metrics.RollupHourlyTest do
 
   describe "aggregate_hours/2 idempotency" do
     test "re-running the aggregation does not double-count" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
         cost_usd: Decimal.new("1.000000")

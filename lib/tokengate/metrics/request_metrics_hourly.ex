@@ -1,7 +1,7 @@
 defmodule Tokengate.Metrics.RequestMetricsHourly do
   @moduledoc """
   Hourly rollup of `request_logs` — one row per (day, hour_utc,
-  team_member_id, model_id, provider_id) dimension bucket.
+  group_member_id, model_id, provider_id) dimension bucket.
 
   Fully derived and rebuildable; `request_logs` remains the source of
   truth. Written by `Tokengate.Metrics.Rollup.aggregate_hours/2` via
@@ -20,7 +20,7 @@ defmodule Tokengate.Metrics.RequestMetricsHourly do
     field :day, :date
 
     field :hour_utc, :utc_datetime
-    field :team_member_id, :binary_id
+    field :group_member_id, :binary_id
     field :model_id, :binary_id
     field :provider_id, :binary_id
 
@@ -38,7 +38,7 @@ defmodule Tokengate.Metrics.RequestMetricsHourly do
     field :updated_at, :utc_datetime
   end
 
-  @fields ~w(day hour_utc team_member_id model_id provider_id request_count error_count
+  @fields ~w(day hour_utc group_member_id model_id provider_id request_count error_count
     prompt_tokens completion_tokens cache_read_tokens cache_creation_tokens cost_micro
     total_latency_ms latency_count)a
 

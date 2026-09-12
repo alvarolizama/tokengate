@@ -5,7 +5,7 @@ defmodule Tokengate.Budgets.ManagerTest do
 
   `async: false` because the ETS table `:tokengate_budgets` is a named
   (singleton) table; concurrent tests would clobber each other's counters.
-  Each test uses a unique team member (via real Accounts fixtures) so
+  Each test uses a unique group member (via real Accounts fixtures) so
   inter-test contamination is avoided even within the serial run.
   """
 
@@ -22,12 +22,12 @@ defmodule Tokengate.Budgets.ManagerTest do
   # Fixtures — create FK parents via the REAL Accounts context.
   # ---------------------------------------------------------------------------
 
-  defp team_fixture(attrs \\ %{}) do
-    {:ok, team} =
-      Accounts.create_team(
+  defp group_fixture(attrs \\ %{}) do
+    {:ok, group} =
+      Accounts.create_group(
         Map.merge(
           %{
-            "name" => "Platform Team",
+            "name" => "Platform Group",
             "monthly_budget_per_user_usd" => "100.00",
             "default_concurrency_limit" => 10,
             "default_rpm_limit" => 120
@@ -36,7 +36,7 @@ defmodule Tokengate.Budgets.ManagerTest do
         )
       )
 
-    team
+    group
   end
 
   defp user_fixture(attrs \\ %{}) do
@@ -55,31 +55,31 @@ defmodule Tokengate.Budgets.ManagerTest do
     user
   end
 
-  defp team_member_fixture(attrs \\ %{}) do
-    team = team_fixture()
+  defp group_member_fixture(attrs \\ %{}) do
+    group = group_fixture()
     user = user_fixture()
 
-    {:ok, team_member} =
-      Accounts.create_team_member(
+    {:ok, group_member} =
+      Accounts.create_group_member(
         Map.merge(
           %{
             "user_id" => user.id,
-            "team_id" => team.id
+            "group_id" => group.id
           },
           attrs
         )
       )
 
-    {team_member, team}
+    {group_member, group}
   end
 
-  defp log_spend(team_member_id, cost_usd, opts \\ []) do
+  defp log_spend(group_member_id, cost_usd, opts \\ []) do
     provider_cost_usd = Keyword.get(opts, :provider_cost_usd, cost_usd)
     inserted_at = Keyword.get(opts, :inserted_at, DateTime.utc_now())
 
     {:ok, _} =
       Logs.log_request(%{
-        team_member_id: team_member_id,
+        group_member_id: group_member_id,
         model_requested: "gpt-4",
         provider_cost_usd: Decimal.new(to_string(provider_cost_usd)),
         credential_id: Keyword.get(opts, :credential_id),
@@ -103,7 +103,7 @@ defmodule Tokengate.Budgets.ManagerTest do
 
   describe "check_ladder/3 — budget pre-flight" do
     test "under cap returns :ok" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       assert :ok = Manager.record_spend(tm.id, Decimal.new("10.00"))
 
@@ -116,7 +116,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "over cap returns error" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       assert :ok = Manager.record_spend(tm.id, Decimal.new("90.00"))
 
@@ -132,7 +132,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "nil budget is unlimited" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       assert :ok = Manager.record_spend(tm.id, Decimal.new("500.00"))
 
@@ -145,7 +145,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "nil estimated cost treated as 0" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       assert :ok = Manager.record_spend(tm.id, Decimal.new("50.00"))
 
@@ -158,7 +158,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "exactly at limit with zero estimated is ok" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       assert :ok = Manager.record_spend(tm.id, Decimal.new("100.00"))
 
@@ -177,7 +177,7 @@ defmodule Tokengate.Budgets.ManagerTest do
 
   describe "record_spend/2 and spend/1" do
     test "record_spend accumulates in both daily and monthly" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       assert :ok = Manager.record_spend(tm.id, Decimal.new("10.00"))
       assert :ok = Manager.record_spend(tm.id, Decimal.new("20.50"))
@@ -188,7 +188,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "spend/1 returns Decimals" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       assert :ok = Manager.record_spend(tm.id, Decimal.new("5.25"))
 
@@ -198,7 +198,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "spend/1 on untouched member returns zeros" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       spend = Manager.spend(tm.id)
       assert Decimal.equal?(spend.monthly_usd, Decimal.new("0"))
@@ -206,7 +206,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "record_spend enqueues SyncWorker via Oban" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       assert :ok = Manager.record_spend(tm.id, Decimal.new("1.00"))
 
@@ -217,7 +217,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "nil cost is treated as 0" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       assert :ok = Manager.record_spend(tm.id, nil)
 
@@ -232,7 +232,7 @@ defmodule Tokengate.Budgets.ManagerTest do
 
   describe "record_spend/3 and per-model daily caps" do
     test "record_spend/3 accumulates per-user and total model spend" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
       model_id = Ecto.UUID.generate()
 
       assert :ok = Manager.record_spend(tm.id, model_id, Decimal.new("10.00"))
@@ -244,7 +244,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "per-user cap is not reached while under the limit" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
       model_id = Ecto.UUID.generate()
 
       Manager.record_spend(tm.id, model_id, Decimal.new("3.00"))
@@ -253,7 +253,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "per-user cap trips once total spend reaches the limit" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
       model_id = Ecto.UUID.generate()
 
       Manager.record_spend(tm.id, model_id, Decimal.new("10.00"))
@@ -262,7 +262,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "nil and zero caps are treated as unlimited" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
       model_id = Ecto.UUID.generate()
 
       Manager.record_spend(tm.id, model_id, Decimal.new("999.00"))
@@ -273,7 +273,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "record_spend/2 does not touch per-model counters" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
       model_id = Ecto.UUID.generate()
 
       assert :ok = Manager.record_spend(tm.id, Decimal.new("5.00"))
@@ -288,7 +288,7 @@ defmodule Tokengate.Budgets.ManagerTest do
 
   describe "lazy load from DB" do
     test "spend/1 reflects DB provider_cost_usd totals for untouched member" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       # Insert request_logs rows where the real paid cost is lower than the
       # credential price. The budget counters must use provider_cost_usd.
@@ -305,7 +305,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "check_ladder lazy-loads before comparing" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       # Insert $90 of real paid spend into request_logs.
       log_spend(tm.id, "90.00")
@@ -324,7 +324,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "record_spend on top of lazy-loaded DB total accumulates correctly" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       # Seed DB with $30 real paid.
       log_spend(tm.id, "30.00")
@@ -343,7 +343,7 @@ defmodule Tokengate.Budgets.ManagerTest do
 
   describe "day rollover" do
     test "stale daily entry (yesterday) resets to fresh on next access" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       # Seed an entry with today's date and a spend.
       assert :ok = Manager.record_spend(tm.id, Decimal.new("50.00"))
@@ -365,7 +365,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "stale monthly entry (last month) resets to fresh" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       assert :ok = Manager.record_spend(tm.id, Decimal.new("50.00"))
 
@@ -388,7 +388,7 @@ defmodule Tokengate.Budgets.ManagerTest do
 
   describe "SyncWorker drift correction" do
     test "perform_job resets ETS counters to DB truth" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       # Insert DB truth: $25.
       log_spend(tm.id, "25.00")
@@ -415,7 +415,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "perform_job with no DB rows resets to 0" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       # Drift to $50.
       :ets.insert(@table, {{tm.id, :daily}, 50_000_000, true, Date.utc_today()})
@@ -433,7 +433,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "worker can be enqueued and performed via Oban.Testing" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       log_spend(tm.id, "10.00")
 
@@ -457,7 +457,7 @@ defmodule Tokengate.Budgets.ManagerTest do
 
   describe "micro-USD precision" do
     test "0.012500 USD spends accumulate exactly over 10k records" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       cost = Decimal.new("0.012500")
 
@@ -478,7 +478,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "sub-cent precision is preserved (0.000001 USD)" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       # 0.000001 USD = 1 micro-USD. record_spend 3 times = 3 micro.
       assert :ok = Manager.record_spend(tm.id, Decimal.new("0.000001"))
@@ -490,7 +490,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "rounding uses half_up for .5 micro boundary" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       # 0.0000005 USD * 1_000_000 = 0.5 micro → rounds to 1 (half_up).
       assert :ok = Manager.record_spend(tm.id, Decimal.new("0.0000005"))
@@ -506,7 +506,7 @@ defmodule Tokengate.Budgets.ManagerTest do
 
   describe "set_from_db/3" do
     test "resets both daily and monthly counters" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       # Seed some spend first.
       assert :ok = Manager.record_spend(tm.id, Decimal.new("50.00"))
@@ -520,7 +520,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "marks entries as loaded_from_db" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       assert :ok = Manager.set_from_db(tm.id, 1000, 2000)
 
@@ -537,7 +537,7 @@ defmodule Tokengate.Budgets.ManagerTest do
 
   describe "load_from_db/2" do
     test "returns micro-USD sum from request_logs" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       log_spend(tm.id, "10.00")
       log_spend(tm.id, "20.00")
@@ -550,7 +550,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "returns 0 when no logs match" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       from = DateTime.new!(Date.utc_today(), ~T[00:00:00], "Etc/UTC")
       micro = Manager.load_from_db(tm.id, from)
@@ -565,8 +565,8 @@ defmodule Tokengate.Budgets.ManagerTest do
 
   describe "reset_monthly_counters/0" do
     test "deletes all monthly ETS entries" do
-      {tm1, _} = team_member_fixture()
-      {tm2, _} = team_member_fixture()
+      {tm1, _} = group_member_fixture()
+      {tm2, _} = group_member_fixture()
 
       assert :ok = Manager.record_spend(tm1.id, Decimal.new("10.00"))
       assert :ok = Manager.record_spend(tm2.id, Decimal.new("20.00"))
@@ -586,7 +586,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "daily counters are unaffected" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       assert :ok = Manager.record_spend(tm.id, Decimal.new("15.00"))
 
@@ -597,7 +597,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "reset then record_spend accumulates from 0" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       # Log en el mes pasado para que el reset mensual lo ignore.
       last_month = Date.add(Date.utc_today(), -31)
@@ -628,8 +628,8 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "record_spend accumulates global daily spend" do
-      {tm1, _} = team_member_fixture()
-      {tm2, _} = team_member_fixture()
+      {tm1, _} = group_member_fixture()
+      {tm2, _} = group_member_fixture()
 
       assert :ok = Manager.record_spend(tm1.id, Decimal.new("10.00"))
       assert :ok = Manager.record_spend(tm2.id, Decimal.new("20.00"))
@@ -638,7 +638,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "record_spend also accumulates global daily spend" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       assert :ok = Manager.record_spend(tm.id, Decimal.new("5.00"))
 
@@ -646,14 +646,14 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "global_exhausted? with nil cap is always false" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
       assert :ok = Manager.record_spend(tm.id, Decimal.new("999.00"))
 
       refute Manager.global_exhausted?(nil)
     end
 
     test "global_exhausted? flips when spend reaches the cap" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
       cap = Decimal.new("10.00")
 
       refute Manager.global_exhausted?(cap)
@@ -666,7 +666,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "lazy-loads today's total spend from request_logs on first touch" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       log_spend(tm.id, "4.00")
       log_spend(tm.id, "6.00")
@@ -678,7 +678,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "yesterday's logs don't count (UTC day rollover)" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       yesterday = Date.add(Date.utc_today(), -1)
       log_spend(tm.id, "8.00", inserted_at: DateTime.new!(yesterday, ~T[23:59:59], "Etc/UTC"))
@@ -690,7 +690,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "set_global_from_db resets the counter" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       assert :ok = Manager.record_spend(tm.id, Decimal.new("5.00"))
       assert :ok = Manager.set_global_from_db(2_000_000)
@@ -699,7 +699,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "record_spend/4 skips the global counter for global_daily-exempt subjects" do
-      {tm, team} = team_member_fixture()
+      {tm, group} = group_member_fixture()
 
       {:ok, _} =
         Exemptions.add(%{
@@ -708,7 +708,11 @@ defmodule Tokengate.Budgets.ManagerTest do
           "user_id" => tm.user_id
         })
 
-      subjects = %{subject: %{type: "user", id: tm.user_id}, team: %{type: "team", id: team.id}}
+      subjects = %{
+        subject: %{type: "user", id: tm.user_id},
+        group: %{type: "group", id: group.id}
+      }
+
       :ok = Manager.record_spend(tm.id, nil, Decimal.new("5.00"), subjects)
 
       # Own counters still bump; the global counter does not.
@@ -717,16 +721,20 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "record_spend/4 still bumps the global counter for non-exempt subjects" do
-      {tm, team} = team_member_fixture()
+      {tm, group} = group_member_fixture()
 
-      subjects = %{subject: %{type: "user", id: tm.user_id}, team: %{type: "team", id: team.id}}
+      subjects = %{
+        subject: %{type: "user", id: tm.user_id},
+        group: %{type: "group", id: group.id}
+      }
+
       :ok = Manager.record_spend(tm.id, nil, Decimal.new("5.00"), subjects)
 
       assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("5.00"))
     end
 
     test "user_daily_exhausted? gates on the member's own daily counter" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
       cap = Decimal.new("4.00")
 
       refute Manager.user_daily_exhausted?(tm.id, cap)
@@ -742,7 +750,7 @@ defmodule Tokengate.Budgets.ManagerTest do
     end
 
     test "user_daily_exhausted? treats a 0 cap as unlimited" do
-      {tm, _} = team_member_fixture()
+      {tm, _} = group_member_fixture()
 
       assert :ok = Manager.record_spend(tm.id, Decimal.new("1.00"))
 

@@ -1,25 +1,25 @@
-defmodule TokengateWeb.TeamsLive do
+defmodule TokengateWeb.GroupsLive do
   @moduledoc """
-  Admin-only CRUD for teams + per-team model model grants + observability webhooks.
+  Admin-only CRUD for groups + per-group model model grants + observability webhooks.
 
   Only admins (global_role == "admin") can access this page. Non-admins
   are redirected to /dashboard with an error flash.
 
-  Teams carry default budgets and limits applied to all members. Model
-  models can be granted per-team via the team_models join table.
-  Observability destinations (webhooks) are managed per-team.
+  Groups carry default budgets and limits applied to all members. Model
+  models can be granted per-group via the group_models join table.
+  Observability destinations (webhooks) are managed per-group.
   """
 
   use TokengateWeb, :live_view
 
   import Ecto.Query, only: [from: 2]
   alias Tokengate.Accounts
-  alias Tokengate.Accounts.Team
+  alias Tokengate.Accounts.Group
   alias Tokengate.Budgets
   alias Tokengate.Observability
   alias Tokengate.Observability.Destination
   alias Tokengate.Providers
-  alias Tokengate.Providers.{Model, TeamModel}
+  alias Tokengate.Providers.{Model, GroupModel}
   alias Tokengate.Repo
 
   @impl true
@@ -34,17 +34,17 @@ defmodule TokengateWeb.TeamsLive do
     else
       socket =
         socket
-        |> assign(:page_title, "Equipos · Tokengate")
+        |> assign(:page_title, "Grupos · Tokengate")
         |> assign(:is_admin, true)
         |> require_admin_hook()
         |> assign(:form, nil)
-        |> assign(:editing_team_id, nil)
+        |> assign(:editing_group_id, nil)
         |> assign(:webhook_form, nil)
-        |> assign(:editing_webhook_team_id, nil)
+        |> assign(:editing_webhook_group_id, nil)
         |> assign(:editing_webhook_id, nil)
-        |> assign(:editing_models_team_id, nil)
-        |> assign(:team_search, "")
-        |> load_teams()
+        |> assign(:editing_models_group_id, nil)
+        |> assign(:group_search, "")
+        |> load_groups()
 
       {:ok, socket}
     end
@@ -66,39 +66,39 @@ defmodule TokengateWeb.TeamsLive do
   ## Data loading ---------------------------------------------------------
 
   # Loads the full dataset ONCE per mount (and after data mutations that
-  # change teams themselves). Search and modal toggles must NOT come through
+  # change groups themselves). Search and modal toggles must NOT come through
   # here — they filter in-memory / touch no data (see the assign-only handlers).
-  defp load_teams(socket) do
-    teams =
-      from(t in Team,
-        preload: [:team_members],
+  defp load_groups(socket) do
+    groups =
+      from(t in Group,
+        preload: [:group_members],
         order_by: [asc: t.name]
       )
       |> Repo.all()
 
     granted_models =
-      from(tma in TeamModel, select: {tma.team_id, tma.model_id})
+      from(tma in GroupModel, select: {tma.group_id, tma.model_id})
       |> Repo.all()
-      |> Enum.group_by(fn {team_id, _} -> team_id end, fn {_, model_id} -> model_id end)
+      |> Enum.group_by(fn {group_id, _} -> group_id end, fn {_, model_id} -> model_id end)
 
     models_by_org =
       from(ma in Model, order_by: [asc: ma.name])
       |> Repo.all()
       |> Enum.group_by(fn _ma -> "all" end)
 
-    # Single query for all teams' destinations (avoids one query per team)
-    destinations_by_team =
-      Observability.list_destinations_for_teams(Enum.map(teams, & &1.id))
+    # Single query for all groups' destinations (avoids one query per group)
+    destinations_by_group =
+      Observability.list_destinations_for_groups(Enum.map(groups, & &1.id))
 
-    # Budget + spend rollup per team and per member
+    # Budget + spend rollup per group and per member
     timezone = socket.assigns[:timezone] || "Etc/UTC"
     member_budgets = Budgets.list_member_budgets(timezone)
 
-    team_budgets =
+    group_budgets =
       member_budgets
-      |> Enum.group_by(fn mb -> mb.member.team_id end)
-      |> Map.new(fn {team_id, budgets} ->
-        team = Enum.find(teams, &(&1.id == team_id))
+      |> Enum.group_by(fn mb -> mb.member.group_id end)
+      |> Map.new(fn {group_id, budgets} ->
+        group = Enum.find(groups, &(&1.id == group_id))
 
         monthly_limit_usd =
           budgets
@@ -110,8 +110,8 @@ defmodule TokengateWeb.TeamsLive do
           Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.monthly_spend_usd, &2))
 
         estimated_monthly_usd =
-          if team && team.monthly_budget_per_user_usd do
-            team.monthly_budget_per_user_usd
+          if group && group.monthly_budget_per_user_usd do
+            group.monthly_budget_per_user_usd
             |> Decimal.mult(Decimal.new(length(budgets)))
           else
             nil
@@ -124,7 +124,7 @@ defmodule TokengateWeb.TeamsLive do
               else: acc
           end)
 
-        {team_id,
+        {group_id,
          %{
            monthly_limit_usd: monthly_limit_usd,
            monthly_spend_usd: monthly_spend_usd,
@@ -136,85 +136,85 @@ defmodule TokengateWeb.TeamsLive do
       end)
 
     socket
-    |> assign(:all_teams, teams)
-    |> stream_teams()
-    |> assign(:teams_empty?, teams == [])
+    |> assign(:all_groups, groups)
+    |> stream_groups()
+    |> assign(:groups_empty?, groups == [])
     |> assign(:granted_models, granted_models)
     |> assign(:models_by_org, models_by_org)
-    |> assign(:destinations_by_team, destinations_by_team)
-    |> assign(:team_budgets, team_budgets)
+    |> assign(:destinations_by_group, destinations_by_group)
+    |> assign(:group_budgets, group_budgets)
   end
 
-  # Re-streams the (already loaded) teams filtered by the current search.
+  # Re-streams the (already loaded) groups filtered by the current search.
   # Pure assign work: zero queries.
-  defp stream_teams(socket) do
-    search = socket.assigns[:team_search] || ""
+  defp stream_groups(socket) do
+    search = socket.assigns[:group_search] || ""
     search_down = String.downcase(search)
 
     filtered =
-      Enum.filter(socket.assigns.all_teams, fn t ->
+      Enum.filter(socket.assigns.all_groups, fn t ->
         search == "" or String.contains?(String.downcase(t.name), search_down)
       end)
 
-    stream(socket, :teams, filtered, reset: true)
+    stream(socket, :groups, filtered, reset: true)
   end
 
-  ## Events — team CRUD ---------------------------------------------------
+  ## Events — group CRUD ---------------------------------------------------
 
   @impl true
-  def handle_event("search_teams", %{"team_search" => search}, socket) do
-    # Teams are already in memory — filter + re-stream, no queries.
-    {:noreply, socket |> assign(:team_search, search) |> stream_teams()}
+  def handle_event("search_groups", %{"group_search" => search}, socket) do
+    # Groups are already in memory — filter + re-stream, no queries.
+    {:noreply, socket |> assign(:group_search, search) |> stream_groups()}
   end
 
   @impl true
-  def handle_event("new_team", _params, socket) do
-    changeset = Accounts.change_team(%Team{})
+  def handle_event("new_group", _params, socket) do
+    changeset = Accounts.change_group(%Group{})
 
     {:noreply,
      socket
-     |> assign(:form, to_form(changeset, as: :team))
-     |> assign(:editing_team_id, :new)}
+     |> assign(:form, to_form(changeset, as: :group))
+     |> assign(:editing_group_id, :new)}
   end
 
   def handle_event("cancel_form", _params, socket) do
     {:noreply,
      socket
      |> assign(:form, nil)
-     |> assign(:editing_team_id, nil)}
+     |> assign(:editing_group_id, nil)}
   end
 
-  def handle_event("edit_models", %{"id" => team_id}, socket) do
-    {:noreply, assign(socket, :editing_models_team_id, team_id)}
+  def handle_event("edit_models", %{"id" => group_id}, socket) do
+    {:noreply, assign(socket, :editing_models_group_id, group_id)}
   end
 
   def handle_event("close_models", _params, socket) do
-    {:noreply, assign(socket, :editing_models_team_id, nil)}
+    {:noreply, assign(socket, :editing_models_group_id, nil)}
   end
 
-  def handle_event("edit_team", %{"id" => team_id}, socket) do
-    team = Accounts.get_team!(team_id)
-    changeset = Accounts.change_team(team)
+  def handle_event("edit_group", %{"id" => group_id}, socket) do
+    group = Accounts.get_group!(group_id)
+    changeset = Accounts.change_group(group)
 
     {:noreply,
      socket
-     |> assign(:form, to_form(changeset, as: :team))
-     |> assign(:editing_team_id, team.id)}
+     |> assign(:form, to_form(changeset, as: :group))
+     |> assign(:editing_group_id, group.id)}
   end
 
-  def handle_event("save_team", %{"team" => team_params}, socket) do
-    save_team(socket, socket.assigns.editing_team_id, team_params)
+  def handle_event("save_group", %{"group" => group_params}, socket) do
+    save_group(socket, socket.assigns.editing_group_id, group_params)
   end
 
-  def handle_event("delete_team", %{"id" => team_id}, socket) do
-    team = Accounts.get_team!(team_id)
+  def handle_event("delete_group", %{"id" => group_id}, socket) do
+    group = Accounts.get_group!(group_id)
 
-    case Accounts.delete_team(team) do
+    case Accounts.delete_group(group) do
       {:ok, _} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Equipo eliminado.")
-         |> load_teams()}
+         |> put_flash(:info, "Grupo eliminado.")
+         |> load_groups()}
 
       {:error, %Ecto.Changeset{} = changeset} ->
         msg =
@@ -225,20 +225,20 @@ defmodule TokengateWeb.TeamsLive do
         {:noreply, put_flash(socket, :error, "No se pudo eliminar: #{msg}")}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo eliminar el equipo.")}
+        {:noreply, put_flash(socket, :error, "No se pudo eliminar el grupo.")}
     end
   end
 
   ## Events — model grants ------------------------------------------------
 
-  def handle_event("toggle_model", %{"team-id" => team_id, "model-id" => model_id}, socket) do
-    team_alias_ids = Map.get(socket.assigns.granted_models, team_id, [])
+  def handle_event("toggle_model", %{"group-id" => group_id, "model-id" => model_id}, socket) do
+    group_alias_ids = Map.get(socket.assigns.granted_models, group_id, [])
 
     result =
-      if model_id in team_alias_ids do
-        Providers.revoke_model_from_team(team_id, model_id)
+      if model_id in group_alias_ids do
+        Providers.revoke_model_from_group(group_id, model_id)
       else
-        Providers.grant_model_to_team(team_id, model_id)
+        Providers.grant_model_to_group(group_id, model_id)
       end
 
     case result do
@@ -256,19 +256,19 @@ defmodule TokengateWeb.TeamsLive do
   ## Events — webhook CRUD -----------------------------------------------
 
   def handle_event("new_webhook", params, socket) do
-    team_id = params["team-id"] || params["team_id"]
+    group_id = params["group-id"] || params["group_id"]
     changeset = Observability.change_destination(%Destination{})
 
     # Modal-only change: no data touched, skip the full reload.
     {:noreply,
      socket
      |> assign(:webhook_form, to_form(changeset, as: :destination))
-     |> assign(:editing_webhook_team_id, team_id)
+     |> assign(:editing_webhook_group_id, group_id)
      |> assign(:editing_webhook_id, :new)}
   end
 
   def handle_event("edit_webhook", params, socket) do
-    team_id = params["team-id"] || params["team_id"]
+    group_id = params["group-id"] || params["group_id"]
     webhook_id = params["webhook-id"] || params["webhook_id"]
     destination = Observability.get_destination!(webhook_id)
     changeset = Observability.change_destination(destination)
@@ -276,7 +276,7 @@ defmodule TokengateWeb.TeamsLive do
     {:noreply,
      socket
      |> assign(:webhook_form, to_form(changeset, as: :destination))
-     |> assign(:editing_webhook_team_id, team_id)
+     |> assign(:editing_webhook_group_id, group_id)
      |> assign(:editing_webhook_id, webhook_id)}
   end
 
@@ -285,12 +285,12 @@ defmodule TokengateWeb.TeamsLive do
     {:noreply,
      socket
      |> assign(:webhook_form, nil)
-     |> assign(:editing_webhook_team_id, nil)
+     |> assign(:editing_webhook_group_id, nil)
      |> assign(:editing_webhook_id, nil)}
   end
 
   def handle_event("save_webhook", %{"destination" => destination_params}, socket) do
-    team_id = socket.assigns.editing_webhook_team_id
+    group_id = socket.assigns.editing_webhook_group_id
     editing_id = socket.assigns.editing_webhook_id
 
     # Parse headers from JSON string if present
@@ -309,7 +309,7 @@ defmodule TokengateWeb.TeamsLive do
           %{}
       end)
 
-    destination_params = Map.put(destination_params, "team_id", team_id)
+    destination_params = Map.put(destination_params, "group_id", group_id)
 
     result =
       if editing_id == :new do
@@ -325,7 +325,7 @@ defmodule TokengateWeb.TeamsLive do
          socket
          |> put_flash(:info, "Webhook guardado.")
          |> assign(:webhook_form, nil)
-         |> assign(:editing_webhook_team_id, nil)
+         |> assign(:editing_webhook_group_id, nil)
          |> assign(:editing_webhook_id, nil)
          |> refresh_destinations()}
 
@@ -351,53 +351,53 @@ defmodule TokengateWeb.TeamsLive do
   end
 
   # Surgical refresh: only the table that actually changed, instead of the
-  # full load_teams() (teams + members + models + destinations + 2 spend
+  # full load_groups() (groups + members + models + destinations + 2 spend
   # aggregates).
   defp refresh_granted_models(socket) do
     granted_models =
-      from(tma in TeamModel, select: {tma.team_id, tma.model_id})
+      from(tma in GroupModel, select: {tma.group_id, tma.model_id})
       |> Repo.all()
-      |> Enum.group_by(fn {team_id, _} -> team_id end, fn {_, model_id} -> model_id end)
+      |> Enum.group_by(fn {group_id, _} -> group_id end, fn {_, model_id} -> model_id end)
 
     assign(socket, :granted_models, granted_models)
   end
 
   defp refresh_destinations(socket) do
-    team_ids = Enum.map(socket.assigns.all_teams, & &1.id)
-    assign(socket, :destinations_by_team, Observability.list_destinations_for_teams(team_ids))
+    group_ids = Enum.map(socket.assigns.all_groups, & &1.id)
+    assign(socket, :destinations_by_group, Observability.list_destinations_for_groups(group_ids))
   end
 
   ## Private helpers — save ----------------------------------------------
 
-  defp save_team(socket, :new, team_params) do
-    case Accounts.create_team(team_params) do
-      {:ok, _team} ->
+  defp save_group(socket, :new, group_params) do
+    case Accounts.create_group(group_params) do
+      {:ok, _group} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Equipo creado.")
+         |> put_flash(:info, "Grupo creado.")
          |> assign(:form, nil)
-         |> assign(:editing_team_id, nil)
-         |> load_teams()}
+         |> assign(:editing_group_id, nil)
+         |> load_groups()}
 
       {:error, changeset} ->
-        {:noreply, assign(socket, :form, to_form(changeset, as: :team))}
+        {:noreply, assign(socket, :form, to_form(changeset, as: :group))}
     end
   end
 
-  defp save_team(socket, team_id, team_params) when is_binary(team_id) do
-    team = Accounts.get_team!(team_id)
+  defp save_group(socket, group_id, group_params) when is_binary(group_id) do
+    group = Accounts.get_group!(group_id)
 
-    case Accounts.update_team(team, team_params) do
-      {:ok, _team} ->
+    case Accounts.update_group(group, group_params) do
+      {:ok, _group} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Equipo actualizado.")
+         |> put_flash(:info, "Grupo actualizado.")
          |> assign(:form, nil)
-         |> assign(:editing_team_id, nil)
-         |> load_teams()}
+         |> assign(:editing_group_id, nil)
+         |> load_groups()}
 
       {:error, changeset} ->
-        {:noreply, assign(socket, :form, to_form(changeset, as: :team))}
+        {:noreply, assign(socket, :form, to_form(changeset, as: :group))}
     end
   end
 
@@ -430,40 +430,40 @@ defmodule TokengateWeb.TeamsLive do
     <Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
       <div class="space-y-6">
         <.header>
-          Equipos
-          <:subtitle>Gestiona equipos, presupuestos, models de models y webhooks</:subtitle>
+          Grupos
+          <:subtitle>Gestiona grupos, presupuestos, models de models y webhooks</:subtitle>
           <:actions>
             <div class="flex items-center gap-2">
               <input
                 type="text"
-                name="team_search"
-                value={@team_search}
-                placeholder="Buscar equipo…"
-                phx-change="search_teams"
+                name="group_search"
+                value={@group_search}
+                placeholder="Buscar grupo…"
+                phx-change="search_groups"
                 phx-debounce="200"
                 class="input input-sm w-48"
               />
-              <.button phx-click="new_team" id="new-team-btn">
-                <.icon name="hero-plus" class="w-4 h-4" /> Nuevo equipo
+              <.button phx-click="new_group" id="new-group-btn">
+                <.icon name="hero-plus" class="w-4 h-4" /> Nuevo grupo
               </.button>
             </div>
           </:actions>
         </.header>
 
-        <%!-- Team form (create / edit) — modal --%>
+        <%!-- Group form (create / edit) — modal --%>
         <div :if={@form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div class="absolute inset-0 bg-black/50" phx-click="cancel_form" />
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
             <div class="card-body p-6">
               <h2 class="text-lg font-semibold mb-4">
-                {if @editing_team_id == :new, do: "Nuevo equipo", else: "Editar equipo"}
+                {if @editing_group_id == :new, do: "Nuevo grupo", else: "Editar grupo"}
               </h2>
-              <.form for={@form} id="team-form" phx-submit="save_team">
+              <.form for={@form} id="group-form" phx-submit="save_group">
                 <.input
                   field={@form[:name]}
                   type="text"
                   label="Nombre"
-                  hint="Nombre identificativo del equipo."
+                  hint="Nombre identificativo del grupo."
                 />
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <.input
@@ -490,42 +490,42 @@ defmodule TokengateWeb.TeamsLive do
                   <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
                     Cancelar
                   </button>
-                  <button type="submit" class="btn btn-primary btn-sm" id="save-team-btn">Guardar</button>
+                  <button type="submit" class="btn btn-primary btn-sm" id="save-group-btn">Guardar</button>
                 </div>
               </.form>
             </div>
           </div>
         </div>
 
-        <%!-- Aliases modal — manage model grants per team per team --%>
+        <%!-- Aliases modal — manage model grants per group per group --%>
         <div
-          :if={@editing_models_team_id}
+          :if={@editing_models_group_id}
           class="fixed inset-0 z-50 flex items-center justify-center p-4"
-          id={"models-modal-#{@editing_models_team_id}"}
+          id={"models-modal-#{@editing_models_group_id}"}
         >
           <div class="absolute inset-0 bg-black/50" phx-click="close_models" />
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
             <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">Modelos del equipo</h2>
+              <h2 class="text-lg font-semibold mb-4">Modelos del grupo</h2>
               <p class="text-sm text-base-content/60 -mt-2 mb-4">
-                Toca un modelo para otorgarlo o revocarlo al equipo.
+                Toca un modelo para otorgarlo o revocarlo al grupo.
               </p>
-              <div class="flex flex-wrap gap-2" id={"model-picker-#{@editing_models_team_id}"}>
+              <div class="flex flex-wrap gap-2" id={"model-picker-#{@editing_models_group_id}"}>
                 <button
                   :for={model <- Map.get(@models_by_org, "all", [])}
                   type="button"
                   phx-click="toggle_model"
-                  phx-value-team-id={@editing_models_team_id}
+                  phx-value-group-id={@editing_models_group_id}
                   phx-value-model-id={model.id}
                   class={[
                     "badge badge-sm cursor-pointer transition-all",
                     if(
-                      model.id in Map.get(@granted_models, @editing_models_team_id, []),
+                      model.id in Map.get(@granted_models, @editing_models_group_id, []),
                       do: "badge-primary",
                       else: "badge-outline"
                     )
                   ]}
-                  id={"model-#{@editing_models_team_id}-#{model.id}"}
+                  id={"model-#{@editing_models_group_id}-#{model.id}"}
                 >
                   {model.name}
                 </button>
@@ -554,7 +554,7 @@ defmodule TokengateWeb.TeamsLive do
         <div
           :if={@webhook_form}
           class="fixed inset-0 z-50 flex items-center justify-center p-4"
-          id={"webhook-form-#{@editing_webhook_team_id}"}
+          id={"webhook-form-#{@editing_webhook_group_id}"}
         >
           <div class="absolute inset-0 bg-black/50" phx-click="cancel_webhook" />
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
@@ -564,7 +564,7 @@ defmodule TokengateWeb.TeamsLive do
               </h2>
               <.form
                 for={@webhook_form}
-                id={"destination-form-#{@editing_webhook_team_id}"}
+                id={"destination-form-#{@editing_webhook_group_id}"}
                 phx-submit="save_webhook"
               >
                 <.input
@@ -592,14 +592,14 @@ defmodule TokengateWeb.TeamsLive do
                     type="button"
                     phx-click="cancel_webhook"
                     class="btn btn-ghost btn-sm"
-                    id={"cancel-webhook-#{@editing_webhook_team_id}"}
+                    id={"cancel-webhook-#{@editing_webhook_group_id}"}
                   >
                     Cancelar
                   </button>
                   <button
                     type="submit"
                     class="btn btn-primary btn-sm"
-                    id={"save-webhook-#{@editing_webhook_team_id}"}
+                    id={"save-webhook-#{@editing_webhook_group_id}"}
                   >
                     Guardar
                   </button>
@@ -609,64 +609,64 @@ defmodule TokengateWeb.TeamsLive do
           </div>
         </div>
 
-        <div id="teams" phx-update="stream">
-          <div :if={@teams_empty?} class="text-center py-12 text-base-content/40" id="teams-empty">
+        <div id="groups" phx-update="stream">
+          <div :if={@groups_empty?} class="text-center py-12 text-base-content/40" id="groups-empty">
             <.icon name="hero-user-group" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-            <p>No hay equipos todavía.</p>
+            <p>No hay grupos todavía.</p>
           </div>
           <div
-            :for={{id, team} <- @streams.teams}
+            :for={{id, group} <- @streams.groups}
             id={id}
             class="card bg-base-100 border border-base-300 shadow-sm mb-4 transition-shadow hover:shadow-md"
           >
             <div class="card-body">
               <div class="flex items-start justify-between">
                 <div>
-                  <h3 class="font-semibold text-base-content">{team.name}</h3>
+                  <h3 class="font-semibold text-base-content">{group.name}</h3>
                   <p class="text-xs text-base-content/50 mt-0.5">
-                    {length(team.team_members)} miembros
+                    {length(group.group_members)} miembros
                   </p>
                 </div>
                 <div class="flex gap-2">
                   <.link
-                    navigate={~p"/admin/teams/#{team}/members"}
+                    navigate={~p"/admin/groups/#{group}/members"}
                     class="btn btn-sm btn-ghost"
-                    id={"members-link-#{team.id}"}
+                    id={"members-link-#{group.id}"}
                   >
                     Miembros
                   </.link>
                   <button
-                    phx-click="edit_team"
-                    phx-value-id={team.id}
+                    phx-click="edit_group"
+                    phx-value-id={group.id}
                     class="btn btn-sm btn-ghost"
-                    id={"edit-#{team.id}"}
+                    id={"edit-#{group.id}"}
                   >
                     Editar
                   </button>
                   <button
                     phx-click="edit_models"
-                    phx-value-id={team.id}
+                    phx-value-id={group.id}
                     class="btn btn-sm btn-ghost"
-                    id={"edit-models-#{team.id}"}
+                    id={"edit-models-#{group.id}"}
                     title="Gestionar models de models"
                   >
                     Aliases
                   </button>
                   <button
                     phx-click="new_webhook"
-                    phx-value-team-id={team.id}
+                    phx-value-group-id={group.id}
                     class="btn btn-sm btn-ghost gap-1"
-                    id={"new-webhook-#{team.id}"}
+                    id={"new-webhook-#{group.id}"}
                     title="Agregar webhook de observabilidad"
                   >
                     <.icon name="hero-bell-alert" class="w-4 h-4" /> Webhook
                   </button>
                   <button
-                    phx-click="delete_team"
-                    phx-value-id={team.id}
+                    phx-click="delete_group"
+                    phx-value-id={group.id}
                     class="btn btn-sm btn-ghost text-error"
-                    id={"delete-#{team.id}"}
-                    data-confirm="¿Eliminar equipo? Esta acción no se puede deshacer."
+                    id={"delete-#{group.id}"}
+                    data-confirm="¿Eliminar grupo? Esta acción no se puede deshacer."
                   >
                     Eliminar
                   </button>
@@ -674,7 +674,7 @@ defmodule TokengateWeb.TeamsLive do
               </div>
 
               <% tb =
-                Map.get(@team_budgets, team.id, %{
+                Map.get(@group_budgets, group.id, %{
                   monthly_limit_usd: Decimal.new(0),
                   monthly_spend_usd: Decimal.new(0),
                   estimated_monthly_usd: nil,
@@ -697,7 +697,7 @@ defmodule TokengateWeb.TeamsLive do
                       </span>
                     </div>
                     <p class="mt-1.5 text-lg font-bold text-base-content">
-                      ${format_decimal(team.monthly_budget_per_user_usd)}
+                      ${format_decimal(group.monthly_budget_per_user_usd)}
                     </p>
                     <p class="text-xs text-base-content/40">por usuario</p>
                   </div>
@@ -715,7 +715,7 @@ defmodule TokengateWeb.TeamsLive do
                       </span>
                     </div>
                     <p class="mt-1.5 text-lg font-bold text-base-content">
-                      {team.default_concurrency_limit}
+                      {group.default_concurrency_limit}
                     </p>
                     <p class="text-xs text-base-content/40">por usuario</p>
                   </div>
@@ -733,7 +733,7 @@ defmodule TokengateWeb.TeamsLive do
                       </span>
                     </div>
                     <p class="mt-1.5 text-lg font-bold text-base-content">
-                      {team.default_rpm_limit}
+                      {group.default_rpm_limit}
                     </p>
                     <p class="text-xs text-base-content/40">por usuario</p>
                   </div>
@@ -816,9 +816,9 @@ defmodule TokengateWeb.TeamsLive do
                 </h4>
 
                 <!-- Destination list -->
-                <div id={"webhooks-list-#{team.id}"}>
+                <div id={"webhooks-list-#{group.id}"}>
                   <div
-                    :for={destination <- Map.get(@destinations_by_team, team.id, [])}
+                    :for={destination <- Map.get(@destinations_by_group, group.id, [])}
                     class="flex items-center justify-between gap-3 py-2 px-3 rounded-lg bg-base-200/50 hover:bg-base-200 transition-colors mb-2"
                     id={"webhook-#{destination.id}"}
                   >
@@ -834,7 +834,7 @@ defmodule TokengateWeb.TeamsLive do
                     <div class="flex gap-1 shrink-0">
                       <button
                         phx-click="edit_webhook"
-                        phx-value-team-id={team.id}
+                        phx-value-group-id={group.id}
                         phx-value-webhook-id={destination.id}
                         class="btn btn-xs btn-ghost"
                         id={"edit-webhook-#{destination.id}"}
@@ -856,12 +856,12 @@ defmodule TokengateWeb.TeamsLive do
                   </div>
 
                   <div
-                    :if={Map.get(@destinations_by_team, team.id, []) == []}
+                    :if={Map.get(@destinations_by_group, group.id, []) == []}
                     class="text-center py-6 text-base-content/40"
-                    id={"webhooks-empty-#{team.id}"}
+                    id={"webhooks-empty-#{group.id}"}
                   >
                     <.icon name="hero-bell-slash" class="w-8 h-8 mx-auto mb-1.5 opacity-40" />
-                    <p class="text-xs">No hay webhooks configurados para este equipo.</p>
+                    <p class="text-xs">No hay webhooks configurados para este grupo.</p>
                   </div>
                 </div>
               </div>

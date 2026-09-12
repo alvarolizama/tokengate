@@ -8,20 +8,20 @@ defmodule Tokengate.ObservabilityTest do
   # Fixtures
   # ---------------------------------------------------------------------------
 
-  defp team_fixture do
-    {:ok, team} =
-      Accounts.create_team(%{
-        "name" => "Platform Team",
+  defp group_fixture do
+    {:ok, group} =
+      Accounts.create_group(%{
+        "name" => "Platform Group",
         "monthly_budget_per_user_usd" => "100.00",
         "default_concurrency_limit" => 10,
         "default_rpm_limit" => 120
       })
 
-    team
+    group
   end
 
   defp valid_destination_attrs(attrs \\ %{}) do
-    team = team_fixture()
+    group = group_fixture()
 
     Map.merge(
       %{
@@ -29,7 +29,7 @@ defmodule Tokengate.ObservabilityTest do
         type: "otlp_webhook",
         url: "https://api.honeycomb.io",
         headers: %{"X-Api-Key" => "secret"},
-        team_id: team.id
+        group_id: group.id
       },
       attrs
     )
@@ -55,40 +55,40 @@ defmodule Tokengate.ObservabilityTest do
       assert dest.type == "otlp_webhook"
       assert dest.url == "https://api.honeycomb.io"
       assert dest.headers == %{"X-Api-Key" => "secret"}
-      assert dest.team_id == attrs.team_id
+      assert dest.group_id == attrs.group_id
     end
 
     test "applies default type when type omitted" do
-      team = team_fixture()
+      group = group_fixture()
 
       {:ok, dest} =
         Observability.create_destination(%{
           name: "Default Dest",
           type: "otlp_webhook",
-          team_id: team.id
+          group_id: group.id
         })
 
       assert dest.type == "otlp_webhook"
     end
 
     test "validates type inclusion" do
-      team = team_fixture()
+      group = group_fixture()
 
       {:error, changeset} =
         Observability.create_destination(%{
           name: "Bad",
           type: "invalid_type",
-          team_id: team.id
+          group_id: group.id
         })
 
       assert "is invalid" in errors_on(changeset).type
     end
 
-    test "requires name, team_id" do
+    test "requires name, group_id" do
       {:error, changeset} = Observability.create_destination(%{})
 
       assert errors_on(changeset).name
-      assert errors_on(changeset).team_id
+      assert errors_on(changeset).group_id
     end
   end
 
@@ -97,39 +97,39 @@ defmodule Tokengate.ObservabilityTest do
   # ---------------------------------------------------------------------------
 
   describe "list_destinations/1" do
-    test "returns destinations scoped to the given team" do
+    test "returns destinations scoped to the given group" do
       dest1 = destination_fixture(%{name: "Dest1"})
       destination_fixture(%{name: "Dest2"})
 
-      results = Observability.list_destinations(dest1.team_id)
+      results = Observability.list_destinations(dest1.group_id)
 
       assert length(results) == 1
       assert hd(results).name == "Dest1"
     end
 
-    test "returns all destinations for a team" do
-      team = team_fixture()
+    test "returns all destinations for a group" do
+      group = group_fixture()
 
-      destination_fixture(%{name: "Dest1", team_id: team.id})
-      destination_fixture(%{name: "Dest2", team_id: team.id})
+      destination_fixture(%{name: "Dest1", group_id: group.id})
+      destination_fixture(%{name: "Dest2", group_id: group.id})
 
-      assert length(Observability.list_destinations(team.id)) == 2
+      assert length(Observability.list_destinations(group.id)) == 2
     end
 
-    test "returns empty list when no destinations for team" do
-      team = team_fixture()
+    test "returns empty list when no destinations for group" do
+      group = group_fixture()
 
-      assert Observability.list_destinations(team.id) == []
+      assert Observability.list_destinations(group.id) == []
     end
 
-    test "does not return destinations from other teams" do
+    test "does not return destinations from other groups" do
       dest1 = destination_fixture(%{name: "Dest1"})
       dest2 = destination_fixture(%{name: "Dest2"})
 
-      refute dest1.team_id == dest2.team_id
+      refute dest1.group_id == dest2.group_id
 
-      assert length(Observability.list_destinations(dest1.team_id)) == 1
-      assert length(Observability.list_destinations(dest2.team_id)) == 1
+      assert length(Observability.list_destinations(dest1.group_id)) == 1
+      assert length(Observability.list_destinations(dest2.group_id)) == 1
     end
   end
 
@@ -175,7 +175,7 @@ defmodule Tokengate.ObservabilityTest do
       dest = destination_fixture()
       {:ok, _} = Observability.delete_destination(dest)
 
-      assert Observability.list_destinations(dest.team_id) == []
+      assert Observability.list_destinations(dest.group_id) == []
     end
   end
 end

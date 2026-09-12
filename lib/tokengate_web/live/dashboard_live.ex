@@ -52,16 +52,16 @@ defmodule TokengateWeb.DashboardLive do
       |> assign(:tokens_series, [])
       |> assign(:tps_series, [])
       |> assign(:top_models, [])
-      |> assign(:top_teams, [])
+      |> assign(:top_groups, [])
       |> assign(:top_members, [])
       |> assign(:breakdown_model, [])
       |> assign(:breakdown_member, [])
-      |> assign(:breakdown_team, [])
+      |> assign(:breakdown_group, [])
       |> assign(:active_breakdown, "model")
       |> assign(:scope_label, "Personal")
       |> assign(:scope_member_ids, user_member_ids(user))
       |> assign(:new_token, nil)
-      |> assign(:new_token_team, nil)
+      |> assign(:new_token_group, nil)
       |> assign(:supervised_services_count, count_supervised_services(user))
       |> load_personal_data(user)
 
@@ -138,7 +138,7 @@ defmodule TokengateWeb.DashboardLive do
   # User-wide scope: EVERY user (admin included) sees only their own
   # memberships on /dashboard. The org-wide view lives in /dashboard/stats.
   defp user_member_ids(user) do
-    user.id |> Accounts.list_team_members_for_user() |> Enum.map(& &1.id)
+    user.id |> Accounts.list_group_members_for_user() |> Enum.map(& &1.id)
   end
 
   # Count of services the user supervises (read-only role). Used to show a
@@ -167,7 +167,7 @@ defmodule TokengateWeb.DashboardLive do
             {:noreply,
              socket
              |> assign(:new_token, new_token)
-             |> assign(:new_token_team, member.team.name)
+             |> assign(:new_token_group, member.group.name)
              |> load_personal_data(user)
              |> put_flash(:info, "Clave reemplazada correctamente.")}
 
@@ -218,24 +218,24 @@ defmodule TokengateWeb.DashboardLive do
   end
 
   def handle_event("set_breakdown", %{"tab" => tab}, socket)
-      when tab in ~w(model member team) do
+      when tab in ~w(model member group) do
     {:noreply, assign(socket, :active_breakdown, tab)}
   end
 
   ## Data loading ---------------------------------------------------------
 
   defp load_personal_data(socket, user) do
-    memberships = Accounts.list_team_members_for_user(user.id)
+    memberships = Accounts.list_group_members_for_user(user.id)
 
-    teams =
+    groups =
       Enum.map(memberships, fn membership ->
         limits = Accounts.effective_limits(membership)
         spend = Budgets.spend(membership.id)
 
         %{
           membership: membership,
-          team: membership.team,
-          team_role: membership.team_role,
+          group: membership.group,
+          group_role: membership.group_role,
           api_key: membership.api_key,
           monthly_limit: limits.monthly_budget_usd,
           monthly_spend: spend.monthly_usd
@@ -243,12 +243,12 @@ defmodule TokengateWeb.DashboardLive do
       end)
 
     # Admins always see the full org-wide dashboard. Regular users need at
-    # least one team membership to access API keys, endpoint info, and metrics.
-    has_access = user.global_role == "admin" or teams != []
+    # least one group membership to access API keys, endpoint info, and metrics.
+    has_access = user.global_role == "admin" or groups != []
 
     socket
     |> assign(:memberships, memberships)
-    |> assign(:teams, teams)
+    |> assign(:groups, groups)
     |> assign(:has_access, has_access)
   end
 
@@ -391,8 +391,8 @@ defmodule TokengateWeb.DashboardLive do
     |> assign(:top_models, bundle.top_models)
     |> assign(:breakdown_member, bundle.breakdown_member)
     |> assign(:top_members, bundle.top_members)
-    |> assign(:breakdown_team, [])
-    |> assign(:top_teams, [])
+    |> assign(:breakdown_group, [])
+    |> assign(:top_groups, [])
     |> assign(:displayed_period, socket.assigns[:period])
     |> assign(:loading, false)
   end

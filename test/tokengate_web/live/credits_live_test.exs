@@ -26,14 +26,14 @@ defmodule TokengateWeb.CreditsLiveTest do
     |> recycle()
   end
 
-  # Equipo con 2 miembros, gasto real registrado en ETS y logs con ahorro
+  # Grupo con 2 miembros, gasto real registrado en ETS y logs con ahorro
   # en el mes en curso.
-  defp team_with_spend_and_savings do
+  defp group_with_spend_and_savings do
     u = unique()
 
-    {:ok, team} =
-      Accounts.create_team(%{
-        name: "Credits Team #{u}",
+    {:ok, group} =
+      Accounts.create_group(%{
+        name: "Credits Group #{u}",
         monthly_budget_per_user_usd: "100.00"
       })
 
@@ -52,10 +52,10 @@ defmodule TokengateWeb.CreditsLiveTest do
       })
 
     {:ok, member_a} =
-      Accounts.create_team_member(%{user_id: owner_a.id, team_id: team.id})
+      Accounts.create_group_member(%{user_id: owner_a.id, group_id: group.id})
 
     {:ok, member_b} =
-      Accounts.create_team_member(%{user_id: owner_b.id, team_id: team.id})
+      Accounts.create_group_member(%{user_id: owner_b.id, group_id: group.id})
 
     {:ok, provider} =
       Providers.create_provider(%{name: "Prov #{u}", base_url: "http://localhost:1"})
@@ -64,7 +64,7 @@ defmodule TokengateWeb.CreditsLiveTest do
     for {member, cost} <- [{member_a, "100.00"}, {member_b, "50.00"}] do
       {:ok, _log} =
         Logs.log_request(%{
-          team_member_id: member.id,
+          group_member_id: member.id,
           provider_id: provider.id,
           model_requested: "model-#{u}",
           model_responded: "model-#{u}",
@@ -79,7 +79,7 @@ defmodule TokengateWeb.CreditsLiveTest do
         })
     end
 
-    %{team: team, member_a: member_a, member_b: member_b}
+    %{group: group, member_a: member_a, member_b: member_b}
   end
 
   ## Auth -------------------------------------------------------------------
@@ -88,29 +88,29 @@ defmodule TokengateWeb.CreditsLiveTest do
     assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/dashboard/credits")
   end
 
-  ## Team rollup --------------------------------------------------------------
+  ## Group rollup --------------------------------------------------------------
 
-  test "admin sees team rollup with daily cap, real spend and savings", %{conn: conn} do
+  test "admin sees group rollup with daily cap, real spend and savings", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    %{team: team, member_a: _member_a} = team_with_spend_and_savings()
+    %{group: group, member_a: _member_a} = group_with_spend_and_savings()
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/credits")
 
-    assert has_element?(view, "#team-budgets")
-    assert has_element?(view, "#team-budget-#{team.id}")
+    assert has_element?(view, "#group-budgets")
+    assert has_element?(view, "#group-budget-#{group.id}")
 
-    row = view |> element("#team-budget-#{team.id}") |> render()
+    row = view |> element("#group-budget-#{group.id}") |> render()
     # Tope = 100 × 2 miembros = 200
     assert row =~ "200"
     # Gasto real = 100 + 50 = 150 (monthly_budget % displayed as $150/$200 progress)
     assert row =~ "150"
     # Since the 2026-07-30 refactor there's no separate "savings" column —
-    # the team spend the same total ($1.50) is shown as the consumed/200 number.
+    # the group spend the same total ($1.50) is shown as the consumed/200 number.
     refute row =~ "0.6"
 
-    # The team-budget row is the primary spend signal now; member-spends
+    # The group-budget row is the primary spend signal now; member-spends
     # are still listed but no longer carried a savings sub-row.
-    assert has_element?(view, "#team-budget-#{team.id}")
+    assert has_element?(view, "#group-budget-#{group.id}")
   end
 end

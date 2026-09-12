@@ -3,7 +3,7 @@ defmodule TokengateWeb.ServicesLive do
   Admin-only CRUD for services + per-service model model grants.
 
   Services are API keys not tied to a user. They have direct limits
-  (monthly budget, concurrency, RPM) without the team/member hierarchy.
+  (monthly budget, concurrency, RPM) without the group/member hierarchy.
   """
   use TokengateWeb, :live_view
 

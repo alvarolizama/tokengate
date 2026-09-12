@@ -31,7 +31,7 @@ defmodule TokengateWeb.LogsLiveTest do
   defp member_with_log(opts \\ []) do
     u = unique()
 
-    {:ok, team} = Accounts.create_team(%{name: "Logs Team #{u}"})
+    {:ok, group} = Accounts.create_group(%{name: "Logs Group #{u}"})
 
     {:ok, owner} =
       Accounts.register_user(%{
@@ -41,7 +41,7 @@ defmodule TokengateWeb.LogsLiveTest do
       })
 
     {:ok, member} =
-      Accounts.create_team_member(%{user_id: owner.id, team_id: team.id})
+      Accounts.create_group_member(%{user_id: owner.id, group_id: group.id})
 
     {:ok, provider} =
       Providers.create_provider(%{name: "Prov #{u}", base_url: "http://localhost:1"})
@@ -54,7 +54,7 @@ defmodule TokengateWeb.LogsLiveTest do
 
     {:ok, log} =
       Logs.log_request(%{
-        team_member_id: member.id,
+        group_member_id: member.id,
         provider_id: provider.id,
         model_requested: "model-#{u}",
         model_responded: "model-#{u}",
@@ -73,7 +73,7 @@ defmodule TokengateWeb.LogsLiveTest do
           Keyword.get(opts, :inserted_at, DateTime.utc_now() |> DateTime.truncate(:second))
       })
 
-    %{team: team, owner: owner, member: member, log: log, model: model}
+    %{group: group, owner: owner, member: member, log: log, model: model}
   end
 
   setup do
@@ -96,18 +96,18 @@ defmodule TokengateWeb.LogsLiveTest do
     assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/admin/logs")
   end
 
-  ## User / team / think / effort columns ---------------------------------------
+  ## User / group / think / effort columns ---------------------------------------
 
-  test "shows user, team, think and effort for completed logs", %{conn: conn} do
+  test "shows user, group, think and effort for completed logs", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    %{team: team, owner: owner} = member_with_log(think: true, effort: "high")
+    %{group: group, owner: owner} = member_with_log(think: true, effort: "high")
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/admin/logs")
 
     html = render(view)
     assert html =~ owner.email
-    assert html =~ team.name
+    assert html =~ group.name
     assert html =~ "high"
   end
 
@@ -122,9 +122,9 @@ defmodule TokengateWeb.LogsLiveTest do
 
     entry =
       Inflight.start_request(%{
-        team_member_id: member.id,
+        group_member_id: member.id,
         user_email: "live@example.com",
-        team_name: "Live Team",
+        group_name: "Live Group",
         model_requested: "glm-5.2",
         agent_type: "api",
         streaming: true,
@@ -159,7 +159,7 @@ defmodule TokengateWeb.LogsLiveTest do
 
     entry =
       Inflight.start_request(%{
-        team_member_id: member.id,
+        group_member_id: member.id,
         model_requested: "glm-5.2",
         streaming: true,
         think: false,
@@ -277,7 +277,7 @@ defmodule TokengateWeb.LogsLiveTest do
     # Log with error
     {:ok, _} =
       Logs.log_request(%{
-        team_member_id: member.id,
+        group_member_id: member.id,
         model_requested: "err-model",
         model_responded: "err-model",
         status_code: 429,

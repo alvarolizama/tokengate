@@ -1,6 +1,6 @@
 defmodule TokengateWeb.CreditsLive do
   @moduledoc """
-  Admin credit overview: every team member's daily/monthly spend against
+  Admin credit overview: every group member's daily/monthly spend against
   their effective budget limits, with progress bars and exhaustion state.
 
   Data is computed live from the ETS budget counters (`Tokengate.Budgets`),
@@ -80,14 +80,14 @@ defmodule TokengateWeb.CreditsLive do
     {:noreply, load_budgets(socket)}
   end
 
-  def handle_event("show_more", %{"team-id" => team_id}, socket) do
-    shown = Map.get(socket.assigns.shown_counts, team_id, @per_page)
+  def handle_event("show_more", %{"group-id" => group_id}, socket) do
+    shown = Map.get(socket.assigns.shown_counts, group_id, @per_page)
 
     {:noreply,
      assign(
        socket,
        :shown_counts,
-       Map.put(socket.assigns.shown_counts, team_id, shown + @per_page)
+       Map.put(socket.assigns.shown_counts, group_id, shown + @per_page)
      )}
   end
 
@@ -97,7 +97,7 @@ defmodule TokengateWeb.CreditsLive do
     timezone = socket.assigns[:timezone] || "Etc/UTC"
 
     # Whole-page bundle behind a short TTL: `list_member_budgets/1` preloads
-    # every team member and runs 2 Postgres aggregates, and
+    # every group member and runs 2 Postgres aggregates, and
     # `inactive_members/2` runs a lifetime MAX(inserted_at) per inactive
     # member. Under sustained proxy traffic this view reloaded on every
     # broadcast; now connected tabs share one computation per TTL window
@@ -106,21 +106,21 @@ defmodule TokengateWeb.CreditsLive do
       DashboardCache.fetch_or_compute({:credits_budgets, timezone}, fn ->
         budgets = Budgets.list_member_budgets(timezone)
 
-        # Reuse the already-loaded member budgets for the team rollup instead
-        # of list_team_budgets/1, which would re-query members + spend.
+        # Reuse the already-loaded member budgets for the group rollup instead
+        # of list_group_budgets/1, which would re-query members + spend.
         %{
           budgets: budgets,
-          budgets_by_team: Enum.group_by(budgets, fn b -> b.member.team.id end),
-          team_budgets: Budgets.rollup_team_budgets(budgets),
-          inactive_by_team: inactive_members(budgets, timezone)
+          budgets_by_group: Enum.group_by(budgets, fn b -> b.member.group.id end),
+          group_budgets: Budgets.rollup_group_budgets(budgets),
+          inactive_by_group: inactive_members(budgets, timezone)
         }
       end)
 
     socket
     |> assign(:budgets, bundle.budgets)
-    |> assign(:budgets_by_team, bundle.budgets_by_team)
-    |> assign(:team_budgets, bundle.team_budgets)
-    |> assign(:inactive_by_team, bundle.inactive_by_team)
+    |> assign(:budgets_by_group, bundle.budgets_by_group)
+    |> assign(:group_budgets, bundle.group_budgets)
+    |> assign(:inactive_by_group, bundle.inactive_by_group)
   end
 
   ## Template helpers --------------------------------------------------------
@@ -154,7 +154,7 @@ defmodule TokengateWeb.CreditsLive do
     |> Enum.map(fn b ->
       Map.put(b, :last_request_at, Map.get(last_requests, b.member.id))
     end)
-    |> Enum.group_by(fn b -> b.member.team.id end)
+    |> Enum.group_by(fn b -> b.member.group.id end)
   end
 
   @impl true
@@ -216,10 +216,10 @@ defmodule TokengateWeb.CreditsLive do
           </div>
         </div>
 
-        <div class="card bg-base-100 border border-base-300 shadow-sm" id="team-budgets">
+        <div class="card bg-base-100 border border-base-300 shadow-sm" id="group-budgets">
           <div class="card-body">
             <h2 class="card-title text-base">
-              <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" /> Por equipo
+              <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" /> Por grupo
             </h2>
             <p class="text-xs text-base-content/60">
               Tope mensual = budget mensual por usuario.
@@ -228,14 +228,14 @@ defmodule TokengateWeb.CreditsLive do
               <table class="table table-sm">
                 <thead>
                   <tr>
-                    <th>Equipo</th>
+                    <th>Grupo</th>
                     <th class="text-right">Miembros</th>
                     <th class="w-64">Gasto mensual real</th>
                   </tr>
                 </thead>
                 <tbody>
-                  <tr :for={tb <- @team_budgets} id={"team-budget-#{tb.team.id}"}>
-                    <td class="font-medium">{tb.team.name}</td>
+                  <tr :for={tb <- @group_budgets} id={"group-budget-#{tb.group.id}"}>
+                    <td class="font-medium">{tb.group.name}</td>
                     <td class="text-right font-mono">{tb.member_count}</td>
                     <td>
                       <%= if is_nil(tb.monthly_limit_usd) do %>
@@ -272,13 +272,13 @@ defmodule TokengateWeb.CreditsLive do
             </h2>
             <div
               :for={
-                {team_id, budgets} <- Enum.sort_by(@budgets_by_team, fn {_, bs} -> -length(bs) end)
+                {group_id, budgets} <- Enum.sort_by(@budgets_by_group, fn {_, bs} -> -length(bs) end)
               }
               class="space-y-3"
-              id={"team-group-#{team_id}"}
+              id={"group-group-#{group_id}"}
             >
               <h3 class="text-sm font-semibold text-base-content/70 uppercase tracking-wide">
-                {hd(budgets).member.team.name}
+                {hd(budgets).member.group.name}
                 <span class="text-xs text-base-content/40">({length(budgets)})</span>
               </h3>
               <div class="overflow-x-auto">
@@ -292,7 +292,7 @@ defmodule TokengateWeb.CreditsLive do
                   </thead>
                   <tbody>
                     <tr
-                      :for={b <- Enum.take(budgets, Map.get(@shown_counts, team_id, @per_page))}
+                      :for={b <- Enum.take(budgets, Map.get(@shown_counts, group_id, @per_page))}
                       id={"credit-row-#{b.member.id}"}
                     >
                       <td class="font-medium w-48">{b.member.user.email}</td>
@@ -317,27 +317,27 @@ defmodule TokengateWeb.CreditsLive do
                 </table>
               </div>
               <div
-                :if={length(budgets) > Map.get(@shown_counts, team_id, @per_page)}
+                :if={length(budgets) > Map.get(@shown_counts, group_id, @per_page)}
                 class="flex justify-center"
               >
                 <button
                   phx-click="show_more"
-                  phx-value-team-id={team_id}
+                  phx-value-group-id={group_id}
                   class="btn btn-ghost btn-xs"
-                  id={"show-more-#{team_id}"}
+                  id={"show-more-#{group_id}"}
                 >
-                  Ver más ({length(budgets) - Map.get(@shown_counts, team_id, @per_page)} restantes)
+                  Ver más ({length(budgets) - Map.get(@shown_counts, group_id, @per_page)} restantes)
                 </button>
               </div>
             </div>
-            <div :if={@budgets_by_team == %{}} class="text-center py-8 text-base-content/40">
+            <div :if={@budgets_by_group == %{}} class="text-center py-8 text-base-content/40">
               Sin miembros registrados.
             </div>
           </div>
         </div>
 
         <%!-- Inactive members: no spend in current period --%>
-        <div :if={@inactive_by_team != %{}} class="card bg-base-100 border border-base-300 shadow-sm">
+        <div :if={@inactive_by_group != %{}} class="card bg-base-100 border border-base-300 shadow-sm">
           <div class="card-body">
             <h2 class="card-title text-base">
               <.icon name="hero-pause-circle" class="w-5 h-5 text-base-content/60" />
@@ -345,13 +345,13 @@ defmodule TokengateWeb.CreditsLive do
             </h2>
             <div
               :for={
-                {team_id, budgets} <- Enum.sort_by(@inactive_by_team, fn {_, bs} -> -length(bs) end)
+                {group_id, budgets} <- Enum.sort_by(@inactive_by_group, fn {_, bs} -> -length(bs) end)
               }
               class="space-y-3"
-              id={"inactive-team-#{team_id}"}
+              id={"inactive-group-#{group_id}"}
             >
               <h3 class="text-sm font-semibold text-base-content/70 uppercase tracking-wide">
-                {hd(budgets).member.team.name}
+                {hd(budgets).member.group.name}
                 <span class="text-xs text-base-content/40">({length(budgets)})</span>
               </h3>
               <div class="overflow-x-auto">

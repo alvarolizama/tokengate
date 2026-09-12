@@ -3,7 +3,7 @@ defmodule TokengateWeb.ProxyController do
   OpenAI-compatible proxy API.
 
     * `GET /v1/models` — only the models the API key can access
-      (team grants + individual extras), each with its `context_window`.
+      (group grants + individual extras), each with its `context_window`.
     * `POST /v1/chat/completions` — transparent passthrough to the routed
       provider with full cost tracking. The response `usage` object gains
       `estimated_cost_usd` (market price) and `cost_usd` (provider price),
@@ -16,8 +16,8 @@ defmodule TokengateWeb.ProxyController do
 
   Requests pass through two independent throttle layers:
 
-    1. **Team limits** — protects TokenGate from abusive users (client-side).
-       Limits are derived from team defaults + member overrides and keyed by
+    1. **Group limits** — protects TokenGate from abusive users (client-side).
+       Limits are derived from group defaults + member overrides and keyed by
        the user's API key.
 
     2. **Credential limits** — protects the provider API key from upstream
@@ -28,7 +28,7 @@ defmodule TokengateWeb.ProxyController do
        every slot of a shared subscription credential — when it trips, only
        that user falls back to the next provider.
 
-  Both gates must pass for a request to proceed. Team limits are acquired
+  Both gates must pass for a request to proceed. Group limits are acquired
   first; if routing succeeds, credential limits are acquired before execution.
 
   Hot path discipline: auth, limits, budgets and routing read from
@@ -42,7 +42,7 @@ defmodule TokengateWeb.ProxyController do
 
   alias Tokengate.Budgets.Manager, as: Budgets
   alias Tokengate.Budgets.Exemptions
-  alias Tokengate.Accounts.TeamMember
+  alias Tokengate.Accounts.GroupMember
   alias Tokengate.GlobalSettings
   alias Tokengate.Limits.Manager, as: Limits
   alias Tokengate.Logs.WriteWorker
@@ -68,7 +68,7 @@ defmodule TokengateWeb.ProxyController do
   Lists the models accessible to the authenticated API key.
   """
   def models(conn, _params) do
-    member = conn.assigns.current_team_member
+    member = conn.assigns.current_group_member
     json(conn, %{"object" => "list", "data" => Router.models_for(member)})
   end
 
@@ -76,7 +76,7 @@ defmodule TokengateWeb.ProxyController do
   Proxies a chat completion request to the routed provider.
   """
   def chat_completions(conn, _params) do
-    member = conn.assigns.current_team_member
+    member = conn.assigns.current_group_member
     payload = conn.body_params
     model = payload["model"]
     limits = conn.assigns.effective_limits
@@ -98,7 +98,7 @@ defmodule TokengateWeb.ProxyController do
     with :ok <- require_model(model),
          :ok <- check_user_daily_cap(member),
          :ok <- check_global_daily_cap(member),
-         :ok <- acquire_team_limits(key_id, limits) do
+         :ok <- acquire_group_limits(key_id, limits) do
       try do
         case route_and_acquire(member, payload, conn.assigns.api_key_hash, limits) do
           {:ok, route} ->
@@ -161,7 +161,7 @@ defmodule TokengateWeb.ProxyController do
     # Same stable idempotency key as the chat path — shared by every
     # upstream attempt of this request.
     conn = assign(conn, :idempotency_key, Ecto.UUID.generate())
-    member = conn.assigns.current_team_member
+    member = conn.assigns.current_group_member
     model = payload["model"]
     limits = conn.assigns.effective_limits
     key_id = member.api_key.id
@@ -170,7 +170,7 @@ defmodule TokengateWeb.ProxyController do
     with :ok <- require_model(model),
          :ok <- check_user_daily_cap(member),
          :ok <- check_global_daily_cap(member),
-         :ok <- acquire_team_limits(key_id, limits) do
+         :ok <- acquire_group_limits(key_id, limits) do
       try do
         case route_and_acquire(member, payload, conn.assigns.api_key_hash, limits, [],
                capability: capability
@@ -430,7 +430,7 @@ defmodule TokengateWeb.ProxyController do
   defp require_model(model) when is_binary(model), do: :ok
   defp require_model(_), do: {:error, {:invalid_request, "model must be a string"}}
 
-  defp acquire_team_limits(key_id, limits) do
+  defp acquire_group_limits(key_id, limits) do
     case Limits.acquire(key_id, %{
            rpm_limit: limits.rpm_limit,
            concurrency_limit: limits.concurrency_limit
@@ -514,12 +514,12 @@ defmodule TokengateWeb.ProxyController do
   defp register_inflight(conn, member, payload, route) do
     inflight =
       Tokengate.Logs.Inflight.start_request(%{
-        team_member_id: member.id,
+        group_member_id: member.id,
         subject_type: if(member.user_id == nil, do: "service", else: "user"),
         service_name: member.service_name,
         user_email: member.user && member.user.email,
-        team_name: member.team && member.team.name,
-        team_id: member.team_id,
+        group_name: member.group && member.group.name,
+        group_id: member.group_id,
         model_requested: payload["model"],
         agent_type: conn.assigns.agent_type,
         client_agent: conn.assigns.client_agent,
@@ -663,26 +663,26 @@ defmodule TokengateWeb.ProxyController do
   end
 
   # Budget-exemption subject for this request. Services authenticate as
-  # virtual TeamMembers (service_name set, user/team nil) — see
-  # ApiAuth.service_to_virtual_member/1. Team members check their own user
-  # row AND their team's exemptions.
-  defp budget_subject(%TeamMember{service_name: name} = member) when not is_nil(name),
+  # virtual GroupMembers (service_name set, user/group nil) — see
+  # ApiAuth.service_to_virtual_member/1. Group members check their own user
+  # row AND their group's exemptions.
+  defp budget_subject(%GroupMember{service_name: name} = member) when not is_nil(name),
     do: %{type: "service", id: member.id}
 
-  defp budget_subject(%TeamMember{} = member), do: %{type: "user", id: member.user_id}
+  defp budget_subject(%GroupMember{} = member), do: %{type: "user", id: member.user_id}
 
-  defp team_subject(%TeamMember{service_name: nil} = member),
-    do: %{type: "team", id: member.team_id}
+  defp group_subject(%GroupMember{service_name: nil} = member),
+    do: %{type: "group", id: member.group_id}
 
-  defp team_subject(_service_member), do: nil
+  defp group_subject(_service_member), do: nil
 
   defp exemption_subjects(member) do
-    %{subject: budget_subject(member), team: team_subject(member)}
+    %{subject: budget_subject(member), group: group_subject(member)}
   end
 
   defp exempt_from?(scope, member) do
     subjects = exemption_subjects(member)
-    Exemptions.exempt?(scope, subjects.subject, subjects.team)
+    Exemptions.exempt?(scope, subjects.subject, subjects.group)
   end
 
   defp check_global_daily_cap(member) do
@@ -1462,13 +1462,13 @@ defmodule TokengateWeb.ProxyController do
 
   # Resolves the subject identity for a durable log. Services arrive as
   # "virtual" members (`user_id == nil`) — their logs store `service_id` and a
-  # null `team_member_id`, while real team members store `team_member_id`.
-  defp log_subject(%TeamMember{user_id: nil} = member) do
-    %{subject_type: "service", team_member_id: nil, service_id: member.id}
+  # null `group_member_id`, while real group members store `group_member_id`.
+  defp log_subject(%GroupMember{user_id: nil} = member) do
+    %{subject_type: "service", group_member_id: nil, service_id: member.id}
   end
 
-  defp log_subject(%TeamMember{} = member) do
-    %{subject_type: "user", team_member_id: member.id, service_id: nil}
+  defp log_subject(%GroupMember{} = member) do
+    %{subject_type: "user", group_member_id: member.id, service_id: nil}
   end
 
   defp enqueue_log(
@@ -1485,7 +1485,7 @@ defmodule TokengateWeb.ProxyController do
     subject = log_subject(member)
 
     %{
-      "team_member_id" => subject.team_member_id,
+      "group_member_id" => subject.group_member_id,
       "service_id" => subject.service_id,
       "subject_type" => subject.subject_type,
       "provider_id" => route.model_provider.credential.provider_id,
@@ -1587,7 +1587,7 @@ defmodule TokengateWeb.ProxyController do
     subject = log_subject(member)
 
     %{
-      "team_member_id" => subject.team_member_id,
+      "group_member_id" => subject.group_member_id,
       "service_id" => subject.service_id,
       "subject_type" => subject.subject_type,
       "provider_id" => route.model_provider.credential.provider_id,
@@ -1623,7 +1623,7 @@ defmodule TokengateWeb.ProxyController do
     subject = log_subject(member)
 
     %{
-      "team_member_id" => subject.team_member_id,
+      "group_member_id" => subject.group_member_id,
       "service_id" => subject.service_id,
       "subject_type" => subject.subject_type,
       "model_id" => model_id_for_name(model),

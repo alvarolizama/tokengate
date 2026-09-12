@@ -10,11 +10,11 @@ defmodule Tokengate.Metrics.Rollup do
   ## Functions
 
     * `hourly_series/2`     — bucketed request/cost/savings per hour
-    * `top_consumers/2`     — per team-member aggregates, ranked by cost
+    * `top_consumers/2`     — per group-member aggregates, ranked by cost
     * `agent_breakdown/1`   — per agent_type aggregates
     * `breakdown_by_model/2` — per-model aggregates (requests, costs, tokens, tps)
     * `breakdown_by_member/2` — per-member aggregates (requests, costs, tokens, tps)
-    * `breakdown_by_team/1`   — per-team aggregates (requests, costs, tokens, tps)
+    * `breakdown_by_group/1`   — per-group aggregates (requests, costs, tokens, tps)
     * `provider_ranking/2`    — provider ranking by failures + latency, tier S/A/B/C/D
     * `usage_by_hour_of_day/2` — 24h UTC distribution (recurring usage patterns)
     * `busiest_hours/2` / `busiest_minutes/2` — top-N busiest hour/minute buckets
@@ -23,7 +23,7 @@ defmodule Tokengate.Metrics.Rollup do
   """
 
   import Ecto.Query, warn: false
-  alias Tokengate.Accounts.TeamMember
+  alias Tokengate.Accounts.GroupMember
   alias Tokengate.Logs
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Metrics.RequestMetricsHourly
@@ -47,9 +47,9 @@ defmodule Tokengate.Metrics.Rollup do
 
   Buckets `inserted_at` using Postgres `date_trunc("hour", inserted_at
   AT TIME ZONE ?) AT TIME ZONE ?` so the series is bucketed by **local
-  hour** for the requested timezone (UTC by default). `nil` `team_id` is
-  org-wide (no team join). When `team_id` is given, filters to logs whose
-  team_member belongs to that team.
+  hour** for the requested timezone (UTC by default). `nil` `group_id` is
+  org-wide (no group join). When `group_id` is given, filters to logs whose
+  group_member belongs to that group.
 
   ## Options
 
@@ -58,7 +58,7 @@ defmodule Tokengate.Metrics.Rollup do
     * `:timezone` — IANA zone for local-hour bucketing; default `"Etc/UTC"`
   """
   @spec hourly_series(String.t() | nil, keyword()) :: [map()]
-  def hourly_series(team_id \\ nil, opts \\ []) when is_list(opts) do
+  def hourly_series(group_id \\ nil, opts \\ []) when is_list(opts) do
     from = Keyword.get(opts, :from) || hours_ago_default()
     to = Keyword.get(opts, :to)
     timezone = Keyword.get(opts, :timezone, "Etc/UTC")
@@ -72,7 +72,7 @@ defmodule Tokengate.Metrics.Rollup do
       RequestLog
       |> maybe_from(from)
       |> maybe_to(to)
-      |> maybe_join_team(team_id)
+      |> maybe_join_group(group_id)
       |> select([rl], %{
         bucket:
           fragment(
@@ -127,33 +127,33 @@ defmodule Tokengate.Metrics.Rollup do
   # -----------------------------------------------------------------------
 
   @doc """
-  Returns per team-member aggregates ranked by total cost (descending).
+  Returns per group-member aggregates ranked by total cost (descending).
 
   Each row is:
 
       %{
-        team_member_id: binary,
+        group_member_id: binary,
         request_count: integer,
         cost_usd: Decimal
       }
 
-  Joins `request_logs` to `team_members` filtered by `team_id`. `limit`
+  Joins `request_logs` to `group_members` filtered by `group_id`. `limit`
   defaults to 10.
   """
   @spec top_consumers(String.t(), pos_integer()) :: [map()]
-  def top_consumers(team_id, limit \\ 10)
+  def top_consumers(group_id, limit \\ 10)
 
-  def top_consumers(team_id, limit)
-      when is_binary(team_id) and is_integer(limit) and limit > 0 do
+  def top_consumers(group_id, limit)
+      when is_binary(group_id) and is_integer(limit) and limit > 0 do
     query =
       RequestLog
-      |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
-      |> where([rl, tm], tm.team_id == ^team_id)
-      |> group_by([rl, tm], rl.team_member_id)
+      |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
+      |> where([rl, tm], tm.group_id == ^group_id)
+      |> group_by([rl, tm], rl.group_member_id)
       |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
       |> limit(^limit)
       |> select([rl], %{
-        team_member_id: rl.team_member_id,
+        group_member_id: rl.group_member_id,
         request_count: count(rl.id),
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
       })
@@ -161,7 +161,7 @@ defmodule Tokengate.Metrics.Rollup do
     Repo.all(query)
     |> Enum.map(fn row ->
       %{
-        team_member_id: row.team_member_id,
+        group_member_id: row.group_member_id,
         request_count: row.request_count,
         cost_usd: Decimal.new(to_string(row.cost_usd))
       }
@@ -179,11 +179,11 @@ defmodule Tokengate.Metrics.Rollup do
 
       %{agent_type => %{requests: integer, cost_usd: Decimal}}
 
-  `nil` `team_id` is org-wide. When `team_id` is given, filters to logs
-  whose team_member belongs to that team.
+  `nil` `group_id` is org-wide. When `group_id` is given, filters to logs
+  whose group_member belongs to that group.
   """
   @spec agent_breakdown(String.t() | nil) :: map()
-  def agent_breakdown(team_id \\ nil)
+  def agent_breakdown(group_id \\ nil)
 
   def agent_breakdown(nil) do
     query =
@@ -206,11 +206,11 @@ defmodule Tokengate.Metrics.Rollup do
     end)
   end
 
-  def agent_breakdown(team_id) when is_binary(team_id) do
+  def agent_breakdown(group_id) when is_binary(group_id) do
     query =
       RequestLog
-      |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
-      |> where([rl, tm], tm.team_id == ^team_id and not is_nil(rl.agent_type))
+      |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
+      |> where([rl, tm], tm.group_id == ^group_id and not is_nil(rl.agent_type))
       |> group_by([rl], rl.agent_type)
       |> select([rl], %{
         agent_type: rl.agent_type,
@@ -247,25 +247,25 @@ defmodule Tokengate.Metrics.Rollup do
         avg_tps: float | nil
       }
 
-  `team_id` of `nil` is org-wide. When given, filters to logs whose
-  team_member belongs to that team.
+  `group_id` of `nil` is org-wide. When given, filters to logs whose
+  group_member belongs to that group.
 
   ## Options
 
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
-    * `:member_ids` — restrict to logs of these team-member ids (scoping)
+    * `:member_ids` — restrict to logs of these group-member ids (scoping)
   """
   @spec breakdown_by_model(String.t() | nil, keyword()) :: [map()]
-  def breakdown_by_model(team_id \\ nil, opts \\ [])
+  def breakdown_by_model(group_id \\ nil, opts \\ [])
 
-  def breakdown_by_model(team_id, opts) do
+  def breakdown_by_model(group_id, opts) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
     query =
       RequestLog
-      |> maybe_join_team(team_id)
+      |> maybe_join_group(group_id)
       |> maybe_service_id(Keyword.get(opts, :service_id))
       |> maybe_from(from)
       |> maybe_to(to)
@@ -304,7 +304,7 @@ defmodule Tokengate.Metrics.Rollup do
   # -----------------------------------------------------------------------
 
   @doc """
-  Breakdown de modelos usados por un miembro específico (por team_member_id).
+  Breakdown de modelos usados por un miembro específico (por group_member_id).
   Útil para la vista de detalle de miembro: qué modelos usa, cuánto gasta, etc.
   """
   @spec breakdown_by_model_for_member(String.t(), keyword()) :: [map()]
@@ -318,7 +318,7 @@ defmodule Tokengate.Metrics.Rollup do
 
     query =
       RequestLog
-      |> where([rl], rl.team_member_id == ^member_id)
+      |> where([rl], rl.group_member_id == ^member_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> join(:left, [rl], ma in Model, on: rl.model_id == ma.id, as: :model)
@@ -351,14 +351,14 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   @doc """
-  Returns per-team-member aggregate metrics ranked by total cost (descending).
+  Returns per-group-member aggregate metrics ranked by total cost (descending).
 
   Each row is:
 
       %{
-        team_member_id: binary,
+        group_member_id: binary,
         user_id: binary,
-        team_name: String.t(),
+        group_name: String.t(),
         user_email: String.t(),
         request_count: integer,
         cost_usd: Decimal,  # what the upstream charged for the request
@@ -368,37 +368,37 @@ defmodule Tokengate.Metrics.Rollup do
         avg_tps: float | nil
       }
 
-  `team_id` of `nil` is org-wide. When given, filters to logs whose
-  team_member belongs to that team.
+  `group_id` of `nil` is org-wide. When given, filters to logs whose
+  group_member belongs to that group.
 
   ## Options
 
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
-    * `:member_ids` — restrict to logs of these team-member ids (scoping)
+    * `:member_ids` — restrict to logs of these group-member ids (scoping)
   """
   @spec breakdown_by_member(String.t() | nil, keyword()) :: [map()]
-  def breakdown_by_member(team_id \\ nil, opts \\ [])
+  def breakdown_by_member(group_id \\ nil, opts \\ [])
 
-  def breakdown_by_member(team_id, opts) do
+  def breakdown_by_member(group_id, opts) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
     query =
       RequestLog
-      |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
-      |> join(:inner, [_, tm], t in assoc(tm, :team))
+      |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
+      |> join(:inner, [_, tm], t in assoc(tm, :group))
       |> join(:inner, [_, tm], u in assoc(tm, :user))
-      |> maybe_member_team_filter(team_id)
+      |> maybe_member_group_filter(group_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
       |> group_by([rl, tm, t, u], [tm.id, t.id, u.id])
       |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
       |> select([rl, tm, t, u], %{
-        team_member_id: tm.id,
+        group_member_id: tm.id,
         user_id: u.id,
-        team_name: t.name,
+        group_name: t.name,
         user_email: u.email,
         request_count: count(rl.id),
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
@@ -411,9 +411,9 @@ defmodule Tokengate.Metrics.Rollup do
     Repo.all(query)
     |> Enum.map(fn row ->
       %{
-        team_member_id: row.team_member_id,
+        group_member_id: row.group_member_id,
         user_id: row.user_id,
-        team_name: row.team_name,
+        group_name: row.group_name,
         user_email: row.user_email,
         request_count: row.request_count,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
@@ -433,7 +433,7 @@ defmodule Tokengate.Metrics.Rollup do
   Returns per-service aggregate metrics ranked by total cost (descending).
 
   Services have a dedicated `service_id` column on `request_logs`
-  (team_member_id is null).
+  (group_member_id is null).
 
   Each row is:
 
@@ -459,7 +459,7 @@ defmodule Tokengate.Metrics.Rollup do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
-    # Services have a dedicated `service_id` column (team_member_id is null).
+    # Services have a dedicated `service_id` column (group_member_id is null).
     query =
       RequestLog
       |> join(:inner, [rl], s in Tokengate.Accounts.Service, on: rl.service_id == s.id)
@@ -494,17 +494,17 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   # -----------------------------------------------------------------------
-  # breakdown_by_team/1
+  # breakdown_by_group/1
   # -----------------------------------------------------------------------
 
   @doc """
-  Returns per-team aggregate metrics ranked by total cost (descending).
+  Returns per-group aggregate metrics ranked by total cost (descending).
 
   Each row is:
 
       %{
-        team_id: binary,
-        team_name: String.t(),
+        group_id: binary,
+        group_name: String.t(),
         request_count: integer,
         cost_usd: Decimal,  # what the upstream charged for the request
         prompt_tokens: integer,
@@ -518,24 +518,24 @@ defmodule Tokengate.Metrics.Rollup do
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
   """
-  @spec breakdown_by_team(keyword()) :: [map()]
-  def breakdown_by_team(opts \\ [])
+  @spec breakdown_by_group(keyword()) :: [map()]
+  def breakdown_by_group(opts \\ [])
 
-  def breakdown_by_team(opts) do
+  def breakdown_by_group(opts) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
     query =
       RequestLog
-      |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
-      |> join(:inner, [_, tm], t in assoc(tm, :team))
+      |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
+      |> join(:inner, [_, tm], t in assoc(tm, :group))
       |> maybe_from(from)
       |> maybe_to(to)
       |> group_by([rl, _, t], t.id)
       |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
       |> select([rl, _, t], %{
-        team_id: t.id,
-        team_name: t.name,
+        group_id: t.id,
+        group_name: t.name,
         request_count: count(rl.id),
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
@@ -547,8 +547,8 @@ defmodule Tokengate.Metrics.Rollup do
     Repo.all(query)
     |> Enum.map(fn row ->
       %{
-        team_id: row.team_id,
-        team_name: row.team_name,
+        group_id: row.group_id,
+        group_name: row.group_name,
         request_count: row.request_count,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
         prompt_tokens: row.prompt_tokens,
@@ -592,7 +592,7 @@ defmodule Tokengate.Metrics.Rollup do
 
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
-    * `:member_ids` — restrict to logs of these team-member ids (scoping)
+    * `:member_ids` — restrict to logs of these group-member ids (scoping)
   """
   @spec breakdown_by_provider_for_model(String.t() | nil, keyword()) :: [map()]
   def breakdown_by_provider_for_model(model_id, opts \\ [])
@@ -658,9 +658,9 @@ defmodule Tokengate.Metrics.Rollup do
   Each row is:
 
       %{
-        team_member_id: binary,
+        group_member_id: binary,
         user_id: binary,
-        team_name: String.t(),
+        group_name: String.t(),
         user_email: String.t(),
         request_count: integer,
         cost_usd: Decimal,  # what the upstream charged for the request
@@ -675,7 +675,7 @@ defmodule Tokengate.Metrics.Rollup do
 
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
-    * `:member_ids` — restrict to logs of these team-member ids (scoping)
+    * `:member_ids` — restrict to logs of these group-member ids (scoping)
   """
   @spec breakdown_by_member_for_model(String.t() | nil, keyword()) :: [map()]
   def breakdown_by_member_for_model(model_id, opts \\ [])
@@ -690,8 +690,8 @@ defmodule Tokengate.Metrics.Rollup do
     query =
       RequestLog
       |> where([rl], rl.model_id == ^model_id)
-      |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
-      |> join(:inner, [_, tm], t in assoc(tm, :team))
+      |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
+      |> join(:inner, [_, tm], t in assoc(tm, :group))
       |> join(:inner, [_, tm], u in assoc(tm, :user))
       |> maybe_from(from)
       |> maybe_to(to)
@@ -699,9 +699,9 @@ defmodule Tokengate.Metrics.Rollup do
       |> group_by([rl, tm, t, u], [tm.id, t.id, u.id])
       |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
       |> select([rl, tm, t, u], %{
-        team_member_id: tm.id,
+        group_member_id: tm.id,
         user_id: u.id,
-        team_name: t.name,
+        group_name: t.name,
         user_email: u.email,
         request_count: count(rl.id),
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
@@ -713,9 +713,9 @@ defmodule Tokengate.Metrics.Rollup do
     Repo.all(query)
     |> Enum.map(fn row ->
       %{
-        team_member_id: row.team_member_id,
+        group_member_id: row.group_member_id,
         user_id: row.user_id,
-        team_name: row.team_name,
+        group_name: row.group_name,
         user_email: row.user_email,
         request_count: row.request_count,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
@@ -727,18 +727,18 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   # -----------------------------------------------------------------------
-  # breakdown_by_team_for_model/2
+  # breakdown_by_group_for_model/2
   # -----------------------------------------------------------------------
 
   @doc """
-  Returns per-team aggregate metrics for a specific model model,
+  Returns per-group aggregate metrics for a specific model model,
   ranked by total provider cost (descending).
 
   Each row is:
 
       %{
-        team_id: binary,
-        team_name: String.t(),
+        group_id: binary,
+        group_name: String.t(),
         request_count: integer,
         cost_usd: Decimal,  # what the upstream charged for the request
         prompt_tokens: integer,
@@ -753,12 +753,12 @@ defmodule Tokengate.Metrics.Rollup do
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
   """
-  @spec breakdown_by_team_for_model(String.t() | nil, keyword()) :: [map()]
-  def breakdown_by_team_for_model(model_id, opts \\ [])
+  @spec breakdown_by_group_for_model(String.t() | nil, keyword()) :: [map()]
+  def breakdown_by_group_for_model(model_id, opts \\ [])
 
-  def breakdown_by_team_for_model(nil, _opts), do: []
+  def breakdown_by_group_for_model(nil, _opts), do: []
 
-  def breakdown_by_team_for_model(model_id, opts)
+  def breakdown_by_group_for_model(model_id, opts)
       when is_binary(model_id) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
@@ -766,15 +766,15 @@ defmodule Tokengate.Metrics.Rollup do
     query =
       RequestLog
       |> where([rl], rl.model_id == ^model_id)
-      |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
-      |> join(:inner, [_, tm], t in assoc(tm, :team))
+      |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
+      |> join(:inner, [_, tm], t in assoc(tm, :group))
       |> maybe_from(from)
       |> maybe_to(to)
       |> group_by([rl, _, t], t.id)
       |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
       |> select([rl, _, t], %{
-        team_id: t.id,
-        team_name: t.name,
+        group_id: t.id,
+        group_name: t.name,
         request_count: count(rl.id),
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
@@ -785,8 +785,8 @@ defmodule Tokengate.Metrics.Rollup do
     Repo.all(query)
     |> Enum.map(fn row ->
       %{
-        team_id: row.team_id,
-        team_name: row.team_name,
+        group_id: row.group_id,
+        group_name: row.group_name,
         request_count: row.request_count,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
         prompt_tokens: row.prompt_tokens,
@@ -838,9 +838,9 @@ defmodule Tokengate.Metrics.Rollup do
     * `:to`   — `inserted_at <= to` (DateTime)
   """
   @spec provider_ranking(String.t() | nil, keyword()) :: [map()]
-  def provider_ranking(team_id \\ nil, opts \\ [])
+  def provider_ranking(group_id \\ nil, opts \\ [])
 
-  def provider_ranking(team_id, opts) do
+  def provider_ranking(group_id, opts) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
@@ -848,7 +848,7 @@ defmodule Tokengate.Metrics.Rollup do
       RequestLog
       |> where([rl], not is_nil(rl.provider_id))
       |> join(:inner, [rl], p in Tokengate.Providers.Provider, on: rl.provider_id == p.id)
-      |> maybe_join_team(team_id)
+      |> maybe_join_group(group_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> group_by([rl, p], [rl.provider_id, p.name])
@@ -954,12 +954,12 @@ defmodule Tokengate.Metrics.Rollup do
   ## Options
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
-    * `:member_ids` — restrict to logs of these team-member ids (scoping)
+    * `:member_ids` — restrict to logs of these group-member ids (scoping)
   """
   @spec model_ranking(String.t() | nil, keyword()) :: [map()]
-  def model_ranking(team_id \\ nil, opts \\ [])
+  def model_ranking(group_id \\ nil, opts \\ [])
 
-  def model_ranking(team_id, opts) do
+  def model_ranking(group_id, opts) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
@@ -967,7 +967,7 @@ defmodule Tokengate.Metrics.Rollup do
       RequestLog
       |> where([rl], not is_nil(rl.model_id))
       |> join(:inner, [rl], ma in Model, on: rl.model_id == ma.id)
-      |> maybe_join_team(team_id)
+      |> maybe_join_group(group_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
@@ -1017,18 +1017,18 @@ defmodule Tokengate.Metrics.Rollup do
 
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
-    * `:member_ids` — restrict to logs of these team-member ids (scoping)
+    * `:member_ids` — restrict to logs of these group-member ids (scoping)
     * `:timezone` — IANA zone for the hour-of-day extraction; default `"Etc/UTC"`
   """
   @spec usage_by_hour_of_day(String.t() | nil, keyword()) :: [map()]
-  def usage_by_hour_of_day(team_id \\ nil, opts \\ []) do
+  def usage_by_hour_of_day(group_id \\ nil, opts \\ []) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
     timezone = Keyword.get(opts, :timezone, "Etc/UTC")
 
     counts =
       RequestLog
-      |> maybe_join_team(team_id)
+      |> maybe_join_group(group_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
@@ -1083,11 +1083,11 @@ defmodule Tokengate.Metrics.Rollup do
 
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
-    * `:member_ids` — restrict to logs of these team-member ids (scoping)
+    * `:member_ids` — restrict to logs of these group-member ids (scoping)
     * `:timezone` — IANA zone for the hour-of-day extraction; default `"Etc/UTC"`
   """
   @spec usage_by_hour_of_day_stacked(String.t() | nil, keyword()) :: [map()]
-  def usage_by_hour_of_day_stacked(team_id \\ nil, opts \\ []) do
+  def usage_by_hour_of_day_stacked(group_id \\ nil, opts \\ []) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
     timezone = Keyword.get(opts, :timezone, "Etc/UTC")
@@ -1099,7 +1099,7 @@ defmodule Tokengate.Metrics.Rollup do
       )
       |> join(:left, [rl, mp], c in Tokengate.Providers.Credential, on: mp.credential_id == c.id)
       |> join(:left, [rl, mp, c], p in Tokengate.Providers.Provider, on: c.provider_id == p.id)
-      |> maybe_join_team(team_id)
+      |> maybe_join_group(group_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
@@ -1211,7 +1211,7 @@ defmodule Tokengate.Metrics.Rollup do
 
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
-    * `:member_ids` — restrict to logs of these team-member ids (scoping)
+    * `:member_ids` — restrict to logs of these group-member ids (scoping)
   """
   @spec usage_by_model_provider_stacked(keyword()) :: [map()]
   def usage_by_model_provider_stacked(opts \\ []) do
@@ -1315,21 +1315,21 @@ defmodule Tokengate.Metrics.Rollup do
   período, ordenadas desc. Cada fila: `%{bucket: DateTime, request_count}`.
   """
   @spec busiest_hours(String.t() | nil, keyword()) :: [map()]
-  def busiest_hours(team_id \\ nil, opts \\ []),
-    do: busiest_buckets(team_id, "hour", opts)
+  def busiest_hours(group_id \\ nil, opts \\ []),
+    do: busiest_buckets(group_id, "hour", opts)
 
   @doc """
   Top N minutos (buckets `date_trunc('minute')`) con más requests en el
   período, ordenados desc. Cada fila: `%{bucket: DateTime, request_count}`.
   """
   @spec busiest_minutes(String.t() | nil, keyword()) :: [map()]
-  def busiest_minutes(team_id \\ nil, opts \\ []),
-    do: busiest_buckets(team_id, "minute", opts)
+  def busiest_minutes(group_id \\ nil, opts \\ []),
+    do: busiest_buckets(group_id, "minute", opts)
 
   # El unit va como bind param (`^unit`); el bucket se materializa en una
   # subquery para que GROUP BY/ORDER BY/SELECT compartan la misma columna
   # (Postgres rechaza expresiones parametrizadas formalmente distintas).
-  defp busiest_buckets(team_id, unit, opts) when unit in ["hour", "minute"] do
+  defp busiest_buckets(group_id, unit, opts) when unit in ["hour", "minute"] do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
     limit = Keyword.get(opts, :limit, 5)
@@ -1337,7 +1337,7 @@ defmodule Tokengate.Metrics.Rollup do
 
     bucketed =
       RequestLog
-      |> maybe_join_team(team_id)
+      |> maybe_join_group(group_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
@@ -1394,13 +1394,13 @@ defmodule Tokengate.Metrics.Rollup do
     * `:to`   — `inserted_at <= to` (DateTime)
   """
   @spec peak_concurrency(String.t() | nil, keyword()) :: map()
-  def peak_concurrency(team_id \\ nil, opts \\ []) do
+  def peak_concurrency(group_id \\ nil, opts \\ []) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
     events =
       RequestLog
-      |> maybe_join_team(team_id)
+      |> maybe_join_group(group_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> select([rl], %{inserted_at: rl.inserted_at, latency_ms: rl.latency_ms})
@@ -1440,7 +1440,7 @@ defmodule Tokengate.Metrics.Rollup do
   # -----------------------------------------------------------------------
 
   @doc """
-  Clasifica a los miembros de un equipo en 3 tiers de uso: alto, regular, bajo.
+  Clasifica a los miembros de un grupo en 3 tiers de uso: alto, regular, bajo.
 
   Combina volumen (tokens, costo, requests), frecuencia (días activos),
   y concurrencia (pico de requests simultáneos por minuto) en un score
@@ -1455,8 +1455,8 @@ defmodule Tokengate.Metrics.Rollup do
   ## Métricas por miembro
 
       %{
-        team_member_id: binary,
-        team_name: String.t(),
+        group_member_id: binary,
+        group_name: String.t(),
         user_email: String.t(),
         user_name: String.t() | nil,
         request_count: integer,
@@ -1475,19 +1475,19 @@ defmodule Tokengate.Metrics.Rollup do
 
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
-    * `:member_ids` — restrict to logs of these team-member ids (scoping)
+    * `:member_ids` — restrict to logs of these group-member ids (scoping)
   """
   @spec member_usage_tiers(String.t() | nil, keyword()) :: [map()]
-  def member_usage_tiers(team_id \\ nil, opts \\ []) do
+  def member_usage_tiers(group_id \\ nil, opts \\ []) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
     base_query =
       RequestLog
-      |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
-      |> join(:inner, [_, tm], t in assoc(tm, :team))
+      |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
+      |> join(:inner, [_, tm], t in assoc(tm, :group))
       |> join(:inner, [_, tm], u in assoc(tm, :user))
-      |> maybe_member_team_filter(team_id)
+      |> maybe_member_group_filter(group_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
@@ -1497,8 +1497,8 @@ defmodule Tokengate.Metrics.Rollup do
       base_query
       |> group_by([rl, tm, t, u], [tm.id, t.name, u.email, u.name])
       |> select([rl, tm, t, u], %{
-        team_member_id: tm.id,
-        team_name: t.name,
+        group_member_id: tm.id,
+        group_name: t.name,
         user_email: u.email,
         user_name: u.name,
         request_count: count(rl.id),
@@ -1516,7 +1516,7 @@ defmodule Tokengate.Metrics.Rollup do
         Map.put(row, :cost_usd, Decimal.new(to_string(row.cost_usd)))
       end)
 
-    member_ids = Enum.map(members, & &1.team_member_id)
+    member_ids = Enum.map(members, & &1.group_member_id)
 
     # RPM stats per member (peak, avg, p95)
     rpm_stats = rpm_stats_per_member(member_ids, from, to)
@@ -1524,7 +1524,7 @@ defmodule Tokengate.Metrics.Rollup do
     # Merge and compute score + tier
     members
     |> Enum.map(fn member ->
-      stats = Map.get(rpm_stats, member.team_member_id, %{})
+      stats = Map.get(rpm_stats, member.group_member_id, %{})
 
       member
       |> Map.merge(%{
@@ -1542,20 +1542,20 @@ defmodule Tokengate.Metrics.Rollup do
     # Bucket requests by minute per member
     minute_buckets =
       RequestLog
-      |> where([rl], rl.team_member_id in ^member_ids)
+      |> where([rl], rl.group_member_id in ^member_ids)
       |> maybe_from(from)
       |> maybe_to(to)
       |> select([rl], %{
-        team_member_id: rl.team_member_id,
+        group_member_id: rl.group_member_id,
         minute: fragment("date_trunc('minute', ?)", rl.inserted_at)
       })
       |> subquery()
 
     query =
       from(m in minute_buckets,
-        group_by: [m.team_member_id, m.minute],
+        group_by: [m.group_member_id, m.minute],
         select: %{
-          team_member_id: m.team_member_id,
+          group_member_id: m.group_member_id,
           minute: m.minute,
           rpm: count()
         }
@@ -1564,7 +1564,7 @@ defmodule Tokengate.Metrics.Rollup do
     rows = Repo.all(query)
 
     rows
-    |> Enum.group_by(& &1.team_member_id)
+    |> Enum.group_by(& &1.group_member_id)
     |> Map.new(fn {member_id, member_rows} ->
       rpms = Enum.map(member_rows, & &1.rpm)
       count = length(rpms)
@@ -1647,17 +1647,17 @@ defmodule Tokengate.Metrics.Rollup do
     * `:from`  — `inserted_at >= from` (DateTime)
     * `:to`    — `inserted_at <= to` (DateTime)
     * `:limit` — default 5
-    * `:member_ids` — restrict to logs of these team-member ids (scoping)
+    * `:member_ids` — restrict to logs of these group-member ids (scoping)
   """
   @spec top_errors(String.t() | nil, keyword()) :: [map()]
-  def top_errors(team_id \\ nil, opts \\ []) do
+  def top_errors(group_id \\ nil, opts \\ []) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
     limit = Keyword.get(opts, :limit, 5)
 
     RequestLog
     |> where([rl], rl.status_code >= 400)
-    |> maybe_join_team(team_id)
+    |> maybe_join_group(group_id)
     |> maybe_from(from)
     |> maybe_to(to)
     |> maybe_member_ids(Keyword.get(opts, :member_ids))
@@ -1815,7 +1815,7 @@ defmodule Tokengate.Metrics.Rollup do
     * `:from` — DateTime (required)
     * `:to`   — DateTime (optional)
     * `:timezone` — IANA zone; default `"Etc/UTC"`
-    * `:member_ids` — restrict to these team-member ids; `nil` = org-wide
+    * `:member_ids` — restrict to these group-member ids; `nil` = org-wide
   """
   @spec hourly_series_from_rollup(keyword()) :: [map()]
   def hourly_series_from_rollup(opts \\ []) do
@@ -1880,7 +1880,7 @@ defmodule Tokengate.Metrics.Rollup do
     # Postgres rejects parametrized GROUP BY vs SELECT).
     bucketed =
       RequestLog
-      |> where([rl], rl.team_member_id in ^member_ids and rl.inserted_at >= ^from)
+      |> where([rl], rl.group_member_id in ^member_ids and rl.inserted_at >= ^from)
       |> maybe_to(to)
       |> select([rl], %{
         bucket:
@@ -2078,7 +2078,7 @@ defmodule Tokengate.Metrics.Rollup do
   defp maybe_rollup_member_ids(query, nil), do: query
 
   defp maybe_rollup_member_ids(query, member_ids) when is_list(member_ids) do
-    where(query, [m], m.team_member_id in ^member_ids)
+    where(query, [m], m.group_member_id in ^member_ids)
   end
 
   # Integer micro-USD → Decimal USD (6dp), same convention as the Collector.
@@ -2092,10 +2092,10 @@ defmodule Tokengate.Metrics.Rollup do
   # Internals
   # -----------------------------------------------------------------------
 
-  defp maybe_member_team_filter(query, nil), do: query
+  defp maybe_member_group_filter(query, nil), do: query
 
-  defp maybe_member_team_filter(query, team_id) when is_binary(team_id) do
-    where(query, [rl, tm, t, u], tm.team_id == ^team_id)
+  defp maybe_member_group_filter(query, group_id) when is_binary(group_id) do
+    where(query, [rl, tm, t, u], tm.group_id == ^group_id)
   end
 
   defp maybe_from(query, nil), do: query
@@ -2120,21 +2120,21 @@ defmodule Tokengate.Metrics.Rollup do
     DateTime.from_naive!(ndt, "Etc/UTC")
   end
 
-  defp maybe_join_team(query, nil), do: query
+  defp maybe_join_group(query, nil), do: query
 
-  defp maybe_join_team(query, team_id) when is_binary(team_id) do
+  defp maybe_join_group(query, group_id) when is_binary(group_id) do
     query
-    |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
-    |> where([rl, tm], tm.team_id == ^team_id)
+    |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
+    |> where([rl, tm], tm.group_id == ^group_id)
   end
 
-  # Scoping filter: restrict rows to the given team-member ids. `nil` means
+  # Scoping filter: restrict rows to the given group-member ids. `nil` means
   # unrestricted (admin scope); an empty list matches nothing (user with no
   # memberships sees zero rows, never org-wide data).
   defp maybe_member_ids(query, nil), do: query
 
   defp maybe_member_ids(query, member_ids) when is_list(member_ids) do
-    where(query, [rl], rl.team_member_id in ^member_ids)
+    where(query, [rl], rl.group_member_id in ^member_ids)
   end
 
   # Single service_id filter (used for service drill-down).
@@ -2206,25 +2206,25 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   # -----------------------------------------------------------------------
-  # daily_series_by_model_for_team/2
+  # daily_series_by_model_for_group/2
   # -----------------------------------------------------------------------
-  # Daily request count per model for a specific team.
-  # Used by the teams drill-down sparkline chart.
+  # Daily request count per model for a specific group.
+  # Used by the groups drill-down sparkline chart.
 
-  def daily_series_by_model_for_team(team_id, opts \\ [])
+  def daily_series_by_model_for_group(group_id, opts \\ [])
 
-  def daily_series_by_model_for_team(nil, _opts), do: []
+  def daily_series_by_model_for_group(nil, _opts), do: []
 
-  def daily_series_by_model_for_team(team_id, opts)
-      when is_binary(team_id) do
+  def daily_series_by_model_for_group(group_id, opts)
+      when is_binary(group_id) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
     timezone = Keyword.get(opts, :timezone, "Etc/UTC")
 
     bucketed =
       RequestLog
-      |> join(:inner, [rl], tm in TeamMember, on: rl.team_member_id == tm.id)
-      |> where([rl, tm], tm.team_id == ^team_id)
+      |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
+      |> where([rl, tm], tm.group_id == ^group_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> select([rl, tm], %{
@@ -2264,7 +2264,7 @@ defmodule Tokengate.Metrics.Rollup do
   # -----------------------------------------------------------------------
   # daily_series_by_model_for_service/2
   # -----------------------------------------------------------------------
-  # Daily request count per model for a specific service (team_member_id).
+  # Daily request count per model for a specific service (group_member_id).
   # Used by the services drill-down sparkline chart.
 
   def daily_series_by_model_for_service(service_id, opts \\ [])

@@ -129,9 +129,9 @@ defmodule TokengateWeb.ProxyControllerTest do
   defp proxy_fixture(opts \\ %{}) do
     u = unique()
 
-    {:ok, team} =
-      Accounts.create_team(%{
-        name: "Team #{u}",
+    {:ok, group} =
+      Accounts.create_group(%{
+        name: "Group #{u}",
         monthly_budget_per_user_usd: Map.get(opts, :daily_budget, "100.00"),
         default_rpm_limit: Map.get(opts, :rpm_limit, 600),
         default_concurrency_limit: Map.get(opts, :concurrency_limit, 10)
@@ -145,10 +145,10 @@ defmodule TokengateWeb.ProxyControllerTest do
       })
 
     {:ok, member} =
-      Accounts.create_team_member(%{
+      Accounts.create_group_member(%{
         user_id: user.id,
-        team_id: team.id,
-        team_role: "user",
+        group_id: group.id,
+        group_role: "user",
         extra_monthly_budget_usd: Map.get(opts, :extra_daily_budget),
         extra_concurrency: Map.get(opts, :extra_concurrency),
         extra_rpm: Map.get(opts, :extra_rpm)
@@ -183,7 +183,7 @@ defmodule TokengateWeb.ProxyControllerTest do
         daily_limit_per_user_usd: Map.get(opts, :model_per_user_cap)
       })
 
-    {:ok, _grant} = Providers.grant_model_to_team(team.id, model.id)
+    {:ok, _grant} = Providers.grant_model_to_group(group.id, model.id)
 
     {:ok, model_provider} =
       Providers.create_model_provider(%{
@@ -194,7 +194,7 @@ defmodule TokengateWeb.ProxyControllerTest do
       })
 
     %{
-      team: team,
+      group: group,
       user: user,
       member: member,
       token: token,
@@ -291,7 +291,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert_enqueued(worker: WriteWorker)
     assert %{success: 1} = Oban.drain_queue(queue: :logs)
 
-    log = Repo.one(from l in RequestLog, where: l.team_member_id == ^member.id)
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
     assert log.agent_type == "claude-code"
     assert log.model_requested == model.name
     assert log.model_responded =~ "gpt-4o-real"
@@ -337,8 +337,8 @@ defmodule TokengateWeb.ProxyControllerTest do
   end
 
   @tag :capture_log
-  test "rejected budget requests do not leak team concurrency slots", %{conn: conn} do
-    # Regression: budget gates used to run AFTER acquire_team_limits, and the
+  test "rejected budget requests do not leak group concurrency slots", %{conn: conn} do
+    # Regression: budget gates used to run AFTER acquire_group_limits, and the
     # concurrency slot was only released inside the try/after that never ran
     # when the `with` short-circuited. N rejected requests leaked N slots and
     # the member ended up permanently 429-blocked (no sweeper on the
@@ -387,7 +387,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert json_response(conn, 200)
   end
 
-  test "402 when estimated cost exceeds the daily budget (nil team budget is unlimited)", %{
+  test "402 when estimated cost exceeds the daily budget (nil group budget is unlimited)", %{
     conn: conn
   } do
     # Nil daily budget means unlimited pool — should pass.
@@ -401,9 +401,9 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert json_response(conn, 200)
   end
 
-  test "member extra daily budget raises the effective team limit", %{conn: conn} do
+  test "member extra daily budget raises the effective group limit", %{conn: conn} do
     # Both caps allow the upstream-reported cost of $0.00015; the second
-    # request also passes since daily spend ($0.00030) < team + member cap.
+    # request also passes since daily spend ($0.00030) < group + member cap.
     %{token: token, model: model} =
       proxy_fixture(%{daily_budget: "0.001", extra_daily_budget: "0.01"})
 
@@ -415,7 +415,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert json_response(conn, 200)
   end
 
-  test "429 when team concurrency limit is exceeded", %{conn: conn} do
+  test "429 when group concurrency limit is exceeded", %{conn: conn} do
     %{token: token, model: model, member: member} =
       proxy_fixture(%{concurrency_limit: 1})
 
@@ -1061,7 +1061,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert_enqueued(worker: WriteWorker)
     assert %{success: 1} = Oban.drain_queue(queue: :logs)
 
-    log = Repo.one(from l in RequestLog, where: l.team_member_id == ^member.id)
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
     assert log.streaming == true
     assert log.prompt_tokens == 20
     assert log.completion_tokens == 2
@@ -1168,7 +1168,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert_enqueued(worker: WriteWorker)
     assert %{success: 1} = Oban.drain_queue(queue: :logs)
 
-    log = Repo.one(from l in RequestLog, where: l.team_member_id == ^member.id)
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
     assert log.request_type == "embedding"
     assert log.prompt_tokens == 11
     assert log.completion_tokens == 0

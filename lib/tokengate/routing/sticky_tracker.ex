@@ -123,7 +123,7 @@ defmodule Tokengate.Routing.StickyTracker do
   @doc """
   Drops all sticky entries for the given `api_key_hash` across every model model.
 
-  Useful when an admin wants to force a team member off their current provider
+  Useful when an admin wants to force a group member off their current provider
   so routing can rebalance them on the next request.
   """
   @spec clear_all_for_api_key_hash(binary()) :: :ok

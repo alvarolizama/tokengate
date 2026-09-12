@@ -24,7 +24,7 @@ defmodule Tokengate.Observability.WebhookWorker do
   ## Dispatch
 
   `dispatch/1` is a plain function (not the worker callback) that resolves
-  all destinations for a request log's team (via the team member) and
+  all destinations for a request log's group (via the group member) and
   enqueues one `WebhookWorker` job per destination, batching the log ids.
   """
 
@@ -33,7 +33,7 @@ defmodule Tokengate.Observability.WebhookWorker do
     max_attempts: 5
 
   import Ecto.Query, warn: false
-  alias Tokengate.Accounts.TeamMember
+  alias Tokengate.Accounts.GroupMember
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Observability.Destination
   alias Tokengate.Observability.OtlpBuilder
@@ -50,7 +50,7 @@ defmodule Tokengate.Observability.WebhookWorker do
         from rl in RequestLog,
           where: rl.id in ^log_ids,
           order_by: [asc: rl.inserted_at],
-          preload: [team_member: [:user, :team]]
+          preload: [group_member: [:user, :group]]
       )
 
     if logs == [] do
@@ -77,22 +77,22 @@ defmodule Tokengate.Observability.WebhookWorker do
   end
 
   @doc """
-  Resolves all observability destinations for the request log's team (via
-  the team member) and enqueues one `WebhookWorker` job per destination.
+  Resolves all observability destinations for the request log's group (via
+  the group member) and enqueues one `WebhookWorker` job per destination.
 
   Returns `{:ok, count}` where `count` is the number of jobs enqueued.
   Returns `{:ok, 0}` if no destinations are configured or if the request
-  log has no team member.
+  log has no group member.
   """
   @spec dispatch(RequestLog.t()) :: {:ok, non_neg_integer()}
-  def dispatch(%RequestLog{id: log_id, team_member_id: tm_id} = _request_log)
+  def dispatch(%RequestLog{id: log_id, group_member_id: tm_id} = _request_log)
       when is_binary(log_id) and is_binary(tm_id) do
-    team_member = Repo.get(TeamMember, tm_id)
-    team_id = team_member && team_member.team_id
+    group_member = Repo.get(GroupMember, tm_id)
+    group_id = group_member && group_member.group_id
 
     destinations =
-      if team_id do
-        Tokengate.Observability.list_destinations(team_id)
+      if group_id do
+        Tokengate.Observability.list_destinations(group_id)
       else
         []
       end

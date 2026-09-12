@@ -1,6 +1,6 @@
 defmodule Tokengate.Budgets.Exemption do
   @moduledoc """
-  A budget exemption — a user, team or service excluded from one of the
+  A budget exemption — a user, group or service excluded from one of the
   daily spending caps.
 
   `scope` selects which cap the subject is exempt from:
@@ -11,23 +11,23 @@ defmodule Tokengate.Budgets.Exemption do
       (`GlobalSettings.daily_max_per_user_usd`).
 
   The three subject FKs are mutually exclusive; which one applies is
-  determined by `subject_type` (`"user"`, `"team"`, `"service"`).
+  determined by `subject_type` (`"user"`, `"group"`, `"service"`).
   """
 
   use Ecto.Schema
 
   import Ecto.Changeset
-  alias Tokengate.Accounts.{Service, Team, User}
+  alias Tokengate.Accounts.{Service, Group, User}
 
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
   @scopes ~w(global_daily user_daily)
-  @subject_types ~w(user team service)
+  @subject_types ~w(user group service)
 
   @subject_fields %{
     "user" => :user_id,
-    "team" => :team_id,
+    "group" => :group_id,
     "service" => :service_id
   }
 
@@ -37,7 +37,7 @@ defmodule Tokengate.Budgets.Exemption do
     field :note, :string
 
     belongs_to :user, User
-    belongs_to :team, Team
+    belongs_to :group, Group
     belongs_to :service, Service
 
     timestamps(type: :utc_datetime)
@@ -45,19 +45,19 @@ defmodule Tokengate.Budgets.Exemption do
 
   def changeset(exemption, attrs) do
     exemption
-    |> cast(attrs, [:scope, :subject_type, :user_id, :team_id, :service_id, :note])
+    |> cast(attrs, [:scope, :subject_type, :user_id, :group_id, :service_id, :note])
     |> validate_required([:scope, :subject_type])
     |> validate_inclusion(:scope, @scopes)
     |> validate_inclusion(:subject_type, @subject_types)
     |> validate_subject()
     |> foreign_key_constraint(:user_id)
-    |> foreign_key_constraint(:team_id)
+    |> foreign_key_constraint(:group_id)
     |> foreign_key_constraint(:service_id)
     |> unique_constraint(:user_id, name: :budget_exemptions_global_daily_user_unique)
-    |> unique_constraint(:team_id, name: :budget_exemptions_global_daily_team_unique)
+    |> unique_constraint(:group_id, name: :budget_exemptions_global_daily_group_unique)
     |> unique_constraint(:service_id, name: :budget_exemptions_global_daily_service_unique)
     |> unique_constraint(:user_id, name: :budget_exemptions_user_daily_user_unique)
-    |> unique_constraint(:team_id, name: :budget_exemptions_user_daily_team_unique)
+    |> unique_constraint(:group_id, name: :budget_exemptions_user_daily_group_unique)
     |> unique_constraint(:service_id, name: :budget_exemptions_user_daily_service_unique)
   end
 
@@ -67,7 +67,7 @@ defmodule Tokengate.Budgets.Exemption do
   @doc "List of valid subject types."
   def subject_types, do: @subject_types
 
-  @doc "Maps a subject_type to its FK field (:user_id | :team_id | :service_id)."
+  @doc "Maps a subject_type to its FK field (:user_id | :group_id | :service_id)."
   def subject_field(subject_type), do: Map.get(@subject_fields, subject_type)
 
   # Exactly one subject FK must be set, and it must match subject_type.
@@ -80,7 +80,7 @@ defmodule Tokengate.Budgets.Exemption do
         add_error(changeset, :subject_type, "inválido")
 
       field ->
-        set_ids = Enum.count([:user_id, :team_id, :service_id], &get_field(changeset, &1))
+        set_ids = Enum.count([:user_id, :group_id, :service_id], &get_field(changeset, &1))
 
         cond do
           is_nil(get_field(changeset, field)) ->

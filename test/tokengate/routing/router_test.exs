@@ -30,14 +30,14 @@ defmodule Tokengate.Routing.RouterTest do
   # which may not be compiled in isolation.)
   # ---------------------------------------------------------------------------
 
-  defmodule TestTeam do
+  defmodule TestGroup do
     use Ecto.Schema
     import Ecto.Changeset
 
     @primary_key {:id, :binary_id, autogenerate: true}
     @foreign_key_type :binary_id
 
-    schema "teams" do
+    schema "groups" do
       field :name, :string
       field :monthly_budget_per_user_usd, :decimal
       field :default_concurrency_limit, :integer, default: 5
@@ -45,8 +45,8 @@ defmodule Tokengate.Routing.RouterTest do
       timestamps(type: :utc_datetime)
     end
 
-    def changeset(team, attrs) do
-      team
+    def changeset(group, attrs) do
+      group
       |> cast(attrs, [:name, :default_concurrency_limit, :default_rpm_limit])
       |> validate_required([:name])
     end
@@ -74,27 +74,27 @@ defmodule Tokengate.Routing.RouterTest do
     end
   end
 
-  defmodule TestTeamMember do
+  defmodule TestGroupMember do
     use Ecto.Schema
     import Ecto.Changeset
 
     @primary_key {:id, :binary_id, autogenerate: true}
     @foreign_key_type :binary_id
 
-    schema "team_members" do
-      field :team_role, :string, default: "user"
+    schema "group_members" do
+      field :group_role, :string, default: "user"
       field :extra_monthly_budget_usd, :decimal
       field :extra_concurrency, :integer
       field :status, :string, default: "active"
-      belongs_to :team, TestTeam
+      belongs_to :group, TestGroup
       belongs_to :user, TestUser
       timestamps(type: :utc_datetime)
     end
 
     def changeset(member, attrs) do
       member
-      |> cast(attrs, [:team_id, :user_id, :team_role, :status])
-      |> validate_required([:team_id, :user_id])
+      |> cast(attrs, [:group_id, :user_id, :group_role, :status])
+      |> validate_required([:group_id, :user_id])
     end
   end
 
@@ -102,13 +102,13 @@ defmodule Tokengate.Routing.RouterTest do
   # Fixtures
   # ---------------------------------------------------------------------------
 
-  defp team_fixture(attrs \\ %{}) do
-    {:ok, team} =
-      %TestTeam{}
-      |> TestTeam.changeset(Map.merge(%{name: "Engineering"}, attrs))
+  defp group_fixture(attrs \\ %{}) do
+    {:ok, group} =
+      %TestGroup{}
+      |> TestGroup.changeset(Map.merge(%{name: "Engineering"}, attrs))
       |> Repo.insert()
 
-    team
+    group
   end
 
   defp user_fixture(attrs \\ %{}) do
@@ -127,11 +127,11 @@ defmodule Tokengate.Routing.RouterTest do
     user
   end
 
-  defp team_member_fixture(team, attrs \\ %{}) do
+  defp group_member_fixture(group, attrs \\ %{}) do
     {:ok, member} =
-      %TestTeamMember{}
-      |> TestTeamMember.changeset(
-        Map.merge(%{team_id: team.id, user_id: user_fixture().id}, attrs)
+      %TestGroupMember{}
+      |> TestGroupMember.changeset(
+        Map.merge(%{group_id: group.id, user_id: user_fixture().id}, attrs)
       )
       |> Repo.insert()
 
@@ -193,15 +193,15 @@ defmodule Tokengate.Routing.RouterTest do
     ap
   end
 
-  # Builds a full routing fixture: team, member, model (granted to team),
+  # Builds a full routing fixture: group, member, model (granted to group),
   # provider + active credential, and an enabled model_provider.
   defp full_setup(opts \\ []) do
-    team = team_fixture()
-    member = team_member_fixture(team)
+    group = group_fixture()
+    member = group_member_fixture(group)
 
     model_name = Keyword.get(opts, :model_name, "gpt-4")
     model = model_fixture(%{name: model_name})
-    {:ok, _} = Providers.grant_model_to_team(team.id, model.id)
+    {:ok, _} = Providers.grant_model_to_group(group.id, model.id)
 
     provider = provider_fixture()
     credential = credential_fixture(provider, %{status: "active"})
@@ -213,10 +213,10 @@ defmodule Tokengate.Routing.RouterTest do
         credential: credential
       })
 
-    member = Repo.preload(member, [:team])
+    member = Repo.preload(member, [:group])
 
     %{
-      team: team,
+      group: group,
       member: member,
       model: model,
       provider: provider,
@@ -241,10 +241,10 @@ defmodule Tokengate.Routing.RouterTest do
       assert route.model_responded == "gpt-4-turbo"
     end
 
-    test "works without team preloaded (preloads internally)" do
+    test "works without group preloaded (preloads internally)" do
       f = full_setup()
-      # Strip the preloaded team
-      member = Map.put(f.member, :team, nil)
+      # Strip the preloaded group
+      member = Map.put(f.member, :group, nil)
 
       assert {:ok, route} = Router.route(f.model.name, member)
       assert route.model.id == f.model.id
@@ -256,23 +256,23 @@ defmodule Tokengate.Routing.RouterTest do
   # ---------------------------------------------------------------------------
 
   describe "access control" do
-    test "returns model_not_found when model is not accessible (no team grant)" do
-      team = team_fixture()
-      member = team_member_fixture(team)
+    test "returns model_not_found when model is not accessible (no group grant)" do
+      group = group_fixture()
+      member = group_member_fixture(group)
 
-      # Alias exists but is NOT granted to the team.
+      # Alias exists but is NOT granted to the group.
       model = model_fixture(%{name: "claude"})
 
-      member = Repo.preload(member, [:team])
+      member = Repo.preload(member, [:group])
 
       assert {:error, :model_not_found} = Router.route(model.name, member)
     end
 
     test "extra model grant makes an otherwise-unganted model accessible" do
-      team = team_fixture()
-      member = team_member_fixture(team)
+      group = group_fixture()
+      member = group_member_fixture(group)
 
-      # Alias not granted to team...
+      # Alias not granted to group...
       model = model_fixture(%{name: "claude"})
       # ...but granted as an extra model to the member directly.
       {:ok, _} = Providers.grant_extra_model(member.id, model.id)
@@ -285,7 +285,7 @@ defmodule Tokengate.Routing.RouterTest do
         credential: credential
       })
 
-      member = Repo.preload(member, [:team])
+      member = Repo.preload(member, [:group])
 
       assert {:ok, route} = Router.route(model.name, member)
       assert route.model.id == model.id
@@ -317,11 +317,11 @@ defmodule Tokengate.Routing.RouterTest do
     end
 
     test "model_provider without active credential is dropped" do
-      team = team_fixture()
-      member = team_member_fixture(team)
+      group = group_fixture()
+      member = group_member_fixture(group)
 
       model = model_fixture(%{name: "gpt-4"})
-      {:ok, _} = Providers.grant_model_to_team(team.id, model.id)
+      {:ok, _} = Providers.grant_model_to_group(group.id, model.id)
 
       provider = provider_fixture()
       # Only a disabled credential.
@@ -329,7 +329,7 @@ defmodule Tokengate.Routing.RouterTest do
 
       model_provider_fixture(model, provider, %{credential: disabled_cred})
 
-      member = Repo.preload(member, [:team])
+      member = Repo.preload(member, [:group])
 
       assert {:error, :no_available_provider} = Router.route(model.name, member)
     end
@@ -527,8 +527,8 @@ defmodule Tokengate.Routing.RouterTest do
 
   describe "models_for/1" do
     test "returns only accessible models with correct shape" do
-      team = team_fixture()
-      member = team_member_fixture(team)
+      group = group_fixture()
+      member = group_member_fixture(group)
 
       model1 =
         model_fixture(%{name: "gpt-4", context_window: 128_000})
@@ -539,10 +539,10 @@ defmodule Tokengate.Routing.RouterTest do
           context_window: 200_000
         })
 
-      # Grant only model1 to the team.
-      {:ok, _} = Providers.grant_model_to_team(team.id, model1.id)
+      # Grant only model1 to the group.
+      {:ok, _} = Providers.grant_model_to_group(group.id, model1.id)
 
-      member = Repo.preload(member, [:team])
+      member = Repo.preload(member, [:group])
 
       models = Router.models_for(member)
       names = Enum.map(models, & &1.id)
@@ -557,8 +557,8 @@ defmodule Tokengate.Routing.RouterTest do
     end
 
     test "includes extra-model grants" do
-      team = team_fixture()
-      member = team_member_fixture(team)
+      group = group_fixture()
+      member = group_member_fixture(group)
 
       model1 =
         model_fixture(%{name: "gpt-4", context_window: 128_000})
@@ -569,10 +569,10 @@ defmodule Tokengate.Routing.RouterTest do
           context_window: 200_000
         })
 
-      {:ok, _} = Providers.grant_model_to_team(team.id, model1.id)
+      {:ok, _} = Providers.grant_model_to_group(group.id, model1.id)
       {:ok, _} = Providers.grant_extra_model(member.id, model2.id)
 
-      member = Repo.preload(member, [:team])
+      member = Repo.preload(member, [:group])
 
       models = Router.models_for(member)
       ids = Enum.map(models, & &1.id) |> MapSet.new()
@@ -583,18 +583,18 @@ defmodule Tokengate.Routing.RouterTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Exclusive scope (team/member-exclusive providers)
+  # Exclusive scope (group/member-exclusive providers)
   # ---------------------------------------------------------------------------
 
   describe "exclusive scope" do
-    test "a team-exclusive provider is never selected for a member of another team" do
-      team_a = team_fixture(%{name: "Team A"})
-      team_b = team_fixture(%{name: "Team B"})
-      member_b = team_member_fixture(team_b)
+    test "a group-exclusive provider is never selected for a member of another group" do
+      group_a = group_fixture(%{name: "Group A"})
+      group_b = group_fixture(%{name: "Group B"})
+      member_b = group_member_fixture(group_b)
 
       model = model_fixture(%{name: "gpt-4"})
-      {:ok, _} = Providers.grant_model_to_team(team_a.id, model.id)
-      {:ok, _} = Providers.grant_model_to_team(team_b.id, model.id)
+      {:ok, _} = Providers.grant_model_to_group(group_a.id, model.id)
+      {:ok, _} = Providers.grant_model_to_group(group_b.id, model.id)
 
       # Global provider (fallback for everyone)
       global_provider = provider_fixture()
@@ -607,32 +607,32 @@ defmodule Tokengate.Routing.RouterTest do
           credential: global_cred
         })
 
-      # Provider exclusive to Team A
-      team_a_provider = provider_fixture()
-      team_a_cred = credential_fixture(team_a_provider, %{status: "active"})
+      # Provider exclusive to Group A
+      group_a_provider = provider_fixture()
+      group_a_cred = credential_fixture(group_a_provider, %{status: "active"})
 
-      model_provider_fixture(model, team_a_provider, %{
-        provider_model: "gpt-4-team-a",
+      model_provider_fixture(model, group_a_provider, %{
+        provider_model: "gpt-4-group-a",
         priority: 1,
-        credential: team_a_cred,
-        exclusive_to_team_id: team_a.id
+        credential: group_a_cred,
+        exclusive_to_group_id: group_a.id
       })
 
-      member_b = Repo.preload(member_b, [:team])
+      member_b = Repo.preload(member_b, [:group])
 
-      # Member B must silently skip Team A's exclusive and land on the global.
+      # Member B must silently skip Group A's exclusive and land on the global.
       assert {:ok, route} = Router.route(model.name, member_b)
       assert route.model_provider.id == global_ap.id
       assert route.credential.id == global_cred.id
       assert route.model_responded == "gpt-4-global"
     end
 
-    test "a team-exclusive provider is picked first (priority -1) for its own team" do
-      team_a = team_fixture(%{name: "Team A"})
-      member_a = team_member_fixture(team_a)
+    test "a group-exclusive provider is picked first (priority -1) for its own group" do
+      group_a = group_fixture(%{name: "Group A"})
+      member_a = group_member_fixture(group_a)
 
       model = model_fixture(%{name: "gpt-4"})
-      {:ok, _} = Providers.grant_model_to_team(team_a.id, model.id)
+      {:ok, _} = Providers.grant_model_to_group(group_a.id, model.id)
 
       # Global provider (would win by priority 1 without exclusive boost)
       global_provider = provider_fixture()
@@ -644,34 +644,34 @@ defmodule Tokengate.Routing.RouterTest do
         credential: global_cred
       })
 
-      # Provider exclusive to Team A
-      team_a_provider = provider_fixture()
-      team_a_cred = credential_fixture(team_a_provider, %{status: "active"})
+      # Provider exclusive to Group A
+      group_a_provider = provider_fixture()
+      group_a_cred = credential_fixture(group_a_provider, %{status: "active"})
 
-      team_a_ap =
-        model_provider_fixture(model, team_a_provider, %{
-          provider_model: "gpt-4-team-a",
+      group_a_ap =
+        model_provider_fixture(model, group_a_provider, %{
+          provider_model: "gpt-4-group-a",
           priority: 1,
-          credential: team_a_cred,
-          exclusive_to_team_id: team_a.id
+          credential: group_a_cred,
+          exclusive_to_group_id: group_a.id
         })
 
-      member_a = Repo.preload(member_a, [:team])
+      member_a = Repo.preload(member_a, [:group])
 
-      # Member A must use their team's exclusive provider first.
+      # Member A must use their group's exclusive provider first.
       assert {:ok, route} = Router.route(model.name, member_a)
-      assert route.model_provider.id == team_a_ap.id
-      assert route.credential.id == team_a_cred.id
-      assert route.model_responded == "gpt-4-team-a"
+      assert route.model_provider.id == group_a_ap.id
+      assert route.credential.id == group_a_cred.id
+      assert route.model_responded == "gpt-4-group-a"
     end
 
-    test "member-exclusive provider is picked for the owner but skipped for teammates" do
-      team = team_fixture()
-      owner = team_member_fixture(team)
-      teammate = team_member_fixture(team)
+    test "member-exclusive provider is picked for the owner but skipped for groupmates" do
+      group = group_fixture()
+      owner = group_member_fixture(group)
+      groupmate = group_member_fixture(group)
 
       model = model_fixture(%{name: "gpt-4"})
-      {:ok, _} = Providers.grant_model_to_team(team.id, model.id)
+      {:ok, _} = Providers.grant_model_to_group(group.id, model.id)
 
       global_provider = provider_fixture()
       global_cred = credential_fixture(global_provider, %{status: "active"})
@@ -690,17 +690,17 @@ defmodule Tokengate.Routing.RouterTest do
         provider_model: "gpt-4-owner",
         priority: 1,
         credential: member_cred,
-        exclusive_to_team_member_id: owner.id
+        exclusive_to_group_member_id: owner.id
       })
 
-      owner = Repo.preload(owner, [:team])
-      teammate = Repo.preload(teammate, [:team])
+      owner = Repo.preload(owner, [:group])
+      groupmate = Repo.preload(groupmate, [:group])
 
       assert {:ok, owner_route} = Router.route(model.name, owner)
       assert owner_route.model_responded == "gpt-4-owner"
 
-      # Teammate silently skips the owner's exclusive and lands on the global.
-      assert {:ok, mate_route} = Router.route(model.name, teammate)
+      # Groupmate silently skips the owner's exclusive and lands on the global.
+      assert {:ok, mate_route} = Router.route(model.name, groupmate)
       assert mate_route.model_provider.id == global_ap.id
       assert mate_route.model_responded == "gpt-4-global"
     end

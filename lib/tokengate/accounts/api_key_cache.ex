@@ -3,15 +3,15 @@ defmodule Tokengate.Accounts.ApiKeyCache do
   ETS cache for proxy API key lookups.
 
   The proxy hot path (`TokengateWeb.Plugs.ApiAuth`) used to hit Postgres on
-  every request: member lookup with preloads (team, user, api_key) plus the
+  every request: member lookup with preloads (group, user, api_key) plus the
   service-key fallback. This cache stores the fully-assembled "auth entry"
-  — the resolved `TeamMember` (or virtual service member) together with its
+  — the resolved `GroupMember` (or virtual service member) together with its
   `effective_limits` — keyed by `sha256(presented_token)`, so authenticated
   requests skip the database entirely.
 
   ## Entry shape
 
-      %{member: %TeamMember{}, limits: %{monthly_budget_usd:, concurrency_limit:, rpm_limit:}, subject_type: "user" | "service"}
+      %{member: %GroupMember{}, limits: %{monthly_budget_usd:, concurrency_limit:, rpm_limit:}, subject_type: "user" | "service"}
 
   Caching the limits alongside the member avoids the extra preload/query
   `Accounts.effective_limits/1` performs for service-backed members.
@@ -25,12 +25,12 @@ defmodule Tokengate.Accounts.ApiKeyCache do
       `revoke_api_key/1`, `generate_service_api_key/1`,
       `revoke_service_api_key/1` invalidate by key hash (and by member so
       every hash of that member drops).
-    * membership/service/team edits (status, limits) — `update_team_member/1`,
-      `update_service/2`, `update_team/2` invalidate by id (team invalidates
-      every member of the team).
-    * membership/service/team deletion — `delete_team_member/1`,
-      `delete_service/1`, `delete_team/1` invalidate by id (team invalidates
-      every member of the team).
+    * membership/service/group edits (status, limits) — `update_group_member/1`,
+      `update_service/2`, `update_group/2` invalidate by id (group invalidates
+      every member of the group).
+    * membership/service/group deletion — `delete_group_member/1`,
+      `delete_service/1`, `delete_group/1` invalidate by id (group invalidates
+      every member of the group).
 
   A stale entry can survive at most `@ttl_ms`; that window bounds how long a
   revoked key or edited limit takes to propagate. 60s is the same staleness
@@ -121,10 +121,10 @@ defmodule Tokengate.Accounts.ApiKeyCache do
     :ok
   end
 
-  @doc "Drops every entry belonging to members of the given team."
-  @spec invalidate_team(term()) :: :ok
-  def invalidate_team(team_id) do
-    :ets.match_delete(@table, {:_, %{member: %{team_id: team_id}}, :_})
+  @doc "Drops every entry belonging to members of the given group."
+  @spec invalidate_group(term()) :: :ok
+  def invalidate_group(group_id) do
+    :ets.match_delete(@table, {:_, %{member: %{group_id: group_id}}, :_})
     :ok
   end
 

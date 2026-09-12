@@ -1,4 +1,4 @@
-defmodule TokengateWeb.TeamMembersLiveTest do
+defmodule TokengateWeb.GroupMembersLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
@@ -27,8 +27,8 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     |> recycle()
   end
 
-  # Builds org + team + model. The "owner" user is a member of the team.
-  defp team_with_member(_opts \\ %{}) do
+  # Builds org + group + model. The "owner" user is a member of the group.
+  defp group_with_member(_opts \\ %{}) do
     u = unique()
 
     {:ok, model} =
@@ -37,7 +37,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
         context_window: 128_000
       })
 
-    {:ok, team} = Accounts.create_team(%{name: "Team #{u}"})
+    {:ok, group} = Accounts.create_group(%{name: "Group #{u}"})
 
     {:ok, owner} =
       Accounts.register_user(%{
@@ -47,18 +47,18 @@ defmodule TokengateWeb.TeamMembersLiveTest do
       })
 
     {:ok, member} =
-      Accounts.create_team_member(%{
+      Accounts.create_group_member(%{
         user_id: owner.id,
-        team_id: team.id,
-        team_role: "user"
+        group_id: group.id,
+        group_role: "user"
       })
 
     # Provision API key for the member (required for proxy + UI display)
     {:ok, _api_key, _token} = Accounts.replace_api_key(member)
-    member = Accounts.get_team_member!(member.id)
+    member = Accounts.get_group_member!(member.id)
 
     %{
-      team: team,
+      group: group,
       model: model,
       owner: owner,
       member: member,
@@ -66,36 +66,36 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     }
   end
 
-  defp team_url(team), do: "/admin/teams/#{team.id}/members"
+  defp group_url(group), do: "/admin/groups/#{group.id}/members"
 
   # --------------------------------------------------------------------------
   # Access control
   # --------------------------------------------------------------------------
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
-    %{team: team} = team_with_member()
-    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, team_url(team))
+    %{group: group} = group_with_member()
+    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, group_url(group))
   end
 
   test "non-admin user is denied access", %{conn: conn} do
-    %{team: team, owner: owner, owner_password: password} = team_with_member()
+    %{group: group, owner: owner, owner_password: password} = group_with_member()
 
     conn = login(conn, owner, password)
-    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, team_url(team))
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, group_url(group))
   end
 
   # --------------------------------------------------------------------------
   # Admin access and render
   # --------------------------------------------------------------------------
 
-  test "admin sees members of any team", %{conn: conn} do
-    %{team: team, owner: owner} = team_with_member()
+  test "admin sees members of any group", %{conn: conn} do
+    %{group: group, owner: owner} = group_with_member()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, team_url(team))
+    {:ok, view, html} = live(conn, group_url(group))
 
-    assert html =~ "Miembros de #{team.name}"
+    assert html =~ "Miembros de #{group.name}"
     assert html =~ owner.email
     assert has_element?(view, "#new-member-btn")
   end
@@ -105,14 +105,14 @@ defmodule TokengateWeb.TeamMembersLiveTest do
   # --------------------------------------------------------------------------
 
   test "admin adds a member by email", %{conn: conn} do
-    %{team: team} = team_with_member()
+    %{group: group} = group_with_member()
     %{user: admin, password: password} = register("admin")
 
     # Register a separate user to add
     %{user: new_user} = register("user")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, team_url(team))
+    {:ok, view, _html} = live(conn, group_url(group))
 
     assert view |> element("#new-member-btn") |> render_click()
 
@@ -129,12 +129,12 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     assert html =~ "Miembro añadido"
     assert html =~ new_user.email
 
-    # Verify the team_member was created with overrides
+    # Verify the group_member was created with overrides
     member =
       Repo.get_by(
-        Tokengate.Accounts.TeamMember,
+        Tokengate.Accounts.GroupMember,
         user_id: new_user.id,
-        team_id: team.id
+        group_id: group.id
       )
 
     assert member != nil
@@ -142,16 +142,16 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     assert member.extra_concurrency == 2
     assert member.extra_rpm == 100
 
-    api_key = Repo.get_by(Tokengate.Accounts.ApiKey, team_member_id: member.id)
+    api_key = Repo.get_by(Tokengate.Accounts.ApiKey, group_member_id: member.id)
     assert api_key == nil
   end
 
   test "add member modal can be cancelled", %{conn: conn} do
-    %{team: team} = team_with_member()
+    %{group: group} = group_with_member()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, team_url(team))
+    {:ok, view, _html} = live(conn, group_url(group))
 
     assert view |> element("#new-member-btn") |> render_click()
     assert has_element?(view, "#add-member-modal")
@@ -161,11 +161,11 @@ defmodule TokengateWeb.TeamMembersLiveTest do
   end
 
   test "add member with non-existent email shows error", %{conn: conn} do
-    %{team: team} = team_with_member()
+    %{group: group} = group_with_member()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, team_url(team))
+    {:ok, view, _html} = live(conn, group_url(group))
 
     assert view |> element("#new-member-btn") |> render_click()
 
@@ -185,11 +185,11 @@ defmodule TokengateWeb.TeamMembersLiveTest do
   # --------------------------------------------------------------------------
 
   test "admin removes a member", %{conn: conn} do
-    %{team: team, member: member} = team_with_member()
+    %{group: group, member: member} = group_with_member()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, team_url(team))
+    {:ok, view, _html} = live(conn, group_url(group))
 
     assert has_element?(view, "#remove-#{member.id}")
 
@@ -198,7 +198,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     assert html =~ "Miembro eliminado"
     refute has_element?(view, "#remove-#{member.id}")
 
-    refute Repo.get(Tokengate.Accounts.TeamMember, member.id)
+    refute Repo.get(Tokengate.Accounts.GroupMember, member.id)
   end
 
   # --------------------------------------------------------------------------
@@ -206,11 +206,11 @@ defmodule TokengateWeb.TeamMembersLiveTest do
   # --------------------------------------------------------------------------
 
   test "admin edits and saves overrides", %{conn: conn} do
-    %{team: team, member: member} = team_with_member()
+    %{group: group, member: member} = group_with_member()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, team_url(team))
+    {:ok, view, _html} = live(conn, group_url(group))
 
     # Open the overrides form
     view |> element("#edit-overrides-#{member.id}") |> render_click()
@@ -228,24 +228,24 @@ defmodule TokengateWeb.TeamMembersLiveTest do
 
     assert html =~ "Extras actualizados"
 
-    updated = Repo.get!(Tokengate.Accounts.TeamMember, member.id)
+    updated = Repo.get!(Tokengate.Accounts.GroupMember, member.id)
     assert Decimal.equal?(updated.extra_monthly_budget_usd, Decimal.new("5.50"))
     assert updated.extra_concurrency == 3
   end
 
   test "overrides can be cleared with empty values", %{conn: conn} do
-    %{team: team, member: member} = team_with_member()
+    %{group: group, member: member} = group_with_member()
     %{user: admin, password: password} = register("admin")
 
     # Pre-set values
     {:ok, _} =
-      Accounts.update_team_member(member, %{
+      Accounts.update_group_member(member, %{
         extra_monthly_budget_usd: Decimal.new("10.00"),
         extra_concurrency: 5
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, team_url(team))
+    {:ok, view, _html} = live(conn, group_url(group))
 
     view |> element("#edit-overrides-#{member.id}") |> render_click()
 
@@ -261,7 +261,7 @@ defmodule TokengateWeb.TeamMembersLiveTest do
 
     assert html =~ "Extras actualizados"
 
-    updated = Repo.get!(Tokengate.Accounts.TeamMember, member.id)
+    updated = Repo.get!(Tokengate.Accounts.GroupMember, member.id)
     assert updated.extra_monthly_budget_usd == nil
     assert updated.extra_concurrency == nil
   end
@@ -271,11 +271,11 @@ defmodule TokengateWeb.TeamMembersLiveTest do
   # --------------------------------------------------------------------------
 
   test "admin toggles an extra model grant on a member", %{conn: conn} do
-    %{team: team, member: member, model: model_} = team_with_member()
+    %{group: group, member: member, model: model_} = group_with_member()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, team_url(team))
+    {:ok, view, _html} = live(conn, group_url(group))
 
     # The checkbox should be present and unchecked
     assert has_element?(view, "#extra-model-#{member.id}-#{model_.id}")
@@ -290,8 +290,8 @@ defmodule TokengateWeb.TeamMembersLiveTest do
 
     grant =
       Repo.get_by(
-        Tokengate.Providers.TeamMemberExtraModel,
-        team_member_id: member.id,
+        Tokengate.Providers.GroupMemberExtraModel,
+        group_member_id: member.id,
         model_id: model_.id
       )
 
@@ -306,18 +306,18 @@ defmodule TokengateWeb.TeamMembersLiveTest do
     assert html =~ "Modelos actualizados"
 
     refute Repo.get_by(
-             Tokengate.Providers.TeamMemberExtraModel,
-             team_member_id: member.id,
+             Tokengate.Providers.GroupMemberExtraModel,
+             group_member_id: member.id,
              model_id: model_.id
            )
   end
 
   test "admin grants extra model access (no per-model budget)", %{conn: conn} do
-    %{team: team, member: member, model: model_} = team_with_member()
+    %{group: group, member: member, model: model_} = group_with_member()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, team_url(team))
+    {:ok, view, _html} = live(conn, group_url(group))
 
     # Grant the model via checkbox toggle
     view
@@ -326,8 +326,8 @@ defmodule TokengateWeb.TeamMembersLiveTest do
 
     grant =
       Repo.get_by(
-        Tokengate.Providers.TeamMemberExtraModel,
-        team_member_id: member.id,
+        Tokengate.Providers.GroupMemberExtraModel,
+        group_member_id: member.id,
         model_id: model_.id
       )
 
@@ -335,17 +335,17 @@ defmodule TokengateWeb.TeamMembersLiveTest do
   end
 
   test "member card shows budget mensual with extra", %{conn: conn} do
-    %{team: team, member: member} = team_with_member()
+    %{group: group, member: member} = group_with_member()
 
-    Accounts.update_team(team, %{monthly_budget_per_user_usd: Decimal.new("10.00")})
+    Accounts.update_group(group, %{monthly_budget_per_user_usd: Decimal.new("10.00")})
 
     {:ok, _member} =
-      Accounts.update_team_member(member, %{extra_monthly_budget_usd: Decimal.new("12.00")})
+      Accounts.update_group_member(member, %{extra_monthly_budget_usd: Decimal.new("12.00")})
 
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, _view, html} = live(conn, team_url(team))
+    {:ok, _view, html} = live(conn, group_url(group))
 
     assert html =~ "Budget/mes"
     assert html =~ "$10.00"
@@ -356,18 +356,18 @@ defmodule TokengateWeb.TeamMembersLiveTest do
   # Empty state
   # --------------------------------------------------------------------------
 
-  test "team with no members shows empty state", %{conn: conn} do
+  test "group with no members shows empty state", %{conn: conn} do
     u = unique()
 
-    {:ok, team} = Accounts.create_team(%{name: "Empty Team #{u}"})
+    {:ok, group} = Accounts.create_group(%{name: "Empty Group #{u}"})
 
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, team_url(team))
+    {:ok, view, html} = live(conn, group_url(group))
 
     assert has_element?(view, "#members-empty")
-    assert html =~ "Este equipo no tiene miembros"
+    assert html =~ "Este grupo no tiene miembros"
   end
 
   # --------------------------------------------------------------------------
@@ -375,11 +375,11 @@ defmodule TokengateWeb.TeamMembersLiveTest do
   # --------------------------------------------------------------------------
 
   test "admin can regenerate a member's API key", %{conn: conn} do
-    %{team: team, member: member} = team_with_member()
+    %{group: group, member: member} = group_with_member()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, team_url(team))
+    {:ok, view, _html} = live(conn, group_url(group))
 
     html = view |> element("#replace-key-#{member.id}") |> render_click()
 
@@ -388,11 +388,11 @@ defmodule TokengateWeb.TeamMembersLiveTest do
   end
 
   test "admin can clear a member's sticky routes", %{conn: conn} do
-    %{team: team, member: member} = team_with_member()
+    %{group: group, member: member} = group_with_member()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, team_url(team))
+    {:ok, view, _html} = live(conn, group_url(group))
 
     assert has_element?(view, "#clear-sticky-#{member.id}")
 
@@ -402,11 +402,11 @@ defmodule TokengateWeb.TeamMembersLiveTest do
   end
 
   test "admin can revoke a member's API key", %{conn: conn} do
-    %{team: team, member: member} = team_with_member()
+    %{group: group, member: member} = group_with_member()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, team_url(team))
+    {:ok, view, _html} = live(conn, group_url(group))
 
     assert has_element?(view, "#revoke-key-#{member.id}")
 
@@ -417,11 +417,11 @@ defmodule TokengateWeb.TeamMembersLiveTest do
   end
 
   test "member card shows API key status badge", %{conn: conn} do
-    %{team: team} = team_with_member()
+    %{group: group} = group_with_member()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, _view, html} = live(conn, team_url(team))
+    {:ok, _view, html} = live(conn, group_url(group))
 
     assert html =~ "Activa"
   end

@@ -4,8 +4,8 @@ defmodule TokengateWeb.Plugs.ApiAuth do
 
   On success assigns:
 
-    * `:current_team_member` — the TeamMember (team, user, api_key preloaded)
-      OR a virtual TeamMember struct when the key belongs to a Service.
+    * `:current_group_member` — the GroupMember (group, user, api_key preloaded)
+      OR a virtual GroupMember struct when the key belongs to a Service.
     * `:api_key_hash` — sha256 hex of the presented token (sticky routing key)
     * `:agent_type` — from the `X-Agent-Type` header (default `"unknown"`)
 
@@ -18,7 +18,7 @@ defmodule TokengateWeb.Plugs.ApiAuth do
   """
   import Plug.Conn
   alias Tokengate.Accounts
-  alias Tokengate.Accounts.TeamMember
+  alias Tokengate.Accounts.GroupMember
   alias Tokengate.Repo
 
   def init(opts), do: opts
@@ -28,7 +28,7 @@ defmodule TokengateWeb.Plugs.ApiAuth do
          {:ok, entry} <- fetch_auth_entry(token),
          :ok <- active_membership(entry.member) do
       conn
-      |> assign(:current_team_member, entry.member)
+      |> assign(:current_group_member, entry.member)
       |> assign(:subject_type, entry.subject_type)
       |> assign(:effective_limits, entry.limits)
       |> assign(:api_key_hash, Accounts.hash_api_key(token))
@@ -37,7 +37,7 @@ defmodule TokengateWeb.Plugs.ApiAuth do
     else
       :no_token -> reject(conn, 401, "missing_api_key", "Missing bearer token")
       :invalid_key -> reject(conn, 401, "invalid_api_key", "Invalid API key")
-      :inactive -> reject(conn, 403, "membership_inactive", "Team membership is not active")
+      :inactive -> reject(conn, 403, "membership_inactive", "Group membership is not active")
     end
   end
 
@@ -53,31 +53,31 @@ defmodule TokengateWeb.Plugs.ApiAuth do
   # populate the cache. Invalid keys are never cached.
   defp fetch_auth_entry(token) do
     case Accounts.resolve_auth_by_api_key(token) do
-      %{member: %TeamMember{}} = entry -> {:ok, entry}
+      %{member: %GroupMember{}} = entry -> {:ok, entry}
       :error -> :invalid_key
     end
   end
 
   @doc """
-  Converts a Service into a virtual TeamMember struct.
+  Converts a Service into a virtual GroupMember struct.
   This allows the proxy controller to handle services without changes.
   """
   def service_to_virtual_member(service) do
     service = Repo.preload(service, [:api_key])
 
-    %TeamMember{
-      # Use service_id as a pseudo team_member_id for budget tracking
+    %GroupMember{
+      # Use service_id as a pseudo group_member_id for budget tracking
       id: service.id,
-      team_id: nil,
+      group_id: nil,
       user_id: nil,
-      team_role: "user",
+      group_role: "user",
       extra_monthly_budget_usd: nil,
       extra_concurrency: nil,
       extra_rpm: nil,
       status: "active",
       service_name: service.name,
       # Preloaded associations (virtual)
-      team: nil,
+      group: nil,
       user: nil,
       api_key: service.api_key
     }

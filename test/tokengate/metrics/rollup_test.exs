@@ -15,12 +15,12 @@ defmodule Tokengate.Metrics.RollupTest do
   # request_logs via Tokengate.Logs.log_request with explicit inserted_at.
   # ---------------------------------------------------------------------
 
-  defp team_fixture(attrs \\ %{}) do
-    {:ok, team} =
-      Accounts.create_team(
+  defp group_fixture(attrs \\ %{}) do
+    {:ok, group} =
+      Accounts.create_group(
         Map.merge(
           %{
-            "name" => "Platform Team",
+            "name" => "Platform Group",
             "monthly_budget_per_user_usd" => "100.00",
             "default_concurrency_limit" => 10,
             "default_rpm_limit" => 120
@@ -29,7 +29,7 @@ defmodule Tokengate.Metrics.RollupTest do
         )
       )
 
-    team
+    group
   end
 
   defp user_fixture(attrs \\ %{}) do
@@ -48,22 +48,22 @@ defmodule Tokengate.Metrics.RollupTest do
     user
   end
 
-  defp team_member_fixture(attrs \\ %{}) do
-    team = team_fixture()
+  defp group_member_fixture(attrs \\ %{}) do
+    group = group_fixture()
     user = user_fixture()
 
-    {:ok, team_member} =
-      Accounts.create_team_member(
+    {:ok, group_member} =
+      Accounts.create_group_member(
         Map.merge(
           %{
             "user_id" => user.id,
-            "team_id" => team.id
+            "group_id" => group.id
           },
           attrs
         )
       )
 
-    {team_member, team}
+    {group_member, group}
   end
 
   @base_attrs %{
@@ -120,10 +120,10 @@ defmodule Tokengate.Metrics.RollupTest do
     %{model_provider | credential: credential}
   end
 
-  defp log_request(team_member_id, inserted_at, overrides \\ %{}) do
+  defp log_request(group_member_id, inserted_at, overrides \\ %{}) do
     attrs =
       Map.merge(@base_attrs, Map.new(overrides))
-      |> Map.put(:team_member_id, team_member_id)
+      |> Map.put(:group_member_id, group_member_id)
       |> Map.put(:inserted_at, inserted_at)
 
     {:ok, _log} = Logs.log_request(attrs)
@@ -136,7 +136,7 @@ defmodule Tokengate.Metrics.RollupTest do
 
   describe "hourly_series/2" do
     test "returns hour buckets ordered ascending" do
-      {tm, team} = team_member_fixture()
+      {tm, group} = group_member_fixture()
 
       now = DateTime.utc_now()
 
@@ -149,7 +149,7 @@ defmodule Tokengate.Metrics.RollupTest do
       log_request(tm.id, DateTime.add(now, -10800, :second))
       log_request(tm.id, DateTime.add(now, -14400, :second))
 
-      series = Rollup.hourly_series(team.id, from: hours_ago(72))
+      series = Rollup.hourly_series(group.id, from: hours_ago(72))
 
       # Expect 4 buckets, one per insert.
       assert length(series) == 4
@@ -161,7 +161,7 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "aggregates cost_usd per bucket" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       # Both inserts land in the same (now-1h) bucket regardless of when the
       # test runs because the offsets differ by only 60 seconds.
@@ -181,29 +181,29 @@ defmodule Tokengate.Metrics.RollupTest do
       assert Decimal.equal?(bucket.cost_usd, Decimal.new("4.000000"))
     end
 
-    test "team filter excludes logs from other teams" do
-      {tm1, team1} = team_member_fixture()
-      {tm2, team2} = team_member_fixture(%{})
+    test "group filter excludes logs from other groups" do
+      {tm1, group1} = group_member_fixture()
+      {tm2, group2} = group_member_fixture(%{})
 
-      # Ensure distinct teams
-      refute team1.id == team2.id
+      # Ensure distinct groups
+      refute group1.id == group2.id
 
       log_request(tm1.id, DateTime.add(DateTime.utc_now(), -1800, :second))
       log_request(tm2.id, DateTime.add(DateTime.utc_now(), -1800, :second))
 
-      series_team1 = Rollup.hourly_series(team1.id, from: hours_ago(72))
-      series_team2 = Rollup.hourly_series(team2.id, from: hours_ago(72))
+      series_group1 = Rollup.hourly_series(group1.id, from: hours_ago(72))
+      series_group2 = Rollup.hourly_series(group2.id, from: hours_ago(72))
 
-      count1 = Enum.map(series_team1, & &1.request_count) |> Enum.sum()
-      count2 = Enum.map(series_team2, & &1.request_count) |> Enum.sum()
+      count1 = Enum.map(series_group1, & &1.request_count) |> Enum.sum()
+      count2 = Enum.map(series_group2, & &1.request_count) |> Enum.sum()
 
       assert count1 == 1
       assert count2 == 1
     end
 
-    test "nil team_id includes all logs (org-wide)" do
-      {tm1, _team1} = team_member_fixture()
-      {tm2, _team2} = team_member_fixture()
+    test "nil group_id includes all logs (org-wide)" do
+      {tm1, _group1} = group_member_fixture()
+      {tm2, _group2} = group_member_fixture()
 
       log_request(tm1.id, DateTime.add(DateTime.utc_now(), -1800, :second))
       log_request(tm2.id, DateTime.add(DateTime.utc_now(), -2700, :second))
@@ -217,7 +217,7 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "respects the hours window (excludes old logs)" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       # 48 hours ago — outside the 24h default window
       old_ts = DateTime.add(DateTime.add(DateTime.utc_now(), -7200, :second), -48 * 3600, :second)
@@ -243,7 +243,7 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "buckets by local hour when timezone is given" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       # 2026-07-31 05:30Z = 2026-07-30 23:30 en America/Mexico_City (UTC-6)
       log_request(tm.id, ~U[2026-07-31 05:30:00Z])
@@ -280,16 +280,16 @@ defmodule Tokengate.Metrics.RollupTest do
   # ---------------------------------------------------------------------
 
   describe "top_consumers/2" do
-    test "returns team members ranked by total cost descending" do
-      team = team_fixture()
+    test "returns group members ranked by total cost descending" do
+      group = group_fixture()
 
       user1 = user_fixture()
       user2 = user_fixture()
       user3 = user_fixture()
 
-      {:ok, tm1} = Accounts.create_team_member(%{"user_id" => user1.id, "team_id" => team.id})
-      {:ok, tm2} = Accounts.create_team_member(%{"user_id" => user2.id, "team_id" => team.id})
-      {:ok, tm3} = Accounts.create_team_member(%{"user_id" => user3.id, "team_id" => team.id})
+      {:ok, tm1} = Accounts.create_group_member(%{"user_id" => user1.id, "group_id" => group.id})
+      {:ok, tm2} = Accounts.create_group_member(%{"user_id" => user2.id, "group_id" => group.id})
+      {:ok, tm3} = Accounts.create_group_member(%{"user_id" => user3.id, "group_id" => group.id})
 
       # tm1: $3.00 total across 2 logs
       log_request(tm1.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
@@ -310,32 +310,33 @@ defmodule Tokengate.Metrics.RollupTest do
         cost_usd: Decimal.new("0.500000")
       })
 
-      results = Rollup.top_consumers(team.id, 10)
+      results = Rollup.top_consumers(group.id, 10)
 
       assert length(results) == 3
 
       [first, second, third] = results
-      assert first.team_member_id == tm2.id
+      assert first.group_member_id == tm2.id
       assert Decimal.equal?(first.cost_usd, Decimal.new("5.000000"))
       assert first.request_count == 1
 
-      assert second.team_member_id == tm1.id
+      assert second.group_member_id == tm1.id
       assert Decimal.equal?(second.cost_usd, Decimal.new("3.000000"))
       assert second.request_count == 2
 
-      assert third.team_member_id == tm3.id
+      assert third.group_member_id == tm3.id
       assert Decimal.equal?(third.cost_usd, Decimal.new("0.500000"))
     end
 
     test "respects limit" do
-      team = team_fixture()
+      group = group_fixture()
 
       # Create 3 members
       _tms =
         for i <- 1..3 do
           user = user_fixture()
 
-          {:ok, tm} = Accounts.create_team_member(%{"user_id" => user.id, "team_id" => team.id})
+          {:ok, tm} =
+            Accounts.create_group_member(%{"user_id" => user.id, "group_id" => group.id})
 
           log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
             cost_usd: Decimal.new("#{i}.000000")
@@ -344,13 +345,13 @@ defmodule Tokengate.Metrics.RollupTest do
           tm
         end
 
-      results = Rollup.top_consumers(team.id, 2)
+      results = Rollup.top_consumers(group.id, 2)
       assert length(results) == 2
     end
 
-    test "excludes members from other teams" do
-      {tm1, team1} = team_member_fixture()
-      {tm2, _team2} = team_member_fixture()
+    test "excludes members from other groups" do
+      {tm1, group1} = group_member_fixture()
+      {tm2, _group2} = group_member_fixture()
 
       log_request(tm1.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         cost_usd: Decimal.new("1.000000")
@@ -360,9 +361,9 @@ defmodule Tokengate.Metrics.RollupTest do
         cost_usd: Decimal.new("5.000000")
       })
 
-      results = Rollup.top_consumers(team1.id, 10)
+      results = Rollup.top_consumers(group1.id, 10)
       assert length(results) == 1
-      assert hd(results).team_member_id == tm1.id
+      assert hd(results).group_member_id == tm1.id
     end
   end
 
@@ -371,8 +372,8 @@ defmodule Tokengate.Metrics.RollupTest do
   # ---------------------------------------------------------------------
 
   describe "agent_breakdown/1" do
-    test "groups by agent_type (org-wide, nil team)" do
-      {tm, team} = team_member_fixture()
+    test "groups by agent_type (org-wide, nil group)" do
+      {tm, group} = group_member_fixture()
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         agent_type: "api",
@@ -389,7 +390,7 @@ defmodule Tokengate.Metrics.RollupTest do
         cost_usd: Decimal.new("0.500000")
       })
 
-      breakdown = Rollup.agent_breakdown(team.id)
+      breakdown = Rollup.agent_breakdown(group.id)
 
       assert Map.has_key?(breakdown, "api")
       assert Map.has_key?(breakdown, "sdk")
@@ -401,9 +402,9 @@ defmodule Tokengate.Metrics.RollupTest do
       assert Decimal.equal?(breakdown["sdk"].cost_usd, Decimal.new("0.500000"))
     end
 
-    test "team filter restricts to that team's logs" do
-      {tm1, team1} = team_member_fixture()
-      {tm2, _team2} = team_member_fixture()
+    test "group filter restricts to that group's logs" do
+      {tm1, group1} = group_member_fixture()
+      {tm2, _group2} = group_member_fixture()
 
       log_request(tm1.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         agent_type: "api",
@@ -415,9 +416,9 @@ defmodule Tokengate.Metrics.RollupTest do
         cost_usd: Decimal.new("5.000000")
       })
 
-      breakdown = Rollup.agent_breakdown(team1.id)
+      breakdown = Rollup.agent_breakdown(group1.id)
 
-      # Only team1's "api" log should be counted.
+      # Only group1's "api" log should be counted.
       assert breakdown == %{
                "api" => %{
                  requests: 1,
@@ -427,8 +428,8 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "returns empty map when no logs match" do
-      {_, team} = team_member_fixture()
-      breakdown = Rollup.agent_breakdown(team.id)
+      {_, group} = group_member_fixture()
+      breakdown = Rollup.agent_breakdown(group.id)
       assert breakdown == %{}
     end
   end
@@ -439,7 +440,7 @@ defmodule Tokengate.Metrics.RollupTest do
 
   describe "breakdown_by_model/2" do
     test "returns per-model aggregates ranked by cost descending" do
-      {tm, team} = team_member_fixture()
+      {tm, group} = group_member_fixture()
       ma = model_fixture(%{"name" => "gpt-4o"})
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
@@ -459,7 +460,7 @@ defmodule Tokengate.Metrics.RollupTest do
       })
 
       results =
-        Rollup.breakdown_by_model(team.id, from: DateTime.add(DateTime.utc_now(), -10, :day))
+        Rollup.breakdown_by_model(group.id, from: DateTime.add(DateTime.utc_now(), -10, :day))
 
       assert length(results) == 1
       row = hd(results)
@@ -474,7 +475,7 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "returns multiple models ranked by cost" do
-      {tm, team} = team_member_fixture()
+      {tm, group} = group_member_fixture()
       ma1 = model_fixture(%{"name" => "cheap-model"})
       ma2 = model_fixture(%{"name" => "expensive-model"})
 
@@ -488,15 +489,15 @@ defmodule Tokengate.Metrics.RollupTest do
         cost_usd: Decimal.new("5.000000")
       })
 
-      results = Rollup.breakdown_by_model(team.id, from: ~U[2026-07-01 00:00:00Z])
+      results = Rollup.breakdown_by_model(group.id, from: ~U[2026-07-01 00:00:00Z])
 
       assert length(results) == 2
       assert hd(results).model_name == "expensive-model"
     end
 
     test "returns empty list when no logs match" do
-      {_tm, team} = team_member_fixture()
-      results = Rollup.breakdown_by_model(team.id, from: ~U[2026-07-01 00:00:00Z])
+      {_tm, group} = group_member_fixture()
+      results = Rollup.breakdown_by_model(group.id, from: ~U[2026-07-01 00:00:00Z])
       assert results == []
     end
   end
@@ -506,11 +507,11 @@ defmodule Tokengate.Metrics.RollupTest do
   # ---------------------------------------------------------------------
 
   describe "breakdown_by_member/2" do
-    test "returns per-member aggregates with team and user info" do
-      team = team_fixture()
+    test "returns per-member aggregates with group and user info" do
+      group = group_fixture()
       user = user_fixture(%{"email" => "test@example.com"})
 
-      {:ok, tm} = Accounts.create_team_member(%{"user_id" => user.id, "team_id" => team.id})
+      {:ok, tm} = Accounts.create_group_member(%{"user_id" => user.id, "group_id" => group.id})
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         cost_usd: Decimal.new("1.000000"),
@@ -522,16 +523,16 @@ defmodule Tokengate.Metrics.RollupTest do
       results = Rollup.breakdown_by_member(nil, from: DateTime.add(DateTime.utc_now(), -10, :day))
 
       assert length(results) >= 1
-      row = Enum.find(results, fn r -> r.team_member_id == tm.id end)
-      assert row.team_name == team.name
+      row = Enum.find(results, fn r -> r.group_member_id == tm.id end)
+      assert row.group_name == group.name
       assert row.user_email == "test@example.com"
       assert row.request_count == 1
       assert Decimal.equal?(row.cost_usd, Decimal.new("1.000000"))
     end
 
-    test "team filter restricts to that team" do
-      {tm1, team1} = team_member_fixture()
-      {tm2, _team2} = team_member_fixture()
+    test "group filter restricts to that group" do
+      {tm1, group1} = group_member_fixture()
+      {tm2, _group2} = group_member_fixture()
 
       log_request(tm1.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         cost_usd: Decimal.new("1.000000")
@@ -541,13 +542,13 @@ defmodule Tokengate.Metrics.RollupTest do
         cost_usd: Decimal.new("5.000000")
       })
 
-      results = Rollup.breakdown_by_member(team1.id, from: ~U[2026-07-01 00:00:00Z])
+      results = Rollup.breakdown_by_member(group1.id, from: ~U[2026-07-01 00:00:00Z])
       assert length(results) == 1
-      assert hd(results).team_member_id == tm1.id
+      assert hd(results).group_member_id == tm1.id
     end
 
     test "aggregates cache_read_tokens" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         cost_usd: Decimal.new("1.000000"),
@@ -562,19 +563,19 @@ defmodule Tokengate.Metrics.RollupTest do
       })
 
       results = Rollup.breakdown_by_member(nil, from: DateTime.add(DateTime.utc_now(), -10, :day))
-      row = Enum.find(results, fn r -> r.team_member_id == tm.id end)
+      row = Enum.find(results, fn r -> r.group_member_id == tm.id end)
       assert row.cache_read_tokens == 100
     end
   end
 
   # ---------------------------------------------------------------------
-  # breakdown_by_team/1
+  # breakdown_by_group/1
   # ---------------------------------------------------------------------
 
-  describe "breakdown_by_team/1" do
-    test "returns per-team aggregates ranked by cost" do
-      {tm1, _team1} = team_member_fixture()
-      {tm2, _team2} = team_member_fixture()
+  describe "breakdown_by_group/1" do
+    test "returns per-group aggregates ranked by cost" do
+      {tm1, _group1} = group_member_fixture()
+      {tm2, _group2} = group_member_fixture()
 
       log_request(tm1.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         cost_usd: Decimal.new("1.000000")
@@ -584,22 +585,22 @@ defmodule Tokengate.Metrics.RollupTest do
         cost_usd: Decimal.new("5.000000")
       })
 
-      results = Rollup.breakdown_by_team(from: ~U[2026-07-01 00:00:00Z])
+      results = Rollup.breakdown_by_group(from: ~U[2026-07-01 00:00:00Z])
 
       assert length(results) >= 2
-      # Most expensive team should be first
+      # Most expensive group should be first
       [first | _] = results
       assert Decimal.equal?(first.cost_usd, Decimal.new("5.000000"))
     end
 
     test "returns empty list when no logs match" do
       # Use a far-future :from so no logs (from any async test) can fall in the window.
-      results = Rollup.breakdown_by_team(from: ~U[2099-01-01 00:00:00Z])
+      results = Rollup.breakdown_by_group(from: ~U[2099-01-01 00:00:00Z])
       assert results == []
     end
 
     test "aggregates cache_read_tokens" do
-      {tm, team} = team_member_fixture()
+      {tm, group} = group_member_fixture()
 
       log_request(tm.id, DateTime.add(DateTime.utc_now(), -0, :second), %{
         cost_usd: Decimal.new("1.000000"),
@@ -613,8 +614,8 @@ defmodule Tokengate.Metrics.RollupTest do
         cache_read_tokens: 40
       })
 
-      results = Rollup.breakdown_by_team(from: DateTime.add(DateTime.utc_now(), -10, :day))
-      row = Enum.find(results, fn r -> r.team_id == team.id end)
+      results = Rollup.breakdown_by_group(from: DateTime.add(DateTime.utc_now(), -10, :day))
+      row = Enum.find(results, fn r -> r.group_id == group.id end)
       assert row.cache_read_tokens == 100
     end
   end
@@ -625,7 +626,7 @@ defmodule Tokengate.Metrics.RollupTest do
 
   describe "breakdown_by_provider_for_model/2" do
     test "groups by model provider (provider + provider model + credential)" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
       ma = model_fixture(%{"name" => "gpt-4o"})
 
       {:ok, provider1} =
@@ -676,7 +677,7 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "separates two model providers under the same provider" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
       ma = model_fixture(%{"name" => "gpt-4o"})
 
       {:ok, provider} =
@@ -705,7 +706,7 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "logs without model_provider_id group into a single unknown row" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
       ma = model_fixture(%{"name" => "gpt-4o"})
 
       {:ok, provider} =
@@ -736,7 +737,7 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "excludes logs from other models" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
       ma1 = model_fixture(%{"name" => "gpt-4o"})
       ma2 = model_fixture(%{"name" => "claude-3"})
 
@@ -767,13 +768,13 @@ defmodule Tokengate.Metrics.RollupTest do
 
   describe "breakdown_by_member_for_model/2" do
     test "groups by member for a specific model" do
-      team = team_fixture()
+      group = group_fixture()
 
       user1 = user_fixture(%{"email" => "alice@example.com"})
       user2 = user_fixture(%{"email" => "bob@example.com"})
 
-      {:ok, tm1} = Accounts.create_team_member(%{"user_id" => user1.id, "team_id" => team.id})
-      {:ok, tm2} = Accounts.create_team_member(%{"user_id" => user2.id, "team_id" => team.id})
+      {:ok, tm1} = Accounts.create_group_member(%{"user_id" => user1.id, "group_id" => group.id})
+      {:ok, tm2} = Accounts.create_group_member(%{"user_id" => user2.id, "group_id" => group.id})
 
       ma = model_fixture(%{"name" => "gpt-4o"})
 
@@ -794,7 +795,7 @@ defmodule Tokengate.Metrics.RollupTest do
       # Ranked by provider_cost descending
       assert first.user_email == "bob@example.com"
       assert second.user_email == "alice@example.com"
-      assert first.team_name == team.name
+      assert first.group_name == group.name
     end
 
     test "returns empty list for nil model_id" do
@@ -803,13 +804,13 @@ defmodule Tokengate.Metrics.RollupTest do
   end
 
   # ---------------------------------------------------------------------
-  # breakdown_by_team_for_model/2
+  # breakdown_by_group_for_model/2
   # ---------------------------------------------------------------------
 
-  describe "breakdown_by_team_for_model/2" do
-    test "groups by team for a specific model" do
-      {tm1, _team1} = team_member_fixture()
-      {tm2, _team2} = team_member_fixture()
+  describe "breakdown_by_group_for_model/2" do
+    test "groups by group for a specific model" do
+      {tm1, _group1} = group_member_fixture()
+      {tm2, _group2} = group_member_fixture()
 
       ma = model_fixture(%{"name" => "gpt-4o"})
 
@@ -823,17 +824,17 @@ defmodule Tokengate.Metrics.RollupTest do
         cost_usd: Decimal.new("4.000000")
       })
 
-      results = Rollup.breakdown_by_team_for_model(ma.id, from: ~U[2026-07-01 00:00:00Z])
+      results = Rollup.breakdown_by_group_for_model(ma.id, from: ~U[2026-07-01 00:00:00Z])
 
       assert length(results) == 2
       [first, _] = results
       # Ranked by provider_cost descending
       assert Decimal.equal?(first.cost_usd, Decimal.new("4.000000"))
-      assert first.team_name != nil
+      assert first.group_name != nil
     end
 
     test "returns empty list for nil model_id" do
-      assert Rollup.breakdown_by_team_for_model(nil) == []
+      assert Rollup.breakdown_by_group_for_model(nil) == []
     end
   end
 
@@ -843,7 +844,7 @@ defmodule Tokengate.Metrics.RollupTest do
 
   describe "provider_ranking/2" do
     test "agrega requests, errores y latencia por proveedor, ordenado por score" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       {:ok, fast} =
         Providers.create_provider(%{name: "FastCo", base_url: "http://localhost:1"})
@@ -881,7 +882,7 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "proveedor con menos de 10 requests queda sin score ni tier y va al final" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       {:ok, big} =
         Providers.create_provider(%{name: "BigCo", base_url: "http://localhost:1"})
@@ -912,7 +913,7 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "4xx cuentan como fallo" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       {:ok, provider} =
         Providers.create_provider(%{name: "QuotaCo", base_url: "http://localhost:1"})
@@ -930,7 +931,7 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "excluye logs sin provider_id y respeta el rango :from" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       {:ok, provider} =
         Providers.create_provider(%{name: "RangedCo", base_url: "http://localhost:1"})
@@ -961,7 +962,7 @@ defmodule Tokengate.Metrics.RollupTest do
 
   describe "usage_by_hour_of_day/2" do
     test "agrupa por hora del día (UTC) con zero-fill de las 24 horas" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
       # 3 logs a las 10:xx UTC, 1 a las 14:xx UTC
@@ -982,7 +983,7 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "respeta el rango :from" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
       now = DateTime.utc_now() |> DateTime.truncate(:second)
       old = DateTime.add(now, -7 * 86_400, :second)
 
@@ -995,17 +996,17 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "usa la hora local del timezone" do
-      {tm, team} = team_member_fixture()
+      {tm, group} = group_member_fixture()
 
       # 2026-07-31 05:30Z = 2026-07-30 23:30 en CDMX (UTC-6)
       log_request(tm.id, ~U[2026-07-31 05:30:00Z])
       # 2026-07-31 07:30Z = 2026-07-31 01:30 en CDMX
       log_request(tm.id, ~U[2026-07-31 07:30:00Z])
 
-      # Aislar por team_id: el fixture crea un team único, así los logs de
+      # Aislar por group_id: el fixture crea un group único, así los logs de
       # otros tests async (que corren org-wide) no contaminan el conteo.
       rows =
-        Rollup.usage_by_hour_of_day(team.id,
+        Rollup.usage_by_hour_of_day(group.id,
           from: ~U[2026-07-31 00:00:00Z],
           to: ~U[2026-07-31 23:59:59Z],
           timezone: "America/Mexico_City"
@@ -1025,7 +1026,7 @@ defmodule Tokengate.Metrics.RollupTest do
 
   describe "busiest_hours/2" do
     test "devuelve las horas con más requests, ordenadas desc" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
 
       # Truncar a la hora para que los buckets sean deterministas sin
       # importar a qué minuto corra el test.
@@ -1052,13 +1053,13 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "agrupa por hora local del timezone" do
-      {tm, team} = team_member_fixture()
+      {tm, group} = group_member_fixture()
 
       # 2026-07-31 05:30Z = 2026-07-30 23:30 en CDMX
       log_request(tm.id, ~U[2026-07-31 05:30:00Z])
 
       [row] =
-        Rollup.busiest_hours(team.id,
+        Rollup.busiest_hours(group.id,
           from: ~U[2026-07-31 00:00:00Z],
           to: ~U[2026-07-31 23:59:59Z],
           timezone: "America/Mexico_City"
@@ -1073,7 +1074,7 @@ defmodule Tokengate.Metrics.RollupTest do
 
   describe "busiest_minutes/2" do
     test "devuelve los minutos con más requests, ordenados desc" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
       spike = DateTime.add(now, -600, :second) |> Map.put(:second, 5)
@@ -1096,7 +1097,7 @@ defmodule Tokengate.Metrics.RollupTest do
 
   describe "peak_concurrency/2" do
     test "estima la concurrencia máxima con sweep line sobre [inicio, fin]" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
       base = DateTime.utc_now() |> DateTime.add(-600, :second) |> DateTime.truncate(:second)
 
       # A: [base+0,  base+10]  (termina a los 10s, latencia 10s)
@@ -1125,7 +1126,7 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "latencia nil se trata como instantáneo sin romper" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
       log_request(tm.id, now, %{latency_ms: nil})
@@ -1143,9 +1144,9 @@ defmodule Tokengate.Metrics.RollupTest do
 
   describe "member_usage_tiers/2" do
     test "clasifica miembros en 3 tiers por uso" do
-      {tm1, team} = team_member_fixture()
-      {tm2, _team} = team_member_fixture(%{"team_id" => team.id})
-      {tm3, _team} = team_member_fixture(%{"team_id" => team.id})
+      {tm1, group} = group_member_fixture()
+      {tm2, _group} = group_member_fixture(%{"group_id" => group.id})
+      {tm3, _group} = group_member_fixture(%{"group_id" => group.id})
 
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
@@ -1176,7 +1177,7 @@ defmodule Tokengate.Metrics.RollupTest do
         })
       end
 
-      rows = Rollup.member_usage_tiers(team.id, from: DateTime.add(now, -3600, :second))
+      rows = Rollup.member_usage_tiers(group.id, from: DateTime.add(now, -3600, :second))
 
       assert length(rows) == 3
 
@@ -1190,33 +1191,33 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "miembro sin actividad no aparece" do
-      {_tm, team} = team_member_fixture()
+      {_tm, group} = group_member_fixture()
 
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-      rows = Rollup.member_usage_tiers(team.id, from: DateTime.add(now, -3600, :second))
+      rows = Rollup.member_usage_tiers(group.id, from: DateTime.add(now, -3600, :second))
 
       assert rows == []
     end
 
-    test "filtra por team_id" do
-      {tm1, team1} = team_member_fixture()
-      {_tm2, team2} = team_member_fixture()
+    test "filtra por group_id" do
+      {tm1, group1} = group_member_fixture()
+      {_tm2, group2} = group_member_fixture()
 
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
       log_request(tm1.id, now)
 
-      rows_team1 = Rollup.member_usage_tiers(team1.id, from: DateTime.add(now, -60, :second))
-      rows_team2 = Rollup.member_usage_tiers(team2.id, from: DateTime.add(now, -60, :second))
+      rows_group1 = Rollup.member_usage_tiers(group1.id, from: DateTime.add(now, -60, :second))
+      rows_group2 = Rollup.member_usage_tiers(group2.id, from: DateTime.add(now, -60, :second))
 
-      assert length(rows_team1) == 1
-      assert rows_team2 == []
+      assert length(rows_group1) == 1
+      assert rows_group2 == []
     end
 
     test "filtra por member_ids" do
-      {tm1, _team} = team_member_fixture()
-      {tm2, _team} = team_member_fixture()
+      {tm1, _group} = group_member_fixture()
+      {tm2, _group} = group_member_fixture()
 
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
@@ -1230,11 +1231,11 @@ defmodule Tokengate.Metrics.RollupTest do
         )
 
       assert length(rows) == 1
-      assert hd(rows).team_member_id == tm1.id
+      assert hd(rows).group_member_id == tm1.id
     end
 
     test "calcula peak_rpm y p95_rpm correctamente" do
-      {tm, team} = team_member_fixture()
+      {tm, group} = group_member_fixture()
 
       now = DateTime.utc_now() |> DateTime.truncate(:second)
       base_minute = DateTime.add(now, -3600, :second)
@@ -1249,7 +1250,7 @@ defmodule Tokengate.Metrics.RollupTest do
         log_request(tm.id, DateTime.add(base_minute, 60 + i, :second))
       end
 
-      rows = Rollup.member_usage_tiers(team.id, from: DateTime.add(now, -7200, :second))
+      rows = Rollup.member_usage_tiers(group.id, from: DateTime.add(now, -7200, :second))
 
       assert length(rows) == 1
       row = hd(rows)
@@ -1267,7 +1268,7 @@ defmodule Tokengate.Metrics.RollupTest do
 
   describe "top_errors/2" do
     test "agrupa por status_code los fallos (>= 400), ordenados por count desc" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
       for _ <- 1..5, do: log_request(tm.id, now, %{status_code: 429})
@@ -1284,7 +1285,7 @@ defmodule Tokengate.Metrics.RollupTest do
     end
 
     test "sin fallos devuelve lista vacía" do
-      {tm, _team} = team_member_fixture()
+      {tm, _group} = group_member_fixture()
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
       for _ <- 1..3, do: log_request(tm.id, now, %{status_code: 200})

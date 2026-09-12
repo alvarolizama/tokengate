@@ -26,8 +26,8 @@ defmodule TokengateWeb.UserStatsLiveTest do
     |> recycle()
   end
 
-  defp fixture_team_member do
-    {:ok, team} = Accounts.create_team(%{name: "Team #{unique()}"})
+  defp fixture_group_member do
+    {:ok, group} = Accounts.create_group(%{name: "Group #{unique()}"})
 
     u = unique()
 
@@ -39,12 +39,12 @@ defmodule TokengateWeb.UserStatsLiveTest do
         global_role: "user"
       })
 
-    {:ok, _member} = Accounts.create_team_member(%{team_id: team.id, user_id: user.id})
+    {:ok, _member} = Accounts.create_group_member(%{group_id: group.id, user_id: user.id})
 
-    {team, user}
+    {group, user}
   end
 
-  defp fixture_user_with_memberships, do: fixture_team_member()
+  defp fixture_user_with_memberships, do: fixture_group_member()
 
   describe "auth" do
     test "unauthenticated visitors are redirected to /login", %{conn: conn} do
@@ -77,16 +77,16 @@ defmodule TokengateWeb.UserStatsLiveTest do
     end
 
     test "admin sees the member's logs across all their memberships", %{conn: conn} do
-      {team, user} = fixture_user_with_memberships()
+      {group, user} = fixture_user_with_memberships()
       %{user: admin, password: password} = register("admin")
       conn = login(conn, admin, password)
 
-      member = hd(Accounts.list_team_members_for_user(user.id))
+      member = hd(Accounts.list_group_members_for_user(user.id))
 
       {:ok, _log1} =
         Logs.log_request(%{
-          team_member_id: member.id,
-          team_id: team.id,
+          group_member_id: member.id,
+          group_id: group.id,
           user_email: user.email,
           model_requested: "gpt-4o-stats",
           status_code: 200,
@@ -98,8 +98,8 @@ defmodule TokengateWeb.UserStatsLiveTest do
 
       {:ok, _log2} =
         Logs.log_request(%{
-          team_member_id: member.id,
-          team_id: team.id,
+          group_member_id: member.id,
+          group_id: group.id,
           user_email: user.email,
           model_requested: "gpt-4o-stats",
           status_code: 503,
@@ -117,15 +117,15 @@ defmodule TokengateWeb.UserStatsLiveTest do
     end
 
     test "admin sees the consolidated total cost across memberships", %{conn: conn} do
-      {team, user} = fixture_user_with_memberships()
+      {group, user} = fixture_user_with_memberships()
       %{user: admin, password: password} = register("admin")
       conn = login(conn, admin, password)
 
-      member = hd(Accounts.list_team_members_for_user(user.id))
+      member = hd(Accounts.list_group_members_for_user(user.id))
 
       Logs.log_request(%{
-        team_member_id: member.id,
-        team_id: team.id,
+        group_member_id: member.id,
+        group_id: group.id,
         user_email: user.email,
         model_requested: "gpt-4o",
         status_code: 200,
@@ -145,7 +145,7 @@ defmodule TokengateWeb.UserStatsLiveTest do
 
   describe "back-link icon" do
     test "users_live has a stats link for every user", %{conn: conn} do
-      {team, user} = fixture_user_with_memberships()
+      {group, user} = fixture_user_with_memberships()
       %{user: admin, password: password} = register("admin")
       conn = login(conn, admin, password)
 

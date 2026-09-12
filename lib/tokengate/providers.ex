@@ -3,7 +3,7 @@ defmodule Tokengate.Providers do
   The Providers context.
 
   Manages the routing domain: providers, credentials, models, model
-  providers, and team/member model grants.
+  providers, and group/member model grants.
 
   ## Cost model (since 2026-07-30)
 
@@ -27,8 +27,8 @@ defmodule Tokengate.Providers do
     Model,
     ModelProvider,
     ServiceModel,
-    TeamModel,
-    TeamMemberExtraModel
+    GroupModel,
+    GroupMemberExtraModel
   }
 
   # ---------------------------------------------------------------------------
@@ -348,20 +348,20 @@ defmodule Tokengate.Providers do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Returns model_providers visible to a specific team member for routing.
+  Returns model_providers visible to a specific group member for routing.
 
   Includes:
   - Global providers (no exclusive scope)
   - Providers exclusive to this member
-  - Providers exclusive to this member's team
+  - Providers exclusive to this member's group
 
-  Returns providers ordered by `exclusive_to_team_member_id` ASC with NULLS
+  Returns providers ordered by `exclusive_to_group_member_id` ASC with NULLS
   LAST (member-exclusive rows sort before the NULL `global` rows), then
   priority ASC. The router uses this to inject exclusive
   providers with priority -1.
   """
-  def list_model_providers_for_member(model_id, team_member_id, team_id)
-      when is_binary(model_id) and is_binary(team_member_id) and is_binary(team_id) do
+  def list_model_providers_for_member(model_id, group_member_id, group_id)
+      when is_binary(model_id) and is_binary(group_member_id) and is_binary(group_id) do
     # Build base query: enabled providers for this model model
     base_query =
       from(mp in ModelProvider,
@@ -369,18 +369,18 @@ defmodule Tokengate.Providers do
         preload: [credential: :provider]
       )
 
-    # Add scope filter: global OR exclusive to this member OR exclusive to this team.
+    # Add scope filter: global OR exclusive to this member OR exclusive to this group.
     # NOTE: "global" means BOTH exclusive fields are nil. Checking only
-    # exclusive_to_team_member_id leaks team-exclusive providers to every
-    # other team (they have exclusive_to_team_id set, member id nil).
+    # exclusive_to_group_member_id leaks group-exclusive providers to every
+    # other group (they have exclusive_to_group_id set, member id nil).
     query =
       from(mp in base_query,
         where:
-          (is_nil(mp.exclusive_to_team_member_id) and is_nil(mp.exclusive_to_team_id)) or
-            mp.exclusive_to_team_member_id == ^team_member_id or
-            mp.exclusive_to_team_id == ^team_id,
+          (is_nil(mp.exclusive_to_group_member_id) and is_nil(mp.exclusive_to_group_id)) or
+            mp.exclusive_to_group_member_id == ^group_member_id or
+            mp.exclusive_to_group_id == ^group_id,
         order_by: [
-          asc_nulls_last: mp.exclusive_to_team_member_id,
+          asc_nulls_last: mp.exclusive_to_group_member_id,
           asc_nulls_last: mp.priority
         ]
       )
@@ -405,7 +405,7 @@ defmodule Tokengate.Providers do
   Returns active credentials available for scope assignment.
 
   A credential can now serve multiple scope buckets for the same model
-  (global + team-exclusive + member-exclusive), so we no longer exclude
+  (global + group-exclusive + member-exclusive), so we no longer exclude
   credentials simply because they appear in another model_provider row.
 
   Filters:
@@ -431,14 +431,14 @@ defmodule Tokengate.Providers do
 
     # Exclude credentials already in the SAME scope bucket for this model,
     # preventing exact-duplicate rows within one bucket. Cross-bucket reuse
-    # (global + team-exclusive + member-exclusive) is allowed.
+    # (global + group-exclusive + member-exclusive) is allowed.
     case scope do
       "member" ->
         if exclude_id do
           from(c in base_query,
             where:
               not fragment(
-                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_id = ? AND mp.exclusive_to_team_member_id IS NOT NULL AND mp.id != ?)",
+                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_id = ? AND mp.exclusive_to_group_member_id IS NOT NULL AND mp.id != ?)",
                 c.id,
                 ^ma_id,
                 ^exclude_id
@@ -448,19 +448,19 @@ defmodule Tokengate.Providers do
           from(c in base_query,
             where:
               not fragment(
-                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_id = ? AND mp.exclusive_to_team_member_id IS NOT NULL)",
+                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_id = ? AND mp.exclusive_to_group_member_id IS NOT NULL)",
                 c.id,
                 ^ma_id
               )
           )
         end
 
-      "team" ->
+      "group" ->
         if exclude_id do
           from(c in base_query,
             where:
               not fragment(
-                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_id = ? AND mp.exclusive_to_team_id IS NOT NULL AND mp.id != ?)",
+                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_id = ? AND mp.exclusive_to_group_id IS NOT NULL AND mp.id != ?)",
                 c.id,
                 ^ma_id,
                 ^exclude_id
@@ -470,7 +470,7 @@ defmodule Tokengate.Providers do
           from(c in base_query,
             where:
               not fragment(
-                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_id = ? AND mp.exclusive_to_team_id IS NOT NULL)",
+                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_id = ? AND mp.exclusive_to_group_id IS NOT NULL)",
                 c.id,
                 ^ma_id
               )
@@ -483,7 +483,7 @@ defmodule Tokengate.Providers do
           from(c in base_query,
             where:
               not fragment(
-                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_id = ? AND mp.exclusive_to_team_member_id IS NULL AND mp.exclusive_to_team_id IS NULL AND mp.id != ?)",
+                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_id = ? AND mp.exclusive_to_group_member_id IS NULL AND mp.exclusive_to_group_id IS NULL AND mp.id != ?)",
                 c.id,
                 ^ma_id,
                 ^exclude_id
@@ -493,7 +493,7 @@ defmodule Tokengate.Providers do
           from(c in base_query,
             where:
               not fragment(
-                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_id = ? AND mp.exclusive_to_team_member_id IS NULL AND mp.exclusive_to_team_id IS NULL)",
+                "EXISTS (SELECT 1 FROM model_providers mp WHERE mp.credential_id = ? AND mp.model_id = ? AND mp.exclusive_to_group_member_id IS NULL AND mp.exclusive_to_group_id IS NULL)",
                 c.id,
                 ^ma_id
               )
@@ -507,45 +507,45 @@ defmodule Tokengate.Providers do
   end
 
   # ---------------------------------------------------------------------------
-  # Team Member Extra Aliases
+  # Group Member Extra Aliases
   # ---------------------------------------------------------------------------
 
-  def get_team_member_extra_model!(id), do: Repo.get!(TeamMemberExtraModel, id)
+  def get_group_member_extra_model!(id), do: Repo.get!(GroupMemberExtraModel, id)
 
   @doc """
-  Returns model ids granted as extra models to a specific team member.
+  Returns model ids granted as extra models to a specific group member.
   """
-  def list_extra_model_ids_for_member(team_member_id) do
-    from(tmea in TeamMemberExtraModel,
-      where: tmea.team_member_id == ^team_member_id,
+  def list_extra_model_ids_for_member(group_member_id) do
+    from(tmea in GroupMemberExtraModel,
+      where: tmea.group_member_id == ^group_member_id,
       select: tmea.model_id
     )
     |> Repo.all()
   end
 
   @doc """
-  Grants an extra model model to an individual team member (access only, no
+  Grants an extra model model to an individual group member (access only, no
   per-model budget). Idempotent: returns `{:error, :already_granted}` if the
   grant already exists.
   """
-  def set_extra_model(team_member_id, model_id) do
-    grant_extra_model(team_member_id, model_id)
+  def set_extra_model(group_member_id, model_id) do
+    grant_extra_model(group_member_id, model_id)
   end
 
   @doc """
-  Grants an extra model model to an individual team member with no budget.
+  Grants an extra model model to an individual group member with no budget.
   Idempotent: returns `{:error, :already_granted}` if the grant already exists.
   """
-  def grant_extra_model(team_member_id, model_id) do
-    %TeamMemberExtraModel{}
-    |> TeamMemberExtraModel.changeset(%{
-      team_member_id: team_member_id,
+  def grant_extra_model(group_member_id, model_id) do
+    %GroupMemberExtraModel{}
+    |> GroupMemberExtraModel.changeset(%{
+      group_member_id: group_member_id,
       model_id: model_id
     })
     |> Repo.insert()
     |> case do
       {:ok, _tmea} = ok ->
-        Tokengate.Routing.Cache.invalidate_accessible_models(nil, team_member_id)
+        Tokengate.Routing.Cache.invalidate_accessible_models(nil, group_member_id)
         ok
 
       other ->
@@ -554,11 +554,11 @@ defmodule Tokengate.Providers do
   end
 
   @doc """
-  Revokes an extra model model from a team member. Idempotent.
+  Revokes an extra model model from a group member. Idempotent.
   """
-  def revoke_extra_model(team_member_id, model_id) do
-    case Repo.get_by(TeamMemberExtraModel,
-           team_member_id: team_member_id,
+  def revoke_extra_model(group_member_id, model_id) do
+    case Repo.get_by(GroupMemberExtraModel,
+           group_member_id: group_member_id,
            model_id: model_id
          ) do
       nil ->
@@ -567,7 +567,7 @@ defmodule Tokengate.Providers do
       record ->
         case Repo.delete(record) do
           {:ok, _tmea} = ok ->
-            Tokengate.Routing.Cache.invalidate_accessible_models(nil, team_member_id)
+            Tokengate.Routing.Cache.invalidate_accessible_models(nil, group_member_id)
             ok
 
           {:error, changeset} ->
@@ -576,20 +576,20 @@ defmodule Tokengate.Providers do
     end
   end
 
-  def change_team_member_extra_model(%TeamMemberExtraModel{} = tmea, attrs \\ %{}),
-    do: TeamMemberExtraModel.changeset(tmea, attrs)
+  def change_group_member_extra_model(%GroupMemberExtraModel{} = tmea, attrs \\ %{}),
+    do: GroupMemberExtraModel.changeset(tmea, attrs)
 
   # ---------------------------------------------------------------------------
-  # Team Model Aliases
+  # Group Model Aliases
   # ---------------------------------------------------------------------------
 
-  def grant_model_to_team(team_id, model_id) do
-    %TeamModel{}
-    |> TeamModel.changeset(%{team_id: team_id, model_id: model_id})
+  def grant_model_to_group(group_id, model_id) do
+    %GroupModel{}
+    |> GroupModel.changeset(%{group_id: group_id, model_id: model_id})
     |> Repo.insert()
     |> case do
       {:ok, _tma} = ok ->
-        Tokengate.Routing.Cache.invalidate_accessible_models(team_id, nil)
+        Tokengate.Routing.Cache.invalidate_accessible_models(group_id, nil)
         ok
 
       {:error, changeset} ->
@@ -597,9 +597,9 @@ defmodule Tokengate.Providers do
     end
   end
 
-  def revoke_model_from_team(team_id, model_id) do
-    case Repo.get_by(TeamModel,
-           team_id: team_id,
+  def revoke_model_from_group(group_id, model_id) do
+    case Repo.get_by(GroupModel,
+           group_id: group_id,
            model_id: model_id
          ) do
       nil ->
@@ -608,7 +608,7 @@ defmodule Tokengate.Providers do
       tma ->
         case Repo.delete(tma) do
           {:ok, _} = ok ->
-            Tokengate.Routing.Cache.invalidate_accessible_models(team_id, nil)
+            Tokengate.Routing.Cache.invalidate_accessible_models(group_id, nil)
             ok
 
           {:error, changeset} ->
@@ -660,14 +660,14 @@ defmodule Tokengate.Providers do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Returns the union of models accessible to a team member:
-  those granted to their team plus any extra models granted individually.
+  Returns the union of models accessible to a group member:
+  those granted to their group plus any extra models granted individually.
   Returns distinct Model structs.
 
-  Expects a team_member struct with `:id` and `:team` preloaded (team must have `:id`).
+  Expects a group_member struct with `:id` and `:group` preloaded (group must have `:id`).
   """
-  def list_accessible_models(%{team: nil} = member) do
-    # Service (virtual team member) — only service_models
+  def list_accessible_models(%{group: nil} = member) do
+    # Service (virtual group member) — only service_models
     service_id = member.id
 
     from(sma in ServiceModel,
@@ -679,23 +679,23 @@ defmodule Tokengate.Providers do
     |> Repo.all()
   end
 
-  def list_accessible_models(team_member) do
-    member_id = team_member.id
-    team_id = team_member.team.id
+  def list_accessible_models(group_member) do
+    member_id = group_member.id
+    group_id = group_member.group.id
 
-    team_alias_ids =
-      from(tma in TeamModel,
-        where: tma.team_id == ^team_id,
+    group_alias_ids =
+      from(tma in GroupModel,
+        where: tma.group_id == ^group_id,
         select: tma.model_id
       )
 
     member_alias_ids =
-      from(tmea in TeamMemberExtraModel,
-        where: tmea.team_member_id == ^member_id,
+      from(tmea in GroupMemberExtraModel,
+        where: tmea.group_member_id == ^member_id,
         select: tmea.model_id
       )
 
-    all_ids = team_alias_ids |> union(^member_alias_ids)
+    all_ids = group_alias_ids |> union(^member_alias_ids)
 
     from(ma in Model,
       join: id in subquery(all_ids),
@@ -706,24 +706,24 @@ defmodule Tokengate.Providers do
   end
 
   @doc """
-  Batch variant of `list_accessible_models/1` for a list of team members
+  Batch variant of `list_accessible_models/1` for a list of group members
   (e.g. all memberships of one user). Runs a constant number of queries
-  regardless of membership count — one for team grants, one for individual
+  regardless of membership count — one for group grants, one for individual
   grants, one for the models — instead of 2N+1.
   """
   def list_accessible_models_for_members(members) when is_list(members) do
-    {service_ids, real_members} = Enum.split_with(members, &(&1.team == nil))
+    {service_ids, real_members} = Enum.split_with(members, &(&1.group == nil))
 
-    team_ids = real_members |> Enum.map(& &1.team.id) |> Enum.uniq()
+    group_ids = real_members |> Enum.map(& &1.group.id) |> Enum.uniq()
     member_ids = Enum.map(real_members, & &1.id)
 
-    team_alias_ids =
-      if team_ids == [] do
+    group_alias_ids =
+      if group_ids == [] do
         []
       else
         Repo.all(
-          from tma in TeamModel,
-            where: tma.team_id in ^team_ids,
+          from tma in GroupModel,
+            where: tma.group_id in ^group_ids,
             select: tma.model_id
         )
       end
@@ -733,8 +733,8 @@ defmodule Tokengate.Providers do
         []
       else
         Repo.all(
-          from tmea in TeamMemberExtraModel,
-            where: tmea.team_member_id in ^member_ids,
+          from tmea in GroupMemberExtraModel,
+            where: tmea.group_member_id in ^member_ids,
             select: tmea.model_id
         )
       end
@@ -750,7 +750,7 @@ defmodule Tokengate.Providers do
         )
       end
 
-    all_ids = Enum.uniq(team_alias_ids ++ member_alias_ids ++ service_alias_ids)
+    all_ids = Enum.uniq(group_alias_ids ++ member_alias_ids ++ service_alias_ids)
 
     if all_ids == [] do
       []

@@ -131,7 +131,7 @@ defmodule TokengateWeb.MaintenanceLive do
     Tokengate.Auditing.audit(
       socket.assigns.current_user,
       "settings.reset_member_extra",
-      "team_member",
+      "group_member",
       nil,
       %{"field" => field, "affected" => count}
     )
@@ -227,7 +227,7 @@ defmodule TokengateWeb.MaintenanceLive do
                 <h3 class="font-semibold text-base-content">Eliminar historial de logs</h3>
                 <p class="text-sm text-base-content/60">
                   Borra todas las filas de <code>request_logs</code>.
-                  No afecta usuarios, equipos, models, proveedores ni API keys.
+                  No afecta usuarios, grupos, models, proveedores ni API keys.
                   Actualmente hay <span class="font-mono font-semibold">{@log_count}</span> registros.
                 </p>
               </div>
@@ -268,7 +268,7 @@ defmodule TokengateWeb.MaintenanceLive do
 
             <h3 class="font-semibold text-base-content mb-2">Reiniciar extras de miembros</h3>
             <p class="text-sm text-base-content/60 mb-3">
-              Reinicia un campo extra específico de todos los miembros a los valores por defecto de su equipo.
+              Reinicia un campo extra específico de todos los miembros a los valores por defecto de su grupo.
               El gasto acumulado NO se resetea.
             </p>
 
@@ -389,7 +389,7 @@ defmodule TokengateWeb.MaintenanceLive do
               todos los registros de <code>request_logs</code>. No se pueden recuperar.
             </p>
             <p class="text-sm text-base-content/70">
-              Usuarios, equipos, models, proveedores y API keys no se ven afectados.
+              Usuarios, grupos, models, proveedores y API keys no se ven afectados.
             </p>
             <div class="flex gap-2 mt-4 justify-end">
               <button type="button" phx-click="cancel_reset" class="btn btn-ghost btn-sm">
@@ -469,7 +469,7 @@ defmodule TokengateWeb.MaintenanceLive do
                 para todos los miembros que tengan un valor distinto de nil.
               </p>
               <p class="text-sm text-base-content/70 mt-1">
-                Cada miembro quedará con el valor por defecto de su equipo.
+                Cada miembro quedará con el valor por defecto de su grupo.
                 El gasto acumulado <strong>no se resetea</strong>.
               </p>
               <div class="flex gap-2 mt-4 justify-end">
@@ -560,7 +560,7 @@ defmodule TokengateWeb.MaintenanceLive do
     import Ecto.Query
 
     Repo.one(
-      from(tm in "team_members",
+      from(tm in "group_members",
         where: not is_nil(field(tm, ^field)),
         select: count(tm.id)
       )
@@ -574,7 +574,7 @@ defmodule TokengateWeb.MaintenanceLive do
 
     {count, _} =
       Repo.update_all(
-        from(tm in "team_members", where: not is_nil(field(tm, ^field))),
+        from(tm in "group_members", where: not is_nil(field(tm, ^field))),
         set: [{field, nil}, {:updated_at, DateTime.truncate(DateTime.utc_now(), :second)}]
       )
 

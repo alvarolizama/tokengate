@@ -27,8 +27,8 @@ Think "LiteLLM, but as an Elixir app with a real admin UI".
 - **Tiered priority routing + sticky sessions** — providers are ordered by priority and grouped into tiers: healthy subscriptions (`included`) first, then degraded subscriptions, then healthy pay-per-token, then degraded pay-per-token. An API key sticks to the same credential to preserve prompt caches, with per-provider sticky TTL overrides (configurable in seconds). Every outbound request also carries an `x-session-affinity` header (built from the API key hash) so providers that support automatic prefix caching group a workspace/session's requests onto the replica holding their cached prefix. A slow-but-answering credential is marked "degraded" and sinks to the bottom of its tier until it recovers.
 - **FIFO queue for saturated included credentials** — when a subscription credential hits its concurrency limit, requests queue FIFO (with tiered timeouts) instead of immediately falling back to pay-per-token, maximizing subscription utilization.
 - **Fallback matrix + circuit breaker** — auth errors (401/402/403) disable the credential and fall back; timeouts and first-token timeouts fall back immediately; fast errors (5xx/429) retry before moving on. Per-credential circuit breaker with configurable threshold/cooldown. Included (subscription) credentials tolerate 429s with a soft degrade instead of tripping the breaker. Every upstream attempt of one client request carries the same generated `Idempotency-Key` header (retries and provider fallbacks included), so providers that processed a lost response can deduplicate the replay.
-- **Two-gate throttling** — per-user limits (team defaults + per-member overrides: RPM, concurrency) protect TokenGate; per-credential limits (`max_rpm`, `max_concurrent`, `max_concurrent_per_user`) protect the upstream key.
-- **Monthly USD budgets** — per team member (team default + member extra) and per service. ETS hot counters checked pre-flight; Postgres `request_logs` is the durable truth.
+- **Two-gate throttling** — per-user limits (group defaults + per-member overrides: RPM, concurrency) protect TokenGate; per-credential limits (`max_rpm`, `max_concurrent`, `max_concurrent_per_user`) protect the upstream key.
+- **Monthly USD budgets** — per group member (group default + member extra) and per service. ETS hot counters checked pre-flight; Postgres `request_logs` is the durable truth.
 - **Daily spending limit per credential** — a provider credential can carry a daily USD cap; once reached, the router skips it and fails over to the next credential until the next UTC day. Live spend/limit indicator on the Models page.
 - **Global daily spending cap (kill-switch)** — instance-wide daily USD limit in Settings; once total spend across all members and credentials reaches the cap, all proxy requests are rejected until 00:00 UTC. `nil` means unlimited (default).
 - **Cost tracking** — the provider-reported `usage.cost` is recorded per request and returned in the `X-Tokengate-Cost` response header. LiteLLM upstreams are supported via the `x-litellm-response-cost` header. Subscription providers (`billing_mode: included`) count as $0. When the upstream doesn't report a cost, TokenGate records $0 (honest fallback, no phantom estimates). Model aliases additionally carry optional **informational market prices** (input / output / cache per 1M tokens) shown on the Models form as operator reference — display-only, never used by the cost engine (billing always comes from upstream-reported costs or the per-provider manual fallback rates).
@@ -39,24 +39,24 @@ Think "LiteLLM, but as an Elixir app with a real admin UI".
 ### Admin UI (LiveView)
 
 - **Personal dashboard** (`/dashboard`) — every user sees their own live consumption (requests, cost, tokens, tokens/sec), period selector (today/7d/30d/90d), their API key with rotate/revoke, and the model catalog available to them with usage-tier badges.
-- **Stats** (`/dashboard/stats`) — drill-downs by model, team, service, and member; scoped by role (admin sees org-wide, managers their teams, users themselves). Period comparison with vs-yesterday deltas, daily sparkline charts, sortable breakdown tables, and CSV export.
+- **Stats** (`/dashboard/stats`) — drill-downs by model, group, service, and member; scoped by role (admin sees org-wide, managers their groups, users themselves). Period comparison with vs-yesterday deltas, daily sparkline charts, sortable breakdown tables, and CSV export.
 - **Logs** (`/dashboard/logs`) — live request log with filters, in-flight requests merged into the main table, and CSV export (30d / 90d).
 - **Credits** (`/dashboard/credits`) — every member's spend against their effective budget, live from the ETS counters, with progress bars.
 - **Calculator** (`/dashboard/calculator`) — compare real provider spend vs estimated cost using custom pricing parameters (input/output price per million tokens). Period and model selector. Uses the same cost source as Stats for consistency.
-- **Teams** (`/dashboard/teams`) — team CRUD with default budgets/limits, per-team model-alias grants, and per-team observability webhook destinations. Dynamic card grid (1/2/3 cols based on team count).
-- **Team members** (`/dashboard/teams/:id/members`) — add members by email (auto-generates their API key), per-member extras: extra budget, concurrency, RPM, and individual model-alias grants with optional per-model daily budget. Search filter by name and email.
+- **Groups** (`/admin/groups`) — group CRUD with default budgets/limits, per-group model-alias grants, and per-group observability webhook destinations. Dynamic card grid (1/2/3 cols based on group count).
+- **Group members** (`/admin/groups/:id/members`) — add members by email (auto-generates their API key), per-member extras: extra budget, concurrency, RPM, and individual model-alias grants with optional per-model daily budget. Search filter by name and email.
 - **Services** (`/dashboard/services`) — machine-to-machine API keys (not tied to a user) with their own monthly budget, concurrency, RPM, and model grants. **Supervisors** get a read-only view (`/dashboard/services/supervised`).
 - **Providers** (`/dashboard/providers`) — provider CRUD with multiple credentials each (encrypted key, rate/concurrency limits, status, icon toggle). Per-provider sticky TTL override in seconds. Provider health surfaced in sidebar with failing credentials highlighted.
-- **Models** (`/dashboard/models`) — model-alias CRUD; assign providers with priority, `billing_mode` (`pay_per_token` / `included`), `model_type` (`llm` / `embedding`), and exclusive scope (global / member / team).
-- **Users** (`/dashboard/users`) — user CRUD, suspend/activate, password reset, per-user stats (`/dashboard/users/:user_id/stats`), **impersonation**, filter by today's spend, group by team, and sortable columns.
+- **Models** (`/dashboard/models`) — model-alias CRUD; assign providers with priority, `billing_mode` (`pay_per_token` / `included`), `model_type` (`llm` / `embedding`), and exclusive scope (global / member / group).
+- **Users** (`/dashboard/users`) — user CRUD, suspend/activate, password reset, per-user stats (`/dashboard/users/:user_id/stats`), **impersonation**, filter by today's spend, group by group, and sortable columns.
 - **Maintenance** (`/dashboard/maintenance`) — read-only config overview plus a Danger Zone (reset request logs, sticky sessions, member extras). Global daily spending cap kill-switch lives here.
-- **Budget** (`/dashboard/budgets`) — global daily cap and per-user daily cap (evaluated before the global one), each with exclusion lists (users / teams / services). Exempt subjects skip the corresponding gate; global-exempt spend doesn't count toward the global counter.
+- **Budget** (`/dashboard/budgets`) — global daily cap and per-user daily cap (evaluated before the global one), each with exclusion lists (users / groups / services). Exempt subjects skip the corresponding gate; global-exempt spend doesn't count toward the global counter.
 
 ### Platform
 
-- **Observability webhooks** — every request log is delivered to per-team destinations as an OTLP/JSON span, HMAC-signed (`X-Tokengate-Signature: sha256=…`), via Oban.
+- **Observability webhooks** — every request log is delivered to per-group destinations as an OTLP/JSON span, HMAC-signed (`X-Tokengate-Signature: sha256=…`), via Oban.
 - **Hot path on ETS** — auth, limits, budgets, routing, and metrics read from ETS only; Postgres is written asynchronously (Oban workers). Named ETS tables degrade gracefully when absent (hot-reload safe).
-- **Postgres** — teams, users, services, sha256-hashed API keys, providers, credentials, aliases, daily RANGE-partitioned `request_logs`, audit logs, Oban jobs. Provider ranking by failures + latency with tiers S/A/B/C/D.
+- **Postgres** — groups, users, services, sha256-hashed API keys, providers, credentials, aliases, daily RANGE-partitioned `request_logs`, audit logs, Oban jobs. Provider ranking by failures + latency with tiers S/A/B/C/D.
 - **Auth** — email/password (Bcrypt) plus optional Google OAuth (enabled when `GOOGLE_OAUTH_CLIENT_ID`/`SECRET` are set; auto-registration restricted by `GOOGLE_OAUTH_ALLOWED_DOMAINS`). Sliding-expiration session cookies (default 1 year idle).
 - **Usage normalization** — OpenAI-compatible usage payloads are normalized into a unified internal shape (`prompt_tokens`, `completion_tokens`, `cache_read_tokens`, `cache_creation_tokens`). `prompt_tokens` keeps the provider's raw total (cached tokens included); `cache_read_tokens` is the cached subset, priced separately at the cache rate by the cost calculator.
 - **Per-user timezone** — dashboard data is bucketed by each user's configured timezone; session-scoped timezone selector for LiveViews.
@@ -81,7 +81,7 @@ Visit [localhost:4000](http://localhost:4000) and sign in with the seeded admin:
 | Email | `admin@tokengate.local` | `TOKENGATE_ADMIN_EMAIL` |
 | Password | `tokengate-admin-secret-1` | `TOKENGATE_ADMIN_PASSWORD` |
 
-Then, from the UI: create a **provider** with a credential → create a **model** alias and assign the provider → grant the alias to a **team** → your member API key is already on your dashboard. You can proxy a request in ~5 minutes.
+Then, from the UI: create a **provider** with a credential → create a **model** alias and assign the provider → grant the alias to a **group** → your member API key is already on your dashboard. You can proxy a request in ~5 minutes.
 
 ## Using the proxy
 
@@ -92,7 +92,7 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="http://localhost:4000/v1",
-    api_key="tg-…",   # TokenGate API key (team member or service)
+    api_key="tg-…",   # TokenGate API key (group member or service)
 )
 
 resp = client.chat.completions.create(

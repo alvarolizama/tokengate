@@ -6,7 +6,7 @@ defmodule Tokengate.Routing.Router do
 
   ## Public API
 
-    * `route/3`  – resolve a `model_requested` for a `team_member`, returning a
+    * `route/3`  – resolve a `model_requested` for a `group_member`, returning a
       route map with the selected `model_provider`, `credential`, and
       `model_responded` (the upstream model string).
     * `record_outcome/2` – record a success or failure against the selected
@@ -15,9 +15,9 @@ defmodule Tokengate.Routing.Router do
 
   ## Access control
 
-  A team member can only route to models returned by
+  A group member can only route to models returned by
   `Tokengate.Providers.list_accessible_models/1` — the union of models
-  granted to their team plus any extra models granted to them individually.
+  granted to their group plus any extra models granted to them individually.
 
   ## Provider selection
 
@@ -31,11 +31,11 @@ defmodule Tokengate.Routing.Router do
 
   Providers can be scoped to serve only specific consumers:
     * Global (no scope) — available to all members with access.
-    * Member-exclusive — only the specified team member sees it.
-    * Team-exclusive — only members of the specified team see it.
+    * Member-exclusive — only the specified group member sees it.
+    * Group-exclusive — only members of the specified group see it.
 
   A credential can appear in multiple scope rows for the same model
-  (global + multiple team-exclusive + multiple member-exclusive).
+  (global + multiple group-exclusive + multiple member-exclusive).
   Exclusive providers are injected with priority -1 (always first) for
   the matching scope. If they fail, the normal fallback pool takes over.
 
@@ -62,7 +62,7 @@ defmodule Tokengate.Routing.Router do
   @default_breaker CircuitBreakerManager
 
   @doc """
-  Resolves `model_requested` for `team_member`, returning a route map.
+  Resolves `model_requested` for `group_member`, returning a route map.
 
   ## Options (`request_context`)
 
@@ -97,15 +97,15 @@ defmodule Tokengate.Routing.Router do
              | :model_type_mismatch
              | :no_providers_configured
              | :no_available_provider}
-  def route(model_requested, team_member, request_context \\ %{}, opts \\ []) do
+  def route(model_requested, group_member, request_context \\ %{}, opts \\ []) do
     breaker = Keyword.get(opts, :breaker, Map.get(request_context, :breaker, @default_breaker))
     exclude = exclude_ids(request_context, opts)
     capability = Map.get(request_context, :capability, "llm")
 
-    # Ensure team is preloaded (callers may not have preloaded it).
-    team_member = maybe_preload_team(team_member)
+    # Ensure group is preloaded (callers may not have preloaded it).
+    group_member = maybe_preload_group(group_member)
 
-    accessible = Providers.list_accessible_models(team_member)
+    accessible = Providers.list_accessible_models(group_member)
 
     case find_alias_by_name(accessible, model_requested) do
       nil ->
@@ -115,7 +115,7 @@ defmodule Tokengate.Routing.Router do
         {:error, :model_type_mismatch}
 
       model ->
-        route_model(model, team_member, accessible, request_context, breaker, exclude)
+        route_model(model, group_member, accessible, request_context, breaker, exclude)
     end
   end
 
@@ -197,14 +197,14 @@ defmodule Tokengate.Routing.Router do
   end
 
   @doc """
-  Returns the accessible models for `team_member` shaped for the
+  Returns the accessible models for `group_member` shaped for the
   OpenAI-compatible `/v1/models` API.
   """
   @spec models_for(map()) :: [map()]
-  def models_for(team_member) do
-    team_member = maybe_preload_team(team_member)
+  def models_for(group_member) do
+    group_member = maybe_preload_group(group_member)
 
-    team_member
+    group_member
     |> Providers.list_accessible_models()
     |> Enum.map(fn model_ ->
       %{
@@ -218,25 +218,25 @@ defmodule Tokengate.Routing.Router do
   end
 
   @doc """
-  How many `included` credentials remain available for `team_member` and
+  How many `included` credentials remain available for `group_member` and
   `model_requested` after excluding `credential_id`.
 
   Used to decide the FIFO wait timeout: the more included credentials
   remain, the less time is spent waiting on the current one.
   """
   @spec count_remaining_included(String.t(), map(), term()) :: non_neg_integer()
-  def count_remaining_included(model_requested, team_member, exclude_credential_id) do
-    model_id = resolve_alias_id(model_requested, team_member)
+  def count_remaining_included(model_requested, group_member, exclude_credential_id) do
+    model_id = resolve_alias_id(model_requested, group_member)
 
     if is_nil(model_id) do
       0
     else
       model_providers =
-        if team_member && team_member.team && team_member.team.id do
+        if group_member && group_member.group && group_member.group.id do
           Providers.list_model_providers_for_member(
             model_id,
-            team_member.id,
-            team_member.team.id
+            group_member.id,
+            group_member.group.id
           )
         else
           Providers.list_model_providers(model_id)
@@ -256,27 +256,27 @@ defmodule Tokengate.Routing.Router do
   # Internal: model resolution
   # ---------------------------------------------------------------------------
 
-  defp route_model(model, team_member, _accessible, request_context, breaker, exclude) do
+  defp route_model(model, group_member, _accessible, request_context, breaker, exclude) do
     # Load model_providers visible to this member (global + their exclusives).
     # The heavy part (join credential + provider, order by priority) is cached
-    # per (model_id, team_id) for 60s; disabled credentials are a
+    # per (model_id, group_id) for 60s; disabled credentials are a
     # separate ETS set refreshed every 60s. Both are stale-tolerant because
     # the fallback matrix re-routes on a dead credential anyway.
-    team_id = team_member && team_member.team && team_member.team.id
+    group_id = group_member && group_member.group && group_member.group.id
 
     model_providers =
-      Tokengate.Routing.Cache.fetch_model_providers(model.id, team_id, fn ->
-        if team_id do
-          # NOTE: the cached list is shared by every member of the team. The
+      Tokengate.Routing.Cache.fetch_model_providers(model.id, group_id, fn ->
+        if group_id do
+          # NOTE: the cached list is shared by every member of the group. The
           # member-exclusive provider rows are filtered per-member below in
-          # `visible_to_member?/2`, so caching by team_id is safe.
+          # `visible_to_member?/2`, so caching by group_id is safe.
           Providers.list_model_providers_for_member(
             model.id,
-            team_member.id,
-            team_id
+            group_member.id,
+            group_id
           )
         else
-          # Fallback: no team context (e.g. service members), global only
+          # Fallback: no group context (e.g. service members), global only
           Providers.list_model_providers(model.id)
         end
       end)
@@ -291,7 +291,7 @@ defmodule Tokengate.Routing.Router do
       # a freshly-disabled credential stops receiving traffic within 60s
       # instead of waiting for the next credential-health sweep.
       # Member-exclusive rows are also dropped for non-owners: the cached
-      # list is keyed by team, so without this filter a teammate would see
+      # list is keyed by group, so without this filter a groupmate would see
       # the owner's exclusive provider.
       candidates =
         model_providers
@@ -300,7 +300,7 @@ defmodule Tokengate.Routing.Router do
             mp.credential.status == "active" and
             not MapSet.member?(disabled_ids, mp.credential.id) and
             mp.credential.id not in exclude and
-            visible_to_member?(mp, team_member)
+            visible_to_member?(mp, group_member)
         end)
 
       if candidates == [] do
@@ -346,7 +346,7 @@ defmodule Tokengate.Routing.Router do
   # first by the priority strategy. Global providers keep their configured priority.
   defp inject_exclusive_priority(candidates) do
     Enum.map(candidates, fn mp ->
-      if mp.exclusive_to_team_member_id != nil || mp.exclusive_to_team_id != nil do
+      if mp.exclusive_to_group_member_id != nil || mp.exclusive_to_group_id != nil do
         %{mp | priority: -1}
       else
         mp
@@ -362,35 +362,35 @@ defmodule Tokengate.Routing.Router do
     Enum.find(accessible, fn model_ -> model_.name == name end)
   end
 
-  defp resolve_alias_id(nil, _team_member), do: nil
+  defp resolve_alias_id(nil, _group_member), do: nil
 
-  defp resolve_alias_id(model_requested, team_member) do
-    team_member = maybe_preload_team(team_member)
+  defp resolve_alias_id(model_requested, group_member) do
+    group_member = maybe_preload_group(group_member)
 
-    team_member
+    group_member
     |> Providers.list_accessible_models()
     |> Enum.find_value(fn model_ -> model_.name == model_requested && model_.id end)
   end
 
   # Member-exclusive scoping for the cached provider list. A cached entry is
-  # keyed by (model_id, team_id), so the raw list may contain a provider
-  # exclusive to a *different* member of the same team. Global rows (both
-  # scope fields nil) and team-exclusive rows are visible to everyone in the
-  # team; member-exclusive rows only to their owner.
-  defp visible_to_member?(mp, team_member) do
-    case mp.exclusive_to_team_member_id do
+  # keyed by (model_id, group_id), so the raw list may contain a provider
+  # exclusive to a *different* member of the same group. Global rows (both
+  # scope fields nil) and group-exclusive rows are visible to everyone in the
+  # group; member-exclusive rows only to their owner.
+  defp visible_to_member?(mp, group_member) do
+    case mp.exclusive_to_group_member_id do
       nil -> true
-      member_id -> team_member != nil and team_member.id == member_id
+      member_id -> group_member != nil and group_member.id == member_id
     end
   end
 
-  defp maybe_preload_team(team_member) do
+  defp maybe_preload_group(group_member) do
     cond do
-      team_member.team != nil and Ecto.assoc_loaded?(team_member.team) ->
-        team_member
+      group_member.group != nil and Ecto.assoc_loaded?(group_member.group) ->
+        group_member
 
       true ->
-        Tokengate.Repo.preload(team_member, [:team], force: true)
+        Tokengate.Repo.preload(group_member, [:group], force: true)
     end
   end
 

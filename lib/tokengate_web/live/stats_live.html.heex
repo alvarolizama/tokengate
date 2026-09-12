@@ -59,14 +59,14 @@
         <.icon name="hero-rectangle-stack" class="w-4 h-4" /> Modelos
       </.link>
       <.link
-        patch={~p"/dashboard/stats/teams?period=#{@period}"}
+        patch={~p"/dashboard/stats/groups?period=#{@period}"}
         class={[
           "join-item btn btn-sm",
-          if(@live_action == :teams, do: "btn-primary", else: "btn-ghost")
+          if(@live_action == :groups, do: "btn-primary", else: "btn-ghost")
         ]}
-        id="nav-teams"
+        id="nav-groups"
       >
-        <.icon name="hero-user-group" class="w-4 h-4" /> Equipos
+        <.icon name="hero-user-group" class="w-4 h-4" /> Grupos
       </.link>
       <.link
         patch={~p"/dashboard/stats/services?period=#{@period}"}
@@ -480,32 +480,32 @@
                   <div class="flex items-center justify-between">
                     <h2 class="card-title text-base">
                       <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" />
-                      Top 5 Equipos
+                      Top 5 Grupos
                     </h2>
                     <.link
-                      patch={~p"/dashboard/stats/teams?period=#{@period}"}
+                      patch={~p"/dashboard/stats/groups?period=#{@period}"}
                       class="btn btn-xs btn-ghost"
-                      id="see-all-teams"
+                      id="see-all-groups"
                     >
                       Ver todos <.icon name="hero-arrow-right" class="w-3 h-3" />
                     </.link>
                   </div>
-                  <%= if has_data?(@breakdown_team) do %>
+                  <%= if has_data?(@breakdown_group) do %>
                     <div class="overflow-x-auto mt-3">
                       <table class="table table-sm table-zebra">
                         <thead>
                           <tr>
-                            <th>Equipo</th>
+                            <th>Grupo</th>
                             <th class="text-right">Requests</th>
                             <th class="text-right">Costo</th>
                           </tr>
                         </thead>
                         <tbody>
                           <tr
-                            :for={row <- Enum.take(@breakdown_team, 5)}
-                            id={"top-team-#{row.team_id}"}
+                            :for={row <- Enum.take(@breakdown_group, 5)}
+                            id={"top-group-#{row.group_id}"}
                           >
-                            <td class="font-medium truncate max-w-[180px]">{row.team_name}</td>
+                            <td class="font-medium truncate max-w-[180px]">{row.group_name}</td>
                             <td class="text-right font-mono">
                               {format_number(row.request_count)}
                             </td>
@@ -539,7 +539,7 @@
                         <tbody>
                           <tr
                             :for={row <- Enum.take(@breakdown_member, 5)}
-                            id={"top-member-#{row.team_member_id}"}
+                            id={"top-member-#{row.group_member_id}"}
                           >
                             <td class="font-medium truncate max-w-[180px]">{row.user_email}</td>
                             <td class="text-right font-mono">
@@ -716,7 +716,7 @@
                           <tr>
                             <th>#</th>
                             <th>Usuario</th>
-                            <th>Equipo</th>
+                            <th>Grupo</th>
                             <th class="text-center">Tier</th>
                             <th class="text-right">Score</th>
                             <th class="text-right">Requests</th>
@@ -730,13 +730,13 @@
                         <tbody>
                           <tr
                             :for={{row, idx} <- Enum.with_index(@member_usage_tiers, 1)}
-                            id={"member-tier-row-#{row.team_member_id}"}
+                            id={"member-tier-row-#{row.group_member_id}"}
                           >
                             <td class="text-base-content/60">{idx}</td>
                             <td class="font-medium truncate max-w-[200px]">
                               {row.user_name || row.user_email}
                             </td>
-                            <td class="truncate max-w-[120px]">{row.team_name}</td>
+                            <td class="truncate max-w-[120px]">{row.group_name}</td>
                             <td class="text-center">
                               <span class={[
                                 "badge badge-sm",
@@ -1143,10 +1143,10 @@
                   <div class="card-body">
                     <h2 class="card-title text-base">
                       <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" />
-                      Equipos que lo usan
+                      Grupos que lo usan
                     </h2>
-                    <%= if has_data?(@breakdown_team) do %>
-                      <% team_total = breakdown_total(@breakdown_team) %>
+                    <%= if has_data?(@breakdown_group) do %>
+                      <% group_total = breakdown_total(@breakdown_group) %>
                       <div class="overflow-x-auto mt-3">
                         <table class="table table-sm table-zebra">
                           <thead>
@@ -1154,12 +1154,12 @@
                               <th>
                                 <button
                                   phx-click="sort"
-                                  phx-value-field="team_name"
+                                  phx-value-field="group_name"
                                   class="flex items-center gap-1 hover:text-primary"
                                 >
-                                  Equipo
+                                  Grupo
                                   <.sort_icon
-                                    field={:team_name}
+                                    field={:group_name}
                                     current={@sort_field}
                                     direction={@sort_direction}
                                   />
@@ -1210,8 +1210,11 @@
                             </tr>
                           </thead>
                           <tbody>
-                            <tr :for={row <- @breakdown_team} id={"bd-model-team-#{row.team_id}"}>
-                              <td class="font-medium">{row.team_name}</td>
+                            <tr
+                              :for={row <- @breakdown_group}
+                              id={"bd-model-group-#{row.group_id}"}
+                            >
+                              <td class="font-medium">{row.group_name}</td>
                               <td class="text-right font-mono">
                                 {format_number(row.request_count)}
                               </td>
@@ -1223,12 +1226,12 @@
                           </tbody>
                           <tfoot>
                             <tr class="font-bold bg-base-200">
-                              <td>Total · {length(@breakdown_team)} equipos</td>
+                              <td>Total · {length(@breakdown_group)} grupos</td>
                               <td class="text-right font-mono">
-                                {format_number(team_total.request_count)}
+                                {format_number(group_total.request_count)}
                               </td>
                               <td class="text-right font-mono">
-                                ${format_decimal(team_total.cost_usd)}
+                                ${format_decimal(group_total.cost_usd)}
                               </td>
                               <td></td>
                             </tr>
@@ -1257,12 +1260,12 @@
                               <th>
                                 <button
                                   phx-click="sort"
-                                  phx-value-field="team_name"
+                                  phx-value-field="group_name"
                                   class="flex items-center gap-1 hover:text-primary"
                                 >
-                                  Equipo
+                                  Grupo
                                   <.sort_icon
-                                    field={:team_name}
+                                    field={:group_name}
                                     current={@sort_field}
                                     direction={@sort_direction}
                                   />
@@ -1329,9 +1332,9 @@
                           <tbody>
                             <tr
                               :for={row <- @breakdown_member}
-                              id={"bd-model-member-#{row.team_member_id}"}
+                              id={"bd-model-member-#{row.group_member_id}"}
                             >
-                              <td>{row.team_name}</td>
+                              <td>{row.group_name}</td>
                               <td class="font-mono text-sm">
                                 <.link
                                   navigate={~p"/admin/users/#{row.user_id}/stats"}
@@ -1560,28 +1563,28 @@
               </div>
             <% end %>
           </div>
-        <% @live_action == :teams -> %>
+        <% @live_action == :groups -> %>
           <div class="space-y-6">
             <div class="flex items-center justify-end flex-wrap gap-3">
               <.link
                 href={
-                  if @team_filter,
+                  if @group_filter,
                     do:
-                      "/dashboard/stats/export?type=teams&period=#{@period}&team_id=#{@team_filter}",
-                    else: "/dashboard/stats/export?type=teams&period=#{@period}"
+                      "/dashboard/stats/export?type=groups&period=#{@period}&group_id=#{@group_filter}",
+                    else: "/dashboard/stats/export?type=groups&period=#{@period}"
                 }
                 class="btn btn-sm btn-ghost"
-                id="csv-teams"
+                id="csv-groups"
               >
                 <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> CSV
               </.link>
             </div>
 
-            <%= if @team_filter do %>
+            <%= if @group_filter do %>
               <div class="space-y-6">
                 <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
                   <div
-                    id="team-kpi-cost"
+                    id="group-kpi-cost"
                     class="card bg-base-100 border border-base-300 shadow-sm"
                   >
                     <div class="card-body p-5">
@@ -1603,7 +1606,7 @@
                     </div>
                   </div>
                   <div
-                    id="team-kpi-requests"
+                    id="group-kpi-requests"
                     class="card bg-base-100 border border-base-300 shadow-sm"
                   >
                     <div class="card-body p-5">
@@ -1625,7 +1628,7 @@
                     </div>
                   </div>
                   <div
-                    id="team-kpi-tokens"
+                    id="group-kpi-tokens"
                     class="card bg-base-100 border border-base-300 shadow-sm"
                   >
                     <div class="card-body p-5">
@@ -1683,7 +1686,10 @@
                       </div>
                     </div>
                   </div>
-                  <div id="team-kpi-tps" class="card bg-base-100 border border-base-300 shadow-sm">
+                  <div
+                    id="group-kpi-tps"
+                    class="card bg-base-100 border border-base-300 shadow-sm"
+                  >
                     <div class="card-body p-5">
                       <div class="flex items-center justify-between">
                         <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">TPS</span>
@@ -1902,7 +1908,7 @@
                           <tbody>
                             <tr
                               :for={row <- @breakdown_model}
-                              id={"bd-team-model-#{row.model_id || "unknown"}"}
+                              id={"bd-group-model-#{row.model_id || "unknown"}"}
                             >
                               <td class="font-medium">
                                 <%= if row.model_id do %>
@@ -1974,7 +1980,7 @@
                   <div class="card-body">
                     <h2 class="card-title text-base">
                       <.icon name="hero-user" class="w-5 h-5 text-base-content/60" />
-                      Miembros del equipo
+                      Miembros del grupo
                     </h2>
                     <%= if has_data?(@breakdown_member) do %>
                       <% member_total = breakdown_total(@breakdown_member) %>
@@ -2077,7 +2083,7 @@
                           <tbody>
                             <tr
                               :for={row <- @breakdown_member}
-                              id={"bd-team-member-#{row.team_member_id}"}
+                              id={"bd-group-member-#{row.group_member_id}"}
                             >
                               <td class="font-mono text-sm">
                                 <.link
@@ -2142,11 +2148,11 @@
                   </div>
                 </div>
                 <button
-                  phx-click="clear_team_filter"
+                  phx-click="clear_group_filter"
                   class="btn btn-sm btn-ghost"
-                  id="clear-team-filter"
+                  id="clear-group-filter"
                 >
-                  <.icon name="hero-x-mark" class="w-4 h-4" /> Quitar filtro de equipo
+                  <.icon name="hero-x-mark" class="w-4 h-4" /> Quitar filtro de grupo
                 </button>
               </div>
             <% else %>
@@ -2154,10 +2160,10 @@
                 <div class="card-body">
                   <h2 class="card-title text-base">
                     <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" />
-                    Todos los equipos
+                    Todos los grupos
                   </h2>
-                  <%= if has_data?(@breakdown_team) do %>
-                    <% team_total = breakdown_total(@breakdown_team) %>
+                  <%= if has_data?(@breakdown_group) do %>
+                    <% group_total = breakdown_total(@breakdown_group) %>
                     <div class="overflow-x-auto mt-3">
                       <table class="table table-sm table-zebra">
                         <thead>
@@ -2165,12 +2171,12 @@
                             <th>
                               <button
                                 phx-click="sort"
-                                phx-value-field="team_name"
+                                phx-value-field="group_name"
                                 class="flex items-center gap-1 hover:text-primary"
                               >
-                                Equipo
+                                Grupo
                                 <.sort_icon
-                                  field={:team_name}
+                                  field={:group_name}
                                   current={@sort_field}
                                   direction={@sort_direction}
                                 />
@@ -2255,14 +2261,14 @@
                           </tr>
                         </thead>
                         <tbody>
-                          <tr :for={row <- @breakdown_team} id={"bd-team-#{row.team_id}"}>
+                          <tr :for={row <- @breakdown_group} id={"bd-group-#{row.group_id}"}>
                             <td class="font-medium">
                               <.link
                                 patch={
-                                  ~p"/dashboard/stats/teams?period=#{@period}&team_id=#{row.team_id}"
+                                  ~p"/dashboard/stats/groups?period=#{@period}&group_id=#{row.group_id}"
                                 }
                                 class="link link-hover"
-                              >{row.team_name}</.link>
+                              >{row.group_name}</.link>
                             </td>
                             <td class="text-right font-mono">
                               {format_number(row.request_count)}
@@ -2287,23 +2293,23 @@
                         </tbody>
                         <tfoot>
                           <tr class="font-bold bg-base-200">
-                            <td>Total · {length(@breakdown_team)} equipos</td>
+                            <td>Total · {length(@breakdown_group)} grupos</td>
                             <td class="text-right font-mono">
-                              {format_number(team_total.request_count)}
+                              {format_number(group_total.request_count)}
                             </td>
                             <td class="text-right font-mono">
-                              ${format_decimal(team_total.cost_usd)}
+                              ${format_decimal(group_total.cost_usd)}
                             </td>
                             <td class="text-right font-mono">
-                              {format_number(team_total.prompt_tokens)}
+                              {format_number(group_total.prompt_tokens)}
                             </td>
                             <td class="text-right font-mono">
-                              {format_number(team_total.completion_tokens)}
+                              {format_number(group_total.completion_tokens)}
                             </td>
                             <td class="text-right font-mono">
                               {cache_hit_pct(
-                                team_total.prompt_tokens,
-                                team_total.cache_read_tokens
+                                group_total.prompt_tokens,
+                                group_total.cache_read_tokens
                               )}
                             </td>
                             <td></td>
@@ -2916,15 +2922,17 @@
                     {@member.user.email}
                   </h1>
                   <p class="text-sm text-base-content/60">
-                    Equipo: {@member.team.name} · Rol: {@member.team_role}
+                    Grupo: {@member.group.name} · Rol: {@member.group_role}
                   </p>
                 </div>
                 <.link
-                  patch={~p"/dashboard/stats/teams?period=#{@period}&team_id=#{@member.team_id}"}
+                  patch={
+                    ~p"/dashboard/stats/groups?period=#{@period}&group_id=#{@member.group_id}"
+                  }
                   class="btn btn-sm btn-ghost"
-                  id="back-to-team"
+                  id="back-to-group"
                 >
-                  <.icon name="hero-arrow-left" class="w-4 h-4" /> Volver al equipo
+                  <.icon name="hero-arrow-left" class="w-4 h-4" /> Volver al grupo
                 </.link>
               </div>
 

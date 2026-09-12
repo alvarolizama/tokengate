@@ -17,19 +17,19 @@ defmodule Tokengate.BudgetsTest do
   # Fixtures — create FK parents via the REAL Accounts context.
   # ---------------------------------------------------------------------------
 
-  defp team_fixture(attrs \\ %{}) do
-    {:ok, team} =
-      Accounts.create_team(
+  defp group_fixture(attrs \\ %{}) do
+    {:ok, group} =
+      Accounts.create_group(
         Map.merge(
           %{
-            "name" => "Team #{System.unique_integer([:positive])}",
+            "name" => "Group #{System.unique_integer([:positive])}",
             "monthly_budget_per_user_usd" => "100.00"
           },
           attrs
         )
       )
 
-    team
+    group
   end
 
   defp user_fixture do
@@ -43,12 +43,14 @@ defmodule Tokengate.BudgetsTest do
     user
   end
 
-  defp member_fixture(team \\ nil, user \\ nil, attrs \\ %{}) do
-    team = team || team_fixture()
+  defp member_fixture(group \\ nil, user \\ nil, attrs \\ %{}) do
+    group = group || group_fixture()
     user = user || user_fixture()
 
     {:ok, member} =
-      Accounts.create_team_member(Map.merge(%{"user_id" => user.id, "team_id" => team.id}, attrs))
+      Accounts.create_group_member(
+        Map.merge(%{"user_id" => user.id, "group_id" => group.id}, attrs)
+      )
 
     member
   end
@@ -62,7 +64,7 @@ defmodule Tokengate.BudgetsTest do
   defp log_request(member_id, inserted_at, cost) do
     {:ok, _} =
       Logs.log_request(%{
-        team_member_id: member_id,
+        group_member_id: member_id,
         model_requested: "gpt-4",
         inserted_at: inserted_at,
         provider_cost_usd: Decimal.new(cost)
@@ -84,7 +86,7 @@ defmodule Tokengate.BudgetsTest do
       refute budget.monthly_exhausted?
     end
 
-    test "member extra stacks on team default" do
+    test "member extra stacks on group default" do
       member = member_fixture(nil, nil, %{"extra_monthly_budget_usd" => "50.00"})
 
       budget = Budgets.member_budget(member)
@@ -93,8 +95,8 @@ defmodule Tokengate.BudgetsTest do
     end
 
     test "unlimited periods report nil pct and never exhaust" do
-      team = team_fixture(%{"monthly_budget_per_user_usd" => nil})
-      member = member_fixture(team)
+      group = group_fixture(%{"monthly_budget_per_user_usd" => nil})
+      member = member_fixture(group)
 
       budget = Budgets.member_budget(member)
 
@@ -125,8 +127,8 @@ defmodule Tokengate.BudgetsTest do
     end
 
     test "zero limit exhausts immediately" do
-      team = team_fixture(%{"monthly_budget_per_user_usd" => "0"})
-      member = member_fixture(team)
+      group = group_fixture(%{"monthly_budget_per_user_usd" => "0"})
+      member = member_fixture(group)
 
       budget = Budgets.member_budget(member)
 
@@ -145,7 +147,7 @@ defmodule Tokengate.BudgetsTest do
   end
 
   describe "list_member_budgets/0" do
-    test "includes every member with user and team preloaded" do
+    test "includes every member with user and group preloaded" do
       member = member_fixture()
 
       budgets = Budgets.list_member_budgets()
@@ -153,7 +155,7 @@ defmodule Tokengate.BudgetsTest do
 
       assert budget
       assert budget.member.user.email == Accounts.get_user!(member.user_id).email
-      assert %Accounts.Team{} = budget.member.team
+      assert %Accounts.Group{} = budget.member.group
     end
   end
 
@@ -201,19 +203,19 @@ defmodule Tokengate.BudgetsTest do
     end
   end
 
-  describe "list_team_budgets/0" do
-    test "agrupa por equipo: tope = suma de límites diarios, gasto = suma de spend" do
-      team = team_fixture(%{"monthly_budget_per_user_usd" => "500.00"})
-      member_a = member_fixture(team)
-      member_b = member_fixture(team)
-      # Otro equipo que no debe mezclarse
+  describe "list_group_budgets/0" do
+    test "agrupa por grupo: tope = suma de límites diarios, gasto = suma de spend" do
+      group = group_fixture(%{"monthly_budget_per_user_usd" => "500.00"})
+      member_a = member_fixture(group)
+      member_b = member_fixture(group)
+      # Otro grupo que no debe mezclarse
       _other = member_fixture()
 
       assert :ok = Manager.record_spend(member_a.id, Decimal.new("100.00"))
       assert :ok = Manager.record_spend(member_b.id, Decimal.new("50.00"))
 
-      teams = Budgets.list_team_budgets()
-      row = Enum.find(teams, &(&1.team.id == team.id))
+      groups = Budgets.list_group_budgets()
+      row = Enum.find(groups, &(&1.group.id == group.id))
 
       assert row.member_count == 2
       # tope = 500 * 2 miembros
@@ -224,13 +226,13 @@ defmodule Tokengate.BudgetsTest do
       refute row.has_unlimited?
     end
 
-    test "spot check on team budget values" do
+    test "spot check on group budget values" do
       _member = member_fixture()
-      team = team_fixture()
+      group = group_fixture()
       _member = member_fixture()
 
-      teams = Budgets.list_team_budgets()
-      refute Enum.find(teams, &(&1.team.id == team.id))
+      groups = Budgets.list_group_budgets()
+      refute Enum.find(groups, &(&1.group.id == group.id))
     end
   end
 
@@ -289,9 +291,9 @@ defmodule Tokengate.BudgetsTest do
     end
 
     test "list_member_budgets_for_user con timezone" do
-      team = team_fixture()
+      group = group_fixture()
       user = user_fixture()
-      member = member_fixture(team, user)
+      member = member_fixture(group, user)
       tz = "America/Mexico_City"
       today_start = Periods.start_of_day_utc(tz)
 

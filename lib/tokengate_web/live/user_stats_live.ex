@@ -1,7 +1,7 @@
 defmodule TokengateWeb.UserStatsLive do
   @moduledoc """
   Admin-only consolidated stats page for a **user**, aggregating every
-  team membership the user holds.
+  group membership the user holds.
 
   Shows aggregated stat cards (requests, cost, tokens, top models, status
   breakdown, last request) and a paginated stream of the user's recent
@@ -27,7 +27,7 @@ defmodule TokengateWeb.UserStatsLive do
   @impl true
   def mount(%{"user_id" => user_id}, _session, socket) do
     user = Accounts.get_user!(user_id)
-    memberships = Accounts.list_team_members_for_user(user.id)
+    memberships = Accounts.list_group_members_for_user(user.id)
     member_ids = Enum.map(memberships, & &1.id)
 
     if connected?(socket) and member_ids != [] do
@@ -39,7 +39,7 @@ defmodule TokengateWeb.UserStatsLive do
       |> assign(:page_title, "Stats · #{user.email} · Tokengate")
       |> assign(:user, user)
       |> assign(:memberships, memberships)
-      |> assign(:team_member_ids, member_ids)
+      |> assign(:group_member_ids, member_ids)
       |> assign(:timezone, socket.assigns[:timezone] || "Etc/UTC")
       |> assign(:is_admin, socket.assigns[:current_user].global_role == "admin")
       |> assign(:filters, default_filters())
@@ -71,7 +71,7 @@ defmodule TokengateWeb.UserStatsLive do
 
   @impl true
   def handle_info({:new_log, log}, socket) do
-    if log.team_member_id in socket.assigns.team_member_ids do
+    if log.group_member_id in socket.assigns.group_member_ids do
       timezone = socket.assigns.timezone
       filters = socket.assigns.filters
 
@@ -138,7 +138,7 @@ defmodule TokengateWeb.UserStatsLive do
   ## Data loading ---------------------------------------------------------
 
   defp load_summary(socket) do
-    ids = socket.assigns.team_member_ids
+    ids = socket.assigns.group_member_ids
     user_id = socket.assigns.user.id
 
     # The two member_stats calls are the expensive part of every PubSub
@@ -162,7 +162,7 @@ defmodule TokengateWeb.UserStatsLive do
   end
 
   defp load_logs(socket, mode) do
-    ids = socket.assigns.team_member_ids
+    ids = socket.assigns.group_member_ids
 
     if ids == [] do
       socket
@@ -171,7 +171,7 @@ defmodule TokengateWeb.UserStatsLive do
     else
       base_filters =
         socket.assigns.filters
-        |> Map.put("team_member_ids", ids)
+        |> Map.put("group_member_ids", ids)
         |> drop_empty_filters()
 
       logs =
@@ -427,7 +427,7 @@ defmodule TokengateWeb.UserStatsLive do
               <% else %>
                 <ul class="space-y-1 text-sm">
                   <li :for={m <- @memberships} class="flex items-center justify-between">
-                    <span>{(m.team && m.team.name) || "—"}</span>
+                    <span>{(m.group && m.group.name) || "—"}</span>
                     <span class="badge badge-sm badge-ghost">
                       {if m.api_key, do: m.api_key.key_prefix, else: "—"}
                     </span>

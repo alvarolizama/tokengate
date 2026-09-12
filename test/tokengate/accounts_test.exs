@@ -1,16 +1,16 @@
 defmodule Tokengate.AccountsTest do
   use Tokengate.DataCase, async: true
   alias Tokengate.Accounts
-  alias Tokengate.Accounts.{ApiKey, Service, ServiceSupervisor, Team, TeamMember, User}
+  alias Tokengate.Accounts.{ApiKey, Service, ServiceSupervisor, Group, GroupMember, User}
 
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
 
-  defp valid_team_attrs(attrs) do
+  defp valid_group_attrs(attrs) do
     Map.merge(
       %{
-        "name" => "Platform Team",
+        "name" => "Platform Group",
         "monthly_budget_per_user_usd" => "100.00",
         "default_concurrency_limit" => 10,
         "default_rpm_limit" => 120
@@ -19,9 +19,9 @@ defmodule Tokengate.AccountsTest do
     )
   end
 
-  defp team_fixture(attrs \\ %{}) do
-    {:ok, team} = Accounts.create_team(valid_team_attrs(attrs))
-    team
+  defp group_fixture(attrs \\ %{}) do
+    {:ok, group} = Accounts.create_group(valid_group_attrs(attrs))
+    group
   end
 
   defp valid_user_attrs(attrs) do
@@ -40,12 +40,12 @@ defmodule Tokengate.AccountsTest do
     user
   end
 
-  defp valid_team_member_attrs(user, team, attrs \\ %{}) do
+  defp valid_group_member_attrs(user, group, attrs \\ %{}) do
     Map.merge(
       %{
         "user_id" => user.id,
-        "team_id" => team.id,
-        "team_role" => "user"
+        "group_id" => group.id,
+        "group_role" => "user"
       },
       attrs
     )
@@ -69,76 +69,76 @@ defmodule Tokengate.AccountsTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Team changesets
+  # Group changesets
   # ---------------------------------------------------------------------------
 
-  describe "team changesets" do
-    test "create_team/1 with valid attrs succeeds and applies defaults when omitted" do
+  describe "group changesets" do
+    test "create_group/1 with valid attrs succeeds and applies defaults when omitted" do
       attrs =
-        valid_team_attrs(%{"default_concurrency_limit" => nil, "default_rpm_limit" => nil})
+        valid_group_attrs(%{"default_concurrency_limit" => nil, "default_rpm_limit" => nil})
 
       # remove from attrs to test DB default
       attrs = Map.delete(attrs, "default_concurrency_limit") |> Map.delete("default_rpm_limit")
 
-      assert {:ok, %Team{} = team} = Accounts.create_team(attrs)
-      assert team.name == "Platform Team"
-      assert team.default_concurrency_limit == 5
-      assert team.default_rpm_limit == 60
+      assert {:ok, %Group{} = group} = Accounts.create_group(attrs)
+      assert group.name == "Platform Group"
+      assert group.default_concurrency_limit == 5
+      assert group.default_rpm_limit == 60
     end
 
-    test "create_team/1 requires name" do
-      {:error, changeset} = Accounts.create_team(%{})
+    test "create_group/1 requires name" do
+      {:error, changeset} = Accounts.create_group(%{})
 
       assert "can't be blank" in errors_on(changeset).name
     end
 
-    test "create_team/1 validates concurrency/rpm greater than 0" do
-      attrs = valid_team_attrs(%{"default_concurrency_limit" => 0, "default_rpm_limit" => 0})
-      {:error, changeset} = Accounts.create_team(attrs)
+    test "create_group/1 validates concurrency/rpm greater than 0" do
+      attrs = valid_group_attrs(%{"default_concurrency_limit" => 0, "default_rpm_limit" => 0})
+      {:error, changeset} = Accounts.create_group(attrs)
 
       assert "must be greater than 0" in errors_on(changeset).default_concurrency_limit
       assert "must be greater than 0" in errors_on(changeset).default_rpm_limit
     end
 
-    test "create_team/1 allows nil budget" do
-      attrs = valid_team_attrs(%{"monthly_budget_per_user_usd" => nil})
+    test "create_group/1 allows nil budget" do
+      attrs = valid_group_attrs(%{"monthly_budget_per_user_usd" => nil})
 
-      assert {:ok, %Team{} = team} = Accounts.create_team(attrs)
-      assert team.monthly_budget_per_user_usd == nil
+      assert {:ok, %Group{} = group} = Accounts.create_group(attrs)
+      assert group.monthly_budget_per_user_usd == nil
     end
   end
 
-  describe "delete_team/1" do
-    test "deletes a team with no members" do
-      team = team_fixture()
+  describe "delete_group/1" do
+    test "deletes a group with no members" do
+      group = group_fixture()
 
-      assert {:ok, _} = Accounts.delete_team(team)
-      assert Accounts.get_team(team.id) == nil
+      assert {:ok, _} = Accounts.delete_group(group)
+      assert Accounts.get_group(group.id) == nil
     end
 
-    test "deletes a team and cascades cleanup of members, api keys, and extra models" do
-      team = team_fixture()
+    test "deletes a group and cascades cleanup of members, api keys, and extra models" do
+      group = group_fixture()
       user = user_fixture()
 
-      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, tm} = Accounts.create_group_member(valid_group_member_attrs(user, group))
 
-      assert {:ok, _} = Accounts.delete_team(team)
-      assert Accounts.get_team(team.id) == nil
-      assert Accounts.get_team_member(tm.id) == nil
+      assert {:ok, _} = Accounts.delete_group(group)
+      assert Accounts.get_group(group.id) == nil
+      assert Accounts.get_group_member(tm.id) == nil
     end
 
-    test "deletes a team with multiple members" do
-      team = team_fixture()
+    test "deletes a group with multiple members" do
+      group = group_fixture()
       user1 = user_fixture()
       user2 = user_fixture(%{"email" => "user2#{System.unique_integer([:positive])}@example.com"})
 
-      {:ok, tm1} = Accounts.create_team_member(valid_team_member_attrs(user1, team))
-      {:ok, tm2} = Accounts.create_team_member(valid_team_member_attrs(user2, team))
+      {:ok, tm1} = Accounts.create_group_member(valid_group_member_attrs(user1, group))
+      {:ok, tm2} = Accounts.create_group_member(valid_group_member_attrs(user2, group))
 
-      assert {:ok, _} = Accounts.delete_team(team)
-      assert Accounts.get_team(team.id) == nil
-      assert Accounts.get_team_member(tm1.id) == nil
-      assert Accounts.get_team_member(tm2.id) == nil
+      assert {:ok, _} = Accounts.delete_group(group)
+      assert Accounts.get_group(group.id) == nil
+      assert Accounts.get_group_member(tm1.id) == nil
+      assert Accounts.get_group_member(tm2.id) == nil
     end
   end
 
@@ -221,17 +221,17 @@ defmodule Tokengate.AccountsTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Team member + API key creation (atomic)
+  # Group member + API key creation (atomic)
   # ---------------------------------------------------------------------------
 
-  describe "create_team_member/1" do
-    test "creates a team member and provisions an API key atomically, returns token once" do
-      team = team_fixture()
+  describe "create_group_member/1" do
+    test "creates a group member and provisions an API key atomically, returns token once" do
+      group = group_fixture()
       user = user_fixture()
 
-      attrs = valid_team_member_attrs(user, team)
+      attrs = valid_group_member_attrs(user, group)
 
-      assert {:ok, %TeamMember{} = tm} = Accounts.create_team_member(attrs)
+      assert {:ok, %GroupMember{} = tm} = Accounts.create_group_member(attrs)
       {:ok, _api_key, token} = Accounts.replace_api_key(tm)
       assert is_binary(token)
       assert String.starts_with?(token, "tg-")
@@ -244,48 +244,48 @@ defmodule Tokengate.AccountsTest do
       assert api_key.status == "active"
     end
 
-    test "token is verifiable via get_team_member_by_api_key/1" do
-      team = team_fixture()
+    test "token is verifiable via get_group_member_by_api_key/1" do
+      group = group_fixture()
       user = user_fixture()
 
-      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, tm} = Accounts.create_group_member(valid_group_member_attrs(user, group))
       {:ok, _api_key, token} = Accounts.replace_api_key(tm)
 
-      assert {:ok, %TeamMember{}} = Accounts.get_team_member_by_api_key(token)
+      assert {:ok, %GroupMember{}} = Accounts.get_group_member_by_api_key(token)
     end
 
-    test "enforces unique (user_id, team_id)" do
-      team = team_fixture()
+    test "enforces unique (user_id, group_id)" do
+      group = group_fixture()
       user = user_fixture()
 
-      {:ok, _tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, _tm} = Accounts.create_group_member(valid_group_member_attrs(user, group))
 
       assert {:error, changeset} =
-               Accounts.create_team_member(valid_team_member_attrs(user, team))
+               Accounts.create_group_member(valid_group_member_attrs(user, group))
 
-      assert "has already been taken" in errors_on(changeset).team_id
+      assert "has already been taken" in errors_on(changeset).group_id
     end
 
-    test "validates team_role and status inclusion" do
-      team = team_fixture()
+    test "validates group_role and status inclusion" do
+      group = group_fixture()
       user = user_fixture()
 
       attrs =
-        valid_team_member_attrs(user, team, %{
-          "team_role" => "invalid",
+        valid_group_member_attrs(user, group, %{
+          "group_role" => "invalid",
           "status" => "invalid"
         })
 
-      assert {:error, changeset} = Accounts.create_team_member(attrs)
-      assert "is invalid" in errors_on(changeset).team_role
+      assert {:error, changeset} = Accounts.create_group_member(attrs)
+      assert "is invalid" in errors_on(changeset).group_role
       assert "is invalid" in errors_on(changeset).status
     end
 
     test "does not store the plaintext token; only the hash" do
-      team = team_fixture()
+      group = group_fixture()
       user = user_fixture()
 
-      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, tm} = Accounts.create_group_member(valid_group_member_attrs(user, group))
       {:ok, _api_key, token} = Accounts.replace_api_key(tm)
       tm_loaded = Repo.preload(tm, [:api_key])
 
@@ -311,65 +311,65 @@ defmodule Tokengate.AccountsTest do
       assert hash == Accounts.hash_api_key(token)
     end
 
-    test "get_team_member_by_api_key/1 preloads team and user" do
-      team = team_fixture(%{"name" => "Lookup Team"})
+    test "get_group_member_by_api_key/1 preloads group and user" do
+      group = group_fixture(%{"name" => "Lookup Group"})
       user = user_fixture(%{"name" => "Lookup User", "email" => "lookup@example.com"})
 
-      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, tm} = Accounts.create_group_member(valid_group_member_attrs(user, group))
       {:ok, _api_key, token} = Accounts.replace_api_key(tm)
 
-      assert {:ok, %TeamMember{team: %Team{}, user: %User{}}} =
-               Accounts.get_team_member_by_api_key(token)
+      assert {:ok, %GroupMember{group: %Group{}, user: %User{}}} =
+               Accounts.get_group_member_by_api_key(token)
 
-      {:ok, tm} = Accounts.get_team_member_by_api_key(token)
-      assert tm.team.name == "Lookup Team"
+      {:ok, tm} = Accounts.get_group_member_by_api_key(token)
+      assert tm.group.name == "Lookup Group"
       assert tm.user.email == "lookup@example.com"
     end
 
-    test "get_team_member_by_api_key/1 returns not_found for revoked key" do
-      team = team_fixture()
+    test "get_group_member_by_api_key/1 returns not_found for revoked key" do
+      group = group_fixture()
       user = user_fixture()
 
-      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, tm} = Accounts.create_group_member(valid_group_member_attrs(user, group))
       {:ok, _api_key, token} = Accounts.replace_api_key(tm)
 
       # Revoke the api key directly
       tm_loaded = Repo.preload(tm, [:api_key])
       {:ok, _} = Accounts.revoke_api_key(tm_loaded.api_key)
 
-      assert {:error, :not_found} = Accounts.get_team_member_by_api_key(token)
+      assert {:error, :not_found} = Accounts.get_group_member_by_api_key(token)
     end
 
-    test "get_team_member_by_api_key/1 returns not_found for garbage token" do
-      assert {:error, :not_found} = Accounts.get_team_member_by_api_key("tg-garbage")
+    test "get_group_member_by_api_key/1 returns not_found for garbage token" do
+      assert {:error, :not_found} = Accounts.get_group_member_by_api_key("tg-garbage")
     end
 
-    test "api_keys has unique index on team_member_id (one key per member)" do
-      team = team_fixture()
+    test "api_keys has unique index on group_member_id (one key per member)" do
+      group = group_fixture()
       user = user_fixture()
 
-      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, tm} = Accounts.create_group_member(valid_group_member_attrs(user, group))
       {:ok, _api_key, _token} = Accounts.replace_api_key(tm)
       tm_loaded = Repo.preload(tm, [:api_key])
 
-      # Attempt to insert a second api key for the same team_member directly
+      # Attempt to insert a second api key for the same group_member directly
       {:error, changeset} =
         Accounts.create_api_key(%{
-          "team_member_id" => tm_loaded.id,
+          "group_member_id" => tm_loaded.id,
           "key_hash" => Accounts.hash_api_key("tg-somethingelse"),
           "key_prefix" => "tg-somet"
         })
 
-      assert "has already been taken" in errors_on(changeset).team_member_id
+      assert "has already been taken" in errors_on(changeset).group_member_id
     end
   end
 
   describe "replace_api_key/1" do
     test "revokes the old key and issues a new one, returning new token" do
-      team = team_fixture()
+      group = group_fixture()
       user = user_fixture()
 
-      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, tm} = Accounts.create_group_member(valid_group_member_attrs(user, group))
       {:ok, _old_key, old_token} = Accounts.replace_api_key(tm)
 
       assert {:ok, %ApiKey{} = new_key, new_token} = Accounts.replace_api_key(tm)
@@ -379,20 +379,20 @@ defmodule Tokengate.AccountsTest do
       assert new_key.key_hash == Accounts.hash_api_key(new_token)
 
       # Old token no longer resolves to an active key
-      assert {:error, :not_found} = Accounts.get_team_member_by_api_key(old_token)
+      assert {:error, :not_found} = Accounts.get_group_member_by_api_key(old_token)
       # New token does
-      assert {:ok, _} = Accounts.get_team_member_by_api_key(new_token)
+      assert {:ok, _} = Accounts.get_group_member_by_api_key(new_token)
     end
 
     test "old token is invalidated after replacement" do
-      team = team_fixture()
+      group = group_fixture()
       user = user_fixture()
 
-      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, tm} = Accounts.create_group_member(valid_group_member_attrs(user, group))
 
       {:ok, _new_key, _new_token} = Accounts.replace_api_key(tm)
 
-      # There is still exactly one api_key row for this team_member
+      # There is still exactly one api_key row for this group_member
       tm_loaded = Repo.preload(tm, [:api_key])
       assert tm_loaded.api_key.status == "active"
       # The key hash has changed (no longer matches the old token)
@@ -405,11 +405,11 @@ defmodule Tokengate.AccountsTest do
   # ---------------------------------------------------------------------------
 
   describe "effective_limits/1" do
-    test "returns team defaults when no member extras are set" do
-      team = team_fixture()
+    test "returns group defaults when no member extras are set" do
+      group = group_fixture()
       user = user_fixture()
 
-      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, tm} = Accounts.create_group_member(valid_group_member_attrs(user, group))
 
       limits = Accounts.effective_limits(tm)
 
@@ -418,13 +418,13 @@ defmodule Tokengate.AccountsTest do
       assert limits.rpm_limit == 120
     end
 
-    test "adds extra_monthly_budget_usd to team default" do
-      team = team_fixture()
+    test "adds extra_monthly_budget_usd to group default" do
+      group = group_fixture()
       user = user_fixture()
 
       {:ok, tm} =
-        Accounts.create_team_member(
-          valid_team_member_attrs(user, team, %{"extra_monthly_budget_usd" => "50.00"})
+        Accounts.create_group_member(
+          valid_group_member_attrs(user, group, %{"extra_monthly_budget_usd" => "50.00"})
         )
 
       limits = Accounts.effective_limits(tm)
@@ -432,13 +432,13 @@ defmodule Tokengate.AccountsTest do
       assert limits.monthly_budget_usd == Decimal.new("150.00")
     end
 
-    test "adds extra_concurrency to team default" do
-      team = team_fixture()
+    test "adds extra_concurrency to group default" do
+      group = group_fixture()
       user = user_fixture()
 
       {:ok, tm} =
-        Accounts.create_team_member(
-          valid_team_member_attrs(user, team, %{"extra_concurrency" => 5})
+        Accounts.create_group_member(
+          valid_group_member_attrs(user, group, %{"extra_concurrency" => 5})
         )
 
       limits = Accounts.effective_limits(tm)
@@ -446,36 +446,36 @@ defmodule Tokengate.AccountsTest do
       assert limits.concurrency_limit == 15
     end
 
-    test "adds extra_rpm to team default" do
-      team = team_fixture()
+    test "adds extra_rpm to group default" do
+      group = group_fixture()
       user = user_fixture()
 
       {:ok, tm} =
-        Accounts.create_team_member(valid_team_member_attrs(user, team, %{"extra_rpm" => 40}))
+        Accounts.create_group_member(valid_group_member_attrs(user, group, %{"extra_rpm" => 40}))
 
       limits = Accounts.effective_limits(tm)
 
       assert limits.rpm_limit == 160
     end
 
-    test "nil team monthly_budget_usd with nil extra → nil" do
-      team = team_fixture(%{"monthly_budget_per_user_usd" => nil})
+    test "nil group monthly_budget_usd with nil extra → nil" do
+      group = group_fixture(%{"monthly_budget_per_user_usd" => nil})
       user = user_fixture()
 
-      {:ok, tm} = Accounts.create_team_member(valid_team_member_attrs(user, team))
+      {:ok, tm} = Accounts.create_group_member(valid_group_member_attrs(user, group))
 
       limits = Accounts.effective_limits(tm)
 
       assert limits.monthly_budget_usd == nil
     end
 
-    test "nil team monthly_budget_usd with extra → just the extra" do
-      team = team_fixture(%{"monthly_budget_per_user_usd" => nil})
+    test "nil group monthly_budget_usd with extra → just the extra" do
+      group = group_fixture(%{"monthly_budget_per_user_usd" => nil})
       user = user_fixture()
 
       {:ok, tm} =
-        Accounts.create_team_member(
-          valid_team_member_attrs(user, team, %{"extra_monthly_budget_usd" => "25.00"})
+        Accounts.create_group_member(
+          valid_group_member_attrs(user, group, %{"extra_monthly_budget_usd" => "25.00"})
         )
 
       limits = Accounts.effective_limits(tm)
@@ -483,7 +483,7 @@ defmodule Tokengate.AccountsTest do
       assert limits.monthly_budget_usd == Decimal.new("25.00")
     end
 
-    test "service virtual member returns service limits (not team defaults)" do
+    test "service virtual member returns service limits (not group defaults)" do
       service =
         service_fixture(%{
           "monthly_budget_usd" => "50.00",
@@ -494,7 +494,7 @@ defmodule Tokengate.AccountsTest do
       service = Repo.preload(service, [:api_key])
       member = TokengateWeb.Plugs.ApiAuth.service_to_virtual_member(service)
 
-      # The virtual member must NOT crash effective_limits (was a nil.team crash)
+      # The virtual member must NOT crash effective_limits (was a nil.group crash)
       limits = Accounts.effective_limits(member)
 
       assert limits.monthly_budget_usd == Decimal.new("50.00")
@@ -504,13 +504,13 @@ defmodule Tokengate.AccountsTest do
 
     test "service virtual member with no backing service returns safe defaults" do
       # Build a virtual member with a non-existent service id
-      member = %TeamMember{
+      member = %GroupMember{
         id: Ecto.UUID.generate(),
-        team_id: nil,
+        group_id: nil,
         user_id: nil,
-        team_role: "user",
+        group_role: "user",
         status: "active",
-        team: nil,
+        group: nil,
         user: nil,
         api_key: nil
       }

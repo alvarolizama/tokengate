@@ -49,10 +49,10 @@ defmodule TokengateWeb.StatsLiveTest do
 
   defp wait_stats_loaded(_view, 0), do: raise("stats async data never loaded")
 
-  defp team_with_log(opts) do
+  defp group_with_log(opts) do
     u = unique()
 
-    {:ok, team} = Accounts.create_team(%{name: "Stats Team #{u}"})
+    {:ok, group} = Accounts.create_group(%{name: "Stats Group #{u}"})
 
     {:ok, owner} =
       Accounts.register_user(%{
@@ -62,7 +62,7 @@ defmodule TokengateWeb.StatsLiveTest do
       })
 
     {:ok, member} =
-      Accounts.create_team_member(%{user_id: owner.id, team_id: team.id, team_role: "user"})
+      Accounts.create_group_member(%{user_id: owner.id, group_id: group.id, group_role: "user"})
 
     {:ok, provider} =
       Providers.create_provider(%{name: "Prov #{u}", base_url: "http://localhost:1"})
@@ -79,7 +79,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
       {:ok, _log} =
         Logs.log_request(%{
-          team_member_id: member.id,
+          group_member_id: member.id,
           provider_id: provider.id,
           model_id: ma.id,
           model_requested: "model-#{u}",
@@ -97,7 +97,7 @@ defmodule TokengateWeb.StatsLiveTest do
         })
     end
 
-    %{team: team, owner: owner, member: member, model: ma, provider: provider}
+    %{group: group, owner: owner, member: member, model: ma, provider: provider}
   end
 
   ## Auth -------------------------------------------------------------------
@@ -110,7 +110,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
   test "admin sees stats index with KPIs and nav tabs", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    team_with_log(%{cost: "0.005"})
+    group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
     {:ok, view, html} = live(conn, ~p"/dashboard/stats")
@@ -119,7 +119,7 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#stats-nav")
     assert has_element?(view, "#nav-stats")
     assert has_element?(view, "#nav-models")
-    assert has_element?(view, "#nav-teams")
+    assert has_element?(view, "#nav-groups")
     assert has_element?(view, "#period-selector")
     assert has_element?(view, "#period-today")
     assert has_element?(view, "#period-week")
@@ -130,7 +130,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
   test "admin sees KPI cards and top tables on index", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    team_with_log(%{cost: "0.005"})
+    group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
@@ -146,7 +146,7 @@ defmodule TokengateWeb.StatsLiveTest do
   test "tokens KPI shows cache (read + creation) with hit rate", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
 
-    team_with_log(%{
+    group_with_log(%{
       cost: "0.005",
       prompt_tokens: 1000,
       cache_read_tokens: 800,
@@ -165,7 +165,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
   test "admin sees provider ranking on index", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    %{provider: provider} = team_with_log(%{cost: "0.005"})
+    %{provider: provider} = group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
@@ -176,7 +176,7 @@ defmodule TokengateWeb.StatsLiveTest do
   end
 
   test "regular user is redirected from stats to dashboard", %{conn: conn} do
-    %{owner: owner} = team_with_log(%{cost: "0.005"})
+    %{owner: owner} = group_with_log(%{cost: "0.005"})
 
     conn = login(conn, owner, owner.password)
     assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/stats")
@@ -184,7 +184,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
   test "admin sees usage patterns section on index", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    team_with_log(%{cost: "0.005"})
+    group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
@@ -198,7 +198,7 @@ defmodule TokengateWeb.StatsLiveTest do
   end
 
   test "regular user is redirected from stats (usage patterns)", %{conn: conn} do
-    %{owner: owner} = team_with_log(%{cost: "0.005"})
+    %{owner: owner} = group_with_log(%{cost: "0.005"})
 
     conn = login(conn, owner, owner.password)
     assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/stats")
@@ -208,7 +208,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
   test "admin sees models table with all models", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    team_with_log(%{cost: "0.005"})
+    group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats/models")
@@ -220,7 +220,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
   test "selecting a model shows drill-down with provider breakdown", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    %{model: ma} = team_with_log(%{cost: "0.005"})
+    %{model: ma} = group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats/models?model_id=#{ma.id}")
@@ -233,39 +233,39 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#clear-model-filter")
   end
 
-  ## Teams view -------------------------------------------------------------
+  ## Groups view -------------------------------------------------------------
 
-  test "admin sees teams table with all teams", %{conn: conn} do
+  test "admin sees groups table with all groups", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    team_with_log(%{cost: "0.005"})
+    group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/stats/teams")
+    {:ok, view, _html} = live(conn, ~p"/dashboard/stats/groups")
     wait_stats_loaded(view)
 
-    assert has_element?(view, "#csv-teams")
+    assert has_element?(view, "#csv-groups")
     assert has_element?(view, "table")
   end
 
-  test "selecting a team shows drill-down with members and models", %{conn: conn} do
+  test "selecting a group shows drill-down with members and models", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    %{team: team} = team_with_log(%{cost: "0.005"})
+    %{group: group} = group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/stats/teams?team_id=#{team.id}")
+    {:ok, view, _html} = live(conn, ~p"/dashboard/stats/groups?group_id=#{group.id}")
     wait_stats_loaded(view)
 
-    assert has_element?(view, "#team-kpi-requests")
-    # Since the 2026-07-30 refactor there's only one cost KPI: #team-kpi-cost.
-    assert has_element?(view, "#team-kpi-cost")
-    assert has_element?(view, "#clear-team-filter")
+    assert has_element?(view, "#group-kpi-requests")
+    # Since the 2026-07-30 refactor there's only one cost KPI: #group-kpi-cost.
+    assert has_element?(view, "#group-kpi-cost")
+    assert has_element?(view, "#clear-group-filter")
   end
 
   ## Period switching --------------------------------------------------------
 
   test "switching period updates data", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    team_with_log(%{cost: "0.005"})
+    group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
@@ -282,10 +282,10 @@ defmodule TokengateWeb.StatsLiveTest do
   test "clicking a sort header re-orders the breakdown table rows", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
 
-    # Same team/member, two different models with different costs so
+    # Same group/member, two different models with different costs so
     # the model breakdown has two sortable rows.
     %{member: member, model: cheap, provider: provider} =
-      team_with_log(%{cost: "0.001"})
+      group_with_log(%{cost: "0.001"})
 
     u = unique()
 
@@ -297,7 +297,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
     {:ok, _log} =
       Logs.log_request(%{
-        team_member_id: member.id,
+        group_member_id: member.id,
         provider_id: provider.id,
         model_id: expensive.id,
         model_requested: expensive.name,
@@ -353,9 +353,9 @@ defmodule TokengateWeb.StatsLiveTest do
   ## User scope --------------------------------------------------------------
 
   test "regular user is redirected from stats (own consumption)", %{conn: conn} do
-    %{owner: owner, member: _member} = team_with_log(%{cost: "0.005"})
-    # Another team's log that must not leak
-    team_with_log(%{cost: "99.99"})
+    %{owner: owner, member: _member} = group_with_log(%{cost: "0.005"})
+    # Another group's log that must not leak
+    group_with_log(%{cost: "99.99"})
 
     password = owner.password
     conn = login(conn, owner, password)
@@ -366,7 +366,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
   test "CSV export returns downloadable file for models", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    team_with_log(%{cost: "0.005"})
+    group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
     conn = get(conn, "/dashboard/stats/export?type=models&period=7d")
@@ -379,16 +379,16 @@ defmodule TokengateWeb.StatsLiveTest do
     assert ["text/csv; charset=utf-8"] = get_resp_header(conn, "content-type")
   end
 
-  test "CSV export returns downloadable file for teams", %{conn: conn} do
+  test "CSV export returns downloadable file for groups", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    team_with_log(%{cost: "0.005"})
+    group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    conn = get(conn, "/dashboard/stats/export?type=teams&period=7d")
+    conn = get(conn, "/dashboard/stats/export?type=groups&period=7d")
 
     assert conn.status == 200
 
-    assert ["attachment; filename=\"estadisticas_equipos_" <> _] =
+    assert ["attachment; filename=\"estadisticas_grupos_" <> _] =
              get_resp_header(conn, "content-disposition")
   end
 
@@ -410,7 +410,7 @@ defmodule TokengateWeb.StatsLiveTest do
         do: candidate,
         else: DateTime.add(now, -60, :second)
 
-    team_with_log(%{cost: "0.005", inserted_at: inserted_at})
+    group_with_log(%{cost: "0.005", inserted_at: inserted_at})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
@@ -430,7 +430,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
     # 23:00 del día anterior local → fuera de "Hoy" local
     today_start = Periods.start_of_day_utc("America/Mexico_City")
-    team_with_log(%{cost: "0.005", inserted_at: DateTime.add(today_start, -3600, :second)})
+    group_with_log(%{cost: "0.005", inserted_at: DateTime.add(today_start, -3600, :second)})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard/stats")

@@ -1,16 +1,16 @@
 defmodule Tokengate.Routing.Cache do
   @moduledoc """
   ETS-backed routing cache: avoids re-querying Postgres for the same
-  (model_id, team_id) provider list on every proxied request.
+  (model_id, group_id) provider list on every proxied request.
 
   ## What is cached
 
-    * `{:model_providers, model_id, team_id}` — the ordered list of
+    * `{:model_providers, model_id, group_id}` — the ordered list of
       `ModelProvider` structs (with credential + provider preloaded) visible to
-      that scope. `team_id` may be `:global` for service/virtual members.
-    * `{:accessible_models, team_id, member_id}` — the list of `Model`
-      structs a team member may route to (team grants ∪ individual extra
-      grants ∪ service grants). `team_id`/`member_id` may be `:global` for
+      that scope. `group_id` may be `:global` for service/virtual members.
+    * `{:accessible_models, group_id, member_id}` — the list of `Model`
+      structs a group member may route to (group grants ∪ individual extra
+      grants ∪ service grants). `group_id`/`member_id` may be `:global` for
       service/virtual members.
     * `{:disabled_credentials, MapSet.t()}` — credential ids that are NOT
       `status == "active"`. A request only reads this set; the write side
@@ -48,12 +48,12 @@ defmodule Tokengate.Routing.Cache do
   Returns the cached model providers for the given scope, computing and
   caching the result on a miss.
 
-  `team_id` may be `nil` for global/service scope (the cache key uses
+  `group_id` may be `nil` for global/service scope (the cache key uses
   `:global`). `fun` is the DB query — it is only executed on a cache miss.
   """
   @spec fetch_model_providers(binary(), binary() | nil, (-> [term()])) :: [term()]
-  def fetch_model_providers(model_id, team_id, fun) when is_function(fun, 0) do
-    key = {:model_providers, model_id, team_id || :global}
+  def fetch_model_providers(model_id, group_id, fun) when is_function(fun, 0) do
+    key = {:model_providers, model_id, group_id || :global}
 
     case :ets.lookup(@table, key) do
       [{^key, providers, _expires_at}] -> providers
@@ -62,15 +62,15 @@ defmodule Tokengate.Routing.Cache do
   end
 
   @doc """
-  Returns the cached accessible models for a team member, computing and
+  Returns the cached accessible models for a group member, computing and
   caching the result on a miss.
 
-  `team_id` may be `nil` for service/virtual members (the cache key uses
+  `group_id` may be `nil` for service/virtual members (the cache key uses
   `:global`). `fun` is the DB query — it is only executed on a cache miss.
   """
   @spec fetch_accessible_models(term(), term() | nil, (-> [term()])) :: [term()]
-  def fetch_accessible_models(team_id, member_id, fun) when is_function(fun, 0) do
-    key = {:accessible_models, team_id || :global, member_id || :global}
+  def fetch_accessible_models(group_id, member_id, fun) when is_function(fun, 0) do
+    key = {:accessible_models, group_id || :global, member_id || :global}
 
     case :ets.lookup(@table, key) do
       [{^key, models, _expires_at}] -> models
@@ -79,19 +79,19 @@ defmodule Tokengate.Routing.Cache do
   end
 
   @doc """
-  Drops the cached accessible models for a team member — or a whole team.
+  Drops the cached accessible models for a group member — or a whole group.
 
   `nil` acts as a wildcard on either side:
 
-    * `(team_id, member_id)` — clears the single exact key.
-    * `(team_id, nil)` — clears every cached entry for members of that team
-      (after a `TeamModel` grant/revoke).
+    * `(group_id, member_id)` — clears the single exact key.
+    * `(group_id, nil)` — clears every cached entry for members of that group
+      (after a `GroupModel` grant/revoke).
     * `(nil, member_id)` — clears every entry for that member regardless of
-      team (after a `TeamMemberExtraModel` / `ServiceModel` change).
+      group (after a `GroupMemberExtraModel` / `ServiceModel` change).
   """
   @spec invalidate_accessible_models(term() | nil, term() | nil) :: :ok
-  def invalidate_accessible_models(team_id, member_id) do
-    :ets.match_delete(@table, {{:accessible_models, team_id || :_, member_id || :_}, :_, :_})
+  def invalidate_accessible_models(group_id, member_id) do
+    :ets.match_delete(@table, {{:accessible_models, group_id || :_, member_id || :_}, :_, :_})
     :ok
   end
 
@@ -110,7 +110,7 @@ defmodule Tokengate.Routing.Cache do
   end
 
   @doc """
-  Invalidates a specific cache key (`{:model_providers, model_id, team_id}`)
+  Invalidates a specific cache key (`{:model_providers, model_id, group_id}`)
   or the whole `:disabled_credentials` set.
   """
   @spec invalidate(tuple() | :disabled_credentials) :: :ok
@@ -120,7 +120,7 @@ defmodule Tokengate.Routing.Cache do
   end
 
   @doc """
-  Drops every cached entry. Called after bulk writes (team deletion, provider
+  Drops every cached entry. Called after bulk writes (group deletion, provider
   deletion, etc.).
   """
   @spec invalidate_all() :: :ok

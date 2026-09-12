@@ -22,7 +22,7 @@ defmodule Tokengate.Logs.WriteWorker do
   @impl Oban.Worker
   def perform(%Oban.Job{args: args}) do
     attrs = %{
-      team_member_id: args["team_member_id"],
+      group_member_id: args["group_member_id"],
       service_id: args["service_id"],
       subject_type: args["subject_type"] || "user",
       provider_id: args["provider_id"],
@@ -57,7 +57,7 @@ defmodule Tokengate.Logs.WriteWorker do
     case Logs.log_request(attrs) do
       {:ok, request_log} ->
         request_log =
-          Tokengate.Repo.preload(request_log, [:provider, :service, team_member: [:user, :team]])
+          Tokengate.Repo.preload(request_log, [:provider, :service, group_member: [:user, :group]])
 
         _ = WebhookWorker.dispatch(request_log)
         broadcast_new_log(request_log)

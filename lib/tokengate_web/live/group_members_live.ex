@@ -1,17 +1,17 @@
-defmodule TokengateWeb.TeamMembersLive do
+defmodule TokengateWeb.GroupMembersLive do
   @moduledoc """
-  Per-team member management.
+  Per-group member management.
 
   Access:
-    - admin: manages members of any team.
+    - admin: manages members of any group.
     - user: denied — redirected to /dashboard.
 
   Supports:
-    - Add member by email (creates team_member + auto-generates API key).
+    - Add member by email (creates group_member + auto-generates API key).
     - Remove member.
     - Per-member extras: extra_monthly_budget_usd,
       extra_concurrency, extra_rpm, extra_model_models (individual grants
-      beyond team models) with optional per-model daily budget.
+      beyond group models) with optional per-model daily budget.
   """
 
   use TokengateWeb, :live_view
@@ -20,20 +20,20 @@ defmodule TokengateWeb.TeamMembersLive do
   alias Tokengate.Accounts
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Providers
-  alias Tokengate.Providers.{Model, TeamMemberExtraModel, TeamModel}
+  alias Tokengate.Providers.{Model, GroupMemberExtraModel, GroupModel}
   alias Tokengate.Repo
 
   @impl true
-  def mount(%{"id" => team_id}, _session, socket) do
+  def mount(%{"id" => group_id}, _session, socket) do
     user = socket.assigns[:current_user]
-    team = Accounts.get_team!(team_id)
+    group = Accounts.get_group!(group_id)
 
-    case check_access(user, team) do
+    case check_access(user, group) do
       :ok ->
         socket =
           socket
           |> assign(:page_title, "Miembros · Tokengate")
-          |> assign(:team, team)
+          |> assign(:group, group)
           |> assign(:editing_member_id, nil)
           |> assign(:new_token, nil)
           |> assign(:new_token_member_id, nil)
@@ -56,19 +56,19 @@ defmodule TokengateWeb.TeamMembersLive do
 
   ## Access control -------------------------------------------------------
 
-  defp check_access(%{global_role: "admin"}, _team), do: :ok
+  defp check_access(%{global_role: "admin"}, _group), do: :ok
 
-  defp check_access(_user, _team) do
-    {:denied, "No tienes permisos para gestionar este equipo."}
+  defp check_access(_user, _group) do
+    {:denied, "No tienes permisos para gestionar este grupo."}
   end
 
   ## Data loading ---------------------------------------------------------
 
   defp load_data(socket) do
-    team = socket.assigns.team
+    group = socket.assigns.group
     search = socket.assigns[:member_search] || ""
     timezone = socket.assigns[:timezone] || "Etc/UTC"
-    members = Accounts.list_team_members_for_team(team.id)
+    members = Accounts.list_group_members_for_group(group.id)
 
     members =
       if search == "" do
@@ -89,10 +89,10 @@ defmodule TokengateWeb.TeamMembersLive do
       )
       |> Repo.all()
 
-    # Get the team's own models (from team_models)
-    team_alias_ids =
-      from(tma in TeamModel,
-        where: tma.team_id == ^team.id,
+    # Get the group's own models (from group_models)
+    group_alias_ids =
+      from(tma in GroupModel,
+        where: tma.group_id == ^group.id,
         select: tma.model_id
       )
       |> Repo.all()
@@ -100,9 +100,9 @@ defmodule TokengateWeb.TeamMembersLive do
 
     # Preload extra model ids per member (access grants only, no budget)
     extra_models =
-      from(tmea in TeamMemberExtraModel,
-        where: tmea.team_member_id in ^Enum.map(members, & &1.id),
-        select: {tmea.team_member_id, tmea.model_id}
+      from(tmea in GroupMemberExtraModel,
+        where: tmea.group_member_id in ^Enum.map(members, & &1.id),
+        select: {tmea.group_member_id, tmea.model_id}
       )
       |> Repo.all()
 
@@ -128,14 +128,14 @@ defmodule TokengateWeb.TeamMembersLive do
         }
       end)
 
-    team_monthly_spend =
+    group_monthly_spend =
       Enum.reduce(monthly_spend_by_member, Decimal.new(0), fn {_id, spend}, acc ->
         Decimal.add(acc, spend)
       end)
 
     estimated_monthly =
-      if team.monthly_budget_per_user_usd do
-        team.monthly_budget_per_user_usd
+      if group.monthly_budget_per_user_usd do
+        group.monthly_budget_per_user_usd
         |> Decimal.mult(Decimal.new(length(members)))
       else
         nil
@@ -148,18 +148,18 @@ defmodule TokengateWeb.TeamMembersLive do
           else: acc
       end)
 
-    # Usage tiers for this team (last 30 days)
-    usage_tiers = Rollup.member_usage_tiers(team.id, from: days_ago(30))
+    # Usage tiers for this group (last 30 days)
+    usage_tiers = Rollup.member_usage_tiers(group.id, from: days_ago(30))
 
     socket
     |> assign(:members, members)
     |> assign(:member_budgets, Map.new(member_budgets, fn b -> {b.member_id, b} end))
     |> assign(:members_empty?, members == [])
     |> assign(:org_models, org_alias_ids)
-    |> assign(:team_alias_ids, team_alias_ids)
+    |> assign(:group_alias_ids, group_alias_ids)
     |> assign(:extra_models, extra_aliases_simple)
     |> assign(:model_map, model_map)
-    |> assign(:team_monthly_spend, team_monthly_spend)
+    |> assign(:group_monthly_spend, group_monthly_spend)
     |> assign(:estimated_monthly, estimated_monthly)
     |> assign(:estimated_monthly_extra, estimated_monthly_extra)
     |> assign(:usage_tiers, usage_tiers)
@@ -173,13 +173,13 @@ defmodule TokengateWeb.TeamMembersLive do
   defp load_exclusive_providers(socket, members) do
     member_ids = Enum.map(members, & &1.id)
 
-    # Query exclusive providers where any member in this team is the target
+    # Query exclusive providers where any member in this group is the target
     import Ecto.Query, only: [from: 2]
     alias Tokengate.Providers.ModelProvider
 
     exclusive_providers =
       from(mp in ModelProvider,
-        where: mp.exclusive_to_team_member_id in ^member_ids,
+        where: mp.exclusive_to_group_member_id in ^member_ids,
         preload: [credential: [:provider], model: []]
       )
       |> Repo.all()
@@ -187,7 +187,7 @@ defmodule TokengateWeb.TeamMembersLive do
     # Group by member_id for easy lookup
     grouped =
       exclusive_providers
-      |> Enum.group_by(& &1.exclusive_to_team_member_id)
+      |> Enum.group_by(& &1.exclusive_to_group_member_id)
 
     assign(socket, :exclusive_providers, grouped)
   end
@@ -244,7 +244,7 @@ defmodule TokengateWeb.TeamMembersLive do
 
   @impl true
   def handle_event("add_member", %{"add_member" => params}, socket) do
-    team = socket.assigns.team
+    group = socket.assigns.group
 
     with {:ok, email} <- Map.fetch(params, "email"),
          {:ok, user} <- fetch_user_by_email(email),
@@ -253,14 +253,14 @@ defmodule TokengateWeb.TeamMembersLive do
          {:ok, rpm} <- parse_integer(params["extra_rpm"]) do
       attrs = %{
         user_id: user.id,
-        team_id: team.id,
-        team_role: "user",
+        group_id: group.id,
+        group_role: "user",
         extra_monthly_budget_usd: monthly,
         extra_concurrency: concurrency,
         extra_rpm: rpm
       }
 
-      case Accounts.create_team_member(attrs) do
+      case Accounts.create_group_member(attrs) do
         {:ok, _member} ->
           {:noreply,
            socket
@@ -295,12 +295,12 @@ defmodule TokengateWeb.TeamMembersLive do
 
   @impl true
   def handle_event("clear_sticky_routes", %{"id" => member_id}, socket) do
-    member = Accounts.get_team_member!(member_id, :with_assoc)
+    member = Accounts.get_group_member!(member_id, :with_assoc)
 
-    if member.team_id != socket.assigns.team.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
+    if member.group_id != socket.assigns.group.id do
+      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
     else
-      Accounts.clear_team_member_sticky_routes(member)
+      Accounts.clear_group_member_sticky_routes(member)
 
       {:noreply,
        socket
@@ -316,13 +316,13 @@ defmodule TokengateWeb.TeamMembersLive do
 
   @impl true
   def handle_event("remove_member", %{"id" => member_id}, socket) do
-    member = Accounts.get_team_member!(member_id)
+    member = Accounts.get_group_member!(member_id)
 
-    # Verify the member belongs to this team
-    if member.team_id != socket.assigns.team.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
+    # Verify the member belongs to this group
+    if member.group_id != socket.assigns.group.id do
+      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
     else
-      case Accounts.delete_team_member(member) do
+      case Accounts.delete_group_member(member) do
         {:ok, _} ->
           {:noreply,
            socket
@@ -339,10 +339,10 @@ defmodule TokengateWeb.TeamMembersLive do
 
   @impl true
   def handle_event("replace_key", %{"id" => member_id}, socket) do
-    member = Accounts.get_team_member!(member_id)
+    member = Accounts.get_group_member!(member_id)
 
-    if member.team_id != socket.assigns.team.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
+    if member.group_id != socket.assigns.group.id do
+      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
     else
       case Accounts.replace_api_key(member) do
         {:ok, _api_key, new_token} ->
@@ -361,10 +361,10 @@ defmodule TokengateWeb.TeamMembersLive do
 
   @impl true
   def handle_event("revoke_key", %{"id" => member_id}, socket) do
-    member = Accounts.get_team_member!(member_id, :with_assoc)
+    member = Accounts.get_group_member!(member_id, :with_assoc)
 
-    if member.team_id != socket.assigns.team.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
+    if member.group_id != socket.assigns.group.id do
+      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
     else
       case member.api_key do
         nil ->
@@ -405,10 +405,10 @@ defmodule TokengateWeb.TeamMembersLive do
   @impl true
   def handle_event("save_overrides", %{"overrides" => override_params} = params, socket) do
     member_id = params["id"]
-    member = Accounts.get_team_member!(member_id)
+    member = Accounts.get_group_member!(member_id)
 
-    if member.team_id != socket.assigns.team.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
+    if member.group_id != socket.assigns.group.id do
+      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
     else
       with {:ok, monthly} <- parse_decimal(override_params["extra_monthly_budget_usd"]),
            {:ok, concurrency} <- parse_integer(override_params["extra_concurrency"]),
@@ -419,7 +419,7 @@ defmodule TokengateWeb.TeamMembersLive do
           extra_rpm: rpm
         }
 
-        case Accounts.update_team_member(member, attrs) do
+        case Accounts.update_group_member(member, attrs) do
           {:ok, _} ->
             {:noreply,
              socket
@@ -446,10 +446,10 @@ defmodule TokengateWeb.TeamMembersLive do
         %{"member-id" => member_id, "model-id" => model_id},
         socket
       ) do
-    member = Accounts.get_team_member!(member_id)
+    member = Accounts.get_group_member!(member_id)
 
-    if member.team_id != socket.assigns.team.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
+    if member.group_id != socket.assigns.group.id do
+      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
     else
       existing = Map.get(socket.assigns.extra_models, member_id, [])
 
@@ -482,10 +482,10 @@ defmodule TokengateWeb.TeamMembersLive do
     member_id = params["member_id"]
     model_id = params["model_id"]
 
-    member = Accounts.get_team_member!(member_id)
+    member = Accounts.get_group_member!(member_id)
 
-    if member.team_id != socket.assigns.team.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este equipo.")}
+    if member.group_id != socket.assigns.group.id do
+      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
     else
       case Providers.set_extra_model(member_id, model_id) do
         {:ok, _} ->
@@ -569,7 +569,7 @@ defmodule TokengateWeb.TeamMembersLive do
   defp masked_key(_), do: "Sin clave"
 
   defp get_member_tier(usage_tiers, member_id) do
-    Enum.find(usage_tiers, &(&1.team_member_id == member_id))
+    Enum.find(usage_tiers, &(&1.group_member_id == member_id))
   end
 
   defp tier_badge_class("alto"), do: "badge-error"
@@ -585,10 +585,10 @@ defmodule TokengateWeb.TeamMembersLive do
     <Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
       <div class="space-y-6">
         <.header>
-          Miembros de {@team.name}
+          Miembros de {@group.name}
           <:subtitle>Añade miembros, gestiona roles y extras</:subtitle>
           <:actions>
-            <.link navigate={~p"/admin/teams"} class="btn btn-ghost" id="back-to-teams">
+            <.link navigate={~p"/admin/groups"} class="btn btn-ghost" id="back-to-groups">
               <.icon name="hero-arrow-left" class="w-4 h-4" /> Volver
             </.link>
           </:actions>
@@ -768,10 +768,10 @@ defmodule TokengateWeb.TeamMembersLive do
           </div>
         </div>
 
-        <%!-- Resumen del equipo — configuración + gasto --%>
-        <div class="card bg-base-100 border border-base-300 shadow-sm" id="team-config">
+        <%!-- Resumen del grupo — configuración + gasto --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm" id="group-config">
           <div class="card-body p-5">
-            <h2 class="text-sm font-semibold mb-3">Resumen del equipo</h2>
+            <h2 class="text-sm font-semibold mb-3">Resumen del grupo</h2>
 
             <%!-- Stats cards: configuración + gasto — 5 tarjetas --%>
             <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -787,7 +787,7 @@ defmodule TokengateWeb.TeamMembersLive do
                     </span>
                   </div>
                   <p class="mt-1.5 text-lg font-bold text-base-content">
-                    ${format_decimal(@team.monthly_budget_per_user_usd)}
+                    ${format_decimal(@group.monthly_budget_per_user_usd)}
                   </p>
                   <p class="text-xs text-base-content/40">por usuario</p>
                 </div>
@@ -805,7 +805,7 @@ defmodule TokengateWeb.TeamMembersLive do
                     </span>
                   </div>
                   <p class="mt-1.5 text-lg font-bold text-base-content">
-                    {@team.default_concurrency_limit}
+                    {@group.default_concurrency_limit}
                   </p>
                   <p class="text-xs text-base-content/40">por usuario</p>
                 </div>
@@ -823,7 +823,7 @@ defmodule TokengateWeb.TeamMembersLive do
                     </span>
                   </div>
                   <p class="mt-1.5 text-lg font-bold text-base-content">
-                    {@team.default_rpm_limit}
+                    {@group.default_rpm_limit}
                   </p>
                   <p class="text-xs text-base-content/40">por usuario</p>
                 </div>
@@ -841,7 +841,7 @@ defmodule TokengateWeb.TeamMembersLive do
                     </span>
                   </div>
                   <p class="mt-1.5 text-lg font-bold text-base-content">
-                    ${format_decimal(@team_monthly_spend)}
+                    ${format_decimal(@group_monthly_spend)}
                   </p>
                   <p class="text-xs text-base-content/40">real</p>
                 </div>
@@ -923,7 +923,7 @@ defmodule TokengateWeb.TeamMembersLive do
         <div id="members" class="space-y-4">
           <div :if={@members_empty?} class="text-center py-12 text-base-content/40" id="members-empty">
             <.icon name="hero-users" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-            <p>Este equipo no tiene miembros todavía.</p>
+            <p>Este grupo no tiene miembros todavía.</p>
           </div>
           <div
             :for={member <- @members}
@@ -1052,7 +1052,7 @@ defmodule TokengateWeb.TeamMembersLive do
                       </span>
                     </div>
                     <p class="mt-1.5 text-lg font-bold text-base-content">
-                      ${format_decimal(@team.monthly_budget_per_user_usd)}
+                      ${format_decimal(@group.monthly_budget_per_user_usd)}
                     </p>
                     <p :if={member.extra_monthly_budget_usd} class="text-xs text-success">
                       +${format_decimal(member.extra_monthly_budget_usd)} extra
@@ -1084,7 +1084,7 @@ defmodule TokengateWeb.TeamMembersLive do
                       </span>
                     </div>
                     <p class="mt-1.5 text-lg font-bold text-base-content">
-                      {@team.default_concurrency_limit}
+                      {@group.default_concurrency_limit}
                     </p>
                     <p :if={member.extra_concurrency} class="text-xs text-success">
                       +{member.extra_concurrency} extra
@@ -1116,7 +1116,7 @@ defmodule TokengateWeb.TeamMembersLive do
                       </span>
                     </div>
                     <p class="mt-1.5 text-lg font-bold text-base-content">
-                      {@team.default_rpm_limit}
+                      {@group.default_rpm_limit}
                     </p>
                     <p :if={member.extra_rpm} class="text-xs text-success">
                       +{member.extra_rpm} extra
@@ -1164,30 +1164,32 @@ defmodule TokengateWeb.TeamMembersLive do
                 >Eliminar</button>
               </div>
 
-              <%!-- Modelos — team models (locked) + extra grants (toggleable) --%>
+              <%!-- Modelos — group models (locked) + extra grants (toggleable) --%>
               <div :if={@org_models != []} class="mt-3 pt-3 border-t border-base-200">
                 <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">Modelos</p>
                 <div class="flex flex-wrap gap-2">
                   <button
                     :for={model <- @org_models}
                     type="button"
-                    phx-click={not MapSet.member?(@team_alias_ids, model.id) and "toggle_extra_model"}
+                    phx-click={
+                      not MapSet.member?(@group_alias_ids, model.id) and "toggle_extra_model"
+                    }
                     phx-value-member-id={member.id}
                     phx-value-model-id={model.id}
                     class={[
                       "badge badge-sm cursor-pointer transition-all",
                       cond do
-                        MapSet.member?(@team_alias_ids, model.id) -> "badge-primary"
+                        MapSet.member?(@group_alias_ids, model.id) -> "badge-primary"
                         model.id in extra_model_ids(@extra_models, member.id) -> "badge-accent"
                         true -> "badge-outline"
                       end
                     ]}
-                    disabled={MapSet.member?(@team_alias_ids, model.id)}
+                    disabled={MapSet.member?(@group_alias_ids, model.id)}
                     id={"extra-model-#{member.id}-#{model.id}"}
                   >
                     {model.name}
-                    <%= if MapSet.member?(@team_alias_ids, model.id) do %>
-                      <span class="text-[10px] opacity-60 ml-0.5">equipo</span>
+                    <%= if MapSet.member?(@group_alias_ids, model.id) do %>
+                      <span class="text-[10px] opacity-60 ml-0.5">grupo</span>
                     <% end %>
                   </button>
                 </div>

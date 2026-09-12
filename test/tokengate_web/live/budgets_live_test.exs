@@ -126,26 +126,26 @@ defmodule TokengateWeb.BudgetsLiveTest do
       assert render(view) =~ "Sin exclusiones"
     end
 
-    test "adds a team exemption to the per-user scope", %{conn: conn} do
+    test "adds a group exemption to the per-user scope", %{conn: conn} do
       %{user: admin, password: pass} = register("admin")
-      {:ok, team} = Accounts.create_team(%{name: "Budget Team #{unique()}"})
+      {:ok, group} = Accounts.create_group(%{name: "Budget Group #{unique()}"})
 
       conn = login(conn, admin, pass)
       {:ok, view, _html} = live(conn, ~p"/admin/budgets")
 
-      # Switch the subject_type select to "team" so the subject select
-      # re-renders with team options before submitting.
+      # Switch the subject_type select to "group" so the subject select
+      # re-renders with group options before submitting.
       view
-      |> form("#user-exemption-form", user_subject: %{subject_type: "team"})
+      |> form("#user-exemption-form", user_subject: %{subject_type: "group"})
       |> render_change()
 
       view
       |> form("#user-exemption-form",
-        user_subject: %{subject_type: "team", subject_id: team.id}
+        user_subject: %{subject_type: "group", subject_id: group.id}
       )
       |> render_submit()
 
-      assert render(view) =~ "Budget Team"
+      assert render(view) =~ "Budget Group"
       assert render(view) =~ "Exención agregada."
     end
 

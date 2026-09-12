@@ -61,9 +61,9 @@ defmodule Tokengate.Logs.RequestLog do
     field :client_agent, :string
     field :provider_key_prefix, :string
 
-    belongs_to :team_member, Tokengate.Accounts.TeamMember,
+    belongs_to :group_member, Tokengate.Accounts.GroupMember,
       references: :id,
-      foreign_key: :team_member_id,
+      foreign_key: :group_member_id,
       type: :binary_id
 
     belongs_to :service, Tokengate.Accounts.Service,
@@ -77,7 +77,7 @@ defmodule Tokengate.Logs.RequestLog do
       type: :binary_id
   end
 
-  @permitted ~w(team_member_id service_id subject_type provider_id model_provider_id credential_id model_id
+  @permitted ~w(group_member_id service_id subject_type provider_id model_provider_id credential_id model_id
     model_requested model_responded agent_type status_code provider_status_code
     error_reason error_message prompt_tokens completion_tokens cache_read_tokens
     cache_creation_tokens provider_cost_usd
@@ -101,12 +101,12 @@ defmodule Tokengate.Logs.RequestLog do
     |> validate_subject_id()
   end
 
-  # A log must reference its subject: `team_member_id` for users, `service_id`
-  # for services. `team_member_id` is nullable at the DB level only so that
+  # A log must reference its subject: `group_member_id` for users, `service_id`
+  # for services. `group_member_id` is nullable at the DB level only so that
   # service rows can store a null — the relevant id is enforced here instead.
   defp validate_subject_id(changeset) do
     case get_field(changeset, :subject_type) do
-      "user" -> validate_required(changeset, [:team_member_id])
+      "user" -> validate_required(changeset, [:group_member_id])
       "service" -> validate_required(changeset, [:service_id])
       _ -> changeset
     end
