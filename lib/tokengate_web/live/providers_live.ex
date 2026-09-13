@@ -478,6 +478,19 @@ defmodule TokengateWeb.ProvidersLive do
     end
   end
 
+  # Whether the provider being edited is a catalog builtin — identity fields
+  # (name/base_url) are catalog-owned and rendered read-only in the modal.
+  defp editing_builtin?(_providers, :new), do: false
+
+  defp editing_builtin?(providers, provider_id) when is_binary(provider_id) do
+    case Enum.find(providers, &(&1.id == provider_id)) do
+      %{source: "builtin"} -> true
+      _ -> false
+    end
+  end
+
+  defp editing_builtin?(_providers, _), do: false
+
   # Capabilities are derived, not chosen: a custom serves embeddings iff an
   # embeddings URL resolves (explicit override or base-url derivation is
   # decided by what the user typed — an explicit Embeddings URL means yes).
@@ -658,9 +671,22 @@ defmodule TokengateWeb.ProvidersLive do
           <div class="absolute inset-0 bg-black/50" phx-click="cancel_form" />
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-3xl">
             <div class="card-body p-6">
+              <% builtin? = editing_builtin?(@providers, @editing_provider_id) %>
               <h2 class="text-lg font-semibold mb-4">
-                {if @editing_provider_id == :new, do: "Nuevo proveedor", else: "Editar proveedor"}
+                {if @editing_provider_id == :new,
+                  do: "Nuevo proveedor",
+                  else: "Editar proveedor#{if builtin?, do: " · catálogo", else: ""}"}
               </h2>
+              <%= if builtin? do %>
+                <div class="mb-4 alert alert-warning py-2 px-3 text-xs flex items-start gap-2">
+                  <.icon name="hero-lock-closed" class="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>
+                    Proveedor del catálogo: nombre y Base URL vienen del catálogo y se
+                    resincronizan en cada arranque — solo lectura. Los overrides de URL
+                    por servicio sí son editables.
+                  </span>
+                </div>
+              <% end %>
               <.form for={@form} id="provider-form" phx-submit="save_provider">
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
                   <div class="space-y-3">
@@ -669,14 +695,25 @@ defmodule TokengateWeb.ProvidersLive do
                       type="text"
                       label="Nombre"
                       placeholder="mi-relay"
-                      hint="Identificador único del proveedor custom."
+                      disabled={builtin?}
+                      hint={
+                        if builtin?,
+                          do: "Gestionado por el catálogo — no editable.",
+                          else: "Identificador único del proveedor custom."
+                      }
                     />
                     <.input
                       field={@form[:base_url]}
                       type="text"
                       label="Base URL"
                       placeholder="https://relay.example.com/v1"
-                      hint="URL base (OpenAI-compatible). El adapter agrega /chat/completions, /models y /embeddings."
+                      disabled={builtin?}
+                      hint={
+                        if builtin?,
+                          do: "Gestionado por el catálogo — no editable.",
+                          else:
+                            "URL base (OpenAI-compatible). El adapter agrega /chat/completions, /models y /embeddings."
+                      }
                     />
                     <.input
                       :if={@editing_provider_id == :new}
@@ -876,8 +913,9 @@ defmodule TokengateWeb.ProvidersLive do
                     phx-value-provider_id={provider.id}
                     class="btn btn-xs btn-ghost"
                     id={"new-credential-#{provider.id}"}
+                    title="Añadir una API key a este proveedor"
                   >
-                    <.icon name="hero-plus" class="w-3 h-3" /> Nueva
+                    <.icon name="hero-plus" class="w-3 h-3" /> API key
                   </button>
                 </div>
 

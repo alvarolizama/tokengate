@@ -254,4 +254,71 @@ defmodule TokengateWeb.ProvidersLiveTest do
     assert html =~ "Credencial eliminada."
     refute has_element?(view, "#credential-#{cred.id}")
   end
+
+  ## Builtin (catalog) providers ------------------------------------------------
+
+  test "builtin edit modal shows identity fields read-only", %{conn: conn} do
+    # Builtins are seeded like CatalogSync does (raw change, bypassing the
+    # operator changeset that locks identity fields).
+    {:ok, builtin} =
+      %Providers.Provider{}
+      |> Ecto.Changeset.change(
+        key: "catalog-prov-#{unique()}",
+        name: "Catalog Prov #{unique()}",
+        base_url: "https://catalog-#{unique()}.example.com/v1",
+        source: "builtin",
+        dialect: "openai",
+        billing_type: "pay_per_token",
+        capabilities: ["llm"],
+        status: "active"
+      )
+      |> Tokengate.Repo.insert()
+
+    # Builtins only surface in the list once a credential exists
+    {:ok, _cred} =
+      Providers.create_credential(%{
+        provider_id: builtin.id,
+        name: "Producción",
+        api_key_encrypted: "sk-builtin-test",
+        status: "active"
+      })
+
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/admin/providers")
+
+    view |> element("#edit-#{builtin.id}") |> render_click()
+
+    # Modal flags the catalog provenance and locks identity fields
+    assert has_element?(view, "#provider-form")
+    assert render(view) =~ "catálogo"
+    assert has_element?(view, "#provider-form input[name='provider[name]'][disabled]")
+    assert has_element?(view, "#provider-form input[name='provider[base_url]'][disabled]")
+  end
+
+  test "custom edit modal keeps identity fields editable", %{conn: conn} do
+    provider = create_provider()
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/admin/providers")
+
+    view |> element("#edit-#{provider.id}") |> render_click()
+
+    assert has_element?(view, "#provider-form")
+    refute has_element?(view, "#provider-form input[name='provider[name]'][disabled]")
+    refute has_element?(view, "#provider-form input[name='provider[base_url]'][disabled]")
+  end
+
+  test "credential button is labeled 'API key' to distinguish from activating providers", %{conn: conn} do
+    provider = create_provider()
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/admin/providers")
+
+    assert has_element?(view, "#new-credential-#{provider.id}")
+    assert render(view) =~ "API key"
+  end
 end
