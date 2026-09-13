@@ -75,6 +75,13 @@ defmodule TokengateWeb.Router do
     get "/dashboard/stats/*rest", RedirectController, :stats
     get "/dashboard/calculator", RedirectController, :calculator
     get "/admin/logs", RedirectController, :logs
+
+    # Refactor /stats: el detalle de miembro se consolidó en el detalle
+    # de usuario, y las stats por usuario se promovieron de /admin a
+    # /stats/users.
+    get "/stats/members/:member_id", RedirectController, :stats_member
+    get "/stats/members/:member_id/*rest", RedirectController, :stats_member
+    get "/admin/users/:user_id/stats", RedirectController, :user_stats
   end
 
   # Authenticated browser dashboard. The on_mount hook mirrors the plug
@@ -96,11 +103,14 @@ defmodule TokengateWeb.Router do
 
     live_session :admin,
       on_mount: [{TokengateWeb.UserAuth, :require_admin}] do
-      live "/stats", StatsLive, :index
+      live "/stats", StatsLive, :live
+      live "/stats/overview", StatsLive, :index
       live "/stats/models", StatsLive, :models
-      live "/stats/groups", StatsLive, :groups
       live "/stats/services", StatsLive, :services
-      live "/stats/members/:member_id", StatsLive, :member
+      live "/stats/groups", StatsLive, :groups
+      live "/stats/groups/:group_id", StatsLive, :group
+      live "/stats/users", StatsLive, :users
+      live "/stats/users/:user_id", UserStatsLive
       live "/stats/credits", StatsLive, :credits
       live "/calculator", CalculatorLive
       live "/logs", LogsLive
@@ -109,7 +119,6 @@ defmodule TokengateWeb.Router do
       live "/admin/groups", GroupsLive
       live "/admin/groups/:id/members", GroupMembersLive
       live "/admin/users", UsersLive
-      live "/admin/users/:user_id/stats", UserStatsLive
       live "/admin/services", ServicesLive
       live "/admin/budgets", BudgetsLive
       live "/admin/maintenance", MaintenanceLive

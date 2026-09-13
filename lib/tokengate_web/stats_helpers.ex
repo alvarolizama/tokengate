@@ -4,7 +4,7 @@ defmodule TokengateWeb.StatsHelpers do
   StatsLive (y reutilizables en otras vistas de analíticas).
 
   Extraído de `TokengateWeb.StatsLive` al separar el template monolítico
-  en componentes por sección (`TokengateWeb.StatsLive.{Index,Models,
+  en componentes por sección (`TokengateWeb.StatsLive.{Index,Models,Groups,Group,Services,Users,LiveSection
   Groups,Services,Member,Credits}`).
 
   Convención: los componentes de sección los importan como
@@ -72,7 +72,27 @@ defmodule TokengateWeb.StatsHelpers do
 
   def format_ms(nil), do: "—"
   def format_ms(ms) when is_integer(ms), do: "#{format_number(ms)} ms"
+  def format_ms(ms) when is_float(ms), do: "#{Float.round(ms)} ms"
   def format_ms(_), do: "—"
+
+  @doc """
+  Fecha-hora corta en la zona del usuario (`HH:MM:SS`); usada por la
+  pestaña En vivo para timestamps del feed y última sincronización.
+  """
+  def format_dt(dt, tz \\ nil)
+
+  def format_dt(nil, _tz), do: "—"
+
+  def format_dt(%DateTime{} = dt, tz) do
+    case DateTime.shift_zone(dt, tz || "Etc/UTC") do
+      {:ok, local} -> Calendar.strftime(local, "%H:%M:%S")
+      _ -> Calendar.strftime(dt, "%H:%M:%S")
+    end
+  end
+
+  def format_dt(%NaiveDateTime{} = dt, _tz) do
+    Calendar.strftime(dt, "%H:%M")
+  end
 
   def format_percent(rate) when is_float(rate),
     do: "#{:erlang.float_to_binary(rate * 100, decimals: 1)}%"

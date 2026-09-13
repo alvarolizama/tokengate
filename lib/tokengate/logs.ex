@@ -574,6 +574,88 @@ defmodule Tokengate.Logs do
     }
   end
 
+  # ---------------------------------------------------------------------------
+  # Realtime dashboard (/stats "En vivo")
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Per-minute request counts for the last `minutes` minutes (default 60),
+  bucketed by `date_trunc('minute', inserted_at)` in UTC, zero-filled so
+  the chart always renders a full window.
+
+  Cheap by design: only `inserted_at` is read (the plain
+  `request_logs_inserted_idx` covers it — index-only scan), no joins.
+  """
+  @spec requests_per_minute(non_neg_integer()) :: [map()]
+  def requests_per_minute(minutes \\ 60) do
+    cutoff = DateTime.add(DateTime.utc_now(), -minutes * 60, :second)
+
+    rows =
+      RequestLog
+      |> where([rl], rl.inserted_at >= ^cutoff)
+      |> group_by([rl], fragment("date_trunc('minute', ?)", rl.inserted_at))
+      |> select([rl], %{
+        bucket: fragment("date_trunc('minute', ?)", rl.inserted_at),
+        request_count: count(rl.id)
+      })
+      |> Repo.all()
+      |> Map.new(fn row -> {row.bucket, row.request_count} end)
+
+    now = DateTime.utc_now()
+
+    for i <- (minutes - 1)..0//-1 do
+      # NaiveDateTime (UTC) to match what date_trunc returns on the
+      # timestamp-without-timezone column — otherwise the Map.get keys
+      # never line up.
+      bucket =
+        now
+        |> DateTime.add(-i * 60, :second)
+        |> DateTime.to_naive()
+        |> truncate_to_minute()
+
+      %{bucket: bucket, request_count: Map.get(rows, bucket, 0)}
+    end
+  end
+
+  # date_trunc('minute') equivalent: drops seconds.
+  defp truncate_to_minute(%NaiveDateTime{} = dt) do
+    %{dt | second: 0}
+  end
+
+  @doc """
+  Calendar-day summary for the "En vivo" tab (KPIs de hoy): request count,
+  cost, tokens and latency (avg + nearest-rank p95) since local midnight.
+
+  `timezone` determines "hoy" (00:00 local → UTC cutoff). Single index
+  range scan over `inserted_at` with a one-pass aggregate.
+  """
+  @spec today_summary(String.t()) :: map()
+  def today_summary(timezone \\ "Etc/UTC") do
+    from = Tokengate.Periods.start_of_day_utc(timezone)
+
+    result =
+      RequestLog
+      |> where([rl], rl.inserted_at >= ^from)
+      |> select([rl], %{
+        request_count: count(rl.id),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+        avg_latency_ms: fragment("AVG(latency_ms)"),
+        p95_latency_ms: fragment("percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms)")
+      })
+      |> Repo.one()
+
+    %{
+      requests_total: result.request_count,
+      cost_usd: Decimal.new(to_string(result.cost_usd)),
+      prompt_tokens: result.prompt_tokens,
+      completion_tokens: result.completion_tokens,
+      avg_latency_ms: avg_to_float(result.avg_latency_ms),
+      p95_latency_ms: avg_to_float(result.p95_latency_ms)
+    }
+  end
+
   defp error_rate(0, _errors), do: 0.0
   defp error_rate(total, errors), do: Float.round(errors / total * 100, 1)
 

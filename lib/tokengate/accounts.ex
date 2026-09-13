@@ -22,6 +22,14 @@ defmodule Tokengate.Accounts do
 
   def list_groups, do: Repo.all(Group)
 
+  @doc """
+  Mapa `%{group_id => name}` de todos los grupos — resolución de nombres
+  para agregados que agrupan por id (evita joins extra en el GROUP BY).
+  """
+  def group_names_by_id do
+    Repo.all(from g in Group, select: {g.id, g.name}) |> Map.new()
+  end
+
   def get_group!(id), do: Repo.get!(Group, id)
 
   def get_group(id), do: Repo.get(Group, id)

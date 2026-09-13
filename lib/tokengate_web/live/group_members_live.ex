@@ -978,7 +978,7 @@ defmodule TokengateWeb.GroupMembersLive do
                   <% end %>
                   <span class="badge badge-sm badge-ghost capitalize">{member.status}</span>
                   <.link
-                    navigate={~p"/admin/users/#{member.user_id}/stats"}
+                    navigate={~p"/stats/users/#{member.user_id}"}
                     class="btn btn-sm btn-ghost"
                     id={"stats-#{member.id}"}
                     title="Ver stats consolidados de este usuario"

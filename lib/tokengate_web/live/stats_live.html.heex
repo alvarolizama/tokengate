@@ -40,12 +40,25 @@
     <%!-- Nav tabs between the views --%>
     <div class="join" id="stats-nav" role="tablist">
       <.link
-        patch={~p"/stats?period=#{@period}"}
+        patch={~p"/stats"}
+        class={[
+          "join-item btn btn-sm",
+          if(@live_action == :live, do: "btn-primary", else: "btn-ghost")
+        ]}
+        id="nav-live"
+      >
+        <span class="relative inline-flex w-4 h-4 items-center justify-center">
+          <span class="absolute w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+        </span>
+        En vivo
+      </.link>
+      <.link
+        patch={~p"/stats/overview?period=#{@period}"}
         class={[
           "join-item btn btn-sm",
           if(@live_action == :index, do: "btn-primary", else: "btn-ghost")
         ]}
-        id="nav-stats"
+        id="nav-overview"
       >
         <.icon name="hero-chart-bar-square" class="w-4 h-4" /> Resumen
       </.link>
@@ -63,11 +76,21 @@
         patch={~p"/stats/groups?period=#{@period}"}
         class={[
           "join-item btn btn-sm",
-          if(@live_action == :groups, do: "btn-primary", else: "btn-ghost")
+          if(@live_action in [:groups, :group], do: "btn-primary", else: "btn-ghost")
         ]}
         id="nav-groups"
       >
         <.icon name="hero-user-group" class="w-4 h-4" /> Grupos
+      </.link>
+      <.link
+        patch={~p"/stats/users?period=#{@period}"}
+        class={[
+          "join-item btn btn-sm",
+          if(@live_action == :users, do: "btn-primary", else: "btn-ghost")
+        ]}
+        id="nav-users"
+      >
+        <.icon name="hero-users" class="w-4 h-4" /> Usuarios
       </.link>
       <.link
         patch={~p"/stats/services?period=#{@period}"}
@@ -99,6 +122,18 @@
       id="stats-content"
     >
       <%= cond do %>
+        <% @live_action == :live -> %>
+          <.live
+            pulse={@pulse}
+            today_metrics={@today_metrics}
+            minute_series={@minute_series}
+            minute_series_max={@minute_series_max}
+            inflight_count={@inflight_count}
+            inflight_by_model={@inflight_by_model}
+            last_sync_at={@last_sync_at}
+            stats_loading={@stats_loading}
+            streams={@streams}
+          />
         <% @live_action == :index -> %>
           <.index
             metrics={@metrics}
@@ -140,9 +175,11 @@
             breakdown_group={@breakdown_group}
             breakdown_member={@breakdown_member}
             breakdown_model={@breakdown_model}
+            breakdown_service={[]}
             drilldown_series={@drilldown_series}
             drilldown_series_labels={@drilldown_series_labels}
             group_filter={@group_filter}
+            group={@group}
             period={@period}
             sort_field={@sort_field}
             sort_direction={@sort_direction}
@@ -159,6 +196,13 @@
             sort_field={@sort_field}
             sort_direction={@sort_direction}
           />
+        <% @live_action == :users -> %>
+          <.users
+            breakdown_user={@breakdown_user}
+            period={@period}
+            sort_field={@sort_field}
+            sort_direction={@sort_direction}
+          />
         <% @live_action == :credits -> %>
           <.credits
             budgets={@budgets}
@@ -168,8 +212,20 @@
             per_page={@per_page}
             shown_counts={@shown_counts}
           />
-        <% @live_action == :member -> %>
-          <.member member={@member} member_models={@member_models} period={@period} />
+        <% @live_action == :group -> %>
+          <.groups
+            metrics={@metrics}
+            breakdown_group={@breakdown_group}
+            breakdown_member={@breakdown_member}
+            breakdown_model={@breakdown_model}
+            breakdown_service={@breakdown_service}
+            drilldown_series={@drilldown_series}
+            drilldown_series_labels={@drilldown_series_labels}
+            group_filter={@group_id}
+            period={@period}
+            sort_field={@sort_field}
+            sort_direction={@sort_direction}
+          />
       <% end %>
     </div>
   </div>

@@ -587,7 +587,7 @@ defmodule TokengateWeb.StatsLive.Models do
                         <td>{row.group_name}</td>
                         <td class="font-mono text-sm">
                           <.link
-                            navigate={~p"/admin/users/#{row.user_id}/stats"}
+                            navigate={~p"/stats/users/#{row.user_id}"}
                             class="link link-hover"
                           >
                             {row.user_email}

@@ -1,13 +1,18 @@
 defmodule TokengateWeb.StatsLive do
   @moduledoc """
-  Analytics dashboard with drill-down by model and group.
+  Analytics dashboard with drill-down by model, user and group.
 
-  Three views via `live_action`:
-    * `:index`  — overview with top-N tables and KPI cards
-    * `:models` — per-model breakdown + drill-down (provider, group, member)
-    * `:groups`  — per-group breakdown + drill-down (members, models)
+  Views via `live_action`:
+    * `:live`    — real-time overview (no period selector)
+    * `:index`   — overview with top-N tables and KPI cards
+    * `:models`  — per-model breakdown + drill-down (provider, user, group)
+    * `:services` — per-service breakdown + drill-down (models)
+    * `:groups`  — per-group list
+    * `:group`   — one group's hub: members, models, daily series
+    * `:users`   — per-user consolidated breakdown (all memberships)
+    * `:credits` — budgets (calendar counters, no period)
 
-  Periods: Hoy, Esta semana, Este mes, 30d, 90d.
+  Periods: Hoy, Esta semana, Este mes, 30d, 90d (all but :live/:credits).
 
   Scoping by role:
     * admin   — org-wide
@@ -21,6 +26,7 @@ defmodule TokengateWeb.StatsLive do
   alias Tokengate.Accounts
   alias Tokengate.Budgets
   alias Tokengate.Logs
+  alias Tokengate.Logs.Inflight
   alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Periods
@@ -28,7 +34,8 @@ defmodule TokengateWeb.StatsLive do
   import TokengateWeb.StatsLive.Models, only: [models: 1]
   import TokengateWeb.StatsLive.Groups, only: [groups: 1]
   import TokengateWeb.StatsLive.Services, only: [services: 1]
-  import TokengateWeb.StatsLive.Member, only: [member: 1]
+  import TokengateWeb.StatsLive.Users, only: [users: 1]
+  import TokengateWeb.StatsLive.LiveSection, only: [live: 1]
   import TokengateWeb.StatsLive.Credits, only: [credits: 1]
 
   import TokengateWeb.StatsHelpers,
@@ -39,7 +46,13 @@ defmodule TokengateWeb.StatsLive do
   # Credits tab: budgets reload cadence after a `logs:new` broadcast (same
   # rationale as the old CreditsLive — see its comment block).
   @reload_interval_ms 3_000
-  @credits_per_page 10
+
+  # "En vivo" tab: cadence of the periodic realtime refresh (matching
+  # LogsLive's inflight cadence).
+  @live_refresh_interval_ms 3_000
+
+  # "En vivo" feed: how many recent requests to show.
+  @live_feed_size 20
 
   @sortable_breakdowns [
     :breakdown_model,
@@ -47,6 +60,7 @@ defmodule TokengateWeb.StatsLive do
     :breakdown_group,
     :breakdown_provider,
     :breakdown_service,
+    :breakdown_user,
     :member_models,
     :member_usage_tiers
   ]
@@ -64,18 +78,31 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:service_filter, nil)
       |> assign(:scope_label, scope_label_for(user))
       |> assign(:scope_member_ids, Accounts.scope_member_ids(user))
-      |> assign(:member_id, nil)
+      |> assign(:group_id, nil)
       |> assign(:sort_field, :request_count)
       |> assign(:sort_direction, :desc)
       |> assign(:hovered_hour, nil)
       |> assign(:stats_loading, true)
-      |> assign(:per_page, @credits_per_page)
+      |> assign(:per_page, 10)
       |> assign(:shown_counts, %{})
       |> assign(:reload_scheduled, false)
       |> assign(empty_data_assigns())
 
+    socket =
+      if connected?(socket) do
+        socket
+      else
+        # The "En vivo" template reads @streams.live_feed; register the
+        # stream so the static (pre-connect) render has the assign.
+        stream(socket, :live_feed, [], reset: true)
+      end
+
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Tokengate.PubSub, "logs:new")
+      # Realtime pulse for the "En vivo" tab (broadcast per proxied request
+      # by Metrics.Collector) + periodic tick so the page ages gracefully.
+      Phoenix.PubSub.subscribe(Tokengate.PubSub, "metrics:updated")
+      send(self(), :live_tick)
     end
 
     {:ok, socket}
@@ -87,7 +114,13 @@ defmodule TokengateWeb.StatsLive do
     model_filter = params["model_id"]
     group_filter = params["group_id"]
     service_filter = params["service_id"]
-    member_id = params["member_id"]
+    # :group action carries the group in the URL path; the other actions
+    # clear it (drill-downs keep using ?group_id=).
+    group_id =
+      case socket.assigns.live_action do
+        :group -> params["group_id"] || socket.assigns[:group_id]
+        _ -> params["group_id"]
+      end
 
     socket =
       socket
@@ -95,13 +128,13 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:model_filter, model_filter)
       |> assign(:group_filter, group_filter)
       |> assign(:service_filter, service_filter)
-      |> assign(:member_id, member_id)
+      |> assign(:group_id, group_id)
 
     socket =
-      if socket.assigns.live_action == :credits do
-        load_budgets(socket)
-      else
-        start_data_load(socket)
+      case socket.assigns.live_action do
+        :credits -> load_budgets(socket)
+        :live -> load_live_data(socket)
+        _ -> start_data_load(socket)
       end
 
     {:noreply, socket}
@@ -186,7 +219,7 @@ defmodule TokengateWeb.StatsLive do
       model_filter: assigns.model_filter,
       group_filter: assigns.group_filter,
       service_filter: assigns.service_filter,
-      member_id: assigns.member_id,
+      group_id: assigns.group_id,
       scope_member_ids: assigns.scope_member_ids,
       live_action: assigns.live_action,
       timezone: assigns[:timezone] || "Etc/UTC",
@@ -217,14 +250,29 @@ defmodule TokengateWeb.StatsLive do
     {:noreply, assign(socket, :stats_loading, false)}
   end
 
-  # Credits tab: coalesce `logs:new` broadcasts into a single budget reload.
+  # `logs:new` broadcast — route by tab:
+  #   * credits: coalesce into a single budget reload
+  #   * live: prepend to the feed + refresh the pulse
   @impl true
-  def handle_info({:new_log, _log}, socket) do
-    if socket.assigns.live_action == :credits and not socket.assigns.reload_scheduled do
-      Process.send_after(self(), :reload_budgets, @reload_interval_ms)
-      {:noreply, assign(socket, :reload_scheduled, true)}
-    else
-      {:noreply, socket}
+  def handle_info({:new_log, log}, socket) do
+    case socket.assigns.live_action do
+      :credits ->
+        if not socket.assigns.reload_scheduled do
+          Process.send_after(self(), :reload_budgets, @reload_interval_ms)
+          {:noreply, assign(socket, :reload_scheduled, true)}
+        else
+          {:noreply, socket}
+        end
+
+      :live ->
+        {:noreply,
+         socket
+         |> stream_insert(:live_feed, log, at: 0, limit: @live_feed_size)
+         |> assign(:pulse, Logs.realtime_summary(%{}))
+         |> assign(:last_sync_at, DateTime.utc_now())}
+
+      _ ->
+        {:noreply, socket}
     end
   end
 
@@ -233,6 +281,45 @@ defmodule TokengateWeb.StatsLive do
      socket
      |> assign(:reload_scheduled, false)
      |> load_budgets()}
+  end
+
+  ## "En vivo" tab ----------------------------------------------------------
+
+  # Realtime refresh: metrics_updated is broadcast on every proxied request;
+  # coalesce into one reload per @live_refresh_interval_ms. The periodic
+  # :live_tick keeps the page moving even with zero traffic (chart shifts,
+  # "hace Ns" ages).
+  def handle_info({:metrics_updated, _lite}, socket) do
+    if socket.assigns.live_action == :live and not socket.assigns.reload_scheduled do
+      Process.send_after(self(), :reload_live, @live_refresh_interval_ms)
+      {:noreply, assign(socket, :reload_scheduled, true)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info(:reload_live, socket) do
+    if socket.assigns.live_action == :live do
+      {:noreply,
+       socket
+       |> assign(:reload_scheduled, false)
+       |> load_live_data()}
+    else
+      {:noreply, assign(socket, :reload_scheduled, false)}
+    end
+  end
+
+  def handle_info(:live_tick, socket) do
+    if socket.assigns.live_action == :live do
+      Process.send_after(self(), :live_tick, @live_refresh_interval_ms)
+
+      {:noreply,
+       socket
+       |> assign(:inflight_count, Inflight.count())
+       |> assign(:inflight_by_model, Inflight.count_by_model(5))}
+    else
+      {:noreply, socket}
+    end
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -379,29 +466,49 @@ defmodule TokengateWeb.StatsLive do
         end
 
       :groups ->
-        group_id = params.group_filter
         admin? = params.user.global_role == "admin"
-        allowed? = group_id && group_drilldown_allowed?(params.user, group_id)
 
-        [fn -> {:breakdown_group, breakdown_by_group_if_admin(admin?, opts)} end] ++
-          if allowed? do
-            [
-              fn -> {:breakdown_member, Rollup.breakdown_by_member(group_id, opts)} end,
-              fn -> {:breakdown_model, Rollup.breakdown_by_model(group_id, opts)} end,
-              fn ->
-                {:drilldown_series, Rollup.daily_series_by_model_for_group(group_id, opts)}
-              end,
-              fn ->
-                {:drilldown_series_labels,
-                 Rollup.daily_series_by_model_for_group(group_id, opts)
-                 |> Enum.map(& &1.label)
-                 |> Enum.uniq()
-                 |> Enum.sort()}
-              end
-            ]
-          else
-            []
-          end
+        base = [fn -> {:breakdown_group, breakdown_by_group_if_admin(admin?, opts)} end]
+
+        # Drill-down (?group_id=) shares the template with :group and
+        # needs the group record for the breadcrumb.
+        case params.group_filter do
+          nil ->
+            base
+
+          group_id ->
+            if group_drilldown_allowed?(params.user, group_id) do
+              [fn -> {:group, Accounts.get_group!(group_id)} end | base]
+            else
+              base
+            end
+        end
+
+      :group ->
+        group_id = params.group_id
+        allowed? = group_drilldown_allowed?(params.user, group_id)
+
+        if allowed? do
+          [
+            fn -> {:group, Accounts.get_group!(group_id)} end,
+            fn -> {:breakdown_member, Rollup.breakdown_by_member(group_id, opts)} end,
+            fn -> {:breakdown_model, Rollup.breakdown_by_model(group_id, opts)} end,
+            fn -> {:breakdown_service, Rollup.breakdown_by_service_for_group(group_id, opts)} end,
+            fn -> {:drilldown_series, Rollup.daily_series_by_model_for_group(group_id, opts)} end,
+            fn ->
+              {:drilldown_series_labels,
+               Rollup.daily_series_by_model_for_group(group_id, opts)
+               |> Enum.map(& &1.label)
+               |> Enum.uniq()
+               |> Enum.sort()}
+            end
+          ]
+        else
+          []
+        end
+
+      :users ->
+        [fn -> {:breakdown_user, Rollup.breakdown_by_user(opts)} end]
 
       :services ->
         service_id = params.service_filter
@@ -429,22 +536,6 @@ defmodule TokengateWeb.StatsLive do
           else
             []
           end
-
-      :member ->
-        member_id = params.member_id
-
-        allowed? =
-          params.user.global_role == "admin" or
-            member_id in Accounts.scope_member_ids(params.user)
-
-        if allowed? do
-          [
-            fn -> {:member, Accounts.get_group_member!(member_id, :with_assoc)} end,
-            fn -> {:member_models, Rollup.breakdown_by_model_for_member(member_id, opts)} end
-          ]
-        else
-          []
-        end
 
       _ ->
         []
@@ -482,9 +573,11 @@ defmodule TokengateWeb.StatsLive do
       breakdown_group: [],
       breakdown_provider: [],
       breakdown_service: [],
+      breakdown_user: [],
       top_errors: [],
       provider_ranking: [],
       model_ranking: [],
+      group: nil,
       member: nil,
       member_models: [],
       hour_distribution: [],
@@ -563,6 +656,37 @@ defmodule TokengateWeb.StatsLive do
       true ->
         base
     end
+  end
+
+  ## "En vivo" data ---------------------------------------------------------
+
+  # One bundled realtime refresh. All queries are cheap (index range scans
+  # over the last hour/day) and shared across connected live tabs via the
+  # DashboardCache TTL so a busy proxy doesn't multiply Postgres load.
+  defp load_live_data(socket) do
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
+
+    bundle =
+      DashboardCache.fetch_or_compute({:stats_live, timezone}, fn ->
+        %{
+          pulse: Logs.realtime_summary(%{}),
+          today_metrics: Logs.today_summary(timezone),
+          minute_series: Logs.requests_per_minute(60)
+        }
+      end)
+
+    feed_logs = Logs.list_logs(%{limit: @live_feed_size})
+
+    socket
+    |> assign(:stats_loading, false)
+    |> assign(:pulse, bundle.pulse)
+    |> assign(:today_metrics, bundle.today_metrics)
+    |> assign(:minute_series, bundle.minute_series)
+    |> assign(:minute_series_max, Enum.max(Enum.map(bundle.minute_series, & &1.request_count)))
+    |> assign(:inflight_count, Inflight.count())
+    |> assign(:inflight_by_model, Inflight.count_by_model(5))
+    |> assign(:last_sync_at, DateTime.utc_now())
+    |> stream(:live_feed, feed_logs, reset: true)
   end
 
   ## Credits (budgets) ----------------------------------------------------
