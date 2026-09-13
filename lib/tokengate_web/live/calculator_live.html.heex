@@ -13,406 +13,417 @@
       </.header>
     </div>
 
-    <%!-- Form ────────────────────────────────────────────────────────────── --%>
-    <div class="card bg-base-100 border border-base-300 shadow-sm">
-      <div class="card-body p-4 sm:p-6">
-        <.form for={%{}} id="calculator-form" phx-change="calculate" phx-submit="calculate">
-          <%!-- Row 1: model + period --%>
-          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div class="space-y-1.5">
-              <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                Modelo
-              </label>
-              <select
-                name="model_id"
-                class="select select-bordered select-sm w-full"
-              >
-                <option value="">Selecciona un modelo…</option>
-                <%= for model <- @models do %>
-                  <option value={model.id} selected={model.id == @selected_model_id}>
-                    {model.name}
-                  </option>
-                <% end %>
-              </select>
-              <p
-                :if={@market_prices}
-                class="text-[11px] text-base-content/50 tabular-nums"
-                title="Precio de mercado de referencia (informativo — no se usa para facturación)"
-              >
-                Mercado: {market_line(@market_prices)}
+    <%!-- Two columns: controls (1/4) + results (3/4) ─────────────────────── --%>
+    <div class="grid grid-cols-1 lg:grid-cols-4 gap-4 items-start">
+      <%!-- Left: form ───────────────────────────────────────────────────── --%>
+      <div class="card bg-base-100 border border-base-300 shadow-sm lg:col-span-1 lg:sticky lg:top-20">
+        <div class="card-body p-4">
+          <.form for={%{}} id="calculator-form" phx-change="calculate" phx-submit="calculate">
+            <div class="space-y-4">
+              <div class="space-y-1.5">
+                <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
+                  Modelo
+                </label>
+                <select
+                  name="model_id"
+                  class="select select-bordered select-sm w-full"
+                >
+                  <option value="">Selecciona un modelo…</option>
+                  <%= for model <- @models do %>
+                    <option value={model.id} selected={model.id == @selected_model_id}>
+                      {model.name}
+                    </option>
+                  <% end %>
+                </select>
+                <p
+                  :if={@market_prices}
+                  class="text-[11px] text-base-content/50 tabular-nums"
+                  title="Precio de mercado de referencia (informativo — no se usa para facturación)"
+                >
+                  Mercado: {market_line(@market_prices)}
+                </p>
+              </div>
+
+              <div class="space-y-1.5">
+                <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
+                  Periodo
+                </label>
+                <select
+                  name="period"
+                  class="select select-bordered select-sm w-full"
+                >
+                  <%= for period <- periods() do %>
+                    <option value={period} selected={period == @period}>
+                      {period_label(period)}
+                    </option>
+                  <% end %>
+                </select>
+              </div>
+
+              <%!-- Custom pricing, stacked for the narrow column --%>
+              <div class="pt-4 border-t border-base-200 space-y-3">
+                <div class="flex items-center justify-between flex-wrap gap-2">
+                  <p class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
+                    Precios custom
+                  </p>
+                  <button
+                    type="button"
+                    phx-click="use_market_prices"
+                    disabled={is_nil(@market_prices)}
+                    class="btn btn-xs btn-ghost gap-1"
+                    id="use-market-prices"
+                    title={
+                      if @market_prices,
+                        do: "Copia los precios de mercado a los campos custom",
+                        else: "El modelo no tiene precios de mercado configurados"
+                    }
+                  >
+                    <.icon name="hero-arrow-down-tray" class="w-3 h-3" /> Usar mercado
+                  </button>
+                </div>
+                <p class="text-[11px] text-base-content/40 -mt-1">
+                  Por millón de tokens — solo afecta la línea "Estimado (custom)"
+                </p>
+
+                <div class="space-y-3">
+                  <div class="space-y-1.5">
+                    <label class="text-xs font-medium text-base-content/60" for="cost-input">
+                      Entrada
+                    </label>
+                    <div class="join w-full">
+                      <span class="join-item px-3 flex items-center text-sm text-base-content/50 bg-base-200 border border-base-300 border-r-0 rounded-l">
+                        $
+                      </span>
+                      <input
+                        type="number"
+                        name="cost_input"
+                        id="cost-input"
+                        value={@cost_input}
+                        min="0"
+                        step="0.01"
+                        class="input input-bordered input-sm w-full rounded-l-none"
+                      />
+                      <span class="join-item px-3 flex items-center text-xs text-base-content/50 bg-base-200 border border-base-300 border-l-0 rounded-r">
+                        /1M
+                      </span>
+                    </div>
+                  </div>
+
+                  <div class="space-y-1.5">
+                    <label class="text-xs font-medium text-base-content/60" for="cost-cache">
+                      Cache
+                    </label>
+                    <div class="join w-full">
+                      <span class="join-item px-3 flex items-center text-sm text-base-content/50 bg-base-200 border border-base-300 border-r-0 rounded-l">
+                        $
+                      </span>
+                      <input
+                        type="number"
+                        name="cost_cache"
+                        id="cost-cache"
+                        value={@cost_cache}
+                        min="0"
+                        step="0.01"
+                        class="input input-bordered input-sm w-full rounded-l-none"
+                      />
+                      <span class="join-item px-3 flex items-center text-xs text-base-content/50 bg-base-200 border border-base-300 border-l-0 rounded-r">
+                        /1M
+                      </span>
+                    </div>
+                  </div>
+
+                  <div class="space-y-1.5">
+                    <label class="text-xs font-medium text-base-content/60" for="cost-output">
+                      Salida
+                    </label>
+                    <div class="join w-full">
+                      <span class="join-item px-3 flex items-center text-sm text-base-content/50 bg-base-200 border border-base-300 border-r-0 rounded-l">
+                        $
+                      </span>
+                      <input
+                        type="number"
+                        name="cost_output"
+                        id="cost-output"
+                        value={@cost_output}
+                        min="0"
+                        step="0.01"
+                        class="input input-bordered input-sm w-full rounded-l-none"
+                      />
+                      <span class="join-item px-3 flex items-center text-xs text-base-content/50 bg-base-200 border border-base-300 border-l-0 rounded-r">
+                        /1M
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </.form>
+        </div>
+      </div>
+
+      <%!-- Right: summary + chart ───────────────────────────────────────── --%>
+      <div class="lg:col-span-3 space-y-4">
+        <%= if @summary do %>
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <.kpi_card
+              id="calc-real"
+              label="Gasto Real"
+              icon="hero-banknotes"
+              accent="primary"
+              title="Costo reportado por el proveedor para el período"
+            >
+              ${format_cost(@summary.total_real)}
+              <:sub :if={Decimal.compare(@summary.total_real, 0) == :eq and @summary.total_requests > 0}>
+                El proveedor no reporta costo
+              </:sub>
+            </.kpi_card>
+
+            <.kpi_card
+              id="calc-estimated"
+              label="Estimado (custom)"
+              icon="hero-calculator"
+              accent="primary"
+              title="Costo estimado con los precios custom de la izquierda"
+            >
+              ${format_cost(@summary.total_estimated)}
+            </.kpi_card>
+
+            <.kpi_card
+              :if={@summary.has_market_pricing}
+              id="calc-market"
+              label="Estimado Mercado"
+              icon="hero-arrow-trending-up"
+              accent="accent"
+              title="Costo estimado con los precios de mercado del modelo"
+            >
+              ${format_cost(@summary.total_market_estimated)}
+            </.kpi_card>
+
+            <.kpi_card
+              id="calc-difference"
+              label="Diferencia"
+              icon="hero-scale"
+              accent={if Decimal.compare(@summary.difference, 0) == :gt, do: "error", else: "primary"}
+              title="Estimado (custom) − Real: positivo = pagas menos de lo estimado"
+            >
+              <span class={difference_class(@summary.difference)}>
+                {difference_sign(@summary.difference)}${abs_decimal(@summary.difference)}
+              </span>
+              <:sub :if={difference_pct(@summary)}>
+                <span class={difference_class(@summary.difference)}>
+                  {difference_sign(@summary.difference)}{difference_pct(@summary)}% vs real
+                </span>
+              </:sub>
+            </.kpi_card>
+          </div>
+
+          <%!-- Volumen del período: requests + tokens --%>
+          <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <.kpi_card id="calc-requests" label="Requests" icon="hero-bolt" accent="primary">
+              {format_number(@summary.total_requests)}
+            </.kpi_card>
+
+            <.kpi_card
+              id="calc-tokens"
+              label="Tokens"
+              icon="hero-cpu-chip"
+              accent="primary"
+              title={
+                "#{format_number(@summary.total_prompt)} in / #{format_number(@summary.total_cache_read)} cache / #{format_number(@summary.total_completion)} out"
+              }
+            >
+              <span class="flex items-baseline gap-2">
+                {format_compact(@summary.total_prompt)}
+                <span class="text-sm text-base-content/50">in</span>
+                <span class="text-base-content/30">/</span>
+                {format_compact(@summary.total_cache_read)}
+                <span class="text-sm text-base-content/50">cache</span>
+                <span class="text-base-content/30">/</span>
+                {format_compact(@summary.total_completion)}
+                <span class="text-sm text-base-content/50">out</span>
+              </span>
+              <:sub>
+                total {format_number(@summary.total_prompt + @summary.total_completion)} tokens
+              </:sub>
+            </.kpi_card>
+          </div>
+        <% end %>
+
+        <%!-- Placeholder until a model is picked ─────────────────────────── --%>
+        <%= if is_nil(@summary) do %>
+          <div class="card bg-base-100 border border-base-300 shadow-sm" id="calc-empty">
+            <div class="card-body">
+              <p class="text-sm text-base-content/40 py-12 text-center">
+                Selecciona un modelo para ver la comparativa de gasto real vs estimado.
               </p>
             </div>
+          </div>
+        <% end %>
 
-            <div class="space-y-1.5">
-              <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                Periodo
-              </label>
-              <select
-                name="period"
-                class="select select-bordered select-sm w-full"
-              >
-                <%= for period <- periods() do %>
-                  <option value={period} selected={period == @period}>
-                    {period_label(period)}
-                  </option>
-                <% end %>
-              </select>
+        <%!-- No data for the selected model/period ───────────────────────── --%>
+        <%= if @chart_data == [] and @selected_model_id do %>
+          <div class="card bg-base-100 border border-base-300 shadow-sm">
+            <div class="card-body">
+              <p class="text-sm text-base-content/40 py-8 text-center">
+                Sin datos para este modelo en el periodo seleccionado.
+              </p>
             </div>
           </div>
+        <% end %>
 
-          <%!-- Row 2: custom pricing with $ prefix and /1M suffix --%>
-          <div class="mt-5 pt-4 border-t border-base-200">
-            <div class="flex items-center justify-between flex-wrap gap-2 mb-3">
-              <div>
-                <p class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                  Precios custom
-                </p>
-                <p class="text-[11px] text-base-content/40">
-                  Precio por millón de tokens — aplica solo a la línea "Estimado (custom)"
-                </p>
-              </div>
-              <button
-                type="button"
-                phx-click="use_market_prices"
-                disabled={is_nil(@market_prices)}
-                class="btn btn-xs btn-ghost gap-1"
-                id="use-market-prices"
-                title={
-                  if @market_prices,
-                    do: "Copia los precios de mercado a los campos custom",
-                    else: "El modelo no tiene precios de mercado configurados"
-                }
-              >
-                <.icon name="hero-arrow-down-tray" class="w-3 h-3" /> Usar mercado
-              </button>
-            </div>
-
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              <div class="space-y-1.5">
-                <label class="text-xs font-medium text-base-content/60" for="cost-input">
-                  Entrada
-                </label>
-                <div class="join w-full">
-                  <span class="join-item px-3 flex items-center text-sm text-base-content/50 bg-base-200 border border-base-300 border-r-0 rounded-l">
-                    $
+        <%!-- Chart ──────────────────────────────────────────────────────────── --%>
+        <%= if @chart_data != [] do %>
+          <% chart = chart_points(@chart_data) %>
+          <div class="card bg-base-100 border border-base-300 shadow-sm">
+            <div class="card-body space-y-3 p-4 sm:p-6">
+              <div class="flex items-center justify-between flex-wrap gap-2">
+                <h3 class="text-sm font-semibold text-base-content">
+                  Comparativa: Gasto Real vs Estimado
+                </h3>
+                <div class="flex items-center gap-4 text-xs">
+                  <span class="inline-flex items-center gap-1.5">
+                    <span class="w-3 h-3 rounded-sm bg-success"></span>
+                    <span class="text-base-content/60">Real</span>
                   </span>
-                  <input
-                    type="number"
-                    name="cost_input"
-                    id="cost-input"
-                    value={@cost_input}
-                    min="0"
-                    step="0.01"
-                    class="input input-bordered input-sm w-full rounded-l-none"
-                  />
-                  <span class="join-item px-3 flex items-center text-xs text-base-content/50 bg-base-200 border border-base-300 border-l-0 rounded-r">
-                    /1M
+                  <span class="inline-flex items-center gap-1.5">
+                    <span class="w-3 h-3 rounded-sm bg-primary"></span>
+                    <span class="text-base-content/60">Estimado (custom)</span>
                   </span>
+                  <%= if @summary.has_market_pricing do %>
+                    <span class="inline-flex items-center gap-1.5">
+                      <span class="w-3 h-0.5 rounded bg-info"></span>
+                      <span class="text-base-content/60">Estimado Mercado</span>
+                    </span>
+                  <% end %>
                 </div>
               </div>
 
-              <div class="space-y-1.5">
-                <label class="text-xs font-medium text-base-content/60" for="cost-cache">
-                  Cache
-                </label>
-                <div class="join w-full">
-                  <span class="join-item px-3 flex items-center text-sm text-base-content/50 bg-base-200 border border-base-300 border-r-0 rounded-l">
-                    $
-                  </span>
-                  <input
-                    type="number"
-                    name="cost_cache"
-                    id="cost-cache"
-                    value={@cost_cache}
-                    min="0"
-                    step="0.01"
-                    class="input input-bordered input-sm w-full rounded-l-none"
+              <div class="w-full overflow-x-auto">
+                <svg
+                  viewBox="0 0 800 220"
+                  class="w-full h-auto min-w-[600px]"
+                  preserveAspectRatio="xMidYMid meet"
+                >
+                  <%!-- Y-axis grid lines + labels --%>
+                  <%= for tick <- chart.y_ticks do %>
+                    <line
+                      x1={chart[:pad_left] || 70}
+                      y1={tick.y}
+                      x2="790"
+                      y2={tick.y}
+                      class="stroke-base-200"
+                      stroke-width="0.5"
+                    />
+                    <text
+                      x={(chart[:pad_left] || 70) - 5}
+                      y={tick.y + 4}
+                      text-anchor="end"
+                      class="fill-base-content/40 text-[9px]"
+                    >
+                      ${tick.value}
+                    </text>
+                  <% end %>
+
+                  <%!-- Real cost area fill --%>
+                  <path d={chart.real_area} class="fill-success/10" />
+
+                  <%!-- Real cost line --%>
+                  <polyline
+                    points={chart.real_points}
+                    fill="none"
+                    class="stroke-success"
+                    stroke-width="2"
+                    stroke-linejoin="round"
+                    stroke-linecap="round"
                   />
-                  <span class="join-item px-3 flex items-center text-xs text-base-content/50 bg-base-200 border border-base-300 border-l-0 rounded-r">
-                    /1M
-                  </span>
-                </div>
+
+                  <%!-- Estimated cost line (custom prices) --%>
+                  <polyline
+                    points={chart.est_points}
+                    fill="none"
+                    class="stroke-primary"
+                    stroke-width="2"
+                    stroke-linejoin="round"
+                    stroke-linecap="round"
+                    stroke-dasharray="4,2"
+                  />
+
+                  <%!-- Market estimate line (only when the model has pricing) --%>
+                  <polyline
+                    :if={chart.market_points != ""}
+                    points={chart.market_points}
+                    fill="none"
+                    class="stroke-info"
+                    stroke-width="1.5"
+                    stroke-linejoin="round"
+                    stroke-linecap="round"
+                    stroke-dasharray="1,3"
+                  />
+
+                  <%!-- X-axis line --%>
+                  <line
+                    x1={chart[:pad_left] || 70}
+                    y1={(chart[:pad_top] || 10) + (chart[:plot_h] || 175)}
+                    x2="790"
+                    y2={(chart[:pad_top] || 10) + (chart[:plot_h] || 175)}
+                    class="stroke-base-300"
+                    stroke-width="1"
+                  />
+
+                  <%!-- X-axis labels --%>
+                  <%= for label <- chart.x_labels do %>
+                    <text
+                      x={label.x}
+                      y="215"
+                      text-anchor="middle"
+                      class="fill-base-content/40 text-[8px]"
+                    >
+                      {label.label}
+                    </text>
+                  <% end %>
+                </svg>
               </div>
 
-              <div class="space-y-1.5">
-                <label class="text-xs font-medium text-base-content/60" for="cost-output">
-                  Salida
-                </label>
-                <div class="join w-full">
-                  <span class="join-item px-3 flex items-center text-sm text-base-content/50 bg-base-200 border border-base-300 border-r-0 rounded-l">
-                    $
+              <%!-- Hourly breakdown table ─────────────────────────────────────── --%>
+              <div class="mt-4 overflow-x-auto">
+                <div class="hidden md:grid grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1fr] gap-2 px-2 pb-2 border-b border-base-200 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
+                  <span>Hora</span>
+                  <span class="text-right">Requests</span>
+                  <span class="text-right">Entrada</span>
+                  <span class="text-right">Cache</span>
+                  <span class="text-right">Salida</span>
+                  <span class="text-right">Real</span>
+                  <span class="text-right">Estimado (custom)</span>
+                </div>
+                <div
+                  :for={row <- @chart_data}
+                  class="grid grid-cols-[1fr_auto] md:grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1fr] gap-2 px-2 py-1.5 items-center text-[11px] tabular-nums hover:bg-base-200/20 border-b border-base-200/30 last:border-b-0"
+                >
+                  <span class="text-base-content/60 truncate">
+                    {Calendar.strftime(row.hour, "%d/%m %H:%M")}
                   </span>
-                  <input
-                    type="number"
-                    name="cost_output"
-                    id="cost-output"
-                    value={@cost_output}
-                    min="0"
-                    step="0.01"
-                    class="input input-bordered input-sm w-full rounded-l-none"
-                  />
-                  <span class="join-item px-3 flex items-center text-xs text-base-content/50 bg-base-200 border border-base-300 border-l-0 rounded-r">
-                    /1M
-                  </span>
+                  <span class="text-right text-base-content/60 hidden md:block">{format_number(
+                    row.request_count
+                  )}</span>
+                  <span class="text-right text-base-content/50 hidden md:block">{format_number(
+                    row.prompt_tokens
+                  )}</span>
+                  <span class="text-right text-base-content/50 hidden md:block">{format_number(
+                    row.cache_read_tokens
+                  )}</span>
+                  <span class="text-right text-base-content/50 hidden md:block">{format_number(
+                    row.completion_tokens
+                  )}</span>
+                  <span class="text-right font-medium text-success/70">${format_cost(row.real_cost)}</span>
+                  <span class="text-right font-medium text-primary/70">${format_cost(
+                    row.estimated_cost
+                  )}</span>
                 </div>
               </div>
             </div>
           </div>
-        </.form>
+        <% end %>
       </div>
     </div>
-
-    <%!-- Summary cards (render whenever a model is selected, even with zero traffic) --%>
-    <%= if @summary do %>
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <.kpi_card
-          id="calc-real"
-          label="Gasto Real"
-          icon="hero-banknotes"
-          accent="primary"
-          title="Costo reportado por el proveedor para el período"
-        >
-          ${format_cost(@summary.total_real)}
-          <:sub :if={
-            Decimal.compare(@summary.total_real, 0) == :eq and @summary.total_requests > 0
-          }>
-            El proveedor no reporta costo
-          </:sub>
-        </.kpi_card>
-
-        <.kpi_card
-          id="calc-estimated"
-          label="Estimado (custom)"
-          icon="hero-calculator"
-          accent="primary"
-          title="Costo estimado con los precios custom de arriba"
-        >
-          ${format_cost(@summary.total_estimated)}
-        </.kpi_card>
-
-        <.kpi_card
-          :if={@summary.has_market_pricing}
-          id="calc-market"
-          label="Estimado Mercado"
-          icon="hero-arrow-trending-up"
-          accent="accent"
-          title="Costo estimado con los precios de mercado del modelo"
-        >
-          ${format_cost(@summary.total_market_estimated)}
-        </.kpi_card>
-
-        <.kpi_card
-          id="calc-difference"
-          label="Diferencia"
-          icon="hero-scale"
-          accent={if Decimal.compare(@summary.difference, 0) == :gt, do: "error", else: "primary"}
-          title="Estimado (custom) − Real: positivo = pagas menos de lo estimado"
-        >
-          <span class={difference_class(@summary.difference)}>
-            {difference_sign(@summary.difference)}${abs_decimal(@summary.difference)}
-          </span>
-          <:sub :if={difference_pct(@summary)}>
-            <span class={difference_class(@summary.difference)}>
-              {difference_sign(@summary.difference)}{difference_pct(@summary)}% vs real
-            </span>
-          </:sub>
-        </.kpi_card>
-      </div>
-
-      <%!-- Volumen del período: requests + tokens en una sola fila --%>
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <.kpi_card id="calc-requests" label="Requests" icon="hero-bolt" accent="primary">
-          {format_number(@summary.total_requests)}
-        </.kpi_card>
-
-        <.kpi_card
-          id="calc-tokens"
-          label="Tokens"
-          icon="hero-cpu-chip"
-          accent="primary"
-          title={
-            "#{format_number(@summary.total_prompt)} in / #{format_number(@summary.total_cache_read)} cache / #{format_number(@summary.total_completion)} out"
-          }
-        >
-          <span class="flex items-baseline gap-2">
-            {format_compact(@summary.total_prompt)}
-            <span class="text-sm text-base-content/50">in</span>
-            <span class="text-base-content/30">/</span>
-            {format_compact(@summary.total_cache_read)}
-            <span class="text-sm text-base-content/50">cache</span>
-            <span class="text-base-content/30">/</span>
-            {format_compact(@summary.total_completion)}
-            <span class="text-sm text-base-content/50">out</span>
-          </span>
-          <:sub>
-            total {format_number(@summary.total_prompt + @summary.total_completion)} tokens
-          </:sub>
-        </.kpi_card>
-      </div>
-    <% end %>
-
-    <%!-- No data ──────────────────────────────────────────────────────────── --%>
-    <%= if @chart_data == [] and @selected_model_id do %>
-      <div class="card bg-base-100 border border-base-300 shadow-sm">
-        <div class="card-body">
-          <p class="text-sm text-base-content/40 py-8 text-center">
-            Sin datos para este modelo en el periodo seleccionado.
-          </p>
-        </div>
-      </div>
-    <% end %>
-
-    <%!-- Chart ──────────────────────────────────────────────────────────── --%>
-    <%= if @chart_data != [] do %>
-      <% chart = chart_points(@chart_data) %>
-      <div class="card bg-base-100 border border-base-300 shadow-sm">
-        <div class="card-body space-y-3 p-4 sm:p-6">
-          <div class="flex items-center justify-between flex-wrap gap-2">
-            <h3 class="text-sm font-semibold text-base-content">
-              Comparativa: Gasto Real vs Estimado
-            </h3>
-            <div class="flex items-center gap-4 text-xs">
-              <span class="inline-flex items-center gap-1.5">
-                <span class="w-3 h-3 rounded-sm bg-success"></span>
-                <span class="text-base-content/60">Real</span>
-              </span>
-              <span class="inline-flex items-center gap-1.5">
-                <span class="w-3 h-3 rounded-sm bg-primary"></span>
-                <span class="text-base-content/60">Estimado (custom)</span>
-              </span>
-              <%= if @summary.has_market_pricing do %>
-                <span class="inline-flex items-center gap-1.5">
-                  <span class="w-3 h-0.5 rounded bg-info"></span>
-                  <span class="text-base-content/60">Estimado Mercado</span>
-                </span>
-              <% end %>
-            </div>
-          </div>
-
-          <div class="w-full overflow-x-auto">
-            <svg
-              viewBox="0 0 800 220"
-              class="w-full h-auto min-w-[600px]"
-              preserveAspectRatio="xMidYMid meet"
-            >
-              <%!-- Y-axis grid lines + labels --%>
-              <%= for tick <- chart.y_ticks do %>
-                <line
-                  x1={chart[:pad_left] || 70}
-                  y1={tick.y}
-                  x2="790"
-                  y2={tick.y}
-                  class="stroke-base-200"
-                  stroke-width="0.5"
-                />
-                <text
-                  x={(chart[:pad_left] || 70) - 5}
-                  y={tick.y + 4}
-                  text-anchor="end"
-                  class="fill-base-content/40 text-[9px]"
-                >
-                  ${tick.value}
-                </text>
-              <% end %>
-
-              <%!-- Real cost area fill --%>
-              <path d={chart.real_area} class="fill-success/10" />
-
-              <%!-- Real cost line --%>
-              <polyline
-                points={chart.real_points}
-                fill="none"
-                class="stroke-success"
-                stroke-width="2"
-                stroke-linejoin="round"
-                stroke-linecap="round"
-              />
-
-              <%!-- Estimated cost line (custom prices) --%>
-              <polyline
-                points={chart.est_points}
-                fill="none"
-                class="stroke-primary"
-                stroke-width="2"
-                stroke-linejoin="round"
-                stroke-linecap="round"
-                stroke-dasharray="4,2"
-              />
-
-              <%!-- Market estimate line (only when the model has pricing) --%>
-              <polyline
-                :if={chart.market_points != ""}
-                points={chart.market_points}
-                fill="none"
-                class="stroke-info"
-                stroke-width="1.5"
-                stroke-linejoin="round"
-                stroke-linecap="round"
-                stroke-dasharray="1,3"
-              />
-
-              <%!-- X-axis line --%>
-              <line
-                x1={chart[:pad_left] || 70}
-                y1={(chart[:pad_top] || 10) + (chart[:plot_h] || 175)}
-                x2="790"
-                y2={(chart[:pad_top] || 10) + (chart[:plot_h] || 175)}
-                class="stroke-base-300"
-                stroke-width="1"
-              />
-
-              <%!-- X-axis labels --%>
-              <%= for label <- chart.x_labels do %>
-                <text
-                  x={label.x}
-                  y="215"
-                  text-anchor="middle"
-                  class="fill-base-content/40 text-[8px]"
-                >
-                  {label.label}
-                </text>
-              <% end %>
-            </svg>
-          </div>
-
-          <%!-- Hourly breakdown table ─────────────────────────────────────── --%>
-          <div class="mt-4 overflow-x-auto">
-            <div class="hidden md:grid grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1fr] gap-2 px-2 pb-2 border-b border-base-200 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-              <span>Hora</span>
-              <span class="text-right">Requests</span>
-              <span class="text-right">Entrada</span>
-              <span class="text-right">Cache</span>
-              <span class="text-right">Salida</span>
-              <span class="text-right">Real</span>
-              <span class="text-right">Estimado (custom)</span>
-            </div>
-            <div
-              :for={row <- @chart_data}
-              class="grid grid-cols-[1fr_auto] md:grid-cols-[1fr_1fr_1fr_1fr_1fr_1fr_1fr] gap-2 px-2 py-1.5 items-center text-[11px] tabular-nums hover:bg-base-200/20 border-b border-base-200/30 last:border-b-0"
-            >
-              <span class="text-base-content/60 truncate">
-                {Calendar.strftime(row.hour, "%d/%m %H:%M")}
-              </span>
-              <span class="text-right text-base-content/60 hidden md:block">{format_number(
-                row.request_count
-              )}</span>
-              <span class="text-right text-base-content/50 hidden md:block">{format_number(
-                row.prompt_tokens
-              )}</span>
-              <span class="text-right text-base-content/50 hidden md:block">{format_number(
-                row.cache_read_tokens
-              )}</span>
-              <span class="text-right text-base-content/50 hidden md:block">{format_number(
-                row.completion_tokens
-              )}</span>
-              <span class="text-right font-medium text-success/70">${format_cost(row.real_cost)}</span>
-              <span class="text-right font-medium text-primary/70">${format_cost(
-                row.estimated_cost
-              )}</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    <% end %>
   </div>
 </Layouts.dashboard>
