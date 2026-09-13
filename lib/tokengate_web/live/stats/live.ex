@@ -13,7 +13,7 @@ defmodule TokengateWeb.StatsLive.LiveSection do
   """
   use TokengateWeb, :html
 
-  import TokengateWeb.KpiHelpers, only: [kpi_card: 1]
+  import TokengateWeb.KpiHelpers, only: [kpi_card: 1, format_cache_value: 2]
 
   alias TokengateWeb.StatsHelpers, as: Stats
 
@@ -114,17 +114,9 @@ defmodule TokengateWeb.StatsLive.LiveSection do
         </.kpi_card>
       </div>
 
-      <%!-- KPIs de hoy (día calendario) --%>
+      <%!-- KPIs de hoy (día calendario) — mismo orden y formato que el Resumen:
+           Costo · Requests · Tokens · latencia --%>
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <.kpi_card
-          id="live-today-requests"
-          label="Hoy · requests"
-          icon="hero-arrow-trending-up"
-          accent="primary"
-        >
-          {Stats.format_number(@today_metrics.requests_total)}
-        </.kpi_card>
-
         <.kpi_card
           id="live-today-cost"
           label="Hoy · costo"
@@ -132,6 +124,15 @@ defmodule TokengateWeb.StatsLive.LiveSection do
           accent="accent"
         >
           ${Stats.format_decimal(@today_metrics.cost_usd)}
+        </.kpi_card>
+
+        <.kpi_card
+          id="live-today-requests"
+          label="Hoy · requests"
+          icon="hero-arrow-trending-up"
+          accent="primary"
+        >
+          {Stats.format_number(@today_metrics.requests_total)}
         </.kpi_card>
 
         <.kpi_card
@@ -143,29 +144,21 @@ defmodule TokengateWeb.StatsLive.LiveSection do
             "#{Stats.format_number(@today_metrics.prompt_tokens)} in / #{Stats.format_number(@today_metrics.completion_tokens)} out"
           }
         >
-          {Stats.format_compact(@today_metrics.prompt_tokens + @today_metrics.completion_tokens)}
-          <:sub>
-            {Stats.format_compact(@today_metrics.prompt_tokens)} in · {Stats.format_compact(
-              @today_metrics.completion_tokens
-            )} out
-          </:sub>
-          <:sub>
-            {if(
-              @today_metrics.cache_read_tokens in [nil, 0] and
-                @today_metrics.cache_creation_tokens in [nil, 0],
-              do: "cache: —",
-              else:
-                "cache: " <>
-                  Stats.format_compact(
-                    (@today_metrics.cache_read_tokens || 0) +
-                      (@today_metrics.cache_creation_tokens || 0)
-                  ) <>
-                  " (" <>
-                  Stats.cache_hit_pct(
-                    @today_metrics.prompt_tokens,
-                    @today_metrics.cache_read_tokens
-                  ) <> " hit)"
+          <span class="flex items-baseline gap-2">
+            {Stats.format_compact(@today_metrics.prompt_tokens)}
+            <span class="text-sm text-base-content/50">in</span>
+            <span class="text-base-content/30">/</span>
+            {Stats.format_compact(@today_metrics.completion_tokens)}
+            <span class="text-sm text-base-content/50">out</span>
+            <span class="text-base-content/30">/</span>
+            {format_cache_value(
+              @today_metrics.cache_read_tokens,
+              @today_metrics.cache_creation_tokens
             )}
+            <span class="text-sm text-base-content/50">cache</span>
+          </span>
+          <:sub>
+            {Stats.cache_hit_pct(@today_metrics.prompt_tokens, @today_metrics.cache_read_tokens)} hit
           </:sub>
         </.kpi_card>
 
