@@ -543,6 +543,7 @@ defmodule TokengateWeb.StatsLive.Services do
                         )}
                       </td>
                       <td></td>
+                      <td></td>
                     </tr>
                   </tfoot>
                 </table>

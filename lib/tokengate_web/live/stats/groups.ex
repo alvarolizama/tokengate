@@ -751,6 +751,7 @@ defmodule TokengateWeb.StatsLive.Groups do
                         )}
                       </td>
                       <td></td>
+                      <td></td>
                     </tr>
                   </tfoot>
                 </table>

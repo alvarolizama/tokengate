@@ -215,6 +215,7 @@ defmodule TokengateWeb.StatsLive.Users do
                     </td>
                     <td></td>
                     <td></td>
+                    <td></td>
                   </tr>
                 </tfoot>
               </table>
