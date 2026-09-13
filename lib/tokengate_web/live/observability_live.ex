@@ -305,7 +305,6 @@ defmodule TokengateWeb.ObservabilityLive do
               <tr
                 :for={{id, destination} <- @streams.destinations}
                 id={id}
-                class="hover:bg-base-200/50 transition-colors"
               >
                 <td>
                   <div class="flex items-center gap-2">

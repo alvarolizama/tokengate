@@ -466,7 +466,7 @@ defmodule TokengateWeb.StatsLive.Index do
             </div>
             <%= if Stats.has_data?(@breakdown_group) do %>
               <div class="overflow-x-auto mt-3">
-                <table class="table table-sm table-zebra">
+                <table class="table table-sm">
                   <thead>
                     <tr>
                       <th>Grupo</th>
@@ -502,7 +502,7 @@ defmodule TokengateWeb.StatsLive.Index do
             </h2>
             <%= if Stats.has_data?(@breakdown_member) do %>
               <div class="overflow-x-auto mt-3">
-                <table class="table table-sm table-zebra">
+                <table class="table table-sm">
                   <thead>
                     <tr>
                       <th>Usuario</th>

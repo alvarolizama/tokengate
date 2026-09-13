@@ -524,8 +524,8 @@ defmodule TokengateWeb.UserStatsLive do
         </.form>
 
         <%!-- Logs table (stream) --%>
-        <div class="overflow-x-auto">
-          <table class="table table-zebra">
+        <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
+          <table class="table table-sm">
             <thead>
               <tr>
                 <th>Fecha</th>

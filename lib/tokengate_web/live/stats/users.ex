@@ -43,7 +43,7 @@ defmodule TokengateWeb.StatsLive.Users do
           <%= if Stats.has_data?(@breakdown_user) do %>
             <% user_total = Stats.breakdown_total(@breakdown_user) %>
             <div class="overflow-x-auto mt-3">
-              <table class="table table-sm table-zebra">
+              <table class="table table-sm">
                 <thead>
                   <tr>
                     <th>

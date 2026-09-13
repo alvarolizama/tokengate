@@ -729,7 +729,7 @@ defmodule TokengateWeb.UsersLive do
           </div>
         </div>
 
-        <div class="overflow-x-auto">
+        <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
           <table class="table table-sm">
             <thead>
               <tr>

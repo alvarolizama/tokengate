@@ -29,3 +29,13 @@
 [data-phx-session], [data-phx-teleported-src] { display: contents }
 
 /* This file is for your main application CSS */
+
+/* Tablas: estilo unificado tipo Observabilidad — hover en fila sin zebra.
+   Se aplica globalmente para que todas las tablas de la app compartan
+   el mismo look (card + table-sm + hover). */
+.table tbody tr {
+  transition: background-color 150ms ease;
+}
+.table tbody tr:hover {
+  background-color: color-mix(in oklab, var(--b2) 60%, transparent);
+}

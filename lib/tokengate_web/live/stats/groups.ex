@@ -232,7 +232,7 @@ defmodule TokengateWeb.StatsLive.Groups do
               <%= if Stats.has_data?(@breakdown_model) do %>
                 <% model_total = Stats.breakdown_total(@breakdown_model) %>
                 <div class="overflow-x-auto mt-3">
-                  <table class="table table-sm table-zebra">
+                  <table class="table table-sm">
                     <thead>
                       <tr>
                         <th>
@@ -404,7 +404,7 @@ defmodule TokengateWeb.StatsLive.Groups do
               <%= if Stats.has_data?(@breakdown_member) do %>
                 <% member_total = Stats.breakdown_total(@breakdown_member) %>
                 <div class="overflow-x-auto mt-3">
-                  <table class="table table-sm table-zebra">
+                  <table class="table table-sm">
                     <thead>
                       <tr>
                         <th>
@@ -587,7 +587,7 @@ defmodule TokengateWeb.StatsLive.Groups do
             <%= if Stats.has_data?(@breakdown_group) do %>
               <% group_total = Stats.breakdown_total(@breakdown_group) %>
               <div class="overflow-x-auto mt-3">
-                <table class="table table-sm table-zebra">
+                <table class="table table-sm">
                   <thead>
                     <tr>
                       <th>

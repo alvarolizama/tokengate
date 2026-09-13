@@ -938,8 +938,8 @@ defmodule TokengateWeb.LogsLive do
         </div>
 
         <%!-- Logs table (includes pending in-flight rows highlighted) --%>
-        <div class="overflow-x-auto">
-          <table class="table table-zebra">
+        <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
+          <table class="table table-sm">
             <thead>
               <tr class="border-b-0">
                 <th
