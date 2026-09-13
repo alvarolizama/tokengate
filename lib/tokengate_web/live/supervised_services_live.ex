@@ -207,9 +207,6 @@ defmodule TokengateWeb.SupervisedServicesLive do
                   </h3>
                   <div class="flex flex-wrap gap-2 mt-2">
                     <span class="badge badge-outline badge-sm">
-                      {format_decimal(service.monthly_budget_usd)} USD/mes
-                    </span>
-                    <span class="badge badge-outline badge-sm">
                       {service.concurrency_limit} conc.
                     </span>
                     <span class="badge badge-outline badge-sm">

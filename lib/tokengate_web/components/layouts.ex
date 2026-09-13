@@ -194,11 +194,9 @@ defmodule TokengateWeb.Layouts do
   defp dashboard_sidebar(assigns) do
     assigns =
       if admin?(assigns.current_scope) do
-        timezone = "Etc/UTC"
         creds = Tokengate.Providers.count_error_credentials()
         breakers = Tokengate.Routing.CircuitBreakerManager.count_open()
-        budgets = Tokengate.Budgets.count_exhausted(timezone)
-        assign(assigns, :alert_count, creds + breakers + budgets)
+        assign(assigns, :alert_count, creds + breakers)
       else
         assigns
       end
@@ -258,14 +256,14 @@ defmodule TokengateWeb.Layouts do
                 icon="hero-wrench-screwdriver"
               />
               <.sidebar_link
+                href={~p"/admin/subscriptions"}
+                label="Suscripciones"
+                icon="hero-banknotes"
+              />
+              <.sidebar_link
                 href={~p"/admin/observability"}
                 label="Observabilidad"
                 icon="hero-bell-alert"
-              />
-              <.sidebar_link
-                href={~p"/admin/budgets"}
-                label="Budget"
-                icon="hero-banknotes"
               />
               <.sidebar_link
                 href={~p"/admin/maintenance"}

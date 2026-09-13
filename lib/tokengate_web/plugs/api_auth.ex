@@ -73,7 +73,6 @@ defmodule TokengateWeb.Plugs.ApiAuth do
       id: service.id,
       group_id: service.group_id,
       user_id: nil,
-      extra_monthly_budget_usd: nil,
       extra_concurrency: nil,
       extra_rpm: nil,
       status: "active",

@@ -74,7 +74,7 @@ defmodule TokengateWeb.StatsLive.Credits do
             <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" /> Por grupo
           </h2>
           <p class="text-xs text-base-content/60">
-            Tope mensual = budget mensual por usuario.
+            El crédito por miembro se gestiona en Suscripciones.
           </p>
           <div class="overflow-x-auto mt-3">
             <table class="table table-sm">

@@ -13,7 +13,6 @@ defmodule Tokengate.Accounts.GroupMember do
   schema "group_members" do
     belongs_to :user, Tokengate.Accounts.User
     belongs_to :group, Tokengate.Accounts.Group
-    field :extra_monthly_budget_usd, :decimal
     field :extra_concurrency, :integer
     field :extra_rpm, :integer
     field :status, :string, default: "active"
@@ -28,8 +27,7 @@ defmodule Tokengate.Accounts.GroupMember do
     timestamps(type: :utc_datetime)
   end
 
-  @permitted ~w(user_id group_id extra_monthly_budget_usd
-                extra_concurrency extra_rpm status)a
+  @permitted ~w(user_id group_id extra_concurrency extra_rpm status)a
   @required ~w(user_id group_id)a
 
   def changeset(group_member, attrs) do
@@ -37,7 +35,6 @@ defmodule Tokengate.Accounts.GroupMember do
     |> cast(attrs, @permitted)
     |> validate_required(@required)
     |> validate_inclusion(:status, ["active", "suspended"])
-    |> validate_number(:extra_monthly_budget_usd, greater_than_or_equal_to: 0)
     |> validate_number(:extra_concurrency, greater_than: 0)
     |> validate_number(:extra_rpm, greater_than: 0)
     |> unique_constraint(:group_id, name: :group_members_user_group_unique_index)

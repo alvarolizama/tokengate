@@ -1,67 +1,52 @@
 defmodule Tokengate.Budgets.SyncWorker do
   @moduledoc """
-  Oban worker that drift-corrects a member's ETS budget counters against
-  the durable truth in `request_logs`.
+  Oban worker that drift-corrects a spending subject's monthly ETS budget
+  counter against the durable truth in `request_logs`.
 
-  On each run, it recomputes the member's daily and monthly spend from
-  `Tokengate.Logs.cost_summary/1` and resets the ETS counters via
-  `Tokengate.Budgets.Manager.set_from_db/3`. This corrects drift caused by
-  lost increments, process crashes, or manual ETS evictions.
+  On each run it recomputes the subject's monthly spend from
+  `Tokengate.Logs.cost_summary/1` and resets the ETS counter via
+  `Tokengate.Budgets.Manager.set_from_db/2`. This corrects drift caused by
+  lost updates, process crashes, or manual ETS evictions.
 
   ## Scheduling
 
-  The worker is enqueued by `Budgets.Manager.record_spend/2` after each
-  spend recording, debounced to at most one pending job per member (see
-  the manager's `maybe_enqueue_sync/1`). There is no cron schedule wired
-  for it in `config/config.exs`.
+  Enqueued by `Budgets.Manager.settle/3` after each spend recording, debounced
+  to at most one pending job per subject (see the manager's
+  `maybe_enqueue_sync/1`). No cron schedule is wired for it.
 
   ## Dedup
 
-  `unique: [period: 60, keys: [:member_id]]` prevents rapid-fire duplicate
-  jobs for the same member within a 60-second window.
+  `unique: [period: 60, keys: [:subject_id]]` prevents rapid-fire duplicate
+  jobs for the same subject within a 60-second window.
   """
 
   use Oban.Worker,
     queue: :budgets,
     max_attempts: 3,
-    unique: [period: 60, keys: [:member_id]]
+    unique: [period: 60, keys: [:subject_id]]
 
   @impl true
-  def perform(%Oban.Job{args: %{"member_id" => member_id}}) do
-    member_id = normalize_member_id(member_id)
+  def perform(%Oban.Job{args: %{"subject_id" => subject_id}}) do
+    # Clear the debounce mark BEFORE recomputing: any spend recorded after this
+    # point will re-enqueue a fresh job. If we cleared it after set_from_db, a
+    # concurrent settle could set the mark between our clear and our write, then
+    # never fire a new job.
+    Tokengate.Budgets.Manager.clear_sync_pending(subject_id)
 
-    # Clear the debounce mark BEFORE recomputing: any spend recorded after
-    # this point will re-enqueue a fresh job. If we cleared it after
-    # set_from_db, a concurrent record_spend could set the mark between our
-    # clear and our write, then never fire a new job.
-    Tokengate.Budgets.Manager.clear_sync_pending(member_id)
+    monthly_micro = compute_monthly_spend(subject_id)
 
-    daily_micro = compute_period_spend(member_id, :daily)
-    monthly_micro = compute_period_spend(member_id, :monthly)
-
-    Tokengate.Budgets.Manager.set_from_db(member_id, daily_micro, monthly_micro)
+    Tokengate.Budgets.Manager.set_from_db(subject_id, monthly_micro)
 
     :ok
   end
 
   # Helper to allow direct invocation in tests with atom-keyed args.
-  def perform(%{member_id: member_id}) do
-    perform(%Oban.Job{args: %{"member_id" => member_id}})
+  def perform(%{subject_id: subject_id}) do
+    perform(%Oban.Job{args: %{"subject_id" => subject_id}})
   end
 
-  defp compute_period_spend(member_id, :daily) do
-    from = period_start(:daily)
-    Tokengate.Budgets.Manager.load_from_db(member_id, from)
-  end
-
-  defp compute_period_spend(member_id, :monthly) do
-    from = period_start(:monthly)
-    Tokengate.Budgets.Manager.load_from_db(member_id, from)
-  end
-
-  defp period_start(:daily) do
-    today = Date.utc_today()
-    DateTime.new!(today, ~T[00:00:00], "Etc/UTC")
+  defp compute_monthly_spend(subject_id) do
+    Tokengate.Budgets.Manager.load_from_db(subject_id, period_start(:monthly))
   end
 
   defp period_start(:monthly) do
@@ -69,10 +54,4 @@ defmodule Tokengate.Budgets.SyncWorker do
     first = Date.new!(today.year, today.month, 1)
     DateTime.new!(first, ~T[00:00:00], "Etc/UTC")
   end
-
-  # Args arrive from Oban with string keys; member_id may be a binary UUID.
-  # The Manager treats member_id as an opaque term, so no conversion is
-  # needed beyond accepting whatever was serialized.
-  defp normalize_member_id(member_id) when is_binary(member_id), do: member_id
-  defp normalize_member_id(member_id), do: member_id
 end

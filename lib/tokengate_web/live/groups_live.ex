@@ -96,8 +96,6 @@ defmodule TokengateWeb.GroupsLive do
       member_budgets
       |> Enum.group_by(fn mb -> mb.member.group_id end)
       |> Map.new(fn {group_id, budgets} ->
-        group = Enum.find(groups, &(&1.id == group_id))
-
         monthly_limit_usd =
           budgets
           |> Enum.map(& &1.monthly_limit_usd)
@@ -107,27 +105,10 @@ defmodule TokengateWeb.GroupsLive do
         monthly_spend_usd =
           Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.monthly_spend_usd, &2))
 
-        estimated_monthly_usd =
-          if group && group.monthly_budget_per_user_usd do
-            group.monthly_budget_per_user_usd
-            |> Decimal.mult(Decimal.new(length(budgets)))
-          else
-            nil
-          end
-
-        estimated_monthly_extra_usd =
-          Enum.reduce(budgets, Decimal.new(0), fn mb, acc ->
-            if mb.member.extra_monthly_budget_usd,
-              do: Decimal.add(acc, mb.member.extra_monthly_budget_usd),
-              else: acc
-          end)
-
         {group_id,
          %{
            monthly_limit_usd: monthly_limit_usd,
            monthly_spend_usd: monthly_spend_usd,
-           estimated_monthly_usd: estimated_monthly_usd,
-           estimated_monthly_extra_usd: estimated_monthly_extra_usd,
            member_count: length(budgets),
            member_budgets: budgets
          }}
@@ -350,13 +331,6 @@ defmodule TokengateWeb.GroupsLive do
                 />
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <.input
-                    field={@form[:monthly_budget_per_user_usd]}
-                    type="number"
-                    label="Budget mensual por usuario (USD)"
-                    step="any"
-                    hint="Presupuesto mensual individual para cada miembro. Vacío = sin límite."
-                  />
-                  <.input
                     field={@form[:default_concurrency_limit]}
                     type="number"
                     label="Concurrencia"
@@ -428,9 +402,7 @@ defmodule TokengateWeb.GroupsLive do
                 <div class="min-w-0 flex-1">
                   <h3 class="font-semibold text-base-content truncate">{group.name}</h3>
                   <p class="text-xs text-base-content/50">
-                    {length(group.group_members)} miembros · ${format_decimal(
-                      group.monthly_budget_per_user_usd
-                    )}/mes · conc. {group.default_concurrency_limit} · {group.default_rpm_limit} RPM
+                    {length(group.group_members)} miembros · conc. {group.default_concurrency_limit} · {group.default_rpm_limit} RPM
                   </p>
                 </div>
 
@@ -439,17 +411,6 @@ defmodule TokengateWeb.GroupsLive do
                   <div class="text-center">
                     <p class="text-[10px] uppercase tracking-wide text-base-content/40">Gasto/mes</p>
                     <p class="font-bold">${format_decimal(get_spend(group, @group_budgets))}</p>
-                  </div>
-                  <div class="text-center">
-                    <p class="text-[10px] uppercase tracking-wide text-base-content/40">Estimado</p>
-                    <p class="font-bold">
-                      ${format_decimal(
-                        Decimal.add(
-                          get_estimated(group, @group_budgets) || Decimal.new(0),
-                          get_extra(group, @group_budgets)
-                        )
-                      )}
-                    </p>
                   </div>
                   <%!-- Models badge --%>
                   <button
@@ -514,15 +475,5 @@ defmodule TokengateWeb.GroupsLive do
 
   defp get_spend(group, group_budgets) do
     group_budgets |> Map.get(group.id, %{}) |> Map.get(:monthly_spend_usd, Decimal.new(0))
-  end
-
-  defp get_estimated(group, group_budgets) do
-    group_budgets |> Map.get(group.id, %{}) |> Map.get(:estimated_monthly_usd)
-  end
-
-  defp get_extra(group, group_budgets) do
-    group_budgets
-    |> Map.get(group.id, %{})
-    |> Map.get(:estimated_monthly_extra_usd, Decimal.new(0))
   end
 end

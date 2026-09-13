@@ -2,7 +2,7 @@
 -- PostgreSQL database dump
 --
 
-\restrict vejjCGY6Q6W9lkLbEKaEYQBkdhkoRp055yfPQyvxVRAdmPCund1fbrjSSOxu0T7
+\restrict Onb6nkSjXgTIPJDzr3hSCs5l6iYt5lq0UO6bNtgHxUv9i1McXuYGYqKkgG3iotb
 
 -- Dumped from database version 18.3 (Homebrew)
 -- Dumped by pg_dump version 18.3 (Homebrew)
@@ -89,6 +89,28 @@ CREATE TABLE public.budget_exemptions (
 
 
 --
+-- Name: credit_subscriptions; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.credit_subscriptions (
+    id uuid NOT NULL,
+    user_id uuid,
+    name character varying(255),
+    units bigint DEFAULT 0 NOT NULL,
+    recurrence character varying(255) DEFAULT 'monthly'::character varying NOT NULL,
+    reset_day integer,
+    rollover_mode character varying(255) DEFAULT 'reset'::character varying NOT NULL,
+    rollover_pct integer,
+    rollover_cap_units bigint,
+    status character varying(255) DEFAULT 'active'::character varying NOT NULL,
+    starts_at timestamp(0) without time zone,
+    expires_at timestamp(0) without time zone,
+    inserted_at timestamp(0) without time zone NOT NULL,
+    updated_at timestamp(0) without time zone NOT NULL
+);
+
+
+--
 -- Name: global_settings; Type: TABLE; Schema: public; Owner: -
 --
 
@@ -96,8 +118,7 @@ CREATE TABLE public.global_settings (
     id integer DEFAULT 1 NOT NULL,
     daily_max_spend_usd numeric,
     inserted_at timestamp(0) without time zone NOT NULL,
-    updated_at timestamp(0) without time zone NOT NULL,
-    daily_max_per_user_usd numeric(12,2)
+    updated_at timestamp(0) without time zone NOT NULL
 );
 
 
@@ -122,7 +143,6 @@ CREATE TABLE public.group_members (
     id uuid NOT NULL,
     user_id uuid NOT NULL,
     group_id uuid NOT NULL,
-    extra_monthly_budget_usd numeric(12,2),
     extra_concurrency integer,
     status character varying(255) DEFAULT 'active'::character varying NOT NULL,
     inserted_at timestamp(0) without time zone NOT NULL,
@@ -151,11 +171,11 @@ CREATE TABLE public.group_models (
 CREATE TABLE public.groups (
     id uuid NOT NULL,
     name character varying(255) NOT NULL,
-    monthly_budget_per_user_usd numeric(12,2),
     default_concurrency_limit integer DEFAULT 5 NOT NULL,
     default_rpm_limit integer DEFAULT 60 NOT NULL,
     inserted_at timestamp(0) without time zone NOT NULL,
-    updated_at timestamp(0) without time zone NOT NULL
+    updated_at timestamp(0) without time zone NOT NULL,
+    default_subscription_id uuid
 );
 
 
@@ -196,7 +216,6 @@ CREATE TABLE public.models (
     prompt_cache_enabled boolean DEFAULT false CONSTRAINT model_aliases_prompt_cache_enabled_not_null NOT NULL,
     lazy_cleanup_enabled boolean DEFAULT false CONSTRAINT model_aliases_lazy_cleanup_enabled_not_null NOT NULL,
     model_type character varying(255) DEFAULT 'llm'::character varying CONSTRAINT model_aliases_model_type_not_null NOT NULL,
-    daily_limit_per_user_usd numeric(12,6),
     pinned boolean DEFAULT false CONSTRAINT model_aliases_pinned_not_null NOT NULL,
     market_input_price_per_1m numeric(12,6),
     market_output_price_per_1m numeric(12,6),
@@ -369,7 +388,8 @@ CREATE TABLE public.request_logs (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying NOT NULL,
+    credit_subscription_id uuid
 )
 PARTITION BY RANGE (inserted_at);
 
@@ -409,7 +429,8 @@ CREATE TABLE public.request_logs_2026_07_26 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -448,7 +469,8 @@ CREATE TABLE public.request_logs_2026_07_27 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -487,7 +509,8 @@ CREATE TABLE public.request_logs_2026_08_05 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -526,7 +549,8 @@ CREATE TABLE public.request_logs_2026_08_27 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -565,7 +589,8 @@ CREATE TABLE public.request_logs_2026_08_28 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -604,7 +629,8 @@ CREATE TABLE public.request_logs_2026_08_29 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -643,7 +669,8 @@ CREATE TABLE public.request_logs_2026_08_30 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -682,7 +709,8 @@ CREATE TABLE public.request_logs_2026_08_31 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -721,7 +749,8 @@ CREATE TABLE public.request_logs_2026_09_01 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -760,7 +789,8 @@ CREATE TABLE public.request_logs_2026_09_02 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -799,7 +829,8 @@ CREATE TABLE public.request_logs_2026_09_03 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -838,7 +869,8 @@ CREATE TABLE public.request_logs_2026_09_04 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -877,7 +909,8 @@ CREATE TABLE public.request_logs_2026_09_05 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -916,7 +949,8 @@ CREATE TABLE public.request_logs_2026_09_06 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -955,7 +989,8 @@ CREATE TABLE public.request_logs_2026_09_07 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -994,7 +1029,8 @@ CREATE TABLE public.request_logs_2026_09_08 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -1033,7 +1069,8 @@ CREATE TABLE public.request_logs_2026_09_09 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -1072,7 +1109,8 @@ CREATE TABLE public.request_logs_2026_09_10 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -1111,7 +1149,8 @@ CREATE TABLE public.request_logs_2026_09_11 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -1150,7 +1189,8 @@ CREATE TABLE public.request_logs_2026_09_12 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -1189,7 +1229,8 @@ CREATE TABLE public.request_logs_2026_09_13 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -1228,7 +1269,8 @@ CREATE TABLE public.request_logs_2026_09_14 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -1267,7 +1309,48 @@ CREATE TABLE public.request_logs_2026_09_15 (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
+);
+
+
+--
+-- Name: request_logs_2026_09_16; Type: TABLE; Schema: public; Owner: -
+--
+
+CREATE TABLE public.request_logs_2026_09_16 (
+    id uuid CONSTRAINT request_logs_id_not_null NOT NULL,
+    group_member_id uuid,
+    provider_id uuid,
+    model_id uuid,
+    model_requested character varying(255) CONSTRAINT request_logs_model_requested_not_null NOT NULL,
+    model_responded character varying(255),
+    agent_type character varying(255) DEFAULT 'unknown'::character varying CONSTRAINT request_logs_agent_type_not_null NOT NULL,
+    status_code integer,
+    prompt_tokens integer DEFAULT 0 CONSTRAINT request_logs_prompt_tokens_not_null NOT NULL,
+    completion_tokens integer DEFAULT 0 CONSTRAINT request_logs_completion_tokens_not_null NOT NULL,
+    provider_cost_usd numeric(12,6),
+    latency_ms integer,
+    streaming boolean DEFAULT false CONSTRAINT request_logs_streaming_not_null NOT NULL,
+    inserted_at timestamp(0) without time zone CONSTRAINT request_logs_inserted_at_not_null NOT NULL,
+    ttft_ms integer,
+    model_provider_id uuid,
+    think boolean DEFAULT false CONSTRAINT request_logs_think_not_null NOT NULL,
+    effort character varying(255),
+    api_key_prefix character varying(255),
+    credential_name character varying(255),
+    provider_status_code integer,
+    error_reason character varying(255),
+    client_agent character varying(255),
+    provider_key_prefix character varying(255),
+    cache_read_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_read_tokens_not_null NOT NULL,
+    cache_creation_tokens integer DEFAULT 0 CONSTRAINT request_logs_cache_creation_tokens_not_null NOT NULL,
+    request_type character varying(255) DEFAULT 'chat'::character varying CONSTRAINT request_logs_request_type_not_null NOT NULL,
+    error_message character varying(255),
+    credential_id uuid,
+    service_id uuid,
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -1306,7 +1389,8 @@ CREATE TABLE public.request_logs_default (
     error_message character varying(255),
     credential_id uuid,
     service_id uuid,
-    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL
+    subject_type character varying(255) DEFAULT 'user'::character varying CONSTRAINT request_logs_subject_type_not_null NOT NULL,
+    credit_subscription_id uuid
 );
 
 
@@ -1417,7 +1501,6 @@ CREATE TABLE public.service_supervisors (
 CREATE TABLE public.services (
     id uuid NOT NULL,
     name character varying(255) NOT NULL,
-    monthly_budget_usd numeric(12,2),
     concurrency_limit integer DEFAULT 5 NOT NULL,
     rpm_limit integer DEFAULT 60 NOT NULL,
     inserted_at timestamp(0) without time zone NOT NULL,
@@ -1607,6 +1690,13 @@ ALTER TABLE ONLY public.request_logs ATTACH PARTITION public.request_logs_2026_0
 
 
 --
+-- Name: request_logs_2026_09_16; Type: TABLE ATTACH; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.request_logs ATTACH PARTITION public.request_logs_2026_09_16 FOR VALUES FROM ('2026-09-16 00:00:00') TO ('2026-09-17 00:00:00');
+
+
+--
 -- Name: request_logs_default; Type: TABLE ATTACH; Schema: public; Owner: -
 --
 
@@ -1642,6 +1732,14 @@ ALTER TABLE ONLY public.audit_logs
 
 ALTER TABLE ONLY public.budget_exemptions
     ADD CONSTRAINT budget_exemptions_pkey PRIMARY KEY (id);
+
+
+--
+-- Name: credit_subscriptions credit_subscriptions_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.credit_subscriptions
+    ADD CONSTRAINT credit_subscriptions_pkey PRIMARY KEY (id);
 
 
 --
@@ -1941,6 +2039,14 @@ ALTER TABLE ONLY public.request_logs_2026_09_15
 
 
 --
+-- Name: request_logs_2026_09_16 request_logs_2026_09_16_pkey; Type: CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.request_logs_2026_09_16
+    ADD CONSTRAINT request_logs_2026_09_16_pkey PRIMARY KEY (id, inserted_at);
+
+
+--
 -- Name: request_logs_default request_logs_default_pkey; Type: CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -2076,17 +2182,17 @@ CREATE INDEX budget_exemptions_scope_index ON public.budget_exemptions USING btr
 
 
 --
--- Name: budget_exemptions_user_daily_service_unique; Type: INDEX; Schema: public; Owner: -
+-- Name: credit_subscriptions_status_index; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX budget_exemptions_user_daily_service_unique ON public.budget_exemptions USING btree (service_id) WHERE (((scope)::text = 'user_daily'::text) AND ((subject_type)::text = 'service'::text) AND (service_id IS NOT NULL));
+CREATE INDEX credit_subscriptions_status_index ON public.credit_subscriptions USING btree (status);
 
 
 --
--- Name: budget_exemptions_user_daily_user_unique; Type: INDEX; Schema: public; Owner: -
+-- Name: credit_subscriptions_user_id_index; Type: INDEX; Schema: public; Owner: -
 --
 
-CREATE UNIQUE INDEX budget_exemptions_user_daily_user_unique ON public.budget_exemptions USING btree (user_id) WHERE (((scope)::text = 'user_daily'::text) AND ((subject_type)::text = 'user'::text) AND (user_id IS NOT NULL));
+CREATE INDEX credit_subscriptions_user_id_index ON public.credit_subscriptions USING btree (user_id);
 
 
 --
@@ -3893,6 +3999,76 @@ CREATE INDEX request_logs_2026_09_15_service_id_inserted_at_idx ON public.reques
 --
 
 CREATE INDEX request_logs_2026_09_15_status_code_idx ON public.request_logs_2026_09_15 USING btree (status_code) WHERE (status_code >= 400);
+
+
+--
+-- Name: request_logs_2026_09_16_agent_type_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_09_16_agent_type_inserted_at_idx ON public.request_logs_2026_09_16 USING btree (agent_type, inserted_at) WHERE (agent_type IS NOT NULL);
+
+
+--
+-- Name: request_logs_2026_09_16_credential_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_09_16_credential_id_inserted_at_idx ON public.request_logs_2026_09_16 USING btree (credential_id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_09_16_credential_name_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_09_16_credential_name_inserted_at_idx ON public.request_logs_2026_09_16 USING btree (credential_name, inserted_at);
+
+
+--
+-- Name: request_logs_2026_09_16_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_09_16_inserted_at_idx ON public.request_logs_2026_09_16 USING btree (inserted_at);
+
+
+--
+-- Name: request_logs_2026_09_16_model_alias_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_09_16_model_alias_id_inserted_at_idx ON public.request_logs_2026_09_16 USING btree (model_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_2026_09_16_model_provider_id_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_09_16_model_provider_id_idx ON public.request_logs_2026_09_16 USING btree (model_provider_id);
+
+
+--
+-- Name: request_logs_2026_09_16_provider_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_09_16_provider_id_inserted_at_idx ON public.request_logs_2026_09_16 USING btree (provider_id, inserted_at);
+
+
+--
+-- Name: request_logs_2026_09_16_service_id_inserted_at_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_09_16_service_id_inserted_at_idx ON public.request_logs_2026_09_16 USING btree (service_id, inserted_at DESC);
+
+
+--
+-- Name: request_logs_2026_09_16_status_code_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_09_16_status_code_idx ON public.request_logs_2026_09_16 USING btree (status_code) WHERE (status_code >= 400);
+
+
+--
+-- Name: request_logs_2026_09_16_team_member_id_inserted_at_id_provi_idx; Type: INDEX; Schema: public; Owner: -
+--
+
+CREATE INDEX request_logs_2026_09_16_team_member_id_inserted_at_id_provi_idx ON public.request_logs_2026_09_16 USING btree (group_member_id, inserted_at) INCLUDE (id, provider_cost_usd, prompt_tokens, completion_tokens, cache_read_tokens, cache_creation_tokens);
 
 
 --
@@ -5870,6 +6046,83 @@ ALTER INDEX public.request_logs_errors_idx ATTACH PARTITION public.request_logs_
 
 
 --
+-- Name: request_logs_2026_09_16_agent_type_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_agent_type_idx ATTACH PARTITION public.request_logs_2026_09_16_agent_type_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_09_16_credential_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_credential_inserted_idx ATTACH PARTITION public.request_logs_2026_09_16_credential_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_09_16_credential_name_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_credential_name_idx ATTACH PARTITION public.request_logs_2026_09_16_credential_name_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_09_16_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_inserted_idx ATTACH PARTITION public.request_logs_2026_09_16_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_09_16_model_alias_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_model_inserted_desc_idx ATTACH PARTITION public.request_logs_2026_09_16_model_alias_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_09_16_model_provider_id_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_model_provider_id_index ATTACH PARTITION public.request_logs_2026_09_16_model_provider_id_idx;
+
+
+--
+-- Name: request_logs_2026_09_16_pkey; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_pkey ATTACH PARTITION public.request_logs_2026_09_16_pkey;
+
+
+--
+-- Name: request_logs_2026_09_16_provider_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_provider_inserted_idx ATTACH PARTITION public.request_logs_2026_09_16_provider_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_09_16_service_id_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_service_inserted_idx ATTACH PARTITION public.request_logs_2026_09_16_service_id_inserted_at_idx;
+
+
+--
+-- Name: request_logs_2026_09_16_status_code_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_errors_idx ATTACH PARTITION public.request_logs_2026_09_16_status_code_idx;
+
+
+--
+-- Name: request_logs_2026_09_16_team_member_id_inserted_at_id_provi_idx; Type: INDEX ATTACH; Schema: public; Owner: -
+--
+
+ALTER INDEX public.request_logs_member_inserted_covering_idx ATTACH PARTITION public.request_logs_2026_09_16_team_member_id_inserted_at_id_provi_idx;
+
+
+--
 -- Name: request_logs_default_agent_type_inserted_at_idx; Type: INDEX ATTACH; Schema: public; Owner: -
 --
 
@@ -5995,6 +6248,14 @@ ALTER TABLE ONLY public.budget_exemptions
 
 
 --
+-- Name: credit_subscriptions credit_subscriptions_user_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.credit_subscriptions
+    ADD CONSTRAINT credit_subscriptions_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;
+
+
+--
 -- Name: group_member_extra_models group_member_extra_models_group_member_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
 --
 
@@ -6040,6 +6301,14 @@ ALTER TABLE ONLY public.group_models
 
 ALTER TABLE ONLY public.group_models
     ADD CONSTRAINT group_models_model_alias_id_fkey FOREIGN KEY (model_id) REFERENCES public.models(id) ON DELETE CASCADE;
+
+
+--
+-- Name: groups groups_default_subscription_id_fkey; Type: FK CONSTRAINT; Schema: public; Owner: -
+--
+
+ALTER TABLE ONLY public.groups
+    ADD CONSTRAINT groups_default_subscription_id_fkey FOREIGN KEY (default_subscription_id) REFERENCES public.credit_subscriptions(id) ON DELETE SET NULL;
 
 
 --
@@ -6158,7 +6427,7 @@ ALTER TABLE ONLY public.services
 -- PostgreSQL database dump complete
 --
 
-\unrestrict vejjCGY6Q6W9lkLbEKaEYQBkdhkoRp055yfPQyvxVRAdmPCund1fbrjSSOxu0T7
+\unrestrict Onb6nkSjXgTIPJDzr3hSCs5l6iYt5lq0UO6bNtgHxUv9i1McXuYGYqKkgG3iotb
 
 INSERT INTO public."schema_migrations" (version) VALUES (20260725210000);
 INSERT INTO public."schema_migrations" (version) VALUES (20260725220000);
@@ -6259,3 +6528,8 @@ INSERT INTO public."schema_migrations" (version) VALUES (20260912190432);
 INSERT INTO public."schema_migrations" (version) VALUES (20260912193233);
 INSERT INTO public."schema_migrations" (version) VALUES (20260912202852);
 INSERT INTO public."schema_migrations" (version) VALUES (20260912213521);
+INSERT INTO public."schema_migrations" (version) VALUES (20260913151500);
+INSERT INTO public."schema_migrations" (version) VALUES (20260913151501);
+INSERT INTO public."schema_migrations" (version) VALUES (20260913151502);
+INSERT INTO public."schema_migrations" (version) VALUES (20260913160836);
+INSERT INTO public."schema_migrations" (version) VALUES (20260913173840);

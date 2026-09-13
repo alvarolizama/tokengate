@@ -125,7 +125,7 @@ defmodule TokengateWeb.Router do
       live "/admin/users", UsersLive
       live "/admin/services", ServicesLive
       live "/admin/observability", ObservabilityLive
-      live "/admin/budgets", BudgetsLive
+      live "/admin/subscriptions", SubscriptionsLive
       live "/admin/maintenance", MaintenanceLive
     end
   end

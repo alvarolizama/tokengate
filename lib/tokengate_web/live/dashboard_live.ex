@@ -229,14 +229,13 @@ defmodule TokengateWeb.DashboardLive do
 
     groups =
       Enum.map(memberships, fn membership ->
-        limits = Accounts.effective_limits(membership)
         spend = Budgets.spend(membership.id)
 
         %{
           membership: membership,
           group: membership.group,
           api_key: membership.api_key,
-          monthly_limit: limits.monthly_budget_usd,
+          monthly_limit: nil,
           monthly_spend: spend.monthly_usd
         }
       end)

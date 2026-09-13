@@ -2,9 +2,10 @@ defmodule Tokengate.GlobalSettings do
   @moduledoc """
   Singleton row storing instance-wide settings that apply to every request.
 
-  Currently holds the **global daily spending cap** — a kill-switch that
-  rejects all requests once the total daily spend across every member and
-  credential reaches the configured amount (USD). Resets at 00:00 UTC.
+  Currently holds the **global daily spending cap** — the kill-switch (layer 2
+  of the budget model) that rejects all requests once the total daily spend
+  across every member and credential reaches the configured amount (USD).
+  Resets at 00:00 UTC.
 
   `nil` daily_max_spend_usd means unlimited (default).
   """
@@ -19,19 +20,14 @@ defmodule Tokengate.GlobalSettings do
 
   schema "global_settings" do
     field :daily_max_spend_usd, :decimal
-    # Per-user daily cap — every member/service gets this daily budget
-    # unless exempted (see Budgets.Exemptions). Evaluated BEFORE the global
-    # cap. nil = unlimited.
-    field :daily_max_per_user_usd, :decimal
 
     timestamps(type: :utc_datetime)
   end
 
   def changeset(settings, attrs) do
     settings
-    |> cast(attrs, [:daily_max_spend_usd, :daily_max_per_user_usd])
+    |> cast(attrs, [:daily_max_spend_usd])
     |> validate_number(:daily_max_spend_usd, greater_than_or_equal_to: 0)
-    |> validate_number(:daily_max_per_user_usd, greater_than_or_equal_to: 0)
   end
 
   @doc "Returns the singleton global settings row."
@@ -40,11 +36,6 @@ defmodule Tokengate.GlobalSettings do
   @doc "Returns the global daily spending cap (nil = unlimited)."
   def get_daily_cap(id \\ @singleton_id) do
     get!(id).daily_max_spend_usd
-  end
-
-  @doc "Returns the per-user daily spending cap (nil = unlimited)."
-  def get_per_user_daily_cap(id \\ @singleton_id) do
-    get!(id).daily_max_per_user_usd
   end
 
   @doc "Updates the singleton global settings row."

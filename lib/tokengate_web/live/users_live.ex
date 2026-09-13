@@ -1017,12 +1017,9 @@ defmodule TokengateWeb.UsersLive do
         <% nil -> %>
           <span class="text-xs text-base-content/30">—</span>
         <% spend -> %>
-          <div class={["text-xs font-mono", spend.exhausted? && "text-error font-semibold"]}>
+          <div class="text-xs font-mono">
             ${fmt_money(spend.monthly_usd)}
           </div>
-          <%= if spend.exhausted? do %>
-            <span class="badge badge-xs badge-error mt-0.5">sin crédito</span>
-          <% end %>
       <% end %>
     </td>
     <td id={"total-spend-#{@user.id}"} class="text-right">

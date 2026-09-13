@@ -24,7 +24,6 @@ defmodule Tokengate.ProvidersTest do
 
     schema "groups" do
       field :name, :string
-      field :monthly_budget_per_user_usd, :decimal
       field :default_concurrency_limit, :integer, default: 5
       field :default_rpm_limit, :integer, default: 60
       timestamps(type: :utc_datetime)
@@ -67,7 +66,6 @@ defmodule Tokengate.ProvidersTest do
     @foreign_key_type :binary_id
 
     schema "group_members" do
-      field :extra_monthly_budget_usd, :decimal
       field :extra_concurrency, :integer
       field :status, :string, default: "active"
       belongs_to :group, TestGroup

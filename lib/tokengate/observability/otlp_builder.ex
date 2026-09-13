@@ -135,8 +135,8 @@ defmodule Tokengate.Observability.OtlpBuilder do
   # ---------------------------------------------------------------------------
 
   @doc ~S"""
-  Builds the identity string used for `service.name` and
-  `trace.metadata.openrouter.api_key_name` from the request log's group member.
+  Builds the identity string used for the `service.name` resource attribute
+  from the request log's group member.
 
   Format: `"#{group.name} - #{user.email}"`
 
@@ -181,8 +181,7 @@ defmodule Tokengate.Observability.OtlpBuilder do
       kv("tokengate.agent.client", request_log.client_agent),
       kv_bool("tokengate.streaming", request_log.streaming),
       kv_int("http.status_code", request_log.status_code),
-      kv("tokengate.group_member_id", to_string(request_log.group_member_id)),
-      kv("trace.metadata.openrouter.api_key_name", build_identity(request_log))
+      kv("tokengate.group_member_id", to_string(request_log.group_member_id))
     ]
   end
 

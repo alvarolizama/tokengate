@@ -104,6 +104,10 @@ config :elixir, :time_zone_database, Tz.TimeZoneDatabase
 # ── Included credential wait + sticky TTL ──────────────────────────────
 
 config :tokengate, :proxy,
+  # Conservative per-request cost ceiling (USD) held against the budget on
+  # reserve. Above any single chat request in the catalog, so it bounds
+  # concurrent in-flight exposure without over-blocking a normal request.
+  max_request_cost_usd: 20,
   # FIFO wait timeouts when an `included` credential is saturated. The key
   # is "how many included credentials remain after excluding this one", the
   # value is the timeout in milliseconds. The first tier whose threshold is

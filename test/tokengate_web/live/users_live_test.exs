@@ -87,33 +87,6 @@ defmodule TokengateWeb.UsersLiveTest do
     assert has_element?(view, "#spend-#{admin.id}", "—")
   end
 
-  test "user without credit shows sin crédito badge", %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
-    %{user: member_user} = register("user")
-
-    {:ok, group} =
-      Accounts.create_group(%{
-        "name" => "Broke Group #{unique()}",
-        "monthly_budget_per_user_usd" => "100.00"
-      })
-
-    {:ok, member} =
-      Accounts.create_group_member(%{"user_id" => member_user.id, "group_id" => group.id})
-
-    {:ok, _log} =
-      Logs.log_request(%{
-        group_member_id: member.id,
-        model_requested: "gpt-4",
-        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
-        provider_cost_usd: Decimal.new("100.00")
-      })
-
-    conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/users")
-
-    assert has_element?(view, "#spend-#{member_user.id}", "sin crédito")
-  end
-
   ## Flat listing + sorting ----------------------------------------------------
 
   test "users are listed flat (no group group headers), alphabetical by name", %{conn: conn} do

@@ -119,7 +119,6 @@ defmodule TokengateWeb.GroupMembersLiveTest do
       view
       |> form("#add-member-form", %{
         "add_member[email]" => new_user.email,
-        "add_member[extra_monthly_budget_usd]" => "5.00",
         "add_member[extra_concurrency]" => "2",
         "add_member[extra_rpm]" => "100"
       })
@@ -137,7 +136,6 @@ defmodule TokengateWeb.GroupMembersLiveTest do
       )
 
     assert member != nil
-    assert Decimal.equal?(member.extra_monthly_budget_usd || Decimal.new(0), Decimal.new("5.00"))
     assert member.extra_concurrency == 2
     assert member.extra_rpm == 100
 
@@ -219,7 +217,6 @@ defmodule TokengateWeb.GroupMembersLiveTest do
       view
       |> form("#override-form-#{member.id}", %{
         overrides: %{
-          extra_monthly_budget_usd: "5.50",
           extra_concurrency: "3"
         }
       })
@@ -228,7 +225,6 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     assert html =~ "Extras actualizados"
 
     updated = Repo.get!(Tokengate.Accounts.GroupMember, member.id)
-    assert Decimal.equal?(updated.extra_monthly_budget_usd, Decimal.new("5.50"))
     assert updated.extra_concurrency == 3
   end
 
@@ -237,11 +233,7 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     %{user: admin, password: password} = register("admin")
 
     # Pre-set values
-    {:ok, _} =
-      Accounts.update_group_member(member, %{
-        extra_monthly_budget_usd: Decimal.new("10.00"),
-        extra_concurrency: 5
-      })
+    {:ok, _} = Accounts.update_group_member(member, %{extra_concurrency: 5})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, group_url(group))
@@ -252,7 +244,6 @@ defmodule TokengateWeb.GroupMembersLiveTest do
       view
       |> form("#override-form-#{member.id}", %{
         overrides: %{
-          extra_monthly_budget_usd: "",
           extra_concurrency: ""
         }
       })
@@ -261,7 +252,6 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     assert html =~ "Extras actualizados"
 
     updated = Repo.get!(Tokengate.Accounts.GroupMember, member.id)
-    assert updated.extra_monthly_budget_usd == nil
     assert updated.extra_concurrency == nil
   end
 
@@ -334,24 +324,6 @@ defmodule TokengateWeb.GroupMembersLiveTest do
       )
 
     assert grant != nil
-  end
-
-  test "member card shows budget mensual with extra", %{conn: conn} do
-    %{group: group, member: member} = group_with_member()
-
-    Accounts.update_group(group, %{monthly_budget_per_user_usd: Decimal.new("10.00")})
-
-    {:ok, _member} =
-      Accounts.update_group_member(member, %{extra_monthly_budget_usd: Decimal.new("12.00")})
-
-    %{user: admin, password: password} = register("admin")
-
-    conn = login(conn, admin, password)
-    {:ok, _view, html} = live(conn, group_url(group))
-
-    assert html =~ "Budget/mes"
-    assert html =~ "$10.00"
-    assert html =~ "+$12.00"
   end
 
   # --------------------------------------------------------------------------

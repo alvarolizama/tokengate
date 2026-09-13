@@ -12,17 +12,17 @@ defmodule Tokengate.Accounts.Group do
 
   schema "groups" do
     field :name, :string
-    field :monthly_budget_per_user_usd, :decimal
     field :default_concurrency_limit, :integer, default: 5
     field :default_rpm_limit, :integer, default: 60
+
+    belongs_to :default_subscription, Tokengate.Credits.Subscription
 
     has_many :group_members, Tokengate.Accounts.GroupMember
 
     timestamps(type: :utc_datetime)
   end
 
-  @permitted ~w(name monthly_budget_per_user_usd
-                default_concurrency_limit default_rpm_limit)a
+  @permitted ~w(name default_concurrency_limit default_rpm_limit)a
   @required ~w(name)a
 
   def changeset(group, attrs) do
@@ -31,6 +31,5 @@ defmodule Tokengate.Accounts.Group do
     |> validate_required(@required)
     |> validate_number(:default_concurrency_limit, greater_than: 0)
     |> validate_number(:default_rpm_limit, greater_than: 0)
-    |> validate_number(:monthly_budget_per_user_usd, greater_than_or_equal_to: 0)
   end
 end

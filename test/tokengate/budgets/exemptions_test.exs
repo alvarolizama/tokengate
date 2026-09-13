@@ -2,7 +2,7 @@ defmodule Tokengate.Budgets.ExemptionsTest do
   @moduledoc """
   Tests for the budget exemptions context and schema: CRUD, uniqueness per
   (scope, subject), subject validation, and the `exempt?/3` hot-path lookup
-  including group inheritance.
+  including group inheritance. Only the `global_daily` scope exists.
   """
 
   use Tokengate.DataCase, async: false
@@ -95,6 +95,20 @@ defmodule Tokengate.Budgets.ExemptionsTest do
 
       refute changeset.valid?
     end
+
+    test "rejects the removed user_daily scope" do
+      user = user_fixture()
+
+      changeset =
+        Exemption.changeset(%Exemption{}, %{
+          "scope" => "user_daily",
+          "subject_type" => "user",
+          "user_id" => user.id
+        })
+
+      refute changeset.valid?
+      assert "is invalid" in errors_on(changeset).scope
+    end
   end
 
   describe "add/remove/list" do
@@ -117,34 +131,13 @@ defmodule Tokengate.Budgets.ExemptionsTest do
       user = user_fixture()
 
       attrs = %{
-        "scope" => "user_daily",
+        "scope" => "global_daily",
         "subject_type" => "user",
         "user_id" => user.id
       }
 
       assert {:ok, _} = Exemptions.add(attrs)
       assert {:error, %Ecto.Changeset{}} = Exemptions.add(attrs)
-    end
-
-    test "same subject can be exempt in both scopes" do
-      user = user_fixture()
-
-      assert {:ok, _} =
-               Exemptions.add(%{
-                 "scope" => "global_daily",
-                 "subject_type" => "user",
-                 "user_id" => user.id
-               })
-
-      assert {:ok, _} =
-               Exemptions.add(%{
-                 "scope" => "user_daily",
-                 "subject_type" => "user",
-                 "user_id" => user.id
-               })
-
-      assert length(Exemptions.list_for_scope("global_daily")) == 1
-      assert length(Exemptions.list_for_scope("user_daily")) == 1
     end
 
     test "removes by id" do
@@ -169,24 +162,25 @@ defmodule Tokengate.Budgets.ExemptionsTest do
       Exemptions.add(%{"scope" => "global_daily", "subject_type" => "user", "user_id" => user.id})
 
       assert Exemptions.exempt?("global_daily", %{type: "user", id: user.id}, nil)
-      refute Exemptions.exempt?("user_daily", %{type: "user", id: user.id}, nil)
+      # A different user is not exempt.
+      refute Exemptions.exempt?("global_daily", %{type: "user", id: Ecto.UUID.generate()}, nil)
     end
 
     test "group exemption applies to group members via group subject" do
       user = user_fixture()
-      group2 = group_fixture()
+      group = group_fixture()
 
       Exemptions.add(%{
-        "scope" => "user_daily",
+        "scope" => "global_daily",
         "subject_type" => "group",
-        "group_id" => group2.id
+        "group_id" => group.id
       })
 
       member_subject = %{type: "user", id: user.id}
 
-      assert Exemptions.exempt?("user_daily", member_subject, %{type: "group", id: group2.id})
+      assert Exemptions.exempt?("global_daily", member_subject, %{type: "group", id: group.id})
 
-      refute Exemptions.exempt?("user_daily", member_subject, %{
+      refute Exemptions.exempt?("global_daily", member_subject, %{
                type: "group",
                id: Ecto.UUID.generate()
              })
@@ -196,12 +190,12 @@ defmodule Tokengate.Budgets.ExemptionsTest do
       service = service_fixture()
 
       Exemptions.add(%{
-        "scope" => "user_daily",
+        "scope" => "global_daily",
         "subject_type" => "service",
         "service_id" => service.id
       })
 
-      assert Exemptions.exempt?("user_daily", %{type: "service", id: service.id}, nil)
+      assert Exemptions.exempt?("global_daily", %{type: "service", id: service.id}, nil)
     end
 
     test "unknown subject type is never exempt" do

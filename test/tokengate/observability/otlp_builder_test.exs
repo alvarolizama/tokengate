@@ -195,7 +195,7 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Identity (service.name / trace.metadata.openrouter.api_key_name)
+  # Identity (service.name)
   # ---------------------------------------------------------------------------
 
   describe "build_span/2 — identity" do
@@ -208,12 +208,12 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
       assert service_attr.value.stringValue == "Engineering - alvaro@gobravo.io"
     end
 
-    test "trace.metadata.openrouter.api_key_name is 'Group - email'" do
-      log = request_log_with_group_member()
-      span = single_span(log)
+    test "no openrouter-simulated attributes are emitted" do
+      span = single_span(request_log_with_group_member())
 
-      attr = find_attr(span, "trace.metadata.openrouter.api_key_name")
-      assert attr.value.stringValue == "Engineering - alvaro@gobravo.io"
+      refute Enum.any?(span.attributes, fn attr ->
+               String.starts_with?(attr.key, "trace.metadata.openrouter")
+             end)
     end
 
     test "service.name falls back to 'tokengate' when group_member not loaded" do
@@ -222,12 +222,6 @@ defmodule Tokengate.Observability.OtlpBuilderTest do
 
       service_attr = Enum.find(rs.resource.attributes, fn a -> a.key == "service.name" end)
       assert service_attr.value.stringValue == "tokengate"
-    end
-
-    test "trace.metadata.openrouter.api_key_name falls back to 'tokengate'" do
-      span = single_span(request_log())
-      attr = find_attr(span, "trace.metadata.openrouter.api_key_name")
-      assert attr.value.stringValue == "tokengate"
     end
   end
 

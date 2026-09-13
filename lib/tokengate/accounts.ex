@@ -844,31 +844,28 @@ defmodule Tokengate.Accounts do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Computes the effective limits for a group member by combining group defaults
-  with member overrides.
+  Computes the effective per-request limits for a group member: group defaults
+  plus member overrides.
 
-  - `monthly_budget_usd`: group default + member's `extra_monthly_budget_usd`
-    (extra added when not nil). If the group default is `nil`, the result is
-    `nil` (no limit) unless an extra is provided, in which case the result is
-    just the extra.
   - `concurrency_limit`: group default + member's `extra_concurrency` (when not
     nil). The group default is always present (defaults to 5).
   - `rpm_limit`: group's `default_rpm_limit` + member's `extra_rpm` (when not
     nil). The group default is always present (defaults to 60).
 
-  Returns a map with `:monthly_budget_usd`, `:concurrency_limit`, and `:rpm_limit` keys.
+  Spending is **not** here: budgets are credit subscriptions (`Tokengate.Credits`),
+  enforced separately in the proxy.
 
   Service virtual members (GroupMember with the backing Service's id) are
   resolved to their Service limits so the proxy controller can use a single
-  code path. A service is a mandatory group member: its own limit fields
-  act as extras on top of the group defaults.
+  code path. A service is a mandatory group member: its own fields act as
+  extras on top of the group defaults.
   """
   # Service virtual member — resolve the backing service and combine its
   # extras with its group defaults.
   def effective_limits(%GroupMember{group: nil, id: id}) do
     case get_service(id) do
       %Service{} = service -> effective_limits(service)
-      nil -> %{monthly_budget_usd: nil, concurrency_limit: 5, rpm_limit: 60}
+      nil -> %{concurrency_limit: 5, rpm_limit: 60}
     end
   end
 
@@ -892,8 +889,6 @@ defmodule Tokengate.Accounts do
     group = group_member.group
 
     %{
-      monthly_budget_usd:
-        combine_decimal(group.monthly_budget_per_user_usd, group_member.extra_monthly_budget_usd),
       concurrency_limit:
         combine_integer(group.default_concurrency_limit, group_member.extra_concurrency),
       rpm_limit: combine_integer(group.default_rpm_limit, group_member.extra_rpm)
@@ -905,18 +900,11 @@ defmodule Tokengate.Accounts do
     group = service.group
 
     %{
-      monthly_budget_usd:
-        combine_decimal(group.monthly_budget_per_user_usd, service.monthly_budget_usd),
       concurrency_limit:
         combine_integer(group.default_concurrency_limit, service.concurrency_limit),
       rpm_limit: combine_integer(group.default_rpm_limit, service.rpm_limit)
     }
   end
-
-  defp combine_decimal(nil, nil), do: nil
-  defp combine_decimal(nil, extra), do: extra
-  defp combine_decimal(base, nil), do: base
-  defp combine_decimal(base, extra), do: Decimal.add(base, extra)
 
   defp combine_integer(base, nil), do: base
   defp combine_integer(nil, extra), do: extra
@@ -970,7 +958,7 @@ defmodule Tokengate.Accounts do
   defp build_auth_entry(token) do
     case get_group_member_by_api_key(token) do
       {:ok, %GroupMember{} = member} ->
-        %{member: member, limits: effective_limits(member), subject_type: "user"}
+        %{member: member, limits: member_limits_with_grants(member), subject_type: "user"}
 
       _ ->
         case get_service_by_api_key(token) do
@@ -978,12 +966,30 @@ defmodule Tokengate.Accounts do
             member =
               TokengateWeb.Plugs.ApiAuth.service_to_virtual_member(service)
 
-            %{member: member, limits: effective_limits(service), subject_type: "service"}
+            %{
+              member: member,
+              limits:
+                Map.put(
+                  effective_limits(service),
+                  :credit_grants,
+                  Tokengate.Credits.grants_for(member)
+                ),
+              subject_type: "service"
+            }
 
           _ ->
             :error
         end
     end
+  end
+
+  # Effective limits + the ordered credit grants the member can debit (group
+  # default first, then the user's direct credit). Cached alongside the limits;
+  # staleness bounded by the ApiKeyCache TTL.
+  defp member_limits_with_grants(%GroupMember{} = member) do
+    member
+    |> effective_limits()
+    |> Map.put(:credit_grants, Tokengate.Credits.grants_for(member))
   end
 
   # Invalidation helpers — piped after Repo writes that change auth-relevant

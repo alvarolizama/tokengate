@@ -16,7 +16,6 @@ defmodule Tokengate.Accounts.Service do
   schema "services" do
     field :name, :string
     # Extras aditivos sobre los defaults del grupo.
-    field :monthly_budget_usd, :decimal
     field :concurrency_limit, :integer
     field :rpm_limit, :integer
 
@@ -29,7 +28,7 @@ defmodule Tokengate.Accounts.Service do
     timestamps(type: :utc_datetime)
   end
 
-  @permitted ~w(name group_id monthly_budget_usd concurrency_limit rpm_limit)a
+  @permitted ~w(name group_id concurrency_limit rpm_limit)a
   @required ~w(name group_id)a
 
   def changeset(service, attrs) do
@@ -38,7 +37,6 @@ defmodule Tokengate.Accounts.Service do
     |> validate_required(@required)
     |> validate_number(:concurrency_limit, greater_than: 0)
     |> validate_number(:rpm_limit, greater_than: 0)
-    |> validate_number(:monthly_budget_usd, greater_than_or_equal_to: 0)
     |> assoc_constraint(:group)
   end
 end

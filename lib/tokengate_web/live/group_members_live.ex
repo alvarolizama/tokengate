@@ -9,8 +9,8 @@ defmodule TokengateWeb.GroupMembersLive do
   Supports:
     - Add member by email (creates group_member + auto-generates API key).
     - Remove member.
-    - Per-member extras: extra_monthly_budget_usd,
-      extra_concurrency, extra_rpm, extra_model_models (individual grants
+    - Per-member extras: extra_concurrency, extra_rpm,
+      extra_model_models (individual grants
       beyond group models) with optional per-model daily budget.
   """
 
@@ -134,21 +134,6 @@ defmodule TokengateWeb.GroupMembersLive do
         Decimal.add(acc, spend)
       end)
 
-    estimated_monthly =
-      if group.monthly_budget_per_user_usd do
-        group.monthly_budget_per_user_usd
-        |> Decimal.mult(Decimal.new(length(members)))
-      else
-        nil
-      end
-
-    estimated_monthly_extra =
-      Enum.reduce(members, Decimal.new(0), fn m, acc ->
-        if m.extra_monthly_budget_usd,
-          do: Decimal.add(acc, m.extra_monthly_budget_usd),
-          else: acc
-      end)
-
     # Usage tiers for this group (last 30 days)
     usage_tiers = Rollup.member_usage_tiers(group.id, from: days_ago(30))
 
@@ -161,8 +146,6 @@ defmodule TokengateWeb.GroupMembersLive do
     |> assign(:extra_models, extra_aliases_simple)
     |> assign(:model_map, model_map)
     |> assign(:group_monthly_spend, group_monthly_spend)
-    |> assign(:estimated_monthly, estimated_monthly)
-    |> assign(:estimated_monthly_extra, estimated_monthly_extra)
     |> assign(:usage_tiers, usage_tiers)
     |> load_exclusive_providers(members)
   end
@@ -249,13 +232,11 @@ defmodule TokengateWeb.GroupMembersLive do
 
     with {:ok, email} <- Map.fetch(params, "email"),
          {:ok, user} <- fetch_user_by_email(email),
-         {:ok, monthly} <- parse_decimal(params["extra_monthly_budget_usd"]),
          {:ok, concurrency} <- parse_integer(params["extra_concurrency"]),
          {:ok, rpm} <- parse_integer(params["extra_rpm"]) do
       attrs = %{
         user_id: user.id,
         group_id: group.id,
-        extra_monthly_budget_usd: monthly,
         extra_concurrency: concurrency,
         extra_rpm: rpm
       }
@@ -420,11 +401,9 @@ defmodule TokengateWeb.GroupMembersLive do
     if member.group_id != socket.assigns.group.id do
       {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
     else
-      with {:ok, monthly} <- parse_decimal(override_params["extra_monthly_budget_usd"]),
-           {:ok, concurrency} <- parse_integer(override_params["extra_concurrency"]),
+      with {:ok, concurrency} <- parse_integer(override_params["extra_concurrency"]),
            {:ok, rpm} <- parse_integer(override_params["extra_rpm"]) do
         attrs = %{
-          extra_monthly_budget_usd: monthly,
           extra_concurrency: concurrency,
           extra_rpm: rpm
         }
@@ -512,19 +491,6 @@ defmodule TokengateWeb.GroupMembersLive do
 
   ## Helpers --------------------------------------------------------------
 
-  defp parse_decimal(""), do: {:ok, nil}
-  defp parse_decimal(nil), do: {:ok, nil}
-  defp parse_decimal(%Decimal{} = d), do: {:ok, d}
-
-  defp parse_decimal(value) when is_binary(value) do
-    case Decimal.parse(value) do
-      {decimal, ""} -> {:ok, decimal}
-      _ -> :error
-    end
-  end
-
-  defp parse_decimal(_), do: :error
-
   defp parse_integer(""), do: {:ok, nil}
   defp parse_integer(nil), do: {:ok, nil}
   defp parse_integer(value) when is_integer(value), do: {:ok, value}
@@ -542,7 +508,6 @@ defmodule TokengateWeb.GroupMembersLive do
     to_form(
       %{
         "email" => "",
-        "extra_monthly_budget_usd" => "",
         "extra_concurrency" => "",
         "extra_rpm" => ""
       },
@@ -654,13 +619,6 @@ defmodule TokengateWeb.GroupMembersLive do
                     </div>
                   </div>
                   <.input
-                    field={@add_form[:extra_monthly_budget_usd]}
-                    type="number"
-                    label="Extra mensual (USD)"
-                    step="any"
-                    placeholder="0.00"
-                  />
-                  <.input
                     field={@add_form[:extra_concurrency]}
                     type="number"
                     label="Extra concurrencia"
@@ -710,11 +668,6 @@ defmodule TokengateWeb.GroupMembersLive do
                 :if={member}
                 for={
                   to_form(%{
-                    "extra_monthly_budget_usd" =>
-                      if(member.extra_monthly_budget_usd,
-                        do: Decimal.to_string(member.extra_monthly_budget_usd),
-                        else: ""
-                      ),
                     "extra_concurrency" =>
                       if(member.extra_concurrency,
                         do: to_string(member.extra_concurrency),
@@ -728,19 +681,6 @@ defmodule TokengateWeb.GroupMembersLive do
                 phx-value-id={@editing_member_id}
               >
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <.input
-                    field={to_form(%{})[:extra_monthly_budget_usd]}
-                    type="number"
-                    label="Extra mensual (USD)"
-                    step="any"
-                    name="overrides[extra_monthly_budget_usd]"
-                    value={
-                      if(member.extra_monthly_budget_usd,
-                        do: Decimal.to_string(member.extra_monthly_budget_usd),
-                        else: ""
-                      )
-                    }
-                  />
                   <.input
                     field={to_form(%{})[:extra_concurrency]}
                     type="number"
@@ -783,11 +723,6 @@ defmodule TokengateWeb.GroupMembersLive do
           <div class="card-body p-4">
             <div class="flex flex-wrap items-center gap-x-8 gap-y-3">
               <div>
-                <p class="text-[10px] uppercase tracking-wide text-base-content/40">Budget/mes</p>
-                <p class="text-lg font-bold">${format_decimal(@group.monthly_budget_per_user_usd)}</p>
-                <p class="text-xs text-base-content/40">por usuario</p>
-              </div>
-              <div>
                 <p class="text-[10px] uppercase tracking-wide text-base-content/40">Concurrencia</p>
                 <p class="text-lg font-bold">{@group.default_concurrency_limit}</p>
                 <p class="text-xs text-base-content/40">por usuario</p>
@@ -801,33 +736,6 @@ defmodule TokengateWeb.GroupMembersLive do
                 <p class="text-[10px] uppercase tracking-wide text-base-content/40">Gasto/mes</p>
                 <p class="text-lg font-bold text-success">${format_decimal(@group_monthly_spend)}</p>
                 <p class="text-xs text-base-content/40">real</p>
-              </div>
-              <div>
-                <p class="text-[10px] uppercase tracking-wide text-base-content/40">Estimado/mes</p>
-                <p class="text-lg font-bold">
-                  ${format_decimal(
-                    Decimal.add(@estimated_monthly || Decimal.new(0), @estimated_monthly_extra)
-                  )}
-                </p>
-                <p
-                  :if={
-                    @estimated_monthly_extra && Decimal.compare(@estimated_monthly_extra, 0) == :gt
-                  }
-                  class="text-xs text-success"
-                >
-                  ${format_decimal(@estimated_monthly)} base + ${format_decimal(
-                    @estimated_monthly_extra
-                  )} extra
-                </p>
-                <p
-                  :if={
-                    !(@estimated_monthly_extra &&
-                        Decimal.compare(@estimated_monthly_extra, 0) == :gt)
-                  }
-                  class="text-xs text-base-content/40"
-                >
-                  proyección
-                </p>
               </div>
             </div>
           </div>
@@ -894,16 +802,6 @@ defmodule TokengateWeb.GroupMembersLive do
                     </div>
                   </td>
                   <td class="text-xs whitespace-nowrap">
-                    <p>
-                      <span class="text-base-content/50">Budget/mes</span>
-                      ${format_decimal(@group.monthly_budget_per_user_usd)}
-                      <span
-                        :if={member.extra_monthly_budget_usd}
-                        class="text-success font-medium"
-                      >
-                        +${format_decimal(member.extra_monthly_budget_usd)}
-                      </span>
-                    </p>
                     <p>
                       <span class="text-base-content/50">Conc.</span>
                       {@group.default_concurrency_limit}

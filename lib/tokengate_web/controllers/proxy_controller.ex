@@ -96,13 +96,15 @@ defmodule TokengateWeb.ProxyController do
       |> assign(:idempotency_key, Ecto.UUID.generate())
 
     with :ok <- require_model(model),
-         :ok <- check_user_daily_cap(member),
-         :ok <- check_global_daily_cap(member),
          :ok <- acquire_group_limits(key_id, limits) do
       try do
         case route_and_acquire(member, payload, conn.assigns.api_key_hash, limits) do
-          {:ok, route} ->
+          {:ok, route, hold} ->
             inflight = register_inflight(conn, member, payload, route)
+            # Clear any stale cost from a previous request on this process; the
+            # finalize step re-sets it if the request produced a cost.
+            Process.delete(:tg_budget_actual_cost)
+            Process.delete(:tg_credit_subscription_id)
 
             try do
               if payload["stream"] == true do
@@ -111,6 +113,7 @@ defmodule TokengateWeb.ProxyController do
                 execute(conn, route, payload, member, @max_attempts, [])
               end
             after
+              settle_budget(member, hold)
               Tokengate.Logs.Inflight.finish_request(inflight.id)
               release_credential_limits(route.credential, key_id)
             end
@@ -168,21 +171,22 @@ defmodule TokengateWeb.ProxyController do
     request_start = System.monotonic_time(:millisecond)
 
     with :ok <- require_model(model),
-         :ok <- check_user_daily_cap(member),
-         :ok <- check_global_daily_cap(member),
          :ok <- acquire_group_limits(key_id, limits) do
       try do
         case route_and_acquire(member, payload, conn.assigns.api_key_hash, limits, [],
                capability: capability
              ) do
-          {:ok, route} ->
+          {:ok, route, hold} ->
             inflight = register_inflight(conn, member, payload, route)
+            Process.delete(:tg_budget_actual_cost)
+            Process.delete(:tg_credit_subscription_id)
 
             try do
               execute_simple(conn, route, payload, member, @max_attempts, [], adapter_fun, kind,
                 capability: capability
               )
             after
+              settle_budget(member, hold)
               Tokengate.Logs.Inflight.finish_request(inflight.id)
               release_credential_limits(route.credential, key_id)
             end
@@ -377,7 +381,9 @@ defmodule TokengateWeb.ProxyController do
 
     cost = cost_with_fallback(route, provider_reported, usage)
 
-    Budgets.record_spend(member.id, route.model.id, cost, exemption_subjects(member))
+    # Budget is settled in the caller's `after` (it owns the hold); stash the
+    # real cost for it here.
+    Process.put(:tg_budget_actual_cost, cost)
 
     Collector.record_request(%{
       model_id: route.model.id,
@@ -566,11 +572,10 @@ defmodule TokengateWeb.ProxyController do
       :capability => Keyword.get(route_opts, :capability, "llm")
     }
 
-    with {:ok, route} <- Router.route(model_requested, member, request_context),
-         :ok <- check_spending(member, limits, route) do
+    with {:ok, route} <- Router.route(model_requested, member, request_context) do
       case acquire_credential_limits(route.credential, key_id) do
         :ok ->
-          {:ok, route}
+          reserve_or_release(member, limits, route, key_id)
 
         {:error, :provider_concurrency_exceeded} ->
           # Si es included, esperar en cola FIFO con timeout según cuántas
@@ -578,7 +583,7 @@ defmodule TokengateWeb.ProxyController do
           if billing_mode(route.model_provider) == "included" do
             case maybe_wait_for_included(route, member, key_id, model_requested) do
               :ok ->
-                {:ok, route}
+                reserve_or_release(member, limits, route, key_id)
 
               {:error, :queue_timeout} ->
                 route_and_acquire(
@@ -638,6 +643,21 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
+  # Reserves budget once the route + credential slot are locked in. A rejected
+  # reservation releases the credential slot so it doesn't leak, and returns
+  # the `{:ok, route, hold}` tri-tuple the callers expect. Reserving here (after
+  # acquire, not before the retry loop) means route retries never double-hold.
+  defp reserve_or_release(member, limits, route, key_id) do
+    case reserve_budget(member, limits, route) do
+      {:ok, hold} ->
+        {:ok, route, hold}
+
+      {:error, error} ->
+        release_credential_limits(route.credential, key_id)
+        {:error, error}
+    end
+  end
+
   # Espera en cola FIFO por un slot en una credential included saturada.
   # El timeout depende de cuántas included quedan disponibles en la cascada.
   defp maybe_wait_for_included(route, member, _key_id, model_requested) do
@@ -685,93 +705,77 @@ defmodule TokengateWeb.ProxyController do
     Exemptions.exempt?(scope, subjects.subject, subjects.group)
   end
 
-  defp check_global_daily_cap(member) do
-    cap = GlobalSettings.get_daily_cap()
-
-    cond do
-      is_nil(cap) ->
-        :ok
-
-      exempt_from?("global_daily", member) ->
-        :ok
-
-      Budgets.global_exhausted?(cap) ->
-        {:error, {:budget_exceeded, %{period: :daily_global, available: Decimal.new(0)}}}
-
-      true ->
-        :ok
-    end
-  end
-
-  # Per-user daily cap — evaluated BEFORE the global cap so a per-user limit
-  # tighter than the global one kicks in first. Applies to users and
-  # services alike (services are virtual members); exemptions via the
-  # "user_daily" scope.
-  defp check_user_daily_cap(member) do
-    cap = GlobalSettings.get_per_user_daily_cap()
-
-    cond do
-      is_nil(cap) ->
-        :ok
-
-      exempt_from?("user_daily", member) ->
-        :ok
-
-      Budgets.user_daily_exhausted?(member.id, cap) ->
-        {:error, {:budget_exceeded, %{period: :daily_per_user, available: Decimal.new(0)}}}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp check_spending(member, limits, route) do
-    # `included` providers cost $0 (subscription / RPM-limited) — they never
-    # consume a spending budget, so no spending gate applies to them. This is
-    # what lets a model (or a user) keep using its `included` providers even
-    # after every spending cap is exhausted.
+  # Reserves budget for the request on both layers (monthly per subject +
+  # global daily kill-switch). Returns `{:ok, hold}` where `hold` is either a
+  # `%{monthly_micro, global_micro, exempt_global?}` reservation or `:none` for
+  # `included` providers (subscription = $0, never charged). Settled — or
+  # released, if the request produced no cost — in the caller's `after` via
+  # `settle_budget/2`.
+  defp reserve_budget(member, limits, route) do
     if billing_mode(route.model_provider) == "included" do
-      :ok
+      {:ok, :none}
     else
-      with :ok <- check_monthly_budget(member, limits, route),
-           :ok <- check_model_per_user_cap(member, route) do
-        :ok
-      end
+      reserve_credit_budget(member, limits)
     end
   end
 
-  defp check_monthly_budget(member, limits, route) do
-    member_monthly_budget = limits.monthly_budget_usd
-    member_monthly_spend = Budgets.spend(member.id).monthly_usd
+  # Credit path for user members: hold against the first grant (group default →
+  # direct) that has room. Records which subscription the request debits so the
+  # durable log can persist it.
+  defp reserve_credit_budget(member, limits) do
+    result =
+      Budgets.reserve_credits(
+        limits.credit_grants || [],
+        GlobalSettings.get_daily_cap(),
+        max_request_cost_usd(),
+        exempt_from?("global_daily", member)
+      )
 
-    # Since the 2026-07-30 refactor we no longer estimate the upstream cost
-    # up-front (the upstream is the source of truth and we don't make up a
-    # number when it doesn't report one). The pre-check therefore asks a
-    # simpler question: "has the member already exhausted their monthly cap?"
-    # If yes, reject. If not, let the request through; the post-pipeline
-    # records the real reported cost and `record_spend` keeps the counter in
-    # sync. A subsequent request will see the updated spend and reject.
-    projected_cost = CostCalculator.provider_cost(route.model_provider |> billing_mode(), nil, [])
+    case result do
+      {:ok, hold} ->
+        Process.put(:tg_credit_subscription_id, hold.subscription_id)
+        {:ok, hold}
 
-    case Budgets.check_ladder(
-           member_monthly_budget,
-           member_monthly_spend,
-           projected_cost
-         ) do
-      :ok -> :ok
-      {:error, :budget_exceeded, details} -> {:error, {:budget_exceeded, details}}
+      {:error, _} = error ->
+        Process.delete(:tg_credit_subscription_id)
+        error
     end
   end
 
-  defp check_model_per_user_cap(member, route) do
-    if Budgets.model_per_user_exhausted?(
-         member.id,
-         route.model.id,
-         route.model.daily_limit_per_user_usd
-       ) do
-      {:error, {:budget_exceeded, %{period: :daily_model_per_user, available: Decimal.new(0)}}}
-    else
-      :ok
+  # Settles the hold to the real cost recorded by the finalize step. When the
+  # request never produced a cost (provider failure / exception), the hold is
+  # released instead so it doesn't leak.
+  defp settle_budget(_member, :none), do: :ok
+
+  defp settle_budget(_member, %{kind: kind} = hold) when kind in [:credit, :no_credit] do
+    case Process.get(:tg_budget_actual_cost) do
+      nil -> Budgets.release_credits(hold)
+      cost -> Budgets.settle_credits(hold, cost)
+    end
+  end
+
+  defp settle_budget(member, hold) do
+    case Process.get(:tg_budget_actual_cost) do
+      nil -> Budgets.release(member.id, hold)
+      cost -> Budgets.settle(member.id, hold, cost)
+    end
+  end
+
+  # Conservative per-request cost ceiling used to hold budget before the real
+  # cost is known. Configurable (`:proxy, :max_request_cost_usd`); defaults to
+  # $20 — above any single chat request in the catalog — so it bounds
+  # concurrent in-flight exposure without over-blocking a normal request.
+  defp max_request_cost_usd do
+    raw =
+      :tokengate
+      |> Application.get_env(:proxy, [])
+      |> Keyword.get(:max_request_cost_usd, 20)
+
+    case raw do
+      %Decimal{} = d -> d
+      n when is_number(n) -> Decimal.new(n)
+      s when is_binary(s) -> Decimal.new(s)
+      _ -> Decimal.new(20)
     end
   end
 
@@ -1309,7 +1313,9 @@ defmodule TokengateWeb.ProxyController do
           {usage, cost}
       end
 
-    Budgets.record_spend(member.id, route.model.id, cost, exemption_subjects(member))
+    # Budget is settled in the caller's `after` (it owns the hold); stash the
+    # real cost for it here.
+    Process.put(:tg_budget_actual_cost, cost)
 
     Collector.record_request(%{
       model_id: route.model.id,
@@ -1400,7 +1406,9 @@ defmodule TokengateWeb.ProxyController do
     cost = cost_with_fallback(route, provider_reported, usage)
 
     # Hot-path state updates (ETS only)
-    Budgets.record_spend(member.id, route.model.id, cost, exemption_subjects(member))
+    # Budget is settled in the caller's `after` (it owns the hold); stash the
+    # real cost for it here.
+    Process.put(:tg_budget_actual_cost, cost)
 
     Collector.record_request(%{
       model_id: route.model.id,
@@ -1503,6 +1511,7 @@ defmodule TokengateWeb.ProxyController do
       "cache_read_tokens" => Map.get(usage, :cache_read_tokens, 0),
       "cache_creation_tokens" => Map.get(usage, :cache_creation_tokens, 0),
       "provider_cost_usd" => Decimal.to_string(cost, :normal),
+      "credit_subscription_id" => Process.get(:tg_credit_subscription_id),
       "latency_ms" => latency_ms,
       "ttft_ms" => Keyword.get(extra, :ttft_ms),
       "streaming" => streaming,
@@ -1741,19 +1750,17 @@ defmodule TokengateWeb.ProxyController do
       {429, "rate_limit_error", "provider_concurrency_exceeded",
        "Too many concurrent requests to provider"}
 
-  defp error_details({:budget_exceeded, %{period: :daily_global}}),
+  defp error_details({:budget_exceeded, %{layer: :global}}),
     do: {402, "billing_error", "budget_exceeded", "Global daily spending cap reached"}
 
-  defp error_details({:budget_exceeded, %{period: :daily_model_per_user}}),
-    do: {402, "billing_error", "budget_exceeded", "Daily spending cap reached for this model"}
+  defp error_details({:budget_exceeded, %{layer: :subject}}),
+    do: {402, "billing_error", "budget_exceeded", "Monthly budget exceeded"}
 
-  defp error_details({:budget_exceeded, %{period: period}}),
-    do: {402, "billing_error", "budget_exceeded", "Budget exceeded (#{period})"}
+  defp error_details({:budget_exceeded, %{layer: :credit}}),
+    do: {402, "billing_error", "budget_exceeded", "Credit exhausted"}
 
-  defp error_details({:budget_exceeded, %{available: available}}),
-    do:
-      {402, "billing_error", "budget_exceeded",
-       "Budget exceeded. Available: $#{Decimal.round(available, 4)}"}
+  defp error_details({:budget_exceeded, _}),
+    do: {402, "billing_error", "budget_exceeded", "Budget exceeded"}
 
   defp error_details(:model_not_found),
     do: {404, "invalid_request_error", "model_not_found", "Model not found or not accessible"}

@@ -107,7 +107,6 @@ defmodule TokengateWeb.GroupsLiveTest do
       |> form("#group-form", %{
         group: %{
           name: "Mi Nuevo Grupo",
-          monthly_budget_per_user_usd: "10.50",
           default_concurrency_limit: 10,
           default_rpm_limit: 120
         }
@@ -116,7 +115,6 @@ defmodule TokengateWeb.GroupsLiveTest do
 
     assert html =~ "Grupo creado"
     assert html =~ "Mi Nuevo Grupo"
-    assert html =~ "10.5"
   end
 
   test "create with invalid params shows errors", %{conn: conn} do

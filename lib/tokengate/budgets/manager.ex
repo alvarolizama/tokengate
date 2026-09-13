@@ -1,10 +1,14 @@
 defmodule Tokengate.Budgets.Manager do
   @moduledoc """
-  ETS-backed micro-USD daily/monthly spend cache for budget enforcement.
+  ETS-backed micro-USD spend cache for budget enforcement.
 
-  Maintains a hot cache of per-member spend in **micro-USD** (USD × 1_000_000)
-  so that `:ets.update_counter/4` can atomically increment counters without
-  the float drift that would accumulate with Decimal-in-ETS approaches.
+  Two budget layers, one reserve primitive:
+
+  - **Layer 1 — monthly per subject** (`{subject_id, :monthly}`): the member's
+    or service's effective monthly budget (group default + extra). `nil` =
+    unlimited.
+  - **Layer 2 — global daily kill-switch** (`{:global, :daily}`): the org-wide
+    daily cap. `nil` = off.
 
   ## Table
 
@@ -13,204 +17,389 @@ defmodule Tokengate.Budgets.Manager do
 
       {key, amount_micro, loaded_from_db?, period_stamp}
 
-    - `key` — `{member_id, :daily}` or `{member_id, :monthly}` (position 1).
+    - `key` — `{subject_id, :monthly}`, `{subject_id, :daily}` (display only)
+      or `{:global, :daily}` (position 1).
     - `amount_micro` — integer micro-USD, the counter element (position 2),
       updated atomically via `:ets.update_counter/4`.
     - `loaded_from_db?` — boolean (position 3); `true` once seeded from DB.
     - `period_stamp` — `Date.t()` for daily, `{year, month}` for monthly
       (position 4); used to detect day/month rollover.
 
-  Storing the period stamp on the entry lets reads/writes detect a rollover
-  and reset the counter to 0 (re-seeding from the DB).
+  ## Enforcement model: reserve → settle
 
-  ## Lazy DB load
-
-  The durable truth is the `request_logs` table; this ETS cache is a hot
-  replica rebuilt lazily on first touch of a member's period.
-
-  To keep the singleton GenServer free of DB I/O, the DB read happens in
-  the **caller process** (via `load_from_db/2`), which then calls the
-  GenServer (`seed/3`) to insert the seeded counter. The GenServer only
-  owns the table lifecycle and serializes seeds/sets; counter increments
-  are lock-free via ETS `update_counter`.
+  The durable truth is `request_logs`; this ETS cache is a hot replica. A
+  request **reserves** (holds) an amount on both layers before it executes and
+  **settles** the hold to the real cost when it finishes. Holding before the
+  cost is known is what stops N concurrent requests from jointly blowing past
+  a cap: each request holds its share first (see `reserve/5`).
 
   ## API summary
 
-    * `check_ladder/3` — pre-flight budget check (current spend + estimated vs limit).
-    * `record_spend/2` — post-request accumulation (atomic counter bump +
-      SyncWorker enqueue).
-    * `spend/1` — read-back of current daily/monthly spend in USD.
-    * `set_from_db/3` — used by `Budgets.SyncWorker` to reset drift.
-    * `seed/3` — internal, called by the lazy-load helper.
-    * `load_from_db/2` — DB read helper (caller-side).
+    * `reserve/5` — pre-flight hold on both layers (rejects if exhausted).
+    * `settle/3` — swap the hold for the real cost after the request.
+    * `release/2` — release a hold when the request never settled (error path).
+    * `spend/1` — read-back of current daily/monthly spend in USD (display).
+    * `global_daily_spend/0` — read-back of the org daily spend (display).
+    * `set_from_db/3` / `set_global_from_db/1` — `Budgets.SyncWorker` drift reset.
+    * `reset_monthly_counters/0` — `Budgets.ResetWorker` monthly reset.
+    * `seed/3` / `load_from_db/2` — lazy-load helpers.
 
-  `nil` limit means unlimited for that period.
+  `nil` budget/cap means unlimited for that layer.
   """
 
   use GenServer
 
   require Logger
-  alias Tokengate.Budgets.Exemptions
 
   @table :tokengate_budgets
+  @credits_table :tokengate_credits
   @micro 1_000_000
   @global_key {:global, :daily}
 
   # ---------------------------------------------------------------------------
-  # Public API
+  # Public API — enforcement
   # ---------------------------------------------------------------------------
 
   @doc """
-  Pre-flight budget check for a group member's request.
+  Reserves budget for an in-flight request on both layers.
 
-  Single cap: member's monthly budget (group default + member extra) minus
-  current monthly spend. `nil` budget means unlimited.
+  Holds `requested_cost_usd` against the subject's monthly counter (layer 1,
+  cap = `monthly_budget_usd`) and the global daily counter (layer 2, cap =
+  `global_cap_usd`). Rejects when either layer is already exhausted, so N
+  concurrent requests cannot jointly blow past a cap.
 
-  Returns `:ok` or `{:error, :budget_exceeded, %{available: Decimal.t()}}`.
+  Optimistic and atomic: `:ets.update_counter/4` bumps first and returns the
+  new value, so the "already exhausted" decision needs no lock. The held
+  amount may transiently push a counter above its cap; `settle/3` corrects it.
+
+  `monthly_budget_usd == nil` (unlimited) holds nothing and never rejects.
+  `exempt_global?` skips layer 2 entirely (a `global_daily` exemption).
+
+  Returns `{:ok, hold}` or
+  `{:error, {:budget_exceeded, %{layer: :subject | :global}}}`.
   """
-  @spec check_ladder(
-          member_monthly_budget :: Decimal.t() | nil,
-          member_monthly_spend :: Decimal.t(),
-          estimated_cost_usd :: Decimal.t()
-        ) :: :ok | {:error, :budget_exceeded, map()}
-  def check_ladder(member_monthly_budget, member_monthly_spend, estimated_cost_usd) do
-    estimated_micro = to_micro(estimated_cost_usd)
-    spend_micro = to_micro(member_monthly_spend)
+  @spec reserve(
+          subject_id :: term(),
+          monthly_budget_usd :: Decimal.t() | nil,
+          global_cap_usd :: Decimal.t() | nil,
+          requested_cost_usd :: Decimal.t() | nil,
+          exempt_global? :: boolean()
+        ) ::
+          {:ok, map()} | {:error, {:budget_exceeded, %{layer: :subject | :global}}}
+  def reserve(subject_id, monthly_budget_usd, global_cap_usd, requested_cost_usd, exempt_global?) do
+    ensure_loaded(subject_id, :monthly)
+    ensure_loaded_global()
 
-    available_micro =
-      if member_monthly_budget do
-        max(0, to_micro(member_monthly_budget) - spend_micro)
-      else
-        :unlimited
-      end
+    requested = to_micro(requested_cost_usd)
 
-    # Two rejection paths:
-    #   1. Already exhausted (spend > budget) — rejects regardless of new cost.
-    #   2. New cost would push us over budget.
-    # The first path is what the 2026-07-30 refactor relies on: with the
-    # upstream cost only known after the call, we always pass `0` from the
-    # pre-check, so the "exhausted" gate is what actually keeps a member from
-    # racking up unlimited spend.
-    if available_micro == :unlimited or
-         (estimated_micro <= available_micro and
-            spend_micro <= to_micro(member_monthly_budget || 0)) do
-      :ok
-    else
-      {:error, :budget_exceeded, %{available: from_micro(available_micro)}}
+    case hold_counter({subject_id, :monthly}, requested, monthly_budget_usd) do
+      {:error, :exhausted} ->
+        {:error, {:budget_exceeded, %{layer: :subject}}}
+
+      {:ok, held_monthly} ->
+        if exempt_global? do
+          {:ok, %{monthly_micro: held_monthly, global_micro: 0, exempt_global?: true}}
+        else
+          case hold_counter(@global_key, requested, global_cap_usd) do
+            {:ok, held_global} ->
+              {:ok,
+               %{monthly_micro: held_monthly, global_micro: held_global, exempt_global?: false}}
+
+            {:error, :exhausted} ->
+              # Roll layer 1 back so the two layers stay consistent.
+              bump_counter({subject_id, :monthly}, -held_monthly)
+              {:error, {:budget_exceeded, %{layer: :global}}}
+          end
+        end
     end
   end
 
   @doc """
-  Records actual spend for `member_id` by atomically incrementing both the
-  daily and monthly ETS counters by `provider_cost_usd` (in micro-USD).
+  Swaps a hold for the real cost once the request finished.
 
-  `provider_cost_usd` is what TokenGate actually paid for the request,
-  preferring the cost reported by the provider and falling back to the
-  pricing-row estimate. This keeps the budget counters in the same currency
-  as the "Costo real" shown in the dashboard.
-
-  If a period's entry is missing or stale (day/month rollover), it is
-  lazy-loaded from the DB first (read in the caller, seeded via the
-  GenServer) before the counter bump.
-
-  After updating the counters, enqueues a debounced `Budgets.SyncWorker`
-  Oban job for drift correction — at most one job enqueued per member until
-  the worker clears the pending mark (see `maybe_enqueue_sync/1`). In the
-  test environment Oban runs in `:manual` mode, so the job is only enqueued
-  (assert with `assert_enqueued/1`).
+  Layer 1 and (unless the hold was global-exempt) layer 2 both move from the
+  held amount to `actual_cost_usd`. The subject's daily counter (display only,
+  never a cap) is bumped by the real cost.
   """
-  @spec record_spend(member_id :: term(), provider_cost_usd :: Decimal.t() | nil) :: :ok
-  def record_spend(member_id, provider_cost_usd) do
-    record_spend(member_id, nil, provider_cost_usd)
-  end
+  @spec settle(subject_id :: term(), hold :: map(), actual_cost_usd :: Decimal.t() | nil) :: :ok
+  def settle(
+        subject_id,
+        %{monthly_micro: held_monthly, global_micro: held_global} = hold,
+        actual_cost_usd
+      ) do
+    ensure_loaded(subject_id, :daily)
+    ensure_loaded(subject_id, :monthly)
 
-  @spec record_spend(
-          member_id :: term(),
-          model_id :: term(),
-          provider_cost_usd :: Decimal.t() | nil
-        ) :: :ok
-  def record_spend(member_id, model_id, provider_cost_usd) do
-    record_spend(member_id, model_id, provider_cost_usd, nil)
-  end
+    actual = to_micro(actual_cost_usd)
 
-  @doc """
-  Records actual spend, optionally skipping the global daily counter when
-  the spending subject is exempt from the global cap.
+    bump_counter({subject_id, :monthly}, actual - held_monthly)
+    bump_counter({subject_id, :daily}, actual)
 
-  `exemption_subjects` is the map built by the proxy's
-  `exemption_subjects/1` (`%{subject: ..., group: ...}`) or `nil` when the
-  caller doesn't know the subject (tests, backfills) — in that case the
-  global counter always gets bumped (legacy /3 behavior).
-  """
-  @spec record_spend(
-          member_id :: term(),
-          model_id :: term(),
-          provider_cost_usd :: Decimal.t() | nil,
-          exemption_subjects :: %{subject: map(), group: map() | nil} | nil
-        ) :: :ok
-  def record_spend(member_id, model_id, provider_cost_usd, exemption_subjects) do
-    micro = to_micro(provider_cost_usd)
-
-    ensure_loaded(member_id, :daily)
-    ensure_loaded(member_id, :monthly)
-
-    # Per-model counters only when a model is in scope. `nil` model_id
-    # (the /2 convenience used by tests) tracks member-level + global only.
-    if model_id do
-      ensure_loaded({member_id, model_id}, :daily)
+    unless hold.exempt_global? do
+      bump_counter(@global_key, actual - held_global)
     end
 
-    # Atomic increments. Position 2 = amount_micro.
-    bump_counter({member_id, :daily}, micro)
-    bump_counter({member_id, :monthly}, micro)
-
-    # Exempt subjects still spend (their own counters above), but their
-    # spend doesn't count toward the global daily cap.
-    global_exempt? =
-      exemption_subjects != nil and
-        Exemptions.exempt?(
-          "global_daily",
-          exemption_subjects.subject,
-          exemption_subjects.group
-        )
-
-    unless global_exempt?, do: bump_counter(@global_key, micro)
-
-    if model_id do
-      bump_counter({{member_id, model_id}, :daily}, micro)
-    end
-
-    # Debounced drift-correction enqueue: instead of one Oban job per request,
-    # we mark `{:sync_pending, member_id}` with insert_new and only enqueue when
-    # the mark didn't already exist. The SyncWorker deletes the mark when it
-    # runs, so the next request re-enqueues. This collapses bursts of spend
-    # into a single sync per member per SyncWorker run.
-    maybe_enqueue_sync(member_id)
-
+    maybe_enqueue_sync(subject_id)
     :ok
   end
 
   @doc """
-  Returns the current daily and monthly spend for `member_id` as Decimals
+  Releases a hold without recording spend — used when the request never
+  produced a cost (provider failure, exception). Exactly one of `settle/3`
+  or `release/2` must be called per hold.
+  """
+  @spec release(subject_id :: term(), hold :: map()) :: :ok
+  def release(subject_id, %{monthly_micro: held_monthly, global_micro: held_global} = hold) do
+    bump_counter({subject_id, :monthly}, -held_monthly)
+
+    unless hold.exempt_global? do
+      bump_counter(@global_key, -held_global)
+    end
+
+    :ok
+  end
+
+  # ---------------------------------------------------------------------------
+  # Public API — credit grants (layer 1 for users)
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Holds `requested_cost_usd` against the **first credit grant** (in the given
+  order) that still has room, then the global daily cap (layer 2).
+
+  `grants` is the ordered list from `Credits.grants_for/1` — each
+  `%{subscription: %Subscription{}, user_id: id, tier: 1 | 2}`, best-first
+  (group default before the user's direct credit; soonest-expiry first within a
+  tier).
+
+    * empty list → no credit gate (tier 3, unlimited): only the global cap applies;
+    * non-empty but every grant exhausted → `{:error, {:budget_exceeded,
+      %{layer: :credit}}}`.
+
+  Returns `{:ok, hold}` (fed to `settle_credits/2` / `release_credits/1`) or an
+  error tuple. The hold carries `:subscription_id` so the caller can persist
+  which grant the request debited.
+  """
+  @spec reserve_credits([map()], Decimal.t() | nil, Decimal.t() | nil, boolean()) ::
+          {:ok, map()} | {:error, {:budget_exceeded, %{layer: :credit | :global}}}
+  def reserve_credits(grants, global_cap_usd, requested_cost_usd, exempt_global?) do
+    ensure_loaded_global()
+    Enum.each(grants, &ensure_grant_loaded/1)
+
+    requested = to_micro(requested_cost_usd)
+
+    case pick_grant(grants) do
+      :none ->
+        hold_global_only(global_cap_usd, requested, exempt_global?)
+
+      :exhausted ->
+        {:error, {:budget_exceeded, %{layer: :credit}}}
+
+      {:ok, grant_key, subscription_id} ->
+        held = bump_credit(grant_key, requested)
+
+        hold_global_after(
+          grant_key,
+          subscription_id,
+          held,
+          global_cap_usd,
+          requested,
+          exempt_global?
+        )
+    end
+  end
+
+  @doc "Settles a credit hold to the real cost."
+  @spec settle_credits(map(), Decimal.t() | nil) :: :ok
+  def settle_credits(%{kind: kind} = hold, actual_cost_usd) do
+    actual = to_micro(actual_cost_usd)
+
+    if kind == :credit do
+      bump_credit(hold.grant_key, actual - hold.subject_micro)
+    end
+
+    unless hold.exempt_global? do
+      bump_counter(@global_key, actual - hold.global_micro)
+    end
+
+    :ok
+  end
+
+  @doc "Releases a credit hold without recording spend."
+  @spec release_credits(map()) :: :ok
+  def release_credits(%{kind: kind} = hold) do
+    if kind == :credit do
+      bump_credit(hold.grant_key, -hold.subject_micro)
+    end
+
+    unless hold.exempt_global? do
+      bump_counter(@global_key, -hold.global_micro)
+    end
+
+    :ok
+  end
+
+  @doc "Consumo/crédito vigentes de un grant (display). `nil` si no está cargado."
+  def credit_spend(subscription_id, user_id) do
+    key = {:grant, subscription_id, user_id}
+
+    case :ets.lookup(@credits_table, key) do
+      [{^key, consumed, credited, _cycle_start, _loaded?, _units}] ->
+        %{
+          consumed_micro: consumed,
+          credited_micro: credited,
+          remaining_micro: max(0, credited - consumed)
+        }
+
+      _ ->
+        nil
+    end
+  end
+
+  # Layer-2-only hold (no credit gate): tier 3 (unlimited) subjects.
+  defp hold_global_only(global_cap_usd, requested, exempt_global?) do
+    if exempt_global? do
+      {:ok, no_credit_hold(0, true)}
+    else
+      case hold_counter(@global_key, requested, global_cap_usd) do
+        {:ok, held_global} -> {:ok, no_credit_hold(held_global, false)}
+        {:error, :exhausted} -> {:error, {:budget_exceeded, %{layer: :global}}}
+      end
+    end
+  end
+
+  defp no_credit_hold(held_global, exempt_global?) do
+    %{
+      kind: :no_credit,
+      grant_key: nil,
+      subscription_id: nil,
+      subject_micro: 0,
+      global_micro: held_global,
+      exempt_global?: exempt_global?
+    }
+  end
+
+  # Layer 2 after a successful grant hold; rolls the grant back if the global
+  # layer is exhausted so the two stay consistent.
+  defp hold_global_after(
+         grant_key,
+         subscription_id,
+         held,
+         global_cap_usd,
+         requested,
+         exempt_global?
+       ) do
+    if exempt_global? do
+      {:ok, credit_hold(grant_key, subscription_id, held, 0, true)}
+    else
+      case hold_counter(@global_key, requested, global_cap_usd) do
+        {:ok, held_global} ->
+          {:ok, credit_hold(grant_key, subscription_id, held, held_global, false)}
+
+        {:error, :exhausted} ->
+          bump_credit(grant_key, -held)
+          {:error, {:budget_exceeded, %{layer: :global}}}
+      end
+    end
+  end
+
+  defp credit_hold(grant_key, subscription_id, held, held_global, exempt_global?) do
+    %{
+      kind: :credit,
+      grant_key: grant_key,
+      subscription_id: subscription_id,
+      subject_micro: held,
+      global_micro: held_global,
+      exempt_global?: exempt_global?
+    }
+  end
+
+  # First grant (in order) with room: consumed < credited.
+  defp pick_grant([]), do: :none
+
+  defp pick_grant(grants) do
+    case Enum.find(grants, &grant_has_room?/1) do
+      nil -> :exhausted
+      grant -> {:ok, grant_key(grant), grant.subscription.id}
+    end
+  end
+
+  defp grant_has_room?(grant) do
+    key = grant_key(grant)
+
+    # Object is {key, consumed, credited, cycle_start, loaded?} — pos 2 = consumed, 3 = credited.
+    read_credit(key, 2) < read_credit(key, 3)
+  end
+
+  defp grant_key(%{subscription: subscription, user_id: user_id}),
+    do: {:grant, subscription.id, user_id}
+
+  defp read_credit(key, position) do
+    :ets.lookup_element(@credits_table, key, position, 0)
+  end
+
+  # Bump position 2 (consumed_micro). The default object covers the rare race
+  # where the entry was evicted between ensure and here.
+  defp bump_credit(key, inc) when is_integer(inc) do
+    default = {key, 0, 0, nil, false, 0}
+    :ets.update_counter(@credits_table, key, {2, inc}, default)
+  end
+
+  # Ensures the grant's ETS entry exists and is on the current cycle. The DB
+  # read happens in the caller (this process); the GenServer stores the result.
+  defp ensure_grant_loaded(%{subscription: subscription, user_id: user_id}) do
+    key = {:grant, subscription.id, user_id}
+    current_start = current_cycle_start(subscription)
+
+    case :ets.lookup(@credits_table, key) do
+      [{^key, _consumed, _credited, cycle_start, true, seeded_units}] ->
+        if cycle_start == current_start and seeded_units == subscription.units do
+          :ok
+        else
+          seed_grant(subscription, user_id, key)
+        end
+
+      _ ->
+        seed_grant(subscription, user_id, key)
+    end
+  end
+
+  defp seed_grant(subscription, user_id, key) do
+    state = Tokengate.Credits.grant_state(subscription, user_id)
+
+    GenServer.call(
+      __MODULE__,
+      {:seed_grant, key, state.consumed_micro, state.credited_micro, state.cycle_start,
+       subscription.units}
+    )
+  end
+
+  defp current_cycle_start(subscription) do
+    %{start: start} = Tokengate.Credits.cycle_bounds(subscription, Date.utc_today())
+    start
+  end
+
+  @doc """
+  Returns the current daily and monthly spend for `subject_id` as Decimals
   (USD), converting from the internal micro-USD representation.
 
   Triggers a lazy load from the DB if the entry is missing or stale (day/month
   rollover). The DB read happens in the caller; the GenServer then seeds the
   entry (see `load_from_db/2` and `seed/3`).
   """
-  @spec spend(member_id :: term()) :: %{daily_usd: Decimal.t(), monthly_usd: Decimal.t()}
-  def spend(member_id) do
-    ensure_loaded(member_id, :daily)
-    ensure_loaded(member_id, :monthly)
+  @spec spend(subject_id :: term()) :: %{daily_usd: Decimal.t(), monthly_usd: Decimal.t()}
+  def spend(subject_id) do
+    ensure_loaded(subject_id, :daily)
+    ensure_loaded(subject_id, :monthly)
 
     %{
-      daily_usd: from_micro(read_counter({member_id, :daily})),
-      monthly_usd: from_micro(read_counter({member_id, :monthly}))
+      daily_usd: from_micro(read_counter({subject_id, :daily})),
+      monthly_usd: from_micro(read_counter({subject_id, :monthly}))
     }
   end
 
   # ---------------------------------------------------------------------------
-  # Global daily cap
+  # Global daily counter (display)
   # ---------------------------------------------------------------------------
 
   @doc """
@@ -224,39 +413,6 @@ defmodule Tokengate.Budgets.Manager do
   end
 
   @doc """
-  Whether the global daily spending cap has been reached for the current
-  UTC day. A `nil` cap means unlimited — always `false`.
-  """
-  @spec global_exhausted?(Decimal.t() | nil) :: boolean()
-  def global_exhausted?(nil), do: false
-
-  def global_exhausted?(%Decimal{} = cap) do
-    ensure_loaded_global()
-    read_counter(@global_key) >= to_micro(cap)
-  end
-
-  @doc """
-  Whether the member's (or service's) daily spend has reached the per-user
-  daily cap for the current UTC day. A `nil` cap means unlimited — always
-  `false`. Reads the same per-member daily counter that `record_spend`
-  already maintains, so no extra bookkeeping is needed.
-  """
-  @spec user_daily_exhausted?(member_id :: term(), cap :: Decimal.t() | number() | nil) ::
-          boolean()
-  def user_daily_exhausted?(_member_id, nil), do: false
-
-  def user_daily_exhausted?(member_id, cap) do
-    case normalize_cap(cap) do
-      nil ->
-        false
-
-      %Decimal{} = limit ->
-        ensure_loaded(member_id, :daily)
-        read_counter({member_id, :daily}) >= to_micro(limit)
-    end
-  end
-
-  @doc """
   Resets the global daily ETS counter to the micro-USD value recomputed
   from the DB by `Budgets.SyncWorker`.
   """
@@ -265,106 +421,63 @@ defmodule Tokengate.Budgets.Manager do
     GenServer.call(__MODULE__, {:set_global_from_db, daily_micro})
   end
 
-  # ---------------------------------------------------------------------------
-  # Per-model daily caps
-  # ---------------------------------------------------------------------------
-
   @doc """
-  Returns the current daily spend for `member_id` on a specific model
-  (UTC day) in USD as a Decimal. Lazy-loads from the DB on first touch or
-  day rollover.
+  Resets the monthly ETS counter for `subject_id` to the given micro-USD value,
+  as recomputed by `Budgets.SyncWorker` from the DB.
+
+  Marks the entry as `loaded_from_db?: true` and stamps the current month so it
+  is not considered stale on the next read.
   """
-  @spec model_per_user_daily_spend(member_id :: term(), model_id :: term()) :: Decimal.t()
-  def model_per_user_daily_spend(member_id, model_id) do
-    ensure_loaded({member_id, model_id}, :daily)
-    from_micro(read_counter({{member_id, model_id}, :daily}))
+  @spec set_from_db(subject_id :: term(), monthly_micro :: integer()) :: :ok
+  def set_from_db(subject_id, monthly_micro) do
+    GenServer.call(__MODULE__, {:set_from_db, subject_id, monthly_micro})
   end
 
   @doc """
-  Whether the member's per-user daily cap on the model has been reached for
-  the current UTC day. A `nil` or `0` cap means unlimited — always `false`.
-  """
-  @spec model_per_user_exhausted?(
-          member_id :: term(),
-          model_id :: term(),
-          cap :: Decimal.t() | number() | nil
-        ) :: boolean()
-  def model_per_user_exhausted?(member_id, model_id, cap) do
-    case normalize_cap(cap) do
-      nil ->
-        false
-
-      %Decimal{} = limit ->
-        ensure_loaded({member_id, model_id}, :daily)
-        read_counter({{member_id, model_id}, :daily}) >= to_micro(limit)
-    end
-  end
-
-  @doc """
-  Resets the daily and monthly ETS counters for `member_id` to the given
-  micro-USD values, as recomputed by `Budgets.SyncWorker` from the DB.
-
-  Marks the entries as `loaded_from_db?: true` and stamps the current
-  day/month so they are not considered stale on the next read.
-  """
-  @spec set_from_db(member_id :: term(), daily_micro :: integer(), monthly_micro :: integer()) ::
-          :ok
-  def set_from_db(member_id, daily_micro, monthly_micro) do
-    GenServer.call(__MODULE__, {:set_from_db, member_id, daily_micro, monthly_micro})
-  end
-
-  @doc """
-  Seeds a single period entry for `member_id` from a precomputed micro-USD
+  Seeds a single period entry for `subject_id` from a precomputed micro-USD
   value (typically the result of `load_from_db/2`).
 
   This is the GenServer-side companion to `load_from_db/2`: the caller reads
   from the DB and passes the integer micro-USD here so the singleton never
   touches the repo.
   """
-  @spec seed(member_id :: term(), period :: :daily | :monthly, micro :: integer()) :: :ok
-  def seed(member_id, period, micro) do
-    GenServer.call(__MODULE__, {:seed, member_id, period, micro})
+  @spec seed(subject_id :: term(), period :: :daily | :monthly, micro :: integer()) :: :ok
+  def seed(subject_id, period, micro) do
+    GenServer.call(__MODULE__, {:seed, subject_id, period, micro})
     # Clear the single-flight loading marker now that the real entry is in
     # place (see `seed_from_db_single_flight/3`). Idempotent — the marker may
     # already have been removed by the caller's `after` block.
-    :ets.delete(@table, {:loading, {member_id, period}})
+    :ets.delete(@table, {:loading, {subject_id, period}})
     :ok
   end
 
   @doc """
-  Loads the spend for `subject` over the given period from the DB
-  (`Tokengate.Logs.cost_summary/1`) and returns it as integer micro-USD.
+  Loads the spend for `subject` over the given period from the DB and returns
+  it as integer micro-USD.
 
-  `subject` may be:
+  `subject` is a member id or a service id (both binary). This reads
+  `total_cost_usd` — what TokenGate actually paid — so the budget counters stay
+  in the same currency as the dashboard's "Costo real".
 
-    * a member id (binary) — member-level daily/monthly spend;
-    * `{member_id, model_id}` — per-user per-model daily spend;
-    * `{:credential, credential_id}` — per-credential spend.
+  Intended to be called from the **caller process** (not the GenServer) to keep
+  DB I/O out of the singleton. The returned value is then handed to `seed/3`.
 
-  This reads `total_cost_usd` — what TokenGate actually paid — so the
-  budget counters stay in the same currency as the dashboard's
-  "Costo real".
-
-  This is intended to be called from the **caller process** (not the
-  GenServer) to keep DB I/O out of the singleton. The returned value is
-  then handed to `seed/3` to populate the ETS cache.
-
-  `from` is a `DateTime.t()` marking the start of the period (e.g. start
-  of today for daily, start of month for monthly).
+  `from` is a `DateTime.t()` marking the start of the period (e.g. start of
+  today for daily, start of month for monthly).
   """
   @spec load_from_db(subject :: term(), from :: DateTime.t()) :: integer()
   def load_from_db(subject, from) do
-    filters = subject_filters(subject) |> Map.put(:from, from)
+    filters = %{subject_id: subject, from: from}
     summary = Tokengate.Logs.cost_summary(filters)
     to_micro(summary.total_cost_usd)
   end
 
   @doc """
-  Deletes every `{member_id, :monthly}` entry from the ETS table.
+  Deletes every `{subject_id, :monthly}` entry from the ETS table.
 
   Called by `Budgets.ResetWorker` on the 1st of each month. The next
-  `record_spend/2` or `spend/1` for each member will lazy-load from DB,
-  which effectively starts the monthly counter at 0.
+  `reserve/5` or `spend/1` for each subject will lazy-load from DB, which
+  effectively starts the monthly counter at 0.
   """
   @spec reset_monthly_counters() :: integer()
   def reset_monthly_counters do
@@ -384,24 +497,23 @@ defmodule Tokengate.Budgets.Manager do
   @impl true
   def init(_opts) do
     ensure_table()
+    ensure_credits_table()
     {:ok, %{}}
   end
 
   @impl true
-  def handle_call({:seed, member_id, period, micro}, _from, state) do
-    key = {member_id, period}
+  def handle_call({:seed, subject_id, period, micro}, _from, state) do
+    key = {subject_id, period}
     obj = {key, micro, true, current_period_stamp(period)}
     :ets.insert(@table, obj)
     {:reply, :ok, state}
   end
 
   @impl true
-  def handle_call({:set_from_db, member_id, daily_micro, monthly_micro}, _from, state) do
-    :ets.insert(@table, {{member_id, :daily}, daily_micro, true, current_period_stamp(:daily)})
-
+  def handle_call({:set_from_db, subject_id, monthly_micro}, _from, state) do
     :ets.insert(
       @table,
-      {{member_id, :monthly}, monthly_micro, true, current_period_stamp(:monthly)}
+      {{subject_id, :monthly}, monthly_micro, true, current_period_stamp(:monthly)}
     )
 
     {:reply, :ok, state}
@@ -419,6 +531,20 @@ defmodule Tokengate.Budgets.Manager do
     {:reply, :ok, state}
   end
 
+  @impl true
+  def handle_call(
+        {:seed_grant, key, consumed_micro, credited_micro, cycle_start, units},
+        _from,
+        state
+      ) do
+    :ets.insert(
+      @credits_table,
+      {key, consumed_micro, credited_micro, cycle_start, true, units}
+    )
+
+    {:reply, :ok, state}
+  end
+
   # ---------------------------------------------------------------------------
   # Internal — table lifecycle
   # ---------------------------------------------------------------------------
@@ -426,6 +552,21 @@ defmodule Tokengate.Budgets.Manager do
   defp ensure_table do
     if :ets.whereis(@table) == :undefined do
       :ets.new(@table, [
+        :set,
+        :public,
+        :named_table,
+        write_concurrency: true,
+        read_concurrency: true
+      ])
+    end
+  end
+
+  # Grants table. Object: {key, consumed_micro, credited_micro, cycle_start, loaded?}
+  # where key = {:grant, subscription_id, user_id}. Separate from
+  # `:tokengate_budgets` so the legacy 4-tuples stay untouched.
+  defp ensure_credits_table do
+    if :ets.whereis(@credits_table) == :undefined do
+      :ets.new(@credits_table, [
         :set,
         :public,
         :named_table,
@@ -447,28 +588,24 @@ defmodule Tokengate.Budgets.Manager do
   end
 
   # ---------------------------------------------------------------------------
-  # Internal — check logic
-  # ---------------------------------------------------------------------------
-
-  # ---------------------------------------------------------------------------
   # Internal — ensure loaded / stale check
   # ---------------------------------------------------------------------------
 
-  # Ensures the entry for (member_id, period) exists and is current. If it
-  # is missing or the stored day/month no longer matches today, we re-seed
-  # from the DB. The DB read happens in the caller (this process), then the
-  # GenServer seeds the entry — keeping DB I/O out of the singleton.
-  defp ensure_loaded(member_id, period) do
-    key = {member_id, period}
+  # Ensures the entry for (subject_id, period) exists and is current. If it is
+  # missing or the stored day/month no longer matches today, we re-seed from the
+  # DB. The DB read happens in the caller (this process), then the GenServer
+  # seeds the entry — keeping DB I/O out of the singleton.
+  defp ensure_loaded(subject_id, period) do
+    key = {subject_id, period}
     current = current_period_stamp(period)
 
     case :ets.lookup(@table, key) do
       [] ->
-        seed_from_db_single_flight(member_id, period, key)
+        seed_from_db_single_flight(subject_id, period, key)
 
       [{^key, _micro, _loaded?, stored_period}] ->
         if stale?(period, stored_period, current) do
-          seed_from_db_single_flight(member_id, period, key)
+          seed_from_db_single_flight(subject_id, period, key)
         else
           :ok
         end
@@ -479,9 +616,9 @@ defmodule Tokengate.Budgets.Manager do
 
   defp stale?(:monthly, {y, m}, {ty, tm}), do: y != ty or m != tm
 
-  # Ensures the global daily entry exists and is current. Same lazy-load
-  # pattern as per-member/credential entries but keyed by @global_key.
-  # Degrades gracefully if the ETS table doesn't exist yet (hot-reload).
+  # Ensures the global daily entry exists and is current. Same lazy-load pattern
+  # as per-subject entries but keyed by @global_key. Degrades gracefully if the
+  # ETS table doesn't exist yet (hot-reload).
   defp ensure_loaded_global do
     case :ets.whereis(@table) do
       :undefined ->
@@ -509,24 +646,24 @@ defmodule Tokengate.Budgets.Manager do
     GenServer.call(__MODULE__, {:seed_global, micro})
   end
 
-  defp seed_from_db(member_id, period) do
+  defp seed_from_db(subject_id, period) do
     from = period_start(period)
-    micro = load_from_db(member_id, from)
-    seed(member_id, period, micro)
+    micro = load_from_db(subject_id, from)
+    seed(subject_id, period, micro)
   end
 
   # Single-flight wrapper around `seed_from_db/2`: concurrent callers for the
-  # same key (thundering herd on a brand-new member or day rollover) park on
-  # the ETS `{:loading, key}` marker instead of all hitting the DB at once.
-  # The marker is removed in the `after` block (crash-safe) and again in
-  # `seed/3` after the real entry is inserted (idempotent no-op).
-  defp seed_from_db_single_flight(member_id, period, key) do
+  # same key (thundering herd on a brand-new subject or day rollover) park on the
+  # ETS `{:loading, key}` marker instead of all hitting the DB at once. The
+  # marker is removed in the `after` block (crash-safe) and again in `seed/3`
+  # after the real entry is inserted (idempotent no-op).
+  defp seed_from_db_single_flight(subject_id, period, key) do
     loading_key = {:loading, key}
 
     case :ets.insert_new(@table, {loading_key, true}) do
       true ->
         try do
-          seed_from_db(member_id, period)
+          seed_from_db(subject_id, period)
         after
           :ets.delete(@table, loading_key)
         end
@@ -540,8 +677,8 @@ defmodule Tokengate.Budgets.Manager do
   end
 
   # Polls for the real entry to appear. Gives up after 10 × 5ms = 50ms and
-  # proceeds anyway — `bump_counter` / `read_counter` tolerate a missing
-  # entry, so worst case we seed from 0 for this request.
+  # proceeds anyway — `bump_counter` / `read_counter` tolerate a missing entry,
+  # so worst case we seed from 0 for this request.
   defp wait_for_load(_key, attempts) when attempts >= 10, do: :ok
 
   defp wait_for_load(key, attempts) do
@@ -567,7 +704,7 @@ defmodule Tokengate.Budgets.Manager do
   end
 
   # ---------------------------------------------------------------------------
-  # Internal — counter read / bump
+  # Internal — counter read / bump / hold
   # ---------------------------------------------------------------------------
 
   defp read_counter(key) do
@@ -575,10 +712,10 @@ defmodule Tokengate.Budgets.Manager do
     :ets.lookup_element(@table, key, 2, 0)
   end
 
+  # Bumps position 2 (amount_micro) by `inc` and returns the NEW counter value.
+  # The default object covers the rare race where the entry was evicted between
+  # ensure_loaded and here.
   defp bump_counter(key, inc) when is_integer(inc) do
-    # Increment element at position 2 (amount_micro) by inc.
-    # Default object covers the rare race where the entry was evicted
-    # between ensure_loaded and here.
     period = elem(key, 1)
     default = {key, 0, false, current_period_stamp(period)}
 
@@ -595,48 +732,45 @@ defmodule Tokengate.Budgets.Manager do
     end
   end
 
+  # Optimistic hold on `key`: bump first, then decide. `nil` cap = unlimited →
+  # hold nothing and never reject. Otherwise, reject iff the value BEFORE this
+  # bump was already at/over the cap (the "already exhausted" gate); a single
+  # request over the remaining headroom is still held (it is a hold, and
+  # `settle/3` corrects it), but it blocks the next concurrent one.
+  defp hold_counter(_key, _requested, nil), do: {:ok, 0}
+
+  defp hold_counter(key, requested, cap) do
+    limit = to_micro(cap)
+    new = bump_counter(key, requested)
+
+    if new - requested >= limit do
+      bump_counter(key, -requested)
+      {:error, :exhausted}
+    else
+      {:ok, requested}
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # Internal — debounced SyncWorker enqueue
   # ---------------------------------------------------------------------------
 
-  defp maybe_enqueue_sync({:credential, credential_id} = subject) do
-    key = {:sync_pending, subject}
+  defp maybe_enqueue_sync(subject_id) do
+    key = {:sync_pending, subject_id}
 
     if :ets.insert_new(@table, {key, true}) do
       _ =
-        %{credential_id: credential_id}
+        %{subject_id: subject_id}
         |> Tokengate.Budgets.SyncWorker.new()
         |> Oban.insert()
     end
 
     :ok
   end
-
-  defp maybe_enqueue_sync(member_id) do
-    key = {:sync_pending, member_id}
-
-    if :ets.insert_new(@table, {key, true}) do
-      _ =
-        %{member_id: member_id}
-        |> Tokengate.Budgets.SyncWorker.new()
-        |> Oban.insert()
-    end
-
-    :ok
-  end
-
-  # ---------------------------------------------------------------------------
-  # Internal — sync-pending debounce marker
-  # ---------------------------------------------------------------------------
 
   @doc false
-  def clear_sync_pending({:credential, _credential_id} = subject) do
-    :ets.delete(@table, {:sync_pending, subject})
-    :ok
-  end
-
-  def clear_sync_pending(member_id) do
-    :ets.delete(@table, {:sync_pending, member_id})
+  def clear_sync_pending(subject_id) do
+    :ets.delete(@table, {:sync_pending, subject_id})
     :ok
   end
 
@@ -663,30 +797,4 @@ defmodule Tokengate.Budgets.Manager do
     |> Decimal.new()
     |> Decimal.div(Decimal.new(@micro))
   end
-
-  # ---------------------------------------------------------------------------
-  # Internal — subject → cost_summary filter mapping
-  # ---------------------------------------------------------------------------
-
-  # Maps a budget subject to the `Tokengate.Logs.cost_summary/1` filters used
-  # to lazy-load its spend from the durable `request_logs` table. More specific
-  # tuple shapes must match before the generic `{member_id, model_id}`.
-  # A binary subject may be a group member *or* a service (both keyed by their
-  # id), so we use the combined `:subject_id` filter that matches either.
-  defp subject_filters(subject) when is_binary(subject), do: %{subject_id: subject}
-  defp subject_filters({:credential, credential_id}), do: %{credential_id: credential_id}
-
-  defp subject_filters({member_id, model_id}),
-    do: %{subject_id: member_id, model_id: model_id}
-
-  # ---------------------------------------------------------------------------
-  # Internal — cap normalization (nil/0 = unlimited)
-  # ---------------------------------------------------------------------------
-
-  # A cap of `nil` or `0` (in any numeric representation) means "unlimited" and
-  # normalizes to `nil`. Anything else returns a `Decimal` limit.
-  defp normalize_cap(nil), do: nil
-  defp normalize_cap(%Decimal{} = d), do: if(Decimal.equal?(d, Decimal.new(0)), do: nil, else: d)
-  defp normalize_cap(n) when is_number(n), do: if(n == 0, do: nil, else: Decimal.new(n))
-  defp normalize_cap(_), do: nil
 end

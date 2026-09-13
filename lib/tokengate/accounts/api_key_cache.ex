@@ -11,7 +11,7 @@ defmodule Tokengate.Accounts.ApiKeyCache do
 
   ## Entry shape
 
-      %{member: %GroupMember{}, limits: %{monthly_budget_usd:, concurrency_limit:, rpm_limit:}, subject_type: "user" | "service"}
+      %{member: %GroupMember{}, limits: %{concurrency_limit:, rpm_limit:, credit_grants: [%{subscription:, user_id:, tier:}]}, subject_type: "user" | "service"}
 
   Caching the limits alongside the member avoids the extra preload/query
   `Accounts.effective_limits/1` performs for service-backed members.

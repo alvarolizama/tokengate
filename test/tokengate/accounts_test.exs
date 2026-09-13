@@ -107,7 +107,7 @@ defmodule Tokengate.AccountsTest do
       attrs = valid_group_attrs(%{"monthly_budget_per_user_usd" => nil})
 
       assert {:ok, %Group{} = group} = Accounts.create_group(attrs)
-      assert group.monthly_budget_per_user_usd == nil
+      assert group.name =~ "Group"
     end
   end
 
@@ -414,23 +414,8 @@ defmodule Tokengate.AccountsTest do
 
       limits = Accounts.effective_limits(tm)
 
-      assert limits.monthly_budget_usd == Decimal.new("100.00")
       assert limits.concurrency_limit == 10
       assert limits.rpm_limit == 120
-    end
-
-    test "adds extra_monthly_budget_usd to group default" do
-      group = group_fixture()
-      user = user_fixture()
-
-      {:ok, tm} =
-        Accounts.create_group_member(
-          valid_group_member_attrs(user, group, %{"extra_monthly_budget_usd" => "50.00"})
-        )
-
-      limits = Accounts.effective_limits(tm)
-
-      assert limits.monthly_budget_usd == Decimal.new("150.00")
     end
 
     test "adds extra_concurrency to group default" do
@@ -442,9 +427,7 @@ defmodule Tokengate.AccountsTest do
           valid_group_member_attrs(user, group, %{"extra_concurrency" => 5})
         )
 
-      limits = Accounts.effective_limits(tm)
-
-      assert limits.concurrency_limit == 15
+      assert Accounts.effective_limits(tm).concurrency_limit == 15
     end
 
     test "adds extra_rpm to group default" do
@@ -454,49 +437,16 @@ defmodule Tokengate.AccountsTest do
       {:ok, tm} =
         Accounts.create_group_member(valid_group_member_attrs(user, group, %{"extra_rpm" => 40}))
 
-      limits = Accounts.effective_limits(tm)
-
-      assert limits.rpm_limit == 160
-    end
-
-    test "nil group monthly_budget_usd with nil extra → nil" do
-      group = group_fixture(%{"monthly_budget_per_user_usd" => nil})
-      user = user_fixture()
-
-      {:ok, tm} = Accounts.create_group_member(valid_group_member_attrs(user, group))
-
-      limits = Accounts.effective_limits(tm)
-
-      assert limits.monthly_budget_usd == nil
-    end
-
-    test "nil group monthly_budget_usd with extra → just the extra" do
-      group = group_fixture(%{"monthly_budget_per_user_usd" => nil})
-      user = user_fixture()
-
-      {:ok, tm} =
-        Accounts.create_group_member(
-          valid_group_member_attrs(user, group, %{"extra_monthly_budget_usd" => "25.00"})
-        )
-
-      limits = Accounts.effective_limits(tm)
-
-      assert limits.monthly_budget_usd == Decimal.new("25.00")
+      assert Accounts.effective_limits(tm).rpm_limit == 160
     end
 
     test "service virtual member combines group defaults with service extras" do
-      # Group defaults: 20 budget, 5 conc, 60 rpm. Service extras on top.
-      group =
-        group_fixture(%{
-          "monthly_budget_per_user_usd" => "20.00",
-          "default_concurrency_limit" => 5,
-          "default_rpm_limit" => 60
-        })
+      # Group defaults: 5 conc, 60 rpm. Service extras on top.
+      group = group_fixture(%{"default_concurrency_limit" => 5, "default_rpm_limit" => 60})
 
       service =
         service_fixture(%{
           "group_id" => group.id,
-          "monthly_budget_usd" => "50.00",
           "concurrency_limit" => 3,
           "rpm_limit" => 30
         })
@@ -507,7 +457,6 @@ defmodule Tokengate.AccountsTest do
       # The virtual member must NOT crash effective_limits (was a nil.group crash)
       limits = Accounts.effective_limits(member)
 
-      assert limits.monthly_budget_usd == Decimal.new("70.00")
       assert limits.concurrency_limit == 8
       assert limits.rpm_limit == 90
     end
@@ -526,7 +475,6 @@ defmodule Tokengate.AccountsTest do
 
       limits = Accounts.effective_limits(member)
 
-      assert limits.monthly_budget_usd == nil
       assert limits.concurrency_limit == 5
       assert limits.rpm_limit == 60
     end

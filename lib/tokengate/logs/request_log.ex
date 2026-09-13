@@ -71,6 +71,10 @@ defmodule Tokengate.Logs.RequestLog do
       foreign_key: :service_id,
       type: :binary_id
 
+    belongs_to :credit_subscription, Tokengate.Credits.Subscription,
+      foreign_key: :credit_subscription_id,
+      type: :binary_id
+
     belongs_to :provider, Tokengate.Providers.Provider,
       references: :id,
       foreign_key: :provider_id,
@@ -80,7 +84,7 @@ defmodule Tokengate.Logs.RequestLog do
   @permitted ~w(group_member_id service_id subject_type provider_id model_provider_id credential_id model_id
     model_requested model_responded agent_type status_code provider_status_code
     error_reason error_message prompt_tokens completion_tokens cache_read_tokens
-    cache_creation_tokens provider_cost_usd
+    cache_creation_tokens provider_cost_usd credit_subscription_id
     latency_ms ttft_ms streaming request_type think effort api_key_prefix
     credential_name client_agent provider_key_prefix inserted_at)a
 

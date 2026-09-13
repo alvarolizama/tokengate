@@ -71,78 +71,37 @@ defmodule Tokengate.BudgetsTest do
       })
   end
 
+  # Simulates a completed request (zero-hold settle) so tests can put spend on
+  # the books without going through the full reserve → settle dance.
+  defp record(subject_id, cost_usd) do
+    Manager.settle(
+      subject_id,
+      %{monthly_micro: 0, global_micro: 0, exempt_global?: false},
+      cost_usd
+    )
+  end
+
   describe "member_budget/1" do
-    test "combines effective limits with zero spend" do
+    test "reports zero spend with no monthly limit (budget is credit now)" do
       member = member_fixture()
 
       budget = Budgets.member_budget(member)
 
       assert Decimal.eq?(budget.monthly_spend_usd, Decimal.new("0"))
-      assert Decimal.eq?(budget.monthly_spend_usd, Decimal.new("0"))
-      assert Decimal.eq?(budget.monthly_limit_usd, Decimal.new("100.00"))
-      assert budget.monthly_pct == 0.0
-      refute budget.exhausted?
-      refute budget.monthly_exhausted?
-      refute budget.monthly_exhausted?
-    end
-
-    test "member extra stacks on group default" do
-      member = member_fixture(nil, nil, %{"extra_monthly_budget_usd" => "50.00"})
-
-      budget = Budgets.member_budget(member)
-
-      assert Decimal.eq?(budget.monthly_limit_usd, Decimal.new("150.00"))
-    end
-
-    test "unlimited periods report nil pct and never exhaust" do
-      group = group_fixture(%{"monthly_budget_per_user_usd" => nil})
-      member = member_fixture(group)
-
-      budget = Budgets.member_budget(member)
-
       assert is_nil(budget.monthly_limit_usd)
       assert is_nil(budget.monthly_pct)
+      refute budget.exhausted?
       refute budget.monthly_exhausted?
     end
 
-    test "spend at the limit is exhausted" do
+    test "reports spend recorded in the ETS counter" do
       member = member_fixture()
-      assert :ok = Manager.record_spend(member.id, Decimal.new("100.00"))
+      assert :ok = record(member.id, Decimal.new("33.33"))
 
       budget = Budgets.member_budget(member)
 
-      assert budget.monthly_pct == 100.0
-      assert budget.monthly_exhausted?
-      assert budget.exhausted?
-    end
-
-    test "spend above the limit is exhausted" do
-      member = member_fixture()
-      assert :ok = Manager.record_spend(member.id, Decimal.new("250.00"))
-
-      budget = Budgets.member_budget(member)
-
-      assert budget.monthly_pct == 250.0
-      assert budget.exhausted?
-    end
-
-    test "zero limit exhausts immediately" do
-      group = group_fixture(%{"monthly_budget_per_user_usd" => "0"})
-      member = member_fixture(group)
-
-      budget = Budgets.member_budget(member)
-
-      assert budget.monthly_pct == 100.0
-      assert budget.monthly_exhausted?
-    end
-
-    test "pct is rounded to one decimal" do
-      member = member_fixture()
-      assert :ok = Manager.record_spend(member.id, Decimal.new("33.33"))
-
-      budget = Budgets.member_budget(member)
-
-      assert budget.monthly_pct == 33.3
+      assert Decimal.eq?(budget.monthly_spend_usd, Decimal.new("33.33"))
+      assert is_nil(budget.monthly_limit_usd)
     end
   end
 
@@ -164,15 +123,14 @@ defmodule Tokengate.BudgetsTest do
       ok_member = member_fixture()
       broke_member = member_fixture()
 
-      assert :ok = Manager.record_spend(ok_member.id, Decimal.new("10.00"))
-      assert :ok = Manager.record_spend(broke_member.id, Decimal.new("1000.00"))
+      assert :ok = record(ok_member.id, Decimal.new("10.00"))
+      assert :ok = record(broke_member.id, Decimal.new("1000.00"))
 
       exhausted = Budgets.list_exhausted_member_budgets()
-      ids = Enum.map(exhausted, & &1.member.id)
 
-      assert broke_member.id in ids
-      refute ok_member.id in ids
-      assert Budgets.count_exhausted() == length(exhausted)
+      # No monthly limit anymore → nobody is flagged by it (budget is credit).
+      assert exhausted == []
+      assert Budgets.count_exhausted() == 0
     end
   end
 
@@ -182,16 +140,15 @@ defmodule Tokengate.BudgetsTest do
       member_a = member_fixture(nil, user)
       member_b = member_fixture(nil, user)
 
-      assert :ok = Manager.record_spend(member_a.id, Decimal.new("10.00"))
-      assert :ok = Manager.record_spend(member_b.id, Decimal.new("1000.00"))
+      assert :ok = record(member_a.id, Decimal.new("10.00"))
+      assert :ok = record(member_b.id, Decimal.new("1000.00"))
 
       spend = Budgets.spend_by_user()
       user_spend = Map.fetch!(spend, user.id)
 
       assert Decimal.eq?(user_spend.monthly_usd, Decimal.new("1010.00"))
-      assert Decimal.eq?(user_spend.monthly_usd, Decimal.new("1010.00"))
-      # member_b exhausted daily limit -> the user is flagged
-      assert user_spend.exhausted?
+      assert is_nil(user_spend.monthly_limit_usd)
+      refute user_spend.exhausted?
     end
 
     test "users without memberships are absent from the map" do
@@ -204,26 +161,25 @@ defmodule Tokengate.BudgetsTest do
   end
 
   describe "list_group_budgets/0" do
-    test "agrupa por grupo: tope = suma de límites diarios, gasto = suma de spend" do
-      group = group_fixture(%{"monthly_budget_per_user_usd" => "500.00"})
+    test "agrupa por grupo: sin tope mensual, gasto = suma de spend" do
+      group = group_fixture()
       member_a = member_fixture(group)
       member_b = member_fixture(group)
       # Otro grupo que no debe mezclarse
       _other = member_fixture()
 
-      assert :ok = Manager.record_spend(member_a.id, Decimal.new("100.00"))
-      assert :ok = Manager.record_spend(member_b.id, Decimal.new("50.00"))
+      assert :ok = record(member_a.id, Decimal.new("100.00"))
+      assert :ok = record(member_b.id, Decimal.new("50.00"))
 
       groups = Budgets.list_group_budgets()
       row = Enum.find(groups, &(&1.group.id == group.id))
 
       assert row.member_count == 2
-      # tope = 500 * 2 miembros
-      assert Decimal.eq?(row.monthly_limit_usd, Decimal.new("1000.00"))
+      assert is_nil(row.monthly_limit_usd)
+      assert is_nil(row.monthly_pct)
+      assert row.has_unlimited?
       # gasto real = 100 + 50
       assert Decimal.eq?(row.monthly_spend_usd, Decimal.new("150.00"))
-      assert row.monthly_pct == 15.0
-      refute row.has_unlimited?
     end
 
     test "spot check on group budget values" do

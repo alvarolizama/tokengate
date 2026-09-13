@@ -2,7 +2,7 @@ defmodule TokengateWeb.SettingsLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
-  alias Tokengate.{Accounts, Logs, Providers}
+  alias Tokengate.{Accounts, Budgets, GlobalSettings, Logs, Providers}
 
   defp unique, do: System.unique_integer([:positive])
 
@@ -104,6 +104,55 @@ defmodule TokengateWeb.SettingsLiveTest do
 
       conn = login(conn, user, pass)
       {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/admin/maintenance")
+    end
+  end
+
+  describe "global daily cap" do
+    test "renders the cap section and saves it", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/admin/maintenance")
+
+      assert has_element?(view, "#global-cap-form")
+      assert render(view) =~ "Límite de gasto diario global"
+
+      view
+      |> form("#global-cap-form", global_settings: %{daily_max_spend_usd: "50.00"})
+      |> render_submit()
+
+      assert render(view) =~ "Límite diario global actualizado"
+      assert GlobalSettings.get_daily_cap() |> Decimal.to_string() =~ "50"
+    end
+
+    test "adds and removes a global exemption", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+
+      {:ok, target} =
+        Accounts.register_user(%{
+          email: "target-#{unique()}@example.com",
+          name: "Target",
+          password: "password-secret-1"
+        })
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/admin/maintenance")
+
+      view
+      |> form("#global-exemption-form",
+        global_subject: %{subject_type: "user", subject_id: target.id}
+      )
+      |> render_submit()
+
+      assert render(view) =~ "Exención agregada."
+      assert render(view) =~ target.email
+
+      exemption = hd(Budgets.Exemptions.list_for_scope("global_daily"))
+
+      view
+      |> element("#global-exemption-" <> exemption.id <> " button")
+      |> render_click()
+
+      assert render(view) =~ "Exención eliminada."
     end
   end
 end

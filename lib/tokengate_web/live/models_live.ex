@@ -1541,13 +1541,6 @@ defmodule TokengateWeb.ModelsLive do
                       required
                       hint="Tamaño máximo de contexto del modelo en tokens."
                     />
-                    <.input
-                      field={@form[:daily_limit_per_user_usd]}
-                      type="number"
-                      step="0.000001"
-                      label="Límite diario por usuario (USD)"
-                      hint="Tope de gasto diario de cada usuario en este modelo. Vacío o 0 = ilimitado. No aplica a facturación incluida."
-                    />
                   </div>
                 </div>
 

@@ -1,17 +1,15 @@
 defmodule Tokengate.Budgets.Exemption do
   @moduledoc """
-  A budget exemption — a user, group or service excluded from one of the
-  daily spending caps.
+  A budget exemption — a user, group or service excluded from the global daily
+  spending cap.
 
   `scope` selects which cap the subject is exempt from:
 
     * `"global_daily"` — the subject's spend never counts toward the global
       daily cap (`GlobalSettings.daily_max_spend_usd`).
-    * `"user_daily"` — the subject ignores the per-user daily cap
-      (`GlobalSettings.daily_max_per_user_usd`).
 
-  The three subject FKs are mutually exclusive; which one applies is
-  determined by `subject_type` (`"user"`, `"group"`, `"service"`).
+  The three subject FKs are mutually exclusive; which one applies is determined
+  by `subject_type` (`"user"`, `"group"`, `"service"`).
   """
 
   use Ecto.Schema
@@ -22,7 +20,7 @@ defmodule Tokengate.Budgets.Exemption do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @scopes ~w(global_daily user_daily)
+  @scopes ~w(global_daily)
   @subject_types ~w(user group service)
 
   @subject_fields %{
@@ -56,9 +54,6 @@ defmodule Tokengate.Budgets.Exemption do
     |> unique_constraint(:user_id, name: :budget_exemptions_global_daily_user_unique)
     |> unique_constraint(:group_id, name: :budget_exemptions_global_daily_group_unique)
     |> unique_constraint(:service_id, name: :budget_exemptions_global_daily_service_unique)
-    |> unique_constraint(:user_id, name: :budget_exemptions_user_daily_user_unique)
-    |> unique_constraint(:group_id, name: :budget_exemptions_user_daily_group_unique)
-    |> unique_constraint(:service_id, name: :budget_exemptions_user_daily_service_unique)
   end
 
   @doc "List of valid scopes."

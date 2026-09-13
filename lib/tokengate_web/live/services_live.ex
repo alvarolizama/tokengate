@@ -638,13 +638,6 @@ defmodule TokengateWeb.ServicesLive do
                 </div>
                 <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
                   <.input
-                    field={@form[:monthly_budget_usd]}
-                    type="number"
-                    label="Budget extra (USD/mes)"
-                    step="any"
-                    hint="Extra sobre el default del grupo. Vacío = solo el default."
-                  />
-                  <.input
                     field={@form[:concurrency_limit]}
                     type="number"
                     label="Concurrencia extra"
@@ -1014,8 +1007,7 @@ defmodule TokengateWeb.ServicesLive do
         <div class="min-w-0">
           <p class="font-medium text-sm truncate">{@service.name}</p>
           <p class="text-xs text-base-content/50">
-            +{format_decimal(@service.monthly_budget_usd)} USD/mes · +{@service.concurrency_limit} conc. ·
-            +{@service.rpm_limit} RPM
+            +{@service.concurrency_limit} conc. · +{@service.rpm_limit} RPM
           </p>
         </div>
       </div>

@@ -11,6 +11,11 @@ defmodule TokengateWeb.MaintenanceLive do
   use TokengateWeb, :live_view
 
   import Ecto.Query, only: [from: 2]
+  alias Tokengate.Accounts
+  alias Tokengate.Budgets.Exemption
+  alias Tokengate.Budgets.Exemptions
+  alias Tokengate.Budgets.Manager, as: Budgets
+  alias Tokengate.GlobalSettings
   alias Tokengate.Logs
   alias Tokengate.Logs.CostBackfill
   alias Tokengate.Repo
@@ -34,9 +39,14 @@ defmodule TokengateWeb.MaintenanceLive do
       |> assign(:backfill_all_count, CostBackfill.count_eligible(mode: :all))
       |> assign(:log_count, count_logs())
       |> assign(:sticky_count, sticky_count())
-      |> assign(:extras_budget_count, count_members_with_extra(:extra_monthly_budget_usd))
       |> assign(:extras_concurrency_count, count_members_with_extra(:extra_concurrency))
       |> assign(:extras_rpm_count, count_members_with_extra(:extra_rpm))
+      |> assign(:global_subject_type, "user")
+      |> assign(:groups, Accounts.list_groups())
+      |> assign(:services, Accounts.list_services())
+      |> assign(:users, Accounts.list_users())
+      |> assign_global_settings()
+      |> assign_exemptions()
       |> require_admin_hook()
 
     {:ok, socket}
@@ -112,7 +122,7 @@ defmodule TokengateWeb.MaintenanceLive do
 
   @impl true
   def handle_event("show_extras_reset_confirm", %{"field" => field}, socket)
-      when field in ["extra_monthly_budget_usd", "extra_concurrency", "extra_rpm"] do
+      when field in ["extra_concurrency", "extra_rpm"] do
     {:noreply, assign(socket, :extras_reset_type, String.to_existing_atom(field))}
   end
 
@@ -123,7 +133,7 @@ defmodule TokengateWeb.MaintenanceLive do
 
   @impl true
   def handle_event("reset_extra", %{"field" => field}, socket)
-      when field in ["extra_monthly_budget_usd", "extra_concurrency", "extra_rpm"] do
+      when field in ["extra_concurrency", "extra_rpm"] do
     field_atom = String.to_existing_atom(field)
     count = reset_member_extra(field_atom)
     new_count = count_members_with_extra(field_atom)
@@ -138,14 +148,12 @@ defmodule TokengateWeb.MaintenanceLive do
 
     count_assign =
       case field_atom do
-        :extra_monthly_budget_usd -> {:extras_budget_count, new_count}
         :extra_concurrency -> {:extras_concurrency_count, new_count}
         :extra_rpm -> {:extras_rpm_count, new_count}
       end
 
     label =
       case field_atom do
-        :extra_monthly_budget_usd -> "Presupuesto mensual"
         :extra_concurrency -> "Concurrencia"
         :extra_rpm -> "RPM"
       end
@@ -158,6 +166,66 @@ defmodule TokengateWeb.MaintenanceLive do
     socket = socket |> assign(elem(count_assign, 0), elem(count_assign, 1))
 
     {:noreply, socket}
+  end
+
+  ## Global daily spending cap (kill-switch) --------------------------------
+
+  @impl true
+  def handle_event("save_global_cap", %{"global_settings" => params}, socket) do
+    case GlobalSettings.update(params) do
+      {:ok, _settings} ->
+        Tokengate.Auditing.audit(
+          socket.assigns.current_user,
+          "budget.update_global_daily_cap",
+          "global_settings",
+          nil,
+          params
+        )
+
+        {:noreply,
+         socket
+         |> assign_global_settings()
+         |> put_flash(:info, "Límite diario global actualizado.")}
+
+      {:error, changeset} ->
+        {:noreply, assign(socket, :global_form, to_form(changeset, as: :global_settings))}
+    end
+  end
+
+  @impl true
+  def handle_event("change_global_subject", %{"global_subject" => %{"subject_type" => t}}, socket) do
+    {:noreply, assign(socket, :global_subject_type, t)}
+  end
+
+  def handle_event("add_global_exemption", %{"global_subject" => params}, socket) do
+    subject_type = params["subject_type"]
+    subject_id = params["subject_id"]
+
+    cond do
+      subject_type in [nil, ""] ->
+        {:noreply, put_flash(socket, :error, "Selecciona un tipo de sujeto.")}
+
+      subject_id in [nil, ""] ->
+        {:noreply, put_flash(socket, :error, "Selecciona a quién excluir.")}
+
+      true ->
+        attrs =
+          %{"scope" => "global_daily", "subject_type" => subject_type}
+          |> Map.put(to_string(Exemption.subject_field(subject_type)), subject_id)
+
+        case Exemptions.add(attrs) do
+          {:ok, _exemption} ->
+            {:noreply, socket |> assign_exemptions() |> put_flash(:info, "Exención agregada.")}
+
+          {:error, changeset} ->
+            {:noreply, put_flash(socket, :error, exemption_error(changeset))}
+        end
+    end
+  end
+
+  def handle_event("remove_global_exemption", %{"id" => id}, socket) do
+    Exemptions.remove(id)
+    {:noreply, socket |> assign_exemptions() |> put_flash(:info, "Exención eliminada.")}
   end
 
   ## Cost backfill ----------------------------------------------------------
@@ -208,6 +276,130 @@ defmodule TokengateWeb.MaintenanceLive do
           <p class="text-sm text-base-content/60 mt-1">
             Administra configuraciones avanzadas y acciones destructivas.
           </p>
+        </div>
+
+        <%!-- Global daily spending cap (kill-switch) --%>
+        <div class="card bg-base-100 border border-base-300" id="global-cap-card">
+          <div class="card-body">
+            <h2 class="card-title flex items-center gap-2">
+              <.icon name="hero-globe-americas" class="w-5 h-5" /> Límite de gasto diario global
+            </h2>
+            <p class="text-sm text-base-content/60">
+              Tope máximo de gasto total por día (UTC), sumando todos los sujetos.
+              Cuando se alcanza, toda nueva request se rechaza con 402 hasta el día
+              siguiente. Vacío = sin límite.
+            </p>
+
+            <.form for={@global_form} id="global-cap-form" phx-submit="save_global_cap">
+              <.input
+                field={@global_form[:daily_max_spend_usd]}
+                type="number"
+                step="0.01"
+                min="0"
+                label="USD por día"
+                hint="Ej: 50.00 — se corta todo cuando el gasto total del día llega a este monto."
+              />
+              <div class="flex gap-2 mt-3">
+                <button type="submit" class="btn btn-primary btn-sm" id="save-global-cap-btn">
+                  Guardar
+                </button>
+              </div>
+            </.form>
+
+            <div class="mt-4">
+              <div class="flex justify-between text-sm">
+                <span class="text-base-content/60">Gastado hoy (total)</span>
+                <span class="font-mono font-semibold">
+                  ${Decimal.round(@global_daily_spend, 2)}
+                  <%= if @global_daily_cap do %>
+                    / ${Decimal.round(@global_daily_cap, 2)}
+                  <% end %>
+                </span>
+              </div>
+              <%= if @global_daily_cap && @global_daily_pct do %>
+                <progress
+                  class={
+                    if @global_daily_pct >= 90,
+                      do: "progress progress-error w-full mt-1",
+                      else: "progress progress-warning w-full mt-1"
+                  }
+                  value={@global_daily_pct}
+                  max="100"
+                />
+              <% end %>
+            </div>
+
+            <div class="divider my-2"></div>
+            <h3 class="font-semibold text-base-content flex items-center gap-2">
+              <.icon name="hero-shield-exclamation" class="w-4 h-4 text-warning" />
+              Exclusiones al límite global
+            </h3>
+            <p class="text-sm text-base-content/60">
+              El gasto de estos sujetos no cuenta para el límite global (sigue
+              contando para su propio crédito).
+            </p>
+
+            <.form
+              for={%{}}
+              phx-submit="add_global_exemption"
+              phx-change="change_global_subject"
+              id="global-exemption-form"
+              class="flex flex-wrap gap-2 items-end"
+            >
+              <div>
+                <label class="text-xs text-base-content/60 block mb-1">Tipo</label>
+                <select name="global_subject[subject_type]" class="select select-bordered select-sm">
+                  <option value="user" selected={@global_subject_type == "user"}>Usuario</option>
+                  <option value="group" selected={@global_subject_type == "group"}>Grupo</option>
+                  <option value="service" selected={@global_subject_type == "service"}>
+                    Servicio
+                  </option>
+                </select>
+              </div>
+              <div class="flex-1 min-w-48">
+                <label class="text-xs text-base-content/60 block mb-1">Sujeto</label>
+                <select
+                  name="global_subject[subject_id]"
+                  class="select select-bordered select-sm w-full"
+                >
+                  <option value="">
+                    {if @global_subject_type == "user",
+                      do: "Usuario…",
+                      else: if(@global_subject_type == "group", do: "Grupo…", else: "Servicio…")}
+                  </option>
+                  <%= for {label, id} <- subject_options(@global_subject_type, assigns) do %>
+                    <option value={id}>{label}</option>
+                  <% end %>
+                </select>
+              </div>
+              <button type="submit" class="btn btn-ghost btn-sm">Excluir</button>
+            </.form>
+
+            <%= if @global_exemptions == [] do %>
+              <p class="text-sm text-base-content/40">
+                Sin exclusiones — todos sujetos al límite global.
+              </p>
+            <% else %>
+              <ul class="space-y-1">
+                <li
+                  :for={e <- @global_exemptions}
+                  id={"global-exemption-" <> e.id}
+                  class="flex items-center justify-between text-sm bg-base-200/50 rounded-lg px-3 py-1.5"
+                >
+                  <span>{Exemptions.subject_label(e)}</span>
+                  <button
+                    type="button"
+                    phx-click="remove_global_exemption"
+                    phx-value-id={e.id}
+                    class="btn btn-ghost btn-xs text-error"
+                    aria-label="Quitar exención"
+                  >
+                    <.icon name="hero-x-mark" class="w-3 h-3" />
+                  </button>
+                </li>
+              </ul>
+            <% end %>
+          </div>
         </div>
 
         <%!-- Danger Zone --%>
@@ -273,25 +465,6 @@ defmodule TokengateWeb.MaintenanceLive do
             </p>
 
             <div class="space-y-2">
-              <div class="flex items-center justify-between">
-                <div>
-                  <span class="text-sm font-medium text-base-content">Presupuesto mensual (USD)</span>
-                  <span class="text-xs text-base-content/50 ml-2">
-                    <span class="font-mono">{@extras_budget_count}</span> miembros
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  phx-click="show_extras_reset_confirm"
-                  phx-value-field="extra_monthly_budget_usd"
-                  class="btn btn-warning btn-outline btn-xs"
-                  id="reset-extras-budget-btn"
-                  disabled={@extras_budget_count == 0}
-                >
-                  Reiniciar
-                </button>
-              </div>
-
               <div class="flex items-center justify-between">
                 <div>
                   <span class="text-sm font-medium text-base-content">Concurrencia</span>
@@ -445,14 +618,12 @@ defmodule TokengateWeb.MaintenanceLive do
       <%= if @extras_reset_type do %>
         <% field_label =
           case @extras_reset_type do
-            :extra_monthly_budget_usd -> "presupuesto mensual (USD)"
             :extra_concurrency -> "concurrencia"
             :extra_rpm -> "RPM"
           end
 
         field_name =
           case @extras_reset_type do
-            :extra_monthly_budget_usd -> "extra_monthly_budget_usd"
             :extra_concurrency -> "extra_concurrency"
             :extra_rpm -> "extra_rpm"
           end %>
@@ -567,7 +738,7 @@ defmodule TokengateWeb.MaintenanceLive do
     )
   end
 
-  @extra_fields ~w(extra_monthly_budget_usd extra_concurrency extra_rpm)a
+  @extra_fields ~w(extra_concurrency extra_rpm)a
 
   defp reset_member_extra(field) when field in @extra_fields do
     import Ecto.Query
@@ -580,4 +751,54 @@ defmodule TokengateWeb.MaintenanceLive do
 
     count
   end
+
+  ## Global cap helpers ------------------------------------------------------
+
+  defp assign_global_settings(socket) do
+    settings = GlobalSettings.get!()
+    daily_spend = Budgets.global_daily_spend()
+    daily_cap = settings.daily_max_spend_usd
+
+    daily_pct =
+      if daily_cap && Decimal.compare(daily_cap, Decimal.new(0)) == :gt do
+        daily_spend
+        |> Decimal.div(daily_cap)
+        |> Decimal.mult(Decimal.new(100))
+        |> Decimal.round(1)
+        |> Decimal.to_float()
+      else
+        nil
+      end
+
+    socket
+    |> assign(
+      :global_form,
+      to_form(GlobalSettings.changeset(settings, %{}), as: :global_settings)
+    )
+    |> assign(:global_daily_spend, daily_spend)
+    |> assign(:global_daily_cap, daily_cap)
+    |> assign(:global_daily_pct, daily_pct)
+  end
+
+  defp assign_exemptions(socket) do
+    assign(socket, :global_exemptions, Exemptions.list_for_scope("global_daily"))
+  end
+
+  defp exemption_error(changeset) do
+    case changeset.errors do
+      [] ->
+        "No se pudo agregar la exención."
+
+      errors ->
+        "No se pudo agregar la exención: " <>
+          (errors |> Enum.map(fn {_, {m, _}} -> m end) |> Enum.join(", "))
+    end
+  end
+
+  def subject_options("user", assigns),
+    do: Enum.map(assigns.users, &{"#{&1.name} — #{&1.email}", &1.id})
+
+  def subject_options("group", assigns), do: Enum.map(assigns.groups, &{&1.name, &1.id})
+  def subject_options("service", assigns), do: Enum.map(assigns.services, &{&1.name, &1.id})
+  def subject_options(_, _assigns), do: []
 end

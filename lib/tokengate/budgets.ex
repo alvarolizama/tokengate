@@ -65,8 +65,7 @@ defmodule Tokengate.Budgets do
 
   @doc """
   Monthly spend per service from Postgres using LOCAL calendar boundaries
-  for the given timezone, joined with each service's own
-  `monthly_budget_usd` limit. One aggregate query total.
+  for the given timezone. One aggregate query total.
 
   Each row:
 
@@ -97,14 +96,13 @@ defmodule Tokengate.Budgets do
     services
     |> Enum.map(fn service ->
       monthly_usd = Map.get(spend, service.id, Decimal.new(0))
-      monthly_pct = pct(monthly_usd, service.monthly_budget_usd)
 
       %{
         service: service,
         monthly_spend_usd: monthly_usd,
-        monthly_limit_usd: service.monthly_budget_usd,
-        monthly_pct: monthly_pct,
-        exhausted?: exhausted?(monthly_pct)
+        monthly_limit_usd: nil,
+        monthly_pct: nil,
+        exhausted?: false
       }
     end)
     |> Enum.sort_by(fn row -> Decimal.to_float(row.monthly_spend_usd) end, :desc)
@@ -344,44 +342,39 @@ defmodule Tokengate.Budgets do
   @doc "Builds the budget status map for a single group member (ETS counters)."
   @spec member_budget(GroupMember.t()) :: member_budget()
   def member_budget(%GroupMember{} = member) do
-    limits = Accounts.effective_limits(member)
     spend = Manager.spend(member.id)
-
-    monthly_pct = pct(spend.monthly_usd, limits.monthly_budget_usd)
 
     %{
       member: member,
       daily_spend_usd: spend.daily_usd,
       monthly_spend_usd: spend.monthly_usd,
       daily_limit_usd: nil,
-      monthly_limit_usd: limits.monthly_budget_usd,
+      monthly_limit_usd: nil,
       daily_pct: nil,
-      monthly_pct: monthly_pct,
+      monthly_pct: nil,
       daily_exhausted?: false,
-      monthly_exhausted?: exhausted?(monthly_pct),
-      exhausted?: exhausted?(monthly_pct)
+      monthly_exhausted?: false,
+      exhausted?: false
     }
   end
 
   # Timezone-aware variant: spend comes from precomputed Postgres maps
   # (%{daily: %{member_id => Decimal}, monthly: %{member_id => Decimal}}).
   defp member_budget(%GroupMember{} = member, spend) do
-    limits = Accounts.effective_limits(member)
     daily_usd = get_in(spend, [:daily, member.id]) || Decimal.new(0)
     monthly_usd = get_in(spend, [:monthly, member.id]) || Decimal.new(0)
-    monthly_pct = pct(monthly_usd, limits.monthly_budget_usd)
 
     %{
       member: member,
       daily_spend_usd: daily_usd,
       monthly_spend_usd: monthly_usd,
       daily_limit_usd: nil,
-      monthly_limit_usd: limits.monthly_budget_usd,
+      monthly_limit_usd: nil,
       daily_pct: nil,
-      monthly_pct: monthly_pct,
+      monthly_pct: nil,
       daily_exhausted?: false,
-      monthly_exhausted?: exhausted?(monthly_pct),
-      exhausted?: exhausted?(monthly_pct)
+      monthly_exhausted?: false,
+      exhausted?: false
     }
   end
 
@@ -456,7 +449,4 @@ defmodule Tokengate.Budgets do
       100.0
     end
   end
-
-  defp exhausted?(nil), do: false
-  defp exhausted?(pct), do: pct >= 100.0
 end
