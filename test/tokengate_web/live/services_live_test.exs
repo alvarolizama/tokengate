@@ -50,7 +50,12 @@ defmodule TokengateWeb.ServicesLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/admin/services")
 
-    # Open the supervisor form
+    # Open the detail modal first (supervisors live there now)
+    view
+    |> element("button[phx-click='view_detail'][phx-value-id='#{service.id}']")
+    |> render_click()
+
+    # Open the supervisor form inside the detail modal
     view
     |> element("button[phx-click='toggle_supervisor_form'][phx-value-service-id='#{service.id}']")
     |> render_click()
@@ -71,5 +76,41 @@ defmodule TokengateWeb.ServicesLiveTest do
     supervisors = Accounts.service_supervisors(service.id)
     assert length(supervisors) == 1
     assert hd(supervisors).user_id == user.id
+  end
+
+  test "búsqueda filtra servicios por nombre", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    service = service_fixture()
+    other = service_fixture()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/admin/services")
+
+    prefix = String.slice(service.name, 0, 12)
+
+    view
+    |> element("#search-form")
+    |> render_change(%{"q" => prefix})
+
+    html = render(view)
+    assert html =~ service.name
+    refute html =~ "id=\"service-#{other.id}\""
+  end
+
+  test "sort por gasto alterna dirección", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    _s1 = service_fixture()
+    _s2 = service_fixture()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/admin/services")
+
+    html =
+      view
+      |> element("#sort-spend")
+      |> render_click()
+
+    assert html =~ "Gasto 30d"
+    assert html =~ "▼"
   end
 end
