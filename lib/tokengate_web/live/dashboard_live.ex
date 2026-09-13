@@ -236,7 +236,8 @@ defmodule TokengateWeb.DashboardLive do
           group: membership.group,
           api_key: membership.api_key,
           monthly_limit: nil,
-          monthly_spend: spend.monthly_usd
+          monthly_spend: spend.monthly_usd,
+          credit: Tokengate.Credits.member_credit(membership)
         }
       end)
 
@@ -704,6 +705,24 @@ defmodule TokengateWeb.DashboardLive do
   end
 
   def budget_bar_class(_), do: "bg-base-300"
+
+  ## Credit helpers --------------------------------------------------------
+
+  @doc "Porcentaje consumido del crédito (nil si no hay crédito asignado)."
+  def credit_pct(%{credited_micro: 0}), do: nil
+
+  def credit_pct(%{credited_micro: c, consumed_micro: k}) when c > 0,
+    do: Float.round(k / c * 100, 1)
+
+  def credit_pct(_), do: nil
+
+  @doc "Formatea un monto en micro-USD como USD."
+  def format_micro(micro) when is_integer(micro) do
+    micro
+    |> Decimal.new()
+    |> Decimal.div(Decimal.new(1_000_000))
+    |> format_decimal()
+  end
 
   ## Chart components ------------------------------------------------------
 

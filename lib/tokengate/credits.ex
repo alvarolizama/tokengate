@@ -271,6 +271,37 @@ defmodule Tokengate.Credits do
   @doc "Micro-USD de `units` créditos."
   def units_to_micro(units) when is_integer(units), do: units * @credit_micro
 
+  @doc """
+  Crédito vigente de una membresía: **suma sobre sus grants** (default de grupo
+  → crédito directo).
+
+  Devuelve `%{credited_micro, consumed_micro, remaining_micro, has_credit?}`.
+  `has_credit?` es `false` cuando no hay ninguna suscripción aplicable (tier 3:
+  sin límite de crédito).
+  """
+  @spec member_credit(GroupMember.t()) :: %{
+          credited_micro: integer(),
+          consumed_micro: integer(),
+          remaining_micro: integer(),
+          has_credit?: boolean()
+        }
+  def member_credit(%GroupMember{} = member) do
+    grants = grants_for(member)
+
+    {credited, consumed} =
+      Enum.reduce(grants, {0, 0}, fn %{subscription: subscription, user_id: user_id}, {c, k} ->
+        state = grant_state(subscription, user_id)
+        {c + state.credited_micro, k + state.consumed_micro}
+      end)
+
+    %{
+      credited_micro: credited,
+      consumed_micro: consumed,
+      remaining_micro: max(0, credited - consumed),
+      has_credit?: grants != []
+    }
+  end
+
   defp carried_micro(
          %Subscription{recurrence: "monthly", rollover_mode: "rollover"} = subscription,
          user_id,

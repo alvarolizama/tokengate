@@ -6,7 +6,7 @@ defmodule Tokengate.CreditsTest do
 
   use Tokengate.DataCase, async: true
 
-  alias Tokengate.{Accounts, Credits}
+  alias Tokengate.{Accounts, Credits, Logs}
   alias Tokengate.Credits.Subscription
 
   # ---------------------------------------------------------------------------
@@ -246,6 +246,41 @@ defmodule Tokengate.CreditsTest do
       sub = %Subscription{recurrence: "none"}
 
       assert %{start: nil, end: nil} = Credits.cycle_bounds(sub, ~D[2026-09-13])
+    end
+  end
+
+  describe "member_credit/1" do
+    test "no applicable subscription -> has_credit? false" do
+      member = member_fixture(nil, nil)
+      credit = Credits.member_credit(member)
+
+      refute credit.has_credit?
+      assert credit.credited_micro == 0
+      assert credit.remaining_micro == 0
+    end
+
+    test "sums the group sub's credited credit and the member's spend" do
+      group = group_fixture()
+      sub = group_sub(%{"units" => 100})
+      {:ok, _} = Credits.set_group_default(group, sub)
+      user = user_fixture()
+      member = member_fixture(group, user)
+
+      {:ok, _} =
+        Logs.log_request(%{
+          group_member_id: member.id,
+          model_requested: "gpt-4",
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+          provider_cost_usd: Decimal.new("30.00"),
+          credit_subscription_id: sub.id
+        })
+
+      credit = Credits.member_credit(member)
+
+      assert credit.has_credit?
+      assert credit.credited_micro == 100_000_000
+      assert credit.consumed_micro == 30_000_000
+      assert credit.remaining_micro == 70_000_000
     end
   end
 end

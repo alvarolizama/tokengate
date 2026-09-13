@@ -151,32 +151,33 @@
                   </div>
                 <% end %>
 
-                <%!-- Budget bar — monthly only (mt-auto pushes to bottom) --%>
+                <%!-- Credit / spend — mt-auto pushes to bottom --%>
                 <div class="mt-auto pt-4 border-t border-base-200 space-y-3">
                   <div>
-                    <div class="flex items-center justify-between text-xs">
-                      <span class="text-base-content/60">Gasto mensual</span>
-                      <span class="font-mono">
-                        ${format_decimal(t.monthly_spend)}
-                        <span :if={t.monthly_limit} class="text-base-content/40">
-                          / ${format_decimal(t.monthly_limit)}
+                    <%= if t.credit.has_credit? do %>
+                      <div class="flex items-center justify-between text-xs">
+                        <span class="text-base-content/60">Crédito restante</span>
+                        <span class="font-mono">
+                          ${format_micro(t.credit.remaining_micro)}
+                          <span class="text-base-content/40">
+                            / ${format_micro(t.credit.credited_micro)}
+                          </span>
                         </span>
-                      </span>
-                    </div>
-                    <div
-                      :if={t.monthly_limit}
-                      class="mt-1 h-2 rounded-full bg-base-200 overflow-hidden"
-                    >
-                      <% monthly_pct = budget_pct(t.monthly_spend, t.monthly_limit) %>
-                      <div
-                        class={[
-                          "h-full rounded-full transition-all",
-                          budget_bar_class(monthly_pct)
-                        ]}
-                        style={budget_bar_width(monthly_pct)}
-                      >
                       </div>
-                    </div>
+                      <div class="mt-1 h-2 rounded-full bg-base-200 overflow-hidden">
+                        <% cpct = credit_pct(t.credit) %>
+                        <div
+                          class={["h-full rounded-full transition-all", budget_bar_class(cpct)]}
+                          style={budget_bar_width(cpct)}
+                        >
+                        </div>
+                      </div>
+                    <% else %>
+                      <div class="flex items-center justify-between text-xs">
+                        <span class="text-base-content/60">Gasto mensual</span>
+                        <span class="font-mono">${format_decimal(t.monthly_spend)}</span>
+                      </div>
+                    <% end %>
                   </div>
                 </div>
               </div>
