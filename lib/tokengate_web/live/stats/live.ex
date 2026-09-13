@@ -2,9 +2,10 @@ defmodule TokengateWeb.StatsLive.LiveSection do
   @moduledoc """
   Sección "En vivo" de /stats — métricas en tiempo real, org-wide.
 
-  Cinco bloques (todos auto-refresh):
+  Cinco bloques (todos auto-refresh, mismo orden de filas que el Resumen:
+  presupuesto → KPIs principales → KPIs secundarios):
+    * KPIs de hoy (día calendario): costo, requests, tokens, latencia p50/p95
     * Pulso: requests/min (5m), error rate, requests en vuelo
-    * KPIs de hoy (día calendario): requests, costo, tokens, latencia p50/p95
     * Requests por minuto — últimos 60 min (barras)
     * En vuelo ahora: registry ETS (`Logs.Inflight`)
     * Feed: últimos requests via LiveView stream (`logs:new` + refetch)
@@ -80,42 +81,10 @@ defmodule TokengateWeb.StatsLive.LiveSection do
         </div>
       <% end %>
 
-      <%!-- Pulso: req/min, error rate, en vuelo --%>
-      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <.kpi_card
-          id="live-rpm"
-          label="Requests / min"
-          icon="hero-bolt"
-          accent="primary"
-          title="Ventana móvil de 5 minutos"
-        >
-          {@pulse.req_per_min}
-          <:sub>ventana 5 min · {Stats.format_number(@pulse.request_count)} requests</:sub>
-        </.kpi_card>
-
-        <.kpi_card
-          id="live-errors"
-          label="Tasa de error"
-          icon="hero-exclamation-triangle"
-          accent="error"
-        >
-          {@pulse.error_rate}%
-          <:sub>{Stats.format_number(@pulse.error_count)} errores en 5 min</:sub>
-        </.kpi_card>
-
-        <.kpi_card
-          id="live-inflight"
-          label="En vuelo"
-          icon="hero-paper-airplane"
-          accent="accent"
-        >
-          {Stats.format_number(@inflight_count)}
-          <:sub>requests en curso ahora</:sub>
-        </.kpi_card>
-      </div>
-
-      <%!-- KPIs de hoy (día calendario) — mismo orden y formato que el Resumen:
-           Costo · Requests · Tokens · latencia --%>
+      <%!-- KPIs de hoy (día calendario) — primera fila de tarjetas, mismo
+           orden de filas que el Resumen: presupuesto → KPIs principales →
+           KPIs secundarios. Dentro de la fila: Costo · Requests · Tokens ·
+           latencia --%>
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <.kpi_card
           id="live-today-cost"
@@ -170,6 +139,41 @@ defmodule TokengateWeb.StatsLive.LiveSection do
         >
           {Stats.format_ms(@today_metrics.avg_latency_ms)}
           <:sub>p95: {Stats.format_ms(@today_metrics.p95_latency_ms)}</:sub>
+        </.kpi_card>
+      </div>
+
+      <%!-- Pulso (secundarios): req/min, error rate, en vuelo — después de
+           los KPIs principales, como los secundarios del Resumen --%>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <.kpi_card
+          id="live-rpm"
+          label="Requests / min"
+          icon="hero-bolt"
+          accent="primary"
+          title="Ventana móvil de 5 minutos"
+        >
+          {@pulse.req_per_min}
+          <:sub>ventana 5 min · {Stats.format_number(@pulse.request_count)} requests</:sub>
+        </.kpi_card>
+
+        <.kpi_card
+          id="live-errors"
+          label="Tasa de error"
+          icon="hero-exclamation-triangle"
+          accent="error"
+        >
+          {@pulse.error_rate}%
+          <:sub>{Stats.format_number(@pulse.error_count)} errores en 5 min</:sub>
+        </.kpi_card>
+
+        <.kpi_card
+          id="live-inflight"
+          label="En vuelo"
+          icon="hero-paper-airplane"
+          accent="accent"
+        >
+          {Stats.format_number(@inflight_count)}
+          <:sub>requests en curso ahora</:sub>
         </.kpi_card>
       </div>
 

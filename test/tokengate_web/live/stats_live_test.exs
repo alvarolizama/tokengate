@@ -441,6 +441,35 @@ defmodule TokengateWeb.StatsLiveTest do
     assert html =~ "Sin datos en este período."
   end
 
+  ## Live ("En vivo") tab ---------------------------------------------------
+
+  test "En vivo: KPIs de hoy van antes que el pulso, como en el Resumen", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    html = render(view)
+
+    # Orden de filas: presupuesto (si existe) → KPIs principales de hoy →
+    # pulso (KPIs secundarios) → gráficas
+    assert order_before?(html, "live-today-cost", "live-rpm")
+    assert order_before?(html, "live-today-latency", "live-errors")
+    # Dentro de la fila de hoy: Costo · Requests · Tokens · Latencia
+    assert order_before?(html, "live-today-cost", "live-today-requests")
+    assert order_before?(html, "live-today-requests", "live-today-tokens")
+    assert order_before?(html, "live-today-tokens", "live-today-latency")
+  end
+
+  defp order_before?(html, first, second) do
+    with {first_pos, _len} <- :binary.match(html, first),
+         {second_pos, _len} <- :binary.match(html, second) do
+      first_pos < second_pos
+    else
+      _ -> false
+    end
+  end
+
   describe "hour_usage_bar_height/2 (sqrt scale)" do
     alias TokengateWeb.StatsHelpers, as: StatsLive
 
