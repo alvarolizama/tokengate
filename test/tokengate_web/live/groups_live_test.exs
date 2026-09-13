@@ -212,17 +212,17 @@ defmodule TokengateWeb.GroupsLiveTest do
 
     # The model picker is NOT in the card — only inside the models modal
     refute html =~ "Modelos del grupo</h4>"
-    refute has_element?(view, "#model-#{group.id}-#{model_.id}")
+    refute has_element?(view, "#model-picker-#{group.id}-#{model_.id}")
 
     # Open the models modal from the group card header
     view |> element("#edit-models-#{group.id}") |> render_click()
     assert has_element?(view, "#models-modal-#{group.id}")
-    assert has_element?(view, "#model-#{group.id}-#{model_.id}")
+    assert has_element?(view, "#model-picker-#{group.id}-#{model_.id}")
 
     # Grant the model
     html =
       view
-      |> element("#model-#{group.id}-#{model_.id}")
+      |> element("#model-picker-#{group.id}-#{model_.id}")
       |> render_click()
 
     assert html =~ "Modelos actualizados"
@@ -240,7 +240,7 @@ defmodule TokengateWeb.GroupsLiveTest do
     # Toggle again to revoke
     html =
       view
-      |> element("#model-#{group.id}-#{model_.id}")
+      |> element("#model-picker-#{group.id}-#{model_.id}")
       |> render_click()
 
     assert html =~ "Modelos actualizados"
@@ -263,22 +263,16 @@ defmodule TokengateWeb.GroupsLiveTest do
   end
 
   # --------------------------------------------------------------------------
-  # Webhooks
+  # Webhooks — managed in ObservabilityLive since the extraction
   # --------------------------------------------------------------------------
 
-  test "clicking new_webhook shows the form", %{conn: conn} do
+  test "webhooks badge links to observability section", %{conn: conn} do
     %{group: group} = group_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/admin/groups")
 
-    assert has_element?(view, "#new-webhook-#{group.id}")
-
-    view
-    |> element("#new-webhook-#{group.id}")
-    |> render_click()
-
-    assert has_element?(view, "#destination-form-#{group.id}")
+    assert has_element?(view, "#webhooks-link-#{group.id}")
   end
 end

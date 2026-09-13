@@ -1,13 +1,15 @@
 defmodule TokengateWeb.GroupsLive do
   @moduledoc """
-  Admin-only CRUD for groups + per-group model model grants + observability webhooks.
+  Admin-only CRUD for groups + per-group model grants.
 
   Only admins (global_role == "admin") can access this page. Non-admins
   are redirected to /dashboard with an error flash.
 
-  Groups carry default budgets and limits applied to all members. Model
-  models can be granted per-group via the group_models join table.
-  Observability destinations (webhooks) are managed per-group.
+  Groups carry default budgets and limits applied to all members. Models
+  can be granted per-group via the group_models join table.
+
+  Webhook management was extracted to `TokengateWeb.ObservabilityLive`
+  (/admin/observability); each group card links there with a counter badge.
   """
 
   use TokengateWeb, :live_view
@@ -17,7 +19,6 @@ defmodule TokengateWeb.GroupsLive do
   alias Tokengate.Accounts.Group
   alias Tokengate.Budgets
   alias Tokengate.Observability
-  alias Tokengate.Observability.Destination
   alias Tokengate.Providers
   alias Tokengate.Providers.{Model, GroupModel}
   alias Tokengate.Repo
@@ -39,9 +40,6 @@ defmodule TokengateWeb.GroupsLive do
         |> require_admin_hook()
         |> assign(:form, nil)
         |> assign(:editing_group_id, nil)
-        |> assign(:webhook_form, nil)
-        |> assign(:editing_webhook_group_id, nil)
-        |> assign(:editing_webhook_id, nil)
         |> assign(:editing_models_group_id, nil)
         |> assign(:group_search, "")
         |> load_groups()
@@ -86,7 +84,7 @@ defmodule TokengateWeb.GroupsLive do
       |> Repo.all()
       |> Enum.group_by(fn _ma -> "all" end)
 
-    # Single query for all groups' destinations (avoids one query per group)
+    # Single query for all groups' destinations (only for the counter badges)
     destinations_by_group =
       Observability.list_destinations_for_groups(Enum.map(groups, & &1.id))
 
@@ -233,7 +231,7 @@ defmodule TokengateWeb.GroupsLive do
 
   ## Events — model grants ------------------------------------------------
 
-  def handle_event("toggle_model", %{"group-id" => group_id, "model-id" => model_id}, socket) do
+  def handle_event("toggle_model", %{"target-id" => group_id, "model-id" => model_id}, socket) do
     group_alias_ids = Map.get(socket.assigns.granted_models, group_id, [])
 
     result =
@@ -255,103 +253,6 @@ defmodule TokengateWeb.GroupsLive do
     end
   end
 
-  ## Events — webhook CRUD -----------------------------------------------
-
-  def handle_event("new_webhook", params, socket) do
-    group_id = params["group-id"] || params["group_id"]
-    changeset = Observability.change_destination(%Destination{})
-
-    # Modal-only change: no data touched, skip the full reload.
-    {:noreply,
-     socket
-     |> assign(:webhook_form, to_form(changeset, as: :destination))
-     |> assign(:editing_webhook_group_id, group_id)
-     |> assign(:editing_webhook_id, :new)}
-  end
-
-  def handle_event("edit_webhook", params, socket) do
-    group_id = params["group-id"] || params["group_id"]
-    webhook_id = params["webhook-id"] || params["webhook_id"]
-    destination = Observability.get_destination!(webhook_id)
-    changeset = Observability.change_destination(destination)
-
-    {:noreply,
-     socket
-     |> assign(:webhook_form, to_form(changeset, as: :destination))
-     |> assign(:editing_webhook_group_id, group_id)
-     |> assign(:editing_webhook_id, webhook_id)}
-  end
-
-  def handle_event("cancel_webhook", _params, socket) do
-    # Modal-only change: no data touched, skip the full reload.
-    {:noreply,
-     socket
-     |> assign(:webhook_form, nil)
-     |> assign(:editing_webhook_group_id, nil)
-     |> assign(:editing_webhook_id, nil)}
-  end
-
-  def handle_event("save_webhook", %{"destination" => destination_params}, socket) do
-    group_id = socket.assigns.editing_webhook_group_id
-    editing_id = socket.assigns.editing_webhook_id
-
-    # Parse headers from JSON string if present
-    destination_params =
-      Map.update(destination_params, "headers", %{}, fn
-        headers when is_map(headers) ->
-          headers
-
-        headers when is_binary(headers) and headers != "" ->
-          case Jason.decode(headers) do
-            {:ok, parsed} -> parsed
-            {:error, _} -> %{"_raw" => headers}
-          end
-
-        _ ->
-          %{}
-      end)
-
-    destination_params = Map.put(destination_params, "group_id", group_id)
-
-    result =
-      if editing_id == :new do
-        Observability.create_destination(destination_params)
-      else
-        destination = Observability.get_destination!(editing_id)
-        Observability.update_destination(destination, destination_params)
-      end
-
-    case result do
-      {:ok, _destination} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Webhook guardado.")
-         |> assign(:webhook_form, nil)
-         |> assign(:editing_webhook_group_id, nil)
-         |> assign(:editing_webhook_id, nil)
-         |> refresh_destinations()}
-
-      {:error, %Ecto.Changeset{} = changeset} ->
-        {:noreply, assign(socket, :webhook_form, to_form(changeset, as: :destination))}
-    end
-  end
-
-  def handle_event("delete_webhook", params, socket) do
-    webhook_id = params["webhook-id"] || params["webhook_id"]
-    destination = Observability.get_destination!(webhook_id)
-
-    case Observability.delete_destination(destination) do
-      {:ok, _} ->
-        {:noreply,
-         socket
-         |> put_flash(:info, "Webhook eliminado.")
-         |> refresh_destinations()}
-
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo eliminar el webhook.")}
-    end
-  end
-
   # Surgical refresh: only the table that actually changed, instead of the
   # full load_groups() (groups + members + models + destinations + 2 spend
   # aggregates).
@@ -362,11 +263,6 @@ defmodule TokengateWeb.GroupsLive do
       |> Enum.group_by(fn {group_id, _} -> group_id end, fn {_, model_id} -> model_id end)
 
     assign(socket, :granted_models, granted_models)
-  end
-
-  defp refresh_destinations(socket) do
-    group_ids = Enum.map(socket.assigns.all_groups, & &1.id)
-    assign(socket, :destinations_by_group, Observability.list_destinations_for_groups(group_ids))
   end
 
   ## Private helpers — save ----------------------------------------------
@@ -409,21 +305,6 @@ defmodule TokengateWeb.GroupsLive do
   def format_decimal(nil), do: "—"
   def format_decimal(value), do: to_string(value)
 
-  # The `headers` destination field is a :map column, but the form edits it as
-  # a JSON string in a textarea. Convert the map to JSON for display; empty
-  # maps render as an empty textarea. Invalid JSON submitted previously is
-  # stored as %{"_raw" => original} — show the original string back.
-  def headers_to_string(%{} = headers) when map_size(headers) == 0, do: ""
-
-  def headers_to_string(%{} = headers) do
-    case Map.get(headers, "_raw") do
-      nil -> Jason.encode!(headers, pretty: true)
-      raw -> raw
-    end
-  end
-
-  def headers_to_string(_), do: ""
-
   ## Render ----------------------------------------------------------------
 
   @impl true
@@ -433,7 +314,7 @@ defmodule TokengateWeb.GroupsLive do
       <div class="space-y-6">
         <.header>
           Grupos
-          <:subtitle>Gestiona grupos, presupuestos, models de models y webhooks</:subtitle>
+          <:subtitle>Gestiona grupos, presupuestos, límites y modelos</:subtitle>
           <:actions>
             <div class="flex items-center gap-2">
               <input
@@ -499,7 +380,7 @@ defmodule TokengateWeb.GroupsLive do
           </div>
         </div>
 
-        <%!-- Aliases modal — manage model grants per group per group --%>
+        <%!-- Models modal — manage model grants per group --%>
         <div
           :if={@editing_models_group_id}
           class="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -509,35 +390,14 @@ defmodule TokengateWeb.GroupsLive do
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
             <div class="card-body p-6">
               <h2 class="text-lg font-semibold mb-4">Modelos del grupo</h2>
-              <p class="text-sm text-base-content/60 -mt-2 mb-4">
-                Toca un modelo para otorgarlo o revocarlo al grupo.
-              </p>
-              <div class="flex flex-wrap gap-2" id={"model-picker-#{@editing_models_group_id}"}>
-                <button
-                  :for={model <- Map.get(@models_by_org, "all", [])}
-                  type="button"
-                  phx-click="toggle_model"
-                  phx-value-group-id={@editing_models_group_id}
-                  phx-value-model-id={model.id}
-                  class={[
-                    "badge badge-sm cursor-pointer transition-all",
-                    if(
-                      model.id in Map.get(@granted_models, @editing_models_group_id, []),
-                      do: "badge-primary",
-                      else: "badge-outline"
-                    )
-                  ]}
-                  id={"model-#{@editing_models_group_id}-#{model.id}"}
-                >
-                  {model.name}
-                </button>
-                <p
-                  :if={Map.get(@models_by_org, "all", []) == []}
-                  class="text-xs text-base-content/40"
-                >
-                  No hay models disponibles.
-                </p>
-              </div>
+              <.model_picker
+                id={"model-picker-#{@editing_models_group_id}"}
+                models={Map.get(@models_by_org, "all", [])}
+                granted_ids={Map.get(@granted_models, @editing_models_group_id, [])}
+                toggle_event="toggle_model"
+                target_value={@editing_models_group_id}
+                empty_text="No hay modelos disponibles."
+              />
               <div class="flex justify-end mt-4">
                 <button
                   type="button"
@@ -552,65 +412,6 @@ defmodule TokengateWeb.GroupsLive do
           </div>
         </div>
 
-        <%!-- Webhook form (create / edit) — modal --%>
-        <div
-          :if={@webhook_form}
-          class="fixed inset-0 z-50 flex items-center justify-center p-4"
-          id={"webhook-form-#{@editing_webhook_group_id}"}
-        >
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_webhook" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
-            <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">
-                {if @editing_webhook_id == :new, do: "Nuevo webhook", else: "Editar webhook"}
-              </h2>
-              <.form
-                for={@webhook_form}
-                id={"destination-form-#{@editing_webhook_group_id}"}
-                phx-submit="save_webhook"
-              >
-                <.input
-                  field={@webhook_form[:name]}
-                  type="text"
-                  label="Nombre"
-                  hint="Nombre identificativo del webhook. Ej.: «Datadog - Producción»."
-                />
-                <.input
-                  field={@webhook_form[:url]}
-                  type="text"
-                  label="URL"
-                  hint="Endpoint HTTPS donde se enviarán los datos de telemetría (formato OTLP)."
-                />
-                <.input
-                  field={@webhook_form[:headers]}
-                  value={headers_to_string(@webhook_form[:headers].value)}
-                  type="textarea"
-                  label="Cabeceras (JSON)"
-                  placeholder='{"Authorization": "Bearer xxx"}'
-                  hint="Cabeceras HTTP adicionales en formato JSON. Dejalo vacio si no necesitas cabeceras extra."
-                />
-                <div class="flex gap-2 mt-4 justify-end">
-                  <button
-                    type="button"
-                    phx-click="cancel_webhook"
-                    class="btn btn-ghost btn-sm"
-                    id={"cancel-webhook-#{@editing_webhook_group_id}"}
-                  >
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    class="btn btn-primary btn-sm"
-                    id={"save-webhook-#{@editing_webhook_group_id}"}
-                  >
-                    Guardar
-                  </button>
-                </div>
-              </.form>
-            </div>
-          </div>
-        </div>
-
         <div id="groups" phx-update="stream">
           <div :if={@groups_empty?} class="text-center py-12 text-base-content/40" id="groups-empty">
             <.icon name="hero-user-group" class="w-10 h-10 mx-auto mb-2 opacity-40" />
@@ -619,17 +420,62 @@ defmodule TokengateWeb.GroupsLive do
           <div
             :for={{id, group} <- @streams.groups}
             id={id}
-            class="card bg-base-100 border border-base-300 shadow-sm mb-4 transition-shadow hover:shadow-md"
+            class="card bg-base-100 border border-base-300 shadow-sm mb-3 transition-shadow hover:shadow-md"
           >
-            <div class="card-body">
-              <div class="flex items-start justify-between">
-                <div>
-                  <h3 class="font-semibold text-base-content">{group.name}</h3>
-                  <p class="text-xs text-base-content/50 mt-0.5">
-                    {length(group.group_members)} miembros
+            <div class="card-body p-4">
+              <%!-- Header row: identity + compact stats + actions --%>
+              <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <div class="min-w-0 flex-1">
+                  <h3 class="font-semibold text-base-content truncate">{group.name}</h3>
+                  <p class="text-xs text-base-content/50">
+                    {length(group.group_members)} miembros · ${format_decimal(
+                      group.monthly_budget_per_user_usd
+                    )}/mes · conc. {group.default_concurrency_limit} · {group.default_rpm_limit} RPM
                   </p>
                 </div>
-                <div class="flex gap-2">
+
+                <%!-- Compact stats --%>
+                <div class="flex items-center gap-4 text-sm">
+                  <div class="text-center">
+                    <p class="text-[10px] uppercase tracking-wide text-base-content/40">Gasto/mes</p>
+                    <p class="font-bold">${format_decimal(get_spend(group, @group_budgets))}</p>
+                  </div>
+                  <div class="text-center">
+                    <p class="text-[10px] uppercase tracking-wide text-base-content/40">Estimado</p>
+                    <p class="font-bold">
+                      ${format_decimal(
+                        Decimal.add(
+                          get_estimated(group, @group_budgets) || Decimal.new(0),
+                          get_extra(group, @group_budgets)
+                        )
+                      )}
+                    </p>
+                  </div>
+                  <%!-- Models badge --%>
+                  <button
+                    phx-click="edit_models"
+                    phx-value-id={group.id}
+                    class="badge badge-sm badge-outline gap-1 hover:badge-primary transition-colors cursor-pointer"
+                    id={"edit-models-#{group.id}"}
+                    title="Gestionar modelos del grupo"
+                  >
+                    <.icon name="hero-rectangle-stack" class="w-3 h-3" />
+                    {length(Map.get(@granted_models, group.id, []))} modelos
+                  </button>
+                  <%!-- Webhooks badge — links to Observability --%>
+                  <.link
+                    navigate={~p"/admin/observability"}
+                    class="badge badge-sm badge-ghost gap-1 hover:bg-base-200 transition-colors"
+                    id={"webhooks-link-#{group.id}"}
+                    title="Gestionar webhooks en Observabilidad"
+                  >
+                    <.icon name="hero-bell-alert" class="w-3 h-3" />
+                    {length(Map.get(@destinations_by_group, group.id, []))} webhooks
+                  </.link>
+                </div>
+
+                <%!-- Actions --%>
+                <div class="flex gap-1 shrink-0">
                   <.link
                     navigate={~p"/admin/groups/#{group}/members"}
                     class="btn btn-sm btn-ghost"
@@ -646,24 +492,6 @@ defmodule TokengateWeb.GroupsLive do
                     Editar
                   </button>
                   <button
-                    phx-click="edit_models"
-                    phx-value-id={group.id}
-                    class="btn btn-sm btn-ghost"
-                    id={"edit-models-#{group.id}"}
-                    title="Gestionar models de models"
-                  >
-                    Aliases
-                  </button>
-                  <button
-                    phx-click="new_webhook"
-                    phx-value-group-id={group.id}
-                    class="btn btn-sm btn-ghost gap-1"
-                    id={"new-webhook-#{group.id}"}
-                    title="Agregar webhook de observabilidad"
-                  >
-                    <.icon name="hero-bell-alert" class="w-4 h-4" /> Webhook
-                  </button>
-                  <button
                     phx-click="delete_group"
                     phx-value-id={group.id}
                     class="btn btn-sm btn-ghost text-error"
@@ -674,204 +502,27 @@ defmodule TokengateWeb.GroupsLive do
                   </button>
                 </div>
               </div>
-
-              <% tb =
-                Map.get(@group_budgets, group.id, %{
-                  monthly_limit_usd: Decimal.new(0),
-                  monthly_spend_usd: Decimal.new(0),
-                  estimated_monthly_usd: nil,
-                  estimated_monthly_extra_usd: Decimal.new(0),
-                  member_count: 0,
-                  member_budgets: []
-                }) %>
-
-              <%!-- Stats cards: configuración + gasto — 5 tarjetas --%>
-              <div class="mt-3 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-                <%!-- Budget mensual/usuario --%>
-                <div class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-4">
-                    <div class="flex items-center justify-between">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                        Budget/mes
-                      </span>
-                      <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10">
-                        <.icon name="hero-banknotes" class="w-4 h-4 text-primary" />
-                      </span>
-                    </div>
-                    <p class="mt-1.5 text-lg font-bold text-base-content">
-                      ${format_decimal(group.monthly_budget_per_user_usd)}
-                    </p>
-                    <p class="text-xs text-base-content/40">por usuario</p>
-                  </div>
-                </div>
-
-                <%!-- Concurrencia/usuario --%>
-                <div class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-4">
-                    <div class="flex items-center justify-between">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                        Concurrencia
-                      </span>
-                      <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent/10">
-                        <.icon name="hero-arrows-right-left" class="w-4 h-4 text-accent" />
-                      </span>
-                    </div>
-                    <p class="mt-1.5 text-lg font-bold text-base-content">
-                      {group.default_concurrency_limit}
-                    </p>
-                    <p class="text-xs text-base-content/40">por usuario</p>
-                  </div>
-                </div>
-
-                <%!-- RPM/usuario --%>
-                <div class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-4">
-                    <div class="flex items-center justify-between">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                        RPM
-                      </span>
-                      <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent/10">
-                        <.icon name="hero-bolt" class="w-4 h-4 text-accent" />
-                      </span>
-                    </div>
-                    <p class="mt-1.5 text-lg font-bold text-base-content">
-                      {group.default_rpm_limit}
-                    </p>
-                    <p class="text-xs text-base-content/40">por usuario</p>
-                  </div>
-                </div>
-
-                <%!-- Gasto mensual --%>
-                <div class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-4">
-                    <div class="flex items-center justify-between">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                        Gasto/mes
-                      </span>
-                      <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-success/10">
-                        <.icon name="hero-currency-dollar" class="w-4 h-4 text-success" />
-                      </span>
-                    </div>
-                    <p class="mt-1.5 text-lg font-bold text-base-content">
-                      ${format_decimal(tb.monthly_spend_usd)}
-                    </p>
-                    <p class="text-xs text-base-content/40">real</p>
-                  </div>
-                </div>
-
-                <%!-- Estimado mensual --%>
-                <div class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-4">
-                    <div class="flex items-center justify-between">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                        Estimado/mes
-                      </span>
-                      <span class={[
-                        "flex items-center justify-center w-8 h-8 rounded-lg",
-                        if(
-                          tb.estimated_monthly_extra_usd &&
-                            Decimal.compare(tb.estimated_monthly_extra_usd, 0) == :gt,
-                          do: "bg-success/10",
-                          else: "bg-primary/10"
-                        )
-                      ]}>
-                        <.icon
-                          name="hero-calculator"
-                          class={[
-                            "w-4 h-4",
-                            if(
-                              tb.estimated_monthly_extra_usd &&
-                                Decimal.compare(tb.estimated_monthly_extra_usd, 0) == :gt,
-                              do: "text-success",
-                              else: "text-primary"
-                            )
-                          ]}
-                        />
-                      </span>
-                    </div>
-                    <p class="mt-1.5 text-lg font-bold text-base-content">
-                      ${format_decimal(
-                        Decimal.add(
-                          tb.estimated_monthly_usd || Decimal.new(0),
-                          tb.estimated_monthly_extra_usd
-                        )
-                      )}
-                    </p>
-                    <%= if Decimal.compare(tb.estimated_monthly_extra_usd, 0) == :gt do %>
-                      <p class="text-xs text-success">
-                        ${format_decimal(tb.estimated_monthly_usd)} base + ${format_decimal(
-                          tb.estimated_monthly_extra_usd
-                        )} extra
-                      </p>
-                    <% else %>
-                      <p class="text-xs text-base-content/40">proyección</p>
-                    <% end %>
-                  </div>
-                </div>
-              </div>
-
-              <%!-- Webhooks section --%>
-              <div class="mt-4 pt-4 border-t border-base-300">
-                <h4 class="text-sm font-semibold flex items-center gap-1.5 mb-3">
-                  <.icon name="hero-bell-alert" class="w-4 h-4 opacity-70" />
-                  Webhooks de observabilidad
-                </h4>
-
-                <!-- Destination list -->
-                <div id={"webhooks-list-#{group.id}"}>
-                  <div
-                    :for={destination <- Map.get(@destinations_by_group, group.id, [])}
-                    class="flex items-center justify-between gap-3 py-2 px-3 rounded-lg bg-base-200/50 hover:bg-base-200 transition-colors mb-2"
-                    id={"webhook-#{destination.id}"}
-                  >
-                    <div class="flex items-center gap-3 min-w-0">
-                      <span class="badge badge-sm badge-primary/20 border-primary/30 text-primary">
-                        {destination.type}
-                      </span>
-                      <div class="min-w-0">
-                        <p class="text-sm font-medium truncate">{destination.name}</p>
-                        <p class="text-xs text-base-content/40 truncate">{destination.url}</p>
-                      </div>
-                    </div>
-                    <div class="flex gap-1 shrink-0">
-                      <button
-                        phx-click="edit_webhook"
-                        phx-value-group-id={group.id}
-                        phx-value-webhook-id={destination.id}
-                        class="btn btn-xs btn-ghost"
-                        id={"edit-webhook-#{destination.id}"}
-                        title="Editar webhook"
-                      >
-                        <.icon name="hero-pencil" class="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        phx-click="delete_webhook"
-                        phx-value-webhook-id={destination.id}
-                        class="btn btn-xs btn-ghost text-error"
-                        id={"delete-webhook-#{destination.id}"}
-                        data-confirm="¿Eliminar webhook? Esta acción no se puede deshacer."
-                        title="Eliminar webhook"
-                      >
-                        <.icon name="hero-trash" class="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  </div>
-
-                  <div
-                    :if={Map.get(@destinations_by_group, group.id, []) == []}
-                    class="text-center py-6 text-base-content/40"
-                    id={"webhooks-empty-#{group.id}"}
-                  >
-                    <.icon name="hero-bell-slash" class="w-8 h-8 mx-auto mb-1.5 opacity-40" />
-                    <p class="text-xs">No hay webhooks configurados para este grupo.</p>
-                  </div>
-                </div>
-              </div>
             </div>
           </div>
         </div>
       </div>
     </Layouts.dashboard>
     """
+  end
+
+  ## Render helpers ---------------------------------------------------------
+
+  defp get_spend(group, group_budgets) do
+    group_budgets |> Map.get(group.id, %{}) |> Map.get(:monthly_spend_usd, Decimal.new(0))
+  end
+
+  defp get_estimated(group, group_budgets) do
+    group_budgets |> Map.get(group.id, %{}) |> Map.get(:estimated_monthly_usd)
+  end
+
+  defp get_extra(group, group_budgets) do
+    group_budgets
+    |> Map.get(group.id, %{})
+    |> Map.get(:estimated_monthly_extra_usd, Decimal.new(0))
   end
 end
