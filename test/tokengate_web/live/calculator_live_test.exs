@@ -43,12 +43,18 @@ defmodule TokengateWeb.CalculatorLiveTest do
   test "admin sees calculator page with form", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
-    {:ok, _view, html} = live(conn, ~p"/calculator")
+    {:ok, view, html} = live(conn, ~p"/calculator")
 
     assert html =~ "Calculadora de Costos"
-    assert html =~ "Entrada $/1M"
-    assert html =~ "Cache $/1M"
-    assert html =~ "Salida $/1M"
+    assert html =~ "Precios custom"
+    # Input groups: label + $ prefix + /1M suffix per price
+    assert html =~ ~s(for="cost-input")
+    assert html =~ "Entrada"
+    assert html =~ "Cache"
+    assert html =~ "Salida"
+    assert html =~ "/1M"
+    # Market shortcut disabled until a model with pricing is selected
+    assert has_element?(view, "#use-market-prices[disabled]")
   end
 
   test "regular user is redirected from calculator", %{conn: conn} do
@@ -99,9 +105,9 @@ defmodule TokengateWeb.CalculatorLiveTest do
       |> render_change()
 
     # The three spends render even with zero traffic in the period.
-    assert html =~ "Gasto Real"
-    assert html =~ "Gasto Estimado (custom)"
-    assert html =~ "Estimado Mercado"
+    assert has_element?(view, "#calc-real")
+    assert has_element?(view, "#calc-estimated")
+    assert has_element?(view, "#calc-market")
 
     # Custom inputs keep the submitted values.
     assert html =~ ~s(value="3.00")
@@ -126,7 +132,31 @@ defmodule TokengateWeb.CalculatorLiveTest do
       |> form("#calculator-form", %{model_id: model_.id, period: "7d"})
       |> render_change()
 
-    assert html =~ "Gasto Estimado (custom)"
-    refute html =~ "Estimado Mercado"
+    assert has_element?(view, "#calc-estimated")
+    refute has_element?(view, "#calc-market")
+    # Market shortcut stays disabled without market pricing
+    assert has_element?(view, "#use-market-prices[disabled]")
+  end
+
+  test "use_market_prices fills the custom inputs with market prices", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    model_ = market_alias_fixture()
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/calculator")
+
+    view
+    |> form("#calculator-form", %{model_id: model_.id, period: "7d"})
+    |> render_change()
+
+    # Button enabled now that market prices are available
+    refute has_element?(view, "#use-market-prices[disabled]")
+
+    html = view |> element("#use-market-prices") |> render_click()
+
+    # Custom inputs now carry the market prices
+    assert html =~ ~s(value="1.25")
+    assert html =~ ~s(value="0.125")
+    assert html =~ ~s(value="10")
   end
 end

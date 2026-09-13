@@ -20,6 +20,8 @@ defmodule TokengateWeb.CalculatorLive do
   alias Tokengate.Periods
   alias Tokengate.Providers
 
+  import TokengateWeb.KpiHelpers, only: [kpi_card: 1, format_compact: 1]
+
   @periods ~w(today week 7d 30d 90d)
 
   @impl true
@@ -80,6 +82,30 @@ defmodule TokengateWeb.CalculatorLive do
       end
 
     {:noreply, socket}
+  end
+
+  # Fill the custom pricing inputs with the model's market prices so the
+  # operator can start from a documented baseline and tweak from there.
+  def handle_event("use_market_prices", _params, socket) do
+    case socket.assigns.market_prices do
+      %{input: input, cache: cache, output: output} = market ->
+        {:noreply,
+         socket
+         |> assign(:cost_input, fmt_price(input))
+         |> assign(:cost_cache, fmt_price(cache))
+         |> assign(:cost_output, fmt_price(output))
+         |> load_chart_data(
+           socket.assigns.selected_model_id,
+           socket.assigns.period,
+           fmt_price(input),
+           fmt_price(cache),
+           fmt_price(output)
+         )
+         |> assign(:market_prices, market)}
+
+      _ ->
+        {:noreply, socket}
+    end
   end
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}
@@ -236,9 +262,9 @@ defmodule TokengateWeb.CalculatorLive do
   end
 
   # 3-term estimate (non-cached × input + cached × cache + completion × output)
-  # using the model's market prices. Returns 0 when market pricing is unset —
-  # the total is gated by has_market_pricing so the 0 never renders.
-  defp market_estimate(nil, _prompt, _cached, _completion), do: Decimal.new(0)
+  # using the model's market prices. Returns nil when market pricing is unset —
+  # the chart skips the line and the total is gated by has_market_pricing.
+  defp market_estimate(nil, _prompt, _cached, _completion), do: nil
 
   defp market_estimate(%{input: input, cache: cache, output: output}, prompt, cached, completion) do
     non_cached = max(prompt - cached, 0)
@@ -301,7 +327,16 @@ defmodule TokengateWeb.CalculatorLive do
       max_val =
         chart_data
         |> Enum.map(fn row ->
-          max(Decimal.to_float(row.real_cost), Decimal.to_float(row.estimated_cost))
+          max(
+            Decimal.to_float(row.real_cost),
+            max(
+              Decimal.to_float(row.estimated_cost),
+              if(is_nil(row.market_estimated_cost),
+                do: 0.0,
+                else: Decimal.to_float(row.market_estimated_cost)
+              )
+            )
+          )
         end)
         |> Enum.max()
         |> max(0.01)
@@ -317,15 +352,35 @@ defmodule TokengateWeb.CalculatorLive do
           real_y = pad_top + plot_h - Decimal.to_float(row.real_cost) / max_val * plot_h
           est_y = pad_top + plot_h - Decimal.to_float(row.estimated_cost) / max_val * plot_h
 
-          {Float.round(x, 1), Float.round(real_y, 1), Float.round(est_y, 1)}
+          market_y =
+            if is_nil(row.market_estimated_cost),
+              do: nil,
+              else:
+                pad_top + plot_h - Decimal.to_float(row.market_estimated_cost) / max_val * plot_h
+
+          {Float.round(x, 1), Float.round(real_y, 1), Float.round(est_y, 1),
+           market_y && Float.round(market_y, 1)}
         end)
 
-      real_pts = points |> Enum.map(fn {x, y, _} -> "#{x},#{y}" end) |> Enum.join(" ")
-      est_pts = points |> Enum.map(fn {x, _, y} -> "#{x},#{y}" end) |> Enum.join(" ")
+      real_pts = points |> Enum.map(fn {x, y, _, _} -> "#{x},#{y}" end) |> Enum.join(" ")
+      est_pts = points |> Enum.map(fn {x, _, y, _} -> "#{x},#{y}" end) |> Enum.join(" ")
+
+      market_pts =
+        if Enum.any?(chart_data, &(&1.market_estimated_cost != nil)) do
+          points
+          |> Enum.map(fn
+            {_x, _, _, nil} -> nil
+            {x, _, _, y} -> "#{x},#{y}"
+          end)
+          |> Enum.reject(&is_nil/1)
+          |> Enum.join(" ")
+        else
+          ""
+        end
 
       # Real cost area path (for fill)
-      {first_x, _first_y, _} = List.first(points)
-      {last_x, _, _} = List.last(points)
+      {first_x, _, _, _} = List.first(points)
+      {last_x, _, _, _} = List.last(points)
       real_area = "M#{first_x},#{pad_top + plot_h} L#{real_pts} L#{last_x},#{pad_top + plot_h} Z"
 
       y_ticks = build_y_ticks(max_val, plot_h, pad_top, pad_left)
@@ -334,6 +389,7 @@ defmodule TokengateWeb.CalculatorLive do
       %{
         real_points: real_pts,
         est_points: est_pts,
+        market_points: market_pts,
         real_area: real_area,
         max_val: max_val,
         y_ticks: y_ticks,

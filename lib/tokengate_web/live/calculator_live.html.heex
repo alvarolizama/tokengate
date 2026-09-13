@@ -15,7 +15,7 @@
 
     <%!-- Form ────────────────────────────────────────────────────────────── --%>
     <div class="card bg-base-100 border border-base-300 shadow-sm">
-      <div class="card-body space-y-4 p-4 sm:p-6">
+      <div class="card-body p-4 sm:p-6">
         <.form for={%{}} id="calculator-form" phx-change="calculate" phx-submit="calculate">
           <%!-- Row 1: model + period --%>
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -60,48 +60,102 @@
             </div>
           </div>
 
-          <%!-- Row 2: pricing --%>
-          <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div class="space-y-1.5">
-              <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                Entrada $/1M (custom)
-              </label>
-              <input
-                type="number"
-                name="cost_input"
-                value={@cost_input}
-                min="0"
-                step="0.01"
-                class="input input-bordered input-sm w-full"
-              />
+          <%!-- Row 2: custom pricing with $ prefix and /1M suffix --%>
+          <div class="mt-5 pt-4 border-t border-base-200">
+            <div class="flex items-center justify-between flex-wrap gap-2 mb-3">
+              <div>
+                <p class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
+                  Precios custom
+                </p>
+                <p class="text-[11px] text-base-content/40">
+                  Precio por millón de tokens — aplica solo a la línea "Estimado (custom)"
+                </p>
+              </div>
+              <button
+                type="button"
+                phx-click="use_market_prices"
+                disabled={is_nil(@market_prices)}
+                class="btn btn-xs btn-ghost gap-1"
+                id="use-market-prices"
+                title={
+                  if @market_prices,
+                    do: "Copia los precios de mercado a los campos custom",
+                    else: "El modelo no tiene precios de mercado configurados"
+                }
+              >
+                <.icon name="hero-arrow-down-tray" class="w-3 h-3" /> Usar mercado
+              </button>
             </div>
 
-            <div class="space-y-1.5">
-              <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                Cache $/1M (custom)
-              </label>
-              <input
-                type="number"
-                name="cost_cache"
-                value={@cost_cache}
-                min="0"
-                step="0.01"
-                class="input input-bordered input-sm w-full"
-              />
-            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div class="space-y-1.5">
+                <label class="text-xs font-medium text-base-content/60" for="cost-input">
+                  Entrada
+                </label>
+                <div class="join w-full">
+                  <span class="join-item px-3 flex items-center text-sm text-base-content/50 bg-base-200 border border-base-300 border-r-0 rounded-l">
+                    $
+                  </span>
+                  <input
+                    type="number"
+                    name="cost_input"
+                    id="cost-input"
+                    value={@cost_input}
+                    min="0"
+                    step="0.01"
+                    class="input input-bordered input-sm w-full rounded-l-none"
+                  />
+                  <span class="join-item px-3 flex items-center text-xs text-base-content/50 bg-base-200 border border-base-300 border-l-0 rounded-r">
+                    /1M
+                  </span>
+                </div>
+              </div>
 
-            <div class="space-y-1.5">
-              <label class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                Salida $/1M (custom)
-              </label>
-              <input
-                type="number"
-                name="cost_output"
-                value={@cost_output}
-                min="0"
-                step="0.01"
-                class="input input-bordered input-sm w-full"
-              />
+              <div class="space-y-1.5">
+                <label class="text-xs font-medium text-base-content/60" for="cost-cache">
+                  Cache
+                </label>
+                <div class="join w-full">
+                  <span class="join-item px-3 flex items-center text-sm text-base-content/50 bg-base-200 border border-base-300 border-r-0 rounded-l">
+                    $
+                  </span>
+                  <input
+                    type="number"
+                    name="cost_cache"
+                    id="cost-cache"
+                    value={@cost_cache}
+                    min="0"
+                    step="0.01"
+                    class="input input-bordered input-sm w-full rounded-l-none"
+                  />
+                  <span class="join-item px-3 flex items-center text-xs text-base-content/50 bg-base-200 border border-base-300 border-l-0 rounded-r">
+                    /1M
+                  </span>
+                </div>
+              </div>
+
+              <div class="space-y-1.5">
+                <label class="text-xs font-medium text-base-content/60" for="cost-output">
+                  Salida
+                </label>
+                <div class="join w-full">
+                  <span class="join-item px-3 flex items-center text-sm text-base-content/50 bg-base-200 border border-base-300 border-r-0 rounded-l">
+                    $
+                  </span>
+                  <input
+                    type="number"
+                    name="cost_output"
+                    id="cost-output"
+                    value={@cost_output}
+                    min="0"
+                    step="0.01"
+                    class="input input-bordered input-sm w-full rounded-l-none"
+                  />
+                  <span class="join-item px-3 flex items-center text-xs text-base-content/50 bg-base-200 border border-base-300 border-l-0 rounded-r">
+                    /1M
+                  </span>
+                </div>
+              </div>
             </div>
           </div>
         </.form>
@@ -110,134 +164,90 @@
 
     <%!-- Summary cards (render whenever a model is selected, even with zero traffic) --%>
     <%= if @summary do %>
-      <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-        <%!-- Total real --%>
-        <div class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-3 sm:p-4">
-            <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-              <.icon name="hero-banknotes" class="w-3.5 h-3.5 text-success" /> Gasto Real
-            </div>
-            <p class="text-xl sm:text-2xl font-bold tabular-nums text-success">
-              ${format_cost(@summary.total_real)}
-            </p>
-            <%= if Decimal.compare(@summary.total_real, 0) == :eq and @summary.total_requests > 0 do %>
-              <p class="text-[10px] text-base-content/40 mt-0.5">
-                El proveedor no reporta costo
-              </p>
-            <% end %>
-          </div>
-        </div>
-
-        <%!-- Total estimated with custom pricing --%>
-        <div class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-3 sm:p-4">
-            <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-              <.icon name="hero-calculator" class="w-3.5 h-3.5 text-primary" />
-              Gasto Estimado (custom)
-            </div>
-            <p class="text-xl sm:text-2xl font-bold tabular-nums text-primary">
-              ${format_cost(@summary.total_estimated)}
-            </p>
-          </div>
-        </div>
-
-        <%!-- Total estimated with market pricing (only when the alias documents it) --%>
-        <div
-          :if={@summary.has_market_pricing}
-          class="card bg-base-100 border border-base-300 shadow-sm"
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <.kpi_card
+          id="calc-real"
+          label="Gasto Real"
+          icon="hero-banknotes"
+          accent="primary"
+          title="Costo reportado por el proveedor para el período"
         >
-          <div class="card-body p-3 sm:p-4">
-            <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-              <.icon name="hero-arrow-trending-up" class="w-3.5 h-3.5 text-info" />
-              Estimado Mercado
-            </div>
-            <p class="text-xl sm:text-2xl font-bold tabular-nums text-info">
-              ${format_cost(@summary.total_market_estimated)}
-            </p>
-          </div>
-        </div>
+          ${format_cost(@summary.total_real)}
+          <:sub :if={
+            Decimal.compare(@summary.total_real, 0) == :eq and @summary.total_requests > 0
+          }>
+            El proveedor no reporta costo
+          </:sub>
+        </.kpi_card>
 
-        <%!-- Difference --%>
-        <div class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-3 sm:p-4">
-            <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-              <.icon name="hero-scale" class="w-3.5 h-3.5 text-base-content/50" /> Diferencia
-            </div>
-            <p class={[
-              "text-xl sm:text-2xl font-bold tabular-nums",
-              difference_class(@summary.difference)
-            ]}>
-              {difference_sign(@summary.difference)}${abs_decimal(@summary.difference)}
-            </p>
-            <%= if difference_pct(@summary) do %>
-              <p class={[
-                "text-[10px] font-medium tabular-nums mt-0.5",
-                difference_class(@summary.difference)
-              ]}>
-                {difference_sign(@summary.difference)}{difference_pct(@summary)}%
-              </p>
-            <% end %>
-          </div>
-        </div>
+        <.kpi_card
+          id="calc-estimated"
+          label="Estimado (custom)"
+          icon="hero-calculator"
+          accent="primary"
+          title="Costo estimado con los precios custom de arriba"
+        >
+          ${format_cost(@summary.total_estimated)}
+        </.kpi_card>
 
-        <%!-- Total requests --%>
-        <div class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-3 sm:p-4">
-            <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-              <.icon name="hero-bolt" class="w-3.5 h-3.5 text-secondary" /> Requests
-            </div>
-            <p class="text-xl sm:text-2xl font-bold tabular-nums text-base-content">
-              {format_number(@summary.total_requests)}
-            </p>
-          </div>
-        </div>
+        <.kpi_card
+          :if={@summary.has_market_pricing}
+          id="calc-market"
+          label="Estimado Mercado"
+          icon="hero-arrow-trending-up"
+          accent="accent"
+          title="Costo estimado con los precios de mercado del modelo"
+        >
+          ${format_cost(@summary.total_market_estimated)}
+        </.kpi_card>
 
-        <%!-- Total tokens --%>
-        <div class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-3 sm:p-4">
-            <div class="flex items-center gap-2 text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-              <.icon name="hero-credit-card" class="w-3.5 h-3.5 text-base-content/50" />
-              Tokens Total
-            </div>
-            <p class="text-xl sm:text-2xl font-bold tabular-nums text-base-content">
-              {format_number(@summary.total_prompt + @summary.total_completion)}
-            </p>
-          </div>
-        </div>
+        <.kpi_card
+          id="calc-difference"
+          label="Diferencia"
+          icon="hero-scale"
+          accent={if Decimal.compare(@summary.difference, 0) == :gt, do: "error", else: "primary"}
+          title="Estimado (custom) − Real: positivo = pagas menos de lo estimado"
+        >
+          <span class={difference_class(@summary.difference)}>
+            {difference_sign(@summary.difference)}${abs_decimal(@summary.difference)}
+          </span>
+          <:sub :if={difference_pct(@summary)}>
+            <span class={difference_class(@summary.difference)}>
+              {difference_sign(@summary.difference)}{difference_pct(@summary)}% vs real
+            </span>
+          </:sub>
+        </.kpi_card>
       </div>
 
-      <%!-- Token breakdown ───────────────────────────────────────────────── --%>
-      <div class="grid grid-cols-3 gap-3">
-        <div class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-3 sm:p-4">
-            <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-              Tokens Entrada
-            </div>
-            <p class="text-sm font-bold tabular-nums text-base-content/70">
-              {format_number(@summary.total_prompt)}
-            </p>
-          </div>
-        </div>
-        <div class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-3 sm:p-4">
-            <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-              Tokens Cache
-            </div>
-            <p class="text-sm font-bold tabular-nums text-base-content/70">
-              {format_number(@summary.total_cache_read)}
-            </p>
-          </div>
-        </div>
-        <div class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-3 sm:p-4">
-            <div class="text-[10px] font-semibold uppercase tracking-wider text-base-content/40">
-              Tokens Salida
-            </div>
-            <p class="text-sm font-bold tabular-nums text-base-content/70">
-              {format_number(@summary.total_completion)}
-            </p>
-          </div>
-        </div>
+      <%!-- Volumen del período: requests + tokens en una sola fila --%>
+      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <.kpi_card id="calc-requests" label="Requests" icon="hero-bolt" accent="primary">
+          {format_number(@summary.total_requests)}
+        </.kpi_card>
+
+        <.kpi_card
+          id="calc-tokens"
+          label="Tokens"
+          icon="hero-cpu-chip"
+          accent="primary"
+          title={
+            "#{format_number(@summary.total_prompt)} in / #{format_number(@summary.total_cache_read)} cache / #{format_number(@summary.total_completion)} out"
+          }
+        >
+          <span class="flex items-baseline gap-2">
+            {format_compact(@summary.total_prompt)}
+            <span class="text-sm text-base-content/50">in</span>
+            <span class="text-base-content/30">/</span>
+            {format_compact(@summary.total_cache_read)}
+            <span class="text-sm text-base-content/50">cache</span>
+            <span class="text-base-content/30">/</span>
+            {format_compact(@summary.total_completion)}
+            <span class="text-sm text-base-content/50">out</span>
+          </span>
+          <:sub>
+            total {format_number(@summary.total_prompt + @summary.total_completion)} tokens
+          </:sub>
+        </.kpi_card>
       </div>
     <% end %>
 
@@ -270,6 +280,12 @@
                 <span class="w-3 h-3 rounded-sm bg-primary"></span>
                 <span class="text-base-content/60">Estimado (custom)</span>
               </span>
+              <%= if @summary.has_market_pricing do %>
+                <span class="inline-flex items-center gap-1.5">
+                  <span class="w-3 h-0.5 rounded bg-info"></span>
+                  <span class="text-base-content/60">Estimado Mercado</span>
+                </span>
+              <% end %>
             </div>
           </div>
 
@@ -312,7 +328,7 @@
                 stroke-linecap="round"
               />
 
-              <%!-- Estimated cost line --%>
+              <%!-- Estimated cost line (custom prices) --%>
               <polyline
                 points={chart.est_points}
                 fill="none"
@@ -321,6 +337,18 @@
                 stroke-linejoin="round"
                 stroke-linecap="round"
                 stroke-dasharray="4,2"
+              />
+
+              <%!-- Market estimate line (only when the model has pricing) --%>
+              <polyline
+                :if={chart.market_points != ""}
+                points={chart.market_points}
+                fill="none"
+                class="stroke-info"
+                stroke-width="1.5"
+                stroke-linejoin="round"
+                stroke-linecap="round"
+                stroke-dasharray="1,3"
               />
 
               <%!-- X-axis line --%>
