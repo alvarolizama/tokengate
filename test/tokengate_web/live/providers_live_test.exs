@@ -257,7 +257,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
 
   ## Builtin (catalog) providers ------------------------------------------------
 
-  test "builtin edit modal shows identity fields read-only", %{conn: conn} do
+  test "builtin providers offer no Editar button", %{conn: conn} do
     # Builtins are seeded like CatalogSync does (raw change, bypassing the
     # operator changeset that locks identity fields).
     {:ok, builtin} =
@@ -283,18 +283,18 @@ defmodule TokengateWeb.ProvidersLiveTest do
         status: "active"
       })
 
+    custom = create_provider()
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/admin/providers")
 
-    view |> element("#edit-#{builtin.id}") |> render_click()
-
-    # Modal flags the catalog provenance and locks identity fields
-    assert has_element?(view, "#provider-form")
-    assert render(view) =~ "catálogo"
-    assert has_element?(view, "#provider-form input[name='provider[name]'][disabled]")
-    assert has_element?(view, "#provider-form input[name='provider[base_url]'][disabled]")
+    # Builtin: no edit affordance at all (identity is catalog-owned; boot
+    # sync would overwrite any edit). Custom keeps it.
+    refute has_element?(view, "#edit-#{builtin.id}")
+    assert has_element?(view, "#edit-#{custom.id}")
+    # Both keep the status toggle
+    assert has_element?(view, "#toggle-provider-#{builtin.id}")
   end
 
   test "custom edit modal keeps identity fields editable", %{conn: conn} do
