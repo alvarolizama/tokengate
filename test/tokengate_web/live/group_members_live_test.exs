@@ -276,7 +276,8 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, group_url(group))
 
-    # The checkbox should be present and unchecked
+    # Open the member details modal to reach the model picker
+    view |> element("#details-#{member.id}") |> render_click()
     assert has_element?(view, "#model-picker-member-#{member.id}-#{model_.id}")
 
     # Grant the extra model
@@ -318,7 +319,9 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, group_url(group))
 
-    # Grant the model via checkbox toggle
+    # Open the member details modal, then grant via picker toggle
+    view |> element("#details-#{member.id}") |> render_click()
+
     view
     |> element("#model-picker-member-#{member.id}-#{model_.id}")
     |> render_click()

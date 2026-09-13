@@ -35,6 +35,7 @@ defmodule TokengateWeb.GroupMembersLive do
           |> assign(:page_title, "Miembros · Tokengate")
           |> assign(:group, group)
           |> assign(:editing_member_id, nil)
+          |> assign(:editing_details_member_id, nil)
           |> assign(:new_token, nil)
           |> assign(:new_token_member_id, nil)
           |> assign(:show_add_modal?, false)
@@ -394,6 +395,16 @@ defmodule TokengateWeb.GroupMembersLive do
   @impl true
   def handle_event("edit_overrides", %{"id" => member_id}, socket) do
     {:noreply, assign(socket, :editing_member_id, member_id)}
+  end
+
+  @impl true
+  def handle_event("open_details", %{"id" => member_id}, socket) do
+    {:noreply, assign(socket, :editing_details_member_id, member_id)}
+  end
+
+  @impl true
+  def handle_event("close_details", _params, socket) do
+    {:noreply, assign(socket, :editing_details_member_id, nil)}
   end
 
   @impl true
@@ -767,449 +778,332 @@ defmodule TokengateWeb.GroupMembersLive do
           </div>
         </div>
 
-        <%!-- Resumen del grupo — configuración + gasto --%>
+        <%!-- Resumen del grupo — fila compacta --%>
         <div class="card bg-base-100 border border-base-300 shadow-sm" id="group-config">
-          <div class="card-body p-5">
-            <h2 class="text-sm font-semibold mb-3">Resumen del grupo</h2>
-
-            <%!-- Stats cards: configuración + gasto — 5 tarjetas --%>
-            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-              <%!-- Budget mensual/usuario --%>
-              <div class="card bg-base-100 border border-base-300 shadow-sm">
-                <div class="card-body p-4">
-                  <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                      Budget/mes
-                    </span>
-                    <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10">
-                      <.icon name="hero-banknotes" class="w-4 h-4 text-primary" />
-                    </span>
-                  </div>
-                  <p class="mt-1.5 text-lg font-bold text-base-content">
-                    ${format_decimal(@group.monthly_budget_per_user_usd)}
-                  </p>
-                  <p class="text-xs text-base-content/40">por usuario</p>
-                </div>
+          <div class="card-body p-4">
+            <div class="flex flex-wrap items-center gap-x-8 gap-y-3">
+              <div>
+                <p class="text-[10px] uppercase tracking-wide text-base-content/40">Budget/mes</p>
+                <p class="text-lg font-bold">${format_decimal(@group.monthly_budget_per_user_usd)}</p>
+                <p class="text-xs text-base-content/40">por usuario</p>
               </div>
-
-              <%!-- Concurrencia/usuario --%>
-              <div class="card bg-base-100 border border-base-300 shadow-sm">
-                <div class="card-body p-4">
-                  <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                      Concurrencia
-                    </span>
-                    <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent/10">
-                      <.icon name="hero-arrows-right-left" class="w-4 h-4 text-accent" />
-                    </span>
-                  </div>
-                  <p class="mt-1.5 text-lg font-bold text-base-content">
-                    {@group.default_concurrency_limit}
-                  </p>
-                  <p class="text-xs text-base-content/40">por usuario</p>
-                </div>
+              <div>
+                <p class="text-[10px] uppercase tracking-wide text-base-content/40">Concurrencia</p>
+                <p class="text-lg font-bold">{@group.default_concurrency_limit}</p>
+                <p class="text-xs text-base-content/40">por usuario</p>
               </div>
-
-              <%!-- RPM/usuario --%>
-              <div class="card bg-base-100 border border-base-300 shadow-sm">
-                <div class="card-body p-4">
-                  <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                      RPM
-                    </span>
-                    <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent/10">
-                      <.icon name="hero-bolt" class="w-4 h-4 text-accent" />
-                    </span>
-                  </div>
-                  <p class="mt-1.5 text-lg font-bold text-base-content">
-                    {@group.default_rpm_limit}
-                  </p>
-                  <p class="text-xs text-base-content/40">por usuario</p>
-                </div>
+              <div>
+                <p class="text-[10px] uppercase tracking-wide text-base-content/40">RPM</p>
+                <p class="text-lg font-bold">{@group.default_rpm_limit}</p>
+                <p class="text-xs text-base-content/40">por usuario</p>
               </div>
-
-              <%!-- Gasto mensual --%>
-              <div class="card bg-base-100 border border-base-300 shadow-sm">
-                <div class="card-body p-4">
-                  <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                      Gasto/mes
-                    </span>
-                    <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-success/10">
-                      <.icon name="hero-currency-dollar" class="w-4 h-4 text-success" />
-                    </span>
-                  </div>
-                  <p class="mt-1.5 text-lg font-bold text-base-content">
-                    ${format_decimal(@group_monthly_spend)}
-                  </p>
-                  <p class="text-xs text-base-content/40">real</p>
-                </div>
+              <div>
+                <p class="text-[10px] uppercase tracking-wide text-base-content/40">Gasto/mes</p>
+                <p class="text-lg font-bold text-success">${format_decimal(@group_monthly_spend)}</p>
+                <p class="text-xs text-base-content/40">real</p>
               </div>
-
-              <%!-- Estimado mensual --%>
-              <div class="card bg-base-100 border border-base-300 shadow-sm">
-                <div class="card-body p-4">
-                  <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                      Estimado/mes
-                    </span>
-                    <span class={[
-                      "flex items-center justify-center w-8 h-8 rounded-lg",
-                      if(
-                        @estimated_monthly_extra &&
-                          Decimal.compare(@estimated_monthly_extra, 0) == :gt,
-                        do: "bg-success/10",
-                        else: "bg-primary/10"
-                      )
-                    ]}>
-                      <.icon
-                        name="hero-calculator"
-                        class={[
-                          "w-4 h-4",
-                          if(
-                            @estimated_monthly_extra &&
-                              Decimal.compare(@estimated_monthly_extra, 0) == :gt,
-                            do: "text-success",
-                            else: "text-primary"
-                          )
-                        ]}
-                      />
-                    </span>
-                  </div>
-                  <p class="mt-1.5 text-lg font-bold text-base-content">
-                    ${format_decimal(
-                      Decimal.add(@estimated_monthly || Decimal.new(0), @estimated_monthly_extra)
-                    )}
-                  </p>
-                  <p
-                    :if={
-                      @estimated_monthly_extra && Decimal.compare(@estimated_monthly_extra, 0) == :gt
-                    }
-                    class="text-xs text-success"
-                  >
-                    ${format_decimal(@estimated_monthly)} base + ${format_decimal(
-                      @estimated_monthly_extra
-                    )} extra
-                  </p>
-                  <p
-                    :if={
-                      !(@estimated_monthly_extra &&
-                          Decimal.compare(@estimated_monthly_extra, 0) == :gt)
-                    }
-                    class="text-xs text-base-content/40"
-                  >
-                    proyección
-                  </p>
-                </div>
+              <div>
+                <p class="text-[10px] uppercase tracking-wide text-base-content/40">Estimado/mes</p>
+                <p class="text-lg font-bold">
+                  ${format_decimal(
+                    Decimal.add(@estimated_monthly || Decimal.new(0), @estimated_monthly_extra)
+                  )}
+                </p>
+                <p
+                  :if={
+                    @estimated_monthly_extra && Decimal.compare(@estimated_monthly_extra, 0) == :gt
+                  }
+                  class="text-xs text-success"
+                >
+                  ${format_decimal(@estimated_monthly)} base + ${format_decimal(
+                    @estimated_monthly_extra
+                  )} extra
+                </p>
+                <p
+                  :if={
+                    !(@estimated_monthly_extra &&
+                        Decimal.compare(@estimated_monthly_extra, 0) == :gt)
+                  }
+                  class="text-xs text-base-content/40"
+                >
+                  proyección
+                </p>
               </div>
             </div>
           </div>
         </div>
 
-        <div class="flex items-center justify-end gap-3 mb-4">
-          <.form for={%{}} phx-change="search_members" id="member-search-form">
-            <input
-              type="text"
-              name="member_search"
-              value={@member_search}
-              placeholder="Buscar por nombre o correo…"
-              phx-debounce="200"
-              class="input input-sm w-72"
-            />
-          </.form>
-        </div>
+        <div id="members">
+          <%!-- New token reveal (after regenerate) — banner above the table --%>
+          <div
+            :if={@new_token && @new_token_member_id}
+            class="alert alert-warning mb-4"
+            id={"new-token-#{@new_token_member_id}"}
+          >
+            <.icon name="hero-exclamation-triangle" class="w-5 h-5 shrink-0" />
+            <div class="flex-1 text-sm">
+              <p class="font-semibold">Guarda esta clave ahora — no se volverá a mostrar:</p>
+              <code class="text-xs font-mono break-all">{@new_token}</code>
+            </div>
+            <button
+              phx-click="dismiss_new_token"
+              class="btn btn-sm btn-ghost"
+              id={"dismiss-token-#{@new_token_member_id}"}
+            >
+              <.icon name="hero-x-mark" class="w-4 h-4" />
+            </button>
+          </div>
 
-        <div id="members" class="space-y-4">
-          <div :if={@members_empty?} class="text-center py-12 text-base-content/40" id="members-empty">
+          <div
+            :if={!@members_empty?}
+            class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm"
+          >
+            <table class="table table-sm">
+              <thead>
+                <tr>
+                  <th>Miembro</th>
+                  <th>Límites</th>
+                  <th>Gasto/mes</th>
+                  <th>Uso</th>
+                  <th>Modelos</th>
+                  <th class="text-right">Acciones</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr :for={member <- @members} id={"members-#{member.id}"} class="align-top">
+                  <% mb = Map.get(@member_budgets, member.id, %{monthly_spend: Decimal.new(0)}) %>
+                  <td>
+                    <p class="font-medium text-sm">{member.user.email}</p>
+                    <p class="text-xs text-base-content/50">{member.user.name}</p>
+                    <div class="flex items-center gap-1.5 mt-1 flex-wrap">
+                      <code class="text-xs font-mono">{masked_key(member)}</code>
+                      <%= if member.api_key do %>
+                        <span class={[
+                          "badge badge-xs",
+                          if(member.api_key.status == "active",
+                            do: "badge-success",
+                            else: "badge-error"
+                          )
+                        ]}>
+                          {if(member.api_key.status == "active", do: "Activa", else: "Revocada")}
+                        </span>
+                      <% else %>
+                        <span class="badge badge-xs badge-ghost">Sin clave</span>
+                      <% end %>
+                      <span class="badge badge-xs badge-ghost capitalize">{member.status}</span>
+                    </div>
+                  </td>
+                  <td class="text-xs whitespace-nowrap">
+                    <p>
+                      <span class="text-base-content/50">Budget/mes</span>
+                      ${format_decimal(@group.monthly_budget_per_user_usd)}
+                      <span
+                        :if={member.extra_monthly_budget_usd}
+                        class="text-success font-medium"
+                      >
+                        +${format_decimal(member.extra_monthly_budget_usd)}
+                      </span>
+                    </p>
+                    <p>
+                      <span class="text-base-content/50">Conc.</span>
+                      {@group.default_concurrency_limit}
+                      <span :if={member.extra_concurrency} class="text-success font-medium">
+                        +{member.extra_concurrency}
+                      </span>
+                    </p>
+                    <p>
+                      <span class="text-base-content/50">RPM</span>
+                      {@group.default_rpm_limit}
+                      <span :if={member.extra_rpm} class="text-success font-medium">
+                        +{member.extra_rpm}
+                      </span>
+                    </p>
+                  </td>
+                  <td class="font-mono text-sm">${format_decimal(mb.monthly_spend)}</td>
+                  <td>
+                    <% tier = get_member_tier(@usage_tiers, member.id) %>
+                    <%= if tier do %>
+                      <span
+                        class={["badge badge-sm", tier_badge_class(tier.tier)]}
+                        title={"Score: #{tier.score} | Peak RPM: #{tier.peak_rpm} | Días activos: #{tier.active_days} | Requests: #{tier.request_count}"}
+                      >
+                        {String.capitalize(tier.tier)}
+                      </span>
+                    <% else %>
+                      <span class="badge badge-sm badge-ghost" title="Sin actividad en 30 días">—</span>
+                    <% end %>
+                  </td>
+                  <td>
+                    <div class="flex items-center gap-1.5 flex-wrap">
+                      <button
+                        phx-click="open_details"
+                        phx-value-id={member.id}
+                        class="badge badge-sm badge-outline gap-1 hover:badge-primary cursor-pointer transition-colors"
+                        id={"details-#{member.id}"}
+                        title="Modelos y API keys exclusivas"
+                      >
+                        <.icon name="hero-rectangle-stack" class="w-3 h-3" />
+                        {length(MapSet.to_list(@group_alias_ids))} grupo
+                      </button>
+                      <span
+                        :if={extra_model_ids(@extra_models, member.id) != []}
+                        class="badge badge-sm badge-accent"
+                      >
+                        +{length(extra_model_ids(@extra_models, member.id))} extra
+                      </span>
+                    </div>
+                  </td>
+                  <td class="text-right">
+                    <div class="flex gap-0.5 justify-end">
+                      <.link
+                        navigate={~p"/stats/users/#{member.user_id}"}
+                        class="btn btn-xs btn-ghost"
+                        id={"stats-#{member.id}"}
+                        title="Ver stats consolidados de este usuario"
+                      >
+                        <.icon name="hero-chart-bar" class="w-3.5 h-3.5" />
+                      </.link>
+                      <button
+                        phx-click="clear_sticky_routes"
+                        phx-value-id={member.id}
+                        class="btn btn-xs btn-ghost"
+                        id={"clear-sticky-#{member.id}"}
+                        title="Limpiar sticky routes (fuerza re-ruteo)"
+                      >
+                        <.icon name="hero-arrow-path" class="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        phx-click="edit_overrides"
+                        phx-value-id={member.id}
+                        class="btn btn-xs btn-ghost"
+                        id={"edit-overrides-#{member.id}"}
+                        title="Editar extras"
+                      >
+                        <.icon name="hero-adjustments-horizontal" class="w-3.5 h-3.5" />
+                      </button>
+                      <button
+                        phx-click="replace_key"
+                        phx-value-id={member.id}
+                        class="btn btn-xs btn-ghost"
+                        id={"replace-key-#{member.id}"}
+                        title="Regenerar clave"
+                        data-confirm="¿Regenerar clave? La clave actual dejará de funcionar inmediatamente."
+                      >
+                        <.icon name="hero-key" class="w-3.5 h-3.5" />
+                      </button>
+                      <%= if member.api_key && member.api_key.status == "active" do %>
+                        <button
+                          phx-click="revoke_key"
+                          phx-value-id={member.id}
+                          class="btn btn-xs btn-ghost text-error"
+                          id={"revoke-key-#{member.id}"}
+                          title="Revocar clave"
+                          data-confirm="¿Revocar clave? Esta acción no se puede deshacer."
+                        >
+                          <.icon name="hero-no-symbol" class="w-3.5 h-3.5" />
+                        </button>
+                      <% end %>
+                      <button
+                        phx-click="remove_member"
+                        phx-value-id={member.id}
+                        class="btn btn-xs btn-ghost text-error"
+                        id={"remove-#{member.id}"}
+                        title="Eliminar miembro"
+                      >
+                        <.icon name="hero-trash" class="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div
+            :if={@members_empty?}
+            class="text-center py-12 text-base-content/40"
+            id="members-empty"
+          >
             <.icon name="hero-users" class="w-10 h-10 mx-auto mb-2 opacity-40" />
             <p>Este grupo no tiene miembros todavía.</p>
           </div>
-          <div
-            :for={member <- @members}
-            id={"members-#{member.id}"}
-            class="card bg-base-100 border border-base-300 shadow-sm"
-          >
-            <% mb =
-              Map.get(@member_budgets, member.id, %{
-                daily_spend: Decimal.new(0),
-                member_extra: Decimal.new(0),
-                model_extras: [],
-                model_extra_total: Decimal.new(0),
-                total_max: Decimal.new(0)
-              }) %>
-            <div class="card-body p-5">
-              <%!-- Header with API key info --%>
-              <div class="flex items-start justify-between">
-                <div class="min-w-0">
-                  <h3 class="font-semibold text-base-content truncate">{member.user.email}</h3>
-                  <div class="flex items-center gap-2 mt-0.5 flex-wrap">
-                    <span class="text-xs text-base-content/50">{member.user.name}</span>
-                    <span class="text-xs text-base-content/30">·</span>
-                    <code class="text-xs font-mono">{masked_key(member)}</code>
-                    <%= if member.api_key do %>
-                      <span class={[
-                        "badge badge-xs",
-                        if(member.api_key.status == "active",
-                          do: "badge-success",
-                          else: "badge-error"
-                        )
-                      ]}>
-                        {if(member.api_key.status == "active", do: "Activa", else: "Revocada")}
-                      </span>
-                    <% else %>
-                      <span class="badge badge-xs badge-ghost">Sin clave</span>
-                    <% end %>
-                  </div>
+        </div>
+
+        <%!-- Member details modal — modelos + API keys exclusivas --%>
+        <div
+          :if={@editing_details_member_id}
+          class="fixed inset-0 z-50 flex items-center justify-center p-4"
+          id={"member-details-#{@editing_details_member_id}"}
+        >
+          <div class="absolute inset-0 bg-black/50" phx-click="close_details" />
+          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
+            <div class="card-body p-6">
+              <% member = Enum.find(@members, &(&1.id == @editing_details_member_id)) %>
+              <div :if={member}>
+                <h2 class="text-lg font-semibold mb-1">{member.user.email}</h2>
+                <p class="text-xs text-base-content/50 mb-4">{member.user.name}</p>
+
+                <div>
+                  <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">Modelos</p>
+                  <p class="text-xs text-base-content/40 mb-2">
+                    Los modelos del grupo están otorgados a todos los miembros; los extras son
+                    individuales.
+                  </p>
+                  <.model_picker
+                    id={"model-picker-member-#{member.id}"}
+                    models={@org_models}
+                    granted_ids={MapSet.to_list(@group_alias_ids)}
+                    extra_ids={extra_model_ids(@extra_models, member.id)}
+                    toggle_event="toggle_extra_model"
+                    target_value={member.id}
+                    empty_text="No hay modelos disponibles."
+                  />
                 </div>
-                <div class="flex items-center gap-5 shrink-0">
-                  <% tier = get_member_tier(@usage_tiers, member.id) %>
-                  <%= if tier do %>
-                    <span
-                      class={[
-                        "badge badge-sm",
-                        tier_badge_class(tier.tier)
-                      ]}
-                      title={"Score: #{tier.score} | Peak RPM: #{tier.peak_rpm} | Días activos: #{tier.active_days} | Requests: #{tier.request_count}"}
-                    >
-                      {String.capitalize(tier.tier)}
-                    </span>
+
+                <div class="mt-4 pt-4 border-t border-base-200">
+                  <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">
+                    API Keys Exclusivas
+                  </p>
+                  <% member_exclusive = Map.get(@exclusive_providers || %{}, member.id, []) %>
+                  <%= if member_exclusive == [] do %>
+                    <p class="text-xs text-base-content/40">Sin keys exclusivas asignadas.</p>
                   <% else %>
-                    <span class="badge badge-sm badge-ghost" title="Sin actividad en 30 días">—</span>
-                  <% end %>
-                  <span class="badge badge-sm badge-ghost capitalize">{member.status}</span>
-                  <.link
-                    navigate={~p"/stats/users/#{member.user_id}"}
-                    class="btn btn-sm btn-ghost"
-                    id={"stats-#{member.id}"}
-                    title="Ver stats consolidados de este usuario"
-                  >
-                    <.icon name="hero-chart-bar" class="w-4 h-4" /> Stats
-                  </.link>
-                  <button
-                    phx-click="clear_sticky_routes"
-                    phx-value-id={member.id}
-                    class="btn btn-sm btn-ghost"
-                    id={"clear-sticky-#{member.id}"}
-                    title="Fuerza re-ruteo en la siguiente petición"
-                  >
-                    <.icon name="hero-arrow-path" class="w-4 h-4" /> Sticky
-                  </button>
-                  <button
-                    phx-click="replace_key"
-                    phx-value-id={member.id}
-                    class="btn btn-sm btn-ghost"
-                    id={"replace-key-#{member.id}"}
-                    data-confirm="¿Regenerar clave? La clave actual dejará de funcionar inmediatamente."
-                  >
-                    <.icon name="hero-arrow-path" class="w-4 h-4" /> Regenerar
-                  </button>
-                  <%= if member.api_key && member.api_key.status == "active" do %>
-                    <button
-                      phx-click="revoke_key"
-                      phx-value-id={member.id}
-                      class="btn btn-sm btn-ghost text-error"
-                      id={"revoke-key-#{member.id}"}
-                      data-confirm="¿Revocar clave? Esta acción no se puede deshacer."
-                    >
-                      <.icon name="hero-no-symbol" class="w-4 h-4" /> Revocar
-                    </button>
-                  <% end %>
-                </div>
-              </div>
-
-              <%!-- New token reveal (after regenerate) --%>
-              <div
-                :if={@new_token && @new_token_member_id == member.id}
-                class="mt-3 alert alert-warning"
-                id={"new-token-#{member.id}"}
-              >
-                <.icon name="hero-exclamation-triangle" class="w-5 h-5 shrink-0" />
-                <div class="flex-1 text-sm">
-                  <p class="font-semibold">Guarda esta clave ahora — no se volverá a mostrar:</p>
-                  <code class="text-xs font-mono break-all">{@new_token}</code>
-                </div>
-                <button
-                  phx-click="dismiss_new_token"
-                  class="btn btn-sm btn-ghost"
-                  id={"dismiss-token-#{member.id}"}
-                >
-                  <.icon name="hero-x-mark" class="w-4 h-4" />
-                </button>
-              </div>
-
-              <%!-- Stats cards: configuración + gasto del miembro — 4 tarjetas --%>
-              <div class="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <%!-- Budget mensual --%>
-                <div class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-4">
-                    <div class="flex items-center justify-between">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                        Budget/mes
-                      </span>
-                      <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10">
-                        <.icon name="hero-banknotes" class="w-4 h-4 text-primary" />
-                      </span>
-                    </div>
-                    <p class="mt-1.5 text-lg font-bold text-base-content">
-                      ${format_decimal(@group.monthly_budget_per_user_usd)}
-                    </p>
-                    <p :if={member.extra_monthly_budget_usd} class="text-xs text-success">
-                      +${format_decimal(member.extra_monthly_budget_usd)} extra
-                    </p>
-                    <p :if={!member.extra_monthly_budget_usd} class="text-xs text-base-content/40">
-                      por usuario
-                    </p>
-                  </div>
-                </div>
-
-                <%!-- Concurrencia --%>
-                <div class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-4">
-                    <div class="flex items-center justify-between">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                        Concurrencia
-                      </span>
-                      <span class={[
-                        "flex items-center justify-center w-8 h-8 rounded-lg",
-                        if(member.extra_concurrency, do: "bg-success/10", else: "bg-accent/10")
-                      ]}>
-                        <.icon
-                          name="hero-arrows-right-left"
-                          class={[
-                            "w-4 h-4",
-                            if(member.extra_concurrency, do: "text-success", else: "text-accent")
-                          ]}
-                        />
-                      </span>
-                    </div>
-                    <p class="mt-1.5 text-lg font-bold text-base-content">
-                      {@group.default_concurrency_limit}
-                    </p>
-                    <p :if={member.extra_concurrency} class="text-xs text-success">
-                      +{member.extra_concurrency} extra
-                    </p>
-                    <p :if={!member.extra_concurrency} class="text-xs text-base-content/40">
-                      por usuario
-                    </p>
-                  </div>
-                </div>
-
-                <%!-- RPM --%>
-                <div class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-4">
-                    <div class="flex items-center justify-between">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                        RPM
-                      </span>
-                      <span class={[
-                        "flex items-center justify-center w-8 h-8 rounded-lg",
-                        if(member.extra_rpm, do: "bg-success/10", else: "bg-accent/10")
-                      ]}>
-                        <.icon
-                          name="hero-bolt"
-                          class={[
-                            "w-4 h-4",
-                            if(member.extra_rpm, do: "text-success", else: "text-accent")
-                          ]}
-                        />
-                      </span>
-                    </div>
-                    <p class="mt-1.5 text-lg font-bold text-base-content">
-                      {@group.default_rpm_limit}
-                    </p>
-                    <p :if={member.extra_rpm} class="text-xs text-success">
-                      +{member.extra_rpm} extra
-                    </p>
-                    <p :if={!member.extra_rpm} class="text-xs text-base-content/40">
-                      por usuario
-                    </p>
-                  </div>
-                </div>
-
-                <%!-- Gasto mensual --%>
-                <div class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-4">
-                    <div class="flex items-center justify-between">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                        Gasto/mes
-                      </span>
-                      <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-success/10">
-                        <.icon name="hero-currency-dollar" class="w-4 h-4 text-success" />
-                      </span>
-                    </div>
-                    <p class="mt-1.5 text-lg font-bold text-base-content">
-                      ${format_decimal(mb.monthly_spend)}
-                    </p>
-                    <p class="text-xs text-base-content/40">real</p>
-                  </div>
-                </div>
-              </div>
-
-              <%!-- Actions --%>
-              <div class="flex flex-wrap items-center justify-between gap-2 mt-3">
-                <div class="flex items-center gap-2">
-                  <button
-                    phx-click="edit_overrides"
-                    phx-value-id={member.id}
-                    class="btn btn-sm btn-ghost"
-                    id={"edit-overrides-#{member.id}"}
-                  >Extras</button>
-                </div>
-                <button
-                  phx-click="remove_member"
-                  phx-value-id={member.id}
-                  class="btn btn-sm btn-ghost text-error"
-                  id={"remove-#{member.id}"}
-                >Eliminar</button>
-              </div>
-
-              <%!-- Modelos — group models (locked) + extra grants (toggleable) --%>
-              <div :if={@org_models != []} class="mt-3 pt-3 border-t border-base-200">
-                <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">Modelos</p>
-                <.model_picker
-                  id={"model-picker-member-#{member.id}"}
-                  models={@org_models}
-                  granted_ids={MapSet.to_list(@group_alias_ids)}
-                  extra_ids={extra_model_ids(@extra_models, member.id)}
-                  toggle_event="toggle_extra_model"
-                  target_value={member.id}
-                  empty_text="No hay modelos disponibles."
-                />
-              </div>
-
-              <%!-- API Keys Exclusivas --%>
-              <div class="mt-3 pt-3 border-t border-base-200">
-                <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">
-                  API Keys Exclusivas
-                </p>
-                <% member_exclusive = Map.get(@exclusive_providers || %{}, member.id, []) %>
-                <%= if member_exclusive == [] do %>
-                  <p class="text-xs text-base-content/40">Sin keys exclusivas asignadas.</p>
-                <% else %>
-                  <div class="space-y-1">
-                    <div
-                      :for={mp <- member_exclusive}
-                      class="flex items-center justify-between text-xs py-1 px-2 rounded bg-base-200/50"
-                    >
-                      <div class="flex items-center gap-2 min-w-0">
-                        <span class="badge badge-xs badge-warning">exclusiva</span>
-                        <span class="font-medium truncate">{mp.model.name}</span>
-                        <span class="text-base-content/40">·</span>
-                        <span class="text-base-content/50">
-                          {if mp.credential && mp.credential.provider,
-                            do: mp.credential.provider.name,
-                            else: "—"}
-                        </span>
-                        <span class="text-base-content/40 font-mono">
-                          {if mp.credential,
-                            do: TokengateWeb.ModelsLive.mask_key(mp.credential.api_key_encrypted),
-                            else: "—"}
-                        </span>
+                    <div class="space-y-1">
+                      <div
+                        :for={mp <- member_exclusive}
+                        class="flex items-center justify-between text-xs py-1 px-2 rounded bg-base-200/50"
+                      >
+                        <div class="flex items-center gap-2 min-w-0">
+                          <span class="badge badge-xs badge-warning">exclusiva</span>
+                          <span class="font-medium truncate">{mp.model.name}</span>
+                          <span class="text-base-content/40">·</span>
+                          <span class="text-base-content/50">
+                            {if mp.credential && mp.credential.provider,
+                              do: mp.credential.provider.name,
+                              else: "—"}
+                          </span>
+                          <span class="text-base-content/40 font-mono">
+                            {if mp.credential,
+                              do: TokengateWeb.ModelsLive.mask_key(mp.credential.api_key_encrypted),
+                              else: "—"}
+                          </span>
+                        </div>
+                        <span class="badge badge-xs badge-ghost">{mp.provider_model}</span>
                       </div>
-                      <span class="badge badge-xs badge-ghost">{mp.provider_model}</span>
                     </div>
-                  </div>
-                <% end %>
+                  <% end %>
+                </div>
+
+                <div class="flex justify-end mt-4">
+                  <button
+                    type="button"
+                    phx-click="close_details"
+                    class="btn btn-primary btn-sm"
+                    id="close-details-btn"
+                  >
+                    Cerrar
+                  </button>
+                </div>
               </div>
             </div>
           </div>
