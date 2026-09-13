@@ -88,6 +88,16 @@ defmodule TokengateWeb.SubscriptionsLive do
     socket
     |> stream(:subscriptions, sorted, reset: true)
     |> assign(:subscriptions_empty?, filtered == [])
+    |> assign(:usage_by_sub, usage_by_sub(filtered))
+  end
+
+  # Consumo del ciclo vigente por suscripción (para la columna "Consumo").
+  # La lista es acotada; una query SUM por sub es suficiente.
+  defp usage_by_sub(subs) do
+    Map.new(subs, fn sub ->
+      usage = Credits.subscription_usage(sub)
+      {sub.id, {usage, sub}}
+    end)
   end
 
   ## Events — search / sort -------------------------------------------------
@@ -343,6 +353,82 @@ defmodule TokengateWeb.SubscriptionsLive do
   end
 
   def rollover_label(_), do: "Se pierde"
+
+  # --- Consumo (columna "Consumo") -------------------------------------------
+
+  # "%{credited_micro, consumed_micro}" → "X / Y (Z%)" en créditos
+  # (micro-USD → USD; 1 crédito = $1). "—" cuando la sub no otorga crédito.
+  def usage_label(%{credited_micro: 0}, _sub), do: "—"
+
+  def usage_label(%{consumed_micro: consumed_micro}, sub) do
+    used =
+      Decimal.new(consumed_micro)
+      |> Decimal.div(Decimal.new(1_000_000))
+      |> Decimal.round(2)
+
+    allocated = Decimal.new(sub.units)
+
+    cond do
+      Decimal.compare(used, allocated) == :gt ->
+        "#{used} / #{allocated} (excedido)"
+
+      Decimal.compare(allocated, 0) == :eq ->
+        "#{used} / 0"
+
+      true ->
+        pct = Decimal.mult(Decimal.div(used, allocated), 100) |> Decimal.round(0)
+        "#{used} / #{allocated} (#{pct}%)"
+    end
+  end
+
+  # Celda de la columna "Consumo": label + barra de progreso (colores del
+  # dashboard: verde < 70%, ámbar < 90%, rojo ≥ 90%).
+  def render_usage_cell(sub, assigns) do
+    assigns =
+      case Map.get(assigns.usage_by_sub, sub.id) do
+        nil -> %{usage: nil, sub: sub}
+        {usage, sub} -> %{usage: usage, sub: sub}
+      end
+
+    assigns = Map.put(assigns, :label, usage_label(assigns.usage || %{credited_micro: 0}, sub))
+
+    assigns =
+      Map.put(
+        assigns,
+        :pct,
+        case assigns.usage do
+          nil -> nil
+          %{credited_micro: 0} -> nil
+          %{credited_micro: c, consumed_micro: k} -> Float.round(k / c * 100, 1)
+        end
+      )
+
+    assigns =
+      Map.put(
+        assigns,
+        :bar_class,
+        cond do
+          is_nil(assigns.pct) -> "bg-base-300"
+          assigns.pct >= 90 -> "bg-error"
+          assigns.pct >= 70 -> "bg-warning"
+          true -> "bg-success"
+        end
+      )
+
+    assigns =
+      Map.put(
+        assigns,
+        :width,
+        if(is_nil(assigns.pct), do: "width: 0%", else: "width: #{min(assigns.pct, 100)}%")
+      )
+
+    ~H"""
+    <div class="text-xs font-mono">{@label}</div>
+    <div class="mt-1 h-1.5 rounded-full bg-base-200 overflow-hidden">
+      <div class={["h-full rounded-full transition-all", @bar_class]} style={@width}></div>
+    </div>
+    """
+  end
 
   attr :field, :atom, required: true
   attr :label, :string, required: true

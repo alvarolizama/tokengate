@@ -2,7 +2,7 @@ defmodule TokengateWeb.UsersLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
-  alias Tokengate.{Accounts, Logs}
+  alias Tokengate.{Accounts, Credits, Logs}
 
   defp unique, do: System.unique_integer([:positive])
 
@@ -85,6 +85,101 @@ defmodule TokengateWeb.UsersLiveTest do
 
     assert has_element?(view, "#spend-#{member_user.id}", "$7.25")
     assert has_element?(view, "#spend-#{admin.id}", "—")
+  end
+
+  describe "credit column" do
+    test "shows remaining/total credit for a user with grants", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{user: member_user} = register("user")
+
+      {:ok, group} = Accounts.create_group(%{name: "Credit Group #{unique()}"})
+
+      {:ok, member} =
+        Accounts.create_group_member(%{"user_id" => member_user.id, "group_id" => group.id})
+
+      {:ok, sub} =
+        Credits.create_subscription(%{
+          "units" => 100,
+          "recurrence" => "monthly",
+          "reset_day" => 1
+        })
+
+      {:ok, _} = Credits.set_group_default(group, sub)
+
+      # $30 consumidos del grant (sub, usuario) del ciclo.
+      {:ok, _} =
+        Tokengate.Logs.log_request(%{
+          group_member_id: member.id,
+          model_requested: "gpt-4",
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+          provider_cost_usd: Decimal.new("30.00"),
+          credit_subscription_id: sub.id
+        })
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/admin/users")
+
+      assert has_element?(view, "#credit-#{member_user.id}", "$70.00")
+      assert has_element?(view, "#credit-#{member_user.id}", "$100.00")
+    end
+
+    test "shows Sin crédito badge for users without subscriptions", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{user: plain} = register("user")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/admin/users")
+
+      assert has_element?(view, "#credit-#{plain.id}", "Sin crédito")
+    end
+
+    test "credit column is sortable (desc default: most remaining first)", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      %{user: rich} = register("user")
+      %{user: poor} = register("user")
+
+      {:ok, group_rich} = Accounts.create_group(%{name: "Rich #{unique()}"})
+      {:ok, group_poor} = Accounts.create_group(%{name: "Poor #{unique()}"})
+
+      {:ok, sub_rich} =
+        Credits.create_subscription(%{
+          "units" => 200,
+          "recurrence" => "monthly",
+          "reset_day" => 1
+        })
+
+      {:ok, sub_poor} =
+        Credits.create_subscription(%{
+          "units" => 50,
+          "recurrence" => "monthly",
+          "reset_day" => 1
+        })
+
+      {:ok, _} = Credits.set_group_default(group_rich, sub_rich)
+      {:ok, _} = Credits.set_group_default(group_poor, sub_poor)
+
+      {:ok, _} =
+        Accounts.create_group_member(%{"user_id" => rich.id, "group_id" => group_rich.id})
+
+      {:ok, _} =
+        Accounts.create_group_member(%{"user_id" => poor.id, "group_id" => group_poor.id})
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/admin/users")
+
+      # Desc default → el de mayor saldo primero.
+      html = render(view)
+      assert html =~ "Crédito"
+
+      rich_first? = fn html ->
+        Regex.scan(~r/id="user-([0-9a-f-]+)"/, html)
+        |> Enum.map(&Enum.at(&1, 1))
+        |> Enum.filter(&(&1 in [to_string(rich.id), to_string(poor.id)]))
+      end
+
+      assert rich_first?.(html) == [to_string(rich.id), to_string(poor.id)]
+    end
   end
 
   ## Flat listing + sorting ----------------------------------------------------

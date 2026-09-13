@@ -302,6 +302,77 @@ defmodule Tokengate.Credits do
     }
   end
 
+  @doc """
+  Consumo agregado de una suscripción en su ciclo vigente.
+
+  Devuelve `%{credited_micro, consumed_micro, remaining_micro, grants,
+  cycle_start}` donde `grants` es el número de grants que la suscripción
+  cubre (usuarios con membresía en los grupos que la referencian, o 1 para
+  una sub directa). `credited_micro` = `units × grants` (sin rollover, que
+  es per-grant y se ve en el dashboard).
+  """
+  @spec subscription_usage(Subscription.t()) :: %{
+          credited_micro: integer(),
+          consumed_micro: integer(),
+          remaining_micro: integer(),
+          grants: non_neg_integer(),
+          cycle_start: Date.t() | nil
+        }
+  def subscription_usage(%Subscription{} = subscription) do
+    %{start: cycle_start} = cycle_bounds(subscription, Date.utc_today())
+    grants = grant_count(subscription)
+    credited = subscription.units * @credit_micro * grants
+    consumed = micro(spend_for_subscription(subscription.id, cycle_start))
+
+    %{
+      credited_micro: credited,
+      consumed_micro: consumed,
+      remaining_micro: max(0, credited - consumed),
+      grants: grants,
+      cycle_start: cycle_start
+    }
+  end
+
+  @doc """
+  Crédito vigente de un usuario: **suma sobre sus grants únicos** (subs
+  default de sus grupos, deduplicadas, + subs directas). A diferencia de
+  `member_credit/1`, no cuenta dos veces una sub compartida por varios
+  grupos del mismo usuario.
+  """
+  @spec user_credit(term()) :: %{
+          credited_micro: integer(),
+          consumed_micro: integer(),
+          remaining_micro: integer(),
+          has_credit?: boolean()
+        }
+  def user_credit(user_id) do
+    group_ids =
+      Repo.all(from gm in GroupMember, where: gm.user_id == ^user_id, select: gm.group_id)
+
+    group_subs =
+      group_ids
+      |> Enum.reject(&is_nil/1)
+      |> Enum.map(&group_subscription/1)
+      |> Enum.reject(&is_nil/1)
+
+    grants =
+      (group_subs ++ direct_subscriptions(user_id))
+      |> Enum.uniq_by(& &1.id)
+
+    {credited, consumed} =
+      Enum.reduce(grants, {0, 0}, fn sub, {c, k} ->
+        state = grant_state(sub, user_id)
+        {c + state.credited_micro, k + state.consumed_micro}
+      end)
+
+    %{
+      credited_micro: credited,
+      consumed_micro: consumed,
+      remaining_micro: max(0, credited - consumed),
+      has_credit?: grants != []
+    }
+  end
+
   defp carried_micro(
          %Subscription{recurrence: "monthly", rollover_mode: "rollover"} = subscription,
          user_id,
@@ -320,18 +391,22 @@ defmodule Tokengate.Credits do
 
   defp carried_micro(_subscription, _user_id, _cycle_start), do: 0
 
-  # Gasto asentado de (suscripción, usuario) en [from, to). `to = nil` → abierto.
-  # El usuario sale del grupo_member de cada request (el grant es por usuario,
-  # compartido por sus membresías).
+  # Gasto asentado de (suscripción, usuario) en [from, to). `from`/`to` nil →
+  # cota abierta (top-ups sin `starts_at` suman todo lo atribuido). El usuario
+  # sale del group_member de cada request (el grant es por usuario, compartido
+  # por sus membresías).
   defp spend_between(subscription_id, user_id, from, to) do
     query =
       RequestLog
       |> join(:inner, [rl], gm in GroupMember, on: gm.id == rl.group_member_id)
-      |> where(
-        [rl, gm],
-        rl.credit_subscription_id == ^subscription_id and gm.user_id == ^user_id and
-          rl.inserted_at >= ^to_datetime(from)
-      )
+      |> where([rl, gm], rl.credit_subscription_id == ^subscription_id and gm.user_id == ^user_id)
+
+    query =
+      if from do
+        where(query, [rl], rl.inserted_at >= ^to_datetime(from))
+      else
+        query
+      end
 
     query =
       if to do
@@ -361,6 +436,43 @@ defmodule Tokengate.Credits do
 
   defp to_datetime(%Date{} = date), do: DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
   defp to_datetime(%DateTime{} = dt), do: dt
+
+  # Número de grants (usuarios) que cubre una suscripción: los miembros de los
+  # grupos que la referencian, o 1 para una sub directa.
+  defp grant_count(%Subscription{user_id: nil} = subscription),
+    do: subscription |> grant_users() |> length()
+
+  defp grant_count(%Subscription{user_id: user_id}) when not is_nil(user_id), do: 1
+
+  defp grant_users(subscription) do
+    group_ids = group_ids_for(subscription)
+
+    if group_ids == [] do
+      []
+    else
+      Repo.all(from gm in GroupMember, where: gm.group_id in ^group_ids, select: gm.user_id)
+      |> Enum.uniq()
+    end
+  end
+
+  # Gasto agregado de TODA la suscripción (todos sus grants) desde `from`
+  # (`nil` → cota abierta).
+  defp spend_for_subscription(subscription_id, from) do
+    query =
+      RequestLog
+      |> where([rl], rl.credit_subscription_id == ^subscription_id)
+
+    query =
+      if from do
+        where(query, [rl], rl.inserted_at >= ^to_datetime(from))
+      else
+        query
+      end
+
+    query
+    |> select([rl], fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
+    |> Repo.one()
+  end
 
   # ---------------------------------------------------------------------------
   # Helpers

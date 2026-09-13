@@ -16,6 +16,7 @@ defmodule TokengateWeb.UsersLive do
   use TokengateWeb, :live_view
   alias Tokengate.Accounts
   alias Tokengate.Accounts.User
+  alias Tokengate.Credits
   alias Tokengate.Metrics.DashboardCache
 
   @impl true
@@ -65,7 +66,7 @@ defmodule TokengateWeb.UsersLive do
   # Sortable columns and their value extractors. Each function receives a
   # user plus the lookup assigns (spend maps, group map) and returns a
   # comparable value.
-  @sort_columns ~w(name role status groups monthly_spend total_spend inserted_at)a
+  @sort_columns ~w(name role status groups credit monthly_spend total_spend inserted_at)a
 
   defp load_users(socket) do
     search = socket.assigns[:search_query] || ""
@@ -102,6 +103,18 @@ defmodule TokengateWeb.UsersLive do
 
     user_groups = load_user_groups(filtered)
 
+    # Crédito vigente por usuario (grants únicos: defaults de sus grupos +
+    # subs directas, dedup de subs compartidas). Grants = 1 query por sub del
+    # usuario; la clave incluye el conjunto de ids filtrados para no servir
+    # entradas rancias (5s TTL) cuando el set cambia.
+    credit_by_user =
+      DashboardCache.fetch_or_compute(
+        {:users_credit_by_user, Enum.map(filtered, & &1.id)},
+        fn ->
+          Map.new(filtered, &{&1.id, Credits.user_credit(&1.id)})
+        end
+      )
+
     # Filter by today's spend when toggle is active
     filtered =
       if socket.assigns.filter_today_spend do
@@ -118,7 +131,8 @@ defmodule TokengateWeb.UsersLive do
     sort_ctx = %{
       spend_by_user: spend_by_user,
       total_spend_by_user: total_spend_by_user,
-      user_groups: user_groups
+      user_groups: user_groups,
+      credit_by_user: credit_by_user
     }
 
     sorted =
@@ -128,6 +142,7 @@ defmodule TokengateWeb.UsersLive do
     |> assign(:spend_by_user, spend_by_user)
     |> assign(:total_spend_by_user, total_spend_by_user)
     |> assign(:user_groups, user_groups)
+    |> assign(:credit_by_user, credit_by_user)
     |> stream(:users, sorted, reset: true)
   end
 
@@ -162,6 +177,15 @@ defmodule TokengateWeb.UsersLive do
     case Map.get(ctx.user_groups, user.id, []) do
       [] -> ""
       groups -> groups |> Enum.map(&String.downcase(&1.name)) |> Enum.join(", ")
+    end
+  end
+
+  # Crédito restante (nil = sin crédito → tier 3, ordena último igual que nil).
+  defp sort_value(user, :credit, ctx) do
+    case Map.get(ctx.credit_by_user, user.id) do
+      %{credited_micro: 0} -> nil
+      %{remaining_micro: rem} -> rem
+      _ -> nil
     end
   end
 
@@ -455,9 +479,10 @@ defmodule TokengateWeb.UsersLive do
   defp toggle_sort_direction(:desc), do: :asc
 
   # Text-ish columns start asc; numeric/date columns start desc (most useful
-  # first: biggest spenders, newest users).
-  defp default_direction_for(field) when field in [:monthly_spend, :total_spend, :inserted_at],
-    do: :desc
+  # first: biggest spenders, newest users). Crédito: desc = más saldo primero.
+  defp default_direction_for(field)
+       when field in [:credit, :monthly_spend, :total_spend, :inserted_at],
+       do: :desc
 
   defp default_direction_for(_), do: :asc
 
@@ -765,6 +790,14 @@ defmodule TokengateWeb.UsersLive do
                     direction={@sort_direction}
                   />
                 </th>
+                <th>
+                  <.sort_button
+                    field={:credit}
+                    label="Crédito"
+                    current={@sort_field}
+                    direction={@sort_direction}
+                  />
+                </th>
                 <th>Google</th>
                 <th class="text-right">
                   <.sort_button
@@ -802,6 +835,7 @@ defmodule TokengateWeb.UsersLive do
                   user_groups={@user_groups}
                   spend_by_user={@spend_by_user}
                   total_spend_by_user={@total_spend_by_user}
+                  credit_by_user={@credit_by_user}
                   current_user={@current_user}
                   timezone={@timezone}
                 />
@@ -929,6 +963,39 @@ defmodule TokengateWeb.UsersLive do
 
   defp initials(_), do: "—"
 
+  ## Credit helpers ------------------------------------------------------------
+
+  # Porcentaje consumido del crédito (nil cuando no hay crédito otorgado).
+  defp credit_pct(%{credited_micro: 0}), do: nil
+
+  defp credit_pct(%{credited_micro: c, consumed_micro: k}) when c > 0,
+    do: Float.round(k / c * 100, 1)
+
+  defp credit_pct(_), do: nil
+
+  # Formatea micro-USD como USD.
+  defp format_micro(micro) when is_integer(micro) do
+    micro
+    |> Decimal.new()
+    |> Decimal.div(Decimal.new(1_000_000))
+    |> Decimal.round(2, :half_up)
+    |> Decimal.to_string(:normal)
+  end
+
+  defp credit_bar_width(nil), do: "width: 0%"
+
+  defp credit_bar_width(pct) when is_number(pct), do: "width: #{min(pct, 100)}%"
+
+  defp credit_bar_class(pct) when is_number(pct) do
+    cond do
+      pct >= 90 -> "bg-error"
+      pct >= 70 -> "bg-warning"
+      true -> "bg-success"
+    end
+  end
+
+  defp credit_bar_class(_), do: "bg-base-300"
+
   ## Components ---------------------------------------------------------------
 
   attr :field, :atom, required: true
@@ -962,6 +1029,7 @@ defmodule TokengateWeb.UsersLive do
   attr :user_groups, :map, required: true
   attr :spend_by_user, :map, required: true
   attr :total_spend_by_user, :map, required: true
+  attr :credit_by_user, :map, required: true
   attr :current_user, :map, required: true
   attr :timezone, :string, required: true
 
@@ -1003,6 +1071,31 @@ defmodule TokengateWeb.UsersLive do
           <.icon name="hero-eye" class="w-3 h-3" />
         </button>
       </div>
+    </td>
+    <td id={"credit-#{@user.id}"}>
+      <%= case Map.get(@credit_by_user, @user.id) do %>
+        <% nil -> %>
+          <span class="text-xs text-base-content/30">—</span>
+        <% %{has_credit?: false} -> %>
+          <span class="badge badge-sm badge-ghost badge-outline">Sin crédito</span>
+        <% %{credited_micro: 0} -> %>
+          <span class="text-xs text-base-content/30">—</span>
+        <% credit -> %>
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-mono">
+              ${format_micro(credit.remaining_micro)}
+              <span class="text-base-content/40">/ ${format_micro(credit.credited_micro)}</span>
+            </span>
+            <% cpct = credit_pct(credit) %>
+            <div class="w-16 h-1.5 rounded-full bg-base-200 overflow-hidden">
+              <div
+                class={["h-full rounded-full transition-all", credit_bar_class(cpct)]}
+                style={credit_bar_width(cpct)}
+              >
+              </div>
+            </div>
+          </div>
+      <% end %>
     </td>
     <td>
       <%= if google_badge(@user) do %>

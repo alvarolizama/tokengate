@@ -154,5 +154,55 @@ defmodule TokengateWeb.SubscriptionsLiveTest do
       assert Tokengate.Repo.get!(Tokengate.Accounts.Group, group.id).default_subscription_id ==
                nil
     end
+
+    test "shows per-subscription usage in the Consumo column", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+      {:ok, group} = Accounts.create_group(%{name: "Usage Group #{unique()}"})
+
+      {:ok, sub} =
+        Credits.create_subscription(%{
+          "units" => 100,
+          "recurrence" => "monthly",
+          "reset_day" => 1
+        })
+
+      {:ok, _} = Credits.set_group_default(group, sub)
+
+      %{user: member_user} = register("user")
+
+      {:ok, member} =
+        Accounts.create_group_member(%{"user_id" => member_user.id, "group_id" => group.id})
+
+      # $30 consumidos de los 100 créditos del ciclo.
+      {:ok, _} =
+        Tokengate.Logs.log_request(%{
+          group_member_id: member.id,
+          model_requested: "gpt-4",
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+          provider_cost_usd: Decimal.new("30.00"),
+          credit_subscription_id: sub.id
+        })
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/admin/subscriptions")
+
+      assert has_element?(view, "#sub-usage-#{sub.id}", "30.00 / 100 (30%)")
+    end
+
+    test "usage column shows em dash for a subscription with zero units", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+
+      {:ok, sub} =
+        Credits.create_subscription(%{
+          "units" => 0,
+          "recurrence" => "monthly",
+          "reset_day" => 1
+        })
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/admin/subscriptions")
+
+      assert has_element?(view, "#sub-usage-#{sub.id}", "—")
+    end
   end
 end

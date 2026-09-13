@@ -223,6 +223,7 @@
                 align="right"
               />
             </th>
+            <th class="text-right">Consumo</th>
             <th>
               <.sort_button
                 field={:recurrence}
@@ -262,6 +263,9 @@
           <tr :for={{dom_id, sub} <- @streams.subscriptions} id={dom_id}>
             <td class="font-medium">{target_label(sub, assigns)}</td>
             <td class="text-right font-mono">{sub.units}</td>
+            <td id={"sub-usage-#{sub.id}"} class="w-40">
+              {render_usage_cell(sub, assigns)}
+            </td>
             <td>{recurrence_label(sub.recurrence)}</td>
             <td>{sub.reset_day || "—"}</td>
             <td>{rollover_label(sub)}</td>
