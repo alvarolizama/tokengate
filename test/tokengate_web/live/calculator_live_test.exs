@@ -43,7 +43,7 @@ defmodule TokengateWeb.CalculatorLiveTest do
   test "admin sees calculator page with form", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
-    {:ok, _view, html} = live(conn, ~p"/dashboard/calculator")
+    {:ok, _view, html} = live(conn, ~p"/calculator")
 
     assert html =~ "Calculadora de Costos"
     assert html =~ "Entrada $/1M"
@@ -54,7 +54,7 @@ defmodule TokengateWeb.CalculatorLiveTest do
   test "regular user is redirected from calculator", %{conn: conn} do
     %{user: user, password: password} = register("user")
     conn = login(conn, user, password)
-    {:error, {:redirect, %{to: to}}} = live(conn, ~p"/dashboard/calculator")
+    {:error, {:redirect, %{to: to}}} = live(conn, ~p"/calculator")
     assert to =~ "/dashboard"
   end
 
@@ -63,7 +63,7 @@ defmodule TokengateWeb.CalculatorLiveTest do
     model_ = market_alias_fixture()
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/dashboard/calculator")
+    {:ok, view, _html} = live(conn, ~p"/calculator")
 
     html =
       view
@@ -85,7 +85,7 @@ defmodule TokengateWeb.CalculatorLiveTest do
     model_ = market_alias_fixture()
     conn = login(conn, admin, password)
 
-    {:ok, view, _html} = live(conn, ~p"/dashboard/calculator")
+    {:ok, view, _html} = live(conn, ~p"/calculator")
 
     html =
       view
@@ -119,7 +119,7 @@ defmodule TokengateWeb.CalculatorLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/calculator")
+    {:ok, view, _html} = live(conn, ~p"/calculator")
 
     html =
       view

@@ -1,0 +1,713 @@
+defmodule TokengateWeb.StatsLive.Index do
+  @moduledoc """
+  Sección index de /stats. Template renderizado por
+  `TokengateWeb.StatsLive` vía `<.live_component>`; helpers de formato
+  vía `TokengateWeb.StatsHelpers`.
+  """
+  use TokengateWeb, :html
+
+  alias TokengateWeb.StatsHelpers, as: Stats
+
+  import TokengateWeb.KpiHelpers, only: [kpi_cards: 1]
+
+  attr :metrics, :any, required: true
+  attr :peak_concurrency, :any, required: true
+  attr :busiest_hours, :any, required: true
+  attr :busiest_minutes, :any, required: true
+  attr :hour_distribution, :any, required: true
+  attr :hour_usage_stacked, :any, required: true
+  attr :model_provider_stacked, :any, required: true
+  attr :breakdown_model, :any, required: true
+  attr :breakdown_member, :any, required: true
+  attr :breakdown_group, :any, required: true
+  attr :provider_ranking, :any, required: true
+  attr :model_ranking, :any, required: true
+  attr :member_usage_tiers, :any, required: true
+  attr :hovered_hour, :any, required: true
+  attr :top_errors, :any, required: true
+  attr :period, :any, required: true
+  attr :timezone, :any, required: true
+  attr :current_user, :any, required: true
+
+  def index(assigns) do
+    ~H"""
+    <div class="space-y-6">
+      <%!-- KPI cards --%>
+      <.kpi_cards metrics={@metrics} deltas={@metrics[:deltas]} />
+
+      <%!-- KPIs secundarios: concurrencia, horas y minutos pico --%>
+      <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <%= if @current_user && @current_user.global_role == "admin" do %>
+          <div
+            id="peak-concurrency"
+            class="card bg-base-100 border border-base-300 shadow-sm"
+          >
+            <div class="card-body p-5">
+              <div class="flex items-center justify-between">
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Pico de concurrencia
+                </span>
+                <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10">
+                  <.icon name="hero-arrow-trending-up" class="w-5 h-5 text-primary" />
+                </span>
+              </div>
+              <%= if @peak_concurrency && @peak_concurrency.max_concurrent > 0 do %>
+                <p class="mt-2 text-2xl font-bold text-base-content">
+                  {Stats.format_number(@peak_concurrency.max_concurrent)}
+                </p>
+                <p class="text-xs text-base-content/40 mt-1">
+                  requests simultáneos · {format_bucket(
+                    @peak_concurrency.at,
+                    @timezone
+                  )}
+                </p>
+              <% else %>
+                <p class="text-sm text-base-content/40 mt-2">
+                  Sin datos
+                </p>
+              <% end %>
+            </div>
+          </div>
+        <% end %>
+
+        <div id="busiest-hours" class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-5">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                Horas pico
+              </span>
+              <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-warning/10">
+                <.icon name="hero-fire" class="w-5 h-5 text-warning" />
+              </span>
+            </div>
+            <%= if Stats.has_data?(@busiest_hours) do %>
+              <ul class="mt-2 space-y-1">
+                <li
+                  :for={{row, idx} <- Enum.with_index(@busiest_hours, 1)}
+                  id={"busiest-hour-#{idx}"}
+                  class="flex items-center justify-between text-sm"
+                >
+                  <span class="text-base-content/70">
+                    {idx}. {format_bucket(row.bucket, @timezone)}
+                  </span>
+                  <span class="font-mono">{Stats.format_number(row.request_count)}</span>
+                </li>
+              </ul>
+            <% else %>
+              <p class="text-sm text-base-content/40 mt-2">
+                Sin datos
+              </p>
+            <% end %>
+          </div>
+        </div>
+
+        <div id="busiest-minutes" class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-5">
+            <div class="flex items-center justify-between">
+              <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                Minutos pico
+              </span>
+              <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-accent/10">
+                <.icon name="hero-bolt" class="w-5 h-5 text-accent" />
+              </span>
+            </div>
+            <%= if Stats.has_data?(@busiest_minutes) do %>
+              <ul class="mt-2 space-y-1">
+                <li
+                  :for={{row, idx} <- Enum.with_index(@busiest_minutes, 1)}
+                  id={"busiest-minute-#{idx}"}
+                  class="flex items-center justify-between text-sm"
+                >
+                  <span class="text-base-content/70">
+                    {idx}. {format_bucket(row.bucket, @timezone)}
+                  </span>
+                  <span class="font-mono">{Stats.format_number(row.request_count)}</span>
+                </li>
+              </ul>
+            <% else %>
+              <p class="text-sm text-base-content/40 mt-2">
+                Sin datos
+              </p>
+            <% end %>
+          </div>
+        </div>
+      </div>
+
+      <%!-- Patrones de uso: gráficas de modelo/proveedor y hora del día --%>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4" id="usage-patterns">
+        <%!-- Card 1: Por modelo y proveedor --%>
+        <div
+          class="card bg-base-100 border border-base-300 shadow-sm"
+          id="model-provider-breakdown"
+        >
+          <div class="card-body p-4 gap-2">
+            <h2 class="card-title text-base">
+              <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" />
+              Por modelo y proveedor
+            </h2>
+
+            <%= if Stats.model_provider_max(@model_provider_stacked) > 0 do %>
+              <% mp_legend = Stats.provider_legend(@model_provider_stacked) %>
+
+              <div class="flex gap-4 mt-2 pt-2 border-t border-base-200">
+                <%!-- Chart --%>
+                <div class="flex-1 space-y-2">
+                  <div
+                    :for={row <- @model_provider_stacked}
+                    class="group"
+                  >
+                    <div class="flex items-center gap-2">
+                      <%!-- Model label --%>
+                      <span class="text-[11px] font-medium text-base-content/70 w-28 truncate shrink-0 text-right">
+                        {row.model_name}
+                      </span>
+
+                      <%!-- Bar --%>
+                      <div class="flex-1 relative h-5 rounded overflow-hidden bg-base-200/50">
+                        <div
+                          :for={seg <- Stats.provider_segments(row, mp_legend)}
+                          class={["h-full inline-block transition-all", seg.color]}
+                          style={"width: #{seg.width_pct}%"}
+                          title={"#{seg.provider_name}: #{Stats.format_number(seg.requests)} req"}
+                        >
+                        </div>
+                      </div>
+
+                      <%!-- Request count --%>
+                      <span class="text-[10px] text-base-content/50 tabular-nums shrink-0 w-12 text-right">
+                        {Stats.format_number(row.total_requests)}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                <%!-- Legend --%>
+                <div class="w-48 shrink-0 border-l border-base-300 pl-4">
+                  <div class="text-[10px] font-semibold text-base-content/60 uppercase tracking-wide mb-2">
+                    Proveedores
+                  </div>
+                  <div class="space-y-2">
+                    <div :for={entry <- mp_legend}>
+                      <div class="flex items-center gap-1.5">
+                        <span class={[
+                          "w-2.5 h-2.5 rounded-sm shrink-0",
+                          Stats.provider_legend_color(entry.provider_name, mp_legend)
+                        ]} />
+                        <span class="text-[10px] font-medium truncate flex-1">{entry.provider_name}</span>
+                        <span class="text-[9px] text-base-content/50 shrink-0">
+                          {Stats.format_number(entry.requests)} req
+                        </span>
+                        <span
+                          :if={Decimal.compare(entry.cost_usd, Decimal.new(0)) == :gt}
+                          class="text-[9px] text-warning shrink-0"
+                        >
+                          ${Stats.format_decimal(entry.cost_usd)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            <% else %>
+              <p class="text-sm text-base-content/40 py-6 text-center">
+                Sin datos en este período.
+              </p>
+            <% end %>
+          </div>
+        </div>
+
+        <%!-- Card 2: Uso por hora del día --%>
+        <div
+          class="card bg-base-100 border border-base-300 shadow-sm"
+          id="hour-distribution"
+        >
+          <div class="card-body p-4 gap-2">
+            <div class="flex items-center justify-between">
+              <h2 class="card-title text-base">
+                <.icon name="hero-clock" class="w-5 h-5 text-base-content/60" /> Uso por hora del día
+              </h2>
+              <span class="text-[10px] text-base-content/40 hidden sm:inline">
+                gris = included · morada = pay_per_token · escala √
+              </span>
+            </div>
+
+            <%!-- Hour distribution chart --%>
+            <%= if Stats.hour_usage_stacked_max(@hour_usage_stacked) > 0 do %>
+              <% max = Stats.hour_usage_stacked_max(@hour_usage_stacked) %>
+              <% legend = Stats.legend_data(@hour_usage_stacked, @hovered_hour) %>
+              <% y_ticks = Stats.y_axis_ticks(max) %>
+
+              <div class="flex gap-4 mt-2 items-end">
+                <%!-- Chart --%>
+                <div class="flex-1">
+                  <div class="flex gap-2 items-end">
+                    <%!-- Y axis labels --%>
+                    <div class="relative h-48 w-10 shrink-0">
+                      <span
+                        :for={tick <- y_ticks}
+                        class="absolute right-0 text-[9px] text-base-content/50 tabular-nums -translate-y-1/2"
+                        style={"bottom: #{:math.sqrt(tick / max) * 100}%"}
+                      >
+                        {Stats.format_number(tick)}
+                      </span>
+                      <span class="absolute right-0 bottom-0 text-[9px] text-base-content/50 tabular-nums translate-y-1/2">
+                        0
+                      </span>
+                    </div>
+
+                    <div class="relative flex-1">
+                      <%!-- Gridlines --%>
+                      <div class="absolute inset-0 pointer-events-none">
+                        <div
+                          :for={tick <- y_ticks}
+                          class="absolute left-0 right-0 border-t border-base-300/50 border-dashed"
+                          style={"bottom: #{:math.sqrt(tick / max) * 100}%"}
+                        />
+                      </div>
+
+                      <div class="flex items-end gap-[3px] h-48 relative">
+                        <div
+                          :for={row <- @hour_usage_stacked}
+                          class="group relative flex-1 flex flex-col items-center justify-end h-full"
+                          phx-mouseover="hour_hover"
+                          phx-value-hour={row.hour}
+                          phx-mouseleave="hour_leave"
+                        >
+                          <% height_pct = Stats.hour_usage_bar_height(row.total_requests, max) %>
+                          <% segments = Stats.bar_segments(row) %>
+
+                          <%!-- Tooltip --%>
+                          <div class="hidden group-hover:block absolute -top-1 -translate-y-full left-1/2 -translate-x-1/2 z-20 pointer-events-none">
+                            <div class="bg-base-300 text-base-content text-[10px] rounded-md px-2.5 py-1.5 shadow-lg whitespace-nowrap">
+                              <div class="font-semibold">
+                                {Stats.hour_label(row.hour)} · {Stats.format_number(
+                                  row.total_requests
+                                )} req
+                              </div>
+                              <div
+                                :if={row.included_requests > 0}
+                                class="text-base-content/70"
+                              >
+                                included: {Stats.format_number(row.included_requests)}
+                              </div>
+                              <div
+                                :if={row.pay_per_token_requests > 0}
+                                class="text-base-content/70"
+                              >
+                                pay_per_token: {Stats.format_number(row.pay_per_token_requests)}
+                              </div>
+                              <div
+                                :for={m <- Stats.ppt_models_for_tooltip(row)}
+                                class="text-base-content/50 flex justify-between gap-3"
+                              >
+                                <span class="truncate max-w-[140px]">{m.model}</span>
+                                <span class="tabular-nums shrink-0">{Stats.format_number(m.requests)}</span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div
+                            class={[
+                              "w-full rounded-t transition-all relative overflow-hidden cursor-pointer",
+                              if(@hovered_hour == row.hour,
+                                do: "ring-2 ring-primary",
+                                else: ""
+                              )
+                            ]}
+                            style={"height: #{height_pct}%"}
+                          >
+                            <%= if segments == [] do %>
+                              <div class="w-full h-full bg-base-300/30" />
+                            <% else %>
+                              <div class="flex flex-col-reverse h-full w-full">
+                                <div
+                                  :for={seg <- segments}
+                                  class={["w-full", seg.color]}
+                                  style={"height: #{seg.height_pct}%"}
+                                />
+                              </div>
+                            <% end %>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <%!-- Hour labels --%>
+                  <div class="flex gap-[3px] mt-1 ml-12">
+                    <span :for={row <- @hour_usage_stacked} class="flex-1 text-center">
+                      <span
+                        :if={rem(row.hour, 3) == 0}
+                        class={[
+                          "text-[10px]",
+                          if(rem(row.hour, 6) == 0,
+                            do: "text-base-content/60 font-medium",
+                            else: "text-base-content/40"
+                          )
+                        ]}
+                      >
+                        {Stats.hour_label(row.hour)}
+                      </span>
+                    </span>
+                  </div>
+                </div>
+
+                <%!-- Legend panel --%>
+                <div class="w-56 shrink-0 border-l border-base-300 pl-4">
+                  <div class="text-[10px] font-semibold text-base-content/60 uppercase tracking-wide mb-2">
+                    <%= if legend.hovered_hour do %>
+                      {Stats.hour_label(legend.hovered_hour)} hrs
+                    <% else %>
+                      Total período
+                    <% end %>
+                  </div>
+
+                  <%!-- Included entry --%>
+                  <div :if={legend.included_requests > 0} class="mb-2">
+                    <div class="flex items-center gap-1.5">
+                      <span class="w-2.5 h-2.5 rounded-sm shrink-0 bg-base-300/30" />
+                      <span class="text-[10px] font-medium flex-1">Included</span>
+                      <span class="text-[9px] text-base-content/50 shrink-0">
+                        {Stats.format_number(legend.included_requests)} req
+                      </span>
+                    </div>
+                  </div>
+
+                  <%!-- Pay-per-token model breakdown --%>
+                  <div class="space-y-2.5">
+                    <div :for={entry <- legend.ppt_entries}>
+                      <div class="flex items-center gap-1.5">
+                        <span class="w-2.5 h-2.5 rounded-sm shrink-0 bg-primary" />
+                        <span class="text-[10px] font-medium truncate flex-1">{entry.model}</span>
+                        <span class="text-[9px] text-base-content/50 shrink-0">
+                          {Stats.format_number(entry.requests)} req
+                        </span>
+                        <span
+                          :if={Decimal.compare(entry.cost_usd, Decimal.new(0)) == :gt}
+                          class="text-[9px] text-warning shrink-0"
+                        >
+                          ${Stats.format_decimal(entry.cost_usd)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  <%!-- Totals --%>
+                  <div class="mt-3 pt-2 border-t border-base-300">
+                    <div class="text-[10px] font-semibold">
+                      {Stats.format_number(legend.total_requests)} requests
+                    </div>
+                    <div
+                      :if={Decimal.compare(legend.total_cost_usd, Decimal.new(0)) == :gt}
+                      class="text-[10px] text-warning font-medium"
+                    >
+                      ${Stats.format_decimal(legend.total_cost_usd)} total
+                    </div>
+                  </div>
+                </div>
+              </div>
+            <% else %>
+              <p class="text-sm text-base-content/40 py-6 text-center">
+                Sin datos en este período.
+              </p>
+            <% end %>
+          </div>
+        </div>
+      </div>
+      <%!-- Top 5 tables --%>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body">
+            <div class="flex items-center justify-between">
+              <h2 class="card-title text-base">
+                <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" /> Top 5 Grupos
+              </h2>
+              <.link
+                patch={~p"/stats/groups?period=#{@period}"}
+                class="btn btn-xs btn-ghost"
+                id="see-all-groups"
+              >
+                Ver todos <.icon name="hero-arrow-right" class="w-3 h-3" />
+              </.link>
+            </div>
+            <%= if Stats.has_data?(@breakdown_group) do %>
+              <div class="overflow-x-auto mt-3">
+                <table class="table table-sm table-zebra">
+                  <thead>
+                    <tr>
+                      <th>Grupo</th>
+                      <th class="text-right">Requests</th>
+                      <th class="text-right">Costo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      :for={row <- Enum.take(@breakdown_group, 5)}
+                      id={"top-group-#{row.group_id}"}
+                    >
+                      <td class="font-medium truncate max-w-[180px]">{row.group_name}</td>
+                      <td class="text-right font-mono">
+                        {Stats.format_number(row.request_count)}
+                      </td>
+                      <td class="text-right font-mono">
+                        ${Stats.format_decimal(row.cost_usd)}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            <% else %>
+              <p class="text-sm text-base-content/40 py-6 text-center">Sin datos.</p>
+            <% end %>
+          </div>
+        </div>
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body">
+            <h2 class="card-title text-base">
+              <.icon name="hero-user" class="w-5 h-5 text-base-content/60" /> Top 5 Miembros
+            </h2>
+            <%= if Stats.has_data?(@breakdown_member) do %>
+              <div class="overflow-x-auto mt-3">
+                <table class="table table-sm table-zebra">
+                  <thead>
+                    <tr>
+                      <th>Usuario</th>
+                      <th class="text-right">Requests</th>
+                      <th class="text-right">Costo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      :for={row <- Enum.take(@breakdown_member, 5)}
+                      id={"top-member-#{row.group_member_id}"}
+                    >
+                      <td class="font-medium truncate max-w-[180px]">{row.user_email}</td>
+                      <td class="text-right font-mono">
+                        {Stats.format_number(row.request_count)}
+                      </td>
+                      <td class="text-right font-mono">
+                        ${Stats.format_decimal(row.cost_usd)}
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            <% else %>
+              <p class="text-sm text-base-content/40 py-6 text-center">Sin datos.</p>
+            <% end %>
+          </div>
+        </div>
+      </div>
+
+      <%!-- Ranking de proveedores (solo admin) --%>
+      <%= if @current_user && @current_user.global_role == "admin" do %>
+        <div class="card bg-base-100 border border-base-300 shadow-sm" id="provider-ranking">
+          <div class="card-body">
+            <h2 class="card-title text-base">
+              <.icon name="hero-trophy" class="w-5 h-5 text-base-content/60" /> Ranking de proveedores
+            </h2>
+            <p class="text-xs text-base-content/60">
+              Clasificación por confiabilidad (fallos) y velocidad (latencia) en el período.
+              Tier S es el mejor; "—" significa menos de 10 requests.
+            </p>
+            <%= if Stats.has_data?(@provider_ranking) do %>
+              <div class="overflow-x-auto mt-3">
+                <table class="table table-sm">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Proveedor</th>
+                      <th class="text-center">Tier</th>
+                      <th class="text-right">Score</th>
+                      <th class="text-right">Requests</th>
+                      <th class="text-right">% Fallos</th>
+                      <th class="text-right">Latencia prom</th>
+                      <th class="text-right">P95</th>
+                      <th class="text-right">TTFT prom</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      :for={{row, idx} <- Enum.with_index(@provider_ranking, 1)}
+                      id={"provider-ranking-row-#{row.provider_id}"}
+                    >
+                      <td class="text-base-content/60">{idx}</td>
+                      <td class="font-medium truncate max-w-[180px]">
+                        {row.provider_name}
+                      </td>
+                      <td class="text-center">
+                        <span class={["badge badge-sm", Stats.tier_badge_class(row.tier)]}>
+                          {row.tier}
+                        </span>
+                      </td>
+                      <td class="text-right font-mono">{row.score || "—"}</td>
+                      <td class="text-right font-mono">
+                        {Stats.format_number(row.request_count)}
+                      </td>
+                      <td class={[
+                        "text-right font-mono",
+                        row.error_rate >= 0.05 && "text-error",
+                        row.error_rate > 0 && row.error_rate < 0.05 && "text-warning"
+                      ]}>
+                        {Stats.format_percent(row.error_rate)}
+                      </td>
+                      <td class="text-right font-mono">{Stats.format_ms(row.avg_latency_ms)}</td>
+                      <td class="text-right font-mono">{Stats.format_ms(row.p95_latency_ms)}</td>
+                      <td class="text-right font-mono">{Stats.format_ms(row.avg_ttft_ms)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            <% else %>
+              <p class="text-sm text-base-content/40 py-6 text-center">
+                Sin datos en este período.
+              </p>
+            <% end %>
+          </div>
+        </div>
+
+        <%!-- Ranking de modelos --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm" id="model-ranking">
+          <div class="card-body">
+            <h2 class="card-title text-base">
+              <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" />
+              Ranking de modelos
+            </h2>
+            <p class="text-xs text-base-content/60">
+              Clasificación por confiabilidad (fallos) y velocidad (latencia) en el período.
+              Tier S es el mejor; "—" significa menos de 10 requests.
+            </p>
+            <%= if Stats.has_data?(@model_ranking) do %>
+              <div class="overflow-x-auto mt-3">
+                <table class="table table-sm">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Modelo</th>
+                      <th class="text-center">Tier</th>
+                      <th class="text-right">Score</th>
+                      <th class="text-right">Requests</th>
+                      <th class="text-right">% Fallos</th>
+                      <th class="text-right">Latencia prom</th>
+                      <th class="text-right">P95</th>
+                      <th class="text-right">TTFT prom</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      :for={{row, idx} <- Enum.with_index(@model_ranking, 1)}
+                      id={"model-ranking-row-#{row.model_id}"}
+                    >
+                      <td class="text-base-content/60">{idx}</td>
+                      <td class="font-medium truncate max-w-[180px]">
+                        {row.model_name}
+                      </td>
+                      <td class="text-center">
+                        <span class={["badge badge-sm", Stats.tier_badge_class(row.tier)]}>
+                          {row.tier}
+                        </span>
+                      </td>
+                      <td class="text-right font-mono">{row.score || "—"}</td>
+                      <td class="text-right font-mono">
+                        {Stats.format_number(row.request_count)}
+                      </td>
+                      <td class={[
+                        "text-right font-mono",
+                        row.error_rate >= 0.05 && "text-error",
+                        row.error_rate > 0 && row.error_rate < 0.05 && "text-warning"
+                      ]}>
+                        {Stats.format_percent(row.error_rate)}
+                      </td>
+                      <td class="text-right font-mono">{Stats.format_ms(row.avg_latency_ms)}</td>
+                      <td class="text-right font-mono">{Stats.format_ms(row.p95_latency_ms)}</td>
+                      <td class="text-right font-mono">{Stats.format_ms(row.avg_ttft_ms)}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            <% else %>
+              <p class="text-sm text-base-content/40 py-6 text-center">
+                Sin datos en este período.
+              </p>
+            <% end %>
+          </div>
+        </div>
+      <% end %>
+
+      <%!-- Tiers de uso por miembro (solo admin) --%>
+      <%= if @current_user && @current_user.global_role == "admin" do %>
+        <div
+          class="card bg-base-100 border border-base-300 shadow-sm"
+          id="member-usage-tiers"
+        >
+          <div class="card-body">
+            <h2 class="card-title text-base">
+              <.icon name="hero-chart-bar" class="w-5 h-5 text-base-content/60" />
+              Tiers de uso por miembro
+            </h2>
+            <p class="text-xs text-base-content/60">
+              Clasificación en 3 grupos (alto / regular / bajo) combinando volumen, frecuencia y concurrencia.
+            </p>
+            <%= if Stats.has_data?(@member_usage_tiers) do %>
+              <div class="overflow-x-auto mt-3">
+                <table class="table table-sm">
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Usuario</th>
+                      <th>Grupo</th>
+                      <th class="text-center">Tier</th>
+                      <th class="text-right">Score</th>
+                      <th class="text-right">Requests</th>
+                      <th class="text-right">Costo</th>
+                      <th class="text-right">Tokens</th>
+                      <th class="text-right">Días activos</th>
+                      <th class="text-right">Peak RPM</th>
+                      <th class="text-right">P95 RPM</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr
+                      :for={{row, idx} <- Enum.with_index(@member_usage_tiers, 1)}
+                      id={"member-tier-row-#{row.group_member_id}"}
+                    >
+                      <td class="text-base-content/60">{idx}</td>
+                      <td class="font-medium truncate max-w-[200px]">
+                        {row.user_name || row.user_email}
+                      </td>
+                      <td class="truncate max-w-[120px]">{row.group_name}</td>
+                      <td class="text-center">
+                        <span class={[
+                          "badge badge-sm",
+                          Stats.tier_badge_class(row.tier)
+                        ]}>
+                          {String.capitalize(row.tier)}
+                        </span>
+                      </td>
+                      <td class="text-right font-mono">{row.score}</td>
+                      <td class="text-right font-mono">
+                        {Stats.format_number(row.request_count)}
+                      </td>
+                      <td class="text-right font-mono">${Stats.format_decimal(row.cost_usd)}</td>
+                      <td class="text-right font-mono">
+                        {Stats.format_compact(row.prompt_tokens + row.completion_tokens)}
+                      </td>
+                      <td class="text-right font-mono">{row.active_days}</td>
+                      <td class="text-right font-mono">{row.peak_rpm}</td>
+                      <td class="text-right font-mono">{row.p95_rpm}</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            <% else %>
+              <p class="text-sm text-base-content/40 py-6 text-center">
+                Sin datos en este período.
+              </p>
+            <% end %>
+          </div>
+        </div>
+      <% end %>
+    </div>
+    """
+  end
+end

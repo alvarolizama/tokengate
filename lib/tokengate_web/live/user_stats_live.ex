@@ -6,7 +6,7 @@ defmodule TokengateWeb.UserStatsLive do
   Shows aggregated stat cards (requests, cost, tokens, top models, status
   breakdown, last request) and a paginated stream of the user's recent
   logs across all memberships. Real-time updates via the same `logs:new`
-  PubSub as `/admin/logs`.
+  PubSub as `/logs`.
 
   Path: `/admin/users/:user_id/stats`
 

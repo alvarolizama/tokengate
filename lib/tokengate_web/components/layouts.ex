@@ -220,23 +220,19 @@ defmodule TokengateWeb.Layouts do
             <.sidebar_link href={~p"/dashboard"} label="Dashboard" icon="hero-chart-bar-square" />
 
             <%= if admin?(@current_scope) do %>
-              <.sidebar_link href={~p"/dashboard/stats"} label="Estadísticas" icon="hero-chart-pie" />
-              <.sidebar_link href={~p"/dashboard/credits"} label="Créditos" icon="hero-banknotes" />
-            <% end %>
-          </div>
-
-          <%= if admin?(@current_scope) do %>
-            <div class="space-y-1">
-              <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
-                Monitoreo
-              </p>
+              <.sidebar_link href={~p"/stats"} label="Estadísticas" icon="hero-chart-pie" />
               <.sidebar_link
-                href={~p"/admin/logs"}
+                href={~p"/logs"}
                 label="Logs"
                 icon="hero-document-text"
               />
-            </div>
-          <% end %>
+              <.sidebar_link
+                href={~p"/calculator"}
+                label="Calculadora"
+                icon="hero-calculator"
+              />
+            <% end %>
+          </div>
 
           <%= if admin?(@current_scope) do %>
             <div class="space-y-1">
@@ -270,19 +266,6 @@ defmodule TokengateWeb.Layouts do
                 href={~p"/admin/services"}
                 label="Servicios"
                 icon="hero-wrench-screwdriver"
-              />
-            </div>
-          <% end %>
-
-          <%= if admin?(@current_scope) do %>
-            <div class="space-y-1">
-              <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
-                Herramientas
-              </p>
-              <.sidebar_link
-                href={~p"/dashboard/calculator"}
-                label="Calculadora"
-                icon="hero-calculator"
               />
             </div>
           <% end %>

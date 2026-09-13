@@ -1,4 +1,4 @@
-defmodule TokengateWeb.CreditsLiveTest do
+defmodule TokengateWeb.StatsCreditsLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
@@ -85,7 +85,7 @@ defmodule TokengateWeb.CreditsLiveTest do
   ## Auth -------------------------------------------------------------------
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
-    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/dashboard/credits")
+    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/stats/credits")
   end
 
   ## Group rollup --------------------------------------------------------------
@@ -95,7 +95,7 @@ defmodule TokengateWeb.CreditsLiveTest do
     %{group: group, member_a: _member_a} = group_with_spend_and_savings()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/credits")
+    {:ok, view, _html} = live(conn, ~p"/stats/credits")
 
     assert has_element?(view, "#group-budgets")
     assert has_element?(view, "#group-budget-#{group.id}")

@@ -63,6 +63,18 @@ defmodule TokengateWeb.Router do
     # Google OAuth — public routes (no auth required to start the flow).
     get "/auth/google", OAuthController, :request
     get "/auth/google/callback", OAuthController, :callback
+
+    # Créditos vivía en /dashboard/credits — ahora es un tab de
+    # /stats. Redirect permanente para bookmarks.
+    get "/dashboard/credits", RedirectController, :stats_credits
+
+    # Stats vivía en /dashboard/stats, la calculadora en
+    # /dashboard/calculator y los logs en /admin/logs. Redirects
+    # permanentes para bookmarks (query string preservado).
+    get "/dashboard/stats", RedirectController, :stats
+    get "/dashboard/stats/*rest", RedirectController, :stats
+    get "/dashboard/calculator", RedirectController, :calculator
+    get "/admin/logs", RedirectController, :logs
   end
 
   # Authenticated browser dashboard. The on_mount hook mirrors the plug
@@ -84,14 +96,14 @@ defmodule TokengateWeb.Router do
 
     live_session :admin,
       on_mount: [{TokengateWeb.UserAuth, :require_admin}] do
-      live "/dashboard/stats", StatsLive, :index
-      live "/dashboard/stats/models", StatsLive, :models
-      live "/dashboard/stats/groups", StatsLive, :groups
-      live "/dashboard/stats/services", StatsLive, :services
-      live "/dashboard/stats/members/:member_id", StatsLive, :member
-      live "/dashboard/credits", CreditsLive
-      live "/dashboard/calculator", CalculatorLive
-      live "/admin/logs", LogsLive
+      live "/stats", StatsLive, :index
+      live "/stats/models", StatsLive, :models
+      live "/stats/groups", StatsLive, :groups
+      live "/stats/services", StatsLive, :services
+      live "/stats/members/:member_id", StatsLive, :member
+      live "/stats/credits", StatsLive, :credits
+      live "/calculator", CalculatorLive
+      live "/logs", LogsLive
       live "/admin/providers", ProvidersLive
       live "/admin/models", ModelsLive
       live "/admin/groups", GroupsLive
@@ -105,7 +117,7 @@ defmodule TokengateWeb.Router do
   end
 
   # CSV export — regular controller action (not LiveView) requiring auth.
-  scope "/dashboard/stats", TokengateWeb do
+  scope "/stats", TokengateWeb do
     pipe_through [:browser, :browser_auth]
     get "/export", StatsExportController, :export
   end

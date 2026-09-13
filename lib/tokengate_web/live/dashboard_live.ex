@@ -136,7 +136,7 @@ defmodule TokengateWeb.DashboardLive do
   # ---------------------------------------------------------------------------
 
   # User-wide scope: EVERY user (admin included) sees only their own
-  # memberships on /dashboard. The org-wide view lives in /dashboard/stats.
+  # memberships on /dashboard. The org-wide view lives in /stats.
   defp user_member_ids(user) do
     user.id |> Accounts.list_group_members_for_user() |> Enum.map(& &1.id)
   end
@@ -650,7 +650,7 @@ defmodule TokengateWeb.DashboardLive do
   def accent_text("accent"), do: "text-accent"
   def accent_text(_), do: "text-base-content"
 
-  # Same tier colors as /dashboard/stats rankings
+  # Same tier colors as /stats rankings
   def tier_badge_class("S"), do: "badge-success"
   def tier_badge_class("A"), do: "badge-info"
   def tier_badge_class("B"), do: "badge-warning"

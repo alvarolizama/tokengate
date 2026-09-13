@@ -103,7 +103,7 @@ defmodule TokengateWeb.StatsLiveTest do
   ## Auth -------------------------------------------------------------------
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
-    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/dashboard/stats")
+    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/stats")
   end
 
   ## Index view -------------------------------------------------------------
@@ -113,7 +113,7 @@ defmodule TokengateWeb.StatsLiveTest do
     group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/dashboard/stats")
+    {:ok, view, html} = live(conn, ~p"/stats")
 
     assert html =~ "Estadísticas"
     assert has_element?(view, "#stats-nav")
@@ -133,7 +133,7 @@ defmodule TokengateWeb.StatsLiveTest do
     group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
+    {:ok, view, _html} = live(conn, ~p"/stats")
     wait_stats_loaded(view)
 
     assert has_element?(view, "#kpi-requests")
@@ -154,7 +154,7 @@ defmodule TokengateWeb.StatsLiveTest do
     })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
+    {:ok, view, _html} = live(conn, ~p"/stats")
     wait_stats_loaded(view)
 
     html = render(view)
@@ -168,7 +168,7 @@ defmodule TokengateWeb.StatsLiveTest do
     %{provider: provider} = group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
+    {:ok, view, _html} = live(conn, ~p"/stats")
     wait_stats_loaded(view)
 
     assert has_element?(view, "#provider-ranking")
@@ -179,7 +179,7 @@ defmodule TokengateWeb.StatsLiveTest do
     %{owner: owner} = group_with_log(%{cost: "0.005"})
 
     conn = login(conn, owner, owner.password)
-    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/stats")
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/stats")
   end
 
   test "admin sees usage patterns section on index", %{conn: conn} do
@@ -187,7 +187,7 @@ defmodule TokengateWeb.StatsLiveTest do
     group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
+    {:ok, view, _html} = live(conn, ~p"/stats")
     wait_stats_loaded(view)
 
     assert has_element?(view, "#usage-patterns")
@@ -201,7 +201,7 @@ defmodule TokengateWeb.StatsLiveTest do
     %{owner: owner} = group_with_log(%{cost: "0.005"})
 
     conn = login(conn, owner, owner.password)
-    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/stats")
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/stats")
   end
 
   ## Models view ------------------------------------------------------------
@@ -211,7 +211,7 @@ defmodule TokengateWeb.StatsLiveTest do
     group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/stats/models")
+    {:ok, view, _html} = live(conn, ~p"/stats/models")
     wait_stats_loaded(view)
 
     assert has_element?(view, "#csv-models")
@@ -223,7 +223,7 @@ defmodule TokengateWeb.StatsLiveTest do
     %{model: ma} = group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/stats/models?model_id=#{ma.id}")
+    {:ok, view, _html} = live(conn, ~p"/stats/models?model_id=#{ma.id}")
     wait_stats_loaded(view)
 
     assert has_element?(view, "#model-kpi-requests")
@@ -240,7 +240,7 @@ defmodule TokengateWeb.StatsLiveTest do
     group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/stats/groups")
+    {:ok, view, _html} = live(conn, ~p"/stats/groups")
     wait_stats_loaded(view)
 
     assert has_element?(view, "#csv-groups")
@@ -252,7 +252,7 @@ defmodule TokengateWeb.StatsLiveTest do
     %{group: group} = group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/stats/groups?group_id=#{group.id}")
+    {:ok, view, _html} = live(conn, ~p"/stats/groups?group_id=#{group.id}")
     wait_stats_loaded(view)
 
     assert has_element?(view, "#group-kpi-requests")
@@ -268,7 +268,7 @@ defmodule TokengateWeb.StatsLiveTest do
     group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
+    {:ok, view, _html} = live(conn, ~p"/stats")
 
     view |> element("#period-30d") |> render_click()
 
@@ -313,7 +313,7 @@ defmodule TokengateWeb.StatsLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/stats/models")
+    {:ok, view, _html} = live(conn, ~p"/stats/models")
     html = render(wait_stats_loaded(view))
 
     # Row order = order of appearance of the bd-model-<id> rows in the HTML.
@@ -359,7 +359,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
     password = owner.password
     conn = login(conn, owner, password)
-    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/dashboard/stats")
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/stats")
   end
 
   ## CSV export --------------------------------------------------------------
@@ -369,7 +369,7 @@ defmodule TokengateWeb.StatsLiveTest do
     group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    conn = get(conn, "/dashboard/stats/export?type=models&period=7d")
+    conn = get(conn, "/stats/export?type=models&period=7d")
 
     assert conn.status == 200
 
@@ -384,7 +384,7 @@ defmodule TokengateWeb.StatsLiveTest do
     group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    conn = get(conn, "/dashboard/stats/export?type=groups&period=7d")
+    conn = get(conn, "/stats/export?type=groups&period=7d")
 
     assert conn.status == 200
 
@@ -393,7 +393,7 @@ defmodule TokengateWeb.StatsLiveTest do
   end
 
   test "unauthenticated CSV export redirects to login", %{conn: conn} do
-    conn = get(conn, "/dashboard/stats/export?type=models&period=7d")
+    conn = get(conn, "/stats/export?type=models&period=7d")
     assert redirected_to(conn, 302) =~ "/login"
   end
 
@@ -413,7 +413,7 @@ defmodule TokengateWeb.StatsLiveTest do
     group_with_log(%{cost: "0.005", inserted_at: inserted_at})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
+    {:ok, view, _html} = live(conn, ~p"/stats")
     html = render(wait_stats_loaded(view))
 
     # El log cayó en una hora local (01:00 local si candidate < now) y la
@@ -433,14 +433,14 @@ defmodule TokengateWeb.StatsLiveTest do
     group_with_log(%{cost: "0.005", inserted_at: DateTime.add(today_start, -3600, :second)})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/dashboard/stats")
+    {:ok, view, _html} = live(conn, ~p"/stats")
     html = render(wait_stats_loaded(view))
 
     assert html =~ "Sin datos en este período."
   end
 
   describe "hour_usage_bar_height/2 (sqrt scale)" do
-    alias TokengateWeb.StatsLive
+    alias TokengateWeb.StatsHelpers, as: StatsLive
 
     test "the max value gets 100%" do
       assert StatsLive.hour_usage_bar_height(10_000, 10_000) == 100.0
@@ -461,7 +461,7 @@ defmodule TokengateWeb.StatsLiveTest do
   end
 
   describe "y_axis_ticks/2" do
-    alias TokengateWeb.StatsLive
+    alias TokengateWeb.StatsHelpers, as: StatsLive
 
     test "returns ascending ticks up to a nice ceiling" do
       assert [_, _, _] = ticks = StatsLive.y_axis_ticks(950)

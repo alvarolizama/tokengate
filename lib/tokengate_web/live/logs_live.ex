@@ -915,21 +915,21 @@ defmodule TokengateWeb.LogsLive do
 
         <div class="flex flex-wrap justify-end gap-2">
           <.link
-            href="/dashboard/stats/export?type=logs&period=30d"
+            href="/stats/export?type=logs&period=30d"
             class="btn btn-sm btn-ghost"
             id="csv-logs-30d"
           >
             <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> CSV Logs 30d
           </.link>
           <.link
-            href="/dashboard/stats/export?type=logs&period=90d"
+            href="/stats/export?type=logs&period=90d"
             class="btn btn-sm btn-ghost"
             id="csv-logs-90d"
           >
             <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> CSV Logs 90d
           </.link>
           <.link
-            href="/dashboard/stats/export?type=errors"
+            href="/stats/export?type=errors"
             class="btn btn-sm btn-ghost"
             id="csv-errors"
           >

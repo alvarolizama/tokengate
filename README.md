@@ -39,10 +39,10 @@ Think "LiteLLM, but as an Elixir app with a real admin UI".
 ### Admin UI (LiveView)
 
 - **Personal dashboard** (`/dashboard`) — every user sees their own live consumption (requests, cost, tokens, tokens/sec), period selector (today/7d/30d/90d), their API key with rotate/revoke, and the model catalog available to them with usage-tier badges.
-- **Stats** (`/dashboard/stats`) — drill-downs by model, group, service, and member; scoped by role (admin sees org-wide, managers their groups, users themselves). Period comparison with vs-yesterday deltas, daily sparkline charts, sortable breakdown tables, and CSV export.
+- **Stats** (`/stats`) — drill-downs by model, group, service, and member; scoped by role (admin sees org-wide, managers their groups, users themselves). Period comparison with vs-yesterday deltas, daily sparkline charts, sortable breakdown tables, and CSV export.
 - **Logs** (`/dashboard/logs`) — live request log with filters, in-flight requests merged into the main table, and CSV export (30d / 90d).
 - **Credits** (`/dashboard/credits`) — every member's spend against their effective budget, live from the ETS counters, with progress bars.
-- **Calculator** (`/dashboard/calculator`) — compare real provider spend vs estimated cost using custom pricing parameters (input/output price per million tokens). Period and model selector. Uses the same cost source as Stats for consistency.
+- **Calculator** (`/calculator`) — compare real provider spend vs estimated cost using custom pricing parameters (input/output price per million tokens). Period and model selector. Uses the same cost source as Stats for consistency.
 - **Groups** (`/admin/groups`) — group CRUD with default budgets/limits, per-group model-alias grants, and per-group observability webhook destinations. Dynamic card grid (1/2/3 cols based on group count).
 - **Group members** (`/admin/groups/:id/members`) — add members by email (auto-generates their API key), per-member extras: extra budget, concurrency, RPM, and individual model-alias grants with optional per-model daily budget. Search filter by name and email.
 - **Services** (`/dashboard/services`) — machine-to-machine API keys (not tied to a user) with their own monthly budget, concurrency, RPM, and model grants. **Supervisors** get a read-only view (`/dashboard/services/supervised`).

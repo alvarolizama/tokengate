@@ -68,7 +68,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
   end
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
-    conn = get(conn, ~p"/dashboard/stats/export?type=groups")
+    conn = get(conn, ~p"/stats/export?type=groups")
     assert redirected_to(conn) =~ "/login"
   end
 
@@ -79,7 +79,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
     conn =
       conn
       |> login(admin, password)
-      |> get(~p"/dashboard/stats/export?type=groups&group_id=#{group.id}")
+      |> get(~p"/stats/export?type=groups&group_id=#{group.id}")
 
     assert response(conn, 200) =~ "usuario,grupo"
   end
@@ -90,7 +90,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
     conn =
       conn
       |> login(owner, password)
-      |> get(~p"/dashboard/stats/export?type=groups&group_id=#{group.id}")
+      |> get(~p"/stats/export?type=groups&group_id=#{group.id}")
 
     assert json_response(conn, 403) == %{"error" => "no autorizado"}
   end
@@ -102,7 +102,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
     conn =
       conn
       |> login(outsider, password)
-      |> get(~p"/dashboard/stats/export?type=groups&group_id=#{group.id}")
+      |> get(~p"/stats/export?type=groups&group_id=#{group.id}")
 
     assert json_response(conn, 403) == %{"error" => "no autorizado"}
   end
@@ -114,7 +114,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
     conn =
       conn
       |> login(user, password)
-      |> get(~p"/dashboard/stats/export?type=models")
+      |> get(~p"/stats/export?type=models")
 
     assert response(conn, 200) =~ "modelo,requests"
   end
@@ -152,7 +152,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
     conn =
       conn
       |> login(user, password)
-      |> get(~p"/dashboard/stats/export?type=logs")
+      |> get(~p"/stats/export?type=logs")
 
     body = response(conn, 200)
     # Prefixed with a single quote — renders as text, never as a formula.
@@ -213,7 +213,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
       conn =
         conn
         |> login(user, password)
-        |> get(~p"/dashboard/stats/export?type=logs&period=30d")
+        |> get(~p"/stats/export?type=logs&period=30d")
 
       body = response(conn, 200)
       data_rows = body |> String.split("\n") |> Enum.drop(1) |> Enum.reject(&(&1 == ""))
@@ -227,7 +227,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
       conn =
         conn
         |> login(owner, password)
-        |> get(~p"/dashboard/stats/export?type=logs&period=today")
+        |> get(~p"/stats/export?type=logs&period=today")
 
       body = response(conn, 200)
       assert body =~ "fecha,estado"
@@ -255,7 +255,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
       conn =
         conn
         |> login(owner, password)
-        |> get(~p"/dashboard/stats/export?type=errors&period=30d")
+        |> get(~p"/stats/export?type=errors&period=30d")
 
       body = response(conn, 200)
       assert body =~ "test_error"
