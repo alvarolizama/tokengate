@@ -641,6 +641,8 @@ defmodule Tokengate.Logs do
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+        cache_read_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_read_tokens),
+        cache_creation_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_creation_tokens),
         avg_latency_ms: fragment("AVG(latency_ms)"),
         p95_latency_ms: fragment("percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms)")
       })
@@ -651,6 +653,8 @@ defmodule Tokengate.Logs do
       cost_usd: Decimal.new(to_string(result.cost_usd)),
       prompt_tokens: result.prompt_tokens,
       completion_tokens: result.completion_tokens,
+      cache_read_tokens: result.cache_read_tokens,
+      cache_creation_tokens: result.cache_creation_tokens,
       avg_latency_ms: avg_to_float(result.avg_latency_ms),
       p95_latency_ms: avg_to_float(result.p95_latency_ms)
     }

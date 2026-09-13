@@ -139,6 +139,24 @@ defmodule TokengateWeb.StatsLive.LiveSection do
                 @today_metrics.completion_tokens
               )} out
             </p>
+            <p class="text-xs text-base-content/40">
+              {if(
+                @today_metrics.cache_read_tokens in [nil, 0] and
+                  @today_metrics.cache_creation_tokens in [nil, 0],
+                do: "cache: —",
+                else:
+                  "cache: " <>
+                    Stats.format_compact(
+                      (@today_metrics.cache_read_tokens || 0) +
+                        (@today_metrics.cache_creation_tokens || 0)
+                    ) <>
+                    " (" <>
+                    Stats.cache_hit_pct(
+                      @today_metrics.prompt_tokens,
+                      @today_metrics.cache_read_tokens
+                    ) <> " hit)"
+              )}
+            </p>
           </div>
         </div>
         <div id="live-today-latency" class="card bg-base-100 border border-base-300 shadow-sm">
