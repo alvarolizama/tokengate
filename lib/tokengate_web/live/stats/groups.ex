@@ -580,6 +580,10 @@ defmodule TokengateWeb.StatsLive.Groups do
             <h2 class="card-title text-base">
               <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" /> Todos los grupos
             </h2>
+            <p class="text-xs text-base-content/60">
+              Una fila por grupo — consolida el consumo de todos sus miembros y servicios del período
+              ({Stats.period_label(@period)}).
+            </p>
             <%= if Stats.has_data?(@breakdown_group) do %>
               <% group_total = Stats.breakdown_total(@breakdown_group) %>
               <div class="overflow-x-auto mt-3">

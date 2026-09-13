@@ -609,6 +609,10 @@ defmodule TokengateWeb.StatsLive.Models do
               <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" />
               Todos los modelos
             </h2>
+            <p class="text-xs text-base-content/60">
+              Una fila por modelo — consolida su consumo de todos los proveedores del período
+              ({Stats.period_label(@period)}).
+            </p>
             <%= if Stats.has_data?(@breakdown_model) do %>
               <% model_total = Stats.breakdown_total(@breakdown_model) %>
               <div class="overflow-x-auto mt-3">

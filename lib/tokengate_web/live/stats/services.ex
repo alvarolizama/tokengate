@@ -372,6 +372,10 @@ defmodule TokengateWeb.StatsLive.Services do
               <.icon name="hero-wrench-screwdriver" class="w-5 h-5 text-base-content/60" />
               Todos los servicios
             </h2>
+            <p class="text-xs text-base-content/60">
+              Una fila por servicio — consolida su consumo del período
+              ({Stats.period_label(@period)}).
+            </p>
             <%= if Stats.has_data?(@breakdown_service) do %>
               <% service_total = Stats.breakdown_total(@breakdown_service) %>
               <div class="overflow-x-auto mt-3">
