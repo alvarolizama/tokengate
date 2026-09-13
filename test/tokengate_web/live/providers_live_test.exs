@@ -311,7 +311,9 @@ defmodule TokengateWeb.ProvidersLiveTest do
     refute has_element?(view, "#provider-form input[name='provider[base_url]'][disabled]")
   end
 
-  test "credential button is labeled 'API key' to distinguish from activating providers", %{conn: conn} do
+  test "credential button is labeled 'API key' to distinguish from activating providers", %{
+    conn: conn
+  } do
     provider = create_provider()
     %{user: admin, password: password} = register_admin()
 
