@@ -9,7 +9,12 @@ defmodule TokengateWeb.StatsLive.Groups do
   alias TokengateWeb.StatsHelpers, as: Stats
 
   import TokengateWeb.KpiHelpers,
-    only: [cache_hit_rate: 2, format_cache_value: 2, format_hit_rate: 1]
+    only: [
+      kpi_card: 1,
+      cache_hit_rate: 2,
+      format_cache_value: 2,
+      format_hit_rate: 1
+    ]
 
   import TokengateWeb.StatsHelpers, only: [sort_icon: 1]
 
@@ -22,6 +27,8 @@ defmodule TokengateWeb.StatsLive.Groups do
   attr :drilldown_series_labels, :any, required: true
   attr :group_filter, :any, required: true
   attr :group, :any, default: nil
+  attr :group_budgets, :any, default: []
+  attr :group_budget, :any, default: nil
   attr :period, :any, required: true
   attr :sort_field, :any, required: true
   attr :sort_direction, :any, required: true
@@ -47,140 +54,81 @@ defmodule TokengateWeb.StatsLive.Groups do
         <div class="space-y-6">
           <%!-- Breadcrumb — el hub vive en /stats/groups/:id (action :group);
                el drill-down ?group_id= de :groups usa el mismo template --%>
-          <div class="flex items-center gap-2 text-xs text-base-content/60">
-            <.link navigate={~p"/stats/groups?period=#{@period}"} class="hover:underline">
-              Grupos
-            </.link>
-            <span>›</span>
-            <span class="font-medium text-base-content/80">
-              <%!-- null-safe: el render estático (pre-async) aún no trae :group --%>
-              {if @group, do: @group.name, else: "…"}
-            </span>
+          <div class="flex items-center justify-between flex-wrap gap-2">
+            <div class="flex items-center gap-2 text-xs text-base-content/60">
+              <.link navigate={~p"/stats/groups?period=#{@period}"} class="hover:underline">
+                Grupos
+              </.link>
+              <span>›</span>
+              <span class="font-medium text-base-content/80">
+                <%!-- null-safe: el render estático (pre-async) aún no trae :group --%>
+                {if @group, do: @group.name, else: "…"}
+              </span>
+            </div>
+
+            <%= if @group_budget do %>
+              <div class="w-full max-w-xs" id="group-budget-bar">
+                <span class="text-xs text-base-content/50 block mb-1">
+                  Presupuesto · mes {if(@group_budget.has_unlimited?,
+                    do: "· algún miembro sin límite",
+                    else: ""
+                  )}
+                </span>
+                <Stats.budget_bar
+                  spend={@group_budget.monthly_spend_usd}
+                  limit={@group_budget.monthly_limit_usd}
+                  pct={@group_budget.monthly_pct}
+                />
+              </div>
+            <% end %>
           </div>
 
           <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div
+            <.kpi_card
               id="group-kpi-cost"
-              class="card bg-base-100 border border-base-300 shadow-sm"
+              label="Costo"
+              icon="hero-currency-dollar"
+              accent="accent"
             >
-              <div class="card-body p-5">
-                <div class="flex items-center justify-between">
-                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Costo</span>
-                  <span class={[
-                    "flex items-center justify-center w-9 h-9 rounded-lg",
-                    Stats.accent_bg("accent")
-                  ]}>
-                    <.icon
-                      name="hero-currency-dollar"
-                      class={["w-5 h-5", Stats.accent_text("accent")]}
-                    />
-                  </span>
-                </div>
-                <p class="mt-2 text-2xl font-bold">
-                  ${Stats.format_decimal(@metrics.cost_usd)}
-                </p>
-              </div>
-            </div>
-            <div
+              ${Stats.format_decimal(@metrics.cost_usd)}
+            </.kpi_card>
+
+            <.kpi_card
               id="group-kpi-requests"
-              class="card bg-base-100 border border-base-300 shadow-sm"
+              label="Requests"
+              icon="hero-arrow-trending-up"
+              accent="primary"
             >
-              <div class="card-body p-5">
-                <div class="flex items-center justify-between">
-                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Requests</span>
-                  <span class={[
-                    "flex items-center justify-center w-9 h-9 rounded-lg",
-                    Stats.accent_bg("primary")
-                  ]}>
-                    <.icon
-                      name="hero-arrow-trending-up"
-                      class={["w-5 h-5", Stats.accent_text("primary")]}
-                    />
-                  </span>
-                </div>
-                <p class="mt-2 text-2xl font-bold">
-                  {Stats.format_number(@metrics.requests_total)}
-                </p>
-              </div>
-            </div>
-            <div
+              {Stats.format_number(@metrics.requests_total)}
+            </.kpi_card>
+
+            <.kpi_card
               id="group-kpi-tokens"
-              class="card bg-base-100 border border-base-300 shadow-sm"
+              label="Tokens"
+              icon="hero-cpu-chip"
+              accent="primary"
+              title={
+                "#{Stats.format_number(@metrics.prompt_tokens)} in / #{Stats.format_number(@metrics.completion_tokens)} out"
+              }
             >
-              <div class="card-body p-5">
-                <div class="flex items-center justify-between">
-                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens</span>
-                  <span class={[
-                    "flex items-center justify-center w-9 h-9 rounded-lg",
-                    Stats.accent_bg("primary")
-                  ]}>
-                    <.icon name="hero-cpu-chip" class={["w-5 h-5", Stats.accent_text("primary")]} />
-                  </span>
-                </div>
-                <div class="mt-2 flex items-baseline gap-3">
-                  <div>
-                    <p
-                      class="text-lg font-bold"
-                      title={Stats.format_number(@metrics.prompt_tokens)}
-                    >
-                      {Stats.format_compact(@metrics.prompt_tokens)}
-                    </p>
-                    <p class="text-xs text-base-content/50">in</p>
-                  </div>
-                  <span class="text-base-content/30">/</span>
-                  <div>
-                    <p
-                      class="text-lg font-bold"
-                      title={Stats.format_number(@metrics.completion_tokens)}
-                    >
-                      {Stats.format_compact(@metrics.completion_tokens)}
-                    </p>
-                    <p class="text-xs text-base-content/50">out</p>
-                  </div>
-                  <span class="text-base-content/30">/</span>
-                  <div>
-                    <p
-                      class="text-lg font-bold"
-                      title={
-                        Stats.format_number(
-                          (@metrics.cache_read_tokens || 0) +
-                            (@metrics.cache_creation_tokens || 0)
-                        )
-                      }
-                    >
-                      {format_cache_value(
-                        @metrics.cache_read_tokens,
-                        @metrics.cache_creation_tokens
-                      )}
-                    </p>
-                    <p class="text-xs text-base-content/50">
-                      cache · {format_hit_rate(
-                        cache_hit_rate(@metrics.cache_read_tokens, @metrics.prompt_tokens)
-                      )} hit
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div
-              id="group-kpi-tps"
-              class="card bg-base-100 border border-base-300 shadow-sm"
-            >
-              <div class="card-body p-5">
-                <div class="flex items-center justify-between">
-                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">TPS</span>
-                  <span class={[
-                    "flex items-center justify-center w-9 h-9 rounded-lg",
-                    Stats.accent_bg("accent")
-                  ]}>
-                    <.icon name="hero-bolt" class={["w-5 h-5", Stats.accent_text("accent")]} />
-                  </span>
-                </div>
-                <p class="mt-2 text-2xl font-bold">
-                  {Stats.format_tps(@metrics.avg_tps)}
-                </p>
-              </div>
-            </div>
+              <span class="flex items-baseline gap-2">
+                {Stats.format_compact(@metrics.prompt_tokens)}
+                <span class="text-sm text-base-content/50">in</span>
+                <span class="text-base-content/30">/</span>
+                {Stats.format_compact(@metrics.completion_tokens)}
+                <span class="text-sm text-base-content/50">out</span>
+                <span class="text-base-content/30">/</span>
+                {format_cache_value(@metrics.cache_read_tokens, @metrics.cache_creation_tokens)}
+                <span class="text-sm text-base-content/50">cache</span>
+              </span>
+              <:sub>
+                {format_hit_rate(cache_hit_rate(@metrics.cache_read_tokens, @metrics.prompt_tokens))} hit
+              </:sub>
+            </.kpi_card>
+
+            <.kpi_card id="group-kpi-tps" label="TPS" icon="hero-bolt" accent="accent">
+              {Stats.format_tps(@metrics.avg_tps)}
+            </.kpi_card>
           </div>
 
           <%!-- Daily usage sparkline: models over time --%>
@@ -728,6 +676,9 @@ defmodule TokengateWeb.StatsLive.Groups do
                           />
                         </button>
                       </th>
+                      <th title="Gasto del mes calendario vs límite agregado de sus miembros">
+                        Presupuesto · mes
+                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -757,6 +708,21 @@ defmodule TokengateWeb.StatsLive.Groups do
                         )}
                       </td>
                       <td class="text-right font-mono">{Stats.format_tps(row.avg_tps)}</td>
+                      <td class="min-w-[150px]">
+                        <%= if budget = group_budget_for(@group_budgets, row.group_id) do %>
+                          <div class="flex items-center gap-2">
+                            <Stats.budget_bar
+                              compact
+                              spend={budget.monthly_spend_usd}
+                              limit={budget.monthly_limit_usd}
+                              pct={budget.monthly_pct}
+                            />
+                            <Stats.budget_badge pct={budget.monthly_pct} />
+                          </div>
+                        <% else %>
+                          <span class="text-base-content/30">—</span>
+                        <% end %>
+                      </td>
                     </tr>
                   </tbody>
                   <tfoot>
@@ -795,5 +761,9 @@ defmodule TokengateWeb.StatsLive.Groups do
       <% end %>
     </div>
     """
+  end
+
+  defp group_budget_for(rows, group_id) do
+    Enum.find(rows, fn row -> row.group.id == group_id end)
   end
 end

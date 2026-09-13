@@ -13,6 +13,7 @@ defmodule TokengateWeb.StatsLive.Users do
   import TokengateWeb.StatsHelpers, only: [sort_icon: 1]
 
   attr :breakdown_user, :any, required: true
+  attr :budgets_by_user, :any, default: %{}
   attr :period, :any, required: true
   attr :sort_field, :any, required: true
   attr :sort_direction, :any, required: true
@@ -131,6 +132,18 @@ defmodule TokengateWeb.StatsLive.Users do
                       </button>
                     </th>
                     <th class="text-right">Costo / req</th>
+                    <th>
+                      Presupuesto · mes
+                      <div
+                        class="tooltip tooltip-top"
+                        data-tip="Gasto del mes calendario vs límite agregado de sus membresías"
+                      >
+                        <.icon
+                          name="hero-question-mark-circle"
+                          class="w-3.5 h-3.5 text-base-content/40"
+                        />
+                      </div>
+                    </th>
                   </tr>
                 </thead>
                 <tbody>
@@ -166,6 +179,21 @@ defmodule TokengateWeb.StatsLive.Users do
                     <td class="text-right font-mono">{Stats.format_tps(row.avg_tps)}</td>
                     <td class="text-right font-mono text-base-content/70">
                       {cost_per_request(row)}
+                    </td>
+                    <td class="min-w-[150px]">
+                      <%= if budget = @budgets_by_user[row.user_id] do %>
+                        <div class="flex items-center gap-2">
+                          <Stats.budget_bar
+                            compact
+                            spend={budget.monthly_usd}
+                            limit={budget.monthly_limit_usd}
+                            pct={budget.monthly_pct}
+                          />
+                          <Stats.budget_badge pct={budget.monthly_pct} />
+                        </div>
+                      <% else %>
+                        <span class="text-base-content/30">—</span>
+                      <% end %>
                     </td>
                   </tr>
                 </tbody>

@@ -160,8 +160,9 @@ defmodule TokengateWeb.StatsLiveTest do
 
     html = render(view)
 
-    # cache read + creation = 1,000 → "1.0K"; hit rate = 800/1000 = 80.0%
-    assert html =~ "cache · 80.0% hit"
+    # Canonical format: hit rate first in the sub-line, values in the title
+    assert html =~ "80.0% hit"
+    assert html =~ "1,000 in / 50 out"
   end
 
   test "admin sees provider ranking on index", %{conn: conn} do

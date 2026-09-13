@@ -82,6 +82,11 @@ defmodule TokengateWeb.Router do
     get "/stats/members/:member_id", RedirectController, :stats_member
     get "/stats/members/:member_id/*rest", RedirectController, :stats_member
     get "/admin/users/:user_id/stats", RedirectController, :user_stats
+
+    # El tab Créditos se disolvió: el uso de presupuesto vive dentro de
+    # cada dimensión (En vivo, Resumen, Usuarios, Grupos, Servicios).
+    get "/stats/credits", RedirectController, :stats_credits
+    get "/stats/credits/*rest", RedirectController, :stats_credits
   end
 
   # Authenticated browser dashboard. The on_mount hook mirrors the plug
@@ -111,7 +116,6 @@ defmodule TokengateWeb.Router do
       live "/stats/groups/:group_id", StatsLive, :group
       live "/stats/users", StatsLive, :users
       live "/stats/users/:user_id", UserStatsLive
-      live "/stats/credits", StatsLive, :credits
       live "/calculator", CalculatorLive
       live "/logs", LogsLive
       live "/admin/providers", ProvidersLive

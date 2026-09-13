@@ -6,6 +6,8 @@ defmodule TokengateWeb.StatsLive.Models do
   """
   use TokengateWeb, :html
 
+  import TokengateWeb.KpiHelpers, only: [kpi_card: 1]
+
   alias TokengateWeb.StatsHelpers, as: Stats
 
   import TokengateWeb.StatsHelpers, only: [sort_icon: 1]
@@ -42,81 +44,48 @@ defmodule TokengateWeb.StatsLive.Models do
       <%= if @model_filter do %>
         <div class="space-y-6">
           <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <div
+            <.kpi_card
               id="model-kpi-requests"
-              class="card bg-base-100 border border-base-300 shadow-sm"
+              label="Requests"
+              icon="hero-server-stack"
+              accent="primary"
             >
-              <div class="card-body p-5">
-                <div class="flex items-center justify-between">
-                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Requests</span>
-                  <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10">
-                    <.icon name="hero-server-stack" class="w-5 h-5 text-primary" />
-                  </span>
-                </div>
-                <p class="mt-2 text-2xl font-bold">
-                  {Stats.format_number(@metrics.requests_total)}
-                </p>
-              </div>
-            </div>
-            <div
+              {Stats.format_number(@metrics.requests_total)}
+            </.kpi_card>
+
+            <.kpi_card
               id="model-kpi-cost"
-              class="card bg-base-100 border border-base-300 shadow-sm"
+              label="Costo"
+              icon="hero-currency-dollar"
+              accent="accent"
             >
-              <div class="card-body p-5">
-                <div class="flex items-center justify-between">
-                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Costo</span>
-                  <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-accent/10">
-                    <.icon name="hero-currency-dollar" class="w-5 h-5 text-accent" />
-                  </span>
-                </div>
-                <p class="mt-2 text-2xl font-bold">
-                  ${Stats.format_decimal(@metrics.cost_usd)}
-                </p>
-              </div>
-            </div>
-            <div
+              ${Stats.format_decimal(@metrics.cost_usd)}
+            </.kpi_card>
+
+            <.kpi_card
               id="model-kpi-tokens"
-              class="card bg-base-100 border border-base-300 shadow-sm"
+              label="Tokens"
+              icon="hero-cpu-chip"
+              accent="primary"
+              title={
+                "#{Stats.format_number(@metrics.prompt_tokens)} in / #{Stats.format_number(@metrics.completion_tokens)} out"
+              }
             >
-              <div class="card-body p-5">
-                <div class="flex items-center justify-between">
-                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens in/out</span>
-                  <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-base-300">
-                    <.icon name="hero-cpu-chip" class="w-5 h-5 text-base-content/60" />
-                  </span>
-                </div>
-                <p
-                  class="mt-2 text-lg font-bold"
-                  title={"#{Stats.format_number(@metrics.prompt_tokens)} / #{Stats.format_number(@metrics.completion_tokens)}"}
-                >
-                  {Stats.format_compact(@metrics.prompt_tokens)} / {Stats.format_compact(
-                    @metrics.completion_tokens
-                  )}
-                </p>
-                <p class="text-xs text-base-content/50 mt-1">
-                  cache · {Stats.cache_hit_pct(
-                    @metrics.prompt_tokens,
-                    @metrics.cache_read_tokens
-                  )} hit
-                </p>
-              </div>
-            </div>
-            <div
-              id="model-kpi-tps"
-              class="card bg-base-100 border border-base-300 shadow-sm"
-            >
-              <div class="card-body p-5">
-                <div class="flex items-center justify-between">
-                  <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">TPS</span>
-                  <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-base-300">
-                    <.icon name="hero-bolt" class="w-5 h-5 text-base-content/60" />
-                  </span>
-                </div>
-                <p class="mt-2 text-2xl font-bold">
-                  {Stats.format_tps(@metrics.avg_tps)}
-                </p>
-              </div>
-            </div>
+              <span class="flex items-baseline gap-2">
+                {Stats.format_compact(@metrics.prompt_tokens)}
+                <span class="text-sm text-base-content/50">in</span>
+                <span class="text-base-content/30">/</span>
+                {Stats.format_compact(@metrics.completion_tokens)}
+                <span class="text-sm text-base-content/50">out</span>
+              </span>
+              <:sub>
+                cache · {Stats.cache_hit_pct(@metrics.prompt_tokens, @metrics.cache_read_tokens)} hit
+              </:sub>
+            </.kpi_card>
+
+            <.kpi_card id="model-kpi-tps" label="TPS" icon="hero-bolt" accent="accent">
+              {Stats.format_tps(@metrics.avg_tps)}
+            </.kpi_card>
           </div>
 
           <%!-- Daily usage sparkline: providers over time --%>

@@ -63,6 +63,114 @@ defmodule Tokengate.Budgets do
     Enum.map(members, &member_budget(&1, spend))
   end
 
+  @doc """
+  Monthly spend per service from Postgres using LOCAL calendar boundaries
+  for the given timezone, joined with each service's own
+  `monthly_budget_usd` limit. One aggregate query total.
+
+  Each row:
+
+      %{
+        service: Service.t(),
+        monthly_spend_usd: Decimal.t(),
+        monthly_limit_usd: Decimal.t() | nil,
+        monthly_pct: float() | nil,
+        exhausted?: boolean()
+      }
+
+  Ordered by highest monthly spend first.
+  """
+  @spec list_service_budgets(String.t()) :: [service_budget()]
+  def list_service_budgets(timezone \\ @default_timezone) do
+    from = Periods.start_of_month_utc(timezone)
+
+    services = Repo.all(from(s in Accounts.Service, preload: :group))
+
+    spend =
+      RequestLog
+      |> where([rl], rl.service_id in ^Enum.map(services, & &1.id) and rl.inserted_at >= ^from)
+      |> group_by([rl], rl.service_id)
+      |> select([rl], {rl.service_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
+      |> Repo.all()
+      |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
+
+    services
+    |> Enum.map(fn service ->
+      monthly_usd = Map.get(spend, service.id, Decimal.new(0))
+      monthly_pct = pct(monthly_usd, service.monthly_budget_usd)
+
+      %{
+        service: service,
+        monthly_spend_usd: monthly_usd,
+        monthly_limit_usd: service.monthly_budget_usd,
+        monthly_pct: monthly_pct,
+        exhausted?: exhausted?(monthly_pct)
+      }
+    end)
+    |> Enum.sort_by(fn row -> Decimal.to_float(row.monthly_spend_usd) end, :desc)
+  end
+
+  @typedoc """
+  Service-level budget view: the service's own monthly cap vs its real
+  spend in the local month.
+  """
+  @type service_budget :: %{
+          service: Tokengate.Accounts.Service.t(),
+          monthly_spend_usd: Decimal.t(),
+          monthly_limit_usd: Decimal.t() | nil,
+          monthly_pct: float() | nil,
+          exhausted?: boolean()
+        }
+
+  @doc """
+  Org-wide budget summary: how much has been spent this local month vs
+  how much is allotted across members and services — the "are we on
+  track" number for the stats hub. `nil` limits are unlimited; they add
+  spend but no cap.
+  """
+  @spec org_budget_summary(String.t()) :: %{
+          monthly_spend_usd: Decimal.t(),
+          monthly_limit_usd: Decimal.t() | nil,
+          monthly_pct: float() | nil,
+          exhausted_count: non_neg_integer()
+        }
+  def org_budget_summary(timezone \\ @default_timezone) do
+    member_rows = list_member_budgets(timezone)
+    service_rows = list_service_budgets(timezone)
+
+    spend =
+      [member_rows, service_rows]
+      |> Enum.map(fn rows ->
+        Enum.reduce(rows, Decimal.new(0), fn row, acc ->
+          Decimal.add(acc, row.monthly_spend_usd)
+        end)
+      end)
+      |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
+
+    limit =
+      [member_rows, service_rows]
+      |> Enum.map(fn rows ->
+        rows
+        |> Enum.map(& &1.monthly_limit_usd)
+        |> Enum.reject(&is_nil/1)
+        |> case do
+          [] -> Decimal.new(0)
+          limits -> Enum.reduce(limits, &Decimal.add/2)
+        end
+      end)
+      |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
+
+    exhausted_count =
+      Enum.count(member_rows, & &1.exhausted?) + Enum.count(service_rows, & &1.exhausted?)
+
+    %{
+      monthly_spend_usd: spend,
+      monthly_limit_usd: limit,
+      monthly_pct: pct(spend, limit),
+      exhausted_count: exhausted_count
+    }
+  end
+
   @doc "Lists only the member budgets that hit a daily or monthly limit."
   @spec list_exhausted_member_budgets() :: [member_budget()]
   def list_exhausted_member_budgets do
@@ -210,11 +318,24 @@ defmodule Tokengate.Budgets do
     member_budgets
     |> Enum.group_by(fn mb -> mb.member.user_id end)
     |> Map.new(fn {user_id, budgets} ->
+      monthly_limit =
+        budgets
+        |> Enum.map(& &1.monthly_limit_usd)
+        |> Enum.reject(&is_nil/1)
+        |> case do
+          [] -> nil
+          limits -> Enum.reduce(limits, &Decimal.add/2)
+        end
+
+      monthly_usd =
+        Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.monthly_spend_usd, &2))
+
       {user_id,
        %{
          daily_usd: Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.daily_spend_usd, &2)),
-         monthly_usd:
-           Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.monthly_spend_usd, &2)),
+         monthly_usd: monthly_usd,
+         monthly_limit_usd: monthly_limit,
+         monthly_pct: pct(monthly_usd, monthly_limit),
          exhausted?: Enum.any?(budgets, & &1.exhausted?)
        }}
     end)

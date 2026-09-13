@@ -11,6 +11,7 @@ defmodule TokengateWeb.StatsLive.Index do
   import TokengateWeb.KpiHelpers, only: [kpi_cards: 1]
 
   attr :metrics, :any, required: true
+  attr :org_budget, :any, default: nil
   attr :peak_concurrency, :any, required: true
   attr :busiest_hours, :any, required: true
   attr :busiest_minutes, :any, required: true
@@ -32,6 +33,39 @@ defmodule TokengateWeb.StatsLive.Index do
   def index(assigns) do
     ~H"""
     <div class="space-y-6">
+      <%!-- Presupuesto org del mes (gasto real vs límite total) --%>
+      <%= if @org_budget && @current_user && @current_user.global_role == "admin" do %>
+        <div class="card bg-base-100 border border-base-300 shadow-sm" id="org-budget-card">
+          <div class="card-body p-5">
+            <div class="flex items-center justify-between flex-wrap gap-2">
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Presupuesto · mes actual
+                </span>
+                <Stats.budget_badge pct={@org_budget.monthly_pct} />
+              </div>
+              <span
+                :if={@org_budget.exhausted_count > 0}
+                class="badge badge-sm badge-error badge-outline"
+                id="org-budget-exhausted"
+              >
+                {@org_budget.exhausted_count} agotados
+              </span>
+            </div>
+            <div class="mt-2">
+              <Stats.budget_bar
+                spend={@org_budget.monthly_spend_usd}
+                limit={@org_budget.monthly_limit_usd}
+                pct={@org_budget.monthly_pct}
+              />
+            </div>
+            <p class="text-xs text-base-content/40 mt-1">
+              Miembros + servicios · mes calendario en su zona horaria
+            </p>
+          </div>
+        </div>
+      <% end %>
+
       <%!-- KPI cards --%>
       <.kpi_cards metrics={@metrics} deltas={@metrics[:deltas]} />
 

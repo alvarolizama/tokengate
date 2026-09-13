@@ -5,9 +5,15 @@ defmodule TokengateWeb.RedirectController do
 
   use TokengateWeb, :controller
 
-  @doc "``/dashboard/credits`` → ``/stats/credits``"
+  @doc """
+  ``/dashboard/credits`` y ``/stats/credits`` → ``/stats/overview``.
+
+  El tab Créditos se disolvió: el uso de presupuesto (gasto vs límite)
+  vive dentro de cada dimensión — barra org en En vivo/Resumen, columnas
+  en Usuarios/Grupos/Servicios.
+  """
   def stats_credits(conn, _params) do
-    redirect(conn, to: ~p"/stats/credits")
+    redirect(conn, to: ~p"/stats/overview")
   end
 
   @doc """

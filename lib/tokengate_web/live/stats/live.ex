@@ -13,10 +13,13 @@ defmodule TokengateWeb.StatsLive.LiveSection do
   """
   use TokengateWeb, :html
 
+  import TokengateWeb.KpiHelpers, only: [kpi_card: 1]
+
   alias TokengateWeb.StatsHelpers, as: Stats
 
   attr :pulse, :any, required: true
   attr :today_metrics, :any, required: true
+  attr :org_budget, :any, default: nil
   attr :minute_series, :any, required: true
   attr :minute_series_max, :any, required: true
   attr :inflight_count, :any, required: true
@@ -44,134 +47,137 @@ defmodule TokengateWeb.StatsLive.LiveSection do
         </span>
       </div>
 
+      <%!-- Presupuesto org del mes — mismo widget que el Resumen --%>
+      <%= if @org_budget do %>
+        <div class="card bg-base-100 border border-base-300 shadow-sm" id="live-org-budget">
+          <div class="card-body p-5">
+            <div class="flex items-center justify-between flex-wrap gap-2">
+              <div class="flex items-center gap-2">
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Presupuesto · mes actual
+                </span>
+                <Stats.budget_badge pct={@org_budget.monthly_pct} />
+              </div>
+              <span
+                :if={@org_budget.exhausted_count > 0}
+                class="badge badge-sm badge-error badge-outline"
+                id="live-org-budget-exhausted"
+              >
+                {@org_budget.exhausted_count} agotados
+              </span>
+            </div>
+            <div class="mt-2">
+              <Stats.budget_bar
+                spend={@org_budget.monthly_spend_usd}
+                limit={@org_budget.monthly_limit_usd}
+                pct={@org_budget.monthly_pct}
+              />
+            </div>
+            <p class="text-xs text-base-content/40 mt-1">
+              Miembros + servicios · mes calendario en su zona horaria
+            </p>
+          </div>
+        </div>
+      <% end %>
+
       <%!-- Pulso: req/min, error rate, en vuelo --%>
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div id="live-rpm" class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-5">
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                Requests / min
-              </span>
-              <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10">
-                <.icon name="hero-bolt" class="w-5 h-5 text-primary" />
-              </span>
-            </div>
-            <p class="mt-2 text-2xl font-bold tabular-nums">
-              {@pulse.req_per_min}
-            </p>
-            <p class="text-xs text-base-content/40 mt-1">
-              ventana 5 min · {Stats.format_number(@pulse.request_count)} requests
-            </p>
-          </div>
-        </div>
+        <.kpi_card
+          id="live-rpm"
+          label="Requests / min"
+          icon="hero-bolt"
+          accent="primary"
+          title="Ventana móvil de 5 minutos"
+        >
+          {@pulse.req_per_min}
+          <:sub>ventana 5 min · {Stats.format_number(@pulse.request_count)} requests</:sub>
+        </.kpi_card>
 
-        <div id="live-errors" class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-5">
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                Tasa de error
-              </span>
-              <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-error/10">
-                <.icon name="hero-exclamation-triangle" class="w-5 h-5 text-error" />
-              </span>
-            </div>
-            <p class="mt-2 text-2xl font-bold tabular-nums">
-              {@pulse.error_rate}%
-            </p>
-            <p class="text-xs text-base-content/40 mt-1">
-              {Stats.format_number(@pulse.error_count)} errores en 5 min
-            </p>
-          </div>
-        </div>
+        <.kpi_card
+          id="live-errors"
+          label="Tasa de error"
+          icon="hero-exclamation-triangle"
+          accent="error"
+        >
+          {@pulse.error_rate}%
+          <:sub>{Stats.format_number(@pulse.error_count)} errores en 5 min</:sub>
+        </.kpi_card>
 
-        <div id="live-inflight" class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-5">
-            <div class="flex items-center justify-between">
-              <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                En vuelo
-              </span>
-              <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-accent/10">
-                <.icon name="hero-paper-airplane" class="w-5 h-5 text-accent" />
-              </span>
-            </div>
-            <p class="mt-2 text-2xl font-bold tabular-nums">
-              {Stats.format_number(@inflight_count)}
-            </p>
-            <p class="text-xs text-base-content/40 mt-1">
-              requests en curso ahora
-            </p>
-          </div>
-        </div>
+        <.kpi_card
+          id="live-inflight"
+          label="En vuelo"
+          icon="hero-paper-airplane"
+          accent="accent"
+        >
+          {Stats.format_number(@inflight_count)}
+          <:sub>requests en curso ahora</:sub>
+        </.kpi_card>
       </div>
 
       <%!-- KPIs de hoy (día calendario) --%>
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <div id="live-today-requests" class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-5">
-            <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-              Hoy · requests
-            </span>
-            <p class="mt-2 text-2xl font-bold tabular-nums">
-              {Stats.format_number(@today_metrics.requests_total)}
-            </p>
-          </div>
-        </div>
-        <div id="live-today-cost" class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-5">
-            <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-              Hoy · costo
-            </span>
-            <p class="mt-2 text-2xl font-bold tabular-nums">
-              ${Stats.format_decimal(@today_metrics.cost_usd)}
-            </p>
-          </div>
-        </div>
-        <div id="live-today-tokens" class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-5">
-            <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-              Hoy · tokens
-            </span>
-            <p class="mt-2 text-2xl font-bold tabular-nums">
-              {Stats.format_compact(@today_metrics.prompt_tokens + @today_metrics.completion_tokens)}
-            </p>
-            <p class="text-xs text-base-content/40 mt-1">
-              {Stats.format_compact(@today_metrics.prompt_tokens)} in · {Stats.format_compact(
-                @today_metrics.completion_tokens
-              )} out
-            </p>
-            <p class="text-xs text-base-content/40">
-              {if(
-                @today_metrics.cache_read_tokens in [nil, 0] and
-                  @today_metrics.cache_creation_tokens in [nil, 0],
-                do: "cache: —",
-                else:
-                  "cache: " <>
-                    Stats.format_compact(
-                      (@today_metrics.cache_read_tokens || 0) +
-                        (@today_metrics.cache_creation_tokens || 0)
-                    ) <>
-                    " (" <>
-                    Stats.cache_hit_pct(
-                      @today_metrics.prompt_tokens,
-                      @today_metrics.cache_read_tokens
-                    ) <> " hit)"
-              )}
-            </p>
-          </div>
-        </div>
-        <div id="live-today-latency" class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-5">
-            <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-              Hoy · latencia
-            </span>
-            <p class="mt-2 text-2xl font-bold tabular-nums">
-              {Stats.format_ms(@today_metrics.avg_latency_ms)}
-            </p>
-            <p class="text-xs text-base-content/40 mt-1">
-              p95: {Stats.format_ms(@today_metrics.p95_latency_ms)}
-            </p>
-          </div>
-        </div>
+        <.kpi_card
+          id="live-today-requests"
+          label="Hoy · requests"
+          icon="hero-arrow-trending-up"
+          accent="primary"
+        >
+          {Stats.format_number(@today_metrics.requests_total)}
+        </.kpi_card>
+
+        <.kpi_card
+          id="live-today-cost"
+          label="Hoy · costo"
+          icon="hero-currency-dollar"
+          accent="accent"
+        >
+          ${Stats.format_decimal(@today_metrics.cost_usd)}
+        </.kpi_card>
+
+        <.kpi_card
+          id="live-today-tokens"
+          label="Hoy · tokens"
+          icon="hero-cpu-chip"
+          accent="primary"
+          title={
+            "#{Stats.format_number(@today_metrics.prompt_tokens)} in / #{Stats.format_number(@today_metrics.completion_tokens)} out"
+          }
+        >
+          {Stats.format_compact(@today_metrics.prompt_tokens + @today_metrics.completion_tokens)}
+          <:sub>
+            {Stats.format_compact(@today_metrics.prompt_tokens)} in · {Stats.format_compact(
+              @today_metrics.completion_tokens
+            )} out
+          </:sub>
+          <:sub>
+            {if(
+              @today_metrics.cache_read_tokens in [nil, 0] and
+                @today_metrics.cache_creation_tokens in [nil, 0],
+              do: "cache: —",
+              else:
+                "cache: " <>
+                  Stats.format_compact(
+                    (@today_metrics.cache_read_tokens || 0) +
+                      (@today_metrics.cache_creation_tokens || 0)
+                  ) <>
+                  " (" <>
+                  Stats.cache_hit_pct(
+                    @today_metrics.prompt_tokens,
+                    @today_metrics.cache_read_tokens
+                  ) <> " hit)"
+            )}
+          </:sub>
+        </.kpi_card>
+
+        <.kpi_card
+          id="live-today-latency"
+          label="Hoy · latencia"
+          icon="hero-clock"
+          accent="accent"
+        >
+          {Stats.format_ms(@today_metrics.avg_latency_ms)}
+          <:sub>p95: {Stats.format_ms(@today_metrics.p95_latency_ms)}</:sub>
+        </.kpi_card>
       </div>
 
       <%!-- Gráfica: requests por minuto (últimos 60 min) --%>

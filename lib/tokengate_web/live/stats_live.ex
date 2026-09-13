@@ -36,7 +36,6 @@ defmodule TokengateWeb.StatsLive do
   import TokengateWeb.StatsLive.Services, only: [services: 1]
   import TokengateWeb.StatsLive.Users, only: [users: 1]
   import TokengateWeb.StatsLive.LiveSection, only: [live: 1]
-  import TokengateWeb.StatsLive.Credits, only: [credits: 1]
 
   import TokengateWeb.StatsHelpers,
     only: [period_label: 1, period_active?: 2, sort_rows: 3]
@@ -132,7 +131,6 @@ defmodule TokengateWeb.StatsLive do
 
     socket =
       case socket.assigns.live_action do
-        :credits -> load_budgets(socket)
         :live -> load_live_data(socket)
         _ -> start_data_load(socket)
       end
@@ -164,7 +162,7 @@ defmodule TokengateWeb.StatsLive do
   end
 
   def handle_event("refresh", _params, socket) do
-    {:noreply, load_budgets(socket)}
+    {:noreply, start_data_load(socket)}
   end
 
   def handle_event("show_more", %{"group-id" => group_id}, socket) do
@@ -251,25 +249,26 @@ defmodule TokengateWeb.StatsLive do
   end
 
   # `logs:new` broadcast — route by tab:
-  #   * credits: coalesce into a single budget reload
   #   * live: prepend to the feed + refresh the pulse
+  #   * overview: coalesce into a single reload so the org budget bar and
+  #     KPIs track spend as it happens
   @impl true
   def handle_info({:new_log, log}, socket) do
     case socket.assigns.live_action do
-      :credits ->
-        if not socket.assigns.reload_scheduled do
-          Process.send_after(self(), :reload_budgets, @reload_interval_ms)
-          {:noreply, assign(socket, :reload_scheduled, true)}
-        else
-          {:noreply, socket}
-        end
-
       :live ->
         {:noreply,
          socket
          |> stream_insert(:live_feed, log, at: 0, limit: @live_feed_size)
          |> assign(:pulse, Logs.realtime_summary(%{}))
          |> assign(:last_sync_at, DateTime.utc_now())}
+
+      :index ->
+        if not socket.assigns.reload_scheduled do
+          Process.send_after(self(), :reload_budgets, @reload_interval_ms)
+          {:noreply, assign(socket, :reload_scheduled, true)}
+        else
+          {:noreply, socket}
+        end
 
       _ ->
         {:noreply, socket}
@@ -280,7 +279,7 @@ defmodule TokengateWeb.StatsLive do
     {:noreply,
      socket
      |> assign(:reload_scheduled, false)
-     |> load_budgets()}
+     |> start_data_load()}
   end
 
   ## "En vivo" tab ----------------------------------------------------------
@@ -424,6 +423,7 @@ defmodule TokengateWeb.StatsLive do
 
         maybe_admin_tasks(admin?, opts) ++
           [
+            fn -> {:org_budget, Budgets.org_budget_summary(params.timezone)} end,
             fn -> {:breakdown_model, Rollup.breakdown_by_model(nil, opts)} end,
             fn -> {:breakdown_member, Rollup.breakdown_by_member(nil, opts)} end,
             fn -> {:breakdown_group, breakdown_by_group_if_admin(admin?, opts)} end,
@@ -468,7 +468,15 @@ defmodule TokengateWeb.StatsLive do
       :groups ->
         admin? = params.user.global_role == "admin"
 
-        base = [fn -> {:breakdown_group, breakdown_by_group_if_admin(admin?, opts)} end]
+        base =
+          [
+            fn -> {:breakdown_group, breakdown_by_group_if_admin(admin?, opts)} end
+          ] ++
+            if admin? do
+              [fn -> {:group_budgets, Budgets.list_group_budgets(params.timezone)} end]
+            else
+              []
+            end
 
         # Drill-down (?group_id=) shares the template with :group and
         # needs the group record for the breadcrumb.
@@ -491,6 +499,10 @@ defmodule TokengateWeb.StatsLive do
         if allowed? do
           [
             fn -> {:group, Accounts.get_group!(group_id)} end,
+            fn ->
+              {:group_budget,
+               Budgets.list_group_budgets(params.timezone) |> find_group_budget(group_id)}
+            end,
             fn -> {:breakdown_member, Rollup.breakdown_by_member(group_id, opts)} end,
             fn -> {:breakdown_model, Rollup.breakdown_by_model(group_id, opts)} end,
             fn -> {:breakdown_service, Rollup.breakdown_by_service_for_group(group_id, opts)} end,
@@ -508,14 +520,18 @@ defmodule TokengateWeb.StatsLive do
         end
 
       :users ->
-        [fn -> {:breakdown_user, Rollup.breakdown_by_user(opts)} end]
+        [
+          fn -> {:breakdown_user, Rollup.breakdown_by_user(opts)} end,
+          fn -> {:budgets_by_user, Budgets.spend_by_user(params.timezone)} end
+        ]
 
       :services ->
         service_id = params.service_filter
         admin? = params.user.global_role == "admin"
 
         # Services have a dedicated service_id column.
-        [fn -> {:breakdown_service, breakdown_by_service_if_admin(admin?, opts)} end] ++
+        [fn -> {:service_budgets, Budgets.list_service_budgets(params.timezone)} end] ++
+          [fn -> {:breakdown_service, breakdown_by_service_if_admin(admin?, opts)} end] ++
           if service_id && admin? do
             [
               fn ->
@@ -554,6 +570,11 @@ defmodule TokengateWeb.StatsLive do
 
   defp maybe_admin_tasks(false, _opts), do: []
 
+  # Picks a single group's budget row out of the group rollup.
+  defp find_group_budget(rows, group_id) do
+    Enum.find(rows, fn row -> row.group.id == group_id end)
+  end
+
   defp apply_sorting(data, %{sort_field: field, sort_direction: direction}) do
     Enum.reduce(@sortable_breakdowns, data, fn key, acc ->
       case acc do
@@ -589,10 +610,11 @@ defmodule TokengateWeb.StatsLive do
       member_usage_tiers: [],
       drilldown_series: [],
       drilldown_series_labels: [],
-      budgets: [],
-      budgets_by_group: %{},
+      org_budget: nil,
+      budgets_by_user: %{},
+      service_budgets: [],
       group_budgets: [],
-      inactive_by_group: %{}
+      group_budget: nil
     }
   end
 
@@ -671,7 +693,8 @@ defmodule TokengateWeb.StatsLive do
         %{
           pulse: Logs.realtime_summary(%{}),
           today_metrics: Logs.today_summary(timezone),
-          minute_series: Logs.requests_per_minute(60)
+          minute_series: Logs.requests_per_minute(60),
+          org_budget: Budgets.org_budget_summary(timezone)
         }
       end)
 
@@ -683,54 +706,11 @@ defmodule TokengateWeb.StatsLive do
     |> assign(:today_metrics, bundle.today_metrics)
     |> assign(:minute_series, bundle.minute_series)
     |> assign(:minute_series_max, Enum.max(Enum.map(bundle.minute_series, & &1.request_count)))
+    |> assign(:org_budget, bundle.org_budget)
     |> assign(:inflight_count, Inflight.count())
     |> assign(:inflight_by_model, Inflight.count_by_model(5))
     |> assign(:last_sync_at, DateTime.utc_now())
     |> stream(:live_feed, feed_logs, reset: true)
-  end
-
-  ## Credits (budgets) ----------------------------------------------------
-
-  # Whole-page bundle behind a short TTL (same pattern as the old
-  # CreditsLive): list_member_budgets preloads every group member and runs
-  # 2 Postgres aggregates; inactive_members runs a lifetime MAX(inserted_at)
-  # per inactive member. Connected tabs share one computation per TTL window.
-  defp load_budgets(socket) do
-    timezone = socket.assigns[:timezone] || "Etc/UTC"
-
-    bundle =
-      DashboardCache.fetch_or_compute({:credits_budgets, timezone}, fn ->
-        budgets = Budgets.list_member_budgets(timezone)
-
-        %{
-          budgets: budgets,
-          budgets_by_group: Enum.group_by(budgets, fn b -> b.member.group.id end),
-          group_budgets: Budgets.rollup_group_budgets(budgets),
-          inactive_by_group: inactive_members(budgets, timezone)
-        }
-      end)
-
-    socket
-    |> assign(:stats_loading, false)
-    |> assign(:budgets, bundle.budgets)
-    |> assign(:budgets_by_group, bundle.budgets_by_group)
-    |> assign(:group_budgets, bundle.group_budgets)
-    |> assign(:inactive_by_group, bundle.inactive_by_group)
-  end
-
-  defp inactive_members(budgets, _timezone) do
-    inactive =
-      budgets
-      |> Enum.filter(fn b ->
-        Decimal.compare(b.daily_spend_usd, Decimal.new(0)) == :eq and
-          Decimal.compare(b.monthly_spend_usd, Decimal.new(0)) == :eq
-      end)
-
-    last_requests = Budgets.last_requests_by_member_ids(Enum.map(inactive, & &1.member.id))
-
-    inactive
-    |> Enum.map(fn b -> Map.put(b, :last_request_at, Map.get(last_requests, b.member.id)) end)
-    |> Enum.group_by(fn b -> b.member.group.id end)
   end
 
   ## Helpers --------------------------------------------------------------

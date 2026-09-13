@@ -514,4 +514,87 @@ defmodule TokengateWeb.StatsHelpers do
     </span>
     """
   end
+
+  # ── Budget usage components (compartidos por todas las secciones) ──────
+
+  @doc """
+  Barra de uso de presupuesto (gasto vs límite del mes local). El tamaño
+  lo pone `pct` (0-100+); el color cruza el 80%. `nil` en pct = sin
+  límite (barra neutra). Reutilizada por En vivo, Resumen, Usuarios,
+  Grupos y Servicios.
+  """
+  attr :spend, :any, required: true, doc: "Decimal — gasto del mes local"
+  attr :limit, :any, default: nil, doc: "Decimal | nil — límite mensual (nil = ilimitado)"
+  attr :pct, :any, default: nil, doc: "float | nil — 0-100+ ya calculado"
+  attr :label, :string, default: "Mes", doc: "Prefijo del texto (Mes, Grupo, Servicio…)"
+  attr :compact, :boolean, default: false, doc: "Versión mini para tablas"
+
+  def budget_bar(assigns) do
+    ~H"""
+    <div class={if(@compact, do: "flex items-center gap-2", else: "space-y-1.5")}>
+      <div class={[@compact && "flex-1", "w-full bg-base-300 rounded-full h-1.5 min-w-12"]}>
+        <div
+          class={[
+            "h-1.5 rounded-full transition-all duration-500",
+            budget_bar_color(@pct)
+          ]}
+          style={"width: #{budget_bar_width(@pct)}%"}
+        >
+        </div>
+      </div>
+      <span class={[
+        "text-xs tabular-nums whitespace-nowrap",
+        if(@compact, do: "text-base-content/60", else: "text-base-content/50")
+      ]}>
+        {format_decimal(@spend)}
+        <span :if={@limit} class="text-base-content/40">
+          / {format_decimal(@limit)}
+        </span>
+        <span :if={is_nil(@limit)} class="text-base-content/40"> · sin límite</span>
+      </span>
+    </div>
+    """
+  end
+
+  defp budget_bar_color(nil), do: "bg-base-content/20"
+  defp budget_bar_color(pct) when pct >= 100, do: "bg-error"
+  defp budget_bar_color(pct) when pct >= 80, do: "bg-warning"
+  defp budget_bar_color(_), do: "bg-success"
+
+  defp budget_bar_width(nil), do: 0
+  defp budget_bar_width(pct) when pct >= 100, do: 100
+  defp budget_bar_width(pct) when pct < 1, do: 2
+  defp budget_bar_width(pct), do: trunc(pct)
+
+  @doc """
+  Badge de estado de presupuesto para tablas: OK / ≥80% / agotado /
+  sin límite.
+  """
+  attr :pct, :any, default: nil
+  attr :exhausted?, :any, default: false
+
+  def budget_badge(assigns) do
+    ~H"""
+    <span class={[
+      "badge badge-sm whitespace-nowrap",
+      cond do
+        @exhausted? or (@pct != nil and @pct >= 100) -> "badge-error"
+        @pct != nil and @pct >= 80 -> "badge-warning"
+        @pct == nil -> "badge-ghost"
+        true -> "badge-success"
+      end
+    ]}>
+      <%= cond do %>
+        <% @exhausted? or (@pct != nil and @pct >= 100) -> %>
+          Agotado
+        <% @pct != nil and @pct >= 80 -> %>
+          ≥80%
+        <% @pct == nil -> %>
+          sin límite
+        <% true -> %>
+          OK
+      <% end %>
+    </span>
+    """
+  end
 end

@@ -102,161 +102,148 @@ defmodule TokengateWeb.KpiHelpers do
   # Function component: renders the 4 KPI cards
   # ---------------------------------------------------------------------
 
+  @doc """
+  Tarjeta KPI canónica del hub /stats — formato único para En vivo,
+  Resumen, Modelos, Grupos, Servicios y Usuarios:
+
+    * label en uppercase + icono en chip de color (accent: primary |
+      accent | error | warning | neutral)
+    * valor principal `text-2xl font-bold tabular-nums`
+    * slot `inner_block` como subtítulo opcional
+  """
+  attr :id, :string, required: true
+  attr :label, :string, required: true
+  attr :icon, :string, required: true
+  attr :accent, :string, default: "primary", doc: "primary | accent | error | warning | neutral"
+  attr :title, :string, default: nil, doc: "tooltip del valor"
+  slot :sub, doc: "sub-línea estándar bajo el valor"
+
+  def kpi_card(assigns) do
+    ~H"""
+    <div id={@id} class="card bg-base-100 border border-base-300 shadow-sm">
+      <div class="card-body p-5">
+        <div class="flex items-center justify-between">
+          <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+            {@label}
+          </span>
+          <span class={["flex items-center justify-center w-9 h-9 rounded-lg", accent_bg(@accent)]}>
+            <.icon name={@icon} class={["w-5 h-5", accent_text(@accent)]} />
+          </span>
+        </div>
+        <p class="mt-2 text-2xl font-bold text-base-content tabular-nums" title={@title}>
+          {render_slot(@inner_block)}
+        </p>
+        <p :for={sub <- @sub} class="text-xs text-base-content/40 mt-1">
+          {render_slot(sub)}
+        </p>
+      </div>
+    </div>
+    """
+  end
+
+  defp accent_bg("primary"), do: "bg-primary/10"
+  defp accent_bg("accent"), do: "bg-accent/10"
+  defp accent_bg("error"), do: "bg-error/10"
+  defp accent_bg("warning"), do: "bg-warning/10"
+  defp accent_bg(_), do: "bg-base-300"
+
+  defp accent_text("primary"), do: "text-primary"
+  defp accent_text("accent"), do: "text-accent"
+  defp accent_text("error"), do: "text-error"
+  defp accent_text("warning"), do: "text-warning"
+  defp accent_text(_), do: "text-base-content/60"
+
+  @doc """
+  Sub-línea estándar bajo el valor de un KPI (misma tipografía en todo el
+  hub): texto pequeño gris, sin tabular.
+  """
+  attr :id, :string, default: nil
+  attr :rest, :global
+
+  def kpi_sub(assigns) do
+    ~H"""
+    <p class="text-xs text-base-content/40 mt-1" id={@id} {@rest}>
+      {render_slot(@inner_block)}
+    </p>
+    """
+  end
+
   attr :metrics, :map, required: true
   attr :deltas, :map, default: nil
 
   def kpi_cards(assigns) do
     ~H"""
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      <div id="kpi-cost" class="card bg-base-100 border border-base-300 shadow-sm">
-        <div class="card-body p-5">
-          <div class="flex items-center justify-between">
-            <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-              Costo
-            </span>
-            <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-accent/10">
-              <.icon name="hero-currency-dollar" class="w-5 h-5 text-accent" />
-            </span>
-          </div>
-          <p class="mt-2 text-2xl font-bold text-base-content">
-            {format_decimal(@metrics.cost_usd)}
-          </p>
-          <div class="text-xs text-base-content/40 mt-1 flex items-center gap-1.5">
-            <span>Reportado por el proveedor</span>
-            <span
-              :if={@deltas && @deltas[:cost_usd] != nil}
-              class={[
-                "font-medium tabular-nums",
-                delta_color(@deltas[:cost_usd])
-              ]}
-            >
-              {delta_arrow(@deltas[:cost_usd])} {abs_float(@deltas[:cost_usd])}%
-            </span>
-          </div>
-        </div>
-      </div>
+      <.kpi_card id="kpi-cost" label="Costo" icon="hero-currency-dollar" accent="accent">
+        ${format_decimal(@metrics.cost_usd)}
+        <:sub>
+          Reportado por el proveedor
+          <span
+            :if={@deltas && @deltas[:cost_usd] != nil}
+            class={["font-medium tabular-nums", delta_color(@deltas[:cost_usd])]}
+          >
+            {delta_arrow(@deltas[:cost_usd])} {abs_float(@deltas[:cost_usd])}%
+          </span>
+        </:sub>
+      </.kpi_card>
 
-      <div id="kpi-requests" class="card bg-base-100 border border-base-300 shadow-sm">
-        <div class="card-body p-5">
-          <div class="flex items-center justify-between">
-            <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-              Requests
-            </span>
-            <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10">
-              <.icon name="hero-arrow-trending-up" class="w-5 h-5 text-primary" />
-            </span>
-          </div>
-          <p class="mt-2 text-2xl font-bold text-base-content">
-            {format_number(@metrics.requests_total)}
-          </p>
-          <div class="text-xs text-base-content/40 mt-1">
-            <span
-              :if={@deltas && @deltas[:requests_total] != nil}
-              class={[
-                "font-medium tabular-nums",
-                delta_color(@deltas[:requests_total])
-              ]}
-            >
-              {delta_arrow(@deltas[:requests_total])} {abs_float(@deltas[:requests_total])}%
-            </span>
-            <span :if={!@deltas || @deltas[:requests_total] == nil} class="text-base-content/40">
-              vs período anterior
-            </span>
-          </div>
-        </div>
-      </div>
+      <.kpi_card
+        id="kpi-requests"
+        label="Requests"
+        icon="hero-arrow-trending-up"
+        accent="primary"
+      >
+        {format_number(@metrics.requests_total)}
+        <:sub>
+          <span
+            :if={@deltas && @deltas[:requests_total] != nil}
+            class={["font-medium tabular-nums", delta_color(@deltas[:requests_total])]}
+          >
+            {delta_arrow(@deltas[:requests_total])} {abs_float(@deltas[:requests_total])}%
+          </span>
+          <span :if={!@deltas || @deltas[:requests_total] == nil}>vs período anterior</span>
+        </:sub>
+      </.kpi_card>
 
-      <div id="kpi-tokens" class="card bg-base-100 border border-base-300 shadow-sm">
-        <div class="card-body p-5">
-          <div class="flex items-center justify-between">
-            <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-              Tokens
-            </span>
-            <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10">
-              <.icon name="hero-cpu-chip" class="w-5 h-5 text-primary" />
-            </span>
-          </div>
-          <div class="mt-2 flex items-baseline gap-3">
-            <div>
-              <p
-                class="text-lg font-bold text-base-content"
-                title={format_number(@metrics.prompt_tokens)}
-              >
-                {format_compact(@metrics.prompt_tokens)}
-              </p>
-              <p class="text-xs text-base-content/50">in</p>
-            </div>
-            <span class="text-base-content/30">/</span>
-            <div>
-              <p
-                class="text-lg font-bold text-base-content"
-                title={format_number(@metrics.completion_tokens)}
-              >
-                {format_compact(@metrics.completion_tokens)}
-              </p>
-              <p class="text-xs text-base-content/50">out</p>
-            </div>
-            <span class="text-base-content/30">/</span>
-            <div>
-              <p
-                class="text-lg font-bold text-base-content"
-                title={
-                  format_number(
-                    (@metrics.cache_read_tokens || 0) +
-                      (@metrics.cache_creation_tokens || 0)
-                  )
-                }
-              >
-                {format_cache_value(
-                  @metrics.cache_read_tokens,
-                  @metrics.cache_creation_tokens
-                )}
-              </p>
-              <p class="text-xs text-base-content/50">
-                cache · {format_hit_rate(
-                  cache_hit_rate(@metrics.cache_read_tokens, @metrics.prompt_tokens)
-                )} hit
-              </p>
-            </div>
-          </div>
-          <div class="text-xs text-base-content/40 mt-1 flex items-center gap-2">
-            <span
-              :if={@deltas && @deltas[:prompt_tokens] != nil}
-              class={[
-                "font-medium tabular-nums",
-                delta_color(@deltas[:prompt_tokens])
-              ]}
-            >
-              {delta_arrow(@deltas[:prompt_tokens])} {abs_float(@deltas[:prompt_tokens])}% in
-            </span>
-            <span
-              :if={@deltas && @deltas[:completion_tokens] != nil}
-              class={[
-                "font-medium tabular-nums",
-                delta_color(@deltas[:completion_tokens])
-              ]}
-            >
-              {delta_arrow(@deltas[:completion_tokens])} {abs_float(@deltas[:completion_tokens])}% out
-            </span>
-          </div>
-        </div>
-      </div>
+      <.kpi_card
+        id="kpi-tokens"
+        label="Tokens"
+        icon="hero-cpu-chip"
+        accent="primary"
+        title={
+          "#{format_number(@metrics.prompt_tokens)} in / #{format_number(@metrics.completion_tokens)} out"
+        }
+      >
+        <span class="flex items-baseline gap-2">
+          {format_compact(@metrics.prompt_tokens)}
+          <span class="text-sm text-base-content/50">in</span>
+          <span class="text-base-content/30">/</span>
+          {format_compact(@metrics.completion_tokens)}
+          <span class="text-sm text-base-content/50">out</span>
+          <span class="text-base-content/30">/</span>
+          {format_cache_value(@metrics.cache_read_tokens, @metrics.cache_creation_tokens)}
+          <span class="text-sm text-base-content/50">cache</span>
+        </span>
+        <:sub>
+          {format_hit_rate(cache_hit_rate(@metrics.cache_read_tokens, @metrics.prompt_tokens))} hit ·
+          <span
+            :if={@deltas && @deltas[:prompt_tokens] != nil}
+            class={["font-medium tabular-nums", delta_color(@deltas[:prompt_tokens])]}
+          >
+            {delta_arrow(@deltas[:prompt_tokens])} {abs_float(@deltas[:prompt_tokens])}% in
+          </span>
+          <span
+            :if={@deltas && @deltas[:completion_tokens] != nil}
+            class={["font-medium tabular-nums", delta_color(@deltas[:completion_tokens])]}
+          >
+            {delta_arrow(@deltas[:completion_tokens])} {abs_float(@deltas[:completion_tokens])}% out
+          </span>
+        </:sub>
+      </.kpi_card>
 
-      <div id="kpi-tps" class="card bg-base-100 border border-base-300 shadow-sm">
-        <div class="card-body p-5">
-          <div class="flex items-center justify-between">
-            <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-              TPS promedio
-            </span>
-            <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-accent/10">
-              <.icon name="hero-bolt" class="w-5 h-5 text-accent" />
-            </span>
-          </div>
-          <p class="mt-2 text-2xl font-bold text-base-content">
-            {format_tps(@metrics.avg_tps)}
-          </p>
-        </div>
-      </div>
+      <.kpi_card id="kpi-tps" label="TPS promedio" icon="hero-bolt" accent="accent">
+        {format_tps(@metrics.avg_tps)}
+      </.kpi_card>
     </div>
     """
   end

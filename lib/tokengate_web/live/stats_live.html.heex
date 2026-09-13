@@ -102,16 +102,6 @@
       >
         <.icon name="hero-wrench-screwdriver" class="w-4 h-4" /> Servicios
       </.link>
-      <.link
-        patch={~p"/stats/credits"}
-        class={[
-          "join-item btn btn-sm",
-          if(@live_action == :credits, do: "btn-primary", else: "btn-ghost")
-        ]}
-        id="nav-credits"
-      >
-        <.icon name="hero-banknotes" class="w-4 h-4" /> Créditos
-      </.link>
     </div>
 
     <div
@@ -126,6 +116,7 @@
           <.live
             pulse={@pulse}
             today_metrics={@today_metrics}
+            org_budget={@org_budget}
             minute_series={@minute_series}
             minute_series_max={@minute_series_max}
             inflight_count={@inflight_count}
@@ -137,6 +128,7 @@
         <% @live_action == :index -> %>
           <.index
             metrics={@metrics}
+            org_budget={@org_budget}
             peak_concurrency={@peak_concurrency}
             busiest_hours={@busiest_hours}
             busiest_minutes={@busiest_minutes}
@@ -173,6 +165,7 @@
           <.groups
             metrics={@metrics}
             breakdown_group={@breakdown_group}
+            group_budgets={@group_budgets}
             breakdown_member={@breakdown_member}
             breakdown_model={@breakdown_model}
             breakdown_service={[]}
@@ -188,6 +181,7 @@
           <.services
             metrics={@metrics}
             breakdown_service={@breakdown_service}
+            service_budgets={@service_budgets}
             breakdown_model={@breakdown_model}
             drilldown_series={@drilldown_series}
             drilldown_series_labels={@drilldown_series_labels}
@@ -199,23 +193,17 @@
         <% @live_action == :users -> %>
           <.users
             breakdown_user={@breakdown_user}
+            budgets_by_user={@budgets_by_user}
             period={@period}
             sort_field={@sort_field}
             sort_direction={@sort_direction}
-          />
-        <% @live_action == :credits -> %>
-          <.credits
-            budgets={@budgets}
-            budgets_by_group={@budgets_by_group}
-            group_budgets={@group_budgets}
-            inactive_by_group={@inactive_by_group}
-            per_page={@per_page}
-            shown_counts={@shown_counts}
           />
         <% @live_action == :group -> %>
           <.groups
             metrics={@metrics}
             breakdown_group={@breakdown_group}
+            group_budgets={@group_budgets}
+            group_budget={@group_budget}
             breakdown_member={@breakdown_member}
             breakdown_model={@breakdown_model}
             breakdown_service={@breakdown_service}

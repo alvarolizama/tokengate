@@ -27,9 +27,9 @@ defmodule TokengateWeb.RedirectControllerTest do
       assert redirected_to(conn) == "/logs"
     end
 
-    test "/dashboard/credits → /stats/credits", %{conn: conn} do
+    test "/dashboard/credits → /stats/overview (tab Créditos disuelto)", %{conn: conn} do
       conn = get(conn, "/dashboard/credits")
-      assert redirected_to(conn) == "/stats/credits"
+      assert redirected_to(conn) == "/stats/overview"
     end
   end
 end
