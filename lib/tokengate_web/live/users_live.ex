@@ -259,8 +259,9 @@ defmodule TokengateWeb.UsersLive do
     end
   end
 
-  ## Events — edit groups --------------------------------------------------
-  def handle_event("edit_groups", %{"id" => user_id}, socket) do
+  ## Events — groups (read-only view modal; memberships are managed per group)
+
+  def handle_event("view_groups", %{"id" => user_id}, socket) do
     user = Accounts.get_user!(user_id)
     memberships = Accounts.list_group_members_for_user(user_id)
     group_ids = Enum.map(memberships, & &1.group_id)
@@ -278,43 +279,6 @@ defmodule TokengateWeb.UsersLive do
      |> assign(:editing_groups_user_id, nil)
      |> assign(:editing_groups_user_name, nil)
      |> assign(:editing_group_ids, [])}
-  end
-
-  def handle_event("save_groups", %{"group_ids" => group_ids}, socket) do
-    user_id = socket.assigns.editing_groups_user_id
-    user = Accounts.get_user!(user_id)
-    group_ids = group_ids |> List.wrap() |> Enum.reject(&(&1 in ["", nil]))
-
-    # Get current memberships
-    current = Accounts.list_group_members_for_user(user_id)
-    current_group_ids = Enum.map(current, & &1.group_id)
-
-    # Remove memberships not in new list
-    to_remove = current |> Enum.filter(&(&1.group_id not in group_ids))
-    Enum.each(to_remove, &Accounts.delete_group_member/1)
-
-    # Add new memberships
-    to_add = group_ids -- current_group_ids
-
-    Enum.each(to_add, fn group_id ->
-      with {:ok, member} <-
-             Accounts.create_group_member(%{
-               user_id: user_id,
-               group_id: group_id,
-               status: "active"
-             }),
-           {:ok, _api_key, _token} <- Accounts.replace_api_key(member) do
-        :ok
-      end
-    end)
-
-    {:noreply,
-     socket
-     |> put_flash(:info, "Grupos actualizados para #{user.name || user.email}.")
-     |> assign(:editing_groups_user_id, nil)
-     |> assign(:editing_groups_user_name, nil)
-     |> assign(:editing_group_ids, [])
-     |> load_users()}
   end
 
   def handle_event("new_user", _params, socket) do
@@ -847,7 +811,7 @@ defmodule TokengateWeb.UsersLive do
         </div>
       </div>
 
-      <%!-- Groups editing modal --%>
+      <%!-- Groups view modal — read-only; memberships are managed in Grupos → Miembros --%>
       <div
         :if={@editing_groups_user_id}
         class="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -858,33 +822,52 @@ defmodule TokengateWeb.UsersLive do
             <h2 class="text-lg font-semibold mb-4">
               Grupos de <span class="text-primary">{@editing_groups_user_name}</span>
             </h2>
-            <.form for={%{}} phx-submit="save_groups" id="edit-groups-form">
-              <div class="space-y-2">
-                <%= for group <- @all_groups do %>
-                  <label class="flex items-center gap-3 p-2 rounded-lg hover:bg-base-200 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      name="group_ids[]"
-                      value={group.id}
-                      checked={group.id in @editing_group_ids}
-                      class="checkbox checkbox-sm checkbox-primary"
+            <div class="space-y-2">
+              <%= for group <- @all_groups do %>
+                <div class="flex items-center justify-between p-2 rounded-lg bg-base-200/50">
+                  <div class="flex items-center gap-2">
+                    <.icon
+                      name={
+                        if group.id in @editing_group_ids,
+                          do: "hero-check-circle",
+                          else: "hero-minus-circle"
+                      }
+                      class={
+                        if group.id in @editing_group_ids,
+                          do: "w-4 h-4 text-success",
+                          else: "w-4 h-4 text-base-content/30"
+                      }
                     />
-                    <span class="text-sm">{group.name}</span>
-                  </label>
-                <% end %>
-                <%= if @all_groups == [] do %>
-                  <p class="text-sm text-base-content/50 py-2">No hay grupos creados.</p>
-                <% end %>
-              </div>
-              <div class="flex gap-2 mt-4 justify-end">
-                <button type="button" phx-click="cancel_edit_groups" class="btn btn-ghost btn-sm">
-                  Cancelar
-                </button>
-                <button type="submit" class="btn btn-primary btn-sm" id="save-groups-btn">
-                  Guardar
-                </button>
-              </div>
-            </.form>
+                    <span class={[
+                      "text-sm",
+                      if(group.id in @editing_group_ids, do: "", else: "text-base-content/40")
+                    ]}>
+                      {group.name}
+                    </span>
+                  </div>
+                  <%= if group.id in @editing_group_ids do %>
+                    <.link
+                      navigate={~p"/admin/groups/#{group}/members"}
+                      class="btn btn-xs btn-ghost"
+                      title="Gestionar membresías del grupo"
+                    >
+                      Miembros
+                    </.link>
+                  <% end %>
+                </div>
+              <% end %>
+              <%= if @all_groups == [] do %>
+                <p class="text-sm text-base-content/50 py-2">No hay grupos creados.</p>
+              <% end %>
+            </div>
+            <p class="text-xs text-base-content/40 mt-3">
+              Las membresías se gestionan desde <strong>Grupos → Miembros</strong> de cada grupo.
+            </p>
+            <div class="flex gap-2 mt-2 justify-end">
+              <button type="button" phx-click="cancel_edit_groups" class="btn btn-primary btn-sm">
+                Cerrar
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -1011,13 +994,13 @@ defmodule TokengateWeb.UsersLive do
           <span class="badge badge-xs badge-outline">{group.name}</span>
         <% end %>
         <button
-          phx-click="edit_groups"
+          phx-click="view_groups"
           phx-value-id={@user.id}
           class="btn btn-xs btn-ghost"
           id={"groups-#{@user.id}"}
-          title="Editar grupos"
+          title="Ver grupos del usuario"
         >
-          <.icon name="hero-pencil" class="w-3 h-3" />
+          <.icon name="hero-eye" class="w-3 h-3" />
         </button>
       </div>
     </td>
