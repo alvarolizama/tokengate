@@ -233,7 +233,7 @@ defmodule TokengateWeb.ServicesLive do
 
   ## Events — model grants -----------------------------------------------
 
-  def handle_event("toggle_model", %{"service-id" => service_id, "model-id" => model_id}, socket) do
+  def handle_event("toggle_model", %{"target-id" => service_id, "model-id" => model_id}, socket) do
     service_alias_ids = Map.get(socket.assigns.granted_models, service_id, [])
 
     result =
@@ -669,26 +669,14 @@ defmodule TokengateWeb.ServicesLive do
               <%!-- Model models section --%>
               <div class="mt-4">
                 <p class="text-sm font-medium mb-2">Modelos permitidos</p>
-                <div class="flex flex-wrap gap-2">
-                  <button
-                    :for={model <- @models}
-                    phx-click="toggle_model"
-                    phx-value-service-id={service.id}
-                    phx-value-model-id={model.id}
-                    class={[
-                      "badge badge-sm cursor-pointer transition-all",
-                      if(model.id in granted_alias_ids(@granted_models, service.id),
-                        do: "badge-primary",
-                        else: "badge-outline"
-                      )
-                    ]}
-                  >
-                    {model.name}
-                  </button>
-                  <%= if @models == [] do %>
-                    <p class="text-xs text-base-content/40">No hay models configurados</p>
-                  <% end %>
-                </div>
+                <.model_picker
+                  id={"model-picker-service-#{service.id}"}
+                  models={@models}
+                  granted_ids={granted_alias_ids(@granted_models, service.id)}
+                  toggle_event="toggle_model"
+                  target_value={service.id}
+                  empty_text="No hay modelos configurados"
+                />
               </div>
 
               <%!-- Supervisores section --%>

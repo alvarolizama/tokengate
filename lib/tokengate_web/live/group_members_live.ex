@@ -442,7 +442,7 @@ defmodule TokengateWeb.GroupMembersLive do
   @impl true
   def handle_event(
         "toggle_extra_model",
-        %{"member-id" => member_id, "model-id" => model_id},
+        %{"target-id" => member_id, "model-id" => model_id},
         socket
       ) do
     member = Accounts.get_group_member!(member_id)
@@ -1166,32 +1166,15 @@ defmodule TokengateWeb.GroupMembersLive do
               <%!-- Modelos — group models (locked) + extra grants (toggleable) --%>
               <div :if={@org_models != []} class="mt-3 pt-3 border-t border-base-200">
                 <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">Modelos</p>
-                <div class="flex flex-wrap gap-2">
-                  <button
-                    :for={model <- @org_models}
-                    type="button"
-                    phx-click={
-                      not MapSet.member?(@group_alias_ids, model.id) and "toggle_extra_model"
-                    }
-                    phx-value-member-id={member.id}
-                    phx-value-model-id={model.id}
-                    class={[
-                      "badge badge-sm cursor-pointer transition-all",
-                      cond do
-                        MapSet.member?(@group_alias_ids, model.id) -> "badge-primary"
-                        model.id in extra_model_ids(@extra_models, member.id) -> "badge-accent"
-                        true -> "badge-outline"
-                      end
-                    ]}
-                    disabled={MapSet.member?(@group_alias_ids, model.id)}
-                    id={"extra-model-#{member.id}-#{model.id}"}
-                  >
-                    {model.name}
-                    <%= if MapSet.member?(@group_alias_ids, model.id) do %>
-                      <span class="text-[10px] opacity-60 ml-0.5">grupo</span>
-                    <% end %>
-                  </button>
-                </div>
+                <.model_picker
+                  id={"model-picker-member-#{member.id}"}
+                  models={@org_models}
+                  granted_ids={MapSet.to_list(@group_alias_ids)}
+                  extra_ids={extra_model_ids(@extra_models, member.id)}
+                  toggle_event="toggle_extra_model"
+                  target_value={member.id}
+                  empty_text="No hay modelos disponibles."
+                />
               </div>
 
               <%!-- API Keys Exclusivas --%>

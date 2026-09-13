@@ -277,12 +277,12 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     {:ok, view, _html} = live(conn, group_url(group))
 
     # The checkbox should be present and unchecked
-    assert has_element?(view, "#extra-model-#{member.id}-#{model_.id}")
+    assert has_element?(view, "#model-picker-member-#{member.id}-#{model_.id}")
 
     # Grant the extra model
     html =
       view
-      |> element("#extra-model-#{member.id}-#{model_.id}")
+      |> element("#model-picker-member-#{member.id}-#{model_.id}")
       |> render_click()
 
     assert html =~ "Modelos actualizados"
@@ -299,7 +299,7 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     # Revoke
     html =
       view
-      |> element("#extra-model-#{member.id}-#{model_.id}")
+      |> element("#model-picker-member-#{member.id}-#{model_.id}")
       |> render_click()
 
     assert html =~ "Modelos actualizados"
@@ -320,7 +320,7 @@ defmodule TokengateWeb.GroupMembersLiveTest do
 
     # Grant the model via checkbox toggle
     view
-    |> element("#extra-model-#{member.id}-#{model_.id}")
+    |> element("#model-picker-member-#{member.id}-#{model_.id}")
     |> render_click()
 
     grant =

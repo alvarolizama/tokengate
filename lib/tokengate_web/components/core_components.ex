@@ -489,6 +489,70 @@ defmodule TokengateWeb.CoreComponents do
     """
   end
 
+  @doc """
+  Renders a shared model picker: toggleable badges for model grants.
+
+  Shared by Groups, Services and Group Members. Each badge fires the given
+  `toggle_event` with the model id plus the target id (group/service/member),
+  passed via `phx-value-target-key`/`phx-value-target-value`.
+
+  ## Examples
+
+      <.model_picker
+        id="model-picker-group"
+        models={@models}
+        granted_ids={@granted_ids}
+        toggle_event="toggle_model"
+        target_key="group-id"
+        target_value={group.id}
+      />
+  """
+  attr :id, :string, required: true
+  attr :models, :list, required: true
+  attr :granted_ids, :list, required: true
+  attr :toggle_event, :string, required: true
+  attr :target_value, :string, required: true
+  attr :locked_ids, :list, default: []
+  attr :extra_ids, :list, default: []
+  attr :empty_text, :string, default: "No hay modelos disponibles."
+
+  def model_picker(assigns) do
+    ~H"""
+    <div class="flex flex-wrap gap-2" id={@id}>
+      <button
+        :for={model <- @models}
+        type="button"
+        phx-click={@toggle_event}
+        phx-value-target-id={@target_value}
+        phx-value-model-id={model.id}
+        class={[
+          "badge badge-sm transition-all",
+          cond do
+            model.id in @locked_ids -> "badge-primary opacity-60"
+            model.id in @extra_ids -> "badge-accent"
+            model.id in @granted_ids -> "badge-primary"
+            true -> "badge-outline cursor-pointer hover:badge-primary/50"
+          end
+        ]}
+        id={"#{@id}-#{model.id}"}
+        disabled={model.id in @locked_ids}
+        title={
+          cond do
+            model.id in @locked_ids -> "Otorgado por el grupo (gestiónalo en Grupos)"
+            model.id in @extra_ids -> "Extra individual"
+            true -> nil
+          end
+        }
+      >
+        {model.name}
+      </button>
+      <p :if={@models == []} class="text-xs text-base-content/40">
+        {@empty_text}
+      </p>
+    </div>
+    """
+  end
+
   ## JS Commands
 
   def show(js \\ %JS{}, selector) do
