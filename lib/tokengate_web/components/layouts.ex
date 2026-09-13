@@ -258,6 +258,11 @@ defmodule TokengateWeb.Layouts do
                 icon="hero-wrench-screwdriver"
               />
               <.sidebar_link
+                href={~p"/admin/observability"}
+                label="Observabilidad"
+                icon="hero-bell-alert"
+              />
+              <.sidebar_link
                 href={~p"/admin/budgets"}
                 label="Budget"
                 icon="hero-banknotes"

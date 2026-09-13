@@ -26,6 +26,11 @@ defmodule Tokengate.Observability do
     |> Enum.group_by(& &1.group_id)
   end
 
+  @doc "Returns all destinations ordered by name."
+  def list_all_destinations do
+    Repo.all(from d in Destination, order_by: [asc: d.name], preload: [:group])
+  end
+
   @doc "Gets a single destination. Raises if not found."
   def get_destination!(id), do: Repo.get!(Destination, id)
 
