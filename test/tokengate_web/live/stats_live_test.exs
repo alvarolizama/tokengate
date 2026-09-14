@@ -129,7 +129,7 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#period-90d")
   end
 
-  test "admin sees KPI cards and top tables on index", %{conn: conn} do
+  test "admin sees KPI cards on index (no tops/rankings anymore)", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     group_with_log(%{cost: "0.005"})
 
@@ -141,7 +141,10 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#kpi-cost")
     assert has_element?(view, "#kpi-tokens")
     assert has_element?(view, "#kpi-tps")
-    assert has_element?(view, "#model-ranking")
+    # Los tops/rankings/tiers se movieron fuera del Resumen.
+    refute has_element?(view, "#model-ranking")
+    refute has_element?(view, "#provider-ranking")
+    refute has_element?(view, "#member-usage-tiers")
   end
 
   test "tokens KPI shows cache (read + creation) with hit rate", %{conn: conn} do
@@ -165,16 +168,53 @@ defmodule TokengateWeb.StatsLiveTest do
     assert html =~ "1,000 in / 50 out"
   end
 
-  test "admin sees provider ranking on index", %{conn: conn} do
+  test "provider ranking lives in /stats/providers now", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     %{provider: provider} = group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/stats/overview")
+    {:ok, view, _html} = live(conn, ~p"/stats/providers")
     wait_stats_loaded(view)
 
+    assert has_element?(view, "#nav-providers")
     assert has_element?(view, "#provider-ranking")
     assert has_element?(view, "#provider-ranking-row-#{provider.id}")
+  end
+
+  test "model ranking lives in /stats/models now", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{model: ma} = group_with_log(%{cost: "0.005"})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/stats/models")
+    wait_stats_loaded(view)
+
+    assert has_element?(view, "#model-ranking")
+    assert has_element?(view, "#model-ranking-row-#{ma.id}")
+  end
+
+  test "member usage tiers live in /stats/groups now", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{member: member} = group_with_log(%{cost: "0.005"})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/stats/groups")
+    wait_stats_loaded(view)
+
+    assert has_element?(view, "#member-usage-tiers")
+    assert has_element?(view, "#member-tier-row-#{member.id}")
+  end
+
+  test "top members live in /stats/users now", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{owner: owner} = group_with_log(%{cost: "0.005"})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/stats/users")
+    wait_stats_loaded(view)
+
+    assert has_element?(view, "#top-members")
+    assert has_element?(view, "#top-member-#{owner.id}")
   end
 
   test "regular user is redirected from stats to dashboard", %{conn: conn} do

@@ -227,6 +227,46 @@ defmodule TokengateWeb.StatsLive.Users do
           <% end %>
         </div>
       </div>
+
+      <%!-- Top miembros (movido del Resumen; derivado de @breakdown_user, sin queries nuevas) --%>
+      <div class="card bg-base-100 border border-base-300 shadow-sm" id="top-members">
+        <div class="card-body">
+          <h2 class="card-title text-base">
+            <.icon name="hero-user" class="w-5 h-5 text-base-content/60" /> Top 5 Miembros
+          </h2>
+          <p class="text-xs text-base-content/60">
+            Mayor consumo del período ({Stats.period_label(@period)}).
+          </p>
+          <%= if Stats.has_data?(@breakdown_user) do %>
+            <div class="overflow-x-auto mt-3">
+              <table class="table table-sm">
+                <thead>
+                  <tr>
+                    <th>Usuario</th>
+                    <th class="text-right">Requests</th>
+                    <th class="text-right">Costo</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <%= for row <- @breakdown_user |> Enum.sort_by(& &1.request_count, :desc) |> Enum.take(5) do %>
+                    <tr id={"top-member-#{row.user_id}"}>
+                      <td class="font-medium truncate max-w-[180px]">{row.user_email}</td>
+                      <td class="text-right font-mono">
+                        {Stats.format_number(row.request_count)}
+                      </td>
+                      <td class="text-right font-mono">
+                        ${Stats.format_decimal(row.cost_usd)}
+                      </td>
+                    </tr>
+                  <% end %>
+                </tbody>
+              </table>
+            </div>
+          <% else %>
+            <p class="text-sm text-base-content/40 py-6 text-center">Sin datos.</p>
+          <% end %>
+        </div>
+      </div>
     </div>
     """
   end

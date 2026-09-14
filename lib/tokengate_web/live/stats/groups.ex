@@ -28,6 +28,7 @@ defmodule TokengateWeb.StatsLive.Groups do
   attr :group, :any, default: nil
   attr :group_budgets, :any, default: []
   attr :group_budget, :any, default: nil
+  attr :member_usage_tiers, :any, default: []
   attr :period, :any, required: true
   attr :sort_field, :any, required: true
   attr :sort_direction, :any, required: true
@@ -760,6 +761,75 @@ defmodule TokengateWeb.StatsLive.Groups do
                 Sin datos para este periodo.
               </p>
             <% end %>
+          </div>
+        </div>
+      <% end %>
+
+      <%!-- Tiers de uso por miembro (movido del Resumen) --%>
+      <%= if Stats.has_data?(@member_usage_tiers) do %>
+        <div
+          class="card bg-base-100 border border-base-300 shadow-sm"
+          id="member-usage-tiers"
+        >
+          <div class="card-body">
+            <h2 class="card-title text-base">
+              <.icon name="hero-chart-bar" class="w-5 h-5 text-base-content/60" />
+              Tiers de uso por miembro
+            </h2>
+            <p class="text-xs text-base-content/60">
+              Clasificación en 3 grupos (alto / regular / bajo) combinando volumen, frecuencia y concurrencia,
+              para el período ({Stats.period_label(@period)}).
+            </p>
+            <div class="overflow-x-auto mt-3">
+              <table class="table table-sm">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Usuario</th>
+                    <th>Grupo</th>
+                    <th class="text-center">Tier</th>
+                    <th class="text-right">Score</th>
+                    <th class="text-right">Requests</th>
+                    <th class="text-right">Costo</th>
+                    <th class="text-right">Tokens</th>
+                    <th class="text-right">Días activos</th>
+                    <th class="text-right">Peak RPM</th>
+                    <th class="text-right">P95 RPM</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    :for={{row, idx} <- Enum.with_index(@member_usage_tiers, 1)}
+                    id={"member-tier-row-#{row.group_member_id}"}
+                  >
+                    <td class="text-base-content/60">{idx}</td>
+                    <td class="font-medium truncate max-w-[200px]">
+                      {row.user_name || row.user_email}
+                    </td>
+                    <td class="truncate max-w-[120px]">{row.group_name}</td>
+                    <td class="text-center">
+                      <span class={[
+                        "badge badge-sm",
+                        Stats.tier_badge_class(row.tier)
+                      ]}>
+                        {String.capitalize(row.tier)}
+                      </span>
+                    </td>
+                    <td class="text-right font-mono">{row.score}</td>
+                    <td class="text-right font-mono">
+                      {Stats.format_number(row.request_count)}
+                    </td>
+                    <td class="text-right font-mono">${Stats.format_decimal(row.cost_usd)}</td>
+                    <td class="text-right font-mono">
+                      {Stats.format_compact(row.prompt_tokens + row.completion_tokens)}
+                    </td>
+                    <td class="text-right font-mono">{row.active_days}</td>
+                    <td class="text-right font-mono">{row.peak_rpm}</td>
+                    <td class="text-right font-mono">{row.p95_rpm}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
           </div>
         </div>
       <% end %>

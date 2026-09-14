@@ -63,6 +63,16 @@
         <.icon name="hero-chart-bar-square" class="w-4 h-4" /> Resumen
       </.link>
       <.link
+        patch={~p"/stats/providers?period=#{@period}"}
+        class={[
+          "join-item btn btn-sm",
+          if(@live_action == :providers, do: "btn-primary", else: "btn-ghost")
+        ]}
+        id="nav-providers"
+      >
+        <.icon name="hero-server-stack" class="w-4 h-4" /> Proveedores
+      </.link>
+      <.link
         patch={~p"/stats/models?period=#{@period}"}
         class={[
           "join-item btn btn-sm",
@@ -132,20 +142,17 @@
             peak_concurrency={@peak_concurrency}
             busiest_hours={@busiest_hours}
             busiest_minutes={@busiest_minutes}
-            hour_distribution={@hour_distribution}
             hour_usage_stacked={@hour_usage_stacked}
             model_provider_stacked={@model_provider_stacked}
-            breakdown_model={@breakdown_model}
-            breakdown_member={@breakdown_member}
-            breakdown_group={@breakdown_group}
-            provider_ranking={@provider_ranking}
-            model_ranking={@model_ranking}
-            member_usage_tiers={@member_usage_tiers}
             hovered_hour={@hovered_hour}
-            top_errors={@top_errors}
             period={@period}
             timezone={@timezone}
             current_user={@current_user}
+          />
+        <% @live_action == :providers -> %>
+          <.providers
+            provider_ranking={@provider_ranking}
+            period={@period}
           />
         <% @live_action == :models -> %>
           <.models
@@ -157,6 +164,7 @@
             drilldown_series={@drilldown_series}
             drilldown_series_labels={@drilldown_series_labels}
             model_filter={@model_filter}
+            model_ranking={@model_ranking}
             period={@period}
             sort_field={@sort_field}
             sort_direction={@sort_direction}
@@ -166,6 +174,7 @@
             metrics={@metrics}
             breakdown_group={@breakdown_group}
             group_budgets={@group_budgets}
+            member_usage_tiers={@member_usage_tiers}
             breakdown_member={@breakdown_member}
             breakdown_model={@breakdown_model}
             drilldown_series={@drilldown_series}

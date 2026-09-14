@@ -115,6 +115,7 @@ defmodule TokengateWeb.Router do
       live "/stats/services/:service_id", ServiceStatsLive
       live "/stats/groups", StatsLive, :groups
       live "/stats/groups/:group_id", StatsLive, :group
+      live "/stats/providers", StatsLive, :providers
       live "/stats/users", StatsLive, :users
       live "/stats/users/:user_id", UserStatsLive
       live "/calculator", CalculatorLive
