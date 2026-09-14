@@ -2144,6 +2144,146 @@ defmodule Tokengate.Metrics.Rollup do
     |> Repo.one()
   end
 
+  # -----------------------------------------------------------------------
+  # Rollup breakdowns (used by StatsQueries hybrid reads)
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Per-model breakdown straight from the rollup table. Same row shape as
+  `breakdown_by_model/2` (minus `avg_tps` recomputed from summed latency).
+
+  Options: `:from` (required), `:to`, `:member_ids`.
+  """
+  @spec breakdown_by_model_from_rollup(keyword()) :: [map()]
+  def breakdown_by_model_from_rollup(opts \\ []) do
+    query =
+      RequestMetricsHourly
+      |> maybe_rollup_from(Keyword.fetch!(opts, :from))
+      |> maybe_rollup_to(Keyword.get(opts, :to))
+      |> maybe_rollup_member_ids(Keyword.get(opts, :member_ids))
+      |> join(:left, [m], ma in Model, on: m.model_id == ma.id, as: :model)
+      |> group_by([model: ma], ma.id)
+      |> order_by([m], desc: fragment("COALESCE(SUM(?), 0)", m.cost_micro))
+      |> select([m, model: ma], %{
+        model_id: ma.id,
+        model_name: ma.name,
+        request_count: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count),
+        cost_usd_raw: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.completion_tokens),
+        cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.cache_read_tokens),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)::bigint", m.total_latency_ms)
+      })
+
+    query
+    |> Repo.all()
+    |> Enum.map(fn row ->
+      %{
+        model_id: row.model_id,
+        model_name: row.model_name || "—",
+        request_count: row.request_count,
+        cost_usd: micro_to_decimal(row.cost_usd_raw),
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens,
+        cache_read_tokens: row.cache_read_tokens,
+        avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
+      }
+    end)
+  end
+
+  @doc """
+  Per-member breakdown straight from the rollup table, with the same row
+  shape as `breakdown_by_member/2`.
+
+  Options: `:from` (required), `:to`, `:member_ids`.
+  """
+  @spec breakdown_by_member_from_rollup(keyword()) :: [map()]
+  def breakdown_by_member_from_rollup(opts \\ []) do
+    query =
+      RequestMetricsHourly
+      |> maybe_rollup_from(Keyword.fetch!(opts, :from))
+      |> maybe_rollup_to(Keyword.get(opts, :to))
+      |> maybe_rollup_member_ids(Keyword.get(opts, :member_ids))
+      |> join(:left, [m], tm in GroupMember, on: m.group_member_id == tm.id, as: :member)
+      |> join(:left, [member: tm], t in assoc(tm, :group), as: :group)
+      |> join(:left, [member: tm], u in assoc(tm, :user), as: :user)
+      |> group_by([member: tm, group: t, user: u], [tm.id, t.id, u.id])
+      |> order_by([m], desc: fragment("COALESCE(SUM(?), 0)", m.cost_micro))
+      |> select([m, member: tm, group: t, user: u], %{
+        group_member_id: tm.id,
+        user_id: u.id,
+        group_name: t.name,
+        user_email: u.email,
+        request_count: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count),
+        cost_usd_raw: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.completion_tokens),
+        cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.cache_read_tokens),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)::bigint", m.total_latency_ms)
+      })
+
+    query
+    |> Repo.all()
+    |> Enum.map(fn row ->
+      %{
+        group_member_id: row.group_member_id,
+        user_id: row.user_id,
+        group_name: row.group_name,
+        user_email: row.user_email,
+        request_count: row.request_count,
+        cost_usd: micro_to_decimal(row.cost_usd_raw),
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens,
+        cache_read_tokens: row.cache_read_tokens,
+        avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
+      }
+    end)
+  end
+
+  @doc """
+  Per-group breakdown straight from the rollup table, with the same row
+  shape as `breakdown_by_group/1`.
+
+  Options: `:from` (required), `:to`, `:member_ids`.
+  """
+  @spec breakdown_by_group_from_rollup(keyword()) :: [map()]
+  def breakdown_by_group_from_rollup(opts \\ []) do
+    query =
+      RequestMetricsHourly
+      |> maybe_rollup_from(Keyword.fetch!(opts, :from))
+      |> maybe_rollup_to(Keyword.get(opts, :to))
+      |> maybe_rollup_member_ids(Keyword.get(opts, :member_ids))
+      |> join(:left, [m], tm in GroupMember, on: m.group_member_id == tm.id, as: :member)
+      |> join(:left, [member: tm], t in assoc(tm, :group), as: :group)
+      |> group_by([group: t], t.id)
+      |> order_by([m], desc: fragment("COALESCE(SUM(?), 0)", m.cost_micro))
+      |> select([m, group: t], %{
+        group_id: t.id,
+        group_name: t.name,
+        request_count: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count),
+        cost_usd_raw: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.completion_tokens),
+        cache_read_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.cache_read_tokens),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)::bigint", m.total_latency_ms)
+      })
+
+    query
+    |> Repo.all()
+    |> Enum.map(fn row ->
+      %{
+        group_id: row.group_id,
+        group_name: row.group_name,
+        request_count: row.request_count,
+        cost_usd: micro_to_decimal(row.cost_usd_raw),
+        prompt_tokens: row.prompt_tokens,
+        completion_tokens: row.completion_tokens,
+        cache_read_tokens: row.cache_read_tokens,
+        avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
+      }
+    end)
+  end
+
   # Rollup-table filter helpers (day ranges are inclusive on `day`).
   defp maybe_rollup_from(query, nil), do: query
 

@@ -29,6 +29,7 @@ defmodule TokengateWeb.StatsLive do
   alias Tokengate.Logs.Inflight
   alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Metrics.Rollup
+  alias Tokengate.Metrics.StatsQueries
   alias Tokengate.Periods
   import TokengateWeb.StatsLive.Index, only: [index: 1]
   import TokengateWeb.StatsLive.Models, only: [models: 1]
@@ -424,11 +425,11 @@ defmodule TokengateWeb.StatsLive do
         maybe_admin_tasks(admin?, opts) ++
           [
             fn -> {:org_budget, Budgets.org_budget_summary(params.timezone)} end,
-            fn -> {:breakdown_model, Rollup.breakdown_by_model(nil, opts)} end,
-            fn -> {:breakdown_member, Rollup.breakdown_by_member(nil, opts)} end,
+            fn -> {:breakdown_model, StatsQueries.breakdown_by_model(nil, opts)} end,
+            fn -> {:breakdown_member, StatsQueries.breakdown_by_member(nil, opts)} end,
             fn -> {:breakdown_group, breakdown_by_group_if_admin(admin?, opts)} end,
             fn -> {:top_errors, Rollup.top_errors(nil, opts)} end,
-            fn -> {:hour_distribution, Rollup.usage_by_hour_of_day(nil, opts)} end,
+            fn -> {:hour_distribution, StatsQueries.usage_by_hour_of_day(nil, opts)} end,
             fn -> {:hour_usage_stacked, Rollup.usage_by_hour_of_day_stacked(nil, opts)} end,
             fn -> {:model_provider_stacked, Rollup.usage_by_model_provider_stacked(opts)} end,
             fn -> {:busiest_hours, Rollup.busiest_hours(nil, opts)} end,
@@ -642,9 +643,12 @@ defmodule TokengateWeb.StatsLive do
   defp breakdown_by_service_if_admin(false, _opts), do: []
 
   defp fetch_summary(%{user: %{global_role: "admin"}} = params, opts) do
+    # Hybrid read: rollup for the bulk of the window + raw tail (last 3h)
+    # — see Tokengate.Metrics.StatsQueries. Falls back to raw when the
+    # window is recent-only or the rollup flag is off.
     opts
     |> apply_stats_filters(params)
-    |> Logs.cost_summary()
+    |> StatsQueries.summary()
   end
 
   defp fetch_summary(%{user: %{global_role: "user"} = user}, opts) do
@@ -654,7 +658,7 @@ defmodule TokengateWeb.StatsLive do
     opts
     |> Map.new()
     |> Map.put(:group_member_ids, member_ids)
-    |> Logs.cost_summary()
+    |> StatsQueries.summary()
   end
 
   defp fetch_summary(_params, _opts), do: empty_summary()
