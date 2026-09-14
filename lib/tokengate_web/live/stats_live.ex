@@ -422,6 +422,9 @@ defmodule TokengateWeb.StatsLive do
       :index ->
         admin? = params.user.global_role == "admin"
 
+        # :breakdown_group vive en maybe_admin_tasks (híbrido rollup+tail);
+        # no-admins no ven desglose por grupo ([] antes y ahora).
+        #
         # El card "Tope diario global" mide la MISMA ventana que el KPI
         # "Costo" del período seleccionado (día local vía opts.from), no el
         # contador ETS del proxy — ese incluye holds en vuelo y "respira".
@@ -430,7 +433,6 @@ defmodule TokengateWeb.StatsLive do
             fn -> {:org_budget, Budgets.global_daily_budget_summary(opts[:from])} end,
             fn -> {:breakdown_model, StatsQueries.breakdown_by_model(nil, opts)} end,
             fn -> {:breakdown_member, StatsQueries.breakdown_by_member(nil, opts)} end,
-            fn -> {:breakdown_group, breakdown_by_group_if_admin(admin?, opts)} end,
             fn -> {:top_errors, Rollup.top_errors(nil, opts)} end,
             fn -> {:hour_distribution, StatsQueries.usage_by_hour_of_day(nil, opts)} end,
             fn -> {:hour_usage_stacked, Rollup.usage_by_hour_of_day_stacked(nil, opts)} end,
@@ -561,13 +563,16 @@ defmodule TokengateWeb.StatsLive do
     end
   end
 
-  # Admin-only infra/org-wide queries on the index view.
+  # Admin-only infra/org-wide queries on the index view. breakdown_by_group
+  # va híbrido (rollup + cola cruda ≤3h): mismo row shape que la cruda pero
+  # sin escanear request_logs completo en ventanas largas (30d/90d).
   defp maybe_admin_tasks(true, opts) do
     [
       fn -> {:provider_ranking, Rollup.provider_ranking(nil, opts)} end,
       fn -> {:model_ranking, Rollup.model_ranking(nil, opts)} end,
       fn -> {:member_usage_tiers, Rollup.member_usage_tiers(nil, opts)} end,
-      fn -> {:peak_concurrency, Rollup.peak_concurrency(nil, opts)} end
+      fn -> {:peak_concurrency, Rollup.peak_concurrency(nil, opts)} end,
+      fn -> {:breakdown_group, StatsQueries.breakdown_by_group(opts)} end
     ]
   end
 
