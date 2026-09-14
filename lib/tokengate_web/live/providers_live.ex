@@ -742,7 +742,7 @@ defmodule TokengateWeb.ProvidersLive do
               </h2>
               <.form for={@credential_form} id="credential-form" phx-submit="save_credential">
                 <.input field={@credential_form[:provider_id]} type="hidden" />
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-5">
                   <.input
                     field={@credential_form[:name]}
                     type="text"
@@ -790,7 +790,7 @@ defmodule TokengateWeb.ProvidersLive do
                     hint="Tiempo máximo de espera por respuesta. Vacío = default global (60s)."
                   />
                 </div>
-                <div class="flex gap-2 mt-4 justify-end">
+                <div class="flex gap-2 pt-4 mt-5 border-t border-base-200 justify-end">
                   <button type="button" phx-click="cancel_credential" class="btn btn-ghost btn-sm">
                     Cancelar
                   </button>

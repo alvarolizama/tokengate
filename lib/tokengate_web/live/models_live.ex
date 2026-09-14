@@ -1666,7 +1666,7 @@ defmodule TokengateWeb.ModelsLive do
                 phx-window-keydown="close_scope_pickers"
                 phx-key="Escape"
               >
-                <div class="grid md:grid-cols-2 gap-x-8 gap-y-1">
+                <div class="grid md:grid-cols-2 gap-x-8 gap-y-5">
                   <div>
                     <.input
                       field={@provider_form[:credential_id]}
@@ -2088,7 +2088,7 @@ defmodule TokengateWeb.ModelsLive do
                   </div>
                 </div>
 
-                <div class="md:col-span-2 flex gap-2 mt-4 justify-end">
+                <div class="md:col-span-2 flex gap-2 pt-4 mt-5 border-t border-base-200 justify-end">
                   <button type="button" phx-click="cancel_model_provider" class="btn btn-ghost btn-sm">
                     Cancelar
                   </button>
