@@ -49,6 +49,7 @@ defmodule Tokengate.Accounts do
 
   def delete_group(%Group{} = group) do
     alias Tokengate.Providers.{GroupModel, GroupMemberExtraModel}
+    alias Tokengate.Observability.Destination
 
     group = Repo.preload(group, group_members: :api_key)
 
@@ -56,6 +57,19 @@ defmodule Tokengate.Accounts do
       # Delete group_models (FK group_id)
       from(t in GroupModel, where: t.group_id == ^group.id)
       |> Repo.delete_all()
+
+      # Delete observability destinations (FK group_id, no ON DELETE action —
+      # they only make sense while their group exists).
+      from(d in Destination, where: d.group_id == ^group.id)
+      |> Repo.delete_all()
+
+      # Detach services. `services.group_id` is a legacy column (the Service
+      # schema no longer has the field — services were decoupled from groups
+      # in 20260914044359) but its FK is still ON DELETE RESTRICT, so it must
+      # be cleared before the group can be deleted. Schemaless query because
+      # the field is not part of the schema anymore.
+      from(s in "services", where: s.group_id == type(^group.id, :binary_id))
+      |> Repo.update_all(set: [group_id: nil])
 
       # For each group_member: delete api_key, extra_models, then the member
       for member <- group.group_members do
@@ -77,8 +91,19 @@ defmodule Tokengate.Accounts do
         end
       end
 
-      # Finally delete the group itself
+      # Finally delete the group itself. Declare the residual FK constraints
+      # so any unforeseen reference becomes a changeset error (surfaced to the
+      # admin as a flash) instead of an Ecto.ConstraintError crash.
       group
+      |> Ecto.Changeset.change()
+      |> Ecto.Changeset.foreign_key_constraint(:id,
+        name: "services_group_id_fkey",
+        message: "el grupo todavía tiene servicios asociados"
+      )
+      |> Ecto.Changeset.foreign_key_constraint(:id,
+        name: "observability_destinations_group_id_fkey",
+        message: "el grupo todavía tiene destinos de observabilidad"
+      )
       |> Repo.delete()
       |> case do
         {:ok, group} -> group

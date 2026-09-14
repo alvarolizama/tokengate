@@ -138,6 +138,48 @@ defmodule Tokengate.AccountsTest do
       assert Accounts.get_group_member(tm1.id) == nil
       assert Accounts.get_group_member(tm2.id) == nil
     end
+
+    test "deletes a group that still has a legacy services.group_id reference" do
+      # Regression: `services.group_id` is a legacy column (no longer on the
+      # Service schema) whose FK is ON DELETE RESTRICT. Deleting a group used
+      # to raise Ecto.ConstraintError because delete_group/1 never cleared it.
+      group = group_fixture()
+      service = service_fixture()
+
+      Tokengate.Repo.update_all(
+        from(s in "services", where: s.id == type(^service.id, :binary_id)),
+        set: [group_id: Ecto.UUID.dump!(group.id)]
+      )
+
+      assert {:ok, _} = Accounts.delete_group(group)
+      assert Accounts.get_group(group.id) == nil
+
+      # The service survives, detached from the deleted group.
+      assert Accounts.get_service(service.id)
+
+      assert Tokengate.Repo.one(
+               from(s in "services",
+                 where: s.id == type(^service.id, :binary_id),
+                 select: s.group_id
+               )
+             ) == nil
+    end
+
+    test "deletes a group and its observability destinations" do
+      group = group_fixture()
+
+      {:ok, _dest} =
+        Tokengate.Observability.create_destination(%{
+          "name" => "Dest #{System.unique_integer([:positive])}",
+          "type" => "otlp_webhook",
+          "url" => "https://example.com/otlp",
+          "group_id" => group.id
+        })
+
+      assert {:ok, _} = Accounts.delete_group(group)
+      assert Accounts.get_group(group.id) == nil
+      assert Tokengate.Observability.list_destinations(group.id) == []
+    end
   end
 
   # ---------------------------------------------------------------------------
