@@ -152,11 +152,38 @@ defmodule TokengateWeb.DashboardLiveTest do
     {:ok, view, html} = live(conn, ~p"/dashboard")
 
     refute has_element?(view, "#empty-state")
-    assert has_element?(view, "#requests-card")
-    assert has_element?(view, "#cost-card")
-    assert has_element?(view, "#tokens-card")
-    assert has_element?(view, "#tps-card")
+    assert has_element?(view, "#kpi-requests")
+    assert has_element?(view, "#kpi-cost")
+    assert has_element?(view, "#kpi-tokens")
+    assert has_element?(view, "#kpi-tps")
     _ = html
+  end
+
+  test "KPI cards show deltas vs the previous period", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    Collector.reset()
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    # current 7d window
+    group_with_log(%{cost: "0.005", user: admin, inserted_at: DateTime.add(now, -3600, :second)})
+    # previous 7d window (8 days back falls in the shifted span)
+    group_with_log(%{
+      cost: "0.004",
+      user: admin,
+      inserted_at: DateTime.add(now, -8 * 86_400, :second)
+    })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    view |> element("#period-7d") |> render_click()
+    html = render_async(view)
+
+    assert has_element?(view, "#kpi-cost")
+    # Both windows have traffic → a delta arrow + % is rendered.
+    assert html =~ "↑" or html =~ "↓"
+    assert html =~ "%"
   end
 
   test "admin does NOT see other members' traffic (user-wide)", %{conn: conn} do
@@ -314,7 +341,7 @@ defmodule TokengateWeb.DashboardLiveTest do
     {:ok, view, _html} = live(conn, ~p"/dashboard")
 
     refute has_element?(view, "#empty-state")
-    assert has_element?(view, "#requests-card")
+    assert has_element?(view, "#kpi-requests")
   end
 
   test "admin sees analytics charts with traffic", %{conn: conn} do
@@ -351,7 +378,7 @@ defmodule TokengateWeb.DashboardLiveTest do
     {:ok, view, _html} = live(conn, ~p"/dashboard")
 
     refute has_element?(view, "#empty-state")
-    assert has_element?(view, "#requests-card")
+    assert has_element?(view, "#kpi-requests")
     # The user's cost card should show 0.005 (their own), not 99.99
     html = render(view)
     assert html =~ "0.005"

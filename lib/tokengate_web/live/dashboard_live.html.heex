@@ -11,24 +11,32 @@
         </:subtitle>
       </.header>
 
-      <%!-- Period selector --%>
-      <div :if={@has_access} class="join" id="period-selector" role="tablist">
-        <button
-          :for={period <- ~w(today 7d 30d 90d)}
-          phx-click="set_period"
-          phx-value-period={period}
-          class={[
-            "join-item btn btn-sm",
-            if(period_active?(@period, period), do: "btn-primary", else: "btn-ghost")
-          ]}
-          id={"period-#{period}"}
-        >
-          <span
-            :if={@loading and period_active?(@period, period)}
-            class="loading loading-spinner loading-xs"
-          ></span>
-          {period_label(period)}
-        </button>
+      <%!-- Period selector + loading spinner (mismo patrón que /stats) --%>
+      <div :if={@has_access} class="flex items-center gap-3">
+        <span
+          :if={@loading and @displayed_period != nil}
+          class="loading loading-spinner loading-sm text-primary"
+          id="dashboard-loading"
+          title="Actualizando métricas…"
+        ></span>
+        <div class="join" id="period-selector" role="tablist">
+          <button
+            :for={period <- ~w(today 7d 30d 90d)}
+            phx-click="set_period"
+            phx-value-period={period}
+            class={[
+              "join-item btn btn-sm",
+              if(period_active?(@period, period), do: "btn-primary", else: "btn-ghost")
+            ]}
+            id={"period-#{period}"}
+          >
+            <span
+              :if={@loading and period_active?(@period, period)}
+              class="loading loading-spinner loading-xs"
+            ></span>
+            {period_label(period)}
+          </button>
+        </div>
       </div>
     </div>
 
@@ -235,158 +243,8 @@
               </p>
             </div>
           <% else %>
-            <!-- Metric cards: KPIs -->
-            <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-              <%!-- Costo (lo que el proveedor reportó por cada request) --%>
-              <div
-                id="cost-card"
-                class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-              >
-                <div class="card-body p-5">
-                  <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                      Costo
-                    </span>
-                    <span class={[
-                      "flex items-center justify-center w-9 h-9 rounded-lg",
-                      accent_bg("accent")
-                    ]}>
-                      <.icon
-                        name="hero-currency-dollar"
-                        class={["w-5 h-5", accent_text("accent")]}
-                      />
-                    </span>
-                  </div>
-                  <p class="mt-2 text-2xl font-bold text-base-content">
-                    ${format_decimal(@metrics.cost_usd)}
-                  </p>
-                  <p class="text-xs text-base-content/40 mt-1">
-                    Reportado por el proveedor
-                  </p>
-                </div>
-              </div>
-
-              <%!-- Requests --%>
-              <div
-                id="requests-card"
-                class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-              >
-                <div class="card-body p-5">
-                  <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                      Requests
-                    </span>
-                    <span class={[
-                      "flex items-center justify-center w-9 h-9 rounded-lg",
-                      accent_bg("primary")
-                    ]}>
-                      <.icon
-                        name="hero-arrow-trending-up"
-                        class={["w-5 h-5", accent_text("primary")]}
-                      />
-                    </span>
-                  </div>
-                  <p class="mt-2 text-2xl font-bold text-base-content">
-                    {format_number(@metrics.requests_total)}
-                  </p>
-                </div>
-              </div>
-
-              <%!-- Tokens (prompt + completion) --%>
-              <div
-                id="tokens-card"
-                class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-              >
-                <div class="card-body p-5">
-                  <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                      Tokens
-                    </span>
-                    <span class={[
-                      "flex items-center justify-center w-9 h-9 rounded-lg",
-                      accent_bg("primary")
-                    ]}>
-                      <.icon name="hero-cpu-chip" class={["w-5 h-5", accent_text("primary")]} />
-                    </span>
-                  </div>
-                  <div class="mt-2 flex items-baseline gap-3">
-                    <div>
-                      <p
-                        class="text-lg font-bold text-base-content"
-                        title={format_number(@metrics.prompt_tokens)}
-                      >
-                        {format_compact(@metrics.prompt_tokens)}
-                      </p>
-                      <p class="text-xs text-base-content/50">in</p>
-                    </div>
-                    <span class="text-base-content/30">/</span>
-                    <div>
-                      <p
-                        class="text-lg font-bold text-base-content"
-                        title={format_number(@metrics.completion_tokens)}
-                      >
-                        {format_compact(@metrics.completion_tokens)}
-                      </p>
-                      <p class="text-xs text-base-content/50">out</p>
-                    </div>
-                    <span class="text-base-content/30">/</span>
-                    <div>
-                      <p
-                        class="text-lg font-bold text-base-content"
-                        title={
-                          format_number(
-                            (@metrics.cache_read_tokens || 0) +
-                              (@metrics.cache_creation_tokens || 0)
-                          )
-                        }
-                      >
-                        {format_cache_value(
-                          @metrics.cache_read_tokens,
-                          @metrics.cache_creation_tokens
-                        )}
-                      </p>
-                      <p class="text-xs text-base-content/50">
-                        cache · {format_hit_rate(
-                          cache_hit_rate(@metrics.cache_read_tokens, @metrics.prompt_tokens)
-                        )} hit
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <%!-- TPS promedio --%>
-              <div
-                id="tps-card"
-                class="card bg-base-100 border border-base-300 shadow-sm hover:shadow-md transition-shadow"
-              >
-                <div class="card-body p-5">
-                  <div class="flex items-center justify-between">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                      TPS promedio
-                    </span>
-                    <span class={[
-                      "flex items-center justify-center w-9 h-9 rounded-lg",
-                      accent_bg("accent")
-                    ]}>
-                      <.icon name="hero-bolt" class={["w-5 h-5", accent_text("accent")]} />
-                    </span>
-                  </div>
-                  <p class="mt-2 text-2xl font-bold text-base-content">
-                    {format_tps(@metrics.avg_tps)}
-                  </p>
-                  <p class="text-xs text-base-content/40 mt-1">
-                    {format_latency(@metrics.avg_latency_ms)}
-                    <span
-                      :if={@metrics[:avg_ttft_ms]}
-                      title="Time to first token promedio (streaming)"
-                    >
-                      · TTFT {format_latency(@metrics.avg_ttft_ms)}
-                    </span>
-                  </p>
-                </div>
-              </div>
-            </div>
+            <%!-- KPI cards canónicas — mismo componente que /stats (DESIGN.md C4/C5) --%>
+            <.kpi_cards metrics={@metrics} deltas={@metrics[:deltas]} />
 
             <!-- Breakdown tabs -->
             <div class="card bg-base-100 border border-base-300 shadow-sm">

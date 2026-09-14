@@ -21,6 +21,9 @@ defmodule TokengateWeb.DashboardLive do
   """
 
   use TokengateWeb, :live_view
+
+  import TokengateWeb.KpiHelpers, only: [kpi_cards: 1]
+
   alias Tokengate.Accounts
   alias Tokengate.Budgets.Manager, as: Budgets
   alias Tokengate.Metrics.DashboardCache
@@ -311,6 +314,10 @@ defmodule TokengateWeb.DashboardLive do
     # Summary
     summary = fetch_summary(member_ids, opts)
 
+    # Delta vs the previous equivalent period (same shape as /stats KPIs).
+    prev_summary = fetch_prev_summary(member_ids, period, timezone)
+    deltas = compute_deltas(summary, prev_summary)
+
     metrics = %{
       requests_total: summary.request_count,
       errors_total: 0,
@@ -322,7 +329,8 @@ defmodule TokengateWeb.DashboardLive do
       cache_creation_tokens: summary.total_cache_creation_tokens,
       avg_latency_ms: Map.get(summary, :avg_latency_ms) || 0.0,
       avg_ttft_ms: Map.get(summary, :avg_ttft_ms),
-      avg_tps: Map.get(summary, :avg_tps)
+      avg_tps: Map.get(summary, :avg_tps),
+      deltas: deltas
     }
 
     # Chart series
@@ -406,6 +414,48 @@ defmodule TokengateWeb.DashboardLive do
       to: Keyword.get(opts, :to),
       member_ids: member_ids
     )
+  end
+
+  # Previous equivalent period (e.g. yesterday, previous 7d) for the KPI
+  # deltas — same computation as /stats (`StatsLive.previous_summary/3`).
+  defp fetch_prev_summary(member_ids, period, timezone) do
+    %{from: from, to: to} = Periods.previous_period_bounds(period, timezone)
+
+    Rollup.summary_for_members(from: from, to: to, member_ids: member_ids)
+  end
+
+  # Delta percentages vs the previous period; nil when the previous value is
+  # zero (a % change from zero is undefined). Mirrors /stats deltas.
+  defp compute_deltas(current, prev) do
+    %{
+      requests_total: pct_delta(current.request_count, prev.request_count),
+      cost_usd: decimal_pct_delta(current.total_cost_usd, prev.total_cost_usd),
+      prompt_tokens: pct_delta(current.total_prompt_tokens, prev.total_prompt_tokens),
+      completion_tokens: pct_delta(current.total_completion_tokens, prev.total_completion_tokens)
+    }
+  end
+
+  defp pct_delta(_current, 0), do: nil
+  defp pct_delta(_current, nil), do: nil
+
+  defp pct_delta(current, prev) when is_number(prev) and prev != 0 do
+    Float.round((current - prev) / abs(prev) * 100, 1)
+  end
+
+  defp decimal_pct_delta(_current, %Decimal{coef: 0}), do: nil
+  defp decimal_pct_delta(_current, nil), do: nil
+
+  defp decimal_pct_delta(current, prev) do
+    if Decimal.equal?(prev, Decimal.new(0)) do
+      nil
+    else
+      current
+      |> Decimal.sub(prev)
+      |> Decimal.div(Decimal.abs(prev))
+      |> Decimal.mult(Decimal.from_float(100.0))
+      |> Decimal.round(1)
+      |> Decimal.to_float()
+    end
   end
 
   # Hour-bucketed chart series. Rollup-first via
@@ -498,7 +548,13 @@ defmodule TokengateWeb.DashboardLive do
       cache_creation_tokens: 0,
       avg_latency_ms: 0.0,
       avg_ttft_ms: nil,
-      avg_tps: nil
+      avg_tps: nil,
+      deltas: %{
+        requests_total: nil,
+        cost_usd: nil,
+        prompt_tokens: nil,
+        completion_tokens: nil
+      }
     }
   end
 
@@ -637,18 +693,6 @@ defmodule TokengateWeb.DashboardLive do
   end
 
   def has_breakdown_data?(breakdown), do: breakdown != []
-
-  def accent_bg("primary"), do: "bg-primary/10"
-  def accent_bg("success"), do: "bg-success/10"
-  def accent_bg("error"), do: "bg-error/10"
-  def accent_bg("accent"), do: "bg-accent/10"
-  def accent_bg(_), do: "bg-base-300"
-
-  def accent_text("primary"), do: "text-primary"
-  def accent_text("success"), do: "text-success"
-  def accent_text("error"), do: "text-error"
-  def accent_text("accent"), do: "text-accent"
-  def accent_text(_), do: "text-base-content"
 
   # Same tier colors as /stats rankings
   def tier_badge_class("S"), do: "badge-success"
