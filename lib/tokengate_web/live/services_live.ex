@@ -1025,6 +1025,14 @@ defmodule TokengateWeb.ServicesLive do
     </td>
     <td>
       <div class="flex gap-1">
+        <.link
+          navigate={~p"/stats/services/#{@service.id}"}
+          class="btn btn-xs btn-ghost"
+          id={"stats-#{@service.id}"}
+          title="Ver stats consolidadas de este servicio"
+        >
+          <.icon name="hero-chart-bar" class="w-3 h-3" />
+        </.link>
         <button
           phx-click="view_detail"
           phx-value-id={@service.id}

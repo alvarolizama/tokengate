@@ -807,6 +807,101 @@ defmodule Tokengate.Logs do
   defp apply_member_stats_range(query, _), do: query
 
   @doc """
+  Aggregated stats for a single **service** (the service-detail stats page).
+
+  Mirror of `member_stats/2` for the service subject: a service has no
+  `group_member_id` (its logs carry `service_id` and a null member id), so the
+  queries filter by `service_id` instead.
+
+  Returns the same shape as `member_stats/2`: cost & token totals, per-status
+  breakdown, top 5 models, last request timestamp and a `realtime_5min` window.
+
+  ## Options
+
+    * `:from` — `inserted_at >= from` (DateTime). Optional.
+    * `:to`   — `inserted_at <= to` (DateTime). Optional.
+  """
+  @spec service_stats(binary(), keyword() | map()) :: map()
+  def service_stats(service_id, opts \\ []) do
+    opts_map =
+      cond do
+        is_map(opts) -> opts
+        is_list(opts) -> Map.new(opts)
+        true -> %{}
+      end
+
+    range =
+      opts_map
+      |> Map.take([:from, :to])
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+
+    filters = Map.merge(%{"service_id" => service_id}, range)
+
+    last_request_at =
+      RequestLog
+      |> where([rl], rl.service_id == ^service_id)
+      |> apply_log_filters(range)
+      |> select([rl], rl.inserted_at)
+      |> order_by([rl], desc: rl.inserted_at)
+      |> limit(1)
+      |> Repo.one()
+
+    cost_summary(filters)
+    |> Map.merge(%{
+      status_breakdown: status_breakdown_for_service(service_id, range),
+      top_models: top_models_for_service(service_id, 5, range),
+      last_request_at: last_request_at,
+      realtime_5min: realtime_summary(filters)
+    })
+  end
+
+  defp status_breakdown_for_service(service_id, range) do
+    empty = %{"2xx" => 0, "4xx" => 0, "5xx" => 0}
+
+    RequestLog
+    |> where([rl], rl.service_id == ^service_id)
+    |> apply_log_filters(range)
+    |> group_by(
+      [rl],
+      fragment(
+        "CASE WHEN ? BETWEEN 200 AND 299 THEN '2xx'
+              WHEN ? BETWEEN 400 AND 499 THEN '4xx'
+              WHEN ? BETWEEN 500 AND 599 THEN '5xx'
+              ELSE NULL END",
+        rl.status_code,
+        rl.status_code,
+        rl.status_code
+      )
+    )
+    |> select(
+      [rl],
+      {fragment(
+         "CASE WHEN ? BETWEEN 200 AND 299 THEN '2xx'
+               WHEN ? BETWEEN 400 AND 499 THEN '4xx'
+               WHEN ? BETWEEN 500 AND 599 THEN '5xx'
+               ELSE NULL END",
+         rl.status_code,
+         rl.status_code,
+         rl.status_code
+       ), count(rl.id)}
+    )
+    |> Repo.all()
+    |> Enum.reduce(empty, fn {class, n}, acc -> Map.put(acc, class, n) end)
+  end
+
+  defp top_models_for_service(service_id, limit, range) do
+    RequestLog
+    |> where([rl], rl.service_id == ^service_id)
+    |> apply_log_filters(range)
+    |> group_by([rl], rl.model_requested)
+    |> select([rl], %{model_requested: rl.model_requested, count: count(rl.id)})
+    |> order_by(desc: :count)
+    |> limit(^limit)
+    |> Repo.all()
+  end
+
+  @doc """
   HTTP status-class breakdown (2xx/4xx/5xx) for a set of group_member_ids.
   Returns a map `%{"2xx" => n, "4xx" => n, "5xx" => n}`, with counts of 0
   for classes that never appeared.
