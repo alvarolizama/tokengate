@@ -295,7 +295,10 @@ defmodule TokengateWeb.ModelsLive do
       changeset =
         Providers.change_model_provider(%ModelProvider{
           model_id: model_id,
-          enabled: true
+          enabled: true,
+          # Sensible default: cache_control on (Fireworks overrides this to
+          # false at save time — apply_provider_defaults).
+          cache_control_enabled: true
         })
 
       {:noreply,
@@ -374,17 +377,11 @@ defmodule TokengateWeb.ModelsLive do
           ""
         end
 
-      # Prefill the override virtuals (JSON string / CSV) so the form shows
-      # the stored per-upstream overrides.
+      # Prefill the service_tier checkbox from the stored extra_body (the
+      # raw override virtuals are no longer part of the form).
       changeset =
-        changeset
-        |> Ecto.Changeset.put_change(:extra_body_json, encode_extra_body(ap.extra_body))
-        |> Ecto.Changeset.put_change(
-          :omit_body_fields_csv,
-          Enum.join(ap.omit_body_fields || [], ", ")
-        )
-        |> Ecto.Changeset.put_change(:omit_headers_csv, Enum.join(ap.omit_headers || [], ", "))
-        |> Ecto.Changeset.put_change(
+        Ecto.Changeset.put_change(
+          changeset,
           :service_tier_priority,
           Map.get(ap.extra_body || %{}, "service_tier") == "priority"
         )
@@ -829,8 +826,35 @@ defmodule TokengateWeb.ModelsLive do
 
   def handle_info(_event, socket), do: {:noreply, socket}
 
+  # Per-provider defaults applied on every save (create and edit). The form
+  # no longer surfaces raw overrides; this keeps the stored columns coherent:
+  #
+  #   * cache_control_enabled — TRUE by default (good for every upstream that
+  #     honors Anthropic-style breakpoints); FALSE and forced off for
+  #     Fireworks, which rejects the content-parts format with a 400.
+  #   * extra_body / omit_* — the UI can't set them anymore (schema fields
+  #     stay for programmatic use); only the service_tier checkbox writes
+  #     extra_body, via the changeset.
+  defp apply_provider_defaults(ap_params, socket) do
+    # Derive the provider from the credential being saved — NOT from the
+    # form-change assign (a direct submit without a prior change event never
+    # fires provider_form_changed and the assign stays stale).
+    credential_id = Map.get(ap_params, "credential_id")
+    fireworks? = credential_is_fireworks?(credential_id, socket)
+
+    ap_params
+    |> Map.put("cache_control_enabled", not fireworks?)
+    |> Map.drop(["extra_body_json", "omit_body_fields_csv", "omit_headers_csv"])
+  end
+
   defp save_model_provider(socket, :new, ap_params) do
     ap_params = Map.put(ap_params, "model_id", socket.assigns.provider_form_model_id)
+
+    # Per-provider defaults the form no longer asks for: cache_control on
+    # except Fireworks (it rejects the content-parts format with a 400), and
+    # the raw extra_body override is not submittable from the UI anymore —
+    # the service_tier checkbox owns extra_body's only managed key.
+    ap_params = apply_provider_defaults(ap_params, socket)
 
     # Extract multi-select target lists (set by inject_scope_params for create mode)
     group_ids = Map.get(ap_params, "exclusive_to_group_ids", [])
@@ -918,6 +942,7 @@ defmodule TokengateWeb.ModelsLive do
 
   defp save_model_provider(socket, ap_id, ap_params) when is_binary(ap_id) do
     ap = Providers.get_model_provider!(ap_id)
+    ap_params = apply_provider_defaults(ap_params, socket)
 
     case Providers.update_model_provider(ap, ap_params) do
       {:ok, _ap} ->
@@ -946,13 +971,6 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   defp credential_is_fireworks?(_, _socket), do: false
-
-  # Serializes a stored extra_body map for the form textarea. One key per
-  # line keeps single-field overrides readable.
-  defp encode_extra_body(nil), do: ""
-  defp encode_extra_body(%{} = body) when map_size(body) == 0, do: ""
-
-  defp encode_extra_body(%{} = body), do: Jason.encode!(body)
 
   @doc "Credential options for the select (id -> display)"
   def credential_options(credentials) do
@@ -2057,49 +2075,9 @@ defmodule TokengateWeb.ModelsLive do
                         field={@provider_form[:cache_control_enabled]}
                         type="checkbox"
                         label="Inyectar cache_control explícito"
-                        hint="Marca el prefijo system con un breakpoint ephemeral estilo Anthropic. Solo para upstreams que lo honoran (Anthropic, z.ai, OpenRouter). Lecturas de caché hasta −90%. No usar con Fireworks (rechaza el formato)."
+                        hint="Marca el prefijo system con un breakpoint ephemeral estilo Anthropic. Solo para upstreams que lo honoran (Anthropic, z.ai, OpenRouter). Lecturas de caché hasta −90%. Viene activado por defecto."
                       />
                     <% end %>
-
-                    <details class="group">
-                      <summary class="cursor-pointer select-none text-xs font-medium text-base-content/60 hover:text-base-content flex items-center gap-1">
-                        <.icon
-                          name="hero-chevron-right"
-                          class="w-3 h-3 transition-transform group-open:rotate-90"
-                        /> Opciones avanzadas del upstream
-                        <%= if @provider_form_is_fireworks do %>
-                          <span class="text-base-content/40">(normalmente innecesarias para Fireworks — el catálogo ya filtra session_id y aplica los hints correctos)</span>
-                        <% end %>
-                      </summary>
-                      <div class="space-y-3 pt-3">
-                        <div class="grid grid-cols-2 gap-3">
-                          <.input
-                            field={@provider_form[:omit_headers_csv]}
-                            type="text"
-                            label="Omitir headers (separados por coma)"
-                            placeholder="idempotency-key, x-session-id"
-                            hint="Headers que este upstream NO recibe. Deja vacío para enviar todos (user-agent, idempotency-key, x-session-id, x-session-affinity…)."
-                          />
-                          <.input
-                            field={@provider_form[:omit_body_fields_csv]}
-                            type="text"
-                            label="Omitir campos del JSON (separados por coma)"
-                            placeholder="session_id"
-                            hint="Llaves que se eliminan del body. Ej: Fireworks valida estrictamente y rechaza session_id."
-                          />
-                        </div>
-                      </div>
-                    </details>
-
-                    <.input
-                      field={@provider_form[:extra_body_json]}
-                      type="textarea"
-                      label="Campos extra del JSON (body)"
-                      placeholder='{"service_tier": "priority"}'
-                      hint={
-                        ~s|JSON que se mezcla al body del upstream. Se aplica al final: gana sobre lo que inyecta TokenGate. Ejemplo Fireworks: service_tier priority para la serving-path Priority — mayor confiabilidad en picos, se cobra a premium según el modelo.|
-                      }
-                    />
 
                     <.input
                       field={@provider_form[:enabled]}

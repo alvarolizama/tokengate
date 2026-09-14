@@ -333,32 +333,29 @@ defmodule TokengateWeb.ModelsLiveTest do
     conn: conn
   } do
     %{user: admin, password: password} = register("admin")
-    provider = create_provider()
+    {_provider, credential} = fw_fixtures()
     model_record = create_model()
-
-    credential =
-      Tokengate.Repo.insert!(%Tokengate.Providers.Credential{
-        provider_id: provider.id,
-        name: "Test Cred",
-        api_key_encrypted: "sk-...",
-        status: "active"
-      })
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/admin/models")
     view |> element("#new-ap-#{model_record.id}") |> render_click()
+
+    # Selecting the fireworks credential reveals the priority checkbox.
+    view
+    |> form("#model-provider-form", %{
+      model_provider: %{credential_id: credential.id, provider_model: "fw", priority: 1}
+    })
+    |> render_change()
 
     html =
       view
       |> form("#model-provider-form", %{
         model_provider: %{
           credential_id: credential.id,
-          provider_model: "fireworks-strict",
+          provider_model: "fw",
           priority: 1,
           enabled: true,
-          extra_body_json: ~s({"service_tier": "priority"}),
-          omit_body_fields_csv: "session_id",
-          omit_headers_csv: "user-agent"
+          service_tier_priority: true
         }
       })
       |> render_submit()
@@ -370,12 +367,14 @@ defmodule TokengateWeb.ModelsLiveTest do
         from mp in Tokengate.Providers.ModelProvider, where: mp.model_id == ^model_record.id
       )
 
+    # The checkbox owns extra_body's managed key.
     assert ap.extra_body == %{"service_tier" => "priority"}
-    assert ap.omit_body_fields == ["session_id"]
-    assert ap.omit_headers == ["user-agent"]
+    # Raw overrides stay at their no-op defaults (not submittable from the UI).
+    assert ap.omit_body_fields == []
+    assert ap.omit_headers == []
   end
 
-  test "edit form prefills the override fields from the stored values", %{conn: conn} do
+  test "edit form no longer renders the raw override inputs", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
     model_record = create_model()
@@ -404,21 +403,98 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     view |> element("#edit-ap-#{mp.id}") |> render_click()
 
-    assert has_element?(
-             view,
-             "input[name='model_provider[omit_body_fields_csv]'][value='session_id']"
-           )
-
-    assert has_element?(
-             view,
-             "input[name='model_provider[omit_headers_csv]'][value='user-agent']"
-           )
-
-    # Textarea content is HTML-escaped (&#34;) — assert on the bare key.
-    assert render(view) =~ "service_tier"
+    # The raw override inputs are gone from the form entirely.
+    refute has_element?(view, "input[name='model_provider[omit_body_fields_csv]']")
+    refute has_element?(view, "input[name='model_provider[omit_headers_csv]']")
+    refute has_element?(view, "textarea[name='model_provider[extra_body_json]']")
   end
 
   describe "fireworks-backed provider form" do
+    defp fw_fixtures do
+      Repo.get_by(Tokengate.Providers.Provider, key: "fireworks")
+      |> case do
+        nil -> :ok
+        builtin -> {:ok, _} = Repo.delete(builtin)
+      end
+
+      provider =
+        create_provider(%{
+          key: "fireworks",
+          name: "Fireworks AI (probe)",
+          base_url: "http://localhost:1"
+        })
+
+      credential =
+        Tokengate.Repo.insert!(%Tokengate.Providers.Credential{
+          provider_id: provider.id,
+          name: "FW Cred #{unique()}",
+          api_key_encrypted: "fw-test",
+          status: "active"
+        })
+
+      {provider, credential}
+    end
+
+    test "saving a fireworks provider leaves cache_control off; regular defaults on", %{
+      conn: conn
+    } do
+      %{user: admin, password: password} = register("admin")
+      {_fw_provider, fw_cred} = fw_fixtures()
+
+      regular_provider = create_provider()
+      model_a = create_model()
+      model_b = create_model()
+
+      regular_cred =
+        Tokengate.Repo.insert!(%Tokengate.Providers.Credential{
+          provider_id: regular_provider.id,
+          name: "Reg Cred #{unique()}",
+          api_key_encrypted: "sk-reg",
+          status: "active"
+        })
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/admin/models")
+
+      # Regular provider: save → cache_control ON by default.
+      view |> element("#new-ap-#{model_a.id}") |> render_click()
+
+      view
+      |> form("#model-provider-form", %{
+        model_provider: %{
+          credential_id: regular_cred.id,
+          provider_model: "m",
+          priority: 1,
+          enabled: true
+        }
+      })
+      |> render_submit()
+
+      regular =
+        Repo.one!(from mp in Tokengate.Providers.ModelProvider, where: mp.model_id == ^model_a.id)
+
+      assert regular.cache_control_enabled == true
+
+      # Fireworks: select the credential (flips the form), then save → OFF.
+      view |> element("#new-ap-#{model_b.id}") |> render_click()
+
+      view
+      |> form("#model-provider-form", %{
+        model_provider: %{
+          credential_id: fw_cred.id,
+          provider_model: "fw-m",
+          priority: 1,
+          enabled: true
+        }
+      })
+      |> render_submit()
+
+      fw =
+        Repo.one!(from mp in Tokengate.Providers.ModelProvider, where: mp.model_id == ^model_b.id)
+
+      assert fw.cache_control_enabled == false
+    end
+
     test "hides cache_control and shows the service_tier checkbox for fireworks", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
 
