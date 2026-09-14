@@ -60,6 +60,17 @@ defmodule Tokengate.Budgets.Exemptions do
     |> Repo.all()
   end
 
+  @doc """
+  Number of exemptions configured for a scope — e.g. how many users,
+  groups or services are exempt from the global daily cap. Display-only
+  (the admin UI badge on the stats cards).
+  """
+  @spec count_for_scope(String.t()) :: non_neg_integer()
+  def count_for_scope(scope) do
+    from(e in Exemption, where: e.scope == ^scope)
+    |> Repo.aggregate(:count)
+  end
+
   @doc "Adds an exemption. Returns {:ok, exemption} or {:error, changeset}."
   @spec add(map()) :: {:ok, Exemption.t()} | {:error, Ecto.Changeset.t()}
   def add(attrs) do

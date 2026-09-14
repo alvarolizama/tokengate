@@ -276,4 +276,59 @@ defmodule Tokengate.BudgetsTest do
       assert Budgets.spend_by_member_ids([], "America/Mexico_City") == %{daily: %{}, monthly: %{}}
     end
   end
+
+  describe "global_daily_budget_summary/0" do
+    # El contador global vive en ETS (tabla pública del árbol de la app):
+    # se limpia como en manager_test para que cada test siembre desde su
+    # propia DB.
+    setup do
+      :ets.delete(:tokengate_budgets, {:global, :daily})
+      :ok
+    end
+
+    test "sin cap configurado: nil en cap y pct, sin badge de estado" do
+      {:ok, _} = Tokengate.GlobalSettings.update(%{"daily_max_spend_usd" => nil})
+
+      summary = Budgets.global_daily_budget_summary()
+
+      assert summary.daily_cap_usd == nil
+      assert summary.daily_pct == nil
+      assert summary.exempt_count == 0
+      assert Decimal.eq?(summary.daily_spend_usd, Decimal.new(0))
+    end
+
+    test "con cap: pct refleja el gasto del contador del proxy (mismo número que enforcement)" do
+      {:ok, _} = Tokengate.GlobalSettings.update(%{"daily_max_spend_usd" => "100.00"})
+      member = member_fixture()
+      record(member.id, Decimal.new("25.00"))
+
+      summary = Budgets.global_daily_budget_summary()
+
+      # El spend del card ES el contador ETS que el proxy enforcementea.
+      assert Decimal.eq?(summary.daily_spend_usd, Manager.global_daily_spend())
+      assert Decimal.eq?(summary.daily_spend_usd, Decimal.new("25.00"))
+      assert Decimal.eq?(summary.daily_cap_usd, Decimal.new("100.00"))
+      assert summary.daily_pct == 25.0
+    end
+
+    test "cuenta las exenciones global_daily aunque no afecten el contador" do
+      {:ok, _} = Tokengate.GlobalSettings.update(%{"daily_max_spend_usd" => "50.00"})
+      user = user_fixture()
+
+      {:ok, _} =
+        Tokengate.Budgets.Exemptions.add(%{
+          "scope" => "global_daily",
+          "subject_type" => "user",
+          "user_id" => user.id
+        })
+
+      # Sujeto exento: su gasto no toca el contador global…
+      record(user.id, Decimal.new("10.00"))
+
+      summary = Budgets.global_daily_budget_summary()
+
+      # …pero la exención sí aparece en el conteo del card.
+      assert summary.exempt_count == 1
+    end
+  end
 end

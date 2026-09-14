@@ -424,7 +424,7 @@ defmodule TokengateWeb.StatsLive do
 
         maybe_admin_tasks(admin?, opts) ++
           [
-            fn -> {:org_budget, Budgets.org_budget_summary(params.timezone)} end,
+            fn -> {:org_budget, Budgets.global_daily_budget_summary()} end,
             fn -> {:breakdown_model, StatsQueries.breakdown_by_model(nil, opts)} end,
             fn -> {:breakdown_member, StatsQueries.breakdown_by_member(nil, opts)} end,
             fn -> {:breakdown_group, breakdown_by_group_if_admin(admin?, opts)} end,
@@ -697,7 +697,7 @@ defmodule TokengateWeb.StatsLive do
           pulse: Logs.realtime_summary(%{}),
           today_metrics: Logs.today_summary(timezone),
           minute_series: Logs.requests_per_minute(60),
-          org_budget: Budgets.org_budget_summary(timezone)
+          org_budget: Budgets.global_daily_budget_summary()
         }
       end)
 

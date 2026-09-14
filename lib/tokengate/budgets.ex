@@ -14,7 +14,8 @@ defmodule Tokengate.Budgets do
   import Ecto.Query
   alias Tokengate.{Accounts, Repo}
   alias Tokengate.Accounts.GroupMember
-  alias Tokengate.Budgets.Manager
+  alias Tokengate.Budgets.{Exemptions, Manager}
+  alias Tokengate.GlobalSettings
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Periods
 
@@ -121,52 +122,39 @@ defmodule Tokengate.Budgets do
         }
 
   @doc """
-  Org-wide budget summary: how much has been spent this local month vs
-  how much is allotted across members and services — the "are we on
-  track" number for the stats hub. `nil` limits are unlimited; they add
-  spend but no cap.
+  Org-wide global daily cap summary — the honest replacement for the old
+  monthly budget rollup: since the subscription-credits migration there is
+  no monthly limit left anywhere, and the only org-wide spend guard is the
+  **global daily cap** (`GlobalSettings.daily_max_spend_usd`, kill-switch
+  layer 2, UTC day).
+
+  The spend comes from `Manager.global_daily_spend/0` — the same ETS
+  counter the proxy enforces against — so the card can never disagree with
+  actual enforcement. Exempted subjects (`global_daily` exemptions) skip
+  that layer in the proxy; they are reported here as `exempt_count`.
+
+  `nil` cap means unlimited (no kill-switch configured).
   """
-  @spec org_budget_summary(String.t()) :: %{
-          monthly_spend_usd: Decimal.t(),
-          monthly_limit_usd: Decimal.t() | nil,
-          monthly_pct: float() | nil,
-          exhausted_count: non_neg_integer()
+  @spec global_daily_budget_summary() :: %{
+          daily_spend_usd: Decimal.t(),
+          daily_cap_usd: Decimal.t() | nil,
+          daily_pct: float() | nil,
+          exempt_count: non_neg_integer()
         }
-  def org_budget_summary(timezone \\ @default_timezone) do
-    member_rows = list_member_budgets(timezone)
-    service_rows = list_service_budgets(timezone)
-
-    spend =
-      [member_rows, service_rows]
-      |> Enum.map(fn rows ->
-        Enum.reduce(rows, Decimal.new(0), fn row, acc ->
-          Decimal.add(acc, row.monthly_spend_usd)
-        end)
-      end)
-      |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
-
-    limit =
-      [member_rows, service_rows]
-      |> Enum.map(fn rows ->
-        rows
-        |> Enum.map(& &1.monthly_limit_usd)
-        |> Enum.reject(&is_nil/1)
-        |> case do
-          [] -> Decimal.new(0)
-          limits -> Enum.reduce(limits, &Decimal.add/2)
-        end
-      end)
-      |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
-
-    exhausted_count =
-      Enum.count(member_rows, & &1.exhausted?) + Enum.count(service_rows, & &1.exhausted?)
-
+  def global_daily_budget_summary do
     %{
-      monthly_spend_usd: spend,
-      monthly_limit_usd: limit,
-      monthly_pct: pct(spend, limit),
-      exhausted_count: exhausted_count
+      daily_spend_usd: Manager.global_daily_spend(),
+      daily_cap_usd: GlobalSettings.get_daily_cap(),
+      daily_pct: nil,
+      exempt_count: Exemptions.count_for_scope("global_daily")
     }
+    |> put_daily_pct()
+  end
+
+  defp put_daily_pct(%{daily_cap_usd: nil} = summary), do: summary
+
+  defp put_daily_pct(%{daily_spend_usd: spend, daily_cap_usd: cap} = summary) do
+    %{summary | daily_pct: pct(spend, cap)}
   end
 
   @doc "Lists only the member budgets that hit a daily or monthly limit."

@@ -48,34 +48,35 @@ defmodule TokengateWeb.StatsLive.LiveSection do
         </span>
       </div>
 
-      <%!-- Presupuesto org del mes — mismo widget que el Resumen --%>
+      <%!-- Tope diario global — mismo widget que el Resumen --%>
       <%= if @org_budget do %>
         <div class="card bg-base-100 border border-base-300 shadow-sm" id="live-org-budget">
           <div class="card-body p-5">
             <div class="flex items-center justify-between flex-wrap gap-2">
               <div class="flex items-center gap-2">
                 <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Presupuesto · mes actual
+                  Tope diario global
                 </span>
-                <Stats.budget_badge pct={@org_budget.monthly_pct} />
+                <Stats.budget_badge pct={@org_budget.daily_pct} />
               </div>
               <span
-                :if={@org_budget.exhausted_count > 0}
-                class="badge badge-sm badge-error badge-outline"
-                id="live-org-budget-exhausted"
+                :if={@org_budget.exempt_count > 0}
+                class="badge badge-sm badge-ghost"
+                id="live-org-budget-exempt"
+                title="Usuarios, grupos o servicios exentos del tope diario global"
               >
-                {@org_budget.exhausted_count} agotados
+                {@org_budget.exempt_count} exentos
               </span>
             </div>
             <div class="mt-2">
               <Stats.budget_bar
-                spend={@org_budget.monthly_spend_usd}
-                limit={@org_budget.monthly_limit_usd}
-                pct={@org_budget.monthly_pct}
+                spend={@org_budget.daily_spend_usd}
+                limit={@org_budget.daily_cap_usd}
+                pct={@org_budget.daily_pct}
               />
             </div>
             <p class="text-xs text-base-content/40 mt-1">
-              Miembros + servicios · mes calendario en su zona horaria
+              Gasto de hoy · todos los sujetos · día UTC (reinicia 00:00 UTC)
             </p>
           </div>
         </div>
