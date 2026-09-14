@@ -145,22 +145,6 @@ defmodule Tokengate.Providers.Catalog do
       dialect: "openai",
       billing: "pay_per_token",
       capabilities: ["llm"]
-    },
-    %{
-      key: "crof_ai",
-      name: "CrofAi",
-      base_url: "https://crof.ai/v1",
-      dialect: "openai",
-      billing: "pay_per_token",
-      capabilities: ["llm"]
-    },
-    %{
-      key: "nube",
-      name: "Nube",
-      base_url: "https://ai.nube.sh/api/v1",
-      dialect: "openai",
-      billing: "pay_per_token",
-      capabilities: ["llm"]
     }
   ]
 

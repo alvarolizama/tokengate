@@ -93,7 +93,7 @@ defmodule Tokengate.Proxy.CostCalculatorTest do
              )
     end
 
-    test "matches nube provider cost for cache hit (validated)" do
+    test "cache hit prices cached tokens at the cache rate (validated)" do
       opts = [
         manual_pricing: %{
           input_cost_per_million: Decimal.new("0.14"),
@@ -107,7 +107,7 @@ defmodule Tokengate.Proxy.CostCalculatorTest do
       assert Decimal.equal?(result, Decimal.new("0.000013"))
     end
 
-    test "matches nube provider cost for no cache (validated)" do
+    test "no cache prices all prompt tokens at input rate (validated)" do
       # 113 prompt, 0 cached, 10 completion
       # = (113×0.14 + 0×0.026 + 10×0.44) / 1M = 20.22 / 1M = 0.000020220
       # Rounded to 6 decimal places: 0.000020
