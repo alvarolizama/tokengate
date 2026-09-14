@@ -1343,6 +1343,45 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert %{"error" => %{"type" => "service_unavailable"}} = json_response(conn, 503)
   end
 
+  # Regression: a 400 on the STREAMING path used to be treated like a
+  # retryable server error — the gateway fell back and logged it as
+  # `provider_error_400` with no message, masking the cause. It must instead
+  # surface the 400 to the client (the same body fails everywhere) and keep
+  # the provider's error message.
+  test "stream: an upstream 400 is surfaced to the client without fallback", %{conn: conn} do
+    u = unique()
+    %{token: token, model: model} = proxy_fixture()
+    add_healthy_fallback(model, u)
+
+    # The strict upstream rejects a field the gateway does not know about.
+    :persistent_term.put({ProviderPlug, :reject_body_fields}, ["totally_unknown_field"])
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(
+        ~p"/v1/chat/completions",
+        Map.put(chat_body(model.name), "stream", true)
+        |> Map.put("totally_unknown_field", "x")
+      )
+
+    assert %{"error" => %{"code" => "upstream_client_error"}} = json_response(conn, 400)
+
+    # Only the primary provider was contacted — a client error is not retried
+    # and does not fall back (the same body fails everywhere).
+    hits =
+      for _ <- 1..10 do
+        receive do
+          {:provider_request, payload} -> payload
+        after
+          0 -> nil
+        end
+      end
+      |> Enum.reject(&is_nil/1)
+
+    assert length(hits) == 1, "expected no fallback, got #{length(hits)} provider attempt(s)"
+  end
+
   test "stream: first-token timeout falls back to the second provider immediately", %{conn: conn} do
     previous = Application.get_env(:tokengate, :first_token_timeout_ms)
     Application.put_env(:tokengate, :first_token_timeout_ms, 100)

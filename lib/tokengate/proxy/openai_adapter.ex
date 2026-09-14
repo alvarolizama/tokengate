@@ -143,7 +143,15 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
 
     {:ok, pid} =
       Task.start(fn ->
-        acc = %{caller: caller, buffer: "", done: false, status: nil, headers: []}
+        acc = %{
+          caller: caller,
+          buffer: "",
+          done: false,
+          status: nil,
+          headers: [],
+          error_status: nil,
+          error_body: ""
+        }
 
         result =
           Finch.stream_while(
@@ -152,14 +160,16 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
             acc,
             fn entry, acc ->
               case entry do
+                {:status, status} when status in 200..299 ->
+                  {:cont, %{acc | status: status}}
+
+                # Non-2xx: the body is a JSON error envelope. Do NOT halt on
+                # the status — keep reading so the provider's message can be
+                # extracted (Fireworks names the offending field there).
+                # Halting at the status used to discard it, leaving every
+                # upstream 4xx logged with a NULL error_message.
                 {:status, status} ->
-                  if status in 200..299 do
-                    {:cont, %{acc | status: status}}
-                  else
-                    # Non-2xx: stop immediately and report the classified error
-                    # to the caller — dying silently would leave it hanging.
-                    {:halt, %{acc | status: status, done: true}}
-                  end
+                  {:cont, %{acc | status: status, error_status: status}}
 
                 {:headers, headers} ->
                   normalized = normalize_headers(headers)
@@ -167,9 +177,13 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
                   {:cont, %{acc | headers: normalized}}
 
                 {:data, data} ->
-                  case forward_sse(acc, data) do
-                    {:cont, acc} -> {:cont, acc}
-                    {:halt, acc} -> {:halt, acc}
+                  if acc.error_status do
+                    {:cont, %{acc | error_body: acc.error_body <> data}}
+                  else
+                    case forward_sse(acc, data) do
+                      {:cont, acc} -> {:cont, acc}
+                      {:halt, acc} -> {:halt, acc}
+                    end
                   end
 
                 {:trailers, _trailers} ->
@@ -180,8 +194,13 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
           )
 
         case result do
-          {:ok, %{status: status}} when is_integer(status) and status not in 200..299 ->
-            send(caller, {:sse_error, {ProviderAdapter.classify_status(status), status}})
+          {:ok, %{error_status: status} = acc} when is_integer(status) ->
+            send(
+              caller,
+              {:sse_error,
+               {ProviderAdapter.classify_status(status), status,
+                extract_error_message(acc.error_body)}}
+            )
 
           {:ok, acc} ->
             flush_remaining(acc)

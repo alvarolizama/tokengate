@@ -225,8 +225,18 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
         })
 
       ref = Process.monitor(pid)
-      assert_receive {:sse_error, {:rate_limited, 429}}
+      assert_receive {:sse_error, {:rate_limited, 429, "slow down"}}
       assert_receive {:DOWN, ^ref, :process, ^pid, :normal}
+    end
+
+    test "non-2xx stream keeps the provider's error message", %{credential: credential} do
+      {:ok, _pid} =
+        OpenAIAdapter.stream_chat_completion(provider_to("/bad"), credential, %{
+          "stream" => true
+        })
+
+      assert_receive {:sse_error, {:client_error, 400, message}}
+      assert message =~ "bad request"
     end
   end
 

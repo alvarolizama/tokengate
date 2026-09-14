@@ -1138,7 +1138,7 @@ defmodule TokengateWeb.ProxyController do
               resp_headers: resp_headers
             })
 
-          {:error, reason, status} ->
+          {:error, reason, status, error_message} ->
             # Kill the upstream stream FIRST — before any fallback work. The
             # Finch.stream_while task holds a real HTTP connection open; if we
             # left it running it would only die after the full receive_timeout,
@@ -1154,23 +1154,41 @@ defmodule TokengateWeb.ProxyController do
 
             Router.record_outcome(route, {:failure, breaker_reason(reason)})
 
-            if attempts_left > 1 do
-              log_fallback_attempt(conn, route, member, status)
+            cond do
+              # A 4xx that is not auth is the client's payload at fault: the
+              # same body fails identically on every provider, so retrying and
+              # falling back is pointless. Surface it (mirroring the
+              # non-streaming path) and keep the provider's message — instead
+              # of masking it as a retryable `provider_error_<status>`.
+              reason == :client_error ->
+                log_and_render_proxy_error(
+                  conn,
+                  route,
+                  member,
+                  {:upstream_client_error, status},
+                  error_reason: "client_error",
+                  error_message: error_message
+                )
 
-              retry_stream_with_fallback(
-                conn,
-                route,
-                payload,
-                member,
-                attempts_left,
-                exclude,
-                provider_retries,
-                reason
-              )
-            else
-              log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
-                error_reason: to_string(reason)
-              )
+              attempts_left > 1 ->
+                log_fallback_attempt(conn, route, member, status, error_message)
+
+                retry_stream_with_fallback(
+                  conn,
+                  route,
+                  payload,
+                  member,
+                  attempts_left,
+                  exclude,
+                  provider_retries,
+                  reason
+                )
+
+              true ->
+                log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
+                  error_reason: to_string(reason),
+                  error_message: error_message
+                )
             end
         end
     end
@@ -1371,31 +1389,46 @@ defmodule TokengateWeb.ProxyController do
         {:ok, chunk, []}
 
       {:sse_done} ->
-        {:error, :empty_stream, nil}
+        {:error, :empty_stream, nil, nil}
+
+      {:sse_error, {reason, status, message}} ->
+        {:error, stream_error_reason(reason), status, message}
 
       {:sse_error, {reason, status}} ->
-        {:error, stream_error_reason(reason), status}
+        {:error, stream_error_reason(reason), status, nil}
 
       {:sse_error, reason} ->
-        {:error, stream_error_reason(reason), nil}
+        {:error, stream_error_reason(reason), nil, nil}
 
       {:DOWN, ^ref, :process, ^pid, reason} ->
-        {:error, stream_error_reason(reason), nil}
+        {:error, stream_error_reason(reason), nil, nil}
     after
-      timeout -> {:error, :timeout, nil}
+      timeout -> {:error, :timeout, nil, nil}
     end
   end
 
   # Waits for the first data chunk after headers have been received.
   defp await_first_chunk_after_headers(pid, ref, timeout) do
     receive do
-      {:sse_chunk, chunk} -> {:ok, chunk}
-      {:sse_done} -> {:error, :empty_stream, nil}
-      {:sse_error, {reason, status}} -> {:error, stream_error_reason(reason), status}
-      {:sse_error, reason} -> {:error, stream_error_reason(reason), nil}
-      {:DOWN, ^ref, :process, ^pid, reason} -> {:error, stream_error_reason(reason), nil}
+      {:sse_chunk, chunk} ->
+        {:ok, chunk}
+
+      {:sse_done} ->
+        {:error, :empty_stream, nil, nil}
+
+      {:sse_error, {reason, status, message}} ->
+        {:error, stream_error_reason(reason), status, message}
+
+      {:sse_error, {reason, status}} ->
+        {:error, stream_error_reason(reason), status, nil}
+
+      {:sse_error, reason} ->
+        {:error, stream_error_reason(reason), nil, nil}
+
+      {:DOWN, ^ref, :process, ^pid, reason} ->
+        {:error, stream_error_reason(reason), nil, nil}
     after
-      timeout -> {:error, :timeout, nil}
+      timeout -> {:error, :timeout, nil, nil}
     end
   end
 
@@ -1889,7 +1922,7 @@ defmodule TokengateWeb.ProxyController do
   # The client never sees this — it is purely for observability. The upstream
   # error message (when present) is persisted so admins can see *why* the
   # provider failed (rate limit, connection limit, etc.), not just the status.
-  defp log_fallback_attempt(conn, route, member, status, error_message \\ nil) do
+  defp log_fallback_attempt(conn, route, member, status, error_message) do
     error_reason =
       case status do
         429 -> "provider_rate_limited"
