@@ -116,15 +116,24 @@ defmodule TokengateWeb.ProvidersLive do
         |> Map.new(fn cred -> {cred.id, Map.get(all, cred.id, :closed)} end)
       end)
 
-    # Catalog builtins with no credentials yet — offered in the "activar
-    # proveedor" menu grouped by billing surface (subscription first).
-    inactive_builtins =
+    # ALL catalog builtins — offered in the "agregar proveedor" menu grouped
+    # by billing surface (subscription first). `active?` marks the ones that
+    # already have credentials: they render disabled with a check (the
+    # provider is live; adding another key happens from its own card).
+    catalog_builtins =
       from(p in Provider,
         left_join: c in assoc(p, :credentials),
-        where: p.source == "builtin" and is_nil(c.id),
+        where: p.source == "builtin",
         order_by: [asc: p.name],
         distinct: true,
-        select: %{id: p.id, name: p.name, key: p.key, capabilities: p.capabilities}
+        group_by: p.id,
+        select: %{
+          id: p.id,
+          name: p.name,
+          key: p.key,
+          capabilities: p.capabilities,
+          active?: count(c.id) > 0
+        }
       )
       |> Repo.all()
       |> Enum.map(fn b ->
@@ -134,7 +143,7 @@ defmodule TokengateWeb.ProvidersLive do
 
     socket
     |> assign(:providers, providers)
-    |> assign(:inactive_builtins, inactive_builtins)
+    |> assign(:catalog_builtins, catalog_builtins)
     |> assign(:providers_empty?, providers == [])
     |> assign(:provider_model_counts, provider_model_counts)
     |> assign(:breaker_statuses, breaker_statuses)
@@ -167,7 +176,7 @@ defmodule TokengateWeb.ProvidersLive do
   ## Events — provider CRUD ------------------------------------------------
 
   @impl true
-  # Custom provider creation — reachable from the "Activar proveedor"
+  # Custom provider creation — reachable from the "Agregar proveedor"
   # dropdown (last entry). Every custom is OpenAI-compatible; capabilities
   # and per-service URLs are configurable.
   def handle_event("new_custom_provider", _params, socket) do
@@ -608,8 +617,8 @@ defmodule TokengateWeb.ProvidersLive do
 
         <div class="flex justify-end">
           <div class="dropdown dropdown-end">
-            <div tabindex="0" role="button" class="btn btn-primary btn-sm" id="activate-builtin-btn">
-              <.icon name="hero-bolt" class="w-4 h-4" /> Activar proveedor
+            <div tabindex="0" role="button" class="btn btn-primary btn-sm" id="add-provider-btn">
+              <.icon name="hero-plus" class="w-4 h-4" /> Agregar proveedor
             </div>
             <div
               tabindex="0"
@@ -619,9 +628,9 @@ defmodule TokengateWeb.ProvidersLive do
                 :for={
                   {label, group} <- [
                     {"Suscripción (plan incluido)",
-                     Enum.filter(@inactive_builtins, &(&1.billing == "subscription"))},
+                     Enum.filter(@catalog_builtins, &(&1.billing == "subscription"))},
                     {"Pay-per-token",
-                     Enum.filter(@inactive_builtins, &(&1.billing == "pay_per_token"))}
+                     Enum.filter(@catalog_builtins, &(&1.billing == "pay_per_token"))}
                   ]
                 }
                 :if={group != []}
@@ -629,23 +638,42 @@ defmodule TokengateWeb.ProvidersLive do
                 <div class="px-2 pt-1 pb-1 text-xs font-semibold opacity-60">
                   {label}
                 </div>
-                <button
-                  :for={b <- group}
-                  phx-click="activate_builtin"
-                  phx-value-id={b.id}
-                  class="text-left px-2 py-1.5 rounded hover:bg-base-200 text-sm flex items-center gap-2"
-                  id={"activate-#{b.id}"}
-                >
-                  <span class="truncate flex-1">{b.name}</span>
-                  <span class="flex gap-1 shrink-0">
-                    <span
-                      :for={cap <- b.capabilities}
-                      class="text-[10px] uppercase tracking-wide badge badge-ghost badge-sm"
-                    >
-                      {cap}
+                <div :for={b <- group} class="flex items-center">
+                  <button
+                    phx-click={not b.active? && "activate_builtin"}
+                    phx-value-id={b.id}
+                    disabled={b.active?}
+                    title={
+                      if b.active?,
+                        do: "Ya activo — agrega más API keys desde su tarjeta",
+                        else: "Adjuntar una API key"
+                    }
+                    class={[
+                      "text-left px-2 py-1.5 rounded text-sm flex items-center gap-2 flex-1 min-w-0",
+                      if(b.active?,
+                        do: "opacity-50 cursor-default",
+                        else: "hover:bg-base-200"
+                      )
+                    ]}
+                    id={"activate-#{b.id}"}
+                  >
+                    <span class="truncate flex-1">{b.name}</span>
+                    <span class="flex gap-1 shrink-0 items-center">
+                      <span
+                        :if={b.active?}
+                        class="text-[10px] text-success inline-flex items-center gap-0.5"
+                      >
+                        <.icon name="hero-check-circle" class="w-3 h-3" /> activo
+                      </span>
+                      <span
+                        :for={cap <- b.capabilities}
+                        class="text-[10px] uppercase tracking-wide badge badge-ghost badge-sm"
+                      >
+                        {cap}
+                      </span>
                     </span>
-                  </span>
-                </button>
+                  </button>
+                </div>
                 <div class="border-t border-base-300 my-1"></div>
               </div>
 
@@ -855,8 +883,9 @@ defmodule TokengateWeb.ProvidersLive do
           <p>
             {if @providers_tab == "builtin",
               do:
-                "Ningún proveedor builtin tiene credenciales todavía — activa uno desde \"Activar proveedor\".",
-              else: "No hay proveedores custom — créalos desde \"Activar proveedor\" → Custom."}
+                "Ningún proveedor builtin tiene credenciales todavía — agrega uno desde \"Agregar proveedor\".",
+              else:
+                "No hay proveedores custom — créalos desde \"Agregar proveedor\" → Custom provider."}
           </p>
         </div>
 
