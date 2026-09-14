@@ -1,11 +1,31 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
   <defs>
-    <linearGradient id="tg-grad" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+    <linearGradient id="tg-gate" x1="12" y1="12" x2="52" y2="52" gradientUnits="userSpaceOnUse">
       <stop stop-color="#6366F1"/>
       <stop offset="1" stop-color="#A855F7"/>
     </linearGradient>
   </defs>
-  <!-- Token (hexagon coin) -->
-  <path d="M32 8l20 12v24l-20 12-20-12V20l20-12Z" fill="url(#tg-grad)" fill-opacity="0.2" stroke="url(#tg-grad)" stroke-width="3" stroke-linejoin="round"/>
-  <circle cx="32" cy="32" r="7" fill="url(#tg-grad)"/>
+
+  <!-- Gate: hexagon ring (the token) — thick for favicon legibility -->
+  <path d="M32 10l18 10.4v20.8L32 51.8 14 41.2V20.4L32 10Z"
+        fill="url(#tg-gate)" fill-opacity="0.15" stroke="url(#tg-gate)" stroke-width="4"
+        stroke-linejoin="round"/>
+
+  <!-- Connection lines: hub → provider nodes -->
+  <g stroke="#60a5fa" stroke-width="3" stroke-linecap="round" opacity="0.7">
+    <line x1="32" y1="32" x2="21" y2="21.5"/>
+    <line x1="32" y1="32" x2="44" y2="22.5"/>
+    <line x1="32" y1="32" x2="43.5" y2="43.5"/>
+    <line x1="32" y1="32" x2="20.5" y2="43"/>
+  </g>
+
+  <!-- Provider nodes -->
+  <circle cx="21" cy="21.5" r="5" fill="#60a5fa"/>
+  <circle cx="44" cy="22.5" r="4.5" fill="#818cf8"/>
+  <circle cx="43.5" cy="43.5" r="4.5" fill="#a78bfa"/>
+  <circle cx="20.5" cy="43" r="5" fill="#60a5fa"/>
+
+  <!-- Gateway hub -->
+  <circle cx="32" cy="32" r="8" fill="#3b82f6"/>
+  <circle cx="32" cy="32" r="4.2" fill="#93c5fd"/>
 </svg>

@@ -1,70 +1,120 @@
 <div align="center">
 
-# 🚪 TokenGate
+<img src="docs/headers/tokengate-logo.png" width="96" height="96" alt="TokenGate" />
 
-### OpenAI-compatible LLM API Gateway
+# TokenGate
 
-An **LLM API gateway** built with **Phoenix 1.8 + LiveView**. It sits between your agents/apps and the model providers: clients call TokenGate with a TokenGate API key, and TokenGate routes each request to the best provider credential — with budgets, rate limits, circuit breakers, and full cost accounting in between.
+### One gate in front of every model. Routing, budgets and cache intelligence in between.
 
-Think "LiteLLM, but as an Elixir app with a real admin UI".
+### OpenAI-compatible LLM API gateway
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Elixir](https://img.shields.io/badge/Elixir-1.18+-4B275F?logo=elixir&logoColor=white)](https://elixir-lang.org)
-[![Phoenix](https://img.shields.io/badge/Phoenix-LiveView-FD4F00?logo=phoenixframework&logoColor=white)](https://www.phoenixframework.org)
-
-![TokenGate](docs/headers/tokengate-header.png)
+[![Phoenix](https://img.shields.io/badge/Phoenix-1.8-LiveView-FD4F00?logo=phoenixframework&logoColor=white)](https://www.phoenixframework.org)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-partitioned-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org)
 
 </div>
 
 > **Note:** the admin UI language is Spanish; the proxy API and this README are English.
 
-## Features
+## What is TokenGate
 
-### Gateway
+TokenGate sits between your agents/apps and the model providers. Clients call TokenGate
+with a TokenGate API key using the **OpenAI SDK unchanged** (just base URL + key);
+TokenGate routes each request to the best provider credential — with credit
+subscriptions, rate limits, circuit breakers, prompt-cache intelligence and full cost
+accounting in between.
 
-- **OpenAI-compatible proxy API** — `POST /v1/chat/completions` (streaming SSE + non-streaming), `POST /v1/embeddings`, `GET /v1/models`. Keep using the OpenAI SDK; just change the base URL and the key.
-- **Model aliases + type routing** — clients ask for an alias (e.g. `gpt-4o`); TokenGate maps it to one or more provider credentials. Each alias has a `model_type` (`llm`, `embedding`) that routes to the correct endpoint. Switching backends is an admin operation, not a client deploy.
-- **Tiered priority routing + sticky sessions** — providers are ordered by priority and grouped into tiers: healthy subscriptions (`included`) first, then degraded subscriptions, then healthy pay-per-token, then degraded pay-per-token. An API key sticks to the same credential to preserve prompt caches, with per-provider sticky TTL overrides (configurable in seconds). Every outbound request also carries an `x-session-affinity` header (built from the API key hash) so providers that support automatic prefix caching group a workspace/session's requests onto the replica holding their cached prefix. A slow-but-answering credential is marked "degraded" and sinks to the bottom of its tier until it recovers.
-- **FIFO queue for saturated included credentials** — when a subscription credential hits its concurrency limit, requests queue FIFO (with tiered timeouts) instead of immediately falling back to pay-per-token, maximizing subscription utilization.
-- **Fallback matrix + circuit breaker** — auth errors (401/402/403) disable the credential and fall back; timeouts and first-token timeouts fall back immediately; fast errors (5xx/429) retry before moving on. Per-credential circuit breaker with configurable threshold/cooldown. Included (subscription) credentials tolerate 429s with a soft degrade instead of tripping the breaker. Every upstream attempt of one client request carries the same generated `Idempotency-Key` header (retries and provider fallbacks included), so providers that processed a lost response can deduplicate the replay.
-- **Two-gate throttling** — per-user limits (group defaults + per-member overrides: RPM, concurrency) protect TokenGate; per-credential limits (`max_rpm`, `max_concurrent`, `max_concurrent_per_user`) protect the upstream key.
-- **Monthly USD budgets** — per group member (group default + member extra) and per service. ETS hot counters checked pre-flight; Postgres `request_logs` is the durable truth.
-- **Daily spending limit per credential** — a provider credential can carry a daily USD cap; once reached, the router skips it and fails over to the next credential until the next UTC day. Live spend/limit indicator on the Models page.
-- **Global daily spending cap (kill-switch)** — instance-wide daily USD limit in Settings; once total spend across all members and credentials reaches the cap, all proxy requests are rejected until 00:00 UTC. `nil` means unlimited (default).
-- **Cost tracking** — the provider-reported `usage.cost` is recorded per request and returned in the `X-Tokengate-Cost` response header. LiteLLM upstreams are supported via the `x-litellm-response-cost` header. Subscription providers (`billing_mode: included`) count as $0. When the upstream doesn't report a cost, TokenGate records $0 (honest fallback, no phantom estimates). Model aliases additionally carry optional **informational market prices** (input / output / cache per 1M tokens) shown on the Models form as operator reference — display-only, never used by the cost engine (billing always comes from upstream-reported costs or the per-provider manual fallback rates).
-- **Pre-flight prompt optimization (mandatory)** — every chat completion request gets its system messages hoisted to the front and deduped (`stable_prefix`), and long or repeated tool-output messages trimmed and collapsed (`lazy_cleanup`). Both passes are pure, deterministic, and always on for LLM models — not per-model toggles. Embeddings payloads pass through untouched.
-- **Reasoning/thinking flag parsing** — normalizes `reasoning_effort` (OpenAI), `reasoning` (new OpenAI), and `thinking` (Anthropic/GLM) into a unified `{think, effort}` tuple across providers.
-- **Agent identification headers** (OpenRouter-style) — `X-Agent-Type`, `X-Title`, `HTTP-Referer`, `User-Agent` feed metrics and limits.
+Think "LiteLLM, but as an Elixir app with a real admin UI".
 
-### Admin UI (LiveView)
+## Routing
 
-- **Personal dashboard** (`/dashboard`) — every user sees their own live consumption (requests, cost, tokens, tokens/sec), period selector (today/7d/30d/90d), their API key with rotate/revoke, and the model catalog available to them with usage-tier badges.
-- **Stats** (`/stats`) — drill-downs by model, group, service, and member; scoped by role (admin sees org-wide, managers their groups, users themselves). Period comparison with vs-yesterday deltas, daily sparkline charts, sortable breakdown tables, and CSV export.
-- **Logs** (`/dashboard/logs`) — live request log with filters, in-flight requests merged into the main table, and CSV export (30d / 90d).
-- **Credits** (`/dashboard/credits`) — every member's spend against their effective budget, live from the ETS counters, with progress bars.
-- **Calculator** (`/calculator`) — compare real provider spend vs estimated cost using custom pricing parameters (input/output price per million tokens). Period and model selector. Uses the same cost source as Stats for consistency.
-- **Groups** (`/admin/groups`) — group CRUD with default budgets/limits, per-group model-alias grants, and per-group observability webhook destinations. Dynamic card grid (1/2/3 cols based on group count).
-- **Group members** (`/admin/groups/:id/members`) — add members by email (auto-generates their API key), per-member extras: extra budget, concurrency, RPM, and individual model-alias grants with optional per-model daily budget. Search filter by name and email.
-- **Services** (`/dashboard/services`) — machine-to-machine API keys (not tied to a user) with their own monthly budget, concurrency, RPM, and model grants. **Supervisors** get a read-only view (`/dashboard/services/supervised`).
-- **Providers** (`/dashboard/providers`) — provider CRUD with multiple credentials each (encrypted key, rate/concurrency limits, status, icon toggle). Per-provider sticky TTL override in seconds. Provider health surfaced in sidebar with failing credentials highlighted.
-- **Models** (`/dashboard/models`) — model-alias CRUD; assign providers with priority, `billing_mode` (`pay_per_token` / `included`), `model_type` (`llm` / `embedding`), and exclusive scope (global / member / group).
-- **Users** (`/dashboard/users`) — user CRUD, suspend/activate, password reset, per-user stats (`/dashboard/users/:user_id/stats`), **impersonation**, filter by today's spend, group by group, and sortable columns.
-- **Maintenance** (`/dashboard/maintenance`) — read-only config overview plus a Danger Zone (reset request logs, sticky sessions, member extras). Global daily spending cap kill-switch lives here.
-- **Budget** (`/dashboard/budgets`) — global daily cap and per-user daily cap (evaluated before the global one), each with exclusion lists (users / groups / services). Exempt subjects skip the corresponding gate; global-exempt spend doesn't count toward the global counter.
+- **OpenAI-compatible proxy API** — `POST /v1/chat/completions` (streaming SSE +
+  non-streaming), `POST /v1/embeddings`, `GET /v1/models`.
+- **Model aliases + type routing** — clients ask for an alias (`gpt-4o`); the alias maps
+  to one or more provider credentials with `model_type` (`llm`/`embedding`) routing to
+  the right endpoint. Switching backends is an admin operation, not a client deploy.
+- **Tiered priority routing** — credentials ordered by priority and grouped into tiers:
+  healthy subscriptions (`included`) first, degraded subscriptions, then healthy
+  pay-per-token, then degraded pay-per-token. A slow-but-answering credential sinks to
+  the bottom of its tier until it recovers.
+- **Fallback matrix + circuit breaker** — auth errors (401/402/403) disable the
+  credential and fall back; timeouts and first-token timeouts fall back immediately;
+  fast errors (5xx/429) retry before moving on. Per-credential breaker with configurable
+  threshold/cooldown; included credentials tolerate 429s with a soft degrade. Every
+  upstream attempt of one client request carries the same generated `Idempotency-Key`.
+- **FIFO queue** for saturated included credentials — requests queue (tiered timeouts)
+  instead of immediately falling back to pay-per-token, maximizing subscription use.
+- **Two-gate throttling** — per-member limits (RPM, concurrency) protect TokenGate;
+  per-credential limits (`max_rpm`, `max_concurrent`, `max_concurrent_per_user`)
+  protect the upstream key.
 
-### Platform
+## Cache intelligence
 
-- **Observability webhooks** — every request log is delivered to per-group destinations as an OTLP/JSON span, HMAC-signed (`X-Tokengate-Signature: sha256=…`), via Oban.
-- **Hot path on ETS** — auth, limits, budgets, routing, and metrics read from ETS only; Postgres is written asynchronously (Oban workers). Named ETS tables degrade gracefully when absent (hot-reload safe).
-- **Postgres** — groups, users, services, sha256-hashed API keys, providers, credentials, aliases, daily RANGE-partitioned `request_logs`, audit logs, Oban jobs. Provider ranking by failures + latency with tiers S/A/B/C/D.
-- **Auth** — email/password (Bcrypt) plus optional Google OAuth (enabled when `GOOGLE_OAUTH_CLIENT_ID`/`SECRET` are set; auto-registration restricted by `GOOGLE_OAUTH_ALLOWED_DOMAINS`). Sliding-expiration session cookies (default 1 year idle).
-- **Usage normalization** — OpenAI-compatible usage payloads are normalized into a unified internal shape (`prompt_tokens`, `completion_tokens`, `cache_read_tokens`, `cache_creation_tokens`). `prompt_tokens` keeps the provider's raw total (cached tokens included); `cache_read_tokens` is the cached subset, priced separately at the cache rate by the cost calculator.
-- **Per-user timezone** — dashboard data is bucketed by each user's configured timezone; session-scoped timezone selector for LiveViews.
+- **Sticky sessions** — an API key sticks to the same credential to preserve prompt
+  caches, with per-provider TTL overrides. Every outbound request also carries an
+  `x-session-affinity` header so providers with automatic prefix caching group a
+  session's requests onto the replica holding the cached prefix.
+- **Conversation session key** — the gateway derives a per-conversation `session_id`
+  (client-provided or hashed from the conversation opening) for cache-affinity routing
+  and per-conversation cache-hit observability.
+- **Explicit `cache_control` injection** — per model-provider toggle: injects
+  Anthropic-style cache breakpoints into system prompts and tool definitions for
+  upstreams that honor them (Anthropic, z.ai, OpenRouter passthrough).
+- **Local response cache** — identical requests (same model + normalized payload) are
+  served from a local cache without touching the upstream: faster answers, $0 cost.
+- **Prompt optimizer** — every chat completion gets system messages hoisted and deduped
+  (`stable_prefix`) and long/repeated tool-output messages trimmed (`lazy_cleanup`).
+  Pure, deterministic, always on for LLMs. Multi-turn histories get reasoning blocks
+  stripped before replay.
+- **Usage normalization** — OpenAI-compatible usage is normalized into
+  `prompt_tokens` / `completion_tokens` / `cache_read_tokens` / `cache_creation_tokens`
+  (OpenRouter cache-write normalization included), priced separately at cache rates.
 
-## Requirements
+## Credits & budgets
 
-- **Elixir** `~> 1.15` (developed on 1.20.x / OTP 29) and **Erlang/OTP**
-- **PostgreSQL**
+- **Credit subscriptions** — a subscription grants `units` of credit per cycle
+  (1 credit = $1), monthly with a cut-off day (with optional rollover % and cap) or a
+  one-shot **top-up**. Group defaults (one sub shared by every member of the group) and
+  direct user subs/top-ups, drained group-default first then direct credit, earliest
+  expiry first. Expired or fully-drained top-ups auto-archive in the admin list
+  (toggle to reveal).
+- **Subjects without any applicable subscription are unlimited** (tier 3) — shown as
+  "Ilimitado", not "no credit".
+- **Daily spending cap per credential** — once reached, the router skips it until the
+  next UTC day.
+- **Global daily kill-switch** — instance-wide USD cap in Maintenance; once total spend
+  reaches it, all proxy requests are rejected until 00:00 UTC. Per-user daily cap with
+  exclusion lists evaluated before the global one.
+- **Cost tracking** — the provider-reported usage cost is recorded per request and
+  returned in the `X-Tokengate-Cost` header (LiteLLM upstreams via
+  `x-litellm-response-cost`). No upstream cost → $0 recorded, no phantom estimates.
+
+## Admin & dashboards (LiveView)
+
+| Page | What it does |
+|---|---|
+| `/dashboard` | Personal live consumption, period selector, API key with rotate/revoke |
+| `/stats` | Analytics hub — live pulse + tabs: overview, models, services, groups, users, credits. Role-scoped, prev-period deltas, CSV export. Hourly rollup (`request_metrics_hourly`) keeps period switching fast |
+| `/logs` | Live request log, filters, in-flight requests, CSV export |
+| `/calculator` | Real provider spend vs estimated cost with custom pricing |
+| `/dashboard/services` (+ `/supervised`) | Machine-to-machine API keys with their own budget/limits/grants |
+| `/admin/providers` | Provider CRUD, multiple credentials each, per-provider sticky TTL and cache_control toggle |
+| `/admin/models` | Alias CRUD — providers by priority, `billing_mode`, exclusive scope |
+| `/admin/groups` (+ members) | Group defaults, per-member extras and grants, observability webhooks |
+| `/admin/users` | User CRUD, suspend, impersonation, per-user stats, credit column |
+| `/admin/subscriptions` | Credit subscriptions & top-ups with auto-archiving |
+| `/admin/observability` | OTLP/JSON webhook destinations (HMAC-signed, delivered via Oban) |
+| `/admin/maintenance` | Config overview, danger zone, global daily cap kill-switch |
+
+## Platform
+
+- **Hot path on ETS** — auth, limits, budgets, routing and metrics read from ETS only;
+  Postgres is written asynchronously. Named tables degrade gracefully when absent.
+- **Postgres** — daily RANGE-partitioned `request_logs` (append-heavy by design),
+  hourly metrics rollup with worker + backfill, audit logs, Oban jobs.
+- **Auth** — email/password (Bcrypt) + optional Google OAuth with domain-restricted
+  auto-registration; sliding-expiration sessions; per-user timezone bucketing.
 
 ## Quick start
 
@@ -81,11 +131,11 @@ Visit [localhost:4000](http://localhost:4000) and sign in with the seeded admin:
 | Email | `admin@tokengate.local` | `TOKENGATE_ADMIN_EMAIL` |
 | Password | `tokengate-admin-secret-1` | `TOKENGATE_ADMIN_PASSWORD` |
 
-Then, from the UI: create a **provider** with a credential → create a **model** alias and assign the provider → grant the alias to a **group** → your member API key is already on your dashboard. You can proxy a request in ~5 minutes.
+Then: create a **provider** with a credential → create a **model** alias and assign the
+provider → grant the alias to a **group** → your member API key is already on your
+dashboard. You can proxy a request in ~5 minutes.
 
 ## Using the proxy
-
-Point any OpenAI-compatible client at TokenGate:
 
 ```python
 from openai import OpenAI
@@ -110,48 +160,47 @@ resp = client.chat.completions.create(
 | `DATABASE_URL` | Postgres connection string |
 | `SECRET_KEY_BASE` | Phoenix secret (`mix phx.gen.secret`) |
 | `PHX_HOST` | Public host |
-| `WEBHOOK_SECRET` | HMAC key for signing observability webhook deliveries |
+| `WEBHOOK_SECRET` | HMAC key for observability webhook deliveries |
 | `SESSION_SIGNING_SALT` / `SESSION_ENCRYPTION_SALT` | Session cookie salts (`mix phx.gen.secret 32`) |
 
 **Common optional knobs:**
 
 | Var | Default | What it tunes |
 | --- | --- | --- |
-| `PORT` | `4000` | HTTP port (`4000` in the Docker image) |
+| `PORT` | `4000` | HTTP port |
 | `POOL_SIZE` | `10` | DB connection pool |
-| `SESSION_MAX_AGE_SECONDS` | `31536000` | Idle session lifetime (sliding, default 1 year) |
-| `PROXY_RECEIVE_TIMEOUT_MS` | `60000` | Upstream read timeout (per-credential override available) |
-| `FIRST_TOKEN_TIMEOUT_MS` | `30000` | Streaming: max wait for first chunk before fallback |
-| `CIRCUIT_BREAKER_THRESHOLD` | `3` | Failures before a credential's breaker opens |
+| `SESSION_MAX_AGE_SECONDS` | `31536000` | Idle session lifetime (sliding) |
+| `PROXY_RECEIVE_TIMEOUT_MS` | `60000` | Upstream read timeout (per-credential override) |
+| `FIRST_TOKEN_TIMEOUT_MS` | `30000` | Streaming: max wait for first chunk |
+| `CIRCUIT_BREAKER_THRESHOLD` | `3` | Failures before a breaker opens |
 | `CIRCUIT_BREAKER_COOLDOWN_MS` | `30000` | Breaker open duration |
-| `CIRCUIT_BREAKER_RATE_LIMIT_COOLDOWN_MS` | `20000` | Breaker duration after a 429 |
-| `ROUTING_SLOW_THRESHOLD_MS` | `30000` | Latency that marks a credential "degraded" |
-| `ROUTING_SLOW_PENALTY_MS` | `120000` | How long a degraded credential sinks in its tier |
-| `ECTO_SSL` / `ECTO_SSL_VERIFY` | on / off | DB SSL and certificate verification |
-| `PHX_SCHEME` / `PHX_PORT` | `https` / `443` | URL generation scheme/port (set `PHX_SCHEME=http` behind a plain-HTTP VPN) |
-| `CHECK_ORIGINS` | unset | Extra allowed origins (multi-scheme deploys) |
-| `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | unset | Enable Google sign-in |
-| `GOOGLE_OAUTH_REDIRECT_URI` | derived | OAuth callback (defaults from `PHX_SCHEME`/`PHX_HOST`) |
-| `GOOGLE_OAUTH_ALLOWED_DOMAINS` | unset | Comma-separated domains allowed to auto-register |
+| `ROUTING_SLOW_THRESHOLD_MS` | `30000` | Latency that marks a credential degraded |
+| `ECTO_SSL` / `ECTO_SSL_VERIFY` | on / off | DB SSL and cert verification |
+| `PHX_SCHEME` / `PHX_PORT` | `https` / `443` | URL generation (set `http` behind a VPN proxy) |
+| `GOOGLE_OAUTH_CLIENT_ID` / `SECRET` | unset | Enable Google sign-in |
+| `GOOGLE_OAUTH_ALLOWED_DOMAINS` | unset | Domains allowed to auto-register |
 | `DNS_CLUSTER_QUERY` | unset | Node clustering DNS query |
 
 ## Production (Docker)
 
-Multi-stage **Dockerfile** included: prebuilt hexpm Elixir image → slim Debian runtime, non-root `app` user, port `4000`. The entrypoint applies migrations and seeds the admin before boot; `SKIP_MIGRATIONS=1` bypasses.
+Multi-stage **Dockerfile** included: prebuilt hexpm Elixir image → slim Debian runtime,
+non-root `app` user, port `4000`. The entrypoint applies migrations and seeds the admin
+before boot; `SKIP_MIGRATIONS=1` bypasses.
 
 ```bash
 docker build -t tokengate .
 docker run -p 4000:4000 --env-file .env tokengate
 ```
 
-- **`DISABLE_FORCE_SSL=1`** (default build ARG) — `force_ssl` is compile-time in Phoenix; the default image serves plain HTTP (VPN/reverse-proxy deploys). Rebuild with an empty value to re-enable TLS redirects.
-- Oban runs a monthly cron (`0 0 1 * *`) that resets the monthly ETS budget counters on the 1st.
-
-> ⚠️ **Migrations on partitioned tables:** `CREATE INDEX` on `request_logs` cannot use `CONCURRENTLY` (Postgres limitation). On a large existing table, run migrations in a maintenance window.
+> ⚠️ **Migrations on partitioned tables:** `CREATE INDEX` on `request_logs` cannot use
+> `CONCURRENTLY` (Postgres limitation). On a large existing table, run migrations in a
+> maintenance window.
 
 ## Tech stack
 
-Phoenix 1.8 + LiveView · Bandit · Ecto/Postgres · Finch (upstream HTTP/SSE) · Req (outbound) · Oban · Tailwind CSS v4 + esbuild · bcrypt_elixir · gettext
+Phoenix 1.8 + LiveView · Bandit · Ecto/Postgres (RANGE partitions) · Finch (upstream
+HTTP/SSE) · Req (outbound) · Oban · Tailwind CSS v4 + daisyUI (dark) · esbuild ·
+bcrypt_elixir
 
 ## Development
 
