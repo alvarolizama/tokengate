@@ -118,15 +118,37 @@ defmodule Tokengate.Credits do
   Varios grupos pueden apuntar a la misma sub.
   """
   def set_group_default(%Group{} = group, %Subscription{} = subscription) do
-    group
-    |> Ecto.Changeset.change(default_subscription_id: subscription.id)
-    |> Repo.update()
+    result =
+      group
+      |> Ecto.Changeset.change(default_subscription_id: subscription.id)
+      |> Repo.update()
+
+    invalidate_member_auth_cache(group.id)
+    result
   end
 
   def set_group_default(%Group{} = group, nil) do
-    group
-    |> Ecto.Changeset.change(default_subscription_id: nil)
-    |> Repo.update()
+    result =
+      group
+      |> Ecto.Changeset.change(default_subscription_id: nil)
+      |> Repo.update()
+
+    invalidate_member_auth_cache(group.id)
+    result
+  end
+
+  # The auth cache stores the resolved `credit_grants` alongside the member
+  # (TTL 60s). Changing a group's default subscription changes every member's
+  # grants, so the cache MUST be dropped or the new credit only applies after
+  # the TTL — members keep debiting the old grant (or stay on tier 3 unlimited)
+  # for up to a minute. Same invalidation `update_subscription/2` performs.
+  defp invalidate_member_auth_cache(group_id) do
+    case :ets.whereis(Tokengate.Accounts.ApiKeyCache.table()) do
+      :undefined -> :ok
+      _ -> Tokengate.Accounts.ApiKeyCache.invalidate_group(group_id)
+    end
+
+    :ok
   end
 
   @doc "Ids de los grupos que referencian esta sub como default."

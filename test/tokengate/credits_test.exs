@@ -359,4 +359,71 @@ defmodule Tokengate.CreditsTest do
       assert credit.remaining_micro == 70_000_000
     end
   end
+
+  describe "auth-cache invalidation on group default change" do
+    alias Tokengate.Accounts.ApiKeyCache
+
+    defp cache_group_grants(member) do
+      # Simulate what Plugs.ApiAuth caches: the member + its resolved grants.
+      entry = %{
+        member: member,
+        limits: %{credit_grants: Credits.grants_for(member)},
+        subject_type: "user"
+      }
+
+      :ets.insert(ApiKeyCache.table(), {"k-#{member.id}", entry, 9_999_999_999_999})
+      :ok
+    end
+
+    defp cached_entry?(member),
+      do: :ets.lookup(ApiKeyCache.table(), "k-#{member.id}") != []
+
+    test "set_group_default drops the group members' cached grants" do
+      group = group_fixture()
+      user = user_fixture()
+      member = member_fixture(group, user)
+
+      cache_group_grants(member)
+      assert cached_entry?(member)
+
+      sub = group_sub(%{"units" => 100})
+      {:ok, _} = Credits.set_group_default(group, sub)
+
+      # Without invalidation the members keep the old grants for the 60s TTL.
+      refute cached_entry?(member)
+    end
+
+    test "clearing the group default also drops the cached grants" do
+      group = group_fixture()
+      sub = group_sub(%{"units" => 50})
+      {:ok, _} = Credits.set_group_default(group, sub)
+
+      user = user_fixture()
+      member = member_fixture(group, user)
+
+      cache_group_grants(member)
+      assert cached_entry?(member)
+
+      {:ok, _} = Credits.set_group_default(group, nil)
+
+      refute cached_entry?(member)
+    end
+
+    test "assign_groups drops the cached grants of every touched group" do
+      group = group_fixture()
+      other = group_fixture()
+      user = user_fixture()
+      member = member_fixture(group, user)
+      other_member = member_fixture(other, user_fixture())
+
+      cache_group_grants(member)
+      cache_group_grants(other_member)
+
+      sub = group_sub(%{"units" => 25})
+      :ok = Credits.assign_groups(sub, [group.id, other.id])
+
+      refute cached_entry?(member)
+      refute cached_entry?(other_member)
+    end
+  end
 end

@@ -110,6 +110,10 @@ defmodule Tokengate.Budgets.ManagerTest do
     pid = Process.whereis(Manager) || start_supervised!(Manager)
     _ = :sys.get_state(pid)
     :ets.delete(@table, {:global, :daily})
+    # The table is a singleton shared across tests; a leftover debounce mark
+    # would make the NEXT test's `insert_new` fail and silently skip the
+    # enqueue (spurious assert_enqueued failures).
+    :ets.delete(@table, {:sync_pending, :global})
     :ok
   end
 
@@ -720,6 +724,102 @@ defmodule Tokengate.Budgets.ManagerTest do
       assert :ok = Manager.settle(tm.id, hold, Decimal.new("5.00"))
 
       assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("5.00"))
+    end
+  end
+
+  describe "global reconciliation" do
+    test "load_global_from_db sums the whole instance without a subject filter" do
+      {tm1, _} = group_member_fixture()
+      {tm2, _} = group_member_fixture()
+
+      log_spend(tm1.id, "7.00")
+      log_spend(tm2.id, "3.00")
+
+      micro = Manager.load_global_from_db(Manager.utc_day_start())
+
+      assert micro == 10_000_000
+    end
+
+    test "load_global_from_db ignores a stale subject filter (the :global trap)" do
+      {tm, _} = group_member_fixture()
+      log_spend(tm.id, "4.00")
+
+      # Passing :global to load_from_db/2 does NOT return 0 — it raises: the
+      # filter casts an atom against a binary_id column. That is exactly why
+      # the reconciler needs its own subject-less loader.
+      assert_raise Ecto.Query.CastError, fn ->
+        Manager.load_from_db(:global, Manager.utc_day_start())
+      end
+
+      assert Manager.load_global_from_db(Manager.utc_day_start()) == 4_000_000
+    end
+
+    test "a settled request enqueues the global reconciler exactly once" do
+      {tm, _} = group_member_fixture()
+
+      assert {:ok, hold} =
+               Manager.reserve(
+                 tm.id,
+                 Decimal.new("100.00"),
+                 Decimal.new("1000.00"),
+                 Decimal.new("5.00"),
+                 false
+               )
+
+      assert :ok = Manager.settle(tm.id, hold, Decimal.new("5.00"))
+
+      assert_enqueued(worker: Tokengate.Budgets.GlobalSyncWorker)
+    end
+
+    test "an exempt-global subject does NOT enqueue the global reconciler" do
+      {tm, _} = group_member_fixture()
+
+      assert {:ok, hold} =
+               Manager.reserve(
+                 tm.id,
+                 Decimal.new("100.00"),
+                 Decimal.new("1000.00"),
+                 Decimal.new("5.00"),
+                 true
+               )
+
+      assert :ok = Manager.settle(tm.id, hold, Decimal.new("5.00"))
+
+      refute_enqueued(worker: Tokengate.Budgets.GlobalSyncWorker)
+    end
+
+    test "the reconciler resets phantom holds to the real DB spend" do
+      {tm, _} = group_member_fixture()
+
+      # Real spend is $5, but a crashed request left a $20 ceiling on the
+      # counter (the falso-402 scenario).
+      log_spend(tm.id, "5.00")
+      :ets.insert(@table, {{:global, :daily}, 25_000_000, true, Date.utc_today()})
+
+      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("25.00"))
+
+      assert :ok = perform_job(Tokengate.Budgets.GlobalSyncWorker, %{})
+
+      assert Decimal.equal?(Manager.global_daily_spend(), Decimal.new("5.00"))
+    end
+
+    test "the reconciler clears its debounce mark so the next settle re-enqueues" do
+      assert :ok = perform_job(Tokengate.Budgets.GlobalSyncWorker, %{})
+
+      {tm, _} = group_member_fixture()
+
+      assert {:ok, hold} =
+               Manager.reserve(
+                 tm.id,
+                 Decimal.new("100.00"),
+                 Decimal.new("1000.00"),
+                 Decimal.new("5.00"),
+                 false
+               )
+
+      assert :ok = Manager.settle(tm.id, hold, Decimal.new("5.00"))
+
+      assert_enqueued(worker: Tokengate.Budgets.GlobalSyncWorker)
     end
   end
 end

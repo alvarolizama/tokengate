@@ -815,21 +815,24 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
-  # Conservative per-request cost ceiling used to hold budget before the real
-  # cost is known. Configurable (`:proxy, :max_request_cost_usd`); defaults to
-  # $20 — above any single chat request in the catalog — so it bounds
-  # concurrent in-flight exposure without over-blocking a normal request.
+  # Per-request cost ceiling used to hold budget before the real cost is known.
+  # Configurable (`:proxy, :max_request_cost_usd`); defaults to $1.
+  #
+  # This value is HELD per in-flight request and settled to the real cost
+  # afterwards, so it is multiplied by the concurrency level against the
+  # global daily cap: an oversized ceiling trips the kill-switch on traffic
+  # alone. Keep it close to a realistic request cost.
   defp max_request_cost_usd do
     raw =
       :tokengate
       |> Application.get_env(:proxy, [])
-      |> Keyword.get(:max_request_cost_usd, 20)
+      |> Keyword.get(:max_request_cost_usd, 1)
 
     case raw do
       %Decimal{} = d -> d
       n when is_number(n) -> Decimal.new(n)
       s when is_binary(s) -> Decimal.new(s)
-      _ -> Decimal.new(20)
+      _ -> Decimal.new(1)
     end
   end
 

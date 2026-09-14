@@ -71,6 +71,9 @@ config :tokengate, Oban,
     {Oban.Plugins.Cron,
      crontab: [
        {"0 0 1 * *", Tokengate.Budgets.ResetWorker},
+       # Global daily kill-switch counter: reconcile against request_logs so
+       # phantom holds from crashed requests can't reject the rest of the day.
+       {"*/5 * * * *", Tokengate.Budgets.GlobalSyncWorker},
        # Daily request_logs partition maintenance: create upcoming daily
        # partitions, backfill stray days out of the default partition, drop
        # partitions past retention. (fixes.md C1)
@@ -104,10 +107,17 @@ config :elixir, :time_zone_database, Tz.TimeZoneDatabase
 # ── Included credential wait + sticky TTL ──────────────────────────────
 
 config :tokengate, :proxy,
-  # Conservative per-request cost ceiling (USD) held against the budget on
-  # reserve. Above any single chat request in the catalog, so it bounds
-  # concurrent in-flight exposure without over-blocking a normal request.
-  max_request_cost_usd: 20,
+  # Per-request cost ceiling (USD) held against the budget on reserve, before
+  # the real cost is known.
+  #
+  # WARNING: this is a HOLD, not the actual cost — the counter is bumped by
+  # this amount per in-flight request and settled down afterwards. With N
+  # concurrent requests the global daily kill-switch sees ceiling×N, so an
+  # oversized ceiling makes the cap fire on traffic alone: at $20, three
+  # concurrent requests tripped a $50 daily cap having spent $0 (the falso
+  # 402 "Out of credits"). Keep it near a realistic high-percentile request
+  # cost, NOT orders of magnitude above it.
+  max_request_cost_usd: 1,
   # FIFO wait timeouts when an `included` credential is saturated. The key
   # is "how many included credentials remain after excluding this one", the
   # value is the timeout in milliseconds. The first tier whose threshold is

@@ -140,6 +140,8 @@ defmodule Tokengate.Budgets.Manager do
     end
 
     maybe_enqueue_sync(subject_id)
+    unless hold.exempt_global?, do: maybe_enqueue_global_sync()
+
     :ok
   end
 
@@ -220,6 +222,7 @@ defmodule Tokengate.Budgets.Manager do
 
     unless hold.exempt_global? do
       bump_counter(@global_key, actual - hold.global_micro)
+      maybe_enqueue_global_sync()
     end
 
     :ok
@@ -500,6 +503,25 @@ defmodule Tokengate.Budgets.Manager do
   end
 
   @doc """
+  Real spend of the **whole instance** (every member and service) over
+  `from`, as integer micro-USD — the durable counterpart of the global daily
+  counter.
+
+  Unlike `load_from_db/2` this applies NO subject filter, so it is the right
+  seed source for `{:global, :daily}`. Passing `:global` to `load_from_db/2`
+  instead raises `Ecto.Query.CastError` (it casts an atom against the binary_id
+  `group_member_id` column), so the global path needs its own loader.
+
+  Intended to be called from the caller process (not the GenServer) to keep
+  DB I/O out of the singleton, then handed to `set_global_from_db/1`.
+  """
+  @spec load_global_from_db(from :: DateTime.t()) :: integer()
+  def load_global_from_db(from) do
+    summary = Tokengate.Logs.cost_summary(%{from: from})
+    to_micro(summary.total_cost_usd)
+  end
+
+  @doc """
   Deletes every `{subject_id, :monthly}` entry from the ETS table.
 
   Called by `Budgets.ResetWorker` on the 1st of each month. The next
@@ -668,8 +690,7 @@ defmodule Tokengate.Budgets.Manager do
 
   defp seed_global_from_db do
     from = period_start(:daily)
-    summary = Tokengate.Logs.cost_summary(%{from: from})
-    micro = to_micro(summary.total_cost_usd)
+    micro = load_global_from_db(from)
     GenServer.call(__MODULE__, {:seed_global, micro})
   end
 
@@ -792,6 +813,29 @@ defmodule Tokengate.Budgets.Manager do
         |> Oban.insert()
     end
 
+    :ok
+  end
+
+  # Debounced enqueue of the GLOBAL counter reconciler. Same pattern as
+  # `maybe_enqueue_sync/1`, with a fixed marker key (the job carries no args).
+  # Without this the global kill-switch counter only ever moves by hold/settle
+  # and keeps phantom ceilings from crashed requests for the whole UTC day.
+  defp maybe_enqueue_global_sync do
+    key = {:sync_pending, :global}
+
+    if :ets.insert_new(@table, {key, true}) do
+      _ =
+        %{}
+        |> Tokengate.Budgets.GlobalSyncWorker.new()
+        |> Oban.insert()
+    end
+
+    :ok
+  end
+
+  @doc false
+  def clear_global_sync_pending do
+    :ets.delete(@table, {:sync_pending, :global})
     :ok
   end
 
