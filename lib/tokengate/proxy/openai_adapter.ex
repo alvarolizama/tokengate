@@ -375,10 +375,11 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
 
   # Includes "idempotency-key": the gateway generates one per client request
   # (see ProxyController) and reuses it across retries/fallbacks. Includes
-  # "x-session-affinity": a stable API-key-hash hint so providers running
-  # automatic prefix caching group a session's requests onto the replica
-  # that already holds their cached prefix.
-  @forwarded_header_keys ~w(user-agent http-referer x-title idempotency-key x-session-affinity)
+  # "x-session-id" (OpenRouter sticky routing) and "x-session-affinity"
+  # (a stable key hint) so providers running prefix caching group a
+  # conversation's requests onto the replica that already holds their
+  # cached prefix.
+  @forwarded_header_keys ~w(user-agent http-referer x-title idempotency-key x-session-id x-session-affinity)
 
   defp headers(api_key) do
     [

@@ -56,6 +56,11 @@ defmodule Tokengate.Providers.ModelProvider do
     # form so operators can type `900` instead of `900_000`. Synced by
     # `sync_sticky_ttl_fields/1` before saving.
     field :sticky_ttl_seconds, :integer, virtual: true
+    # Explicit Anthropic-style cache_control injection on the stable system
+    # prefix. Off by default: only upstreams that honor cache_control
+    # breakpoints (Anthropic, z.ai's OpenAI-compatible endpoint, OpenRouter
+    # passthrough) benefit; elsewhere it's dead payload weight.
+    field :cache_control_enabled, :boolean, default: false
     field :scope, :string, virtual: true, default: "global"
 
     belongs_to :model, Tokengate.Providers.Model
@@ -78,6 +83,7 @@ defmodule Tokengate.Providers.ModelProvider do
       :enabled,
       :sticky_ttl_ms,
       :sticky_ttl_seconds,
+      :cache_control_enabled,
       :input_cost_per_million,
       :output_cost_per_million,
       :cache_cost_per_million,
