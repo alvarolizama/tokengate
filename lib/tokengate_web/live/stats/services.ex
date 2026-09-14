@@ -214,7 +214,7 @@ defmodule TokengateWeb.StatsLive.Services do
                           <button
                             phx-click="sort"
                             phx-value-field="request_count"
-                            class="flex items-center justify-end gap-1 hover:text-primary"
+                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
                           >
                             Requests
                             <.sort_icon
@@ -228,7 +228,7 @@ defmodule TokengateWeb.StatsLive.Services do
                           <button
                             phx-click="sort"
                             phx-value-field="cost_usd"
-                            class="flex items-center justify-end gap-1 hover:text-primary"
+                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
                           >
                             Costo
                             <.sort_icon
@@ -242,7 +242,7 @@ defmodule TokengateWeb.StatsLive.Services do
                           <button
                             phx-click="sort"
                             phx-value-field="prompt_tokens"
-                            class="flex items-center justify-end gap-1 hover:text-primary"
+                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
                           >
                             Tokens in
                             <.sort_icon
@@ -256,7 +256,7 @@ defmodule TokengateWeb.StatsLive.Services do
                           <button
                             phx-click="sort"
                             phx-value-field="completion_tokens"
-                            class="flex items-center justify-end gap-1 hover:text-primary"
+                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
                           >
                             Tokens out
                             <.sort_icon
@@ -276,7 +276,7 @@ defmodule TokengateWeb.StatsLive.Services do
                           <button
                             phx-click="sort"
                             phx-value-field="avg_tps"
-                            class="flex items-center justify-end gap-1 hover:text-primary"
+                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
                           >
                             TPS
                             <.sort_icon
@@ -400,7 +400,7 @@ defmodule TokengateWeb.StatsLive.Services do
                         <button
                           phx-click="sort"
                           phx-value-field="request_count"
-                          class="flex items-center justify-end gap-1 hover:text-primary"
+                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
                         >
                           Requests
                           <.sort_icon
@@ -414,7 +414,7 @@ defmodule TokengateWeb.StatsLive.Services do
                         <button
                           phx-click="sort"
                           phx-value-field="cost_usd"
-                          class="flex items-center justify-end gap-1 hover:text-primary"
+                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
                         >
                           Costo
                           <.sort_icon
@@ -428,7 +428,7 @@ defmodule TokengateWeb.StatsLive.Services do
                         <button
                           phx-click="sort"
                           phx-value-field="prompt_tokens"
-                          class="flex items-center justify-end gap-1 hover:text-primary"
+                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
                         >
                           Tokens in
                           <.sort_icon
@@ -442,7 +442,7 @@ defmodule TokengateWeb.StatsLive.Services do
                         <button
                           phx-click="sort"
                           phx-value-field="completion_tokens"
-                          class="flex items-center justify-end gap-1 hover:text-primary"
+                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
                         >
                           Tokens out
                           <.sort_icon
@@ -462,7 +462,7 @@ defmodule TokengateWeb.StatsLive.Services do
                         <button
                           phx-click="sort"
                           phx-value-field="avg_tps"
-                          class="flex items-center justify-end gap-1 hover:text-primary"
+                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
                         >
                           TPS
                           <.sort_icon
