@@ -505,7 +505,6 @@ defmodule TokengateWeb.StatsLive do
             end,
             fn -> {:breakdown_member, Rollup.breakdown_by_member(group_id, opts)} end,
             fn -> {:breakdown_model, Rollup.breakdown_by_model(group_id, opts)} end,
-            fn -> {:breakdown_service, Rollup.breakdown_by_service_for_group(group_id, opts)} end,
             fn -> {:drilldown_series, Rollup.daily_series_by_model_for_group(group_id, opts)} end,
             fn ->
               {:drilldown_series_labels,

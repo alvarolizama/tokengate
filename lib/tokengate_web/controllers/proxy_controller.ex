@@ -63,6 +63,10 @@ defmodule TokengateWeb.ProxyController do
 
   @max_attempts 9
   @max_retries_per_provider 3
+  # Cap on the per-credential rate-limit backoff inside the routing cascade,
+  # so a provider demanding a long retry window can't stall the request:
+  # the cascade moves on to the next credential after at most this long.
+  @max_route_backoff_ms 2_000
 
   @doc """
   Lists the models accessible to the authenticated API key.
@@ -545,9 +549,13 @@ defmodule TokengateWeb.ProxyController do
   @max_route_retries 20
 
   defp route_and_acquire(member, payload, api_key_hash, limits, exclude \\ [], route_opts \\ []) do
-    route_and_acquire(member, payload, api_key_hash, limits, exclude, route_opts, 0)
+    route_and_acquire(member, payload, api_key_hash, limits, exclude, route_opts, {0, nil})
   end
 
+  # The accumulator threads {attempt, last_reject}: the attempt count caps the
+  # cascade, and last_reject remembers WHY the most recent candidate was
+  # dropped so an exhausted cascade reports an honest reason instead of always
+  # blaming "too many concurrent requests to provider".
   defp route_and_acquire(
          _member,
          _payload,
@@ -555,13 +563,21 @@ defmodule TokengateWeb.ProxyController do
          _limits,
          _exclude,
          _route_opts,
-         attempt
+         {attempt, last_reject}
        )
        when attempt >= @max_route_retries do
-    {:error, :provider_concurrency_exceeded}
+    {:error, {:cascade_exhausted, last_reject || :provider_concurrency_exceeded}}
   end
 
-  defp route_and_acquire(member, payload, api_key_hash, limits, exclude, route_opts, attempt) do
+  defp route_and_acquire(
+         member,
+         payload,
+         api_key_hash,
+         limits,
+         exclude,
+         route_opts,
+         {attempt, last_reject}
+       ) do
     key_id = member.api_key.id
     model_requested = payload["model"]
 
@@ -591,11 +607,9 @@ defmodule TokengateWeb.ProxyController do
                   payload,
                   api_key_hash,
                   limits,
-                  [
-                    route.credential.id | exclude
-                  ],
+                  [route.credential.id | exclude],
                   route_opts,
-                  attempt + 1
+                  {attempt + 1, :provider_concurrency_exceeded}
                 )
             end
           else
@@ -604,11 +618,9 @@ defmodule TokengateWeb.ProxyController do
               payload,
               api_key_hash,
               limits,
-              [
-                route.credential.id | exclude
-              ],
+              [route.credential.id | exclude],
               route_opts,
-              attempt + 1
+              {attempt + 1, :provider_concurrency_exceeded}
             )
           end
 
@@ -620,10 +632,19 @@ defmodule TokengateWeb.ProxyController do
             limits,
             [route.credential.id | exclude],
             route_opts,
-            attempt + 1
+            {attempt + 1, :provider_concurrency_exceeded}
           )
 
-        {:error, {:provider_rate_limited, _retry_ms}} ->
+        {:error, {:provider_rate_limited, retry_ms}} ->
+          # Rate-limited on this credential: hold the retry to honor the
+          # provider's window (bounded, so the @max_route_retries cap still
+          # dominates worst-case latency), then re-route excluding it.
+          backoff = min(retry_ms, @max_route_backoff_ms)
+
+          if backoff > 0 do
+            Process.sleep(backoff)
+          end
+
           route_and_acquire(
             member,
             payload,
@@ -631,12 +652,14 @@ defmodule TokengateWeb.ProxyController do
             limits,
             [route.credential.id | exclude],
             route_opts,
-            attempt + 1
+            {attempt + 1, :provider_rate_limited}
           )
       end
     else
       {:error, :no_available_provider} when exclude != [] ->
-        {:error, :provider_concurrency_exceeded}
+        # Every remaining candidate was excluded during this cascade; the
+        # accumulator knows why the last one was dropped.
+        {:error, {:cascade_exhausted, last_reject}}
 
       {:error, error} ->
         {:error, error}
@@ -1726,9 +1749,25 @@ defmodule TokengateWeb.ProxyController do
 
     body = %{"error" => %{"message" => message, "type" => type, "code" => code}}
 
-    conn
-    |> put_resp_content_type("application/json")
-    |> send_resp(status, Jason.encode!(body))
+    conn =
+      conn
+      |> put_resp_content_type("application/json")
+
+    # Standard Retry-After (seconds, rounded up) on rate-limit responses so
+    # well-behaved clients and SDKs back off instead of hammering.
+    conn =
+      case {status, error} do
+        {429, {:rate_limited, retry_ms}} ->
+          put_resp_header(conn, "retry-after", Integer.to_string(div(retry_ms, 1000) + 1))
+
+        {429, {:provider_rate_limited, retry_ms}} ->
+          put_resp_header(conn, "retry-after", Integer.to_string(div(retry_ms, 1000) + 1))
+
+        _ ->
+          conn
+      end
+
+    send_resp(conn, status, Jason.encode!(body))
   end
 
   defp error_details({:invalid_request, msg}),
@@ -1749,6 +1788,24 @@ defmodule TokengateWeb.ProxyController do
     do:
       {429, "rate_limit_error", "provider_concurrency_exceeded",
        "Too many concurrent requests to provider"}
+
+  # Routing cascade exhausted: every candidate credential was excluded (or
+  # the attempt cap hit). The reason is threaded from the last rejection so
+  # the client sees WHY the cascade died instead of a generic concurrency
+  # blame: saturation keeps the historical 429 provider_concurrency_exceeded
+  # code (API compatibility), rate-limit keeps provider_rate_limited.
+  defp error_details({:cascade_exhausted, :provider_concurrency_exceeded}),
+    do:
+      {429, "rate_limit_error", "provider_concurrency_exceeded",
+       "All provider candidates are saturated (too many concurrent requests to provider)"}
+
+  defp error_details({:cascade_exhausted, :provider_rate_limited}),
+    do:
+      {429, "rate_limit_error", "provider_rate_limited",
+       "All provider candidates are rate limited; retry later"}
+
+  defp error_details({:cascade_exhausted, _other}),
+    do: {503, "service_unavailable", "cascade_exhausted", "All provider candidates were rejected"}
 
   defp error_details({:budget_exceeded, %{layer: :global}}),
     do: {402, "billing_error", "budget_exceeded", "Global daily spending cap reached"}

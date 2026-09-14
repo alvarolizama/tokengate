@@ -83,7 +83,7 @@ defmodule Tokengate.Budgets do
   def list_service_budgets(timezone \\ @default_timezone) do
     from = Periods.start_of_month_utc(timezone)
 
-    services = Repo.all(from(s in Accounts.Service, preload: :group))
+    services = Repo.all(from(s in Accounts.Service, preload: [:subscription]))
 
     spend =
       RequestLog

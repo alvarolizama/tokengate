@@ -576,56 +576,6 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   # -----------------------------------------------------------------------
-  # breakdown_by_service_for_group/2
-  # -----------------------------------------------------------------------
-
-  @doc """
-  Returns per-service aggregate metrics for ONE group, ranked by total
-  cost (descending). Services are group members too (they consume via
-  their own `service_id` column).
-
-  Each row has the same shape as `breakdown_by_service/1`.
-  """
-  @spec breakdown_by_service_for_group(String.t(), keyword()) :: [map()]
-  def breakdown_by_service_for_group(group_id, opts \\ []) when is_binary(group_id) do
-    from = Keyword.get(opts, :from)
-    to = Keyword.get(opts, :to)
-
-    query =
-      RequestLog
-      |> join(:inner, [rl], s in Tokengate.Accounts.Service, on: rl.service_id == s.id)
-      |> where([_rl, s], s.group_id == ^group_id)
-      |> maybe_from(from)
-      |> maybe_to(to)
-      |> group_by([rl, s], s.id)
-      |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
-      |> select([rl, s], %{
-        service_id: s.id,
-        service_name: s.name,
-        request_count: count(rl.id),
-        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
-        prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
-        completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
-        cache_read_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_read_tokens),
-        total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
-      })
-
-    Repo.all(query)
-    |> Enum.map(fn row ->
-      %{
-        service_id: row.service_id,
-        service_name: row.service_name,
-        request_count: row.request_count,
-        cost_usd: Decimal.new(to_string(row.cost_usd)),
-        prompt_tokens: row.prompt_tokens,
-        completion_tokens: row.completion_tokens,
-        cache_read_tokens: row.cache_read_tokens,
-        avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
-      }
-    end)
-  end
-
-  # -----------------------------------------------------------------------
   # breakdown_by_group/1
   # -----------------------------------------------------------------------
 

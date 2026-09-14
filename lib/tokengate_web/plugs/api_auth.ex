@@ -61,24 +61,24 @@ defmodule TokengateWeb.Plugs.ApiAuth do
   @doc """
   Converts a Service into a virtual GroupMember struct.
   This allows the proxy controller to handle services without changes.
-  The virtual member carries the service's real group, so routing,
-  provider exclusives and the (model_id, group_id) cache apply to
-  services exactly like to user members.
+  The virtual member no longer carries a group: services own their
+  subscription (credit grants) and model catalog directly, so routing
+  providers/model access for services is resolved without group scope.
   """
   def service_to_virtual_member(service) do
-    service = Repo.preload(service, [:api_key, :group])
+    service = Repo.preload(service, [:api_key, :subscription])
 
     %GroupMember{
       # Use service_id as a pseudo group_member_id for budget tracking
       id: service.id,
-      group_id: service.group_id,
+      group_id: nil,
       user_id: nil,
       extra_concurrency: nil,
       extra_rpm: nil,
       status: "active",
       service_name: service.name,
       # Preloaded associations (virtual)
-      group: service.group,
+      group: nil,
       user: nil,
       api_key: service.api_key
     }

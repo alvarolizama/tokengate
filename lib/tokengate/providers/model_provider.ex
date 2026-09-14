@@ -86,6 +86,10 @@ defmodule Tokengate.Providers.ModelProvider do
       :exclusive_to_service_id
     ])
     |> validate_required([:model_id, :credential_id, :provider_model, :enabled])
+    # 0 is the floor: -1 is reserved at runtime for exclusive providers
+    # (Router.inject_exclusive_priority/1), so a configured negative priority
+    # on a global row would outrank an exclusive one.
+    |> validate_number(:priority, greater_than_or_equal_to: 0)
     |> validate_number(:sticky_ttl_ms,
       greater_than_or_equal_to: 1_000,
       less_than_or_equal_to: 24 * 60 * 60 * 1000

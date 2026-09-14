@@ -474,6 +474,47 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert %{"error" => %{"code" => "rate_limited"}} = json_response(conn2, 429)
   end
 
+  test "429 rate-limit responses carry a Retry-After header", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture(%{rpm_limit: 1})
+
+    conn1 =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+    assert json_response(conn1, 200)
+
+    conn2 =
+      build_conn()
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+    assert %{"error" => %{"code" => "rate_limited"}} = json_response(conn2, 429)
+    [retry_after] = get_resp_header(conn2, "retry-after")
+    assert String.to_integer(retry_after) >= 1
+  end
+
+  test "cascade exhausted on rate limits reports provider_rate_limited (not concurrency)", %{
+    conn: conn
+  } do
+    %{token: token, model: model} = proxy_fixture(%{})
+
+    # Saturate the only credential's RPM so every route attempt is rejected
+    # with provider_rate_limited — the cascade then exhausts on rate limits.
+    [mp] = Providers.list_model_providers(model.id)
+    {:ok, cred} = Providers.update_credential(mp.credential, %{max_rpm: 1})
+    :ok = Limits.acquire(cred.id, %{rpm_limit: 1, concurrency_limit: nil})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+    assert %{"error" => %{"code" => "provider_rate_limited"}} = json_response(conn, 429)
+
+    Limits.release(cred.id)
+  end
+
   test "404 for a model the key cannot access", %{conn: conn} do
     %{token: token} = proxy_fixture()
 
