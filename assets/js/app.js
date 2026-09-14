@@ -71,7 +71,7 @@ const SortableProviders = {
       this.el.insertBefore(this.dragged, after ? row.nextSibling : row)
 
       const ids = Array.from(this.el.querySelectorAll("tr[data-id]")).map(r => r.dataset.id)
-      this.pushEvent("reorder_providers", {alias_id: this.el.dataset.aliasId, ids})
+      this.pushEvent("reorder_providers", {model_id: this.el.dataset.modelId, ids})
     })
   },
 
