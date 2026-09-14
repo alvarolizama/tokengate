@@ -204,7 +204,10 @@ defmodule TokengateWeb.ServicesLive do
   end
 
   defp sort_value(s, :name, _ctx), do: String.downcase(s.name || "")
-  defp sort_value(s, :subscription, _ctx), do: String.downcase((s.subscription && s.subscription.name) || "")
+
+  defp sort_value(s, :subscription, _ctx),
+    do: String.downcase((s.subscription && s.subscription.name) || "")
+
   defp sort_value(s, :requests, ctx), do: stat_value(s, ctx.stats, :total_requests)
   defp sort_value(s, :monthly_spend, ctx), do: Map.get(ctx.monthly_spend, s.id)
   defp sort_value(s, :total_spend, ctx), do: Map.get(ctx.total_spend, s.id)
@@ -667,7 +670,9 @@ defmodule TokengateWeb.ServicesLive do
                 type="select"
                 label="Suscripción"
                 prompt="Sin suscripción (consumo ilimitado)"
-                options={Enum.map(@subscriptions, &{&1.name || "Sub #{String.slice(&1.id, 0, 8)}", &1.id})}
+                options={
+                  Enum.map(@subscriptions, &{&1.name || "Sub #{String.slice(&1.id, 0, 8)}", &1.id})
+                }
                 hint="Sub de crédito propia del servicio. Cada servicio drena su propio bolsín. Sin sub = ilimitado (solo aplica el cap global)."
               />
             </div>

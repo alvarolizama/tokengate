@@ -205,4 +205,87 @@ defmodule TokengateWeb.SubscriptionsLiveTest do
       assert has_element?(view, "#sub-usage-#{sub.id}", "—")
     end
   end
+
+  describe "auto-archived subscriptions" do
+    test "hides expired top-ups and shows them via toggle", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+
+      {:ok, sub} =
+        Credits.create_subscription(%{
+          "units" => 50,
+          "recurrence" => "none",
+          "expires_at" => DateTime.add(DateTime.utc_now(), -1, :day) |> DateTime.truncate(:second)
+        })
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/admin/subscriptions")
+
+      # Oculta la sub vencida y muestra el contador del toggle.
+      refute has_element?(view, "#edit-subscription-#{sub.id}")
+      assert has_element?(view, "#toggle-archived-btn", "Ver archivadas (1)")
+
+      # Al togglear, la sub aparece con badge "Vencida".
+      view |> element("#toggle-archived-btn") |> render_click()
+      assert has_element?(view, "#edit-subscription-#{sub.id}")
+      assert has_element?(view, "#archived-badge-#{sub.id}", "Vencida")
+
+      # Toggle de nuevo → se oculta.
+      view |> element("#toggle-archived-btn") |> render_click()
+      refute has_element?(view, "#edit-subscription-#{sub.id}")
+    end
+
+    test "hides drained top-ups (lifetime spend >= units)", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+      {:ok, group} = Accounts.create_group(%{name: "Drain Group #{unique()}"})
+
+      {:ok, sub} =
+        Credits.create_subscription(%{
+          "units" => 10,
+          "recurrence" => "none"
+        })
+
+      %{user: member_user} = register("user")
+
+      {:ok, member} =
+        Accounts.create_group_member(%{"user_id" => member_user.id, "group_id" => group.id})
+
+      # $12 gastados de 10 créditos → agotada.
+      {:ok, _} =
+        Tokengate.Logs.log_request(%{
+          group_member_id: member.id,
+          model_requested: "gpt-4",
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+          provider_cost_usd: Decimal.new("12.00"),
+          credit_subscription_id: sub.id
+        })
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/admin/subscriptions")
+
+      refute has_element?(view, "#edit-subscription-#{sub.id}")
+
+      view |> element("#toggle-archived-btn") |> render_click()
+      assert has_element?(view, "#archived-badge-#{sub.id}", "Agotada")
+    end
+
+    test "active top-ups and monthly subs are never archived", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+
+      {:ok, _topup} =
+        Credits.create_subscription(%{"units" => 20, "recurrence" => "none"})
+
+      {:ok, _monthly} =
+        Credits.create_subscription(%{
+          "units" => 100,
+          "recurrence" => "monthly",
+          "reset_day" => 1
+        })
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/admin/subscriptions")
+
+      assert has_element?(view, "#toggle-archived-btn") == false
+      assert render(view) =~ "No hay suscripciones" == false
+    end
+  end
 end

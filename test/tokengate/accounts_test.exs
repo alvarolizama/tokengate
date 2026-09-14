@@ -51,14 +51,9 @@ defmodule Tokengate.AccountsTest do
   end
 
   defp valid_service_attrs(attrs) do
-    {:ok, group} =
-      Accounts.create_group(%{name: "Svc Group #{System.unique_integer([:positive])}"})
-
     Map.merge(
       %{
         "name" => "Service #{System.unique_integer([:positive])}",
-        "group_id" => group.id,
-        "monthly_budget_usd" => "100.00",
         "concurrency_limit" => 5,
         "rpm_limit" => 60
       },
@@ -440,13 +435,10 @@ defmodule Tokengate.AccountsTest do
       assert Accounts.effective_limits(tm).rpm_limit == 160
     end
 
-    test "service virtual member combines group defaults with service extras" do
-      # Group defaults: 5 conc, 60 rpm. Service extras on top.
-      group = group_fixture(%{"default_concurrency_limit" => 5, "default_rpm_limit" => 60})
-
+    test "service virtual member uses the service's absolute limits" do
+      # Service limits are absolute now (no group defaults underneath).
       service =
         service_fixture(%{
-          "group_id" => group.id,
           "concurrency_limit" => 3,
           "rpm_limit" => 30
         })
@@ -457,8 +449,19 @@ defmodule Tokengate.AccountsTest do
       # The virtual member must NOT crash effective_limits (was a nil.group crash)
       limits = Accounts.effective_limits(member)
 
-      assert limits.concurrency_limit == 8
-      assert limits.rpm_limit == 90
+      assert limits.concurrency_limit == 3
+      assert limits.rpm_limit == 30
+    end
+
+    test "service virtual member without limits falls back to defaults" do
+      service = service_fixture(%{"concurrency_limit" => nil, "rpm_limit" => nil})
+      service = Repo.preload(service, [:api_key])
+      member = TokengateWeb.Plugs.ApiAuth.service_to_virtual_member(service)
+
+      limits = Accounts.effective_limits(member)
+
+      assert limits.concurrency_limit == 5
+      assert limits.rpm_limit == 60
     end
 
     test "service virtual member with no backing service returns safe defaults" do

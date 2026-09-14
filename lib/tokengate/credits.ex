@@ -106,6 +106,14 @@ defmodule Tokengate.Credits do
   end
 
   @doc """
+  Micro-USD gastados por una suscripción desde su inicio (cota abierta hacia
+  atrás). Se usa para detectar top-ups agotados.
+  """
+  def lifetime_spend_micro(subscription_id) do
+    micro(spend_for_subscription(subscription_id, nil))
+  end
+
+  @doc """
   Fija (o limpia, con `nil`) la suscripción default de un grupo.
   Varios grupos pueden apuntar a la misma sub.
   """
@@ -338,8 +346,10 @@ defmodule Tokengate.Credits do
 
     %{
       credited_micro:
-        subscription.units * @credit_micro + carried_micro(subscription, {:service, service_id}, cycle_start),
-      consumed_micro: micro(spend_between(subscription.id, {:service, service_id}, cycle_start, nil)),
+        subscription.units * @credit_micro +
+          carried_micro(subscription, {:service, service_id}, cycle_start),
+      consumed_micro:
+        micro(spend_between(subscription.id, {:service, service_id}, cycle_start, nil)),
       cycle_start: cycle_start
     }
   end
@@ -484,7 +494,10 @@ defmodule Tokengate.Credits do
   defp spend_between(subscription_id, {:service, service_id} = _subject, from, to) do
     query =
       RequestLog
-      |> where([rl], rl.credit_subscription_id == ^subscription_id and rl.service_id == ^service_id)
+      |> where(
+        [rl],
+        rl.credit_subscription_id == ^subscription_id and rl.service_id == ^service_id
+      )
 
     query = time_window(query, from, to)
     aggregate(query)

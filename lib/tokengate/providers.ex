@@ -759,7 +759,8 @@ defmodule Tokengate.Providers do
     # Real members carry their group grants; service members are
     # group-independent and only get service_models.
     group_ids =
-      (real_members |> Enum.map(& &1.group.id))
+      real_members
+      |> Enum.map(& &1.group.id)
       |> Enum.uniq()
 
     member_ids = Enum.map(real_members, & &1.id)
