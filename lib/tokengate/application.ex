@@ -49,6 +49,10 @@ defmodule Tokengate.Application do
       Tokengate.Metrics.Supervisor,
       Tokengate.Logs.Inflight,
       Tokengate.Accounts.ApiKeyCache,
+      # Gateway-local response cache for identical non-streaming requests
+      # (embeddings re-indexing, retries, dashboard refreshes). Zero-cost
+      # hits on a short TTL; see Tokengate.Proxy.ResponseCache.
+      Tokengate.Proxy.ResponseCache,
       TokengateWeb.Plugs.LoginRateLimit.TableKeeper,
       TokengateWeb.Endpoint
     ]
