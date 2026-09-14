@@ -14,6 +14,9 @@ defmodule TokengateWeb.UsersLive do
   """
 
   use TokengateWeb, :live_view
+
+  import TokengateWeb.AdminComponents
+
   alias Tokengate.Accounts
   alias Tokengate.Accounts.User
   alias Tokengate.Credits
@@ -143,6 +146,7 @@ defmodule TokengateWeb.UsersLive do
     |> assign(:total_spend_by_user, total_spend_by_user)
     |> assign(:user_groups, user_groups)
     |> assign(:credit_by_user, credit_by_user)
+    |> assign(:users_empty?, sorted == [])
     |> stream(:users, sorted, reset: true)
   end
 
@@ -615,23 +619,12 @@ defmodule TokengateWeb.UsersLive do
           <:subtitle>Gestión de usuarios del sistema</:subtitle>
           <:actions>
             <div class="flex items-center gap-3">
-              <.form for={%{}} phx-change="search_users" phx-submit="search_users" id="search-form">
-                <div class="relative">
-                  <.icon
-                    name="hero-magnifying-glass"
-                    class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40"
-                  />
-                  <input
-                    type="text"
-                    name="q"
-                    placeholder="Buscar por nombre o correo..."
-                    value={@search_query}
-                    phx-debounce="300"
-                    class="input input-sm input-bordered pl-9 w-64"
-                    id="user-search"
-                  />
-                </div>
-              </.form>
+              <.admin_search
+                event="search_users"
+                value={@search_query}
+                placeholder="Buscar por nombre o correo..."
+                input_id="user-search"
+              />
               <button
                 phx-click="toggle_today_spend"
                 class={[
@@ -651,108 +644,96 @@ defmodule TokengateWeb.UsersLive do
         </.header>
 
         <%!-- User form — create (modal) --%>
-        <div
+        <.admin_modal
           :if={@form && @form_mode == :create}
-          class="fixed inset-0 z-50 flex items-center justify-center p-4"
+          id="user-create-modal"
+          on_close="cancel_form"
         >
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_form" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
-            <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">Nuevo usuario</h2>
-              <.form for={@form} id="user-form" phx-submit="save_user">
-                <.input
-                  field={@form[:email]}
-                  type="email"
-                  label="Correo"
-                  placeholder="usuario@empresa.com"
-                />
-                <.input field={@form[:name]} type="text" label="Nombre" placeholder="Nombre completo" />
-                <.input
-                  field={@form[:password]}
-                  type="password"
-                  label="Contraseña"
-                  hint="Mínimo 12 caracteres, debe incluir letras y números."
-                />
-                <.input
-                  field={@form[:global_role]}
-                  type="select"
-                  label="Rol"
-                  options={[{"Usuario", "user"}, {"Administrador", "admin"}]}
-                  prompt="Selecciona un rol"
-                />
-                <.input
-                  field={@form[:group_ids]}
-                  type="select"
-                  multiple
-                  label="Grupos"
-                  options={Enum.map(@all_groups, fn t -> {t.name, t.id} end)}
-                  hint="Mantén Ctrl/Cmd para seleccionar múltiples grupos."
-                />
-                <div class="flex gap-2 mt-4 justify-end">
-                  <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
-                  <button type="submit" class="btn btn-primary btn-sm" id="save-user-btn">Crear</button>
-                </div>
-              </.form>
+          <h2 class="text-lg font-semibold mb-4">Nuevo usuario</h2>
+          <.form for={@form} id="user-form" phx-submit="save_user">
+            <.input
+              field={@form[:email]}
+              type="email"
+              label="Correo"
+              placeholder="usuario@empresa.com"
+            />
+            <.input field={@form[:name]} type="text" label="Nombre" placeholder="Nombre completo" />
+            <.input
+              field={@form[:password]}
+              type="password"
+              label="Contraseña"
+              hint="Mínimo 12 caracteres, debe incluir letras y números."
+            />
+            <.input
+              field={@form[:global_role]}
+              type="select"
+              label="Rol"
+              options={[{"Usuario", "user"}, {"Administrador", "admin"}]}
+              prompt="Selecciona un rol"
+            />
+            <.input
+              field={@form[:group_ids]}
+              type="select"
+              multiple
+              label="Grupos"
+              options={Enum.map(@all_groups, fn t -> {t.name, t.id} end)}
+              hint="Mantén Ctrl/Cmd para seleccionar múltiples grupos."
+            />
+            <div class="flex gap-2 mt-4 justify-end">
+              <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
+              <button type="submit" class="btn btn-primary btn-sm" id="save-user-btn">Crear</button>
             </div>
-          </div>
-        </div>
+          </.form>
+        </.admin_modal>
 
         <%!-- User form — edit (modal) --%>
-        <div
+        <.admin_modal
           :if={@form && @form_mode == :edit}
-          class="fixed inset-0 z-50 flex items-center justify-center p-4"
+          id="user-edit-modal"
+          on_close="cancel_form"
         >
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_form" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
-            <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">Editar usuario</h2>
-              <.form for={@form} id="user-edit-form" phx-submit="save_user">
-                <.input field={@form[:name]} type="text" label="Nombre" />
-                <.input
-                  field={@form[:global_role]}
-                  type="select"
-                  label="Rol"
-                  options={[{"Usuario", "user"}, {"Administrador", "admin"}]}
-                />
-                <.input
-                  field={@form[:status]}
-                  type="select"
-                  label="Estado"
-                  options={[{"Activo", "active"}, {"Suspendido", "suspended"}]}
-                />
-                <div class="flex gap-2 mt-4 justify-end">
-                  <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
-                  <button type="submit" class="btn btn-primary btn-sm" id="update-user-btn">Guardar</button>
-                </div>
-              </.form>
+          <h2 class="text-lg font-semibold mb-4">Editar usuario</h2>
+          <.form for={@form} id="user-edit-form" phx-submit="save_user">
+            <.input field={@form[:name]} type="text" label="Nombre" />
+            <.input
+              field={@form[:global_role]}
+              type="select"
+              label="Rol"
+              options={[{"Usuario", "user"}, {"Administrador", "admin"}]}
+            />
+            <.input
+              field={@form[:status]}
+              type="select"
+              label="Estado"
+              options={[{"Activo", "active"}, {"Suspendido", "suspended"}]}
+            />
+            <div class="flex gap-2 mt-4 justify-end">
+              <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
+              <button type="submit" class="btn btn-primary btn-sm" id="update-user-btn">Guardar</button>
             </div>
-          </div>
-        </div>
+          </.form>
+        </.admin_modal>
 
         <%!-- User form — reset password (modal) --%>
-        <div
+        <.admin_modal
           :if={@form && @form_mode == :reset_password}
-          class="fixed inset-0 z-50 flex items-center justify-center p-4"
+          id="user-reset-modal"
+          on_close="cancel_form"
         >
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_form" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
-            <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">Restablecer contraseña</h2>
-              <.form for={@form} id="user-reset-form" phx-submit="save_password">
-                <.input
-                  field={@form[:password]}
-                  type="password"
-                  label="Nueva contraseña"
-                  hint="Mínimo 12 caracteres, debe incluir letras y números."
-                />
-                <div class="flex gap-2 mt-4 justify-end">
-                  <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
-                  <button type="submit" class="btn btn-primary btn-sm" id="reset-pwd-btn">Restablecer</button>
-                </div>
-              </.form>
+          <h2 class="text-lg font-semibold mb-4">Restablecer contraseña</h2>
+          <.form for={@form} id="user-reset-form" phx-submit="save_password">
+            <.input
+              field={@form[:password]}
+              type="password"
+              label="Nueva contraseña"
+              hint="Mínimo 12 caracteres, debe incluir letras y números."
+            />
+            <div class="flex gap-2 mt-4 justify-end">
+              <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
+              <button type="submit" class="btn btn-primary btn-sm" id="reset-pwd-btn">Restablecer</button>
             </div>
-          </div>
-        </div>
+          </.form>
+        </.admin_modal>
 
         <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
           <table class="table table-sm">
@@ -760,6 +741,7 @@ defmodule TokengateWeb.UsersLive do
               <tr>
                 <th>
                   <.sort_button
+                    event="sort_users"
                     field={:name}
                     label="Usuario"
                     current={@sort_field}
@@ -768,6 +750,7 @@ defmodule TokengateWeb.UsersLive do
                 </th>
                 <th>
                   <.sort_button
+                    event="sort_users"
                     field={:role}
                     label="Rol"
                     current={@sort_field}
@@ -776,6 +759,7 @@ defmodule TokengateWeb.UsersLive do
                 </th>
                 <th>
                   <.sort_button
+                    event="sort_users"
                     field={:status}
                     label="Estado"
                     current={@sort_field}
@@ -784,6 +768,7 @@ defmodule TokengateWeb.UsersLive do
                 </th>
                 <th>
                   <.sort_button
+                    event="sort_users"
                     field={:groups}
                     label="Grupos"
                     current={@sort_field}
@@ -792,6 +777,7 @@ defmodule TokengateWeb.UsersLive do
                 </th>
                 <th>
                   <.sort_button
+                    event="sort_users"
                     field={:credit}
                     label="Crédito"
                     current={@sort_field}
@@ -801,6 +787,7 @@ defmodule TokengateWeb.UsersLive do
                 <th>Google</th>
                 <th class="text-right">
                   <.sort_button
+                    event="sort_users"
                     field={:monthly_spend}
                     label="Gasto mensual"
                     current={@sort_field}
@@ -810,6 +797,7 @@ defmodule TokengateWeb.UsersLive do
                 </th>
                 <th class="text-right">
                   <.sort_button
+                    event="sort_users"
                     field={:total_spend}
                     label="Gasto total"
                     current={@sort_field}
@@ -819,6 +807,7 @@ defmodule TokengateWeb.UsersLive do
                 </th>
                 <th>
                   <.sort_button
+                    event="sort_users"
                     field={:inserted_at}
                     label="Creado"
                     current={@sort_field}
@@ -842,114 +831,91 @@ defmodule TokengateWeb.UsersLive do
               </tr>
             </tbody>
           </table>
+          <.admin_empty_state
+            :if={@users_empty?}
+            id="users-empty"
+            icon="hero-users"
+            message="No hay usuarios todavía."
+          />
         </div>
       </div>
 
       <%!-- Groups view modal — read-only; memberships are managed in Grupos → Miembros --%>
-      <div
+      <.admin_modal
         :if={@editing_groups_user_id}
-        class="fixed inset-0 z-50 flex items-center justify-center p-4"
+        id="user-groups-modal"
+        on_close="cancel_edit_groups"
+        width="max-w-md"
       >
-        <div class="absolute inset-0 bg-black/50" phx-click="cancel_edit_groups" />
-        <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-md">
-          <div class="card-body p-6">
-            <h2 class="text-lg font-semibold mb-4">
-              Grupos de <span class="text-primary">{@editing_groups_user_name}</span>
-            </h2>
-            <div class="space-y-2">
-              <%= for group <- @all_groups do %>
-                <div class="flex items-center justify-between p-2 rounded-lg bg-base-200/50">
-                  <div class="flex items-center gap-2">
-                    <.icon
-                      name={
-                        if group.id in @editing_group_ids,
-                          do: "hero-check-circle",
-                          else: "hero-minus-circle"
-                      }
-                      class={
-                        if group.id in @editing_group_ids,
-                          do: "w-4 h-4 text-success",
-                          else: "w-4 h-4 text-base-content/30"
-                      }
-                    />
-                    <span class={[
-                      "text-sm",
-                      if(group.id in @editing_group_ids, do: "", else: "text-base-content/40")
-                    ]}>
-                      {group.name}
-                    </span>
-                  </div>
-                  <%= if group.id in @editing_group_ids do %>
-                    <.link
-                      navigate={~p"/admin/groups/#{group}/members"}
-                      class="btn btn-xs btn-ghost"
-                      title="Gestionar membresías del grupo"
-                    >
-                      Miembros
-                    </.link>
-                  <% end %>
-                </div>
-              <% end %>
-              <%= if @all_groups == [] do %>
-                <p class="text-sm text-base-content/50 py-2">No hay grupos creados.</p>
+        <h2 class="text-lg font-semibold mb-4">
+          Grupos de <span class="text-primary">{@editing_groups_user_name}</span>
+        </h2>
+        <div class="space-y-2">
+          <%= for group <- @all_groups do %>
+            <div class="flex items-center justify-between p-2 rounded-lg bg-base-200/50">
+              <div class="flex items-center gap-2">
+                <.icon
+                  name={
+                    if group.id in @editing_group_ids,
+                      do: "hero-check-circle",
+                      else: "hero-minus-circle"
+                  }
+                  class={
+                    if group.id in @editing_group_ids,
+                      do: "w-4 h-4 text-success",
+                      else: "w-4 h-4 text-base-content/30"
+                  }
+                />
+                <span class={[
+                  "text-sm",
+                  if(group.id in @editing_group_ids, do: "", else: "text-base-content/40")
+                ]}>
+                  {group.name}
+                </span>
+              </div>
+              <%= if group.id in @editing_group_ids do %>
+                <.link
+                  navigate={~p"/admin/groups/#{group}/members"}
+                  class="btn btn-xs btn-ghost"
+                  title="Gestionar membresías del grupo"
+                >
+                  Miembros
+                </.link>
               <% end %>
             </div>
-            <p class="text-xs text-base-content/40 mt-3">
-              Las membresías se gestionan desde <strong>Grupos → Miembros</strong> de cada grupo.
-            </p>
-            <div class="flex gap-2 mt-2 justify-end">
-              <button type="button" phx-click="cancel_edit_groups" class="btn btn-primary btn-sm">
-                Cerrar
-              </button>
-            </div>
-          </div>
+          <% end %>
+          <%= if @all_groups == [] do %>
+            <p class="text-sm text-base-content/50 py-2">No hay grupos creados.</p>
+          <% end %>
         </div>
-      </div>
+        <p class="text-xs text-base-content/40 mt-3">
+          Las membresías se gestionan desde <strong>Grupos → Miembros</strong> de cada grupo.
+        </p>
+        <div class="flex gap-2 mt-2 justify-end">
+          <button type="button" phx-click="cancel_edit_groups" class="btn btn-primary btn-sm">
+            Cerrar
+          </button>
+        </div>
+      </.admin_modal>
 
       <%!-- Delete confirmation modal — warns about irreversible data loss --%>
-      <dialog id="delete-user-modal" class="modal" phx-hook="Modal">
-        <div class="modal-box max-w-md">
-          <h3 class="text-lg font-bold text-error flex items-center gap-2">
-            <.icon name="hero-exclamation-triangle" class="w-5 h-5" /> Eliminar usuario
-          </h3>
-          <div class="py-4 space-y-3">
-            <p class="text-sm">
-              ¿Seguro que quieres eliminar a <span class="font-semibold" id="delete-user-email">{@delete_target_email}</span>?
-            </p>
-            <div class="alert alert-warning text-sm">
-              <.icon name="hero-exclamation-triangle" class="w-5 h-5 shrink-0" />
-              <div>
-                <p class="font-semibold">Esta acción es irreversible.</p>
-                <p class="mt-1">
-                  Se borrará permanentemente toda su data:
-                </p>
-                <ul class="mt-1 list-disc list-inside space-y-0.5 text-xs">
-                  <li>Membresías de grupos</li>
-                  <li>Claves API</li>
-                  <li>Todo el historial de consumo (request_logs)</li>
-                  <li>Los logs de auditoría perderán la atribución al usuario</li>
-                </ul>
-              </div>
-            </div>
-          </div>
-          <div class="modal-action">
-            <form method="dialog">
-              <button class="btn btn-ghost btn-sm" id="cancel-delete-user">Cancelar</button>
-            </form>
-            <button
-              phx-click="confirm_delete_user"
-              phx-value-id={@delete_target_id}
-              class="btn btn-error btn-sm"
-              id="confirm-delete-user"
-            >
-              <.icon name="hero-trash" class="w-4 h-4" /> Sí, eliminar permanentemente
-            </button>
-          </div>
-        </div>
-        <form method="dialog" class="modal-backdrop">
-          <button>close</button>
-        </form>
-      </dialog>
+      <.admin_delete_modal
+        id="delete-user-modal"
+        title="Eliminar usuario"
+        target_label={@delete_target_email}
+        target_span_id="delete-user-email"
+        confirm_event="confirm_delete_user"
+        confirm_value={@delete_target_id}
+        confirm_button_id="confirm-delete-user"
+        cancel_button_id="cancel-delete-user"
+        warning_intro="Se borrará permanentemente toda su data:"
+        warning_items={[
+          "Membresías de grupos",
+          "Claves API",
+          "Todo el historial de consumo (request_logs)",
+          "Los logs de auditoría perderán la atribución al usuario"
+        ]}
+      />
     </Layouts.dashboard>
     """
   end
@@ -998,33 +964,6 @@ defmodule TokengateWeb.UsersLive do
 
   ## Components ---------------------------------------------------------------
 
-  attr :field, :atom, required: true
-  attr :label, :string, required: true
-  attr :current, :atom, required: true
-  attr :direction, :atom, required: true
-  attr :align, :string, default: "left"
-
-  defp sort_button(assigns) do
-    ~H"""
-    <button
-      phx-click="sort_users"
-      phx-value-field={@field}
-      class={[
-        "flex items-center gap-1 hover:text-primary",
-        @align == "right" && "justify-end w-full"
-      ]}
-      id={"sort-#{@field}"}
-    >
-      {@label}
-      <span class="inline-block w-3 text-center">
-        <%= if @current == @field do %>
-          {if @direction == :asc, do: "▲", else: "▼"}
-        <% end %>
-      </span>
-    </button>
-    """
-  end
-
   attr :user, :map, required: true
   attr :user_groups, :map, required: true
   attr :spend_by_user, :map, required: true
@@ -1036,17 +975,7 @@ defmodule TokengateWeb.UsersLive do
   defp user_row(assigns) do
     ~H"""
     <td>
-      <div class="flex items-center gap-3">
-        <div class="avatar avatar-placeholder">
-          <div class="w-8 rounded-full bg-primary text-primary-content">
-            <span class="text-xs font-semibold">{initials(@user)}</span>
-          </div>
-        </div>
-        <div>
-          <p class="font-medium text-sm">{@user.name}</p>
-          <p class="text-xs text-base-content/50">{@user.email}</p>
-        </div>
-      </div>
+      <.admin_identity initials={initials(@user)} title={@user.name} subtitle={@user.email} />
     </td>
     <td>
       <span class={["badge", "badge-sm", role_badge(@user.global_role)]}>{@user.global_role}</span>

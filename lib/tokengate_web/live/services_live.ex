@@ -10,6 +10,7 @@ defmodule TokengateWeb.ServicesLive do
   use TokengateWeb, :live_view
 
   import Ecto.Query, only: [from: 2]
+  import TokengateWeb.AdminComponents
   alias Tokengate.Accounts
   alias Tokengate.Accounts.Service
   alias Tokengate.Providers
@@ -37,6 +38,8 @@ defmodule TokengateWeb.ServicesLive do
         |> assign(:form, nil)
         |> assign(:editing_service_id, nil)
         |> assign(:new_token, nil)
+        |> assign(:delete_target_id, nil)
+        |> assign(:delete_target_name, nil)
         |> assign(:detail_service_id, nil)
         |> assign(:models_service_id, nil)
         |> assign(:supervisor_search_service_id, nil)
@@ -278,6 +281,14 @@ defmodule TokengateWeb.ServicesLive do
     save_service(socket, socket.assigns.editing_service_id, service_params)
   end
 
+  def handle_event("open_delete_modal", %{"id" => service_id, "name" => name}, socket) do
+    {:noreply,
+     socket
+     |> assign(:delete_target_id, service_id)
+     |> assign(:delete_target_name, name)
+     |> push_event("open_modal", %{id: "delete-service-modal"})}
+  end
+
   def handle_event("delete_service", %{"id" => service_id}, socket) do
     service = Accounts.get_service!(service_id)
 
@@ -286,6 +297,9 @@ defmodule TokengateWeb.ServicesLive do
         {:noreply,
          socket
          |> put_flash(:info, "Servicio eliminado.")
+         |> assign(:delete_target_id, nil)
+         |> assign(:delete_target_name, nil)
+         |> push_event("close_modal", %{id: "delete-service-modal"})
          |> load_services()}
 
       {:error, %Ecto.Changeset{} = changeset} ->
@@ -570,28 +584,12 @@ defmodule TokengateWeb.ServicesLive do
           <:subtitle>API keys para servicios sin usuario asociado</:subtitle>
           <:actions>
             <div class="flex items-center gap-3">
-              <.form
-                for={%{}}
-                phx-change="search_services"
-                phx-submit="search_services"
-                id="search-form"
-              >
-                <div class="relative">
-                  <.icon
-                    name="hero-magnifying-glass"
-                    class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40"
-                  />
-                  <input
-                    type="text"
-                    name="q"
-                    placeholder="Buscar por nombre o grupo..."
-                    value={@search_query}
-                    phx-debounce="300"
-                    class="input input-sm input-bordered pl-9 w-64"
-                    id="service-search"
-                  />
-                </div>
-              </.form>
+              <.admin_search
+                event="search_services"
+                value={@search_query}
+                placeholder="Buscar por nombre o grupo..."
+                input_id="service-search"
+              />
               <.button phx-click="new_service" id="new-service-btn">
                 <.icon name="hero-plus" class="w-4 h-4" /> Nuevo servicio
               </.button>
@@ -613,279 +611,283 @@ defmodule TokengateWeb.ServicesLive do
         </div>
 
         <%!-- Service form (create / edit) — modal --%>
-        <div :if={@form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_form" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
-            <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">
-                {if @editing_service_id == :new, do: "Nuevo servicio", else: "Editar servicio"}
-              </h2>
-              <.form for={@form} id="service-form" phx-submit="save_service">
-                <.input
-                  field={@form[:name]}
-                  type="text"
-                  label="Nombre"
-                  hint={"Nombre identificativo del servicio. Ej.: \"Bot de Telegram\", \"Webhook de Shopify\"."}
-                />
-                <div class="mt-3">
-                  <.input
-                    field={@form[:group_id]}
-                    type="select"
-                    label="Grupo"
-                    options={Enum.map(@groups, &{&1.name, &1.id})}
-                    hint="Grupo del que hereda catálogo, presupuesto y límites."
-                  />
-                </div>
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
-                  <.input
-                    field={@form[:concurrency_limit]}
-                    type="number"
-                    label="Concurrencia extra"
-                    hint="Extra sobre el default del grupo."
-                  />
-                  <.input
-                    field={@form[:rpm_limit]}
-                    type="number"
-                    label="RPM extra"
-                    hint="Extra sobre el default del grupo."
-                  />
-                </div>
-                <div class="flex gap-2 mt-4 justify-end">
-                  <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
-                  <button type="submit" class="btn btn-primary btn-sm" id="save-service-btn">Guardar</button>
-                </div>
-              </.form>
+        <.admin_modal :if={@form} id="service-form-modal" on_close="cancel_form">
+          <h2 class="text-lg font-semibold mb-4">
+            {if @editing_service_id == :new, do: "Nuevo servicio", else: "Editar servicio"}
+          </h2>
+          <.form for={@form} id="service-form" phx-submit="save_service">
+            <.input
+              field={@form[:name]}
+              type="text"
+              label="Nombre"
+              hint={"Nombre identificativo del servicio. Ej.: \"Bot de Telegram\", \"Webhook de Shopify\"."}
+            />
+            <div class="mt-3">
+              <.input
+                field={@form[:group_id]}
+                type="select"
+                label="Grupo"
+                options={Enum.map(@groups, &{&1.name, &1.id})}
+                hint="Grupo del que hereda catálogo, presupuesto y límites."
+              />
             </div>
-          </div>
-        </div>
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+              <.input
+                field={@form[:concurrency_limit]}
+                type="number"
+                label="Concurrencia extra"
+                hint="Extra sobre el default del grupo."
+              />
+              <.input
+                field={@form[:rpm_limit]}
+                type="number"
+                label="RPM extra"
+                hint="Extra sobre el default del grupo."
+              />
+            </div>
+            <div class="flex gap-2 mt-4 justify-end">
+              <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
+              <button type="submit" class="btn btn-primary btn-sm" id="save-service-btn">Guardar</button>
+            </div>
+          </.form>
+        </.admin_modal>
 
         <%!-- Models modal — manage model grants per service --%>
-        <div
+        <.admin_modal
           :if={@models_service_id}
-          class="fixed inset-0 z-50 flex items-center justify-center p-4"
           id={"models-modal-#{@models_service_id}"}
+          on_close="close_models"
         >
-          <div class="absolute inset-0 bg-black/50" phx-click="close_models" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
-            <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">Modelos del servicio</h2>
-              <.model_picker
-                id={"model-picker-#{@models_service_id}"}
-                models={@models}
-                granted_ids={granted_alias_ids(@granted_models, @models_service_id)}
-                toggle_event="toggle_model"
-                target_value={@models_service_id}
-                empty_text="No hay modelos disponibles."
-              />
-              <div class="flex justify-end mt-4">
-                <button
-                  type="button"
-                  phx-click="close_models"
-                  class="btn btn-primary btn-sm"
-                  id="close-models-btn"
-                >
-                  Listo
-                </button>
-              </div>
-            </div>
+          <h2 class="text-lg font-semibold mb-4">Modelos del servicio</h2>
+          <.model_picker
+            id={"model-picker-#{@models_service_id}"}
+            models={@models}
+            granted_ids={granted_alias_ids(@granted_models, @models_service_id)}
+            toggle_event="toggle_model"
+            target_value={@models_service_id}
+            empty_text="No hay modelos disponibles."
+          />
+          <div class="flex justify-end mt-4">
+            <button
+              type="button"
+              phx-click="close_models"
+              class="btn btn-primary btn-sm"
+              id="close-models-btn"
+            >
+              Listo
+            </button>
           </div>
-        </div>
+        </.admin_modal>
 
         <%!-- Detail modal — stats + API key + supervisores --%>
-        <div
+        <.admin_modal
           :if={@detail_service_id && detail_service(assigns)}
-          class="fixed inset-0 z-50 flex items-center justify-center p-4"
           id="service-detail-modal"
+          on_close="close_detail"
+          width="max-w-2xl"
         >
-          <div class="absolute inset-0 bg-black/50" phx-click="close_detail" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-2xl">
-            <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">
-                {detail_service(assigns).name}
-                <span class="text-sm text-base-content/50 font-normal">
-                  · Grupo: {detail_service(assigns).group && detail_service(assigns).group.name}
-                </span>
-              </h2>
+          <h2 class="text-lg font-semibold mb-4">
+            {detail_service(assigns).name}
+            <span class="text-sm text-base-content/50 font-normal">
+              · Grupo: {detail_service(assigns).group && detail_service(assigns).group.name}
+            </span>
+          </h2>
 
-              <%!-- Stats 30d --%>
-              <% stats = stats_for(assigns, @detail_service_id) %>
-              <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                <div class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-4">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Gasto real</span>
-                    <p class="text-lg font-bold">${format_decimal(stats.total_cost)}</p>
-                    <p class="text-xs text-base-content/40">30 días</p>
-                  </div>
-                </div>
-                <div class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-4">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Requests</span>
-                    <p class="text-lg font-bold">{format_number(stats.total_requests)}</p>
-                    <p class="text-xs text-base-content/40">30 días</p>
-                  </div>
-                </div>
-                <div class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-4">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens In</span>
-                    <p class="text-lg font-bold">{format_number(stats.total_input_tokens)}</p>
-                    <p class="text-xs text-base-content/40">30 días</p>
-                  </div>
-                </div>
-                <div class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-4">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens Out</span>
-                    <p class="text-lg font-bold">{format_number(stats.total_output_tokens)}</p>
-                    <p class="text-xs text-base-content/40">30 días</p>
-                  </div>
-                </div>
+          <%!-- Stats 30d --%>
+          <% stats = stats_for(assigns, @detail_service_id) %>
+          <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div class="card bg-base-100 border border-base-300 shadow-sm">
+              <div class="card-body p-4">
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Gasto real</span>
+                <p class="text-lg font-bold">${format_decimal(stats.total_cost)}</p>
+                <p class="text-xs text-base-content/40">30 días</p>
               </div>
-
-              <%!-- API key --%>
-              <div class="mt-4 p-3 bg-base-200 rounded-lg">
-                <div class="flex items-center justify-between">
-                  <div>
-                    <p class="text-sm font-medium">API Key</p>
-                    <%= if detail_service(assigns).api_key do %>
-                      <p class="text-xs text-base-content/60">
-                        <span class="font-mono">{detail_service(assigns).api_key.key_prefix}</span>…
-                        <span class={[
-                          "badge badge-xs",
-                          key_status_badge(detail_service(assigns).api_key.status)
-                        ]}>
-                          {detail_service(assigns).api_key.status}
-                        </span>
-                      </p>
-                    <% else %>
-                      <p class="text-xs text-base-content/40">Sin clave</p>
-                    <% end %>
-                  </div>
-                  <div class="flex gap-1">
-                    <button
-                      phx-click="generate_key"
-                      phx-value-id={@detail_service_id}
-                      class="btn btn-primary btn-xs"
-                      title={
-                        if detail_service(assigns).api_key,
-                          do: "Regenerar clave",
-                          else: "Generar clave"
-                      }
-                    >
-                      <.icon name="hero-key" class="w-4 h-4" />
-                      {if detail_service(assigns).api_key, do: "Regenerar", else: "Generar"}
-                    </button>
-                    <%= if detail_service(assigns).api_key && detail_service(assigns).api_key.status == "active" do %>
-                      <button
-                        phx-click="revoke_key"
-                        phx-value-id={@detail_service_id}
-                        data-confirm="¿Revocar esta clave? El servicio dejará de funcionar inmediatamente."
-                        class="btn btn-error btn-xs"
-                        title="Revocar clave"
-                      >
-                        <.icon name="hero-no-symbol" class="w-4 h-4" />
-                      </button>
-                    <% end %>
-                  </div>
-                </div>
+            </div>
+            <div class="card bg-base-100 border border-base-300 shadow-sm">
+              <div class="card-body p-4">
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Requests</span>
+                <p class="text-lg font-bold">{format_number(stats.total_requests)}</p>
+                <p class="text-xs text-base-content/40">30 días</p>
               </div>
+            </div>
+            <div class="card bg-base-100 border border-base-300 shadow-sm">
+              <div class="card-body p-4">
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens In</span>
+                <p class="text-lg font-bold">{format_number(stats.total_input_tokens)}</p>
+                <p class="text-xs text-base-content/40">30 días</p>
+              </div>
+            </div>
+            <div class="card bg-base-100 border border-base-300 shadow-sm">
+              <div class="card-body p-4">
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens Out</span>
+                <p class="text-lg font-bold">{format_number(stats.total_output_tokens)}</p>
+                <p class="text-xs text-base-content/40">30 días</p>
+              </div>
+            </div>
+          </div>
 
-              <%!-- Supervisores --%>
-              <% supervisors = Map.get(@supervisors_map, @detail_service_id, []) %>
-              <div class="mt-4 p-3 bg-base-200 rounded-lg">
-                <div class="flex items-center justify-between mb-2">
-                  <div>
-                    <p class="text-sm font-medium">Supervisores</p>
-                    <p class="text-xs text-base-content/60">
-                      Ven sus servicios asignados en <code>/dashboard/services/supervised</code>
-                      (solo lectura).
-                    </p>
-                  </div>
-                  <button
-                    phx-click="toggle_supervisor_form"
-                    phx-value-service-id={@detail_service_id}
-                    class="btn btn-ghost btn-xs"
-                  >
-                    {if @supervisor_search_service_id == @detail_service_id,
-                      do: "Cerrar",
-                      else: "Agregar supervisor"}
-                  </button>
-                </div>
-
-                <div :if={supervisors == []} class="text-xs text-base-content/40">
-                  Sin supervisores asignados.
-                </div>
-
-                <div :if={supervisors != []} class="flex flex-wrap gap-2">
-                  <span
-                    :for={supervisor <- supervisors}
-                    class="badge badge-primary badge-sm gap-1"
-                    id={"supervisor-#{supervisor.user_id}"}
-                  >
-                    <span>
-                      {(supervisor.user && (supervisor.user.name || supervisor.user.email)) ||
-                        supervisor.user_id}
+          <%!-- API key --%>
+          <div class="mt-4 p-3 bg-base-200 rounded-lg">
+            <div class="flex items-center justify-between">
+              <div>
+                <p class="text-sm font-medium">API Key</p>
+                <%= if detail_service(assigns).api_key do %>
+                  <p class="text-xs text-base-content/60">
+                    <span class="font-mono">{detail_service(assigns).api_key.key_prefix}</span>…
+                    <span class={[
+                      "badge badge-xs",
+                      key_status_badge(detail_service(assigns).api_key.status)
+                    ]}>
+                      {detail_service(assigns).api_key.status}
                     </span>
-                    <button
-                      type="button"
-                      phx-click="remove_supervisor"
-                      phx-value-service-id={@detail_service_id}
-                      phx-value-user-id={supervisor.user_id}
-                      class="ml-1 leading-none opacity-70 hover:opacity-100"
-                      title="Quitar supervisor"
-                      aria-label="Quitar supervisor"
-                    >
-                      ×
-                    </button>
-                  </span>
-                </div>
-
-                <div :if={@supervisor_search_service_id == @detail_service_id} class="mt-3">
-                  <.input
-                    type="text"
-                    name="supervisor_query"
-                    value={@supervisor_search_query}
-                    placeholder="Buscar por email o nombre…"
-                    phx-keyup="search_supervisor_users"
-                    phx-change="search_supervisor_users"
-                    id="supervisor-search"
-                  />
-                  <div
-                    :if={@supervisor_search_query != "" and @supervisor_search_results == []}
-                    class="text-xs text-base-content/40 mt-2"
-                  >
-                    Sin coincidencias.
-                  </div>
-                  <div
-                    :if={@supervisor_search_results != []}
-                    class="mt-2 max-h-48 overflow-y-auto border border-base-300 rounded-md"
-                  >
-                    <button
-                      :for={user <- @supervisor_search_results}
-                      type="button"
-                      phx-click="add_supervisor"
-                      phx-value-service-id={@detail_service_id}
-                      phx-value-user-id={user.id}
-                      class="w-full text-left px-3 py-2 text-sm hover:bg-base-100 border-b border-base-300 last:border-b-0"
-                    >
-                      <div class="font-medium">{user.name || user.email}</div>
-                      <div class="text-xs text-base-content/60">{user.email}</div>
-                    </button>
-                  </div>
-                </div>
+                  </p>
+                <% else %>
+                  <p class="text-xs text-base-content/40">Sin clave</p>
+                <% end %>
               </div>
+              <div class="flex gap-1">
+                <button
+                  phx-click="generate_key"
+                  phx-value-id={@detail_service_id}
+                  class="btn btn-primary btn-xs"
+                  title={
+                    if detail_service(assigns).api_key,
+                      do: "Regenerar clave",
+                      else: "Generar clave"
+                  }
+                >
+                  <.icon name="hero-key" class="w-4 h-4" />
+                  {if detail_service(assigns).api_key, do: "Regenerar", else: "Generar"}
+                </button>
+                <%= if detail_service(assigns).api_key && detail_service(assigns).api_key.status == "active" do %>
+                  <button
+                    phx-click="revoke_key"
+                    phx-value-id={@detail_service_id}
+                    data-confirm="¿Revocar esta clave? El servicio dejará de funcionar inmediatamente."
+                    class="btn btn-error btn-xs"
+                    title="Revocar clave"
+                  >
+                    <.icon name="hero-no-symbol" class="w-4 h-4" />
+                  </button>
+                <% end %>
+              </div>
+            </div>
+          </div>
 
-              <div class="flex gap-2 mt-4 justify-end">
+          <%!-- Supervisores --%>
+          <% supervisors = Map.get(@supervisors_map, @detail_service_id, []) %>
+          <div class="mt-4 p-3 bg-base-200 rounded-lg">
+            <div class="flex items-center justify-between mb-2">
+              <div>
+                <p class="text-sm font-medium">Supervisores</p>
+                <p class="text-xs text-base-content/60">
+                  Ven sus servicios asignados en <code>/dashboard/services/supervised</code>
+                  (solo lectura).
+                </p>
+              </div>
+              <button
+                phx-click="toggle_supervisor_form"
+                phx-value-service-id={@detail_service_id}
+                class="btn btn-ghost btn-xs"
+              >
+                {if @supervisor_search_service_id == @detail_service_id,
+                  do: "Cerrar",
+                  else: "Agregar supervisor"}
+              </button>
+            </div>
+
+            <div :if={supervisors == []} class="text-xs text-base-content/40">
+              Sin supervisores asignados.
+            </div>
+
+            <div :if={supervisors != []} class="flex flex-wrap gap-2">
+              <span
+                :for={supervisor <- supervisors}
+                class="badge badge-primary badge-sm gap-1"
+                id={"supervisor-#{supervisor.user_id}"}
+              >
+                <span>
+                  {(supervisor.user && (supervisor.user.name || supervisor.user.email)) ||
+                    supervisor.user_id}
+                </span>
                 <button
                   type="button"
-                  phx-click="close_detail"
-                  class="btn btn-primary btn-sm"
-                  id="close-detail-btn"
+                  phx-click="remove_supervisor"
+                  phx-value-service-id={@detail_service_id}
+                  phx-value-user-id={supervisor.user_id}
+                  class="ml-1 leading-none opacity-70 hover:opacity-100"
+                  title="Quitar supervisor"
+                  aria-label="Quitar supervisor"
                 >
-                  Cerrar
+                  ×
+                </button>
+              </span>
+            </div>
+
+            <div :if={@supervisor_search_service_id == @detail_service_id} class="mt-3">
+              <.input
+                type="text"
+                name="supervisor_query"
+                value={@supervisor_search_query}
+                placeholder="Buscar por email o nombre…"
+                phx-keyup="search_supervisor_users"
+                phx-change="search_supervisor_users"
+                id="supervisor-search"
+              />
+              <div
+                :if={@supervisor_search_query != "" and @supervisor_search_results == []}
+                class="text-xs text-base-content/40 mt-2"
+              >
+                Sin coincidencias.
+              </div>
+              <div
+                :if={@supervisor_search_results != []}
+                class="mt-2 max-h-48 overflow-y-auto border border-base-300 rounded-md"
+              >
+                <button
+                  :for={user <- @supervisor_search_results}
+                  type="button"
+                  phx-click="add_supervisor"
+                  phx-value-service-id={@detail_service_id}
+                  phx-value-user-id={user.id}
+                  class="w-full text-left px-3 py-2 text-sm hover:bg-base-100 border-b border-base-300 last:border-b-0"
+                >
+                  <div class="font-medium">{user.name || user.email}</div>
+                  <div class="text-xs text-base-content/60">{user.email}</div>
                 </button>
               </div>
             </div>
           </div>
-        </div>
+
+          <div class="flex gap-2 mt-4 justify-end">
+            <button
+              type="button"
+              phx-click="close_detail"
+              class="btn btn-primary btn-sm"
+              id="close-detail-btn"
+            >
+              Cerrar
+            </button>
+          </div>
+        </.admin_modal>
+
+        <%!-- Delete confirmation modal --%>
+        <.admin_delete_modal
+          id="delete-service-modal"
+          title="Eliminar servicio"
+          target_label={@delete_target_name}
+          target_span_id="delete-service-name"
+          confirm_event="delete_service"
+          confirm_value={@delete_target_id}
+          confirm_button_id="confirm-delete-service"
+          cancel_button_id="cancel-delete-service"
+          warning_intro="Se borrará permanentemente:"
+          warning_items={[
+            "La clave API del servicio",
+            "Los modelos otorgados al servicio",
+            "Los supervisores asignados"
+          ]}
+        />
 
         <%!-- Services table --%>
         <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
@@ -894,6 +896,7 @@ defmodule TokengateWeb.ServicesLive do
               <tr>
                 <th>
                   <.sort_button
+                    event="sort_services"
                     field={:name}
                     label="Servicio"
                     current={@sort_field}
@@ -902,6 +905,7 @@ defmodule TokengateWeb.ServicesLive do
                 </th>
                 <th>
                   <.sort_button
+                    event="sort_services"
                     field={:group}
                     label="Grupo"
                     current={@sort_field}
@@ -910,6 +914,7 @@ defmodule TokengateWeb.ServicesLive do
                 </th>
                 <th class="text-right">
                   <.sort_button
+                    event="sort_services"
                     field={:requests}
                     label="Requests 30d"
                     current={@sort_field}
@@ -919,6 +924,7 @@ defmodule TokengateWeb.ServicesLive do
                 </th>
                 <th class="text-right">
                   <.sort_button
+                    event="sort_services"
                     field={:spend}
                     label="Gasto 30d"
                     current={@sort_field}
@@ -930,6 +936,7 @@ defmodule TokengateWeb.ServicesLive do
                 <th>API Key</th>
                 <th>
                   <.sort_button
+                    event="sort_services"
                     field={:inserted_at}
                     label="Creado"
                     current={@sort_field}
@@ -951,14 +958,12 @@ defmodule TokengateWeb.ServicesLive do
               </tr>
             </tbody>
           </table>
-          <div
+          <.admin_empty_state
             :if={@services_empty?}
-            class="text-center py-12 text-base-content/40"
             id="services-empty"
-          >
-            <.icon name="hero-wrench-screwdriver" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-            <p>No hay servicios todavía.</p>
-          </div>
+            icon="hero-wrench-screwdriver"
+            message="No hay servicios todavía."
+          />
         </div>
       </div>
     </Layouts.dashboard>
@@ -966,30 +971,6 @@ defmodule TokengateWeb.ServicesLive do
   end
 
   ## Components ---------------------------------------------------------------
-
-  attr :field, :atom, required: true
-  attr :label, :string, required: true
-  attr :current, :atom, required: true
-  attr :direction, :atom, required: true
-  attr :align, :string, default: "left"
-
-  defp sort_button(assigns) do
-    ~H"""
-    <button
-      phx-click="sort_services"
-      phx-value-field={@field}
-      class={["flex items-center gap-1 hover:text-primary", @align == "right" && "justify-end w-full"]}
-      id={"sort-#{@field}"}
-    >
-      {@label}
-      <span class="inline-block w-3 text-center">
-        <%= if @current == @field do %>
-          {if @direction == :asc, do: "▲", else: "▼"}
-        <% end %>
-      </span>
-    </button>
-    """
-  end
 
   attr :service, :map, required: true
   attr :granted_models, :map, required: true
@@ -1000,17 +981,12 @@ defmodule TokengateWeb.ServicesLive do
   defp service_row(assigns) do
     ~H"""
     <td>
-      <div class="flex items-center gap-3">
-        <div class="flex items-center justify-center w-8 h-8 rounded-lg bg-base-200 shrink-0">
-          <.icon name="hero-wrench-screwdriver" class="w-4 h-4 text-base-content/60" />
-        </div>
-        <div class="min-w-0">
-          <p class="font-medium text-sm truncate">{@service.name}</p>
-          <p class="text-xs text-base-content/50">
-            +{@service.concurrency_limit} conc. · +{@service.rpm_limit} RPM
-          </p>
-        </div>
-      </div>
+      <.admin_identity
+        icon="hero-wrench-screwdriver"
+        title={@service.name}
+        subtitle={"+#{@service.concurrency_limit} conc. · +#{@service.rpm_limit} RPM"}
+        truncate
+      />
     </td>
     <td class="text-sm">
       {(@service.group && @service.group.name) || "—"}
@@ -1068,9 +1044,9 @@ defmodule TokengateWeb.ServicesLive do
           <.icon name="hero-pencil" class="w-3 h-3" />
         </button>
         <button
-          phx-click="delete_service"
+          phx-click="open_delete_modal"
           phx-value-id={@service.id}
-          data-confirm="¿Eliminar este servicio? Se perderán la clave y los modelos."
+          phx-value-name={@service.name}
           class="btn btn-xs btn-ghost text-error"
           id={"delete-#{@service.id}"}
           title="Eliminar"

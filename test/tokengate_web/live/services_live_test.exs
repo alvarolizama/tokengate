@@ -113,4 +113,23 @@ defmodule TokengateWeb.ServicesLiveTest do
     assert html =~ "Gasto 30d"
     assert html =~ "▼"
   end
+
+  test "eliminar servicio via modal de confirmación", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    service = service_fixture()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/admin/services")
+
+    # El modal de borrado vive siempre en el DOM; se abre con el evento.
+    view |> element("#delete-#{service.id}") |> render_click()
+
+    assert has_element?(view, "#delete-service-modal")
+    assert has_element?(view, "#delete-service-name", service.name)
+    assert has_element?(view, "#confirm-delete-service")
+
+    html = view |> element("#confirm-delete-service") |> render_click()
+    assert html =~ "Servicio eliminado"
+    assert Accounts.get_service(service.id) == nil
+  end
 end
