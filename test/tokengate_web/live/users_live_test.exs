@@ -123,14 +123,14 @@ defmodule TokengateWeb.UsersLiveTest do
       assert has_element?(view, "#credit-#{member_user.id}", "$100.00")
     end
 
-    test "shows Sin crédito badge for users without subscriptions", %{conn: conn} do
+    test "shows Ilimitado badge for users without subscriptions (tier 3)", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
       %{user: plain} = register("user")
 
       conn = login(conn, admin, password)
       {:ok, view, _html} = live(conn, ~p"/admin/users")
 
-      assert has_element?(view, "#credit-#{plain.id}", "Sin crédito")
+      assert has_element?(view, "#credit-#{plain.id}", "Ilimitado")
     end
 
     test "credit column is sortable (desc default: most remaining first)", %{conn: conn} do

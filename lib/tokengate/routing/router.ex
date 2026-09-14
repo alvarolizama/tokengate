@@ -267,18 +267,24 @@ defmodule Tokengate.Routing.Router do
 
     model_providers =
       Tokengate.Routing.Cache.fetch_model_providers(model.id, group_id, fn ->
-        if group_id do
-          # NOTE: the cached list is shared by every member of the group. The
-          # member-exclusive provider rows are filtered per-member below in
-          # `visible_to_member?/2`, so caching by group_id is safe.
-          Providers.list_model_providers_for_member(
-            model.id,
-            group_member.id,
-            group_id,
-            service_id
-          )
-        else
-          Providers.list_model_providers(model.id)
+        cond do
+          service_id ->
+            # Services are group-independent: global rows + their own
+            # service-exclusive rows (no group/member exclusives).
+            Providers.list_model_providers_for_service(model.id, service_id)
+
+          group_id ->
+            # NOTE: the cached list is shared by every member of the group. The
+            # member-exclusive provider rows are filtered per-member below in
+            # `visible_to_member?/2`, so caching by group_id is safe.
+            Providers.list_model_providers_for_member(
+              model.id,
+              group_member.id,
+              group_id
+            )
+
+          true ->
+            Providers.list_model_providers(model.id)
         end
       end)
 
@@ -398,6 +404,9 @@ defmodule Tokengate.Routing.Router do
     do: group_member.id
 
   defp service_id_of(_), do: nil
+
+  defp maybe_preload_group(%{service_name: name} = group_member) when is_binary(name),
+    do: group_member
 
   defp maybe_preload_group(group_member) do
     cond do

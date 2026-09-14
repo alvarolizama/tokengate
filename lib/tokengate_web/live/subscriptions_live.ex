@@ -44,6 +44,9 @@ defmodule TokengateWeb.SubscriptionsLive do
         |> assign(:search_query, "")
         |> assign(:sort_field, :target)
         |> assign(:sort_direction, :asc)
+        |> assign(:show_archived, false)
+        |> assign(:archived_ids, MapSet.new())
+        |> assign(:archived_count, 0)
         |> load_subscriptions()
 
       {:ok, socket}
@@ -76,20 +79,45 @@ defmodule TokengateWeb.SubscriptionsLive do
     search_down = String.downcase(search)
     assigns = socket.assigns
 
+    {archived_ids, archived_count} =
+      assigns.all_subscriptions
+      |> Enum.filter(&expired_or_drained?/1)
+      |> (&{MapSet.new(&1, fn sub -> sub.id end), length(&1)}).()
+
     filtered =
       Enum.filter(assigns.all_subscriptions, fn sub ->
-        search == "" or
-          String.contains?(String.downcase(target_label(sub, assigns)), search_down) or
-          String.contains?(String.downcase(sub.name || ""), search_down)
+        (socket.assigns.show_archived or sub.id not in archived_ids) and
+          (search == "" or
+             String.contains?(String.downcase(target_label(sub, assigns)), search_down) or
+             String.contains?(String.downcase(sub.name || ""), search_down))
       end)
 
     sorted = sort_subscriptions(filtered, assigns.sort_field, assigns.sort_direction, assigns)
 
     socket
+    |> assign(:archived_ids, archived_ids)
+    |> assign(:archived_count, archived_count)
     |> stream(:subscriptions, sorted, reset: true)
     |> assign(:subscriptions_empty?, filtered == [])
     |> assign(:usage_by_sub, usage_by_sub(filtered))
   end
+
+  # Auto-archivables: top-ups (`recurrence = "none"`) vencidos (su `expires_at`
+  # ya pasó) o agotados (todo el crédito del grant fue consumido). Las subs
+  # mensuales se reciclan cada ciclo, así que nunca se auto-archivan.
+  defp expired_or_drained?(%Subscription{recurrence: "none"} = sub) do
+    now = DateTime.utc_now()
+
+    expired? =
+      sub.expires_at != nil and DateTime.compare(sub.expires_at, now) != :gt
+
+    drained? =
+      sub.units > 0 and sub.units * 1_000_000 <= Credits.lifetime_spend_micro(sub.id)
+
+    expired? or drained?
+  end
+
+  defp expired_or_drained?(%Subscription{}), do: false
 
   # Consumo del ciclo vigente por suscripción (para la columna "Consumo").
   # La lista es acotada; una query SUM por sub es suficiente.
@@ -125,6 +153,13 @@ defmodule TokengateWeb.SubscriptionsLive do
     else
       _ -> {:noreply, socket}
     end
+  end
+
+  def handle_event("toggle_archived", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:show_archived, not socket.assigns.show_archived)
+     |> stream_subscriptions()}
   end
 
   ## Events — CRUD ----------------------------------------------------------
@@ -341,6 +376,25 @@ defmodule TokengateWeb.SubscriptionsLive do
 
       groups ->
         Enum.map_join(groups, ", ", & &1.name)
+    end
+  end
+
+  # ¿Esta sub está auto-archivada en el listado vigente?
+  def archived?(%Subscription{} = sub, assigns),
+    do: MapSet.member?(assigns.archived_ids, sub.id)
+
+  def archived_reason(%Subscription{} = sub, _assigns) do
+    expired? =
+      is_struct(sub.expires_at, DateTime) and
+        DateTime.compare(sub.expires_at, DateTime.utc_now()) != :gt
+
+    drained? =
+      sub.units > 0 and sub.units * 1_000_000 <= Credits.lifetime_spend_micro(sub.id)
+
+    cond do
+      expired? -> "Vencida"
+      drained? -> "Agotada"
+      true -> "Archivada"
     end
   end
 

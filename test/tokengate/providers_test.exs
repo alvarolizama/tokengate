@@ -390,6 +390,48 @@ defmodule Tokengate.ProvidersTest do
       assert %Provider{} = result.credential.provider
     end
 
+    test "list_model_providers/1 breaks priority ties by credential_id (stable order)" do
+      model_ = model_fixture()
+      provider = provider_fixture()
+
+      # Two providers sharing priority 2: the order must be deterministic
+      # (by credential_id) so sticky routing doesn't flip between cache
+      # refreshes. Insert in reverse to prove it isn't insertion order.
+      ap_later = model_provider_fixture(model_, provider, %{priority: 2})
+      ap_earlier = model_provider_fixture(model_, provider, %{priority: 2})
+
+      result = Providers.list_model_providers(model_.id)
+
+      assert [first, second | _] = result
+
+      if first.id == ap_earlier.id do
+        assert second.id == ap_later.id
+      else
+        assert first.id == ap_later.id and second.id == ap_earlier.id
+      end
+
+      # The invariant that matters: same query, same order, every time.
+      assert Enum.map(result, & &1.id) ==
+               Enum.map(Providers.list_model_providers(model_.id), & &1.id)
+    end
+
+    test "model_provider changeset rejects negative priority" do
+      model_ = model_fixture()
+      provider = provider_fixture()
+
+      # -1 is reserved at runtime for exclusive providers; a configured
+      # negative priority on a global row would outrank an exclusive one.
+      assert {:error, changeset} =
+               Providers.create_model_provider(%{
+                 model_id: model_.id,
+                 credential_id: credential_fixture(provider).id,
+                 provider_model: "neg-priority",
+                 priority: -1
+               })
+
+      assert %{priority: ["must be greater than or equal to 0"]} = errors_on(changeset)
+    end
+
     test "delete_model_provider/1 removes the row" do
       mp = model_provider_fixture()
 

@@ -20,7 +20,7 @@ defmodule TokengateWeb.ServicesLive do
   alias Tokengate.Providers.{Model, ServiceModel}
   alias Tokengate.Repo
 
-  @sort_columns ~w(name group requests monthly_spend total_spend inserted_at)a
+  @sort_columns ~w(name subscription requests monthly_spend total_spend inserted_at)a
 
   @impl true
   def mount(_params, _session, socket) do
@@ -77,13 +77,16 @@ defmodule TokengateWeb.ServicesLive do
   defp load_services(socket) do
     services =
       from(s in Service,
-        preload: [:api_key, :group],
+        preload: [:api_key, :subscription],
         order_by: [asc: s.name]
       )
       |> Repo.all()
 
-    groups =
-      from(g in Tokengate.Accounts.Group, order_by: [asc: g.name])
+    subscriptions =
+      from(s in Tokengate.Credits.Subscription,
+        where: is_nil(s.user_id) and s.status == "active",
+        order_by: [asc: s.name]
+      )
       |> Repo.all()
 
     granted_models =
@@ -113,7 +116,7 @@ defmodule TokengateWeb.ServicesLive do
 
     socket
     |> assign(:all_services, services)
-    |> assign(:groups, groups)
+    |> assign(:subscriptions, subscriptions)
     |> assign(:granted_models, granted_models)
     |> assign(:models, models)
     |> assign(:service_stats, stats)
@@ -156,7 +159,8 @@ defmodule TokengateWeb.ServicesLive do
       Enum.filter(socket.assigns.all_services, fn s ->
         search == "" or
           String.contains?(String.downcase(s.name), search_down) or
-          (s.group && String.contains?(String.downcase(s.group.name), search_down))
+          (s.subscription &&
+             String.contains?(String.downcase(s.subscription.name || ""), search_down))
       end)
 
     sorted =
@@ -200,7 +204,10 @@ defmodule TokengateWeb.ServicesLive do
   end
 
   defp sort_value(s, :name, _ctx), do: String.downcase(s.name || "")
-  defp sort_value(s, :group, _ctx), do: String.downcase((s.group && s.group.name) || "")
+
+  defp sort_value(s, :subscription, _ctx),
+    do: String.downcase((s.subscription && s.subscription.name) || "")
+
   defp sort_value(s, :requests, ctx), do: stat_value(s, ctx.stats, :total_requests)
   defp sort_value(s, :monthly_spend, ctx), do: Map.get(ctx.monthly_spend, s.id)
   defp sort_value(s, :total_spend, ctx), do: Map.get(ctx.total_spend, s.id)
@@ -599,6 +606,14 @@ defmodule TokengateWeb.ServicesLive do
     Enum.find(assigns.all_services, &(&1.id == assigns.detail_service_id))
   end
 
+  # Sub label for display: name, or "Ilimitado" when the service has no
+  # subscription (tier 3 — only the global daily cap applies).
+  defp subscription_label(%{subscription: %{} = sub}) do
+    sub.name || "Sub #{String.slice(sub.id, 0, 8)}"
+  end
+
+  defp subscription_label(_service), do: "Ilimitado"
+
   ## Render ----------------------------------------------------------------
 
   @impl true
@@ -651,25 +666,28 @@ defmodule TokengateWeb.ServicesLive do
             />
             <div class="mt-3">
               <.input
-                field={@form[:group_id]}
+                field={@form[:subscription_id]}
                 type="select"
-                label="Grupo"
-                options={Enum.map(@groups, &{&1.name, &1.id})}
-                hint="Grupo del que hereda catálogo, presupuesto y límites."
+                label="Suscripción"
+                prompt="Sin suscripción (consumo ilimitado)"
+                options={
+                  Enum.map(@subscriptions, &{&1.name || "Sub #{String.slice(&1.id, 0, 8)}", &1.id})
+                }
+                hint="Sub de crédito propia del servicio. Cada servicio drena su propio bolsín. Sin sub = ilimitado (solo aplica el cap global)."
               />
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
               <.input
                 field={@form[:concurrency_limit]}
                 type="number"
-                label="Concurrencia extra"
-                hint="Extra sobre el default del grupo."
+                label="Concurrencia"
+                hint="Límite absoluto (default 5 si se deja vacío)."
               />
               <.input
                 field={@form[:rpm_limit]}
                 type="number"
-                label="RPM extra"
-                hint="Extra sobre el default del grupo."
+                label="RPM"
+                hint="Límite absoluto (default 60 si se deja vacío)."
               />
             </div>
             <div class="flex gap-2 mt-4 justify-end">
@@ -716,7 +734,7 @@ defmodule TokengateWeb.ServicesLive do
           <h2 class="text-lg font-semibold mb-4">
             {detail_service(assigns).name}
             <span class="text-sm text-base-content/50 font-normal">
-              · Grupo: {detail_service(assigns).group && detail_service(assigns).group.name}
+              · Sub: {subscription_label(detail_service(assigns))}
             </span>
           </h2>
 
@@ -933,8 +951,8 @@ defmodule TokengateWeb.ServicesLive do
                 <th>
                   <.sort_button
                     event="sort_services"
-                    field={:group}
-                    label="Grupo"
+                    field={:subscription}
+                    label="Suscripción"
                     current={@sort_field}
                     direction={@sort_direction}
                   />
@@ -1025,12 +1043,12 @@ defmodule TokengateWeb.ServicesLive do
       <.admin_identity
         icon="hero-wrench-screwdriver"
         title={@service.name}
-        subtitle={"+#{@service.concurrency_limit} conc. · +#{@service.rpm_limit} RPM"}
+        subtitle={"#{@service.concurrency_limit || 5} conc. · #{@service.rpm_limit || 60} RPM"}
         truncate
       />
     </td>
     <td class="text-sm">
-      {(@service.group && @service.group.name) || "—"}
+      {subscription_label(@service)}
     </td>
     <td>
       <button

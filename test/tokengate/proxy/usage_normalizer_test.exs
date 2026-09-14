@@ -32,6 +32,26 @@ defmodule Tokengate.Proxy.UsageNormalizerTest do
              }
     end
 
+    test "extracts cache_write_tokens (OpenRouter) into cache_creation_tokens" do
+      body = %{
+        "usage" => %{
+          "prompt_tokens" => 1000,
+          "completion_tokens" => 50,
+          "prompt_tokens_details" => %{
+            "cached_tokens" => 800,
+            "cache_write_tokens" => 120
+          }
+        }
+      }
+
+      assert UsageNormalizer.normalize(:openai, body) == %{
+               prompt_tokens: 1000,
+               completion_tokens: 50,
+               cache_read_tokens: 800,
+               cache_creation_tokens: 120
+             }
+    end
+
     test "no usage returns nil" do
       assert UsageNormalizer.normalize(:openai, %{"choices" => []}) == nil
     end

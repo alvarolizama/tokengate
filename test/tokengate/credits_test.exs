@@ -208,6 +208,82 @@ defmodule Tokengate.CreditsTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Service grants (services are group-independent)
+  # ---------------------------------------------------------------------------
+
+  describe "service_grants/1" do
+    test "a service without subscription has no grants (unlimited, tier 3)" do
+      {:ok, service} =
+        Accounts.create_service(%{name: "Svc #{System.unique_integer([:positive])}"})
+
+      assert Credits.service_grants(service) == []
+    end
+
+    test "the service's direct subscription is its tier-1 grant" do
+      sub = group_sub()
+
+      {:ok, service} =
+        Accounts.create_service(%{
+          name: "Svc #{System.unique_integer([:positive])}",
+          subscription_id: sub.id
+        })
+
+      assert [%{tier: 1, subscription: %Subscription{id: sub_id}, service_id: service_id}] =
+               Credits.service_grants(service)
+
+      assert sub_id == sub.id
+      assert service_id == service.id
+    end
+
+    test "a paused subscription yields no grants" do
+      sub = group_sub(%{"status" => "paused"})
+
+      {:ok, service} =
+        Accounts.create_service(%{
+          name: "Svc #{System.unique_integer([:positive])}",
+          subscription_id: sub.id
+        })
+
+      assert Credits.service_grants(service) == []
+    end
+  end
+
+  describe "grant_state/2 with a service subject" do
+    test "credits are per-service even when two services share one subscription" do
+      sub = group_sub()
+
+      {:ok, s1} =
+        Accounts.create_service(%{
+          name: "S1 #{System.unique_integer([:positive])}",
+          subscription_id: sub.id
+        })
+
+      {:ok, s2} =
+        Accounts.create_service(%{
+          name: "S2 #{System.unique_integer([:positive])}",
+          subscription_id: sub.id
+        })
+
+      # Debit s1's pocket only.
+      {:ok, _} =
+        Tokengate.Logs.log_request(%{
+          subject_type: "service",
+          model_requested: "gpt-test",
+          service_id: s1.id,
+          credit_subscription_id: sub.id,
+          provider_cost_usd: Decimal.new("2.50")
+        })
+
+      s1_state = Credits.grant_state(sub, {:service, s1.id})
+      s2_state = Credits.grant_state(sub, {:service, s2.id})
+
+      assert s1_state.consumed_micro == 2_500_000
+      assert s2_state.consumed_micro == 0
+      assert s1_state.credited_micro == s2_state.credited_micro
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Cycle boundaries
   # ---------------------------------------------------------------------------
 

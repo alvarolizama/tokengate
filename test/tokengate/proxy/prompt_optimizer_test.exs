@@ -479,4 +479,44 @@ defmodule Tokengate.Proxy.PromptOptimizerTest do
       assert result == expected
     end
   end
+
+  describe "strip_reasoning/1" do
+    test "removes reasoning_content, thinking and reasoning from assistant messages only" do
+      messages = [
+        %{"role" => "system", "content" => "sys"},
+        %{
+          "role" => "assistant",
+          "content" => "respuesta",
+          "reasoning_content" => "pensamiento largo",
+          "thinking" => %{"type" => "enabled"},
+          "reasoning" => %{"effort" => "high"}
+        },
+        %{"role" => "user", "content" => "siguiente"}
+      ]
+
+      assert PromptOptimizer.strip_reasoning(messages) == [
+               %{"role" => "system", "content" => "sys"},
+               %{"role" => "assistant", "content" => "respuesta"},
+               %{"role" => "user", "content" => "siguiente"}
+             ]
+    end
+
+    test "non-assistant messages carrying the same keys are untouched" do
+      messages = [
+        %{"role" => "user", "content" => "x", "reasoning" => "keep me"}
+      ]
+
+      assert PromptOptimizer.strip_reasoning(messages) == messages
+    end
+
+    test "assistant messages without reasoning keys pass through equal" do
+      messages = [%{"role" => "assistant", "content" => "plain"}]
+      assert PromptOptimizer.strip_reasoning(messages) == messages
+    end
+
+    test "empty list and non-list inputs" do
+      assert PromptOptimizer.strip_reasoning([]) == []
+      assert PromptOptimizer.strip_reasoning(nil) == []
+    end
+  end
 end

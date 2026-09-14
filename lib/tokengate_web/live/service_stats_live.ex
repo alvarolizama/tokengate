@@ -27,7 +27,7 @@ defmodule TokengateWeb.ServiceStatsLive do
 
   @impl true
   def mount(%{"service_id" => service_id}, _session, socket) do
-    service = service_id |> Accounts.get_service!() |> Repo.preload([:group, :api_key])
+    service = service_id |> Accounts.get_service!() |> Repo.preload([:subscription, :api_key])
 
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Tokengate.PubSub, "logs:new")
@@ -338,7 +338,7 @@ defmodule TokengateWeb.ServiceStatsLive do
               {@service.name}
             </h1>
             <p class="text-sm text-base-content/70">
-              Grupo: {(@service.group && @service.group.name) || "—"}
+              Sub: {sub_label(@service)}
             </p>
           </div>
           <div class="flex-1"></div>
@@ -406,8 +406,8 @@ defmodule TokengateWeb.ServiceStatsLive do
               <h3 class="text-sm font-semibold mb-2">Servicio</h3>
               <ul class="space-y-1 text-sm">
                 <li class="flex items-center justify-between">
-                  <span class="text-base-content/60">Grupo</span>
-                  <span>{(@service.group && @service.group.name) || "—"}</span>
+                  <span class="text-base-content/60">Suscripción</span>
+                  <span>{sub_label(@service)}</span>
                 </li>
                 <li class="flex items-center justify-between">
                   <span class="text-base-content/60">API key</span>
@@ -696,4 +696,8 @@ defmodule TokengateWeb.ServiceStatsLive do
     do: :erlang.float_to_binary(f, [:compact, {:decimals, 1}]) <> suffix
 
   defp safe_sub_count(_, suffix), do: "0" <> suffix
+
+  # Sub label: name, or "Ilimitado" when the service has no subscription.
+  defp sub_label(%{subscription: %{} = sub}), do: sub.name || "Sub #{String.slice(sub.id, 0, 8)}"
+  defp sub_label(_service), do: "Ilimitado"
 end

@@ -19,11 +19,16 @@ defmodule Tokengate.Credits do
        **directo** del usuario (subs directas + top-ups),
 
   y dentro de cada tier **se drena primero lo que se reinicia/vence antes**.
+
+  Los **services** no dependen de grupos: su sub es directa
+  (`services.subscription_id`) vía `service_grants/1`, y cada service drena
+  su **propio** bolsín aunque comparta sub con otro service. Sin sub el
+  consumo es ilimitado (tier 3).
   """
 
   import Ecto.Query
 
-  alias Tokengate.Accounts.{Group, GroupMember}
+  alias Tokengate.Accounts.{Group, GroupMember, Service}
   alias Tokengate.Credits.Subscription
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Repo
@@ -63,9 +68,33 @@ defmodule Tokengate.Credits do
   end
 
   def update_subscription(%Subscription{} = subscription, attrs) do
-    subscription
-    |> Subscription.changeset(attrs)
-    |> Repo.update()
+    result =
+      subscription
+      |> Subscription.changeset(attrs)
+      |> Repo.update()
+
+    # Status/units changes affect the auth cache of every subject with a
+    # grant on this sub (group members + linked services).
+    with {:ok, _} <- result do
+      Tokengate.Routing.Cache.invalidate_all()
+      groups = group_ids_for(subscription)
+      Enum.each(groups, &Tokengate.Accounts.ApiKeyCache.invalidate_group/1)
+
+      subscription.id
+      |> linked_services()
+      |> Enum.each(&Tokengate.Accounts.ApiKeyCache.invalidate_member(&1.id))
+    end
+
+    result
+  end
+
+  # Services directly linked to a subscription (their own grant pocket).
+  defp linked_services(subscription_id) do
+    import Ecto.Query, only: [from: 2]
+
+    Tokengate.Repo.all(
+      from s in Tokengate.Accounts.Service, where: s.subscription_id == ^subscription_id
+    )
   end
 
   def change_subscription(%Subscription{} = subscription, attrs \\ %{}) do
@@ -74,6 +103,14 @@ defmodule Tokengate.Credits do
 
   def delete_subscription(%Subscription{} = subscription) do
     Repo.delete(subscription)
+  end
+
+  @doc """
+  Micro-USD gastados por una suscripción desde su inicio (cota abierta hacia
+  atrás). Se usa para detectar top-ups agotados.
+  """
+  def lifetime_spend_micro(subscription_id) do
+    micro(spend_for_subscription(subscription_id, nil))
   end
 
   @doc """
@@ -157,6 +194,51 @@ defmodule Tokengate.Credits do
       |> Enum.map(&%{subscription: &1, tier: 2, user_id: member.user_id})
 
     tier1 ++ tier2
+  end
+
+  @doc """
+  Grants a intentar para un service: su sub directa, o `[]` (ilimitado, tier 3).
+
+  El grant es `(subscription, service)` — cada service drena su propio
+  bolsín aunque la sub la comparta con otros services.
+  """
+  @spec service_grants(Service.t() | nil) :: [
+          %{subscription: Subscription.t(), tier: 1, service_id: term()}
+        ]
+  def service_grants(nil), do: []
+
+  def service_grants(%Service{} = service) do
+    case service_subscription(service) do
+      %Subscription{} = subscription ->
+        [%{subscription: subscription, tier: 1, service_id: service.id}]
+
+      nil ->
+        []
+    end
+  end
+
+  @doc """
+  La sub directa de un service (o `nil` si no tiene o está pausada).
+  Acepta también un virtual member (`service_name` seteado) o un id.
+  """
+  def service_subscription(%Service{} = service) do
+    service = Repo.preload(service, [:subscription])
+
+    case service.subscription do
+      %Subscription{status: "active"} = sub -> sub
+      _ -> nil
+    end
+  end
+
+  def service_subscription(%GroupMember{service_name: name} = member)
+      when is_binary(name),
+      do: member.id |> Repo.get!(Service) |> service_subscription()
+
+  def service_subscription(service_id) when is_binary(service_id) do
+    case Repo.get(Service, service_id) do
+      nil -> nil
+      service -> service_subscription(service)
+    end
   end
 
   @doc "La sub default de un grupo (o `nil` si no tiene o está pausada)."
@@ -257,6 +339,21 @@ defmodule Tokengate.Credits do
           consumed_micro: integer(),
           cycle_start: Date.t() | nil
         }
+  # Service grant: the pocket is (subscription, service) — spend is measured
+  # by the service's own request logs.
+  def grant_state(%Subscription{} = subscription, {:service, service_id}) do
+    %{start: cycle_start} = cycle_bounds(subscription, Date.utc_today())
+
+    %{
+      credited_micro:
+        subscription.units * @credit_micro +
+          carried_micro(subscription, {:service, service_id}, cycle_start),
+      consumed_micro:
+        micro(spend_between(subscription.id, {:service, service_id}, cycle_start, nil)),
+      cycle_start: cycle_start
+    }
+  end
+
   def grant_state(%Subscription{} = subscription, user_id) do
     %{start: cycle_start} = cycle_bounds(subscription, Date.utc_today())
 
@@ -391,16 +488,32 @@ defmodule Tokengate.Credits do
 
   defp carried_micro(_subscription, _user_id, _cycle_start), do: 0
 
-  # Gasto asentado de (suscripción, usuario) en [from, to). `from`/`to` nil →
-  # cota abierta (top-ups sin `starts_at` suman todo lo atribuido). El usuario
-  # sale del group_member de cada request (el grant es por usuario, compartido
-  # por sus membresías).
+  # Gasto asentado de (suscripción, sujeto) en [from, to). `from`/`to` nil →
+  # cota abierta (top-ups sin `starts_at` suman todo lo atribuido). El sujeto
+  # es el usuario (grant por membresía) o `{:service, id}` (grant por service).
+  defp spend_between(subscription_id, {:service, service_id} = _subject, from, to) do
+    query =
+      RequestLog
+      |> where(
+        [rl],
+        rl.credit_subscription_id == ^subscription_id and rl.service_id == ^service_id
+      )
+
+    query = time_window(query, from, to)
+    aggregate(query)
+  end
+
   defp spend_between(subscription_id, user_id, from, to) do
     query =
       RequestLog
       |> join(:inner, [rl], gm in GroupMember, on: gm.id == rl.group_member_id)
       |> where([rl, gm], rl.credit_subscription_id == ^subscription_id and gm.user_id == ^user_id)
 
+    query = time_window(query, from, to)
+    aggregate(query)
+  end
+
+  defp time_window(query, from, to) do
     query =
       if from do
         where(query, [rl], rl.inserted_at >= ^to_datetime(from))
@@ -408,13 +521,14 @@ defmodule Tokengate.Credits do
         query
       end
 
-    query =
-      if to do
-        where(query, [rl], rl.inserted_at < ^to_datetime(to))
-      else
-        query
-      end
+    if to do
+      where(query, [rl], rl.inserted_at < ^to_datetime(to))
+    else
+      query
+    end
+  end
 
+  defp aggregate(query) do
     query
     |> select([rl], fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
     |> Repo.one()
@@ -437,22 +551,35 @@ defmodule Tokengate.Credits do
   defp to_datetime(%Date{} = date), do: DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
   defp to_datetime(%DateTime{} = dt), do: dt
 
-  # Número de grants (usuarios) que cubre una suscripción: los miembros de los
-  # grupos que la referencian, o 1 para una sub directa.
+  # Número de grants que cubre una suscripción: los miembros de los grupos
+  # que la referencian + los services vinculados directamente, o 1 para una
+  # sub directa de usuario.
   defp grant_count(%Subscription{user_id: nil} = subscription),
-    do: subscription |> grant_users() |> length()
+    do: subscription |> grant_subjects() |> length()
 
   defp grant_count(%Subscription{user_id: user_id}) when not is_nil(user_id), do: 1
 
-  defp grant_users(subscription) do
+  # Sujetos con grant de una sub de grupo: los usuarios de los grupos que la
+  # referencian + los services con `subscription_id` directa.
+  defp grant_subjects(subscription) do
     group_ids = group_ids_for(subscription)
 
-    if group_ids == [] do
-      []
-    else
-      Repo.all(from gm in GroupMember, where: gm.group_id in ^group_ids, select: gm.user_id)
-      |> Enum.uniq()
-    end
+    user_ids =
+      if group_ids == [] do
+        []
+      else
+        Repo.all(from gm in GroupMember, where: gm.group_id in ^group_ids, select: gm.user_id)
+        |> Enum.uniq()
+      end
+
+    service_ids =
+      Repo.all(
+        from s in Tokengate.Accounts.Service,
+          where: s.subscription_id == ^subscription.id,
+          select: {:service, s.id}
+      )
+
+    user_ids ++ service_ids
   end
 
   # Gasto agregado de TODA la suscripción (todos sus grants) desde `from`

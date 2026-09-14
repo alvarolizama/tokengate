@@ -27,17 +27,14 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
   end
 
   defp service_fixture do
-    {:ok, group} = Accounts.create_group(%{name: "Svc Stats Group #{unique()}"})
-
     {:ok, service} =
       Accounts.create_service(%{
         name: "Svc Stats #{unique()}",
-        group_id: group.id,
         concurrency_limit: 5,
         rpm_limit: 60
       })
 
-    {group, service}
+    service
   end
 
   defp log_for(service, attrs) do
@@ -60,14 +57,14 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
 
   describe "auth" do
     test "unauthenticated visitors are redirected to /login", %{conn: conn} do
-      {_, service} = service_fixture()
+      service = service_fixture()
 
       assert {:error, {:redirect, %{to: "/login"}}} =
                live(conn, ~p"/stats/services/#{service.id}")
     end
 
     test "regular user is redirected to /dashboard (admin-only)", %{conn: conn} do
-      {_, service} = service_fixture()
+      service = service_fixture()
       %{user: regular, password: password} = register("user")
       conn = login(conn, regular, password)
 
@@ -77,19 +74,19 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
   end
 
   describe "render" do
-    test "admin sees the service header (name + group)", %{conn: conn} do
-      {group, service} = service_fixture()
+    test "admin sees the service header (name + unlimited sub label)", %{conn: conn} do
+      service = service_fixture()
       %{user: admin, password: password} = register("admin")
       conn = login(conn, admin, password)
 
       {:ok, _view, html} = live(conn, ~p"/stats/services/#{service.id}")
 
       assert html =~ service.name
-      assert html =~ group.name
+      assert html =~ "Ilimitado"
     end
 
     test "admin sees the service's logs", %{conn: conn} do
-      {_group, service} = service_fixture()
+      service = service_fixture()
       %{user: admin, password: password} = register("admin")
       conn = login(conn, admin, password)
 
@@ -104,8 +101,8 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
     end
 
     test "logs from another service are not shown", %{conn: conn} do
-      {_g1, service} = service_fixture()
-      {_g2, other} = service_fixture()
+      service = service_fixture()
+      other = service_fixture()
       %{user: admin, password: password} = register("admin")
       conn = login(conn, admin, password)
 
@@ -121,7 +118,7 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
 
   describe "access from the services list" do
     test "services_live has a stats link for every service", %{conn: conn} do
-      {_group, service} = service_fixture()
+      service = service_fixture()
       %{user: admin, password: password} = register("admin")
       conn = login(conn, admin, password)
 

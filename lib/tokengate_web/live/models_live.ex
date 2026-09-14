@@ -1997,6 +1997,13 @@ defmodule TokengateWeb.ModelsLive do
                     </div>
 
                     <.input
+                      field={@provider_form[:cache_control_enabled]}
+                      type="checkbox"
+                      label="Inyectar cache_control explícito"
+                      hint="Marca el prefijo system con un breakpoint ephemeral estilo Anthropic. Solo para upstreams que lo honoran (Anthropic, z.ai, OpenRouter). Lecturas de caché hasta −90%."
+                    />
+
+                    <.input
                       field={@provider_form[:enabled]}
                       type="checkbox"
                       label="Habilitado"

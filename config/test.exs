@@ -34,6 +34,11 @@ config :tokengate, :partition_boot_ensure, false
 # refresh tick would fight the sandbox.
 config :tokengate, Tokengate.Metrics.RollupWorker, enabled: false
 
+# Stats reads answer from raw request_logs in tests: fixtures insert
+# arbitrary historical dates without a matching rollup, so the hybrid
+# split (rollup + fresh tail) would silently miss fixture rows.
+config :tokengate, :stats_rollup, hybrid: false
+
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false
 

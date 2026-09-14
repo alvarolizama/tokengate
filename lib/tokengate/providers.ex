@@ -323,7 +323,7 @@ defmodule Tokengate.Providers do
   def list_model_providers(model_id) when is_binary(model_id) do
     from(mp in ModelProvider,
       where: mp.model_id == ^model_id and mp.enabled == true,
-      order_by: [asc_nulls_last: mp.priority],
+      order_by: [asc_nulls_last: mp.priority, asc: mp.credential_id],
       preload: [credential: :provider]
     )
     |> Repo.all()
@@ -355,18 +355,12 @@ defmodule Tokengate.Providers do
   - Providers exclusive to this member
   - Providers exclusive to this member's group
 
-  When `service_id` is given (service virtual member), also includes
-  providers exclusive to that service, and member-exclusive rows are
-  excluded — a service is not a group_member.
-
   Returns providers ordered by `exclusive_to_group_member_id` ASC with NULLS
   LAST (member-exclusive rows sort before the NULL `global` rows), then
   priority ASC. The router uses this to inject exclusive
   providers with priority -1.
   """
-  def list_model_providers_for_member(model_id, group_member_id, group_id, service_id \\ nil)
-
-  def list_model_providers_for_member(model_id, group_member_id, group_id, nil)
+  def list_model_providers_for_member(model_id, group_member_id, group_id)
       when is_binary(model_id) and is_binary(group_member_id) and is_binary(group_id) do
     model_id
     |> base_query()
@@ -374,12 +368,16 @@ defmodule Tokengate.Providers do
     |> Repo.all()
   end
 
-  def list_model_providers_for_member(model_id, _group_member_id, group_id, service_id)
-      when is_binary(model_id) and is_binary(group_id) and is_binary(service_id) do
+  @doc """
+  Returns model_providers visible to a **service**: global rows (no exclusive
+  scope) plus rows exclusive to that service. Group- and member-exclusive
+  rows never apply — services are group-independent.
+  """
+  def list_model_providers_for_service(model_id, service_id)
+      when is_binary(model_id) and is_binary(service_id) do
     model_id
     |> base_query()
-    |> scoped_query(nil, group_id)
-    |> where_service_exclusive(service_id)
+    |> where_service_exclusive_only(service_id)
     |> Repo.all()
   end
 
@@ -399,14 +397,30 @@ defmodule Tokengate.Providers do
           mp.exclusive_to_group_id == ^group_id,
       order_by: [
         asc_nulls_last: mp.exclusive_to_group_member_id,
-        asc_nulls_last: mp.priority
+        asc_nulls_last: mp.priority,
+        # Deterministic tiebreaker: rows sharing scope+priority keep a stable
+        # order across cache refreshes, so sticky routing (prompt-cache
+        # affinity) doesn't flip between equally-prioritized providers.
+        asc: mp.credential_id
       ]
     )
   end
 
-  defp where_service_exclusive(query, service_id) do
+  # Service scope: global rows + rows exclusive to this service only. Group-
+  # and member-exclusive rows are excluded — services don't inherit them.
+  defp where_service_exclusive_only(query, service_id) do
     from(mp in query,
-      where: mp.exclusive_to_service_id == ^service_id or is_nil(mp.exclusive_to_service_id)
+      where:
+        (is_nil(mp.exclusive_to_group_member_id) and is_nil(mp.exclusive_to_group_id) and
+           is_nil(mp.exclusive_to_service_id)) or
+          mp.exclusive_to_service_id == ^service_id,
+      order_by: [
+        asc_nulls_last: mp.priority,
+        # Deterministic tiebreaker: rows sharing scope+priority keep a stable
+        # order across cache refreshes, so sticky routing (prompt-cache
+        # affinity) doesn't flip between equally-prioritized providers.
+        asc: mp.credential_id
+      ]
     )
   end
 
@@ -684,33 +698,22 @@ defmodule Tokengate.Providers do
   @doc """
   Returns the union of models accessible to a group member:
   those granted to their group plus any extra models granted individually.
-  A service virtual member (`service_name` set) gets the models granted
-  to its group plus its own service_models.
+  A service virtual member (`service_name` set) gets only its own
+  service_models — services are group-independent.
   Returns distinct Model structs.
-
-  Expects a group_member struct with `:id` and `:group` preloaded (group must have `:id`).
   """
   def list_accessible_models(%{service_name: name} = member) when is_binary(name) do
-    # Service (virtual group member) — group_models ∪ service_models
+    # Service (virtual group member) — service_models only.
     service_id = member.id
-    group_id = member.group.id
 
-    service_alias_ids =
+    alias_ids =
       from(sma in ServiceModel,
         where: sma.service_id == ^service_id,
         select: sma.model_id
       )
 
-    group_alias_ids =
-      from(tma in GroupModel,
-        where: tma.group_id == ^group_id,
-        select: tma.model_id
-      )
-
-    all_ids = service_alias_ids |> union(^group_alias_ids)
-
     from(ma in Model,
-      join: id in subquery(all_ids),
+      join: id in subquery(alias_ids),
       on: ma.id == id.model_id
     )
     |> Repo.all()
@@ -753,12 +756,11 @@ defmodule Tokengate.Providers do
     {service_members, real_members} =
       Enum.split_with(members, &is_binary(&1.service_name))
 
-    # Service virtual members carry their real group: their group grants are
-    # already covered by the real_members' group_ids below (a service and a
-    # user member of the same group share grants), plus service_models.
+    # Real members carry their group grants; service members are
+    # group-independent and only get service_models.
     group_ids =
-      ((real_members |> Enum.map(& &1.group.id)) ++
-         (service_members |> Enum.map(& &1.group.id)))
+      real_members
+      |> Enum.map(& &1.group.id)
       |> Enum.uniq()
 
     member_ids = Enum.map(real_members, & &1.id)

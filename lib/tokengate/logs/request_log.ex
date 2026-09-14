@@ -57,6 +57,9 @@ defmodule Tokengate.Logs.RequestLog do
     field :think, :boolean, default: false
     field :effort, :string
     field :api_key_prefix, :string
+    # Conversation-level cache affinity key (client session_id / hashed
+    # conversation opening). NULL when no session could be derived.
+    field :session_id, :string
     field :credential_name, :string
     field :client_agent, :string
     field :provider_key_prefix, :string

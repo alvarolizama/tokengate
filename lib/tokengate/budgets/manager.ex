@@ -331,6 +331,13 @@ defmodule Tokengate.Budgets.Manager do
     read_credit(key, 2) < read_credit(key, 3)
   end
 
+  # Grant ETS key: user grants are (subscription, user_id), service grants
+  # (subscription, service_id) — each service drains its own pocket even when
+  # several services share one subscription.
+  defp grant_key(%{subscription: subscription, service_id: service_id})
+       when service_id != nil,
+       do: {:grant, subscription.id, {:service, service_id}}
+
   defp grant_key(%{subscription: subscription, user_id: user_id}),
     do: {:grant, subscription.id, user_id}
 
@@ -345,10 +352,8 @@ defmodule Tokengate.Budgets.Manager do
     :ets.update_counter(@credits_table, key, {2, inc}, default)
   end
 
-  # Ensures the grant's ETS entry exists and is on the current cycle. The DB
-  # read happens in the caller (this process); the GenServer stores the result.
-  defp ensure_grant_loaded(%{subscription: subscription, user_id: user_id}) do
-    key = {:grant, subscription.id, user_id}
+  defp ensure_grant_loaded(%{subscription: subscription} = grant) do
+    key = grant_key(grant)
     current_start = current_cycle_start(subscription)
 
     case :ets.lookup(@credits_table, key) do
@@ -356,16 +361,16 @@ defmodule Tokengate.Budgets.Manager do
         if cycle_start == current_start and seeded_units == subscription.units do
           :ok
         else
-          seed_grant(subscription, user_id, key)
+          seed_grant(subscription, grant, key)
         end
 
       _ ->
-        seed_grant(subscription, user_id, key)
+        seed_grant(subscription, grant, key)
     end
   end
 
-  defp seed_grant(subscription, user_id, key) do
-    state = Tokengate.Credits.grant_state(subscription, user_id)
+  defp seed_grant(subscription, grant, key) do
+    state = Tokengate.Credits.grant_state(subscription, grant_subject(grant))
 
     GenServer.call(
       __MODULE__,
@@ -373,6 +378,13 @@ defmodule Tokengate.Budgets.Manager do
        subscription.units}
     )
   end
+
+  # The subject whose spend a grant debits: the service for service grants,
+  # the user for member grants.
+  defp grant_subject(%{service_id: service_id}) when service_id != nil,
+    do: {:service, service_id}
+
+  defp grant_subject(%{user_id: user_id}), do: user_id
 
   defp current_cycle_start(subscription) do
     %{start: start} = Tokengate.Credits.cycle_bounds(subscription, Date.utc_today())

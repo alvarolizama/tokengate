@@ -1006,7 +1006,12 @@ defmodule TokengateWeb.UsersLive do
         <% nil -> %>
           <span class="text-xs text-base-content/30">—</span>
         <% %{has_credit?: false} -> %>
-          <span class="badge badge-sm badge-ghost badge-outline">Sin crédito</span>
+          <span
+            class="badge badge-sm badge-ghost badge-outline"
+            title="Sin suscripción aplicable (tier 3): consumo sin tope"
+          >
+            Ilimitado
+          </span>
         <% %{credited_micro: 0} -> %>
           <span class="text-xs text-base-content/30">—</span>
         <% credit -> %>

@@ -22,7 +22,6 @@ defmodule TokengateWeb.StatsLive.Groups do
   attr :breakdown_group, :any, required: true
   attr :breakdown_member, :any, required: true
   attr :breakdown_model, :any, required: true
-  attr :breakdown_service, :any, required: true
   attr :drilldown_series, :any, required: true
   attr :drilldown_series_labels, :any, required: true
   attr :group_filter, :any, required: true

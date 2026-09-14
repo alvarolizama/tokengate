@@ -649,7 +649,7 @@ defmodule Tokengate.Accounts do
   Looks up a service by a presented API key token.
   Returns `{:ok, service}` only when the token matches an active API key
   of subject_type "service". The returned service has `:api_key` and
-  `:group` preloaded. Returns `{:error, :not_found}` otherwise.
+  `:subscription` preloaded. Returns `{:error, :not_found}` otherwise.
   """
   def get_service_by_api_key(token) when is_binary(token) do
     key_hash = hash_api_key(token)
@@ -660,7 +660,7 @@ defmodule Tokengate.Accounts do
         where:
           ak.key_hash == ^key_hash and ak.status == "active" and
             ak.subject_type == "service",
-        preload: [:api_key, :group]
+        preload: [:api_key, :subscription]
 
     case Repo.one(query) do
       %Service{} = service -> {:ok, service}
@@ -857,11 +857,11 @@ defmodule Tokengate.Accounts do
 
   Service virtual members (GroupMember with the backing Service's id) are
   resolved to their Service limits so the proxy controller can use a single
-  code path. A service is a mandatory group member: its own fields act as
-  extras on top of the group defaults.
+  code path. Services are independent of groups: their limits are absolute
+  (defaults 5/60 when nil).
   """
-  # Service virtual member — resolve the backing service and combine its
-  # extras with its group defaults.
+  # Service virtual member — resolve the backing service for its absolute
+  # limits.
   def effective_limits(%GroupMember{group: nil, id: id}) do
     case get_service(id) do
       %Service{} = service -> effective_limits(service)
@@ -896,15 +896,15 @@ defmodule Tokengate.Accounts do
   end
 
   def effective_limits(%Service{} = service) do
-    service = Repo.preload(service, [:group])
-    group = service.group
-
     %{
-      concurrency_limit:
-        combine_integer(group.default_concurrency_limit, service.concurrency_limit),
-      rpm_limit: combine_integer(group.default_rpm_limit, service.rpm_limit)
+      concurrency_limit: absolute_limit(service.concurrency_limit, :concurrency_limit),
+      rpm_limit: absolute_limit(service.rpm_limit, :rpm_limit)
     }
   end
+
+  # Service sin límite propio → default del schema (5 conc / 60 rpm).
+  defp absolute_limit(nil, key), do: Map.fetch!(Service.default_limits(), key)
+  defp absolute_limit(value, _key) when is_integer(value), do: value
 
   defp combine_integer(base, nil), do: base
   defp combine_integer(nil, extra), do: extra
@@ -972,7 +972,7 @@ defmodule Tokengate.Accounts do
                 Map.put(
                   effective_limits(service),
                   :credit_grants,
-                  Tokengate.Credits.grants_for(member)
+                  Tokengate.Credits.service_grants(service)
                 ),
               subject_type: "service"
             }
