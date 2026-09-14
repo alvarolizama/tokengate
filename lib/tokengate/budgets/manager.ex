@@ -415,8 +415,23 @@ defmodule Tokengate.Budgets.Manager do
   # ---------------------------------------------------------------------------
 
   @doc """
+  Start of the current UTC day as a `DateTime.t()` — the kill-switch day
+  boundary (`GlobalSettings.daily_max_spend_usd` resets at 00:00 UTC).
+  Shared by the Manager seed and display callers so both agree on the
+  window.
+  """
+  @spec utc_day_start() :: DateTime.t()
+  def utc_day_start, do: period_start(:daily)
+
+  @doc """
   Returns the total daily spend across every member and credential (UTC day)
   in USD as a Decimal. Lazy-loads from the DB on first touch or day rollover.
+
+  NOTE (display): this is the raw enforcement counter — while requests are
+  in flight it includes the `$max_request_cost_usd` holds reserved by
+  `reserve_credits/4` and not yet settled, so the value "breathes" with
+  concurrent traffic. Use for enforcement/maintenance, not for spend
+  dashboards (see `Budgets.global_daily_budget_summary/1`).
   """
   @spec global_daily_spend() :: Decimal.t()
   def global_daily_spend do

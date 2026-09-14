@@ -16,6 +16,7 @@ defmodule Tokengate.Budgets do
   alias Tokengate.Accounts.GroupMember
   alias Tokengate.Budgets.{Exemptions, Manager}
   alias Tokengate.GlobalSettings
+  alias Tokengate.Logs
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Periods
 
@@ -128,22 +129,38 @@ defmodule Tokengate.Budgets do
   **global daily cap** (`GlobalSettings.daily_max_spend_usd`, kill-switch
   layer 2, UTC day).
 
-  The spend comes from `Manager.global_daily_spend/0` — the same ETS
-  counter the proxy enforces against — so the card can never disagree with
-  actual enforcement. Exempted subjects (`global_daily` exemptions) skip
-  that layer in the proxy; they are reported here as `exempt_count`.
+  The spend is real spend from `request_logs` (via `Logs.cost_summary/1`)
+  over `from` (default: start of the current UTC day), NOT the live ETS
+  enforcement counter — that one includes in-flight `$max_request_cost_usd`
+  holds and drifts on crashes, so it "breathes" (jumps $20 per in-flight
+  request, drops on settle) and must never back a display number. It still
+  backs enforcement itself (`Budgets.Manager`) and the maintenance screen.
+
+  Exempted subjects (`global_daily` exemptions) skip the kill-switch layer
+  in the proxy but their spend IS included here — the card reports real
+  money spent — they are listed separately as `exempt_count`.
 
   `nil` cap means unlimited (no kill-switch configured).
+
+  `daily_pct` is only meaningful when `from` is the start of a single day;
+  callers showing a longer window must not render the bar/badge from it.
   """
-  @spec global_daily_budget_summary() :: %{
+  @spec global_daily_budget_summary(DateTime.t() | nil) :: %{
           daily_spend_usd: Decimal.t(),
           daily_cap_usd: Decimal.t() | nil,
           daily_pct: float() | nil,
           exempt_count: non_neg_integer()
         }
-  def global_daily_budget_summary do
+  def global_daily_budget_summary(from \\ nil) do
+    from = from || Manager.utc_day_start()
+
+    spend =
+      %{from: from}
+      |> Logs.cost_summary()
+      |> Map.get(:total_cost_usd, Decimal.new(0))
+
     %{
-      daily_spend_usd: Manager.global_daily_spend(),
+      daily_spend_usd: spend,
       daily_cap_usd: GlobalSettings.get_daily_cap(),
       daily_pct: nil,
       exempt_count: Exemptions.count_for_scope("global_daily")

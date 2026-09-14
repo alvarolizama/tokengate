@@ -33,7 +33,9 @@ defmodule TokengateWeb.StatsLive.Index do
   def index(assigns) do
     ~H"""
     <div class="space-y-6">
-      <%!-- Tope diario global — gasto real (contador del proxy) vs kill-switch --%>
+      <%!-- Tope diario global — gasto real del período (DB) vs kill-switch
+           diario (UTC). El gasto sigue la ventana del período seleccionado;
+           la barra solo compara contra el cap cuando la ventana es "hoy". --%>
       <%= if @org_budget && @current_user && @current_user.global_role == "admin" do %>
         <div class="card bg-base-100 border border-base-300 shadow-sm" id="org-budget-card">
           <div class="card-body p-5">
@@ -42,7 +44,9 @@ defmodule TokengateWeb.StatsLive.Index do
                 <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
                   Tope diario global
                 </span>
-                <Stats.budget_badge pct={@org_budget.daily_pct} />
+                <%= if @period == "today" do %>
+                  <Stats.budget_badge pct={@org_budget.daily_pct} />
+                <% end %>
               </div>
               <span
                 :if={@org_budget.exempt_count > 0}
@@ -54,14 +58,26 @@ defmodule TokengateWeb.StatsLive.Index do
               </span>
             </div>
             <div class="mt-2">
-              <Stats.budget_bar
-                spend={@org_budget.daily_spend_usd}
-                limit={@org_budget.daily_cap_usd}
-                pct={@org_budget.daily_pct}
-              />
+              <%= if @period == "today" do %>
+                <Stats.budget_bar
+                  spend={@org_budget.daily_spend_usd}
+                  limit={@org_budget.daily_cap_usd}
+                  pct={@org_budget.daily_pct}
+                />
+              <% else %>
+                <Stats.budget_bar
+                  spend={@org_budget.daily_spend_usd}
+                  limit={nil}
+                  pct={nil}
+                />
+              <% end %>
             </div>
             <p class="text-xs text-base-content/40 mt-1">
-              Gasto de hoy · todos los sujetos · día UTC (reinicia 00:00 UTC)
+              <%= if @period == "today" do %>
+                Gasto de hoy · todos los sujetos · día local ({@timezone}) · tope reinicia 00:00 UTC
+              <% else %>
+                Gasto de {Stats.period_label(@period)} · todos los sujetos · el tope aplica por día UTC
+              <% end %>
             </p>
           </div>
         </div>

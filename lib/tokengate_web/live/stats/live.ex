@@ -48,7 +48,9 @@ defmodule TokengateWeb.StatsLive.LiveSection do
         </span>
       </div>
 
-      <%!-- Tope diario global — mismo widget que el Resumen --%>
+      <%!-- Tope diario global — gasto real del día local (misma fuente que el
+           KPI "Hoy · costo") vs kill-switch diario (UTC). Sin contador ETS:
+           ese incluye holds en vuelo y oscila con el tráfico en curso. --%>
       <%= if @org_budget do %>
         <div class="card bg-base-100 border border-base-300 shadow-sm" id="live-org-budget">
           <div class="card-body p-5">
@@ -76,7 +78,7 @@ defmodule TokengateWeb.StatsLive.LiveSection do
               />
             </div>
             <p class="text-xs text-base-content/40 mt-1">
-              Gasto de hoy · todos los sujetos · día UTC (reinicia 00:00 UTC)
+              Gasto de hoy · todos los sujetos · tope reinicia 00:00 UTC
             </p>
           </div>
         </div>
