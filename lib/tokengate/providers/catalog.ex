@@ -56,6 +56,14 @@ defmodule Tokengate.Providers.Catalog do
   # field is a 400. `session_id` is OpenRouter's convention, NOT Fireworks'.
   @fireworks_session_hint_fields ~w(prompt_cache_key)
 
+  # Fields the gateway must actively STRIP before a strict upstream sees the
+  # body. `session_hint_fields` only narrows what attach_session_hint ADDS; a
+  # `session_id` the CLIENT put in the request body still travels, and
+  # Fireworks rejects it with a 400. Reasoning flags (`reasoning_effort`,
+  # `thinking`) and `reasoning_content` ARE documented by Fireworks, so they
+  # are deliberately left alone.
+  @fireworks_omit_body_fields ~w(session_id)
+
   @builtin [
     %{
       key: "openrouter",
@@ -72,7 +80,8 @@ defmodule Tokengate.Providers.Catalog do
       dialect: "openai",
       billing: "pay_per_token",
       capabilities: ["llm", "embedding"],
-      session_hint_fields: @fireworks_session_hint_fields
+      session_hint_fields: @fireworks_session_hint_fields,
+      omit_body_fields: @fireworks_omit_body_fields
     },
     %{
       key: "qwen_cloud",
@@ -188,6 +197,28 @@ defmodule Tokengate.Providers.Catalog do
   @doc "The default session-hint fields (tolerant upstreams)."
   @spec default_session_hint_fields() :: [String.t()]
   def default_session_hint_fields, do: @default_session_hint_fields
+
+  @doc """
+  Body fields the gateway must strip for a strict provider, by catalog key.
+
+  Empty for tolerant providers and for unknown/custom keys (nothing is
+  removed). A provider that validates its body strictly declares the fields
+  it does not accept, so a client-supplied value (e.g. `session_id`) never
+  reaches it.
+
+      iex> Tokengate.Providers.Catalog.omit_body_fields("fireworks")
+      ["session_id"]
+
+      iex> Tokengate.Providers.Catalog.omit_body_fields("openrouter")
+      []
+  """
+  @spec omit_body_fields(String.t() | nil) :: [String.t()]
+  def omit_body_fields(key \\ nil) do
+    case key && get(key) do
+      %{omit_body_fields: fields} when is_list(fields) -> fields
+      _ -> []
+    end
+  end
 
   @doc "Valid sources."
   def sources, do: @sources

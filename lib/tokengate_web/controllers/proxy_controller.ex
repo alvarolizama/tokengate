@@ -1293,6 +1293,7 @@ defmodule TokengateWeb.ProxyController do
     |> Map.update!("messages", &PromptOptimizer.strip_reasoning/1)
     |> attach_session_hint(session_key, provider_key(route_ctx))
     |> CacheControlInjector.inject(Map.get(route_ctx, :cache_control_enabled, false))
+    |> drop_strict_fields(provider_key(route_ctx))
     # Operator overrides run LAST so they can strip/replace anything the
     # gateway injected (e.g. Fireworks must drop `session_id`).
     |> apply_request_overrides(route_ctx)
@@ -1371,6 +1372,18 @@ defmodule TokengateWeb.ProxyController do
     provider_key
     |> Tokengate.Providers.Catalog.session_hint_fields()
     |> Enum.reduce(payload, fn field, acc -> Map.put_new(acc, field, session_key) end)
+  end
+
+  # Removes the body fields a strict provider does not accept. `attach_session_hint`
+  # only narrows what the gateway ADDS — a `session_id` the client already put
+  # in the body still travels and Fireworks rejects it with a 400. Tolerant
+  # providers declare nothing here, so their body is untouched. `model`,
+  # `messages` and `stream_options` are protected: the gateway owns them.
+  defp drop_strict_fields(payload, provider_key) do
+    case Tokengate.Providers.Catalog.omit_body_fields(provider_key) do
+      [] -> payload
+      fields -> Map.drop(payload, fields -- @protected_body_keys)
+    end
   end
 
   defp await_first_chunk(pid, ref) do

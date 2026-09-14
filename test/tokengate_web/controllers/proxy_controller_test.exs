@@ -876,17 +876,21 @@ defmodule TokengateWeb.ProxyControllerTest do
     end
   end
 
-  test "without the override, session_id reaches the upstream and strict provider 400s", %{
+  test "a field the strict upstream rejects is surfaced as a 400 without fallback", %{
     conn: conn
   } do
     %{token: token, model: model} = proxy_fixture(%{})
-    :persistent_term.put({ProviderPlug, :reject_body_fields}, ["session_id"])
+    # A field the gateway does NOT know about and therefore never strips: the
+    # operator-configured strict upstream rejects it. The 400 must reach the
+    # client (no fallback: the same body would fail on every candidate).
+    :persistent_term.put({ProviderPlug, :reject_body_fields}, ["totally_unknown_field"])
 
     conn =
       conn
       |> authed_conn(token)
       |> post(~p"/v1/chat/completions", %{
         "model" => model.name,
+        "totally_unknown_field" => "x",
         "messages" => [
           %{"role" => "system", "content" => "You are a helpful assistant."},
           %{"role" => "user", "content" => "hola, ¿cómo vas?"}
@@ -894,12 +898,6 @@ defmodule TokengateWeb.ProxyControllerTest do
       })
 
     assert json_response(conn, 400)
-
-    receive do
-      {:provider_request, payload} -> assert Map.has_key?(payload, "session_id")
-    after
-      0 -> flunk("expected an upstream request")
-    end
   end
 
   # Catalog-driven: a model_provider backed by a provider whose catalog key
@@ -911,23 +909,8 @@ defmodule TokengateWeb.ProxyControllerTest do
   # and point at the real Fireworks endpoint).
   test "a fireworks-keyed provider never receives session_id (catalog-driven)", %{conn: conn} do
     %{token: token, model: model} = proxy_fixture(%{})
-    [mp] = Providers.list_model_providers(model.id)
 
-    credential = Repo.get!(Tokengate.Providers.Credential, mp.credential_id)
-    provider = Repo.get!(Tokengate.Providers.Provider, credential.provider_id)
-
-    # The builtin fireworks row owns the unique key index; drop it so the
-    # fixture's local-URL provider can carry the catalog key for this test.
-    # CatalogSync re-creates the builtin on next boot.
-    Repo.get_by(Tokengate.Providers.Provider, key: "fireworks")
-    |> case do
-      nil -> :ok
-      builtin -> {:ok, _} = Repo.delete(builtin)
-    end
-
-    {:ok, _} = Providers.update_provider(provider, %{key: "fireworks"})
-
-    Tokengate.Routing.Cache.invalidate_all()
+    make_provider_fireworks(model)
 
     conn =
       conn
@@ -947,6 +930,59 @@ defmodule TokengateWeb.ProxyControllerTest do
         refute Map.has_key?(payload, "session_id"),
                "fireworks must not receive the OpenRouter-style session_id"
 
+        assert Map.has_key?(payload, "prompt_cache_key")
+    after
+      0 -> flunk("expected an upstream request")
+    end
+  end
+
+  # Points the model's only model_provider at a provider whose catalog key is
+  # "fireworks", keeping the fixture's local test URL. Builtin rows are
+  # identity-locked (they point at the real Fireworks endpoint), so the
+  # builtin is dropped and the local provider row gets stamped with the key.
+  defp make_provider_fireworks(model) do
+    [mp] = Providers.list_model_providers(model.id)
+    credential = Repo.get!(Tokengate.Providers.Credential, mp.credential_id)
+    provider = Repo.get!(Tokengate.Providers.Provider, credential.provider_id)
+
+    case Repo.get_by(Tokengate.Providers.Provider, key: "fireworks") do
+      nil -> :ok
+      builtin -> {:ok, _} = Repo.delete(builtin)
+    end
+
+    {:ok, _} = Providers.update_provider(provider, %{key: "fireworks"})
+    Tokengate.Routing.Cache.invalidate_all()
+  end
+
+  # Regression: the exact Fireworks case. The CLIENT puts `session_id` in the
+  # body (OpenRouter's convention); Fireworks validates strictly and 400s on
+  # unknown fields. The catalog declares session_id as omit_body_fields for
+  # fireworks, so the gateway must STRIP it even though the client sent it —
+  # `attach_session_hint` alone only narrows what the gateway adds.
+  test "a client-supplied session_id is stripped before reaching fireworks", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture(%{})
+
+    make_provider_fireworks(model)
+    :persistent_term.put({ProviderPlug, :reject_body_fields}, ["session_id"])
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", %{
+        "model" => model.name,
+        "session_id" => "client-conv-abc",
+        "messages" => [
+          %{"role" => "system", "content" => "You are a helpful assistant."},
+          %{"role" => "user", "content" => "hola, ¿cómo vas?"}
+        ]
+      })
+
+    # A 200 proves the strict upstream did not see session_id (it 400s on it).
+    assert json_response(conn, 200)
+
+    receive do
+      {:provider_request, payload} ->
+        refute Map.has_key?(payload, "session_id")
         assert Map.has_key?(payload, "prompt_cache_key")
     after
       0 -> flunk("expected an upstream request")
