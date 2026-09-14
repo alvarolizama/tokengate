@@ -36,6 +36,7 @@ defmodule TokengateWeb.ProvidersLive do
       |> assign(:editing_provider_id, nil)
       |> assign(:credential_form, nil)
       |> assign(:editing_credential_id, nil)
+      |> assign(:providers_tab, "builtin")
       |> assign(:is_admin, user && user.global_role == "admin")
       |> assign(:credential_inflight, %{})
       |> require_admin_hook()
@@ -181,6 +182,13 @@ defmodule TokengateWeb.ProvidersLive do
      socket
      |> assign(:form, to_form(changeset, as: :provider))
      |> assign(:editing_provider_id, :new)}
+  end
+
+  # Tab switch for the provider list: builtin (default) or custom. Local UI
+  # state only — no URL/route change, the list is already loaded.
+  def handle_event("set_providers_tab", %{"tab" => tab}, socket)
+      when tab in ~w(builtin custom) do
+    {:noreply, assign(socket, :providers_tab, tab)}
   end
 
   # Opens the credential modal for a builtin that isn't shown in the list
@@ -804,7 +812,7 @@ defmodule TokengateWeb.ProvidersLive do
         </div>
 
         <div
-          :if={@providers_empty?}
+          :if={@providers == []}
           class="text-center py-12 text-base-content/40"
           id="providers-empty"
         >
@@ -812,9 +820,49 @@ defmodule TokengateWeb.ProvidersLive do
           <p>No hay proveedores todavía.</p>
         </div>
 
+        <%!-- Tabs: builtin first, then custom — the list below filters by
+             the active tab. --%>
+        <div :if={@providers != []} class="join" id="providers-tabs" role="tablist">
+          <button
+            phx-click="set_providers_tab"
+            phx-value-tab="builtin"
+            class={[
+              "join-item btn btn-sm",
+              if(@providers_tab == "builtin", do: "btn-primary", else: "btn-ghost")
+            ]}
+            id="tab-providers-builtin"
+          >
+            <.icon name="hero-cube" class="w-4 h-4" /> Built In
+          </button>
+          <button
+            phx-click="set_providers_tab"
+            phx-value-tab="custom"
+            class={[
+              "join-item btn btn-sm",
+              if(@providers_tab == "custom", do: "btn-primary", else: "btn-ghost")
+            ]}
+            id="tab-providers-custom"
+          >
+            <.icon name="hero-wrench-screwdriver" class="w-4 h-4" /> Custom
+          </button>
+        </div>
+
+        <div
+          :if={@providers != [] and Enum.filter(@providers, &(&1.source == @providers_tab)) == []}
+          class="text-center py-8 text-base-content/40"
+          id={"providers-tab-empty-#{@providers_tab}"}
+        >
+          <p>
+            {if @providers_tab == "builtin",
+              do:
+                "Ningún proveedor builtin tiene credenciales todavía — activa uno desde \"Activar proveedor\".",
+              else: "No hay proveedores custom — créalos desde \"Activar proveedor\" → Custom."}
+          </p>
+        </div>
+
         <div id="providers" class="space-y-3">
           <div
-            :for={provider <- @providers}
+            :for={provider <- Enum.filter(@providers, &(&1.source == @providers_tab))}
             id={"providers-#{provider.id}"}
             class="card bg-base-100 border border-base-300 shadow-sm"
           >

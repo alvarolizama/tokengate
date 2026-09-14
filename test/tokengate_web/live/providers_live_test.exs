@@ -40,6 +40,24 @@ defmodule TokengateWeb.ProvidersLiveTest do
     |> recycle()
   end
 
+  # The providers list defaults to the builtin tab; custom providers only
+  # render after switching. Helper: mount + switch to the Custom tab. The
+  # tabs only render when at least one provider is visible — when the list
+  # is empty the tab is absent and we stay on the default.
+  defp live_custom_tab(conn) do
+    {:ok, view, _html} = live(conn, ~p"/admin/providers")
+
+    view =
+      if Phoenix.LiveViewTest.has_element?(view, "#tab-providers-custom") do
+        view |> Phoenix.LiveViewTest.element("#tab-providers-custom") |> render_click()
+        view
+      else
+        view
+      end
+
+    {:ok, view, render(view)}
+  end
+
   defp create_provider(attrs \\ %{}) do
     u = unique()
 
@@ -76,7 +94,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/admin/providers")
+    {:ok, view, html} = live_custom_tab(conn)
 
     assert html =~ "Proveedores"
     assert has_element?(view, "#providers-#{provider.id}")
@@ -89,7 +107,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/providers")
+    {:ok, view, _html} = live_custom_tab(conn)
 
     view |> element("#new-custom-provider-btn") |> render_click()
     assert has_element?(view, "#provider-form")
@@ -106,7 +124,10 @@ defmodule TokengateWeb.ProvidersLiveTest do
       |> render_submit()
 
     assert html =~ "Proveedor creado."
-    assert html =~ "anthropic"
+
+    # The new custom provider lives on the Custom tab.
+    view |> element("#tab-providers-custom") |> render_click()
+    assert render(view) =~ "anthropic"
   end
 
   test "admin edits a provider", %{conn: conn} do
@@ -114,7 +135,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/providers")
+    {:ok, view, _html} = live_custom_tab(conn)
 
     view |> element("#edit-#{provider.id}") |> render_click()
     assert has_element?(view, "#provider-form")
@@ -138,7 +159,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/providers")
+    {:ok, view, _html} = live_custom_tab(conn)
 
     html = view |> element("#delete-#{provider.id}") |> render_click()
 
@@ -175,7 +196,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/providers")
+    {:ok, view, _html} = live_custom_tab(conn)
 
     html = view |> element("#delete-#{provider.id}") |> render_click()
 
@@ -190,7 +211,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/providers")
+    {:ok, view, _html} = live_custom_tab(conn)
 
     # Credentials panel is always open
     assert has_element?(view, "#credentials-panel-#{provider.id}")
@@ -287,14 +308,19 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
+    # Builtin card lives on the DEFAULT tab — plain mount, no switch.
     {:ok, view, _html} = live(conn, ~p"/admin/providers")
 
     # Builtin: no edit affordance at all (identity is catalog-owned; boot
-    # sync would overwrite any edit). Custom keeps it.
+    # sync would overwrite any edit). Custom keeps it — on ITS tab.
     refute has_element?(view, "#edit-#{builtin.id}")
+    refute has_element?(view, "#providers-#{custom.id}")
+
+    view |> element("#tab-providers-custom") |> render_click()
     assert has_element?(view, "#edit-#{custom.id}")
     # Both keep the status toggle
-    assert has_element?(view, "#toggle-provider-#{builtin.id}")
+    assert has_element?(view, "#toggle-provider-#{builtin.id}") ||
+             has_element?(view, "#toggle-provider-#{custom.id}")
   end
 
   test "custom edit modal keeps identity fields editable", %{conn: conn} do
@@ -302,7 +328,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/providers")
+    {:ok, view, _html} = live_custom_tab(conn)
 
     view |> element("#edit-#{provider.id}") |> render_click()
 
@@ -318,7 +344,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/providers")
+    {:ok, view, _html} = live_custom_tab(conn)
 
     assert has_element?(view, "#new-credential-#{provider.id}")
     assert render(view) =~ "API key"
