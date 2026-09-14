@@ -418,6 +418,85 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert render(view) =~ "service_tier"
   end
 
+  describe "fireworks-backed provider form" do
+    test "hides cache_control and shows the service_tier checkbox for fireworks", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      # Drop the builtin row to own the unique key, then stamp it on a local
+      # provider (same trick as the proxy controller test).
+      Repo.get_by(Tokengate.Providers.Provider, key: "fireworks")
+      |> case do
+        nil -> :ok
+        builtin -> {:ok, _} = Repo.delete(builtin)
+      end
+
+      provider =
+        create_provider(%{
+          key: "fireworks",
+          name: "Fireworks AI (probe)",
+          base_url: "http://localhost:1"
+        })
+
+      model_record = create_model()
+
+      credential =
+        Tokengate.Repo.insert!(%Tokengate.Providers.Credential{
+          provider_id: provider.id,
+          name: "FW Cred",
+          api_key_encrypted: "fw-test",
+          status: "active"
+        })
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/admin/models")
+      view |> element("#new-ap-#{model_record.id}") |> render_click()
+
+      # Selecting the fireworks credential flips the form.
+      view
+      |> form("#model-provider-form", %{
+        model_provider: %{credential_id: credential.id, provider_model: "fw-model", priority: 1}
+      })
+      |> render_change()
+
+      # The priority checkbox appears…
+      assert has_element?(view, "input[name='model_provider[service_tier_priority]']")
+      # …and the Anthropic-style cache_control toggle does NOT (it breaks
+      # Fireworks: strict validation rejects the content-parts format).
+      refute has_element?(view, "input[name='model_provider[cache_control_enabled]']")
+      # The automatic prompt-cache note is visible.
+      assert render(view) =~ "activa por defecto"
+    end
+
+    test "non-fireworks credentials keep the cache_control toggle and no priority checkbox", %{
+      conn: conn
+    } do
+      %{user: admin, password: password} = register("admin")
+      provider = create_provider()
+      model_record = create_model()
+
+      credential =
+        Tokengate.Repo.insert!(%Tokengate.Providers.Credential{
+          provider_id: provider.id,
+          name: "Other Cred",
+          api_key_encrypted: "sk-other",
+          status: "active"
+        })
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/admin/models")
+      view |> element("#new-ap-#{model_record.id}") |> render_click()
+
+      view
+      |> form("#model-provider-form", %{
+        model_provider: %{credential_id: credential.id, provider_model: "any", priority: 1}
+      })
+      |> render_change()
+
+      assert has_element?(view, "input[name='model_provider[cache_control_enabled]']")
+      refute has_element?(view, "input[name='model_provider[service_tier_priority]']")
+    end
+  end
+
   test "sticky_ttl_seconds below 1 second is rejected by the form", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()

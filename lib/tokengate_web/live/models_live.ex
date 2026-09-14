@@ -2034,38 +2034,62 @@ defmodule TokengateWeb.ModelsLive do
                       />
                     </div>
 
-                    <.input
-                      field={@provider_form[:cache_control_enabled]}
-                      type="checkbox"
-                      label="Inyectar cache_control explícito"
-                      hint="Marca el prefijo system con un breakpoint ephemeral estilo Anthropic. Solo para upstreams que lo honoran (Anthropic, z.ai, OpenRouter). Lecturas de caché hasta −90%."
-                    />
-
                     <%= if @provider_form_is_fireworks do %>
+                      <%!-- Fireworks: la configuración de caché es automática
+                           (prefix match por defecto) y valida el body con
+                           estrictez — el cache_control explícito (estilo
+                           Anthropic) le rompe el request (400: exige content
+                           string). Solo se muestra lo que le aplica. --%>
                       <.input
                         field={@provider_form[:service_tier_priority]}
                         type="checkbox"
                         label="Fireworks Priority (service_tier)"
-                        hint="Manda service_tier: priority en el body — mayor confiabilidad en horas pico. Se cobra a premium según el modelo (también visible en Campos extra del JSON)."
+                        hint="Manda service_tier: priority — mayor confiabilidad en horas pico, se cobra a premium según el modelo."
+                      />
+                      <p class="text-xs text-base-content/50 -mt-2">
+                        <.icon name="hero-bolt" class="w-3.5 h-3.5 inline text-success" />
+                        Caché de prompts: <b>activa por defecto</b>
+                        en Fireworks (coincidencia de prefijo, tokens cacheados a descuento). TokenGate ya manda
+                        prompt_cache_key + x-session-affinity por conversación y registra los tokens cacheados en los logs — no requiere configuración.
+                      </p>
+                    <% else %>
+                      <.input
+                        field={@provider_form[:cache_control_enabled]}
+                        type="checkbox"
+                        label="Inyectar cache_control explícito"
+                        hint="Marca el prefijo system con un breakpoint ephemeral estilo Anthropic. Solo para upstreams que lo honoran (Anthropic, z.ai, OpenRouter). Lecturas de caché hasta −90%. No usar con Fireworks (rechaza el formato)."
                       />
                     <% end %>
 
-                    <div class="grid grid-cols-2 gap-3">
-                      <.input
-                        field={@provider_form[:omit_headers_csv]}
-                        type="text"
-                        label="Omitir headers (separados por coma)"
-                        placeholder="idempotency-key, x-session-id"
-                        hint="Headers que este upstream NO recibe. Deja vacío para enviar todos (user-agent, idempotency-key, x-session-id, x-session-affinity…)."
-                      />
-                      <.input
-                        field={@provider_form[:omit_body_fields_csv]}
-                        type="text"
-                        label="Omitir campos del JSON (separados por coma)"
-                        placeholder="session_id"
-                        hint="Llaves que se eliminan del body. Ej: Fireworks valida estrictamente y rechaza session_id."
-                      />
-                    </div>
+                    <details class="group">
+                      <summary class="cursor-pointer select-none text-xs font-medium text-base-content/60 hover:text-base-content flex items-center gap-1">
+                        <.icon
+                          name="hero-chevron-right"
+                          class="w-3 h-3 transition-transform group-open:rotate-90"
+                        /> Opciones avanzadas del upstream
+                        <%= if @provider_form_is_fireworks do %>
+                          <span class="text-base-content/40">(normalmente innecesarias para Fireworks — el catálogo ya filtra session_id y aplica los hints correctos)</span>
+                        <% end %>
+                      </summary>
+                      <div class="space-y-3 pt-3">
+                        <div class="grid grid-cols-2 gap-3">
+                          <.input
+                            field={@provider_form[:omit_headers_csv]}
+                            type="text"
+                            label="Omitir headers (separados por coma)"
+                            placeholder="idempotency-key, x-session-id"
+                            hint="Headers que este upstream NO recibe. Deja vacío para enviar todos (user-agent, idempotency-key, x-session-id, x-session-affinity…)."
+                          />
+                          <.input
+                            field={@provider_form[:omit_body_fields_csv]}
+                            type="text"
+                            label="Omitir campos del JSON (separados por coma)"
+                            placeholder="session_id"
+                            hint="Llaves que se eliminan del body. Ej: Fireworks valida estrictamente y rechaza session_id."
+                          />
+                        </div>
+                      </div>
+                    </details>
 
                     <.input
                       field={@provider_form[:extra_body_json]}
