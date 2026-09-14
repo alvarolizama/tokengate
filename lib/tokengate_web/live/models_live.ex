@@ -54,6 +54,7 @@ defmodule TokengateWeb.ModelsLive do
       |> assign(:provider_models_loading, false)
       |> assign(:provider_model_search, "")
       |> assign(:provider_form_credential_id, nil)
+      |> assign(:provider_form_is_fireworks, false)
       |> assign(:current_scope, "global")
       |> assign(:current_scope_group_ids, [])
       |> assign(:current_scope_member_ids, [])
@@ -323,6 +324,7 @@ defmodule TokengateWeb.ModelsLive do
      |> assign(:provider_models_loading, false)
      |> assign(:provider_model_search, "")
      |> assign(:provider_form_credential_id, nil)
+     |> assign(:provider_form_is_fireworks, false)
      |> assign(:current_scope, "global")
      |> assign(:current_scope_group_ids, [])
      |> assign(:current_scope_member_ids, [])
@@ -372,11 +374,27 @@ defmodule TokengateWeb.ModelsLive do
           ""
         end
 
+      # Prefill the override virtuals (JSON string / CSV) so the form shows
+      # the stored per-upstream overrides.
+      changeset =
+        changeset
+        |> Ecto.Changeset.put_change(:extra_body_json, encode_extra_body(ap.extra_body))
+        |> Ecto.Changeset.put_change(
+          :omit_body_fields_csv,
+          Enum.join(ap.omit_body_fields || [], ", ")
+        )
+        |> Ecto.Changeset.put_change(:omit_headers_csv, Enum.join(ap.omit_headers || [], ", "))
+        |> Ecto.Changeset.put_change(
+          :service_tier_priority,
+          Map.get(ap.extra_body || %{}, "service_tier") == "priority"
+        )
+
       {:noreply,
        socket
        |> assign(:provider_form, to_form(changeset, as: :model_provider))
        |> assign(:editing_ap_id, ap.id)
        |> assign(:provider_form_credential_id, ap.credential_id)
+       |> assign(:provider_form_is_fireworks, credential_is_fireworks?(ap.credential_id, socket))
        |> assign(:current_scope, scope)
        |> assign(:current_scope_group_id, ap.exclusive_to_group_id)
        |> assign(:current_scope_member_id, ap.exclusive_to_group_member_id)
@@ -433,6 +451,7 @@ defmodule TokengateWeb.ModelsLive do
           {:noreply,
            socket
            |> assign(:provider_form_credential_id, credential_id)
+           |> assign(:provider_form_is_fireworks, credential_is_fireworks?(credential_id, socket))
            |> assign(:provider_models_loading, true)
            |> fetch_provider_models(credential_id)}
 
@@ -915,6 +934,25 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   ## Helpers ---------------------------------------------------------------
+
+  # True when the form's selected credential belongs to the Fireworks
+  # provider (catalog key "fireworks"). Gates the service_tier checkbox —
+  # Priority is a Fireworks-only serving path.
+  defp credential_is_fireworks?(credential_id, socket) when is_binary(credential_id) do
+    case Enum.find(socket.assigns.credentials_for_select, &(&1.id == credential_id)) do
+      %{provider: %{key: "fireworks"}} -> true
+      _ -> false
+    end
+  end
+
+  defp credential_is_fireworks?(_, _socket), do: false
+
+  # Serializes a stored extra_body map for the form textarea. One key per
+  # line keeps single-field overrides readable.
+  defp encode_extra_body(nil), do: ""
+  defp encode_extra_body(%{} = body) when map_size(body) == 0, do: ""
+
+  defp encode_extra_body(%{} = body), do: Jason.encode!(body)
 
   @doc "Credential options for the select (id -> display)"
   def credential_options(credentials) do
@@ -2001,6 +2039,42 @@ defmodule TokengateWeb.ModelsLive do
                       type="checkbox"
                       label="Inyectar cache_control explícito"
                       hint="Marca el prefijo system con un breakpoint ephemeral estilo Anthropic. Solo para upstreams que lo honoran (Anthropic, z.ai, OpenRouter). Lecturas de caché hasta −90%."
+                    />
+
+                    <%= if @provider_form_is_fireworks do %>
+                      <.input
+                        field={@provider_form[:service_tier_priority]}
+                        type="checkbox"
+                        label="Fireworks Priority (service_tier)"
+                        hint="Manda service_tier: priority en el body — mayor confiabilidad en horas pico. Se cobra a premium según el modelo (también visible en Campos extra del JSON)."
+                      />
+                    <% end %>
+
+                    <div class="grid grid-cols-2 gap-3">
+                      <.input
+                        field={@provider_form[:omit_headers_csv]}
+                        type="text"
+                        label="Omitir headers (separados por coma)"
+                        placeholder="idempotency-key, x-session-id"
+                        hint="Headers que este upstream NO recibe. Deja vacío para enviar todos (user-agent, idempotency-key, x-session-id, x-session-affinity…)."
+                      />
+                      <.input
+                        field={@provider_form[:omit_body_fields_csv]}
+                        type="text"
+                        label="Omitir campos del JSON (separados por coma)"
+                        placeholder="session_id"
+                        hint="Llaves que se eliminan del body. Ej: Fireworks valida estrictamente y rechaza session_id."
+                      />
+                    </div>
+
+                    <.input
+                      field={@provider_form[:extra_body_json]}
+                      type="textarea"
+                      label="Campos extra del JSON (body)"
+                      placeholder='{"service_tier": "priority"}'
+                      hint={
+                        ~s|JSON que se mezcla al body del upstream. Se aplica al final: gana sobre lo que inyecta TokenGate. Ejemplo Fireworks: service_tier priority para la serving-path Priority — mayor confiabilidad en picos, se cobra a premium según el modelo.|
+                      }
                     />
 
                     <.input

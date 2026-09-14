@@ -438,6 +438,114 @@ defmodule Tokengate.ProvidersTest do
       {:ok, _} = Providers.delete_model_provider(mp)
       refute Repo.get(ModelProvider, mp.id)
     end
+
+    test "default request overrides are no-ops" do
+      mp = model_provider_fixture()
+
+      assert mp.extra_body == %{}
+      assert mp.omit_body_fields == []
+      assert mp.omit_headers == []
+    end
+
+    test "extra_body_json parses valid JSON into extra_body" do
+      mp = model_provider_fixture()
+
+      {:ok, mp} =
+        Providers.update_model_provider(mp, %{extra_body_json: ~s({"service_tier": "priority"})})
+
+      assert mp.extra_body == %{"service_tier" => "priority"}
+    end
+
+    test "extra_body_json with a non-object JSON value is rejected" do
+      mp = model_provider_fixture()
+
+      {:error, changeset} = Providers.update_model_provider(mp, %{extra_body_json: "[1,2]"})
+
+      assert %{extra_body_json: ["JSON inválido: se esperaba un objeto"]} = errors_on(changeset)
+    end
+
+    test "protected gateway keys are rejected inside extra_body" do
+      mp = model_provider_fixture()
+
+      {:error, changeset} =
+        Providers.update_model_provider(mp, %{extra_body_json: ~s({"stream_options": {"x": 1}})})
+
+      assert %{extra_body_json: ["no se puede sobrescribir \"stream_options\""]} =
+               errors_on(changeset)
+    end
+
+    test "omit lists normalize: trim, dedupe, drop blanks" do
+      mp = model_provider_fixture()
+
+      {:ok, mp} =
+        Providers.update_model_provider(mp, %{
+          omit_body_fields_csv: " session_id ,,, Session_ID ",
+          omit_headers_csv: "X-SESSION-ID,, idempotency-key "
+        })
+
+      assert mp.omit_body_fields == ["session_id", "Session_ID"]
+      assert mp.omit_headers == ["x-session-id", "idempotency-key"]
+    end
+
+    test "protected keys are rejected in omit_body_fields_csv" do
+      mp = model_provider_fixture()
+
+      {:error, changeset} =
+        Providers.update_model_provider(mp, %{omit_body_fields_csv: "model, session_id"})
+
+      assert %{omit_body_fields_csv: ["no se puede omitir \"model\""]} = errors_on(changeset)
+    end
+
+    test "authorization cannot be omitted" do
+      mp = model_provider_fixture()
+
+      {:error, changeset} =
+        Providers.update_model_provider(mp, %{omit_headers_csv: "authorization"})
+
+      assert %{omit_headers_csv: ["no se puede omitir \"authorization\""]} = errors_on(changeset)
+    end
+
+    test "service_tier_priority checkbox sets extra_body[service_tier]" do
+      mp = model_provider_fixture()
+
+      {:ok, mp} = Providers.update_model_provider(mp, %{service_tier_priority: true})
+
+      assert mp.extra_body == %{"service_tier" => "priority"}
+    end
+
+    test "unchecking drops the key but keeps other extra_body entries" do
+      mp =
+        model_provider_fixture(nil, nil, %{
+          extra_body: %{"service_tier" => "priority", "top_k" => 7}
+        })
+
+      {:ok, mp} = Providers.update_model_provider(mp, %{service_tier_priority: false})
+
+      assert mp.extra_body == %{"top_k" => 7}
+    end
+
+    test "a programmatic update without the checkbox param leaves extra_body untouched" do
+      mp = model_provider_fixture(nil, nil, %{extra_body: %{"service_tier" => "priority"}})
+
+      {:ok, mp} = Providers.update_model_provider(mp, %{priority: 5})
+
+      assert mp.extra_body == %{"service_tier" => "priority"}
+      assert mp.priority == 5
+    end
+
+    test "clearing the form fields resets overrides to defaults" do
+      mp =
+        model_provider_fixture(nil, nil, %{
+          omit_body_fields: ["session_id"],
+          omit_headers: ["user-agent"]
+        })
+
+      {:ok, mp} =
+        Providers.update_model_provider(mp, %{omit_body_fields_csv: "", omit_headers_csv: ""})
+
+      assert mp.omit_body_fields == []
+      assert mp.omit_headers == []
+    end
   end
 
   describe "model_providers exclusive scope" do

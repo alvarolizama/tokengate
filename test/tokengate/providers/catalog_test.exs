@@ -151,4 +151,23 @@ defmodule Tokengate.Providers.CatalogTest do
       assert mine.dialect == "openai"
     end
   end
+
+  describe "session_hint_fields/1" do
+    test "fireworks narrows the hints to its documented field" do
+      # Fireworks validates strictly (unknown body field -> 400) and
+      # documents prompt_cache_key; session_id is OpenRouter's convention.
+      assert Catalog.session_hint_fields("fireworks") == ["prompt_cache_key"]
+    end
+
+    test "tolerant providers keep both hints" do
+      assert Catalog.session_hint_fields("openrouter") == ["session_id", "prompt_cache_key"]
+      assert Catalog.session_hint_fields("kimi") == ["session_id", "prompt_cache_key"]
+    end
+
+    test "unknown, custom and nil keys fall back to the tolerant default" do
+      assert Catalog.session_hint_fields("nope") == Catalog.default_session_hint_fields()
+      assert Catalog.session_hint_fields(nil) == Catalog.default_session_hint_fields()
+      assert "session_id" in Catalog.default_session_hint_fields()
+    end
+  end
 end

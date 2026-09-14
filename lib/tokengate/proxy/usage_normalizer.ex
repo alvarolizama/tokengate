@@ -26,17 +26,29 @@ defmodule Tokengate.Proxy.UsageNormalizer do
   """
 
   @type usage :: %{
-          prompt_tokens: non_neg_integer,
-          completion_tokens: non_neg_integer,
-          cache_read_tokens: non_neg_integer,
-          cache_creation_tokens: non_neg_integer
+          prompt_tokens: non_neg_integer(),
+          completion_tokens: non_neg_integer(),
+          cache_read_tokens: non_neg_integer(),
+          cache_creation_tokens: non_neg_integer()
         }
+
+  # Fireworks Serverless response header carrying the cached portion of the
+  # input tokens. Caching is on by default for every Serverless model, so the
+  # discount applies on every cache hit; without reading this header the
+  # saving is invisible in the logs (it looks like full-price input).
+  @fireworks_cached_tokens_header "fireworks-cached-prompt-tokens"
 
   @doc """
   Normalizes a complete (non-streaming) provider response body.
+
+  `resp_headers` (optional) carries the upstream response headers, used to
+  recover the cached-prompt-token count on upstreams that report it there
+  instead of in the body — Fireworks sets `fireworks-prompt-tokens` and
+  `fireworks-cached-prompt-tokens` on every Serverless response, and
+  streaming responses carry no `usage` in the chunked body.
   """
-  @spec normalize(:openai, map()) :: usage() | nil
-  def normalize(:openai, %{"usage" => usage}) when is_map(usage) do
+  @spec normalize(:openai, map(), [{String.t(), String.t()}] | nil) :: usage() | nil
+  def normalize(:openai, %{"usage" => usage}, resp_headers) when is_map(usage) do
     # prompt_tokens stays raw (includes cached tokens) — CostCalculator
     # subtracts the cached subset to price it at the cache rate.
     cached = get_in_int(usage, ["prompt_tokens_details", "cached_tokens"])
@@ -49,12 +61,46 @@ defmodule Tokengate.Proxy.UsageNormalizer do
     %{
       prompt_tokens: get_int(usage, "prompt_tokens"),
       completion_tokens: get_int(usage, "completion_tokens"),
-      cache_read_tokens: cached,
+      # A body-reported cached count wins; headers are the fallback for
+      # upstreams that only expose it there (or for streaming).
+      cache_read_tokens: max(cached, cached_from_headers(resp_headers)),
       cache_creation_tokens: cache_write
     }
   end
 
-  def normalize(_provider, _body), do: nil
+  # Non-OpenAI dialects, and OpenAI-compatible bodies without a `usage`
+  # object, yield no usage (the original behaviour).
+  def normalize(_provider, _body, _resp_headers), do: nil
+
+  @doc """
+  Arity-2 convenience: normalizes without upstream headers.
+  """
+  @spec normalize(:openai, map()) :: usage() | nil
+  def normalize(provider, body), do: normalize(provider, body, nil)
+
+  # Fireworks Serverless reports the cached-prompt-token split in headers:
+  #   fireworks-prompt-tokens         — total input tokens
+  #   fireworks-cached-prompt-tokens  — the cached portion (billed at a
+  #                                     discount, default 50% of input)
+  # Reads the cached count only; the total is redundant with the body's
+  # `prompt_tokens` and the body is authoritative for the other counters.
+  defp cached_from_headers(nil), do: 0
+
+  defp cached_from_headers(headers) when is_list(headers) do
+    case List.keyfind(headers, @fireworks_cached_tokens_header, 0) do
+      {@fireworks_cached_tokens_header, value} -> parse_int(value)
+      _ -> 0
+    end
+  end
+
+  defp parse_int(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {n, _} when n >= 0 -> n
+      _ -> 0
+    end
+  end
+
+  defp parse_int(_), do: 0
 
   @doc """
   Extracts the cost reported by the provider, if any.
@@ -115,12 +161,20 @@ defmodule Tokengate.Proxy.UsageNormalizer do
 
   Same shape as the non-streaming response; returns nil when the chunk
   has no usage (all chunks except the last one).
-  """
-  @spec from_openai_stream_chunk(map()) :: usage() | nil
-  def from_openai_stream_chunk(%{"usage" => usage}) when is_map(usage),
-    do: normalize(:openai, %{"usage" => usage})
 
-  def from_openai_stream_chunk(_chunk), do: nil
+  `resp_headers` (optional) is the upstream's response headers — streaming
+  responses on some upstreams (Fireworks Serverless) carry the
+  cached-prompt-token split ONLY in headers, so the body's `usage` alone
+  undercounts cache reads.
+  """
+  @spec from_openai_stream_chunk(map(), [{String.t(), String.t()}] | nil) :: usage() | nil
+  def from_openai_stream_chunk(chunk, resp_headers \\ nil)
+
+  def from_openai_stream_chunk(%{"usage" => usage}, resp_headers) when is_map(usage) do
+    normalize(:openai, %{"usage" => usage}, resp_headers)
+  end
+
+  def from_openai_stream_chunk(_chunk, _resp_headers), do: nil
 
   defp get_int(map, key) when is_map(map) do
     case Map.get(map, key) do

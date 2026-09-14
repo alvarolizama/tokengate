@@ -26,13 +26,24 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     def call(conn, _opts) do
       {:ok, body, conn} = read_body(conn)
+      payload = Jason.decode!(body)
 
       if pid = :persistent_term.get({__MODULE__, :test_pid}, nil) do
-        send(pid, {:provider_request, Jason.decode!(body)})
+        send(pid, {:provider_request, payload})
         send(pid, {:provider_request_headers, conn.req_headers})
       end
 
       cond do
+        # Simulates a strictly-validating upstream (Fireworks): any of the
+        # configured fields present in the body is a hard 400.
+        rejected = rejected_fields(payload) ->
+          json(conn, 400, %{
+            "error" => %{
+              "message" => "Extra inputs are not permitted, field: '#{rejected}'",
+              "code" => 400
+            }
+          })
+
         "down" in conn.path_info ->
           json(conn, 500, %{"error" => %{"message" => "provider exploded"}})
 
@@ -114,10 +125,19 @@ defmodule TokengateWeb.ProxyControllerTest do
       |> put_resp_content_type("application/json")
       |> send_resp(status, Jason.encode!(map))
     end
+
+    # Strict-upstream simulation (Fireworks): 400s on any field listed in
+    # :persistent_term under {ProviderPlug, :reject_body_fields}.
+    defp rejected_fields(payload) do
+      reject = :persistent_term.get({__MODULE__, :reject_body_fields}, [])
+
+      Enum.find(reject, &Map.has_key?(payload, &1))
+    end
   end
 
   setup do
     :persistent_term.put({ProviderPlug, :test_pid}, self())
+    :persistent_term.put({ProviderPlug, :reject_body_fields}, [])
     start_supervised!({Bandit, plug: ProviderPlug, scheme: :http, ip: :loopback, port: @port})
     :ok
   end
@@ -748,7 +768,7 @@ defmodule TokengateWeb.ProxyControllerTest do
   defp collect_upstream_headers do
     for _ <- 1..100 do
       receive do
-        {:provider_request_headers, headers} -> headers
+        {:provider_request_headers, headers} -> List.flatten(headers)
       after
         0 -> nil
       end
@@ -818,6 +838,164 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert length(keys) >= 2, "expected multiple upstream attempts, got #{length(keys)}"
     assert Enum.all?(keys, &is_binary/1), "every attempt must carry the key"
     assert Enum.uniq(keys) |> length() == 1, "expected one stable key across attempts"
+  end
+
+  ## Per-provider request overrides ###########################################
+
+  # Reproduces the Fireworks 400 regression: the gateway injects
+  # `session_id` (OpenRouter's routing hint) into every chat body and
+  # Fireworks strictly rejects unknown fields. With the model_provider
+  # override omit_body_fields=["session_id"] the same request passes.
+  #
+  # The body needs a system + user opener so SessionId.derive/2 produces a
+  # fingerprint session_key — that's what triggers the gateway injection.
+  test "omit_body_fields strips gateway-injected fields for the strict upstream", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture(%{})
+    [mp] = Providers.list_model_providers(model.id)
+
+    {:ok, _} = Providers.update_model_provider(mp, %{omit_body_fields: ["session_id"]})
+    :persistent_term.put({ProviderPlug, :reject_body_fields}, ["session_id"])
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", %{
+        "model" => model.name,
+        "messages" => [
+          %{"role" => "system", "content" => "You are a helpful assistant."},
+          %{"role" => "user", "content" => "hola, ¿cómo vas?"}
+        ]
+      })
+
+    assert json_response(conn, 200)
+
+    receive do
+      {:provider_request, payload} -> refute Map.has_key?(payload, "session_id")
+    after
+      0 -> flunk("expected an upstream request")
+    end
+  end
+
+  test "without the override, session_id reaches the upstream and strict provider 400s", %{
+    conn: conn
+  } do
+    %{token: token, model: model} = proxy_fixture(%{})
+    :persistent_term.put({ProviderPlug, :reject_body_fields}, ["session_id"])
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", %{
+        "model" => model.name,
+        "messages" => [
+          %{"role" => "system", "content" => "You are a helpful assistant."},
+          %{"role" => "user", "content" => "hola, ¿cómo vas?"}
+        ]
+      })
+
+    assert json_response(conn, 400)
+
+    receive do
+      {:provider_request, payload} -> assert Map.has_key?(payload, "session_id")
+    after
+      0 -> flunk("expected an upstream request")
+    end
+  end
+
+  # Catalog-driven: a model_provider backed by a provider whose catalog key
+  # is "fireworks" must NEVER receive session_id (Fireworks 400s on unknown
+  # body fields) without any operator configuring omit_body_fields. The hint
+  # narrowing is provider knowledge (Catalog.session_hint_fields/1), not
+  # per-row data. The fixture's custom provider keeps its local test URL —
+  # only the catalog key is stamped onto it (builtin rows are identity-locked
+  # and point at the real Fireworks endpoint).
+  test "a fireworks-keyed provider never receives session_id (catalog-driven)", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture(%{})
+    [mp] = Providers.list_model_providers(model.id)
+
+    credential = Repo.get!(Tokengate.Providers.Credential, mp.credential_id)
+    provider = Repo.get!(Tokengate.Providers.Provider, credential.provider_id)
+
+    # The builtin fireworks row owns the unique key index; drop it so the
+    # fixture's local-URL provider can carry the catalog key for this test.
+    # CatalogSync re-creates the builtin on next boot.
+    Repo.get_by(Tokengate.Providers.Provider, key: "fireworks")
+    |> case do
+      nil -> :ok
+      builtin -> {:ok, _} = Repo.delete(builtin)
+    end
+
+    {:ok, _} = Providers.update_provider(provider, %{key: "fireworks"})
+
+    Tokengate.Routing.Cache.invalidate_all()
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", %{
+        "model" => model.name,
+        "messages" => [
+          %{"role" => "system", "content" => "You are a helpful assistant."},
+          %{"role" => "user", "content" => "hola, ¿cómo vas?"}
+        ]
+      })
+
+    assert json_response(conn, 200)
+
+    receive do
+      {:provider_request, payload} ->
+        refute Map.has_key?(payload, "session_id"),
+               "fireworks must not receive the OpenRouter-style session_id"
+
+        assert Map.has_key?(payload, "prompt_cache_key")
+    after
+      0 -> flunk("expected an upstream request")
+    end
+  end
+
+  test "extra_body merges operator fields into the upstream payload", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture(%{})
+    [mp] = Providers.list_model_providers(model.id)
+
+    {:ok, _} =
+      Providers.update_model_provider(mp, %{extra_body: %{"service_tier" => "priority"}})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+    assert json_response(conn, 200)
+
+    receive do
+      {:provider_request, payload} ->
+        assert payload["service_tier"] == "priority"
+        # Gateway-owned keys are protected from override merges.
+        refute Map.has_key?(payload, "extra_key")
+    after
+      0 -> flunk("expected an upstream request")
+    end
+  end
+
+  test "omit_headers removes forwarded hints for the upstream", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture(%{})
+    [mp] = Providers.list_model_providers(model.id)
+
+    {:ok, _} = Providers.update_model_provider(mp, %{omit_headers: ["x-session-id"]})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> put_req_header("user-agent", "test-agent/1.0")
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+    assert json_response(conn, 200)
+
+    headers = List.flatten(collect_upstream_headers())
+
+    refute Enum.any?(headers, fn {k, _v} -> k == "x-session-id" end)
+    # Non-omitted forwarded headers still travel.
+    assert Enum.any?(headers, fn {k, v} -> k == "user-agent" and v == "test-agent/1.0" end)
   end
 
   test "embeddings requests also carry an Idempotency-Key", %{conn: conn} do

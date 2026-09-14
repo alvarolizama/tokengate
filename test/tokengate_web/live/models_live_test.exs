@@ -329,6 +329,95 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert ap.sticky_ttl_ms == 60_000
   end
 
+  test "admin can set per-provider request overrides when creating a model provider", %{
+    conn: conn
+  } do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    model_record = create_model()
+
+    credential =
+      Tokengate.Repo.insert!(%Tokengate.Providers.Credential{
+        provider_id: provider.id,
+        name: "Test Cred",
+        api_key_encrypted: "sk-...",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
+    view |> element("#new-ap-#{model_record.id}") |> render_click()
+
+    html =
+      view
+      |> form("#model-provider-form", %{
+        model_provider: %{
+          credential_id: credential.id,
+          provider_model: "fireworks-strict",
+          priority: 1,
+          enabled: true,
+          extra_body_json: ~s({"service_tier": "priority"}),
+          omit_body_fields_csv: "session_id",
+          omit_headers_csv: "user-agent"
+        }
+      })
+      |> render_submit()
+
+    assert html =~ "Proveedor asignado"
+
+    ap =
+      Repo.one!(
+        from mp in Tokengate.Providers.ModelProvider, where: mp.model_id == ^model_record.id
+      )
+
+    assert ap.extra_body == %{"service_tier" => "priority"}
+    assert ap.omit_body_fields == ["session_id"]
+    assert ap.omit_headers == ["user-agent"]
+  end
+
+  test "edit form prefills the override fields from the stored values", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    model_record = create_model()
+
+    credential =
+      Tokengate.Repo.insert!(%Tokengate.Providers.Credential{
+        provider_id: provider.id,
+        name: "Test Cred",
+        api_key_encrypted: "sk-...",
+        status: "active"
+      })
+
+    mp =
+      Tokengate.Repo.insert!(%Tokengate.Providers.ModelProvider{
+        model_id: model_record.id,
+        credential_id: credential.id,
+        provider_model: "fireworks-strict",
+        enabled: true,
+        extra_body: %{"service_tier" => "priority"},
+        omit_body_fields: ["session_id"],
+        omit_headers: ["user-agent"]
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/admin/models")
+
+    view |> element("#edit-ap-#{mp.id}") |> render_click()
+
+    assert has_element?(
+             view,
+             "input[name='model_provider[omit_body_fields_csv]'][value='session_id']"
+           )
+
+    assert has_element?(
+             view,
+             "input[name='model_provider[omit_headers_csv]'][value='user-agent']"
+           )
+
+    # Textarea content is HTML-escaped (&#34;) — assert on the bare key.
+    assert render(view) =~ "service_tier"
+  end
+
   test "sticky_ttl_seconds below 1 second is rejected by the form", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()

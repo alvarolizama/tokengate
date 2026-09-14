@@ -15,6 +15,20 @@ defmodule Tokengate.Providers.Catalog do
     * `"openrouter"` — same surface, but embedding models are listed at
       `{base}/embeddings/models`.
 
+  ## Session-hint fields (`:session_hint_fields`)
+
+  The gateway attaches the conversation key to the upstream body as a
+  cache-routing hint (`session_id` for OpenRouter, `prompt_cache_key` for
+  OpenAI-style upstreams). Which fields are SAFE to send is provider
+  knowledge, so it lives here rather than in the proxy:
+
+    * omitting the key → `["session_id", "prompt_cache_key"]`, the
+      historical behaviour (both hints, tolerated as unknown fields);
+    * a provider that validates its body strictly declares ONLY the fields
+      it documents. Fireworks rejects unknown body fields with a 400, so it
+      declares `prompt_cache_key` alone — `session_id` is OpenRouter's
+      convention and must not reach it.
+
   ## Catalog rule
 
   Only providers that serve `/embeddings` under the SAME base path as chat
@@ -32,6 +46,16 @@ defmodule Tokengate.Providers.Catalog do
   # pay-per-token. Customs are their own group in the UI.
   @billing_modes ~w(subscription pay_per_token)
 
+  # Hints attached to every chat body unless a provider narrows the list.
+  # OpenRouter reads `session_id`; the OpenAI-compatible surface reads
+  # `prompt_cache_key`. Both are harmless no-ops on tolerant upstreams.
+  @default_session_hint_fields ~w(session_id prompt_cache_key)
+
+  # Fireworks documents `prompt_cache_key` (and
+  # `prompt_cache_isolation_key`) and validates strictly: an unknown body
+  # field is a 400. `session_id` is OpenRouter's convention, NOT Fireworks'.
+  @fireworks_session_hint_fields ~w(prompt_cache_key)
+
   @builtin [
     %{
       key: "openrouter",
@@ -47,7 +71,8 @@ defmodule Tokengate.Providers.Catalog do
       base_url: "https://api.fireworks.ai/inference/v1",
       dialect: "openai",
       billing: "pay_per_token",
-      capabilities: ["llm", "embedding"]
+      capabilities: ["llm", "embedding"],
+      session_hint_fields: @fireworks_session_hint_fields
     },
     %{
       key: "qwen_cloud",
@@ -154,6 +179,31 @@ defmodule Tokengate.Providers.Catalog do
 
   @doc "Valid dialects."
   def dialects, do: @dialects
+
+  @doc """
+  Body fields the gateway may attach as cache-routing hints for `key`.
+
+  Returns `@default_session_hint_fields` for a provider that does not narrow
+  the list (or unknown/custom keys). A strict provider declares only the
+  fields it documents, so the gateway never sends it an unknown one.
+
+      iex> Tokengate.Providers.Catalog.session_hint_fields("fireworks")
+      ["prompt_cache_key"]
+
+      iex> Tokengate.Providers.Catalog.session_hint_fields("openrouter")
+      ["session_id", "prompt_cache_key"]
+  """
+  @spec session_hint_fields(String.t() | nil) :: [String.t()]
+  def session_hint_fields(key \\ nil) do
+    case key && get(key) do
+      %{session_hint_fields: fields} when is_list(fields) -> fields
+      _ -> @default_session_hint_fields
+    end
+  end
+
+  @doc "The default session-hint fields (tolerant upstreams)."
+  @spec default_session_hint_fields() :: [String.t()]
+  def default_session_hint_fields, do: @default_session_hint_fields
 
   @doc "Valid sources."
   def sources, do: @sources

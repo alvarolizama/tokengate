@@ -283,7 +283,7 @@ defmodule TokengateWeb.ProxyController do
 
       case adapter_fun.(provider, route.credential, payload,
              receive_timeout: receive_timeout,
-             forwarded_headers: extract_forwarded_headers(conn)
+             forwarded_headers: extract_forwarded_headers(conn, route)
            ) do
         {:ok, body, latency_ms, resp_headers} ->
           Router.record_outcome(route, :success, latency_ms: latency_ms)
@@ -856,7 +856,7 @@ defmodule TokengateWeb.ProxyController do
     "x-title" => "x-title"
   }
 
-  defp extract_forwarded_headers(conn) do
+  defp extract_forwarded_headers(conn, route) do
     forwarded =
       @forwarded_header_keys
       |> Enum.reduce(%{}, fn {client_key, upstream_key}, acc ->
@@ -873,6 +873,17 @@ defmodule TokengateWeb.ProxyController do
     |> Map.put("x-session-id", conn.assigns[:session_key] || conn.assigns.api_key_hash)
     # Legacy hint for providers running automatic prefix caching.
     |> Map.put("x-session-affinity", conn.assigns[:affinity_key] || conn.assigns.api_key_hash)
+    |> drop_omitted_headers(route)
+  end
+
+  # Per model_provider header omissions (e.g. an upstream that rejects or
+  # misbehaves on forwarded hints). Only strips the forwarded set —
+  # authorization / content-type are adapter-owned and never forwarded here.
+  defp drop_omitted_headers(headers, route) do
+    case model_provider_setting(route, :omit_headers) || [] do
+      [] -> headers
+      omit -> Map.drop(headers, omit)
+    end
   end
 
   defp session_id_header(conn) do
@@ -933,7 +944,7 @@ defmodule TokengateWeb.ProxyController do
 
       case OpenAIAdapter.chat_completion(provider, route.credential, payload,
              receive_timeout: receive_timeout,
-             forwarded_headers: extract_forwarded_headers(conn)
+             forwarded_headers: extract_forwarded_headers(conn, route)
            ) do
         {:ok, body, latency_ms, resp_headers} ->
           Router.record_outcome(route, :success, latency_ms: latency_ms)
@@ -1098,7 +1109,7 @@ defmodule TokengateWeb.ProxyController do
 
     case OpenAIAdapter.stream_chat_completion(provider, route.credential, payload,
            receive_timeout: receive_timeout,
-           forwarded_headers: extract_forwarded_headers(conn)
+           forwarded_headers: extract_forwarded_headers(conn, route)
          ) do
       {:ok, pid} ->
         ref = Process.monitor(pid)
@@ -1262,11 +1273,54 @@ defmodule TokengateWeb.ProxyController do
     |> Map.put("messages", PromptOptimizer.stable_prefix(messages))
     |> Map.update!("messages", &PromptOptimizer.lazy_cleanup/1)
     |> Map.update!("messages", &PromptOptimizer.strip_reasoning/1)
-    |> attach_session_hint(session_key)
+    |> attach_session_hint(session_key, provider_key(route_ctx))
     |> CacheControlInjector.inject(Map.get(route_ctx, :cache_control_enabled, false))
+    # Operator overrides run LAST so they can strip/replace anything the
+    # gateway injected (e.g. Fireworks must drop `session_id`).
+    |> apply_request_overrides(route_ctx)
   end
 
   defp maybe_optimize(payload, _model_model), do: payload
+
+  # Per model_provider upstream overrides, applied last in the payload
+  # pipeline so they win over every gateway injection (session hints,
+  # cache_control). Defaults are no-ops. `model`, `messages` and
+  # `stream_options` are protected: the gateway owns them (model mapping,
+  # passthrough body, usage accounting) and an override there would break
+  # routing or cost tracking.
+  @protected_body_keys ~w(model messages stream_options)
+
+  defp apply_request_overrides(payload, route_ctx) do
+    extra = model_provider_setting(route_ctx, :extra_body) || %{}
+    omit = model_provider_setting(route_ctx, :omit_body_fields) || []
+
+    payload
+    |> Map.merge(Map.drop(extra, @protected_body_keys))
+    |> Map.drop(omit -- @protected_body_keys)
+  end
+
+  # The provider's catalog key, used to select the safe session-hint fields
+  # (and any other provider-specific behaviour). Tolerates structs or plain
+  # maps and a missing credential/provider — nil falls back to the tolerant
+  # default field list.
+  defp provider_key(route_ctx) do
+    mp = Map.get(route_ctx, :model_provider) || Map.get(route_ctx, "model_provider") || %{}
+    credential = Map.get(mp, :credential) || Map.get(mp, "credential") || %{}
+    provider = Map.get(credential, :provider) || Map.get(credential, "provider") || %{}
+
+    Map.get(provider, :key) || Map.get(provider, "key")
+  end
+
+  # Reads a model_provider field tolerating structs or plain maps (the route
+  # may come from the routing cache) and atom or string keys.
+  defp model_provider_setting(route_ctx, key) do
+    mp = Map.get(route_ctx, :model_provider) || %{}
+
+    case Map.get(mp, key, :__missing__) do
+      :__missing__ -> Map.get(mp, Atom.to_string(key))
+      value -> value
+    end
+  end
 
   # Context for the pre-flight transform pipeline: everything the passes
   # need that isn't in the payload itself. Built once per attempt from the
@@ -1277,20 +1331,28 @@ defmodule TokengateWeb.ProxyController do
       session_key: conn.assigns[:session_key],
       cache_control_enabled:
         Map.get(route.model_provider || %{}, :cache_control_enabled, false) == true or
-          Map.get(route.model_provider || %{}, "cache_control_enabled", false) == true
+          Map.get(route.model_provider || %{}, "cache_control_enabled", false) == true,
+      model_provider: route.model_provider,
+      extra_body: model_provider_setting(route, :extra_body),
+      omit_body_fields: model_provider_setting(route, :omit_body_fields),
+      omit_headers: model_provider_setting(route, :omit_headers)
     }
   end
 
-  # Attaches the conversation key as the upstream cache-routing hint:
-  # OpenRouter reads `session_id` (body), OpenAI reads `prompt_cache_key`.
-  # Both are harmless no-ops on upstreams that ignore unknown fields —
-  # the OpenAI-compatible surface tolerates extra body fields.
-  defp attach_session_hint(payload, nil), do: payload
+  # Attaches the conversation key as the upstream cache-routing hint.
+  #
+  # WHICH fields are safe to attach is provider knowledge declared in the
+  # catalog: `session_id` is OpenRouter's convention, `prompt_cache_key` is
+  # the OpenAI-compatible one. Tolerant upstreams ignore unknown fields, but
+  # a strict one (Fireworks) rejects them with a 400 — so the field list is
+  # narrowed per provider instead of assumed. See
+  # `Tokengate.Providers.Catalog.session_hint_fields/1`.
+  defp attach_session_hint(payload, nil, _provider_key), do: payload
 
-  defp attach_session_hint(payload, session_key) when is_binary(session_key) do
-    payload
-    |> Map.put_new("session_id", session_key)
-    |> Map.put_new("prompt_cache_key", session_key)
+  defp attach_session_hint(payload, session_key, provider_key) when is_binary(session_key) do
+    provider_key
+    |> Tokengate.Providers.Catalog.session_hint_fields()
+    |> Enum.reduce(payload, fn field, acc -> Map.put_new(acc, field, session_key) end)
   end
 
   defp await_first_chunk(pid, ref) do
@@ -1394,7 +1456,7 @@ defmodule TokengateWeb.ProxyController do
   defp decode_usage_chunk(chunk, route, acc) do
     case Jason.decode(chunk) do
       {:ok, decoded} ->
-        case UsageNormalizer.from_openai_stream_chunk(decoded) do
+        case UsageNormalizer.from_openai_stream_chunk(decoded, acc.resp_headers) do
           nil ->
             if acc.usage == nil do
               {chunk, %{acc | completion: [extract_delta_text(decoded) | acc.completion]}}
@@ -1538,7 +1600,10 @@ defmodule TokengateWeb.ProxyController do
   ## Success finalization #######################################################
 
   defp finalize_success(conn, route, body, latency_ms, member, resp_headers) do
-    usage = UsageNormalizer.normalize(:openai, body) || fallback_usage(conn.body_params, body)
+    usage =
+      UsageNormalizer.normalize(:openai, body, resp_headers) ||
+        fallback_usage(conn.body_params, body)
+
     provider_reported = UsageNormalizer.extract_reported_cost(:openai, body, resp_headers)
 
     cost = cost_with_fallback(route, provider_reported, usage)

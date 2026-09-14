@@ -61,6 +61,27 @@ defmodule Tokengate.Providers.ModelProvider do
     # breakpoints (Anthropic, z.ai's OpenAI-compatible endpoint, OpenRouter
     # passthrough) benefit; elsewhere it's dead payload weight.
     field :cache_control_enabled, :boolean, default: false
+    # Per-upstream request overrides (defaults are no-ops):
+    #   * extra_body — JSON merged into the upstream request body (e.g.
+    #     Fireworks' `{"service_tier": "priority"}` serving-path opt-in).
+    #   * omit_body_fields — keys stripped from the upstream body (e.g.
+    #     Fireworks 400s on the OpenRouter-style `session_id` hint).
+    #   * omit_headers — forwarded headers NOT sent to this upstream.
+    #     Never applies to authorization / content-type.
+    field :extra_body, :map, default: %{}
+    field :omit_body_fields, {:array, :string}, default: []
+    field :omit_headers, {:array, :string}, default: []
+    # Form fields for the per-upstream overrides. The LiveView form submits
+    # free text (JSON string for extra_body, comma-separated lists for the
+    # omit fields); these virtual fields mirror the stored ones the same
+    # way sticky_ttl_seconds mirrors sticky_ttl_ms. Programmatic writes may
+    # set the real fields directly.
+    field :extra_body_json, :string, virtual: true
+    # Fireworks' serving-path opt-in checkbox; mirrors extra_body["service_tier"].
+    # Only rendered for fireworks-backed model_providers in the admin form.
+    field :service_tier_priority, :boolean, virtual: true, default: false
+    field :omit_body_fields_csv, :string, virtual: true
+    field :omit_headers_csv, :string, virtual: true
     field :scope, :string, virtual: true, default: "global"
 
     belongs_to :model, Tokengate.Providers.Model
@@ -71,6 +92,10 @@ defmodule Tokengate.Providers.ModelProvider do
 
     timestamps(type: :utc_datetime)
   end
+
+  # Gateway-owned payload keys an operator override must never touch:
+  # model mapping, passthrough body and usage accounting depend on them.
+  @protected_body_keys ["model", "messages", "stream_options"]
 
   @doc false
   def changeset(model_provider, attrs) do
@@ -84,6 +109,13 @@ defmodule Tokengate.Providers.ModelProvider do
       :sticky_ttl_ms,
       :sticky_ttl_seconds,
       :cache_control_enabled,
+      :extra_body,
+      :omit_body_fields,
+      :omit_headers,
+      :extra_body_json,
+      :service_tier_priority,
+      :omit_body_fields_csv,
+      :omit_headers_csv,
       :input_cost_per_million,
       :output_cost_per_million,
       :cache_cost_per_million,
@@ -105,6 +137,7 @@ defmodule Tokengate.Providers.ModelProvider do
       less_than_or_equal_to: 24 * 60 * 60
     )
     |> sync_sticky_ttl_fields()
+    |> sync_override_fields()
     |> validate_exclusive_scope()
     |> foreign_key_constraint(:model_id)
     |> foreign_key_constraint(:credential_id)
@@ -155,6 +188,160 @@ defmodule Tokengate.Providers.ModelProvider do
   # -------------------------------------------------------------------
   # Validations
   # -------------------------------------------------------------------
+
+  # Sync the virtual form fields into the stored ones. JSON/csv parsing
+  # errors surface as changeset errors on the virtual field so they render
+  # next to the input that produced them.
+  defp sync_override_fields(changeset) do
+    changeset
+    |> sync_extra_body()
+    # Header names are case-insensitive (normalized to lowercase); JSON
+    # body keys are case-sensitive and kept as typed.
+    |> sync_omit_list(:omit_body_fields_csv, :omit_body_fields, false)
+    |> sync_omit_list(:omit_headers_csv, :omit_headers, true)
+    |> sync_service_tier_priority()
+  end
+
+  # `service_tier: "priority"` is Fireworks' serving-path opt-in (higher
+  # reliability during peak periods, priced at a premium). Exposed as a
+  # checkbox that mirrors `extra_body["service_tier"]` so operators don't
+  # hand-write JSON. The checkbox only rewrites the key it owns — a
+  # hand-written extra_body JSON still wins when both are submitted (the
+  # raw-JSON path runs first and this pass only touches the key when the
+  # checkbox param is present).
+  defp sync_service_tier_priority(changeset) do
+    case param_submitted?(changeset, :service_tier_priority) do
+      checked when checked in [true, "true", "on"] ->
+        put_change(changeset, :extra_body, service_tier_merge(changeset, "priority"))
+
+      # Absent param (programmatic update) leaves extra_body untouched;
+      # a submitted-but-unchecked checkbox drops the key.
+      :not_submitted ->
+        changeset
+
+      _unchecked ->
+        put_change(changeset, :extra_body, service_tier_drop(changeset))
+    end
+  end
+
+  defp service_tier_merge(changeset, tier) do
+    (get_field(changeset, :extra_body) || %{})
+    |> Map.put("service_tier", tier)
+  end
+
+  defp service_tier_drop(changeset) do
+    (get_field(changeset, :extra_body) || %{})
+    |> Map.delete("service_tier")
+  end
+
+  defp sync_extra_body(changeset) do
+    case param_submitted?(changeset, :extra_body_json) do
+      :not_submitted ->
+        changeset
+
+      submitted ->
+        case json_extra_body(submitted) do
+          {:ok, map} ->
+            case Enum.find(Map.keys(map), &(&1 in @protected_body_keys)) do
+              nil -> put_change(changeset, :extra_body, map)
+              key -> add_error(changeset, :extra_body_json, "no se puede sobrescribir \"#{key}\"")
+            end
+
+          {:error, reason} ->
+            add_error(changeset, :extra_body_json, "JSON inválido: #{reason}")
+        end
+    end
+  end
+
+  # cast/3 converts submitted "" to nil for string fields, so emptiness is
+  # indistinguishable from absence via get_field/2. The raw params keep the
+  # distinction: absent key = programmatic update that must not touch the
+  # stored value; present-but-empty = the form field was cleared.
+  defp param_submitted?(changeset, field) do
+    string_key = Atom.to_string(field)
+    params = changeset.params
+
+    cond do
+      Map.has_key?(params, field) -> Map.get(params, field)
+      Map.has_key?(params, string_key) -> Map.get(params, string_key)
+      true -> :not_submitted
+    end
+  end
+
+  defp json_extra_body(json) when is_binary(json) do
+    if String.trim(json) == "" do
+      {:ok, %{}}
+    else
+      parse_json_object(json)
+    end
+  end
+
+  defp json_extra_body(nil), do: {:ok, %{}}
+
+  defp json_extra_body(other) do
+    # A map arriving through extra_body_json means a programmatic caller
+    # passed the map directly — accept it (JSON round-trip safe).
+    if is_map(other) and not Map.has_key?(other, :__struct__) do
+      {:ok, other}
+    else
+      {:error, "se esperaba un objeto"}
+    end
+  end
+
+  defp parse_json_object(json) do
+    case Jason.decode(String.trim(json)) do
+      {:ok, %{} = map} ->
+        # Reject arrays decoded as maps with integer keys is unnecessary —
+        # Jason decodes arrays to lists. A bare list or scalar is invalid.
+        {:ok, map}
+
+      {:ok, _other} ->
+        {:error, "se esperaba un objeto"}
+
+      {:error, %Jason.DecodeError{} = e} ->
+        {:error, Exception.message(e)}
+    end
+  end
+
+  @reserved_headers ["authorization", "content-type"]
+
+  defp sync_omit_list(changeset, csv_field, stored_field, downcase?) do
+    case param_submitted?(changeset, csv_field) do
+      :not_submitted ->
+        changeset
+
+      submitted when is_binary(submitted) ->
+        items =
+          submitted
+          |> String.split(",", trim: true)
+          |> Enum.map(&String.trim/1)
+          |> Enum.map(fn item -> if downcase?, do: String.downcase(item), else: item end)
+          |> Enum.reject(&(&1 == ""))
+          |> Enum.uniq()
+
+        cond do
+          stored_field == :omit_body_fields and Enum.any?(items, &(&1 in @protected_body_keys)) ->
+            blocked = Enum.find(items, &(&1 in @protected_body_keys))
+
+            add_error(changeset, csv_field, "no se puede omitir \"#{blocked}\"")
+
+          true ->
+            case Enum.find(items, &(&1 in @reserved_headers)) do
+              nil ->
+                put_change(changeset, stored_field, items)
+
+              reserved ->
+                add_error(changeset, csv_field, "no se puede omitir \"#{reserved}\"")
+            end
+        end
+
+      other when is_list(other) ->
+        items =
+          Enum.map(other, fn item -> if downcase?, do: String.downcase(item), else: item end)
+
+        put_change(changeset, stored_field, items)
+    end
+  end
 
   defp validate_exclusive_scope(changeset) do
     member_id = get_field(changeset, :exclusive_to_group_member_id)
