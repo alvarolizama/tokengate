@@ -16,6 +16,12 @@ defmodule Tokengate.Proxy.PromptOptimizer do
       to exactly two, and trims leading/trailing whitespace. Non-string
       content (lists, maps, nil) is left completely untouched.
 
+    * `strip_reasoning/1` — removes `reasoning_content` (and the Anthropic
+      `thinking` block) from historical `assistant` messages. Reasoning is
+      an output artifact: re-sending it in the conversation history burns
+      input tokens that the model recomputes anyway, and it breaks prefix
+      stability when clients truncate it differently each turn.
+
   Both functions return a brand-new list; the input is never mutated.
   """
 
@@ -79,6 +85,35 @@ defmodule Tokengate.Proxy.PromptOptimizer do
   end
 
   def lazy_cleanup(_), do: []
+
+  @doc """
+  Removes reasoning artifacts from historical `assistant` messages:
+
+    * drops the `reasoning_content` field (GLM / DeepSeek / Qwen dialects)
+    * drops the `thinking` block (Anthropic-style messages)
+    * drops the `reasoning` field (OpenAI Responses-style re-sends)
+
+  Only `assistant` messages are touched; the final turn's reasoning (if the
+  client intentionally included it) follows the same rule — reasoning is
+  never a useful prefix. The LAST assistant message is treated identically:
+  providers recompute reasoning server-side regardless.
+  """
+  @spec strip_reasoning([map()]) :: [map()]
+  def strip_reasoning(messages) when is_list(messages) do
+    Enum.map(messages, fn
+      %{"role" => "assistant"} = msg -> strip_reasoning_fields(msg)
+      msg -> msg
+    end)
+  end
+
+  def strip_reasoning(_), do: []
+
+  defp strip_reasoning_fields(message) do
+    message
+    |> Map.delete("reasoning_content")
+    |> Map.delete("thinking")
+    |> Map.delete("reasoning")
+  end
 
   ## Internals -------------------------------------------------------------
 
