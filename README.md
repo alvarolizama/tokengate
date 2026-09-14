@@ -16,8 +16,6 @@
 
 </div>
 
-> **Note:** the admin UI language is Spanish; the proxy API and this README are English.
-
 ## What is TokenGate
 
 TokenGate sits between your agents/apps and the model providers. Clients call TokenGate
@@ -211,4 +209,6 @@ mix precommit   # compile --warnings-as-errors → deps.unlock --unused → deps
 
 ## License
 
-MIT
+Released under the [MIT License](LICENSE) — Copyright (c) 2026 Álvaro Lizama.
+The license covers the whole repository: the Phoenix server, the admin UI and
+the Docker production image. Third-party dependencies keep their own licenses.
