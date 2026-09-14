@@ -421,6 +421,26 @@ defmodule Tokengate.Budgets do
   end
 
   @doc """
+  Per-service monthly spend (local month for `timezone`). Returns
+  `%{service_id => Decimal.t()}` — used by the admin services page for the
+  "Gasto mensual" column. Services have no `group_member_id`; their logs carry
+  `service_id`.
+  """
+  @spec spend_by_service(String.t()) :: %{term() => Decimal.t()}
+  def spend_by_service(timezone \\ @default_timezone) do
+    service_spend_map(Periods.start_of_month_utc(timezone))
+  end
+
+  defp service_spend_map(from) do
+    RequestLog
+    |> where([rl], not is_nil(rl.service_id) and rl.inserted_at >= ^from)
+    |> group_by([rl], rl.service_id)
+    |> select([rl], {rl.service_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
+    |> Repo.all()
+    |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
+  end
+
+  @doc """
   Last request timestamp per member, across all time.
   Returns `%{member_id => DateTime.t()}` — members without requests are missing.
   """

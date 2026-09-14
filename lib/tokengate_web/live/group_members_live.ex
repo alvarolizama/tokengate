@@ -771,9 +771,9 @@ defmodule TokengateWeb.GroupMembersLive do
                 <tr>
                   <th>Miembro</th>
                   <th>Límites</th>
+                  <th>Modelos</th>
                   <th>Gasto/mes</th>
                   <th>Uso</th>
-                  <th>Modelos</th>
                   <th class="text-right">Acciones</th>
                 </tr>
               </thead>
@@ -817,20 +817,6 @@ defmodule TokengateWeb.GroupMembersLive do
                       </span>
                     </p>
                   </td>
-                  <td class="font-mono text-sm">${format_decimal(mb.monthly_spend)}</td>
-                  <td>
-                    <% tier = get_member_tier(@usage_tiers, member.id) %>
-                    <%= if tier do %>
-                      <span
-                        class={["badge badge-sm", tier_badge_class(tier.tier)]}
-                        title={"Score: #{tier.score} | Peak RPM: #{tier.peak_rpm} | Días activos: #{tier.active_days} | Requests: #{tier.request_count}"}
-                      >
-                        {String.capitalize(tier.tier)}
-                      </span>
-                    <% else %>
-                      <span class="badge badge-sm badge-ghost" title="Sin actividad en 30 días">—</span>
-                    <% end %>
-                  </td>
                   <td>
                     <div class="flex items-center gap-1.5 flex-wrap">
                       <button
@@ -851,6 +837,20 @@ defmodule TokengateWeb.GroupMembersLive do
                       </span>
                     </div>
                   </td>
+                  <td class="font-mono text-sm">${format_decimal(mb.monthly_spend)}</td>
+                  <td>
+                    <% tier = get_member_tier(@usage_tiers, member.id) %>
+                    <%= if tier do %>
+                      <span
+                        class={["badge badge-sm", tier_badge_class(tier.tier)]}
+                        title={"Score: #{tier.score} | Peak RPM: #{tier.peak_rpm} | Días activos: #{tier.active_days} | Requests: #{tier.request_count}"}
+                      >
+                        {String.capitalize(tier.tier)}
+                      </span>
+                    <% else %>
+                      <span class="badge badge-sm badge-ghost" title="Sin actividad en 30 días">—</span>
+                    <% end %>
+                  </td>
                   <td class="text-right">
                     <div class="flex gap-0.5 justify-end">
                       <.link
@@ -862,22 +862,13 @@ defmodule TokengateWeb.GroupMembersLive do
                         <.icon name="hero-chart-bar" class="w-3.5 h-3.5" />
                       </.link>
                       <button
-                        phx-click="clear_sticky_routes"
-                        phx-value-id={member.id}
-                        class="btn btn-xs btn-ghost"
-                        id={"clear-sticky-#{member.id}"}
-                        title="Limpiar sticky routes (fuerza re-ruteo)"
-                      >
-                        <.icon name="hero-arrow-path" class="w-3.5 h-3.5" />
-                      </button>
-                      <button
                         phx-click="edit_overrides"
                         phx-value-id={member.id}
                         class="btn btn-xs btn-ghost"
                         id={"edit-overrides-#{member.id}"}
                         title="Editar extras"
                       >
-                        <.icon name="hero-adjustments-horizontal" class="w-3.5 h-3.5" />
+                        <.icon name="hero-pencil" class="w-3.5 h-3.5" />
                       </button>
                       <button
                         phx-click="replace_key"
@@ -901,6 +892,15 @@ defmodule TokengateWeb.GroupMembersLive do
                           <.icon name="hero-no-symbol" class="w-3.5 h-3.5" />
                         </button>
                       <% end %>
+                      <button
+                        phx-click="clear_sticky_routes"
+                        phx-value-id={member.id}
+                        class="btn btn-xs btn-ghost"
+                        id={"clear-sticky-#{member.id}"}
+                        title="Limpiar sticky routes (fuerza re-ruteo)"
+                      >
+                        <.icon name="hero-arrow-path" class="w-3.5 h-3.5" />
+                      </button>
                       <button
                         phx-click="remove_member"
                         phx-value-id={member.id}

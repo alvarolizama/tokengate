@@ -13,11 +13,14 @@ defmodule TokengateWeb.ServicesLive do
   import TokengateWeb.AdminComponents
   alias Tokengate.Accounts
   alias Tokengate.Accounts.Service
+  alias Tokengate.Budgets
+  alias Tokengate.Logs
+  alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Providers
   alias Tokengate.Providers.{Model, ServiceModel}
   alias Tokengate.Repo
 
-  @sort_columns ~w(name group requests spend inserted_at)a
+  @sort_columns ~w(name group requests monthly_spend total_spend inserted_at)a
 
   @impl true
   def mount(_params, _session, socket) do
@@ -93,6 +96,20 @@ defmodule TokengateWeb.ServicesLive do
       |> Repo.all()
 
     stats = service_stats(Enum.map(services, & &1.id), socket)
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
+
+    # Gasto mensual / total por servicio — mismas columnas que la tabla de
+    # Usuarios. Agregados whole-table cacheados (5s TTL) para no re-escanear
+    # request_logs en cada keystroke de búsqueda/orden.
+    monthly_spend =
+      DashboardCache.fetch_or_compute({:services_monthly_spend, timezone}, fn ->
+        Budgets.spend_by_service(timezone)
+      end)
+
+    total_spend =
+      DashboardCache.fetch_or_compute({:services_total_spend}, fn ->
+        Logs.total_spend_by_service()
+      end)
 
     socket
     |> assign(:all_services, services)
@@ -100,6 +117,8 @@ defmodule TokengateWeb.ServicesLive do
     |> assign(:granted_models, granted_models)
     |> assign(:models, models)
     |> assign(:service_stats, stats)
+    |> assign(:monthly_spend_by_service, monthly_spend)
+    |> assign(:total_spend_by_service, total_spend)
     |> assign(:supervisors_map, build_supervisors_map(Enum.map(services, & &1.id)))
     |> stream_services()
   end
@@ -165,22 +184,27 @@ defmodule TokengateWeb.ServicesLive do
   ## Sorting ---------------------------------------------------------------
 
   defp sort_services(services, field, direction, socket) do
-    stats = socket.assigns.service_stats
+    ctx = %{
+      stats: socket.assigns.service_stats,
+      monthly_spend: socket.assigns.monthly_spend_by_service,
+      total_spend: socket.assigns.total_spend_by_service
+    }
 
     Enum.sort_by(
       services,
-      fn s -> sort_value(s, field, stats) end,
+      fn s -> sort_value(s, field, ctx) end,
       fn a, b ->
         if direction == :asc, do: compare_vals(a, b) != :gt, else: compare_vals(a, b) != :lt
       end
     )
   end
 
-  defp sort_value(s, :name, _stats), do: String.downcase(s.name || "")
-  defp sort_value(s, :group, _stats), do: String.downcase((s.group && s.group.name) || "")
-  defp sort_value(s, :requests, stats), do: stat_value(s, stats, :total_requests)
-  defp sort_value(s, :spend, stats), do: stat_value(s, stats, :total_cost)
-  defp sort_value(s, :inserted_at, _stats), do: s.inserted_at
+  defp sort_value(s, :name, _ctx), do: String.downcase(s.name || "")
+  defp sort_value(s, :group, _ctx), do: String.downcase((s.group && s.group.name) || "")
+  defp sort_value(s, :requests, ctx), do: stat_value(s, ctx.stats, :total_requests)
+  defp sort_value(s, :monthly_spend, ctx), do: Map.get(ctx.monthly_spend, s.id)
+  defp sort_value(s, :total_spend, ctx), do: Map.get(ctx.total_spend, s.id)
+  defp sort_value(s, :inserted_at, _ctx), do: s.inserted_at
 
   defp stat_value(s, stats, key) do
     case Map.get(stats, s.id) do
@@ -532,7 +556,10 @@ defmodule TokengateWeb.ServicesLive do
   defp toggle_sort_direction(:desc), do: :asc
 
   # Numeric columns start desc (biggest spenders / most requests first).
-  defp default_direction_for(field) when field in [:requests, :spend, :inserted_at], do: :desc
+  defp default_direction_for(field)
+       when field in [:requests, :monthly_spend, :total_spend, :inserted_at],
+       do: :desc
+
   defp default_direction_for(_), do: :asc
 
   def granted_alias_ids(granted_models, service_id) do
@@ -912,6 +939,8 @@ defmodule TokengateWeb.ServicesLive do
                     direction={@sort_direction}
                   />
                 </th>
+                <th>Modelos</th>
+                <th>API Key</th>
                 <th class="text-right">
                   <.sort_button
                     event="sort_services"
@@ -925,15 +954,23 @@ defmodule TokengateWeb.ServicesLive do
                 <th class="text-right">
                   <.sort_button
                     event="sort_services"
-                    field={:spend}
-                    label="Gasto 30d"
+                    field={:monthly_spend}
+                    label="Gasto mensual"
                     current={@sort_field}
                     direction={@sort_direction}
                     align="right"
                   />
                 </th>
-                <th>Modelos</th>
-                <th>API Key</th>
+                <th class="text-right">
+                  <.sort_button
+                    event="sort_services"
+                    field={:total_spend}
+                    label="Gasto total"
+                    current={@sort_field}
+                    direction={@sort_direction}
+                    align="right"
+                  />
+                </th>
                 <th>
                   <.sort_button
                     event="sort_services"
@@ -952,6 +989,8 @@ defmodule TokengateWeb.ServicesLive do
                   service={service}
                   granted_models={@granted_models}
                   stats={@service_stats}
+                  monthly_spend={@monthly_spend_by_service}
+                  total_spend={@total_spend_by_service}
                   supervisors_map={@supervisors_map}
                   timezone={@timezone}
                 />
@@ -975,6 +1014,8 @@ defmodule TokengateWeb.ServicesLive do
   attr :service, :map, required: true
   attr :granted_models, :map, required: true
   attr :stats, :map, required: true
+  attr :monthly_spend, :map, required: true
+  attr :total_spend, :map, required: true
   attr :supervisors_map, :map, required: true
   attr :timezone, :string, required: true
 
@@ -990,12 +1031,6 @@ defmodule TokengateWeb.ServicesLive do
     </td>
     <td class="text-sm">
       {(@service.group && @service.group.name) || "—"}
-    </td>
-    <td class="text-right text-xs font-mono">
-      {format_number(stat_for(@stats, @service.id, :total_requests))}
-    </td>
-    <td class="text-right text-xs font-mono">
-      ${format_decimal(stat_decimal(@stats, @service.id, :total_cost))}
     </td>
     <td>
       <button
@@ -1018,6 +1053,25 @@ defmodule TokengateWeb.ServicesLive do
             <span class="text-xs font-mono">{api_key.key_prefix}…</span>
             <span class={["badge badge-xs", key_status_badge(api_key.status)]}>{api_key.status}</span>
           </div>
+      <% end %>
+    </td>
+    <td class="text-right text-xs font-mono">
+      {format_number(stat_for(@stats, @service.id, :total_requests))}
+    </td>
+    <td class="text-right text-xs font-mono" id={"monthly-spend-#{@service.id}"}>
+      <%= case Map.get(@monthly_spend, @service.id) do %>
+        <% nil -> %>
+          <span class="text-base-content/30">—</span>
+        <% v -> %>
+          ${format_decimal(v)}
+      <% end %>
+    </td>
+    <td class="text-right text-xs font-mono" id={"total-spend-#{@service.id}"}>
+      <%= case Map.get(@total_spend, @service.id) do %>
+        <% nil -> %>
+          <span class="text-base-content/30">—</span>
+        <% v -> %>
+          ${format_decimal(v)}
       <% end %>
     </td>
     <td class="text-xs text-base-content/50">
@@ -1070,13 +1124,6 @@ defmodule TokengateWeb.ServicesLive do
     case Map.get(stats, service_id) do
       nil -> 0
       stat -> Map.get(stat, key) || 0
-    end
-  end
-
-  defp stat_decimal(stats, service_id, key) do
-    case Map.get(stats, service_id) do
-      nil -> nil
-      stat -> Map.get(stat, key)
     end
   end
 end

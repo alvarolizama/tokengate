@@ -107,11 +107,31 @@ defmodule TokengateWeb.ServicesLiveTest do
 
     html =
       view
-      |> element("#sort-spend")
+      |> element("#sort-monthly_spend")
       |> render_click()
 
-    assert html =~ "Gasto 30d"
+    assert html =~ "Gasto mensual"
     assert html =~ "▼"
+  end
+
+  test "muestra las columnas Gasto mensual y Gasto total", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    service = service_fixture()
+
+    {:ok, _} =
+      Tokengate.Logs.log_request(%{
+        subject_type: "service",
+        service_id: service.id,
+        model_requested: "gpt-4o",
+        provider_cost_usd: Decimal.new("1.50"),
+        latency_ms: 100
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/admin/services")
+
+    assert has_element?(view, "#monthly-spend-#{service.id}", "$1.50")
+    assert has_element?(view, "#total-spend-#{service.id}", "$1.50")
   end
 
   test "eliminar servicio via modal de confirmación", %{conn: conn} do

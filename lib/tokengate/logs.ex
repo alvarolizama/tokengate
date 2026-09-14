@@ -697,6 +697,22 @@ defmodule Tokengate.Logs do
   end
 
   @doc """
+  Per-service total historical spend. Returns `%{service_id => Decimal.t()}`
+  — the sum of `provider_cost_usd` (the real cost) from all `request_logs`
+  grouped by service. Used by the admin services page for the "Gasto total"
+  column. Mirror of `total_spend_by_user/0`.
+  """
+  @spec total_spend_by_service() :: %{term() => Decimal.t()}
+  def total_spend_by_service do
+    RequestLog
+    |> where([rl], not is_nil(rl.service_id))
+    |> group_by([rl], rl.service_id)
+    |> select([rl], {rl.service_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
+    |> Repo.all()
+    |> Map.new(fn {service_id, cost} -> {service_id, Decimal.new(to_string(cost))} end)
+  end
+
+  @doc """
   Truncates all request logs. This is a **destructive operation** that
   removes every row from `request_logs` while preserving the table
   structure and partitions.

@@ -1060,6 +1060,14 @@ defmodule TokengateWeb.UsersLive do
     <td>
       <div class="flex gap-1">
         <.link
+          navigate={~p"/stats/users/#{@user.id}"}
+          class="btn btn-xs btn-ghost"
+          id={"stats-#{@user.id}"}
+          title="Ver stats consolidados de este usuario"
+        >
+          <.icon name="hero-chart-bar" class="w-3 h-3" />
+        </.link>
+        <.link
           :if={@user.id != @current_user.id && !root_admin?(@user)}
           href={~p"/impersonate/#{@user.id}"}
           method="post"
@@ -1069,14 +1077,6 @@ defmodule TokengateWeb.UsersLive do
           title="Ver como este usuario"
         >
           <.icon name="hero-eye" class="w-3 h-3" />
-        </.link>
-        <.link
-          navigate={~p"/stats/users/#{@user.id}"}
-          class="btn btn-xs btn-ghost"
-          id={"stats-#{@user.id}"}
-          title="Ver stats consolidados de este usuario"
-        >
-          <.icon name="hero-chart-bar" class="w-3 h-3" />
         </.link>
         <button
           phx-click="edit_user"
