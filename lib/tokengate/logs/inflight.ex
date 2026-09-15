@@ -144,50 +144,6 @@ defmodule Tokengate.Logs.Inflight do
   end
 
   @doc """
-  In-flight count per model — groups current entries by `model_requested`.
-  Returns a list of maps sorted by count descending, capped at `limit`
-  entries. Each map has:
-
-    * `:model` — the model_requested string
-    * `:count` — number of in-flight requests
-    * `:credential_name` — credential model (if available)
-    * `:provider_key_suffix` — last 4 chars of the provider API key
-  """
-  @spec count_by_model(non_neg_integer()) :: [
-          %{
-            model: String.t(),
-            count: non_neg_integer(),
-            credential_name: String.t() | nil,
-            provider_key_suffix: String.t() | nil
-          }
-        ]
-  def count_by_model(limit \\ 5) do
-    ensure_table()
-
-    # Project only the 3 fields we need instead of copying full 20-key maps.
-    # The match spec returns a 3-tuple {model, credential_name, key_suffix}.
-    @table
-    |> :ets.select([
-      {{:"$1", %{model_requested: :"$2", credential_name: :"$3", provider_key_suffix: :"$4"},
-        :"$5"}, [], [{{:"$2", :"$3", :"$4"}}]}
-    ])
-    |> Enum.reject(fn {model, _cred, _suffix} -> is_nil(model) end)
-    |> Enum.group_by(fn {model, _cred, _suffix} -> model end)
-    |> Enum.map(fn {model, group} ->
-      {_model, credential_name, provider_key_suffix} = List.first(group)
-
-      %{
-        model: model,
-        count: length(group),
-        credential_name: credential_name,
-        provider_key_suffix: provider_key_suffix
-      }
-    end)
-    |> Enum.sort_by(& &1.count, :desc)
-    |> Enum.take(limit)
-  end
-
-  @doc """
   In-flight count per user — groups current entries by `user_email`.
   Returns a list of maps sorted by count descending, capped at `limit`
   entries. Each map has:

@@ -3,6 +3,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
   import Phoenix.LiveViewTest
   alias Tokengate.{Accounts, Budgets, Logs, Periods, Providers}
+  alias Tokengate.Logs.Inflight
   alias Tokengate.Budgets.Manager
 
   defp unique, do: System.unique_integer([:positive])
@@ -892,8 +893,13 @@ defmodule TokengateWeb.StatsLiveTest do
     html = render(view)
     assert order_before?(html, "live-minute-chart", "live-tokens-minute-chart")
     assert order_before?(html, "live-tokens-minute-chart", "live-cost-minute-chart")
-    assert order_before?(html, "live-cost-minute-chart", "live-inflight-models")
-    assert order_before?(html, "live-inflight-models", "live-feed-card")
+    assert order_before?(html, "live-cost-minute-chart", "live-day-hour-chart")
+    assert order_before?(html, "live-day-hour-chart", "live-feed-card")
+
+    # El desglose "en vuelo por modelo" salió de esta tarjeta: estaba vacía
+    # casi siempre (el registry ETS sólo tiene filas mientras hay una request
+    # en curso) y /logs ya lista esos pending con su modelo.
+    refute has_element?(view, "#live-inflight-models")
   end
 
   test "requests_per_minute/1 llena la ventana con todas las métricas en cero", %{conn: conn} do
@@ -976,6 +982,138 @@ defmodule TokengateWeb.StatsLiveTest do
     for id <- ~w(live-minute-chart live-tokens-minute-chart live-cost-minute-chart) do
       assert has_element?(view, "##{id}-hint", "barras · 1 barra = 1 min · últimos 60 min")
     end
+  end
+
+  test "En vivo: la gráfica del día cruza hora × proveedor sobre el día UTC", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    # Proveedor A con 2 requests ($0.0100 + $0.0050) y proveedor B con 1
+    # ($0.0025), todos en la hora UTC en curso.
+    fixture = group_with_log(%{cost: "0.0100", inserted_at: now})
+    log_extra(fixture, 1)
+    %{provider: provider_b} = group_with_log(%{cost: "0.0025", inserted_at: now})
+
+    hour = DateTime.utc_now().hour
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    # Cabecera: el total del día (requests y costo), en el día UTC.
+    assert has_element?(view, "#live-day-hour-chart-total", "3 req · $0.0175")
+
+    # Leyenda: reparto del día por proveedor, ordenado por requests.
+    assert has_element?(view, "#live-day-hour-chart-legend", fixture.provider.name)
+    assert has_element?(view, "#live-day-hour-chart-legend", provider_b.name)
+
+    # La barra de la hora en curso lleva el desglose: su tooltip nombra hora,
+    # total, costo y cada proveedor con su conteo.
+    assert has_element?(view, "#live-day-hour-chart-hour-#{hour}[title*='3 req']")
+    assert has_element?(view, "#live-day-hour-chart-hour-#{hour}[title*='$0.0175']")
+
+    assert has_element?(
+             view,
+             "#live-day-hour-chart-hour-#{hour}[title*='#{fixture.provider.name} 2']"
+           )
+
+    assert has_element?(view, "#live-day-hour-chart-hour-#{hour}[title*='#{provider_b.name} 1']")
+
+    # Las 24 horas del día se dibujan siempre (el eje no desaparece) y una
+    # hora sin tráfico queda en cero — sin piso, no se inventa tráfico.
+    for h <- 0..23 do
+      assert has_element?(view, "#live-day-hour-chart-hour-#{h}")
+    end
+
+    empty_hour = if hour == 0, do: 1, else: 0
+    assert has_element?(view, "#live-day-hour-chart-hour-#{empty_hour} div[style*='height: 0%']")
+    assert has_element?(view, "#live-day-hour-chart-hour-#{empty_hour}[title*='sin tráfico']")
+
+    # La unidad y la ventana van declaradas, como en las gráficas por minuto.
+    assert has_element?(
+             view,
+             "#live-day-hour-chart-hint",
+             "barras apiladas · 1 barra = 1 hora del día UTC"
+           )
+  end
+
+  test "En vivo: la gráfica del día ignora el día UTC anterior", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    # 23:00 del día UTC anterior → fuera de "Hoy", que mide el día UTC (la
+    # misma ventana que reinicia el tope global), no el día local.
+    utc_start = Periods.start_of_day_utc("Etc/UTC")
+    group_with_log(%{cost: "0.005", inserted_at: DateTime.add(utc_start, -3600, :second)})
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    assert has_element?(view, "#live-day-hour-chart-total", "0 req")
+    assert has_element?(view, "#live-day-hour-chart", "sin tráfico en el día UTC todavía")
+    refute has_element?(view, "#live-day-hour-chart-legend")
+  end
+
+  test "En vivo: el tick de 3s refresca el conteo en vuelo sin tocar la tarjeta del día", %{
+    conn: conn
+  } do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    # El tick de 3s sólo reasigna el conteo en curso (registry ETS): la
+    # tarjeta del día se refresca por el bundle cacheado, no por el tick.
+    before = Inflight.count()
+    entry = Inflight.start_request(%{model_requested: "modelo-tick"})
+
+    send(view.pid, :live_tick)
+    assert render(view) =~ "live-day-hour-chart"
+
+    assigns = :sys.get_state(view.pid).socket.assigns
+    # El tick releyó el registry (no reusó el valor del mount) y ve la
+    # request que acabamos de registrar. Se compara contra el conteo actual
+    # y no contra `before + 1` porque la tabla ETS es global al BEAM: otras
+    # suites pueden registrar/cerrar entries mientras corre ésta.
+    assert assigns.inflight_count == Inflight.count()
+    assert assigns.inflight_count >= before + 1
+    # El desglose por modelo (y su assign) ya no existe en esta tab.
+    refute Map.has_key?(assigns, :inflight_by_model)
+
+    Inflight.finish_request(entry.id)
+  end
+
+  test "today_usage_by_hour_provider/0 zero-fillea 24 horas y agrupa por proveedor" do
+    rows = Logs.today_usage_by_hour_provider()
+
+    assert Enum.map(rows, & &1.hour) == Enum.to_list(0..23)
+    assert Enum.all?(rows, &(&1.total_requests == 0 and &1.providers == []))
+    assert Enum.all?(rows, &Decimal.equal?(&1.total_cost_usd, Decimal.new(0)))
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+    hour = now.hour
+
+    fixture = group_with_log(%{cost: "0.0100", inserted_at: now})
+    log_extra(fixture, 1)
+    %{provider: other} = group_with_log(%{cost: "0.0025", inserted_at: now})
+
+    rows = Logs.today_usage_by_hour_provider()
+    row = Enum.find(rows, &(&1.hour == hour))
+
+    assert row.total_requests == 3
+    assert Decimal.equal?(row.total_cost_usd, Decimal.new("0.0175"))
+
+    # Desglose ordenado por requests desc; el total de la hora es su suma.
+    assert [
+             %{provider_name: first, requests: 2, cost_usd: first_cost},
+             %{provider_name: second, requests: 1}
+           ] = row.providers
+
+    assert first == fixture.provider.name
+    assert second == other.name
+    assert Decimal.equal?(first_cost, Decimal.new("0.0150"))
+
+    # Las demás horas del día siguen vacías.
+    assert Enum.all?(rows, fn r -> r.hour == hour or r.total_requests == 0 end)
   end
 
   test "En vivo: el status del feed es el del cliente y no oculta la causa del proveedor", %{

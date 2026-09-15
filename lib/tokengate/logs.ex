@@ -27,6 +27,10 @@ defmodule Tokengate.Logs do
   # keeps `list_logs/1` bounded at 500 while exports can stream up to 50k.
   @export_limit 50_000
 
+  # Etiqueta de los logs sin proveedor en el desglose por hora del día
+  # (fallo antes del routing, o provider ya borrado).
+  @no_provider "sin proveedor"
+
   # ---------------------------------------------------------------------------
   # Insert
   # ---------------------------------------------------------------------------
@@ -691,6 +695,121 @@ defmodule Tokengate.Logs do
       avg_latency_ms: avg_to_float(result.avg_latency_ms),
       p95_latency_ms: avg_to_float(result.p95_latency_ms)
     }
+  end
+
+  @doc """
+  Uso del día UTC por hora, desglosado por proveedor — la gráfica "Hoy por
+  hora · por proveedor" del tab "En vivo".
+
+  Devuelve las 24 horas del día (`0..23`, zero-filled, para que el eje se
+  dibuje siempre) sobre la MISMA ventana que el resto de los "Hoy" del tab
+  (día UTC, el que reinicia el tope global):
+
+      %{
+        hour: 0..23,
+        total_requests: integer,
+        total_cost_usd: Decimal.t(),
+        providers: [%{provider_name: String.t(), requests: integer, cost_usd: Decimal.t()}]
+      }
+
+  `providers` va ordenado por requests desc (el frontend apila en ese
+  orden). Los logs sin `provider_id` caen en "#{@no_provider}".
+
+  Barata por diseño: **una** consulta agregada agrupada por (hora,
+  proveedor) sobre la partición del día en curso, sin joins — los nombres
+  de los proveedores se resuelven después, en una segunda consulta acotada
+  a los ids que realmente aparecieron.
+  """
+  @spec today_usage_by_hour_provider() :: [map()]
+  def today_usage_by_hour_provider do
+    from = Tokengate.Periods.start_of_day_utc("Etc/UTC")
+
+    bucketed =
+      RequestLog
+      |> where([rl], rl.inserted_at >= ^from)
+      |> select([rl], %{
+        hour: fragment("CAST(EXTRACT(hour FROM ?) AS integer)", rl.inserted_at),
+        provider_id: rl.provider_id,
+        id: rl.id,
+        cost_usd: rl.provider_cost_usd
+      })
+      |> subquery()
+
+    rows =
+      from(b in bucketed,
+        group_by: [b.hour, b.provider_id],
+        select: %{
+          hour: b.hour,
+          provider_id: b.provider_id,
+          request_count: count(b.id),
+          cost_usd: fragment("COALESCE(SUM(?), 0)", b.cost_usd)
+        }
+      )
+      |> Repo.all()
+
+    names = provider_names_by_id(rows)
+
+    rows
+    |> Enum.map(fn row ->
+      %{
+        hour: row.hour,
+        provider_name: Map.get(names, row.provider_id, @no_provider),
+        requests: row.request_count,
+        cost_usd: Decimal.new(to_string(row.cost_usd))
+      }
+    end)
+    |> Enum.group_by(& &1.hour)
+    |> then(fn by_hour ->
+      for hour <- 0..23 do
+        # Varios `provider_id` pueden compartir nombre (o no tener nombre):
+        # se colapsan en una sola fila del desglose, como en el resto de
+        # las gráficas apiladas del hub.
+        providers =
+          by_hour
+          |> Map.get(hour, [])
+          |> Enum.group_by(& &1.provider_name)
+          |> Enum.map(fn {name, entries} ->
+            %{
+              provider_name: name,
+              requests: Enum.reduce(entries, 0, &(&1.requests + &2)),
+              cost_usd:
+                Enum.reduce(entries, Decimal.new(0), fn e, acc ->
+                  Decimal.add(acc, e.cost_usd)
+                end)
+            }
+          end)
+          |> Enum.sort_by(& &1.requests, :desc)
+
+        %{
+          hour: hour,
+          total_requests: Enum.reduce(providers, 0, &(&1.requests + &2)),
+          total_cost_usd:
+            Enum.reduce(providers, Decimal.new(0), fn p, acc ->
+              Decimal.add(acc, p.cost_usd)
+            end),
+          providers: providers
+        }
+      end
+    end)
+  end
+
+  # Nombres de los proveedores presentes en las filas agregadas, en un solo
+  # viaje (tabla pequeña). Un id nil o ya borrado cae al fallback del
+  # llamador en vez de desaparecer del gráfico.
+  defp provider_names_by_id(rows) do
+    ids = rows |> Enum.map(& &1.provider_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+
+    case ids do
+      [] ->
+        %{}
+
+      ids ->
+        Tokengate.Providers.Provider
+        |> where([p], p.id in ^ids)
+        |> select([p], {p.id, p.name})
+        |> Repo.all()
+        |> Map.new()
+    end
   end
 
   defp error_rate(0, _errors), do: 0.0

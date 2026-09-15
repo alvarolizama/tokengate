@@ -329,10 +329,7 @@ defmodule TokengateWeb.StatsLive do
     if socket.assigns.live_action == :live do
       Process.send_after(self(), :live_tick, @live_refresh_interval_ms)
 
-      {:noreply,
-       socket
-       |> assign(:inflight_count, Inflight.count())
-       |> assign(:inflight_by_model, Inflight.count_by_model(5))}
+      {:noreply, assign(socket, :inflight_count, Inflight.count())}
     else
       {:noreply, socket}
     end
@@ -773,6 +770,9 @@ defmodule TokengateWeb.StatsLive do
           pulse: Logs.realtime_summary(%{}),
           today_metrics: today_metrics,
           minute_series: Logs.requests_per_minute(60),
+          # "Hoy por hora · por proveedor": un solo agregado (hora ×
+          # proveedor) sobre la partición del día UTC, sin joins.
+          day_by_hour: Logs.today_usage_by_hour_provider(),
           # Gasto real del día UTC — el mismo número que muestra Mantenimiento
           # — más cap y exentos del kill-switch. Día UTC y no local: el cap
           # resetea a las 00:00 UTC, así que barra, % y countdown tienen que
@@ -795,7 +795,7 @@ defmodule TokengateWeb.StatsLive do
     |> assign(:minute_cost_max, minute_cost_max(minute_series))
     |> assign(:org_budget, bundle.org_budget)
     |> assign(:inflight_count, Inflight.count())
-    |> assign(:inflight_by_model, Inflight.count_by_model(5))
+    |> assign(:day_by_hour, bundle.day_by_hour)
     |> assign(:last_sync_at, DateTime.utc_now())
     |> stream(:live_feed, feed_logs, reset: true)
   end
