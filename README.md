@@ -33,10 +33,9 @@ Think "LiteLLM, but as an Elixir app with a real admin UI".
 - **Model aliases + type routing** — clients ask for an alias (`gpt-4o`); the alias maps
   to one or more provider credentials with `model_type` (`llm`/`embedding`) routing to
   the right endpoint. Switching backends is an admin operation, not a client deploy.
-- **Tiered priority routing** — credentials ordered by priority and grouped into tiers:
-  healthy subscriptions (`included`) first, degraded subscriptions, then healthy
-  pay-per-token, then degraded pay-per-token. A slow-but-answering credential sinks to
-  the bottom of its tier until it recovers.
+- **Health + priority routing** — credentials ordered by configured priority, with slow
+  ones sinking below healthy ones until they recover. Billing surface (subscription vs
+  pay-per-token) does not rank candidates: order is priority alone.
 - **Fallback matrix + circuit breaker** — auth errors (401/402/403) disable the
   credential and fall back; timeouts and first-token timeouts fall back immediately;
   fast errors (5xx/429) retry before moving on. Per-credential breaker with configurable

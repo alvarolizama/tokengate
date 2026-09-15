@@ -1,22 +1,22 @@
 defmodule Tokengate.Routing.Priority do
   @moduledoc """
-  Default routing strategy: tiered, priority-based, cache-aware, and sticky.
+  Default routing strategy: health- and priority-based, cache-aware, and sticky.
 
   Selection algorithm:
 
-    1. Sort candidates by `{tier, priority}`: healthy subscription
-       (`billing_mode == "included"`) providers form the top tier, then
-       healthy pay-per-token, then degraded (slow) subscriptions, then
-       degraded pay-per-token. Within a tier, `priority` ASC NULLS LAST
+    1. Sort candidates by `{health, priority}`: healthy credentials first,
+       then degraded (slow) ones. Within a level, `priority` ASC NULLS LAST
        decides; the sort is stable so original order is preserved within
        ties. A credential is "degraded" when
        `Tokengate.Routing.CredentialHealth` has a live slow mark for it.
+       Billing surface does NOT rank candidates — a subscription is not
+       preferred over a pay-per-token provider.
     2. If `opts[:api_key_hash]` is present: look up the sticky entry in
        `StickyTracker`. If the stuck `model_provider_id` is among the
        candidates, satisfies `available?.(ap)`, **and** is not degraded,
        return it immediately (a degraded stuck provider releases the stick
-       so traffic flows back to a healthy tier).
-    3. Otherwise pick the first available candidate in tier+priority order,
+       so traffic flows back to a healthy one).
+    3. Otherwise pick the first available candidate in health+priority order,
        stick to it (only when `opts[:api_key_hash]` is present), and return it.
     4. If no candidate is available, return `{:error, :no_available_provider}`.
 
@@ -69,7 +69,7 @@ defmodule Tokengate.Routing.Priority do
           %ModelProvider{} = ap ->
             # Keep the stuck provider only while it's usable AND healthy. A
             # degraded (slow) stuck provider releases the stick so the user
-            # flows back to a healthy tier; on recovery the next request
+            # flows back to a healthy candidate; on recovery the next request
             # re-sticks (and restores the prompt-cache affinity).
             if available?.(ap) and not degraded_credential?(ap) do
               {:ok, ap}
@@ -93,50 +93,41 @@ defmodule Tokengate.Routing.Priority do
     end
   end
 
-  # Stable sort by {tier, priority}: tier ranks the candidate pool so a
-  # healthy provider always beats a degraded one, and among healthy ones a
-  # subscription (provider `billing_type == "subscription"`, i.e. derived
-  # billing_mode "included") always beats pay-per-token — regardless of raw
-  # priority. Within a tier, the configured priority ASC NULLS LAST decides,
-  # exactly as before. Tiers:
+  # Stable sort by {health, priority}: a healthy credential always beats a
+  # degraded (slow) one, and within a level the configured priority ASC
+  # NULLS LAST decides. Billing surface does NOT participate — subscription
+  # and pay-per-token providers compete on priority alone.
   #
-  #   0 — healthy, subscription   (use the paid-for plan)
-  #   1 — healthy, pay_per_token  (spend money, but fast)
-  #   2 — degraded, subscription  (slow plan, last resort)
-  #   3 — degraded, pay_per_token
+  # Levels:
   #
-  # A degraded subscription sinks BELOW a healthy pay-per-token: a slow
-  # "free" provider is worse than a fast paid one, because the whole point
-  # of preferring the subscription is that it serves traffic well.
+  #   0 — healthy
+  #   1 — degraded (slow)
+  #
+  # A degraded credential sinks below a healthy one regardless of its billing
+  # surface or priority: a slow provider is worse than a fast one, because
+  # the whole point of routing is that it serves traffic well.
   #
   # `Enum.sort_by/3` with a strict comparator is stable, so original order
-  # is preserved among candidates sharing tier and priority.
+  # is preserved among candidates sharing level and priority.
   @nil_sentinel 9_999_999_999
 
   defp sort_by_priority(candidates) do
-    Enum.sort_by(candidates, &sort_key/1, fn {tier_a, pri_a}, {tier_b, pri_b} ->
-      tier_a < tier_b or (tier_a == tier_b and pri_a <= pri_b)
+    Enum.sort_by(candidates, &sort_key/1, fn {health_a, pri_a}, {health_b, pri_b} ->
+      health_a < health_b or (health_a == health_b and pri_a <= pri_b)
     end)
   end
 
   defp sort_key(%ModelProvider{} = mp) do
-    {tier(mp), priority_value(mp)}
+    {health_level(mp), priority_value(mp)}
   end
 
-  defp tier(%ModelProvider{} = mp) do
-    degraded = degraded_credential?(mp)
-
-    case {ModelProvider.billing_mode(mp), degraded} do
-      {"included", false} -> 0
-      {"included", true} -> 2
-      {_, false} -> 1
-      {_, true} -> 3
-    end
+  defp health_level(%ModelProvider{} = mp) do
+    if degraded_credential?(mp), do: 1, else: 0
   end
 
   # Degradation is read from the credential's soft health mark. Candidates
   # without a loaded credential (isolated tests, hand-built structs) are
-  # treated as healthy so selection falls back to billing_mode + priority.
+  # treated as healthy so selection falls back to priority alone.
   defp degraded_credential?(%ModelProvider{credential: %Ecto.Association.NotLoaded{}}),
     do: false
 
@@ -168,17 +159,16 @@ defmodule Tokengate.Routing.Priority do
   # Returns the sticky TTL for a model_provider:
   #
   #   1. If the model_provider has an explicit `sticky_ttl_ms`, use it.
-  #   2. Otherwise fall back to the billing default (derived from the
-  #      provider surface) from config (included → 15 min, pay_per_token → 3 min).
+  #   2. Otherwise fall back to the single config default
+  #      (`proxy.sticky_default_ttl_ms`, 3 min). Billing surface does not
+  #      change the TTL anymore — every credential keeps prompt-cache affinity
+  #      for the same window.
   #
   defp sticky_ttl_for(%ModelProvider{sticky_ttl_ms: ms}) when not is_nil(ms), do: ms
 
-  defp sticky_ttl_for(%ModelProvider{} = mp) do
-    defaults =
-      Application.get_env(:tokengate, :proxy, [])
-      |> Keyword.get(:sticky_default_ttl_ms, %{})
-
-    Map.get(defaults, ModelProvider.billing_mode(mp), 15 * 60 * 1000)
+  defp sticky_ttl_for(%ModelProvider{}) do
+    Application.get_env(:tokengate, :proxy, [])
+    |> Keyword.get(:sticky_default_ttl_ms, 3 * 60 * 1000)
   end
 
   defp sticky_put(api_key_hash, model_id, model_provider_id, sticky_ttl_ms) do

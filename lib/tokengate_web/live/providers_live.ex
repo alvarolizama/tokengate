@@ -724,7 +724,7 @@ defmodule TokengateWeb.ProvidersLive do
                         {"Pay per token", "pay_per_token"},
                         {"Suscripción (plan incluido)", "subscription"}
                       ]}
-                      hint="Se elige una vez al crear el proveedor. Suscripción = costo $0 y prioridad de routing top."
+                      hint="Se elige una vez al crear el proveedor. Suscripción = costo $0 (no se cobra ni reserva budget)."
                     />
                   </div>
 

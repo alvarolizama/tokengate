@@ -15,8 +15,8 @@ defmodule TokengateWeb.ModelsLive do
   Manual per-provider pricing (input + cache + output per million tokens)
   serves as a fallback when the upstream omits cost. Billing is a
   provider-level attribute (`providers.billing_type`): subscription
-  providers cost $0 and form the top routing tier; the effective mode is
-  derived via `ModelProvider.billing_mode/1`.
+  providers cost $0; the effective mode is derived via
+  `ModelProvider.billing_mode/1`.
 
   ## Exclusive scope
 
@@ -2021,7 +2021,7 @@ defmodule TokengateWeb.ModelsLive do
                         field={@provider_form[:sticky_ttl_seconds]}
                         type="number"
                         label="TTL sticky (segundos)"
-                        hint="Vacío usa el default según facturación: included → 900 s (15 min), pay-per-token → 180 s (3 min). Si pones un valor, siempre se usa ese. Mínimo 1 s, máximo 86 400 s (24 h). Se guarda en milisegundos."
+                        hint="Vacío usa el default de config (180 s / 3 min) para toda credencial, sin importar la facturación. Si pones un valor, siempre se usa ese. Mínimo 1 s, máximo 86 400 s (24 h). Se guarda en milisegundos."
                       />
                     </div>
 

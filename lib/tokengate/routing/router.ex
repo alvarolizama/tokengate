@@ -126,7 +126,7 @@ defmodule Tokengate.Routing.Router do
 
     * `:success` → `breaker.record_success(credential.id)`. When
       `:latency_ms` is passed in `opts`, a slow success degrades the
-      credential (it sinks within its routing tier) and a fast one heals it.
+      credential (it sinks below healthy candidates) and a fast one heals it.
     * `{:failure, reason}` → `breaker.record_failure(credential.id, reason)`.
     * `{:failure, reason, error_message}` → same, also storing the upstream
       error message in the breaker state for observability.
@@ -136,9 +136,9 @@ defmodule Tokengate.Routing.Router do
   A `:rate_limited` failure against a `billing_mode == "included"` provider
   **does not** trip the circuit breaker: subscription 429s are a capacity
   signal ("too many RPM right now"), not a dead credential. Instead the
-  credential is degraded via `CredentialHealth.mark_slow/1` — it sinks to
-  the bottom of its routing tier so healthy pay-per-token providers absorb
-  the burst, while the included credential stays available as fallback.
+  credential is degraded via `CredentialHealth.mark_slow/1` — it sinks
+  below healthy candidates so they absorb the burst, while the included
+  credential stays available as fallback.
   `:server_error` and `:timeout` still count toward the breaker normally —
   those mean the credential itself is broken, not merely busy.
 

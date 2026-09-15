@@ -162,33 +162,33 @@ defmodule Tokengate.Routing.PriorityTest do
       assert ttl_ms == 60_000
     end
 
-    test "nil sticky_ttl_ms falls back to billing default: subscription=15min, pay_per_token=3min" do
-      # included → 15 min default
-      included = ap_with_cred("incl", priority: 1, billing_type: "subscription")
-      candidates = [included]
-      opts = %{api_key_hash: "key-incl-ttl", model_id: "model-1"}
-      key_incl = {"key-incl-ttl", "model-1"}
-
-      assert {:ok, _} = Priority.select(candidates, opts)
-      _ = :sys.get_state(StickyTracker)
-
-      [{^key_incl, {_id, _inserted_at, ttl_ms}}] = :ets.lookup(:tokengate_sticky_routes, key_incl)
-      assert ttl_ms == 15 * 60 * 1000
-
-      # pay_per_token → 3 min default (from config)
+    test "nil sticky_ttl_ms falls back to the single config default (3 min) on any billing surface" do
+      # Billing surface no longer changes the default: both a subscription and
+      # a pay_per_token credential keep the same affinity window.
+      sub = ap_with_cred("sub", priority: 1, billing_type: "subscription")
       pay = ap_with_cred("pay", priority: 1, billing_type: "pay_per_token")
-      candidates_pay = [pay]
+
+      opts_sub = %{api_key_hash: "key-sub-ttl", model_id: "model-1"}
       opts_pay = %{api_key_hash: "key-pay-ttl", model_id: "model-1"}
+      key_sub = {"key-sub-ttl", "model-1"}
       key_pay = {"key-pay-ttl", "model-1"}
 
-      assert {:ok, _} = Priority.select(candidates_pay, opts_pay)
+      assert {:ok, _} = Priority.select([sub], opts_sub)
+      _ = :sys.get_state(StickyTracker)
+      assert {:ok, _} = Priority.select([pay], opts_pay)
       _ = :sys.get_state(StickyTracker)
 
-      [{^key_pay, {_id, _inserted_at, ttl_pay}}] = :ets.lookup(:tokengate_sticky_routes, key_pay)
+      [{^key_sub, {_id, _inserted_at, ttl_sub}}] =
+        :ets.lookup(:tokengate_sticky_routes, key_sub)
+
+      [{^key_pay, {_id, _inserted_at, ttl_pay}}] =
+        :ets.lookup(:tokengate_sticky_routes, key_pay)
+
+      assert ttl_sub == 3 * 60 * 1000
       assert ttl_pay == 3 * 60 * 1000
     end
 
-    test "nil sticky_ttl_ms falls back to billing_mode default (plain ap, nil billing = 15 min)" do
+    test "nil sticky_ttl_ms on a credential-less candidate also lands on the config default" do
       candidates = [ap("plain", priority: 1)]
       opts = %{api_key_hash: "key-nil-ttl", model_id: "model-1"}
       key = {"key-nil-ttl", "model-1"}
@@ -198,7 +198,7 @@ defmodule Tokengate.Routing.PriorityTest do
 
       [{^key, {_id, _inserted_at, ttl_ms}}] = :ets.lookup(:tokengate_sticky_routes, key)
 
-      # plain ap has no credential → derived pay_per_token → 3 min
+      # No credential → no billing derivation → still the single config default.
       assert ttl_ms == 3 * 60 * 1000
     end
   end
@@ -249,9 +249,11 @@ defmodule Tokengate.Routing.PriorityTest do
     end
   end
 
-  describe "tiers (provider billing + degradation)" do
-    # Candidates here carry a loaded credential + provider billing so the tier
-    # sort engages. `mark_slow` degrades a credential's soft health.
+  describe "health levels + priority (billing surface does not rank)" do
+    # Candidates here carry a loaded credential + provider billing so a
+    # billing-based sort WOULD engage if it existed. `mark_slow` degrades a
+    # credential's soft health. The tests below pin that billing no longer
+    # influences the order — only health and priority do.
 
     defp ap_with_cred(id, opts) do
       cred_id = Keyword.get(opts, :credential_id, "cred-#{id}")
@@ -279,22 +281,33 @@ defmodule Tokengate.Routing.PriorityTest do
       :ok
     end
 
-    test "healthy included beats pay_per_token regardless of priority" do
+    test "priority alone decides — a subscription does NOT outrank a pay_per_token" do
       candidates = [
         ap_with_cred("pay", priority: 1, billing_type: "pay_per_token"),
         ap_with_cred("sub", priority: 9, billing_type: "subscription")
       ]
 
       assert {:ok, selected} = Priority.select(candidates, %{})
+      assert selected.id == "pay"
+    end
+
+    test "a subscription still wins when it has the better priority" do
+      candidates = [
+        ap_with_cred("pay", priority: 9, billing_type: "pay_per_token"),
+        ap_with_cred("sub", priority: 1, billing_type: "subscription")
+      ]
+
+      assert {:ok, selected} = Priority.select(candidates, %{})
       assert selected.id == "sub"
     end
 
-    test "degraded included sinks below healthy pay_per_token" do
+    test "degraded credential sinks below healthy regardless of billing surface" do
       sub =
         ap_with_cred("sub", priority: 1, billing_type: "subscription", credential_id: "cred-sub")
 
       pay = ap_with_cred("pay", priority: 5, billing_type: "pay_per_token")
 
+      # Priority says sub first, but slowing it down hands the slot to pay.
       :ok = Tokengate.Routing.CredentialHealth.mark_slow("cred-sub")
       _ = :sys.get_state(GenServer.whereis(Tokengate.Routing.CredentialHealth))
 
@@ -302,7 +315,21 @@ defmodule Tokengate.Routing.PriorityTest do
       assert selected.id == "pay"
     end
 
-    test "priority decides within the same tier" do
+    test "degraded pay_per_token sinks below a healthy subscription" do
+      sub =
+        ap_with_cred("sub", priority: 9, billing_type: "subscription", credential_id: "cred-s2")
+
+      pay =
+        ap_with_cred("pay", priority: 1, billing_type: "pay_per_token", credential_id: "cred-p2")
+
+      :ok = Tokengate.Routing.CredentialHealth.mark_slow("cred-p2")
+      _ = :sys.get_state(GenServer.whereis(Tokengate.Routing.CredentialHealth))
+
+      assert {:ok, selected} = Priority.select([pay, sub], %{})
+      assert selected.id == "sub"
+    end
+
+    test "priority decides within the same health level" do
       candidates = [
         ap_with_cred("sub-b", priority: 5, billing_type: "subscription"),
         ap_with_cred("sub-a", priority: 1, billing_type: "subscription")
@@ -320,7 +347,7 @@ defmodule Tokengate.Routing.PriorityTest do
       candidates = [sub, pay]
       opts = %{api_key_hash: "key-tier", model_id: "model-1"}
 
-      # Stick to the healthy subscription first.
+      # Stick to the better-priority subscription first.
       assert {:ok, first} = Priority.select(candidates, opts)
       assert first.id == "sub"
       _ = :sys.get_state(StickyTracker)
@@ -336,9 +363,7 @@ defmodule Tokengate.Routing.PriorityTest do
       assert StickyTracker.get("key-tier", "model-1") == "pay"
     end
 
-    test "candidates without a loaded credential are treated as healthy pay-per-token" do
-      # No credential struct → billing can't be derived, defaults to
-      # pay_per_token. Tier is healthy pay-per-token; priority decides.
+    test "candidates without a loaded credential compete purely on priority" do
       no_cred = %ModelProvider{
         id: "bare",
         priority: 1,

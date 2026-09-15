@@ -127,12 +127,10 @@ config :tokengate, :proxy,
     {1, 15_000},
     {0, 30_000}
   ],
-  # Default sticky-routing TTL per billing_mode. An explicit
-  # model_provider.sticky_ttl_ms overrides it.
-  sticky_default_ttl_ms: %{
-    "included" => 15 * 60 * 1000,
-    "pay_per_token" => 3 * 60 * 1000
-  }
+  # Default sticky-routing TTL. An explicit
+  # model_provider.sticky_ttl_ms overrides it. Routing no longer classifies
+  # by billing surface, so there is a single default for every credential.
+  sticky_default_ttl_ms: 3 * 60 * 1000
 
 # Import environment specific config. This must remain at the bottom
 # of this file so it overrides the configuration defined above.
