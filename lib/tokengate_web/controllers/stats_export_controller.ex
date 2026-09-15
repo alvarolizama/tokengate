@@ -3,10 +3,12 @@ defmodule TokengateWeb.StatsExportController do
   CSV export endpoint for stats data.
 
   Accepts query params:
-    * `type`   — `models`, `groups`, `errors`, or `logs` (required)
+    * `type`   — `models`, `groups`, `providers`, `errors`, or `logs` (required)
     * `period` — `today`, `week`, `month`, `7d`, `30d`, `90d` (default: `7d`)
     * `model_id` — filter by model (for models type only)
     * `group_id`  — filter by group (for groups type only)
+
+  Unknown types fall through to the models CSV — see `build_csv/5`.
 
   Returns a CSV file download with `Content-Disposition: attachment`.
   """
@@ -51,6 +53,20 @@ defmodule TokengateWeb.StatsExportController do
     end
   end
 
+  # La tabla de proveedores es la única sección admin-only del hub (la ruta vive
+  # en la live_session :admin) y su ranking NO admite scoping por miembro —
+  # `Rollup.provider_ranking/2` agrega por proveedor sin filtrar por
+  # `member_ids`. Un manager exportaría, entonces, el tráfico de la
+  # organización entera; el mismo criterio que el drill-down de grupos: si no
+  # eres admin, no baja.
+  defp build_csv(user, "providers", _params, opts, timezone) do
+    if admin?(user) do
+      {:ok, build_providers_csv(opts, timezone)}
+    else
+      {:error, :forbidden}
+    end
+  end
+
   defp build_csv(user, "errors", _params, opts, timezone) do
     {:ok, build_errors_csv(user, opts, timezone)}
   end
@@ -67,6 +83,52 @@ defmodule TokengateWeb.StatsExportController do
   # admins may export it.
   defp group_export_allowed?(%{global_role: "admin"}, _group_id), do: true
   defp group_export_allowed?(_, _), do: false
+
+  defp admin?(%{global_role: "admin"}), do: true
+  defp admin?(_), do: false
+
+  ## Providers CSV ---------------------------------------------------------
+
+  # Mismo desglose que la tabla de proveedores: una fila por proveedor con su
+  # tier/score y su información básica del período. Sale del MISMO agregado que
+  # pinta la tabla (`Rollup.provider_ranking/2`), así el CSV y la pantalla no
+  # pueden decir cosas distintas — igual que el detalle de un proveedor.
+  defp build_providers_csv(opts, timezone) do
+    rows = Rollup.provider_ranking(nil, opts)
+
+    header = ~w(proveedor tier score requests fallos latencia_ms p95_ms ttft_ms)
+
+    csv =
+      [header | Enum.map(rows, &row_to_csv_provider/1)]
+      |> Enum.map(&Enum.join(&1, ","))
+      |> Enum.join("\n")
+
+    {"estadisticas_proveedores_#{Periods.local_today(timezone)}.csv", csv}
+  end
+
+  defp row_to_csv_provider(row) do
+    [
+      csv_escape(row.provider_name),
+      csv_escape(Map.get(row, :tier, "—")),
+      csv_score(Map.get(row, :score)),
+      row.request_count,
+      csv_percent(Map.get(row, :error_rate)),
+      csv_ms(Map.get(row, :avg_latency_ms)),
+      csv_ms(Map.get(row, :p95_latency_ms)),
+      csv_ms(Map.get(row, :avg_ttft_ms))
+    ]
+  end
+
+  # Menos de 10 requests no tiene tier ni score (misma regla que la tabla):
+  # se exporta vacío, no un cero que se leería como "pésimo".
+  defp csv_score(nil), do: ""
+  defp csv_score(score), do: to_string(score)
+
+  defp csv_percent(nil), do: ""
+  defp csv_percent(rate), do: Float.to_string(Float.round(rate * 100, 1))
+
+  defp csv_ms(nil), do: ""
+  defp csv_ms(ms), do: to_string(round(ms))
 
   ## Models CSV -----------------------------------------------------------
 

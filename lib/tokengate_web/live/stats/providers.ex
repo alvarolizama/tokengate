@@ -25,6 +25,16 @@ defmodule TokengateWeb.StatsLive.Providers do
   def providers(assigns) do
     ~H"""
     <div class="space-y-6">
+      <div class="flex items-center justify-end flex-wrap gap-3">
+        <.link
+          href={"/stats/export?type=providers&period=#{@period}"}
+          class="btn btn-sm btn-ghost"
+          id="csv-providers"
+        >
+          <.icon name="hero-arrow-down-tray" class="w-4 h-4" /> CSV
+        </.link>
+      </div>
+
       <div class="card bg-base-100 border border-base-300 shadow-sm" id="provider-ranking">
         <div class="card-body">
           <h2 class="card-title text-base">

@@ -30,7 +30,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
   end
 
   # Group with one member (owner) and one request log.
-  defp group_with_log do
+  defp group_with_log(opts \\ []) do
     u = unique()
 
     {:ok, group} = Accounts.create_group(%{name: "Group #{u}"})
@@ -61,10 +61,18 @@ defmodule TokengateWeb.StatsExportControllerTest do
         completion_tokens: 50,
         provider_cost_usd: "0.005",
         latency_ms: 42,
-        streaming: false
+        streaming: false,
+        inserted_at:
+          Keyword.get(opts, :inserted_at) || DateTime.utc_now() |> DateTime.truncate(:second)
       })
 
-    %{group: group, owner: owner, member: member, owner_password: "password-secret-#{u}1"}
+    %{
+      group: group,
+      owner: owner,
+      member: member,
+      provider: provider,
+      owner_password: "password-secret-#{u}1"
+    }
   end
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
@@ -117,6 +125,59 @@ defmodule TokengateWeb.StatsExportControllerTest do
       |> get(~p"/stats/export?type=models")
 
     assert response(conn, 200) =~ "modelo,requests"
+  end
+
+  test "providers export: el desglose de la tabla, y sólo para admins", %{conn: conn} do
+    %{provider: provider} = group_with_log()
+    %{user: admin, password: admin_password} = register("admin")
+
+    conn =
+      conn
+      |> login(admin, admin_password)
+      |> get(~p"/stats/export?type=providers&period=today")
+
+    body = response(conn, 200)
+
+    assert body =~ "proveedor,tier,score,requests,fallos,latencia_ms,p95_ms,ttft_ms"
+    assert body =~ provider.name
+
+    # La fila trae el mismo desglose que la tabla: con 1 request no hay tier ni
+    # score (< 10 requests), los fallos van como porcentaje y las latencias en ms.
+    row = body |> String.split("\n") |> Enum.find(&String.contains?(&1, provider.name))
+    assert row == "#{provider.name},—,,1,0.0,42,42,"
+
+    [disposition] = get_resp_header(conn, "content-disposition")
+    assert disposition =~ "estadisticas_proveedores_"
+    assert disposition =~ ".csv"
+
+    # Un no-admin no baja el ranking completo: la pestaña es admin-only y
+    # `provider_ranking/2` no sabe filtrar por scope de miembro.
+    %{user: plain, password: plain_password} = register("user")
+
+    forbidden_conn =
+      build_conn()
+      |> login(plain, plain_password)
+      |> get(~p"/stats/export?type=providers&period=today")
+
+    assert response(forbidden_conn, 403) =~ "no autorizado"
+  end
+
+  test "providers export: respeta el período del selector", %{conn: conn} do
+    %{provider: old_provider} =
+      group_with_log(inserted_at: DateTime.add(DateTime.utc_now(), -40, :day))
+
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+
+    # 30d no alcanza un log de hace 40 días; 90d sí.
+    assert response(get(conn, ~p"/stats/export?type=providers&period=30d"), 200) =~
+             "proveedor,tier,score"
+
+    refute get(conn, ~p"/stats/export?type=providers&period=30d").resp_body =~
+             old_provider.name
+
+    assert get(conn, ~p"/stats/export?type=providers&period=90d").resp_body =~ old_provider.name
   end
 
   test "logs export neutralizes CSV formula injection in client_agent", %{conn: conn} do
