@@ -1021,99 +1021,73 @@ defmodule Tokengate.Metrics.RollupTest do
   end
 
   # ---------------------------------------------------------------------
-  # usage_by_hour_of_day_stacked/2
+  # usage_by_hour_of_day_by_provider/1
   # ---------------------------------------------------------------------
 
-  describe "usage_by_hour_of_day_stacked/2" do
-    test "zero-fill de 24 horas y totales por hora (free vs paid)" do
+  describe "usage_by_hour_of_day_by_provider/1" do
+    test "zero-fill de 24 horas y reparto por hora: requests y costo por proveedor" do
       {tm, _group} = group_member_fixture()
+      {:ok, openai} = Providers.create_provider(%{name: "OpenAI", base_url: "http://localhost:1"})
+      {:ok, azure} = Providers.create_provider(%{name: "Azure", base_url: "http://localhost:2"})
       now = DateTime.utc_now() |> DateTime.truncate(:second)
 
       at_09 = %{now | hour: 9, minute: 0, second: 0}
       at_16 = %{now | hour: 16, minute: 0, second: 0}
 
-      # 2 gratis + 1 cobrado a las 09; 1 gratis a las 16.
-      log_request(tm.id, at_09, %{cost_usd: Decimal.new("0")})
-      log_request(tm.id, at_09, %{cost_usd: Decimal.new("0")})
-      log_request(tm.id, at_09, %{cost_usd: Decimal.new("1.500000")})
-      log_request(tm.id, at_16, %{cost_usd: Decimal.new("0")})
+      # 2 a las 09 por OpenAI (una gratis y una de $1.50) + 1 por Azure; a las
+      # 16 una sin proveedor, que cae al label "sin proveedor".
+      log_request(tm.id, at_09, %{provider_id: openai.id, provider_cost_usd: Decimal.new("0")})
 
-      rows = Rollup.usage_by_hour_of_day_stacked(nil, from: DateTime.add(now, -86_400, :second))
+      log_request(tm.id, at_09, %{
+        provider_id: openai.id,
+        provider_cost_usd: Decimal.new("1.500000")
+      })
+
+      log_request(tm.id, at_09, %{
+        provider_id: azure.id,
+        provider_cost_usd: Decimal.new("0.250000")
+      })
+
+      log_request(tm.id, at_16, %{provider_cost_usd: Decimal.new("0")})
+
+      rows = Rollup.usage_by_hour_of_day_by_provider(from: DateTime.add(now, -86_400, :second))
 
       assert length(rows) == 24
       assert Enum.map(rows, & &1.hour) == Enum.to_list(0..23)
 
       h9 = Enum.find(rows, &(&1.hour == 9))
       assert h9.total_requests == 3
-      assert h9.free_requests == 2
-      assert h9.paid_requests == 1
-      assert Decimal.equal?(h9.total_cost_usd, Decimal.new("1.5"))
+      assert Decimal.equal?(h9.total_cost_usd, Decimal.new("1.75"))
+
+      # Ordenados por requests desc (el frontend apila en ese orden) y los dos
+      # logs del mismo proveedor colapsados en UNA fila, con su costo sumado.
+      assert Enum.map(h9.providers, & &1.provider_name) == ["OpenAI", "Azure"]
+      assert Enum.map(h9.providers, & &1.requests) == [2, 1]
+      assert Decimal.equal?(Enum.at(h9.providers, 0).cost_usd, Decimal.new("1.5"))
+      assert Decimal.equal?(Enum.at(h9.providers, 1).cost_usd, Decimal.new("0.25"))
 
       h16 = Enum.find(rows, &(&1.hour == 16))
       assert h16.total_requests == 1
-      assert h16.free_requests == 1
-      assert h16.paid_requests == 0
-    end
+      assert Enum.map(h16.providers, & &1.provider_name) == ["sin proveedor"]
 
-    # El cambio saca el nombre del modelo del GROUP BY SQL y lo resuelve
-    # después. Estos dos casos cubren exactamente las dos ramas del COALESCE
-    # que antes hacía el JOIN: nombre del catálogo, y fallback al
-    # `model_requested` cuando el log no trae `model_id`.
-    test "resuelve el nombre del modelo desde el catálogo" do
-      {tm, _group} = group_member_fixture()
-      model = model_fixture(%{})
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
-
-      log_request(tm.id, now, %{model_id: model.id, model_requested: "alias-viejo"})
-
-      rows = Rollup.usage_by_hour_of_day_stacked(nil, from: DateTime.add(now, -3600, :second))
-
-      models = rows |> Enum.flat_map(& &1.models)
-      assert Enum.any?(models, &(&1.model == model.name))
-      refute Enum.any?(models, &(&1.model == "alias-viejo"))
-    end
-
-    test "cae al model_requested cuando el log no tiene model_id" do
-      {tm, _group} = group_member_fixture()
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
-
-      log_request(tm.id, now, %{model_requested: "modelo-sin-catalogo"})
-
-      rows = Rollup.usage_by_hour_of_day_stacked(nil, from: DateTime.add(now, -3600, :second))
-
-      models = rows |> Enum.flat_map(& &1.models)
-      assert Enum.any?(models, &(&1.model == "modelo-sin-catalogo"))
-    end
-
-    test "un mismo modelo con requests gratis y cobrados en la misma hora" do
-      {tm, _group} = group_member_fixture()
-      model = model_fixture(%{})
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
-      at = %{now | hour: 11, minute: 0, second: 0}
-
-      log_request(tm.id, at, %{model_id: model.id, cost_usd: Decimal.new("0")})
-      log_request(tm.id, at, %{model_id: model.id, cost_usd: Decimal.new("2.000000")})
-
-      rows = Rollup.usage_by_hour_of_day_stacked(nil, from: DateTime.add(now, -86_400, :second))
-
-      h11 = Enum.find(rows, &(&1.hour == 11))
-      assert h11.free_requests == 1
-      assert h11.paid_requests == 1
-
-      # Dos entradas del mismo nombre: una gratis y una cobrada.
-      same_model = Enum.filter(h11.models, &(&1.model == model.name))
-      assert length(same_model) == 2
-      assert Enum.sort(Enum.map(same_model, & &1.paid)) == [false, true]
+      # Las horas sin tráfico van zero-filled y sin proveedores: el eje de la
+      # gráfica se dibuja siempre.
+      h0 = Enum.find(rows, &(&1.hour == 0))
+      assert h0.total_requests == 0
+      assert h0.providers == []
     end
 
     test "usa la hora local del timezone" do
-      {tm, group} = group_member_fixture()
+      {tm, _group} = group_member_fixture()
+
+      {:ok, provider} =
+        Providers.create_provider(%{name: "OpenAI", base_url: "http://localhost:1"})
 
       # 2026-07-31 05:30Z = 2026-07-30 23:30 en CDMX (UTC-6)
-      log_request(tm.id, ~U[2026-07-31 05:30:00Z])
+      log_request(tm.id, ~U[2026-07-31 05:30:00Z], %{provider_id: provider.id})
 
       rows =
-        Rollup.usage_by_hour_of_day_stacked(group.id,
+        Rollup.usage_by_hour_of_day_by_provider(
           from: ~U[2026-07-31 00:00:00Z],
           to: ~U[2026-07-31 23:59:59Z],
           timezone: "America/Mexico_City"
@@ -1121,6 +1095,28 @@ defmodule Tokengate.Metrics.RollupTest do
 
       assert Enum.find(rows, &(&1.hour == 23)).total_requests == 1
       assert Enum.find(rows, &(&1.hour == 5)).total_requests == 0
+    end
+
+    test "acota por member_ids (scoping)" do
+      {tm, _group} = group_member_fixture()
+      {other, _other_group} = group_member_fixture()
+
+      {:ok, provider} =
+        Providers.create_provider(%{name: "OpenAI", base_url: "http://localhost:1"})
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      at = %{now | hour: 8, minute: 0, second: 0}
+
+      log_request(tm.id, at, %{provider_id: provider.id})
+      log_request(other.id, at, %{provider_id: provider.id})
+
+      rows =
+        Rollup.usage_by_hour_of_day_by_provider(
+          from: DateTime.add(now, -86_400, :second),
+          member_ids: [tm.id]
+        )
+
+      assert Enum.find(rows, &(&1.hour == 8)).total_requests == 1
     end
   end
 

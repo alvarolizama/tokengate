@@ -17,6 +17,8 @@ defmodule Tokengate.Metrics.Rollup do
     * `breakdown_by_group/1`   — per-group aggregates (requests, costs, tokens, tps)
     * `provider_ranking/2`    — provider ranking by failures + latency, tier S/A/B/C/D
     * `usage_by_hour_of_day/2` — 24h UTC distribution (recurring usage patterns)
+    * `usage_by_hour_of_day_by_provider/1` — per-hour-of-day split by provider (the
+      hour card the Resumen shares with En vivo)
     * `busiest_hours/2` / `busiest_minutes/2` — top-N busiest hour/minute buckets
     * `peak_concurrency/2`    — estimated max in-flight requests (sweep line)
     * `top_errors/2`          — top HTTP error codes (>= 400) by count
@@ -28,7 +30,15 @@ defmodule Tokengate.Metrics.Rollup do
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Metrics.RequestMetricsHourly
   alias Tokengate.Providers.Model
+  alias Tokengate.Providers.Provider
   alias Tokengate.Repo
+
+  # Etiqueta de los logs sin `provider_id` en el desglose horario por
+  # proveedor. Tiene que ser la MISMA que la de En vivo
+  # (`Logs.today_usage_by_hour_provider/0`): las dos pestañas dibujan la
+  # misma tarjeta y una barra "sin proveedor" no puede cambiar de nombre al
+  # cambiar de pestaña.
+  @no_provider "sin proveedor"
 
   # -----------------------------------------------------------------------
   # hourly_series/2
@@ -1144,32 +1154,40 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   # -----------------------------------------------------------------------
-  # cost_by_hour_of_day_stacked/2
+  # usage_by_hour_of_day_by_provider/1
   # -----------------------------------------------------------------------
 
   @doc """
-  Uso total por hora del día, con desglose por modelo.
+  Perfil horario del período, desglosado por proveedor — la misma tarjeta
+  que "Hoy por hora · por proveedor" de En vivo, agregada sobre la ventana
+  del Resumen (el día en curso lo mide En vivo, no acá).
 
-  Incluye TODOS los models. Para cada hora:
+  Devuelve siempre las 24 horas (`0..23`, zero-filled, para que el eje se
+  dibuje siempre). La hora es la **local del timezone**, no UTC: el Resumen
+  pregunta "¿a qué horas se usa?" sobre el período entero, y esa lectura es
+  la del usuario. Cada fila:
 
       %{
         hour: 0..23,
         total_requests: integer,
-        total_cost_usd: Decimal,      # suma de costos cobrados
-        free_requests: integer,       # requests sin costo (provider_cost_usd = 0)
-        paid_requests: integer,       # requests con costo > 0
-        models: [
+        total_cost_usd: Decimal.t(),      # suma de costos cobrados
+        providers: [
           %{
-            model: String.t(),
+            provider_name: String.t(),
             requests: integer,
-            cost_usd: Decimal,
-            paid: boolean
+            cost_usd: Decimal.t()
           }
         ]
       }
 
-  La barra muestra `total_requests` (todos los models). El segmento
-  destacado es la proporción de requests de modelos pay_per_token.
+  `providers` va ordenado por requests desc (el frontend apila en ese
+  orden). Los logs sin `provider_id` caen en "sin proveedor".
+
+  Barata por el mismo camino que la de En vivo: **una** consulta agregada
+  agrupada por (hora, proveedor), sin joins — los nombres se resuelven
+  después, en una segunda consulta acotada a los ids que aparecieron. La
+  salida es idéntica a la de `Logs.today_usage_by_hour_provider/0` para que
+  las DOS pestañas alimenten la misma gráfica.
 
   ## Options
 
@@ -1178,28 +1196,23 @@ defmodule Tokengate.Metrics.Rollup do
     * `:member_ids` — restrict to logs of these group-member ids (scoping)
     * `:timezone` — IANA zone for the hour-of-day extraction; default `"Etc/UTC"`
   """
-  @spec usage_by_hour_of_day_stacked(String.t() | nil, keyword()) :: [map()]
-  def usage_by_hour_of_day_stacked(group_id \\ nil, opts \\ []) do
+  @spec usage_by_hour_of_day_by_provider(keyword()) :: [map()]
+  def usage_by_hour_of_day_by_provider(opts \\ []) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
     timezone = Keyword.get(opts, :timezone, "Etc/UTC")
 
-    # El nombre del modelo NO entra al GROUP BY: resolverlo exige un JOIN a
-    # `models` por cada fila del período, y eso convertía el agregado en un
-    # sort+join de millones de filas (~4.1 s a 90 días). Se agrupa por las
-    # columnas crudas (`model_id`, `model_requested`) — que es lo que el JOIN
-    # sólo traducía a texto — y el nombre se resuelve después sobre las ~1000
-    # filas del resultado. El merge final por nombre preserva el
-    # comportamiento previo: dos model_id con el mismo nombre caen en la
-    # misma fila del desglose.
-    #
     # El bucket horario se materializa en la subquery (misma razón que en
     # `hourly_series/2`: Postgres trata `date_trunc(... AT TIME ZONE $1)` del
     # SELECT y del GROUP BY como expresiones distintas por ir con parámetros
     # separados, y exige que la columna "aparezca" en el GROUP BY).
+    #
+    # El nombre del proveedor tampoco entra al agregado: resolverlo exige un
+    # JOIN por cada fila del período. Se agrupa por `provider_id` — lo único
+    # que identifica al proveedor — y el nombre se resuelve después, sobre las
+    # ~16 filas (hora × proveedor) del resultado.
     bucketed =
       RequestLog
-      |> maybe_join_group(group_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
@@ -1210,106 +1223,72 @@ defmodule Tokengate.Metrics.Rollup do
             rl.inserted_at,
             ^timezone
           ),
-        model_id: rl.model_id,
-        model_requested: rl.model_requested,
-        paid: fragment("COALESCE(?, 0) > 0", rl.provider_cost_usd),
+        provider_id: rl.provider_id,
+        id: rl.id,
         cost_usd: rl.provider_cost_usd
       })
       |> subquery()
 
     rows =
       from(b in bucketed,
-        group_by: [b.hour, b.model_id, b.model_requested, b.paid],
+        group_by: [b.hour, b.provider_id],
         select: %{
           hour: b.hour,
-          model_id: b.model_id,
-          model_requested: b.model_requested,
-          paid: b.paid,
+          provider_id: b.provider_id,
           cost_usd: fragment("COALESCE(SUM(?), 0)", b.cost_usd),
           request_count: fragment("count(*)")
         }
       )
       |> Repo.all()
 
-    model_names = model_names_by_id(rows)
-    hours_with_models = Enum.map(rows, &Map.put(&1, :model, resolve_model_name(&1, model_names)))
-
-    by_hour = Enum.group_by(hours_with_models, & &1.hour)
+    names = provider_names_by_id(rows)
+    by_hour = Enum.group_by(rows, & &1.hour)
 
     for hour <- 0..23 do
-      hour_rows = Map.get(by_hour, hour, [])
-
-      # Agrupar por (model, paid) — un mismo model puede tener requests
-      # cobrados y gratis en la misma hora, y varios model_id pueden
-      # compartir nombre.
-      by_model =
-        hour_rows
-        |> Enum.group_by(&{&1.model, &1.paid})
-        |> Enum.map(fn {{model, paid}, entries} ->
+      # Varios `provider_id` pueden compartir nombre (o no tener nombre): se
+      # colapsan en una sola fila del desglose, como en el resto de las
+      # gráficas apiladas del hub.
+      providers =
+        by_hour
+        |> Map.get(hour, [])
+        |> Enum.group_by(&Map.get(names, &1.provider_id, @no_provider))
+        |> Enum.map(fn {provider_name, entries} ->
           requests = Enum.reduce(entries, 0, &(&1.request_count + &2))
 
           cost =
-            Enum.reduce(entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
+            Enum.reduce(entries, Decimal.new(0), fn e, acc ->
+              Decimal.add(acc, Decimal.new(to_string(e.cost_usd)))
+            end)
 
-          %{
-            model: model,
-            requests: requests,
-            cost_usd: cost,
-            paid: paid
-          }
+          %{provider_name: provider_name, requests: requests, cost_usd: cost}
         end)
         |> Enum.sort_by(& &1.requests, :desc)
 
-      total_requests = Enum.reduce(by_model, 0, &(&1.requests + &2))
-
-      free_requests =
-        hour_rows
-        |> Enum.filter(&(&1.paid == false))
-        |> Enum.reduce(0, &(&1.request_count + &2))
-
-      paid_requests =
-        hour_rows
-        |> Enum.filter(&(&1.paid == true))
-        |> Enum.reduce(0, &(&1.request_count + &2))
-
-      total_cost =
-        hour_rows
-        |> Enum.reduce(Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
-
       %{
         hour: hour,
-        total_requests: total_requests,
-        free_requests: free_requests,
-        paid_requests: paid_requests,
-        total_cost_usd: total_cost,
-        models: by_model
+        total_requests: Enum.reduce(providers, 0, &(&1.requests + &2)),
+        total_cost_usd:
+          Enum.reduce(providers, Decimal.new(0), fn p, acc -> Decimal.add(acc, p.cost_usd) end),
+        providers: providers
       }
     end
   end
 
-  # Nombre de cada `model_id` presente en las filas agregadas, en una sola
-  # consulta. Un solo viaje para todos los ids en vez de un JOIN por fila.
-  defp model_names_by_id(rows) do
-    ids = rows |> Enum.map(& &1.model_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+  # Nombre de cada proveedor presente en las filas agregadas, en una sola
+  # consulta. Un id nil o ya borrado cae al `@no_provider` del llamador en
+  # vez de desaparecer del gráfico.
+  defp provider_names_by_id(rows) do
+    ids = rows |> Enum.map(& &1.provider_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
 
     case ids do
       [] ->
         %{}
 
       ids ->
-        from(m in Model, where: m.id in ^ids, select: {m.id, m.name})
+        from(p in Provider, where: p.id in ^ids, select: {p.id, p.name})
         |> Repo.all()
         |> Map.new()
     end
-  end
-
-  # El log cae al `model_requested` cuando su `model_id` es nil o cuando el
-  # modelo ya no existe — mismo `COALESCE(ma.name, rl.model_requested)` de
-  # antes, sólo que resuelto fuera del agregado.
-  defp resolve_model_name(%{model_id: nil} = row, _names), do: row.model_requested || "—"
-
-  defp resolve_model_name(%{model_id: id, model_requested: requested}, names) do
-    Map.get(names, id) || requested || "—"
   end
 
   # -----------------------------------------------------------------------

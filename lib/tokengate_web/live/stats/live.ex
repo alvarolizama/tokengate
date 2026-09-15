@@ -22,6 +22,7 @@ defmodule TokengateWeb.StatsLive.LiveSection do
   import TokengateWeb.KpiHelpers, only: [kpi_card: 1, format_cache_value: 2]
 
   alias TokengateWeb.StatsHelpers, as: Stats
+  alias TokengateWeb.StatsLive.DayHourChart
 
   attr :pulse, :any, required: true
   attr :today_metrics, :any, required: true
@@ -242,7 +243,18 @@ defmodule TokengateWeb.StatsLive.LiveSection do
            ventana que los KPIs de arriba — y responde cómo va el día y
            quién lo está sirviendo. --%>
       <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-        <.day_hour_chart id="live-day-hour-chart" rows={@day_by_hour} />
+        <%!-- Hoy por hora · por proveedor: la MISMA tarjeta que dibuja el
+             Resumen sobre el período (lib/tokengate_web/live/stats/
+             day_hour_chart.ex), aquí sobre el día UTC en curso. --%>
+        <DayHourChart.day_hour_chart
+          id="live-day-hour-chart"
+          rows={@day_by_hour}
+          title="Hoy por hora · por proveedor"
+          hint="barras apiladas · 1 barra = 1 hora del día UTC · color = proveedor · hora en curso marcada"
+          hour_suffix="UTC"
+          empty_note="sin tráfico en el día UTC todavía"
+          now_hour={DateTime.utc_now().hour}
+        />
 
         <%!-- Feed: últimos requests. La tarjeta no aporta alto propio en el
              layout de dos columnas: su cuerpo va posicionado absoluto sobre
@@ -443,238 +455,6 @@ defmodule TokengateWeb.StatsLive.LiveSection do
     :erlang.float_to_binary(value * 1.0, decimals: decimals)
   end
 
-  ## Hoy por hora · por proveedor -------------------------------------------
-
-  attr :id, :string, required: true
-  attr :rows, :list, required: true
-
-  # 24 barras (una por hora del día UTC) apiladas por proveedor. Reusa el
-  # lenguaje visual de la gráfica "Uso por hora del día" del Resumen — misma
-  # escala √, mismo eje de ticks "nice", misma paleta de proveedores — para
-  # que las dos se lean como el mismo producto en vez de dos gráficas
-  # distintas. La ventana es el día UTC, la misma que los KPIs de arriba.
-  defp day_hour_chart(assigns) do
-    max = Stats.hour_usage_stacked_max(assigns.rows)
-    legend = Stats.provider_legend(assigns.rows)
-
-    assigns =
-      assigns
-      |> assign(:max, max)
-      # Escala por el techo "nice" y no por el pico: los ticks se calculan
-      # sobre el techo, así que con el pico como denominador el tick más alto
-      # quedaría por encima del área de la gráfica.
-      |> assign(:scale_max, Stats.nice_ceiling(max))
-      |> assign(:legend, legend)
-      |> assign(:has_data?, max > 0)
-      |> assign(:total_requests, Enum.reduce(assigns.rows, 0, &(&1.total_requests + &2)))
-      |> assign(
-        :total_cost,
-        Enum.reduce(assigns.rows, Decimal.new(0), fn r, acc ->
-          Decimal.add(acc, r.total_cost_usd)
-        end)
-      )
-      |> assign(:now_hour, DateTime.utc_now().hour)
-
-    ~H"""
-    <div class="card bg-base-100 border border-base-300 shadow-sm" id={@id}>
-      <div class="card-body p-4 gap-2">
-        <div class="flex items-center justify-between flex-wrap gap-2">
-          <h2 class="card-title text-base">
-            <.icon name="hero-clock" class="w-5 h-5 text-base-content/60" />
-            Hoy por hora · por proveedor
-          </h2>
-          <span class="text-xs text-base-content/40 tabular-nums" id={"#{@id}-total"}>
-            {day_total_label(@total_requests, @total_cost)}
-          </span>
-        </div>
-
-        <%!-- Tipo de gráfica, unidad y ventana explícitos, como en las
-             gráficas por minuto de arriba. --%>
-        <p class="text-[10px] text-base-content/40" id={"#{@id}-hint"}>
-          barras apiladas · 1 barra = 1 hora del día UTC · color = proveedor · hora en curso marcada
-        </p>
-
-        <div class="flex gap-2 items-end mt-1">
-          <%!-- Eje Y (con la escala √, los ticks se posicionan en √(tick/techo)) --%>
-          <%= if @has_data? do %>
-            <div class="relative h-40 w-10 shrink-0">
-              <span
-                :for={tick <- Stats.y_axis_ticks(@max)}
-                class="absolute right-0 text-[9px] text-base-content/50 tabular-nums -translate-y-1/2"
-                style={"bottom: #{y_tick_pct(tick, @scale_max)}%"}
-              >
-                {Stats.format_number(tick)}
-              </span>
-              <span class="absolute right-0 bottom-0 text-[9px] text-base-content/50 tabular-nums translate-y-1/2">
-                0
-              </span>
-            </div>
-          <% else %>
-            <%!-- Sin tráfico: el hueco del eje se mantiene para que las barras
-                 no se desalineen de las etiquetas de hora. --%>
-            <div class="h-40 w-10 shrink-0"></div>
-          <% end %>
-
-          <div class="relative flex-1">
-            <div :if={@has_data?} class="absolute inset-0 pointer-events-none">
-              <div
-                :for={tick <- Stats.y_axis_ticks(@max)}
-                class="absolute left-0 right-0 border-t border-base-300/50 border-dashed"
-                style={"bottom: #{y_tick_pct(tick, @scale_max)}%"}
-              />
-            </div>
-
-            <div class="flex items-end gap-[3px] h-40 relative">
-              <div
-                :for={row <- @rows}
-                class="relative flex-1 flex flex-col items-center justify-end h-full"
-                id={"#{@id}-hour-#{row.hour}"}
-                title={day_hour_title(row)}
-              >
-                <div
-                  class={[
-                    "w-full rounded-t overflow-hidden",
-                    row.hour == @now_hour && row.total_requests > 0 && "ring-1 ring-primary/70"
-                  ]}
-                  style={"height: #{day_bar_height_pct(row.total_requests, @scale_max)}%"}
-                >
-                  <%= if day_hour_segments(row, @legend) == [] do %>
-                    <div class="w-full h-full bg-base-300/20" />
-                  <% else %>
-                    <div class="flex flex-col-reverse h-full w-full">
-                      <div
-                        :for={seg <- day_hour_segments(row, @legend)}
-                        class={["w-full", seg.color]}
-                        style={"height: #{seg.height_pct}%"}
-                      />
-                    </div>
-                  <% end %>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <%!-- Etiquetas de hora: una cada 3 horas, como en el Resumen. Las
-             horas que aún no han llegado quedan más apagadas, para que la
-             gráfica se lea como "el día hasta ahora". --%>
-        <div class="flex gap-[3px] mt-1 ml-12" id={"#{@id}-hours"}>
-          <span :for={row <- @rows} class="flex-1 text-center">
-            <span
-              :if={rem(row.hour, 3) == 0}
-              class={[
-                "text-[10px]",
-                if(row.hour > @now_hour,
-                  do: "text-base-content/20",
-                  else: "text-base-content/40"
-                )
-              ]}
-            >
-              {Stats.hour_label(row.hour)}
-            </span>
-          </span>
-        </div>
-
-        <div class="flex items-center justify-between text-[10px] text-base-content/40">
-          <span>00:00 UTC</span>
-          <span :if={not @has_data?} class="text-base-content/30">
-            sin tráfico en el día UTC todavía
-          </span>
-          <span>ahora {Stats.hour_label(@now_hour)} UTC</span>
-        </div>
-
-        <%!-- Leyenda: reparto del día por proveedor. Top 6 por requests (una
-             tarjeta a media fila no aguanta 16 colores legibles); el resto se
-             resume en "+N más" — el tooltip de cada barra los sigue mostrando. --%>
-        <div
-          :if={@legend != []}
-          class="flex flex-wrap items-center gap-x-3 gap-y-1 mt-1"
-          id={"#{@id}-legend"}
-        >
-          <div :for={entry <- Enum.take(@legend, 6)} class="flex items-center gap-1.5">
-            <span class={[
-              "w-2 h-2 rounded-sm shrink-0",
-              Stats.provider_legend_color(entry.provider_name, @legend)
-            ]} />
-            <span
-              class="text-[10px] text-base-content/60 truncate max-w-[110px]"
-              title={entry.provider_name}
-            >
-              {entry.provider_name}
-            </span>
-            <span class="text-[10px] text-base-content/40 tabular-nums">
-              {Stats.format_number(entry.requests)}
-            </span>
-          </div>
-          <span :if={length(@legend) > 6} class="text-[10px] text-base-content/40">
-            +{length(@legend) - 6} más
-          </span>
-        </div>
-      </div>
-    </div>
-    """
-  end
-
-  # Total del día (requests y costo) que va en la cabecera de la tarjeta.
-  # Una sola cadena contigua: el HEEx parte el texto en nodos cuando se
-  # interpola en varias líneas, y así el número y su unidad se leen (y se
-  # asertan) como un valor único.
-  defp day_total_label(requests, cost) do
-    "#{Stats.format_number(requests)} req · $#{Stats.format_decimal(Decimal.round(cost, 4))}"
-  end
-
-  # Altura de la barra de una hora: como `Stats.hour_usage_bar_height/2` pero
-  # sin el piso del 8% para las horas SIN tráfico — con el piso, una hora
-  # vacía se dibujaría con la misma altura mínima que una con una request, es
-  # decir tráfico inexistente.
-  defp day_bar_height_pct(0, _max), do: 0
-  defp day_bar_height_pct(_requests, 0), do: 0
-  defp day_bar_height_pct(requests, max), do: Stats.hour_usage_bar_height(requests, max)
-
-  # Posición (%) de un tick del eje Y en la misma escala √ que las barras.
-  defp y_tick_pct(tick, scale_max) when scale_max > 0 do
-    Float.round(:math.sqrt(tick / scale_max) * 100, 1)
-  end
-
-  # Segmentos apilados de una hora: cada proveedor ocupa su proporción del
-  # total de la hora (la altura total de la barra ya viene escalada) y toma
-  # el color de su índice global en la leyenda, para que barra y leyenda
-  # coincidan.
-  defp day_hour_segments(%{total_requests: total} = row, legend) when total > 0 do
-    Enum.map(row.providers, fn provider ->
-      %{
-        provider_name: provider.provider_name,
-        height_pct: Float.round(provider.requests / total * 100, 1),
-        color: Stats.provider_legend_color(provider.provider_name, legend)
-      }
-    end)
-  end
-
-  defp day_hour_segments(_row, _legend), do: []
-
-  defp day_hour_title(%{hour: hour, total_requests: 0}) do
-    "#{Stats.hour_label(hour)} UTC · sin tráfico"
-  end
-
-  defp day_hour_title(%{hour: hour, total_requests: total} = row) do
-    base =
-      "#{Stats.hour_label(hour)} UTC · #{Stats.format_number(total)} req · $" <>
-        Stats.format_decimal(Decimal.round(row.total_cost_usd, 4))
-
-    shown = Enum.take(row.providers, 4)
-    extra = length(row.providers) - length(shown)
-
-    providers =
-      Enum.map_join(shown, " · ", fn p ->
-        "#{p.provider_name} #{Stats.format_number(p.requests)}"
-      end)
-
-    providers = if extra > 0, do: providers <> " · +#{extra}", else: providers
-
-    if providers == "", do: base, else: "#{base}\n#{providers}"
-  end
-
-  defp status_class(code) when code >= 500, do: "text-error"
   defp status_class(code) when code >= 400, do: "text-warning"
   defp status_class(_code), do: "text-success"
 
