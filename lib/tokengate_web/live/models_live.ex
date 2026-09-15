@@ -14,10 +14,9 @@ defmodule TokengateWeb.ModelsLive do
   The primary cost source is the upstream provider's `usage.cost` report.
   Manual per-provider pricing (input + cache + output per million tokens)
   serves as a fallback when the upstream omits cost. Billing is a
-  provider-level attribute (`providers.billing_type`): subscription
-  providers cost $0; the effective mode is derived via
-  `ModelProvider.billing_mode/1`.
-
+  provider-level attribute (`providers.billing_type`): an organizational
+  label for grouping providers, with no effect on cost. Every provider is
+  priced by the same chain (upstream report → manual pricing → $0).
   ## Exclusive scope
 
   A model_provider can be scoped to serve only specific consumers:
@@ -1141,11 +1140,20 @@ defmodule TokengateWeb.ModelsLive do
   def credential_named?(%{name: name}) when is_binary(name) and name != "", do: true
   def credential_named?(_), do: false
 
-  def billing_badge("included"), do: "badge-success"
+  def billing_badge("subscription"), do: "badge-success"
   def billing_badge(_), do: "badge-ghost"
 
-  def billing_label("included"), do: "Incluida"
+  def billing_label("subscription"), do: "Suscripción"
   def billing_label(_), do: "Pay per token"
+
+  # Billing surface of the model_provider's provider — an organizational
+  # label only (it does not drive routing, cost or budget anymore). Falls
+  # back to "pay_per_token" when the association isn't loaded.
+  defp provider_billing_type(%ModelProvider{credential: %{provider: %{billing_type: type}}})
+       when is_binary(type),
+       do: type
+
+  defp provider_billing_type(_), do: "pay_per_token"
 
   def enabled_badge(true), do: "badge-success"
   def enabled_badge(_), do: "badge-ghost"
@@ -1451,9 +1459,9 @@ defmodule TokengateWeb.ModelsLive do
                               <span class={[
                                 "badge",
                                 "badge-sm",
-                                billing_badge(ModelProvider.billing_mode(ap))
+                                billing_badge(provider_billing_type(ap))
                               ]}>
-                                {billing_label(ModelProvider.billing_mode(ap))}
+                                {billing_label(provider_billing_type(ap))}
                               </span>
                             </td>
                             <td>

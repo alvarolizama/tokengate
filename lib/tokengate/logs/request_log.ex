@@ -13,10 +13,9 @@ defmodule Tokengate.Logs.RequestLog do
   `provider_cost_usd` is the **only** cost field: the amount the upstream
   reported it charged for the request (typically `usage.cost` from
   OpenAI-compatible gateways). When the upstream doesn't report a cost and
-  `billing_mode` is `included` (subscription / RPM-limited), the value is
-  `0`. When the upstream doesn't report a cost and `billing_mode` is
-  `pay_per_token`, the value is also `0` — honest fallback, no phantom
-  costs derived from stale manual pricing tables.
+  no manual pricing is configured, the value is `0` — honest fallback, no
+  phantom costs derived from stale manual pricing tables. The billing
+  surface of the provider does not change this.
 
   ## Privacy
 

@@ -118,15 +118,6 @@ config :tokengate, :proxy,
   # 402 "Out of credits"). Keep it near a realistic high-percentile request
   # cost, NOT orders of magnitude above it.
   max_request_cost_usd: 1,
-  # FIFO wait timeouts when an `included` credential is saturated. The key
-  # is "how many included credentials remain after excluding this one", the
-  # value is the timeout in milliseconds. The first tier whose threshold is
-  # <= the remaining included count wins (so 0 always matches).
-  included_wait_tiers: [
-    {2, 5_000},
-    {1, 15_000},
-    {0, 30_000}
-  ],
   # Default sticky-routing TTL. An explicit
   # model_provider.sticky_ttl_ms overrides it. Routing no longer classifies
   # by billing surface, so there is a single default for every credential.

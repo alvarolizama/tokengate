@@ -62,7 +62,6 @@ defmodule TokengateWeb.ProxyController do
   }
 
   alias Tokengate.Routing.Router
-  alias Tokengate.Routing.IncludedWaiter
 
   @max_attempts 9
   @max_retries_per_provider 3
@@ -625,35 +624,17 @@ defmodule TokengateWeb.ProxyController do
           reserve_or_release(member, limits, route, key_id)
 
         {:error, :provider_concurrency_exceeded} ->
-          # Si es included, esperar en cola FIFO con timeout según cuántas
-          # included queden. Si es pay-per-token, fallback inmediato.
-          if billing_mode(route.model_provider) == "included" do
-            case maybe_wait_for_included(route, member, key_id, model_requested) do
-              :ok ->
-                reserve_or_release(member, limits, route, key_id)
-
-              {:error, :queue_timeout} ->
-                route_and_acquire(
-                  member,
-                  payload,
-                  api_key_hash,
-                  limits,
-                  [route.credential.id | exclude],
-                  route_opts,
-                  {attempt + 1, :provider_concurrency_exceeded}
-                )
-            end
-          else
-            route_and_acquire(
-              member,
-              payload,
-              api_key_hash,
-              limits,
-              [route.credential.id | exclude],
-              route_opts,
-              {attempt + 1, :provider_concurrency_exceeded}
-            )
-          end
+          # Credencial saturada: fallback inmediato al siguiente candidato.
+          # No hay cola de espera por facturación — todo provider se trata igual.
+          route_and_acquire(
+            member,
+            payload,
+            api_key_hash,
+            limits,
+            [route.credential.id | exclude],
+            route_opts,
+            {attempt + 1, :provider_concurrency_exceeded}
+          )
 
         {:error, :provider_user_concurrency_exceeded} ->
           route_and_acquire(
@@ -712,30 +693,6 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
-  # Espera en cola FIFO por un slot en una credential included saturada.
-  # El timeout depende de cuántas included quedan disponibles en la cascada.
-  defp maybe_wait_for_included(route, member, _key_id, model_requested) do
-    remaining = Router.count_remaining_included(model_requested, member, route.credential.id)
-    timeout_ms = included_wait_timeout(remaining)
-    credential = route.credential
-
-    IncludedWaiter.wait_for_slot(credential.id, credential.max_concurrent, timeout_ms)
-  end
-
-  defp included_wait_timeout(remaining) do
-    tiers =
-      Application.get_env(:tokengate, :proxy, [])
-      |> Keyword.get(:included_wait_tiers, [])
-
-    # Recorre tiers en orden; el primero cuyo threshold <= remaining da el timeout.
-    # A más included restantes, menos se espera en la actual. El tier {0, _}
-    # siempre matchea (0 <= remaining) y actúa como fallback para la última
-    # included de la cascada.
-    Enum.find_value(tiers, 30_000, fn {threshold, timeout} ->
-      if threshold <= remaining, do: timeout
-    end)
-  end
-
   # Budget-exemption subject for this request. Services authenticate as
   # virtual GroupMembers (service_name set, user/group nil) — see
   # ApiAuth.service_to_virtual_member/1. Group members check their own user
@@ -760,17 +717,13 @@ defmodule TokengateWeb.ProxyController do
   end
 
   # Reserves budget for the request on both layers (monthly per subject +
-  # global daily kill-switch). Returns `{:ok, hold}` where `hold` is either a
-  # `%{monthly_micro, global_micro, exempt_global?}` reservation or `:none` for
-  # `included` providers (subscription = $0, never charged). Settled — or
-  # released, if the request produced no cost — in the caller's `after` via
-  # `settle_budget/2`.
-  defp reserve_budget(member, limits, route) do
-    if billing_mode(route.model_provider) == "included" do
-      {:ok, :none}
-    else
-      reserve_credit_budget(member, limits)
-    end
+  # global daily kill-switch). Returns `{:ok, hold}` with
+  # `%{monthly_micro, global_micro, exempt_global?}`, settled — or released,
+  # if the request produced no cost — in the caller's `after` via
+  # `settle_budget/2`. Every provider goes through this gate; there is no
+  # billing-surface exemption.
+  defp reserve_budget(member, limits, _route) do
+    reserve_credit_budget(member, limits)
   end
 
   # Credit path for user members: hold against the first grant (group default →
@@ -799,8 +752,6 @@ defmodule TokengateWeb.ProxyController do
   # Settles the hold to the real cost recorded by the finalize step. When the
   # request never produced a cost (provider failure / exception), the hold is
   # released instead so it doesn't leak.
-  defp settle_budget(_member, :none), do: :ok
-
   defp settle_budget(_member, %{kind: kind} = hold) when kind in [:credit, :no_credit] do
     case Process.get(:tg_budget_actual_cost) do
       nil -> Budgets.release_credits(hold)
@@ -1591,14 +1542,14 @@ defmodule TokengateWeb.ProxyController do
       if body, do: UsageNormalizer.extract_reported_cost(:openai, body, resp_headers), else: nil
 
     if provider_reported do
-      CostCalculator.provider_cost(route.model_provider |> billing_mode(), provider_reported)
+      CostCalculator.provider_cost(provider_reported)
     else
       # Body had no cost — try headers alone (LiteLLM proxies report cost only
       # in headers, not in the streaming body).
       header_cost = UsageNormalizer.extract_reported_cost(:openai, %{}, resp_headers)
 
       if header_cost do
-        CostCalculator.provider_cost(route.model_provider |> billing_mode(), header_cost)
+        CostCalculator.provider_cost(header_cost)
       else
         # Neither body nor headers reported a cost — try manual pricing fallback.
         manual_cost(route, usage)
@@ -1612,7 +1563,7 @@ defmodule TokengateWeb.ProxyController do
   defp cost_with_fallback(route, provider_reported, usage) do
     mp = route.model_provider
 
-    CostCalculator.provider_cost(mp |> billing_mode(), provider_reported,
+    CostCalculator.provider_cost(provider_reported,
       manual_pricing: %{
         input_cost_per_million: mp.input_cost_per_million,
         output_cost_per_million: mp.output_cost_per_million,
@@ -1627,7 +1578,7 @@ defmodule TokengateWeb.ProxyController do
   defp manual_cost(route, usage) do
     mp = route.model_provider
 
-    CostCalculator.provider_cost(mp |> billing_mode(), nil,
+    CostCalculator.provider_cost(nil,
       manual_pricing: %{
         input_cost_per_million: mp.input_cost_per_million,
         output_cost_per_million: mp.output_cost_per_million,
@@ -1636,12 +1587,6 @@ defmodule TokengateWeb.ProxyController do
       usage: usage
     )
   end
-
-  # Effective billing mode derived from the credential's provider surface
-  # (subscription → "included", else "pay_per_token"). See
-  # Tokengate.Providers.ModelProvider.billing_mode/1.
-  defp billing_mode(%Tokengate.Providers.ModelProvider{} = mp),
-    do: Tokengate.Providers.ModelProvider.billing_mode(mp)
 
   ## Success finalization #######################################################
 

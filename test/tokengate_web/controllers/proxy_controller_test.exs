@@ -417,18 +417,18 @@ defmodule TokengateWeb.ProxyControllerTest do
     |> json_response(200)
   end
 
-  test "included provider bypasses exhausted credit", %{conn: conn} do
+  test "a subscription provider is not exempt from an exhausted credit", %{conn: conn} do
     %{token: token, model: model} =
       proxy_fixture(%{credit_units: 0, billing_type: "subscription"})
 
-    # Exhausted credit; an `included` provider must still serve.
-
+    # Exhausted credit + no billing-surface exemption: the gate rejects it,
+    # exactly as it would for a pay_per_token provider.
     conn =
       conn
       |> authed_conn(token)
       |> post(~p"/v1/chat/completions", chat_body(model.name))
 
-    assert json_response(conn, 200)
+    assert json_response(conn, 402)
   end
 
   test "402 when estimated cost exceeds the daily budget (nil group budget is unlimited)", %{

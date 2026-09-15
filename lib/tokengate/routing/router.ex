@@ -47,7 +47,6 @@ defmodule Tokengate.Routing.Router do
   the same (now failed) credential.
   """
   alias Tokengate.Providers
-  alias Tokengate.Providers.ModelProvider
   alias Tokengate.Routing.CircuitBreakerManager
   alias Tokengate.Routing.CredentialHealth
   alias Tokengate.Routing.Priority
@@ -131,16 +130,11 @@ defmodule Tokengate.Routing.Router do
     * `{:failure, reason, error_message}` → same, also storing the upstream
       error message in the breaker state for observability.
 
-  ### Included providers and rate limits
+  ### Rate limits
 
-  A `:rate_limited` failure against a `billing_mode == "included"` provider
-  **does not** trip the circuit breaker: subscription 429s are a capacity
-  signal ("too many RPM right now"), not a dead credential. Instead the
-  credential is degraded via `CredentialHealth.mark_slow/1` — it sinks
-  below healthy candidates so they absorb the burst, while the included
-  credential stays available as fallback.
-  `:server_error` and `:timeout` still count toward the breaker normally —
-  those mean the credential itself is broken, not merely busy.
+  A `:rate_limited` failure feeds the circuit breaker like any other failure
+  reason — routing no longer distinguishes a subscription provider. A 429 is
+  a provider signal, and the breaker's cooldown/fallback handles it.
 
   Always returns `:ok`. The caller decides whether to re-route (using
   `:exclude_credential_ids` to skip the failed credential) or surface the
@@ -182,18 +176,11 @@ defmodule Tokengate.Routing.Router do
     :ok
   end
 
-  # Included providers treat 429s as a soft capacity signal: degrade the
-  # credential within its tier instead of counting it toward the breaker.
-  # Everything else (and every pay_per_token failure) feeds the breaker.
+  # Every failure reason feeds the breaker — billing surface no longer makes a
+  # 429 special. The breaker's cooldown and the routing cascade provide the
+  # fallback a saturated credential needs.
   defp record_failure_outcome(route, reason, error_message) do
-    credential_id = route.credential.id
-    included? = ModelProvider.billing_mode(route.model_provider) == "included"
-
-    if reason == :rate_limited and included? do
-      CredentialHealth.mark_slow(credential_id)
-    else
-      @default_breaker.record_failure(credential_id, reason, error_message)
-    end
+    @default_breaker.record_failure(route.credential.id, reason, error_message)
   end
 
   @doc """
@@ -215,41 +202,6 @@ defmodule Tokengate.Routing.Router do
         owned_by: "tokengate"
       }
     end)
-  end
-
-  @doc """
-  How many `included` credentials remain available for `group_member` and
-  `model_requested` after excluding `credential_id`.
-
-  Used to decide the FIFO wait timeout: the more included credentials
-  remain, the less time is spent waiting on the current one.
-  """
-  @spec count_remaining_included(String.t(), map(), term()) :: non_neg_integer()
-  def count_remaining_included(model_requested, group_member, exclude_credential_id) do
-    model_id = resolve_alias_id(model_requested, group_member)
-
-    if is_nil(model_id) do
-      0
-    else
-      model_providers =
-        if group_member && group_member.group && group_member.group.id do
-          Providers.list_model_providers_for_member(
-            model_id,
-            group_member.id,
-            group_member.group.id
-          )
-        else
-          Providers.list_model_providers(model_id)
-        end
-
-      model_providers
-      |> Enum.count(fn mp ->
-        ModelProvider.billing_mode(mp) == "included" and
-          mp.credential != nil and
-          mp.credential.status == "active" and
-          mp.credential.id != exclude_credential_id
-      end)
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -368,16 +320,6 @@ defmodule Tokengate.Routing.Router do
 
   defp find_alias_by_name(accessible, name) do
     Enum.find(accessible, fn model_ -> model_.name == name end)
-  end
-
-  defp resolve_alias_id(nil, _group_member), do: nil
-
-  defp resolve_alias_id(model_requested, group_member) do
-    group_member = maybe_preload_group(group_member)
-
-    group_member
-    |> Providers.list_accessible_models()
-    |> Enum.find_value(fn model_ -> model_.name == model_requested && model_.id end)
   end
 
   # Member-exclusive scoping for the cached provider list. A cached entry is

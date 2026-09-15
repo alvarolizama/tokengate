@@ -531,7 +531,7 @@ defmodule TokengateWeb.MaintenanceLive do
                 <p class="text-sm text-base-content/60">
                   Recalcula el costo de logs usando los precios manuales
                   (input + cache + output) configurados en cada provider.
-                  Solo afecta logs con <code>billing_mode = pay_per_token</code>
+                  Solo afecta logs de providers que no son suscripción
                   que tengan input y output configurados.
                 </p>
                 <p class="text-sm text-base-content/60 mt-1">
@@ -707,7 +707,7 @@ defmodule TokengateWeb.MaintenanceLive do
               </p>
             <% end %>
             <p class="text-sm text-base-content/70 mt-1">
-              Solo afecta logs con <code>billing_mode = pay_per_token</code>
+              Solo afecta logs de providers que no son suscripción
               que tengan input y output configurados.
               Esta acción <strong>no se puede deshacer</strong>.
             </p>

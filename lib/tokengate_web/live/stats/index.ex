@@ -270,7 +270,7 @@ defmodule TokengateWeb.StatsLive.Index do
                 <.icon name="hero-clock" class="w-5 h-5 text-base-content/60" /> Uso por hora del día
               </h2>
               <span class="text-[10px] text-base-content/40 hidden sm:inline">
-                gris = included · morada = pay_per_token · escala √
+                gris = sin costo · morada = con costo · escala √
               </span>
             </div>
 
@@ -328,19 +328,19 @@ defmodule TokengateWeb.StatsLive.Index do
                                 )} req
                               </div>
                               <div
-                                :if={row.included_requests > 0}
+                                :if={row.free_requests > 0}
                                 class="text-base-content/70"
                               >
-                                included: {Stats.format_number(row.included_requests)}
+                                sin costo: {Stats.format_number(row.free_requests)}
                               </div>
                               <div
-                                :if={row.pay_per_token_requests > 0}
+                                :if={row.paid_requests > 0}
                                 class="text-base-content/70"
                               >
-                                pay_per_token: {Stats.format_number(row.pay_per_token_requests)}
+                                con costo: {Stats.format_number(row.paid_requests)}
                               </div>
                               <div
-                                :for={m <- Stats.ppt_models_for_tooltip(row)}
+                                :for={m <- Stats.paid_models_for_tooltip(row)}
                                 class="text-base-content/50 flex justify-between gap-3"
                               >
                                 <span class="truncate max-w-[140px]">{m.model}</span>
@@ -405,20 +405,20 @@ defmodule TokengateWeb.StatsLive.Index do
                     <% end %>
                   </div>
 
-                  <%!-- Included entry --%>
-                  <div :if={legend.included_requests > 0} class="mb-2">
+                  <%!-- Free entry --%>
+                  <div :if={legend.free_requests > 0} class="mb-2">
                     <div class="flex items-center gap-1.5">
                       <span class="w-2.5 h-2.5 rounded-sm shrink-0 bg-base-300/30" />
-                      <span class="text-[10px] font-medium flex-1">Included</span>
+                      <span class="text-[10px] font-medium flex-1">Sin costo</span>
                       <span class="text-[9px] text-base-content/50 shrink-0">
-                        {Stats.format_number(legend.included_requests)} req
+                        {Stats.format_number(legend.free_requests)} req
                       </span>
                     </div>
                   </div>
 
-                  <%!-- Pay-per-token model breakdown --%>
+                  <%!-- Charged-cost model breakdown --%>
                   <div class="space-y-2.5">
-                    <div :for={entry <- legend.ppt_entries}>
+                    <div :for={entry <- legend.paid_entries}>
                       <div class="flex items-center gap-1.5">
                         <span class="w-2.5 h-2.5 rounded-sm shrink-0 bg-primary" />
                         <span class="text-[10px] font-medium truncate flex-1">{entry.model}</span>

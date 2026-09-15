@@ -1142,18 +1142,20 @@ defmodule Tokengate.Metrics.Rollup do
   @doc """
   Uso total por hora del día, con desglose por modelo.
 
-  Incluye TODOS los models (pay_per_token e included). Para cada hora:
+  Incluye TODOS los models. Para cada hora:
 
       %{
         hour: 0..23,
         total_requests: integer,
-        total_cost_usd: Decimal,      # solo pay_per_token tiene costo > 0
+        total_cost_usd: Decimal,      # suma de costos cobrados
+        free_requests: integer,       # requests sin costo (provider_cost_usd = 0)
+        paid_requests: integer,       # requests con costo > 0
         models: [
           %{
             model: String.t(),
             requests: integer,
-            cost_usd: Decimal,        # 0 para included
-            billing_mode: String.t()
+            cost_usd: Decimal,
+            paid: boolean
           }
         ]
       }
@@ -1176,17 +1178,12 @@ defmodule Tokengate.Metrics.Rollup do
 
     rows =
       RequestLog
-      |> join(:left, [rl], mp in Tokengate.Providers.ModelProvider,
-        on: rl.model_provider_id == mp.id
-      )
-      |> join(:left, [rl, mp], c in Tokengate.Providers.Credential, on: mp.credential_id == c.id)
-      |> join(:left, [rl, mp, c], p in Tokengate.Providers.Provider, on: c.provider_id == p.id)
       |> maybe_join_group(group_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
       |> join(:left, [rl], ma in Model, on: rl.model_id == ma.id)
-      |> select([rl, mp, c, p, ma], %{
+      |> select([rl, ma], %{
         hour:
           fragment(
             "CAST(EXTRACT(hour FROM (? AT TIME ZONE 'Etc/UTC') AT TIME ZONE ?) AS integer)",
@@ -1194,22 +1191,18 @@ defmodule Tokengate.Metrics.Rollup do
             ^timezone
           ),
         model: fragment("COALESCE(?, ?)", ma.name, rl.model_requested),
-        billing_mode:
-          fragment(
-            "CASE WHEN ? = 'subscription' THEN 'included' ELSE 'pay_per_token' END",
-            p.billing_type
-          ),
         cost_usd: rl.provider_cost_usd,
+        paid: fragment("COALESCE(?, 0) > 0", rl.provider_cost_usd),
         id: rl.id
       })
       |> subquery()
       |> then(fn subq ->
         from(r in subq,
-          group_by: [r.hour, r.model, r.billing_mode],
+          group_by: [r.hour, r.model, r.paid],
           select: %{
             hour: r.hour,
             model: r.model,
-            billing_mode: r.billing_mode,
+            paid: r.paid,
             cost_usd: fragment("COALESCE(SUM(?), 0)", r.cost_usd),
             request_count: count(r.id)
           }
@@ -1224,12 +1217,12 @@ defmodule Tokengate.Metrics.Rollup do
     for hour <- 0..23 do
       hour_rows = Map.get(by_hour, hour, [])
 
-      # Agrupar por (model, billing_mode) — un mismo model model puede tener
-      # providers incluidos y pay_per_token simultáneamente.
-      by_model_billing =
+      # Agrupar por (model, paid) — un mismo model puede tener requests
+      # cobrados y gratis en la misma hora.
+      by_model =
         hour_rows
-        |> Enum.group_by(&{&1.model, &1.billing_mode})
-        |> Enum.map(fn {{model, billing_mode}, entries} ->
+        |> Enum.group_by(&{&1.model, &1.paid})
+        |> Enum.map(fn {{model, paid}, entries} ->
           requests = Enum.reduce(entries, 0, &(&1.request_count + &2))
 
           cost =
@@ -1239,39 +1232,34 @@ defmodule Tokengate.Metrics.Rollup do
             model: model,
             requests: requests,
             cost_usd: cost,
-            billing_mode: billing_mode
+            paid: paid
           }
         end)
         |> Enum.sort_by(& &1.requests, :desc)
 
-      total_requests = Enum.reduce(by_model_billing, 0, &(&1.requests + &2))
+      total_requests = Enum.reduce(by_model, 0, &(&1.requests + &2))
 
-      # Totales por billing_mode desde los rows agrupados del SQL (no del
-      # by_model aplanado) para no perder requests cuando un modelo tiene
-      # providers mixtos. Los NULL/unknown se tratan como pay_per_token
-      # (el default del schema) para no perderlos en la visualización.
-      included_requests =
+      free_requests =
         hour_rows
-        |> Enum.filter(&(&1.billing_mode == "included"))
+        |> Enum.filter(&(&1.paid == false))
         |> Enum.reduce(0, &(&1.request_count + &2))
 
-      pay_per_token_requests =
+      paid_requests =
         hour_rows
-        |> Enum.filter(&(&1.billing_mode != "included"))
+        |> Enum.filter(&(&1.paid == true))
         |> Enum.reduce(0, &(&1.request_count + &2))
 
       total_cost =
         hour_rows
-        |> Enum.filter(&(&1.billing_mode != "included"))
         |> Enum.reduce(Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
 
       %{
         hour: hour,
         total_requests: total_requests,
-        included_requests: included_requests,
-        pay_per_token_requests: pay_per_token_requests,
+        free_requests: free_requests,
+        paid_requests: paid_requests,
         total_cost_usd: total_cost,
-        models: by_model_billing
+        models: by_model
       }
     end
   end
@@ -1284,7 +1272,7 @@ defmodule Tokengate.Metrics.Rollup do
   Requests agrupados por model model, con desglose por proveedor (ModelProvider).
 
   Devuelve una lista de models, cada uno con su total de requests y la lista
-  de proveedores que lo sirvieron (con requests, billing_mode y costo).
+  de proveedores que lo sirvieron (con requests y costo).
 
   Las barras horizontales de la gráfica de stats usan esta data: una barra
   por modelo, segmentos apilados por proveedor.
@@ -1317,7 +1305,7 @@ defmodule Tokengate.Metrics.Rollup do
       )
       |> group_by(
         [rl, ma, mp, c, p],
-        [ma.id, ma.name, mp.id, p.name, p.billing_type]
+        [ma.id, ma.name, mp.id, p.name]
       )
       |> select(
         [rl, ma, mp, c, p],
@@ -1326,11 +1314,6 @@ defmodule Tokengate.Metrics.Rollup do
           model_name: ma.name,
           provider_id: mp.id,
           provider_name: p.name,
-          billing_mode:
-            fragment(
-              "CASE WHEN ? = 'subscription' THEN 'included' ELSE 'pay_per_token' END",
-              p.billing_type
-            ),
           request_count: count(rl.id),
           cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
         }
@@ -1342,7 +1325,6 @@ defmodule Tokengate.Metrics.Rollup do
           model_name: row.model_name || "—",
           provider_id: row.provider_id,
           provider_name: row.provider_name || "—",
-          billing_mode: row.billing_mode || "pay_per_token",
           request_count: row.request_count,
           cost_usd: Decimal.new(to_string(row.cost_usd))
         }
@@ -1365,13 +1347,10 @@ defmodule Tokengate.Metrics.Rollup do
               Decimal.add(acc, e.cost_usd)
             end)
 
-          billing_mode = List.first(p_entries).billing_mode
-
           %{
             provider_name: provider_name,
             requests: requests,
-            cost_usd: cost,
-            billing_mode: billing_mode
+            cost_usd: cost
           }
         end)
         |> Enum.sort_by(& &1.requests, :desc)

@@ -192,14 +192,14 @@ defmodule TokengateWeb.StatsHelpers do
   end
 
   @doc """
-  Modelos pay_per_token para mostrar en el tooltip del hover de una barra.
+  Modelos con costo cobrado, para el tooltip del hover de una barra.
 
-  Filtra los models del hour_row por billing_mode != "included", los agrupa
-  por nombre y los ordena por requests desc.
+  Filtra los models del hour_row con `paid == true`, los agrupa por nombre
+  y los ordena por requests desc.
   """
-  def ppt_models_for_tooltip(hour_row) do
+  def paid_models_for_tooltip(hour_row) do
     hour_row.models
-    |> Enum.filter(&(&1.billing_mode != "included"))
+    |> Enum.filter(& &1.paid)
     |> Enum.group_by(& &1.model)
     |> Enum.map(fn {model, entries} ->
       requests = Enum.reduce(entries, 0, &(&1.requests + &2))
@@ -211,8 +211,8 @@ defmodule TokengateWeb.StatsHelpers do
   @doc """
   Segmentos de barra para una hora: solo dos colores.
 
-  - Gris (`bg-base-300/30`) = requests included
-  - Morado (`bg-primary`) = requests pay_per_token (todos los models combinados)
+  - Gris claro (`bg-base-300/30`) = requests sin costo (`provider_cost_usd = 0`)
+  - Morado (`bg-primary`) = requests con costo cobrado (todos los models combinados)
   """
   def bar_segments(hour_row) do
     hour_total = hour_row.total_requests
@@ -220,31 +220,31 @@ defmodule TokengateWeb.StatsHelpers do
     if hour_total <= 0 do
       []
     else
-      included_segment =
-        if hour_row.included_requests > 0 do
-          pct = Float.round(hour_row.included_requests / hour_total * 100, 1)
+      free_segment =
+        if hour_row.free_requests > 0 do
+          pct = Float.round(hour_row.free_requests / hour_total * 100, 1)
           [%{height_pct: pct, color: "bg-base-300/30"}]
         else
           []
         end
 
-      ppt_segment =
-        if hour_row.pay_per_token_requests > 0 do
-          pct = Float.round(hour_row.pay_per_token_requests / hour_total * 100, 1)
+      paid_segment =
+        if hour_row.paid_requests > 0 do
+          pct = Float.round(hour_row.paid_requests / hour_total * 100, 1)
           [%{height_pct: pct, color: "bg-primary"}]
         else
           []
         end
 
-      included_segment ++ ppt_segment
+      free_segment ++ paid_segment
     end
   end
 
   @doc """
   Datos para la leyenda de la gráfica de uso por hora.
 
-  - `included_requests` — total de requests included en el periodo (o la hora hovered)
-  - `ppt_entries` — desglose por modelo de los requests pay_per_token, con costo
+  - `free_requests` — total de requests sin costo en el periodo (o la hora hovered)
+  - `paid_entries` — desglose por modelo de los requests con costo
   """
   def legend_data(stacked_rows, hovered_hour) do
     source_rows =
@@ -255,17 +255,16 @@ defmodule TokengateWeb.StatsHelpers do
         stacked_rows |> Enum.flat_map(& &1.models)
       end
 
-    # Included total
-    included_requests =
+    # Requests without a cost
+    free_requests =
       source_rows
-      |> Enum.filter(&(&1.billing_mode == "included"))
+      |> Enum.filter(&(&1.paid == false))
       |> Enum.reduce(0, &(&1.requests + &2))
 
-    # Pay-per-token entries grouped by model
-    # (includes unknown billing_mode, treated as pay_per_token)
-    ppt_entries =
+    # Requests with a charged cost, grouped by model
+    paid_entries =
       source_rows
-      |> Enum.filter(&(&1.billing_mode != "included"))
+      |> Enum.filter(& &1.paid)
       |> Enum.group_by(& &1.model)
       |> Enum.map(fn {model, entries} ->
         requests = Enum.reduce(entries, 0, &(&1.requests + &2))
@@ -277,14 +276,14 @@ defmodule TokengateWeb.StatsHelpers do
       end)
       |> Enum.sort_by(& &1.requests, :desc)
 
-    total_requests = included_requests + Enum.reduce(ppt_entries, 0, &(&1.requests + &2))
+    total_requests = free_requests + Enum.reduce(paid_entries, 0, &(&1.requests + &2))
 
     total_cost =
-      Enum.reduce(ppt_entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
+      Enum.reduce(paid_entries, Decimal.new(0), fn e, acc -> Decimal.add(acc, e.cost_usd) end)
 
     %{
-      included_requests: included_requests,
-      ppt_entries: ppt_entries,
+      free_requests: free_requests,
+      paid_entries: paid_entries,
       total_requests: total_requests,
       total_cost_usd: total_cost,
       hovered_hour: hovered_hour
@@ -358,7 +357,6 @@ defmodule TokengateWeb.StatsHelpers do
           provider_name: p.provider_name,
           requests: p.requests,
           cost_usd: p.cost_usd,
-          billing_mode: p.billing_mode,
           width_pct: pct,
           color: provider_legend_color(p.provider_name, legend)
         }

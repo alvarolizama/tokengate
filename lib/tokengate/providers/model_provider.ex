@@ -9,10 +9,10 @@ defmodule Tokengate.Providers.ModelProvider do
   priorities for fallback.
 
   Billing lives on the provider (`providers.billing_type`, synced from the
-  catalog for builtins, chosen at creation for customs). Routing tiers,
-  cost calculation and sticky TTL defaults derive it via
-  `billing_mode/1`. Per-provider pricing rows are gone; we trust the
-  upstream to report what it actually charged.
+  catalog for builtins, chosen at creation for customs), but it is an
+  **organizational label only** — it groups the "add provider" menu and
+  labels the admin tables. Routing, cost, budget and the circuit breaker
+  treat every provider the same.
 
   ## Exclusive scope
 
@@ -39,7 +39,6 @@ defmodule Tokengate.Providers.ModelProvider do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @billing_modes ~w(pay_per_token included)
   @scopes ~w(global member group service)
 
   schema "model_providers" do
@@ -160,26 +159,6 @@ defmodule Tokengate.Providers.ModelProvider do
       message: "esta credencial ya es exclusiva para este usuario y modelo"
     )
     |> sync_scope_field()
-  end
-
-  @doc "List of valid billing modes (derived from the provider surface)"
-  def billing_modes, do: @billing_modes
-
-  @doc """
-  Effective billing mode for a model_provider, derived from its
-  credential's provider: a `subscription` provider maps to `"included"`
-  (cost $0, top routing tier); anything else is `"pay_per_token"`.
-
-  Handles not-loaded associations defensively (returns
-  `"pay_per_token"`), though production paths always preload
-  `credential: :provider`.
-  """
-  @spec billing_mode(map()) :: String.t()
-  def billing_mode(%__MODULE__{} = mp) do
-    case mp do
-      %__MODULE__{credential: %{provider: %{billing_type: "subscription"}}} -> "included"
-      _ -> "pay_per_token"
-    end
   end
 
   @doc "List of valid scopes"

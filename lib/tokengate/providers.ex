@@ -9,10 +9,9 @@ defmodule Tokengate.Providers do
 
   Per-provider pricing rows (`model_pricing`) and per-model market prices
   have been removed. `provider_cost_usd` is whatever the upstream reports
-  in its response body (`usage.cost` for OpenAI-compatible gateways). The
-  only cost-relevant attribute remaining is `model_providers.billing_mode`:
-  `"pay_per_token"` (use upstream-reported cost when available) or
-  `"included"` (subscription / RPM-limited — cost is $0).
+  in its response body (`usage.cost` for OpenAI-compatible gateways).
+  `providers.billing_type` is an organizational label for the admin UI
+  only; it does not affect routing, cost or budget.
 
   All `belongs_to` references to `Tokengate.Accounts.*` modules resolve at
   runtime — the Accounts context may not be compiled when this module is.

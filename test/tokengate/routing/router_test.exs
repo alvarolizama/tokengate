@@ -468,13 +468,13 @@ defmodule Tokengate.Routing.RouterTest do
       assert CircuitBreakerManager.allow?(cred_id) == false
     end
 
-    test "rate_limited failures on an included provider do NOT trip the breaker" do
+    test "rate_limited failures trip the breaker on every billing surface" do
       f = full_setup()
 
+      # A subscription provider is no longer special: a 429 feeds the breaker.
       {:ok, _p} = Providers.update_provider(f.provider, %{billing_type: "subscription"})
 
       assert {:ok, route} = Router.route(f.model.name, f.member)
-      assert Tokengate.Providers.ModelProvider.billing_mode(route.model_provider) == "included"
       cred_id = route.credential.id
 
       CircuitBreakerManager.reset(cred_id)
@@ -484,21 +484,11 @@ defmodule Tokengate.Routing.RouterTest do
         assert :ok = Router.record_outcome(route, {:failure, :rate_limited})
       end
 
-      # Flush the CredentialHealth GenServer mailbox so the async mark_slow
-      # casts have been handled before we assert on the ETS table.
-      _ = :sys.get_state(Tokengate.Routing.CredentialHealth)
-
-      # The breaker stays closed — 429s on a subscription are capacity, not death.
-      assert CircuitBreakerManager.status(cred_id) == :closed
-      assert CircuitBreakerManager.allow?(cred_id) == true
-
-      # But the credential is degraded within its tier instead.
-      assert Tokengate.Routing.CredentialHealth.degraded?(cred_id)
-
-      # (The provider update to subscription proved itself above.)
+      assert CircuitBreakerManager.status(cred_id) == :open
+      assert CircuitBreakerManager.allow?(cred_id) == false
     end
 
-    test "server_error on an included provider still trips the breaker" do
+    test "server_error trips the breaker regardless of billing surface" do
       f = full_setup()
 
       {:ok, _p} = Providers.update_provider(f.provider, %{billing_type: "subscription"})
@@ -512,7 +502,7 @@ defmodule Tokengate.Routing.RouterTest do
         assert :ok = Router.record_outcome(route, {:failure, :server_error})
       end
 
-      # A dead credential is a dead credential — included or not.
+      # A dead credential is a dead credential — on any surface.
       assert CircuitBreakerManager.status(cred_id) == :open
       assert CircuitBreakerManager.allow?(cred_id) == false
     end

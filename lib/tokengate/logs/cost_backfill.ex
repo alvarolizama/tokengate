@@ -18,7 +18,7 @@ defmodule Tokengate.Logs.CostBackfill do
 
   Only affects rows where:
     * `model_provider_id` is not null
-    * `billing_mode` is `pay_per_token`
+    * `billing_type` of the provider is not `subscription`
     * The model_provider has both input AND output pricing set
 
   Returns `{updated_count, skipped_count}`.
@@ -101,7 +101,7 @@ defmodule Tokengate.Logs.CostBackfill do
   end
 
   defp compute_cost(row) do
-    CostCalculator.provider_cost("pay_per_token", nil,
+    CostCalculator.provider_cost(nil,
       manual_pricing: %{
         input_cost_per_million: row.input_cost,
         output_cost_per_million: row.output_cost,
