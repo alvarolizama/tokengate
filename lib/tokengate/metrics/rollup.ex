@@ -1176,49 +1176,64 @@ defmodule Tokengate.Metrics.Rollup do
     to = Keyword.get(opts, :to)
     timezone = Keyword.get(opts, :timezone, "Etc/UTC")
 
-    rows =
+    # El nombre del modelo NO entra al GROUP BY: resolverlo exige un JOIN a
+    # `models` por cada fila del período, y eso convertía el agregado en un
+    # sort+join de millones de filas (~4.1 s a 90 días). Se agrupa por las
+    # columnas crudas (`model_id`, `model_requested`) — que es lo que el JOIN
+    # sólo traducía a texto — y el nombre se resuelve después sobre las ~1000
+    # filas del resultado. El merge final por nombre preserva el
+    # comportamiento previo: dos model_id con el mismo nombre caen en la
+    # misma fila del desglose.
+    #
+    # El bucket horario se materializa en la subquery (misma razón que en
+    # `hourly_series/2`: Postgres trata `date_trunc(... AT TIME ZONE $1)` del
+    # SELECT y del GROUP BY como expresiones distintas por ir con parámetros
+    # separados, y exige que la columna "aparezca" en el GROUP BY).
+    bucketed =
       RequestLog
       |> maybe_join_group(group_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
-      |> join(:left, [rl], ma in Model, on: rl.model_id == ma.id)
-      |> select([rl, ma], %{
+      |> select([rl], %{
         hour:
           fragment(
             "CAST(EXTRACT(hour FROM (? AT TIME ZONE 'Etc/UTC') AT TIME ZONE ?) AS integer)",
             rl.inserted_at,
             ^timezone
           ),
-        model: fragment("COALESCE(?, ?)", ma.name, rl.model_requested),
-        cost_usd: rl.provider_cost_usd,
+        model_id: rl.model_id,
+        model_requested: rl.model_requested,
         paid: fragment("COALESCE(?, 0) > 0", rl.provider_cost_usd),
-        id: rl.id
+        cost_usd: rl.provider_cost_usd
       })
       |> subquery()
-      |> then(fn subq ->
-        from(r in subq,
-          group_by: [r.hour, r.model, r.paid],
-          select: %{
-            hour: r.hour,
-            model: r.model,
-            paid: r.paid,
-            cost_usd: fragment("COALESCE(SUM(?), 0)", r.cost_usd),
-            request_count: count(r.id)
-          }
-        )
-      end)
+
+    rows =
+      from(b in bucketed,
+        group_by: [b.hour, b.model_id, b.model_requested, b.paid],
+        select: %{
+          hour: b.hour,
+          model_id: b.model_id,
+          model_requested: b.model_requested,
+          paid: b.paid,
+          cost_usd: fragment("COALESCE(SUM(?), 0)", b.cost_usd),
+          request_count: fragment("count(*)")
+        }
+      )
       |> Repo.all()
 
-    by_hour =
-      rows
-      |> Enum.group_by(& &1.hour)
+    model_names = model_names_by_id(rows)
+    hours_with_models = Enum.map(rows, &Map.put(&1, :model, resolve_model_name(&1, model_names)))
+
+    by_hour = Enum.group_by(hours_with_models, & &1.hour)
 
     for hour <- 0..23 do
       hour_rows = Map.get(by_hour, hour, [])
 
       # Agrupar por (model, paid) — un mismo model puede tener requests
-      # cobrados y gratis en la misma hora.
+      # cobrados y gratis en la misma hora, y varios model_id pueden
+      # compartir nombre.
       by_model =
         hour_rows
         |> Enum.group_by(&{&1.model, &1.paid})
@@ -1262,6 +1277,31 @@ defmodule Tokengate.Metrics.Rollup do
         models: by_model
       }
     end
+  end
+
+  # Nombre de cada `model_id` presente en las filas agregadas, en una sola
+  # consulta. Un solo viaje para todos los ids en vez de un JOIN por fila.
+  defp model_names_by_id(rows) do
+    ids = rows |> Enum.map(& &1.model_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+
+    case ids do
+      [] ->
+        %{}
+
+      ids ->
+        from(m in Model, where: m.id in ^ids, select: {m.id, m.name})
+        |> Repo.all()
+        |> Map.new()
+    end
+  end
+
+  # El log cae al `model_requested` cuando su `model_id` es nil o cuando el
+  # modelo ya no existe — mismo `COALESCE(ma.name, rl.model_requested)` de
+  # antes, sólo que resuelto fuera del agregado.
+  defp resolve_model_name(%{model_id: nil} = row, _names), do: row.model_requested || "—"
+
+  defp resolve_model_name(%{model_id: id, model_requested: requested}, names) do
+    Map.get(names, id) || requested || "—"
   end
 
   # -----------------------------------------------------------------------
@@ -1446,8 +1486,12 @@ defmodule Tokengate.Metrics.Rollup do
   Devuelve `%{max_concurrent: integer, at: DateTime | nil}` — `at` es el
   primer momento en que se alcanzó el máximo; nil si no hubo requests.
 
-  Nota: carga `(inserted_at, latency_ms)` del período en memoria — es una
-  estimación para dashboards, no para hot paths.
+  El sweep corre en Postgres (suma acumulativa sobre los eventos ordenados),
+  no en memoria de la BEAM: la versión anterior cargaba `(inserted_at,
+  latency_ms)` de todo el período y ordenaba en Elixir, lo que a 90 días
+  sobre un millón de filas costaba segundos de CPU y cientos de MB por
+  recarga. El resultado es idéntico — incluido el empate a favor de los
+  finales (-1) sobre los inicios (+1) en el mismo timestamp.
 
   ## Options
 
@@ -1459,41 +1503,53 @@ defmodule Tokengate.Metrics.Rollup do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
-    events =
+    base =
       RequestLog
       |> maybe_join_group(group_id)
       |> maybe_from(from)
       |> maybe_to(to)
-      |> select([rl], %{inserted_at: rl.inserted_at, latency_ms: rl.latency_ms})
-      |> Repo.all()
-      |> Enum.flat_map(fn row ->
-        latency = row.latency_ms || 0
-        start_at = DateTime.add(row.inserted_at, -latency, :millisecond)
-        # En empate de timestamp, los finales (-1) van antes que los
-        # inicios (+1): un request que termina justo cuando otro empieza
-        # no cuenta como concurrente.
-        [{start_at, 1}, {row.inserted_at, -1}]
-      end)
-      |> Enum.sort(fn {ts_a, delta_a}, {ts_b, delta_b} ->
-        case DateTime.compare(ts_a, ts_b) do
-          :lt -> true
-          :gt -> false
-          :eq -> delta_a <= delta_b
-        end
-      end)
 
-    {max_concurrent, at, _current} =
-      Enum.reduce(events, {0, nil, 0}, fn {ts, delta}, {max, max_at, current} ->
-        current = current + delta
+    # Cada log aporta dos eventos: su inicio (+1) y su fin (-1). El inicio
+    # retrocede `latency_ms`; `nil` = instantáneo (mismo ts que el fin).
+    starts =
+      from(rl in base,
+        select: %{
+          ts:
+            fragment(
+              "? - (COALESCE(?, 0) * interval '1 millisecond')",
+              rl.inserted_at,
+              rl.latency_ms
+            ),
+          delta: 1
+        }
+      )
 
-        if current > max do
-          {current, ts, current}
-        else
-          {max, max_at, current}
-        end
-      end)
+    ends = from(rl in base, select: %{ts: rl.inserted_at, delta: -1})
 
-    %{max_concurrent: max_concurrent, at: at}
+    # El orden del window reproduce el del sweep en Elixir: por timestamp y,
+    # en empate, los finales (-1) antes que los inicios (+1) — un request que
+    # termina justo cuando otro empieza no cuenta como concurrente.
+    runs =
+      from(e in subquery(union_all(starts, ^ends)),
+        select: %{
+          ts: e.ts,
+          run: over(sum(e.delta), order_by: [asc: e.ts, asc: e.delta])
+        }
+      )
+
+    # El pico es el mayor `run`; `at` el primer ts que lo alcanzó. Un `run`
+    # máximo solo puede venir de un evento +1 (un -1 lo habría superado
+    # antes), así que ordenar por ts ascendente da el primer instante real.
+    from(r in subquery(runs),
+      order_by: [desc: r.run, asc: r.ts],
+      limit: 1,
+      select: %{max_concurrent: r.run, at: r.ts}
+    )
+    |> Repo.one()
+    |> case do
+      nil -> %{max_concurrent: 0, at: nil}
+      row -> %{max_concurrent: row.max_concurrent, at: to_utc_datetime(row.at)}
+    end
   end
 
   # -----------------------------------------------------------------------

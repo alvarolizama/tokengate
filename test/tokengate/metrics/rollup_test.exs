@@ -1021,6 +1021,110 @@ defmodule Tokengate.Metrics.RollupTest do
   end
 
   # ---------------------------------------------------------------------
+  # usage_by_hour_of_day_stacked/2
+  # ---------------------------------------------------------------------
+
+  describe "usage_by_hour_of_day_stacked/2" do
+    test "zero-fill de 24 horas y totales por hora (free vs paid)" do
+      {tm, _group} = group_member_fixture()
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      at_09 = %{now | hour: 9, minute: 0, second: 0}
+      at_16 = %{now | hour: 16, minute: 0, second: 0}
+
+      # 2 gratis + 1 cobrado a las 09; 1 gratis a las 16.
+      log_request(tm.id, at_09, %{cost_usd: Decimal.new("0")})
+      log_request(tm.id, at_09, %{cost_usd: Decimal.new("0")})
+      log_request(tm.id, at_09, %{cost_usd: Decimal.new("1.500000")})
+      log_request(tm.id, at_16, %{cost_usd: Decimal.new("0")})
+
+      rows = Rollup.usage_by_hour_of_day_stacked(nil, from: DateTime.add(now, -86_400, :second))
+
+      assert length(rows) == 24
+      assert Enum.map(rows, & &1.hour) == Enum.to_list(0..23)
+
+      h9 = Enum.find(rows, &(&1.hour == 9))
+      assert h9.total_requests == 3
+      assert h9.free_requests == 2
+      assert h9.paid_requests == 1
+      assert Decimal.equal?(h9.total_cost_usd, Decimal.new("1.5"))
+
+      h16 = Enum.find(rows, &(&1.hour == 16))
+      assert h16.total_requests == 1
+      assert h16.free_requests == 1
+      assert h16.paid_requests == 0
+    end
+
+    # El cambio saca el nombre del modelo del GROUP BY SQL y lo resuelve
+    # después. Estos dos casos cubren exactamente las dos ramas del COALESCE
+    # que antes hacía el JOIN: nombre del catálogo, y fallback al
+    # `model_requested` cuando el log no trae `model_id`.
+    test "resuelve el nombre del modelo desde el catálogo" do
+      {tm, _group} = group_member_fixture()
+      model = model_fixture(%{})
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      log_request(tm.id, now, %{model_id: model.id, model_requested: "alias-viejo"})
+
+      rows = Rollup.usage_by_hour_of_day_stacked(nil, from: DateTime.add(now, -3600, :second))
+
+      models = rows |> Enum.flat_map(& &1.models)
+      assert Enum.any?(models, &(&1.model == model.name))
+      refute Enum.any?(models, &(&1.model == "alias-viejo"))
+    end
+
+    test "cae al model_requested cuando el log no tiene model_id" do
+      {tm, _group} = group_member_fixture()
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      log_request(tm.id, now, %{model_requested: "modelo-sin-catalogo"})
+
+      rows = Rollup.usage_by_hour_of_day_stacked(nil, from: DateTime.add(now, -3600, :second))
+
+      models = rows |> Enum.flat_map(& &1.models)
+      assert Enum.any?(models, &(&1.model == "modelo-sin-catalogo"))
+    end
+
+    test "un mismo modelo con requests gratis y cobrados en la misma hora" do
+      {tm, _group} = group_member_fixture()
+      model = model_fixture(%{})
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      at = %{now | hour: 11, minute: 0, second: 0}
+
+      log_request(tm.id, at, %{model_id: model.id, cost_usd: Decimal.new("0")})
+      log_request(tm.id, at, %{model_id: model.id, cost_usd: Decimal.new("2.000000")})
+
+      rows = Rollup.usage_by_hour_of_day_stacked(nil, from: DateTime.add(now, -86_400, :second))
+
+      h11 = Enum.find(rows, &(&1.hour == 11))
+      assert h11.free_requests == 1
+      assert h11.paid_requests == 1
+
+      # Dos entradas del mismo nombre: una gratis y una cobrada.
+      same_model = Enum.filter(h11.models, &(&1.model == model.name))
+      assert length(same_model) == 2
+      assert Enum.sort(Enum.map(same_model, & &1.paid)) == [false, true]
+    end
+
+    test "usa la hora local del timezone" do
+      {tm, group} = group_member_fixture()
+
+      # 2026-07-31 05:30Z = 2026-07-30 23:30 en CDMX (UTC-6)
+      log_request(tm.id, ~U[2026-07-31 05:30:00Z])
+
+      rows =
+        Rollup.usage_by_hour_of_day_stacked(group.id,
+          from: ~U[2026-07-31 00:00:00Z],
+          to: ~U[2026-07-31 23:59:59Z],
+          timezone: "America/Mexico_City"
+        )
+
+      assert Enum.find(rows, &(&1.hour == 23)).total_requests == 1
+      assert Enum.find(rows, &(&1.hour == 5)).total_requests == 0
+    end
+  end
+
+  # ---------------------------------------------------------------------
   # busiest_hours/2 y busiest_minutes/2
   # ---------------------------------------------------------------------
 
