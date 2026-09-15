@@ -4,7 +4,9 @@ defmodule TokengateWeb.StatsLive.LiveSection do
 
   Cinco bloques (todos auto-refresh, mismo orden de filas que el Resumen:
   presupuesto → KPIs principales → KPIs secundarios):
-    * KPIs de hoy (día calendario): costo, requests, tokens, latencia p50/p95
+    * KPIs de hoy (día calendario): costo, tokens y requests — la latencia
+      (media y p95) va como sub-línea de la tarjeta de requests, que es el
+      dato principal; así la fila queda en 3 columnas
     * Pulso: requests/min (5m), error rate, requests en vuelo
     * Requests por minuto — últimos 60 min (barras)
     * En vuelo ahora: registry ETS (`Logs.Inflight`)
@@ -93,9 +95,11 @@ defmodule TokengateWeb.StatsLive.LiveSection do
 
       <%!-- KPIs de hoy (día calendario) — primera fila de tarjetas, mismo
            orden de filas que el Resumen: presupuesto → KPIs principales →
-           KPIs secundarios. Dentro de la fila: Costo · Requests · Tokens ·
-           latencia --%>
-      <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
+           KPIs secundarios. Dentro de la fila: Costo · Tokens · Requests con
+           la latencia debajo (3 columnas: requests y latencia comparten
+           tarjeta porque son la misma lectura — volumen y su coste en
+           tiempo — y así la fila no deja un hueco vacío). --%>
+      <div class="grid grid-cols-2 lg:grid-cols-3 gap-4">
         <.kpi_card
           id="live-today-cost"
           label="Hoy · costo (UTC)"
@@ -108,15 +112,6 @@ defmodule TokengateWeb.StatsLive.LiveSection do
             Reinicia en {@budget_reset_hours}h {@budget_reset_minutes}m
             ({Stats.format_time(@budget_reset_at, @timezone)} en tu hora local)
           </:sub>
-        </.kpi_card>
-
-        <.kpi_card
-          id="live-today-requests"
-          label="Hoy · requests"
-          icon="hero-arrow-trending-up"
-          accent="primary"
-        >
-          {Stats.format_number(@today_metrics.requests_total)}
         </.kpi_card>
 
         <.kpi_card
@@ -146,14 +141,25 @@ defmodule TokengateWeb.StatsLive.LiveSection do
           </:sub>
         </.kpi_card>
 
+        <%!-- Requests + latencia: el valor grande es el volumen de requests,
+             que es el dato principal; la latencia (media y p95) va como
+             sub-línea bajo él. Mismo criterio de ventana que el resto de la
+             fila: día UTC. --%>
         <.kpi_card
-          id="live-today-latency"
-          label="Hoy · latencia"
-          icon="hero-clock"
-          accent="accent"
+          id="live-today-requests"
+          label="Hoy · requests"
+          icon="hero-arrow-trending-up"
+          accent="primary"
+          title="Latencia de las requests de hoy — media y p95"
         >
-          {Stats.format_ms(@today_metrics.avg_latency_ms)}
-          <:sub>p95: {Stats.format_ms(@today_metrics.p95_latency_ms)}</:sub>
+          {Stats.format_number(@today_metrics.requests_total)}
+          <:sub>
+            <span id="live-today-latency">
+              latencia {Stats.format_ms(@today_metrics.avg_latency_ms)} · p95: {Stats.format_ms(
+                @today_metrics.p95_latency_ms
+              )}
+            </span>
+          </:sub>
         </.kpi_card>
       </div>
 

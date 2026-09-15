@@ -525,11 +525,16 @@ defmodule TokengateWeb.StatsLiveTest do
     # Orden de filas: presupuesto (si existe) → KPIs principales de hoy →
     # pulso (KPIs secundarios) → gráficas
     assert order_before?(html, "live-today-cost", "live-rpm")
-    assert order_before?(html, "live-today-latency", "live-errors")
-    # Dentro de la fila de hoy: Costo · Requests · Tokens · Latencia
-    assert order_before?(html, "live-today-cost", "live-today-requests")
-    assert order_before?(html, "live-today-requests", "live-today-tokens")
-    assert order_before?(html, "live-today-tokens", "live-today-latency")
+    assert order_before?(html, "live-today-requests", "live-errors")
+    # Dentro de la fila de hoy: Costo · Tokens · Requests, con la latencia
+    # debajo del valor de requests (3 columnas, no 4).
+    assert order_before?(html, "live-today-cost", "live-today-tokens")
+    assert order_before?(html, "live-today-tokens", "live-today-requests")
+    assert order_before?(html, "live-today-requests", "live-today-latency")
+    # La latencia ya no es tarjeta propia: vive dentro de la de requests.
+    assert has_element?(view, "#live-today-requests #live-today-latency", "latencia")
+    assert has_element?(view, "#live-today-requests", "p95:")
+    refute has_element?(view, "#live-today-latency.card")
   end
 
   test "En vivo: no muestra el selector de período (ventana fija)", %{conn: conn} do
