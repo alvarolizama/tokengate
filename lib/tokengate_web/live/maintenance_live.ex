@@ -17,7 +17,6 @@ defmodule TokengateWeb.MaintenanceLive do
   alias Tokengate.Budgets.Manager, as: Budgets
   alias Tokengate.GlobalSettings
   alias Tokengate.Logs
-  alias Tokengate.Logs.CostBackfill
   alias Tokengate.Repo
   alias Tokengate.Routing.StickyTracker
 
@@ -32,11 +31,6 @@ defmodule TokengateWeb.MaintenanceLive do
       |> assign(:confirm_reset, false)
       |> assign(:confirm_sticky_reset, false)
       |> assign(:extras_reset_type, nil)
-      |> assign(:confirm_backfill, false)
-      |> assign(:backfill_running, false)
-      |> assign(:backfill_mode, nil)
-      |> assign(:backfill_count, CostBackfill.count_eligible(mode: :zero_only))
-      |> assign(:backfill_all_count, CostBackfill.count_eligible(mode: :all))
       |> assign(:log_count, count_logs())
       |> assign(:sticky_count, sticky_count())
       |> assign(:extras_concurrency_count, count_members_with_extra(:extra_concurrency))
@@ -228,42 +222,6 @@ defmodule TokengateWeb.MaintenanceLive do
     {:noreply, socket |> assign_exemptions() |> put_flash(:info, "Exención eliminada.")}
   end
 
-  ## Cost backfill ----------------------------------------------------------
-
-  @impl true
-  def handle_event("show_backfill_confirm", %{"mode" => mode}, socket)
-      when mode in ["zero_only", "all"] do
-    {:noreply,
-     assign(socket, confirm_backfill: true, backfill_mode: String.to_existing_atom(mode))}
-  end
-
-  @impl true
-  def handle_event("cancel_backfill", _params, socket) do
-    {:noreply, assign(socket, confirm_backfill: false, backfill_mode: nil)}
-  end
-
-  @impl true
-  def handle_event("run_backfill", _params, socket) do
-    mode = socket.assigns[:backfill_mode] || :zero_only
-    {:ok, {updated, _skipped}} = CostBackfill.run(mode: mode)
-
-    Tokengate.Auditing.audit(
-      socket.assigns.current_user,
-      "settings.backfill_costs",
-      "request_logs",
-      nil,
-      %{"updated" => updated, "mode" => to_string(mode)}
-    )
-
-    {:noreply,
-     socket
-     |> assign(:confirm_backfill, false)
-     |> assign(:backfill_mode, nil)
-     |> assign(:backfill_count, CostBackfill.count_eligible(mode: :zero_only))
-     |> assign(:backfill_all_count, CostBackfill.count_eligible(mode: :all))
-     |> put_flash(:info, "Costo recalculado en #{updated} logs.")}
-  end
-
   ## Render -----------------------------------------------------------------
 
   @impl true
@@ -421,36 +379,16 @@ defmodule TokengateWeb.MaintenanceLive do
           </div>
         </div>
 
-        <%!-- Danger Zone --%>
-        <div class="card bg-base-100 border border-error/30">
+        <%!-- Zona de precaución: acciones repetibles o reversibles --%>
+        <div class="card bg-base-100 border border-warning/30" id="caution-zone-card">
           <div class="card-body">
-            <h2 class="card-title text-error flex items-center gap-2">
-              <.icon name="hero-exclamation-triangle" class="w-5 h-5" /> Zona de peligro
+            <h2 class="card-title text-warning flex items-center gap-2">
+              <.icon name="hero-shield-exclamation" class="w-5 h-5" /> Zona de precaución
             </h2>
             <p class="text-sm text-base-content/60">
-              Las acciones en esta sección son irreversibles. Úsalas con precaución.
+              Acciones repetibles o reversibles: no borran datos de forma permanente.
+              Revisa el alcance de cada una antes de ejecutarla.
             </p>
-
-            <div class="divider my-2"></div>
-
-            <div class="flex items-center justify-between">
-              <div>
-                <h3 class="font-semibold text-base-content">Eliminar historial de logs</h3>
-                <p class="text-sm text-base-content/60">
-                  Borra todas las filas de <code>request_logs</code>.
-                  No afecta usuarios, grupos, models, proveedores ni API keys.
-                  Actualmente hay <span class="font-mono font-semibold">{@log_count}</span> registros.
-                </p>
-              </div>
-              <button
-                type="button"
-                phx-click="show_reset_confirm"
-                class="btn btn-error btn-outline btn-sm"
-                id="reset-logs-btn"
-              >
-                Eliminar logs
-              </button>
-            </div>
 
             <div class="divider my-2"></div>
 
@@ -522,47 +460,38 @@ defmodule TokengateWeb.MaintenanceLive do
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+
+        <%!-- Zona de peligro: acciones irreversibles, siempre al final de la página --%>
+        <div class="card bg-base-100 border border-error/30" id="danger-zone-card">
+          <div class="card-body">
+            <h2 class="card-title text-error flex items-center gap-2">
+              <.icon name="hero-exclamation-triangle" class="w-5 h-5" /> Zona de peligro
+            </h2>
+            <p class="text-sm text-base-content/60">
+              Las acciones en esta sección son irreversibles. Úsalas con precaución.
+            </p>
 
             <div class="divider my-2"></div>
 
             <div class="flex items-center justify-between">
               <div>
-                <h3 class="font-semibold text-base-content">Recalcular costos históricos</h3>
+                <h3 class="font-semibold text-base-content">Eliminar historial de logs</h3>
                 <p class="text-sm text-base-content/60">
-                  Recalcula el costo de logs usando los precios manuales
-                  (input + cache + output) configurados en cada provider.
-                  Solo afecta logs de providers que no son suscripción
-                  que tengan input y output configurados.
-                </p>
-                <p class="text-sm text-base-content/60 mt-1">
-                  <span class="font-mono font-semibold">{@backfill_count}</span>
-                  logs en $0 elegibles
-                  · <span class="font-mono font-semibold">{@backfill_all_count}</span>
-                  logs totales elegibles.
+                  Borra todas las filas de <code>request_logs</code>.
+                  No afecta usuarios, grupos, models, proveedores ni API keys.
+                  Actualmente hay <span class="font-mono font-semibold">{@log_count}</span> registros.
                 </p>
               </div>
-              <div class="flex gap-2">
-                <button
-                  type="button"
-                  phx-click="show_backfill_confirm"
-                  phx-value-mode="zero_only"
-                  class="btn btn-primary btn-outline btn-sm flex-1"
-                  id="backfill-costs-btn"
-                  disabled={@backfill_count == 0}
-                >
-                  Recalcular $0
-                </button>
-                <button
-                  type="button"
-                  phx-click="show_backfill_confirm"
-                  phx-value-mode="all"
-                  class="btn btn-warning btn-outline btn-sm flex-1"
-                  id="backfill-all-costs-btn"
-                  disabled={@backfill_all_count == 0}
-                >
-                  Recalcular todo
-                </button>
-              </div>
+              <button
+                type="button"
+                phx-click="show_reset_confirm"
+                class="btn btn-error btn-outline btn-sm"
+                id="reset-logs-btn"
+              >
+                Eliminar logs
+              </button>
             </div>
           </div>
         </div>
@@ -680,53 +609,6 @@ defmodule TokengateWeb.MaintenanceLive do
           </div>
         </div>
       <% end %>
-
-      <%!-- Confirmation modal: backfill costs --%>
-      <div :if={@confirm_backfill} class="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div class="absolute inset-0 bg-black/50" phx-click="cancel_backfill" />
-        <div class="relative card bg-base-100 border border-primary/50 shadow-xl w-full max-w-md">
-          <div class="card-body">
-            <h3 class="card-title flex items-center gap-2">
-              <.icon name="hero-currency-dollar" class="w-5 h-5" /> ¿Recalcular costos históricos?
-            </h3>
-            <%= if @backfill_mode == :all do %>
-              <p class="text-sm text-base-content/70 mt-2">
-                Se recalcularán <strong>{@backfill_all_count}</strong> logs usando los precios
-                manuales (input + cache + output) configurados en cada provider.
-                Esto <strong>sobrescribe</strong> los costos existentes, incluyendo los que
-                ya tenían un valor del proveedor.
-              </p>
-            <% else %>
-              <p class="text-sm text-base-content/70 mt-2">
-                Se actualizarán <strong>{@backfill_count}</strong>
-                logs que tienen <code>provider_cost_usd = $0</code>, usando los precios manuales
-                (input + cache + output) configurados en cada provider.
-              </p>
-              <p class="text-sm text-base-content/70 mt-1">
-                Los logs con costo ya reportado no se tocan.
-              </p>
-            <% end %>
-            <p class="text-sm text-base-content/70 mt-1">
-              Solo afecta logs de providers que no son suscripción
-              que tengan input y output configurados.
-              Esta acción <strong>no se puede deshacer</strong>.
-            </p>
-            <div class="flex gap-2 mt-4 justify-end">
-              <button type="button" phx-click="cancel_backfill" class="btn btn-ghost btn-sm">
-                Cancelar
-              </button>
-              <button
-                type="button"
-                phx-click="run_backfill"
-                class="btn btn-primary btn-sm"
-                id="confirm-backfill-btn"
-              >
-                Sí, recalcular
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
     </Layouts.dashboard>
     """
   end

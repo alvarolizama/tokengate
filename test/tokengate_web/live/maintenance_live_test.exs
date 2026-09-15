@@ -75,6 +75,31 @@ defmodule TokengateWeb.SettingsLiveTest do
       assert html =~ "Zona de peligro"
     end
 
+    test "la zona de peligro queda al final, después de la de precaución", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/admin/maintenance")
+
+      assert has_element?(view, "#caution-zone-card")
+      assert has_element?(view, "#danger-zone-card")
+
+      # Lo reversible vive en precaución; solo el borrado irreversible está en peligro.
+      assert has_element?(view, "#caution-zone-card #reset-sticky-btn")
+      refute has_element?(view, "#caution-zone-card #reset-logs-btn")
+      assert has_element?(view, "#danger-zone-card #reset-logs-btn")
+
+      # El recálculo de costos históricos ya no se ofrece desde esta página.
+      refute has_element?(view, "#backfill-costs-btn")
+      refute has_element?(view, "#backfill-all-costs-btn")
+
+      html = render(view)
+      {caution_pos, _} = :binary.match(html, ~s(id="caution-zone-card"))
+      {danger_pos, _} = :binary.match(html, ~s(id="danger-zone-card"))
+
+      assert caution_pos < danger_pos
+    end
+
     test "reset sticky sessions clears all sticky entries", %{conn: conn} do
       %{user: admin, password: pass} = register("admin")
 
