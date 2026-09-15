@@ -11,7 +11,7 @@ defmodule Tokengate.Providers.CatalogTest do
   describe "catalog" do
     test "every builtin entry has unique key and valid fields" do
       entries = Catalog.all()
-      assert length(entries) >= 11
+      assert length(entries) >= 10
 
       keys = Enum.map(entries, & &1.key)
       assert length(keys) == length(Enum.uniq(keys))

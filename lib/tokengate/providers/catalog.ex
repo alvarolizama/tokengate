@@ -146,14 +146,6 @@ defmodule Tokengate.Providers.Catalog do
       dialect: "openai",
       billing: "subscription",
       capabilities: ["llm"]
-    },
-    %{
-      key: "abliteration",
-      name: "Abliteration",
-      base_url: "https://api.abliteration.ai/v1",
-      dialect: "openai",
-      billing: "pay_per_token",
-      capabilities: ["llm"]
     }
   ]
 
