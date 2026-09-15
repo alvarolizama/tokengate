@@ -579,12 +579,17 @@ defmodule Tokengate.Logs do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Per-minute request counts for the last `minutes` minutes (default 60),
-  bucketed by `date_trunc('minute', inserted_at)` in UTC, zero-filled so
-  the chart always renders a full window.
+  Per-minute request/token/cost series for the last `minutes` minutes
+  (default 60), bucketed by `date_trunc('minute', inserted_at)` in UTC,
+  zero-filled so the chart always renders a full window.
 
-  Cheap by design: only `inserted_at` is read (the plain
-  `request_logs_inserted_idx` covers it — index-only scan), no joins.
+  Every bucket carries the full metric set:
+
+    * `:request_count` — requests seen in that minute
+    * `:prompt_tokens` / `:completion_tokens` — tokens consumed
+    * `:cost_usd` — provider-reported cost (`Decimal`)
+
+  Cheap by design: one grouped range scan over `inserted_at`, no joins.
   """
   @spec requests_per_minute(non_neg_integer()) :: [map()]
   def requests_per_minute(minutes \\ 60) do
@@ -596,10 +601,28 @@ defmodule Tokengate.Logs do
       |> group_by([rl], fragment("date_trunc('minute', ?)", rl.inserted_at))
       |> select([rl], %{
         bucket: fragment("date_trunc('minute', ?)", rl.inserted_at),
-        request_count: count(rl.id)
+        request_count: count(rl.id),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
       })
       |> Repo.all()
-      |> Map.new(fn row -> {row.bucket, row.request_count} end)
+      |> Map.new(fn row ->
+        {minute_key(row.bucket),
+         %{
+           request_count: row.request_count,
+           prompt_tokens: row.prompt_tokens,
+           completion_tokens: row.completion_tokens,
+           cost_usd: Decimal.new(to_string(row.cost_usd))
+         }}
+      end)
+
+    empty = %{
+      request_count: 0,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cost_usd: Decimal.new(0)
+    }
 
     now = DateTime.utc_now()
 
@@ -613,13 +636,23 @@ defmodule Tokengate.Logs do
         |> DateTime.to_naive()
         |> truncate_to_minute()
 
-      %{bucket: bucket, request_count: Map.get(rows, bucket, 0)}
+      bucket
+      |> then(&Map.get(rows, minute_key(&1), empty))
+      |> Map.put(:bucket, bucket)
     end
   end
 
-  # date_trunc('minute') equivalent: drops seconds.
+  # Canonical map key for a minute bucket. Postgres returns `date_trunc` with
+  # microsecond precision `{0, 6}` while the zero-fill builds `{0, 0}`, and
+  # `NaiveDateTime` keys compare structurally — so both sides must be folded
+  # onto the same representation or every lookup misses.
+  defp minute_key(%NaiveDateTime{} = dt) do
+    Calendar.strftime(dt, "%Y-%m-%d %H:%M")
+  end
+
+  # date_trunc('minute') equivalent: drops seconds AND microseconds.
   defp truncate_to_minute(%NaiveDateTime{} = dt) do
-    %{dt | second: 0}
+    %{dt | second: 0, microsecond: {0, 0}}
   end
 
   @doc """

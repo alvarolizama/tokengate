@@ -433,8 +433,10 @@ defmodule Tokengate.Budgets.Manager do
   NOTE (display): this is the raw enforcement counter — while requests are
   in flight it includes the `$max_request_cost_usd` holds reserved by
   `reserve_credits/4` and not yet settled, so the value "breathes" with
-  concurrent traffic. Use for enforcement/maintenance, not for spend
-  dashboards (see `Budgets.global_daily_budget_summary/1`).
+  concurrent traffic. Use for enforcement, not for spend dashboards: both
+  `/stats` and the maintenance screen display real spend from `request_logs`
+  (`Budgets.global_daily_budget_summary/1`); maintenance additionally shows
+  this counter as a drift reference when the two disagree.
   """
   @spec global_daily_spend() :: Decimal.t()
   def global_daily_spend do

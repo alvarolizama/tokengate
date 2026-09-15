@@ -327,6 +327,25 @@ defmodule TokengateWeb.MaintenanceLive do
                   max="100"
                 />
               <% end %>
+              <p class="text-xs text-base-content/40 mt-1">
+                Gasto real de <code>request_logs</code>, día UTC
+                (misma fuente que Estadísticas).
+              </p>
+              <%= if @global_daily_enforcement && drift?(@global_daily_enforcement, @global_daily_spend) do %>
+                <p class="text-xs text-warning mt-1" id="global-enforcement-drift">
+                  Contador de enforcement:
+                  <span class="font-mono">
+                    ${Decimal.round(@global_daily_enforcement, 2)}
+                  </span>
+                  — incluye los holds de las requests en vuelo.
+                  <%= if Decimal.compare(@global_daily_enforcement, @global_daily_spend) == :gt do %>
+                    Si no baja en unos minutos, es drift: el <code>GlobalSyncWorker</code>
+                    lo reconcilia contra la DB.
+                  <% else %>
+                    Se sincroniza contra la DB al vuelo.
+                  <% end %>
+                </p>
+              <% end %>
             </div>
 
             <div class="divider my-2"></div>
@@ -756,12 +775,26 @@ defmodule TokengateWeb.MaintenanceLive do
 
   defp assign_global_settings(socket) do
     settings = GlobalSettings.get!()
-    daily_spend = Budgets.global_daily_spend()
+    # Two different numbers, on purpose:
+    #
+    #   * `:global_daily_spend` — REAL spend from `request_logs` over the UTC
+    #     day, the same source `/stats` displays. This is what the kill-switch
+    #     compares against, so it is the number an operator must see here.
+    #   * `:global_daily_enforcement` — the live ETS enforcement counter
+    #     (`Budgets.Manager`). It carries the `$max_request_cost_usd` holds of
+    #     in-flight requests, so it "breathes" with traffic and can hold a
+    #     phantom peak if a request dies between hold and settle. Kept only as
+    #     a drift reference, rendered when it disagrees with the real spend.
+    real_spend =
+      %{from: Budgets.utc_day_start()}
+      |> Logs.cost_summary()
+      |> Map.get(:total_cost_usd, Decimal.new(0))
+
     daily_cap = settings.daily_max_spend_usd
 
     daily_pct =
       if daily_cap && Decimal.compare(daily_cap, Decimal.new(0)) == :gt do
-        daily_spend
+        real_spend
         |> Decimal.div(daily_cap)
         |> Decimal.mult(Decimal.new(100))
         |> Decimal.round(1)
@@ -775,9 +808,30 @@ defmodule TokengateWeb.MaintenanceLive do
       :global_form,
       to_form(GlobalSettings.changeset(settings, %{}), as: :global_settings)
     )
-    |> assign(:global_daily_spend, daily_spend)
+    |> assign(:global_daily_spend, real_spend)
     |> assign(:global_daily_cap, daily_cap)
     |> assign(:global_daily_pct, daily_pct)
+    |> assign(:global_daily_enforcement, enforcement_counter_spend())
+  end
+
+  # True when the enforcement counter and the real DB spend disagree by more
+  # than half a cent — below that the difference is rounding noise between an
+  # exact Decimal sum and the micro-USD ETS counter, not drift worth showing.
+  defp drift?(enforcement, real_spend) do
+    enforcement
+    |> Decimal.sub(real_spend)
+    |> Decimal.abs()
+    |> Decimal.compare(Decimal.new("0.005")) == :gt
+  end
+
+  # The ETS enforcement counter as a Decimal, or `nil` when it cannot be read
+  # (table not up yet on a cold boot). Never raises: the card is informational.
+  defp enforcement_counter_spend do
+    try do
+      Budgets.global_daily_spend()
+    rescue
+      ArgumentError -> nil
+    end
   end
 
   defp assign_exemptions(socket) do

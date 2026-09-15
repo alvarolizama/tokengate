@@ -85,7 +85,8 @@ defmodule TokengateWeb.StatsLiveTest do
           model_requested: "model-#{u}",
           model_responded: "model-#{u}",
           agent_type: "api",
-          status_code: 200,
+          status_code: Map.get(opts, :status_code, 200),
+          provider_status_code: Map.get(opts, :provider_status_code),
           prompt_tokens: Map.get(opts, :prompt_tokens, 100),
           completion_tokens: Map.get(opts, :completion_tokens, 50),
           cache_read_tokens: Map.get(opts, :cache_read_tokens, 0),
@@ -499,6 +500,139 @@ defmodule TokengateWeb.StatsLiveTest do
     assert order_before?(html, "live-today-cost", "live-today-requests")
     assert order_before?(html, "live-today-requests", "live-today-tokens")
     assert order_before?(html, "live-today-tokens", "live-today-latency")
+  end
+
+  test "En vivo: las tres gráficas por minuto se renderizan juntas y siempre", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    # Sin tráfico en la última hora, el chart NO se sustituye por texto:
+    # el eje y el ancho de la ventana siguen visibles.
+    assert has_element?(view, "#live-minute-chart")
+    assert has_element?(view, "#live-tokens-minute-chart")
+    assert has_element?(view, "#live-cost-minute-chart")
+    refute has_element?(view, "#live-minute-chart p", "Sin requests en la última hora.")
+
+    # Orden de la fila: requests → tokens → costo → bloque inferior
+    html = render(view)
+    assert order_before?(html, "live-minute-chart", "live-tokens-minute-chart")
+    assert order_before?(html, "live-tokens-minute-chart", "live-cost-minute-chart")
+    assert order_before?(html, "live-cost-minute-chart", "live-inflight-models")
+    assert order_before?(html, "live-inflight-models", "live-feed-card")
+  end
+
+  test "requests_per_minute/1 llena la ventana con todas las métricas en cero", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    login(conn, admin, password)
+
+    series = Logs.requests_per_minute(60)
+
+    assert length(series) == 60
+
+    # Cada bucket trae el juego completo de métricas, sin filas para tráfico
+    # inexistente (rango vacío → todo cero, nunca nil).
+    assert Enum.all?(series, fn row ->
+             row.request_count == 0 and row.prompt_tokens == 0 and
+               row.completion_tokens == 0 and Decimal.equal?(row.cost_usd, Decimal.new(0))
+           end)
+
+    assert Enum.all?(series, &match?(%{bucket: %NaiveDateTime{second: 0}}, &1))
+  end
+
+  test "requests_per_minute/1 agrega requests, tokens y costo del minuto actual", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    login(conn, admin, password)
+
+    group_with_log(%{
+      cost: Decimal.new("0.0125"),
+      prompt_tokens: 300,
+      completion_tokens: 120,
+      inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+    })
+
+    series = Logs.requests_per_minute(60)
+    current = List.last(series)
+
+    assert current.request_count == 1
+    assert current.prompt_tokens == 300
+    assert current.completion_tokens == 120
+
+    # El costo se agrega tal cual, preservando la precisión decimal.
+    assert Decimal.equal?(current.cost_usd, Decimal.new("0.0125"))
+
+    # Y el bucket realmente poblado es el del minuto actual — el zero-fill
+    # debe alinear la llave con el `date_trunc` de Postgres (segundos y
+    # microsegundos en cero), no dejar la serie entera en cero.
+    assert Enum.count(series, &(&1.request_count > 0)) == 1
+  end
+
+  test "En vivo: con tráfico real las barras de las tres gráficas toman altura", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    for i <- 1..3 do
+      group_with_log(%{
+        cost: Decimal.new("0.001#{i}"),
+        prompt_tokens: 100 * i,
+        completion_tokens: 40 * i,
+        inserted_at: DateTime.add(now, -i, :second)
+      })
+    end
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    # Cada gráfica saca su propio pico del mismo minuto poblado.
+    assert has_element?(view, "#live-minute-chart [style*='height: 100%']")
+    assert has_element?(view, "#live-tokens-minute-chart [style*='height: 100%']")
+    assert has_element?(view, "#live-cost-minute-chart [style*='height: 100%']")
+
+    # El pie de "sin tráfico" desaparece cuando sí hay datos.
+    refute has_element?(view, "#live-minute-chart span", "sin tráfico en la última hora")
+  end
+
+  test "En vivo: cada gráfica declara tipo y unidad (barras · 1 barra = 1 min)", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    for id <- ~w(live-minute-chart live-tokens-minute-chart live-cost-minute-chart) do
+      assert has_element?(view, "##{id}-hint", "barras · 1 barra = 1 min · últimos 60 min")
+    end
+  end
+
+  test "En vivo: el status del feed es el del cliente y no oculta la causa del proveedor", %{
+    conn: conn
+  } do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    # Fallback: el proveedor devolvió 429 pero el cliente recibió 200.
+    group_with_log(%{cost: "0.002", status_code: 200, provider_status_code: 429})
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    # El número visible sigue siendo el del cliente…
+    assert has_element?(view, "#live-feed-card", "200")
+    # …y la causa del upstream se muestra aparte, a la izquierda.
+    assert has_element?(view, "#live-feed-card", "prov 429")
+  end
+
+  test "En vivo: sin mismatch de proveedor no se agrega causa al status", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    # 200 limpio: el proveedor también respondió 200 → sin causa extra.
+    group_with_log(%{cost: "0.002", status_code: 200, provider_status_code: 200})
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    assert has_element?(view, "#live-feed-card", "200")
+    refute has_element?(view, "#live-feed-card", "prov 200")
   end
 
   defp order_before?(html, first, second) do

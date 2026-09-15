@@ -4,6 +4,15 @@ defmodule TokengateWeb.SettingsLiveTest do
   import Phoenix.LiveViewTest
   alias Tokengate.{Accounts, Budgets, GlobalSettings, Logs, Providers}
 
+  # `:tokengate_budgets` es una tabla ETS nombrada (singleton): sin limpiar el
+  # contador global entre tests, el gasto acumulado de un caso hace fallar al
+  # siguiente (p. ej. un `reserve` contra un cap bajo). Igual que en
+  # `budgets_test.exs`.
+  setup do
+    :ets.delete(:tokengate_budgets, {:global, :daily})
+    :ok
+  end
+
   defp unique, do: System.unique_integer([:positive])
 
   defp register(role) do
@@ -26,7 +35,8 @@ defmodule TokengateWeb.SettingsLiveTest do
     |> recycle()
   end
 
-  defp insert_log do
+  defp insert_log(opts \\ []) do
+    cost = Keyword.get(opts, :cost)
     {:ok, group} = Accounts.create_group(%{name: "Settings Group #{unique()}"})
 
     {:ok, owner} =
@@ -42,14 +52,17 @@ defmodule TokengateWeb.SettingsLiveTest do
     {:ok, provider} =
       Providers.create_provider(%{name: "Prov #{unique()}", base_url: "http://localhost:1"})
 
-    {:ok, _log} =
-      Logs.log_request(%{
-        group_member_id: member.id,
-        provider_id: provider.id,
-        model_requested: "gpt-4o",
-        prompt_tokens: 10,
-        completion_tokens: 5
-      })
+    attrs = %{
+      group_member_id: member.id,
+      provider_id: provider.id,
+      model_requested: "gpt-4o",
+      prompt_tokens: 10,
+      completion_tokens: 5
+    }
+
+    attrs = if cost, do: Map.put(attrs, :provider_cost_usd, cost), else: attrs
+
+    {:ok, _log} = Logs.log_request(attrs)
   end
 
   describe "admin access" do
@@ -122,6 +135,53 @@ defmodule TokengateWeb.SettingsLiveTest do
 
       assert render(view) =~ "Límite diario global actualizado"
       assert GlobalSettings.get_daily_cap() |> Decimal.to_string() =~ "50"
+    end
+
+    test "muestra el gasto real de request_logs, no el contador ETS de enforcement", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+
+      # Gasto durable del día UTC: es el número que debe verse.
+      insert_log(cost: Decimal.new("1.25"))
+
+      # Hold en vuelo en el contador ETS: NO debe ser el número principal.
+      {:ok, hold} =
+        Tokengate.Budgets.Manager.reserve_credits(
+          [],
+          Decimal.new("2.00"),
+          Decimal.new("0.25"),
+          false
+        )
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/admin/maintenance")
+
+      # 1.25 real + 0.25 hold = 1.50 en el contador ETS.
+      assert render(view) =~ "$1.25"
+      refute render(view) =~ "$1.50 /"
+
+      # Con drift, el contador de enforcement se muestra como referencia.
+      assert has_element?(view, "#global-enforcement-drift")
+      assert render(view) =~ "$1.50"
+
+      :ok = Tokengate.Budgets.Manager.release_credits(hold)
+    end
+
+    test "sin drift no muestra la línea del contador de enforcement", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+      insert_log(cost: Decimal.new("1.250000"))
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/admin/maintenance")
+
+      # Se registra el mismo gasto en el contador ETS: ambos coinciden.
+      {:ok, hold} =
+        Tokengate.Budgets.Manager.reserve_credits([], nil, Decimal.new("1.25"), false)
+
+      Tokengate.Budgets.Manager.settle_credits(hold, Decimal.new("1.25"))
+
+      view |> element("#global-cap-card") |> render()
+
+      refute has_element?(view, "#global-enforcement-drift")
     end
 
     test "adds and removes a global exemption", %{conn: conn} do

@@ -23,6 +23,8 @@ defmodule TokengateWeb.StatsLive.LiveSection do
   attr :org_budget, :any, default: nil
   attr :minute_series, :any, required: true
   attr :minute_series_max, :any, required: true
+  attr :minute_tokens_max, :any, required: true
+  attr :minute_cost_max, :any, required: true
   attr :inflight_count, :any, required: true
   attr :inflight_by_model, :any, required: true
   attr :last_sync_at, :any, required: true
@@ -180,40 +182,37 @@ defmodule TokengateWeb.StatsLive.LiveSection do
         </.kpi_card>
       </div>
 
-      <%!-- Gráfica: requests por minuto (últimos 60 min) --%>
-      <div class="card bg-base-100 border border-base-300 shadow-sm" id="live-minute-chart">
-        <div class="card-body p-4 gap-2">
-          <div class="flex items-center justify-between">
-            <h2 class="card-title text-base">
-              <.icon name="hero-chart-bar" class="w-5 h-5 text-base-content/60" />
-              Requests por minuto · últimos 60 min
-            </h2>
-          </div>
-          <%= if @minute_series != [] and @minute_series_max > 0 do %>
-            <div class="flex items-end gap-px h-40 mt-2">
-              <div
-                :for={row <- @minute_series}
-                class="flex-1 group relative flex items-end h-full"
-                title={"#{Stats.format_dt(row.bucket)} · #{Stats.format_number(row.request_count)} req"}
-              >
-                <div
-                  class="w-full rounded-t bg-primary/80 group-hover:bg-primary transition-colors"
-                  style={"height: #{bar_height_pct(row.request_count, @minute_series_max)}%"}
-                >
-                </div>
-              </div>
-            </div>
-            <div class="flex justify-between text-[10px] text-base-content/40 mt-1">
-              <span>-60 min</span>
-              <span>-30 min</span>
-              <span>ahora</span>
-            </div>
-          <% else %>
-            <p class="text-sm text-base-content/40 py-6 text-center">
-              Sin requests en la última hora.
-            </p>
-          <% end %>
-        </div>
+      <%!-- Gráficas: requests / tokens / costo por minuto (últimos 60 min).
+           Las tres comparten el mismo eje de 60 buckets y se dibujan siempre
+           — con cero tráfico quedan como línea base plana, no como texto. --%>
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+        <.minute_chart
+          id="live-minute-chart"
+          metric={:requests}
+          icon="hero-chart-bar"
+          title="Requests por minuto"
+          bar_class="bg-primary/80 group-hover:bg-primary"
+          series={@minute_series}
+          max={@minute_series_max}
+        />
+        <.minute_chart
+          id="live-tokens-minute-chart"
+          metric={:tokens}
+          icon="hero-cpu-chip"
+          title="Tokens por minuto"
+          bar_class="bg-accent/80 group-hover:bg-accent"
+          series={@minute_series}
+          max={@minute_tokens_max}
+        />
+        <.minute_chart
+          id="live-cost-minute-chart"
+          metric={:cost}
+          icon="hero-currency-dollar"
+          title="Costo por minuto"
+          bar_class="bg-success/80 group-hover:bg-success"
+          series={@minute_series}
+          max={@minute_cost_max}
+        />
       </div>
 
       <%!-- En vuelo: por modelo --%>
@@ -270,10 +269,17 @@ defmodule TokengateWeb.StatsLive.LiveSection do
                 <span class="text-base-content/50 truncate flex-1" title={feed_who(log)}>
                   {feed_who(log)}
                 </span>
-                <span class={[
-                  "shrink-0 font-mono",
-                  status_class(log.status_code)
-                ]}>
+                <span
+                  :if={provider_mismatch?(log)}
+                  class="shrink-0"
+                  title={provider_mismatch_title(log)}
+                >
+                  <span class="badge badge-xs badge-warning">{provider_cause(log)}</span>
+                </span>
+                <span
+                  class={["shrink-0 font-mono", status_class(log.status_code)]}
+                  title="Status devuelto al cliente"
+                >
                   {log.status_code}
                 </span>
                 <span class="shrink-0 font-mono text-base-content/60 tabular-nums">
@@ -291,9 +297,106 @@ defmodule TokengateWeb.StatsLive.LiveSection do
   defp bar_height_pct(count, max) when max > 0, do: round(count / max * 100)
   defp bar_height_pct(_count, _max), do: 0
 
+  ## Gráficas por minuto ---------------------------------------------------
+
+  attr :id, :string, required: true
+  attr :metric, :atom, required: true, values: [:requests, :tokens, :cost]
+  attr :icon, :string, required: true
+  attr :title, :string, required: true
+  attr :bar_class, :string, required: true
+  attr :series, :list, required: true
+  attr :max, :any, required: true
+
+  # Bar chart card for one metric of the shared 60-minute series. Renders the
+  # full window even with zero traffic so the axis stays readable.
+  defp minute_chart(assigns) do
+    assigns = assign(assigns, :has_data?, assigns.max > 0)
+
+    ~H"""
+    <div class="card bg-base-100 border border-base-300 shadow-sm" id={@id}>
+      <div class="card-body p-4 gap-2">
+        <div class="flex items-center justify-between">
+          <h2 class="card-title text-base">
+            <.icon name={@icon} class="w-5 h-5 text-base-content/60" />
+            {@title}
+          </h2>
+          <span :if={@has_data?} class="text-xs text-base-content/40 tabular-nums">
+            pico {metric_peak(@metric, @max)}
+          </span>
+        </div>
+
+        <%!-- Tipo de gráfica y unidad explícitos: son barras, una por minuto,
+             sobre la ventana fija de 60 min. --%>
+        <p class="text-[10px] text-base-content/40" id={"#{@id}-hint"}>
+          barras · 1 barra = 1 min · últimos 60 min
+        </p>
+
+        <div class="flex items-end gap-px h-40 mt-2">
+          <div
+            :for={row <- @series}
+            class="flex-1 group relative flex items-end h-full"
+            title={bucket_title(row, @metric)}
+          >
+            <div
+              class={["w-full rounded-t transition-colors", @bar_class]}
+              style={"height: #{bar_height_pct(metric_value(row, @metric), @max)}%"}
+            >
+            </div>
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between text-[10px] text-base-content/40">
+          <span>-60 min</span>
+          <span :if={not @has_data?} class="text-base-content/30">sin tráfico en la última hora</span>
+          <span>ahora</span>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  defp metric_value(row, :requests), do: row.request_count
+  defp metric_value(row, :tokens), do: row.prompt_tokens + row.completion_tokens
+  defp metric_value(row, :cost), do: Decimal.to_float(row.cost_usd)
+
+  defp bucket_title(row, :cost) do
+    "#{Stats.format_dt(row.bucket)} · $#{Stats.format_decimal(Decimal.round(row.cost_usd, 6))}"
+  end
+
+  defp bucket_title(row, :tokens) do
+    "#{Stats.format_dt(row.bucket)} · #{Stats.format_number(row.prompt_tokens)} in / " <>
+      "#{Stats.format_number(row.completion_tokens)} out"
+  end
+
+  defp bucket_title(row, :requests) do
+    "#{Stats.format_dt(row.bucket)} · #{Stats.format_number(row.request_count)} req"
+  end
+
+  defp metric_peak(:requests, max), do: "#{Stats.format_number(max)} req/min"
+  defp metric_peak(:tokens, max), do: "#{Stats.format_compact(max)} tok/min"
+  defp metric_peak(:cost, max), do: "$#{Float.round(max, 4)}/min"
+
   defp status_class(code) when code >= 500, do: "text-error"
   defp status_class(code) when code >= 400, do: "text-warning"
   defp status_class(_code), do: "text-success"
+
+  # El número del feed es el status que TokenGate devolvió AL CLIENTE
+  # (`status_code`), no el del proveedor. Cuando el proveedor contestó algo
+  # distinto — típicamente un fallback que recuperó la request (provider 429/5xx
+  # pero cliente 200) — mostramos la causa del upstream a la izquierda del
+  # status, para que un 200 no oculte el error real.
+  defp provider_mismatch?(%{provider_status_code: nil}), do: false
+
+  defp provider_mismatch?(%{provider_status_code: provider, status_code: client}) do
+    provider != client
+  end
+
+  defp provider_cause(%{provider_status_code: provider}), do: "prov #{provider}"
+
+  defp provider_mismatch_title(%{provider_status_code: provider, status_code: client}) do
+    "El proveedor respondió #{provider}; el cliente recibió #{client}" <>
+      if(client == 200, do: " (recuperada por fallback)", else: "")
+  end
 
   defp feed_who(%{subject_type: "service", service: %{name: name}}), do: "svc · #{name}"
   defp feed_who(%{group_member: %{user: %{email: email}}}), do: email

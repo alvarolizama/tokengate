@@ -737,18 +737,41 @@ defmodule TokengateWeb.StatsLive do
 
     feed_logs = Logs.list_logs(%{limit: @live_feed_size})
 
+    minute_series = bundle.minute_series
+
     socket
     |> assign(:stats_loading, false)
     |> assign(:pulse, bundle.pulse)
     |> assign(:today_metrics, bundle.today_metrics)
-    |> assign(:minute_series, bundle.minute_series)
-    |> assign(:minute_series_max, Enum.max(Enum.map(bundle.minute_series, & &1.request_count)))
+    |> assign(:minute_series, minute_series)
+    |> assign(:minute_series_max, minute_requests_max(minute_series))
+    |> assign(:minute_tokens_max, minute_tokens_max(minute_series))
+    |> assign(:minute_cost_max, minute_cost_max(minute_series))
     |> assign(:org_budget, bundle.org_budget)
     |> assign(:inflight_count, Inflight.count())
     |> assign(:inflight_by_model, Inflight.count_by_model(5))
     |> assign(:last_sync_at, DateTime.utc_now())
     |> stream(:live_feed, feed_logs, reset: true)
   end
+
+  # Per-series maxima for the three "En vivo" bar charts. All three read the
+  # same 60-bucket series already in hand — no extra query.
+  defp minute_requests_max(series), do: series |> Enum.map(& &1.request_count) |> max_or_zero()
+
+  defp minute_tokens_max(series) do
+    series
+    |> Enum.map(&(&1.prompt_tokens + &1.completion_tokens))
+    |> max_or_zero()
+  end
+
+  defp minute_cost_max(series) do
+    series
+    |> Enum.map(&Decimal.to_float(&1.cost_usd))
+    |> Enum.max(fn -> 0.0 end)
+  end
+
+  defp max_or_zero([]), do: 0
+  defp max_or_zero(list), do: Enum.max(list)
 
   ## Helpers --------------------------------------------------------------
 
