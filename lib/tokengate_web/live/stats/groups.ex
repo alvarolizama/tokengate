@@ -28,7 +28,7 @@ defmodule TokengateWeb.StatsLive.Groups do
   attr :group, :any, default: nil
   attr :group_budgets, :any, default: []
   attr :group_budget, :any, default: nil
-  attr :member_usage_tiers, :any, default: []
+  attr :list_search, :any, default: ""
   attr :period, :any, required: true
   attr :sort_field, :any, required: true
   attr :sort_direction, :any, required: true
@@ -578,258 +578,206 @@ defmodule TokengateWeb.StatsLive.Groups do
         <div class="card bg-base-100 border border-base-300 shadow-sm">
           <div class="card-body">
             <h2 class="card-title text-base">
-              <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" /> Todos los grupos
+              <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" /> Grupos
             </h2>
             <p class="text-xs text-base-content/60">
-              Una fila por grupo — consolida el consumo de todos sus miembros y servicios del período
-              ({Stats.period_label(@period)}).
+              Una fila por grupo con su información básica en el período
+              ({Stats.period_label(@period)}). El nombre abre el detalle: sus métricas,
+              sus miembros y los modelos que consume.
             </p>
             <%= if Stats.has_data?(@breakdown_group) do %>
               <% group_total = Stats.breakdown_total(@breakdown_group) %>
-              <div class="overflow-x-auto mt-3">
-                <table class="table table-sm">
-                  <thead>
-                    <tr>
-                      <th>
-                        <button
-                          phx-click="sort"
-                          phx-value-field="group_name"
-                          class="flex items-center gap-1 hover:text-primary"
-                        >
-                          Grupo
-                          <.sort_icon
-                            field={:group_name}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="request_count"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          Requests
-                          <.sort_icon
-                            field={:request_count}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="cost_usd"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          Costo
-                          <.sort_icon
-                            field={:cost_usd}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="prompt_tokens"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          Tokens in
-                          <.sort_icon
-                            field={:prompt_tokens}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="completion_tokens"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          Tokens out
-                          <.sort_icon
-                            field={:completion_tokens}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th
-                        class="text-right"
-                        title="Porcentaje de prompt tokens con cache hit"
-                      >
-                        Cache %
-                      </th>
-                      <th class="text-right">
-                        <button
-                          phx-click="sort"
-                          phx-value-field="avg_tps"
-                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                        >
-                          TPS
-                          <.sort_icon
-                            field={:avg_tps}
-                            current={@sort_field}
-                            direction={@sort_direction}
-                          />
-                        </button>
-                      </th>
-                      <th title="Gasto del mes calendario vs límite agregado de sus miembros">
-                        Presupuesto · mes
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr :for={row <- @breakdown_group} id={"bd-group-#{row.group_id}"}>
-                      <td class="font-medium">
-                        <.link
-                          patch={~p"/stats/groups/#{row.group_id}?period=#{@period}"}
-                          class="link link-hover"
-                        >{row.group_name}</.link>
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(row.request_count)}
-                      </td>
-                      <td class="text-right font-mono">
-                        ${Stats.format_decimal(row.cost_usd)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(row.prompt_tokens)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(row.completion_tokens)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.cache_hit_pct(
-                          row.prompt_tokens,
-                          Map.get(row, :cache_read_tokens, 0)
-                        )}
-                      </td>
-                      <td class="text-right font-mono">{Stats.format_tps(row.avg_tps)}</td>
-                      <td class="min-w-[150px]">
-                        <%= if budget = group_budget_for(@group_budgets, row.group_id) do %>
-                          <div class="flex items-center gap-2">
-                            <Stats.budget_bar
-                              compact
-                              spend={budget.monthly_spend_usd}
-                              limit={budget.monthly_limit_usd}
-                              pct={budget.monthly_pct}
-                            />
-                            <Stats.budget_badge pct={budget.monthly_pct} />
-                          </div>
-                        <% else %>
-                          <span class="text-base-content/30">—</span>
-                        <% end %>
-                      </td>
-                    </tr>
-                  </tbody>
-                  <tfoot>
-                    <tr class="font-bold bg-base-200">
-                      <td>Total · {length(@breakdown_group)} grupos</td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(group_total.request_count)}
-                      </td>
-                      <td class="text-right font-mono">
-                        ${Stats.format_decimal(group_total.cost_usd)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(group_total.prompt_tokens)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(group_total.completion_tokens)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.cache_hit_pct(
-                          group_total.prompt_tokens,
-                          group_total.cache_read_tokens
-                        )}
-                      </td>
-                      <td></td>
-                      <td></td>
-                    </tr>
-                  </tfoot>
-                </table>
+              <%!-- El buscador filtra las filas en el render: no toca la DB ni las
+                   claves del DashboardCache. --%>
+              <% rows = Enum.filter(@breakdown_group, &Stats.matches?(@list_search, &1.group_name)) %>
+              <div class="mt-3">
+                <Stats.list_search
+                  id="group-list-search"
+                  value={@list_search}
+                  placeholder="Filtrar por grupo…"
+                />
               </div>
+              <%= if rows == [] do %>
+                <p class="text-sm text-base-content/40 py-6 text-center" id="group-list-empty">
+                  Sin coincidencias.
+                </p>
+              <% else %>
+                <div class="overflow-x-auto mt-3">
+                  <table class="table table-sm" id="group-table">
+                    <thead>
+                      <tr>
+                        <th>
+                          <button
+                            phx-click="sort"
+                            phx-value-field="group_name"
+                            class="flex items-center gap-1 hover:text-primary"
+                          >
+                            Grupo
+                            <.sort_icon
+                              field={:group_name}
+                              current={@sort_field}
+                              direction={@sort_direction}
+                            />
+                          </button>
+                        </th>
+                        <th class="text-right">
+                          <button
+                            phx-click="sort"
+                            phx-value-field="request_count"
+                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
+                          >
+                            Requests
+                            <.sort_icon
+                              field={:request_count}
+                              current={@sort_field}
+                              direction={@sort_direction}
+                            />
+                          </button>
+                        </th>
+                        <th class="text-right">
+                          <button
+                            phx-click="sort"
+                            phx-value-field="cost_usd"
+                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
+                          >
+                            Costo
+                            <.sort_icon
+                              field={:cost_usd}
+                              current={@sort_field}
+                              direction={@sort_direction}
+                            />
+                          </button>
+                        </th>
+                        <th class="text-right">
+                          <button
+                            phx-click="sort"
+                            phx-value-field="prompt_tokens"
+                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
+                          >
+                            Tokens in
+                            <.sort_icon
+                              field={:prompt_tokens}
+                              current={@sort_field}
+                              direction={@sort_direction}
+                            />
+                          </button>
+                        </th>
+                        <th class="text-right">
+                          <button
+                            phx-click="sort"
+                            phx-value-field="completion_tokens"
+                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
+                          >
+                            Tokens out
+                            <.sort_icon
+                              field={:completion_tokens}
+                              current={@sort_field}
+                              direction={@sort_direction}
+                            />
+                          </button>
+                        </th>
+                        <th
+                          class="text-right"
+                          title="Porcentaje de prompt tokens con cache hit"
+                        >
+                          Cache %
+                        </th>
+                        <th class="text-right">
+                          <button
+                            phx-click="sort"
+                            phx-value-field="avg_tps"
+                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
+                          >
+                            TPS
+                            <.sort_icon
+                              field={:avg_tps}
+                              current={@sort_field}
+                              direction={@sort_direction}
+                            />
+                          </button>
+                        </th>
+                        <th title="Gasto del mes calendario vs límite agregado de sus miembros">
+                          Presupuesto · mes
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr :for={row <- rows} id={"bd-group-#{row.group_id}"}>
+                        <td class="font-medium">
+                          <.link
+                            patch={~p"/stats/groups/#{row.group_id}?period=#{@period}"}
+                            class="link link-hover"
+                          >{row.group_name}</.link>
+                        </td>
+                        <td class="text-right font-mono">
+                          {Stats.format_number(row.request_count)}
+                        </td>
+                        <td class="text-right font-mono">
+                          ${Stats.format_decimal(row.cost_usd)}
+                        </td>
+                        <td class="text-right font-mono">
+                          {Stats.format_number(row.prompt_tokens)}
+                        </td>
+                        <td class="text-right font-mono">
+                          {Stats.format_number(row.completion_tokens)}
+                        </td>
+                        <td class="text-right font-mono">
+                          {Stats.cache_hit_pct(
+                            row.prompt_tokens,
+                            Map.get(row, :cache_read_tokens, 0)
+                          )}
+                        </td>
+                        <td class="text-right font-mono">{Stats.format_tps(row.avg_tps)}</td>
+                        <td class="min-w-[150px]">
+                          <%= if budget = group_budget_for(@group_budgets, row.group_id) do %>
+                            <div class="flex items-center gap-2">
+                              <Stats.budget_bar
+                                compact
+                                spend={budget.monthly_spend_usd}
+                                limit={budget.monthly_limit_usd}
+                                pct={budget.monthly_pct}
+                              />
+                              <Stats.budget_badge pct={budget.monthly_pct} />
+                            </div>
+                          <% else %>
+                            <span class="text-base-content/30">—</span>
+                          <% end %>
+                        </td>
+                      </tr>
+                    </tbody>
+                    <tfoot>
+                      <tr class="font-bold bg-base-200">
+                        <td>Total · {length(rows)} grupos</td>
+                        <td class="text-right font-mono">
+                          {Stats.format_number(group_total.request_count)}
+                        </td>
+                        <td class="text-right font-mono">
+                          ${Stats.format_decimal(group_total.cost_usd)}
+                        </td>
+                        <td class="text-right font-mono">
+                          {Stats.format_number(group_total.prompt_tokens)}
+                        </td>
+                        <td class="text-right font-mono">
+                          {Stats.format_number(group_total.completion_tokens)}
+                        </td>
+                        <td class="text-right font-mono">
+                          {Stats.cache_hit_pct(
+                            group_total.prompt_tokens,
+                            group_total.cache_read_tokens
+                          )}
+                        </td>
+                        <td></td>
+                        <td></td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              <% end %>
             <% else %>
               <p class="text-sm text-base-content/40 py-6 text-center">
                 Sin datos para este periodo.
               </p>
             <% end %>
-          </div>
-        </div>
-      <% end %>
-
-      <%!-- Tiers de uso por miembro (movido del Resumen) --%>
-      <%= if Stats.has_data?(@member_usage_tiers) do %>
-        <div
-          class="card bg-base-100 border border-base-300 shadow-sm"
-          id="member-usage-tiers"
-        >
-          <div class="card-body">
-            <h2 class="card-title text-base">
-              <.icon name="hero-chart-bar" class="w-5 h-5 text-base-content/60" />
-              Tiers de uso por miembro
-            </h2>
-            <p class="text-xs text-base-content/60">
-              Clasificación en 3 grupos (alto / regular / bajo) combinando volumen, frecuencia y concurrencia,
-              para el período ({Stats.period_label(@period)}).
-            </p>
-            <div class="overflow-x-auto mt-3">
-              <table class="table table-sm">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Usuario</th>
-                    <th>Grupo</th>
-                    <th class="text-center">Tier</th>
-                    <th class="text-right">Score</th>
-                    <th class="text-right">Requests</th>
-                    <th class="text-right">Costo</th>
-                    <th class="text-right">Tokens</th>
-                    <th class="text-right">Días activos</th>
-                    <th class="text-right">Peak RPM</th>
-                    <th class="text-right">P95 RPM</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr
-                    :for={{row, idx} <- Enum.with_index(@member_usage_tiers, 1)}
-                    id={"member-tier-row-#{row.group_member_id}"}
-                  >
-                    <td class="text-base-content/60">{idx}</td>
-                    <td class="font-medium truncate max-w-[200px]">
-                      {row.user_name || row.user_email}
-                    </td>
-                    <td class="truncate max-w-[120px]">{row.group_name}</td>
-                    <td class="text-center">
-                      <span class={[
-                        "badge badge-sm",
-                        Stats.tier_badge_class(row.tier)
-                      ]}>
-                        {String.capitalize(row.tier)}
-                      </span>
-                    </td>
-                    <td class="text-right font-mono">{row.score}</td>
-                    <td class="text-right font-mono">
-                      {Stats.format_number(row.request_count)}
-                    </td>
-                    <td class="text-right font-mono">${Stats.format_decimal(row.cost_usd)}</td>
-                    <td class="text-right font-mono">
-                      {Stats.format_compact(row.prompt_tokens + row.completion_tokens)}
-                    </td>
-                    <td class="text-right font-mono">{row.active_days}</td>
-                    <td class="text-right font-mono">{row.peak_rpm}</td>
-                    <td class="text-right font-mono">{row.p95_rpm}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
           </div>
         </div>
       <% end %>

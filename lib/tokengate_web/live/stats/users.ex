@@ -32,261 +32,224 @@ defmodule TokengateWeb.StatsLive.Users do
         </.link>
       </div>
 
-      <div class="card bg-base-100 border border-base-300 shadow-sm">
+      <div class="card bg-base-100 border border-base-300 shadow-sm" id="user-ranking">
         <div class="card-body">
           <h2 class="card-title text-base">
-            <.icon name="hero-users" class="w-5 h-5 text-base-content/60" /> Consumo por usuario
+            <.icon name="hero-users" class="w-5 h-5 text-base-content/60" /> Usuarios
           </h2>
           <p class="text-xs text-base-content/60">
-            Una fila por usuario — consolida todas sus membresías de grupo en el período
-            ({Stats.period_label(@period)}).
+            Una fila por usuario con su información básica en el período
+            ({Stats.period_label(@period)}). Consolida todas sus membresías de grupo y
+            el nombre abre el detalle: sus métricas y sus últimos requests.
           </p>
           <%= if Stats.has_data?(@breakdown_user) do %>
             <% user_total = Stats.breakdown_total(@breakdown_user) %>
-            <div class="overflow-x-auto mt-3">
-              <table class="table table-sm">
-                <thead>
-                  <tr>
-                    <th>
-                      <button
-                        phx-click="sort"
-                        phx-value-field="user_email"
-                        class="flex items-center gap-1 hover:text-primary"
-                      >
-                        Usuario
-                        <.sort_icon
-                          field={:user_email}
-                          current={@sort_field}
-                          direction={@sort_direction}
-                        />
-                      </button>
-                    </th>
-                    <th>Grupos</th>
-                    <th class="text-right">
-                      <button
-                        phx-click="sort"
-                        phx-value-field="request_count"
-                        class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                      >
-                        Requests
-                        <.sort_icon
-                          field={:request_count}
-                          current={@sort_field}
-                          direction={@sort_direction}
-                        />
-                      </button>
-                    </th>
-                    <th class="text-right">
-                      <button
-                        phx-click="sort"
-                        phx-value-field="cost_usd"
-                        class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                      >
-                        Costo
-                        <.sort_icon
-                          field={:cost_usd}
-                          current={@sort_field}
-                          direction={@sort_direction}
-                        />
-                      </button>
-                    </th>
-                    <th class="text-right">
-                      <button
-                        phx-click="sort"
-                        phx-value-field="prompt_tokens"
-                        class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                      >
-                        Tokens in
-                        <.sort_icon
-                          field={:prompt_tokens}
-                          current={@sort_field}
-                          direction={@sort_direction}
-                        />
-                      </button>
-                    </th>
-                    <th class="text-right">
-                      <button
-                        phx-click="sort"
-                        phx-value-field="completion_tokens"
-                        class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                      >
-                        Tokens out
-                        <.sort_icon
-                          field={:completion_tokens}
-                          current={@sort_field}
-                          direction={@sort_direction}
-                        />
-                      </button>
-                    </th>
-                    <th class="text-right">
-                      <button
-                        phx-click="sort"
-                        phx-value-field="avg_tps"
-                        class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                      >
-                        TPS
-                        <.sort_icon
-                          field={:avg_tps}
-                          current={@sort_field}
-                          direction={@sort_direction}
-                        />
-                      </button>
-                    </th>
-                    <th class="text-right">Costo / req</th>
-                    <th>
-                      Presupuesto · mes
-                      <div
-                        class="tooltip tooltip-top"
-                        data-tip="Gasto del mes calendario vs límite agregado de sus membresías"
-                      >
-                        <.icon
-                          name="hero-question-mark-circle"
-                          class="w-3.5 h-3.5 text-base-content/40"
-                        />
-                      </div>
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr :for={row <- @breakdown_user} id={"bd-user-#{row.user_id}"}>
-                    <td class="font-medium">
-                      <.link navigate={~p"/stats/users/#{row.user_id}"} class="link link-hover">
-                        {row.user_email}
-                      </.link>
-                    </td>
-                    <td>
-                      <div class="flex flex-wrap gap-1">
-                        <span
-                          :for={name <- row.group_names}
-                          class="badge badge-sm badge-ghost max-w-[140px] truncate"
-                          title={name}
-                        >
-                          {name}
-                        </span>
-                      </div>
-                    </td>
-                    <td class="text-right font-mono">
-                      {Stats.format_number(row.request_count)}
-                    </td>
-                    <td class="text-right font-mono">
-                      ${Stats.format_decimal(row.cost_usd)}
-                    </td>
-                    <td class="text-right font-mono">
-                      {Stats.format_number(row.prompt_tokens)}
-                    </td>
-                    <td class="text-right font-mono">
-                      {Stats.format_number(row.completion_tokens)}
-                    </td>
-                    <td class="text-right font-mono">{Stats.format_tps(row.avg_tps)}</td>
-                    <td class="text-right font-mono text-base-content/70">
-                      {cost_per_request(row)}
-                    </td>
-                    <td class="min-w-[150px]">
-                      <%= if budget = @budgets_by_user[row.user_id] do %>
-                        <div class="flex items-center gap-2">
-                          <Stats.budget_bar
-                            compact
-                            spend={budget.monthly_usd}
-                            limit={budget.monthly_limit_usd}
-                            pct={budget.monthly_pct}
-                          />
-                          <Stats.budget_badge pct={budget.monthly_pct} />
-                        </div>
-                      <% else %>
-                        <span class="text-base-content/30">—</span>
-                      <% end %>
-                    </td>
-                  </tr>
-                </tbody>
-                <tfoot>
-                  <tr class="font-bold bg-base-200">
-                    <td>Total · {length(@breakdown_user)} usuarios</td>
-                    <td></td>
-                    <td class="text-right font-mono">
-                      {Stats.format_number(user_total.request_count)}
-                    </td>
-                    <td class="text-right font-mono">
-                      ${Stats.format_decimal(user_total.cost_usd)}
-                    </td>
-                    <td class="text-right font-mono">
-                      {Stats.format_number(user_total.prompt_tokens)}
-                    </td>
-                    <td class="text-right font-mono">
-                      {Stats.format_number(user_total.completion_tokens)}
-                    </td>
-                    <td></td>
-                    <td></td>
-                    <td></td>
-                  </tr>
-                </tfoot>
-              </table>
-            </div>
-          <% else %>
-            <p class="text-sm text-base-content/40 py-6 text-center">
-              Sin datos para este periodo.
-            </p>
-          <% end %>
-        </div>
-      </div>
-
-      <%!-- Top miembros: listado rankeado sobre la MISMA fuente que la tabla de
-           arriba (@breakdown_user), ordenado por consumo. El rango sale de la
-           clasificación completa, así que filtrar no renumera los puestos. --%>
-      <div class="card bg-base-100 border border-base-300 shadow-sm" id="top-members">
-        <div class="card-body">
-          <h2 class="card-title text-base">
-            <.icon name="hero-user" class="w-5 h-5 text-base-content/60" /> Top 5 Miembros
-          </h2>
-          <p class="text-xs text-base-content/60">
-            Mayor consumo del período ({Stats.period_label(@period)}). El puesto es la
-            posición en el período, no la de la lista filtrada.
-          </p>
-          <%= if Stats.has_data?(@breakdown_user) do %>
-            <% ranked =
-              @breakdown_user |> Enum.sort_by(& &1.request_count, :desc) |> Enum.with_index(1) %>
-
+            <%!-- El buscador filtra las filas en el render (correo o nombre): no
+                 toca la DB ni las claves del DashboardCache. --%>
             <% rows =
-              ranked
-              |> Enum.filter(fn {row, _rank} ->
-                Stats.matches?(@list_search, [row.user_email, row.user_name])
-              end)
-              |> Enum.take(5) %>
+              Enum.filter(
+                @breakdown_user,
+                &Stats.matches?(@list_search, [&1.user_email, &1.user_name])
+              ) %>
             <div class="mt-3">
               <Stats.list_search
-                id="top-members-search"
+                id="user-list-search"
                 value={@list_search}
                 placeholder="Filtrar por correo o nombre…"
               />
             </div>
             <%= if rows == [] do %>
-              <p class="text-sm text-base-content/40 py-6 text-center" id="top-members-empty">
+              <p class="text-sm text-base-content/40 py-6 text-center" id="user-list-empty">
                 Sin coincidencias.
               </p>
             <% else %>
-              <ul class="mt-2" id="top-members-list">
-                <Stats.ranked_row
-                  :for={{row, rank} <- rows}
-                  rank={rank}
-                  title={row.user_email}
-                  subtitle={user_groups(row)}
-                  href={~p"/stats/users/#{row.user_id}"}
-                  id={"top-member-#{row.user_id}"}
-                >
-                  <:metrics>
-                    <Stats.metric_cell
-                      label="Requests"
-                      value={Stats.format_number(row.request_count)}
-                    />
-                    <Stats.metric_cell
-                      label="Costo"
-                      value={"$#{Stats.format_decimal(row.cost_usd)}"}
-                    />
-                  </:metrics>
-                </Stats.ranked_row>
-              </ul>
+              <div class="overflow-x-auto mt-3">
+                <table class="table table-sm" id="user-table">
+                  <thead>
+                    <tr>
+                      <th>
+                        <button
+                          phx-click="sort"
+                          phx-value-field="user_email"
+                          class="flex items-center gap-1 hover:text-primary"
+                        >
+                          Usuario
+                          <.sort_icon
+                            field={:user_email}
+                            current={@sort_field}
+                            direction={@sort_direction}
+                          />
+                        </button>
+                      </th>
+                      <th>Grupos</th>
+                      <th class="text-right">
+                        <button
+                          phx-click="sort"
+                          phx-value-field="request_count"
+                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
+                        >
+                          Requests
+                          <.sort_icon
+                            field={:request_count}
+                            current={@sort_field}
+                            direction={@sort_direction}
+                          />
+                        </button>
+                      </th>
+                      <th class="text-right">
+                        <button
+                          phx-click="sort"
+                          phx-value-field="cost_usd"
+                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
+                        >
+                          Costo
+                          <.sort_icon
+                            field={:cost_usd}
+                            current={@sort_field}
+                            direction={@sort_direction}
+                          />
+                        </button>
+                      </th>
+                      <th class="text-right">
+                        <button
+                          phx-click="sort"
+                          phx-value-field="prompt_tokens"
+                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
+                        >
+                          Tokens in
+                          <.sort_icon
+                            field={:prompt_tokens}
+                            current={@sort_field}
+                            direction={@sort_direction}
+                          />
+                        </button>
+                      </th>
+                      <th class="text-right">
+                        <button
+                          phx-click="sort"
+                          phx-value-field="completion_tokens"
+                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
+                        >
+                          Tokens out
+                          <.sort_icon
+                            field={:completion_tokens}
+                            current={@sort_field}
+                            direction={@sort_direction}
+                          />
+                        </button>
+                      </th>
+                      <th class="text-right">
+                        <button
+                          phx-click="sort"
+                          phx-value-field="avg_tps"
+                          class="flex items-center justify-end gap-1 w-full hover:text-primary"
+                        >
+                          TPS
+                          <.sort_icon
+                            field={:avg_tps}
+                            current={@sort_field}
+                            direction={@sort_direction}
+                          />
+                        </button>
+                      </th>
+                      <th class="text-right">Costo / req</th>
+                      <th>
+                        Presupuesto · mes
+                        <div
+                          class="tooltip tooltip-top"
+                          data-tip="Gasto del mes calendario vs límite agregado de sus membresías"
+                        >
+                          <.icon
+                            name="hero-question-mark-circle"
+                            class="w-3.5 h-3.5 text-base-content/40"
+                          />
+                        </div>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr :for={row <- rows} id={"bd-user-#{row.user_id}"}>
+                      <td class="font-medium">
+                        <.link
+                          navigate={~p"/stats/users/#{row.user_id}"}
+                          class="link link-hover inline-flex items-center gap-1"
+                          id={"user-link-#{row.user_id}"}
+                        >
+                          {row.user_email}
+                        </.link>
+                      </td>
+                      <td>
+                        <div class="flex flex-wrap gap-1">
+                          <span
+                            :for={name <- row.group_names}
+                            class="badge badge-sm badge-ghost max-w-[140px] truncate"
+                            title={name}
+                          >
+                            {name}
+                          </span>
+                        </div>
+                      </td>
+                      <td class="text-right font-mono">
+                        {Stats.format_number(row.request_count)}
+                      </td>
+                      <td class="text-right font-mono">
+                        ${Stats.format_decimal(row.cost_usd)}
+                      </td>
+                      <td class="text-right font-mono">
+                        {Stats.format_number(row.prompt_tokens)}
+                      </td>
+                      <td class="text-right font-mono">
+                        {Stats.format_number(row.completion_tokens)}
+                      </td>
+                      <td class="text-right font-mono">{Stats.format_tps(row.avg_tps)}</td>
+                      <td class="text-right font-mono text-base-content/70">
+                        {cost_per_request(row)}
+                      </td>
+                      <td class="min-w-[150px]">
+                        <%= if budget = @budgets_by_user[row.user_id] do %>
+                          <div class="flex items-center gap-2">
+                            <Stats.budget_bar
+                              compact
+                              spend={budget.monthly_usd}
+                              limit={budget.monthly_limit_usd}
+                              pct={budget.monthly_pct}
+                            />
+                            <Stats.budget_badge pct={budget.monthly_pct} />
+                          </div>
+                        <% else %>
+                          <span class="text-base-content/30">—</span>
+                        <% end %>
+                      </td>
+                    </tr>
+                  </tbody>
+                  <tfoot>
+                    <tr class="font-bold bg-base-200">
+                      <td>Total · {length(rows)} usuarios</td>
+                      <td></td>
+                      <td class="text-right font-mono">
+                        {Stats.format_number(user_total.request_count)}
+                      </td>
+                      <td class="text-right font-mono">
+                        ${Stats.format_decimal(user_total.cost_usd)}
+                      </td>
+                      <td class="text-right font-mono">
+                        {Stats.format_number(user_total.prompt_tokens)}
+                      </td>
+                      <td class="text-right font-mono">
+                        {Stats.format_number(user_total.completion_tokens)}
+                      </td>
+                      <td></td>
+                      <td></td>
+                      <td></td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
             <% end %>
           <% else %>
-            <p class="text-sm text-base-content/40 py-6 text-center">Sin datos.</p>
+            <p class="text-sm text-base-content/40 py-6 text-center">
+              Sin datos para este periodo.
+            </p>
           <% end %>
         </div>
       </div>
@@ -304,16 +267,4 @@ defmodule TokengateWeb.StatsLive.Users do
   end
 
   defp cost_per_request(_), do: "—"
-
-  # Subtítulo de la fila: los grupos del miembro. `group_names` sale de un
-  # caché de nombres y puede traer "—" para un grupo recién creado, así que se
-  # descartan los desconocidos; sin grupos reales no se pinta subtítulo.
-  defp user_groups(%{group_names: names}) do
-    case names |> List.wrap() |> Enum.reject(&(&1 in [nil, "", "—"])) do
-      [] -> nil
-      real -> Enum.join(real, " · ")
-    end
-  end
-
-  defp user_groups(_), do: nil
 end

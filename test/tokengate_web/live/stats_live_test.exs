@@ -248,6 +248,8 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#nav-providers")
     assert has_element?(view, "#provider-ranking")
     assert has_element?(view, "#provider-ranking-row-#{provider.id}")
+    # La tabla de proveedores también baja su CSV (type=providers).
+    assert has_element?(view, "#csv-providers[href='/stats/export?type=providers&period=today']")
   end
 
   test "model ranking lives in /stats/models now", %{conn: conn} do
@@ -264,14 +266,18 @@ defmodule TokengateWeb.StatsLiveTest do
 
   test "member usage tiers live in /stats/groups now", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    %{member: member} = group_with_log(%{cost: "0.005"})
+    %{group: group} = group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/stats/groups")
     wait_stats_loaded(view)
 
-    assert has_element?(view, "#member-usage-tiers")
-    assert has_element?(view, "#member-tier-row-#{member.id}")
+    assert has_element?(view, "#group-table")
+    assert has_element?(view, "#group-list-search")
+    assert has_element?(view, "#bd-group-#{group.id}")
+    # El listado tiene UNA sola tabla: el card de tiers de uso por miembro salió
+    # de la pestaña (el mismo agregado sigue en /admin/groups/:id/members).
+    refute has_element?(view, "#member-usage-tiers")
   end
 
   test "top members live in /stats/users now", %{conn: conn} do
@@ -282,8 +288,11 @@ defmodule TokengateWeb.StatsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/stats/users")
     wait_stats_loaded(view)
 
-    assert has_element?(view, "#top-members")
-    assert has_element?(view, "#top-member-#{owner.id}")
+    assert has_element?(view, "#user-table")
+    assert has_element?(view, "#user-list-search")
+    assert has_element?(view, "#bd-user-#{owner.id}")
+    # El card "Top 5 Miembros" se fue: la pestaña es una sola tabla.
+    refute has_element?(view, "#top-members")
   end
 
   test "regular user is redirected from stats to dashboard", %{conn: conn} do
@@ -328,7 +337,11 @@ defmodule TokengateWeb.StatsLiveTest do
     {:ok, long, _html} = live(conn, ~p"/stats/overview?period=30d")
     wait_stats_loaded(long)
 
+    # Y es la MISMA tarjeta que En vivo — barras apiladas por proveedor con su
+    # leyenda — no el desglose sin costo / con costo que dibujaba el Resumen.
     assert has_element?(long, "#hour-distribution")
+    assert has_element?(long, "#hour-distribution-legend")
+    refute render(long) =~ "Sin costo"
   end
 
   test "regular user is redirected from stats (usage patterns)", %{conn: conn} do
@@ -364,7 +377,29 @@ defmodule TokengateWeb.StatsLiveTest do
     # Since the 2026-07-30 refactor there's only one cost KPI: #model-kpi-cost.
     assert has_element?(view, "#model-kpi-cost")
     # Provider breakdown
-    assert has_element?(view, "#clear-model-filter")
+    assert has_element?(view, "#model-providers")
+    # El drill-down ?model_id= es el ALIAS del detalle: la ruta propia
+    # (/stats/models/:id) pinta la MISMA vista, con el botón de vuelta a la tabla.
+    assert has_element?(view, "#model-back")
+    assert has_element?(view, "#model-detail-header")
+
+    {:ok, detail, _html} = live(conn, ~p"/stats/models/#{ma.id}?period=today")
+    detail = wait_stats_loaded(detail)
+
+    assert has_element?(detail, "#model-detail-header", ma.name)
+    assert has_element?(detail, "#model-kpi-cost")
+    assert has_element?(detail, "#nav-models.btn-primary")
+  end
+
+  test "detalle del modelo: un id que no existe avisa en vez de romper", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/stats/models/#{Ecto.UUID.generate()}")
+    view = wait_stats_loaded(view)
+
+    assert has_element?(view, "#model-not-found")
+    refute has_element?(view, "#model-kpi-cost")
   end
 
   ## Groups view -------------------------------------------------------------
@@ -450,14 +485,14 @@ defmodule TokengateWeb.StatsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/stats/models")
     html = render(wait_stats_loaded(view))
 
-    # Row order = order of appearance of the bd-model-<id> rows in the HTML.
+    # Row order = order of appearance of the model-ranking-row-<id> rows in the HTML.
     row_order = fn view ->
-      Regex.scan(~r/<tr[^>]+id="(bd-model-[^"]+)"/, render(view))
+      Regex.scan(~r/<tr[^>]+id="(model-ranking-row-[^"]+)"/, render(view))
       |> Enum.map(fn [_full, id] -> id end)
     end
 
-    expensive_row = "bd-model-#{expensive.id}"
-    cheap_row = "bd-model-#{cheap.id}"
+    expensive_row = "model-ranking-row-#{expensive.id}"
+    cheap_row = "model-ranking-row-#{cheap.id}"
 
     assert html =~ expensive_row
     assert html =~ cheap_row
@@ -915,7 +950,7 @@ defmodule TokengateWeb.StatsLiveTest do
     # Y los agregados estructurales siguen siendo los mismos términos: el
     # broadcast no re-ejecuta los scans crudos de ventana completa. Con el
     # reload completo de antes, el log nuevo aparecía en estas listas.
-    assert despues.hour_usage_stacked == antes.hour_usage_stacked
+    assert despues.hour_usage_by_provider == antes.hour_usage_by_provider
     assert despues.model_provider_stacked == antes.model_provider_stacked
     assert despues.busiest_minutes == antes.busiest_minutes
     assert despues.peak_concurrency == antes.peak_concurrency
@@ -1470,7 +1505,7 @@ defmodule TokengateWeb.StatsLiveTest do
       refute has_element?(view, "#provider-kpi-cost")
     end
 
-    test "models: listado rankeado + buscador", %{conn: conn} do
+    test "models: la pestaña es la tabla de consumo con buscador", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
 
       [a, b] = for _ <- 1..2, do: group_with_log(%{cost: "0.005"})
@@ -1480,76 +1515,112 @@ defmodule TokengateWeb.StatsLiveTest do
       {:ok, view, _html} = live(conn, ~p"/stats/models")
       view = wait_stats_loaded(view)
 
-      assert has_element?(view, "#model-list")
+      assert has_element?(view, "table#model-table")
       assert has_element?(view, "#model-list-search")
-      refute has_element?(view, "#model-ranking table")
+      assert has_element?(view, "#model-table thead th", "Costo")
+      # Una sola tabla: el listado rankeado ya no existe.
+      refute has_element?(view, "#model-list")
 
+      # El puesto es la posición por consumo del período: `a` tiene más
+      # requests, así que va 1º con medalla de oro.
       assert has_element?(
                view,
-               "#model-ranking-row-#{a.model.id} span[aria-label='Puesto 1'][class*='amber']"
+               "#model-ranking-row-#{a.model.id} span[aria-label='Puesto 1'][class*='amber'] .hero-trophy"
              )
 
-      # Filtra por nombre de modelo: queda sólo la fila que coincide.
+      # El nombre enlaza al detalle propio del modelo.
+      assert has_element?(view, "#model-link-#{a.model.id}")
+
+      # Filtra por nombre de modelo: queda sólo la fila que coincide, y
+      # conserva su puesto (filtrar no renumera).
       view |> element("#model-list-search") |> render_change(%{"value" => b.model.name})
 
       assert has_element?(view, "#model-ranking-row-#{b.model.id}")
       refute has_element?(view, "#model-ranking-row-#{a.model.id}")
 
-      # Y conserva su puesto (2º), no pasa a 1º.
       assert has_element?(
                view,
                "#model-ranking-row-#{b.model.id} span[aria-label='Puesto 2']"
              )
     end
 
-    test "users: Top miembros es listado rankeado, no tabla", %{conn: conn} do
+    test "users: el buscador filtra la tabla por correo o por nombre", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
-      %{owner: owner} = group_with_log(%{cost: "0.005"})
+
+      [a, b] = for _ <- 1..2, do: group_with_log(%{cost: "0.005"})
+      log_extra(a, 1)
 
       conn = login(conn, admin, password)
       {:ok, view, _html} = live(conn, ~p"/stats/users")
       view = wait_stats_loaded(view)
 
-      assert has_element?(view, "#top-members-list")
-      assert has_element?(view, "#top-members-search")
-      assert has_element?(view, "#top-members-list li#top-member-#{owner.id}")
-      assert has_element?(view, "#top-member-#{owner.id} span[aria-label='Puesto 1']")
-      # El listado reemplazó la tabla del card.
-      refute has_element?(view, "#top-members table")
-    end
+      assert has_element?(view, "#user-table")
+      assert has_element?(view, "#bd-user-#{a.owner.id}")
+      assert has_element?(view, "#bd-user-#{b.owner.id}")
 
-    test "users: buscar un miembro fuera del top lo muestra con su puesto real",
-         %{conn: conn} do
-      %{user: admin, password: password} = register("admin")
+      # Por correo: queda sólo el que coincide.
+      view |> element("#user-list-search") |> render_change(%{"value" => b.owner.email})
 
-      # 6 usuarios con 6..1 requests: el 6º queda fuera del top 5 por consumo.
-      fixtures =
-        for i <- 1..6 do
-          %{owner: owner} = g = group_with_log(%{cost: "0.005"})
-          log_extra(g, 6 - i)
-          {owner, g}
-        end
-
-      {last_owner, _last_group} = List.last(fixtures)
-
-      conn = login(conn, admin, password)
-      {:ok, view, _html} = live(conn, ~p"/stats/users")
-      view = wait_stats_loaded(view)
-
-      # Sin filtro: 5 filas (el 6º no aparece).
-      assert has_element?(view, "#top-members-list")
-      refute has_element?(view, "#top-member-#{last_owner.id}")
-
-      # Al buscarlo aparece con su puesto REAL del período (6º), no como 1º.
-      view |> element("#top-members-search") |> render_change(%{"value" => last_owner.email})
-
-      assert has_element?(view, "#top-member-#{last_owner.id}")
-      assert has_element?(view, "#top-member-#{last_owner.id} span[aria-label='Puesto 6']")
+      refute has_element?(view, "#bd-user-#{a.owner.id}")
+      assert has_element?(view, "#bd-user-#{b.owner.id}")
 
       # Y se puede buscar por NOMBRE (no sólo por correo).
-      view |> element("#top-members-search") |> render_change(%{"value" => last_owner.name})
+      view |> element("#user-list-search") |> render_change(%{"value" => b.owner.name})
 
-      assert has_element?(view, "#top-member-#{last_owner.id}")
+      assert has_element?(view, "#bd-user-#{b.owner.id}")
+
+      # Sin coincidencias avisa en vez de dejar la tabla vacía sin explicación.
+      view |> element("#user-list-search") |> render_change(%{"value" => "nadie-coincide-aca"})
+
+      assert has_element?(view, "#user-list-empty")
+      refute has_element?(view, "#user-table")
+    end
+
+    test "groups y services: buscador en vivo sobre su tabla", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      [a, b] = for _ <- 1..2, do: group_with_log(%{cost: "0.005"})
+
+      conn = login(conn, admin, password)
+
+      # Grupos: el buscador filtra por nombre de grupo.
+      {:ok, groups, _html} = live(conn, ~p"/stats/groups")
+      groups = wait_stats_loaded(groups)
+
+      assert has_element?(groups, "#bd-group-#{a.group.id}")
+      assert has_element?(groups, "#bd-group-#{b.group.id}")
+
+      groups |> element("#group-list-search") |> render_change(%{"value" => b.group.name})
+
+      refute has_element?(groups, "#bd-group-#{a.group.id}")
+      assert has_element?(groups, "#bd-group-#{b.group.id}")
+
+      # Servicios: mismo contrato (una tabla + buscador). El desglose existe en
+      # cuanto hay logs de servicio en el período.
+      {:ok, service} = Accounts.create_service(%{name: "svc-#{unique()}"})
+
+      {:ok, _log} =
+        Logs.log_request(%{
+          subject_type: "service",
+          service_id: service.id,
+          provider_id: b.provider.id,
+          model_requested: b.model.name,
+          model_id: b.model.id,
+          status_code: 200,
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          provider_cost_usd: "0.005",
+          latency_ms: 42,
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        })
+
+      {:ok, services, _html} = live(conn, ~p"/stats/services")
+      services = wait_stats_loaded(services)
+
+      assert has_element?(services, "#service-table")
+      assert has_element?(services, "#service-list-search")
+      assert has_element?(services, "#bd-service-#{service.id}")
+      assert has_element?(services, "#service-link-#{service.id}")
     end
 
     test "el filtro se limpia al cambiar de sección", %{conn: conn} do

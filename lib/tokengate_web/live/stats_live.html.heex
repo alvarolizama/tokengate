@@ -97,7 +97,7 @@
         patch={~p"/stats/models?period=#{@period}"}
         class={[
           "join-item btn btn-sm",
-          if(@live_action == :models, do: "btn-primary", else: "btn-ghost")
+          if(@live_action in [:models, :model], do: "btn-primary", else: "btn-ghost")
         ]}
         id="nav-models"
       >
@@ -168,9 +168,8 @@
             peak_concurrency={@peak_concurrency}
             busiest_hours={@busiest_hours}
             busiest_minutes={@busiest_minutes}
-            hour_usage_stacked={@hour_usage_stacked}
+            hour_usage_by_provider={@hour_usage_by_provider}
             model_provider_stacked={@model_provider_stacked}
-            hovered_hour={@hovered_hour}
             period={@period}
             timezone={@timezone}
             budget_reset_hours={@budget_reset_hours}
@@ -197,34 +196,45 @@
             period={@period}
             stats_loading={@stats_loading}
           />
-        <% @live_action == :models -> %>
-          <.models
-            metrics={@metrics}
-            breakdown_model={@breakdown_model}
-            breakdown_provider={@breakdown_provider}
-            breakdown_group={@breakdown_group}
-            breakdown_member={@breakdown_member}
-            drilldown_series={@drilldown_series}
-            drilldown_series_labels={@drilldown_series_labels}
-            model_filter={@model_filter}
-            model_ranking={@model_ranking}
-            period={@period}
-            sort_field={@sort_field}
-            sort_direction={@sort_direction}
-            list_search={@list_search}
-          />
+        <% @live_action in [:models, :model] -> %>
+          <%= if @model_filter do %>
+            <%!-- Detalle del modelo: la MISMA vista para la ruta propia
+                 (/stats/models/:id, action :model) y para el alias ?model_id= --%>
+            <.model
+              model={@model}
+              model_ranking={@model_ranking}
+              metrics={@metrics}
+              breakdown_provider={@breakdown_provider}
+              breakdown_group={@breakdown_group}
+              breakdown_member={@breakdown_member}
+              drilldown_series={@drilldown_series}
+              drilldown_series_labels={@drilldown_series_labels}
+              period={@period}
+              sort_field={@sort_field}
+              sort_direction={@sort_direction}
+              stats_loading={@stats_loading}
+            />
+          <% else %>
+            <.models
+              breakdown_model={@breakdown_model}
+              period={@period}
+              sort_field={@sort_field}
+              sort_direction={@sort_direction}
+              list_search={@list_search}
+            />
+          <% end %>
         <% @live_action == :groups -> %>
           <.groups
             metrics={@metrics}
             breakdown_group={@breakdown_group}
             group_budgets={@group_budgets}
-            member_usage_tiers={@member_usage_tiers}
             breakdown_member={@breakdown_member}
             breakdown_model={@breakdown_model}
             drilldown_series={@drilldown_series}
             drilldown_series_labels={@drilldown_series_labels}
             group_filter={@group_filter}
             group={@group}
+            list_search={@list_search}
             period={@period}
             sort_field={@sort_field}
             sort_direction={@sort_direction}
@@ -238,6 +248,7 @@
             drilldown_series={@drilldown_series}
             drilldown_series_labels={@drilldown_series_labels}
             service_filter={@service_filter}
+            list_search={@list_search}
             period={@period}
             sort_field={@sort_field}
             sort_direction={@sort_direction}
@@ -262,6 +273,7 @@
             drilldown_series={@drilldown_series}
             drilldown_series_labels={@drilldown_series_labels}
             group_filter={@group_id}
+            list_search={@list_search}
             period={@period}
             sort_field={@sort_field}
             sort_direction={@sort_direction}

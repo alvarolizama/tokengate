@@ -7,6 +7,7 @@ defmodule TokengateWeb.StatsLive do
     * `:index`   — period overview: contadores del período (con deltas) +
       perfil horario / modelo × proveedor
     * `:models`  — per-model breakdown + drill-down (provider, user, group)
+    * `:model`   — one model's hub: metrics, who serves it, who uses it
     * `:services` — per-service breakdown + drill-down (models)
     * `:groups`  — per-group list
     * `:group`   — one group's hub: members, models, daily series
@@ -36,6 +37,7 @@ defmodule TokengateWeb.StatsLive do
   alias Tokengate.Periods
   import TokengateWeb.StatsLive.Index, only: [index: 1]
   import TokengateWeb.StatsLive.Models, only: [models: 1]
+  import TokengateWeb.StatsLive.Model, only: [model: 1]
   import TokengateWeb.StatsLive.Groups, only: [groups: 1]
   import TokengateWeb.StatsLive.Services, only: [services: 1]
   import TokengateWeb.StatsLive.Users, only: [users: 1]
@@ -68,8 +70,7 @@ defmodule TokengateWeb.StatsLive do
     :breakdown_provider,
     :breakdown_service,
     :breakdown_user,
-    :member_models,
-    :member_usage_tiers
+    :member_models
   ]
 
   @impl true
@@ -89,7 +90,6 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:sort_field, :request_count)
       |> assign(:sort_direction, :desc)
       |> assign(:list_search, "")
-      |> assign(:hovered_hour, nil)
       |> assign(:stats_loading, true)
       |> assign(:per_page, 10)
       |> assign(:shown_counts, %{})
@@ -203,15 +203,6 @@ defmodule TokengateWeb.StatsLive do
        :shown_counts,
        Map.put(socket.assigns.shown_counts, group_id, shown + socket.assigns.per_page)
      )}
-  end
-
-  def handle_event("hour_hover", %{"hour" => hour}, socket) do
-    hour = String.to_integer(hour)
-    {:noreply, assign(socket, :hovered_hour, hour)}
-  end
-
-  def handle_event("hour_leave", _params, socket) do
-    {:noreply, assign(socket, :hovered_hour, nil)}
   end
 
   defp toggle_direction(:asc), do: :desc
@@ -559,39 +550,24 @@ defmodule TokengateWeb.StatsLive do
           ]
 
       :models ->
-        model_id = params.model_filter
-        # Ranking de modelos movido del Resumen (:index).
-        ranking_task = fn -> {:model_ranking, Rollup.model_ranking(nil, opts)} end
+        # La pestaña es la tabla de consumo por modelo. El drill-down por query
+        # string (?model_id=) sigue vivo como ALIAS del detalle: los enlaces que
+        # ya existen (proveedor, grupo, servicio) entran por ahí y renderizan la
+        # misma vista que `/stats/models/:id`, con las mismas queries.
+        case params.model_filter do
+          nil ->
+            # Sin ranking: la tabla muestra el consumo, y el tier/score (que sale
+            # del ranking) vive en la cabecera del detalle, que sí lo carga.
+            [fn -> {:breakdown_model, Rollup.breakdown_by_model(nil, opts)} end]
 
-        if model_id do
-          [
-            fn -> {:breakdown_model, Rollup.breakdown_by_model(nil, opts)} end,
-            fn ->
-              {:breakdown_provider, Rollup.breakdown_by_provider_for_model(model_id, opts)}
-            end,
-            fn ->
-              {:breakdown_group, breakdown_group_for_model(params.user, model_id, opts)}
-            end,
-            fn ->
-              {:breakdown_member, Rollup.breakdown_by_member_for_model(model_id, opts)}
-            end,
-            fn ->
-              {:drilldown_series, Rollup.daily_series_by_provider_for_model(model_id, opts)}
-            end,
-            fn ->
-              {:drilldown_series_labels,
-               Rollup.daily_series_by_provider_for_model(model_id, opts)
-               |> Enum.map(& &1.label)
-               |> Enum.uniq()
-               |> Enum.sort()}
-            end
-          ] ++ [ranking_task]
-        else
-          [
-            fn -> {:breakdown_model, Rollup.breakdown_by_model(nil, opts)} end,
-            ranking_task
-          ]
+          model_id ->
+            model_detail_tasks(model_id, params.user, opts)
         end
+
+      :model ->
+        # Interior de la tabla de modelos: métricas del modelo, los proveedores
+        # que lo sirven y quién lo usa (grupos y miembros).
+        model_detail_tasks(params.model_filter, params.user, opts)
 
       :providers ->
         # Sección Infra nueva: destino del ranking de proveedores.
@@ -638,10 +614,7 @@ defmodule TokengateWeb.StatsLive do
             fn -> {:breakdown_group, breakdown_by_group_if_admin(admin?, opts)} end
           ] ++
             if admin? do
-              [
-                fn -> {:group_budgets, Budgets.list_group_budgets(params.timezone)} end,
-                fn -> {:member_usage_tiers, Rollup.member_usage_tiers(nil, opts)} end
-              ]
+              [fn -> {:group_budgets, Budgets.list_group_budgets(params.timezone)} end]
             else
               []
             end
@@ -725,13 +698,41 @@ defmodule TokengateWeb.StatsLive do
     end
   end
 
+  # Detalle de un modelo: el bundle que alimenta la vista de detalle, tanto por
+  # la ruta propia (`/stats/models/:id`, action `:model`) como por el alias
+  # `?model_id=` de la pestaña Modelos. Los proveedores que lo sirven y los
+  # grupos/miembros que lo usan son los MISMOS tres desgloses que ya tenía el
+  # drill-down: acá sólo cambia de dónde entran.
+  defp model_detail_tasks(model_id, user, opts) do
+    [
+      fn -> {:model, Tokengate.Providers.get_model(model_id)} end,
+      # El ranking completo entra para tomar de ahí tier/score/p95/fallos: la
+      # fila de la tabla y la cabecera del detalle no pueden decir cosas
+      # distintas (mismo criterio que el detalle de proveedor).
+      fn -> {:model_ranking, Rollup.model_ranking(nil, opts)} end,
+      fn -> {:breakdown_provider, Rollup.breakdown_by_provider_for_model(model_id, opts)} end,
+      fn -> {:breakdown_group, breakdown_group_for_model(user, model_id, opts)} end,
+      fn -> {:breakdown_member, Rollup.breakdown_by_member_for_model(model_id, opts)} end,
+      fn -> {:drilldown_series, Rollup.daily_series_by_provider_for_model(model_id, opts)} end,
+      fn ->
+        {:drilldown_series_labels,
+         Rollup.daily_series_by_provider_for_model(model_id, opts)
+         |> Enum.map(& &1.label)
+         |> Enum.uniq()
+         |> Enum.sort()}
+      end
+    ]
+  end
+
   # Perfil horario del período (gráfica "Uso por hora del día"). Sólo aplica a
-  # ventanas de más de un día: en "Hoy" el perfil del día lo mide En vivo, así
-  # que el Resumen no pide el agregado.
+  # ventanas de más de un día: en "Hoy" ese día lo mide En vivo, así que el
+  # Resumen no pide el agregado. Devuelve la misma forma que la de En vivo
+  # (`Logs.today_usage_by_hour_provider/0`): las dos alimentan la MISMA tarjeta
+  # (`StatsLive.DayHourChart`).
   defp hour_usage_tasks(%{period: "today"}, _opts), do: []
 
   defp hour_usage_tasks(_params, opts) do
-    [fn -> {:hour_usage_stacked, Rollup.usage_by_hour_of_day_stacked(nil, opts)} end]
+    [fn -> {:hour_usage_by_provider, Rollup.usage_by_hour_of_day_by_provider(opts)} end]
   end
 
   # Admin-only infra/org-wide queries on the index view. Ahora el Resumen solo
@@ -783,12 +784,12 @@ defmodule TokengateWeb.StatsLive do
       group: nil,
       member: nil,
       member_models: [],
-      hour_usage_stacked: [],
+      hour_usage_by_provider: [],
       model_provider_stacked: [],
       busiest_hours: [],
       busiest_minutes: [],
       peak_concurrency: nil,
-      member_usage_tiers: [],
+      model: nil,
       drilldown_series: [],
       drilldown_series_labels: [],
       org_budget: nil,

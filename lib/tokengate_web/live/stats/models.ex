@@ -1,41 +1,36 @@
 defmodule TokengateWeb.StatsLive.Models do
   @moduledoc """
-  Sección models de /stats. Template renderizado por
-  `TokengateWeb.StatsLive` vía `<.live_component>`; helpers de formato
-  vía `TokengateWeb.StatsHelpers`.
+  Sección models (Modelos) de /stats. Template renderizado por
+  `TokengateWeb.StatsLive`; helpers de formato vía `TokengateWeb.StatsHelpers`.
+
+  Se renderiza como una TABLA ÚNICA: puesto (medalla oro/plata/bronce en el
+  top 3) + nombre + el consumo de cada modelo en el período. El nombre es el
+  enlace al detalle (`/stats/models/:id?period=…`), donde viven sus métricas,
+  los proveedores que lo sirven y quién lo usa. El buscador filtra por nombre
+  en vivo y el período se elige en el selector del hub, que sigue visible acá.
+
+  Misma estructura que la tabla de proveedores. El puesto sale de la
+  clasificación por consumo del período — no del listado ordenado o filtrado:
+  ordenar por otra columna o escribir en el buscador no renumera las filas.
   """
   use TokengateWeb, :html
-
-  import TokengateWeb.KpiHelpers, only: [kpi_card: 1]
 
   alias TokengateWeb.StatsHelpers, as: Stats
 
   import TokengateWeb.StatsHelpers, only: [sort_icon: 1]
 
-  attr :metrics, :any, required: true
   attr :breakdown_model, :any, required: true
-  attr :breakdown_provider, :any, required: true
-  attr :breakdown_group, :any, required: true
-  attr :breakdown_member, :any, required: true
-  attr :drilldown_series, :any, required: true
-  attr :drilldown_series_labels, :any, required: true
-  attr :model_filter, :any, required: true
-  attr :model_ranking, :any, required: true
-  attr :list_search, :any, required: true
   attr :period, :any, required: true
   attr :sort_field, :any, required: true
   attr :sort_direction, :any, required: true
+  attr :list_search, :any, default: ""
 
   def models(assigns) do
     ~H"""
     <div class="space-y-6">
       <div class="flex items-center justify-end flex-wrap gap-3">
         <.link
-          href={
-            if @model_filter,
-              do: "/stats/export?type=models&period=#{@period}&model_id=#{@model_filter}",
-              else: "/stats/export?type=models&period=#{@period}"
-          }
+          href={"/stats/export?type=models&period=#{@period}"}
           class="btn btn-sm btn-ghost"
           id="csv-models"
         >
@@ -43,584 +38,45 @@ defmodule TokengateWeb.StatsLive.Models do
         </.link>
       </div>
 
-      <%= if @model_filter do %>
-        <div class="space-y-6">
-          <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <.kpi_card
-              id="model-kpi-requests"
-              label="Requests"
-              icon="hero-server-stack"
-              accent="primary"
-            >
-              {Stats.format_number(@metrics.requests_total)}
-            </.kpi_card>
-
-            <.kpi_card
-              id="model-kpi-cost"
-              label="Costo"
-              icon="hero-currency-dollar"
-              accent="accent"
-            >
-              ${Stats.format_decimal(@metrics.cost_usd)}
-            </.kpi_card>
-
-            <.kpi_card
-              id="model-kpi-tokens"
-              label="Tokens"
-              icon="hero-cpu-chip"
-              accent="primary"
-              title={
-                "#{Stats.format_number(@metrics.prompt_tokens)} in / #{Stats.format_number(@metrics.completion_tokens)} out"
-              }
-            >
-              <span class="flex items-baseline gap-2">
-                {Stats.format_compact(@metrics.prompt_tokens)}
-                <span class="text-sm text-base-content/50">in</span>
-                <span class="text-base-content/30">/</span>
-                {Stats.format_compact(@metrics.completion_tokens)}
-                <span class="text-sm text-base-content/50">out</span>
-              </span>
-              <:sub>
-                cache · {Stats.cache_hit_pct(@metrics.prompt_tokens, @metrics.cache_read_tokens)} hit
-              </:sub>
-            </.kpi_card>
-
-            <.kpi_card id="model-kpi-tps" label="TPS" icon="hero-bolt" accent="accent">
-              {Stats.format_tps(@metrics.avg_tps)}
-            </.kpi_card>
-          </div>
-
-          <%!-- Daily usage sparkline: providers over time --%>
-          <%= if @drilldown_series != [] do %>
-            <% pivoted = Stats.pivot_daily_series(@drilldown_series) %>
-            <% spark_max = Stats.daily_series_max(pivoted) %>
-            <% labels = @drilldown_series_labels %>
-
-            <div class="card bg-base-100 border border-base-300 shadow-sm">
-              <div class="card-body p-4 gap-2">
-                <div class="flex items-center justify-between">
-                  <h2 class="card-title text-base">
-                    <.icon name="hero-chart-bar" class="w-5 h-5 text-base-content/60" />
-                    Uso diario por proveedor
-                  </h2>
-                  <span class="text-[10px] text-base-content/40 hidden sm:inline">
-                    {Stats.period_label(@period)}
-                  </span>
-                </div>
-
-                <div class="flex gap-4 mt-2">
-                  <%!-- Chart area --%>
-                  <div class="flex-1">
-                    <div class="flex items-end gap-px h-32 relative">
-                      <div
-                        :for={day <- pivoted.days}
-                        class="flex-1 flex flex-col items-center justify-end h-full group relative"
-                      >
-                        <%!-- Tooltip --%>
-                        <div class="hidden group-hover:block absolute -top-1 -translate-y-full left-1/2 -translate-x-1/2 z-20 pointer-events-none">
-                          <div class="bg-base-300 text-base-content text-[10px] rounded-md px-2 py-1 shadow-lg whitespace-nowrap">
-                            <div class="font-semibold">
-                              {Calendar.strftime(day, "%d %b")}
-                            </div>
-                            <div :for={label <- labels} class="flex justify-between gap-2">
-                              <span class="truncate max-w-[100px]">{label}</span>
-                              <span class="tabular-nums">
-                                {Stats.format_number(Map.get(pivoted.series[label] || %{}, day, 0))}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <%!-- Stacked bar --%>
-                        <div class="w-full flex flex-col-reverse rounded-t overflow-hidden">
-                          <div
-                            :for={label <- labels}
-                            class={[
-                              "w-full",
-                              Stats.sparkline_color(Enum.find_index(labels, &(&1 == label)) || 0)
-                            ]}
-                            style={"height: #{Stats.sparkline_bar_height(Map.get(pivoted.series[label] || %{}, day, 0), spark_max)}%"}
-                            title={"#{label}: #{Stats.format_number(Map.get(pivoted.series[label] || %{}, day, 0))}"}
-                          />
-                        </div>
-                      </div>
-                    </div>
-
-                    <%!-- Day labels --%>
-                    <div class="flex gap-px mt-1">
-                      <span
-                        :for={day <- pivoted.days}
-                        class="flex-1 text-center text-[9px] text-base-content/40"
-                      >
-                        {Calendar.strftime(day, "%d")}
-                      </span>
-                    </div>
-                  </div>
-
-                  <%!-- Legend --%>
-                  <div class="w-40 shrink-0 border-l border-base-300 pl-3">
-                    <div class="text-[10px] font-semibold text-base-content/60 uppercase tracking-wide mb-2">
-                      Proveedores
-                    </div>
-                    <div class="space-y-1.5">
-                      <div
-                        :for={{label, idx} <- Enum.with_index(labels)}
-                        class="flex items-center gap-1.5"
-                      >
-                        <span class={["w-2 h-2 rounded-sm shrink-0", Stats.sparkline_color(idx)]} />
-                        <span class="text-[10px] truncate flex-1">{label}</span>
-                        <span class="text-[9px] text-base-content/50 shrink-0">
-                          {Stats.format_number(
-                            Stats.sparkline_label_total(pivoted.series[label] || %{})
-                          )}
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
+      <div class="card bg-base-100 border border-base-300 shadow-sm" id="model-ranking">
+        <div class="card-body">
+          <h2 class="card-title text-base">
+            <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" /> Modelos
+          </h2>
+          <p class="text-xs text-base-content/60">
+            Una fila por modelo con su consumo en el período
+            ({Stats.period_label(@period)}). El podio va marcado con medalla y el
+            nombre abre el detalle: sus métricas, los proveedores que lo sirven y
+            quién lo usa.
+          </p>
+          <%= if Stats.has_data?(@breakdown_model) do %>
+            <% model_total = Stats.breakdown_total(@breakdown_model) %>
+            <%!-- Puesto = clasificación por consumo del período (completa), no la
+                 del listado ordenado o filtrado. --%>
+            <% ranks =
+              @breakdown_model
+              |> Enum.sort_by(& &1.request_count, :desc)
+              |> Enum.map(& &1.model_id)
+              |> Enum.with_index(1)
+              |> Map.new() %>
+            <% rows = Enum.filter(@breakdown_model, &Stats.matches?(@list_search, &1.model_name)) %>
+            <div class="mt-3">
+              <Stats.list_search
+                id="model-list-search"
+                value={@list_search}
+                placeholder="Filtrar por modelo…"
+              />
             </div>
-          <% end %>
-
-          <div class="card bg-base-100 border border-base-300 shadow-sm">
-            <div class="card-body">
-              <h2 class="card-title text-base">
-                <.icon name="hero-server-stack" class="w-5 h-5 text-base-content/60" />
-                Por modelo del proveedor
-              </h2>
-              <%= if Stats.has_data?(@breakdown_provider) do %>
-                <% provider_total = Stats.breakdown_total(@breakdown_provider) %>
-                <div class="overflow-x-auto mt-3">
-                  <table class="table table-sm">
-                    <thead>
-                      <tr>
-                        <th>#</th>
-                        <th>
-                          <button
-                            phx-click="sort"
-                            phx-value-field="provider_name"
-                            class="flex items-center gap-1 hover:text-primary"
-                          >
-                            Proveedor / Modelo
-                            <.sort_icon
-                              field={:provider_name}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="request_count"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            Requests
-                            <.sort_icon
-                              field={:request_count}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="cost_usd"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            Costo
-                            <.sort_icon
-                              field={:cost_usd}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="prompt_tokens"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            Tokens in
-                            <.sort_icon
-                              field={:prompt_tokens}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="completion_tokens"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            Tokens out
-                            <.sort_icon
-                              field={:completion_tokens}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th
-                          class="text-right"
-                          title="Porcentaje de prompt tokens con cache hit"
-                        >
-                          Cache %
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="avg_tps"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            TPS
-                            <.sort_icon
-                              field={:avg_tps}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr
-                        :for={{row, idx} <- Enum.with_index(@breakdown_provider, 1)}
-                        id={"bd-provider-#{row.model_provider_id || "unknown"}"}
-                      >
-                        <td class="text-base-content/60">{idx}</td>
-                        <td>
-                          <div class="font-medium">
-                            {row.provider_name}{if row.provider_model,
-                              do: " · #{row.provider_model}"}
-                          </div>
-                          <div
-                            :if={row.credential_name}
-                            class="text-xs text-base-content/60"
-                          >
-                            {row.credential_name}
-                          </div>
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(row.request_count)}
-                        </td>
-                        <td class="text-right font-mono">
-                          ${Stats.format_decimal(row.cost_usd)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(row.prompt_tokens)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(row.completion_tokens)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.cache_hit_pct(
-                            row.prompt_tokens,
-                            Map.get(row, :cache_read_tokens, 0)
-                          )}
-                        </td>
-                        <td class="text-right font-mono">{Stats.format_tps(row.avg_tps)}</td>
-                      </tr>
-                    </tbody>
-                    <tfoot>
-                      <tr class="font-bold bg-base-200">
-                        <td colspan="2">
-                          Total · {Stats.distinct_providers(@breakdown_provider)} proveedores
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(provider_total.request_count)}
-                        </td>
-                        <td class="text-right font-mono">
-                          ${Stats.format_decimal(provider_total.cost_usd)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(provider_total.prompt_tokens)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(provider_total.completion_tokens)}
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.cache_hit_pct(
-                            provider_total.prompt_tokens,
-                            provider_total.cache_read_tokens
-                          )}
-                        </td>
-                        <td></td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
-              <% else %>
-                <p class="text-sm text-base-content/40 py-6 text-center">
-                  Sin datos para este periodo.
-                </p>
-              <% end %>
-            </div>
-          </div>
-          <div class="card bg-base-100 border border-base-300 shadow-sm">
-            <div class="card-body">
-              <h2 class="card-title text-base">
-                <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" />
-                Grupos que lo usan
-              </h2>
-              <%= if Stats.has_data?(@breakdown_group) do %>
-                <% group_total = Stats.breakdown_total(@breakdown_group) %>
-                <div class="overflow-x-auto mt-3">
-                  <table class="table table-sm">
-                    <thead>
-                      <tr>
-                        <th>
-                          <button
-                            phx-click="sort"
-                            phx-value-field="group_name"
-                            class="flex items-center gap-1 hover:text-primary"
-                          >
-                            Grupo
-                            <.sort_icon
-                              field={:group_name}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="request_count"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            Requests
-                            <.sort_icon
-                              field={:request_count}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="cost_usd"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            Costo
-                            <.sort_icon
-                              field={:cost_usd}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="avg_tps"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            TPS
-                            <.sort_icon
-                              field={:avg_tps}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr
-                        :for={row <- @breakdown_group}
-                        id={"bd-model-group-#{row.group_id}"}
-                      >
-                        <td class="font-medium">{row.group_name}</td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(row.request_count)}
-                        </td>
-                        <td class="text-right font-mono">
-                          ${Stats.format_decimal(row.cost_usd)}
-                        </td>
-                        <td class="text-right font-mono">{Stats.format_tps(row.avg_tps)}</td>
-                      </tr>
-                    </tbody>
-                    <tfoot>
-                      <tr class="font-bold bg-base-200">
-                        <td>Total · {length(@breakdown_group)} grupos</td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(group_total.request_count)}
-                        </td>
-                        <td class="text-right font-mono">
-                          ${Stats.format_decimal(group_total.cost_usd)}
-                        </td>
-                        <td></td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
-              <% else %>
-                <p class="text-sm text-base-content/40 py-6 text-center">
-                  Sin datos para este periodo.
-                </p>
-              <% end %>
-            </div>
-          </div>
-          <div class="card bg-base-100 border border-base-300 shadow-sm">
-            <div class="card-body">
-              <h2 class="card-title text-base">
-                <.icon name="hero-user" class="w-5 h-5 text-base-content/60" /> Miembros que lo usan
-              </h2>
-              <%= if Stats.has_data?(@breakdown_member) do %>
-                <% member_total = Stats.breakdown_total(@breakdown_member) %>
-                <div class="overflow-x-auto mt-3">
-                  <table class="table table-sm">
-                    <thead>
-                      <tr>
-                        <th>
-                          <button
-                            phx-click="sort"
-                            phx-value-field="group_name"
-                            class="flex items-center gap-1 hover:text-primary"
-                          >
-                            Grupo
-                            <.sort_icon
-                              field={:group_name}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th>
-                          <button
-                            phx-click="sort"
-                            phx-value-field="user_email"
-                            class="flex items-center gap-1 hover:text-primary"
-                          >
-                            Usuario
-                            <.sort_icon
-                              field={:user_email}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="request_count"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            Requests
-                            <.sort_icon
-                              field={:request_count}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="cost_usd"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            Costo
-                            <.sort_icon
-                              field={:cost_usd}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                        <th class="text-right">
-                          <button
-                            phx-click="sort"
-                            phx-value-field="avg_tps"
-                            class="flex items-center justify-end gap-1 w-full hover:text-primary"
-                          >
-                            TPS
-                            <.sort_icon
-                              field={:avg_tps}
-                              current={@sort_field}
-                              direction={@sort_direction}
-                            />
-                          </button>
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr
-                        :for={row <- @breakdown_member}
-                        id={"bd-model-member-#{row.group_member_id}"}
-                      >
-                        <td>{row.group_name}</td>
-                        <td class="font-mono text-sm">
-                          <.link
-                            navigate={~p"/stats/users/#{row.user_id}"}
-                            class="link link-hover"
-                          >
-                            {row.user_email}
-                          </.link>
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(row.request_count)}
-                        </td>
-                        <td class="text-right font-mono">
-                          ${Stats.format_decimal(row.cost_usd)}
-                        </td>
-                        <td class="text-right font-mono">{Stats.format_tps(row.avg_tps)}</td>
-                      </tr>
-                    </tbody>
-                    <tfoot>
-                      <tr class="font-bold bg-base-200">
-                        <td colspan="2">
-                          Total · {Stats.distinct_users(@breakdown_member)} usuarios
-                        </td>
-                        <td class="text-right font-mono">
-                          {Stats.format_number(member_total.request_count)}
-                        </td>
-                        <td class="text-right font-mono">
-                          ${Stats.format_decimal(member_total.cost_usd)}
-                        </td>
-                        <td></td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
-              <% else %>
-                <p class="text-sm text-base-content/40 py-6 text-center">
-                  Sin datos para este periodo.
-                </p>
-              <% end %>
-            </div>
-          </div>
-          <button
-            phx-click="clear_model_filter"
-            class="btn btn-sm btn-ghost"
-            id="clear-model-filter"
-          >
-            <.icon name="hero-x-mark" class="w-4 h-4" /> Quitar filtro de modelo
-          </button>
-        </div>
-      <% else %>
-        <div class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body">
-            <h2 class="card-title text-base">
-              <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" />
-              Todos los modelos
-            </h2>
-            <p class="text-xs text-base-content/60">
-              Una fila por modelo — consolida su consumo de todos los proveedores del período
-              ({Stats.period_label(@period)}).
-            </p>
-            <%= if Stats.has_data?(@breakdown_model) do %>
-              <% model_total = Stats.breakdown_total(@breakdown_model) %>
+            <%= if rows == [] do %>
+              <p class="text-sm text-base-content/40 py-6 text-center" id="model-list-empty">
+                Sin coincidencias.
+              </p>
+            <% else %>
               <div class="overflow-x-auto mt-3">
-                <table class="table table-sm">
+                <table class="table table-sm" id="model-table">
                   <thead>
                     <tr>
+                      <th class="w-12">Puesto</th>
                       <th>
                         <button
                           phx-click="sort"
@@ -691,10 +147,7 @@ defmodule TokengateWeb.StatsLive.Models do
                           />
                         </button>
                       </th>
-                      <th
-                        class="text-right"
-                        title="Porcentaje de prompt tokens con cache hit"
-                      >
+                      <th class="text-right" title="Porcentaje de prompt tokens con cache hit">
                         Cache %
                       </th>
                       <th class="text-right">
@@ -715,15 +168,24 @@ defmodule TokengateWeb.StatsLive.Models do
                   </thead>
                   <tbody>
                     <tr
-                      :for={row <- @breakdown_model}
-                      id={"bd-model-#{row.model_id || "unknown"}"}
+                      :for={row <- rows}
+                      id={"model-ranking-row-#{row.model_id || "unknown"}"}
                     >
+                      <td>
+                        <%= if rank = Map.get(ranks, row.model_id) do %>
+                          <Stats.medal rank={rank} />
+                        <% end %>
+                      </td>
                       <td class="font-medium">
                         <%= if row.model_id do %>
                           <.link
-                            patch={~p"/stats/models?period=#{@period}&model_id=#{row.model_id}"}
-                            class="link link-hover"
-                          >{row.model_name}</.link>
+                            patch={~p"/stats/models/#{row.model_id}?period=#{@period}"}
+                            class="link link-hover inline-flex items-center gap-1"
+                            id={"model-link-#{row.model_id}"}
+                          >
+                            {row.model_name}
+                            <.icon name="hero-chevron-right" class="w-3.5 h-3.5 text-base-content/40" />
+                          </.link>
                         <% else %>
                           {row.model_name}
                         <% end %>
@@ -751,7 +213,8 @@ defmodule TokengateWeb.StatsLive.Models do
                   </tbody>
                   <tfoot>
                     <tr class="font-bold bg-base-200">
-                      <td>Total · {length(@breakdown_model)} modelos</td>
+                      <td></td>
+                      <td>Total · {length(rows)} modelos</td>
                       <td class="text-right font-mono">
                         {Stats.format_number(model_total.request_count)}
                       </td>
@@ -777,84 +240,10 @@ defmodule TokengateWeb.StatsLive.Models do
                   </tfoot>
                 </table>
               </div>
-            <% else %>
-              <p class="text-sm text-base-content/40 py-6 text-center">
-                Sin datos para este periodo.
-              </p>
-            <% end %>
-          </div>
-        </div>
-      <% end %>
-
-      <%!-- Ranking de modelos (movido del Resumen) --%>
-      <div class="card bg-base-100 border border-base-300 shadow-sm" id="model-ranking">
-        <div class="card-body">
-          <h2 class="card-title text-base">
-            <.icon name="hero-trophy" class="w-5 h-5 text-base-content/60" /> Ranking de modelos
-          </h2>
-          <p class="text-xs text-base-content/60">
-            Clasificación por confiabilidad (fallos) y velocidad (latencia) en el período
-            ({Stats.period_label(@period)}). Tier S es el mejor; "—" significa menos de 10 requests.
-          </p>
-          <%= if Stats.has_data?(@model_ranking) do %>
-            <%!-- Rango de la clasificación completa, no del listado filtrado. --%>
-            <% rows =
-              @model_ranking
-              |> Enum.with_index(1)
-              |> Enum.filter(fn {row, _rank} ->
-                Stats.matches?(@list_search, row.model_name)
-              end) %>
-            <div class="mt-3">
-              <Stats.list_search
-                id="model-list-search"
-                value={@list_search}
-                placeholder="Filtrar por modelo…"
-              />
-            </div>
-            <%= if rows == [] do %>
-              <p class="text-sm text-base-content/40 py-6 text-center" id="model-list-empty">
-                Sin coincidencias.
-              </p>
-            <% else %>
-              <ul class="mt-2" id="model-list">
-                <Stats.ranked_row
-                  :for={{row, rank} <- rows}
-                  rank={rank}
-                  title={row.model_name}
-                  id={"model-ranking-row-#{row.model_id}"}
-                >
-                  <:metrics>
-                    <Stats.metric_cell label="Tier">
-                      <span class={["badge badge-sm", Stats.tier_badge_class(row.tier)]}>
-                        {row.tier}
-                      </span>
-                    </Stats.metric_cell>
-                    <Stats.metric_cell label="Score" value={row.score || "—"} />
-                    <Stats.metric_cell
-                      label="Requests"
-                      value={Stats.format_number(row.request_count)}
-                    />
-                    <Stats.metric_cell
-                      label="Fallos"
-                      value={Stats.format_percent(row.error_rate)}
-                      class={[
-                        row.error_rate >= 0.05 && "text-error",
-                        row.error_rate > 0 && row.error_rate < 0.05 && "text-warning"
-                      ]}
-                    />
-                    <Stats.metric_cell
-                      label="Latencia"
-                      value={Stats.format_ms(row.avg_latency_ms)}
-                    />
-                    <Stats.metric_cell label="P95" value={Stats.format_ms(row.p95_latency_ms)} />
-                    <Stats.metric_cell label="TTFT" value={Stats.format_ms(row.avg_ttft_ms)} />
-                  </:metrics>
-                </Stats.ranked_row>
-              </ul>
             <% end %>
           <% else %>
             <p class="text-sm text-base-content/40 py-6 text-center">
-              Sin datos en este período.
+              Sin datos para este periodo.
             </p>
           <% end %>
         </div>
