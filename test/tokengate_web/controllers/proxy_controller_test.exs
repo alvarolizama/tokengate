@@ -15,6 +15,7 @@ defmodule TokengateWeb.ProxyControllerTest do
   alias Tokengate.Limits.Manager, as: Limits
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Logs.WriteWorker
+  alias Tokengate.Routing.CircuitBreakerManager
 
   @port 41236
 
@@ -46,6 +47,11 @@ defmodule TokengateWeb.ProxyControllerTest do
 
         "down" in conn.path_info ->
           json(conn, 500, %{"error" => %{"message" => "provider exploded"}})
+
+        # Simulates an upstream answering a 4xx other than 400 (the caller's
+        # payload at fault, not a provider-specific rejection).
+        "notfound" in conn.path_info ->
+          json(conn, 404, %{"error" => %{"message" => "model not found upstream"}})
 
         "embeddings" in conn.path_info ->
           payload = Jason.decode!(body)
@@ -677,6 +683,19 @@ defmodule TokengateWeb.ProxyControllerTest do
       Providers.update_provider(model_provider.credential.provider, %{
         base_url: "http://localhost:#{@port}/hang"
       })
+  end
+
+  # Drains every {:provider_request, _} message ProviderPlug sent — one per
+  # upstream attempt (retries and fallbacks included).
+  defp collect_provider_hits do
+    for _ <- 1..100 do
+      receive do
+        {:provider_request, payload} -> payload
+      after
+        0 -> nil
+      end
+    end
+    |> Enum.reject(&is_nil/1)
   end
 
   test "timeout falls back immediately to the second provider (no same-provider retries)", %{
@@ -1377,6 +1396,41 @@ defmodule TokengateWeb.ProxyControllerTest do
       |> post(~p"/v1/chat/completions", Map.put(chat_body(model.name), "stream", true))
 
     assert %{"error" => %{"type" => "service_unavailable"}} = json_response(conn, 503)
+  end
+
+  # A non-400 4xx on the streaming path is the caller's payload at fault, so it
+  # is neither retried nor fallen back — and, like every 4xx, it must cost the
+  # credential nothing. It used to be recorded through `breaker_reason/1`, whose
+  # catch-all mapped it to `:server_error`, so a 404 burned the breaker of a
+  # healthy credential on the streaming path only.
+  test "stream: an upstream 404 is surfaced and does not count against the breaker", %{
+    conn: conn
+  } do
+    %{token: token, model: model} = proxy_fixture()
+
+    [model_provider] =
+      Providers.list_model_providers(model.id) |> Enum.sort_by(& &1.priority)
+
+    credential_id = model_provider.credential_id
+
+    {:ok, _provider} =
+      Providers.update_provider(model_provider.credential.provider, %{
+        base_url: "http://localhost:#{@port}/notfound"
+      })
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", Map.put(chat_body(model.name), "stream", true))
+
+    assert %{"error" => %{"code" => "upstream_client_error"}} = json_response(conn, 404)
+
+    # Terminal: a single attempt, no fallback.
+    assert length(collect_provider_hits()) == 1
+
+    assert Providers.get_credential!(credential_id).status == "active"
+    assert CircuitBreakerManager.status(credential_id) == :closed
+    assert CircuitBreakerManager.details(credential_id).failures == 0
   end
 
   # Regression: a 400 on the STREAMING path used to be treated like a

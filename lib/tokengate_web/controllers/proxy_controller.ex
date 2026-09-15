@@ -1916,6 +1916,10 @@ defmodule TokengateWeb.ProxyController do
   defp breaker_reason(:auth_error), do: :auth_error
   defp breaker_reason(:connection_error), do: :server_error
   defp breaker_reason(:server_error), do: :server_error
+  # The streaming path records through this function. Without this clause a 4xx
+  # falls into the catch-all and is counted as :server_error, burning the
+  # breaker on a healthy credential (the non-streaming paths never count them).
+  defp breaker_reason(:client_error), do: :client_error
   defp breaker_reason(_), do: :server_error
 
   defp render_proxy_error(conn, error) do
