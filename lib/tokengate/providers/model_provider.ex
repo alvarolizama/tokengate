@@ -27,10 +27,26 @@ defmodule Tokengate.Providers.ModelProvider do
       specified service sees this provider for the model.
 
   The exclusive fields are mutually exclusive — you cannot set more than
-  one. A credential can be used across different models, and can appear
-  in multiple scope rows for the same model model (global, multiple
-  group-exclusive, multiple member-exclusive) — each scope bucket has its
-  own partial unique index preventing duplicates within that bucket.
+  one. A credential can be used across different models.
+
+  **One exclusive per (model, target).** For a given model there is at most
+  ONE exclusive row per group, per member and per service — enforced by
+  partial unique indexes (`*_exclusive_target_unique_index`). Trying to add
+  a second exclusive for the same target errors out, even with a different
+  credential. The global scope is unbounded (only the same credential for
+  the same model is rejected).
+
+  ## Routing order with several exclusives
+
+  Exclusive rows are injected `priority: -1` at selection time, so they
+  always outrank global rows. Among exclusives the effective order is:
+
+    1. member-exclusive before group-exclusive (`ORDER BY
+       exclusive_to_group_member_id ASC NULLS LAST` — a nil group member id
+       sorts last, so the member row wins);
+    2. within the same level, the configured `priority` ASC;
+    3. final tiebreaker: `credential_id` ASC (deterministic, so sticky
+       routing doesn't flip between equally-ranked providers).
   """
 
   use Ecto.Schema
@@ -143,20 +159,26 @@ defmodule Tokengate.Providers.ModelProvider do
     |> foreign_key_constraint(:exclusive_to_group_member_id)
     |> foreign_key_constraint(:exclusive_to_group_id)
     |> foreign_key_constraint(:exclusive_to_service_id)
-    # Three partial unique indexes replace the old single composite index,
-    # allowing the same credential to serve multiple scope buckets (global +
-    # group-exclusive + member-exclusive) for the same model model.
+    # Un exclusivo es único por (modelo, target): solo puede haber UNA fila
+    # exclusiva por grupo/usuario/servicio para un modelo. Y la misma
+    # credencial no puede repetirse en scope global.
+    |> unique_constraint(:exclusive_to_group_id,
+      name: :model_providers_group_exclusive_target_unique_index,
+      message: "este modelo ya tiene un proveedor exclusivo para este grupo (solo se permite uno)"
+    )
+    |> unique_constraint(:exclusive_to_group_member_id,
+      name: :model_providers_member_exclusive_target_unique_index,
+      message:
+        "este modelo ya tiene un proveedor exclusivo para este usuario (solo se permite uno)"
+    )
+    |> unique_constraint(:exclusive_to_service_id,
+      name: :model_providers_service_exclusive_target_unique_index,
+      message:
+        "este modelo ya tiene un proveedor exclusivo para este servicio (solo se permite uno)"
+    )
     |> unique_constraint(:credential_id,
       name: :model_providers_global_credential_unique_index,
       message: "esta credencial ya es global para este modelo"
-    )
-    |> unique_constraint(:credential_id,
-      name: :model_providers_group_exclusive_credential_unique_index,
-      message: "esta credencial ya es exclusiva para este grupo y modelo"
-    )
-    |> unique_constraint(:credential_id,
-      name: :model_providers_member_exclusive_credential_unique_index,
-      message: "esta credencial ya es exclusiva para este usuario y modelo"
     )
     |> sync_scope_field()
   end

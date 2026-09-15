@@ -741,7 +741,9 @@ defmodule Tokengate.ProvidersTest do
         })
 
       refute changeset.valid?
-      assert changeset.errors[:credential_id] != nil
+      # El índice es por target ahora (modelo + grupo), no por credencial:
+      # el error se reporta en el campo del target.
+      assert changeset.errors[:exclusive_to_group_id] != nil
     end
 
     @tag :hermes_verify
@@ -782,6 +784,223 @@ defmodule Tokengate.ProvidersTest do
 
       refute cred.id in available_ids
       refute cred2.id in available_ids
+    end
+  end
+
+  describe "model_providers exclusividad única por target" do
+    test "un segundo exclusivo del mismo grupo y modelo es rechazado" do
+      group = group_fixture(%{name: "Solo Uno"})
+      model_ = model_fixture()
+
+      {:ok, _mp} =
+        Providers.create_model_provider(%{
+          model_id: model_.id,
+          credential_id: credential_fixture(provider_fixture()).id,
+          provider_model: "first",
+          priority: 1,
+          enabled: true,
+          exclusive_to_group_id: group.id
+        })
+
+      # Otra credencial, MISMO grupo y modelo → debe fallar.
+      {:error, changeset} =
+        Providers.create_model_provider(%{
+          model_id: model_.id,
+          credential_id: credential_fixture(provider_fixture(%{name: "Otro"})).id,
+          provider_model: "second",
+          priority: 1,
+          enabled: true,
+          exclusive_to_group_id: group.id
+        })
+
+      assert %{exclusive_to_group_id: [msg]} = errors_on(changeset)
+      assert msg =~ "exclusivo"
+    end
+
+    test "un segundo exclusivo del mismo miembro y modelo es rechazado" do
+      group = group_fixture()
+      member = group_member_fixture(group)
+      model_ = model_fixture()
+
+      {:ok, _mp} =
+        Providers.create_model_provider(%{
+          model_id: model_.id,
+          credential_id: credential_fixture(provider_fixture()).id,
+          provider_model: "first",
+          priority: 1,
+          enabled: true,
+          exclusive_to_group_member_id: member.id
+        })
+
+      {:error, changeset} =
+        Providers.create_model_provider(%{
+          model_id: model_.id,
+          credential_id: credential_fixture(provider_fixture(%{name: "Otro"})).id,
+          provider_model: "second",
+          priority: 1,
+          enabled: true,
+          exclusive_to_group_member_id: member.id
+        })
+
+      assert %{exclusive_to_group_member_id: [msg]} = errors_on(changeset)
+      assert msg =~ "exclusivo"
+    end
+
+    test "exclusivos de grupos DISTINTOS para el mismo modelo siguen permitidos" do
+      group_a = group_fixture(%{name: "Grupo A2"})
+      group_b = group_fixture(%{name: "Grupo B2"})
+      model_ = model_fixture()
+
+      {:ok, mp_a} =
+        Providers.create_model_provider(%{
+          model_id: model_.id,
+          credential_id: credential_fixture(provider_fixture()).id,
+          provider_model: "for-a",
+          priority: 1,
+          enabled: true,
+          exclusive_to_group_id: group_a.id
+        })
+
+      {:ok, mp_b} =
+        Providers.create_model_provider(%{
+          model_id: model_.id,
+          credential_id: credential_fixture(provider_fixture(%{name: "B"})).id,
+          provider_model: "for-b",
+          priority: 1,
+          enabled: true,
+          exclusive_to_group_id: group_b.id
+        })
+
+      refute mp_a.id == mp_b.id
+    end
+
+    test "un miembro y su grupo pueden tener cada uno su exclusivo para el mismo modelo" do
+      group = group_fixture(%{name: "Grupo Mixto"})
+      member = group_member_fixture(group)
+      model_ = model_fixture()
+
+      # Niveles distintos → ambos conviven.
+      {:ok, group_mp} =
+        Providers.create_model_provider(%{
+          model_id: model_.id,
+          credential_id: credential_fixture(provider_fixture()).id,
+          provider_model: "group-level",
+          priority: 1,
+          enabled: true,
+          exclusive_to_group_id: group.id
+        })
+
+      {:ok, member_mp} =
+        Providers.create_model_provider(%{
+          model_id: model_.id,
+          credential_id: credential_fixture(provider_fixture(%{name: "M"})).id,
+          provider_model: "member-level",
+          priority: 1,
+          enabled: true,
+          exclusive_to_group_member_id: member.id
+        })
+
+      refute group_mp.id == member_mp.id
+    end
+
+    test "el scope global sigue permitiendo varias credenciales para el mismo modelo" do
+      model_ = model_fixture()
+
+      {:ok, mp1} =
+        Providers.create_model_provider(%{
+          model_id: model_.id,
+          credential_id: credential_fixture(provider_fixture()).id,
+          provider_model: "global-1",
+          priority: 1,
+          enabled: true
+        })
+
+      {:ok, mp2} =
+        Providers.create_model_provider(%{
+          model_id: model_.id,
+          credential_id: credential_fixture(provider_fixture(%{name: "G2"})).id,
+          provider_model: "global-2",
+          priority: 2,
+          enabled: true
+        })
+
+      assert mp1.id != mp2.id
+    end
+
+    test "create_model_providers_transactional: si un target choca, no inserta NINGUNO" do
+      model_ = model_fixture()
+      group = group_fixture(%{name: "Tx Grupo"})
+
+      # Un target ya ocupado para este modelo.
+      {:ok, _existente} =
+        Providers.create_model_provider(%{
+          model_id: model_.id,
+          credential_id: credential_fixture(provider_fixture()).id,
+          provider_model: "ocupado",
+          priority: 1,
+          enabled: true,
+          exclusive_to_group_id: group.id
+        })
+
+      otro_grupo = group_fixture(%{name: "Tx Grupo 2"})
+
+      # Dos targets: uno libre (otro_grupo) y uno ocupado (group).
+      params_list = [
+        %{
+          model_id: model_.id,
+          credential_id: credential_fixture(provider_fixture(%{name: "T1"})).id,
+          provider_model: "libre",
+          priority: 1,
+          enabled: true,
+          exclusive_to_group_id: otro_grupo.id
+        },
+        %{
+          model_id: model_.id,
+          credential_id: credential_fixture(provider_fixture(%{name: "T2"})).id,
+          provider_model: "choca",
+          priority: 1,
+          enabled: true,
+          exclusive_to_group_id: group.id
+        }
+      ]
+
+      assert {:error, _changeset} = Providers.create_model_providers_transactional(params_list)
+
+      # El target libre NO debe haber quedado insertado (rollback total):
+      # ninguno de los dos provider_model existe para este modelo.
+      existentes =
+        Providers.list_all_model_providers(model_.id)
+        |> Enum.map(& &1.provider_model)
+
+      refute "libre" in existentes
+      refute "choca" in existentes
+    end
+
+    test "create_model_providers_transactional: targets válidos entran todos" do
+      model_ = model_fixture()
+      g1 = group_fixture(%{name: "Tx Ok 1"})
+      g2 = group_fixture(%{name: "Tx Ok 2"})
+
+      params_list = [
+        %{
+          model_id: model_.id,
+          credential_id: credential_fixture(provider_fixture()).id,
+          provider_model: "ok-1",
+          priority: 1,
+          enabled: true,
+          exclusive_to_group_id: g1.id
+        },
+        %{
+          model_id: model_.id,
+          credential_id: credential_fixture(provider_fixture(%{name: "OK2"})).id,
+          provider_model: "ok-2",
+          priority: 1,
+          enabled: true,
+          exclusive_to_group_id: g2.id
+        }
+      ]
+
+      assert {:ok, 2} = Providers.create_model_providers_transactional(params_list)
     end
   end
 

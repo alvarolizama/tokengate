@@ -909,32 +909,35 @@ defmodule TokengateWeb.ModelsLive do
          )}
 
       true ->
+        # Los inserts van en una sola transacción: si un target choca con el
+        # índice de exclusividad única (mismo modelo+target ya tiene dueño),
+        # no debe quedar un estado parcial con la mitad de los targets
+        # asignados. O entran todos, o ninguno.
         results =
-          Enum.map(targets, fn params ->
-            Providers.create_model_provider(params)
-          end)
+          Providers.create_model_providers_transactional(targets)
 
-        errors = Enum.filter(results, fn {status, _} -> status == :error end)
+        case results do
+          {:ok, count} ->
+            msg =
+              if count == 1,
+                do: "Proveedor asignado al modelo.",
+                else: "#{count} proveedores asignados al modelo."
 
-        if errors == [] do
-          count = length(targets)
+            {:noreply,
+             socket
+             |> put_flash(:info, msg)
+             |> assign(:provider_form, nil)
+             |> assign(:editing_ap_id, nil)
+             |> load_models()}
 
-          msg =
-            if count == 1,
-              do: "Proveedor asignado al modelo.",
-              else: "#{count} proveedores asignados al modelo."
-
-          {:noreply,
-           socket
-           |> put_flash(:info, msg)
-           |> assign(:provider_form, nil)
-           |> assign(:editing_ap_id, nil)
-           |> load_models()}
-        else
-          # Show the first error's changeset on the form
-          {:error, changeset} = hd(errors)
-
-          {:noreply, assign(socket, :provider_form, to_form(changeset, as: :model_provider))}
+          {:error, changeset} ->
+            {:noreply,
+             socket
+             |> put_flash(
+               :error,
+               "No se pudo asignar: #{Enum.map_join(changeset.errors, ", ", fn {_f, {m, _}} -> m end)}"
+             )
+             |> assign(:provider_form, to_form(changeset, as: :model_provider))}
         end
     end
   end

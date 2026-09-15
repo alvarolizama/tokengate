@@ -263,6 +263,37 @@ defmodule Tokengate.Providers do
   def get_model_provider!(id), do: Repo.get!(ModelProvider, id)
   def get_model_provider(id), do: Repo.get(ModelProvider, id)
 
+  @doc """
+  Crea varios model_providers en una sola transacción (los targets múltiples
+  de un scope exclusivo). Si alguno choca con el índice de exclusividad única
+  por (modelo, target) — o con cualquier otra restricción — no se inserta
+  ninguno: nunca queda un estado parcial con la mitad de los targets.
+
+  Devuelve `{:ok, count}` o `{:error, changeset}` con el primer error real.
+  """
+  def create_model_providers_transactional(params_list) when is_list(params_list) do
+    result =
+      Repo.transaction(fn ->
+        Enum.reduce_while(params_list, 0, fn params, acc ->
+          case %ModelProvider{}
+               |> ModelProvider.changeset(params)
+               |> Repo.insert() do
+            {:ok, _mp} -> {:cont, acc + 1}
+            {:error, changeset} -> Repo.rollback(changeset)
+          end
+        end)
+      end)
+
+    case result do
+      {:ok, count} ->
+        Tokengate.Routing.Cache.invalidate_all()
+        {:ok, count}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
+  end
+
   def create_model_provider(attrs) do
     %ModelProvider{}
     |> ModelProvider.changeset(attrs)
