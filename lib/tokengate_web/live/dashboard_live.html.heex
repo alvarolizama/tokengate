@@ -243,8 +243,17 @@
               </p>
             </div>
           <% else %>
-            <%!-- KPI cards canónicas — mismo componente que /stats (DESIGN.md C4/C5) --%>
-            <.kpi_cards metrics={@metrics} deltas={@metrics[:deltas]} />
+            <%!-- KPI cards canónicas — mismo componente que /stats (DESIGN.md C4/C5).
+                 Con período "Hoy" el costo mide el día UTC y declara el reinicio. --%>
+            <.kpi_cards
+              metrics={@metrics}
+              deltas={@metrics[:deltas]}
+              period={@period}
+              reset_hours={@budget_reset_hours}
+              reset_minutes={@budget_reset_minutes}
+              reset_at={@budget_reset_at}
+              timezone={@timezone}
+            />
 
             <!-- Breakdown tabs -->
             <div class="card bg-base-100 border border-base-300 shadow-sm">

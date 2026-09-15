@@ -30,6 +30,7 @@ defmodule TokengateWeb.DashboardLive do
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Periods
   alias TokengateWeb.KpiHelpers
+  alias TokengateWeb.StatsHelpers, as: Stats
 
   import Ecto.Query
 
@@ -70,12 +71,20 @@ defmodule TokengateWeb.DashboardLive do
 
     if connected?(socket) do
       Phoenix.PubSub.subscribe(@pubsub, @metrics_topic)
+
+      # Countdown del reinicio del tope global: minuto-granular y sin tráfico,
+      # igual que en /stats. El `:reload_metrics` de arriba depende de la
+      # pubsub, así que con el proxy quieto el contador se quedaría congelado.
+      schedule_clock_tick()
     end
 
     # Mount is synchronous: the static render and the test client both
     # expect data to be present right after `live/2`. The async path is
     # reserved for period switches and background reloads (below).
-    socket = load_metrics_sync(socket, user)
+    socket =
+      socket
+      |> assign_budget_reset()
+      |> load_metrics_sync(user)
 
     {:ok, socket}
   end
@@ -130,6 +139,14 @@ defmodule TokengateWeb.DashboardLive do
      socket
      |> assign(:reload_scheduled, false)
      |> load_metrics_async(user)}
+  end
+
+  # Minute-aligned tick for the budget-reset countdown only. Re-assigning an
+  # unchanged value is a no-op in `assign/3`, so this costs a re-render just
+  # when the minute (or the midnight rollover) actually changes.
+  def handle_info(:clock_tick, socket) do
+    schedule_clock_tick()
+    {:noreply, assign_budget_reset(socket)}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -226,6 +243,26 @@ defmodule TokengateWeb.DashboardLive do
   end
 
   ## Data loading ---------------------------------------------------------
+
+  # Horas/minutos que faltan para el reinicio del tope global (00:00 UTC) y el
+  # instante del reinicio. Misma semántica que /stats: la duración es
+  # independiente de la zona; `reset_at` se muestra en la hora del usuario.
+  defp assign_budget_reset(socket) do
+    reset_at = Periods.next_utc_day_start(Periods.now_utc())
+    {hours, minutes} = Stats.countdown_parts(reset_at)
+
+    socket
+    |> assign(:budget_reset_hours, hours)
+    |> assign(:budget_reset_minutes, minutes)
+    |> assign(:budget_reset_at, reset_at)
+  end
+
+  # Wakes just after the wall-clock minute turns so the countdown label is
+  # never more than a second stale.
+  defp schedule_clock_tick do
+    ms = 60_000 - rem(System.system_time(:millisecond), 60_000)
+    Process.send_after(self(), :clock_tick, ms)
+  end
 
   defp load_personal_data(socket, user) do
     memberships = Accounts.list_group_members_for_user(user.id)

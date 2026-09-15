@@ -322,6 +322,23 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert has_element?(view, "#empty-state")
   end
 
+  test "dashboard: el KPI de costo declara el día UTC y el reinicio", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    {:ok, admin} = Accounts.update_user_timezone(admin, "America/Mexico_City")
+    Collector.reset()
+
+    group_with_log(%{cost: "0.005", user: admin})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    # Misma ventana y mismo contrato que /stats: el KPI declara UTC y anuncia
+    # el reinicio del tope global.
+    assert has_element?(view, "#kpi-cost", "Costo (UTC)")
+    assert has_element?(view, "#kpi-cost", "Reinicia en")
+    assert has_element?(view, "#kpi-cost", "en tu hora local")
+  end
+
   test "today period includes logs from the current UTC day", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     {:ok, admin} = Accounts.update_user_timezone(admin, "America/Mexico_City")
