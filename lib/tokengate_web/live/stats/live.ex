@@ -240,15 +240,23 @@ defmodule TokengateWeb.StatsLive.LiveSection do
            y /logs ya lista esos pending con su modelo), así que no aportaba
            nada en el caso normal. Esta mide el día UTC completo — la misma
            ventana que los KPIs de arriba — y responde cómo va el día y
-           quién lo está sirviendo.
-           `items-start`: la tarjeta se queda con la altura de su gráfica en
-           vez de estirarse hasta el feed (20 filas) que tiene al lado. --%>
-      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 items-start">
+           quién lo está sirviendo. --%>
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <.day_hour_chart id="live-day-hour-chart" rows={@day_by_hour} />
 
-        <%!-- Feed: últimos requests --%>
-        <div class="card bg-base-100 border border-base-300 shadow-sm" id="live-feed-card">
-          <div class="card-body p-4">
+        <%!-- Feed: últimos requests. La tarjeta no aporta alto propio en el
+             layout de dos columnas: su cuerpo va posicionado absoluto sobre
+             ella (`lg:absolute lg:inset-0`), así que quien dimensiona la fila
+             es la gráfica de al lado y el feed queda exactamente de su misma
+             altura, desplazándose por dentro. Sin esto, las 20 filas del feed
+             estiraban la fila a ~650px y la gráfica quedaba flotando en un
+             marco vacío. En una sola columna (móvil) el flujo normal manda:
+             ahí no hay nada con lo que igualar. --%>
+        <div
+          class="card bg-base-100 border border-base-300 shadow-sm lg:relative"
+          id="live-feed-card"
+        >
+          <div class="card-body p-4 lg:absolute lg:inset-0">
             <div class="flex items-center justify-between">
               <h2 class="card-title text-base">
                 <.icon name="hero-signal" class="w-5 h-5 text-base-content/60" /> Últimos requests
@@ -257,7 +265,11 @@ defmodule TokengateWeb.StatsLive.LiveSection do
                 Ver todos <.icon name="hero-arrow-right" class="w-3 h-3" />
               </.link>
             </div>
-            <div id="live-feed" phx-update="stream" class="mt-3 space-y-1">
+            <div
+              id="live-feed"
+              phx-update="stream"
+              class="mt-3 space-y-1 overflow-y-auto lg:mt-0 lg:min-h-0 lg:flex-1"
+            >
               <div
                 :for={{id, log} <- @streams.live_feed}
                 id={id}

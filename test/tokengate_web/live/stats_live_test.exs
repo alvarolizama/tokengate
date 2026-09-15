@@ -1116,6 +1116,23 @@ defmodule TokengateWeb.StatsLiveTest do
     assert Enum.all?(rows, fn r -> r.hour == hour or r.total_requests == 0 end)
   end
 
+  test "En vivo: el feed no estira la fila, toma el alto de la gráfica", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    # La igualdad de alturas es un resultado de CSS: se midió en un navegador
+    # real (misma altura exacta que #live-day-hour-chart en el rango de dos
+    # columnas; en una sola columna cada tarjeta conserva su alto natural).
+    # Aquí se pinnea el mecanismo que la produce: la tarjeta del feed no
+    # aporta alto propio (cuerpo posicionado absoluto) y su lista se desplaza
+    # por dentro.
+    assert has_element?(view, "#live-feed-card.lg\\:relative")
+    assert has_element?(view, "#live-feed-card > .card-body.lg\\:absolute.lg\\:inset-0")
+    assert has_element?(view, "#live-feed.lg\\:flex-1.lg\\:min-h-0.overflow-y-auto")
+  end
+
   test "En vivo: el status del feed es el del cliente y no oculta la causa del proveedor", %{
     conn: conn
   } do
