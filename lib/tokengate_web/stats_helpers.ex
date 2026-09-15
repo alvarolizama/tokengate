@@ -348,11 +348,39 @@ defmodule TokengateWeb.StatsHelpers do
   def hour_bar_height(count, max) when max > 0, do: max(round(count / max * 100), 4)
   def hour_bar_height(_count, _max), do: 0
 
-  # ── Model × provider stacked horizontal bar helpers ───────────────────────
+  # ── Reparto del período: por modelo / por proveedor ───────────────────────
 
-  @doc "Total de requests del modelo con más requests (para escalar las barras)."
-  def model_provider_max(rows) do
-    rows |> Enum.map(& &1.total_requests) |> Enum.max(fn -> 0 end)
+  @doc """
+  Filas del listado "Por modelo": requests, costo y cuántos proveedores
+  sirvieron cada modelo.
+
+  Se deriva en memoria del agregado modelo × proveedor que el Resumen ya
+  cargó (`Rollup.usage_by_model_provider_stacked/1`): ninguna query extra.
+  """
+  def model_rows(rows) do
+    rows
+    |> Enum.map(fn row ->
+      %{
+        model_name: row.model_name,
+        requests: row.total_requests,
+        cost_usd:
+          Enum.reduce(row.providers, Decimal.new(0), fn p, acc -> Decimal.add(acc, p.cost_usd) end),
+        provider_count: length(row.providers)
+      }
+    end)
+    |> Enum.sort_by(& &1.requests, :desc)
+  end
+
+  @doc """
+  Reparto de un valor sobre el total del período, en % (0.0 sin total).
+  """
+  def share_pct(_value, total) when total in [0, nil], do: 0.0
+
+  def share_pct(value, total), do: Float.round(value / total * 100, 1)
+
+  @doc "Requests totales del agregado modelo × proveedor (base del reparto)."
+  def model_provider_total(rows) do
+    Enum.reduce(rows, 0, &(&1.total_requests + &2))
   end
 
   @provider_colors ~w(
@@ -389,34 +417,6 @@ defmodule TokengateWeb.StatsHelpers do
       |> Enum.find_value(fn {entry, i} -> if entry.provider_name == provider_name, do: i end)
 
     provider_color(idx || 0)
-  end
-
-  @doc """
-  Segmentos apilados por proveedor para una barra de modelo.
-
-  Cada segmento tiene `width_pct` (ancho relativo al total del modelo) y
-  `color` — un color distinto por proveedor, usando el mismo índice
-  global de la leyenda para que barras y leyenda coincidan.
-  """
-  def provider_segments(model_row, legend) do
-    total = model_row.total_requests
-
-    if total <= 0 do
-      []
-    else
-      model_row.providers
-      |> Enum.map(fn p ->
-        pct = Float.round(p.requests / total * 100, 1)
-
-        %{
-          provider_name: p.provider_name,
-          requests: p.requests,
-          cost_usd: p.cost_usd,
-          width_pct: pct,
-          color: provider_legend_color(p.provider_name, legend)
-        }
-      end)
-    end
   end
 
   @doc """
@@ -624,6 +624,34 @@ defmodule TokengateWeb.StatsHelpers do
   defp rank_class(_), do: "bg-base-200 text-base-content/50 border-transparent"
 
   @doc """
+  Puesto de una tabla de ranking: medalla (oro/plata/bronce) para el 1º, 2º y
+  3º, número para el resto. El color vive en el `<span>` que también lleva el
+  `aria-label="Puesto N"`, así el puesto es verificable en tests aunque el
+  texto sea un icono.
+  """
+  attr :rank, :any, required: true
+
+  def medal(assigns) do
+    ~H"""
+    <span
+      class={["inline-flex items-center justify-center w-8 h-6", medal_class(@rank)]}
+      aria-label={"Puesto #{@rank}"}
+    >
+      <%= if @rank in 1..3 do %>
+        <.icon name="hero-trophy" class="w-4 h-4" />
+      <% else %>
+        {@rank}
+      <% end %>
+    </span>
+    """
+  end
+
+  defp medal_class(1), do: "text-amber-400"
+  defp medal_class(2), do: "text-slate-300"
+  defp medal_class(3), do: "text-orange-400"
+  defp medal_class(_), do: "font-mono text-sm tabular-nums text-base-content/50"
+
+  @doc """
   Fila de un listado rankeado: rango + título (con subtítulo opcional) y el
   slot `:metrics` a la derecha. Misma estructura en los tres rankings.
   """
@@ -659,6 +687,11 @@ defmodule TokengateWeb.StatsHelpers do
   Métrica del listado: etiqueta en mayúsculas sobre el valor, para que las
   columnas de la tabla anterior sigan siendo legibles sin encabezados. El
   valor puede venir en `value` o como bloque (badges, spans con color).
+
+  El fallback va por `empty_block?/1` y no por `render_slot/2`: un componente
+  con `slot :inner_block` recibe `[]` (lista vacía, *truthy* en Elixir) cuando
+  se llama sin bloque, así que un `if @inner_block` mandaba todo valor escalar
+  a un slot vacío y la celda se pintaba en blanco.
   """
   attr :label, :string, required: true
   attr :value, :any, default: nil
@@ -672,11 +705,19 @@ defmodule TokengateWeb.StatsHelpers do
         {@label}
       </div>
       <div class={["font-mono text-sm text-right tabular-nums", @class]}>
-        {if @inner_block, do: render_slot(@inner_block), else: @value}
+        <%= if empty_block?(@inner_block) do %>
+          {@value}
+        <% else %>
+          {render_slot(@inner_block)}
+        <% end %>
       </div>
     </div>
     """
   end
+
+  defp empty_block?(nil), do: true
+  defp empty_block?([]), do: true
+  defp empty_block?(_slots), do: false
 
   @doc "Sort indicator for table headers."
   def sort_icon(assigns) do

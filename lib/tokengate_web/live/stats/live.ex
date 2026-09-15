@@ -339,18 +339,30 @@ defmodule TokengateWeb.StatsLive.LiveSection do
   # Bar chart card for one metric of the shared 60-minute series. Renders the
   # full window even with zero traffic so the axis stays readable.
   defp minute_chart(assigns) do
-    assigns = assign(assigns, :has_data?, assigns.max > 0)
+    assigns =
+      assigns
+      |> assign(:has_data?, assigns.max > 0)
+      |> assign(:avg, mean_per_minute(assigns.metric, assigns.series))
 
     ~H"""
     <div class="card bg-base-100 border border-base-300 shadow-sm" id={@id}>
       <div class="card-body p-4 gap-2">
-        <div class="flex items-center justify-between">
+        <div class="flex items-center justify-between gap-2">
           <h2 class="card-title text-base">
             <.icon name={@icon} class="w-5 h-5 text-base-content/60" />
             {@title}
           </h2>
-          <span :if={@has_data?} class="text-xs text-base-content/40 tabular-nums">
-            pico {metric_peak(@metric, @max)}
+          <%!-- El pico solo no dice cómo fue la hora: un único minuto cargado
+               al lado de 59 vacíos y una hora sostenida se ven idénticos.
+               El promedio por minuto de la ventana va al lado para que la
+               forma de la hora se lea de un vistazo. --%>
+          <span
+            :if={@has_data?}
+            class="text-xs text-base-content/40 tabular-nums"
+            id={"#{@id}-header-stats"}
+            title="prom.: media por minuto de la ventana completa (los minutos sin tráfico cuentan como 0) · pico: minuto de mayor tráfico"
+          >
+            prom. {metric_avg(@metric, @avg)} · pico {metric_peak(@metric, @max)}
           </span>
         </div>
 
@@ -404,6 +416,32 @@ defmodule TokengateWeb.StatsLive.LiveSection do
   defp metric_peak(:requests, max), do: "#{Stats.format_number(max)} req/min"
   defp metric_peak(:tokens, max), do: "#{Stats.format_compact(max)} tok/min"
   defp metric_peak(:cost, max), do: "$#{Float.round(max, 4)}/min"
+
+  # Media por minuto de la ventana. El denominador es la ventana completa (los
+  # buckets vacíos cuentan como 0): es "cuánto por minuto, de media, en la
+  # última hora". La media de sólo los minutos con tráfico sería otra cosa —la
+  # media de los minutos activos— y al lado del pico se leería como un segundo
+  # pico.
+  defp mean_per_minute(_metric, []), do: 0.0
+
+  defp mean_per_minute(metric, series) do
+    total =
+      Enum.reduce(series, 0.0, fn row, acc -> acc + metric_value(row, metric) end)
+
+    total / length(series)
+  end
+
+  # Una decimal para requests (5 requests en 60 min son 0.1/min, y truncar a 0
+  # haría parecer la tarjeta vacía), entero para tokens —que a estas escalas se
+  # leen mejor compactos— y seis decimales para el coste, donde el pico —que va
+  # a cuatro— redondearía a cero una hora con gasto real.
+  defp metric_avg(:requests, avg), do: "#{format_avg(avg, 1)} req/min"
+  defp metric_avg(:tokens, avg), do: "#{Stats.format_compact(round(avg))} tok/min"
+  defp metric_avg(:cost, avg), do: "$#{format_avg(avg, 6)}/min"
+
+  defp format_avg(value, decimals) do
+    :erlang.float_to_binary(value * 1.0, decimals: decimals)
+  end
 
   ## Hoy por hora · por proveedor -------------------------------------------
 

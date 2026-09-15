@@ -1397,4 +1397,81 @@ defmodule Tokengate.Metrics.RollupTest do
       assert Rollup.top_errors(nil, from: DateTime.add(now, -3600, :second)) == []
     end
   end
+
+  # ---------------------------------------------------------------------
+  # filtro :provider_id (detalle de proveedor)
+  # ---------------------------------------------------------------------
+
+  describe "filtro :provider_id en los breakdowns" do
+    test "acota modelos, usuarios, servicios y grupos al proveedor" do
+      {tm, _group} = group_member_fixture()
+
+      {:ok, provider_a} =
+        Providers.create_provider(%{name: "Prov A", base_url: "http://localhost:1"})
+
+      {:ok, provider_b} =
+        Providers.create_provider(%{name: "Prov B", base_url: "http://localhost:2"})
+
+      {:ok, service} = Accounts.create_service(%{name: "svc-provider-filter"})
+
+      ma = model_fixture(%{"name" => "gpt-4o"})
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      log_request(tm.id, now, %{
+        model_id: ma.id,
+        provider_id: provider_a.id,
+        cost_usd: Decimal.new("1.000000")
+      })
+
+      log_request(tm.id, now, %{
+        model_id: ma.id,
+        provider_id: provider_b.id,
+        cost_usd: Decimal.new("2.000000")
+      })
+
+      {:ok, _} =
+        Logs.log_request(%{
+          subject_type: "service",
+          service_id: service.id,
+          provider_id: provider_a.id,
+          model_requested: "gpt-4o",
+          cost_usd: Decimal.new("0.500000"),
+          inserted_at: now
+        })
+
+      from = DateTime.add(now, -1, :day)
+
+      # Modelos del proveedor A: el del modelo real + el request del servicio,
+      # que no trae model_id y cae en la fila "—".
+      model_rows = Rollup.breakdown_by_model(nil, from: from, provider_id: provider_a.id)
+      assert length(model_rows) == 2
+
+      model_row = Enum.find(model_rows, &(&1.model_id == ma.id))
+      assert model_row.request_count == 1
+      assert Decimal.equal?(model_row.cost_usd, Decimal.new("1.000000"))
+
+      assert [user_row] = Rollup.breakdown_by_user(from: from, provider_id: provider_a.id)
+      assert user_row.request_count == 1
+      assert Decimal.equal?(user_row.cost_usd, Decimal.new("1.000000"))
+
+      # El servicio que lo usa.
+      assert [service_row] = Rollup.breakdown_by_service(from: from, provider_id: provider_a.id)
+      assert service_row.service_id == service.id
+      assert service_row.request_count == 1
+      assert Decimal.equal?(service_row.cost_usd, Decimal.new("0.500000"))
+
+      # Los grupos que lo usan.
+      assert [group_row] = Rollup.breakdown_by_group(from: from, provider_id: provider_a.id)
+      assert group_row.request_count == 1
+      assert Decimal.equal?(group_row.cost_usd, Decimal.new("1.000000"))
+
+      # Sin filtro entran los dos proveedores (el filtro acota, no esconde).
+      all_requests =
+        Rollup.breakdown_by_model(nil, from: from)
+        |> Enum.map(& &1.request_count)
+        |> Enum.sum()
+
+      assert all_requests == 3
+    end
+  end
 end

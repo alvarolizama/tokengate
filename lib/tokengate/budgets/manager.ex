@@ -435,7 +435,7 @@ defmodule Tokengate.Budgets.Manager do
   `reserve_credits/4` and not yet settled, so the value "breathes" with
   concurrent traffic. Use for enforcement, not for spend dashboards: both
   `/stats` and the maintenance screen display real spend from `request_logs`
-  (`Budgets.global_daily_budget_summary/1`); maintenance additionally shows
+  (`Budgets.global_daily_budget_summary/0`); maintenance additionally shows
   this counter as a drift reference when the two disagree.
   """
   @spec global_daily_spend() :: Decimal.t()

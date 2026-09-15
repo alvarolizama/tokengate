@@ -51,6 +51,44 @@ defmodule TokengateWeb.StatsLiveTest do
 
   defp wait_stats_loaded(_view, 0), do: raise("stats async data never loaded")
 
+  # El Resumen recarga sus contadores en una tarea async propia (`:stats_counters`),
+  # independiente de la parte estructural: espera a que el costo del período
+  # deje de ser el anterior y devuelve los assigns ya actualizados.
+  defp wait_counters_changed(view, previous_cost, attempts \\ 400)
+
+  defp wait_counters_changed(view, previous_cost, attempts) when attempts > 0 do
+    assigns = :sys.get_state(view.pid).socket.assigns
+
+    if Decimal.equal?(assigns.metrics.cost_usd, previous_cost) do
+      Process.sleep(10)
+      wait_counters_changed(view, previous_cost, attempts - 1)
+    else
+      assigns
+    end
+  end
+
+  defp wait_counters_changed(_view, _previous_cost, 0),
+    do: raise("stats counters never reloaded")
+
+  # El Resumen carga sus contadores (KPIs y deltas) en una tarea async propia.
+  # `prev_metrics` sólo existe cuando esa mitad llegó — el wipe de la parte
+  # estructural lo conserva — así que es la señal para sincronizar los tests
+  # que miran `metrics`.
+  defp wait_counters_loaded(view, attempts \\ 400)
+
+  defp wait_counters_loaded(view, attempts) when attempts > 0 do
+    assigns = :sys.get_state(view.pid).socket.assigns
+
+    if assigns[:prev_metrics] do
+      view
+    else
+      Process.sleep(10)
+      wait_counters_loaded(view, attempts - 1)
+    end
+  end
+
+  defp wait_counters_loaded(_view, 0), do: raise("stats counters never loaded")
+
   # Suma `n` requests extra al sujeto del fixture, para que los rankings tengan
   # conteos distintos y el orden (los puestos 1º/2º/3º) sea determinista.
   defp log_extra(%{member: member, provider: provider, model: model}, n) when n > 0 do
@@ -264,10 +302,33 @@ defmodule TokengateWeb.StatsLiveTest do
     wait_stats_loaded(view)
 
     assert has_element?(view, "#usage-patterns")
-    assert has_element?(view, "#hour-distribution")
     assert has_element?(view, "#busiest-hours")
     assert has_element?(view, "#busiest-minutes")
     assert has_element?(view, "#peak-concurrency")
+
+    # El reparto del período: proveedor y modelo, los DOS del mismo agregado.
+    assert has_element?(view, "#provider-breakdown")
+    assert has_element?(view, "#model-breakdown")
+
+    # Un solo log en el fixture → una fila por vista y el 100% del reparto:
+    # pincha que la fila se deriva del agregado ya cargado (no de una query
+    # nueva) y que el reparto se calcula sobre el total del período.
+    assert has_element?(view, "#provider-breakdown-row-1")
+    assert has_element?(view, "#provider-breakdown-row-1", "100.0%")
+    assert has_element?(view, "#model-breakdown-row-1")
+    assert has_element?(view, "#model-breakdown-row-1", "100.0%")
+    assert has_element?(view, "#model-breakdown-row-1", "$0.005")
+
+    # Con "Hoy" el Resumen no dibuja el perfil horario: ese día lo mide En
+    # vivo ("Hoy por hora · por proveedor") y duplicarlo costaba un agregado
+    # crudo por carga.
+    refute has_element?(view, "#hour-distribution")
+
+    # Con una ventana más larga el perfil horario del período sí es único.
+    {:ok, long, _html} = live(conn, ~p"/stats/overview?period=30d")
+    wait_stats_loaded(long)
+
+    assert has_element?(long, "#hour-distribution")
   end
 
   test "regular user is redirected from stats (usage patterns)", %{conn: conn} do
@@ -486,7 +547,9 @@ defmodule TokengateWeb.StatsLiveTest do
     group_with_log(%{cost: "0.005", inserted_at: inserted_at})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/stats/overview")
+    # El perfil horario sólo se dibuja con ventanas de más de un día: con "Hoy"
+    # ese día lo mide En vivo. La zona del usuario sigue mandando en el bucketing.
+    {:ok, view, _html} = live(conn, ~p"/stats/overview?period=30d")
     html = render(wait_stats_loaded(view))
 
     # El log cayó en una hora local (01:00 local si candidate < now) y la
@@ -508,9 +571,12 @@ defmodule TokengateWeb.StatsLiveTest do
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/stats/overview")
-    html = render(wait_stats_loaded(view))
+    view = wait_stats_loaded(view) |> wait_counters_loaded()
 
-    assert html =~ "Sin datos en este período."
+    # El log de ayer UTC queda fuera de "Hoy": ni en los contadores del período
+    # ni en el reparto derivado del mismo agregado.
+    assert :sys.get_state(view.pid).socket.assigns.metrics.requests_total == 0
+    assert render(view) =~ "Sin datos en este período."
   end
 
   ## Live ("En vivo") tab ---------------------------------------------------
@@ -622,7 +688,6 @@ defmodule TokengateWeb.StatsLiveTest do
     wait_stats_loaded(overview)
     ov = :sys.get_state(overview.pid).socket.assigns
 
-    assert Decimal.eq?(ov.org_budget.daily_spend_usd, real)
     assert Decimal.eq?(ov.metrics.cost_usd, real)
 
     # El hold SÍ está en el contador de enforcement: eso prueba que existía y
@@ -769,13 +834,15 @@ defmodule TokengateWeb.StatsLiveTest do
     esperado = if en_utc?, do: Decimal.new("0.7500"), else: Decimal.new("0.0000")
     assert Decimal.equal?(card_spend, esperado)
 
-    # El Resumen ("Tope diario global", período "hoy") tiene que mostrar el
-    # mismo número que el card de En vivo y que Mantenimiento.
+    # El Resumen mide la misma ventana: su KPI de costo (período "hoy" = día
+    # UTC) tiene que dar el mismo número que el card de En vivo, aunque el
+    # card del tope ya no viva ahí. Si los dos caminos divergen, este assert
+    # lo caza.
     {:ok, overview, _html} = live(conn, ~p"/stats/overview")
     wait_stats_loaded(overview)
 
     ov = :sys.get_state(overview.pid).socket.assigns
-    assert Decimal.equal?(ov.org_budget.daily_spend_usd, card_spend)
+    assert Decimal.equal?(ov.metrics.cost_usd, card_spend)
   end
 
   test "En vivo: el pie muestra cuánto falta para el reinicio y a qué hora local cae",
@@ -821,8 +888,37 @@ defmodule TokengateWeb.StatsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/stats/overview")
     wait_stats_loaded(view)
 
-    assert has_element?(view, "#org-budget-card #org-budget-reset-countdown")
-    assert has_element?(view, "#org-budget-reset-at", "18:00 en tu hora local")
+    # El Resumen ya no repite el card del tope (vive en En vivo): el countdown
+    # queda en la sub-línea del KPI de costo, que es además la que declara la
+    # ventana UTC.
+    assert has_element?(view, "#kpi-cost", "Reinicia en")
+    assert has_element?(view, "#kpi-cost", "18:00 en tu hora local")
+  end
+
+  test "Resumen: un logs:new sólo recalcula los contadores, no los agregados", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    group_with_log(%{cost: "0.005"})
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/stats/overview")
+    wait_stats_loaded(view)
+
+    antes = :sys.get_state(view.pid).socket.assigns
+
+    # Tráfico nuevo con otro costo: mueve los contadores del período.
+    group_with_log(%{cost: "0.2500"})
+    send(view.pid, {:new_log, nil})
+    despues = wait_counters_changed(view, antes.metrics.cost_usd)
+
+    refute Decimal.equal?(despues.metrics.cost_usd, antes.metrics.cost_usd)
+
+    # Y los agregados estructurales siguen siendo los mismos términos: el
+    # broadcast no re-ejecuta los scans crudos de ventana completa. Con el
+    # reload completo de antes, el log nuevo aparecía en estas listas.
+    assert despues.hour_usage_stacked == antes.hour_usage_stacked
+    assert despues.model_provider_stacked == antes.model_provider_stacked
+    assert despues.busiest_minutes == antes.busiest_minutes
+    assert despues.peak_concurrency == antes.peak_concurrency
   end
 
   test "En vivo: el contador se recalcula en el tick de reloj, sin tráfico", %{conn: conn} do
@@ -1248,7 +1344,7 @@ defmodule TokengateWeb.StatsLiveTest do
     # rankeado (no tabla) con buscador que filtra en vivo. El puesto sale de la
     # clasificación COMPLETA, así que filtrar no renumera.
 
-    test "providers: listado rankeado con color en el top 3", %{conn: conn} do
+    test "providers: tabla única con medallas en el podio y liga al detalle", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
 
       # 3/2/1 requests → clasificación determinista para los puestos 1-3.
@@ -1260,33 +1356,34 @@ defmodule TokengateWeb.StatsLiveTest do
       {:ok, view, _html} = live(conn, ~p"/stats/providers")
       view = wait_stats_loaded(view)
 
-      # Ya no es tabla: es un listado con buscador.
-      assert has_element?(view, "#provider-list")
-      assert has_element?(view, "ul#provider-list li")
+      # Tabla única (no listado), con buscador y la información básica en columnas.
+      assert has_element?(view, "table#provider-table")
+      assert has_element?(view, "#provider-table tbody tr")
       assert has_element?(view, "#provider-list-search")
-      refute has_element?(view, "#provider-ranking table")
+      assert has_element?(view, "#provider-table thead th", "Requests")
+      assert has_element?(view, "#provider-table thead th", "Latencia")
 
-      # Puestos 1º/2º/3º con su color; el 1º (más requests) es el destacado.
+      # Podio: medalla (icono) en 1º/2º/3º con su color; el 1º (más requests) manda.
       assert has_element?(
                view,
-               "#provider-ranking-row-#{a.provider.id} span[aria-label='Puesto 1'][class*='amber']"
+               "#provider-ranking-row-#{a.provider.id} span[aria-label='Puesto 1'][class*='amber'] .hero-trophy"
              )
 
       assert has_element?(
                view,
-               "#provider-ranking-row-#{b.provider.id} span[aria-label='Puesto 2'][class*='slate']"
+               "#provider-ranking-row-#{b.provider.id} span[aria-label='Puesto 2'][class*='slate'] .hero-trophy"
              )
 
       assert has_element?(
                view,
-               "#provider-ranking-row-#{c.provider.id} span[aria-label='Puesto 3'][class*='orange']"
+               "#provider-ranking-row-#{c.provider.id} span[aria-label='Puesto 3'][class*='orange'] .hero-trophy"
              )
 
-      # Las métricas de cada proveedor siguen visibles, ahora en la fila.
-      row_html = view |> element("#provider-ranking-row-#{a.provider.id}") |> render()
-      assert row_html =~ "Requests"
-      assert row_html =~ "Latencia"
-      assert row_html =~ "Tier"
+      # El nombre abre el interior del proveedor arrastrando el período.
+      assert has_element?(
+               view,
+               "#provider-link-#{a.provider.id}[href*='/stats/providers/#{a.provider.id}'][href*='period=today']"
+             )
     end
 
     test "providers: el buscador filtra en vivo sin renumerar los puestos", %{conn: conn} do
@@ -1327,7 +1424,50 @@ defmodule TokengateWeb.StatsLiveTest do
       |> render_change(%{"value" => "no-existe-este-proveedor"})
 
       assert has_element?(view, "#provider-list-empty")
-      refute has_element?(view, "ul#provider-list li")
+      refute has_element?(view, "#provider-table tbody tr")
+    end
+
+    test "detalle del proveedor: métricas, modelos y quién lo usa", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      fixture = group_with_log(%{cost: "0.005"})
+      log_extra(fixture, 1)
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/stats/providers/#{fixture.provider.id}?period=today")
+      view = wait_stats_loaded(view)
+
+      # Sigue siendo la pestaña Proveedores, con vuelta a la tabla.
+      assert has_element?(view, "#nav-providers.btn-primary")
+      assert has_element?(view, "#provider-back[href*='/stats/providers']")
+      assert has_element?(view, "#provider-detail-header", fixture.provider.name)
+
+      # Sus métricas: costo (2 × 0.005), requests y latencia del período.
+      assert has_element?(view, "#provider-kpi-cost")
+      assert has_element?(view, "#provider-kpi-requests")
+      assert has_element?(view, "#provider-kpi-tokens")
+      assert has_element?(view, "#provider-kpi-latency")
+      assert view |> element("#provider-kpi-cost") |> render() =~ "0.01"
+
+      # Los modelos que sirve y los usuarios/servicios/grupos que lo usan.
+      assert has_element?(view, "#provider-models #provider-model-#{fixture.model.id}")
+      assert has_element?(view, "#provider-users #provider-user-#{fixture.owner.id}")
+      assert has_element?(view, "#provider-groups #provider-group-#{fixture.group.id}")
+
+      # El período del detalle es el que trae la URL.
+      view |> element("#period-week") |> render_click()
+      assert has_element?(view, "#provider-metrics-period", "Esta semana")
+    end
+
+    test "detalle del proveedor: un id que no existe avisa en vez de romper", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/stats/providers/#{Ecto.UUID.generate()}")
+      view = wait_stats_loaded(view)
+
+      assert has_element?(view, "#provider-not-found")
+      refute has_element?(view, "#provider-kpi-cost")
     end
 
     test "models: listado rankeado + buscador", %{conn: conn} do

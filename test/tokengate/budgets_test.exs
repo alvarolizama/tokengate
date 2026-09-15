@@ -378,7 +378,7 @@ defmodule Tokengate.BudgetsTest do
       assert Decimal.eq?(summary.daily_spend_usd, Decimal.new("10.00"))
     end
 
-    test "respeta la ventana from (períodos > hoy no filtran por día UTC)" do
+    test "gasto del día UTC: ignora logs de días anteriores" do
       {:ok, _} = Tokengate.GlobalSettings.update(%{"daily_max_spend_usd" => "100.00"})
       member = member_fixture()
 
@@ -388,18 +388,11 @@ defmodule Tokengate.BudgetsTest do
       record_log(member, Decimal.new("5.00"), yesterday)
       record_log(member, Decimal.new("25.00"))
 
-      # Día UTC actual: solo el log de hoy.
+      # La ventana del tope es la del kill-switch (día UTC): el log de ayer no
+      # entra, y no hay forma de pedir otra ventana.
       assert Decimal.eq?(
                Budgets.global_daily_budget_summary().daily_spend_usd,
                Decimal.new("25.00")
-             )
-
-      # Ventana de 2 días: ambos logs.
-      from_2d = DateTime.utc_now() |> DateTime.add(-2, :day) |> DateTime.truncate(:second)
-
-      assert Decimal.eq?(
-               Budgets.global_daily_budget_summary(from_2d).daily_spend_usd,
-               Decimal.new("30.00")
              )
     end
   end

@@ -87,7 +87,7 @@
         patch={~p"/stats/providers?period=#{@period}"}
         class={[
           "join-item btn btn-sm",
-          if(@live_action == :providers, do: "btn-primary", else: "btn-ghost")
+          if(@live_action in [:providers, :provider], do: "btn-primary", else: "btn-ghost")
         ]}
         id="nav-providers"
       >
@@ -165,7 +165,6 @@
         <% @live_action == :index -> %>
           <.index
             metrics={@metrics}
-            org_budget={@org_budget}
             peak_concurrency={@peak_concurrency}
             busiest_hours={@busiest_hours}
             busiest_minutes={@busiest_minutes}
@@ -184,6 +183,19 @@
             provider_ranking={@provider_ranking}
             period={@period}
             list_search={@list_search}
+          />
+        <% @live_action == :provider -> %>
+          <.provider
+            provider={@provider}
+            provider_ranking={@provider_ranking}
+            provider_metrics={@provider_metrics}
+            breakdown_model={@breakdown_model}
+            breakdown_user={@breakdown_user}
+            breakdown_service={@breakdown_service}
+            breakdown_group={@breakdown_group}
+            show_services={@current_user.global_role == "admin"}
+            period={@period}
+            stats_loading={@stats_loading}
           />
         <% @live_action == :models -> %>
           <.models

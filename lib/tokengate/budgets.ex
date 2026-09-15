@@ -143,20 +143,19 @@ defmodule Tokengate.Budgets do
 
   `nil` cap means unlimited (no kill-switch configured).
 
-  `daily_pct` is only meaningful when `from` is the start of a single day;
-  callers showing a longer window must not render the bar/badge from it.
+  La ventana es siempre la del tope (día UTC): no acepta un `from` arbitrario
+  porque cualquier otro rango haría que la barra y el % compararan un gasto
+  contra un cap que mide otro período.
   """
-  @spec global_daily_budget_summary(DateTime.t() | nil) :: %{
+  @spec global_daily_budget_summary() :: %{
           daily_spend_usd: Decimal.t(),
           daily_cap_usd: Decimal.t() | nil,
           daily_pct: float() | nil,
           exempt_count: non_neg_integer()
         }
-  def global_daily_budget_summary(from \\ nil) do
-    from = from || Manager.utc_day_start()
-
+  def global_daily_budget_summary do
     spend =
-      %{from: from}
+      %{from: Manager.utc_day_start()}
       |> Logs.cost_summary()
       |> Map.get(:total_cost_usd, Decimal.new(0))
 

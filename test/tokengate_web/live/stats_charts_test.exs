@@ -185,5 +185,57 @@ defmodule TokengateWeb.StatsChartsTest do
       assert Enum.count(heights, &(&1 == 0)) == 59
       assert Enum.max(heights) == 100
     end
+
+    test "la cabecera muestra promedio y pico, no solo el pico", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      # 4 requests en un minuto y 1 en otro: pico 4 req/min y media 5/60 = 0.1.
+      # Los 58 minutos vacíos cuentan en el denominador, así que el promedio
+      # describe la ventana completa y no sólo los minutos con tráfico.
+      for _ <- 1..4 do
+        group_with_log(%{
+          cost: Decimal.new("0.001"),
+          inserted_at: DateTime.add(now, -10, :second)
+        })
+      end
+
+      group_with_log(%{cost: Decimal.new("0.001"), inserted_at: DateTime.add(now, -70, :second)})
+
+      {:ok, view, _html} = live(conn, ~p"/stats")
+
+      # 5 requests × (100 in + 50 out) = 750 tokens → 12.5/min, y $0.005 →
+      # $0.000083/min (a cuatro decimales, como el pico, sería $0.0).
+      assert has_element?(
+               view,
+               "#live-minute-chart-header-stats",
+               "prom. 0.1 req/min · pico 4 req/min"
+             )
+
+      assert has_element?(
+               view,
+               "#live-tokens-minute-chart-header-stats",
+               "prom. 13 tok/min · pico 600 tok/min"
+             )
+
+      assert has_element?(
+               view,
+               "#live-cost-minute-chart-header-stats",
+               "prom. $0.000083/min · pico $0.004/min"
+             )
+    end
+
+    test "sin tráfico la cabecera no inventa un promedio de cero", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/stats")
+
+      for id <- ~w(live-minute-chart live-tokens-minute-chart live-cost-minute-chart) do
+        refute has_element?(view, "##{id}-header-stats")
+      end
+    end
   end
 end

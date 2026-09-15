@@ -255,6 +255,7 @@ defmodule Tokengate.Metrics.Rollup do
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
     * `:member_ids` — restrict to logs of these group-member ids (scoping)
+    * `:provider_id` — restrict to logs served by that provider
   """
   @spec breakdown_by_model(String.t() | nil, keyword()) :: [map()]
   def breakdown_by_model(group_id \\ nil, opts \\ [])
@@ -267,6 +268,7 @@ defmodule Tokengate.Metrics.Rollup do
       RequestLog
       |> maybe_join_group(group_id)
       |> maybe_service_id(Keyword.get(opts, :service_id))
+      |> maybe_provider_id(Keyword.get(opts, :provider_id))
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
@@ -454,6 +456,7 @@ defmodule Tokengate.Metrics.Rollup do
 
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
+    * `:provider_id` — restrict to logs served by that provider
   """
   @spec breakdown_by_user(keyword()) :: [map()]
   def breakdown_by_user(opts \\ []) do
@@ -464,6 +467,7 @@ defmodule Tokengate.Metrics.Rollup do
       RequestLog
       |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
       |> join(:inner, [_, tm], u in assoc(tm, :user))
+      |> maybe_provider_id(Keyword.get(opts, :provider_id))
       |> maybe_from(from)
       |> maybe_to(to)
       |> group_by([rl, tm, u], u.id)
@@ -533,6 +537,7 @@ defmodule Tokengate.Metrics.Rollup do
 
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
+    * `:provider_id` — restrict to logs served by that provider
   """
   @spec breakdown_by_service(keyword()) :: [map()]
   def breakdown_by_service(opts \\ [])
@@ -545,6 +550,7 @@ defmodule Tokengate.Metrics.Rollup do
     query =
       RequestLog
       |> join(:inner, [rl], s in Tokengate.Accounts.Service, on: rl.service_id == s.id)
+      |> maybe_provider_id(Keyword.get(opts, :provider_id))
       |> maybe_from(from)
       |> maybe_to(to)
       |> group_by([rl, s], s.id)
@@ -599,6 +605,7 @@ defmodule Tokengate.Metrics.Rollup do
 
     * `:from` — `inserted_at >= from` (DateTime)
     * `:to`   — `inserted_at <= to` (DateTime)
+    * `:provider_id` — restrict to logs served by that provider
   """
   @spec breakdown_by_group(keyword()) :: [map()]
   def breakdown_by_group(opts \\ [])
@@ -611,6 +618,7 @@ defmodule Tokengate.Metrics.Rollup do
       RequestLog
       |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
       |> join(:inner, [_, tm], t in assoc(tm, :group))
+      |> maybe_provider_id(Keyword.get(opts, :provider_id))
       |> maybe_from(from)
       |> maybe_to(to)
       |> group_by([rl, _, t], t.id)
@@ -2399,6 +2407,14 @@ defmodule Tokengate.Metrics.Rollup do
 
   defp maybe_service_id(query, service_id) when is_binary(service_id) do
     where(query, [rl], rl.service_id == ^service_id)
+  end
+
+  # Single provider_id filter (used by the provider drill-down: its models and
+  # the users/services/groups that route through it).
+  defp maybe_provider_id(query, nil), do: query
+
+  defp maybe_provider_id(query, provider_id) when is_binary(provider_id) do
+    where(query, [rl], rl.provider_id == ^provider_id)
   end
 
   # -----------------------------------------------------------------------

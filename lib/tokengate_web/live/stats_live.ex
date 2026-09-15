@@ -4,11 +4,14 @@ defmodule TokengateWeb.StatsLive do
 
   Views via `live_action`:
     * `:live`    — real-time overview (no period selector)
-    * `:index`   — overview with top-N tables and KPI cards
+    * `:index`   — period overview: contadores del período (con deltas) +
+      perfil horario / modelo × proveedor
     * `:models`  — per-model breakdown + drill-down (provider, user, group)
     * `:services` — per-service breakdown + drill-down (models)
     * `:groups`  — per-group list
     * `:group`   — one group's hub: members, models, daily series
+    * `:providers` — provider ranking table
+    * `:provider` — one provider's hub: metrics, models served, who uses it
     * `:users`   — per-user consolidated breakdown (all memberships)
     * `:credits` — budgets (calendar counters, no period)
 
@@ -37,6 +40,7 @@ defmodule TokengateWeb.StatsLive do
   import TokengateWeb.StatsLive.Services, only: [services: 1]
   import TokengateWeb.StatsLive.Users, only: [users: 1]
   import TokengateWeb.StatsLive.Providers, only: [providers: 1]
+  import TokengateWeb.StatsLive.Provider, only: [provider: 1]
   import TokengateWeb.StatsLive.LiveSection, only: [live: 1]
 
   import TokengateWeb.StatsHelpers,
@@ -128,6 +132,13 @@ defmodule TokengateWeb.StatsLive do
         _ -> params["group_id"]
       end
 
+    # :provider carries the provider in the URL path (/stats/providers/:id).
+    provider_id =
+      case socket.assigns.live_action do
+        :provider -> params["provider_id"]
+        _ -> nil
+      end
+
     socket =
       socket
       |> assign(:period, period)
@@ -135,6 +146,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:group_filter, group_filter)
       |> assign(:service_filter, service_filter)
       |> assign(:group_id, group_id)
+      |> assign(:provider_id, provider_id)
       # Cada sección tiene su propio listado: el filtro de la anterior no
       # aplica y escondería filas sin que se vea por qué.
       |> assign(:list_search, "")
@@ -226,25 +238,52 @@ defmodule TokengateWeb.StatsLive do
   # diff via handle_info/2. Switching periods quickly cancels the in-flight
   # load automatically.
   defp start_data_load(socket) do
-    assigns = socket.assigns
+    params = data_params(socket.assigns)
 
-    params = %{
+    socket =
+      case params.live_action do
+        :index ->
+          # El Resumen se parte en dos cargas: los contadores (resumen del
+          # período + el anterior → deltas) y los agregados estructurales
+          # (perfil horario, modelo×proveedor, picos y el sweep de
+          # concurrencia). Sólo los contadores se recargan con `logs:new`;
+          # lo estructural espera a un cambio de período, un refresh o un
+          # cambio de pestaña. Las demás pestañas conservan su bundle único.
+          socket
+          |> start_async(:stats_counters, fn -> compute_counter_assigns(params) end)
+          |> start_async(:stats_data, fn -> compute_structural_assigns(params) end)
+
+        _ ->
+          start_async(socket, :stats_data, fn -> compute_data_assigns(params) end)
+      end
+
+    assign(socket, :stats_loading, true)
+  end
+
+  # Recarga de contadores del Resumen, sin la parte estructural: la usa el
+  # broadcast `logs:new` (ver handle_info/2).
+  defp start_counters_load(socket) do
+    params = data_params(socket.assigns)
+
+    start_async(socket, :stats_counters, fn -> compute_counter_assigns(params) end)
+  end
+
+  # Params de una carga: el socket ya trae todo lo que los loaders necesitan.
+  defp data_params(assigns) do
+    %{
       user: assigns.current_user,
       period: assigns.period,
       model_filter: assigns.model_filter,
       group_filter: assigns.group_filter,
       service_filter: assigns.service_filter,
       group_id: assigns.group_id,
+      provider_id: assigns[:provider_id],
       scope_member_ids: assigns.scope_member_ids,
       live_action: assigns.live_action,
       timezone: assigns[:timezone] || "Etc/UTC",
       sort_field: assigns.sort_field,
       sort_direction: assigns.sort_direction
     }
-
-    socket
-    |> assign(:stats_loading, true)
-    |> start_async(:stats_data, fn -> compute_data_assigns(params) end)
   end
 
   @impl true
@@ -252,7 +291,7 @@ defmodule TokengateWeb.StatsLive do
     socket =
       socket
       |> assign(:stats_loading, false)
-      |> assign(empty_data_assigns())
+      |> assign(empty_structural_assigns(socket.assigns.live_action))
       |> assign(data)
 
     {:noreply, socket}
@@ -265,10 +304,24 @@ defmodule TokengateWeb.StatsLive do
     {:noreply, assign(socket, :stats_loading, false)}
   end
 
+  # Los contadores del Resumen llegan en su propia tarea y se aplican solos:
+  # no tocan `stats_loading` (quien la apaga es la parte estructural, que es
+  # la pesada) ni pisan el resto de los assigns.
+  def handle_async(:stats_counters, {:ok, data}, socket) do
+    {:noreply, assign(socket, data)}
+  end
+
+  def handle_async(:stats_counters, {:exit, reason}, socket) do
+    require Logger
+    Logger.warning("stats counters load failed: #{inspect(reason)}")
+
+    {:noreply, socket}
+  end
+
   # `logs:new` broadcast — route by tab:
   #   * live: prepend to the feed + refresh the pulse
-  #   * overview: coalesce into a single reload so the org budget bar and
-  #     KPIs track spend as it happens
+  #   * overview: coalesce into a counters-only reload (KPIs y deltas);
+  #     los agregados estructurales NO se re-ejecutan acá
   @impl true
   def handle_info({:new_log, log}, socket) do
     case socket.assigns.live_action do
@@ -281,7 +334,7 @@ defmodule TokengateWeb.StatsLive do
 
       :index ->
         if not socket.assigns.reload_scheduled do
-          Process.send_after(self(), :reload_budgets, @reload_interval_ms)
+          Process.send_after(self(), :reload_counters, @reload_interval_ms)
           {:noreply, assign(socket, :reload_scheduled, true)}
         else
           {:noreply, socket}
@@ -292,11 +345,17 @@ defmodule TokengateWeb.StatsLive do
     end
   end
 
-  def handle_info(:reload_budgets, socket) do
+  # Recarga coalescida del Resumen: sólo los contadores que el broadcast
+  # invalida. Los agregados estructurales — perfil horario, modelo×proveedor,
+  # minutos/horas pico y el sweep de concurrencia — son scans crudos de toda
+  # la ventana y el tráfico nuevo no cambia el perfil del período, así que no
+  # entran en este camino: se recalculan al cambiar de período, con el
+  # refresh o al volver a la pestaña.
+  def handle_info(:reload_counters, socket) do
     {:noreply,
      socket
      |> assign(:reload_scheduled, false)
-     |> start_data_load()}
+     |> start_counters_load()}
   end
 
   ## "En vivo" tab ----------------------------------------------------------
@@ -351,22 +410,54 @@ defmodule TokengateWeb.StatsLive do
 
   # Pure orchestration: no socket, no assigns — everything runs off plain
   # values so it can execute inside an async task (queries in parallel).
+  # Bundle completo de las pestañas de datos (Modelos, Grupos, Servicios,
+  # Usuarios, Proveedores): contadores + desgloses.
   defp compute_data_assigns(params) do
-    %{from: from, to: to} = Periods.period_bounds(params.period, params.timezone)
-    opts = [from: from, to: to, timezone: params.timezone]
+    opts = period_opts(params)
 
-    summary_task = fn -> {:metrics, summary_to_metrics(fetch_summary(params, opts))} end
-
-    prev_summary_task = fn ->
-      prev = previous_summary(params, params.period, params.timezone)
-      {:prev_metrics, summary_to_metrics(prev)}
-    end
-
-    [summary_task, prev_summary_task | breakdown_tasks(params, opts)]
+    (counter_tasks(params, opts) ++ breakdown_tasks(params, opts))
     |> run_parallel()
     |> Map.new()
     |> apply_sorting(params)
     |> merge_prev_metrics()
+  end
+
+  # Contadores del Resumen (:index): resumen del período + del anterior (los
+  # deltas de los KPI). Son los dos agregados livianos del bundle y lo único
+  # que se re-ejecuta en cada recarga por `logs:new`.
+  defp compute_counter_assigns(params) do
+    params
+    |> counter_tasks(period_opts(params))
+    |> run_parallel()
+    |> Map.new()
+    |> merge_prev_metrics()
+  end
+
+  # Agregados estructurales del Resumen: describen el período, no el tráfico
+  # del momento (perfil horario, modelo×proveedor, horas/minutos pico y el
+  # pico de concurrencia). Se recalculan al cambiar de período, con el
+  # refresh o al volver a la pestaña — no en cada broadcast.
+  defp compute_structural_assigns(params) do
+    params
+    |> breakdown_tasks(period_opts(params))
+    |> run_parallel()
+    |> Map.new()
+    |> apply_sorting(params)
+  end
+
+  defp period_opts(params) do
+    %{from: from, to: to} = Periods.period_bounds(params.period, params.timezone)
+    [from: from, to: to, timezone: params.timezone]
+  end
+
+  defp counter_tasks(params, opts) do
+    [
+      fn -> {:metrics, summary_to_metrics(fetch_summary(params, opts))} end,
+      fn ->
+        {:prev_metrics,
+         summary_to_metrics(previous_summary(params, params.period, params.timezone))}
+      end
+    ]
   end
 
   # Fetch the previous period's summary for delta comparison.
@@ -452,20 +543,16 @@ defmodule TokengateWeb.StatsLive do
         # agregados caros (percentile_cont, sweep de concurrencia) en cada
         # recarga del broadcast `logs:new`, que re-lanza el bundle completo.
         #
-        # El card "Tope diario global" mide la MISMA ventana que el
-        # kill-switch (día UTC) cuando el período es "hoy": así la barra y el
-        # badge comparan gasto real contra el cap real, igual que
-        # Mantenimiento. En ventanas más largas muestra el gasto del período
-        # (vía opts.from) sin barra — el tope aplica por día UTC y no hay nada
-        # contra lo que compararlo. Nunca el contador ETS del proxy: ese
-        # incluye holds en vuelo y "respira".
+        # Tampoco carga el tope diario global: ese card mide el kill-switch y
+        # vive en En vivo (`live-org-budget`), la pestaña que declaró esa
+        # responsabilidad; con período "hoy" era el mismo card duplicado con
+        # la misma query.
+        # Con el período "Hoy" la gráfica de perfil horario no se dibuja (ese
+        # día lo mide En vivo), así que su agregado tampoco se pide: sería
+        # una query cuyo resultado nadie lee.
         index_admin_tasks(admin?, opts) ++
+          hour_usage_tasks(params, opts) ++
           [
-            fn ->
-              from = if params.period == "today", do: nil, else: opts[:from]
-              {:org_budget, Budgets.global_daily_budget_summary(from)}
-            end,
-            fn -> {:hour_usage_stacked, Rollup.usage_by_hour_of_day_stacked(nil, opts)} end,
             fn -> {:model_provider_stacked, Rollup.usage_by_model_provider_stacked(opts)} end,
             fn -> {:busiest_hours, Rollup.busiest_hours(nil, opts)} end,
             fn -> {:busiest_minutes, Rollup.busiest_minutes(nil, opts)} end
@@ -509,6 +596,39 @@ defmodule TokengateWeb.StatsLive do
       :providers ->
         # Sección Infra nueva: destino del ranking de proveedores.
         [fn -> {:provider_ranking, Rollup.provider_ranking(nil, opts)} end]
+
+      :provider ->
+        # Interior de la tabla de proveedores: métricas del proveedor, los
+        # modelos que sirve y quién lo usa (usuarios, servicios, grupos).
+        provider_id = params.provider_id
+        admin? = params.user.global_role == "admin"
+
+        [
+          fn -> {:provider, Tokengate.Providers.get_provider(provider_id)} end,
+          # El ranking completo entra para tomar de ahí tier/score/p95/fallos:
+          # la fila de la tabla y el detalle no pueden decir cosas distintas.
+          fn -> {:provider_ranking, Rollup.provider_ranking(nil, opts)} end,
+          fn -> {:provider_metrics, provider_metrics(provider_id, opts)} end,
+          fn ->
+            {:breakdown_model,
+             Rollup.breakdown_by_model(nil, Keyword.put(opts, :provider_id, provider_id))}
+          end,
+          fn ->
+            {:breakdown_user,
+             Rollup.breakdown_by_user(Keyword.put(opts, :provider_id, provider_id))}
+          end,
+          fn ->
+            {:breakdown_service,
+             if admin? do
+               Rollup.breakdown_by_service(Keyword.put(opts, :provider_id, provider_id))
+             else
+               []
+             end}
+          end,
+          fn ->
+            {:breakdown_group, breakdown_by_group_for_provider(params.user, provider_id, opts)}
+          end
+        ]
 
       :groups ->
         admin? = params.user.global_role == "admin"
@@ -605,6 +725,15 @@ defmodule TokengateWeb.StatsLive do
     end
   end
 
+  # Perfil horario del período (gráfica "Uso por hora del día"). Sólo aplica a
+  # ventanas de más de un día: en "Hoy" el perfil del día lo mide En vivo, así
+  # que el Resumen no pide el agregado.
+  defp hour_usage_tasks(%{period: "today"}, _opts), do: []
+
+  defp hour_usage_tasks(_params, opts) do
+    [fn -> {:hour_usage_stacked, Rollup.usage_by_hour_of_day_stacked(nil, opts)} end]
+  end
+
   # Admin-only infra/org-wide queries on the index view. Ahora el Resumen solo
   # conserva el pico de concurrencia (admin): rankings y tiers viven en las
   # secciones models / groups / providers.
@@ -628,6 +757,14 @@ defmodule TokengateWeb.StatsLive do
     end)
   end
 
+  # Empty values for the structural assigns of a load. The Resumen (:index)
+  # keeps `:metrics` out of this wipe: those counters travel in their own
+  # async task (`:stats_counters`) and clearing them here would blank the KPI
+  # row whenever the structural half lands last.
+  defp empty_structural_assigns(:index), do: Map.delete(empty_data_assigns(), :metrics)
+
+  defp empty_structural_assigns(_live_action), do: empty_data_assigns()
+
   # Empty values for every data assign — used on mount so the first render
   # (while the async load runs) shows empty states instead of stale assigns.
   defp empty_data_assigns do
@@ -640,6 +777,8 @@ defmodule TokengateWeb.StatsLive do
       breakdown_service: [],
       breakdown_user: [],
       provider_ranking: [],
+      provider: nil,
+      provider_metrics: empty_provider_metrics(),
       model_ranking: [],
       group: nil,
       member: nil,
@@ -676,6 +815,37 @@ defmodule TokengateWeb.StatsLive do
       nil -> Rollup.breakdown_by_group_for_model(model_id, opts)
       [] -> []
     end
+  end
+
+  # Mismo criterio de scoping para los grupos que usan un proveedor.
+  defp breakdown_by_group_for_provider(user, provider_id, opts) do
+    case Accounts.scope_group_ids(user) do
+      nil -> Rollup.breakdown_by_group(Keyword.put(opts, :provider_id, provider_id))
+      [] -> []
+    end
+  end
+
+  # Costo y tokens del proveedor en el período. La confiabilidad (tier, score,
+  # p95, fallos) NO se recalcula acá: sale de la fila del ranking, que es la
+  # misma que pinta la tabla de proveedores.
+  defp provider_metrics(nil, _opts), do: empty_provider_metrics()
+
+  defp provider_metrics(provider_id, opts) do
+    Logs.cost_summary(%{provider_id: provider_id, from: opts[:from], to: opts[:to]})
+  end
+
+  defp empty_provider_metrics do
+    %{
+      total_cost_usd: Decimal.new(0),
+      total_prompt_tokens: 0,
+      total_completion_tokens: 0,
+      total_cache_read_tokens: 0,
+      total_cache_creation_tokens: 0,
+      request_count: 0,
+      avg_latency_ms: nil,
+      avg_ttft_ms: nil,
+      avg_tps: nil
+    }
   end
 
   defp breakdown_by_group_if_admin(true, opts), do: Rollup.breakdown_by_group(opts)
