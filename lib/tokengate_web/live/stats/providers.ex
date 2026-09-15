@@ -7,6 +7,10 @@ defmodule TokengateWeb.StatsLive.Providers do
   El ranking de proveedores vivía en el Resumen (`:index`) y se movió acá
   para no recomputar el `percentile_cont` sobre todo el período en cada
   recarga del broadcast `logs:new`.
+
+  Se renderiza como LISTADO (no tabla): rango con color, el nombre como
+  identificador y las métricas de cada proveedor a la derecha. El buscador
+  filtra por nombre en vivo.
   """
   use TokengateWeb, :html
 
@@ -14,6 +18,7 @@ defmodule TokengateWeb.StatsLive.Providers do
 
   attr :provider_ranking, :any, required: true
   attr :period, :any, required: true
+  attr :list_search, :any, required: true
 
   def providers(assigns) do
     ~H"""
@@ -28,53 +33,63 @@ defmodule TokengateWeb.StatsLive.Providers do
             ({Stats.period_label(@period)}). Tier S es el mejor; "—" significa menos de 10 requests.
           </p>
           <%= if Stats.has_data?(@provider_ranking) do %>
-            <div class="overflow-x-auto mt-3">
-              <table class="table table-sm">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Proveedor</th>
-                    <th class="text-center">Tier</th>
-                    <th class="text-right">Score</th>
-                    <th class="text-right">Requests</th>
-                    <th class="text-right">% Fallos</th>
-                    <th class="text-right">Latencia prom</th>
-                    <th class="text-right">P95</th>
-                    <th class="text-right">TTFT prom</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr
-                    :for={{row, idx} <- Enum.with_index(@provider_ranking, 1)}
-                    id={"provider-ranking-row-#{row.provider_id}"}
-                  >
-                    <td class="text-base-content/60">{idx}</td>
-                    <td class="font-medium truncate max-w-[180px]">
-                      {row.provider_name}
-                    </td>
-                    <td class="text-center">
+            <%!-- El rango se toma de la clasificación completa, no del listado
+                 filtrado: el puesto de cada proveedor no cambia porque el
+                 usuario escriba en el buscador. --%>
+            <% rows =
+              @provider_ranking
+              |> Enum.with_index(1)
+              |> Enum.filter(fn {row, _rank} ->
+                Stats.matches?(@list_search, row.provider_name)
+              end) %>
+            <div class="mt-3">
+              <Stats.list_search
+                id="provider-list-search"
+                value={@list_search}
+                placeholder="Filtrar por proveedor…"
+              />
+            </div>
+            <%= if rows == [] do %>
+              <p class="text-sm text-base-content/40 py-6 text-center" id="provider-list-empty">
+                Sin coincidencias.
+              </p>
+            <% else %>
+              <ul class="mt-2" id="provider-list">
+                <Stats.ranked_row
+                  :for={{row, rank} <- rows}
+                  rank={rank}
+                  title={row.provider_name}
+                  id={"provider-ranking-row-#{row.provider_id}"}
+                >
+                  <:metrics>
+                    <Stats.metric_cell label="Tier">
                       <span class={["badge badge-sm", Stats.tier_badge_class(row.tier)]}>
                         {row.tier}
                       </span>
-                    </td>
-                    <td class="text-right font-mono">{row.score || "—"}</td>
-                    <td class="text-right font-mono">
-                      {Stats.format_number(row.request_count)}
-                    </td>
-                    <td class={[
-                      "text-right font-mono",
-                      row.error_rate >= 0.05 && "text-error",
-                      row.error_rate > 0 && row.error_rate < 0.05 && "text-warning"
-                    ]}>
-                      {Stats.format_percent(row.error_rate)}
-                    </td>
-                    <td class="text-right font-mono">{Stats.format_ms(row.avg_latency_ms)}</td>
-                    <td class="text-right font-mono">{Stats.format_ms(row.p95_latency_ms)}</td>
-                    <td class="text-right font-mono">{Stats.format_ms(row.avg_ttft_ms)}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+                    </Stats.metric_cell>
+                    <Stats.metric_cell label="Score" value={row.score || "—"} />
+                    <Stats.metric_cell
+                      label="Requests"
+                      value={Stats.format_number(row.request_count)}
+                    />
+                    <Stats.metric_cell
+                      label="Fallos"
+                      value={Stats.format_percent(row.error_rate)}
+                      class={[
+                        row.error_rate >= 0.05 && "text-error",
+                        row.error_rate > 0 && row.error_rate < 0.05 && "text-warning"
+                      ]}
+                    />
+                    <Stats.metric_cell
+                      label="Latencia"
+                      value={Stats.format_ms(row.avg_latency_ms)}
+                    />
+                    <Stats.metric_cell label="P95" value={Stats.format_ms(row.p95_latency_ms)} />
+                    <Stats.metric_cell label="TTFT" value={Stats.format_ms(row.avg_ttft_ms)} />
+                  </:metrics>
+                </Stats.ranked_row>
+              </ul>
+            <% end %>
           <% else %>
             <p class="text-sm text-base-content/40 py-6 text-center">
               Sin datos en este período.

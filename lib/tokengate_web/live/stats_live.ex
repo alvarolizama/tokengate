@@ -84,6 +84,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:group_id, nil)
       |> assign(:sort_field, :request_count)
       |> assign(:sort_direction, :desc)
+      |> assign(:list_search, "")
       |> assign(:hovered_hour, nil)
       |> assign(:stats_loading, true)
       |> assign(:per_page, 10)
@@ -134,6 +135,9 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:group_filter, group_filter)
       |> assign(:service_filter, service_filter)
       |> assign(:group_id, group_id)
+      # Cada sección tiene su propio listado: el filtro de la anterior no
+      # aplica y escondería filas sin que se vea por qué.
+      |> assign(:list_search, "")
 
     socket =
       case socket.assigns.live_action do
@@ -148,6 +152,13 @@ defmodule TokengateWeb.StatsLive do
   def handle_event("set_period", %{"period" => period}, socket)
       when period in ~w(today week month 30d 90d) do
     {:noreply, socket |> assign(:period, period) |> start_data_load()}
+  end
+
+  # Buscador de los listados rankeados (Users, Models, Providers). El texto
+  # vive en el socket y las secciones filtran sus propias filas en el render:
+  # no toca la DB ni las claves del DashboardCache.
+  def handle_event("filter_list", %{"value" => query}, socket) do
+    {:noreply, assign(socket, :list_search, query || "")}
   end
 
   def handle_event("sort", %{"field" => field}, socket) do

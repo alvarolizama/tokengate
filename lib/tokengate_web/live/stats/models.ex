@@ -21,6 +21,7 @@ defmodule TokengateWeb.StatsLive.Models do
   attr :drilldown_series_labels, :any, required: true
   attr :model_filter, :any, required: true
   attr :model_ranking, :any, required: true
+  attr :list_search, :any, required: true
   attr :period, :any, required: true
   attr :sort_field, :any, required: true
   attr :sort_direction, :any, required: true
@@ -796,53 +797,61 @@ defmodule TokengateWeb.StatsLive.Models do
             ({Stats.period_label(@period)}). Tier S es el mejor; "—" significa menos de 10 requests.
           </p>
           <%= if Stats.has_data?(@model_ranking) do %>
-            <div class="overflow-x-auto mt-3">
-              <table class="table table-sm">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Modelo</th>
-                    <th class="text-center">Tier</th>
-                    <th class="text-right">Score</th>
-                    <th class="text-right">Requests</th>
-                    <th class="text-right">% Fallos</th>
-                    <th class="text-right">Latencia prom</th>
-                    <th class="text-right">P95</th>
-                    <th class="text-right">TTFT prom</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr
-                    :for={{row, idx} <- Enum.with_index(@model_ranking, 1)}
-                    id={"model-ranking-row-#{row.model_id}"}
-                  >
-                    <td class="text-base-content/60">{idx}</td>
-                    <td class="font-medium truncate max-w-[180px]">
-                      {row.model_name}
-                    </td>
-                    <td class="text-center">
+            <%!-- Rango de la clasificación completa, no del listado filtrado. --%>
+            <% rows =
+              @model_ranking
+              |> Enum.with_index(1)
+              |> Enum.filter(fn {row, _rank} ->
+                Stats.matches?(@list_search, row.model_name)
+              end) %>
+            <div class="mt-3">
+              <Stats.list_search
+                id="model-list-search"
+                value={@list_search}
+                placeholder="Filtrar por modelo…"
+              />
+            </div>
+            <%= if rows == [] do %>
+              <p class="text-sm text-base-content/40 py-6 text-center" id="model-list-empty">
+                Sin coincidencias.
+              </p>
+            <% else %>
+              <ul class="mt-2" id="model-list">
+                <Stats.ranked_row
+                  :for={{row, rank} <- rows}
+                  rank={rank}
+                  title={row.model_name}
+                  id={"model-ranking-row-#{row.model_id}"}
+                >
+                  <:metrics>
+                    <Stats.metric_cell label="Tier">
                       <span class={["badge badge-sm", Stats.tier_badge_class(row.tier)]}>
                         {row.tier}
                       </span>
-                    </td>
-                    <td class="text-right font-mono">{row.score || "—"}</td>
-                    <td class="text-right font-mono">
-                      {Stats.format_number(row.request_count)}
-                    </td>
-                    <td class={[
-                      "text-right font-mono",
-                      row.error_rate >= 0.05 && "text-error",
-                      row.error_rate > 0 && row.error_rate < 0.05 && "text-warning"
-                    ]}>
-                      {Stats.format_percent(row.error_rate)}
-                    </td>
-                    <td class="text-right font-mono">{Stats.format_ms(row.avg_latency_ms)}</td>
-                    <td class="text-right font-mono">{Stats.format_ms(row.p95_latency_ms)}</td>
-                    <td class="text-right font-mono">{Stats.format_ms(row.avg_ttft_ms)}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
+                    </Stats.metric_cell>
+                    <Stats.metric_cell label="Score" value={row.score || "—"} />
+                    <Stats.metric_cell
+                      label="Requests"
+                      value={Stats.format_number(row.request_count)}
+                    />
+                    <Stats.metric_cell
+                      label="Fallos"
+                      value={Stats.format_percent(row.error_rate)}
+                      class={[
+                        row.error_rate >= 0.05 && "text-error",
+                        row.error_rate > 0 && row.error_rate < 0.05 && "text-warning"
+                      ]}
+                    />
+                    <Stats.metric_cell
+                      label="Latencia"
+                      value={Stats.format_ms(row.avg_latency_ms)}
+                    />
+                    <Stats.metric_cell label="P95" value={Stats.format_ms(row.p95_latency_ms)} />
+                    <Stats.metric_cell label="TTFT" value={Stats.format_ms(row.avg_ttft_ms)} />
+                  </:metrics>
+                </Stats.ranked_row>
+              </ul>
+            <% end %>
           <% else %>
             <p class="text-sm text-base-content/40 py-6 text-center">
               Sin datos en este período.

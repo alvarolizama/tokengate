@@ -553,6 +553,131 @@ defmodule TokengateWeb.StatsHelpers do
   defp compare_values(a, b) when is_binary(a) and is_binary(b), do: if(a <= b, do: :lt, else: :gt)
   defp compare_values(a, b), do: if(a <= b, do: :lt, else: :gt)
 
+  @doc """
+  True si el texto del buscador aparece en alguno de los campos dados.
+
+  El buscador de los listados rankeados filtra en vivo por nombre/correo;
+  texto vacío (o sólo espacios) deja pasar todo.
+  """
+  def matches?(query, fields)
+
+  def matches?(query, _fields) when query in [nil, ""], do: true
+
+  def matches?(query, fields) when is_binary(query) do
+    q = query |> String.trim() |> String.downcase()
+
+    q == "" or
+      Enum.any?(List.wrap(fields), fn
+        nil -> false
+        field -> String.contains?(field |> to_string() |> String.downcase(), q)
+      end)
+  end
+
+  # ── Ranked list (listados de Users, Models y Providers) ────────────────
+  #
+  # Los rankings del hub se muestran como LISTADO, no como tabla: un rango con
+  # color para el top 3, el nombre como identificador y sus métricas a la
+  # derecha. Los tres comparten estos componentes para verse iguales.
+
+  @doc """
+  Buscador en vivo de un listado. Emite `filter_list` en cada tecla con
+  `%{"value" => texto}`; el LiveView re-renderiza el listado filtrado.
+  """
+  attr :id, :string, required: true
+  attr :value, :any, default: ""
+  attr :placeholder, :string, default: "Filtrar…"
+
+  def list_search(assigns) do
+    ~H"""
+    <.input
+      type="text"
+      name="q"
+      id={@id}
+      value={@value}
+      placeholder={@placeholder}
+      phx-keyup="filter_list"
+      phx-change="filter_list"
+      autocomplete="off"
+    />
+    """
+  end
+
+  @doc """
+  Rango del listado: 1º/2º/3º destacados (oro/plata/bronce), el resto neutro.
+  """
+  attr :rank, :any, required: true
+
+  def rank_badge(assigns) do
+    ~H"""
+    <span
+      class={["badge badge-sm border w-8 justify-center font-mono tabular-nums", rank_class(@rank)]}
+      aria-label={"Puesto #{@rank}"}
+    >
+      {@rank}
+    </span>
+    """
+  end
+
+  defp rank_class(1), do: "bg-amber-400/20 text-amber-200 border-amber-400/30"
+  defp rank_class(2), do: "bg-slate-400/20 text-slate-200 border-slate-400/30"
+  defp rank_class(3), do: "bg-orange-700/25 text-orange-300 border-orange-700/40"
+  defp rank_class(_), do: "bg-base-200 text-base-content/50 border-transparent"
+
+  @doc """
+  Fila de un listado rankeado: rango + título (con subtítulo opcional) y el
+  slot `:metrics` a la derecha. Misma estructura en los tres rankings.
+  """
+  attr :rank, :any, required: true
+  attr :title, :any, required: true
+  attr :subtitle, :any, default: nil
+  attr :href, :string, default: nil
+  attr :rest, :global, include: ~w(id)
+  slot :metrics
+
+  def ranked_row(assigns) do
+    ~H"""
+    <li class="flex items-center gap-3 px-1 py-2.5 border-b border-base-300 last:border-b-0" {@rest}>
+      <.rank_badge rank={@rank} />
+      <div class="min-w-0 flex-1">
+        <%= if @href do %>
+          <.link navigate={@href} class="font-medium truncate link link-hover block">
+            {@title}
+          </.link>
+        <% else %>
+          <div class="font-medium truncate" title={@title}>{@title}</div>
+        <% end %>
+        <div :if={@subtitle} class="text-xs text-base-content/50 truncate">{@subtitle}</div>
+      </div>
+      <div class="flex items-center gap-3 shrink-0">
+        {render_slot(@metrics)}
+      </div>
+    </li>
+    """
+  end
+
+  @doc """
+  Métrica del listado: etiqueta en mayúsculas sobre el valor, para que las
+  columnas de la tabla anterior sigan siendo legibles sin encabezados. El
+  valor puede venir en `value` o como bloque (badges, spans con color).
+  """
+  attr :label, :string, required: true
+  attr :value, :any, default: nil
+  attr :class, :any, default: nil
+  slot :inner_block
+
+  def metric_cell(assigns) do
+    ~H"""
+    <div class="text-right">
+      <div class="text-[10px] uppercase tracking-wide text-base-content/40 whitespace-nowrap">
+        {@label}
+      </div>
+      <div class={["font-mono text-sm text-right tabular-nums", @class]}>
+        {if @inner_block, do: render_slot(@inner_block), else: @value}
+      </div>
+    </div>
+    """
+  end
+
   @doc "Sort indicator for table headers."
   def sort_icon(assigns) do
     ~H"""

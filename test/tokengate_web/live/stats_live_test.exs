@@ -50,6 +50,32 @@ defmodule TokengateWeb.StatsLiveTest do
 
   defp wait_stats_loaded(_view, 0), do: raise("stats async data never loaded")
 
+  # Suma `n` requests extra al sujeto del fixture, para que los rankings tengan
+  # conteos distintos y el orden (los puestos 1º/2º/3º) sea determinista.
+  defp log_extra(%{member: member, provider: provider, model: model}, n) when n > 0 do
+    Enum.each(1..n//1, fn _ ->
+      {:ok, _} =
+        Logs.log_request(%{
+          group_member_id: member.id,
+          provider_id: provider.id,
+          model_id: model.id,
+          model_requested: model.name,
+          agent_type: "api",
+          status_code: 200,
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          provider_cost_usd: "0.005",
+          latency_ms: 42,
+          streaming: false,
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+        })
+    end)
+
+    :ok
+  end
+
+  defp log_extra(_fixture, _n), do: :ok
+
   defp group_with_log(opts) do
     u = unique()
 
@@ -1054,6 +1080,198 @@ defmodule TokengateWeb.StatsLiveTest do
 
     test "handles tiny maxima" do
       assert [_, _, _] = StatsLive.y_axis_ticks(5)
+    end
+  end
+
+  describe "listados rankeados (rango + buscador en vivo)" do
+    # Los rankings de Users, Models y Providers se muestran como listado
+    # rankeado (no tabla) con buscador que filtra en vivo. El puesto sale de la
+    # clasificación COMPLETA, así que filtrar no renumera.
+
+    test "providers: listado rankeado con color en el top 3", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      # 3/2/1 requests → clasificación determinista para los puestos 1-3.
+      [a, b, c] = for _ <- 1..3, do: group_with_log(%{cost: "0.005"})
+      log_extra(a, 2)
+      log_extra(b, 1)
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/stats/providers")
+      view = wait_stats_loaded(view)
+
+      # Ya no es tabla: es un listado con buscador.
+      assert has_element?(view, "#provider-list")
+      assert has_element?(view, "ul#provider-list li")
+      assert has_element?(view, "#provider-list-search")
+      refute has_element?(view, "#provider-ranking table")
+
+      # Puestos 1º/2º/3º con su color; el 1º (más requests) es el destacado.
+      assert has_element?(
+               view,
+               "#provider-ranking-row-#{a.provider.id} span[aria-label='Puesto 1'][class*='amber']"
+             )
+
+      assert has_element?(
+               view,
+               "#provider-ranking-row-#{b.provider.id} span[aria-label='Puesto 2'][class*='slate']"
+             )
+
+      assert has_element?(
+               view,
+               "#provider-ranking-row-#{c.provider.id} span[aria-label='Puesto 3'][class*='orange']"
+             )
+
+      # Las métricas de cada proveedor siguen visibles, ahora en la fila.
+      row_html = view |> element("#provider-ranking-row-#{a.provider.id}") |> render()
+      assert row_html =~ "Requests"
+      assert row_html =~ "Latencia"
+      assert row_html =~ "Tier"
+    end
+
+    test "providers: el buscador filtra en vivo sin renumerar los puestos", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      [a, b, c] = for _ <- 1..3, do: group_with_log(%{cost: "0.005"})
+      log_extra(a, 2)
+      log_extra(b, 1)
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/stats/providers")
+      view = wait_stats_loaded(view)
+
+      # El peor clasificado es el 3º: al filtrarlo debe SEGUIR siendo el 3º
+      # (si el rango saliera del listado filtrado aparecería como 1º).
+      view |> element("#provider-list-search") |> render_change(%{"value" => c.provider.name})
+
+      assert has_element?(view, "#provider-ranking-row-#{c.provider.id}")
+      refute has_element?(view, "#provider-ranking-row-#{a.provider.id}")
+      refute has_element?(view, "#provider-ranking-row-#{b.provider.id}")
+
+      assert has_element?(
+               view,
+               "#provider-ranking-row-#{c.provider.id} span[aria-label='Puesto 3']"
+             )
+    end
+
+    test "providers: sin coincidencias muestra el estado vacío", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      group_with_log(%{cost: "0.005"})
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/stats/providers")
+      view = wait_stats_loaded(view)
+
+      view
+      |> element("#provider-list-search")
+      |> render_change(%{"value" => "no-existe-este-proveedor"})
+
+      assert has_element?(view, "#provider-list-empty")
+      refute has_element?(view, "ul#provider-list li")
+    end
+
+    test "models: listado rankeado + buscador", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      [a, b] = for _ <- 1..2, do: group_with_log(%{cost: "0.005"})
+      log_extra(a, 1)
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/stats/models")
+      view = wait_stats_loaded(view)
+
+      assert has_element?(view, "#model-list")
+      assert has_element?(view, "#model-list-search")
+      refute has_element?(view, "#model-ranking table")
+
+      assert has_element?(
+               view,
+               "#model-ranking-row-#{a.model.id} span[aria-label='Puesto 1'][class*='amber']"
+             )
+
+      # Filtra por nombre de modelo: queda sólo la fila que coincide.
+      view |> element("#model-list-search") |> render_change(%{"value" => b.model.name})
+
+      assert has_element?(view, "#model-ranking-row-#{b.model.id}")
+      refute has_element?(view, "#model-ranking-row-#{a.model.id}")
+
+      # Y conserva su puesto (2º), no pasa a 1º.
+      assert has_element?(
+               view,
+               "#model-ranking-row-#{b.model.id} span[aria-label='Puesto 2']"
+             )
+    end
+
+    test "users: Top miembros es listado rankeado, no tabla", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{owner: owner} = group_with_log(%{cost: "0.005"})
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/stats/users")
+      view = wait_stats_loaded(view)
+
+      assert has_element?(view, "#top-members-list")
+      assert has_element?(view, "#top-members-search")
+      assert has_element?(view, "#top-members-list li#top-member-#{owner.id}")
+      assert has_element?(view, "#top-member-#{owner.id} span[aria-label='Puesto 1']")
+      # El listado reemplazó la tabla del card.
+      refute has_element?(view, "#top-members table")
+    end
+
+    test "users: buscar un miembro fuera del top lo muestra con su puesto real",
+         %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      # 6 usuarios con 6..1 requests: el 6º queda fuera del top 5 por consumo.
+      fixtures =
+        for i <- 1..6 do
+          %{owner: owner} = g = group_with_log(%{cost: "0.005"})
+          log_extra(g, 6 - i)
+          {owner, g}
+        end
+
+      {last_owner, _last_group} = List.last(fixtures)
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/stats/users")
+      view = wait_stats_loaded(view)
+
+      # Sin filtro: 5 filas (el 6º no aparece).
+      assert has_element?(view, "#top-members-list")
+      refute has_element?(view, "#top-member-#{last_owner.id}")
+
+      # Al buscarlo aparece con su puesto REAL del período (6º), no como 1º.
+      view |> element("#top-members-search") |> render_change(%{"value" => last_owner.email})
+
+      assert has_element?(view, "#top-member-#{last_owner.id}")
+      assert has_element?(view, "#top-member-#{last_owner.id} span[aria-label='Puesto 6']")
+
+      # Y se puede buscar por NOMBRE (no sólo por correo).
+      view |> element("#top-members-search") |> render_change(%{"value" => last_owner.name})
+
+      assert has_element?(view, "#top-member-#{last_owner.id}")
+    end
+
+    test "el filtro se limpia al cambiar de sección", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      group_with_log(%{cost: "0.005"})
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/stats/providers")
+      view = wait_stats_loaded(view)
+
+      view
+      |> element("#provider-list-search")
+      |> render_change(%{"value" => "algo-que-no-coincide"})
+
+      assert has_element?(view, "#provider-list-empty")
+
+      # Navegar a otra sección no arrastra el filtro (escondería filas sin
+      # motivo visible).
+      {:ok, view, _html} = live(conn, ~p"/stats/models")
+
+      assigns = :sys.get_state(view.pid).socket.assigns
+      assert assigns.list_search == ""
     end
   end
 end

@@ -17,6 +17,7 @@ defmodule TokengateWeb.StatsLive.Users do
   attr :period, :any, required: true
   attr :sort_field, :any, required: true
   attr :sort_direction, :any, required: true
+  attr :list_search, :any, required: true
 
   def users(assigns) do
     ~H"""
@@ -228,40 +229,62 @@ defmodule TokengateWeb.StatsLive.Users do
         </div>
       </div>
 
-      <%!-- Top miembros (movido del Resumen; derivado de @breakdown_user, sin queries nuevas) --%>
+      <%!-- Top miembros: listado rankeado sobre la MISMA fuente que la tabla de
+           arriba (@breakdown_user), ordenado por consumo. El rango sale de la
+           clasificación completa, así que filtrar no renumera los puestos. --%>
       <div class="card bg-base-100 border border-base-300 shadow-sm" id="top-members">
         <div class="card-body">
           <h2 class="card-title text-base">
             <.icon name="hero-user" class="w-5 h-5 text-base-content/60" /> Top 5 Miembros
           </h2>
           <p class="text-xs text-base-content/60">
-            Mayor consumo del período ({Stats.period_label(@period)}).
+            Mayor consumo del período ({Stats.period_label(@period)}). El puesto es la
+            posición en el período, no la de la lista filtrada.
           </p>
           <%= if Stats.has_data?(@breakdown_user) do %>
-            <div class="overflow-x-auto mt-3">
-              <table class="table table-sm">
-                <thead>
-                  <tr>
-                    <th>Usuario</th>
-                    <th class="text-right">Requests</th>
-                    <th class="text-right">Costo</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <%= for row <- @breakdown_user |> Enum.sort_by(& &1.request_count, :desc) |> Enum.take(5) do %>
-                    <tr id={"top-member-#{row.user_id}"}>
-                      <td class="font-medium truncate max-w-[180px]">{row.user_email}</td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(row.request_count)}
-                      </td>
-                      <td class="text-right font-mono">
-                        ${Stats.format_decimal(row.cost_usd)}
-                      </td>
-                    </tr>
-                  <% end %>
-                </tbody>
-              </table>
+            <% ranked =
+              @breakdown_user |> Enum.sort_by(& &1.request_count, :desc) |> Enum.with_index(1) %>
+
+            <% rows =
+              ranked
+              |> Enum.filter(fn {row, _rank} ->
+                Stats.matches?(@list_search, [row.user_email, row.user_name])
+              end)
+              |> Enum.take(5) %>
+            <div class="mt-3">
+              <Stats.list_search
+                id="top-members-search"
+                value={@list_search}
+                placeholder="Filtrar por correo o nombre…"
+              />
             </div>
+            <%= if rows == [] do %>
+              <p class="text-sm text-base-content/40 py-6 text-center" id="top-members-empty">
+                Sin coincidencias.
+              </p>
+            <% else %>
+              <ul class="mt-2" id="top-members-list">
+                <Stats.ranked_row
+                  :for={{row, rank} <- rows}
+                  rank={rank}
+                  title={row.user_email}
+                  subtitle={user_groups(row)}
+                  href={~p"/stats/users/#{row.user_id}"}
+                  id={"top-member-#{row.user_id}"}
+                >
+                  <:metrics>
+                    <Stats.metric_cell
+                      label="Requests"
+                      value={Stats.format_number(row.request_count)}
+                    />
+                    <Stats.metric_cell
+                      label="Costo"
+                      value={"$#{Stats.format_decimal(row.cost_usd)}"}
+                    />
+                  </:metrics>
+                </Stats.ranked_row>
+              </ul>
+            <% end %>
           <% else %>
             <p class="text-sm text-base-content/40 py-6 text-center">Sin datos.</p>
           <% end %>
@@ -281,4 +304,16 @@ defmodule TokengateWeb.StatsLive.Users do
   end
 
   defp cost_per_request(_), do: "—"
+
+  # Subtítulo de la fila: los grupos del miembro. `group_names` sale de un
+  # caché de nombres y puede traer "—" para un grupo recién creado, así que se
+  # descartan los desconocidos; sin grupos reales no se pinta subtítulo.
+  defp user_groups(%{group_names: names}) do
+    case names |> List.wrap() |> Enum.reject(&(&1 in [nil, "", "—"])) do
+      [] -> nil
+      real -> Enum.join(real, " · ")
+    end
+  end
+
+  defp user_groups(_), do: nil
 end

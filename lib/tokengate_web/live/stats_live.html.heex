@@ -183,6 +183,7 @@
           <.providers
             provider_ranking={@provider_ranking}
             period={@period}
+            list_search={@list_search}
           />
         <% @live_action == :models -> %>
           <.models
@@ -198,6 +199,7 @@
             period={@period}
             sort_field={@sort_field}
             sort_direction={@sort_direction}
+            list_search={@list_search}
           />
         <% @live_action == :groups -> %>
           <.groups
@@ -235,6 +237,7 @@
             period={@period}
             sort_field={@sort_field}
             sort_direction={@sort_direction}
+            list_search={@list_search}
           />
         <% @live_action == :group -> %>
           <.groups
