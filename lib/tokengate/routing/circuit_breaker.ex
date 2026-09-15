@@ -22,6 +22,9 @@ defmodule Tokengate.Routing.CircuitBreaker do
     * `:timeout`      - counts normally.
     * `:rate_limited`  - counts AND selects the short cooldown if the breaker trips.
     * `:client_error`  - **never counts** (4xx are the caller's fault); ignored entirely.
+    * `:bad_request`  - **never counts** either (a `400` is a rejection of the
+      body, not a symptom of credential health): the request falls back to the
+      next candidate and this credential is left untouched.
     * `:auth_error`    - **never counts**; the credential is permanently
       deactivated in the DB instead (see ProxyController), so the breaker
       has nothing to do.
@@ -111,10 +114,10 @@ defmodule Tokengate.Routing.CircuitBreaker do
   Records a failed request.
 
   `reason` is one of `:server_error`, `:timeout`, `:rate_limited`,
-  `:client_error`, or `:auth_error`.
-  `:client_error` and `:auth_error` are ignored entirely and never count
-  toward the threshold (`:auth_error` is handled by permanent credential
-  deactivation upstream).
+  `:client_error`, `:bad_request`, or `:auth_error`.
+  `:client_error`, `:bad_request` and `:auth_error` are ignored entirely and
+  never count toward the threshold (`:auth_error` is handled by permanent
+  credential deactivation upstream).
 
   An optional third argument carries the upstream error message (e.g. the
   provider's error body) so `details/1` can surface *why* the failure happened,

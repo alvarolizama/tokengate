@@ -130,6 +130,22 @@ defmodule Tokengate.Routing.CircuitBreakerManagerTest do
       assert CircuitBreakerManager.allow?(credential) == true
     end
 
+    test ":bad_request never counts" do
+      credential = credential()
+
+      for _ <- 1..100 do
+        CircuitBreakerManager.record_failure(
+          credential,
+          :bad_request,
+          "Invalid parameter: field x"
+        )
+      end
+
+      assert CircuitBreakerManager.status(credential) == :closed
+      assert CircuitBreakerManager.allow?(credential) == true
+      assert CircuitBreakerManager.details(credential).failures == 0
+    end
+
     test "record_failure on a new credential ensures a breaker is started" do
       credential = credential()
 

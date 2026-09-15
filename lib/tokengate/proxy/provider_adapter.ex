@@ -39,6 +39,7 @@ defmodule Tokengate.Proxy.ProviderAdapter do
           | :server_error
           | :rate_limited
           | :client_error
+          | :bad_request
           | :connection_error
           | :auth_error
 
@@ -123,11 +124,18 @@ defmodule Tokengate.Proxy.ProviderAdapter do
   @doc """
   Classifies an HTTP status code into a failure reason.
 
+    * `400` -> `:bad_request` (the provider rejected *this* body for its own
+      reasons: an unsupported field or parameter, a limit only that model
+      enforces, a prefix over its context window…). The same body can be
+      accepted by the next candidate, so the request falls back to it — and
+      the rejection carries no consequence for the credential that issued it:
+      the breaker never counts it and the credential is never deactivated.
     * `401`, `402`, `403` -> `:auth_error` (credential is bad — disable it
       permanently and fall back to the next provider).
     * `429`, `529` -> `:rate_limited` (selects the short rate-limit cooldown
       of the circuit breaker, then falls back).
-    * other `4xx` -> `:client_error` (caller's fault — surface, don't switch).
+    * other `4xx` -> `:client_error` (caller's fault and, unlike `400`, not
+      provider-specific: `404`/`422`/… are surfaced, not retried elsewhere).
     * `5xx` -> `:server_error` (selects the standard circuit-breaker cooldown,
       then falls back).
 
@@ -135,6 +143,7 @@ defmodule Tokengate.Proxy.ProviderAdapter do
   classified here — see `classify_error/1`.
   """
   @spec classify_status(non_neg_integer()) :: failure_reason()
+  def classify_status(400), do: :bad_request
   def classify_status(status) when status in [401, 402, 403], do: :auth_error
   def classify_status(status) when status in [429, 529], do: :rate_limited
   def classify_status(status) when status >= 400 and status < 500, do: :client_error

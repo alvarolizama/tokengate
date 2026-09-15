@@ -897,6 +897,7 @@ defmodule TokengateWeb.LogsLive do
               {"timeout", "timeout"},
               {"server_error", "server_error"},
               {"auth_error", "auth_error"},
+              {"bad_request", "bad_request"},
               {"client_error", "client_error"}
             ]}
             label="Error"

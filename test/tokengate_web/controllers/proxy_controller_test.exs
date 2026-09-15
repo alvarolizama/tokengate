@@ -48,6 +48,13 @@ defmodule TokengateWeb.ProxyControllerTest do
         "down" in conn.path_info ->
           json(conn, 500, %{"error" => %{"message" => "provider exploded"}})
 
+        # Simulates a provider that rejects the request body for its own
+        # reasons (400) while the next candidate would accept it.
+        "badrequest" in conn.path_info ->
+          json(conn, 400, %{
+            "error" => %{"message" => "Invalid parameter: unsupported field", "code" => 400}
+          })
+
         # Simulates an upstream answering a 4xx other than 400 (the caller's
         # payload at fault, not a provider-specific rejection).
         "notfound" in conn.path_info ->
@@ -685,6 +692,21 @@ defmodule TokengateWeb.ProxyControllerTest do
       })
   end
 
+  # Points the model's first (priority 1) provider at an endpoint that always
+  # answers 400 — a body that provider refuses for its own reasons, while the
+  # fallback candidate serves it. Returns the credential id.
+  defp make_first_provider_reject(model) do
+    [model_provider] =
+      Providers.list_model_providers(model.id) |> Enum.sort_by(& &1.priority)
+
+    {:ok, _provider} =
+      Providers.update_provider(model_provider.credential.provider, %{
+        base_url: "http://localhost:#{@port}/badrequest"
+      })
+
+    model_provider.credential_id
+  end
+
   # Drains every {:provider_request, _} message ProviderPlug sent — one per
   # upstream attempt (retries and fallbacks included).
   defp collect_provider_hits do
@@ -895,13 +917,15 @@ defmodule TokengateWeb.ProxyControllerTest do
     end
   end
 
-  test "a field the strict upstream rejects is surfaced as a 400 without fallback", %{
+  test "a 400 that every candidate rejects is surfaced to the client", %{
     conn: conn
   } do
     %{token: token, model: model} = proxy_fixture(%{})
     # A field the gateway does NOT know about and therefore never strips: the
-    # operator-configured strict upstream rejects it. The 400 must reach the
-    # client (no fallback: the same body would fail on every candidate).
+    # operator-configured strict upstream rejects it. The gateway now walks the
+    # candidate pool on a 400 (the rejection can be provider-specific), but with
+    # a single candidate there is nowhere to go — the upstream 4xx must reach
+    # the client untouched, never a 503.
     :persistent_term.put({ProviderPlug, :reject_body_fields}, ["totally_unknown_field"])
 
     conn =
@@ -916,7 +940,50 @@ defmodule TokengateWeb.ProxyControllerTest do
         ]
       })
 
-    assert json_response(conn, 400)
+    assert %{"error" => %{"code" => "upstream_client_error"}} = json_response(conn, 400)
+  end
+
+  # A 400 means "this body is wrong for ME", not "this credential is sick": the
+  # request must reach the next candidate, and the provider that rejected it
+  # must pay no price at all — credential stays active, breaker counts nothing.
+  test "a 400 falls back to the next provider and leaves the rejecting one untouched" do
+    u = unique()
+    %{model: model, member: member} = proxy_fixture()
+    credential_id = make_first_provider_reject(model)
+    add_healthy_fallback(model, u)
+
+    # More rounds than the breaker threshold (5): if a 400 counted as a failure
+    # the breaker would be open by now and the credential excluded from the
+    # pool. A fresh API key per round keeps the router's sticky routing (keyed
+    # by api_key_hash + model) from pinning later rounds to the provider that
+    # already answered, so every round starts at the rejecting one.
+    for i <- 1..6 do
+      {:ok, _api_key, token} = Accounts.replace_api_key(member)
+
+      conn =
+        build_conn()
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "messages" => [%{"role" => "user", "content" => "hola #{i} (#{u})"}]
+        })
+
+      assert %{"choices" => [%{"message" => %{"content" => "qué onda"}}]} =
+               json_response(conn, 200)
+    end
+
+    hits = collect_provider_hits()
+    rejects = Enum.count(hits, &(&1["model"] =~ "gpt-4o-real"))
+    served = Enum.count(hits, &(&1["model"] =~ "gpt-4o-healthy"))
+
+    # One attempt per provider per round: a 400 is never replayed to the
+    # provider that just rejected it.
+    assert rejects == 6, "expected 6 rejections from the primary provider, got #{rejects}"
+    assert served == 6, "expected 6 answers from the fallback, got #{served}"
+
+    assert Providers.get_credential!(credential_id).status == "active"
+    assert CircuitBreakerManager.status(credential_id) == :closed
+    assert CircuitBreakerManager.details(credential_id).failures == 0
   end
 
   # Catalog-driven: a model_provider backed by a provider whose catalog key
@@ -1435,15 +1502,20 @@ defmodule TokengateWeb.ProxyControllerTest do
 
   # Regression: a 400 on the STREAMING path used to be treated like a
   # retryable server error — the gateway fell back and logged it as
-  # `provider_error_400` with no message, masking the cause. It must instead
-  # surface the 400 to the client (the same body fails everywhere) and keep
-  # the provider's error message.
-  test "stream: an upstream 400 is surfaced to the client without fallback", %{conn: conn} do
+  # `provider_error_400` with no message, masking the cause. A 400 IS now
+  # retried across candidates (the rejection is often provider-specific), but
+  # when every candidate refuses the same body the client must see the upstream
+  # 4xx — never a 503 "all providers down" — and no candidate pays a price.
+  test "stream: a 400 rejected by every candidate is surfaced without punishing them", %{
+    conn: conn
+  } do
     u = unique()
-    %{token: token, model: model} = proxy_fixture()
+    %{token: token, model: model, model_provider: model_provider} = proxy_fixture()
     add_healthy_fallback(model, u)
+    credential_id = model_provider.credential_id
 
-    # The strict upstream rejects a field the gateway does not know about.
+    # Every upstream rejects a field the gateway does not know about, so no
+    # candidate can serve this body.
     :persistent_term.put({ProviderPlug, :reject_body_fields}, ["totally_unknown_field"])
 
     conn =
@@ -1457,19 +1529,38 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     assert %{"error" => %{"code" => "upstream_client_error"}} = json_response(conn, 400)
 
-    # Only the primary provider was contacted — a client error is not retried
-    # and does not fall back (the same body fails everywhere).
-    hits =
-      for _ <- 1..10 do
-        receive do
-          {:provider_request, payload} -> payload
-        after
-          0 -> nil
-        end
-      end
-      |> Enum.reject(&is_nil/1)
+    # Both candidates were tried — one attempt each: a 400 is never replayed to
+    # the provider that just rejected it.
+    assert length(collect_provider_hits()) == 2
 
-    assert length(hits) == 1, "expected no fallback, got #{length(hits)} provider attempt(s)"
+    assert Providers.get_credential!(credential_id).status == "active"
+    assert CircuitBreakerManager.status(credential_id) == :closed
+    assert CircuitBreakerManager.details(credential_id).failures == 0
+  end
+
+  test "stream: a 400 falls back to the next provider", %{conn: conn} do
+    u = unique()
+    %{token: token, model: model} = proxy_fixture()
+    credential_id = make_first_provider_reject(model)
+    add_healthy_fallback(model, u)
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", Map.put(chat_body(model.name), "stream", true))
+
+    assert conn.state == :chunked
+    assert get_resp_header(conn, "content-type") |> hd() =~ "text/event-stream"
+
+    body = response(conn, 200)
+    assert body =~ ~s("content":"qué")
+    assert body =~ "data: [DONE]"
+
+    # One rejected attempt + one served attempt.
+    assert length(collect_provider_hits()) == 2
+
+    assert Providers.get_credential!(credential_id).status == "active"
+    assert CircuitBreakerManager.details(credential_id).failures == 0
   end
 
   test "stream: first-token timeout falls back to the second provider immediately", %{conn: conn} do
@@ -1547,6 +1638,30 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert log.prompt_tokens == 11
     assert log.completion_tokens == 0
     assert log.status_code == 200
+  end
+
+  test "embeddings: a 400 falls back to the next provider without punishing it", %{conn: conn} do
+    u = unique()
+    %{token: token, model: model} = proxy_fixture()
+    update_alias_type(model, "embedding")
+    credential_id = make_first_provider_reject(model)
+    add_healthy_fallback(model, u)
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/embeddings", %{"model" => model.name, "input" => ["hola"]})
+
+    body = json_response(conn, 200)
+    assert [%{"embedding" => [0.1, 0.2, 0.3]}] = body["data"]
+
+    # One rejected attempt (primary) + one served attempt (the fallback).
+    hits = collect_provider_hits()
+    assert Enum.count(hits, &(&1["model"] =~ "gpt-4o-real")) == 1
+    assert Enum.count(hits, &(&1["model"] =~ "gpt-4o-healthy")) == 1
+
+    assert Providers.get_credential!(credential_id).status == "active"
+    assert CircuitBreakerManager.details(credential_id).failures == 0
   end
 
   test "embeddings accepts a bare string input", %{conn: conn} do

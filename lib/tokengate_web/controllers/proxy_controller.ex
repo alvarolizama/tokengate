@@ -320,7 +320,42 @@ defmodule TokengateWeb.ProxyController do
             )
           end
 
+        {:error, :bad_request, status, error_message} ->
+          # 400: the provider rejected THIS body for its own reasons — often
+          # provider-specific (a field only it refuses, a limit only its model
+          # enforces, a prefix over its context window). The request falls back
+          # to the next candidate, but the rejection is recorded as a
+          # NON-counting failure: the credential is NOT deactivated and the
+          # breaker does NOT count it.
+          Router.record_outcome(route, {:failure, :bad_request})
+
+          if attempts_left > 1 do
+            retry_simple_with_fallback(
+              conn,
+              route,
+              payload,
+              member,
+              attempts_left,
+              exclude,
+              status,
+              adapter_fun,
+              kind,
+              route_opts,
+              provider_retries: provider_retries,
+              reason: :bad_request,
+              error_message: error_message
+            )
+          else
+            log_and_render_proxy_error(conn, route, member, {:upstream_client_error, status},
+              error_reason: "bad_request",
+              error_message: error_message
+            )
+          end
+
         {:error, :client_error, status, error_message} ->
+          # 4xx other than 400 (404, 422, …): the caller's payload is at fault and
+          # — unlike a 400 — the rejection is not provider-specific. Surface it
+          # without burning the breaker or trying other providers.
           Router.record_outcome(route, {:failure, :client_error})
 
           log_and_render_proxy_error(conn, route, member, {:upstream_client_error, status},
@@ -394,6 +429,15 @@ defmodule TokengateWeb.ProxyController do
           kind,
           route_opts,
           provider_retries: provider_retries
+        )
+
+      {:error, :no_available_provider} when reason == :bad_request ->
+        # Every remaining candidate rejected the body with a 400. That is not a
+        # provider outage, so the client gets the upstream 4xx it can act on
+        # instead of a 503.
+        log_and_render_proxy_error(conn, route, member, {:upstream_client_error, status},
+          error_reason: "bad_request",
+          error_message: error_message
         )
 
       {:error, :no_available_provider} ->
@@ -491,11 +535,17 @@ defmodule TokengateWeb.ProxyController do
   #     the milliseconds a retry takes, and each retry would cost another
   #     full timeout of client-perceived latency, so we exclude the
   #     credential immediately and move on.
+  #   * `:bad_request` — the provider rejected the body (400). Replaying the
+  #     identical payload to the same provider gets the identical 400, so the
+  #     credential is excluded immediately and the cascade moves on. The
+  #     rejection says nothing about credential health, so it is never counted
+  #     as a failure (no breaker penalty, no deactivation).
   #   * any other reason — fast failures (5xx, 429, connection refused) are
   #     often transient and cost almost nothing to retry, so the same
   #     provider gets up to @max_retries_per_provider attempts before being
   #     excluded.
-  defp next_candidate(route, exclude, _provider_retries, :timeout) do
+  defp next_candidate(route, exclude, _provider_retries, reason)
+       when reason in [:timeout, :bad_request] do
     {[route.credential.id | exclude], 0}
   end
 
@@ -932,9 +982,39 @@ defmodule TokengateWeb.ProxyController do
             )
           end
 
+        {:error, :bad_request, status, error_message} ->
+          # 400: the provider rejected THIS body for its own reasons — often
+          # provider-specific (a field only it refuses, a limit only its model
+          # enforces, a prefix over its context window). The request falls back
+          # to the next candidate, but the rejection is recorded as a
+          # NON-counting failure: the credential is NOT deactivated and the
+          # breaker does NOT count it.
+          Router.record_outcome(route, {:failure, :bad_request})
+
+          if attempts_left > 1 do
+            retry_with_fallback(
+              conn,
+              route,
+              payload,
+              member,
+              attempts_left,
+              exclude,
+              status,
+              provider_retries,
+              :bad_request,
+              error_message
+            )
+          else
+            log_and_render_proxy_error(conn, route, member, {:upstream_client_error, status},
+              error_reason: "bad_request",
+              error_message: error_message
+            )
+          end
+
         {:error, :client_error, status, error_message} ->
-          # Other 4xx from the provider: the caller's payload is at fault — surface
-          # it without burning the breaker or trying other providers.
+          # 4xx other than 400 (404, 422, …): the caller's payload is at fault and
+          # — unlike a 400 — the rejection is not provider-specific. Surface it
+          # without burning the breaker or trying other providers.
           Router.record_outcome(route, {:failure, :client_error})
 
           log_and_render_proxy_error(conn, route, member, {:upstream_client_error, status},
@@ -1018,6 +1098,15 @@ defmodule TokengateWeb.ProxyController do
     case Router.route(route.model.name, member, request_context) do
       {:ok, new_route} ->
         execute(conn, new_route, payload, member, attempts_left - 1, exclude, provider_retries)
+
+      {:error, :no_available_provider} when reason == :bad_request ->
+        # Every remaining candidate rejected the body with a 400. That is not a
+        # provider outage, so the client gets the upstream 4xx it can act on
+        # instead of a 503.
+        log_and_render_proxy_error(conn, route, member, {:upstream_client_error, status},
+          error_reason: "bad_request",
+          error_message: error_message
+        )
 
       {:error, :no_available_provider} ->
         log_and_render_proxy_error(conn, route, member, :all_providers_down,
@@ -1106,18 +1195,42 @@ defmodule TokengateWeb.ProxyController do
             Router.record_outcome(route, {:failure, breaker_reason(reason)})
 
             cond do
-              # A 4xx that is not auth is the client's payload at fault: the
-              # same body fails identically on every provider, so retrying and
-              # falling back is pointless. Surface it (mirroring the
-              # non-streaming path) and keep the provider's message — instead
-              # of masking it as a retryable `provider_error_<status>`.
-              reason == :client_error ->
+              # 400: the provider rejected THIS body. That is often
+              # provider-specific, so move to the next candidate (no
+              # same-provider retry — the identical payload gets the identical
+              # 400). The rejection was already recorded above as a
+              # non-counting failure: no breaker penalty, credential stays
+              # enabled.
+              reason == :bad_request and attempts_left > 1 ->
+                log_fallback_attempt(conn, route, member, status, error_message)
+
+                retry_stream_with_fallback(
+                  conn,
+                  route,
+                  payload,
+                  member,
+                  attempts_left,
+                  exclude,
+                  provider_retries,
+                  :bad_request,
+                  status,
+                  error_message
+                )
+
+              # Any other non-auth 4xx (404, 422, …) is the client's payload at
+              # fault: the same body fails identically on every provider, so
+              # retrying and falling back is pointless. Surface it (mirroring
+              # the non-streaming path) and keep the provider's message —
+              # instead of masking it as a retryable `provider_error_<status>`.
+              # A 400 landing here had no candidate left to fall back to, so it
+              # is surfaced the same way.
+              reason in [:client_error, :bad_request] ->
                 log_and_render_proxy_error(
                   conn,
                   route,
                   member,
                   {:upstream_client_error, status},
-                  error_reason: "client_error",
+                  error_reason: to_string(reason),
                   error_message: error_message
                 )
 
@@ -1132,7 +1245,9 @@ defmodule TokengateWeb.ProxyController do
                   attempts_left,
                   exclude,
                   provider_retries,
-                  reason
+                  reason,
+                  status,
+                  error_message
                 )
 
               true ->
@@ -1153,10 +1268,13 @@ defmodule TokengateWeb.ProxyController do
          attempts_left,
          exclude,
          provider_retries,
-         reason
+         reason,
+         status,
+         error_message
        ) do
-    # Same policy as retry_with_fallback: timeouts fall back immediately,
-    # fast errors retry the same provider up to @max_retries_per_provider.
+    # Same policy as retry_with_fallback: timeouts and 400s fall back
+    # immediately, fast errors retry the same provider up to
+    # @max_retries_per_provider.
     {exclude, provider_retries} = next_candidate(route, exclude, provider_retries, reason)
 
     request_context = %{
@@ -1175,6 +1293,15 @@ defmodule TokengateWeb.ProxyController do
           attempts_left - 1,
           exclude,
           provider_retries
+        )
+
+      {:error, :no_available_provider} when reason == :bad_request ->
+        # Every remaining candidate rejected the body with a 400. That is not a
+        # provider outage, so the client gets the upstream 4xx it can act on
+        # instead of a 503.
+        log_and_render_proxy_error(conn, route, member, {:upstream_client_error, status},
+          error_reason: "bad_request",
+          error_message: error_message
         )
 
       {:error, :no_available_provider} ->
@@ -1883,6 +2010,7 @@ defmodule TokengateWeb.ProxyController do
   defp log_fallback_attempt(conn, route, member, status, error_message) do
     error_reason =
       case status do
+        400 -> "provider_bad_request"
         429 -> "provider_rate_limited"
         503 -> "provider_overloaded"
         502 -> "provider_gateway_error"
@@ -1916,9 +2044,11 @@ defmodule TokengateWeb.ProxyController do
   defp breaker_reason(:auth_error), do: :auth_error
   defp breaker_reason(:connection_error), do: :server_error
   defp breaker_reason(:server_error), do: :server_error
-  # The streaming path records through this function. Without this clause a 4xx
-  # falls into the catch-all and is counted as :server_error, burning the
-  # breaker on a healthy credential (the non-streaming paths never count them).
+  # The streaming path records through this function. Without these two clauses
+  # a 4xx would fall into the catch-all and be counted as :server_error, burning
+  # the breaker on a healthy credential. Both map to themselves, which the
+  # breaker ignores (see CircuitBreaker.@counting_reasons).
+  defp breaker_reason(:bad_request), do: :bad_request
   defp breaker_reason(:client_error), do: :client_error
   defp breaker_reason(_), do: :server_error
 

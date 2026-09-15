@@ -104,6 +104,19 @@ defmodule Tokengate.Routing.CircuitBreakerTest do
       assert CircuitBreaker.allow?(breaker) == true
     end
 
+    # A 400 rejects the body, not the credential: falling back on it must cost
+    # the provider nothing, so it never counts toward the threshold.
+    test ":bad_request never counts", %{breaker: breaker} do
+      for _ <- 1..100 do
+        CircuitBreaker.record_failure(breaker, :bad_request, "Invalid parameter: field x")
+      end
+
+      sync(breaker)
+      assert CircuitBreaker.status(breaker) == :closed
+      assert CircuitBreaker.allow?(breaker) == true
+      assert CircuitBreaker.details(breaker).failures == 0
+    end
+
     test ":timeout counts toward the threshold", %{breaker: breaker} do
       for _ <- 1..@threshold do
         CircuitBreaker.record_failure(breaker, :timeout)

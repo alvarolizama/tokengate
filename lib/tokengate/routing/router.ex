@@ -141,7 +141,7 @@ defmodule Tokengate.Routing.Router do
   error to the client.
 
   `reason` is one of `:server_error`, `:timeout`, `:rate_limited`,
-  `:client_error`, `:auth_error`.
+  `:client_error`, `:bad_request`, `:auth_error`.
 
   ## Options
 

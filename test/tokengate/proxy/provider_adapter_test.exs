@@ -25,8 +25,11 @@ defmodule Tokengate.Proxy.ProviderAdapterTest do
       assert ProviderAdapter.classify_status(529) == :rate_limited
     end
 
+    test "400 maps to :bad_request (falls back without penalizing the credential)" do
+      assert ProviderAdapter.classify_status(400) == :bad_request
+    end
+
     test "other 4xx map to :client_error" do
-      assert ProviderAdapter.classify_status(400) == :client_error
       assert ProviderAdapter.classify_status(404) == :client_error
       assert ProviderAdapter.classify_status(422) == :client_error
     end

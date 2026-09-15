@@ -163,8 +163,8 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
                OpenAIAdapter.chat_completion(provider_to("/broken"), credential, %{})
     end
 
-    test "400 classifies as :client_error", %{credential: credential} do
-      assert {:error, :client_error, 400, _} =
+    test "400 classifies as :bad_request", %{credential: credential} do
+      assert {:error, :bad_request, 400, _} =
                OpenAIAdapter.chat_completion(provider_to("/bad"), credential, %{})
     end
 
@@ -235,7 +235,7 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
           "stream" => true
         })
 
-      assert_receive {:sse_error, {:client_error, 400, message}}
+      assert_receive {:sse_error, {:bad_request, 400, message}}
       assert message =~ "bad request"
     end
   end
