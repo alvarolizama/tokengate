@@ -39,3 +39,29 @@
 .table tbody tr:hover {
   background-color: color-mix(in oklab, var(--b2) 60%, transparent);
 }
+
+/* Separador ":" del contador de reinicio del tope diario (En vivo y Resumen).
+   Parpadea para leerse como "tiempo corriendo" y no como parte fija del
+   número; `step-end` mantiene el carácter siempre legible (nunca a medio
+   fundir) salvo en el tramo apagado. Se desactiva con reduced-motion: el
+   valor ya se lee sin la animación. */
+@keyframes reset-colon-blink {
+  0%,
+  60% {
+    opacity: 1;
+  }
+  61%,
+  100% {
+    opacity: 0.15;
+  }
+}
+
+.reset-colon {
+  animation: reset-colon-blink 1.2s step-end infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reset-colon {
+    animation: none;
+  }
+}

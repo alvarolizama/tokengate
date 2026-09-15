@@ -94,6 +94,61 @@ defmodule TokengateWeb.StatsHelpers do
     Calendar.strftime(dt, "%H:%M")
   end
 
+  @doc """
+  Wall-clock time `HH:MM` for an instant, in the user's timezone.
+
+  Used for "when does this happen" labels (e.g. the budget reset), where the
+  seconds of `format_dt/2` are noise.
+  """
+  def format_time(dt, tz \\ nil)
+
+  def format_time(nil, _tz), do: "—"
+
+  def format_time(%DateTime{} = dt, tz) do
+    case DateTime.shift_zone(dt, tz || "Etc/UTC") do
+      {:ok, local} -> Calendar.strftime(local, "%H:%M")
+      _ -> Calendar.strftime(dt, "%H:%M")
+    end
+  end
+
+  @doc """
+  Hours and zero-padded minutes left until `target`, for the split countdown
+  display (`{hours}` + blinking `:` + `{minutes}`).
+
+  Rounds **up** to whole minutes: with 30s left it reads `0:01` instead of
+  `0:00`, so the label never claims the reset already happened while the
+  boundary is still ahead. Past or nil targets render `{"0", "00"}`.
+
+  The remaining span is a plain duration, so it reads the same in every
+  timezone; the wall-clock moment it lands on is rendered separately with
+  `format_time/2`.
+  """
+  def countdown_parts(target, now \\ nil)
+
+  def countdown_parts(nil, _now), do: {"0", "00"}
+
+  def countdown_parts(%DateTime{} = target, now) do
+    total_minutes =
+      target
+      |> DateTime.diff(now || DateTime.utc_now(), :second)
+      |> max(0)
+      |> Kernel.+(59)
+      |> div(60)
+
+    minutes = total_minutes |> rem(60) |> Integer.to_string() |> String.pad_leading(2, "0")
+    {"#{div(total_minutes, 60)}", minutes}
+  end
+
+  @doc """
+  Countdown as a single `"H:MM"` string — `countdown_parts/2` joined.
+
+  Kept for non-HTML callers that just need the label (tooltips, logs, tests).
+  """
+  def format_countdown(target, now \\ nil) do
+    {hours, minutes} = countdown_parts(target, now)
+    "#{hours}:#{minutes}"
+  end
+
   def format_percent(rate) when is_float(rate),
     do: "#{:erlang.float_to_binary(rate * 100, decimals: 1)}%"
 

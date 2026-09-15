@@ -42,6 +42,8 @@ defmodule TokengateWeb.StatsLive do
   import TokengateWeb.StatsHelpers,
     only: [period_label: 1, period_active?: 2, sort_rows: 3]
 
+  alias TokengateWeb.StatsHelpers, as: Stats
+
   # Breakdown assigns whose tables have sortable column headers. The "sort"
   # event re-orders these in memory — see resort_breakdowns/3.
   # Credits tab: budgets reload cadence after a `logs:new` broadcast (same
@@ -87,6 +89,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:per_page, 10)
       |> assign(:shown_counts, %{})
       |> assign(:reload_scheduled, false)
+      |> assign_budget_reset()
       |> assign(empty_data_assigns())
 
     socket =
@@ -103,6 +106,7 @@ defmodule TokengateWeb.StatsLive do
       # Realtime pulse for the "En vivo" tab (broadcast per proxied request
       # by Metrics.Collector) + periodic tick so the page ages gracefully.
       Phoenix.PubSub.subscribe(Tokengate.PubSub, "metrics:updated")
+      schedule_clock_tick()
       send(self(), :live_tick)
     end
 
@@ -321,6 +325,18 @@ defmodule TokengateWeb.StatsLive do
     else
       {:noreply, socket}
     end
+  end
+
+  # Minute-aligned clock tick for the budget-reset countdown. The countdown
+  # is the only thing on /stats that has to move with zero traffic (the
+  # "En vivo" 3s tick and the Resumen's `logs:new` reload both stall when the
+  # proxy is idle), and it only changes once a minute, so we wake on the
+  # minute boundary instead of polling. Re-assigning an unchanged value is a
+  # no-op in `assign/3`, so this costs a re-render only when the label
+  # actually changes (or on the midnight rollover).
+  def handle_info(:clock_tick, socket) do
+    schedule_clock_tick()
+    {:noreply, assign_budget_reset(socket)}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -710,6 +726,33 @@ defmodule TokengateWeb.StatsLive do
       |> Float.round(1)
 
     %{budget | daily_pct: pct}
+  end
+
+  # Countdown to the global kill-switch reset, split into hours/minutes so the
+  # template can render the `:` as its own blinking element. Minute-granular,
+  # so a per-minute wall-clock tick almost always reassigns identical values
+  # and `assign/3` no-ops — the diff goes out only when the label actually
+  # changes, not on every tick.
+  #
+  # The countdown is a plain duration (timezone-independent); `reset_at` is the
+  # same instant, which the label renders in the selected zone so the user
+  # reads the reset on their own clock.
+  defp assign_budget_reset(socket) do
+    reset_at = Periods.next_utc_day_start(Periods.now_utc())
+    {hours, minutes} = Stats.countdown_parts(reset_at)
+
+    socket
+    |> assign(:budget_reset_hours, hours)
+    |> assign(:budget_reset_minutes, minutes)
+    |> assign(:budget_reset_at, reset_at)
+  end
+
+  # Wakes just after the wall-clock minute turns, so the countdown label is
+  # never more than a second stale. Skew between the BEAM and the browser
+  # clock would otherwise drift the label off the minute boundary.
+  defp schedule_clock_tick do
+    ms = 60_000 - rem(System.system_time(:millisecond), 60_000)
+    Process.send_after(self(), :clock_tick, ms)
   end
 
   # One bundled realtime refresh. All queries are cheap (index range scans

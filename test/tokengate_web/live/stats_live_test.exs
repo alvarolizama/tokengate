@@ -87,6 +87,8 @@ defmodule TokengateWeb.StatsLiveTest do
           agent_type: "api",
           status_code: Map.get(opts, :status_code, 200),
           provider_status_code: Map.get(opts, :provider_status_code),
+          error_reason: Map.get(opts, :error_reason),
+          error_message: Map.get(opts, :error_message),
           prompt_tokens: Map.get(opts, :prompt_tokens, 100),
           completion_tokens: Map.get(opts, :completion_tokens, 50),
           cache_read_tokens: Map.get(opts, :cache_read_tokens, 0),
@@ -502,6 +504,152 @@ defmodule TokengateWeb.StatsLiveTest do
     assert order_before?(html, "live-today-tokens", "live-today-latency")
   end
 
+  test "En vivo: no muestra el selector de período (ventana fija)", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    refute has_element?(view, "#period-selector")
+    refute has_element?(view, "#period-90d")
+
+    # Sigue presente en las tabs de datos.
+    {:ok, overview, _html} = live(conn, ~p"/stats/overview")
+    assert has_element?(overview, "#period-selector")
+    assert has_element?(overview, "#period-90d")
+  end
+
+  test "En vivo: el estado de auto-refresh vive en el header, no en el contenido", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    # Ocupa el lugar que los timeframes dejan vacío en el header.
+    assert has_element?(view, "#live-status")
+    assert has_element?(view, "#live-status #live-last-sync")
+    assert has_element?(view, "#live-status", "En vivo · actualización automática")
+
+    # Ya no está dentro del contenido.
+    refute has_element?(view, "#stats-content #live-status")
+
+    # Las tabs de datos no lo muestran (ahí el header es el selector de período).
+    {:ok, overview, _html} = live(conn, ~p"/stats/overview")
+    refute has_element?(overview, "#live-status")
+  end
+
+  test "En vivo: el pie del tope diario nombra la zona horaria del día local", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    {:ok, admin} = Accounts.update_user_timezone(admin, "America/Mexico_City")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    # El número del card es el gasto del día LOCAL, así que el pie lo declara
+    # junto con la zona — igual que el Resumen. Sin esto "00:00 UTC" era la
+    # única referencia y el día medido quedaba ambiguo.
+    assert has_element?(view, "#live-org-budget", "día local (America/Mexico_City)")
+    assert has_element?(view, "#live-org-budget", "00:00 UTC")
+  end
+
+  test "En vivo: el pie muestra cuánto falta para el reinicio y a qué hora local cae",
+       %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    # America/Merida = UTC-6, así que 00:00 UTC es 18:00 del día anterior local.
+    {:ok, admin} = Accounts.update_user_timezone(admin, "America/Merida")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    # El contador está presente, en formato H:MM + unidad "h".
+    assert has_element?(view, "#live-budget-reset-countdown")
+
+    texto = view |> element("#live-budget-reset-countdown") |> render()
+    assert texto =~ ~r/\d{1,2}/
+    assert texto =~ ~r/\d{2}/
+    assert texto =~ ">h</span>"
+
+    # Y el instante del reinicio, expresado en la zona elegida (no en UTC).
+    assert has_element?(view, "#live-budget-reset-at", "18:00 local · 00:00 UTC")
+  end
+
+  test "En vivo: cambiar la zona horaria mueve la hora local del reinicio", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    # UTC → el reinicio cae a las 00:00 locales.
+    assert has_element?(view, "#live-budget-reset-at", "00:00 local · 00:00 UTC")
+
+    # +1h (Madrid en verano) → 02:00 locales.
+    render_change(view, "set-timezone", %{"timezone" => "Europe/Madrid"})
+    assert has_element?(view, "#live-budget-reset-at", "02:00 local · 00:00 UTC")
+  end
+
+  test "En vivo: el contador del reinicio también vive en el Resumen", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    {:ok, admin} = Accounts.update_user_timezone(admin, "America/Merida")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/stats/overview")
+    wait_stats_loaded(view)
+
+    assert has_element?(view, "#org-budget-card #org-budget-reset-countdown")
+    assert has_element?(view, "#org-budget-reset-at", "18:00 local · 00:00 UTC")
+  end
+
+  test "En vivo: el contador se recalcula en el tick de reloj, sin tráfico", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    antes = get_in(:sys.get_state(view.pid).socket.assigns, [:budget_reset_hours])
+
+    # :clock_tick no toca la DB ni depende de `logs:new`: es el reloj de la
+    # página. Debe reemplazar los asigns por el tiempo restante real.
+    send(view.pid, :clock_tick)
+    _ = :sys.get_state(view.pid)
+
+    assigns = :sys.get_state(view.pid).socket.assigns
+    assert assigns.budget_reset_hours =~ ~r/^\d{1,2}$/
+    assert assigns.budget_reset_minutes =~ ~r/^\d{2}$/
+    assert Process.alive?(view.pid)
+
+    # Coincide con el tiempo real hasta el próximo 00:00 UTC (tolerancia 1 min).
+    h = String.to_integer(assigns.budget_reset_hours)
+    m = String.to_integer(assigns.budget_reset_minutes)
+
+    esperado =
+      Tokengate.Periods.next_utc_day_start()
+      |> DateTime.diff(DateTime.utc_now(), :second)
+      |> div(60)
+
+    assert_in_delta esperado, h * 60 + m, 1
+    assert antes =~ ~r/^\d{1,2}$/
+  end
+
+  test "En vivo: el contador declara la unidad (horas) y separa el ':'", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    # La unidad va explícita para que "21:02" no se lea como mm:ss.
+    assert has_element?(view, "#live-budget-reset-countdown", "h")
+
+    # El ":" es su propio elemento (parpadea) y el valor lleva un aria-label
+    # con las unidades habladas (el ":" decorativo queda oculto).
+    assert has_element?(view, "#live-budget-reset-countdown span.reset-colon")
+    assert has_element?(view, "#live-budget-reset-countdown[aria-label]")
+    assert has_element?(view, "#live-budget-reset-countdown span[aria-hidden='true']")
+
+    html = view |> element("#live-budget-reset-countdown") |> render()
+    assert html =~ "reset-colon"
+    assert html =~ ">h</span>"
+  end
+
   test "En vivo: las tres gráficas por minuto se renderizan juntas y siempre", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
@@ -633,6 +781,38 @@ defmodule TokengateWeb.StatsLiveTest do
 
     assert has_element?(view, "#live-feed-card", "200")
     refute has_element?(view, "#live-feed-card", "prov 200")
+  end
+
+  test "En vivo: el feed muestra la razón del error cuando existe", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    group_with_log(%{
+      cost: "0.002",
+      status_code: 502,
+      provider_status_code: 401,
+      error_reason: "all_providers_down",
+      error_message: "todos los proveedores fallaron"
+    })
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    # El badge del proveedor sigue ahí…
+    assert has_element?(view, "#live-feed-card", "prov 401")
+    # …y la razón del error se muestra junto a él, con el mensaje en el title.
+    assert has_element?(view, "#live-feed-card .badge-error", "all_providers_down")
+    assert has_element?(view, "#live-feed-card [title='todos los proveedores fallaron']")
+  end
+
+  test "En vivo: sin razón de error no se agrega badge", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    group_with_log(%{cost: "0.002", status_code: 200, provider_status_code: 200})
+
+    {:ok, view, _html} = live(conn, ~p"/stats")
+
+    refute has_element?(view, "#live-feed-card .badge-error")
   end
 
   defp order_before?(html, first, second) do

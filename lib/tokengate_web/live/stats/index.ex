@@ -20,6 +20,9 @@ defmodule TokengateWeb.StatsLive.Index do
   attr :hovered_hour, :any, required: true
   attr :period, :any, required: true
   attr :timezone, :any, required: true
+  attr :budget_reset_hours, :any, required: true
+  attr :budget_reset_minutes, :any, required: true
+  attr :budget_reset_at, :any, required: true
   attr :current_user, :any, required: true
 
   def index(assigns) do
@@ -66,7 +69,22 @@ defmodule TokengateWeb.StatsLive.Index do
             </div>
             <p class="text-xs text-base-content/40 mt-1">
               <%= if @period == "today" do %>
-                Gasto de hoy · todos los sujetos · día local ({@timezone}) · tope reinicia 00:00 UTC
+                Gasto de hoy · todos los sujetos · día local ({@timezone}) · reinicia en
+                <span
+                  class="font-mono tabular-nums text-base-content/60 whitespace-nowrap"
+                  id="org-budget-reset-countdown"
+                  title="Horas y minutos restantes hasta el reinicio del tope"
+                  aria-label={
+                    "Faltan #{@budget_reset_hours} horas y #{@budget_reset_minutes} minutos para el reinicio del tope"
+                  }
+                >
+                  <span aria-hidden="true">
+                    {@budget_reset_hours}<span class="reset-colon">:</span>{@budget_reset_minutes}<span class="text-base-content/40">h</span>
+                  </span>
+                </span>
+                <span id="org-budget-reset-at">
+                  ({Stats.format_time(@budget_reset_at, @timezone)} local · 00:00 UTC)
+                </span>
               <% else %>
                 Gasto de {Stats.period_label(@period)} · todos los sujetos · el tope aplica por día UTC
               <% end %>

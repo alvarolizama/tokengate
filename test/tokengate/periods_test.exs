@@ -73,4 +73,26 @@ defmodule Tokengate.PeriodsTest do
     {:ok, now} = DateTime.now("America/Mexico_City")
     assert Periods.local_today("America/Mexico_City") == DateTime.to_date(now)
   end
+
+  test "next_utc_day_start es la próxima medianoche UTC" do
+    now = ~U[2026-09-15 13:45:12Z]
+    reset = Periods.next_utc_day_start(now)
+
+    assert reset == ~U[2026-09-16 00:00:00Z]
+    assert reset.zone_abbr == "UTC"
+    assert DateTime.diff(reset, now, :second) == 36_888
+  end
+
+  test "next_utc_day_start a medianoche ya apunta al día siguiente" do
+    # No devuelve el mismo instante: la frontera de hoy ya pasó.
+    assert Periods.next_utc_day_start(~U[2026-09-15 00:00:00Z]) == ~U[2026-09-16 00:00:00Z]
+  end
+
+  test "next_utc_day_start cierra el día que abre utc_day_start" do
+    start = Tokengate.Budgets.Manager.utc_day_start()
+    reset = Periods.next_utc_day_start()
+
+    assert DateTime.compare(reset, start) == :gt
+    assert DateTime.diff(reset, start, :second) in 86_399..86_401
+  end
 end

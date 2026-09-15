@@ -109,6 +109,24 @@ defmodule Tokengate.Periods do
     %{from: prev_from, to: prev_to}
   end
 
+  @doc """
+  UTC instant of the *next* 00:00 UTC — the boundary at which the global
+  daily kill-switch (`GlobalSettings.daily_max_spend_usd`) resets.
+
+  Companion to `Budgets.Manager.utc_day_start/0` (the start of the current
+  UTC day): this one is the instant that day ends. Callers showing a
+  "time left until reset" counter use this; the value is a fixed UTC instant,
+  so the remaining *duration* is the same in every timezone — only the clock
+  time it lands on depends on the zone.
+  """
+  @spec next_utc_day_start(DateTime.t()) :: DateTime.t()
+  def next_utc_day_start(now \\ now_utc()) do
+    now
+    |> DateTime.to_date()
+    |> Date.add(1)
+    |> DateTime.new!(~T[00:00:00], "Etc/UTC")
+  end
+
   @doc "Local day range `%{from: UTC start-of-day, to: UTC start-of-next-day}`."
   def local_day_range(tz \\ @default_timezone) do
     from = start_of_day_utc(tz)

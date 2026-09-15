@@ -28,28 +28,16 @@ defmodule TokengateWeb.StatsLive.LiveSection do
   attr :inflight_count, :any, required: true
   attr :inflight_by_model, :any, required: true
   attr :last_sync_at, :any, required: true
+  attr :timezone, :any, required: true
+  attr :budget_reset_hours, :any, required: true
+  attr :budget_reset_minutes, :any, required: true
+  attr :budget_reset_at, :any, required: true
   attr :stats_loading, :any, required: true
   attr :streams, :any, required: true
 
   def live(assigns) do
     ~H"""
     <div class="space-y-6">
-      <%!-- Status bar: indicador vivo + última sincronización --%>
-      <div class="flex items-center justify-between flex-wrap gap-3">
-        <div class="flex items-center gap-2">
-          <span class="relative flex h-2.5 w-2.5">
-            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-60"></span>
-            <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-success"></span>
-          </span>
-          <span class="text-xs text-base-content/60">
-            En vivo · actualización automática
-          </span>
-        </div>
-        <span class="text-xs text-base-content/40 tabular-nums" id="live-last-sync">
-          {Stats.format_dt(@last_sync_at)}
-        </span>
-      </div>
-
       <%!-- Tope diario global — gasto real del día local (misma fuente que el
            KPI "Hoy · costo") vs kill-switch diario (UTC). Sin contador ETS:
            ese incluye holds en vuelo y oscila con el tráfico en curso. --%>
@@ -80,7 +68,22 @@ defmodule TokengateWeb.StatsLive.LiveSection do
               />
             </div>
             <p class="text-xs text-base-content/40 mt-1">
-              Gasto de hoy · todos los sujetos · tope reinicia 00:00 UTC
+              Gasto de hoy · todos los sujetos · día local ({@timezone}) · reinicia en
+              <span
+                class="font-mono tabular-nums text-base-content/60 whitespace-nowrap"
+                id="live-budget-reset-countdown"
+                title="Horas y minutos restantes hasta el reinicio del tope"
+                aria-label={
+                  "Faltan #{@budget_reset_hours} horas y #{@budget_reset_minutes} minutos para el reinicio del tope"
+                }
+              >
+                <span aria-hidden="true">
+                  {@budget_reset_hours}<span class="reset-colon">:</span>{@budget_reset_minutes}<span class="text-base-content/40">h</span>
+                </span>
+              </span>
+              <span id="live-budget-reset-at">
+                ({Stats.format_time(@budget_reset_at, @timezone)} local · 00:00 UTC)
+              </span>
             </p>
           </div>
         </div>
@@ -277,6 +280,13 @@ defmodule TokengateWeb.StatsLive.LiveSection do
                   <span class="badge badge-xs badge-warning">{provider_cause(log)}</span>
                 </span>
                 <span
+                  :if={log.error_reason}
+                  class="shrink-0 badge badge-xs badge-error"
+                  title={log.error_message || log.error_reason}
+                >
+                  {log.error_reason}
+                </span>
+                <span
                   class={["shrink-0 font-mono", status_class(log.status_code)]}
                   title="Status devuelto al cliente"
                 >
@@ -294,8 +304,18 @@ defmodule TokengateWeb.StatsLive.LiveSection do
     """
   end
 
-  defp bar_height_pct(count, max) when max > 0, do: round(count / max * 100)
-  defp bar_height_pct(_count, _max), do: 0
+  # A populated bucket must never render as a zero-height bar. At a busy peak
+  # (hundreds of req/min) a quiet minute with a single request rounds to 0%
+  # and vanishes, which reads as "no traffic" — the opposite of what the chart
+  # is for. Any non-zero value gets a visible floor; only a genuinely empty
+  # bucket renders at 0.
+  @min_bar_pct 2
+
+  defp bar_height_pct(value, max) when max > 0 and value > 0 do
+    (value / max * 100) |> round() |> max(@min_bar_pct)
+  end
+
+  defp bar_height_pct(_value, _max), do: 0
 
   ## Gráficas por minuto ---------------------------------------------------
 
