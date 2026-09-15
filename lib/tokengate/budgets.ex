@@ -81,9 +81,10 @@ defmodule Tokengate.Budgets do
 
   Ordered by highest monthly spend first.
   """
-  @spec list_service_budgets(String.t()) :: [service_budget()]
-  def list_service_budgets(timezone \\ @default_timezone) do
-    from = Periods.start_of_month_utc(timezone)
+  @spec list_service_budgets() :: [service_budget()]
+  def list_service_budgets do
+    # Mes UTC: la ventana en que resetea el presupuesto mensual de cada sujeto.
+    from = Periods.start_of_month_utc("Etc/UTC")
 
     services = Repo.all(from(s in Accounts.Service, preload: [:subscription]))
 
@@ -112,7 +113,7 @@ defmodule Tokengate.Budgets do
 
   @typedoc """
   Service-level budget view: the service's own monthly cap vs its real
-  spend in the local month.
+  spend in the UTC month.
   """
   @type service_budget :: %{
           service: Tokengate.Accounts.Service.t(),
@@ -384,9 +385,10 @@ defmodule Tokengate.Budgets do
   end
 
   @doc """
-  Daily/monthly spend per member from Postgres using LOCAL calendar
-  boundaries for the given timezone. Two aggregate queries total
-  (independent of member count). Returns
+  Daily/monthly spend per member from Postgres. Daily uses the viewer's LOCAL
+  day (display-only: members have no daily cap to agree with); monthly uses the
+  UTC month — the window the monthly budget actually resets on. Two aggregate
+  queries total (independent of member count). Returns
   `%{daily: %{member_id => Decimal}, monthly: %{member_id => Decimal}}`.
   """
   @spec spend_by_member_ids([term()], String.t()) :: %{
@@ -400,13 +402,15 @@ defmodule Tokengate.Budgets do
   def spend_by_member_ids(member_ids, timezone) do
     %{
       daily: member_spend_map(member_ids, Periods.start_of_day_utc(timezone)),
-      monthly: member_spend_map(member_ids, Periods.start_of_month_utc(timezone))
+      # Mes UTC: la ventana en que resetea el presupuesto mensual de cada
+      # sujeto (Budgets.Manager), no el mes local del visor.
+      monthly: member_spend_map(member_ids, Periods.start_of_month_utc("Etc/UTC"))
     }
   end
 
-  @doc "Monthly spend for a single member in the local month (display)."
-  def monthly_spend_for_member(member_id, timezone \\ @default_timezone) do
-    member_spend_map([member_id], Periods.start_of_month_utc(timezone))
+  @doc "Monthly spend for a single member in the UTC month (display)."
+  def monthly_spend_for_member(member_id) do
+    member_spend_map([member_id], Periods.start_of_month_utc("Etc/UTC"))
     |> Map.get(member_id, Decimal.new(0))
   end
 
@@ -426,14 +430,14 @@ defmodule Tokengate.Budgets do
   end
 
   @doc """
-  Per-service monthly spend (local month for `timezone`). Returns
+  Per-service monthly spend (UTC month). Returns
   `%{service_id => Decimal.t()}` — used by the admin services page for the
   "Gasto mensual" column. Services have no `group_member_id`; their logs carry
   `service_id`.
   """
-  @spec spend_by_service(String.t()) :: %{term() => Decimal.t()}
-  def spend_by_service(timezone \\ @default_timezone) do
-    service_spend_map(Periods.start_of_month_utc(timezone))
+  @spec spend_by_service() :: %{term() => Decimal.t()}
+  def spend_by_service do
+    service_spend_map(Periods.start_of_month_utc("Etc/UTC"))
   end
 
   defp service_spend_map(from) do

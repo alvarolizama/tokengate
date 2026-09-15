@@ -210,58 +210,79 @@ defmodule Tokengate.BudgetsTest do
     end
   end
 
-  describe "timezone-aware local spend" do
-    test "spend_by_member_ids usa boundaries locales (America/Mexico_City)" do
+  describe "spend windows (día local · mes UTC)" do
+    test "spend_by_member_ids: día local para el daily, mes UTC para el monthly" do
       member = member_fixture()
       tz = "America/Mexico_City"
-      today_start = Periods.start_of_day_utc(tz)
-      month_start = Periods.start_of_month_utc(tz)
+      local_day_start = Periods.start_of_day_utc(tz)
+      utc_month_start = Periods.start_of_month_utc("Etc/UTC")
 
-      # Ayer local (23:00 del día anterior) → NO cuenta hoy
-      log_request(member.id, DateTime.add(today_start, -3600, :second), "1.50")
-      # Hoy local (01:00) → cuenta hoy
-      log_request(member.id, DateTime.add(today_start, 3600, :second), "2.50")
-      # Mes anterior (23:00 del último día del mes anterior) → NO cuenta mes
-      log_request(member.id, DateTime.add(month_start, -3600, :second), "8.00")
+      # Tres instantes que separan las ventanas entre sí:
+      # 1) antes del inicio del MES UTC → fuera del monthly
+      log_request(member.id, DateTime.add(utc_month_start, -3600, :second), "8.00")
+      # 2) 23:00 del día anterior LOCAL (06:00 UTC − 1h = 05:00 UTC) → fuera del
+      #    daily local pero DENTRO del mes UTC: el caso que discrimina los dos
+      #    criterios (con un mes local, este log quedaba fuera del monthly).
+      log_request(member.id, DateTime.add(local_day_start, -3600, :second), "1.50")
+      # 3) hoy local → cuenta en ambas
+      log_request(member.id, DateTime.add(local_day_start, 3600, :second), "2.50")
 
       spend = Budgets.spend_by_member_ids([member.id], tz)
 
+      # Daily: día local del visor (display-only, sin tope que respaldar).
       assert Decimal.eq?(spend.daily[member.id], Decimal.new("2.50"))
 
-      # El monthly depende de si "ayer local" cayó en el mismo mes (día 1 == borde)
-      today = Periods.local_today(tz)
-      yesterday_same_month? = Date.add(today, -1).month == today.month
-
-      expected_monthly =
-        if yesterday_same_month?,
-          do: Decimal.new("4.00"),
-          else: Decimal.new("2.50")
-
-      assert Decimal.eq?(spend.monthly[member.id], expected_monthly)
+      # Monthly: mes UTC — incluye el log de "ayer local" y excluye solo el
+      # anterior al día 1 UTC.
+      assert Decimal.eq?(spend.monthly[member.id], Decimal.new("4.00"))
     end
 
-    test "list_member_budgets con timezone lee Postgres local" do
+    test "el monthly NO depende del timezone del visor (mismo número en UTC y Madrid)" do
+      member = member_fixture()
+      utc_day_start = Periods.start_of_day_utc("Etc/UTC")
+
+      # 00:01 UTC: dentro del día UTC, del día de Madrid y del mes UTC — las
+      # tres ventanas, así que sirve para aislar la invarianza del monthly.
+      log_request(member.id, DateTime.add(utc_day_start, 60, :second), "1.50")
+
+      utc = Budgets.spend_by_member_ids([member.id], "Etc/UTC")
+      madrid = Budgets.spend_by_member_ids([member.id], "Europe/Madrid")
+
+      assert Decimal.eq?(utc.monthly[member.id], Decimal.new("1.50"))
+      assert Decimal.eq?(utc.monthly[member.id], madrid.monthly[member.id])
+      assert Decimal.eq?(utc.daily[member.id], madrid.daily[member.id])
+    end
+
+    test "el daily sí sigue el día local del visor" do
+      member = member_fixture()
+      utc_day_start = Periods.start_of_day_utc("Etc/UTC")
+
+      # 23:00 UTC de ayer: fuera del día UTC (arranca a las 00:00 UTC), dentro
+      # del día de Madrid (UTC+1/+2 → su medianoche cae a las 22:00/23:00 UTC).
+      log_request(member.id, DateTime.add(utc_day_start, -3600, :second), "1.50")
+
+      utc = Budgets.spend_by_member_ids([member.id], "Etc/UTC")
+      madrid = Budgets.spend_by_member_ids([member.id], "Europe/Madrid")
+
+      # El mapa solo trae miembros con gasto en la ventana; los callers lo
+      # leen como `get_in(...) || Decimal.new(0)` (sin entrada = 0).
+      assert Decimal.eq?(Map.get(utc.daily, member.id, Decimal.new(0)), Decimal.new("0"))
+      assert Decimal.eq?(madrid.daily[member.id], Decimal.new("1.50"))
+    end
+
+    test "list_member_budgets lee el gasto mensual del mes UTC" do
       member = member_fixture()
       tz = "America/Mexico_City"
-      today_start = Periods.start_of_day_utc(tz)
+      local_day_start = Periods.start_of_day_utc(tz)
 
-      # 23:00 del día anterior local → daily 0, monthly > 0 (mismo mes salvo día 1)
-      log_request(member.id, DateTime.add(today_start, -3600, :second), "5.00")
+      # 23:00 del día anterior local → daily 0 (día local), monthly 5.00 (mes UTC)
+      log_request(member.id, DateTime.add(local_day_start, -3600, :second), "5.00")
 
       budgets = Budgets.list_member_budgets(tz)
       budget = Enum.find(budgets, &(&1.member.id == member.id))
 
       assert Decimal.eq?(budget.daily_spend_usd, Decimal.new("0"))
-
-      # Si "ayer local" es el último día del mes anterior (hoy == día 1), no cuenta en monthly
-      today = Periods.local_today(tz)
-
-      expected_monthly =
-        if Date.add(today, -1).month == today.month,
-          do: Decimal.new("5.00"),
-          else: Decimal.new("0")
-
-      assert Decimal.eq?(budget.monthly_spend_usd, expected_monthly)
+      assert Decimal.eq?(budget.monthly_spend_usd, Decimal.new("5.00"))
     end
 
     test "list_member_budgets_for_user con timezone" do
@@ -286,7 +307,7 @@ defmodule Tokengate.BudgetsTest do
 
       log_request(member.id, DateTime.add(today_start, 3600, :second), "1.00")
 
-      assert Decimal.eq?(Budgets.monthly_spend_for_member(member.id, tz), Decimal.new("1.00"))
+      assert Decimal.eq?(Budgets.monthly_spend_for_member(member.id), Decimal.new("1.00"))
       assert Decimal.eq?(Budgets.daily_spend_for_member(member.id, tz), Decimal.new("1.00"))
     end
 

@@ -24,6 +24,7 @@ defmodule TokengateWeb.KpiHelpers do
   alias Tokengate.Logs
   alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Periods
+  alias TokengateWeb.StatsHelpers, as: Stats
 
   @doc """
   Assigns the 4-card KPI metrics for a calendar `period` ("today", "7d",
@@ -153,6 +154,22 @@ defmodule TokengateWeb.KpiHelpers do
   defp accent_text("warning"), do: "text-warning"
   defp accent_text(_), do: "text-base-content/60"
 
+  # El label del KPI de costo declara la ventana cuando ésta es un límite de
+  # tope (día/mes UTC). Los períodos rolling y la semana no tienen tope
+  # asociado, así que se quedan con el nombre corto.
+  defp cost_label("today"), do: "Costo (UTC)"
+  defp cost_label("month"), do: "Costo (mes UTC)"
+  defp cost_label(_), do: "Costo"
+
+  defp cost_title("today"),
+    do: "Gasto del día UTC (00:00–24:00 UTC) — la ventana que reinicia el tope global"
+
+  defp cost_title("month"),
+    do:
+      "Gasto del mes UTC (desde el día 1 a las 00:00 UTC) — la ventana que reinicia el tope mensual"
+
+  defp cost_title(_), do: nil
+
   @doc """
   Sub-línea estándar bajo el valor de un KPI (misma tipografía en todo el
   hub): texto pequeño gris, sin tabular.
@@ -170,11 +187,27 @@ defmodule TokengateWeb.KpiHelpers do
 
   attr :metrics, :map, required: true
   attr :deltas, :map, default: nil
+  attr :period, :string, default: nil, doc: "período activo; \"today\"/\"month\" = ventana UTC"
+  attr :reset_hours, :any, default: nil, doc: "horas restantes hasta el reinicio del tope"
+  attr :reset_minutes, :any, default: nil
+  attr :reset_at, :any, default: nil, doc: "instante del reinicio (00:00 UTC)"
+  attr :timezone, :any, default: "Etc/UTC", doc: "zona del usuario, solo para mostrar la hora"
 
   def kpi_cards(assigns) do
     ~H"""
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      <.kpi_card id="kpi-cost" label="Costo" icon="hero-currency-dollar" accent="accent">
+      <%!-- Con "Hoy" y "Este mes" el número mide la ventana UTC en que
+           resetean los topes (día/mes, ver Periods.period_bounds), la MISMA
+           que el kill-switch y Mantenimiento: se declara en el label. El
+           countdown solo tiene sentido para el tope diario. Los períodos
+           rolling (7d/30d/90d) no tienen tope que los respalde. --%>
+      <.kpi_card
+        id="kpi-cost"
+        label={cost_label(@period)}
+        icon="hero-currency-dollar"
+        accent="accent"
+        title={cost_title(@period)}
+      >
         ${format_decimal(@metrics.cost_usd)}
         <:sub>
           Reportado por el proveedor
@@ -184,6 +217,10 @@ defmodule TokengateWeb.KpiHelpers do
           >
             {delta_arrow(@deltas[:cost_usd])} {abs_float(@deltas[:cost_usd])}%
           </span>
+        </:sub>
+        <:sub :if={@period == "today"}>
+          Reinicia en {@reset_hours}h {@reset_minutes}m
+          ({Stats.format_time(@reset_at, @timezone)} en tu hora local)
         </:sub>
       </.kpi_card>
 

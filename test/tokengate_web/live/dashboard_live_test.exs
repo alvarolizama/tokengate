@@ -301,18 +301,19 @@ defmodule TokengateWeb.DashboardLiveTest do
     refute html =~ "opacity-60"
   end
 
-  test "today period excludes logs from the previous local day", %{conn: conn} do
+  test "today period excludes logs from the previous UTC day", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     {:ok, admin} = Accounts.update_user_timezone(admin, "America/Mexico_City")
     Collector.reset()
 
-    # 23:00 del día anterior local (UTC-6) → NO cuenta en "Hoy" local
-    today_start = Periods.start_of_day_utc("America/Mexico_City")
+    # 23:00 del día UTC anterior → NO cuenta en "Hoy", que mide el día UTC
+    # (la ventana del kill-switch), no el día local del usuario.
+    utc_start = Periods.start_of_day_utc("Etc/UTC")
 
     group_with_log(%{
       cost: "0.005",
       user: admin,
-      inserted_at: DateTime.add(today_start, -3600, :second)
+      inserted_at: DateTime.add(utc_start, -3600, :second)
     })
 
     conn = login(conn, admin, password)
@@ -321,19 +322,27 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert has_element?(view, "#empty-state")
   end
 
-  test "today period includes logs from the current local day", %{conn: conn} do
+  test "today period includes logs from the current UTC day", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     {:ok, admin} = Accounts.update_user_timezone(admin, "America/Mexico_City")
     Collector.reset()
 
-    today_start = Periods.start_of_day_utc("America/Mexico_City")
+    # "Hoy" = día UTC. Un log dentro de esa ventana cuenta; el fallback cubre
+    # la primera hora del día UTC, donde `utc_start + 1h` aún está en el futuro.
+    utc_start = Periods.start_of_day_utc("Etc/UTC")
     now = DateTime.utc_now() |> DateTime.truncate(:second)
-    candidate = DateTime.add(today_start, 3600, :second)
+    candidate = DateTime.add(utc_start, 3600, :second)
 
     inserted_at =
-      if DateTime.compare(candidate, now) == :lt,
-        do: candidate,
-        else: DateTime.add(now, -60, :second)
+      if DateTime.compare(candidate, now) == :lt do
+        candidate
+      else
+        fallback = DateTime.add(now, -30, :second)
+
+        if DateTime.compare(fallback, utc_start) == :lt,
+          do: DateTime.add(utc_start, 1, :second),
+          else: fallback
+      end
 
     group_with_log(%{cost: "0.005", user: admin, inserted_at: inserted_at})
 

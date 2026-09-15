@@ -444,12 +444,19 @@ defmodule TokengateWeb.StatsLive do
         # agregados caros (percentile_cont, sweep de concurrencia) en cada
         # recarga del broadcast `logs:new`, que re-lanza el bundle completo.
         #
-        # El card "Tope diario global" mide la MISMA ventana que el KPI
-        # "Costo" del período seleccionado (día local vía opts.from), no el
-        # contador ETS del proxy — ese incluye holds en vuelo y "respira".
+        # El card "Tope diario global" mide la MISMA ventana que el
+        # kill-switch (día UTC) cuando el período es "hoy": así la barra y el
+        # badge comparan gasto real contra el cap real, igual que
+        # Mantenimiento. En ventanas más largas muestra el gasto del período
+        # (vía opts.from) sin barra — el tope aplica por día UTC y no hay nada
+        # contra lo que compararlo. Nunca el contador ETS del proxy: ese
+        # incluye holds en vuelo y "respira".
         index_admin_tasks(admin?, opts) ++
           [
-            fn -> {:org_budget, Budgets.global_daily_budget_summary(opts[:from])} end,
+            fn ->
+              from = if params.period == "today", do: nil, else: opts[:from]
+              {:org_budget, Budgets.global_daily_budget_summary(from)}
+            end,
             fn -> {:hour_usage_stacked, Rollup.usage_by_hour_of_day_stacked(nil, opts)} end,
             fn -> {:model_provider_stacked, Rollup.usage_by_model_provider_stacked(opts)} end,
             fn -> {:busiest_hours, Rollup.busiest_hours(nil, opts)} end,
@@ -562,7 +569,7 @@ defmodule TokengateWeb.StatsLive do
         admin? = params.user.global_role == "admin"
 
         # Services have a dedicated service_id column.
-        [fn -> {:service_budgets, Budgets.list_service_budgets(params.timezone)} end] ++
+        [fn -> {:service_budgets, Budgets.list_service_budgets()} end] ++
           [fn -> {:breakdown_service, breakdown_by_service_if_admin(admin?, opts)} end] ++
           if service_id && admin? do
             [
@@ -712,22 +719,6 @@ defmodule TokengateWeb.StatsLive do
 
   ## "En vivo" data ---------------------------------------------------------
 
-  # pct del card "En vivo": gasto del día local contra el cap diario del
-  # kill-switch (que aplica por día UTC). Es una referencia cruzada, no un
-  # cálculo de enforcement — el pie de la tarjeta lo aclara.
-  defp put_daily_cap_pct(%{daily_cap_usd: nil} = budget, _spend), do: budget
-
-  defp put_daily_cap_pct(budget, spend) do
-    pct =
-      spend
-      |> Decimal.div(budget.daily_cap_usd)
-      |> Decimal.mult(100)
-      |> Decimal.to_float()
-      |> Float.round(1)
-
-    %{budget | daily_pct: pct}
-  end
-
   # Countdown to the global kill-switch reset, split into hours/minutes so the
   # template can render the `:` as its own blinking element. Minute-granular,
   # so a per-minute wall-clock tick almost always reassigns identical values
@@ -763,18 +754,19 @@ defmodule TokengateWeb.StatsLive do
 
     bundle =
       DashboardCache.fetch_or_compute({:stats_live, timezone}, fn ->
-        today_metrics = Logs.today_summary(timezone)
+        # KPIs "Hoy" = día UTC (misma ventana que el kill-switch y que el
+        # card de tope de arriba) — no el día local del usuario.
+        today_metrics = Logs.today_summary("Etc/UTC")
 
         %{
           pulse: Logs.realtime_summary(%{}),
           today_metrics: today_metrics,
           minute_series: Logs.requests_per_minute(60),
-          # Gasto real del día local (misma fuente que el KPI "Hoy · costo");
-          # cap + exentos del kill-switch. Nada de contador ETS (holds).
-          org_budget:
-            Budgets.global_daily_budget_summary(Periods.start_of_day_utc(timezone))
-            |> Map.put(:daily_spend_usd, today_metrics.cost_usd)
-            |> put_daily_cap_pct(today_metrics.cost_usd)
+          # Gasto real del día UTC — el mismo número que muestra Mantenimiento
+          # — más cap y exentos del kill-switch. Día UTC y no local: el cap
+          # resetea a las 00:00 UTC, así que barra, % y countdown tienen que
+          # medir la misma ventana. Nada de contador ETS (holds).
+          org_budget: Budgets.global_daily_budget_summary()
         }
       end)
 

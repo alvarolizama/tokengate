@@ -35,11 +35,23 @@ defmodule Tokengate.PeriodsTest do
              Periods.start_of_day_utc("America/Mexico_City")
   end
 
-  test "period_bounds today = día local completo hasta now" do
+  test "period_bounds today = día UTC completo hasta now" do
+    # "Hoy" mide el día UTC (la ventana que resetea el kill-switch global), no
+    # el día local del usuario: por eso `from` es la medianoche UTC aunque el
+    # tz sea otro.
     %{from: from, to: to} = Periods.period_bounds("today", "America/Mexico_City")
     assert DateTime.compare(from, to) == :lt
-    local_from = DateTime.shift_zone!(from, "America/Mexico_City")
-    assert local_from.hour == 0 and local_from.minute == 0
+    assert from == Periods.start_of_day_utc("Etc/UTC")
+
+    utc_from = DateTime.shift_zone!(from, "Etc/UTC")
+    assert utc_from.hour == 0 and utc_from.minute == 0
+
+    # El tz del usuario NO mueve la ventana de "Hoy"...
+    assert from == Periods.period_bounds("today", "Europe/Madrid").from
+    # ...pero sí sigue moviendo las ventanas que son de calendario local.
+    refute Periods.period_bounds("30d", "Etc/UTC").from ==
+             Periods.period_bounds("30d", "America/Mexico_City").from
+
     # to == now UTC truncado
     assert DateTime.diff(to, DateTime.utc_now() |> DateTime.truncate(:second)) in -2..2
   end
@@ -59,9 +71,17 @@ defmodule Tokengate.PeriodsTest do
     assert from == expected
   end
 
-  test "period_bounds month = start of local month" do
+  test "period_bounds month = start of UTC month" do
+    # "Este mes" mide el mes UTC — la ventana en que resetea el presupuesto
+    # mensual de cada sujeto (Budgets.Manager), igual que "Hoy" con el día.
     %{from: from} = Periods.period_bounds("month", "America/Mexico_City")
-    assert from == Periods.start_of_month_utc("America/Mexico_City")
+    assert from == Periods.start_of_month_utc("Etc/UTC")
+
+    # El tz no mueve la ventana mensual...
+    assert from == Periods.period_bounds("month", "Europe/Madrid").from
+    # ...pero sí las que siguen siendo de calendario local.
+    assert Periods.period_bounds("week", "Etc/UTC").from !=
+             Periods.period_bounds("week", "America/Mexico_City").from
   end
 
   test "local_day_range devuelve start y start+24h" do

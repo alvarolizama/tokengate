@@ -28,9 +28,11 @@ defmodule TokengateWeb.StatsLive.Index do
   def index(assigns) do
     ~H"""
     <div class="space-y-6">
-      <%!-- Tope diario global — gasto real del período (DB) vs kill-switch
-           diario (UTC). El gasto sigue la ventana del período seleccionado;
-           la barra solo compara contra el cap cuando la ventana es "hoy". --%>
+      <%!-- Tope diario global — gasto real (DB) vs kill-switch diario. Con el
+           período "hoy" mide el día UTC, la misma ventana que Mantenimiento,
+           así que la barra y el badge comparan contra el cap real; con
+           ventanas más largas muestra el gasto del período sin barra (el tope
+           aplica por día UTC). --%>
       <%= if @org_budget && @current_user && @current_user.global_role == "admin" do %>
         <div class="card bg-base-100 border border-base-300 shadow-sm" id="org-budget-card">
           <div class="card-body p-5">
@@ -69,11 +71,11 @@ defmodule TokengateWeb.StatsLive.Index do
             </div>
             <p class="text-xs text-base-content/40 mt-1">
               <%= if @period == "today" do %>
-                Gasto de hoy · todos los sujetos · día local ({@timezone}) · reinicia en
+                Gasto del día UTC · todos los sujetos · reinicia en
                 <span
                   class="font-mono tabular-nums text-base-content/60 whitespace-nowrap"
                   id="org-budget-reset-countdown"
-                  title="Horas y minutos restantes hasta el reinicio del tope"
+                  title="Horas y minutos restantes hasta el reinicio del tope (00:00 UTC)"
                   aria-label={
                     "Faltan #{@budget_reset_hours} horas y #{@budget_reset_minutes} minutos para el reinicio del tope"
                   }
@@ -83,7 +85,7 @@ defmodule TokengateWeb.StatsLive.Index do
                   </span>
                 </span>
                 <span id="org-budget-reset-at">
-                  ({Stats.format_time(@budget_reset_at, @timezone)} local · 00:00 UTC)
+                  ({Stats.format_time(@budget_reset_at, @timezone)} en tu hora local)
                 </span>
               <% else %>
                 Gasto de {Stats.period_label(@period)} · todos los sujetos · el tope aplica por día UTC
@@ -93,8 +95,17 @@ defmodule TokengateWeb.StatsLive.Index do
         </div>
       <% end %>
 
-      <%!-- KPI cards --%>
-      <.kpi_cards metrics={@metrics} deltas={@metrics[:deltas]} />
+      <%!-- KPI cards — con período "Hoy" el costo mide el día UTC y declara
+           cuánto falta para el reinicio del tope, igual que En vivo. --%>
+      <.kpi_cards
+        metrics={@metrics}
+        deltas={@metrics[:deltas]}
+        period={@period}
+        reset_hours={@budget_reset_hours}
+        reset_minutes={@budget_reset_minutes}
+        reset_at={@budget_reset_at}
+        timezone={@timezone}
+      />
 
       <%!-- KPIs secundarios: concurrencia, horas y minutos pico --%>
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">

@@ -38,9 +38,11 @@ defmodule TokengateWeb.StatsLive.LiveSection do
   def live(assigns) do
     ~H"""
     <div class="space-y-6">
-      <%!-- Tope diario global — gasto real del día local (misma fuente que el
-           KPI "Hoy · costo") vs kill-switch diario (UTC). Sin contador ETS:
-           ese incluye holds en vuelo y oscila con el tráfico en curso. --%>
+      <%!-- Tope diario global — gasto real del día UTC (misma fuente y misma
+           ventana que Mantenimiento) vs kill-switch diario, que resetea a las
+           00:00 UTC. Día UTC y no local: si el número midiera el día local, la
+           barra y el countdown apuntarían a ventanas distintas. Sin contador
+           ETS: ese incluye holds en vuelo y oscila con el tráfico en curso. --%>
       <%= if @org_budget do %>
         <div class="card bg-base-100 border border-base-300 shadow-sm" id="live-org-budget">
           <div class="card-body p-5">
@@ -68,11 +70,11 @@ defmodule TokengateWeb.StatsLive.LiveSection do
               />
             </div>
             <p class="text-xs text-base-content/40 mt-1">
-              Gasto de hoy · todos los sujetos · día local ({@timezone}) · reinicia en
+              Gasto del día UTC · todos los sujetos · reinicia en
               <span
                 class="font-mono tabular-nums text-base-content/60 whitespace-nowrap"
                 id="live-budget-reset-countdown"
-                title="Horas y minutos restantes hasta el reinicio del tope"
+                title="Horas y minutos restantes hasta el reinicio del tope (00:00 UTC)"
                 aria-label={
                   "Faltan #{@budget_reset_hours} horas y #{@budget_reset_minutes} minutos para el reinicio del tope"
                 }
@@ -82,7 +84,7 @@ defmodule TokengateWeb.StatsLive.LiveSection do
                 </span>
               </span>
               <span id="live-budget-reset-at">
-                ({Stats.format_time(@budget_reset_at, @timezone)} local · 00:00 UTC)
+                ({Stats.format_time(@budget_reset_at, @timezone)} en tu hora local)
               </span>
             </p>
           </div>
@@ -96,11 +98,16 @@ defmodule TokengateWeb.StatsLive.LiveSection do
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <.kpi_card
           id="live-today-cost"
-          label="Hoy · costo"
+          label="Hoy · costo (UTC)"
           icon="hero-currency-dollar"
           accent="accent"
+          title="Gasto del día UTC (00:00–24:00 UTC) — la ventana que reinicia el tope global"
         >
           ${Stats.format_decimal(@today_metrics.cost_usd)}
+          <:sub>
+            Reinicia en {@budget_reset_hours}h {@budget_reset_minutes}m
+            ({Stats.format_time(@budget_reset_at, @timezone)} en tu hora local)
+          </:sub>
         </.kpi_card>
 
         <.kpi_card

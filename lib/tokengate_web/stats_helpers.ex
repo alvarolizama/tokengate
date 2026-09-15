@@ -571,12 +571,12 @@ defmodule TokengateWeb.StatsHelpers do
   # ── Budget usage components (compartidos por todas las secciones) ──────
 
   @doc """
-  Barra de uso de presupuesto (gasto vs límite del mes local). El tamaño
+  Barra de uso de presupuesto (gasto vs límite del mes UTC). El tamaño
   lo pone `pct` (0-100+); el color cruza el 80%. `nil` en pct = sin
   límite (barra neutra). Reutilizada por En vivo, Resumen, Usuarios,
   Grupos y Servicios.
   """
-  attr :spend, :any, required: true, doc: "Decimal — gasto del mes local"
+  attr :spend, :any, required: true, doc: "Decimal — gasto del mes UTC"
   attr :limit, :any, default: nil, doc: "Decimal | nil — límite mensual (nil = ilimitado)"
   attr :pct, :any, default: nil, doc: "float | nil — 0-100+ ya calculado"
   attr :label, :string, default: "Mes", doc: "Prefijo del texto (Mes, Grupo, Servicio…)"

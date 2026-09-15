@@ -106,7 +106,7 @@ defmodule TokengateWeb.ServicesLive do
     # request_logs en cada keystroke de búsqueda/orden.
     monthly_spend =
       DashboardCache.fetch_or_compute({:services_monthly_spend, timezone}, fn ->
-        Budgets.spend_by_service(timezone)
+        Budgets.spend_by_service()
       end)
 
     total_spend =

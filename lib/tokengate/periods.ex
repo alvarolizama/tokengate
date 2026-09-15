@@ -68,7 +68,7 @@ defmodule Tokengate.Periods do
 
     * `"today"` — start of local day → now
     * `"week"`   — start of local week (Monday) → now
-    * `"month"`  — start of local month → now
+    * `"month"`  — start of UTC month → now
     * `"7d"`     — start of local day 6 days ago → now
     * `"30d"`    — start of local day 29 days ago → now
     * `"90d"`    — start of local day 89 days ago → now
@@ -76,13 +76,21 @@ defmodule Tokengate.Periods do
   def period_bounds(period, tz \\ @default_timezone) do
     from =
       case period do
-        "today" -> start_of_day_utc(tz)
+        # "Hoy" mide el día UTC — la misma ventana que resetea el kill-switch
+        # global (ver Budgets.Manager): KPIs, tope y Mantenimiento tienen que
+        # ver el mismo número. La zona del usuario sigue usándose para mostrar
+        # horas (distribución por hora, "en tu hora local"), no para windowar.
+        "today" -> start_of_day_utc("Etc/UTC")
         "week" -> start_of_week_utc(tz)
-        "month" -> start_of_month_utc(tz)
+        # Igual que "today": el mes UTC es la ventana en que resetea el
+        # presupuesto mensual de cada sujeto (Budgets.Manager), así que el KPI
+        # "Este mes" y los gastos mensuales de Mantenimiento tienen que medir
+        # lo mismo que el enforcement.
+        "month" -> start_of_month_utc("Etc/UTC")
         "7d" -> start_of_n_days_ago_utc(6, tz)
         "30d" -> start_of_n_days_ago_utc(29, tz)
         "90d" -> start_of_n_days_ago_utc(89, tz)
-        _ -> start_of_day_utc(tz)
+        _ -> start_of_day_utc("Etc/UTC")
       end
 
     %{from: from, to: now_utc()}
