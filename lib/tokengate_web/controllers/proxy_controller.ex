@@ -63,6 +63,7 @@ defmodule TokengateWeb.ProxyController do
     OpenAIAdapter,
     ProviderAdapter,
     PromptOptimizer,
+    RawResponse,
     ResponseCache,
     SessionId,
     TokenEstimator,
@@ -70,6 +71,7 @@ defmodule TokengateWeb.ProxyController do
   }
 
   alias Tokengate.Routing.Router
+  alias TokengateWeb.Plugs.MediaBodyParser
 
   @max_attempts 9
   @max_retries_per_provider 3
@@ -224,12 +226,35 @@ defmodule TokengateWeb.ProxyController do
   defp service_passthrough(conn, service) do
     payload = conn.body_params
 
-    simple_proxy(conn, payload, "llm", &adapter_service(&1, &2, &3, &4, service), service)
+    # The raw capture (multipart bodies, for one) travels to the adapter: the
+    # upstream must receive the client's exact bytes and content-type, never
+    # a re-encoded JSON version of the parsed fields. Nil for JSON requests.
+    raw_body = conn.private[MediaBodyParser.raw_body_key()]
+    raw_content_type = conn.private[MediaBodyParser.raw_content_type_key()]
+
+    simple_proxy(
+      conn,
+      payload,
+      "llm",
+      &adapter_service(&1, &2, &3, &4, service, raw_body, raw_content_type),
+      service
+    )
   end
 
   # The service through the dialect adapter of the routed provider: the
-  # adapter owns the URL (base_url + the path `ProviderPaths` resolves).
-  defp adapter_service(provider, credential, payload, opts, service) do
+  # adapter owns the URL (base_url + the path `ProviderPaths` resolves). A
+  # captured raw body is forwarded byte-for-byte with the client's own
+  # content-type (see `TokengateWeb.Plugs.MediaBodyParser`).
+  defp adapter_service(provider, credential, payload, opts, service, raw_body, raw_content_type) do
+    opts =
+      case raw_body do
+        raw when is_binary(raw) ->
+          Keyword.merge(opts, raw_body: raw, content_type: raw_content_type)
+
+        _ ->
+          opts
+      end
+
     ProviderAdapter.dispatch(provider).service_post(provider, credential, service, payload, opts)
   end
 
@@ -331,7 +356,18 @@ defmodule TokengateWeb.ProxyController do
 
     # Gateway-local response cache: identical non-streaming requests hit
     # the local ETS copy instead of paying upstream again.
-    cache_key = ResponseCache.cache_key(conn.assigns.api_key_hash, route.model_responded, payload)
+    #
+    # A request with a captured raw body (a multipart audio upload — where
+    # the payload's own fields are `MediaFile` metadata) is never cached:
+    # its cache key would be built from a payload that does not carry the
+    # bytes, so two different uploads would hash EQUAL and the second would
+    # get the first one's answer.
+    cache_key =
+      if conn.private[MediaBodyParser.raw_body_key()] do
+        nil
+      else
+        ResponseCache.cache_key(conn.assigns.api_key_hash, route.model_responded, payload)
+      end
 
     with :miss <- cache_lookup(conn, cache_key) do
       receive_timeout = receive_timeout(route.credential)
@@ -509,8 +545,13 @@ defmodule TokengateWeb.ProxyController do
   end
 
   defp finalize_simple_success(conn, route, body, latency_ms, member, kind, resp_headers) do
-    {usage, body} = simple_usage(conn.body_params, body, kind)
-    provider_reported = UsageNormalizer.extract_reported_cost(:openai, body, resp_headers)
+    # A binary 2xx (audio bytes from tts, an asset) carries no usage to read;
+    # only the upstream's cost HEADER can still report. `reportable_body/1`
+    # keeps the accounting readers on the map shapes they expect.
+    reportable = reportable_body(body)
+
+    {usage, _} = simple_usage(conn.body_params, reportable, kind)
+    provider_reported = UsageNormalizer.extract_reported_cost(:openai, reportable, resp_headers)
 
     cost = cost_with_fallback(route, provider_reported, usage)
 
@@ -539,8 +580,25 @@ defmodule TokengateWeb.ProxyController do
 
     conn
     |> put_resp_header("x-tokengate-cost", Decimal.to_string(cost, :normal))
-    |> json(body)
+    |> send_service_response(body)
   end
+
+  # Usage/cost readers expect a decoded map; a raw 2xx body has nothing to
+  # contribute beyond the headers, so it is normalized to an empty map.
+  defp reportable_body(%RawResponse{}), do: %{}
+  defp reportable_body(body), do: body
+
+  # Renders a 2xx service response. A JSON body keeps the historical `json/1`
+  # path; a non-JSON one (audio bytes, an asset) goes back byte-for-byte with
+  # the upstream's own content-type — `json/1` cannot send it and would wrap
+  # it in an object. `x-tokengate-cost` rides on both.
+  defp send_service_response(conn, %RawResponse{} = raw) do
+    conn
+    |> put_resp_header("content-type", raw.content_type || "application/octet-stream")
+    |> send_resp(200, raw.body)
+  end
+
+  defp send_service_response(conn, body), do: json(conn, body)
 
   # Resolves usage for non-chat responses, returning {usage, response_body}.
   #
@@ -1074,9 +1132,14 @@ defmodule TokengateWeb.ProxyController do
 
   defp cache_store(nil, _body), do: :ok
 
-  defp cache_store(key, body) when is_map(body) do
+  # A raw (non-JSON) body is never cached: it is bytes, not a decoded map.
+  defp cache_store(_key, %RawResponse{}), do: :ok
+
+  defp cache_store(key, body) when is_map(body) and not is_struct(body) do
     ResponseCache.store(key, Jason.encode!(body))
   end
+
+  defp cache_store(_key, _body), do: :ok
 
   defp execute(conn, route, payload, member, attempts_left, exclude) do
     execute(conn, route, payload, member, attempts_left, exclude, 0)

@@ -181,11 +181,31 @@ defmodule Tokengate.Proxy.ResponseCache do
   # output, in a stable encoding. Fields that don't affect the output
   # (user tracking, session ids) are excluded so equivalent requests hash
   # equal regardless of telemetry.
+  #
+  # Chat has a canonical SUBSET: it carries telemetry (`user`, `session_id`)
+  # whose changes must not break the cache. A service request (embeddings,
+  # rerank, stt, tts, image, video, music) has no fixed output-shaping subset
+  # — its whole payload IS the request — so it hashes everything except the
+  # telemetry fields. Hashing it through the chat whitelist would make two
+  # different `input`/`query`/`prompt` values hash EQUAL, and the second
+  # request would receive the first one's cached answer.
   @canonical_fields ~w(model messages temperature top_p max_tokens presence_penalty frequency_penalty stop response_format seed tool_choice)
+  @telemetry_fields ~w(user session_id)
+
+  defp canonical_hash(%{"messages" => _} = payload) do
+    payload
+    |> Map.take(@canonical_fields)
+    |> encode_hash()
+  end
 
   defp canonical_hash(payload) do
     payload
-    |> Map.take(@canonical_fields)
+    |> Map.drop(@telemetry_fields)
+    |> encode_hash()
+  end
+
+  defp encode_hash(payload) do
+    payload
     |> Jason.encode!()
     |> then(&:crypto.hash(:sha256, &1))
     |> Base.encode16(case: :lower)

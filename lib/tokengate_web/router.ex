@@ -32,7 +32,11 @@ defmodule TokengateWeb.Router do
   end
 
   pipeline :proxy_api do
-    plug :accepts, ["json"]
+    # No `:accepts` negotiation: this API is a passthrough. A tts client may
+    # legitimately ask for `Accept: audio/mpeg` and the response content-type
+    # is the UPSTREAM's own (the controller writes it explicitly, `json/1`
+    # included). An `accepts` list would 406 that client before the controller
+    # ever runs — the negotiation belongs to the upstream, not here.
     plug TokengateWeb.Plugs.ApiAuth
   end
 

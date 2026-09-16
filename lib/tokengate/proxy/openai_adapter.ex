@@ -27,6 +27,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
 
   @behaviour Tokengate.Proxy.ProviderAdapter
   alias Tokengate.Proxy.ProviderAdapter
+  alias Tokengate.Proxy.RawResponse
 
   @default_receive_timeout 180_000
 
@@ -83,10 +84,18 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   for that service (operator override → catalog hardcode → generic
   OpenAI-compatible default), or an absolute URL from any of those tiers,
   used as-is.
+
+  `opts` may carry `:raw_body` (a binary) plus `:content_type` (the client's
+  own header): the request is then forwarded byte-for-byte with that
+  content-type instead of being JSON-encoded — the canonical
+  `/audio/transcriptions` body is `multipart/form-data` and cannot be
+  rebuilt from its parsed fields. A non-JSON 2xx response (audio bytes, an
+  asset) comes back as a `Tokengate.Proxy.RawResponse` carrying the
+  upstream's own content-type; JSON responses keep being decoded to a map.
   """
   @impl true
   def service_post(provider, credential, service, payload, opts \\ []) do
-    post_json(provider, credential, service_path(provider, service), payload, opts)
+    post_payload(provider, credential, service_path(provider, service), payload, opts)
   end
 
   @doc """
@@ -144,6 +153,80 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
         # upstream status and no body. Normalize to the same 4-tuple shape
         # as status-based errors so callers' case clauses don't miss them.
         {:error, ProviderAdapter.classify_error(error), nil, nil}
+    end
+  end
+
+  # Non-streaming POST for the path-routed services (`service_post/5`).
+  # Same transport as `post_json/5` with the two differences real media
+  # passthrough needs:
+  #
+  #   * a `:raw_body` in `opts` is forwarded byte-for-byte with the client's
+  #     own content-type — the multipart stt body cannot be rebuilt from its
+  #     parsed fields, so it is never JSON-encoded;
+  #   * a 2xx response that is not JSON (audio bytes, an asset) is returned
+  #     as a `RawResponse` with the upstream's own content-type, instead of
+  #     being degraded to `%{}` by `decode!/1`.
+  defp post_payload(provider, credential, path, payload, opts) do
+    url = build_url(provider, path)
+
+    api_key = Map.get(credential, :api_key_encrypted) || Map.get(credential, "api_key_encrypted")
+    receive_timeout = Keyword.get(opts, :receive_timeout, @default_receive_timeout)
+    forwarded_headers = Keyword.get(opts, :forwarded_headers, %{})
+    {body, content_type} = request_body(payload, opts)
+
+    request =
+      Finch.build(:post, url, headers(api_key, forwarded_headers, content_type), body)
+
+    start = System.monotonic_time(:millisecond)
+
+    case Finch.request(request, finch_name(), receive_timeout: receive_timeout) do
+      {:ok, %Finch.Response{status: status, body: resp_body, headers: resp_headers}}
+      when status in 200..299 ->
+        latency = System.monotonic_time(:millisecond) - start
+        resp_headers = normalize_headers(resp_headers)
+        {:ok, decode_service_body(resp_body, resp_headers), latency, resp_headers}
+
+      {:ok, %Finch.Response{status: status, body: resp_body}} ->
+        {:error, ProviderAdapter.classify_status(status), status,
+         extract_error_message(resp_body)}
+
+      {:error, error} ->
+        {:error, ProviderAdapter.classify_error(error), nil, nil}
+    end
+  end
+
+  # A raw body wins: those bytes and that content-type are the client's own,
+  # forwarded as received. Without one the payload is JSON as always.
+  defp request_body(payload, opts) do
+    case Keyword.get(opts, :raw_body) do
+      raw when is_binary(raw) ->
+        {raw, Keyword.get(opts, :content_type) || "application/octet-stream"}
+
+      _ ->
+        {Jason.encode!(payload), "application/json"}
+    end
+  end
+
+  # 2xx response of a service: JSON decodes to a map as always; anything else
+  # (audio bytes, an image/video asset) is kept byte-for-byte together with
+  # the upstream's content-type so the controller can hand it to the client.
+  # An empty body keeps the historical `%{}`.
+  defp decode_service_body("", _resp_headers), do: %{}
+
+  defp decode_service_body(resp_body, resp_headers) do
+    case Jason.decode(resp_body) do
+      {:ok, decoded} ->
+        decoded
+
+      {:error, _} ->
+        %RawResponse{body: resp_body, content_type: response_content_type(resp_headers)}
+    end
+  end
+
+  defp response_content_type(resp_headers) do
+    case List.keyfind(resp_headers, "content-type", 0) do
+      {"content-type", value} -> value
+      _ -> nil
     end
   end
 
@@ -428,14 +511,22 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   @forwarded_header_keys ~w(user-agent http-referer x-title idempotency-key x-session-id x-session-affinity)
 
   defp headers(api_key) do
-    [
-      {"content-type", "application/json"},
-      {"authorization", "Bearer #{api_key}"}
-    ]
+    headers(api_key, %{}, "application/json")
   end
 
   defp headers(api_key, forwarded_headers) when is_map(forwarded_headers) do
-    base = headers(api_key)
+    headers(api_key, forwarded_headers, "application/json")
+  end
+
+  # The content-type is a parameter because the raw passthrough of the path
+  # services must forward the client's OWN header (e.g. the multipart
+  # boundary of an audio upload), never a guessed JSON one. `authorization`
+  # and `content-type` are always resolved here, inside the adapter.
+  defp headers(api_key, forwarded_headers, content_type) when is_map(forwarded_headers) do
+    base = [
+      {"content-type", content_type},
+      {"authorization", "Bearer #{api_key}"}
+    ]
 
     forwarded =
       @forwarded_header_keys

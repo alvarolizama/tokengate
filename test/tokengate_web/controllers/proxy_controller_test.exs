@@ -18,6 +18,30 @@ defmodule TokengateWeb.ProxyControllerTest do
   alias Tokengate.Routing.CircuitBreakerManager
 
   @port 41236
+  @boundary "tg-upload-boundary"
+
+  # A real multipart/form-data body for the stt surface: a form field plus a
+  # file part whose bytes are binary (invalid UTF-8 on purpose — the
+  # byte-for-byte assertion must not depend on the body being text).
+  defp multipart_body(model, filename \\ "audio.wav") do
+    IO.iodata_to_binary([
+      "--",
+      @boundary,
+      "\r\n",
+      ~s(content-disposition: form-data; name="model"\r\n\r\n),
+      "#{model}\r\n",
+      "--",
+      @boundary,
+      "\r\n",
+      ~s(content-disposition: form-data; name="file"; filename="#{filename}"\r\n),
+      "content-type: audio/wav\r\n\r\n",
+      <<0x52, 0x49, 0xFF, 0x00, 0x46, 0x4D>>,
+      "\r\n",
+      "--",
+      @boundary,
+      "--\r\n"
+    ])
+  end
 
   defmodule ProviderPlug do
     @moduledoc false
@@ -27,14 +51,29 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     def call(conn, _opts) do
       {:ok, body, conn} = read_body(conn)
-      payload = Jason.decode!(body)
+      # JSON only: a multipart body has no JSON to decode, so it is captured
+      # raw instead. `{:provider_request, payload}` keeps its historical shape
+      # for the JSON tests; the raw body rides its own message.
+      payload = decode_json(body)
 
       if pid = :persistent_term.get({__MODULE__, :test_pid}, nil) do
-        send(pid, {:provider_request, payload})
+        send(pid, {:provider_raw_body, body, conn.req_headers})
+        if payload != nil, do: send(pid, {:provider_request, payload})
         send(pid, {:provider_request_headers, conn.req_headers})
         send(pid, {:provider_request_path, conn.request_path})
       end
 
+      route(conn, body, payload || %{})
+    end
+
+    defp decode_json(body) do
+      case Jason.decode(body) do
+        {:ok, decoded} -> decoded
+        {:error, _} -> nil
+      end
+    end
+
+    defp route(conn, body, payload) do
       cond do
         # Simulates a strictly-validating upstream (Fireworks): any of the
         # configured fields present in the body is a hard 400.
@@ -60,6 +99,19 @@ defmodule TokengateWeb.ProxyControllerTest do
         # payload at fault, not a provider-specific rejection).
         "notfound" in conn.path_info ->
           json(conn, 404, %{"error" => %{"message" => "model not found upstream"}})
+
+        # A tts surface that answers with real audio bytes instead of JSON —
+        # the binary passthrough the client must receive untouched.
+        "costly-binary-speech" in conn.path_info ->
+          conn
+          |> put_resp_content_type("audio/mpeg")
+          |> put_resp_header("x-litellm-response-cost", "0.000420")
+          |> send_resp(200, <<0xFF, 0xFB, 0x90, 0x01>>)
+
+        "binary-speech" in conn.path_info ->
+          conn
+          |> put_resp_content_type("audio/mpeg")
+          |> send_resp(200, <<0xFF, 0xFB, 0x90, 0x00>>)
 
         "embeddings" in conn.path_info ->
           payload = Jason.decode!(body)
@@ -118,8 +170,6 @@ defmodule TokengateWeb.ProxyControllerTest do
           json(conn, 500, %{"error" => %{"message" => "eventually"}})
 
         true ->
-          payload = Jason.decode!(body)
-
           if payload["stream"] == true do
             stream(conn)
           else
@@ -1889,6 +1939,154 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert log.request_type == "video"
     assert log.prompt_tokens > 0
     assert log.completion_tokens == 0
+  end
+
+  ## Media passthrough (multipart in, binary out) ##############################
+  #
+  # The canonical stt call is `multipart/form-data`, and a tts upstream may
+  # answer with audio bytes. Both are transport, not routing: the bytes must
+  # cross the gateway untouched. See `TokengateWeb.Plugs.MediaBodyParser`.
+
+  test "multipart /v1/audio/transcriptions reaches the upstream byte-for-byte", %{conn: conn} do
+    %{token: token, model: model, member: member} = proxy_fixture()
+    body = multipart_body(model.name)
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
+      |> post(~p"/v1/audio/transcriptions", body)
+
+    assert json_response(conn, 200)["text"] == "hola mundo"
+
+    # The wire saw the client's exact bytes and its original content-type —
+    # the boundary included, or the upstream could not parse the body.
+    assert_receive {:provider_raw_body, ^body, headers}
+    assert {"content-type", "multipart/form-data; boundary=#{@boundary}"} in headers
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert log.request_type == "stt"
+    assert log.status_code == 200
+  end
+
+  test "two different multipart uploads are not one cache entry", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture()
+
+    # Same model, same form field names, different FILE BYTES: the response
+    # cache hashes the parsed payload (which cannot carry the file), so a
+    # cached hit here would answer the second upload with the first's result.
+    first = multipart_body(model.name, "uno.wav")
+    second = multipart_body(model.name, "dos.wav")
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
+      |> post(~p"/v1/audio/transcriptions", first)
+
+    assert json_response(conn, 200)
+    assert_receive {:provider_raw_body, ^first, _headers}
+
+    conn =
+      conn
+      |> recycle()
+      |> authed_conn(token)
+      |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
+      |> post(~p"/v1/audio/transcriptions", second)
+
+    assert json_response(conn, 200)
+    assert get_resp_header(conn, "x-tokengate-cache") == []
+    assert_receive {:provider_raw_body, ^second, _headers}
+  end
+
+  test "a binary upstream response reaches the client with its content-type", %{conn: conn} do
+    %{token: token, model: model, member: member} =
+      proxy_fixture(%{path_overrides: %{"tts" => "/binary-speech"}})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/audio/speech", %{"model" => model.name, "input" => "hola"})
+
+    # The bytes, not a JSON wrapper: `json/1` would have sent `{}`.
+    assert conn.status == 200
+    assert response(conn, 200) == <<0xFF, 0xFB, 0x90, 0x00>>
+    assert get_resp_header(conn, "content-type") |> hd() =~ "audio/mpeg"
+
+    # The cost header survives the binary path (no upstream usage and no
+    # manual pricing: the honest $0).
+    assert get_resp_header(conn, "x-tokengate-cost") == ["0"]
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert log.request_type == "tts"
+    assert log.status_code == 200
+  end
+
+  # A binary answer can still report its cost — LiteLLM proxies put it in a
+  # response HEADER, and there is no JSON body to read it from.
+  test "a binary upstream response still books the header-reported cost", %{conn: conn} do
+    %{
+      token: token,
+      model: model,
+      member: member,
+      credit_subscription: credit_subscription
+    } = proxy_fixture(%{credit_units: 100, path_overrides: %{"tts" => "/costly-binary-speech"}})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/audio/speech", %{"model" => model.name, "input" => "hola"})
+
+    assert response(conn, 200) == <<0xFF, 0xFB, 0x90, 0x01>>
+    assert get_resp_header(conn, "x-tokengate-cost") == ["0.000420"]
+
+    assert %{consumed_micro: 420} = Budgets.credit_spend(credit_subscription.id, member.user_id)
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert log.request_type == "tts"
+    assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000420"))
+  end
+
+  # A tts client asks for audio, not JSON: the old `plug :accepts, ["json"]`
+  # in the proxy pipeline refused it with a 406 before the controller ran.
+  # The proxy mirrors the upstream's answer, so no negotiation happens here.
+  test "an audio Accept header is not refused with 406", %{conn: conn} do
+    %{token: token, model: model} =
+      proxy_fixture(%{path_overrides: %{"tts" => "/binary-speech"}})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> put_req_header("accept", "audio/mpeg")
+      |> post(~p"/v1/audio/speech", %{"model" => model.name, "input" => "hola"})
+
+    assert response(conn, 200) == <<0xFF, 0xFB, 0x90, 0x00>>
+    assert get_resp_header(conn, "content-type") |> hd() =~ "audio/mpeg"
+  end
+
+  # The operator's override is the path the raw multipart body must reach:
+  # the capture is transport, the path is routing — both have to line up.
+  test "multipart passthrough honours the operator's path override", %{conn: conn} do
+    %{token: token, model: model} =
+      proxy_fixture(%{path_overrides: %{"stt" => "/custom/transcriptions"}})
+
+    body = multipart_body(model.name)
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> put_req_header("content-type", "multipart/form-data; boundary=#{@boundary}")
+      |> post(~p"/v1/audio/transcriptions", body)
+
+    assert json_response(conn, 200)
+    assert_receive {:provider_request_path, "/custom/transcriptions"}
+    assert_receive {:provider_raw_body, ^body, _headers}
   end
 
   # Drives one of the six services end to end and returns the conn: the

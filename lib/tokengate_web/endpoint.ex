@@ -64,6 +64,14 @@ defmodule TokengateWeb.Endpoint do
   # Explicit body-size caps: LLM proxy payloads (long contexts, embeddings
   # batches) legitimately reach a few MB, but nothing should approach 10MB.
   # Requests beyond the cap are rejected with 413 before full buffering.
+  #
+  # The media-body plug runs FIRST and only for `/v1`: it captures the raw
+  # bytes of non-JSON requests (the multipart stt upload) and parses their
+  # fields itself — the stock multipart parser discards the raw body, and the
+  # proxy must forward it byte-for-byte. JSON bodies are left for
+  # `Plug.Parsers` below.
+  plug TokengateWeb.Plugs.MediaBodyParser, prefixes: ["/v1/"]
+
   plug Plug.Parsers,
     parsers: [:urlencoded, :multipart, :json],
     pass: ["*/*"],

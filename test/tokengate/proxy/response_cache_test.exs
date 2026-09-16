@@ -43,6 +43,35 @@ defmodule Tokengate.Proxy.ResponseCacheTest do
     refute ResponseCache.cache_key("k", "m", base) == ResponseCache.cache_key("k", "m", temp)
   end
 
+  # A service payload (embeddings, rerank, stt, …) has no output-shaping
+  # subset: its input fields ARE the request. Two different inputs must not
+  # share a cache entry, or the second request gets the first one's answer.
+  test "cache_key distinguishes different service inputs" do
+    base = %{"model" => "m", "input" => "uno"}
+
+    other = %{"model" => "m", "input" => "dos"}
+
+    refute ResponseCache.cache_key("k", "m", base) == ResponseCache.cache_key("k", "m", other)
+  end
+
+  test "cache_key of a service payload still ignores telemetry" do
+    base = %{"model" => "m", "input" => "uno", "query" => "q", "user" => "tracker-123"}
+
+    other_user = Map.put(base, "user", "tracker-999")
+
+    assert ResponseCache.cache_key("k", "m", base) ==
+             ResponseCache.cache_key("k", "m", other_user)
+  end
+
+  test "cache_key distinguishes every service capability's own field" do
+    keys =
+      for field <- ~w(input prompt query documents), value <- ~w(uno dos) do
+        ResponseCache.cache_key("k", "m", %{"model" => "m", field => value})
+      end
+
+    assert length(Enum.uniq(keys)) == length(keys)
+  end
+
   test "cache_key is scoped per api key and model" do
     payload = %{"messages" => [%{"role" => "user", "content" => "hi"}]}
 

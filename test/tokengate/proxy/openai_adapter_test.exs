@@ -9,6 +9,32 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
   alias Tokengate.Proxy.OpenAIAdapter
 
   @port 41234
+  @boundary "tok-boundary-test"
+
+  # A real multipart/form-data body: one form field plus a file part with
+  # binary audio bytes (invalid UTF-8 on purpose — a byte-for-byte assertion
+  # must not depend on the body being text).
+  defp multipart_body do
+    IO.iodata_to_binary([
+      "--",
+      @boundary,
+      "\r\n",
+      ~s(content-disposition: form-data; name="model"\r\n),
+      "\r\n",
+      "whisper-1\r\n",
+      "--",
+      @boundary,
+      "\r\n",
+      ~s(content-disposition: form-data; name="file"; filename="audio.wav"\r\n),
+      "content-type: audio/wav\r\n",
+      "\r\n",
+      <<0x52, 0x49, 0xFF, 0x00, 0x46, 0x4D>>,
+      "\r\n",
+      "--",
+      @boundary,
+      "--\r\n"
+    ])
+  end
 
   defmodule TestPlug do
     @moduledoc false
@@ -32,6 +58,8 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
           pid,
           {:captured, %{method: conn.method, path: conn.request_path, body: body, auth: auth}}
         )
+
+        send(pid, {:captured_headers, conn.req_headers})
       end
 
       route(conn, body)
@@ -54,6 +82,25 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
 
         conn.request_path == "/models" ->
           json(conn, 200, %{"data" => []})
+
+        # TTS surface answering with real audio bytes instead of JSON — the
+        # binary passthrough path of `service_post`.
+        "binaryspeech" in conn.path_info ->
+          conn
+          |> put_resp_content_type("audio/mpeg")
+          |> send_resp(200, <<0xFF, 0xFB, 0x90, 0x00>>)
+
+        # A binary answer that ALSO reports its cost the LiteLLM way, so the
+        # accounting fallback chain is exercised without a JSON body.
+        "costlyspeech" in conn.path_info ->
+          conn
+          |> put_resp_content_type("audio/mpeg")
+          |> put_resp_header("x-litellm-response-cost", "0.000420")
+          |> send_resp(200, <<0xFF, 0xFB, 0x90, 0x01>>)
+
+        # A 2xx with no body at all: the historical `%{}` must survive.
+        "emptybody" in conn.path_info ->
+          send_resp(conn, 200, "")
 
         # Only reachable through a provider path override: the generic surface
         # would book /chat/completions.
@@ -349,6 +396,71 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
                OpenAIAdapter.service_post(provider, credential, :nonexistent, %{"model" => "x"})
 
       assert_receive {:captured, %{path: "/", method: "POST"}}
+    end
+
+    # Raw-body passthrough: the multipart stt body cannot be rebuilt from its
+    # parsed fields, so the captured bytes travel untouched with the client's
+    # own content-type — never a JSON re-encoding.
+    test "a :raw_body is forwarded byte-for-byte with the client's content-type", %{
+      provider: provider,
+      credential: credential
+    } do
+      multipart = multipart_body()
+
+      assert {:ok, _body, _latency, _headers} =
+               OpenAIAdapter.service_post(
+                 provider,
+                 credential,
+                 :stt,
+                 %{"model" => "whisper-1"},
+                 raw_body: multipart,
+                 content_type: "multipart/form-data; boundary=#{@boundary}"
+               )
+
+      assert_receive {:captured, %{body: ^multipart, path: "/audio/transcriptions"}}
+
+      # The same bytes on the wire, content-type included: same boundary, so
+      # the upstream can parse them.
+      assert_receive {:captured_headers, captured_headers}
+      assert {"content-type", "multipart/form-data; boundary=#{@boundary}"} in captured_headers
+    end
+
+    test "without :raw_body the payload stays JSON", %{provider: provider, credential: credential} do
+      payload = %{"model" => "whisper-1"}
+
+      assert {:ok, _body, _latency, _headers} =
+               OpenAIAdapter.service_post(provider, credential, :stt, payload)
+
+      assert_receive {:captured, %{body: raw}}
+      assert raw == Jason.encode!(payload)
+    end
+
+    # Binary 2xx: audio bytes must come back as a RawResponse carrying the
+    # upstream's content-type, not as a decoded `%{}`.
+    test "a non-JSON 2xx comes back as a RawResponse with its content-type", %{
+      credential: credential
+    } do
+      provider = provider_to("/binaryspeech")
+
+      assert {:ok, body, _latency, headers} =
+               OpenAIAdapter.service_post(provider, credential, :tts, %{"model" => "tts-1"})
+
+      assert %Tokengate.Proxy.RawResponse{body: <<0xFF, 0xFB, 0x90, 0x00>>, content_type: ct} =
+               body
+
+      # `put_resp_content_type` appends `; charset=utf-8`, so the assertion
+      # checks the media type the upstream declared.
+      assert ct =~ "audio/mpeg"
+      assert {"content-type", "audio/mpeg; charset=utf-8"} in headers
+    end
+
+    test "an empty 2xx body keeps the historical empty map", %{credential: credential} do
+      provider = provider_to("/emptybody")
+
+      assert {:ok, body, _latency, _headers} =
+               OpenAIAdapter.service_post(provider, credential, :video, %{"model" => "v"})
+
+      assert body == %{}
     end
   end
 

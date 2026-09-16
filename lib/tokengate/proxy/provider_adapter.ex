@@ -123,6 +123,11 @@ defmodule Tokengate.Proxy.ProviderAdapter do
   forwarded untouched, like `embeddings/4`; cost/usage normalization is
   the caller's, since the shapes differ per service.
 
+  `opts` may carry `:raw_body` + `:content_type`: the request is then sent
+  byte-for-byte with the client's own content-type instead of JSON-encoded
+  (the multipart stt body cannot be rebuilt), and a non-JSON 2xx response
+  is returned as a `Tokengate.Proxy.RawResponse` instead of a decoded map.
+
   Returns the same 4-tuple shape as `embeddings/4`.
   """
   @callback service_post(
@@ -132,8 +137,8 @@ defmodule Tokengate.Proxy.ProviderAdapter do
               payload :: map(),
               opts :: keyword()
             ) ::
-              {:ok, body :: map(), latency_ms :: non_neg_integer(),
-               resp_headers :: [{String.t(), String.t()}]}
+              {:ok, body :: map() | Tokengate.Proxy.RawResponse.t(),
+               latency_ms :: non_neg_integer(), resp_headers :: [{String.t(), String.t()}]}
               | {:error, failure_reason(), status :: non_neg_integer() | nil,
                  error_message :: String.t() | nil}
 
