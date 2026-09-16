@@ -3,6 +3,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
 
   import Phoenix.LiveViewTest
   alias Tokengate.{Accounts, Providers}
+  alias Tokengate.Providers.ProviderPaths
 
   defp unique, do: System.unique_integer([:positive])
 
@@ -108,6 +109,21 @@ defmodule TokengateWeb.ProvidersLiveTest do
     assert html =~ "Proveedores"
     assert has_element?(view, "#providers-#{provider.id}")
     refute has_element?(view, "#providers-empty")
+  end
+
+  # El grid de 2 columnas se pina por clases: ExUnit no puede medir el layout.
+  # La paridad de alturas por fila y el 2-por-fila real se midieron en el
+  # navegador (1512/1280/1100/1024 → 2 por fila; 900 → 1 por fila).
+  test "la lista de proveedores es un grid de dos columnas", %{conn: conn} do
+    create_provider(%{name: "grid-prov-a-#{unique()}"})
+    create_provider(%{name: "grid-prov-b-#{unique()}"})
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_custom_tab(conn)
+
+    assert has_element?(view, "#providers.grid.gap-3.lg\\:grid-cols-2")
+    refute has_element?(view, "#providers.space-y-3")
   end
 
   # El chip del logo es claro a propósito: los logos de models.dev usan
@@ -579,9 +595,16 @@ defmodule TokengateWeb.ProvidersLiveTest do
     view |> element("#paths-#{provider.id}") |> render_click()
     assert has_element?(view, "#paths-modal")
 
-    # One input per capability, empty by default: an empty input inherits.
-    for service <- ~w(chat models embeddings rerank stt tts image video music) do
-      assert has_element?(view, "#paths-form input[name='paths[#{service}]'][value='']")
+    # One input per capability, empty by default: an empty input inherits, and
+    # the placeholder shows exactly what it would inherit — the generic path of
+    # the service (a custom has no catalog entry).
+    for service <- ProviderPaths.services() do
+      assert has_element?(view, "#paths-form input[name='paths[#{service.key}]'][value='']")
+
+      assert has_element?(
+               view,
+               "#paths-form input[name='paths[#{service.key}]'][placeholder='#{service.default}']"
+             )
     end
 
     html =

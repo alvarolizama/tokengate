@@ -306,6 +306,7 @@ defmodule TokengateWeb.CoreComponents do
             @class || "w-full textarea",
             @errors != [] && (@error_class || "textarea-error")
           ]}
+          placeholder={@placeholder}
           {@rest}
         >{Phoenix.HTML.Form.normalize_value("textarea", @value)}</textarea>
       </label>
@@ -330,6 +331,7 @@ defmodule TokengateWeb.CoreComponents do
             @class || "w-full input",
             @errors != [] && (@error_class || "input-error")
           ]}
+          placeholder={@placeholder}
           {@rest}
         />
       </label>

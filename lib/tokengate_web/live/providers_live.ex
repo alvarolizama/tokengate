@@ -666,8 +666,9 @@ defmodule TokengateWeb.ProvidersLive do
 
   # Modal state for one provider: the form (pre-filled with what the operator
   # last typed, so a rejected save loses nothing) plus the rows the template
-  # renders — label, the path in effect as the placeholder, and a hint saying
-  # which tier wins today.
+  # renders — label, the path an empty input inherits as the placeholder
+  # (the provider's hardcoded catalog path, else the adapter default), and a
+  # hint saying which tier wins today.
   defp open_paths_modal(socket, provider, values) do
     params =
       Enum.reduce(ProviderPaths.services(), %{"provider_id" => provider.id}, fn service, acc ->
@@ -708,7 +709,7 @@ defmodule TokengateWeb.ProvidersLive do
       %{
         key: description.key,
         label: description.label,
-        placeholder: description.effective,
+        placeholder: description.catalog || description.default,
         hint: path_hint(description)
       }
     end)
@@ -1228,7 +1229,10 @@ defmodule TokengateWeb.ProvidersLive do
           </p>
         </div>
 
-        <div id="providers" class="space-y-3">
+        <%!-- Dos cards por fila: la lista dejó de ser una sola columna. El grid
+             estira cada card a la altura de su fila, así que el par sale
+             parejo aunque un proveedor tenga más credenciales que el otro. --%>
+        <div id="providers" class="grid gap-3 lg:grid-cols-2">
           <div
             :for={provider <- Enum.filter(@providers, &(&1.source == @providers_tab))}
             id={"providers-#{provider.id}"}
