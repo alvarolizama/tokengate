@@ -9,7 +9,7 @@ defmodule TokengateWeb.GroupsLive do
   can be granted per-group via the group_models join table.
 
   Webhook management was extracted to `TokengateWeb.ObservabilityLive`
-  (/admin/observability); each group card links there with a counter badge.
+  (/operations/observability); each group card links there with a counter badge.
   """
 
   use TokengateWeb, :live_view
@@ -428,7 +428,7 @@ defmodule TokengateWeb.GroupsLive do
                   </button>
                   <%!-- Webhooks badge — links to Observability --%>
                   <.link
-                    navigate={~p"/admin/observability"}
+                    navigate={~p"/operations/observability"}
                     class="badge badge-sm badge-ghost gap-1 hover:bg-base-200 transition-colors"
                     id={"webhooks-link-#{group.id}"}
                     title="Gestionar webhooks en Observabilidad"
@@ -441,7 +441,7 @@ defmodule TokengateWeb.GroupsLive do
                 <%!-- Actions --%>
                 <div class="flex gap-1 shrink-0">
                   <.link
-                    navigate={~p"/admin/groups/#{group}/members"}
+                    navigate={~p"/access/groups/#{group}/members"}
                     class="btn btn-sm btn-ghost"
                     id={"members-link-#{group.id}"}
                   >

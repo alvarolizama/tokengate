@@ -227,7 +227,12 @@ defmodule TokengateWeb.MaintenanceLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
+    <Layouts.dashboard
+      flash={@flash}
+      current_scope={@current_user}
+      impersonator={@impersonator}
+      current_path={@current_path}
+    >
       <div class="max-w-3xl mx-auto space-y-8">
         <div>
           <h1 class="text-2xl font-bold text-base-content">Mantenimiento</h1>

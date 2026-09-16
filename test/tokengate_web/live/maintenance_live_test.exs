@@ -70,7 +70,7 @@ defmodule TokengateWeb.SettingsLiveTest do
       %{user: admin, password: pass} = register("admin")
 
       conn = login(conn, admin, pass)
-      {:ok, _view, html} = live(conn, ~p"/admin/maintenance")
+      {:ok, _view, html} = live(conn, ~p"/operations/maintenance")
 
       assert html =~ "Zona de peligro"
     end
@@ -79,7 +79,7 @@ defmodule TokengateWeb.SettingsLiveTest do
       %{user: admin, password: pass} = register("admin")
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/admin/maintenance")
+      {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
 
       assert has_element?(view, "#caution-zone-card")
       assert has_element?(view, "#danger-zone-card")
@@ -104,7 +104,7 @@ defmodule TokengateWeb.SettingsLiveTest do
       %{user: admin, password: pass} = register("admin")
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/admin/maintenance")
+      {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
 
       # Click reset sticky → confirmation modal appears
       view |> element("#reset-sticky-btn") |> render_click()
@@ -122,7 +122,7 @@ defmodule TokengateWeb.SettingsLiveTest do
       assert Logs.list_logs(%{limit: 1000}) |> length() > 0
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/admin/maintenance")
+      {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
 
       # Click reset → confirmation modal appears
       view |> element("#reset-logs-btn") |> render_click()
@@ -141,7 +141,7 @@ defmodule TokengateWeb.SettingsLiveTest do
       %{user: user, password: pass} = register("user")
 
       conn = login(conn, user, pass)
-      {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/admin/maintenance")
+      {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/operations/maintenance")
     end
   end
 
@@ -149,7 +149,7 @@ defmodule TokengateWeb.SettingsLiveTest do
     test "renders the cap section and saves it", %{conn: conn} do
       %{user: admin, password: pass} = register("admin")
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/admin/maintenance")
+      {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
 
       assert has_element?(view, "#global-cap-form")
       assert render(view) =~ "Límite de gasto diario global"
@@ -178,7 +178,7 @@ defmodule TokengateWeb.SettingsLiveTest do
         )
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/admin/maintenance")
+      {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
 
       # 1.25 real + 0.25 hold = 1.50 en el contador ETS.
       assert render(view) =~ "$1.25"
@@ -196,7 +196,7 @@ defmodule TokengateWeb.SettingsLiveTest do
       insert_log(cost: Decimal.new("1.250000"))
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/admin/maintenance")
+      {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
 
       # Se registra el mismo gasto en el contador ETS: ambos coinciden.
       {:ok, hold} =
@@ -220,7 +220,7 @@ defmodule TokengateWeb.SettingsLiveTest do
         })
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/admin/maintenance")
+      {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
 
       view
       |> form("#global-exemption-form",

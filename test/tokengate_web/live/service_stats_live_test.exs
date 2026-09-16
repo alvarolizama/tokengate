@@ -122,7 +122,7 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       %{user: admin, password: password} = register("admin")
       conn = login(conn, admin, password)
 
-      {:ok, _view, html} = live(conn, ~p"/admin/services")
+      {:ok, _view, html} = live(conn, ~p"/access/services")
       assert html =~ ~s(id="stats-#{service.id}")
     end
   end

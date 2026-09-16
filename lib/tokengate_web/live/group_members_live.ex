@@ -557,13 +557,18 @@ defmodule TokengateWeb.GroupMembersLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
+    <Layouts.dashboard
+      flash={@flash}
+      current_scope={@current_user}
+      impersonator={@impersonator}
+      current_path={@current_path}
+    >
       <div class="space-y-6">
         <.header>
           Miembros de {@group.name}
           <:subtitle>Añade miembros, gestiona roles y extras</:subtitle>
           <:actions>
-            <.link navigate={~p"/admin/groups"} class="btn btn-ghost" id="back-to-groups">
+            <.link navigate={~p"/access/groups"} class="btn btn-ghost" id="back-to-groups">
               <.icon name="hero-arrow-left" class="w-4 h-4" /> Volver
             </.link>
           </:actions>

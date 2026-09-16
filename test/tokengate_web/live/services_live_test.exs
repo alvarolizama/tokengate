@@ -48,7 +48,7 @@ defmodule TokengateWeb.ServicesLiveTest do
     %{user: user} = register("user")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/services")
+    {:ok, view, _html} = live(conn, ~p"/access/services")
 
     # Open the detail modal first (supervisors live there now)
     view
@@ -84,7 +84,7 @@ defmodule TokengateWeb.ServicesLiveTest do
     other = service_fixture()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/services")
+    {:ok, view, _html} = live(conn, ~p"/access/services")
 
     prefix = String.slice(service.name, 0, 12)
 
@@ -103,7 +103,7 @@ defmodule TokengateWeb.ServicesLiveTest do
     _s2 = service_fixture()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/services")
+    {:ok, view, _html} = live(conn, ~p"/access/services")
 
     html =
       view
@@ -128,7 +128,7 @@ defmodule TokengateWeb.ServicesLiveTest do
       })
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/services")
+    {:ok, view, _html} = live(conn, ~p"/access/services")
 
     assert has_element?(view, "#monthly-spend-#{service.id}", "$1.50")
     assert has_element?(view, "#total-spend-#{service.id}", "$1.50")
@@ -139,7 +139,7 @@ defmodule TokengateWeb.ServicesLiveTest do
     service = service_fixture()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/services")
+    {:ok, view, _html} = live(conn, ~p"/access/services")
 
     # El modal de borrado vive siempre en el DOM; se abre con el evento.
     view |> element("#delete-#{service.id}") |> render_click()

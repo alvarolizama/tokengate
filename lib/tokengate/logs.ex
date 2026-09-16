@@ -126,7 +126,7 @@ defmodule Tokengate.Logs do
 
   @doc """
   Lists request logs with `inserted_at` strictly after `since` (DateTime),
-  ordered newest-first. Used by the LogsLive real-time subscription to
+  ordered newest-first. Used by the MonitoringLive real-time subscription to
   fetch new logs appended after page load.
 
   Same filter support as `list_logs/1` (scope, status, agent, etc.), but

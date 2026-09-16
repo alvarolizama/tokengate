@@ -81,7 +81,7 @@ defmodule TokengateWeb.Layouts do
 
   ## Examples
 
-      <Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
+      <Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator} current_path={@current_path}>
         <h1>Dashboard</h1>
       </Layouts.dashboard>
 
@@ -100,6 +100,10 @@ defmodule TokengateWeb.Layouts do
     doc: "the original admin user while an impersonation session is active"
 
   attr :alert_count, :integer, default: 0
+
+  attr :current_path, :string,
+    default: nil,
+    doc: "request path used to highlight the active sidebar link"
 
   slot :inner_block, required: true
 
@@ -139,7 +143,11 @@ defmodule TokengateWeb.Layouts do
         </main>
       </div>
 
-      <.dashboard_sidebar current_scope={@current_scope} alert_count={@alert_count} />
+      <.dashboard_sidebar
+        current_scope={@current_scope}
+        alert_count={@alert_count}
+        current_path={@current_path}
+      />
 
       <.flash_group flash={@flash} />
     </div>
@@ -190,6 +198,7 @@ defmodule TokengateWeb.Layouts do
 
   attr :current_scope, :map, default: nil
   attr :alert_count, :integer, default: 0
+  attr :current_path, :string, default: nil
 
   defp dashboard_sidebar(assigns) do
     assigns =
@@ -215,16 +224,22 @@ defmodule TokengateWeb.Layouts do
 
         <nav class="flex-1 p-3 space-y-4">
           <div class="space-y-1">
-            <.sidebar_link href={~p"/dashboard"} label="Dashboard" icon="hero-chart-bar-square" />
+            <.sidebar_link
+              current_path={@current_path}
+              href={~p"/dashboard"}
+              label="Dashboard"
+              icon="hero-chart-bar-square"
+            />
 
             <%= if admin?(@current_scope) do %>
-              <.sidebar_link href={~p"/stats"} label="Estadísticas" icon="hero-chart-pie" />
               <.sidebar_link
-                href={~p"/logs"}
-                label="Logs"
-                icon="hero-document-text"
+                current_path={@current_path}
+                href={~p"/stats"}
+                label="Estadísticas"
+                icon="hero-chart-pie"
               />
               <.sidebar_link
+                current_path={@current_path}
                 href={~p"/calculator"}
                 label="Calculadora"
                 icon="hero-calculator"
@@ -233,44 +248,72 @@ defmodule TokengateWeb.Layouts do
           </div>
 
           <%= if admin?(@current_scope) do %>
-            <div class="space-y-1">
-              <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
-                Administración
-              </p>
+            <.sidebar_section id="sidebar-section-catalogo" label="Catálogo">
               <.sidebar_link
-                href={~p"/admin/providers"}
+                current_path={@current_path}
+                href={~p"/catalog/providers"}
                 label="Proveedores"
                 icon="hero-server-stack"
                 badge={@alert_count}
               />
               <.sidebar_link
-                href={~p"/admin/models"}
+                current_path={@current_path}
+                href={~p"/catalog/models"}
                 label="Modelos"
                 icon="hero-rectangle-stack"
               />
-              <.sidebar_link href={~p"/admin/groups"} label="Grupos" icon="hero-user-group" />
-              <.sidebar_link href={~p"/admin/users"} label="Usuarios" icon="hero-users" />
+            </.sidebar_section>
+
+            <.sidebar_section id="sidebar-section-acceso" label="Acceso">
               <.sidebar_link
-                href={~p"/admin/services"}
+                current_path={@current_path}
+                href={~p"/access/groups"}
+                label="Grupos"
+                icon="hero-user-group"
+              />
+              <.sidebar_link
+                current_path={@current_path}
+                href={~p"/access/users"}
+                label="Usuarios"
+                icon="hero-users"
+              />
+              <.sidebar_link
+                current_path={@current_path}
+                href={~p"/access/services"}
                 label="Servicios"
                 icon="hero-wrench-screwdriver"
               />
+            </.sidebar_section>
+
+            <.sidebar_section id="sidebar-section-credito" label="Crédito">
               <.sidebar_link
-                href={~p"/admin/subscriptions"}
+                current_path={@current_path}
+                href={~p"/credit/subscriptions"}
                 label="Suscripciones"
                 icon="hero-banknotes"
               />
+            </.sidebar_section>
+
+            <.sidebar_section id="sidebar-section-operaciones" label="Operaciones">
               <.sidebar_link
-                href={~p"/admin/observability"}
+                current_path={@current_path}
+                href={~p"/operations/monitoring"}
+                label="Monitoring"
+                icon="hero-signal"
+              />
+              <.sidebar_link
+                current_path={@current_path}
+                href={~p"/operations/observability"}
                 label="Observabilidad"
                 icon="hero-bell-alert"
               />
               <.sidebar_link
-                href={~p"/admin/maintenance"}
+                current_path={@current_path}
+                href={~p"/operations/maintenance"}
                 label="Mantenimiento"
                 icon="hero-cog-6-tooth"
               />
-            </div>
+            </.sidebar_section>
           <% end %>
         </nav>
 
@@ -280,20 +323,45 @@ defmodule TokengateWeb.Layouts do
     """
   end
 
+  attr :id, :string, required: true
+  attr :label, :string, required: true
+  slot :inner_block, required: true
+
+  defp sidebar_section(assigns) do
+    ~H"""
+    <div class="space-y-1" id={@id}>
+      <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
+        {@label}
+      </p>
+      {render_slot(@inner_block)}
+    </div>
+    """
+  end
+
   attr :href, :string, required: true
   attr :label, :string, required: true
   attr :icon, :string, required: true
   attr :disabled, :boolean, default: false
   attr :badge, :integer, default: 0
+  attr :current_path, :string, default: nil
 
   defp sidebar_link(assigns) do
+    assigns =
+      assigns
+      |> assign(:active, active_path?(assigns.current_path, assigns.href))
+      |> assign(:dom_id, "sidebar-link-" <> sidebar_link_id(assigns.href))
+
     ~H"""
     <.link
       href={@href}
+      id={@dom_id}
+      aria-current={if @active, do: "page", else: nil}
       class={[
         "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
         @disabled && "text-base-content/30 cursor-not-allowed pointer-events-none",
-        not @disabled && "text-base-content/70 hover:bg-base-200 hover:text-base-content"
+        not @disabled && @active && "bg-primary/10 text-primary",
+        not @disabled && not @active &&
+          "text-base-content/70 hover:bg-base-200 hover:text-base-content"
       ]}
     >
       <.icon name={@icon} class="w-5 h-5 shrink-0" />
@@ -306,6 +374,23 @@ defmodule TokengateWeb.Layouts do
       </span>
     </.link>
     """
+  end
+
+  # A link is active on its own route and on any of its sub-routes, so
+  # drill-downs keep the parent entry lit (e.g. /access/groups/42/members
+  # highlights Grupos).
+  defp active_path?(nil, _href), do: false
+
+  defp active_path?(path, href) when is_binary(path) and is_binary(href) do
+    path == href or String.starts_with?(path, href <> "/")
+  end
+
+  defp active_path?(_path, _href), do: false
+
+  defp sidebar_link_id(href) do
+    href
+    |> String.trim_leading("/")
+    |> String.replace("/", "-")
   end
 
   attr :current_scope, :map, default: nil

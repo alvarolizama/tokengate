@@ -138,7 +138,7 @@ Menos urgentes (no afectan el hot path del proxy). Agrupadas por componente.
 |---|-----|---------|--------|----------|------------|
 | 4.1 | **A14** Cachear queries en MonitorLive | `monitor_live.ex:327-452` | Cachear `day_stats_query` y `per_model_cost` con DashboardCache (5s TTL). Debounce PubSub refreshes (no encolar si ya hay uno pendiente). Mover `list_model_aliases` a assign en mount | 3-4h | DashboardCache existe ✓ |
 | 4.2 | **A15** Optimizar `load_alert_data` | `monitor_live.ex:109-166, 168-220` | Reemplazar `from(p in Providers.Provider, select: p) |> Repo.all()` (línea 204) con un JOIN a `top_provider_query` o filtrar solo los providers que aparecen. Cachear `load_alert_data` con TTL 30s | 2-3h | — |
-| 4.3 | **A16** Reducir queries en LogsLive | `logs_live.ex:89-104, 382-387` | Eliminar timer de 5s (`@summary_tick_interval_ms`) — redundante con debounce de PubSub. Cachear `top_models_card` y `top_users_card` con TTL 3s | 2h | — |
+| 4.3 | **A16** Reducir queries en MonitoringLive | `monitoring_live.ex:89-104, 382-387` | Eliminar timer de 5s (`@summary_tick_interval_ms`) — redundante con debounce de PubSub. Cachear `top_models_card` y `top_users_card` con TTL 3s | 2h | — |
 | 4.4 | **M9** `peak_concurrency` en SQL | `rollup.ex:1755-1761` | Reemplazar sweep line en Elixir con `PERCENTILE_CONT` o `MAX` sobre `latency_ms` en SQL. Limitar a 24h máx | 3h | C1 (Fase 2) |
 | 4.5 | **M10** `rpm_stats_per_member` en SQL | `rollup.ex:1895-1942` | Mover `Enum.group_by`/`Enum.max`/`Enum.sum` a `MAX`/`AVG`/`percentile_cont` en SQL | 3h | — |
 | 4.6 | **M11** `breakdown_by_credential` con JOINs | `rollup.ex:1114-1232` | Mergear queries 2 y 3 (resolución de nombres de providers y credentials) como JOINs en la query principal | 2-3h | — |
@@ -221,4 +221,4 @@ Después de Fases 1-2, medir:
 Después de Fase 4, medir:
 
 5. **Queries DB por dashboard conectado cada 5s:** objetivo **2-3** (con cache). Hoy: 6-10 en MonitorLive.
-6. **Tiempo de mount de LogsLive:** objetivo **< 500ms**. Hoy: puede ser segundos sin pruning.
+6. **Tiempo de mount de MonitoringLive:** objetivo **< 500ms**. Hoy: puede ser segundos sin pruning.

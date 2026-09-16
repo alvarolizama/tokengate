@@ -57,14 +57,14 @@ defmodule TokengateWeb.ObservabilityLiveTest do
   # --------------------------------------------------------------------------
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
-    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/admin/observability")
+    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/operations/observability")
   end
 
   test "non-admin authenticated users are redirected to /dashboard", %{conn: conn} do
     %{user: user, password: password} = register("user")
 
     conn = login(conn, user, password)
-    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/admin/observability")
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/operations/observability")
   end
 
   # --------------------------------------------------------------------------
@@ -77,7 +77,7 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/admin/observability")
+    {:ok, view, html} = live(conn, ~p"/operations/observability")
 
     assert html =~ "Observabilidad"
     assert has_element?(view, "#edit-destination-#{destination.id}")
@@ -90,7 +90,7 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/observability")
+    {:ok, view, _html} = live(conn, ~p"/operations/observability")
 
     # No match — destination disappears
     view |> element("input[name='search']") |> render_change(%{"search" => "zzz-no-match"})
@@ -108,7 +108,7 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/observability")
+    {:ok, view, _html} = live(conn, ~p"/operations/observability")
 
     view
     |> element("#group-filter")
@@ -132,7 +132,7 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/observability")
+    {:ok, view, _html} = live(conn, ~p"/operations/observability")
 
     view |> element("#new-destination-btn") |> render_click()
     assert has_element?(view, "#destination-form")
@@ -143,7 +143,7 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/observability")
+    {:ok, view, _html} = live(conn, ~p"/operations/observability")
 
     view |> element("#new-destination-btn") |> render_click()
 
@@ -170,7 +170,7 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/observability")
+    {:ok, view, _html} = live(conn, ~p"/operations/observability")
 
     view
     |> element("#delete-destination-#{destination.id}")

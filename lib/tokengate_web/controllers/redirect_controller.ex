@@ -58,24 +58,14 @@ defmodule TokengateWeb.RedirectController do
 
   def stats_member(conn, _params), do: redirect(conn, to: ~p"/stats/users")
 
-  @doc """
-  ``/admin/users/:user_id/stats`` → ``/stats/users/:user_id``.
-
-  La página de stats por usuario se promovió de /admin a la sección
-  /stats. Query string preservado.
-  """
-  def user_stats(conn, %{"user_id" => user_id}) do
-    redirect(conn, to: append_query(~p"/stats/users/#{user_id}", conn))
-  end
-
   @doc "``/dashboard/calculator`` → ``/calculator``"
   def calculator(conn, _params) do
     redirect(conn, to: append_query(~p"/calculator", conn))
   end
 
-  @doc "``/admin/logs`` → ``/logs``"
+  @doc "``/logs`` → ``/operations/monitoring``"
   def logs(conn, _params) do
-    redirect(conn, to: append_query(~p"/logs", conn))
+    redirect(conn, to: append_query(~p"/operations/monitoring", conn))
   end
 
   defp append_query(path, conn) do

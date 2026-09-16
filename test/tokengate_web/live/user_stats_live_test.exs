@@ -149,7 +149,7 @@ defmodule TokengateWeb.UserStatsLiveTest do
       %{user: admin, password: password} = register("admin")
       conn = login(conn, admin, password)
 
-      {:ok, _view, html} = live(conn, ~p"/admin/users")
+      {:ok, _view, html} = live(conn, ~p"/access/users")
       assert html =~ ~s(id="stats-#{user.id}")
     end
   end

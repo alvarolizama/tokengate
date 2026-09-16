@@ -1166,9 +1166,9 @@ defmodule TokengateWeb.ModelsLive do
 
   # A model_provider is effectively active only when ITS row is enabled AND
   # its credential exists and is in the "active" state. The credential
-  # status is managed in /admin/providers and must surface here too —
+  # status is managed in /catalog/providers and must surface here too —
   # otherwise disabling the credential leaves a misleading "Activo" badge
-  # in /admin/models even though the router already filters the row out
+  # in /catalog/models even though the router already filters the row out
   # of the candidate pool (router.ex filters by credential.status).
   @doc false
   def provider_active?(%{enabled: false}), do: false
@@ -1193,7 +1193,7 @@ defmodule TokengateWeb.ModelsLive do
   defp toggle_title_effective(ap) do
     if provider_active?(ap),
       do: "Desactivar",
-      else: "Credential desactivada — activa en /admin/providers"
+      else: "Credential desactivada — activa en /catalog/providers"
   end
 
   def group_options(groups) do
@@ -1222,7 +1222,12 @@ defmodule TokengateWeb.ModelsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
+    <Layouts.dashboard
+      flash={@flash}
+      current_scope={@current_user}
+      impersonator={@impersonator}
+      current_path={@current_path}
+    >
       <div class="space-y-6">
         <.header>
           Modelos

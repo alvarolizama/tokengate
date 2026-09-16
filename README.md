@@ -97,13 +97,13 @@ Think "LiteLLM, but as an Elixir app with a real admin UI".
 | `/logs` | Live request log, filters, in-flight requests, CSV export |
 | `/calculator` | Real provider spend vs estimated cost with custom pricing |
 | `/dashboard/services` (+ `/supervised`) | Machine-to-machine API keys with their own budget/limits/grants |
-| `/admin/providers` | Provider CRUD, multiple credentials each, per-provider sticky TTL and cache_control toggle |
-| `/admin/models` | Alias CRUD — providers by priority, `billing_mode`, exclusive scope |
-| `/admin/groups` (+ members) | Group defaults, per-member extras and grants, observability webhooks |
-| `/admin/users` | User CRUD, suspend, impersonation, per-user stats, credit column |
-| `/admin/subscriptions` | Credit subscriptions & top-ups with auto-archiving |
-| `/admin/observability` | OTLP/JSON webhook destinations (HMAC-signed, delivered via Oban) |
-| `/admin/maintenance` | Config overview, danger zone, global daily cap kill-switch |
+| `/catalog/providers` | Provider CRUD, multiple credentials each, per-provider sticky TTL and cache_control toggle |
+| `/catalog/models` | Alias CRUD — providers by priority, `billing_mode`, exclusive scope |
+| `/access/groups` (+ members) | Group defaults, per-member extras and grants, observability webhooks |
+| `/access/users` | User CRUD, suspend, impersonation, per-user stats, credit column |
+| `/credit/subscriptions` | Credit subscriptions & top-ups with auto-archiving |
+| `/operations/observability` | OTLP/JSON webhook destinations (HMAC-signed, delivered via Oban) |
+| `/operations/maintenance` | Config overview, danger zone, global daily cap kill-switch |
 
 ## Platform
 

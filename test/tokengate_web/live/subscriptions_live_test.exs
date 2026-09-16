@@ -32,7 +32,7 @@ defmodule TokengateWeb.SubscriptionsLiveTest do
     test "renders the subscriptions list for admin", %{conn: conn} do
       %{user: admin, password: pass} = register("admin")
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/admin/subscriptions")
+      {:ok, view, _html} = live(conn, ~p"/credit/subscriptions")
 
       assert has_element?(view, "#subscriptions")
       assert render(view) =~ "Suscripciones"
@@ -42,7 +42,7 @@ defmodule TokengateWeb.SubscriptionsLiveTest do
     test "redirects non-admin away", %{conn: conn} do
       %{user: user, password: pass} = register("user")
       conn = login(conn, user, pass)
-      {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/admin/subscriptions")
+      {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/credit/subscriptions")
     end
   end
 
@@ -52,7 +52,7 @@ defmodule TokengateWeb.SubscriptionsLiveTest do
       {:ok, group} = Accounts.create_group(%{name: "Sub Group #{unique()}"})
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/admin/subscriptions")
+      {:ok, view, _html} = live(conn, ~p"/credit/subscriptions")
 
       view |> element("#new-subscription-btn") |> render_click()
 
@@ -97,7 +97,7 @@ defmodule TokengateWeb.SubscriptionsLiveTest do
         })
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/admin/subscriptions")
+      {:ok, view, _html} = live(conn, ~p"/credit/subscriptions")
 
       view |> element("#new-subscription-btn") |> render_click()
 
@@ -144,7 +144,7 @@ defmodule TokengateWeb.SubscriptionsLiveTest do
       {:ok, _} = Credits.set_group_default(group, sub)
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/admin/subscriptions")
+      {:ok, view, _html} = live(conn, ~p"/credit/subscriptions")
 
       view |> element("#delete-subscription-#{sub.id}") |> render_click()
 
@@ -184,7 +184,7 @@ defmodule TokengateWeb.SubscriptionsLiveTest do
         })
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/admin/subscriptions")
+      {:ok, view, _html} = live(conn, ~p"/credit/subscriptions")
 
       assert has_element?(view, "#sub-usage-#{sub.id}", "30.00 / 100 (30%)")
     end
@@ -200,7 +200,7 @@ defmodule TokengateWeb.SubscriptionsLiveTest do
         })
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/admin/subscriptions")
+      {:ok, view, _html} = live(conn, ~p"/credit/subscriptions")
 
       assert has_element?(view, "#sub-usage-#{sub.id}", "—")
     end
@@ -218,7 +218,7 @@ defmodule TokengateWeb.SubscriptionsLiveTest do
         })
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/admin/subscriptions")
+      {:ok, view, _html} = live(conn, ~p"/credit/subscriptions")
 
       # Oculta la sub vencida y muestra el contador del toggle.
       refute has_element?(view, "#edit-subscription-#{sub.id}")
@@ -260,7 +260,7 @@ defmodule TokengateWeb.SubscriptionsLiveTest do
         })
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/admin/subscriptions")
+      {:ok, view, _html} = live(conn, ~p"/credit/subscriptions")
 
       refute has_element?(view, "#edit-subscription-#{sub.id}")
 
@@ -282,7 +282,7 @@ defmodule TokengateWeb.SubscriptionsLiveTest do
         })
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/admin/subscriptions")
+      {:ok, view, _html} = live(conn, ~p"/credit/subscriptions")
 
       assert has_element?(view, "#toggle-archived-btn") == false
       assert render(view) =~ "No hay suscripciones" == false

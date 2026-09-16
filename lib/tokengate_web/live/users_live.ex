@@ -875,7 +875,7 @@ defmodule TokengateWeb.UsersLive do
               </div>
               <%= if group.id in @editing_group_ids do %>
                 <.link
-                  navigate={~p"/admin/groups/#{group}/members"}
+                  navigate={~p"/access/groups/#{group}/members"}
                   class="btn btn-xs btn-ghost"
                   title="Gestionar membresías del grupo"
                 >

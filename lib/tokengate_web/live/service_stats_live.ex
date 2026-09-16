@@ -324,7 +324,12 @@ defmodule TokengateWeb.ServiceStatsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
+    <Layouts.dashboard
+      flash={@flash}
+      current_scope={@current_user}
+      impersonator={@impersonator}
+      current_path={@current_path}
+    >
       <div class="space-y-6">
         <%!-- Header --%>
         <header class="flex items-center justify-between gap-6 pb-4">

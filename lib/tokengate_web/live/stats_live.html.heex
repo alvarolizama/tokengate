@@ -1,4 +1,9 @@
-<Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
+<Layouts.dashboard
+  flash={@flash}
+  current_scope={@current_user}
+  impersonator={@impersonator}
+  current_path={@current_path}
+>
   <div class="space-y-6">
     <%!-- Header + period selector (hidden on credits: budgets are live
          calendar-day/month counters, not a rolling window) --%>

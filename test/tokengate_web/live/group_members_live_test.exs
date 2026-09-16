@@ -65,7 +65,7 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     }
   end
 
-  defp group_url(group), do: "/admin/groups/#{group.id}/members"
+  defp group_url(group), do: "/access/groups/#{group.id}/members"
 
   # --------------------------------------------------------------------------
   # Access control

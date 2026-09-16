@@ -13,6 +13,9 @@ defmodule TokengateWeb.UserAuth do
     * `:require_admin`         — redirects non-admins (or unauthenticated visitors)
       to `/login` or `/dashboard` respectively.
 
+  All three also assign `:current_path` (the request path, refreshed on every
+  navigation) so the sidebar can highlight the active link.
+
   Usage in the router:
 
       live_session :dashboard, on_mount: [{TokengateWeb.UserAuth, :require_authenticated}] do
@@ -41,6 +44,7 @@ defmodule TokengateWeb.UserAuth do
       socket
       |> assign_new(:current_user, fn -> fetch_user(session) end)
       |> assign_new(:impersonator, fn -> fetch_impersonator(session) end)
+      |> attach_path_handler()
 
     {:cont, socket}
   end
@@ -54,6 +58,7 @@ defmodule TokengateWeb.UserAuth do
       |> assign_new(:impersonator, fn -> fetch_impersonator(session) end)
       |> assign_timezone(user)
       |> attach_timezone_handler()
+      |> attach_path_handler()
 
     if user do
       track_presence(socket, user)
@@ -72,6 +77,7 @@ defmodule TokengateWeb.UserAuth do
       |> assign_new(:impersonator, fn -> fetch_impersonator(session) end)
       |> assign_timezone(user)
       |> attach_timezone_handler()
+      |> attach_path_handler()
 
     case user do
       %{global_role: "admin"} ->
@@ -124,6 +130,22 @@ defmodule TokengateWeb.UserAuth do
   end
 
   defp handle_timezone_event(_event, _params, socket), do: {:cont, socket}
+
+  # Tracks the URL the user is currently on in the `:current_path` assign.
+  # `handle_params` is the only LiveView callback that receives the URI, and
+  # it runs both on the static render and on every live_patch / navigate, so
+  # the sidebar highlight stays in sync without any per-LiveView plumbing.
+  defp attach_path_handler(socket) do
+    Phoenix.LiveView.attach_hook(
+      socket,
+      :current_path_handler,
+      :handle_params,
+      fn _params, uri, socket ->
+        path = uri |> URI.parse() |> Map.get(:path)
+        {:cont, Phoenix.Component.assign(socket, :current_path, path)}
+      end
+    )
+  end
 
   # Track the connected LiveView in Phoenix.Presence so the topbar can show
   # how many users are on the dashboard right now. Only the connected mount

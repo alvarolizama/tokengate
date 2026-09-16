@@ -385,7 +385,7 @@ defmodule Tokengate.Budgets do
         Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.monthly_spend_usd, &2))
 
       # Gasto real del mes (sin recortar a la ventana del grant): es el número
-      # que va en la columna de dinero de /admin/users, no el del presupuesto.
+      # que va en la columna de dinero de /access/users, no el del presupuesto.
       real_monthly_usd =
         Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.real_monthly_spend_usd, &2))
 

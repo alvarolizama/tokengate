@@ -47,14 +47,14 @@ defmodule TokengateWeb.GroupsLiveTest do
   # --------------------------------------------------------------------------
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
-    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/admin/groups")
+    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/access/groups")
   end
 
   test "non-admin authenticated users are redirected to /dashboard", %{conn: conn} do
     %{user: user, password: password} = register("user")
 
     conn = login(conn, user, password)
-    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/admin/groups")
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/access/groups")
   end
 
   # --------------------------------------------------------------------------
@@ -65,7 +65,7 @@ defmodule TokengateWeb.GroupsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/admin/groups")
+    {:ok, view, html} = live(conn, ~p"/access/groups")
 
     assert html =~ "Grupos"
     assert has_element?(view, "#new-group-btn")
@@ -82,7 +82,7 @@ defmodule TokengateWeb.GroupsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/admin/groups")
+    {:ok, view, html} = live(conn, ~p"/access/groups")
 
     assert html =~ group.name
     assert has_element?(view, "#edit-#{group.id}")
@@ -97,7 +97,7 @@ defmodule TokengateWeb.GroupsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/groups")
+    {:ok, view, _html} = live(conn, ~p"/access/groups")
 
     view |> element("#new-group-btn") |> render_click()
     assert has_element?(view, "#group-form")
@@ -122,7 +122,7 @@ defmodule TokengateWeb.GroupsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/groups")
+    {:ok, view, _html} = live(conn, ~p"/access/groups")
 
     view |> element("#new-group-btn") |> render_click()
 
@@ -149,7 +149,7 @@ defmodule TokengateWeb.GroupsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/groups")
+    {:ok, view, _html} = live(conn, ~p"/access/groups")
 
     view |> element("#edit-#{group.id}") |> render_click()
     assert has_element?(view, "#group-form")
@@ -169,7 +169,7 @@ defmodule TokengateWeb.GroupsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/groups")
+    {:ok, view, _html} = live(conn, ~p"/access/groups")
 
     view |> element("#new-group-btn") |> render_click()
     assert has_element?(view, "#group-form")
@@ -187,7 +187,7 @@ defmodule TokengateWeb.GroupsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/groups")
+    {:ok, view, _html} = live(conn, ~p"/access/groups")
 
     assert has_element?(view, "#delete-#{group.id}")
 
@@ -206,7 +206,7 @@ defmodule TokengateWeb.GroupsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live(conn, ~p"/admin/groups")
+    {:ok, view, html} = live(conn, ~p"/access/groups")
 
     # The model picker is NOT in the card — only inside the models modal
     refute html =~ "Modelos del grupo</h4>"
@@ -255,7 +255,7 @@ defmodule TokengateWeb.GroupsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/groups")
+    {:ok, view, _html} = live(conn, ~p"/access/groups")
 
     assert has_element?(view, "#members-link-#{group.id}")
   end
@@ -269,7 +269,7 @@ defmodule TokengateWeb.GroupsLiveTest do
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/groups")
+    {:ok, view, _html} = live(conn, ~p"/access/groups")
 
     assert has_element?(view, "#webhooks-link-#{group.id}")
   end

@@ -46,7 +46,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
   # tabs only render when at least one provider is visible — when the list
   # is empty the tab is absent and we stay on the default.
   defp live_custom_tab(conn) do
-    {:ok, view, _html} = live(conn, ~p"/admin/providers")
+    {:ok, view, _html} = live(conn, ~p"/catalog/providers")
 
     view =
       if Phoenix.LiveViewTest.has_element?(view, "#tab-providers-custom") do
@@ -79,14 +79,14 @@ defmodule TokengateWeb.ProvidersLiveTest do
   ## Permissions -----------------------------------------------------------
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
-    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/admin/providers")
+    assert {:error, {:redirect, %{to: "/login"}}} = live(conn, ~p"/catalog/providers")
   end
 
   test "non-admin users are redirected to /dashboard", %{conn: conn} do
     %{user: user, password: password} = register_user()
 
     conn = login(conn, user, password)
-    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/admin/providers")
+    assert {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/catalog/providers")
   end
 
   test "admin sees the provider list with a created provider", %{conn: conn} do
@@ -315,7 +315,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
 
     %{user: admin, password: password} = register_admin()
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/admin/providers")
+    {:ok, view, _html} = live(conn, ~p"/catalog/providers")
 
     # Force a server re-render so the credential state lands in the
     # dropdown (the mount may have raced the fixture writes in shared mode).
@@ -364,7 +364,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
 
     conn = login(conn, admin, password)
     # Builtin card lives on the DEFAULT tab — plain mount, no switch.
-    {:ok, view, _html} = live(conn, ~p"/admin/providers")
+    {:ok, view, _html} = live(conn, ~p"/catalog/providers")
 
     # Builtin: no edit affordance at all (identity is catalog-owned; boot
     # sync would overwrite any edit). Custom keeps it — on ITS tab.

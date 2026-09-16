@@ -69,19 +69,21 @@ defmodule TokengateWeb.Router do
     get "/dashboard/credits", RedirectController, :stats_credits
 
     # Stats vivía en /dashboard/stats, la calculadora en
-    # /dashboard/calculator y los logs en /admin/logs. Redirects
+    # /dashboard/calculator y los logs en /logs. Redirects
     # permanentes para bookmarks (query string preservado).
     get "/dashboard/stats", RedirectController, :stats
     get "/dashboard/stats/*rest", RedirectController, :stats
     get "/dashboard/calculator", RedirectController, :calculator
-    get "/admin/logs", RedirectController, :logs
+    # La página de logs se promovió a /operations/monitoring.
+    get "/logs", RedirectController, :logs
 
     # Refactor /stats: el detalle de miembro se consolidó en el detalle
-    # de usuario, y las stats por usuario se promovieron de /admin a
-    # /stats/users.
+    # de usuario. El prefijo /admin se retiró en favor de las
+    # sub-secciones del sidebar, así que sus rutas legacy
+    # (la vieja de logs, y la de stats por usuario) se eliminaron con
+    # él: no hay redirects para /admin/*.
     get "/stats/members/:member_id", RedirectController, :stats_member
     get "/stats/members/:member_id/*rest", RedirectController, :stats_member
-    get "/admin/users/:user_id/stats", RedirectController, :user_stats
 
     # El tab Créditos se disolvió: el uso de presupuesto vive dentro de
     # cada dimensión (En vivo, Resumen, Usuarios, Grupos, Servicios).
@@ -121,16 +123,25 @@ defmodule TokengateWeb.Router do
       live "/stats/users", StatsLive, :users
       live "/stats/users/:user_id", UserStatsLive
       live "/calculator", CalculatorLive
-      live "/logs", LogsLive
-      live "/admin/providers", ProvidersLive
-      live "/admin/models", ModelsLive
-      live "/admin/groups", GroupsLive
-      live "/admin/groups/:id/members", GroupMembersLive
-      live "/admin/users", UsersLive
-      live "/admin/services", ServicesLive
-      live "/admin/observability", ObservabilityLive
-      live "/admin/subscriptions", SubscriptionsLive
-      live "/admin/maintenance", MaintenanceLive
+
+      # Las rutas admin se agrupan por la sub-sección del sidebar a la
+      # que pertenecen (Catálogo / Acceso / Crédito / Operaciones). El
+      # prefijo /admin se retiró: no hay redirects legacy, un bookmark
+      # a /admin/* responde 404.
+      # Catálogo — qué se sirve y a qué costo.
+      live "/catalog/providers", ProvidersLive
+      live "/catalog/models", ModelsLive
+      # Acceso — quién puede usar qué.
+      live "/access/groups", GroupsLive
+      live "/access/groups/:id/members", GroupMembersLive
+      live "/access/users", UsersLive
+      live "/access/services", ServicesLive
+      # Crédito — suscripciones y top-ups.
+      live "/credit/subscriptions", SubscriptionsLive
+      # Operaciones — logs en vivo, webhooks y danger zone.
+      live "/operations/monitoring", MonitoringLive
+      live "/operations/observability", ObservabilityLive
+      live "/operations/maintenance", MaintenanceLive
     end
   end
 

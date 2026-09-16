@@ -123,21 +123,21 @@ defmodule TokengateWeb.SessionController do
   defp do_impersonate(conn, _admin, nil) do
     conn
     |> put_flash(:error, "Usuario no encontrado.")
-    |> redirect(to: "/admin/users")
+    |> redirect(to: "/access/users")
   end
 
   defp do_impersonate(conn, %{id: admin_id} = _admin, %{id: target_id})
        when admin_id == target_id do
     conn
     |> put_flash(:error, "No puedes impersonarte a ti mismo.")
-    |> redirect(to: "/admin/users")
+    |> redirect(to: "/access/users")
   end
 
   defp do_impersonate(conn, admin, target) do
     if root_admin?(target) do
       conn
       |> put_flash(:error, "No se puede impersonar al administrador principal.")
-      |> redirect(to: "/admin/users")
+      |> redirect(to: "/access/users")
     else
       {:ok, _} =
         Tokengate.Auditing.audit(admin, "impersonate.start", "user", target.id, %{

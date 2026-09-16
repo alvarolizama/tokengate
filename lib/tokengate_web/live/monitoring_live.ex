@@ -1,4 +1,4 @@
-defmodule TokengateWeb.LogsLive do
+defmodule TokengateWeb.MonitoringLive do
   @moduledoc false
   use TokengateWeb, :live_view
   alias Tokengate.{Accounts, Logs}
@@ -19,7 +19,7 @@ defmodule TokengateWeb.LogsLive do
 
     socket =
       socket
-      |> assign(:page_title, "Logs · Tokengate")
+      |> assign(:page_title, "Monitoring · Tokengate")
       |> assign(:page_size, @page_size)
       |> assign(:has_more, false)
       |> assign(:cursor, nil)
@@ -741,10 +741,15 @@ defmodule TokengateWeb.LogsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
+    <Layouts.dashboard
+      flash={@flash}
+      current_scope={@current_user}
+      impersonator={@impersonator}
+      current_path={@current_path}
+    >
       <div class="space-y-6">
         <.header>
-          Logs
+          Monitoring
           <:subtitle>Registro de solicitudes a la API en tiempo real</:subtitle>
         </.header>
 
