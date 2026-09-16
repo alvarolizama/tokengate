@@ -247,7 +247,7 @@ defmodule Tokengate.Budgets.Manager do
     key = {:grant, subscription_id, user_id}
 
     case :ets.lookup(@credits_table, key) do
-      [{^key, consumed, credited, _cycle_start, _loaded?, _units}] ->
+      [{^key, consumed, credited, _cycle_start, _loaded?, _units, _granting?}] ->
         %{
           consumed_micro: consumed,
           credited_micro: credited,
@@ -330,7 +330,8 @@ defmodule Tokengate.Budgets.Manager do
   defp grant_has_room?(grant) do
     key = grant_key(grant)
 
-    # Object is {key, consumed, credited, cycle_start, loaded?} — pos 2 = consumed, 3 = credited.
+    # Object is {key, consumed, credited, cycle_start, loaded?, units, granting?}
+    # — pos 2 = consumed, 3 = credited.
     read_credit(key, 2) < read_credit(key, 3)
   end
 
@@ -349,9 +350,10 @@ defmodule Tokengate.Budgets.Manager do
   end
 
   # Bump position 2 (consumed_micro). The default object covers the rare race
-  # where the entry was evicted between ensure and here.
+  # where the entry was evicted between ensure and here. Positions 2/3 (consumed,
+  # credited) must stay put — `read_credit/2` and `pick_grant/1` index them.
   defp bump_credit(key, inc) when is_integer(inc) do
-    default = {key, 0, 0, nil, false, 0}
+    default = {key, 0, 0, nil, false, 0, false}
     :ets.update_counter(@credits_table, key, {2, inc}, default)
   end
 
@@ -360,8 +362,14 @@ defmodule Tokengate.Budgets.Manager do
     current_start = current_cycle_start(subscription)
 
     case :ets.lookup(@credits_table, key) do
-      [{^key, _consumed, _credited, cycle_start, true, seeded_units}] ->
-        if cycle_start == current_start and seeded_units == subscription.units do
+      [{^key, _consumed, _credited, cycle_start, true, seeded_units, seeded_granting?}] ->
+        # La frescura incluye si la sub otorga crédito, comparado en las DOS
+        # direcciones: pausar/vencer no cambia el ciclo ni `units`, así que sin
+        # este chequeo una entrada ya sembrada seguía sirviendo el crédito viejo
+        # (y al reactivar la sub se quedaba en 0, bloqueando a un miembro con
+        # suscripción vigente).
+        if cycle_start == current_start and seeded_units == subscription.units and
+             seeded_granting? == Tokengate.Credits.grants_credit?(subscription) do
           :ok
         else
           seed_grant(subscription, grant, key)
@@ -378,7 +386,7 @@ defmodule Tokengate.Budgets.Manager do
     GenServer.call(
       __MODULE__,
       {:seed_grant, key, state.consumed_micro, state.credited_micro, state.cycle_start,
-       subscription.units}
+       subscription.units, Tokengate.Credits.grants_credit?(subscription)}
     )
   end
 
@@ -584,13 +592,13 @@ defmodule Tokengate.Budgets.Manager do
 
   @impl true
   def handle_call(
-        {:seed_grant, key, consumed_micro, credited_micro, cycle_start, units},
+        {:seed_grant, key, consumed_micro, credited_micro, cycle_start, units, granting?},
         _from,
         state
       ) do
     :ets.insert(
       @credits_table,
-      {key, consumed_micro, credited_micro, cycle_start, true, units}
+      {key, consumed_micro, credited_micro, cycle_start, true, units, granting?}
     )
 
     {:reply, :ok, state}
@@ -612,9 +620,13 @@ defmodule Tokengate.Budgets.Manager do
     end
   end
 
-  # Grants table. Object: {key, consumed_micro, credited_micro, cycle_start, loaded?}
-  # where key = {:grant, subscription_id, user_id}. Separate from
-  # `:tokengate_budgets` so the legacy 4-tuples stay untouched.
+  # Grants table. Object:
+  # {key, consumed_micro, credited_micro, cycle_start, loaded?, units, granting?}
+  # where key = {:grant, subscription_id, user_id}. `granting?` es si la sub
+  # otorgaba crédito al sembrar: forma parte de la frescura (junto a
+  # `cycle_start` y `units`) porque pausar/vencer/reactivar no cambia ninguno de
+  # los otros dos. Separate from `:tokengate_budgets` so the legacy 4-tuples stay
+  # untouched.
   defp ensure_credits_table do
     if :ets.whereis(@credits_table) == :undefined do
       :ets.new(@credits_table, [

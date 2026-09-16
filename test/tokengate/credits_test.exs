@@ -372,6 +372,88 @@ defmodule Tokengate.CreditsTest do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # Ventana de la sub: `starts_at` / `expires_at` (solo existen en top-ups
+  # `recurrence = "none"`). Estaban definidos en la config y usados para el
+  # badge de "vencido", pero el gate de crédito los ignoraba por completo: un
+  # top-up vencido seguía otorgando su saldo sin usar, y uno aún no empezado
+  # otorgaba antes de tiempo.
+  # ---------------------------------------------------------------------------
+  describe "ventana de la sub (starts_at / expires_at)" do
+    defp top_up(attrs) do
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      group_sub(
+        Map.merge(%{"recurrence" => "none", "reset_day" => nil, "starts_at" => now}, attrs)
+      )
+    end
+
+    defp seconds_ago(n),
+      do: DateTime.add(DateTime.utc_now(), -n, :second) |> DateTime.truncate(:second)
+
+    defp seconds_ahead(n),
+      do: DateTime.add(DateTime.utc_now(), n, :second) |> DateTime.truncate(:second)
+
+    test "grants_credit?/1: activa y dentro de ventana" do
+      assert Credits.grants_credit?(group_sub(%{}))
+      assert Credits.grants_credit?(top_up(%{}))
+      assert Credits.grants_credit?(top_up(%{"expires_at" => seconds_ahead(3600)}))
+
+      refute Credits.grants_credit?(group_sub(%{"status" => "paused"}))
+      refute Credits.grants_credit?(top_up(%{"expires_at" => seconds_ago(60)}))
+      refute Credits.grants_credit?(top_up(%{"starts_at" => seconds_ahead(3600)}))
+    end
+
+    test "un top-up vencido con saldo deja de otorgar crédito" do
+      user = user_fixture()
+      group = group_fixture()
+      member = member_fixture(group, user)
+
+      sub = top_up(%{"units" => 50, "expires_at" => seconds_ago(60)})
+      {:ok, _} = Credits.set_group_default(group, sub)
+
+      assert Credits.grant_state(sub, user.id).credited_micro == 0
+
+      # Sigue vinculado: el grant existe con 0 crédito (revoca, no libera).
+      credit = Credits.member_credit(member)
+      assert credit.has_credit?
+      assert credit.credited_micro == 0
+      assert credit.remaining_micro == 0
+    end
+
+    test "un top-up que aún no empieza tampoco otorga crédito" do
+      sub = top_up(%{"units" => 50, "starts_at" => seconds_ahead(3600)})
+
+      assert Credits.grant_state(sub, user_fixture().id).credited_micro == 0
+    end
+
+    test "dentro de la ventana sí otorga (control)" do
+      sub =
+        top_up(%{
+          "units" => 50,
+          "starts_at" => seconds_ago(3600),
+          "expires_at" => seconds_ahead(3600)
+        })
+
+      assert Credits.grant_state(sub, user_fixture().id).credited_micro == 50_000_000
+    end
+
+    test "member_credits/1 (lote) revoca la ventana igual que member_credit/1" do
+      user = user_fixture()
+      group = group_fixture()
+      member = member_fixture(group, user)
+
+      expired = top_up(%{"units" => 30, "expires_at" => seconds_ago(60)})
+      {:ok, _} = Credits.set_group_default(group, expired)
+
+      batch = Credits.member_credits([member]) |> Map.fetch!(member.id)
+
+      assert batch.has_credit?
+      assert batch.credited_micro == 0
+      assert batch.credited_micro == Credits.member_credit(member).credited_micro
+    end
+  end
+
   describe "auth-cache invalidation on group default change" do
     alias Tokengate.Accounts.ApiKeyCache
 

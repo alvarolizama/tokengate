@@ -122,6 +122,104 @@ defmodule Tokengate.Credits.ManagerTest do
       assert {:ok, hold} = Manager.reserve_credits(grants, nil, Decimal.new("1"), false)
       assert hold.subscription_id == direct_sub.id
     end
+
+    # Regresión: la entrada de ETS de un grant ya sembrado solo se resemilla
+    # cuando cambia el ciclo o `units`. Pausar o vencer la sub no cambia
+    # ninguno de los dos, así que el proxy seguía gastando el crédito viejo
+    # aunque la UI ya mostrara la sub como pausada/vencida — "revocar" no
+    # revocaba nada en caliente.
+    test "pausar revoca un grant ya sembrado (sin esperar al ciclo)" do
+      user = user_fixture()
+      _member = member_fixture(nil, user)
+      sub = sub_fixture(%{"units" => 100})
+      grants = [grant(sub, user)]
+
+      assert {:ok, _hold} = Manager.reserve_credits(grants, nil, Decimal.new("1"), false)
+      assert %{credited_micro: 100_000_000} = Manager.credit_spend(sub.id, user.id)
+
+      {:ok, _} = Credits.update_subscription(sub, %{"status" => "paused"})
+
+      assert {:error, {:budget_exceeded, %{layer: :credit}}} =
+               Manager.reserve_credits(
+                 [grant(%{sub | status: "paused"}, user)],
+                 nil,
+                 Decimal.new("1"),
+                 false
+               )
+    end
+
+    test "un top-up vencido deja de otorgar aunque ya estuviera sembrado" do
+      user = user_fixture()
+      _member = member_fixture(nil, user)
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      sub =
+        sub_fixture(%{
+          "units" => 100,
+          "recurrence" => "none",
+          "reset_day" => nil,
+          "starts_at" => DateTime.add(now, -3600, :second),
+          "expires_at" => DateTime.add(now, 3600, :second)
+        })
+
+      grants = [grant(sub, user)]
+      assert {:ok, _hold} = Manager.reserve_credits(grants, nil, Decimal.new("1"), false)
+
+      expired = %{sub | expires_at: DateTime.add(now, -60, :second)}
+
+      assert {:error, {:budget_exceeded, %{layer: :credit}}} =
+               Manager.reserve_credits([grant(expired, user)], nil, Decimal.new("1"), false)
+    end
+
+    # El flip inverso: si revocar dejaba la entrada sembrada en 0, reactivar la
+    # sub tiene que devolver el crédito en caliente (si no, un miembro con
+    # suscripción vigente queda bloqueado hasta el próximo cambio de ciclo).
+    test "reactivar la sub devuelve el crédito a un grant ya sembrado" do
+      user = user_fixture()
+      _member = member_fixture(nil, user)
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      sub =
+        sub_fixture(%{
+          "units" => 100,
+          "recurrence" => "none",
+          "reset_day" => nil,
+          "starts_at" => DateTime.add(now, -3600, :second),
+          "expires_at" => DateTime.add(now, -60, :second)
+        })
+
+      # Sembrado mientras está vencida: 0 crédito.
+      assert {:error, {:budget_exceeded, %{layer: :credit}}} =
+               Manager.reserve_credits([grant(sub, user)], nil, Decimal.new("1"), false)
+
+      vigente = %{sub | expires_at: DateTime.add(now, 3600, :second)}
+
+      assert {:ok, hold} =
+               Manager.reserve_credits([grant(vigente, user)], nil, Decimal.new("1"), false)
+
+      assert hold.subscription_id == sub.id
+      assert Manager.credit_spend(sub.id, user.id).credited_micro == 100_000_000
+    end
+
+    test "reactivar (pausada -> activa) devuelve el crédito a un grant ya sembrado" do
+      user = user_fixture()
+      _member = member_fixture(nil, user)
+      sub = sub_fixture(%{"units" => 100, "status" => "paused"})
+      grants = [grant(sub, user)]
+
+      assert {:error, {:budget_exceeded, %{layer: :credit}}} =
+               Manager.reserve_credits(grants, nil, Decimal.new("1"), false)
+
+      {:ok, _} = Credits.update_subscription(sub, %{"status" => "active"})
+      active = %{sub | status: "active"}
+
+      assert {:ok, hold} =
+               Manager.reserve_credits([grant(active, user)], nil, Decimal.new("1"), false)
+
+      assert hold.subscription_id == sub.id
+    end
   end
 
   describe "Credits.grant_state/2" do

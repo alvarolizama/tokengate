@@ -376,6 +376,43 @@ defmodule Tokengate.Credits do
   @credit_micro 1_000_000
 
   @doc """
+  ¿La sub ya venció (`expires_at` ≤ `now`)?
+
+  Único lugar donde se decide: lo usan el gate de crédito
+  (`grants_credit?/2`) y el badge de top-ups vencidos de la UI, que antes
+  duplicaba la comparación y por eso podían discrepar.
+  """
+  @spec expired?(Subscription.t(), DateTime.t()) :: boolean()
+  def expired?(%Subscription{} = subscription, now \\ DateTime.utc_now()) do
+    not is_nil(subscription.expires_at) and DateTime.compare(subscription.expires_at, now) != :gt
+  end
+
+  @doc """
+  ¿La sub otorga crédito ahora mismo? `false` si está pausada, vencida
+  (`expired?/2`) o si todavía no empieza (`starts_at` en el futuro).
+
+  `starts_at`/`expires_at` solo los usan en la práctica los top-ups
+  (`recurrence = "none"`), pero una fecha explícita se respeta en cualquier
+  recurrencia.
+
+  Una sub que no otorga **sigue vinculada y sigue contando como grant, con 0
+  crédito** (ver `grant_state/2`): revoca, no libera. El Manager lo consulta en
+  cada `ensure_grant_loaded/1` para que pausar/vencer surta efecto sin esperar
+  al cambio de ciclo (la entrada de ETS de un grant ya sembrado guardaba el
+  crédito viejo).
+  """
+  @spec grants_credit?(Subscription.t(), DateTime.t()) :: boolean()
+  def grants_credit?(%Subscription{} = subscription, now \\ DateTime.utc_now()) do
+    subscription.status == "active" and started?(subscription, now) and
+      not expired?(subscription, now)
+  end
+
+  # Cota abierta cuando `starts_at` es nil.
+  defp started?(%Subscription{} = subscription, now) do
+    is_nil(subscription.starts_at) or DateTime.compare(subscription.starts_at, now) != :gt
+  end
+
+  @doc """
   Estado vigente de un grant `(suscripción, usuario)`, derivado de
   `request_logs` (la verdad durable) + la config de la suscripción.
 
@@ -408,21 +445,24 @@ defmodule Tokengate.Credits do
     }
   end
 
-  # Sub vigente: `units` por ciclo + lo arrastrado por rollover.
-  defp credit_state(%Subscription{status: "active"} = subscription, subject, cycle_start) do
-    credited =
-      subscription.units * @credit_micro + carried_micro(subscription, subject, cycle_start)
-
-    {credited, micro(spend_between(subscription.id, subject, cycle_start, nil))}
-  end
-
-  # Vinculada pero inactiva (pausada): el grant **sigue existiendo con 0
-  # crédito** en vez de desaparecer. Así el sujeto queda bloqueado
-  # (`:budget_exceeded` / 402) y no cae a tier 3 (ilimitado): pausar una sub
-  # revoca el crédito, no lo libera. El consumo se reporta real para que la UI
-  # siga mostrando lo gastado antes de pausar.
+  # Sub que otorga crédito: `units` del ciclo + lo arrastrado por rollover.
+  #
+  # Si no otorga (pausada, vencida o aún no empezada) el grant **sigue
+  # existiendo con 0 crédito** en vez de desaparecer. Así el sujeto queda
+  # bloqueado (`:budget_exceeded` / 402) y no cae a tier 3 (ilimitado): pausar
+  # o vencer revoca el crédito, no lo libera. El consumo se reporta real para
+  # que la UI siga mostrando lo gastado.
   defp credit_state(%Subscription{} = subscription, subject, cycle_start) do
-    {0, micro(spend_between(subscription.id, subject, cycle_start, nil))}
+    consumed = micro(spend_between(subscription.id, subject, cycle_start, nil))
+
+    if grants_credit?(subscription) do
+      credited =
+        subscription.units * @credit_micro + carried_micro(subscription, subject, cycle_start)
+
+      {credited, consumed}
+    else
+      {0, consumed}
+    end
   end
 
   @doc "Micro-USD de `units` créditos."
@@ -615,12 +655,15 @@ defmodule Tokengate.Credits do
     |> Enum.group_by(& &1.user_id)
   end
 
-  # Crédito del ciclo para un grant. Pausada ⇒ 0 (ver `grant_state/2`).
-  defp credited_micro(%Subscription{status: "active", units: units}, user_id, carried) do
-    units * @credit_micro + Map.get(carried, user_id, 0)
+  # Crédito del ciclo para un grant. No otorga (pausada / vencida / sin
+  # empezar) ⇒ 0 (ver `grants_credit?/2`).
+  defp credited_micro(%Subscription{} = subscription, user_id, carried) do
+    if grants_credit?(subscription) do
+      subscription.units * @credit_micro + Map.get(carried, user_id, 0)
+    else
+      0
+    end
   end
-
-  defp credited_micro(%Subscription{}, _user_id, _carried), do: 0
 
   # `%{user_id => micro}` — consumo asentado de la sub en su ciclo vigente, en
   # una query agrupada por usuario.

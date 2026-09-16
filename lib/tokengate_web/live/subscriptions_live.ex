@@ -105,11 +105,12 @@ defmodule TokengateWeb.SubscriptionsLive do
   # Auto-archivables: top-ups (`recurrence = "none"`) vencidos (su `expires_at`
   # ya pasó) o agotados (todo el crédito del grant fue consumido). Las subs
   # mensuales se reciclan cada ciclo, así que nunca se auto-archivan.
+  #
+  # El vencimiento se delega en `Credits.expired?/1` — el MISMO predicado que
+  # usa el gate de crédito. Duplicar la comparación aquí fue lo que dejó que el
+  # badge dijera "vencido" mientras el proxy seguía otorgando el saldo.
   defp expired_or_drained?(%Subscription{recurrence: "none"} = sub) do
-    now = DateTime.utc_now()
-
-    expired? =
-      sub.expires_at != nil and DateTime.compare(sub.expires_at, now) != :gt
+    expired? = Credits.expired?(sub)
 
     drained? =
       sub.units > 0 and sub.units * 1_000_000 <= Credits.lifetime_spend_micro(sub.id)
