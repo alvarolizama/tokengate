@@ -1,33 +1,35 @@
 defmodule TokengateWeb.TopupsLive do
   @moduledoc """
-  Admin-only CRUD for top-ups — crédito de una sola vez por usuario.
+  Admin-only CRUD de **top-ups**: crédito extra de un solo uso.
 
-  Un top-up es una suscripción con `recurrence = "none"` y dueño directo
-  (`user_id`): otorga `units` de crédito hasta agotarse o vencer. La tabla
-  muestra **cuánto se consumió de lo otorgado** (columna Consumo) y los
-  top-ups se auto-archivan cuando el remanente llega a **0** (agotado) o
-  cuando **vencen**; el toggle "Ver archivados" los revela con su badge.
+  Un top-up pertenece a un **usuario** o a un **servicio** (exactamente uno) y
+  otorga `amount_usd` hasta agotarse o vencer; `expires_in_days` nil = nunca
+  vence. Es el segundo camino de gasto de un sujeto con límite mensual, y el
+  único para uno que no lo tiene.
+
+  La tabla muestra cuánto se consumió de lo otorgado (medido contra
+  `request_logs.credit_topup_id`) y archiva —sin borrar— los vencidos y
+  agotados; el toggle "Ver archivados" los revela con su badge.
 
   Acciones por fila:
 
-    * **Desactivar / Reactivar** — pausa: deja de otorgar el saldo restante
-      (lo ya consumido queda visible) y se puede reactivar.
-    * **Revocar** — elimina el top-up completo; el consumo ya asentado queda
-      en los logs.
+    * **Desactivar / Reactivar** — deja de otorgar el saldo restante (lo ya
+      consumido queda en los logs) y se puede reactivar.
+    * **Revocar** — marca el top-up como revocado; deja de otorgar.
 
-  Las suscripciones recurrentes viven en `/credit/subscriptions`.
+  Esta es la **única** página de crédito: las suscripciones desaparecieron del
+  modelo y el gasto ordinario se gobierna con el límite mensual de cada sujeto
+  (se edita en su propia página de Acceso).
   """
 
   use TokengateWeb, :live_view
 
   alias Tokengate.Accounts
-  alias Tokengate.Credits
-  alias Tokengate.Credits.Subscription
-  alias TokengateWeb.CreditHelpers, as: Credit
+  alias Tokengate.Credits.{Topup, Topups}
 
-  import TokengateWeb.CreditHelpers, only: [sort_button: 1]
+  import TokengateWeb.TopupHelpers
 
-  @sort_columns ~w(target units expires_at status inserted_at)a
+  @sort_columns ~w(target amount expires_at status inserted_at)a
 
   @impl true
   def mount(_params, _session, socket) do
@@ -47,15 +49,14 @@ defmodule TokengateWeb.TopupsLive do
         |> stream_configure(:topups, dom_id: &"topup-#{&1.id}")
         |> assign(:form, nil)
         |> assign(:editing_topup_id, nil)
-        |> assign(:topup_users, [])
-        |> assign(:topup_user_query, "")
-        |> assign(:topup_user_results, [])
-        |> assign(:topup_expires_on, "")
+        |> assign(:owner_kind, "user")
+        |> assign(:owner_query, "")
+        |> assign(:owner_results, [])
+        |> assign(:selected_owner, nil)
         |> assign(:search_query, "")
         |> assign(:sort_field, :inserted_at)
         |> assign(:sort_direction, :desc)
         |> assign(:show_archived, false)
-        |> assign(:archived_ids, MapSet.new())
         |> assign(:archived_count, 0)
         |> load_topups()
 
@@ -76,71 +77,72 @@ defmodule TokengateWeb.TopupsLive do
   ## Data loading -----------------------------------------------------------
 
   defp load_topups(socket) do
+    topups = Topups.list_all()
+    archived = Enum.filter(topups, &archived?/1)
+
     socket
-    |> assign(:all_topups, Credits.list_subscriptions())
-    |> assign(:groups_by_sub, Credits.groups_by_subscription())
-    |> assign(:users, Accounts.list_users())
-    |> stream_topups()
+    |> assign(:archived_count, length(archived))
+    |> assign(:all_topups, topups)
+    |> assign(:topups_empty?, visible_topups(topups, socket) == [])
+    |> stream(:topups, visible_topups(topups, socket), reset: true)
   end
 
-  defp stream_topups(socket) do
-    search = socket.assigns[:search_query] || ""
-    search_down = String.downcase(search)
+  defp visible_topups(topups, socket) do
     assigns = socket.assigns
 
-    # Solo top-ups: las subs recurrentes viven en /credit/subscriptions.
-    topups = Enum.filter(assigns.all_topups, &(&1.recurrence == "none"))
-
-    {archived_ids, archived_count} =
-      topups
-      |> Enum.filter(&Credit.expired_or_drained?/1)
-      |> (&{MapSet.new(&1, fn sub -> sub.id end), length(&1)}).()
-
-    filtered =
-      Enum.filter(topups, fn sub ->
-        (assigns.show_archived or sub.id not in archived_ids) and
-          (search == "" or
-             String.contains?(String.downcase(Credit.target_label(sub, assigns)), search_down) or
-             String.contains?(String.downcase(sub.name || ""), search_down))
-      end)
-
-    sorted =
-      Credit.sort_rows(
-        filtered,
-        assigns.sort_direction,
-        &sort_value(&1, assigns.sort_field, assigns)
-      )
-
-    socket
-    |> assign(:archived_ids, archived_ids)
-    |> assign(:archived_count, archived_count)
-    |> stream(:topups, sorted, reset: true)
-    |> assign(:topups_empty?, filtered == [])
-    |> assign(:usage_by_sub, Credit.usage_by_sub(filtered))
+    topups
+    |> Enum.filter(fn t -> assigns.show_archived || not archived?(t) end)
+    |> filter_by_query(assigns.search_query)
+    |> sort(assigns.sort_field, assigns.sort_direction)
   end
 
-  ## Events — search / sort / archivo ---------------------------------------
+  defp filter_by_query(topups, ""), do: topups
+
+  defp filter_by_query(topups, query) do
+    q = String.downcase(query)
+
+    Enum.filter(topups, fn t ->
+      String.contains?(String.downcase(owner_label(t)), q) or
+        String.contains?(String.downcase(t.label || ""), q)
+    end)
+  end
+
+  defp sort(topups, field, direction) do
+    sorted =
+      Enum.sort_by(topups, fn t ->
+        case field do
+          :target -> owner_label(t)
+          :amount -> Decimal.to_float(t.amount_usd)
+          :expires_at -> t.expires_at || ~U[9999-12-31 00:00:00Z]
+          :status -> state_label(state(t))
+          :inserted_at -> t.inserted_at
+        end
+      end)
+
+    if direction == :asc, do: sorted, else: Enum.reverse(sorted)
+  end
+
+  ## Events — búsqueda / orden / archivo -------------------------------------
 
   @impl true
   def handle_event("search_topups", %{"q" => query}, socket) do
-    {:noreply, socket |> assign(:search_query, query) |> stream_topups()}
+    {:noreply, socket |> assign(:search_query, query) |> load_topups()}
   end
 
   def handle_event("sort_topups", %{"field" => field}, socket) do
-    with {:ok, field} <- Credit.to_sort_field(field),
-         true <- field in @sort_columns do
-      {sort_field, sort_direction} =
-        if socket.assigns.sort_field == field do
-          {field, Credit.toggle_sort_direction(socket.assigns.sort_direction)}
-        else
-          {field, Credit.default_direction_for(field, [:units, :inserted_at])}
-        end
+    with true <- field in Enum.map(@sort_columns, &to_string/1) do
+      field = String.to_existing_atom(field)
+
+      direction =
+        if socket.assigns.sort_field == field and socket.assigns.sort_direction == :desc,
+          do: :asc,
+          else: :desc
 
       {:noreply,
        socket
-       |> assign(:sort_field, sort_field)
-       |> assign(:sort_direction, sort_direction)
-       |> stream_topups()}
+       |> assign(:sort_field, field)
+       |> assign(:sort_direction, direction)
+       |> load_topups()}
     else
       _ -> {:noreply, socket}
     end
@@ -150,7 +152,7 @@ defmodule TokengateWeb.TopupsLive do
     {:noreply,
      socket
      |> assign(:show_archived, not socket.assigns.show_archived)
-     |> stream_topups()}
+     |> load_topups()}
   end
 
   ## Events — CRUD ----------------------------------------------------------
@@ -158,179 +160,196 @@ defmodule TokengateWeb.TopupsLive do
   def handle_event("new_topup", _params, socket) do
     {:noreply,
      socket
+     |> assign(:editing_topup_id, nil)
+     |> assign(:selected_owner, nil)
+     |> assign(:owner_query, "")
+     # Se ofrecen los primeros sujetos sin escribir nada: el selector tiene que
+     # ser usable de un clic.
+     |> assign(:owner_results, search_users(""))
      |> assign(
        :form,
-       to_form(
-         Credits.change_subscription(%Subscription{recurrence: "none"}),
-         as: :subscription
-       )
-     )
-     |> assign(:editing_topup_id, :new)
-     |> assign(:topup_users, [])
-     |> assign(:topup_user_query, "")
-     |> assign(:topup_user_results, [])
-     |> assign(:topup_expires_on, "")}
+       to_form(Topups.change_topup(%Topup{}), as: :topup)
+     )}
   end
 
   def handle_event("edit_topup", %{"id" => id}, socket) do
-    topup = Credits.get_subscription!(id)
+    topup = Topups.get_topup!(id)
 
     {:noreply,
      socket
-     |> assign(:form, to_form(Credits.change_subscription(topup), as: :subscription))
      |> assign(:editing_topup_id, topup.id)
-     |> assign(:topup_users, Credit.user_tag(socket.assigns.users, topup.user_id))
-     |> assign(:topup_user_query, "")
-     |> assign(:topup_user_results, [])
-     |> assign(:topup_expires_on, format_expires_on(topup.expires_at))}
+     |> assign(:selected_owner, nil)
+     |> assign(:owner_query, "")
+     |> assign(:owner_results, [])
+     |> assign(:form, to_form(Topups.change_topup(topup), as: :topup))}
   end
 
   def handle_event("cancel_topup", _params, socket) do
     {:noreply, socket |> assign(:form, nil) |> assign(:editing_topup_id, nil)}
   end
 
-  # Desactivar/reactivar: pausar deja de otorgar el saldo restante (lo ya
-  # consumido sigue visible en la columna Consumo) hasta reactivar.
-  def handle_event("toggle_topup_status", %{"id" => id}, socket) do
-    topup = Credits.get_subscription!(id)
-    pausing? = topup.status == "active"
-    new_status = if pausing?, do: "paused", else: "active"
-
-    case Credits.update_subscription(topup, %{"status" => new_status}) do
-      {:ok, _} ->
-        message =
-          if pausing?,
-            do: "Top-up desactivado — el saldo restante deja de otorgarse.",
-            else: "Top-up reactivado."
-
-        {:noreply, socket |> load_topups() |> put_flash(:info, message)}
-
-      {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "No se pudo cambiar el estado del top-up.")}
-    end
-  end
-
-  # Revocar: elimina el top-up completo. El consumo ya asentado queda en los
-  # logs (`request_logs.credit_subscription_id`, sin FK) y el vínculo de
-  # grupos se limpia solo (`on_delete: :nilify_all`).
-  def handle_event("revoke_topup", %{"id" => id}, socket) do
-    topup = Credits.get_subscription!(id)
-    Credits.assign_groups(topup, [])
-    Credits.delete_subscription(topup)
-
-    {:noreply, socket |> load_topups() |> put_flash(:info, "Top-up revocado.")}
-  end
-
-  def handle_event("topup_form_change", params, socket) do
-    query = params["topup_user_query"] || ""
-    expires_on = Map.get(params, "topup_expires_on", socket.assigns.topup_expires_on)
-    selected_ids = Enum.map(socket.assigns.topup_users, & &1.id)
+  # El formulario ofrece un solo dueño: usuario o servicio.
+  def handle_event("owner_kind", %{"kind" => kind}, socket) when kind in ["user", "service"] do
+    results = if kind == "user", do: search_users(""), else: search_services("")
 
     {:noreply,
      socket
-     |> assign(:topup_user_query, query)
-     |> assign(:topup_user_results, Credit.users_search(query, selected_ids))
-     |> assign(:topup_expires_on, expires_on || "")}
+     |> assign(:owner_kind, kind)
+     |> assign(:owner_query, "")
+     |> assign(:owner_results, results)
+     |> assign(:selected_owner, nil)}
   end
 
-  def handle_event("add_topup_user", %{"user-id" => user_id} = params, socket) do
-    if Enum.any?(socket.assigns.topup_users, &(&1.id == user_id)) do
-      {:noreply, socket}
-    else
-      label = params["label"] || user_id
+  def handle_event("search_owner", %{"q" => query}, socket) do
+    results =
+      case socket.assigns.owner_kind do
+        "user" -> search_users(query)
+        "service" -> search_services(query)
+      end
 
-      {:noreply,
-       socket
-       |> assign(:topup_users, socket.assigns.topup_users ++ [%{id: user_id, label: label}])
-       |> assign(:topup_user_query, "")
-       |> assign(:topup_user_results, [])}
-    end
+    {:noreply, socket |> assign(:owner_query, query) |> assign(:owner_results, results)}
   end
 
-  def handle_event("remove_topup_user", %{"user-id" => user_id}, socket) do
+  def handle_event("select_owner", %{"id" => id}, socket) do
+    owner =
+      case socket.assigns.owner_kind do
+        "user" -> Accounts.get_user(id)
+        "service" -> Accounts.get_service(id)
+      end
+
     {:noreply,
-     assign(socket, :topup_users, Enum.reject(socket.assigns.topup_users, &(&1.id == user_id)))}
+     socket
+     |> assign(:selected_owner, owner && {socket.assigns.owner_kind, owner})
+     |> assign(:owner_results, [])
+     |> assign(:owner_query, owner_name(owner))}
   end
 
-  def handle_event("save_topup", params, socket) do
-    sub_params = params["subscription"] || %{}
-    editing = socket.assigns.editing_topup_id
+  def handle_event("save_topup", %{"topup" => params}, socket) do
+    attrs = topup_attrs(params, socket)
 
-    if socket.assigns.topup_users == [] do
-      {:noreply, put_flash(socket, :error, "Selecciona al menos un usuario.")}
-    else
-      expires_on = Map.get(params, "topup_expires_on", socket.assigns.topup_expires_on)
-
-      attrs =
-        sub_params
-        |> Map.put("recurrence", "none")
-        |> Map.put("expires_at", parse_expires_on(expires_on))
-
-      [first | rest] = Enum.map(socket.assigns.topup_users, & &1.id)
-
-      result =
-        if is_binary(editing) do
-          case Credits.update_subscription(
-                 Credits.get_subscription!(editing),
-                 Map.put(attrs, "user_id", first)
-               ) do
-            {:ok, _} -> create_topups(rest, attrs)
-            {:error, changeset} -> {:error, changeset}
-          end
-        else
-          create_topups([first | rest], attrs)
-        end
-
-      case result do
-        :ok ->
-          {:noreply,
-           socket
-           |> assign(:form, nil)
-           |> assign(:editing_topup_id, nil)
-           |> load_topups()
-           |> put_flash(:info, "Top-up guardado.")}
-
-        {:error, changeset} ->
-          {:noreply, assign(socket, :form, to_form(changeset, as: :subscription))}
+    result =
+      case socket.assigns.editing_topup_id do
+        nil -> Topups.create(attrs)
+        id -> Topups.edit_topup(Topups.get_topup!(id), attrs)
       end
+
+    case result do
+      {:ok, _topup} ->
+        {:noreply,
+         socket
+         |> assign(:form, nil)
+         |> assign(:editing_topup_id, nil)
+         |> load_topups()
+         |> put_flash(:info, "Top-up guardado.")}
+
+      {:error, changeset} ->
+        {:noreply, assign(socket, :form, to_form(changeset, as: :topup))}
     end
   end
 
-  # Un top-up por usuario seleccionado (mismo patrón que las subs directas).
-  defp create_topups(user_ids, attrs) do
-    Enum.reduce_while(user_ids, :ok, fn uid, :ok ->
-      case Credits.create_subscription(Map.put(attrs, "user_id", uid)) do
-        {:ok, _} -> {:cont, :ok}
-        {:error, changeset} -> {:halt, {:error, changeset}}
+  # Desactivar/reactivar: dejar de otorgar el saldo restante (lo ya consumido
+  # sigue visible en la columna Consumo) hasta reactivar.
+  def handle_event("toggle_topup_status", %{"id" => id}, socket) do
+    topup = Topups.get_topup!(id)
+
+    {result, message} =
+      case topup.status do
+        "active" ->
+          {Topups.revoke(topup), "Top-up desactivado — el saldo restante deja de otorgarse."}
+
+        _ ->
+          {Topups.reactivate(topup), "Top-up reactivado."}
       end
-    end)
-  end
 
-  ## Fechas ----------------------------------------------------------------
-
-  # El campo "Vence" es un `<input type="date">` (YYYY-MM-DD). Se guarda al
-  # FINAL del día (23:59:59 UTC) para que el top-up valga todo ese día:
-  # `Credits.expired?/1` compara `expires_at <= now`. Vacío = sin vencimiento.
-  defp parse_expires_on(nil), do: nil
-
-  defp parse_expires_on(value) when is_binary(value) do
-    case value |> String.trim() |> Date.from_iso8601() do
-      {:ok, date} -> DateTime.new!(date, ~T[23:59:59], "Etc/UTC")
-      {:error, _} -> nil
+    case result do
+      {:ok, _} -> {:noreply, socket |> load_topups() |> put_flash(:info, message)}
+      {:error, _} -> {:noreply, put_flash(socket, :error, "No se pudo cambiar el estado.")}
     end
   end
 
-  defp format_expires_on(%DateTime{} = dt), do: dt |> DateTime.to_date() |> Date.to_iso8601()
-  defp format_expires_on(_), do: ""
+  def handle_event("revoke_topup", %{"id" => id}, socket) do
+    topup = Topups.get_topup!(id)
 
-  defp expires_label(nil), do: "—"
-  defp expires_label(%DateTime{} = dt), do: Calendar.strftime(dt, "%d %b %Y")
+    case Topups.revoke(topup) do
+      {:ok, _} ->
+        {:noreply, socket |> load_topups() |> put_flash(:info, "Top-up revocado.")}
 
-  ## Sorting ----------------------------------------------------------------
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "No se pudo revocar.")}
+    end
+  end
 
-  defp sort_value(sub, :target, assigns), do: String.downcase(Credit.target_label(sub, assigns))
-  defp sort_value(sub, :units, _assigns), do: sub.units
-  defp sort_value(sub, :expires_at, _assigns), do: sub.expires_at
-  defp sort_value(sub, :status, _assigns), do: sub.status || ""
-  defp sort_value(sub, :inserted_at, _assigns), do: sub.inserted_at
+  ## Helpers ----------------------------------------------------------------
+
+  # El dueño sale del selector (usuario/servicio) o del top-up que se edita.
+  defp topup_attrs(params, socket) do
+    {user_id, service_id} =
+      case socket.assigns.selected_owner do
+        {"user", %{id: id}} ->
+          {id, nil}
+
+        {"service", %{id: id}} ->
+          {nil, id}
+
+        nil ->
+          editing_owner(socket.assigns.editing_topup_id)
+      end
+
+    %{
+      "user_id" => user_id,
+      "service_id" => service_id,
+      "amount_usd" => Map.get(params, "amount_usd"),
+      "label" => Map.get(params, "label"),
+      "note" => Map.get(params, "note"),
+      "expires_in_days" => blank_to_nil(Map.get(params, "expires_in_days"))
+    }
+  end
+
+  defp editing_owner(nil), do: {nil, nil}
+
+  defp editing_owner(id) do
+    case Topups.get_topup!(id) do
+      %{user_id: uid, service_id: sid} -> {uid, sid}
+    end
+  end
+
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(value), do: value
+
+  defp search_users(query) do
+    q = String.downcase(query)
+
+    Accounts.list_users()
+    |> Enum.filter(fn u -> q == "" or String.contains?(String.downcase(u.email), q) end)
+    |> Enum.take(8)
+  end
+
+  defp search_services(query) do
+    q = String.downcase(query)
+
+    Accounts.list_services()
+    |> Enum.filter(fn s -> q == "" or String.contains?(String.downcase(s.name), q) end)
+    |> Enum.take(8)
+  end
+
+  # Nombre y línea secundaria de un candidato (usuario o servicio), sin asumir
+  # la forma del struct: el selector ofrece ambos.
+  defp subject_primary(%{name: name}) when is_binary(name) and name != "", do: name
+  defp subject_primary(%{email: email}) when is_binary(email), do: email
+  defp subject_primary(%{id: id}), do: String.slice(id, 0, 8)
+
+  defp subject_secondary(%{email: email, name: name}) when is_binary(email) and is_binary(name),
+    do: email
+
+  defp subject_secondary(_), do: nil
+
+  # Etiqueta del dueño elegido en el form: usuario (email) o servicio (nombre).
+  defp owner_badge({"user", %{email: email}}), do: "Usuario: " <> email
+  defp owner_badge({"service", %{name: name}}), do: "Servicio: " <> name
+  defp owner_badge(_), do: "—"
+
+  defp owner_name(%{email: email}), do: email
+  defp owner_name(%{name: name}), do: name
+  defp owner_name(_), do: ""
 end

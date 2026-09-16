@@ -112,7 +112,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
     services =
       user.id
       |> Accounts.services_for_supervisor()
-      |> Repo.preload(:subscription)
+      |> Repo.preload(:api_key)
 
     service_ids = Enum.map(services, & &1.id)
 
@@ -216,9 +216,12 @@ defmodule TokengateWeb.SupervisedServicesLive do
 
   defp format_cost(_), do: "$0.00"
 
-  defp subscription_label(%{subscription: %{name: name}}) when is_binary(name), do: name
-  defp subscription_label(%{subscription: nil}), do: "Crédito ilimitado"
-  defp subscription_label(_service), do: "Crédito ilimitado"
+  defp subscription_label(%{unlimited_spend: true}), do: "Crédito ilimitado"
+
+  defp subscription_label(%{monthly_spend_limit_usd: %Decimal{} = limit}),
+    do: "Límite $#{Decimal.to_string(limit)}/mes"
+
+  defp subscription_label(_service), do: "Sin límite (solo top-ups)"
 
   ## Render --------------------------------------------------------------
 

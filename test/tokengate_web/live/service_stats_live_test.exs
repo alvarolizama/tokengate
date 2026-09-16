@@ -74,7 +74,7 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
   end
 
   describe "render" do
-    test "admin sees the service header (name + unlimited sub label)", %{conn: conn} do
+    test "admin sees the service header (name + saw its limit)", %{conn: conn} do
       service = service_fixture()
       %{user: admin, password: password} = register("admin")
       conn = login(conn, admin, password)
@@ -82,7 +82,8 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       {:ok, _view, html} = live(conn, ~p"/stats/services/#{service.id}")
 
       assert html =~ service.name
-      assert html =~ "Ilimitado"
+      # El modelo nuevo declara el límite del servicio (aquí: sin límite).
+      assert html =~ "Sin límite"
     end
 
     test "admin sees the service's logs", %{conn: conn} do

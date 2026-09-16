@@ -106,32 +106,26 @@ defmodule TokengateWeb.UsersLiveTest do
   end
 
   describe "credit column" do
-    test "shows remaining/total credit for a user with grants", %{conn: conn} do
+    test "shows remaining/total limit for a user in a group with a monthly limit", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
       %{user: member_user} = register("user")
 
-      {:ok, group} = Accounts.create_group(%{name: "Credit Group #{unique()}"})
+      {:ok, group} =
+        Accounts.create_group(%{
+          name: "Credit Group #{unique()}",
+          monthly_spend_limit_usd: "100.00"
+        })
 
       {:ok, member} =
         Accounts.create_group_member(%{"user_id" => member_user.id, "group_id" => group.id})
 
-      {:ok, sub} =
-        Credits.create_subscription(%{
-          "units" => 100,
-          "recurrence" => "monthly",
-          "reset_day" => 1
-        })
-
-      {:ok, _} = Credits.set_group_default(group, sub)
-
-      # $30 consumidos del grant (sub, usuario) del ciclo.
+      # $30 consumidos del límite mensual del ciclo.
       {:ok, _} =
-        Tokengate.Logs.log_request(%{
+        Logs.log_request(%{
           group_member_id: member.id,
           model_requested: "gpt-4",
           inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
-          provider_cost_usd: Decimal.new("30.00"),
-          credit_subscription_id: sub.id
+          provider_cost_usd: Decimal.new("30.00")
         })
 
       conn = login(conn, admin, password)
@@ -141,9 +135,15 @@ defmodule TokengateWeb.UsersLiveTest do
       assert has_element?(view, "#credit-#{member_user.id}", "$100.00")
     end
 
-    test "shows Ilimitado badge for users without subscriptions (tier 3)", %{conn: conn} do
+    test "shows Ilimitado badge for users marked unlimited", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
       %{user: plain} = register("user")
+
+      {:ok, group} =
+        Accounts.create_group(%{name: "Unlimited #{unique()}", unlimited_spend: true})
+
+      {:ok, _} =
+        Accounts.create_group_member(%{"user_id" => plain.id, "group_id" => group.id})
 
       conn = login(conn, admin, password)
       {:ok, view, _html} = live(conn, ~p"/access/users")
@@ -157,31 +157,29 @@ defmodule TokengateWeb.UsersLiveTest do
       %{user: rich} = register("user")
       %{user: poor} = register("user")
 
-      {:ok, group_rich} = Accounts.create_group(%{name: "Rich #{unique()}"})
-      {:ok, group_poor} = Accounts.create_group(%{name: "Poor #{unique()}"})
-
-      {:ok, sub_rich} =
-        Credits.create_subscription(%{
-          "units" => 200,
-          "recurrence" => "monthly",
-          "reset_day" => 1
+      {:ok, group_rich} =
+        Accounts.create_group(%{
+          name: "Rich #{unique()}",
+          monthly_spend_limit_usd: "200.00"
         })
 
-      {:ok, sub_poor} =
-        Credits.create_subscription(%{
-          "units" => 50,
-          "recurrence" => "monthly",
-          "reset_day" => 1
-        })
+      {:ok, group_poor} =
+        Accounts.create_group(%{name: "Poor #{unique()}", monthly_spend_limit_usd: "50.00"})
 
-      {:ok, _} = Credits.set_group_default(group_rich, sub_rich)
-      {:ok, _} = Credits.set_group_default(group_poor, sub_poor)
-
-      {:ok, _} =
+      {:ok, member_rich} =
         Accounts.create_group_member(%{"user_id" => rich.id, "group_id" => group_rich.id})
 
       {:ok, _} =
         Accounts.create_group_member(%{"user_id" => poor.id, "group_id" => group_poor.id})
+
+      # El rico gasta poco (queda más remanente); el pobre consume casi todo.
+      {:ok, _} =
+        Logs.log_request(%{
+          group_member_id: member_rich.id,
+          model_requested: "gpt-4",
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+          provider_cost_usd: Decimal.new("10.00")
+        })
 
       conn = login(conn, admin, password)
       {:ok, view, _html} = live(conn, ~p"/access/users")

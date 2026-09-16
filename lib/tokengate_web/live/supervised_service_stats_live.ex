@@ -67,7 +67,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
            socket
            |> assign(:denied?, false)
            |> assign(:page_title, "Stats · #{service.name} · Tokengate")
-           |> assign(:service, Repo.preload(service, [:subscription, :api_key]))
+           |> assign(:service, Repo.preload(service, [:api_key]))
            |> assign(:granted_models, granted_models)
            |> assign(
              :models,
@@ -274,8 +274,12 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
   defp status_share(_count, 0), do: "0%"
   defp status_share(count, total), do: Stats.format_percent(count / total)
 
-  defp sub_label(%{subscription: %{name: name}}) when is_binary(name), do: name
-  defp sub_label(_service), do: "Crédito ilimitado"
+  defp sub_label(%{unlimited_spend: true}), do: "Crédito ilimitado"
+
+  defp sub_label(%{monthly_spend_limit_usd: %Decimal{} = limit}),
+    do: "Límite $#{Decimal.to_string(limit)}/mes"
+
+  defp sub_label(_service), do: "Sin límite (solo top-ups)"
 
   defp supervisor_label(%{user: %{name: name, email: email}}) when is_binary(name),
     do: "#{name} · #{email}"

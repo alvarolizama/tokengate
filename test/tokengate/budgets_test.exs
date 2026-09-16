@@ -181,6 +181,7 @@ defmodule Tokengate.BudgetsTest do
       user = user_fixture()
       group = group_fixture(%{"monthly_spend_limit_usd" => "10.00"})
       member = member_fixture(group, user)
+
       {:ok, topup} =
         Tokengate.Credits.Topups.create(%{"user_id" => user.id, "amount_usd" => "5.00"})
 
@@ -262,7 +263,6 @@ defmodule Tokengate.BudgetsTest do
       assert Decimal.eq?(budget.monthly_spend_usd, Decimal.new("1"))
     end
   end
-
 
   describe "list_member_budgets/0" do
     test "includes every member with user and group preloaded" do
@@ -412,7 +412,11 @@ defmodule Tokengate.BudgetsTest do
 
       # 00:01 UTC de hoy: dentro del día UTC, fuera del día de Los Ángeles
       # (que aún no ha empezado).
-      log_request(member.id, DateTime.add(Periods.start_of_day_utc("Etc/UTC"), 60, :second), "1.50")
+      log_request(
+        member.id,
+        DateTime.add(Periods.start_of_day_utc("Etc/UTC"), 60, :second),
+        "1.50"
+      )
 
       utc = Budgets.spend_by_member_ids([member.id], "Etc/UTC")
       la = Budgets.spend_by_member_ids([member.id], tz)

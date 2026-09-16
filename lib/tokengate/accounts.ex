@@ -404,6 +404,23 @@ defmodule Tokengate.Accounts do
   end
 
   @doc """
+  Membresías (con grupo y usuario precargados) de varios usuarios en una query:
+  `%{user_id => [GroupMember, ...]}`. Para los tableros que resuelven el límite
+  efectivo de cada usuario sin disparar una consulta por fila.
+  """
+  def list_users_with_memberships(user_ids) when is_list(user_ids) do
+    members =
+      Repo.all(
+        from tm in GroupMember,
+          where: tm.user_id in ^user_ids,
+          preload: [:group, :user]
+      )
+      |> Enum.group_by(& &1.user_id)
+
+    Map.new(user_ids, fn id -> {id, Map.get(members, id, [])} end)
+  end
+
+  @doc """
   Batch variant: returns a `%{user_id => [Group]}` map for a list of user ids
   in a single query (with groups preloaded), instead of one query per user.
   Users without memberships map to an empty list.
@@ -676,8 +693,7 @@ defmodule Tokengate.Accounts do
         where: rl.api_key_id in ^api_key_ids,
         group_by: rl.api_key_id,
         select:
-          {rl.api_key_id, count(rl.id),
-           fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)}
+          {rl.api_key_id, count(rl.id), fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)}
 
     query =
       if from do
@@ -791,8 +807,8 @@ defmodule Tokengate.Accounts do
   @doc """
   Looks up a service by a presented API key token.
   Returns `{:ok, service}` only when the token matches an active API key
-  of subject_type "service". The returned service has `:api_key` and
-  `:subscription` preloaded. Returns `{:error, :not_found}` otherwise.
+  of subject_type "service". The returned service has `:api_key` preloaded.
+  Returns `{:error, :not_found}` otherwise.
   """
   def get_service_by_api_key(token) when is_binary(token) do
     key_hash = hash_api_key(token)

@@ -5,7 +5,6 @@ defmodule TokengateWeb.MaintenanceLive do
   Currently supports:
     * Reset all request logs (truncate `request_logs` table)
     * Reset sticky sessions
-    * Reset per-field member extras (budget, concurrency, rpm)
   """
 
   use TokengateWeb, :live_view
@@ -36,11 +35,8 @@ defmodule TokengateWeb.MaintenanceLive do
       |> assign(:is_admin, user && user.global_role == "admin")
       |> assign(:confirm_reset, false)
       |> assign(:confirm_sticky_reset, false)
-      |> assign(:extras_reset_type, nil)
       |> assign(:log_count, count_logs())
       |> assign(:sticky_count, sticky_count())
-      |> assign(:extras_concurrency_count, count_members_with_extra(:extra_concurrency))
-      |> assign(:extras_rpm_count, count_members_with_extra(:extra_rpm))
       |> assign(:global_subject_type, "user")
       |> assign(:groups, Accounts.list_groups())
       |> assign(:services, Accounts.list_services())
@@ -160,56 +156,6 @@ defmodule TokengateWeb.MaintenanceLive do
         {:noreply, put_flash(socket, :error, "No se pudo encolar la actualización.")}
     end
   end
-
-  @impl true
-  def handle_event("show_extras_reset_confirm", %{"field" => field}, socket)
-      when field in ["extra_concurrency", "extra_rpm"] do
-    {:noreply, assign(socket, :extras_reset_type, String.to_existing_atom(field))}
-  end
-
-  @impl true
-  def handle_event("cancel_extras_reset", _params, socket) do
-    {:noreply, assign(socket, :extras_reset_type, nil)}
-  end
-
-  @impl true
-  def handle_event("reset_extra", %{"field" => field}, socket)
-      when field in ["extra_concurrency", "extra_rpm"] do
-    field_atom = String.to_existing_atom(field)
-    count = reset_member_extra(field_atom)
-    new_count = count_members_with_extra(field_atom)
-
-    Tokengate.Auditing.audit(
-      socket.assigns.current_user,
-      "settings.reset_member_extra",
-      "group_member",
-      nil,
-      %{"field" => field, "affected" => count}
-    )
-
-    count_assign =
-      case field_atom do
-        :extra_concurrency -> {:extras_concurrency_count, new_count}
-        :extra_rpm -> {:extras_rpm_count, new_count}
-      end
-
-    label =
-      case field_atom do
-        :extra_concurrency -> "Concurrencia"
-        :extra_rpm -> "RPM"
-      end
-
-    socket =
-      socket
-      |> assign(:extras_reset_type, nil)
-      |> put_flash(:info, "#{label} reiniciado en #{count} miembros.")
-
-    socket = socket |> assign(elem(count_assign, 0), elem(count_assign, 1))
-
-    {:noreply, socket}
-  end
-
-  ## Global daily spending cap (kill-switch) --------------------------------
 
   @impl true
   def handle_event("save_global_cap", %{"global_settings" => params}, socket) do
@@ -479,54 +425,6 @@ defmodule TokengateWeb.MaintenanceLive do
 
             <div class="divider my-2"></div>
 
-            <h3 class="font-semibold text-base-content mb-2">Reiniciar extras de miembros</h3>
-            <p class="text-sm text-base-content/60 mb-3">
-              Reinicia un campo extra específico de todos los miembros a los valores por defecto de su grupo.
-              El gasto acumulado NO se resetea.
-            </p>
-
-            <div class="space-y-2">
-              <div class="flex items-center justify-between">
-                <div>
-                  <span class="text-sm font-medium text-base-content">Concurrencia</span>
-                  <span class="text-xs text-base-content/50 ml-2">
-                    <span class="font-mono">{@extras_concurrency_count}</span> miembros
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  phx-click="show_extras_reset_confirm"
-                  phx-value-field="extra_concurrency"
-                  class="btn btn-warning btn-outline btn-xs"
-                  id="reset-extras-concurrency-btn"
-                  disabled={@extras_concurrency_count == 0}
-                >
-                  Reiniciar
-                </button>
-              </div>
-
-              <div class="flex items-center justify-between">
-                <div>
-                  <span class="text-sm font-medium text-base-content">RPM</span>
-                  <span class="text-xs text-base-content/50 ml-2">
-                    <span class="font-mono">{@extras_rpm_count}</span> miembros
-                  </span>
-                </div>
-                <button
-                  type="button"
-                  phx-click="show_extras_reset_confirm"
-                  phx-value-field="extra_rpm"
-                  class="btn btn-warning btn-outline btn-xs"
-                  id="reset-extras-rpm-btn"
-                  disabled={@extras_rpm_count == 0}
-                >
-                  Reiniciar
-                </button>
-              </div>
-            </div>
-
-            <div class="divider my-2"></div>
-
             <%!-- External data, not user data: the refresh upserts the mirror
                  from models.dev and re-materializes provider identity. Nothing
                  is deleted, so it belongs in the caution zone. --%>
@@ -686,54 +584,6 @@ defmodule TokengateWeb.MaintenanceLive do
           </div>
         </div>
       </div>
-
-      <%!-- Confirmation modal: reset member extra field --%>
-      <%= if @extras_reset_type do %>
-        <% field_label =
-          case @extras_reset_type do
-            :extra_concurrency -> "concurrencia"
-            :extra_rpm -> "RPM"
-          end
-
-        field_name =
-          case @extras_reset_type do
-            :extra_concurrency -> "extra_concurrency"
-            :extra_rpm -> "extra_rpm"
-          end %>
-        <div class="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_extras_reset" />
-          <div class="relative card bg-base-100 border border-warning/50 shadow-xl w-full max-w-md">
-            <div class="card-body">
-              <h3 class="card-title text-warning flex items-center gap-2">
-                <.icon name="hero-exclamation-triangle" class="w-5 h-5" /> ¿Reiniciar {field_label}?
-              </h3>
-              <p class="text-sm text-base-content/70 mt-2">
-                Esto pondrá <code>{field_name}</code>
-                en <strong>nil</strong>
-                para todos los miembros que tengan un valor distinto de nil.
-              </p>
-              <p class="text-sm text-base-content/70 mt-1">
-                Cada miembro quedará con el valor por defecto de su grupo.
-                El gasto acumulado <strong>no se resetea</strong>.
-              </p>
-              <div class="flex gap-2 mt-4 justify-end">
-                <button type="button" phx-click="cancel_extras_reset" class="btn btn-ghost btn-sm">
-                  Cancelar
-                </button>
-                <button
-                  type="button"
-                  phx-click="reset_extra"
-                  phx-value-field={field_name}
-                  class="btn btn-warning btn-sm"
-                  id="confirm-reset-extra-btn"
-                >
-                  Sí, reiniciar
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      <% end %>
     </Layouts.dashboard>
     """
   end
@@ -751,31 +601,6 @@ defmodule TokengateWeb.MaintenanceLive do
     rescue
       ArgumentError -> 0
     end
-  end
-
-  defp count_members_with_extra(field) do
-    import Ecto.Query
-
-    Repo.one(
-      from(tm in "group_members",
-        where: not is_nil(field(tm, ^field)),
-        select: count(tm.id)
-      )
-    )
-  end
-
-  @extra_fields ~w(extra_concurrency extra_rpm)a
-
-  defp reset_member_extra(field) when field in @extra_fields do
-    import Ecto.Query
-
-    {count, _} =
-      Repo.update_all(
-        from(tm in "group_members", where: not is_nil(field(tm, ^field))),
-        set: [{field, nil}, {:updated_at, DateTime.truncate(DateTime.utc_now(), :second)}]
-      )
-
-    count
   end
 
   ## Global cap helpers ------------------------------------------------------

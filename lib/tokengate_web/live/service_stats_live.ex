@@ -27,7 +27,7 @@ defmodule TokengateWeb.ServiceStatsLive do
 
   @impl true
   def mount(%{"service_id" => service_id}, _session, socket) do
-    service = service_id |> Accounts.get_service!() |> Repo.preload([:subscription, :api_key])
+    service = service_id |> Accounts.get_service!() |> Repo.preload([:api_key])
 
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Tokengate.PubSub, "logs:new")
@@ -702,7 +702,12 @@ defmodule TokengateWeb.ServiceStatsLive do
 
   defp safe_sub_count(_, suffix), do: "0" <> suffix
 
-  # Sub label: name, or "Ilimitado" when the service has no subscription.
-  defp sub_label(%{subscription: %{} = sub}), do: sub.name || "Sub #{String.slice(sub.id, 0, 8)}"
-  defp sub_label(_service), do: "Ilimitado"
+  # Etiqueta del gasto del servicio: ilimitado, su límite mensual, o sin límite
+  # (solo top-ups) — el modelo nuevo no tiene suscripciones.
+  defp sub_label(%{unlimited_spend: true}), do: "Ilimitado"
+
+  defp sub_label(%{monthly_spend_limit_usd: %Decimal{} = limit}),
+    do: "Límite $#{Decimal.to_string(limit)}/mes"
+
+  defp sub_label(_), do: "Sin límite"
 end

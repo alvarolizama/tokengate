@@ -459,11 +459,13 @@ defmodule TokengateWeb.GroupMembersLive do
           model_id in denied ->
             Providers.allow_model(member_id, model_id)
 
-          # Estado "heredado" o "agregado" → quitar:
-          #   heredado  → crea un deny (resta del union)
-          #   agregado  → revoca el extra y deja el deny por si venía de heredado
+          # Estado "heredado" o "agregado" → quitar. Un extra concedido aquí se
+          # revoca además de denegarse: dejar el extra vivo lo resucitaría al
+          # quitar el deny desde la UI (el union volvería a incluirlo).
           model_id in existing ->
-            Providers.deny_model(member_id, model_id)
+            with {:ok, _} <- Providers.deny_model(member_id, model_id) do
+              Providers.revoke_extra_model(member_id, model_id)
+            end
 
           # Estado "sin acceso" → agregar como extra.
           true ->

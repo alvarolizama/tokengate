@@ -882,7 +882,13 @@ defmodule TokengateWeb.StatsLiveTest do
     # Hold en vuelo: el proxy reserva $20 contra el tope ANTES de que el
     # request termine y su costo quede escrito en request_logs.
     {:ok, hold} =
-      Manager.reserve_credits([], Decimal.new("100.00"), Decimal.new("20.00"), false)
+      Manager.reserve(
+        nil,
+        Decimal.new("100.00"),
+        Decimal.new("1000.00"),
+        Decimal.new("20.00"),
+        false
+      )
 
     # El "gasto real reportado" = agregado de request_logs del día UTC.
     real =
@@ -910,7 +916,7 @@ defmodule TokengateWeb.StatsLiveTest do
     # que el cálculo mostrado lo ignora.
     assert Decimal.gt?(Manager.global_daily_spend(), real)
 
-    :ok = Manager.release_credits(hold)
+    :ok = Manager.release(nil, hold)
   end
 
   test "Resumen: el KPI de costo declara UTC y el reinicio solo en el período hoy",

@@ -20,7 +20,7 @@ defmodule TokengateWeb.ServicesLive do
   alias Tokengate.Providers.{Model, ServiceModel}
   alias Tokengate.Repo
 
-  @sort_columns ~w(name subscription requests monthly_spend total_spend inserted_at)a
+  @sort_columns ~w(name limit requests monthly_spend total_spend inserted_at)a
 
   @impl true
   def mount(_params, _session, socket) do
@@ -77,14 +77,7 @@ defmodule TokengateWeb.ServicesLive do
   defp load_services(socket) do
     services =
       from(s in Service,
-        preload: [:api_key, :subscription],
-        order_by: [asc: s.name]
-      )
-      |> Repo.all()
-
-    subscriptions =
-      from(s in Tokengate.Credits.Subscription,
-        where: is_nil(s.user_id) and s.status == "active",
+        preload: [:api_key],
         order_by: [asc: s.name]
       )
       |> Repo.all()
@@ -116,7 +109,6 @@ defmodule TokengateWeb.ServicesLive do
 
     socket
     |> assign(:all_services, services)
-    |> assign(:subscriptions, subscriptions)
     |> assign(:granted_models, granted_models)
     |> assign(:models, models)
     |> assign(:service_stats, stats)
@@ -159,8 +151,7 @@ defmodule TokengateWeb.ServicesLive do
       Enum.filter(socket.assigns.all_services, fn s ->
         search == "" or
           String.contains?(String.downcase(s.name), search_down) or
-          (s.subscription &&
-             String.contains?(String.downcase(s.subscription.name || ""), search_down))
+          String.contains?(String.downcase(limit_search_text(s)), search_down)
       end)
 
     sorted =
@@ -203,10 +194,8 @@ defmodule TokengateWeb.ServicesLive do
     )
   end
 
+  defp sort_value(s, :limit, _ctx), do: limit_search_text(s)
   defp sort_value(s, :name, _ctx), do: String.downcase(s.name || "")
-
-  defp sort_value(s, :subscription, _ctx),
-    do: String.downcase((s.subscription && s.subscription.name) || "")
 
   defp sort_value(s, :requests, ctx), do: stat_value(s, ctx.stats, :total_requests)
   defp sort_value(s, :monthly_spend, ctx), do: Map.get(ctx.monthly_spend, s.id)
@@ -219,6 +208,13 @@ defmodule TokengateWeb.ServicesLive do
       stat -> Map.get(stat, key) || Decimal.new(0)
     end
   end
+
+  defp limit_search_text(%{unlimited_spend: true}), do: "ilimitado"
+
+  defp limit_search_text(%{monthly_spend_limit_usd: %Decimal{} = limit}),
+    do: Decimal.to_string(limit)
+
+  defp limit_search_text(_), do: "sin límite"
 
   defp compare_vals(%Decimal{} = a, %Decimal{} = b), do: Decimal.compare(a, b)
 
@@ -607,12 +603,12 @@ defmodule TokengateWeb.ServicesLive do
   end
 
   # Sub label for display: name, or "Ilimitado" when the service has no
-  # subscription (tier 3 — only the global daily cap applies).
-  defp subscription_label(%{subscription: %{} = sub}) do
-    sub.name || "Sub #{String.slice(sub.id, 0, 8)}"
-  end
+  defp subscription_label(%{unlimited_spend: true}), do: "Ilimitado"
 
-  defp subscription_label(_service), do: "Ilimitado"
+  defp subscription_label(%{monthly_spend_limit_usd: %Decimal{} = limit}),
+    do: "$#{Decimal.to_string(limit)}/mes"
+
+  defp subscription_label(_service), do: "Sin límite"
 
   ## Render ----------------------------------------------------------------
 
@@ -669,16 +665,20 @@ defmodule TokengateWeb.ServicesLive do
               label="Nombre"
               hint={"Nombre identificativo del servicio. Ej.: \"Bot de Telegram\", \"Webhook de Shopify\"."}
             />
-            <div class="mt-3">
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
               <.input
-                field={@form[:subscription_id]}
-                type="select"
-                label="Suscripción"
-                prompt="Sin suscripción (consumo ilimitado)"
-                options={
-                  Enum.map(@subscriptions, &{&1.name || "Sub #{String.slice(&1.id, 0, 8)}", &1.id})
-                }
-                hint="Sub de crédito propia del servicio. Cada servicio drena su propio bolsín. Sin sub = ilimitado (solo aplica el cap global)."
+                field={@form[:monthly_spend_limit_usd]}
+                type="number"
+                step="0.01"
+                min="0"
+                label="Límite mensual (USD)"
+                hint="0 = cero (no deja gastar). Vacío = sin límite propio (solo top-ups)."
+              />
+              <.input
+                field={@form[:unlimited_spend]}
+                type="checkbox"
+                label="Ilimitado"
+                hint="Único camino a ilimitado; gana sobre el límite."
               />
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
@@ -739,7 +739,7 @@ defmodule TokengateWeb.ServicesLive do
           <h2 class="text-lg font-semibold mb-4">
             {detail_service(assigns).name}
             <span class="text-sm text-base-content/50 font-normal">
-              · Sub: {subscription_label(detail_service(assigns))}
+              · Límite: {subscription_label(detail_service(assigns))}
             </span>
           </h2>
 
@@ -960,7 +960,7 @@ defmodule TokengateWeb.ServicesLive do
                 <th>
                   <.sort_button
                     event="sort_services"
-                    field={:subscription}
+                    field={:limit}
                     label="Suscripción"
                     current={@sort_field}
                     direction={@sort_direction}

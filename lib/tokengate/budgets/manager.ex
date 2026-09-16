@@ -393,7 +393,6 @@ defmodule Tokengate.Budgets.Manager do
     )
   end
 
-
   @doc """
   Gasto del mes **debitado al límite** de un sujeto, desde el contador ETS
   (display/tests). `subject` es `{:user, id}` o `{:service, id}`.

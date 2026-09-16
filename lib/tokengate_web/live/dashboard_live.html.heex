@@ -191,17 +191,15 @@
                   </div>
                 <% end %>
 
-                <%!-- Credit / spend — mt-auto pushes to bottom --%>
+                <%!-- Límite mensual + top-ups — mt-auto pushes to bottom --%>
                 <div class="mt-auto pt-4 border-t border-base-200 space-y-3">
                   <div>
-                    <%= if t.credit.has_credit? do %>
+                    <%= if credit_visible?(t.credit) do %>
                       <div class="flex items-center justify-between text-xs">
-                        <span class="text-base-content/60">Crédito restante</span>
+                        <span class="text-base-content/60">Límite mensual</span>
                         <span class="font-mono">
-                          ${format_micro(t.credit.remaining_micro)}
-                          <span class="text-base-content/40">
-                            / ${format_micro(t.credit.credited_micro)}
-                          </span>
+                          {format_decimal(t.credit.limit_spend_usd)}
+                          <span class="text-base-content/40">/ {format_decimal(t.credit.limit_usd)}</span>
                         </span>
                       </div>
                       <div class="mt-1 h-2 rounded-full bg-base-200 overflow-hidden">
@@ -212,8 +210,21 @@
                         >
                         </div>
                       </div>
+                      <div
+                        :if={Decimal.compare(t.credit.remaining_topup_usd, 0) == :gt}
+                        class="flex items-center justify-between text-xs"
+                      >
+                        <span class="text-base-content/60">Top-ups disponibles</span>
+                        <span class="font-mono text-success">
+                          {format_decimal(t.credit.remaining_topup_usd)}
+                        </span>
+                      </div>
                     <% else %>
                       <div class="flex items-center justify-between text-xs">
+                        <span class="text-base-content/60">Límite mensual</span>
+                        <span class="text-base-content/40">Sin límite</span>
+                      </div>
+                      <div class="flex items-center justify-between text-xs mt-1">
                         <span class="text-base-content/60">Gasto mensual</span>
                         <span class="font-mono">${format_decimal(t.monthly_spend)}</span>
                       </div>

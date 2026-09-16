@@ -117,16 +117,12 @@ defmodule TokengateWeb.UsersLive do
 
     user_groups = load_user_groups(filtered)
 
-    # Crédito vigente por usuario (grants únicos: defaults de sus grupos +
-    # subs directas, dedup de subs compartidas). Grants = 1 query por sub del
-    # usuario; la clave incluye el conjunto de ids filtrados para no servir
-    # entradas rancias (5s TTL) cuando el set cambia.
-    credit_by_user =
+    # Límite de gasto efectivo por usuario (propio o heredado del grupo) más el
+    # gasto del mes. En lote: una query por sujeto, nunca una por membresía.
+    users_credit =
       DashboardCache.fetch_or_compute(
         {:users_credit_by_user, Enum.map(filtered, & &1.id)},
-        fn ->
-          Map.new(filtered, &{&1.id, Credits.user_credit(&1.id)})
-        end
+        fn -> load_users_credit(filtered) end
       )
 
     # Filter by today's spend when toggle is active
@@ -146,7 +142,7 @@ defmodule TokengateWeb.UsersLive do
       spend_by_user: spend_by_user,
       total_spend_by_user: total_spend_by_user,
       user_groups: user_groups,
-      credit_by_user: credit_by_user
+      users_credit: users_credit
     }
 
     sorted =
@@ -164,7 +160,7 @@ defmodule TokengateWeb.UsersLive do
     |> assign(:spend_by_user, spend_by_user)
     |> assign(:total_spend_by_user, total_spend_by_user)
     |> assign(:user_groups, user_groups)
-    |> assign(:credit_by_user, credit_by_user)
+    |> assign(:users_credit, users_credit)
     |> assign(:users_empty?, sorted == [])
     |> assign(:page, page)
     |> assign(:total_count, total_count)
@@ -199,19 +195,18 @@ defmodule TokengateWeb.UsersLive do
   defp sort_value(user, :role, _ctx), do: user.global_role || ""
   defp sort_value(user, :status, _ctx), do: user.status || ""
 
+  # Remanente del límite mensual efectivo (nil = sin límite definido).
+  defp sort_value(user, :credit, ctx) do
+    case Map.get(ctx.users_credit, user.id) do
+      %{remaining_limit_usd: %Decimal{} = rem} -> Decimal.to_float(rem)
+      _ -> nil
+    end
+  end
+
   defp sort_value(user, :groups, ctx) do
     case Map.get(ctx.user_groups, user.id, []) do
       [] -> ""
       groups -> groups |> Enum.map(&String.downcase(&1.name)) |> Enum.join(", ")
-    end
-  end
-
-  # Crédito restante (nil = sin crédito → tier 3, ordena último igual que nil).
-  defp sort_value(user, :credit, ctx) do
-    case Map.get(ctx.credit_by_user, user.id) do
-      %{credited_micro: 0} -> nil
-      %{remaining_micro: rem} -> rem
-      _ -> nil
     end
   end
 
@@ -227,6 +222,48 @@ defmodule TokengateWeb.UsersLive do
   end
 
   defp sort_value(user, :inserted_at, _ctx), do: user.inserted_at
+
+  # Límite efectivo + gasto del mes por usuario, en lote (una query por sujeto).
+  # El usuario hereda el límite de su grupo si no define el suyo.
+  defp load_users_credit(users) do
+    users
+    |> Enum.map(& &1.id)
+    |> Tokengate.Accounts.list_users_with_memberships()
+    |> Map.new(fn {user_id, memberships} ->
+      case memberships do
+        [] ->
+          {user_id,
+           %{
+             limit_usd: nil,
+             unlimited?: false,
+             spend_usd: Decimal.new(0),
+             limit_spend_usd: Decimal.new(0),
+             remaining_limit_usd: nil
+           }}
+
+        memberships ->
+          summaries = Credits.summaries(memberships)
+          member_ids = Enum.map(memberships, & &1.id)
+
+          # El primer resumen con camino de gasto gana (normalmente hay uno:
+          # un usuario pertenece a un solo grupo).
+          case Enum.find(member_ids, &Map.has_key?(summaries, &1)) do
+            nil ->
+              {user_id,
+               %{
+                 limit_usd: nil,
+                 unlimited?: false,
+                 spend_usd: Decimal.new(0),
+                 limit_spend_usd: Decimal.new(0),
+                 remaining_limit_usd: nil
+               }}
+
+            id ->
+              {user_id, Map.fetch!(summaries, id)}
+          end
+      end
+    end)
+  end
 
   # nils always sort last, in both directions (users without spend/groups data).
   defp compare_sort_values(a, b, direction) do
@@ -897,7 +934,7 @@ defmodule TokengateWeb.UsersLive do
                   user_groups={@user_groups}
                   spend_by_user={@spend_by_user}
                   total_spend_by_user={@total_spend_by_user}
-                  credit_by_user={@credit_by_user}
+                  users_credit={@users_credit}
                   current_user={@current_user}
                   timezone={@timezone}
                 />
@@ -1012,15 +1049,31 @@ defmodule TokengateWeb.UsersLive do
 
   ## Credit helpers ------------------------------------------------------------
 
-  # Porcentaje consumido del crédito (nil cuando no hay crédito otorgado).
-  defp credit_pct(%{credited_micro: 0}), do: nil
-
-  defp credit_pct(%{credited_micro: c, consumed_micro: k}) when c > 0,
-    do: Float.round(k / c * 100, 1)
+  # Porcentaje consumido del límite mensual efectivo (nil = sin límite → sin
+  # barra). Un límite en cero está al 100%: bloquea todo.
+  defp credit_pct(%{limit_usd: limit, limit_spend_usd: spent}) when not is_nil(limit) do
+    if Decimal.compare(limit, 0) != :gt do
+      100.0
+    else
+      spent
+      |> Decimal.div(limit)
+      |> Decimal.mult(100)
+      |> Decimal.round(1)
+      |> Decimal.to_float()
+      |> min(100.0)
+    end
+  end
 
   defp credit_pct(_), do: nil
 
   # Formatea micro-USD como USD.
+  # El template formatea en micro-USD; los montos nuevos son Decimal USD.
+  defp decimal_to_micro(nil), do: 0
+
+  defp decimal_to_micro(%Decimal{} = d) do
+    d |> Decimal.mult(1_000_000) |> Decimal.round(0, :half_up) |> Decimal.to_integer()
+  end
+
   defp format_micro(micro) when is_integer(micro) do
     micro
     |> Decimal.new()
@@ -1049,7 +1102,7 @@ defmodule TokengateWeb.UsersLive do
   attr :user_groups, :map, required: true
   attr :spend_by_user, :map, required: true
   attr :total_spend_by_user, :map, required: true
-  attr :credit_by_user, :map, required: true
+  attr :users_credit, :map, required: true
   attr :current_user, :map, required: true
   attr :timezone, :string, required: true
 
@@ -1083,23 +1136,28 @@ defmodule TokengateWeb.UsersLive do
       </div>
     </td>
     <td id={"credit-#{@user.id}"}>
-      <%= case Map.get(@credit_by_user, @user.id) do %>
+      <%= case Map.get(@users_credit, @user.id) do %>
         <% nil -> %>
           <span class="text-xs text-base-content/30">—</span>
-        <% %{has_credit?: false} -> %>
+        <% %{unlimited?: true} -> %>
           <span
-            class="badge badge-sm badge-ghost badge-outline"
-            title="Sin suscripción aplicable (tier 3): consumo sin tope"
+            class="badge badge-sm badge-success badge-outline"
+            title="Marcado ilimitado: solo topa el cap global diario"
           >
             Ilimitado
           </span>
-        <% %{credited_micro: 0} -> %>
-          <span class="text-xs text-base-content/30">—</span>
+        <% %{limit_usd: nil} -> %>
+          <span
+            class="badge badge-sm badge-warning badge-outline"
+            title="Sin límite propio ni del grupo: solo top-ups"
+          >
+            Sin límite
+          </span>
         <% credit -> %>
           <div class="flex items-center gap-2">
             <span class="text-xs font-mono">
-              ${format_micro(credit.remaining_micro)}
-              <span class="text-base-content/40">/ ${format_micro(credit.credited_micro)}</span>
+              ${format_micro(decimal_to_micro(credit.remaining_limit_usd))}
+              <span class="text-base-content/40">/ ${format_micro(decimal_to_micro(credit.limit_usd))}</span>
             </span>
             <% cpct = credit_pct(credit) %>
             <div class="w-16 h-1.5 rounded-full bg-base-200 overflow-hidden">

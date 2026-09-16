@@ -138,7 +138,11 @@ defmodule Tokengate.Credits do
   defp plan_for_user(user_id) do
     user = Repo.get(User, user_id)
     group = group_for_user(user_id)
-    limit = if user, do: user_limit(user, group), else: %{limit_usd: nil, unlimited?: false, source: nil}
+
+    limit =
+      if user,
+        do: user_limit(user, group),
+        else: %{limit_usd: nil, unlimited?: false, source: nil}
 
     %{
       subject: {:user, user_id},
@@ -336,8 +340,6 @@ defmodule Tokengate.Credits do
     end)
   end
 
-  def summaries([]), do: %{}
-
   @doc """
   Resumen de los servicios en lote, indexado por `service_id`.
   """
@@ -377,8 +379,6 @@ defmodule Tokengate.Credits do
     end)
   end
 
-  def service_summaries([]), do: %{}
-
   # ---------------------------------------------------------------------------
   # Auxiliares
   # ---------------------------------------------------------------------------
@@ -401,12 +401,13 @@ defmodule Tokengate.Credits do
   top-up vigente) — para la vigilancia de mantenimiento.
   """
   def blocked_users do
-    users = Repo.all(from u in User)
+    users = Repo.all(from(u in User))
     summaries = summaries(Enum.flat_map(users, &Repo.preload(&1, :group_members).group_members))
 
     users
     |> Enum.filter(fn user ->
       membership = Enum.find(Repo.preload(user, :group_members).group_members, & &1.user_id)
+
       case membership do
         nil -> true
         member -> Map.get(summaries, member.id, %{has_path?: false}).has_path? == false

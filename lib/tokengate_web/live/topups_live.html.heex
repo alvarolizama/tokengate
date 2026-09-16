@@ -7,7 +7,7 @@
   <div class="space-y-6">
     <.header>
       Top-ups
-      <:subtitle>Crédito de una vez por usuario</:subtitle>
+      <:subtitle>Crédito de un solo uso, por usuario o servicio</:subtitle>
       <:actions>
         <div class="flex items-center gap-3">
           <.form
@@ -24,7 +24,7 @@
               <input
                 type="text"
                 name="q"
-                placeholder="Buscar por usuario…"
+                placeholder="Buscar por usuario o servicio…"
                 value={@search_query}
                 phx-debounce="300"
                 class="input input-sm input-bordered pl-9 w-64"
@@ -58,91 +58,106 @@
       <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
         <div class="card-body p-6">
           <h2 class="text-lg font-semibold mb-4">
-            {if @editing_topup_id == :new, do: "Nuevo top-up", else: "Editar top-up"}
+            {if @editing_topup_id, do: "Editar top-up", else: "Nuevo top-up"}
           </h2>
-          <.form
-            for={@form}
-            id="topup-form"
-            phx-change="topup_form_change"
-            phx-submit="save_topup"
-          >
-            <div id="topup-users">
-              <label class="text-xs text-base-content/60 block mb-1">Usuarios</label>
+          <.form for={@form} id="topup-form" phx-submit="save_topup">
+            <div id="topup-owner">
+              <label class="text-xs text-base-content/60 block mb-1">Dueño</label>
 
-              <div :if={@topup_users != []} class="flex flex-wrap gap-2 mb-2">
-                <span
-                  :for={u <- @topup_users}
-                  class="badge badge-primary badge-sm gap-1"
-                  id={"topup-user-#{u.id}"}
+              <div class="flex gap-1 mb-2">
+                <button
+                  type="button"
+                  phx-click="owner_kind"
+                  phx-value-kind="user"
+                  id="owner-kind-user"
+                  class={[
+                    "btn btn-xs",
+                    if(@owner_kind == "user", do: "btn-primary", else: "btn-ghost")
+                  ]}
                 >
-                  {u.label}
-                  <button
-                    type="button"
-                    phx-click="remove_topup_user"
-                    phx-value-user-id={u.id}
-                    class="ml-1 leading-none opacity-70 hover:opacity-100"
-                    aria-label="Quitar usuario"
-                  >
-                    ×
-                  </button>
+                  Usuario
+                </button>
+                <button
+                  type="button"
+                  phx-click="owner_kind"
+                  phx-value-kind="service"
+                  id="owner-kind-service"
+                  class={[
+                    "btn btn-xs",
+                    if(@owner_kind == "service", do: "btn-primary", else: "btn-ghost")
+                  ]}
+                >
+                  Servicio
+                </button>
+              </div>
+
+              <div :if={@selected_owner} class="mb-2" id="selected-owner">
+                <span class="badge badge-primary badge-sm gap-1">
+                  {owner_badge(@selected_owner)}
                 </span>
               </div>
 
               <.input
                 type="text"
-                name="topup_user_query"
-                value={@topup_user_query}
-                placeholder="Buscar por email o nombre…"
-                id="topup-user-search"
+                name="topup_owner_query"
+                value={@owner_query}
+                placeholder={"Buscar #{if @owner_kind == "user", do: "usuario", else: "servicio"}…"}
+                phx-change="search_owner"
+                phx-debounce="200"
+                id="topup-owner-search"
                 autocomplete="off"
               />
 
               <div
-                :if={@topup_user_query != "" and @topup_user_results == []}
+                :if={@owner_query != "" and @owner_results == []}
                 class="text-xs text-base-content/40 mt-2"
               >
                 Sin coincidencias.
               </div>
 
               <div
-                :if={@topup_user_results != []}
+                :if={@owner_results != []}
                 class="mt-2 max-h-40 overflow-y-auto border border-base-300 rounded-md"
               >
                 <button
-                  :for={u <- @topup_user_results}
+                  :for={o <- @owner_results}
                   type="button"
-                  id={"add-topup-user-#{u.id}"}
-                  phx-click="add_topup_user"
-                  phx-value-user-id={u.id}
-                  phx-value-label={u.name || u.email}
+                  id={"select-owner-#{o.id}"}
+                  phx-click="select_owner"
+                  phx-value-id={o.id}
                   class="w-full text-left px-3 py-2 text-sm hover:bg-base-100 border-b border-base-300 last:border-b-0"
                 >
-                  <div class="font-medium">{u.name || u.email}</div>
-                  <div class="text-xs text-base-content/60">{u.email}</div>
+                  <div class="font-medium">{subject_primary(o)}</div>
+                  <div :if={subject_secondary(o)} class="text-xs text-base-content/60">
+                    {subject_secondary(o)}
+                  </div>
                 </button>
               </div>
             </div>
 
-            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
-              <.input field={@form[:name]} type="text" label="Nombre (opcional)" />
-              <.input field={@form[:units]} type="number" min="0" label="Créditos" />
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
               <.input
-                field={@form[:status]}
-                type="select"
-                label="Estado"
-                options={[{"Activo", "active"}, {"Pausado", "paused"}]}
+                field={@form[:amount_usd]}
+                type="number"
+                step="0.01"
+                min="0.01"
+                label="Monto (USD)"
               />
+              <.input field={@form[:label]} type="text" label="Etiqueta (opcional)" />
             </div>
 
             <div class="mt-3">
               <.input
-                type="date"
-                name="topup_expires_on"
-                value={@topup_expires_on}
-                label="Vence (opcional)"
-                hint="Vacío = sin vencimiento"
-                id="topup-expires-on"
+                field={@form[:expires_in_days]}
+                type="select"
+                label="Expiración"
+                options={expiry_options()}
+                hint="Contada desde su creación"
               />
+            </div>
+
+            <div class="mt-3">
+              <.input field={@form[:note]} type="text" label="Nota (opcional)" />
             </div>
 
             <div class="flex gap-2 mt-4 justify-end">
@@ -165,40 +180,35 @@
           <tr>
             <th>
               <.sort_button
-                event="sort_topups"
                 field={:target}
-                label="Objetivo"
-                current={@sort_field}
-                direction={@sort_direction}
+                label="Dueño"
+                sort_field={@sort_field}
+                sort_direction={@sort_direction}
               />
             </th>
             <th class="text-right">
               <.sort_button
-                event="sort_topups"
-                field={:units}
-                label="Créditos"
-                current={@sort_field}
-                direction={@sort_direction}
-                align="right"
+                field={:amount}
+                label="Monto"
+                sort_field={@sort_field}
+                sort_direction={@sort_direction}
               />
             </th>
             <th class="text-right">Consumo</th>
             <th>
               <.sort_button
-                event="sort_topups"
                 field={:expires_at}
                 label="Vence"
-                current={@sort_field}
-                direction={@sort_direction}
+                sort_field={@sort_field}
+                sort_direction={@sort_direction}
               />
             </th>
             <th>
               <.sort_button
-                event="sort_topups"
                 field={:status}
                 label="Estado"
-                current={@sort_field}
-                direction={@sort_direction}
+                sort_field={@sort_field}
+                sort_direction={@sort_direction}
               />
             </th>
             <th></th>
@@ -206,33 +216,34 @@
         </thead>
         <tbody id="topups" phx-update="stream">
           <tr
-            :for={{dom_id, sub} <- @streams.topups}
+            :for={{dom_id, topup} <- @streams.topups}
             id={dom_id}
-            class={Credit.archived?(sub, @archived_ids) && "opacity-50"}
+            class={archived?(topup) && "opacity-50"}
           >
-            <td class="font-medium">{Credit.target_label(sub, assigns)}</td>
-            <td class="text-right font-mono">{sub.units}</td>
-            <td id={"topup-usage-#{sub.id}"} class="w-40">
-              {Credit.render_usage_cell(sub, assigns)}
-              <div :if={sub.status == "paused"} class="text-[10px] text-warning mt-0.5">
+            <td>
+              <div class="font-medium">{owner_label(topup)}</div>
+              <div class="text-[10px] text-base-content/50">{owner_type(topup)}</div>
+            </td>
+            <td class="text-right font-mono">{usd(topup.amount_usd)}</td>
+            <td id={"topup-usage-#{topup.id}"} class="w-40">
+              <div class="flex items-center gap-2">
+                <div class="flex-1 h-1.5 rounded-full bg-base-300 overflow-hidden">
+                  <div
+                    class="h-full bg-primary"
+                    style={"width: #{consumed_pct(topup)}%"}
+                  />
+                </div>
+                <span class="text-xs font-mono">{usd(Topups.consumed_usd(topup))}</span>
+              </div>
+              <div :if={state(topup) == :revoked} class="text-[10px] text-warning mt-0.5">
                 saldo revocado
               </div>
             </td>
-            <td class="text-xs">{expires_label(sub.expires_at)}</td>
+            <td class="text-xs">{expires_label(topup.expires_at)}</td>
             <td>
               <div class="flex items-center gap-1">
-                <span class={[
-                  "badge badge-sm",
-                  if(sub.status == "active", do: "badge-success", else: "badge-ghost")
-                ]}>
-                  {Credit.topup_status_label(sub.status)}
-                </span>
-                <span
-                  :if={Credit.archived?(sub, @archived_ids)}
-                  class="badge badge-sm badge-warning badge-outline"
-                  id={"archived-badge-#{sub.id}"}
-                >
-                  {Credit.archived_reason(sub)}
+                <span class={["badge badge-sm", state_badge_class(state(topup))]}>
+                  {state_label(state(topup))}
                 </span>
               </div>
             </td>
@@ -240,26 +251,26 @@
               <div class="flex gap-1 justify-end">
                 <button
                   phx-click="edit_topup"
-                  phx-value-id={sub.id}
+                  phx-value-id={topup.id}
                   class="btn btn-ghost btn-xs"
-                  id={"edit-topup-#{sub.id}"}
+                  id={"edit-topup-#{topup.id}"}
                 >
                   Editar
                 </button>
                 <button
                   phx-click="toggle_topup_status"
-                  phx-value-id={sub.id}
+                  phx-value-id={topup.id}
                   class="btn btn-ghost btn-xs"
-                  id={"toggle-topup-status-#{sub.id}"}
+                  id={"toggle-topup-status-#{topup.id}"}
                 >
-                  {if sub.status == "active", do: "Desactivar", else: "Reactivar"}
+                  {if topup.status == "active", do: "Desactivar", else: "Reactivar"}
                 </button>
                 <button
                   phx-click="revoke_topup"
-                  phx-value-id={sub.id}
+                  phx-value-id={topup.id}
                   data-confirm="¿Revocar este top-up? El saldo restante deja de otorgarse."
                   class="btn btn-ghost btn-xs text-error"
-                  id={"revoke-topup-#{sub.id}"}
+                  id={"revoke-topup-#{topup.id}"}
                 >
                   <.icon name="hero-trash" class="w-4 h-4" /> Revocar
                 </button>
@@ -274,7 +285,7 @@
         id="topups-empty"
       >
         <.icon name="hero-arrow-up-circle" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-        <p>No hay top-ups — ningún usuario tiene crédito de una vez.</p>
+        <p>No hay top-ups — ningún sujeto tiene crédito de un solo uso.</p>
       </div>
     </div>
   </div>

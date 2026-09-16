@@ -25,7 +25,6 @@ defmodule TokengateWeb.DashboardLive do
   import TokengateWeb.KpiHelpers, only: [kpi_cards: 1]
 
   alias Tokengate.Accounts
-  alias Tokengate.Budgets.Manager, as: Budgets
   alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Periods
@@ -259,17 +258,21 @@ defmodule TokengateWeb.DashboardLive do
   defp load_personal_data(socket, user) do
     memberships = Accounts.list_group_members_for_user(user.id)
 
+    # El resumen del sujeto (límite efectivo + top-ups) se resuelve en lote:
+    # una pasada para todas las membresías.
+    summaries = Tokengate.Credits.summaries(memberships)
+
     groups =
       Enum.map(memberships, fn membership ->
-        spend = Budgets.spend(membership.id)
+        summary = Map.get(summaries, membership.id)
 
         %{
           membership: membership,
           group: membership.group,
           api_key: membership.api_key,
-          monthly_limit: nil,
-          monthly_spend: spend.monthly_usd,
-          credit: Tokengate.Credits.member_credit(membership)
+          monthly_limit: summary && summary.limit_usd,
+          monthly_spend: (summary && summary.spend_usd) || Decimal.new(0),
+          credit: summary
         }
       end)
 
@@ -781,11 +784,23 @@ defmodule TokengateWeb.DashboardLive do
 
   ## Credit helpers --------------------------------------------------------
 
-  @doc "Porcentaje consumido del crédito (nil si no hay crédito asignado)."
-  def credit_pct(%{credited_micro: 0}), do: nil
+  @doc "¿Hay límite mensual definido para el sujeto? (nil = sin límite)."
+  def credit_visible?(%{limit_usd: limit}), do: not is_nil(limit)
+  def credit_visible?(_), do: false
 
-  def credit_pct(%{credited_micro: c, consumed_micro: k}) when c > 0,
-    do: Float.round(k / c * 100, 1)
+  @doc "Porcentaje consumido del límite mensual efectivo (nil = sin límite)."
+  def credit_pct(%{limit_usd: limit, limit_spend_usd: spent}) when not is_nil(limit) do
+    if Decimal.compare(limit, 0) != :gt do
+      100.0
+    else
+      spent
+      |> Decimal.div(limit)
+      |> Decimal.mult(100)
+      |> Decimal.round(1)
+      |> Decimal.to_float()
+      |> min(100.0)
+    end
+  end
 
   def credit_pct(_), do: nil
 

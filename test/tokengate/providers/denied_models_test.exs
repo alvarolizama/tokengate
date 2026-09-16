@@ -228,7 +228,10 @@ defmodule Tokengate.Providers.DeniedModelsTest do
       {:ok, _} = Providers.deny_model(m2.id, g1.id)
 
       result =
-        Providers.list_accessible_models_for_members([Repo.preload(m1, :group), Repo.preload(m2, :group)])
+        Providers.list_accessible_models_for_members([
+          Repo.preload(m1, :group),
+          Repo.preload(m2, :group)
+        ])
         |> Map.new(fn {id, models} -> {id, models} end)
 
       assert MapSet.new(Enum.map(result[m1.id], & &1.id)) == ids([g1, extra])

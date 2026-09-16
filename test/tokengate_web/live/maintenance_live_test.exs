@@ -242,10 +242,12 @@ defmodule TokengateWeb.SettingsLiveTest do
       insert_log(cost: Decimal.new("1.25"))
 
       # Hold en vuelo en el contador ETS: NO debe ser el número principal.
+      # Arranca en el gasto durable (semilla desde DB) y suma el hold.
       {:ok, hold} =
-        Tokengate.Budgets.Manager.reserve_credits(
-          [],
-          Decimal.new("2.00"),
+        Tokengate.Budgets.Manager.reserve(
+          nil,
+          nil,
+          Decimal.new("10.00"),
           Decimal.new("0.25"),
           false
         )
@@ -261,7 +263,7 @@ defmodule TokengateWeb.SettingsLiveTest do
       assert has_element?(view, "#global-enforcement-drift")
       assert render(view) =~ "$1.50"
 
-      :ok = Tokengate.Budgets.Manager.release_credits(hold)
+      :ok = Tokengate.Budgets.Manager.release(nil, hold)
     end
 
     test "sin drift no muestra la línea del contador de enforcement", %{conn: conn} do
@@ -271,11 +273,9 @@ defmodule TokengateWeb.SettingsLiveTest do
       conn = login(conn, admin, pass)
       {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
 
-      # Se registra el mismo gasto en el contador ETS: ambos coinciden.
-      {:ok, hold} =
-        Tokengate.Budgets.Manager.reserve_credits([], nil, Decimal.new("1.25"), false)
-
-      Tokengate.Budgets.Manager.settle_credits(hold, Decimal.new("1.25"))
+      # El reconciliador (SyncWorker) alinea el contador ETS con la DB: ambos
+      # coinciden y no hay drift que mostrar.
+      :ok = Tokengate.Budgets.Manager.set_global_from_db(1_250_000)
 
       view |> element("#global-cap-card") |> render()
 

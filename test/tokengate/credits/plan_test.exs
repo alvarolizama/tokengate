@@ -33,7 +33,13 @@ defmodule Tokengate.Credits.PlanTest do
   # El alta (registration_changeset) no castea los campos de gasto: se crean
   # aparte, igual que haría un admin desde la UI.
   defp user_fixture(attrs \\ %{}) do
-    {spend, rest} = Map.split(attrs, ["monthly_spend_limit_usd", "unlimited_spend", :monthly_spend_limit_usd, :unlimited_spend])
+    {spend, rest} =
+      Map.split(attrs, [
+        "monthly_spend_limit_usd",
+        "unlimited_spend",
+        :monthly_spend_limit_usd,
+        :unlimited_spend
+      ])
 
     {:ok, user} =
       Accounts.register_user(
@@ -259,8 +265,22 @@ defmodule Tokengate.Credits.PlanTest do
       user = user_fixture()
       now = DateTime.utc_now()
 
-      _tardio = topup_fixture(%{"user_id" => user.id, "amount_usd" => "10", "expires_at" => DateTime.add(now, 30, :day), "label" => "30d"})
-      _temprano = topup_fixture(%{"user_id" => user.id, "amount_usd" => "10", "expires_at" => DateTime.add(now, 2, :day), "label" => "2d"})
+      _tardio =
+        topup_fixture(%{
+          "user_id" => user.id,
+          "amount_usd" => "10",
+          "expires_at" => DateTime.add(now, 30, :day),
+          "label" => "30d"
+        })
+
+      _temprano =
+        topup_fixture(%{
+          "user_id" => user.id,
+          "amount_usd" => "10",
+          "expires_at" => DateTime.add(now, 2, :day),
+          "label" => "2d"
+        })
+
       _sin = topup_fixture(%{"user_id" => user.id, "amount_usd" => "10", "label" => "nunca"})
 
       labels = Credits.Topups.draining_order({:user, user.id}) |> Enum.map(& &1.label)

@@ -46,7 +46,10 @@ defmodule Tokengate.Accounts.ApiKeysPerSubjectTest do
 
   defp group_fixture do
     {:ok, group} =
-      Accounts.create_group(%{"name" => "G#{System.unique_integer([:positive])}", "unlimited_spend" => true})
+      Accounts.create_group(%{
+        "name" => "G#{System.unique_integer([:positive])}",
+        "unlimited_spend" => true
+      })
 
     group
   end

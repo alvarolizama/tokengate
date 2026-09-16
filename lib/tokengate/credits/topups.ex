@@ -28,25 +28,28 @@ defmodule Tokengate.Credits.Topups do
 
   @doc "Top-ups de un usuario (cualquier estado), más recientes primero."
   def list_for_user(user_id) do
-    Repo.all(
-      from t in Topup,
-        where: t.user_id == ^user_id,
-        order_by: [desc: t.inserted_at]
-    )
+    Topup
+    |> where([t], t.user_id == ^user_id)
+    |> order_by([t], desc: t.inserted_at)
+    |> preload([:user, :service])
+    |> Repo.all()
   end
 
   @doc "Top-ups de un servicio (cualquier estado), más recientes primero."
   def list_for_service(service_id) do
-    Repo.all(
-      from t in Topup,
-        where: t.service_id == ^service_id,
-        order_by: [desc: t.inserted_at]
-    )
+    Topup
+    |> where([t], t.service_id == ^service_id)
+    |> order_by([t], desc: t.inserted_at)
+    |> preload([:user, :service])
+    |> Repo.all()
   end
 
-  @doc "Todos los top-ups, con el dueño precargado."
+  @doc "Todos los top-ups, con el dueño (usuario/servicio) precargado."
   def list_all do
-    Repo.all(from t in Topup, order_by: [desc: t.inserted_at])
+    Topup
+    |> order_by([t], desc: t.inserted_at)
+    |> preload([:user, :service])
+    |> Repo.all()
   end
 
   def get_topup(id), do: Repo.get(Topup, id)
@@ -133,7 +136,8 @@ defmodule Tokengate.Credits.Topups do
         %{
           topup: topup,
           consumed_usd: consumed,
-          remaining_usd: if(Decimal.compare(remaining, 0) == :lt, do: Decimal.new(0), else: remaining)
+          remaining_usd:
+            if(Decimal.compare(remaining, 0) == :lt, do: Decimal.new(0), else: remaining)
         }
       end)
 
@@ -180,8 +184,6 @@ defmodule Tokengate.Credits.Topups do
     end)
   end
 
-  def summaries([]), do: %{}
-
   defp all_draining([], []), do: []
 
   defp all_draining(user_ids, service_ids) do
@@ -217,7 +219,6 @@ defmodule Tokengate.Credits.Topups do
     }
   end
 
-
   # ---------------------------------------------------------------------------
   # Invalidación de caché (constraint del contrato)
   # ---------------------------------------------------------------------------
@@ -246,7 +247,6 @@ defmodule Tokengate.Credits.Topups do
   # ---------------------------------------------------------------------------
   # Escritura
   # ---------------------------------------------------------------------------
-
 
   @doc "Crea un top-up (usuario o servicio) con su label y expiración."
   def create(attrs) do

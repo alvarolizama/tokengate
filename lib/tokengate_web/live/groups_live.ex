@@ -100,10 +100,6 @@ defmodule TokengateWeb.GroupsLive do
       |> Budgets.rollup_group_budgets()
       |> Map.new(fn budget -> {budget.group.id, budget} end)
 
-    # Sub vinculada de cada grupo (incluidas las pausadas) para que la tarjeta
-    # muestre el crédito del grupo, no solo el gasto.
-    group_subscriptions = Tokengate.Credits.group_subscriptions(Enum.map(groups, & &1.id))
-
     socket
     |> assign(:all_groups, groups)
     |> stream_groups()
@@ -112,7 +108,6 @@ defmodule TokengateWeb.GroupsLive do
     |> assign(:models_by_org, models_by_org)
     |> assign(:destinations_by_group, destinations_by_group)
     |> assign(:group_budgets, group_budgets)
-    |> assign(:group_subscriptions, group_subscriptions)
   end
 
   # Re-streams the (already loaded) groups filtered by the current search.
@@ -411,7 +406,7 @@ defmodule TokengateWeb.GroupsLive do
                 </div>
 
                 <%!-- Compact stats --%>
-                <% credit = group_credit(group, @group_budgets, @group_subscriptions) %>
+                <% credit = group_credit(group, @group_budgets) %>
                 <div class="flex items-center gap-4 text-sm">
                   <div class="text-center">
                     <p class="text-[10px] uppercase tracking-wide text-base-content/40">Gasto/mes</p>
@@ -490,40 +485,33 @@ defmodule TokengateWeb.GroupsLive do
     |> Map.get(:real_monthly_spend_usd, Decimal.new(0))
   end
 
-  # Crédito del grupo para la tarjeta: `sin sub` (no hay nada vinculado),
-  # `pausada` (vinculada pero revocada) o `usado / otorgado` sumando los grants
-  # de sus miembros.
-  defp group_credit(group, group_budgets, group_subscriptions) do
-    case Map.get(group_subscriptions, group.id) do
-      nil ->
-        %{label: "Crédito", value: "sin sub", class: "text-base-content/40"}
+  # Límite del grupo para la tarjeta: el grupo es el override masivo de sus
+  # miembros, así que muestra su propio límite mensual y el gasto agregado.
+  # `unlimited_spend` es el único ilimitado; sin límite, el grupo no habilita
+  # gasto a sus miembros (salvo top-ups).
+  defp group_credit(group, group_budgets) do
+    budget = Map.get(group_budgets, group.id)
 
-      %{status: "paused"} ->
-        %{label: "Crédito", value: "pausada", class: "text-warning"}
+    cond do
+      group.unlimited_spend ->
+        %{label: "Límite del grupo", value: "ilimitado", class: "text-success"}
 
-      subscription ->
-        credit_value(subscription, Map.get(group_budgets, group.id))
+      is_nil(group.monthly_spend_limit_usd) ->
+        %{label: "Límite del grupo", value: "sin límite", class: "text-warning"}
+
+      is_nil(budget) ->
+        %{label: "Límite del grupo", value: "—", class: "text-base-content/40"}
+
+      true ->
+        spent = budget.monthly_spend_usd || Decimal.new(0)
+
+        %{
+          label: "Límite del grupo",
+          value: "#{format_decimal(spent)} / #{format_decimal(group.monthly_spend_limit_usd)}",
+          class: credit_class(budget.monthly_pct)
+        }
     end
   end
-
-  defp credit_value(subscription, %{monthly_limit_usd: nil}) do
-    %{label: credit_label(subscription), value: "sin miembros", class: "text-base-content/40"}
-  end
-
-  defp credit_value(subscription, %{monthly_spend_usd: spent} = budget) do
-    %{
-      label: credit_label(subscription),
-      value: "#{format_decimal(spent)} / #{format_decimal(budget.monthly_limit_usd)}",
-      class: credit_class(budget.monthly_pct)
-    }
-  end
-
-  defp credit_value(subscription, _no_members) do
-    %{label: credit_label(subscription), value: "—", class: "text-base-content/40"}
-  end
-
-  defp credit_label(%{name: name}) when is_binary(name) and name != "", do: "Crédito · #{name}"
-  defp credit_label(_subscription), do: "Crédito"
 
   defp credit_class(nil), do: "text-base-content/60"
   defp credit_class(pct) when pct >= 100, do: "text-error"

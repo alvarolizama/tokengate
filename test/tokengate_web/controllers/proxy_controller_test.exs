@@ -255,9 +255,14 @@ defmodule TokengateWeb.ProxyControllerTest do
         cond do
           # Default del fixture: ILIMITADO (espejo del tier-3 de antes), para
           # que los tests que no hablan de crédito no tropiecen con el gate.
-          Map.get(opts, :credit_units) -> Map.put(attrs, :monthly_spend_limit_usd, to_string(opts.credit_units))
-          Map.get(opts, :blocked) -> attrs
-          true -> Map.put(attrs, :unlimited_spend, true)
+          Map.get(opts, :credit_units) ->
+            Map.put(attrs, :monthly_spend_limit_usd, to_string(opts.credit_units))
+
+          Map.get(opts, :blocked) ->
+            attrs
+
+          true ->
+            Map.put(attrs, :unlimited_spend, true)
         end
       end)
 
