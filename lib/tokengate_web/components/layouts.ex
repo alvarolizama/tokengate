@@ -276,6 +276,14 @@ defmodule TokengateWeb.Layouts do
 
           <%= if admin?(@current_scope) do %>
             <.sidebar_section id="sidebar-section-catalogo" label="Catálogo">
+              <%!-- Labs (quién construyó cada modelo) va antes de Proveedores:
+                   el lab es el nivel más alto y no depende del proveedor. --%>
+              <.sidebar_link
+                current_path={@current_path}
+                href={~p"/catalog/labs"}
+                label="Labs"
+                icon="hero-beaker"
+              />
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/catalog/providers"}
@@ -289,15 +297,17 @@ defmodule TokengateWeb.Layouts do
                 label="Modelos"
                 icon="hero-rectangle-stack"
               />
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/catalog/labs"}
-                label="Labs"
-                icon="hero-beaker"
-              />
             </.sidebar_section>
 
             <.sidebar_section id="sidebar-section-acceso" label="Acceso">
+              <%!-- Servicios va antes de Grupos: un servicio no depende de un
+                   grupo, así que se lista primero. --%>
+              <.sidebar_link
+                current_path={@current_path}
+                href={~p"/access/services"}
+                label="Servicios"
+                icon="hero-wrench-screwdriver"
+              />
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/access/groups"}
@@ -309,12 +319,6 @@ defmodule TokengateWeb.Layouts do
                 href={~p"/access/users"}
                 label="Usuarios"
                 icon="hero-users"
-              />
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/access/services"}
-                label="Servicios"
-                icon="hero-wrench-screwdriver"
               />
             </.sidebar_section>
 

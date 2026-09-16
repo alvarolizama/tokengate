@@ -82,6 +82,24 @@ defmodule TokengateWeb.SidebarTest do
       end)
 
     assert positions == Enum.sort(positions)
+
+    # Inside a section the links render in this order too. Labs goes before
+    # Proveedores (a lab is independent from any provider) and Servicios
+    # before Grupos (a service does not depend on a group).
+    for {first, second} <- [
+          {"sidebar-link-catalog-labs", "sidebar-link-catalog-providers"},
+          {"sidebar-link-catalog-providers", "sidebar-link-catalog-models"},
+          {"sidebar-link-access-services", "sidebar-link-access-groups"},
+          {"sidebar-link-access-groups", "sidebar-link-access-users"}
+        ] do
+      assert link_position(html, first) < link_position(html, second),
+             "expected #{first} to render before #{second}"
+    end
+  end
+
+  defp link_position(html, link_id) do
+    {pos, _len} = :binary.match(html, link_id)
+    pos
   end
 
   test "the active route is highlighted, drill-downs keep the parent lit", %{conn: conn} do
