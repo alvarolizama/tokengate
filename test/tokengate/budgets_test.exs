@@ -388,35 +388,44 @@ defmodule Tokengate.BudgetsTest do
 
     test "el monthly NO depende del timezone del visor (mismo número en UTC y Madrid)" do
       member = member_fixture()
-      utc_day_start = Periods.start_of_day_utc("Etc/UTC")
 
-      # 00:01 UTC: dentro del día UTC, del día de Madrid y del mes UTC — las
-      # tres ventanas, así que sirve para aislar la invarianza del monthly.
-      log_request(member.id, DateTime.add(utc_day_start, 60, :second), "1.50")
+      # Ancla: minuto 1 del MES UTC. Cae dentro del mes UTC siempre, y la
+      # invarianza que este test mide es la del monthly (el daily tiene su
+      # propio test), así que la hora de corrida no influye.
+      utc_month_start = Periods.start_of_month_utc("Etc/UTC")
+      log_request(member.id, DateTime.add(utc_month_start, 60, :second), "1.50")
 
       utc = Budgets.spend_by_member_ids([member.id], "Etc/UTC")
       madrid = Budgets.spend_by_member_ids([member.id], "Europe/Madrid")
 
       assert Decimal.eq?(utc.monthly[member.id], Decimal.new("1.50"))
+      # El mismo número con cualquier timezone del visor: el mes es UTC.
       assert Decimal.eq?(utc.monthly[member.id], madrid.monthly[member.id])
-      assert Decimal.eq?(utc.daily[member.id], madrid.daily[member.id])
     end
 
     test "el daily sí sigue el día local del visor" do
       member = member_fixture()
-      utc_day_start = Periods.start_of_day_utc("Etc/UTC")
+      # Zona con offset NEGATIVO: su medianoche cae DESPUÉS de la de UTC, así
+      # que las dos ventanas diarias nunca coinciden del todo — el test
+      # discrimina a cualquier hora.
+      tz = "America/Los_Angeles"
 
-      # 23:00 UTC de ayer: fuera del día UTC (arranca a las 00:00 UTC), dentro
-      # del día de Madrid (UTC+1/+2 → su medianoche cae a las 22:00/23:00 UTC).
-      log_request(member.id, DateTime.add(utc_day_start, -3600, :second), "1.50")
+      # 00:01 UTC de hoy: dentro del día UTC, fuera del día de Los Ángeles
+      # (que aún no ha empezado).
+      log_request(member.id, DateTime.add(Periods.start_of_day_utc("Etc/UTC"), 60, :second), "1.50")
 
       utc = Budgets.spend_by_member_ids([member.id], "Etc/UTC")
-      madrid = Budgets.spend_by_member_ids([member.id], "Europe/Madrid")
+      la = Budgets.spend_by_member_ids([member.id], tz)
 
       # El mapa solo trae miembros con gasto en la ventana; los callers lo
       # leen como `get_in(...) || Decimal.new(0)` (sin entrada = 0).
-      assert Decimal.eq?(Map.get(utc.daily, member.id, Decimal.new(0)), Decimal.new("0"))
-      assert Decimal.eq?(madrid.daily[member.id], Decimal.new("1.50"))
+      assert Decimal.eq?(Map.get(utc.daily, member.id, Decimal.new(0)), Decimal.new("1.50"))
+      assert Decimal.eq?(Map.get(la.daily, member.id, Decimal.new(0)), Decimal.new("0"))
+
+      # …y el log del inicio de SU día sí entra en su ventana.
+      log_request(member.id, DateTime.add(Periods.start_of_day_utc(tz), 60, :second), "2.00")
+      la2 = Budgets.spend_by_member_ids([member.id], tz)
+      assert Decimal.eq?(Map.get(la2.daily, member.id, Decimal.new(0)), Decimal.new("2.00"))
     end
 
     test "list_member_budgets lee el gasto mensual del mes UTC" do
