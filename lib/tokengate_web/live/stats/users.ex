@@ -160,7 +160,7 @@ defmodule TokengateWeb.StatsLive.Users do
                         Crédito · ciclo
                         <div
                           class="tooltip tooltip-top"
-                          data-tip="Crédito consumido vs otorgado por las suscripciones del usuario (default de sus grupos + subs directas) en el ciclo vigente. Sin suscripción aplicable: sin límite (solo topa el cap global diario)."
+                          data-tip="Gasto del usuario contra su límite mensual efectivo (el suyo o el heredado de su grupo) en el ciclo vigente. Sin límite aplicable: solo top-ups."
                         >
                           <.icon
                             name="hero-question-mark-circle"

@@ -274,12 +274,12 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
   defp status_share(_count, 0), do: "0%"
   defp status_share(count, total), do: Stats.format_percent(count / total)
 
-  defp sub_label(%{unlimited_spend: true}), do: "Crédito ilimitado"
+  defp limit_label(%{unlimited_spend: true}), do: "Crédito ilimitado"
 
-  defp sub_label(%{monthly_spend_limit_usd: %Decimal{} = limit}),
+  defp limit_label(%{monthly_spend_limit_usd: %Decimal{} = limit}),
     do: "Límite $#{Decimal.to_string(limit)}/mes"
 
-  defp sub_label(_service), do: "Sin límite (solo top-ups)"
+  defp limit_label(_service), do: "Sin límite (solo top-ups)"
 
   defp supervisor_label(%{user: %{name: name, email: email}}) when is_binary(name),
     do: "#{name} · #{email}"
@@ -342,7 +342,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
               </span>
             </h1>
             <p class="text-sm text-base-content/70">
-              Sub: {sub_label(@service)} · últimos {period_label(@period)}
+              Sub: {limit_label(@service)} · últimos {period_label(@period)}
             </p>
           </div>
 
@@ -661,7 +661,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
 
               <div class="rounded-xl border border-base-300 px-3 py-2">
                 <dt class="text-[10px] uppercase tracking-wide text-base-content/60">Crédito</dt>
-                <dd class="mt-1">{sub_label(@service)}</dd>
+                <dd class="mt-1">{limit_label(@service)}</dd>
               </div>
             </dl>
 

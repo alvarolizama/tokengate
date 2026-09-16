@@ -603,12 +603,12 @@ defmodule TokengateWeb.ServicesLive do
   end
 
   # Sub label for display: name, or "Ilimitado" when the service has no
-  defp subscription_label(%{unlimited_spend: true}), do: "Ilimitado"
+  defp limit_label(%{unlimited_spend: true}), do: "Ilimitado"
 
-  defp subscription_label(%{monthly_spend_limit_usd: %Decimal{} = limit}),
+  defp limit_label(%{monthly_spend_limit_usd: %Decimal{} = limit}),
     do: "$#{Decimal.to_string(limit)}/mes"
 
-  defp subscription_label(_service), do: "Sin límite"
+  defp limit_label(_service), do: "Sin límite"
 
   ## Render ----------------------------------------------------------------
 
@@ -739,7 +739,7 @@ defmodule TokengateWeb.ServicesLive do
           <h2 class="text-lg font-semibold mb-4">
             {detail_service(assigns).name}
             <span class="text-sm text-base-content/50 font-normal">
-              · Límite: {subscription_label(detail_service(assigns))}
+              · Límite: {limit_label(detail_service(assigns))}
             </span>
           </h2>
 
@@ -961,7 +961,7 @@ defmodule TokengateWeb.ServicesLive do
                   <.sort_button
                     event="sort_services"
                     field={:limit}
-                    label="Suscripción"
+                    label="Límite mensual"
                     current={@sort_field}
                     direction={@sort_direction}
                   />
@@ -1057,7 +1057,7 @@ defmodule TokengateWeb.ServicesLive do
       />
     </td>
     <td class="text-sm">
-      {subscription_label(@service)}
+      {limit_label(@service)}
     </td>
     <td>
       <button

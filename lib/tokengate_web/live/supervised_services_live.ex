@@ -216,12 +216,12 @@ defmodule TokengateWeb.SupervisedServicesLive do
 
   defp format_cost(_), do: "$0.00"
 
-  defp subscription_label(%{unlimited_spend: true}), do: "Crédito ilimitado"
+  defp limit_label(%{unlimited_spend: true}), do: "Crédito ilimitado"
 
-  defp subscription_label(%{monthly_spend_limit_usd: %Decimal{} = limit}),
+  defp limit_label(%{monthly_spend_limit_usd: %Decimal{} = limit}),
     do: "Límite $#{Decimal.to_string(limit)}/mes"
 
-  defp subscription_label(_service), do: "Sin límite (solo top-ups)"
+  defp limit_label(_service), do: "Sin límite (solo top-ups)"
 
   ## Render --------------------------------------------------------------
 
@@ -345,7 +345,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
                     <span class="badge badge-outline badge-sm">
                       {service.rpm_limit || 60} RPM
                     </span>
-                    <span class="badge badge-ghost badge-sm">{subscription_label(service)}</span>
+                    <span class="badge badge-ghost badge-sm">{limit_label(service)}</span>
 
                     <%= if service.api_key do %>
                       <span class="badge badge-ghost badge-sm gap-1">
