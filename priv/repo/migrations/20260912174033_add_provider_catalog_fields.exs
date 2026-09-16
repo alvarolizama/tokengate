@@ -30,10 +30,158 @@ defmodule Tokengate.Repo.Migrations.AddProviderCatalogFields do
 
   use Ecto.Migration
 
-  alias Tokengate.Providers.Catalog
-
   require Logger
-  @catalog_keys Enum.map(Catalog.all(), & &1.key)
+  # ── Catálogo congelado ─────────────────────────────────────────────────────
+  #
+  # Esta migración se escribió cuando el catálogo de proveedores vivía en
+  # `Tokengate.Providers.Catalog` como lista compile-time. El refactor del
+  # catálogo a models.dev eliminó esas funciones, y desde entonces la cadena
+  # desde cero (drop → create → migrate) no compila: moría aquí con
+  # `function Tokengate.Providers.Catalog.all/0 is undefined`.
+  #
+  # Una migración no puede depender de código de la app que evoluciona: se
+  # congela el catálogo tal como estaba el día que se escribió (commit
+  # 27b57f6) junto con sus helpers, con el mismo comportamiento que ya corrió
+  # en los entornos existentes. Solo restaura la capacidad de correr la
+  # cadena desde cero; en las BD donde ya está aplicada no se re-ejecuta.
+
+  @builtin [
+    %{
+      key: "openrouter",
+      name: "OpenRouter",
+      base_url: "https://openrouter.ai/api/v1",
+      dialect: "openrouter",
+      billing: "pay_per_token",
+      capabilities: ["llm", "embedding"]
+    },
+    %{
+      key: "fireworks",
+      name: "Fireworks AI",
+      base_url: "https://api.fireworks.ai/inference/v1",
+      dialect: "openai",
+      billing: "pay_per_token",
+      capabilities: ["llm", "embedding"]
+    },
+    %{
+      key: "qwen_cloud",
+      name: "Qwen Cloud",
+      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+      dialect: "openai",
+      billing: "pay_per_token",
+      capabilities: ["llm", "embedding"]
+    },
+    %{
+      key: "qwen_cloud_token_plan",
+      name: "Qwen Cloud (Token Plan)",
+      base_url: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+      dialect: "openai",
+      billing: "subscription",
+      capabilities: ["llm"]
+    },
+    %{
+      key: "opencode_zen",
+      name: "OpenCode Zen",
+      base_url: "https://opencode.ai/zen/v1",
+      dialect: "openai",
+      billing: "pay_per_token",
+      capabilities: ["llm"]
+    },
+    %{
+      key: "opencode_go",
+      name: "OpenCode Go",
+      base_url: "https://opencode.ai/zen/go/v1",
+      dialect: "openai",
+      billing: "subscription",
+      capabilities: ["llm"]
+    },
+    %{
+      key: "kimi",
+      name: "Kimi (Moonshot)",
+      base_url: "https://api.moonshot.ai/v1",
+      dialect: "openai",
+      billing: "pay_per_token",
+      capabilities: ["llm"]
+    },
+    %{
+      key: "kimi_code",
+      name: "Kimi Code (suscripción)",
+      base_url: "https://api.kimi.com/coding/v1",
+      dialect: "openai",
+      billing: "subscription",
+      capabilities: ["llm"]
+    },
+    %{
+      key: "zai",
+      name: "Z.AI",
+      base_url: "https://api.z.ai/api/paas/v4",
+      dialect: "openai",
+      billing: "pay_per_token",
+      capabilities: ["llm"]
+    },
+    %{
+      key: "zai_coding_plan",
+      name: "Z.AI (GLM Coding Plan)",
+      base_url: "https://api.z.ai/api/coding/paas/v4",
+      dialect: "openai",
+      billing: "subscription",
+      capabilities: ["llm"]
+    },
+    %{
+      key: "abliteration",
+      name: "Abliteration",
+      base_url: "https://api.abliteration.ai/v1",
+      dialect: "openai",
+      billing: "pay_per_token",
+      capabilities: ["llm"]
+    },
+    %{
+      key: "crof_ai",
+      name: "CrofAi",
+      base_url: "https://crof.ai/v1",
+      dialect: "openai",
+      billing: "pay_per_token",
+      capabilities: ["llm"]
+    },
+    %{
+      key: "nube",
+      name: "Nube",
+      base_url: "https://ai.nube.sh/api/v1",
+      dialect: "openai",
+      billing: "pay_per_token",
+      capabilities: ["llm"]
+    }
+  ]
+
+  defp get_builtin(key) when is_binary(key), do: Enum.find(@builtin, &(&1.key == key))
+
+  defp normalize_base_url(nil), do: nil
+
+  defp normalize_base_url(url) when is_binary(url) do
+    url |> String.trim_trailing("/") |> String.downcase()
+  end
+
+  defp match_by_base_url(nil), do: nil
+
+  defp match_by_base_url(base_url) do
+    normalized = normalize_base_url(base_url)
+    Enum.find(@builtin, &(normalize_base_url(&1.base_url) == normalized))
+  end
+
+  defp embedding_override_conflict?(row) when is_map(row) do
+    case Map.get(row, :embedding_base_url) do
+      nil ->
+        false
+
+      "" ->
+        false
+
+      override ->
+        base = Map.get(row, :base_url) || ""
+        normalize_base_url(override) != normalize_base_url(base <> "/embeddings")
+    end
+  end
+
+  @catalog_keys Enum.map(@builtin, & &1.key)
 
   def up do
     alter table(:providers) do
@@ -107,7 +255,7 @@ defmodule Tokengate.Repo.Migrations.AddProviderCatalogFields do
   defp preflight_embedding_overrides! do
     conflicts =
       fetch_providers()
-      |> Enum.filter(&Catalog.embedding_override_conflict?/1)
+      |> Enum.filter(&embedding_override_conflict?/1)
       |> Enum.map(&{&1.name, &1.base_url, &1.embedding_base_url})
 
     if conflicts != [] do
@@ -127,7 +275,7 @@ defmodule Tokengate.Repo.Migrations.AddProviderCatalogFields do
     matched_groups =
       @catalog_keys
       |> Enum.map(fn key ->
-        entry = Catalog.get(key)
+        entry = get_builtin(key)
         group = Enum.filter(rows, fn row -> match_key(row.base_url) == key end)
         {entry, group}
       end)
@@ -176,7 +324,7 @@ defmodule Tokengate.Repo.Migrations.AddProviderCatalogFields do
   # Insert catalog entries that no existing row matched.
   defp seed_missing_builtins(matched_groups) do
     matched_keys = MapSet.new(matched_groups, fn {entry, _rows} -> entry.key end)
-    to_seed = Enum.reject(Catalog.all(), &(&1.key in matched_keys))
+    to_seed = Enum.reject(@builtin, &(&1.key in matched_keys))
 
     Enum.each(to_seed, fn entry ->
       caps = Enum.map_join(entry.capabilities, ",", &"'#{&1}'")
@@ -206,7 +354,7 @@ defmodule Tokengate.Repo.Migrations.AddProviderCatalogFields do
   # ---------------------------------------------------------------------------
 
   defp match_key(base_url) do
-    case Catalog.match_by_base_url(base_url) do
+    case match_by_base_url(base_url) do
       nil -> nil
       entry -> entry.key
     end
