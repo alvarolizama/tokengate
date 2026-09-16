@@ -138,6 +138,38 @@ Then: create a **provider** with a credential → create a **model** alias and a
 provider → grant the alias to a **group** → your member API key is already on your
 dashboard. You can proxy a request in ~5 minutes.
 
+### Demo dataset (a month of usage)
+
+To exercise every screen with real data instead of an empty instance:
+
+```bash
+mix ecto.demo    # priv/repo/demo_seeds.exs — idempotent, safe to re-run
+```
+
+Seeds 31 days of synthetic traffic (~7.5k request logs) plus the full surface
+around it: 12 demo users and 4 groups (active subscription, one with rollover,
+one paused, one deliberately over-budget), 3 machine services (own subscription,
+one-shot, unlimited) with supervisors, 2 custom providers + credentials in
+`error`/`disabled` states, 11 models with market + manual pricing,
+`prompt_cache_enabled`, exclusive routes (member / group / service), credit
+subscriptions and top-ups (active, drained, expired), observability webhooks,
+a custom lab, and a month of audit entries. The hourly metrics rollup is
+rebuilt for the whole range.
+
+Everything it creates is marked (users at `@demo.tokengate`, fixed group/lab
+names, `sk-demo-` credential keys) and wiped on the next run — operator data is
+never touched. Re-running produces identical row counts. The script prints the
+demo API keys at the end:
+
+| | Value |
+| --- | --- |
+| Demo users | `<name>@demo.tokengate` |
+| Password | `DemoPassw0rd!2026` |
+| Admin dashboard | the seeded admin also gets a demo membership |
+
+`mix run priv/repo/demo_verify.exs` re-checks the dataset by calling the same
+context functions the LiveViews use (one line per screen).
+
 ## Using the proxy
 
 ```python
