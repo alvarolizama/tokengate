@@ -325,12 +325,6 @@ defmodule TokengateWeb.Layouts do
             <.sidebar_section id="sidebar-section-credito" label="Crédito">
               <.sidebar_link
                 current_path={@current_path}
-                href={~p"/credit/subscriptions"}
-                label="Suscripciones"
-                icon="hero-banknotes"
-              />
-              <.sidebar_link
-                current_path={@current_path}
                 href={~p"/credit/topups"}
                 label="Top-ups"
                 icon="hero-arrow-up-circle"

@@ -97,6 +97,12 @@ defmodule TokengateWeb.Router do
     # cada dimensión (En vivo, Resumen, Usuarios, Grupos, Servicios).
     get "/stats/credits", RedirectController, :stats_credits
     get "/stats/credits/*rest", RedirectController, :stats_credits
+
+    # La página de suscripciones desapareció con el modelo: el crédito se
+    # gobierna con el límite mensual del sujeto y los top-ups. Un bookmark
+    # viejo cae en la única página de crédito que queda.
+    get "/credit/subscriptions", RedirectController, :credit_subscriptions
+    get "/credit/subscriptions/*rest", RedirectController, :credit_subscriptions
   end
 
   # Authenticated browser dashboard. The on_mount hook mirrors the plug
@@ -148,9 +154,9 @@ defmodule TokengateWeb.Router do
       live "/access/groups/:id/members", GroupMembersLive
       live "/access/users", UsersLive
       live "/access/services", ServicesLive
-      # Crédito — suscripciones recurrentes y top-ups (una página cada una;
-      # mismo modelo, vista distinta: subs mensuales vs crédito de una vez).
-      live "/credit/subscriptions", SubscriptionsLive
+      # Crédito — una sola página: los top-ups (crédito extra de un solo uso).
+      # El gasto ordinario se gobierna con el límite mensual de cada sujeto,
+      # que se edita en su propia página (Acceso).
       live "/credit/topups", TopupsLive
       # Operaciones — logs en vivo, webhooks y danger zone.
       live "/operations/monitoring", MonitoringLive

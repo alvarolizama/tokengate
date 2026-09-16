@@ -54,8 +54,10 @@ defmodule TokengateWeb.SidebarTest do
     assert in_section?(view, "sidebar-section-acceso", "sidebar-link-access-services")
     refute in_section?(view, "sidebar-section-acceso", "sidebar-link-catalog-models")
 
-    assert in_section?(view, "sidebar-section-credito", "sidebar-link-credit-subscriptions")
+    # Crédito tiene UN solo link (Top-ups): las suscripciones desaparecieron
+    # con el modelo de límite mensual + top-ups.
     assert in_section?(view, "sidebar-section-credito", "sidebar-link-credit-topups")
+    refute in_section?(view, "sidebar-section-credito", "sidebar-link-credit-subscriptions")
     refute in_section?(view, "sidebar-section-credito", "sidebar-link-operations-monitoring")
 
     assert in_section?(view, "sidebar-section-operaciones", "sidebar-link-operations-monitoring")
@@ -68,6 +70,7 @@ defmodule TokengateWeb.SidebarTest do
 
     assert in_section?(view, "sidebar-section-operaciones", "sidebar-link-operations-maintenance")
     refute in_section?(view, "sidebar-section-operaciones", "sidebar-link-credit-subscriptions")
+    refute in_section?(view, "sidebar-section-operaciones", "sidebar-link-credit-topups")
 
     # The old single "Administración" block is gone.
     refute has_element?(view, "nav p", "Administración")
@@ -126,7 +129,6 @@ defmodule TokengateWeb.SidebarTest do
           {"sidebar-link-access-groups", "/access/groups"},
           {"sidebar-link-access-users", "/access/users"},
           {"sidebar-link-access-services", "/access/services"},
-          {"sidebar-link-credit-subscriptions", "/credit/subscriptions"},
           {"sidebar-link-credit-topups", "/credit/topups"},
           {"sidebar-link-operations-monitoring", "/operations/monitoring"},
           {"sidebar-link-operations-observability", "/operations/observability"},

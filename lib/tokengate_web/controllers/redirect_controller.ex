@@ -17,6 +17,17 @@ defmodule TokengateWeb.RedirectController do
   end
 
   @doc """
+  ``/credit/subscriptions`` → ``/credit/topups``.
+
+  Las suscripciones desaparecieron del modelo: el gasto se gobierna con el
+  límite mensual del sujeto más los top-ups. La página se elimina, pero un
+  bookmark viejo no puede quedar en 404.
+  """
+  def credit_subscriptions(conn, _params) do
+    redirect(conn, to: append_query(~p"/credit/topups", conn))
+  end
+
+  @doc """
   ``/dashboard/stats[...rest]`` → ``/stats[...rest]``.
 
   Preserva subruta (`/models`, `/groups`, …) y query string.
