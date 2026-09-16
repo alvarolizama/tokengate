@@ -42,17 +42,26 @@ defmodule Tokengate.Accounts.ApiKey do
   end
 
   # Exactamente un subject seteado y consistente con subject_type.
+  #
+  # La key es del **sujeto**: `"member"` = del usuario (`user_id`), con
+  # `group_member_id` opcional para trazabilidad; `"service"` = del servicio.
+  # Se acepta la forma vieja (`group_member_id` sin `user_id`) para no romper
+  # fixtures ni datos históricos, pero la forma nueva es por `user_id`.
   defp validate_subject(changeset) do
     subject_type = get_field(changeset, :subject_type)
+    user_id = get_field(changeset, :user_id)
     member_id = get_field(changeset, :group_member_id)
     service_id = get_field(changeset, :service_id)
 
     cond do
-      subject_type == "member" and member_id != nil ->
+      subject_type == "member" and (user_id != nil or member_id != nil) ->
         changeset
 
       subject_type == "service" and service_id != nil ->
         changeset
+
+      subject_type == "member" ->
+        add_error(changeset, :user_id, "la key del miembro necesita un dueño (user_id)")
 
       true ->
         add_error(changeset, :subject_type, "debe coincidir con el subject asignado")

@@ -2068,6 +2068,7 @@ defmodule TokengateWeb.ProxyController do
       "think" => Keyword.get(extra, :think, false),
       "effort" => Keyword.get(extra, :effort),
       "api_key_prefix" => member.api_key && member.api_key.key_prefix,
+      "api_key_id" => member.api_key && member.api_key.id,
       "session_id" => Keyword.get(extra, :session_id),
       "credential_name" => route.credential.name,
       "credential_id" => route.credential.id,
@@ -2170,6 +2171,7 @@ defmodule TokengateWeb.ProxyController do
       "think" => conn.assigns[:think] || false,
       "effort" => conn.assigns[:effort],
       "api_key_prefix" => member.api_key && member.api_key.key_prefix,
+      "api_key_id" => member.api_key && member.api_key.id,
       "session_id" => conn.assigns[:session_key],
       "credential_name" => route.credential.name,
       "credential_id" => route.credential.id,
@@ -2199,6 +2201,7 @@ defmodule TokengateWeb.ProxyController do
       "latency_ms" => Keyword.get(opts, :latency_ms, 0),
       "streaming" => Keyword.get(opts, :streaming, false),
       "api_key_prefix" => member.api_key && member.api_key.key_prefix,
+      "api_key_id" => member.api_key && member.api_key.id,
       "credential_name" => nil,
       "provider_key_prefix" => nil
     }

@@ -51,6 +51,7 @@ defmodule Tokengate.Logs.WriteWorker do
       think: args["think"] || false,
       effort: args["effort"],
       api_key_prefix: args["api_key_prefix"],
+      api_key_id: args["api_key_id"],
       session_id: args["session_id"],
       credential_name: args["credential_name"],
       credential_id: args["credential_id"],

@@ -5,6 +5,7 @@ defmodule Tokengate.Accounts do
 
   import Ecto.Query
   alias Tokengate.Repo
+  alias Tokengate.Logs.RequestLog
 
   alias Tokengate.Accounts.{
     ApiKey,
@@ -506,24 +507,66 @@ defmodule Tokengate.Accounts do
   @doc """
   Looks up a group member by a presented API key token.
 
-  Returns `{:ok, group_member}` only when the token matches an active API key.
-  The returned group_member has `:group` and `:user` preloaded. Returns
-  `{:error, :not_found}` otherwise.
+  La key es **del usuario** (N activas con label): se busca la key por hash y se
+  resuelve la **membresía** de su `user_id` — el proxy sigue recibiendo un
+  `GroupMember` y no cambia de forma. Un usuario pertenece a un solo grupo, así
+  que la membresía es única en la práctica; si hubiera varias se toma la
+  primera por fecha de alta (determinista).
+
+  Devuelve `{:error, :not_found}` cuando el token no corresponde a una key
+  activa o su usuario no tiene membresía.
   """
   def get_group_member_by_api_key(token) when is_binary(token) do
     key_hash = hash_api_key(token)
 
-    query =
-      from tm in GroupMember,
-        join: ak in assoc(tm, :api_key),
-        where: ak.key_hash == ^key_hash and ak.status == "active",
-        preload: [:group, :user, :api_key]
-
-    case Repo.one(query) do
-      %GroupMember{} = tm -> {:ok, tm}
-      nil -> {:error, :not_found}
+    with %ApiKey{subject_type: "member"} = api_key <-
+           Repo.one(
+             from ak in ApiKey,
+               where: ak.key_hash == ^key_hash and ak.status == "active",
+               where: ak.subject_type == "member"
+           ),
+         %GroupMember{} = member <- member_for_key(api_key) do
+      # La key resuelta viaja en la membresía: el proxy la usa para el
+      # `api_key_id` del log y para el prefijo, sin volver a consultar.
+      {:ok, %{member | api_key: api_key}}
+    else
+      _ -> {:error, :not_found}
     end
   end
+
+  # La key es del usuario (`user_id`); las filas anteriores a la migración solo
+  # tienen `group_member_id`, así que se acepta esa forma como respaldo.
+  defp member_for_key(%ApiKey{user_id: user_id} = api_key) when is_binary(user_id) do
+    Repo.one(
+      from gm in GroupMember,
+        where: gm.user_id == ^user_id,
+        order_by: [asc: gm.inserted_at],
+        limit: 1,
+        preload: [:group, :user]
+    )
+    |> case do
+      %GroupMember{} = member -> member
+      nil -> nil
+    end
+    |> fallback_to_member_id(api_key)
+  end
+
+  defp member_for_key(%ApiKey{group_member_id: member_id}) when is_binary(member_id) do
+    Repo.one(
+      from gm in GroupMember,
+        where: gm.id == ^member_id,
+        preload: [:group, :user]
+    )
+  end
+
+  defp member_for_key(_), do: nil
+
+  defp fallback_to_member_id(nil, %ApiKey{group_member_id: member_id})
+       when is_binary(member_id) do
+    Repo.one(from gm in GroupMember, where: gm.id == ^member_id, preload: [:group, :user])
+  end
+
+  defp fallback_to_member_id(member, _api_key), do: member
 
   @doc """
   Revokes the existing API key for the group member and issues a new one,
@@ -588,10 +631,66 @@ defmodule Tokengate.Accounts do
     |> tap_invalidate_api_key(api_key)
   end
 
+  @doc """
+  Crea una API key. Acepta `label` y `user_id` (key de usuario, el caso nuevo)
+  además de `service_id`. Devuelve `{:ok, api_key}` o `{:error, changeset}`.
+
+  Cada key es independiente: un sujeto puede tener N activas con labels
+  distintos. La invalidación cae por hash y por sujeto dueño.
+  """
   def create_api_key(attrs) do
     %ApiKey{}
     |> ApiKey.changeset(attrs)
     |> Repo.insert()
+    |> tap_invalidate_created_api_key()
+  end
+
+  # Keys activas de un usuario (con label), más recientes primero.
+  @doc "Lista las keys activas de un usuario (N keys con label)."
+  def list_api_keys_for_user(user_id) do
+    Repo.all(
+      from ak in ApiKey,
+        where: ak.user_id == ^user_id and ak.status == "active",
+        order_by: [desc: ak.inserted_at]
+    )
+  end
+
+  @doc "Lista las keys activas de un servicio (N keys con label)."
+  def list_api_keys_for_service(service_id) do
+    Repo.all(
+      from ak in ApiKey,
+        where: ak.service_id == ^service_id and ak.status == "active",
+        order_by: [desc: ak.inserted_at]
+    )
+  end
+
+  @doc """
+  Consumo por key desde los logs: `%{api_key_id => %{requests: n, cost_usd: Decimal}}`.
+
+  Solo cuenta el histórico con `api_key_id` (las filas viejas se agrupan por
+  `api_key_prefix`). `from` acota la ventana; `nil` = todo el histórico.
+  """
+  def spend_by_api_key(api_key_ids, from \\ nil) when is_list(api_key_ids) do
+    query =
+      from rl in RequestLog,
+        where: rl.api_key_id in ^api_key_ids,
+        group_by: rl.api_key_id,
+        select:
+          {rl.api_key_id, count(rl.id),
+           fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)}
+
+    query =
+      if from do
+        where(query, [rl], rl.inserted_at >= ^from)
+      else
+        query
+      end
+
+    query
+    |> Repo.all()
+    |> Map.new(fn {id, requests, cost} ->
+      {id, %{requests: requests, cost_usd: Decimal.new(to_string(cost))}}
+    end)
   end
 
   def update_api_key(%ApiKey{} = api_key, attrs) do
@@ -1128,6 +1227,34 @@ defmodule Tokengate.Accounts do
   end
 
   defp tap_invalidate_api_key(result, _key), do: result
+
+  # Al crear una key hay que tumbar el cache por hash y por sujeto dueño: el
+  # entry guarda la key resuelta y el plan, así que una key nueva (o el mismo
+  # sujeto con otra key) no debe seguir sirviendo el entry viejo.
+  defp tap_invalidate_created_api_key({:ok, %ApiKey{} = key} = result) do
+    safe_invalidate(fn ->
+      ApiKeyCache.invalidate_hash(key.key_hash)
+      invalidate_key_subject(key)
+    end)
+
+    result
+  end
+
+  defp tap_invalidate_created_api_key(result), do: result
+
+  defp invalidate_key_subject(%ApiKey{user_id: user_id}) when is_binary(user_id) do
+    ApiKeyCache.invalidate_user(user_id)
+  end
+
+  defp invalidate_key_subject(%ApiKey{service_id: service_id}) when is_binary(service_id) do
+    ApiKeyCache.invalidate_member(service_id)
+  end
+
+  defp invalidate_key_subject(%ApiKey{group_member_id: member_id}) when is_binary(member_id) do
+    ApiKeyCache.invalidate_member(member_id)
+  end
+
+  defp invalidate_key_subject(_), do: :ok
 
   defp tap_invalidate_service_api_key({:ok, _} = result, %ApiKey{} = key) do
     safe_invalidate(fn ->

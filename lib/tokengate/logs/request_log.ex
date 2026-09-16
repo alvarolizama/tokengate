@@ -56,6 +56,9 @@ defmodule Tokengate.Logs.RequestLog do
     field :think, :boolean, default: false
     field :effort, :string
     field :api_key_prefix, :string
+    # La key que autenticó el request (NULL en el histórico: se agrupa por
+    # `api_key_prefix`, que es el puente).
+    field :api_key_id, :binary_id
     # Conversation-level cache affinity key (client session_id / hashed
     # conversation opening). NULL when no session could be derived.
     field :session_id, :string
@@ -96,7 +99,7 @@ defmodule Tokengate.Logs.RequestLog do
     error_reason error_message prompt_tokens completion_tokens cache_read_tokens
     cache_creation_tokens provider_cost_usd credit_subscription_id credit_topup_id
     latency_ms ttft_ms streaming request_type think effort api_key_prefix
-    credential_name client_agent provider_key_prefix inserted_at)a
+    credential_name client_agent provider_key_prefix api_key_id inserted_at)a
 
   @required ~w(model_requested inserted_at subject_type)a
 
