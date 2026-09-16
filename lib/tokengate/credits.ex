@@ -1,863 +1,404 @@
 defmodule Tokengate.Credits do
   @moduledoc """
-  Suscripciones de crédito: la *policy* (config) y la **resolución de grants**
-  que usa el pre-flight del proxy.
+  Resolución del gasto por sujeto: **límite mensual + top-ups**.
 
-  Un **grant** es `(subscription, user)` — no se materializa en una tabla:
+  Reemplaza al modelo de suscripciones. Cada request autenticado resuelve su
+  crédito contra el sujeto que lo paga:
 
-    * sub **de grupo** (`subscription.user_id == nil`): cada miembro de un grupo
-      que la referencia vía `groups.default_subscription_id` queda auto-asignado
-      al mismo grant. Si un usuario está en varios grupos que comparten la MISMA
-      sub, tiene **un solo grant** (no se crea uno por grupo).
-    * sub **directa** (`subscription.user_id` seteado): grant del dueño
-      (incluye top-ups, `recurrence = "none"`).
+    * **usuario** — límite propio (`users.monthly_spend_limit_usd`) o, si no
+      define el suyo, el de su grupo; `unlimited_spend` (propio o heredado del
+      grupo) lo exime del tope; sus top-ups son el segundo camino de gasto.
+    * **servicio** — límite propio (`services.monthly_spend_limit_usd`) con su
+      `unlimited_spend`, más sus top-ups.
 
-  Orden de débito para un request autenticado con una membresía `(user, group)`:
+  ## Semántica de nulos y ceros (el único lugar donde se decide)
 
-    1. el grant de la suscripción default del grupo (`default_subscription_id`),
-    2. si el grupo no tiene sub — o el grant del tier 1 se agotó — el crédito
-       **directo** del usuario (subs directas + top-ups),
+  | estado | significado |
+  |---|---|
+  | `monthly_spend_limit_usd IS NULL` | **sin límite propio**: el usuario hereda el de su grupo; un grupo/servicio sin límite no deja gastar salvo top-ups |
+  | `monthly_spend_limit_usd = 0` | **cero**: no hay límite disponible (jamás «ilimitado») |
+  | `monthly_spend_limit_usd > 0` | límite mensual del sujeto, en USD |
+  | `unlimited_spend = true` | único camino a ilimitado; gana sobre límite y top-ups |
 
-  y dentro de cada tier **se drena primero lo que se reinicia/vence antes**.
+  El **ciclo** es el mes calendario UTC. No hay `reset_day` (era del modelo viejo).
 
-  Los **services** no dependen de grupos: su sub es directa
-  (`services.subscription_id`) vía `service_grants/1`, y cada service drena
-  su **propio** bolsín aunque comparta sub con otro service. Sin sub el
-  consumo es ilimitado (tier 3).
+  ## Orden de drenado
+
+  El límite primero; agotado (o en cero/ausente), se drena el top-up que
+  **expira antes** (`Credits.Topups.draining_order/1`, `NULLS LAST`).
   """
 
   import Ecto.Query
 
-  alias Tokengate.Accounts.{Group, GroupMember, Service}
-  alias Tokengate.Credits.Subscription
+  alias Tokengate.Accounts.{Group, GroupMember, Service, User}
+  alias Tokengate.Credits.Topups
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Repo
 
   # ---------------------------------------------------------------------------
-  # CRUD
+  # Límite efectivo
   # ---------------------------------------------------------------------------
 
-  def list_subscriptions do
-    Repo.all(from s in Subscription, order_by: [desc: s.inserted_at])
-  end
-
-  @doc "Subs de grupo (defaults), con el grupo que las referencia."
-  def list_group_subscriptions do
-    Repo.all(
-      from s in Subscription,
-        where: is_nil(s.user_id),
-        order_by: [desc: s.inserted_at]
-    )
-  end
-
-  @doc "Subs directas de un usuario."
-  def list_user_subscriptions(user_id) do
-    Repo.all(
-      from s in Subscription, where: s.user_id == ^user_id, order_by: [desc: s.inserted_at]
-    )
-  end
-
-  def get_subscription(id), do: Repo.get(Subscription, id)
-
-  def get_subscription!(id), do: Repo.get!(Subscription, id)
-
-  def create_subscription(attrs) do
-    %Subscription{}
-    |> Subscription.changeset(attrs)
-    |> Repo.insert()
-  end
-
-  def update_subscription(%Subscription{} = subscription, attrs) do
-    result =
-      subscription
-      |> Subscription.changeset(attrs)
-      |> Repo.update()
-
-    # Status/units changes affect the auth cache of every subject with a
-    # grant on this sub (group members + linked services).
-    with {:ok, _} <- result do
-      Tokengate.Routing.Cache.invalidate_all()
-      groups = group_ids_for(subscription)
-      Enum.each(groups, &Tokengate.Accounts.ApiKeyCache.invalidate_group/1)
-
-      subscription.id
-      |> linked_services()
-      |> Enum.each(&Tokengate.Accounts.ApiKeyCache.invalidate_member(&1.id))
-    end
-
-    result
-  end
-
-  # Services directly linked to a subscription (their own grant pocket).
-  defp linked_services(subscription_id) do
-    import Ecto.Query, only: [from: 2]
-
-    Tokengate.Repo.all(
-      from s in Tokengate.Accounts.Service, where: s.subscription_id == ^subscription_id
-    )
-  end
-
-  def change_subscription(%Subscription{} = subscription, attrs \\ %{}) do
-    Subscription.changeset(subscription, attrs)
-  end
-
-  def delete_subscription(%Subscription{} = subscription) do
-    Repo.delete(subscription)
-  end
+  @typedoc """
+  Límite de gasto efectivo: `limit_usd` nil con `unlimited?: false` ⇒ sin
+  límite y solo top-ups; `source` dice de dónde salió (`nil` = de nadie).
+  """
+  @type limit :: %{limit_usd: Decimal.t() | nil, unlimited?: boolean(), source: atom() | nil}
 
   @doc """
-  Micro-USD gastados por una suscripción desde su inicio (cota abierta hacia
-  atrás). Se usa para detectar top-ups agotados.
+  Límite efectivo del miembro: el suyo si lo define, si no el del grupo.
   """
-  def lifetime_spend_micro(subscription_id) do
-    micro(spend_for_subscription(subscription_id, nil))
+  @spec user_limit(GroupMember.t()) :: limit()
+  def user_limit(%GroupMember{} = member) do
+    member = Repo.preload(member, [:user, :group])
+    user_limit(member.user, member.group)
   end
 
-  @doc """
-  Fija (o limpia, con `nil`) la suscripción default de un grupo.
-  Varios grupos pueden apuntar a la misma sub.
+  @spec user_limit(User.t(), Group.t() | nil) :: limit()
+  def user_limit(%User{} = user, group) do
+    cond do
+      user.unlimited_spend ->
+        %{limit_usd: nil, unlimited?: true, source: :user}
 
-  `nil` **siempre escribe en la BD**: el `Repo.update/1` de un changeset sin
-  cambios es un no-op, así que un `group` con el struct obsoleto (p. ej.
-  cargado antes de vincular) "desvinculaba" sin tocar la fila y el grupo seguía
-  apuntando a la sub — un vínculo fantasma, invisible en la UI pero activo en
-  el gate de crédito.
-  """
-  def set_group_default(%Group{} = group, %Subscription{} = subscription) do
-    put_group_link(group, subscription.id)
-  end
+      not is_nil(user.monthly_spend_limit_usd) ->
+        %{limit_usd: user.monthly_spend_limit_usd, unlimited?: false, source: :user}
 
-  def set_group_default(%Group{} = group, nil) do
-    put_group_link(group, nil)
-  end
+      group && group.unlimited_spend ->
+        %{limit_usd: nil, unlimited?: true, source: :group}
 
-  defp put_group_link(%Group{} = group, subscription_id) do
-    {count, _} =
-      from(g in Group, where: g.id == ^group.id)
-      |> Repo.update_all(
-        set: [
-          default_subscription_id: subscription_id,
-          updated_at: DateTime.utc_now() |> DateTime.truncate(:second)
-        ]
-      )
+      group && not is_nil(group.monthly_spend_limit_usd) ->
+        %{limit_usd: group.monthly_spend_limit_usd, unlimited?: false, source: :group}
 
-    invalidate_member_auth_cache(group.id)
-
-    if count == 1 do
-      {:ok, %{group | default_subscription_id: subscription_id}}
-    else
-      {:error, :not_found}
+      true ->
+        %{limit_usd: nil, unlimited?: false, source: nil}
     end
   end
 
-  # The auth cache stores the resolved `credit_grants` alongside the member
-  # (TTL 60s). Changing a group's default subscription changes every member's
-  # grants, so the cache MUST be dropped or the new credit only applies after
-  # the TTL — members keep debiting the old grant (or stay on tier 3 unlimited)
-  # for up to a minute. Same invalidation `update_subscription/2` performs.
-  defp invalidate_member_auth_cache(group_id) do
-    case :ets.whereis(Tokengate.Accounts.ApiKeyCache.table()) do
-      :undefined -> :ok
-      _ -> Tokengate.Accounts.ApiKeyCache.invalidate_group(group_id)
-    end
-
-    :ok
-  end
-
-  @doc "Ids de los grupos que referencian esta sub como default."
-  def group_ids_for(%Subscription{id: id}) do
-    Repo.all(from g in Group, where: g.default_subscription_id == ^id, select: g.id)
-  end
-
-  @doc "Grupos con default, agrupados por `subscription_id`."
-  def groups_by_subscription do
-    Repo.all(from g in Group, where: not is_nil(g.default_subscription_id))
-    |> Enum.group_by(& &1.default_subscription_id)
-  end
-
-  @doc """
-  Sincroniza qué grupos referencian a `subscription` como su default: fija los
-  nuevos, limpia los que ya no están.
-  """
-  def assign_groups(%Subscription{} = subscription, group_ids) do
-    wanted = Enum.map(group_ids, &to_string/1)
-    current = group_ids_for(subscription)
-
-    Enum.each(wanted -- current, &put_group_default(&1, subscription))
-    Enum.each(current -- wanted, &put_group_default(&1, nil))
-
-    :ok
-  end
-
-  defp put_group_default(nil, _sub), do: :ok
-
-  defp put_group_default(group_id, sub) do
-    case Repo.get(Group, group_id) do
-      nil -> :ok
-      group -> set_group_default(group, sub)
+  @doc "Límite efectivo del servicio: el propio (no hereda de nadie)."
+  @spec service_limit(Service.t()) :: limit()
+  def service_limit(%Service{} = service) do
+    case {service.monthly_spend_limit_usd, service.unlimited_spend} do
+      {_, true} -> %{limit_usd: nil, unlimited?: true, source: :service}
+      {limit, false} -> %{limit_usd: limit, unlimited?: false, source: :service}
     end
   end
 
   # ---------------------------------------------------------------------------
-  # Resolución de grants
+  # Plan de gasto (lo que el Manager reserva)
+  # ---------------------------------------------------------------------------
+
+  @typedoc """
+  Plan de gasto de un sujeto: límite efectivo + top-ups vigentes en orden de
+  drenado. Es lo que el pre-flight del proxy entrega al Manager.
+  """
+  @type plan :: %{
+          subject: subject(),
+          limit_usd: Decimal.t() | nil,
+          unlimited?: boolean(),
+          topups: [Tokengate.Credits.Topup.t()]
+        }
+
+  @type subject :: {:user, term()} | {:service, term()}
+
+  @doc """
+  Plan de gasto de un miembro (usuario, o el servicio detrás de un
+  virtual member).
+  """
+  @spec plan(GroupMember.t() | Service.t()) :: plan()
+  def plan(%Service{} = service) do
+    limit = service_limit(service)
+
+    %{
+      subject: {:service, service.id},
+      limit_usd: limit.limit_usd,
+      unlimited?: limit.unlimited?,
+      topups: Topups.draining_order({:service, service.id})
+    }
+  end
+
+  def plan(%GroupMember{service_name: name} = member) when is_binary(name) do
+    case Repo.get(Service, member.id) do
+      %Service{} = service -> plan(service)
+      nil -> plan_for_user(member.user_id)
+    end
+  end
+
+  def plan(%GroupMember{user_id: user_id} = member) do
+    member = Repo.preload(member, [:user, :group])
+    limit = user_limit(member.user, member.group)
+
+    %{
+      subject: {:user, user_id},
+      limit_usd: limit.limit_usd,
+      unlimited?: limit.unlimited?,
+      topups: Topups.draining_order({:user, user_id})
+    }
+  end
+
+  defp plan_for_user(user_id) do
+    user = Repo.get(User, user_id)
+    group = group_for_user(user_id)
+    limit = if user, do: user_limit(user, group), else: %{limit_usd: nil, unlimited?: false, source: nil}
+
+    %{
+      subject: {:user, user_id},
+      limit_usd: limit.limit_usd,
+      unlimited?: limit.unlimited?,
+      topups: Topups.draining_order({:user, user_id})
+    }
+  end
+
+  # ---------------------------------------------------------------------------
+  # Gasto (verdad durable: request_logs)
   # ---------------------------------------------------------------------------
 
   @doc """
-  Grants a intentar para una membresía, mejor primero.
-
-  Devuelve `[%{subscription: %Subscription{}, tier: 1 | 2}]`:
-
-    * tier 1 (si existe): la sub default del grupo — esté activa o pausada; si
-      está pausada el grant vale 0 crédito y bloquea (`grant_state/2`), que es
-      lo que debe pasar al pausar: revocar, no liberar;
-    * tier 2: las subs directas del usuario (subs + top-ups), ordenadas por
-      próximo reset/vencimiento ascendente (se drena primero lo que vence antes).
+  Gasto del ciclo vigente (mes calendario UTC) del sujeto, desde los logs.
   """
-  @spec grants_for(GroupMember.t()) :: [%{subscription: Subscription.t(), tier: 1 | 2}]
-  def grants_for(%GroupMember{} = member) do
-    tier1 =
-      case group_subscription(member.group_id) do
-        %Subscription{} = subscription ->
-          [%{subscription: subscription, tier: 1, user_id: member.user_id}]
-
-        nil ->
-          []
-      end
-
-    tier2 =
-      member.user_id
-      |> direct_subscriptions()
-      |> Enum.sort_by(&next_reset/1, Date)
-      |> Enum.map(&%{subscription: &1, tier: 2, user_id: member.user_id})
-
-    tier1 ++ tier2
-  end
-
-  @doc """
-  Grants a intentar para un service: su sub directa, o `[]` (ilimitado, tier 3).
-
-  El grant es `(subscription, service)` — cada service drena su propio
-  bolsín aunque la sub la comparta con otros services.
-  """
-  @spec service_grants(Service.t() | nil) :: [
-          %{subscription: Subscription.t(), tier: 1, service_id: term()}
-        ]
-  def service_grants(nil), do: []
-
-  def service_grants(%Service{} = service) do
-    case service_subscription(service) do
-      %Subscription{} = subscription ->
-        [%{subscription: subscription, tier: 1, service_id: service.id}]
-
-      nil ->
-        []
-    end
-  end
-
-  @doc """
-  La sub directa de un service, o `nil` si no tiene ninguna vinculada.
-
-  Cualquier `status`: una sub pausada sigue vinculada y cuenta como grant con 0
-  crédito (no como ilimitado). Acepta también un virtual member
-  (`service_name` seteado) o un id.
-  """
-  def service_subscription(%Service{} = service) do
-    Repo.preload(service, [:subscription]).subscription
-  end
-
-  def service_subscription(%GroupMember{service_name: name} = member)
-      when is_binary(name),
-      do: member.id |> Repo.get!(Service) |> service_subscription()
-
-  def service_subscription(service_id) when is_binary(service_id) do
-    case Repo.get(Service, service_id) do
-      nil -> nil
-      service -> service_subscription(service)
-    end
-  end
-
-  @doc """
-  La sub default de un grupo, o `nil` si el grupo no tiene ninguna vinculada.
-
-  Devuelve la sub **sea cual sea su `status`**: una sub pausada sigue vinculada
-  y debe seguir contando como grant (con 0 crédito, ver `grant_state/2`) en vez
-  de desaparecer y dejar a los miembros en tier 3 (ilimitado). Lo que devuelve
-  `nil` es desvincular el grupo (o borrar la sub).
-  """
-  def group_subscription(nil), do: nil
-
-  def group_subscription(group_id) do
-    from(g in Group,
-      join: s in Subscription,
-      on: s.id == g.default_subscription_id,
-      where: g.id == ^group_id,
-      select: s
-    )
+  @spec monthly_spend_usd(subject()) :: Decimal.t()
+  def monthly_spend_usd(subject) do
+    subject
+    |> spend_query(nil)
+    |> select([rl], fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
     |> Repo.one()
+    |> Decimal.new()
   end
 
   @doc """
-  Sub default **vigente** de un grupo: `nil` si no hay ninguna vinculada o si
-  la vinculada está pausada. Para saber si el grupo tiene algo vinculado — y
-  por tanto si sus miembros están gateados por crédito — usa
-  `group_subscription/1`.
+  Gasto del sujeto **debitado al límite** (los logs sin top-up). Es el consumo
+  que cuenta contra `monthly_spend_limit_usd`.
   """
-  def active_group_subscription(group_id) do
-    case group_subscription(group_id) do
-      %Subscription{status: "active"} = subscription -> subscription
-      _ -> nil
-    end
+  @spec spend_debited_to_limit(subject(), DateTime.t() | nil) :: Decimal.t()
+  def spend_debited_to_limit(subject, from \\ nil) do
+    subject
+    |> spend_query(from)
+    |> where([rl], is_nil(rl.credit_topup_id))
+    |> select([rl], fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
+    |> Repo.one()
+    |> Decimal.new()
   end
 
   @doc """
-  Las subs directas del usuario (incluye top-ups), **cualquier status**: una
-  sub pausada sigue siendo grant con 0 crédito (ver `grant_state/2`), no un
-  permiso para consumir sin tope.
-  """
-  def direct_subscriptions(nil), do: []
+  Gasto de varios sujetos en una query por tipo: `%{subject => usd}`.
 
-  def direct_subscriptions(user_id) do
-    Repo.all(from s in Subscription, where: s.user_id == ^user_id)
+  Los sujetos ausentes del resultado gastaron 0.
+  """
+  def spend_by_subjects(subjects) do
+    users = for {:user, id} <- subjects, do: id
+    services = for {:service, id} <- subjects, do: id
+
+    user_spend = spend_grouped_users(users, nil)
+    service_spend = spend_grouped_services(services, nil)
+
+    Map.new(subjects, fn
+      {:user, id} = subject -> {subject, Map.get(user_spend, id, Decimal.new(0))}
+      {:service, id} = subject -> {subject, Map.get(service_spend, id, Decimal.new(0))}
+    end)
   end
+
+  defp spend_grouped_users([], _from), do: %{}
+
+  defp spend_grouped_users(user_ids, from) do
+    query =
+      RequestLog
+      |> join(:inner, [rl], gm in GroupMember, on: gm.id == rl.group_member_id)
+      |> where([rl, gm], gm.user_id in ^user_ids)
+
+    query
+    |> since(from)
+    |> group_by([_rl, gm], gm.user_id)
+    |> select([rl, gm], {gm.user_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
+    |> Repo.all()
+    |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
+  end
+
+  defp spend_grouped_services([], _from), do: %{}
+
+  defp spend_grouped_services(service_ids, from) do
+    RequestLog
+    |> where([rl], rl.service_id in ^service_ids)
+    |> since(from)
+    |> group_by([rl], rl.service_id)
+    |> select([rl], {rl.service_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
+    |> Repo.all()
+    |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
+  end
+
+  defp spend_query({:service, service_id}, from) do
+    RequestLog
+    |> where([rl], rl.service_id == ^service_id)
+    |> since(from)
+  end
+
+  defp spend_query({:user, user_id}, from) do
+    RequestLog
+    |> join(:inner, [rl], gm in GroupMember, on: gm.id == rl.group_member_id)
+    |> where([rl, gm], gm.user_id == ^user_id)
+    |> since(from)
+  end
+
+  defp since(query, nil) do
+    from = Tokengate.Periods.start_of_month_utc("Etc/UTC")
+    where(query, [rl], rl.inserted_at >= ^from)
+  end
+
+  defp since(query, %DateTime{} = from), do: where(query, [rl], rl.inserted_at >= ^from)
 
   # ---------------------------------------------------------------------------
-  # Ciclo
+  # Resumen (display + pre-flight)
   # ---------------------------------------------------------------------------
 
   @doc """
-  Fronteras del ciclo vigente para `date`:
-
-    * `recurrence = "monthly"` → anclado en `reset_day`, clampeado al último
-      día del mes cuando no existe (p.ej. 31 en febrero). `%{start: Date.t(),
-      end: Date.t()}` donde `end` es el **próximo** reset.
-    * `recurrence = "none"` → `%{start: starts_at, end: expires_at}` (cada uno
-      puede ser `nil`).
+  Resumen del sujeto: límite, gasto del mes, remanente de límite y top-ups
+  vigentes con su remanente.
   """
-  @spec cycle_bounds(Subscription.t(), Date.t()) :: %{start: Date.t() | nil, end: Date.t() | nil}
-  def cycle_bounds(%Subscription{recurrence: "none"} = subscription, _date) do
-    %{start: to_date(subscription.starts_at), end: to_date(subscription.expires_at)}
-  end
+  @spec summary(subject(), limit() | plan()) :: map()
+  def summary(subject, %{limit_usd: limit_usd, unlimited?: unlimited?}) do
+    spend = monthly_spend_usd(subject)
+    topups = Topups.summary(subject)
 
-  def cycle_bounds(%Subscription{reset_day: day}, date) do
-    this_month = reset_on(date.year, date.month, day)
-
-    start =
-      if Date.compare(this_month, date) in [:lt, :eq] do
-        this_month
-      else
-        prev = Date.add(Date.new!(date.year, date.month, 1), -1)
-        reset_on(prev.year, prev.month, day)
+    remaining_limit =
+      case limit_usd do
+        nil -> nil
+        limit_usd -> max_decimal(Decimal.sub(limit_usd, spend), Decimal.new(0))
       end
 
-    {ny, nm} = next_month(start.year, start.month)
-    %{start: start, end: reset_on(ny, nm, day)}
-  end
-
-  @doc """
-  Fecha del próximo reset de la sub (o su vencimiento, para las no recurrentes).
-  Se usa para drenar primero lo que antes se reinicia/vence.
-  """
-  @spec next_reset(Subscription.t()) :: Date.t()
-  def next_reset(%Subscription{recurrence: "none"} = subscription) do
-    to_date(subscription.expires_at) || ~D[9999-12-31]
-  end
-
-  def next_reset(%Subscription{} = subscription) do
-    %{end: e} = cycle_bounds(subscription, Date.utc_today())
-    e || ~D[9999-12-31]
-  end
-
-  # ---------------------------------------------------------------------------
-  # Estado del grant (derivado de request_logs + config)
-  # ---------------------------------------------------------------------------
-
-  # 1 crédito = $1 (1_000_000 micro-USD). Cambiar aquí si se quiere otra
-  # denominación (la unidad se mantiene en la misma escala que el costo).
-  @credit_micro 1_000_000
-
-  @doc """
-  ¿La sub ya venció (`expires_at` ≤ `now`)?
-
-  Único lugar donde se decide: lo usan el gate de crédito
-  (`grants_credit?/2`) y el badge de top-ups vencidos de la UI, que antes
-  duplicaba la comparación y por eso podían discrepar.
-  """
-  @spec expired?(Subscription.t(), DateTime.t()) :: boolean()
-  def expired?(%Subscription{} = subscription, now \\ DateTime.utc_now()) do
-    not is_nil(subscription.expires_at) and DateTime.compare(subscription.expires_at, now) != :gt
-  end
-
-  @doc """
-  ¿La sub otorga crédito ahora mismo? `false` si está pausada, vencida
-  (`expired?/2`) o si todavía no empieza (`starts_at` en el futuro).
-
-  `starts_at`/`expires_at` solo los usan en la práctica los top-ups
-  (`recurrence = "none"`), pero una fecha explícita se respeta en cualquier
-  recurrencia.
-
-  Una sub que no otorga **sigue vinculada y sigue contando como grant, con 0
-  crédito** (ver `grant_state/2`): revoca, no libera. El Manager lo consulta en
-  cada `ensure_grant_loaded/1` para que pausar/vencer surta efecto sin esperar
-  al cambio de ciclo (la entrada de ETS de un grant ya sembrado guardaba el
-  crédito viejo).
-  """
-  @spec grants_credit?(Subscription.t(), DateTime.t()) :: boolean()
-  def grants_credit?(%Subscription{} = subscription, now \\ DateTime.utc_now()) do
-    subscription.status == "active" and started?(subscription, now) and
-      not expired?(subscription, now)
-  end
-
-  # Cota abierta cuando `starts_at` es nil.
-  defp started?(%Subscription{} = subscription, now) do
-    is_nil(subscription.starts_at) or DateTime.compare(subscription.starts_at, now) != :gt
-  end
-
-  @doc """
-  Estado vigente de un grant `(suscripción, usuario)`, derivado de
-  `request_logs` (la verdad durable) + la config de la suscripción.
-
-  Devuelve `%{credited_micro: integer, consumed_micro: integer, cycle_start: Date.t() | nil}`:
-
-    * `consumed_micro` — gasto del ciclo vigente (requests ya asentados con este
-      `credit_subscription_id` para este usuario);
-    * `credited_micro` — `units` del ciclo + arrastre de rollover;
-    * `cycle_start` — inicio del ciclo vigente.
-
-  Rollover (Fase A): arrastra un `%` de lo **no gastado del ciclo anterior**
-  sobre la asignación base (`units`), con tope opcional. Sin acumulación
-  compuesta — si el grant estuvo inactivo varios ciclos, no se compone.
-  """
-  @spec grant_state(Subscription.t(), term()) :: %{
-          credited_micro: integer(),
-          consumed_micro: integer(),
-          cycle_start: Date.t() | nil
-        }
-  # Service grant: the pocket is (subscription, service) — spend is measured
-  # by the service's own request logs.
-  def grant_state(%Subscription{} = subscription, subject) do
-    %{start: cycle_start} = cycle_bounds(subscription, Date.utc_today())
-    {credited, consumed} = credit_state(subscription, subject, cycle_start)
-
     %{
-      credited_micro: credited,
-      consumed_micro: consumed,
-      cycle_start: cycle_start
+      subject: subject,
+      limit_usd: limit_usd,
+      unlimited?: unlimited?,
+      spend_usd: spend,
+      remaining_limit_usd: remaining_limit,
+      topups: topups.topups,
+      remaining_topup_usd: topups.remaining_topup_usd,
+      has_path?: has_path?(unlimited?, remaining_limit, topups.remaining_topup_usd)
     }
   end
 
-  # Sub que otorga crédito: `units` del ciclo + lo arrastrado por rollover.
-  #
-  # Si no otorga (pausada, vencida o aún no empezada) el grant **sigue
-  # existiendo con 0 crédito** en vez de desaparecer. Así el sujeto queda
-  # bloqueado (`:budget_exceeded` / 402) y no cae a tier 3 (ilimitado): pausar
-  # o vencer revoca el crédito, no lo libera. El consumo se reporta real para
-  # que la UI siga mostrando lo gastado.
-  defp credit_state(%Subscription{} = subscription, subject, cycle_start) do
-    consumed = micro(spend_between(subscription.id, subject, cycle_start, nil))
+  @doc "¿Queda algún camino de gasto? (ilimitado, límite con remanente o top-up)"
+  def has_path?(unlimited?, remaining_limit, remaining_topup)
+  def has_path?(true, _limit, _topup), do: true
 
-    if grants_credit?(subscription) do
-      credited =
-        subscription.units * @credit_micro + carried_micro(subscription, subject, cycle_start)
+  def has_path?(false, %Decimal{} = limit, _topup), do: Decimal.compare(limit, 0) == :gt
 
-      {credited, consumed}
-    else
-      {0, consumed}
-    end
-  end
-
-  @doc "Micro-USD de `units` créditos."
-  def units_to_micro(units) when is_integer(units), do: units * @credit_micro
+  def has_path?(false, nil, %Decimal{} = topup), do: Decimal.compare(topup, 0) == :gt
 
   @doc """
-  Crédito vigente de una membresía: **suma sobre sus grants** (default de grupo
-  → crédito directo).
-
-  Devuelve `%{credited_micro, consumed_micro, remaining_micro, has_credit?}`.
-  `has_credit?` es `false` cuando no hay ninguna suscripción aplicable (tier 3:
-  sin límite de crédito).
+  Resúmenes de varias membresías en lote (para los tableros): 3 queries fijas,
+  nunca una por miembro. `%{member_id => summary}` con las mismas llaves que
+  `summary/2`, más `:member`.
   """
-  @spec member_credit(GroupMember.t()) :: %{
-          credited_micro: integer(),
-          consumed_micro: integer(),
-          remaining_micro: integer(),
-          has_credit?: boolean()
-        }
-  def member_credit(%GroupMember{} = member) do
-    grants = grants_for(member)
+  def summaries(members) when is_list(members) do
+    members = Enum.map(members, &Repo.preload(&1, [:user, :group]))
+    subjects = Enum.map(members, &{:user, &1.user_id})
+    spend = spend_by_subjects(subjects)
+    topups = Topups.summaries(subjects)
 
-    {credited, consumed} =
-      Enum.reduce(grants, {0, 0}, fn %{subscription: subscription, user_id: user_id}, {c, k} ->
-        state = grant_state(subscription, user_id)
-        {c + state.credited_micro, k + state.consumed_micro}
-      end)
+    Map.new(members, fn member ->
+      subject = {:user, member.user_id}
+      limit = user_limit(member.user, member.group)
+      {limit_usd, unlimited?} = {limit.limit_usd, limit.unlimited?}
+      spent = Map.get(spend, subject, Decimal.new(0))
 
-    %{
-      credited_micro: credited,
-      consumed_micro: consumed,
-      remaining_micro: max(0, credited - consumed),
-      has_credit?: grants != []
-    }
-  end
+      remaining_limit =
+        case limit_usd do
+          nil -> nil
+          limit_usd -> max_decimal(Decimal.sub(limit_usd, spent), Decimal.new(0))
+        end
 
-  @doc """
-  Consumo agregado de una suscripción en su ciclo vigente.
+      topup = Map.get(topups, subject, %{topups: [], remaining_topup_usd: Decimal.new(0)})
 
-  Devuelve `%{credited_micro, consumed_micro, remaining_micro, grants,
-  cycle_start}` donde `grants` es el número de grants que la suscripción
-  cubre (usuarios con membresía en los grupos que la referencian, o 1 para
-  una sub directa). `credited_micro` = `units × grants` (sin rollover, que
-  es per-grant y se ve en el dashboard).
-  """
-  @spec subscription_usage(Subscription.t()) :: %{
-          credited_micro: integer(),
-          consumed_micro: integer(),
-          remaining_micro: integer(),
-          grants: non_neg_integer(),
-          cycle_start: Date.t() | nil
-        }
-  def subscription_usage(%Subscription{} = subscription) do
-    %{start: cycle_start} = cycle_bounds(subscription, Date.utc_today())
-    grants = grant_count(subscription)
-    credited = subscription.units * @credit_micro * grants
-    consumed = micro(spend_for_subscription(subscription.id, cycle_start))
-
-    %{
-      credited_micro: credited,
-      consumed_micro: consumed,
-      remaining_micro: max(0, credited - consumed),
-      grants: grants,
-      cycle_start: cycle_start
-    }
-  end
-
-  @doc """
-  Crédito vigente de un usuario: **suma sobre sus grants únicos** (subs
-  default de sus grupos, deduplicadas, + subs directas). A diferencia de
-  `member_credit/1`, no cuenta dos veces una sub compartida por varios
-  grupos del mismo usuario.
-  """
-  @spec user_credit(term()) :: %{
-          credited_micro: integer(),
-          consumed_micro: integer(),
-          remaining_micro: integer(),
-          has_credit?: boolean()
-        }
-  def user_credit(user_id) do
-    group_ids =
-      Repo.all(from gm in GroupMember, where: gm.user_id == ^user_id, select: gm.group_id)
-
-    group_subs =
-      group_ids
-      |> Enum.reject(&is_nil/1)
-      |> Enum.map(&group_subscription/1)
-      |> Enum.reject(&is_nil/1)
-
-    grants =
-      (group_subs ++ direct_subscriptions(user_id))
-      |> Enum.uniq_by(& &1.id)
-
-    {credited, consumed} =
-      Enum.reduce(grants, {0, 0}, fn sub, {c, k} ->
-        state = grant_state(sub, user_id)
-        {c + state.credited_micro, k + state.consumed_micro}
-      end)
-
-    %{
-      credited_micro: credited,
-      consumed_micro: consumed,
-      remaining_micro: max(0, credited - consumed),
-      has_credit?: grants != []
-    }
-  end
-
-  @doc """
-  Crédito vigente de varias membresías en una pasada acotada: **2 queries por
-  lote + 1 (o 2) por suscripción distinta**, nunca una por miembro.
-
-  Versión por lotes de `member_credit/1` para los tableros de presupuesto (que
-  pintaban "sin límite" porque el límite venía hardcodeado a `nil`). Misma
-  forma de retorno, indexada por `member_id`:
-  `%{member_id => %{credited_micro, consumed_micro, remaining_micro, has_credit?}}`.
-  """
-  @spec member_credits([GroupMember.t()]) :: %{term() => map()}
-  def member_credits([]), do: %{}
-
-  def member_credits(members) when is_list(members) do
-    user_ids = members |> Enum.map(& &1.user_id) |> Enum.uniq()
-    group_ids = members |> Enum.map(& &1.group_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
-
-    group_subs = group_subscriptions(group_ids)
-    direct_subs = subscriptions_by_user_id(user_ids)
-
-    # `%{member_id => {user_id, [subscription]}}` — el sujeto del grant es el
-    # usuario, igual que en `grants_for/1`.
-    grants =
-      Map.new(members, fn member ->
-        subs =
-          ([Map.get(group_subs, member.group_id)] ++ Map.get(direct_subs, member.user_id, []))
-          |> Enum.reject(&is_nil/1)
-          |> Enum.uniq_by(& &1.id)
-
-        {member.id, {member.user_id, subs}}
-      end)
-
-    subs =
-      grants
-      |> Map.values()
-      |> Enum.flat_map(fn {_user_id, subs} -> subs end)
-      |> Enum.uniq_by(& &1.id)
-
-    consumed = Map.new(subs, &{&1.id, consumed_by_user(&1, user_ids)})
-    carried = Map.new(subs, &{&1.id, carried_by_user(&1, user_ids)})
-
-    Map.new(grants, fn {member_id, {user_id, subs}} ->
-      {credited, spent} =
-        Enum.reduce(subs, {0, 0}, fn sub, {c, k} ->
-          {
-            c + credited_micro(sub, user_id, Map.get(carried, sub.id, %{})),
-            k + Map.get(Map.get(consumed, sub.id, %{}), user_id, 0)
-          }
-        end)
-
-      {member_id,
+      {member.id,
        %{
-         credited_micro: credited,
-         consumed_micro: spent,
-         remaining_micro: max(0, credited - spent),
-         has_credit?: subs != []
+         member: member,
+         subject: subject,
+         limit_usd: limit_usd,
+         unlimited?: unlimited?,
+         spend_usd: spent,
+         remaining_limit_usd: remaining_limit,
+         topups: topup.topups,
+         remaining_topup_usd: topup.remaining_topup_usd,
+         has_path?: has_path?(unlimited?, remaining_limit, topup.remaining_topup_usd)
        }}
     end)
   end
 
+  def summaries([]), do: %{}
+
   @doc """
-  Subs default de varios grupos en una query: `%{group_id => Subscription.t()}`.
-  Incluye las pausadas (siguen vinculadas).
+  Resumen de los servicios en lote, indexado por `service_id`.
   """
-  @spec group_subscriptions([term()]) :: %{term() => Subscription.t()}
-  def group_subscriptions([]), do: %{}
+  def service_summaries(services) when is_list(services) do
+    subjects = Enum.map(services, &{:service, &1.id})
+    spend = spend_by_subjects(subjects)
+    topups = Topups.summaries(subjects)
 
-  def group_subscriptions(group_ids) do
-    from(g in Group,
-      join: s in Subscription,
-      on: s.id == g.default_subscription_id,
-      where: g.id in ^group_ids,
-      select: {g.id, s}
-    )
-    |> Repo.all()
-    |> Map.new()
-  end
+    Map.new(services, fn service ->
+      subject = {:service, service.id}
+      limit = service_limit(service)
+      spent = Map.get(spend, subject, Decimal.new(0))
 
-  defp subscriptions_by_user_id([]), do: %{}
+      remaining_limit =
+        case limit.limit_usd do
+          nil -> nil
+          limit_usd -> max_decimal(Decimal.sub(limit_usd, spent), Decimal.new(0))
+        end
 
-  defp subscriptions_by_user_id(user_ids) do
-    from(s in Subscription, where: s.user_id in ^user_ids)
-    |> Repo.all()
-    |> Enum.group_by(& &1.user_id)
-  end
+      topup = Map.get(topups, subject, %{topups: [], remaining_topup_usd: Decimal.new(0)})
 
-  # Crédito del ciclo para un grant. No otorga (pausada / vencida / sin
-  # empezar) ⇒ 0 (ver `grants_credit?/2`).
-  defp credited_micro(%Subscription{} = subscription, user_id, carried) do
-    if grants_credit?(subscription) do
-      subscription.units * @credit_micro + Map.get(carried, user_id, 0)
-    else
-      0
-    end
-  end
-
-  # `%{user_id => micro}` — consumo asentado de la sub en su ciclo vigente, en
-  # una query agrupada por usuario.
-  defp consumed_by_user(%Subscription{} = subscription, user_ids) do
-    %{start: cycle_start} = cycle_bounds(subscription, Date.utc_today())
-    spend_by_user(subscription.id, user_ids, cycle_start, nil)
-  end
-
-  # `%{user_id => micro}` — remanente del ciclo anterior arrastrable, solo para
-  # subs con rollover (si no, sin query).
-  defp carried_by_user(
-         %Subscription{recurrence: "monthly", rollover_mode: "rollover"} = subscription,
-         user_ids
-       ) do
-    %{start: cycle_start} = cycle_bounds(subscription, Date.utc_today())
-    prev_start = prev_cycle_start(subscription, cycle_start)
-    spent = spend_by_user(subscription.id, user_ids, prev_start, cycle_start)
-
-    Map.new(spent, fn {user_id, micro} ->
-      unused = max(0, subscription.units * @credit_micro - micro)
-      raw = div(unused * (subscription.rollover_pct || 0), 100)
-
-      {user_id,
-       case subscription.rollover_cap_units do
-         nil -> raw
-         cap -> min(raw, cap * @credit_micro)
-       end}
+      {service.id,
+       %{
+         service: service,
+         subject: subject,
+         limit_usd: limit.limit_usd,
+         unlimited?: limit.unlimited?,
+         spend_usd: spent,
+         remaining_limit_usd: remaining_limit,
+         topups: topup.topups,
+         remaining_topup_usd: topup.remaining_topup_usd,
+         has_path?: has_path?(limit.unlimited?, remaining_limit, topup.remaining_topup_usd)
+       }}
     end)
   end
 
-  defp carried_by_user(%Subscription{}, _user_ids), do: %{}
+  def service_summaries([]), do: %{}
 
-  # `%{user_id => micro}` del gasto atribuido a `subscription_id` en [from, to).
-  defp spend_by_user(_subscription_id, [], _from, _to), do: %{}
+  # ---------------------------------------------------------------------------
+  # Auxiliares
+  # ---------------------------------------------------------------------------
 
-  defp spend_by_user(subscription_id, user_ids, from, to) do
-    RequestLog
-    |> join(:inner, [rl], gm in GroupMember, on: gm.id == rl.group_member_id)
-    |> where(
-      [rl, gm],
-      rl.credit_subscription_id == ^subscription_id and gm.user_id in ^user_ids
+  @doc "El grupo de un usuario, o `nil` (un usuario pertenece a un solo grupo)."
+  def group_for_user(user_id) do
+    Repo.one(
+      from(gm in GroupMember,
+        join: g in Group,
+        on: g.id == gm.group_id,
+        where: gm.user_id == ^user_id,
+        select: g,
+        limit: 1
+      )
     )
-    |> time_window(from, to)
-    |> group_by([_rl, gm], gm.user_id)
-    |> select([rl, gm], {gm.user_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
-    |> Repo.all()
-    |> Map.new(fn {user_id, cost} -> {user_id, micro(cost)} end)
   end
 
-  defp carried_micro(
-         %Subscription{recurrence: "monthly", rollover_mode: "rollover"} = subscription,
-         user_id,
-         cycle_start
-       ) do
-    prev_start = prev_cycle_start(subscription, cycle_start)
-    consumed_prev = micro(spend_between(subscription.id, user_id, prev_start, cycle_start))
-    unused = max(0, subscription.units * @credit_micro - consumed_prev)
-    raw = div(unused * (subscription.rollover_pct || 0), 100)
+  @doc """
+  Sujetos que hoy no tienen camino de gasto (sin límite, sin ilimitado, sin
+  top-up vigente) — para la vigilancia de mantenimiento.
+  """
+  def blocked_users do
+    users = Repo.all(from u in User)
+    summaries = summaries(Enum.flat_map(users, &Repo.preload(&1, :group_members).group_members))
 
-    case subscription.rollover_cap_units do
-      nil -> raw
-      cap -> min(raw, cap * @credit_micro)
-    end
-  end
-
-  defp carried_micro(_subscription, _user_id, _cycle_start), do: 0
-
-  # Gasto asentado de (suscripción, sujeto) en [from, to). `from`/`to` nil →
-  # cota abierta (top-ups sin `starts_at` suman todo lo atribuido). El sujeto
-  # es el usuario (grant por membresía) o `{:service, id}` (grant por service).
-  defp spend_between(subscription_id, {:service, service_id} = _subject, from, to) do
-    query =
-      RequestLog
-      |> where(
-        [rl],
-        rl.credit_subscription_id == ^subscription_id and rl.service_id == ^service_id
-      )
-
-    query = time_window(query, from, to)
-    aggregate(query)
-  end
-
-  defp spend_between(subscription_id, user_id, from, to) do
-    query =
-      RequestLog
-      |> join(:inner, [rl], gm in GroupMember, on: gm.id == rl.group_member_id)
-      |> where([rl, gm], rl.credit_subscription_id == ^subscription_id and gm.user_id == ^user_id)
-
-    query = time_window(query, from, to)
-    aggregate(query)
-  end
-
-  defp time_window(query, from, to) do
-    query =
-      if from do
-        where(query, [rl], rl.inserted_at >= ^to_datetime(from))
-      else
-        query
+    users
+    |> Enum.filter(fn user ->
+      membership = Enum.find(Repo.preload(user, :group_members).group_members, & &1.user_id)
+      case membership do
+        nil -> true
+        member -> Map.get(summaries, member.id, %{has_path?: false}).has_path? == false
       end
-
-    if to do
-      where(query, [rl], rl.inserted_at < ^to_datetime(to))
-    else
-      query
-    end
+    end)
   end
 
-  defp aggregate(query) do
-    query
-    |> select([rl], fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
-    |> Repo.one()
+  defp max_decimal(a, b) do
+    if Decimal.compare(a, b) == :lt, do: b, else: a
   end
-
-  defp prev_cycle_start(subscription, cycle_start) do
-    %{start: previous} = cycle_bounds(subscription, Date.add(cycle_start, -1))
-    previous
-  end
-
-  defp micro(%Decimal{} = usd) do
-    usd
-    |> Decimal.mult(Decimal.new(@credit_micro))
-    |> Decimal.round(0, :half_up)
-    |> Decimal.to_integer()
-  end
-
-  defp micro(nil), do: 0
-
-  defp to_datetime(%Date{} = date), do: DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
-  defp to_datetime(%DateTime{} = dt), do: dt
-
-  # Número de grants que cubre una suscripción: los miembros de los grupos
-  # que la referencian + los services vinculados directamente, o 1 para una
-  # sub directa de usuario.
-  defp grant_count(%Subscription{user_id: nil} = subscription),
-    do: subscription |> grant_subjects() |> length()
-
-  defp grant_count(%Subscription{user_id: user_id}) when not is_nil(user_id), do: 1
-
-  # Sujetos con grant de una sub de grupo: los usuarios de los grupos que la
-  # referencian + los services con `subscription_id` directa.
-  defp grant_subjects(subscription) do
-    group_ids = group_ids_for(subscription)
-
-    user_ids =
-      if group_ids == [] do
-        []
-      else
-        Repo.all(from gm in GroupMember, where: gm.group_id in ^group_ids, select: gm.user_id)
-        |> Enum.uniq()
-      end
-
-    service_ids =
-      Repo.all(
-        from s in Tokengate.Accounts.Service,
-          where: s.subscription_id == ^subscription.id,
-          select: {:service, s.id}
-      )
-
-    user_ids ++ service_ids
-  end
-
-  # Gasto agregado de TODA la suscripción (todos sus grants) desde `from`
-  # (`nil` → cota abierta).
-  defp spend_for_subscription(subscription_id, from) do
-    query =
-      RequestLog
-      |> where([rl], rl.credit_subscription_id == ^subscription_id)
-
-    query =
-      if from do
-        where(query, [rl], rl.inserted_at >= ^to_datetime(from))
-      else
-        query
-      end
-
-    query
-    |> select([rl], fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
-    |> Repo.one()
-  end
-
-  # ---------------------------------------------------------------------------
-  # Helpers
-  # ---------------------------------------------------------------------------
-
-  # Día `day` del mes `month`, clampeado al último día existente.
-  defp reset_on(year, month, day) do
-    d = min(day, Date.days_in_month(Date.new!(year, month, 1)))
-    Date.new!(year, month, d)
-  end
-
-  defp next_month(year, 12), do: {year + 1, 1}
-  defp next_month(year, month), do: {year, month + 1}
-
-  defp to_date(nil), do: nil
-  defp to_date(%DateTime{} = dt), do: DateTime.to_date(dt)
-  defp to_date(%Date{} = d), do: d
 end

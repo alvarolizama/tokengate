@@ -162,62 +162,71 @@ defmodule Tokengate.Budgets.Manager do
   end
 
   # ---------------------------------------------------------------------------
-  # Public API — credit grants (layer 1 for users)
+  # Public API — spend plan (límite del sujeto + top-ups)
   # ---------------------------------------------------------------------------
 
   @doc """
-  Holds `requested_cost_usd` against the **first credit grant** (in the given
-  order) that still has room, then the global daily cap (layer 2).
+  Holds `requested_cost_usd` against the subject's **spend plan** (monthly
+  limit first, then the top-up that expires soonest), then the global daily cap.
 
-  `grants` is the ordered list from `Credits.grants_for/1` — each
-  `%{subscription: %Subscription{}, user_id: id, tier: 1 | 2}`, best-first
-  (group default before the user's direct credit; soonest-expiry first within a
-  tier).
+  `plan` es lo que resuelve `Credits.plan/1`:
 
-    * empty list → no credit gate (tier 3, unlimited): only the global cap applies;
-    * non-empty but every grant exhausted → `{:error, {:budget_exceeded,
-      %{layer: :credit}}}`.
+      %{subject: {:user, id} | {:service, id},
+        limit_usd: Decimal.t() | nil,
+        unlimited?: boolean(),
+        topups: [%Topup{}, ...]}   # en orden de drenado
 
-  Returns `{:ok, hold}` (fed to `settle_credits/2` / `release_credits/1`) or an
-  error tuple. The hold carries `:subscription_id` so the caller can persist
-  which grant the request debited.
+  Orden de intento (una sola función, documentado aquí):
+
+    1. `unlimited?` ⇒ no hay tope de sujeto: solo cap global.
+    2. límite con remanente ⇒ se descuenta del límite.
+    3. límite agotado (o `0`, o `nil`) y hay top-ups vigentes ⇒ drena el que
+       **expira antes**.
+    4. sin límite (`nil`) y sin ilimitado ni top-ups ⇒ **402** (`:no_credit`).
+
+  Devuelve `{:ok, hold}` (para `settle_credits/2` / `release_credits/1`) o
+  `{:error, {:budget_exceeded, %{layer: :subject | :no_credit | :global}}}`.
+  El hold dice **qué se debitó**: `:limit` o `{:topup, id}`.
   """
-  @spec reserve_credits([map()], Decimal.t() | nil, Decimal.t() | nil, boolean()) ::
-          {:ok, map()} | {:error, {:budget_exceeded, %{layer: :credit | :global}}}
-  def reserve_credits(grants, global_cap_usd, requested_cost_usd, exempt_global?) do
+  @spec reserve_plan(Tokengate.Credits.plan(), Decimal.t() | nil, Decimal.t() | nil, boolean()) ::
+          {:ok, map()}
+          | {:error, {:budget_exceeded, %{layer: :subject | :no_credit | :global}}}
+  def reserve_plan(plan, global_cap_usd, requested_cost_usd, exempt_global?) do
     ensure_loaded_global()
-    Enum.each(grants, &ensure_grant_loaded/1)
 
     requested = to_micro(requested_cost_usd)
 
-    case pick_grant(grants) do
-      :none ->
+    case pick_layer(plan) do
+      :unlimited ->
         hold_global_only(global_cap_usd, requested, exempt_global?)
 
+      {:limit, subject} ->
+        hold_limit(subject, plan.limit_usd, global_cap_usd, requested, exempt_global?)
+
+      {:topup, topup} ->
+        hold_topup(topup, global_cap_usd, requested, exempt_global?)
+
+      :no_credit ->
+        {:error, {:budget_exceeded, %{layer: :no_credit}}}
+
       :exhausted ->
-        {:error, {:budget_exceeded, %{layer: :credit}}}
-
-      {:ok, grant_key, subscription_id} ->
-        held = bump_credit(grant_key, requested)
-
-        hold_global_after(
-          grant_key,
-          subscription_id,
-          held,
-          global_cap_usd,
-          requested,
-          exempt_global?
-        )
+        {:error, {:budget_exceeded, %{layer: :subject}}}
     end
   end
 
-  @doc "Settles a credit hold to the real cost."
+  @doc """
+  Settles a plan hold to the real cost. `:topup` holds debit the top-up passed
+  in the hold; the top-up row itself is untouched (its consumption is measured
+  against `request_logs.credit_topup_id`).
+  """
   @spec settle_credits(map(), Decimal.t() | nil) :: :ok
   def settle_credits(%{kind: kind} = hold, actual_cost_usd) do
     actual = to_micro(actual_cost_usd)
 
-    if kind == :credit do
-      bump_credit(hold.grant_key, actual - hold.subject_micro)
+    case kind do
+      :limit -> bump_credit(hold.grant_key, actual - hold.subject_micro)
+      :topup -> bump_credit(hold.grant_key, actual - hold.subject_micro)
+      :no_credit -> :ok
     end
 
     unless hold.exempt_global? do
@@ -228,10 +237,12 @@ defmodule Tokengate.Budgets.Manager do
     :ok
   end
 
-  @doc "Releases a credit hold without recording spend."
+  @doc """
+  Releases a plan hold without recording spend.
+  """
   @spec release_credits(map()) :: :ok
   def release_credits(%{kind: kind} = hold) do
-    if kind == :credit do
+    if kind in [:limit, :topup] do
       bump_credit(hold.grant_key, -hold.subject_micro)
     end
 
@@ -242,165 +253,129 @@ defmodule Tokengate.Budgets.Manager do
     :ok
   end
 
-  @doc "Consumo/crédito vigentes de un grant (display). `nil` si no está cargado."
-  def credit_spend(subscription_id, user_id) do
-    key = {:grant, subscription_id, user_id}
+  # Which layer the plan debits, in order. `:exhausted` = límite agotado y sin
+  # top-ups; `:no_credit` = sin límite ni ilimitado ni top-ups (bloqueado).
+  defp pick_layer(%{unlimited?: true}), do: :unlimited
 
-    case :ets.lookup(@credits_table, key) do
-      [{^key, consumed, credited, _cycle_start, _loaded?, _units, _granting?}] ->
-        %{
-          consumed_micro: consumed,
-          credited_micro: credited,
-          remaining_micro: max(0, credited - consumed)
-        }
+  defp pick_layer(%{limit_usd: limit} = plan) when is_struct(limit, Decimal) do
+    subject = plan.subject
+    key = limit_key(subject)
 
-      _ ->
-        nil
-    end
-  end
-
-  # Layer-2-only hold (no credit gate): tier 3 (unlimited) subjects.
-  defp hold_global_only(global_cap_usd, requested, exempt_global?) do
-    if exempt_global? do
-      {:ok, no_credit_hold(0, true)}
+    if read_credit(key, 2) < to_micro(limit) do
+      {:limit, subject}
     else
-      case hold_counter(@global_key, requested, global_cap_usd) do
-        {:ok, held_global} -> {:ok, no_credit_hold(held_global, false)}
-        {:error, :exhausted} -> {:error, {:budget_exceeded, %{layer: :global}}}
-      end
+      pick_topup(plan)
     end
   end
 
-  defp no_credit_hold(held_global, exempt_global?) do
-    %{
-      kind: :no_credit,
-      grant_key: nil,
-      subscription_id: nil,
-      subject_micro: 0,
-      global_micro: held_global,
-      exempt_global?: exempt_global?
-    }
+  defp pick_layer(%{limit_usd: nil} = plan), do: pick_topup(plan)
+
+  defp pick_topup(%{topups: []}), do: :no_credit
+
+  defp pick_topup(%{topups: topups}) do
+    case Enum.find(topups, &topup_has_room?/1) do
+      nil -> :exhausted
+      topup -> {:topup, topup}
+    end
   end
 
-  # Layer 2 after a successful grant hold; rolls the grant back if the global
-  # layer is exhausted so the two stay consistent.
-  defp hold_global_after(
-         grant_key,
-         subscription_id,
-         held,
-         global_cap_usd,
-         requested,
-         exempt_global?
-       ) do
+  defp topup_has_room?(topup) do
+    key = topup_key(topup)
+    read_credit(key, 2) < to_micro(topup.amount_usd)
+  end
+
+  # Limit hold: the subject's own monthly counter (daily/monthly counters live
+  # in the other table and are unrelated).
+  defp hold_limit(subject, limit_usd, global_cap_usd, requested, exempt_global?) do
+    key = limit_key(subject)
+    ensure_limit_loaded(subject)
+
+    held = bump_credit(key, requested)
+
+    hold_global_after_credit(
+      %{kind: :limit, grant_key: key, subject: subject, limit_usd: limit_usd},
+      held,
+      global_cap_usd,
+      requested,
+      exempt_global?
+    )
+  end
+
+  defp hold_topup(topup, global_cap_usd, requested, exempt_global?) do
+    key = topup_key(topup)
+    ensure_topup_loaded(topup)
+
+    held = bump_credit(key, requested)
+
+    hold_global_after_credit(
+      %{kind: :topup, grant_key: key, topup: topup},
+      held,
+      global_cap_usd,
+      requested,
+      exempt_global?
+    )
+  end
+
+  defp hold_global_after_credit(partial, held, global_cap_usd, requested, exempt_global?) do
     if exempt_global? do
-      {:ok, credit_hold(grant_key, subscription_id, held, 0, true)}
+      {:ok, credit_hold(partial, held, 0, true)}
     else
       case hold_counter(@global_key, requested, global_cap_usd) do
         {:ok, held_global} ->
-          {:ok, credit_hold(grant_key, subscription_id, held, held_global, false)}
+          {:ok, credit_hold(partial, held, held_global, false)}
 
         {:error, :exhausted} ->
-          bump_credit(grant_key, -held)
+          bump_credit(partial.grant_key, -held)
           {:error, {:budget_exceeded, %{layer: :global}}}
       end
     end
   end
 
-  defp credit_hold(grant_key, subscription_id, held, held_global, exempt_global?) do
-    %{
-      kind: :credit,
-      grant_key: grant_key,
-      subscription_id: subscription_id,
+  defp credit_hold(partial, held, held_global, exempt_global?) do
+    Map.merge(partial, %{
       subject_micro: held,
       global_micro: held_global,
       exempt_global?: exempt_global?
-    }
+    })
   end
 
-  # First grant (in order) with room: consumed < credited.
-  defp pick_grant([]), do: :none
+  # ETS keys: the subject's limit counter and each top-up's own pocket.
+  defp limit_key({:user, user_id}), do: {:limit, {:user, user_id}}
+  defp limit_key({:service, service_id}), do: {:limit, {:service, service_id}}
+  defp topup_key(%{id: id}), do: {:topup, id}
 
-  defp pick_grant(grants) do
-    case Enum.find(grants, &grant_has_room?/1) do
-      nil -> :exhausted
-      grant -> {:ok, grant_key(grant), grant.subscription.id}
+  # ---------------------------------------------------------------------------
+  # Seeds
+  # ---------------------------------------------------------------------------
+
+  # The limit counter seeds from the durable log: what the subject already spent
+  # against its limit this month (top-up debits don't count against the limit).
+  defp ensure_limit_loaded(subject) do
+    key = limit_key(subject)
+
+    if :ets.lookup(@credits_table, key) == [] do
+      consumed = Tokengate.Credits.spend_debited_to_limit(subject)
+      seed_credit(key, to_micro(consumed), nil, nil, nil, true)
     end
   end
 
-  defp grant_has_room?(grant) do
-    key = grant_key(grant)
+  # A top-up pocket seeds from the log attribution for that top-up.
+  defp ensure_topup_loaded(topup) do
+    key = topup_key(topup)
 
-    # Object is {key, consumed, credited, cycle_start, loaded?, units, granting?}
-    # — pos 2 = consumed, 3 = credited.
-    read_credit(key, 2) < read_credit(key, 3)
-  end
-
-  # Grant ETS key: user grants are (subscription, user_id), service grants
-  # (subscription, service_id) — each service drains its own pocket even when
-  # several services share one subscription.
-  defp grant_key(%{subscription: subscription, service_id: service_id})
-       when service_id != nil,
-       do: {:grant, subscription.id, {:service, service_id}}
-
-  defp grant_key(%{subscription: subscription, user_id: user_id}),
-    do: {:grant, subscription.id, user_id}
-
-  defp read_credit(key, position) do
-    :ets.lookup_element(@credits_table, key, position, 0)
-  end
-
-  # Bump position 2 (consumed_micro). The default object covers the rare race
-  # where the entry was evicted between ensure and here. Positions 2/3 (consumed,
-  # credited) must stay put — `read_credit/2` and `pick_grant/1` index them.
-  defp bump_credit(key, inc) when is_integer(inc) do
-    default = {key, 0, 0, nil, false, 0, false}
-    :ets.update_counter(@credits_table, key, {2, inc}, default)
-  end
-
-  defp ensure_grant_loaded(%{subscription: subscription} = grant) do
-    key = grant_key(grant)
-    current_start = current_cycle_start(subscription)
-
-    case :ets.lookup(@credits_table, key) do
-      [{^key, _consumed, _credited, cycle_start, true, seeded_units, seeded_granting?}] ->
-        # La frescura incluye si la sub otorga crédito, comparado en las DOS
-        # direcciones: pausar/vencer no cambia el ciclo ni `units`, así que sin
-        # este chequeo una entrada ya sembrada seguía sirviendo el crédito viejo
-        # (y al reactivar la sub se quedaba en 0, bloqueando a un miembro con
-        # suscripción vigente).
-        if cycle_start == current_start and seeded_units == subscription.units and
-             seeded_granting? == Tokengate.Credits.grants_credit?(subscription) do
-          :ok
-        else
-          seed_grant(subscription, grant, key)
-        end
-
-      _ ->
-        seed_grant(subscription, grant, key)
+    if :ets.lookup(@credits_table, key) == [] do
+      consumed = Tokengate.Credits.Topups.consumed_usd(topup)
+      seed_credit(key, to_micro(consumed), to_micro(topup.amount_usd), nil, nil, false)
     end
   end
 
-  defp seed_grant(subscription, grant, key) do
-    state = Tokengate.Credits.grant_state(subscription, grant_subject(grant))
-
+  defp seed_credit(key, consumed_micro, credited_micro, cycle_start, units, granting?) do
     GenServer.call(
       __MODULE__,
-      {:seed_grant, key, state.consumed_micro, state.credited_micro, state.cycle_start,
-       subscription.units, Tokengate.Credits.grants_credit?(subscription)}
+      {:seed_credit, key, consumed_micro, credited_micro, cycle_start, units, granting?}
     )
   end
 
-  # The subject whose spend a grant debits: the service for service grants,
-  # the user for member grants.
-  defp grant_subject(%{service_id: service_id}) when service_id != nil,
-    do: {:service, service_id}
-
-  defp grant_subject(%{user_id: user_id}), do: user_id
-
-  defp current_cycle_start(subscription) do
-    %{start: start} = Tokengate.Credits.cycle_bounds(subscription, Date.utc_today())
-    start
-  end
 
   @doc """
   Returns the current daily and monthly spend for `subject_id` as Decimals
@@ -592,7 +567,7 @@ defmodule Tokengate.Budgets.Manager do
 
   @impl true
   def handle_call(
-        {:seed_grant, key, consumed_micro, credited_micro, cycle_start, units, granting?},
+        {:seed_credit, key, consumed_micro, credited_micro, cycle_start, units, granting?},
         _from,
         state
       ) do
@@ -620,13 +595,11 @@ defmodule Tokengate.Budgets.Manager do
     end
   end
 
-  # Grants table. Object:
+  # Credits table. Object:
   # {key, consumed_micro, credited_micro, cycle_start, loaded?, units, granting?}
-  # where key = {:grant, subscription_id, user_id}. `granting?` es si la sub
-  # otorgaba crédito al sembrar: forma parte de la frescura (junto a
-  # `cycle_start` y `units`) porque pausar/vencer/reactivar no cambia ninguno de
-  # los otros dos. Separate from `:tokengate_budgets` so the legacy 4-tuples stay
-  # untouched.
+  # where key = {:limit, subject} (el contador del límite mensual del sujeto) o
+  # {:topup, topup_id} (el bolsín de un top-up). `credited` es nil para el
+  # límite (su techo lo impone `plan.limit_usd`, no la entrada).
   defp ensure_credits_table do
     if :ets.whereis(@credits_table) == :undefined do
       :ets.new(@credits_table, [

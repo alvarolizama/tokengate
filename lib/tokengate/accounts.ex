@@ -1068,7 +1068,7 @@ defmodule Tokengate.Accounts do
   defp build_auth_entry(token) do
     case get_group_member_by_api_key(token) do
       {:ok, %GroupMember{} = member} ->
-        %{member: member, limits: member_limits_with_grants(member), subject_type: "user"}
+        %{member: member, limits: member_limits_with_plan(member), subject_type: "user"}
 
       _ ->
         case get_service_by_api_key(token) do
@@ -1081,8 +1081,8 @@ defmodule Tokengate.Accounts do
               limits:
                 Map.put(
                   effective_limits(service),
-                  :credit_grants,
-                  Tokengate.Credits.service_grants(service)
+                  :credit_plan,
+                  Tokengate.Credits.plan(service)
                 ),
               subject_type: "service"
             }
@@ -1093,13 +1093,13 @@ defmodule Tokengate.Accounts do
     end
   end
 
-  # Effective limits + the ordered credit grants the member can debit (group
-  # default first, then the user's direct credit). Cached alongside the limits;
-  # staleness bounded by the ApiKeyCache TTL.
-  defp member_limits_with_grants(%GroupMember{} = member) do
+  # Effective limits + the resolved spend plan the member debits (monthly limit
+  # + top-ups in draining order). Cached alongside the limits; staleness bounded
+  # by the ApiKeyCache TTL.
+  defp member_limits_with_plan(%GroupMember{} = member) do
     member
     |> effective_limits()
-    |> Map.put(:credit_grants, Tokengate.Credits.grants_for(member))
+    |> Map.put(:credit_plan, Tokengate.Credits.plan(member))
   end
 
   # Invalidation helpers — piped after Repo writes that change auth-relevant

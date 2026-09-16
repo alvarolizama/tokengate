@@ -136,7 +136,7 @@ defmodule TokengateWeb.ProxyController do
             # Clear any stale cost from a previous request on this process; the
             # finalize step re-sets it if the request produced a cost.
             Process.delete(:tg_budget_actual_cost)
-            Process.delete(:tg_credit_subscription_id)
+            Process.delete(:tg_credit_topup_id)
 
             try do
               if payload["stream"] == true do
@@ -282,7 +282,7 @@ defmodule TokengateWeb.ProxyController do
           {:ok, route, hold} ->
             inflight = register_inflight(conn, member, payload, route)
             Process.delete(:tg_budget_actual_cost)
-            Process.delete(:tg_credit_subscription_id)
+            Process.delete(:tg_credit_topup_id)
 
             try do
               execute_simple(conn, route, payload, member, @max_attempts, [], adapter_fun, kind,
@@ -973,22 +973,24 @@ defmodule TokengateWeb.ProxyController do
   end
 
   # Reserves budget for the request on both layers (monthly per subject +
-  # global daily kill-switch). Returns `{:ok, hold}` with
-  # `%{monthly_micro, global_micro, exempt_global?}`, settled — or released,
-  # if the request produced no cost — in the caller's `after` via
-  # `settle_budget/2`. Every provider goes through this gate; there is no
-  # billing-surface exemption.
+  # global daily kill-switch). Returns `{:ok, hold}` with `%{monthly_micro,
+  # global_micro, exempt_global?}`, settled — or released, if the request
+  # produced no cost — in the caller's `after` via `settle_budget/2`. Every
+  # provider goes through this gate; there is no billing-surface exemption.
   defp reserve_budget(member, limits, _route) do
     reserve_credit_budget(member, limits)
   end
 
-  # Credit path for user members: hold against the first grant (group default →
-  # direct) that has room. Records which subscription the request debits so the
-  # durable log can persist it.
+  # Credit path: hold against the subject's spend plan — its monthly limit
+  # first, then the top-up that expires soonest (resolved by
+  # `Credits.plan/1`). Records WHAT the request debits (limit or top-up id) so
+  # the durable log can persist it.
   defp reserve_credit_budget(member, limits) do
+    plan = limits.credit_plan || Tokengate.Credits.plan(member)
+
     result =
-      Budgets.reserve_credits(
-        limits.credit_grants || [],
+      Budgets.reserve_plan(
+        plan,
         GlobalSettings.get_daily_cap(),
         max_request_cost_usd(),
         exempt_from?("global_daily", member)
@@ -996,11 +998,11 @@ defmodule TokengateWeb.ProxyController do
 
     case result do
       {:ok, hold} ->
-        Process.put(:tg_credit_subscription_id, hold.subscription_id)
+        Process.put(:tg_credit_topup_id, hold[:topup] && hold.topup.id)
         {:ok, hold}
 
       {:error, _} = error ->
-        Process.delete(:tg_credit_subscription_id)
+        Process.delete(:tg_credit_topup_id)
         error
     end
   end
@@ -1008,7 +1010,7 @@ defmodule TokengateWeb.ProxyController do
   # Settles the hold to the real cost recorded by the finalize step. When the
   # request never produced a cost (provider failure / exception), the hold is
   # released instead so it doesn't leak.
-  defp settle_budget(_member, %{kind: kind} = hold) when kind in [:credit, :no_credit] do
+  defp settle_budget(_member, %{kind: kind} = hold) when kind in [:limit, :topup, :no_credit] do
     case Process.get(:tg_budget_actual_cost) do
       nil -> Budgets.release_credits(hold)
       cost -> Budgets.settle_credits(hold, cost)
@@ -2052,7 +2054,7 @@ defmodule TokengateWeb.ProxyController do
       "cache_read_tokens" => Map.get(usage, :cache_read_tokens, 0),
       "cache_creation_tokens" => Map.get(usage, :cache_creation_tokens, 0),
       "provider_cost_usd" => Decimal.to_string(cost, :normal),
-      "credit_subscription_id" => Process.get(:tg_credit_subscription_id),
+      "credit_topup_id" => Process.get(:tg_credit_topup_id),
       "latency_ms" => latency_ms,
       "ttft_ms" => Keyword.get(extra, :ttft_ms),
       "streaming" => streaming,
@@ -2338,10 +2340,15 @@ defmodule TokengateWeb.ProxyController do
     do: {402, "billing_error", "budget_exceeded", "Global daily spending cap reached"}
 
   defp error_details({:budget_exceeded, %{layer: :subject}}),
-    do: {402, "billing_error", "budget_exceeded", "Monthly budget exceeded"}
+    do: {402, "billing_error", "budget_exceeded", "Monthly spend limit exceeded"}
 
-  defp error_details({:budget_exceeded, %{layer: :credit}}),
-    do: {402, "billing_error", "budget_exceeded", "Credit exhausted"}
+  # «Sin crédito»: no hay límite mensual (ni propio ni del grupo), no está
+  # marcado ilimitado y no hay top-ups vigentes. Copy propio — NO comparte el
+  # mensaje del tope global ni el del límite agotado.
+  defp error_details({:budget_exceeded, %{layer: :no_credit}}),
+    do:
+      {402, "billing_error", "no_credit",
+       "No spending path: no monthly limit, not marked unlimited and no active top-ups"}
 
   defp error_details({:budget_exceeded, _}),
     do: {402, "billing_error", "budget_exceeded", "Budget exceeded"}
