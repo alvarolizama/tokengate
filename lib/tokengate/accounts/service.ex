@@ -25,6 +25,11 @@ defmodule Tokengate.Accounts.Service do
     field :concurrency_limit, :integer
     field :rpm_limit, :integer
 
+    # Límite mensual de gasto: nil = sin límite propio, 0 = cero (jamás
+    # ilimitado). El único camino a ilimitado es `unlimited_spend`.
+    field :monthly_spend_limit_usd, :decimal
+    field :unlimited_spend, :boolean, default: false
+
     # Sub de crédito directa (opcional; nil = ilimitado, tier 3).
     belongs_to :subscription, Tokengate.Credits.Subscription
 
@@ -36,7 +41,7 @@ defmodule Tokengate.Accounts.Service do
     timestamps(type: :utc_datetime)
   end
 
-  @permitted ~w(name subscription_id concurrency_limit rpm_limit)a
+  @permitted ~w(name subscription_id concurrency_limit rpm_limit monthly_spend_limit_usd unlimited_spend)a
   @required ~w(name)a
 
   def changeset(service, attrs) do
@@ -45,6 +50,7 @@ defmodule Tokengate.Accounts.Service do
     |> validate_required(@required)
     |> validate_number(:concurrency_limit, greater_than: 0)
     |> validate_number(:rpm_limit, greater_than: 0)
+    |> validate_number(:monthly_spend_limit_usd, greater_than_or_equal_to: 0)
     |> assoc_constraint(:subscription)
   end
 

@@ -17,6 +17,8 @@ defmodule Tokengate.Accounts.ApiKey do
     field :subject_type, :string, default: "member"
     belongs_to :group_member, Tokengate.Accounts.GroupMember
     belongs_to :service, Tokengate.Accounts.Service
+    belongs_to :user, Tokengate.Accounts.User
+    field :label, :string
     field :key_hash, :string
     field :key_prefix, :string
     field :status, :string, default: "active"
@@ -24,7 +26,7 @@ defmodule Tokengate.Accounts.ApiKey do
     timestamps(type: :utc_datetime)
   end
 
-  @permitted ~w(subject_type group_member_id service_id key_hash key_prefix status)a
+  @permitted ~w(subject_type group_member_id service_id user_id label key_hash key_prefix status)a
   @required ~w(subject_type key_hash key_prefix)a
 
   def changeset(api_key, attrs) do
@@ -35,14 +37,6 @@ defmodule Tokengate.Accounts.ApiKey do
     |> validate_inclusion(:status, ["active", "revoked"])
     |> validate_subject()
     |> unique_constraint(:key_hash)
-    |> unique_constraint(:group_member_id,
-      name: :api_keys_group_member_active_index,
-      message: "ya existe una key activa para este miembro"
-    )
-    |> unique_constraint(:service_id,
-      name: :api_keys_service_id_active_index,
-      message: "ya existe una key activa para este servicio"
-    )
     |> assoc_constraint(:group_member)
     |> assoc_constraint(:service)
   end

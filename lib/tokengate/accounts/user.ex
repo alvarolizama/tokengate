@@ -25,6 +25,15 @@ defmodule Tokengate.Accounts.User do
     field :google_id, :string
     field :avatar_url, :string
 
+    # Límite mensual de gasto: nil = sin límite propio, 0 = cero (jamás
+    # ilimitado). El único camino a ilimitado es `unlimited_spend`. Los
+    # defaults de conc/RPM propios del usuario (null = sin propios) completan
+    # el escalado group → user → service.
+    field :monthly_spend_limit_usd, :decimal
+    field :unlimited_spend, :boolean, default: false
+    field :default_concurrency_limit, :integer
+    field :default_rpm_limit, :integer
+
     # Virtual
     field :password, :string, virtual: true
     # Virtual: contraseña actual, exigida para autorizar un cambio de
@@ -36,7 +45,12 @@ defmodule Tokengate.Accounts.User do
     timestamps(type: :utc_datetime)
   end
 
-  @permitted ~w(email name password global_role status google_id avatar_url timezone)a
+  @permitted ~w(email name password global_role status google_id avatar_url timezone monthly_spend_limit_usd unlimited_spend default_concurrency_limit default_rpm_limit)a
+
+  # Campos de límites editables por admin (gasto mensual, unlimited, conc/RPM
+  # propios). `changeset/2` y `admin_create_changeset/2` los castean vía
+  # @permitted; `admin_update_changeset/2` los agrega explícitamente.
+  @spend_fields ~w(monthly_spend_limit_usd unlimited_spend default_concurrency_limit default_rpm_limit)a
 
   @doc """
   Changeset for self-registration (sign-up). Requires email + password
@@ -63,6 +77,9 @@ defmodule Tokengate.Accounts.User do
     |> validate_password()
     |> validate_inclusion(:global_role, ~w(user admin))
     |> validate_inclusion(:status, ~w(active suspended))
+    |> validate_number(:monthly_spend_limit_usd, greater_than_or_equal_to: 0)
+    |> validate_number(:default_concurrency_limit, greater_than: 0)
+    |> validate_number(:default_rpm_limit, greater_than: 0)
     |> put_password_hash()
   end
 
@@ -72,10 +89,13 @@ defmodule Tokengate.Accounts.User do
   """
   def admin_update_changeset(user, attrs) do
     user
-    |> cast(attrs, [:email, :name, :global_role, :status])
+    |> cast(attrs, [:email, :name, :global_role, :status] ++ @spend_fields)
     |> validate_email()
     |> validate_inclusion(:global_role, ~w(user admin))
     |> validate_inclusion(:status, ~w(active suspended))
+    |> validate_number(:monthly_spend_limit_usd, greater_than_or_equal_to: 0)
+    |> validate_number(:default_concurrency_limit, greater_than: 0)
+    |> validate_number(:default_rpm_limit, greater_than: 0)
   end
 
   @doc """
@@ -107,6 +127,9 @@ defmodule Tokengate.Accounts.User do
     |> cast(attrs, @permitted)
     |> validate_required([:email])
     |> validate_email()
+    |> validate_number(:monthly_spend_limit_usd, greater_than_or_equal_to: 0)
+    |> validate_number(:default_concurrency_limit, greater_than: 0)
+    |> validate_number(:default_rpm_limit, greater_than: 0)
   end
 
   @doc """

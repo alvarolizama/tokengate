@@ -425,7 +425,7 @@ defmodule Tokengate.AccountsTest do
       assert {:error, :not_found} = Accounts.get_group_member_by_api_key("tg-garbage")
     end
 
-    test "api_keys has unique index on group_member_id (one key per member)" do
+    test "allows multiple active keys for the same group_member (no per-subject unique index)" do
       group = group_fixture()
       user = user_fixture()
 
@@ -433,15 +433,29 @@ defmodule Tokengate.AccountsTest do
       {:ok, _api_key, _token} = Accounts.replace_api_key(tm)
       tm_loaded = Repo.preload(tm, [:api_key])
 
-      # Attempt to insert a second api key for the same group_member directly
-      {:error, changeset} =
+      # Ya no hay índice único por sujeto: una segunda key activa del mismo
+      # miembro convive con la primera (el error de unicidad ya no existe).
+      {:ok, second_key} =
         Accounts.create_api_key(%{
           "group_member_id" => tm_loaded.id,
           "key_hash" => Accounts.hash_api_key("tg-somethingelse"),
-          "key_prefix" => "tg-somet"
+          "key_prefix" => "tg-somet",
+          "label" => "segunda key"
         })
 
-      assert "ya existe una key activa para este miembro" in errors_on(changeset).group_member_id
+      assert second_key.status == "active"
+      assert second_key.group_member_id == tm_loaded.id
+      assert second_key.label == "segunda key"
+
+      # Ambas keys activas existen para el mismo group_member_id.
+      keys =
+        from(k in ApiKey,
+          where: k.group_member_id == ^tm_loaded.id and k.status == "active",
+          select: count(k.id)
+        )
+        |> Repo.one()
+
+      assert keys == 2
     end
   end
 
