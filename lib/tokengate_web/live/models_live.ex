@@ -41,7 +41,6 @@ defmodule TokengateWeb.ModelsLive do
       socket
       |> assign(:page_title, "Modelos · Tokengate")
       |> assign(:is_admin, is_admin)
-      |> assign(:model_type_filter, "favorites")
       |> assign(:form, nil)
       |> assign(:editing_model_id, nil)
       |> assign(:guard_rails_form, nil)
@@ -71,29 +70,26 @@ defmodule TokengateWeb.ModelsLive do
   ## Data loading ---------------------------------------------------------
 
   defp load_models(socket) do
-    filter = socket.assigns.model_type_filter
-
-    models =
-      aliases_with_providers_query()
-      |> Repo.all()
-      |> filter_by_type(filter)
+    models = aliases_with_providers_query() |> Repo.all()
 
     socket
     |> stream(:models, models, reset: true)
     |> assign(:models_empty?, models == [])
   end
 
-  defp filter_by_type(models, "all"), do: models
-  defp filter_by_type(models, "favorites"), do: Enum.filter(models, & &1.pinned)
-  defp filter_by_type(models, type), do: Enum.filter(models, &(&1.model_type == type))
-
-  # The model_type of the model being edited (edit_model_provider path).
-  defp get_alias_type(_socket, model_id) do
-    case Tokengate.Repo.get(Tokengate.Providers.Model, model_id) do
+  @doc """
+  The model_type of the model the provider form is working on — it decides
+  which upstream catalogue to list (embeddings vs chat models). Unknown or
+  absent ids fall back to "llm".
+  """
+  def model_type_for(model_id) when is_binary(model_id) do
+    case Providers.get_model(model_id) do
       nil -> "llm"
       model_ -> model_.model_type || "llm"
     end
   end
+
+  def model_type_for(_model_id), do: "llm"
 
   # Providers are grouped by scope first — global, then group-exclusive,
   # then member-exclusive — and ordered by priority within each group.
@@ -166,13 +162,6 @@ defmodule TokengateWeb.ModelsLive do
      socket
      |> assign(:form, nil)
      |> assign(:editing_model_id, nil)}
-  end
-
-  def handle_event("filter_model_type", %{"type" => type}, socket) do
-    {:noreply,
-     socket
-     |> assign(:model_type_filter, type)
-     |> load_models()}
   end
 
   def handle_event("toggle_pin", %{"id" => model_id}, socket) do
@@ -389,6 +378,7 @@ defmodule TokengateWeb.ModelsLive do
        socket
        |> assign(:provider_form, to_form(changeset, as: :model_provider))
        |> assign(:editing_ap_id, ap.id)
+       |> assign(:provider_form_model_id, ap.model_id)
        |> assign(:provider_form_credential_id, ap.credential_id)
        |> assign(:provider_form_is_fireworks, credential_is_fireworks?(ap.credential_id, socket))
        |> assign(:current_scope, scope)
@@ -762,14 +752,7 @@ defmodule TokengateWeb.ModelsLive do
     if credential do
       provider = credential.provider
 
-      # Which catalogue to list depends on the model being edited: the
-      # active filter when creating, the edited model's type otherwise.
-      model_type =
-        case socket.assigns.editing_model_id do
-          :new -> socket.assigns.model_type_filter
-          nil -> socket.assigns.model_type_filter
-          id -> get_alias_type(socket, id)
-        end
+      model_type = model_type_for(socket.assigns[:provider_form_model_id])
 
       lv_pid = self()
 
@@ -1044,14 +1027,8 @@ defmodule TokengateWeb.ModelsLive do
       " · cache $" <> fmt_price(model.market_cache_price_per_1m) <> " /1M"
   end
 
-  @doc "Empty-state message for the active model type filter"
-  def empty_state_message("favorites"),
-    do: "No hay modelos pineados. Pinea un modelo para verlo aquí."
-
-  def empty_state_message("all"), do: "No hay models configurados."
-  def empty_state_message("llm"), do: "No hay models LLM."
-  def empty_state_message("embedding"), do: "No hay models de embedding."
-  def empty_state_message(_), do: "No hay models configurados."
+  @doc "Empty-state message for the models list"
+  def empty_state_message, do: "No hay models configurados."
 
   def format_compact(n) when is_integer(n) and n >= 1_000_000_000,
     do: "#{Float.round(n / 1_000_000_000, 1)}B"
@@ -1243,29 +1220,6 @@ defmodule TokengateWeb.ModelsLive do
           </:actions>
         </.header>
 
-        <%!-- Model type filter tabs --%>
-        <div class="join" id="model-type-tabs" role="tablist">
-          <button
-            :for={
-              {label, value} <- [
-                {"Favoritos", "favorites"},
-                {"LLM", "llm"},
-                {"Embedding", "embedding"},
-                {"Todos", "all"}
-              ]
-            }
-            phx-click="filter_model_type"
-            phx-value-type={value}
-            class={[
-              "join-item btn btn-sm",
-              if(@model_type_filter == value, do: "btn-primary", else: "btn-ghost")
-            ]}
-            id={"model-type-#{value}"}
-          >
-            {label}
-          </button>
-        </div>
-
         <%!-- Alias list --%>
         <%!-- The empty state must live OUTSIDE the stream container:
              phx-update="stream" only manages children keyed by stream ids,
@@ -1276,7 +1230,7 @@ defmodule TokengateWeb.ModelsLive do
           class="text-center py-12 text-base-content/40"
         >
           <.icon name="hero-cpu-chip" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-          <p>{empty_state_message(@model_type_filter)}</p>
+          <p>{empty_state_message()}</p>
         </div>
 
         <div id="models" phx-update="stream" class="space-y-3">

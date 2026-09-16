@@ -137,8 +137,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     assert html =~ "Modelo creado"
 
-    # New models are created unpinned, so the default Favoritos view hides them.
-    view |> element("#model-type-all") |> render_click()
+    # No filters left on the page: a freshly created (unpinned) model shows.
     html = render(view)
     assert html =~ "gpt-4o-test"
 
@@ -176,9 +175,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     assert html =~ "Modelo creado"
 
-    # Market prices surface on the model card row (display-only): the model
-    # lives in the "all" tab because it is unpinned, not in Favoritos.
-    view |> element("#model-type-all") |> render_click()
+    # Market prices surface on the model card row (display-only).
     html = render(view)
     assert html =~ "gpt-4o-market"
     # Exact single-line render (HEEx must not split "$" from the value).
@@ -1084,15 +1081,10 @@ defmodule TokengateWeb.ModelsLiveTest do
     # have created models already. Wipe them so the empty state holds.
     Repo.delete_all(Providers.Model)
 
-    {:ok, view, html} = live(conn, ~p"/catalog/models")
+    {:ok, _view, html} = live(conn, ~p"/catalog/models")
 
-    # Default filter is Favoritos → favorites-specific empty message.
-    assert html =~ "No hay modelos pineados"
-
-    view |> element("#model-type-all") |> render_click()
-
-    html = render(view)
     assert html =~ "No hay models configurados"
+    refute html =~ "No hay modelos pineados"
   end
 
   # -- Read-only view shows model data -------------------------------------
@@ -1121,8 +1113,6 @@ defmodule TokengateWeb.ModelsLiveTest do
     conn = login(conn, admin, password)
 
     {:ok, view, _html} = live(conn, ~p"/catalog/models")
-
-    view |> element("#model-type-all") |> render_click()
 
     html = render(view)
     assert order_before?(html, "aa-pinned-test", "bb-pinned-test")
@@ -1162,38 +1152,41 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert html =~ ~s(style="display: none")
   end
 
-  # -- Default filter -------------------------------------------------------
+  # -- Provider catalogue follows the model's own type -----------------------
 
-  test "default filter is favorites; pinned shown, unpinned hidden", %{conn: conn} do
+  test "the provider catalogue type follows the model inside the form", %{conn: _conn} do
+    emb = create_model(%{name: "emb-catalogue-model", model_type: "embedding"})
+    llm = create_model(%{name: "llm-catalogue-model", model_type: "llm"})
+
+    # The form's model decides which upstream catalogue is listed.
+    assert TokengateWeb.ModelsLive.model_type_for(emb.id) == "embedding"
+    assert TokengateWeb.ModelsLive.model_type_for(llm.id) == "llm"
+
+    # No form open yet / unknown id: safe chat-model default.
+    assert TokengateWeb.ModelsLive.model_type_for(nil) == "llm"
+    assert TokengateWeb.ModelsLive.model_type_for(Ecto.UUID.generate()) == "llm"
+  end
+
+  # -- Type / favorites tabs are gone ---------------------------------------
+
+  test "the list is unfiltered and carries no type tabs", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    _pinned = create_model(%{name: "fav-default-model", pinned: true})
-    _unpinned = create_model(%{name: "unpinned-default-model", pinned: false})
+    _pinned = create_model(%{name: "nl-pinned-model", pinned: true})
+    _unpinned = create_model(%{name: "nl-unpinned-model", pinned: false})
     conn = login(conn, admin, password)
 
     {:ok, view, html} = live(conn, ~p"/catalog/models")
 
-    assert html =~ "fav-default-model"
-    refute html =~ "unpinned-default-model"
+    # Both pinned and unpinned models show in the single unfiltered list.
+    assert html =~ "nl-pinned-model"
+    assert html =~ "nl-unpinned-model"
 
-    view |> element("#model-type-all") |> render_click()
-
-    html = render(view)
-    assert html =~ "unpinned-default-model"
-  end
-
-  test "Favoritos tab shows only pinned models", %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
-    _pinned = create_model(%{name: "fav-pinned-model", pinned: true})
-    _unpinned = create_model(%{name: "fav-unpinned-model", pinned: false})
-    conn = login(conn, admin, password)
-
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
-
-    view |> element("#model-type-favorites") |> render_click()
-
-    html = render(view)
-    assert html =~ "fav-pinned-model"
-    refute html =~ "fav-unpinned-model"
+    # The tab strip and each of its buttons are gone.
+    refute has_element?(view, "#model-type-tabs")
+    refute has_element?(view, "#model-type-favorites")
+    refute has_element?(view, "#model-type-llm")
+    refute has_element?(view, "#model-type-embedding")
+    refute has_element?(view, "#model-type-all")
   end
 
   defp order_before?(html, first, second) do
