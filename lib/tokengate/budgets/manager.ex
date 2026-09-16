@@ -394,6 +394,42 @@ defmodule Tokengate.Budgets.Manager do
   end
 
 
+  @doc """
+  Gasto del mes **debitado al límite** de un sujeto, desde el contador ETS
+  (display/tests). `subject` es `{:user, id}` o `{:service, id}`.
+
+  Devuelve `%{consumed_micro: n}` o `nil` si el contador no está cargado. Lo
+  sembrado son los logs sin top-up: es lo que consume `monthly_spend_limit_usd`.
+  """
+  @spec limit_spend(Tokengate.Credits.subject()) :: %{consumed_micro: integer()} | nil
+  def limit_spend(subject) do
+    key = limit_key(subject)
+
+    case :ets.lookup(@credits_table, key) do
+      [{^key, consumed, _credited, _cycle_start, _loaded?, _units, _granting?}] ->
+        %{consumed_micro: consumed}
+
+      _ ->
+        nil
+    end
+  end
+
+  @doc """
+  Consumo de un top-up desde su bolsín ETS. `nil` si no está cargado.
+  """
+  @spec topup_spend(term()) :: %{consumed_micro: integer()} | nil
+  def topup_spend(topup_id) do
+    key = {:topup, topup_id}
+
+    case :ets.lookup(@credits_table, key) do
+      [{^key, consumed, _credited, _cycle_start, _loaded?, _units, _granting?}] ->
+        %{consumed_micro: consumed}
+
+      _ ->
+        nil
+    end
+  end
+
   # Layer-2-only hold (no subject gate): unlimited subjects and limit-less
   # subjects with no top-ups never touch a subject counter.
   defp hold_global_only(global_cap_usd, requested, exempt_global?) do

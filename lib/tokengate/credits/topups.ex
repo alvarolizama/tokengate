@@ -217,24 +217,65 @@ defmodule Tokengate.Credits.Topups do
     }
   end
 
+
+  # ---------------------------------------------------------------------------
+  # Invalidación de caché (constraint del contrato)
+  # ---------------------------------------------------------------------------
+
+  # El `ApiKeyCache` guarda el PLAN del sujeto (límite + top-ups vigentes) con
+  # TTL de 60s. Crear, revocar, reactivar o editar un top-up cambia ese plan:
+  # sin invalidar, el proxy seguiría usando el plan viejo (un top-up recién
+  # creado no se vería hasta un minuto después, y uno revocado seguiría
+  # otorgando). Se invalida por el sujeto dueño.
+  defp invalidate_for({:user, user_id}) do
+    safe_invalidate(fn -> Tokengate.Accounts.ApiKeyCache.invalidate_user(user_id) end)
+  end
+
+  defp invalidate_for({:service, service_id}) do
+    safe_invalidate(fn -> Tokengate.Accounts.ApiKeyCache.invalidate_member(service_id) end)
+  end
+
+  defp subject_of(%Topup{user_id: user_id}) when is_binary(user_id), do: {:user, user_id}
+  defp subject_of(%Topup{service_id: service_id}), do: {:service, service_id}
+
+  defp safe_invalidate(fun) do
+    if :ets.whereis(Tokengate.Accounts.ApiKeyCache.table()) != :undefined, do: fun.()
+    :ok
+  end
+
   # ---------------------------------------------------------------------------
   # Escritura
   # ---------------------------------------------------------------------------
 
+
   @doc "Crea un top-up (usuario o servicio) con su label y expiración."
   def create(attrs) do
-    %Topup{}
-    |> Topup.changeset(attrs)
-    |> Repo.insert()
+    result =
+      %Topup{}
+      |> Topup.changeset(attrs)
+      |> Repo.insert()
+
+    with {:ok, topup} <- result do
+      invalidate_for(subject_of(topup))
+    end
+
+    result
   end
 
   def change_topup(%Topup{} = topup, attrs \\ %{}), do: Topup.changeset(topup, attrs)
 
   @doc "Actualiza un top-up (label, nota, expiración)."
   def edit_topup(%Topup{} = topup, attrs) do
-    topup
-    |> Topup.changeset(attrs)
-    |> Repo.update()
+    result =
+      topup
+      |> Topup.changeset(attrs)
+      |> Repo.update()
+
+    with {:ok, updated} <- result do
+      invalidate_for(subject_of(updated))
+    end
+
+    result
   end
 
   @doc "Revoca un top-up: deja de otorgar; lo ya consumido vive en los logs."
@@ -247,5 +288,9 @@ defmodule Tokengate.Credits.Topups do
     edit_topup(topup, %{status: "active"})
   end
 
-  def delete(%Topup{} = topup), do: Repo.delete(topup)
+  def delete(%Topup{} = topup) do
+    result = Repo.delete(topup)
+    invalidate_for(subject_of(topup))
+    result
+  end
 end

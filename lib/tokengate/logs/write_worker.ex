@@ -40,6 +40,10 @@ defmodule Tokengate.Logs.WriteWorker do
       cache_read_tokens: args["cache_read_tokens"] || 0,
       cache_creation_tokens: args["cache_creation_tokens"] || 0,
       provider_cost_usd: args["provider_cost_usd"],
+      # Qué se debitó: el top-up (nuevo modelo) y, en filas viejas, la
+      # suscripción (evidencia histórica). El proxy los pone en los args.
+      credit_topup_id: args["credit_topup_id"],
+      credit_subscription_id: args["credit_subscription_id"],
       latency_ms: args["latency_ms"],
       ttft_ms: args["ttft_ms"],
       streaming: args["streaming"] || false,

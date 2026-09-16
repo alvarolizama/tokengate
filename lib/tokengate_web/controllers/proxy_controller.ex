@@ -127,16 +127,18 @@ defmodule TokengateWeb.ProxyController do
       # lost the response can deduplicate the replay.
       |> assign(:idempotency_key, Ecto.UUID.generate())
 
+    # Limpia el estado por-request ANTES de reservar: la reserva escribe qué se
+    # debitó (límite o top-up) y el finalize lo persiste en el log durable.
+    # Borrarlo después de reservar descartaba justo el valor nuevo.
+    Process.delete(:tg_budget_actual_cost)
+    Process.delete(:tg_credit_topup_id)
+
     with :ok <- require_model(model),
          :ok <- acquire_group_limits(key_id, limits) do
       try do
         case route_and_acquire(member, payload, affinity_key, limits) do
           {:ok, route, hold} ->
             inflight = register_inflight(conn, member, payload, route)
-            # Clear any stale cost from a previous request on this process; the
-            # finalize step re-sets it if the request produced a cost.
-            Process.delete(:tg_budget_actual_cost)
-            Process.delete(:tg_credit_topup_id)
 
             try do
               if payload["stream"] == true do
@@ -273,6 +275,12 @@ defmodule TokengateWeb.ProxyController do
     key_id = member.api_key.id
     request_start = System.monotonic_time(:millisecond)
 
+    # Limpia el estado por-request ANTES de reservar: la reserva escribe qué se
+    # debitó (límite o top-up) y el finalize lo persiste en el log durable.
+    # Borrarlo después de reservar descartaba justo el valor nuevo.
+    Process.delete(:tg_budget_actual_cost)
+    Process.delete(:tg_credit_topup_id)
+
     with :ok <- require_model(model),
          :ok <- acquire_group_limits(key_id, limits) do
       try do
@@ -281,8 +289,6 @@ defmodule TokengateWeb.ProxyController do
              ) do
           {:ok, route, hold} ->
             inflight = register_inflight(conn, member, payload, route)
-            Process.delete(:tg_budget_actual_cost)
-            Process.delete(:tg_credit_topup_id)
 
             try do
               execute_simple(conn, route, payload, member, @max_attempts, [], adapter_fun, kind,

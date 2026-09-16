@@ -128,6 +128,20 @@ defmodule Tokengate.Accounts.ApiKeyCache do
     :ok
   end
 
+  @doc """
+  Drops every entry of a **user** (across all their memberships).
+
+  El plan de gasto del usuario (su límite y SUS top-ups) viaja en cada entrada
+  de sus keys: un top-up nuevo o revocado debe tumbar todas. Con un grupo por
+  usuario basta con `invalidate_group/1`, pero el plan es del usuario, no del
+  grupo — invalidar por usuario es lo correcto.
+  """
+  @spec invalidate_user(term()) :: :ok
+  def invalidate_user(user_id) do
+    :ets.match_delete(@table, {:_, %{member: %{user_id: user_id}}, :_})
+    :ok
+  end
+
   @doc "Drops the whole cache."
   @spec invalidate_all() :: :ok
   def invalidate_all do

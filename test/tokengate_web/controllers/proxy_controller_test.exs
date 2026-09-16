@@ -242,32 +242,26 @@ defmodule TokengateWeb.ProxyControllerTest do
   defp proxy_fixture(opts \\ %{}) do
     u = unique()
 
-    {:ok, group} =
-      Accounts.create_group(%{
+    # El gasto del grupo ahora es su límite mensual. Sin `:credit_units` y sin
+    # `:unlimited` el grupo NO deja gastar (los miembros quedarían sin camino
+    # salvo top-up) — que es exactamente la conducta nueva.
+    group_attrs =
+      %{
         name: "Group #{u}",
-        monthly_budget_per_user_usd: Map.get(opts, :daily_budget, "100.00"),
         default_rpm_limit: Map.get(opts, :rpm_limit, 600),
         default_concurrency_limit: Map.get(opts, :concurrency_limit, 10)
-      })
+      }
+      |> then(fn attrs ->
+        cond do
+          # Default del fixture: ILIMITADO (espejo del tier-3 de antes), para
+          # que los tests que no hablan de crédito no tropiecen con el gate.
+          Map.get(opts, :credit_units) -> Map.put(attrs, :monthly_spend_limit_usd, to_string(opts.credit_units))
+          Map.get(opts, :blocked) -> attrs
+          true -> Map.put(attrs, :unlimited_spend, true)
+        end
+      end)
 
-    # Optional group default subscription — the credit gate for user members.
-    # Absent `:credit_units` => no subscription (tier 3: unlimited).
-    credit_subscription =
-      case Map.get(opts, :credit_units) do
-        nil ->
-          nil
-
-        units ->
-          {:ok, sub} =
-            Tokengate.Credits.create_subscription(%{
-              "units" => units,
-              "recurrence" => "monthly",
-              "reset_day" => 1
-            })
-
-          {:ok, _group} = Tokengate.Credits.set_group_default(group, sub)
-          sub
-      end
+    {:ok, group} = Accounts.create_group(group_attrs)
 
     {:ok, user} =
       Accounts.register_user(%{
@@ -332,7 +326,9 @@ defmodule TokengateWeb.ProxyControllerTest do
       provider: provider,
       model: model,
       model_provider: model_provider,
-      credit_subscription: credit_subscription
+      # El límite mensual del grupo (nil = sin límite propio): es lo que el
+      # proxy debita y lo que los tests comparan contra el gasto.
+      credit_limit_usd: group.monthly_spend_limit_usd
     }
   end
 
@@ -407,8 +403,7 @@ defmodule TokengateWeb.ProxyControllerTest do
       token: token,
       model: model,
       member: member,
-      model_provider: model_provider,
-      credit_subscription: credit_subscription
+      model_provider: model_provider
     } = proxy_fixture(%{credit_units: 100})
 
     conn =
@@ -433,8 +428,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     # The request debits the member's credit grant by the real paid cost
     # (0.000150 USD = 150 micro-USD = 150 units of crédito at 1:1).
-    assert %{consumed_micro: 150} =
-             Budgets.credit_spend(credit_subscription.id, member.user_id)
+    assert %{consumed_micro: 150} = Budgets.limit_spend({:user, member.user_id})
 
     # Log job enqueued → drain → request_log row with the single cost dimension
     assert_enqueued(worker: WriteWorker)
@@ -488,7 +482,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     # when the `with` short-circuited. N rejected requests leaked N slots and
     # the member ended up permanently 429-blocked (no sweeper on the
     # in-flight table).
-    %{token: token, model: model, member: member, credit_subscription: credit_subscription} =
+    %{token: token, model: model, member: member, group: group} =
       proxy_fixture(%{credit_units: 0, concurrency_limit: 3})
 
     # Member's credit is exhausted → every request 402s.
@@ -503,8 +497,8 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     # ...and block forever: refill the credit (and drop the cached auth so the
     # new grant amount is picked up) — the 4th request must NOT be blocked.
-    {:ok, _} = Tokengate.Credits.update_subscription(credit_subscription, %{"units" => 100})
-    Tokengate.Accounts.ApiKeyCache.invalidate_member(member.id)
+    {:ok, _} = Accounts.update_group(group, %{"monthly_spend_limit_usd" => "100.00"})
+    Tokengate.Accounts.ApiKeyCache.invalidate_group(group.id)
 
     conn
     |> authed_conn(token)
@@ -1690,8 +1684,7 @@ defmodule TokengateWeb.ProxyControllerTest do
   test "embeddings happy path: passthrough, cost from usage, log with request_type", %{
     conn: conn
   } do
-    %{token: token, model: model, member: member, credit_subscription: credit_subscription} =
-      proxy_fixture(%{credit_units: 100})
+    %{token: token, model: model, member: member} = proxy_fixture(%{credit_units: 100})
 
     update_alias_type(model, "embedding")
 
@@ -1709,8 +1702,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     # Provider-reported usage drives cost (cost 0.000011)
     assert get_resp_header(conn, "x-tokengate-cost") == ["0.000011"]
 
-    assert %{consumed_micro: 11} =
-             Budgets.credit_spend(credit_subscription.id, member.user_id)
+    assert %{consumed_micro: 11} = Budgets.limit_spend({:user, member.user_id})
 
     assert_enqueued(worker: WriteWorker)
     assert %{success: 1} = Oban.drain_queue(queue: :logs)
@@ -1889,8 +1881,7 @@ defmodule TokengateWeb.ProxyControllerTest do
       token: token,
       model: model,
       member: member,
-      model_provider: model_provider,
-      credit_subscription: credit_subscription
+      model_provider: model_provider
     } = proxy_fixture(%{credit_units: 100})
 
     {:ok, _} =
@@ -1908,7 +1899,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     # 100 in × $1/M + 200 out × $2/M = 0.0005
     assert get_resp_header(conn, "x-tokengate-cost") == ["0.000500"]
-    assert %{consumed_micro: 500} = Budgets.credit_spend(credit_subscription.id, member.user_id)
+    assert %{consumed_micro: 500} = Budgets.limit_spend({:user, member.user_id})
 
     assert %{success: 1} = Oban.drain_queue(queue: :logs)
 
@@ -2032,8 +2023,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     %{
       token: token,
       model: model,
-      member: member,
-      credit_subscription: credit_subscription
+      member: member
     } = proxy_fixture(%{credit_units: 100, path_overrides: %{"tts" => "/costly-binary-speech"}})
 
     conn =
@@ -2044,7 +2034,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert response(conn, 200) == <<0xFF, 0xFB, 0x90, 0x01>>
     assert get_resp_header(conn, "x-tokengate-cost") == ["0.000420"]
 
-    assert %{consumed_micro: 420} = Budgets.credit_spend(credit_subscription.id, member.user_id)
+    assert %{consumed_micro: 420} = Budgets.limit_spend({:user, member.user_id})
 
     assert %{success: 1} = Oban.drain_queue(queue: :logs)
 
@@ -2120,4 +2110,77 @@ defmodule TokengateWeb.ProxyControllerTest do
   end
 
   defp json_body(conn), do: json_response(conn, 200)
+
+  # ---------------------------------------------------------------------------
+  # P2 — el gate por sujeto: 0 es CERO, unlimited_spend explícito pasa
+  # ---------------------------------------------------------------------------
+
+  describe "gate por sujeto (límite mensual + top-ups)" do
+    test "límite 0 (cero) bloquea con 402 y código propio", %{conn: conn} do
+      %{token: token, model: model} = proxy_fixture(%{credit_units: 0})
+
+      conn = conn |> authed_conn(token) |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+      assert json_response(conn, 402)["error"]["code"] == "budget_exceeded"
+      refute json_response(conn, 402)["error"]["message"] =~ "Global"
+    end
+
+    test "sin límite, sin ilimitado y sin top-ups: 402 con código no_credit", %{conn: conn} do
+      %{token: token, model: model} = proxy_fixture(%{blocked: true})
+
+      conn = conn |> authed_conn(token) |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+      body = json_response(conn, 402)
+      assert body["error"]["code"] == "no_credit"
+      # Copy propio: NO comparte el mensaje del límite agotado ni el del cap global.
+      refute body["error"]["message"] =~ "Monthly"
+      refute body["error"]["message"] =~ "Global"
+    end
+
+    test "unlimited_spend pasa aunque no haya límite", %{conn: conn} do
+      %{token: token, model: model} = proxy_fixture(%{unlimited: true})
+
+      conn = conn |> authed_conn(token) |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+      assert json_response(conn, 200)
+    end
+
+    test "límite agotado + top-up vigente: el request pasa y se debita el top-up", %{conn: conn} do
+      %{token: token, model: model, member: member} = proxy_fixture(%{credit_units: 0})
+
+      {:ok, topup} =
+        Tokengate.Credits.Topups.create(%{"user_id" => member.user_id, "amount_usd" => "50.00"})
+
+      # El límite es 0 (cero): sin top-up sería 402. Con top-up vigente el
+      # request pasa y el log registra QUÉ se debitó.
+      conn = conn |> authed_conn(token) |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+      assert json_response(conn, 200)
+      assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+      # El log asentado por ESTE request: el único con el monto exacto.
+      log =
+        Repo.one(
+          from l in RequestLog,
+            where: l.group_member_id == ^member.id,
+            where: l.provider_cost_usd == ^Decimal.new("0.000150"),
+            order_by: [desc: l.inserted_at],
+            limit: 1
+        )
+
+      assert log.credit_topup_id == topup.id
+      assert %{consumed_micro: 150} = Budgets.topup_spend(topup.id)
+    end
+
+    test "el 402 del cap global NO comparte copy con el del sujeto", %{conn: conn} do
+      %{token: token, model: model} = proxy_fixture(%{unlimited: true})
+      {:ok, _} = Tokengate.GlobalSettings.update(%{"daily_max_spend_usd" => "0.000001"})
+
+      conn = conn |> authed_conn(token) |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+      body = json_response(conn, 402)
+      assert body["error"]["message"] =~ "Global"
+      refute body["error"]["message"] =~ "No spending path"
+    end
+  end
 end

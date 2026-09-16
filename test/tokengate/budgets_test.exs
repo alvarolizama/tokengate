@@ -73,13 +73,6 @@ defmodule Tokengate.BudgetsTest do
 
   # Simulates a completed request (zero-hold settle) so tests can put spend on
   # the books without going through the full reserve → settle dance.
-  defp record(subject_id, cost_usd) do
-    Manager.settle(
-      subject_id,
-      %{monthly_micro: 0, global_micro: 0, exempt_global?: false},
-      cost_usd
-    )
-  end
 
   # Durable spend row in request_logs — what display queries read now.
   defp record_log(member, cost_usd, inserted_at \\ nil) do
