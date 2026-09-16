@@ -2,10 +2,10 @@ defmodule Tokengate.Accounts.Service do
   @moduledoc """
   Servicio — consumidor machine de la API, independiente de grupos.
 
-  Sin sub (`subscription_id == nil`) el consumo es ilimitado en crédito
-  (tier 3, solo aplica el cap global diario). Con sub, cada service es un
-  grant propio: dos services que apunten a la misma sub drenan bolsines
-  separados. `concurrency_limit`/`rpm_limit` son absolutos (no extras).
+  El gasto se gobierna con su **límite mensual propio**
+  (`monthly_spend_limit_usd`) más sus **top-ups**; `unlimited_spend` es el
+  único camino a ilimitado. `concurrency_limit`/`rpm_limit` son absolutos
+  (no extras).
   """
   use Ecto.Schema
 
@@ -30,9 +30,6 @@ defmodule Tokengate.Accounts.Service do
     field :monthly_spend_limit_usd, :decimal
     field :unlimited_spend, :boolean, default: false
 
-    # Sub de crédito directa (opcional; nil = ilimitado, tier 3).
-    belongs_to :subscription, Tokengate.Credits.Subscription
-
     has_one :api_key, Tokengate.Accounts.ApiKey
     has_many :models, Tokengate.Providers.ServiceModel
     has_many :supervisors, Tokengate.Accounts.ServiceSupervisor
@@ -41,7 +38,7 @@ defmodule Tokengate.Accounts.Service do
     timestamps(type: :utc_datetime)
   end
 
-  @permitted ~w(name subscription_id concurrency_limit rpm_limit monthly_spend_limit_usd unlimited_spend)a
+  @permitted ~w(name concurrency_limit rpm_limit monthly_spend_limit_usd unlimited_spend)a
   @required ~w(name)a
 
   def changeset(service, attrs) do
@@ -51,7 +48,6 @@ defmodule Tokengate.Accounts.Service do
     |> validate_number(:concurrency_limit, greater_than: 0)
     |> validate_number(:rpm_limit, greater_than: 0)
     |> validate_number(:monthly_spend_limit_usd, greater_than_or_equal_to: 0)
-    |> assoc_constraint(:subscription)
   end
 
   @doc "Defaults de límites cuando el service no define los suyos."

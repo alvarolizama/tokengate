@@ -209,7 +209,7 @@ defmodule Tokengate.Budgets.Manager do
       :no_credit ->
         {:error, {:budget_exceeded, %{layer: :no_credit}}}
 
-      :exhausted ->
+      :subject ->
         {:error, {:budget_exceeded, %{layer: :subject}}}
     end
   end
@@ -253,28 +253,45 @@ defmodule Tokengate.Budgets.Manager do
     :ok
   end
 
-  # Which layer the plan debits, in order. `:exhausted` = límite agotado y sin
-  # top-ups; `:no_credit` = sin límite ni ilimitado ni top-ups (bloqueado).
+  # Which layer the plan debits, in order. `:subject` = el límite existe y está
+  # agotado (o en cero); `:no_credit` = no hay límite, ni ilimitado, ni top-up
+  # utilizable (bloqueado de verdad).
+  #
+  # Importante: antes de decidir hay que **sembrar** los contadores desde la
+  # verdad durable (`ensure_limit_loaded/1`, `ensure_topup_loaded/1`). Un
+  # contador vacío en ETS lee 0 — con límite 0 o agotado eso elegiría la capa
+  # equivocada y dejaría gastar al sujeto.
   defp pick_layer(%{unlimited?: true}), do: :unlimited
 
   defp pick_layer(%{limit_usd: limit} = plan) when is_struct(limit, Decimal) do
     subject = plan.subject
     key = limit_key(subject)
+    ensure_limit_loaded(subject)
 
-    if read_credit(key, 2) < to_micro(limit) do
+    # `0` = CERO (jamás ilimitado): no hay límite disponible, así que este plan
+    # solo puede seguir por top-ups y, si no hay, queda `:subject`.
+    if Decimal.compare(limit, 0) == :gt and read_credit(key, 2) < to_micro(limit) do
       {:limit, subject}
     else
-      pick_topup(plan)
+      limit_exhausted(plan)
     end
   end
 
-  defp pick_layer(%{limit_usd: nil} = plan), do: pick_topup(plan)
+  defp pick_layer(%{limit_usd: nil} = plan), do: topups_only(plan, :no_credit)
 
-  defp pick_topup(%{topups: []}), do: :no_credit
+  # El límite existe pero está agotado (o en cero): top-ups o `:subject`.
+  defp limit_exhausted(plan), do: topups_only(plan, :subject)
 
-  defp pick_topup(%{topups: topups}) do
+  # Solo top-ups: el primero (orden de drenado) con remanente. Sin ninguno
+  # utilizable, la capa que corresponda (`:subject` si había límite,
+  # `:no_credit` si no había ninguno).
+  defp topups_only(%{topups: []}, fallback), do: fallback
+
+  defp topups_only(%{topups: topups}, fallback) do
+    Enum.each(topups, &ensure_topup_loaded/1)
+
     case Enum.find(topups, &topup_has_room?/1) do
-      nil -> :exhausted
+      nil -> fallback
       topup -> {:topup, topup}
     end
   end
@@ -376,6 +393,49 @@ defmodule Tokengate.Budgets.Manager do
     )
   end
 
+
+  # Layer-2-only hold (no subject gate): unlimited subjects and limit-less
+  # subjects with no top-ups never touch a subject counter.
+  defp hold_global_only(global_cap_usd, requested, exempt_global?) do
+    if exempt_global? do
+      {:ok, no_credit_hold(0, true)}
+    else
+      case hold_counter(@global_key, requested, global_cap_usd) do
+        {:ok, held_global} -> {:ok, no_credit_hold(held_global, false)}
+        {:error, :exhausted} -> {:error, {:budget_exceeded, %{layer: :global}}}
+      end
+    end
+  end
+
+  defp no_credit_hold(held_global, exempt_global?) do
+    %{
+      kind: :no_credit,
+      grant_key: nil,
+      subject: nil,
+      topup: nil,
+      subject_micro: 0,
+      global_micro: held_global,
+      exempt_global?: exempt_global?
+    }
+  end
+
+  # ---------------------------------------------------------------------------
+  # Internal — credit table read/bump
+  # ---------------------------------------------------------------------------
+
+  # Object: {key, consumed, credited, cycle_start, loaded?, units, granting?}
+  # — pos 2 = consumed, pos 3 = credited. Default 0 when the key is missing.
+  defp read_credit(key, position) do
+    :ets.lookup_element(@credits_table, key, position, 0)
+  end
+
+  # Bumps position 2 (consumed_micro) by `inc` and returns the NEW value. The
+  # default object covers the rare race where the entry was evicted between the
+  # ensure and here. Positions 2/3 must stay put — `read_credit/2` indexes them.
+  defp bump_credit(key, inc) when is_integer(inc) do
+    default = {key, 0, 0, nil, false, 0, false}
+    :ets.update_counter(@credits_table, key, {2, inc}, default)
+  end
 
   @doc """
   Returns the current daily and monthly spend for `subject_id` as Decimals

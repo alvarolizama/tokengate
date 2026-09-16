@@ -162,7 +162,11 @@ defmodule Tokengate.Credits.Topups do
       end)
 
     consumed =
-      consumed_by_topup_ids(Enum.map(topups |> List.flatten() |> Enum.map(& &1.id), & &1))
+      topups
+      |> Map.values()
+      |> List.flatten()
+      |> Enum.map(& &1.id)
+      |> consumed_by_topup_ids()
 
     Map.new(subjects, fn subject ->
       rows =
@@ -227,7 +231,7 @@ defmodule Tokengate.Credits.Topups do
   def change_topup(%Topup{} = topup, attrs \\ %{}), do: Topup.changeset(topup, attrs)
 
   @doc "Actualiza un top-up (label, nota, expiración)."
-  def update(%Topup{} = topup, attrs) do
+  def edit_topup(%Topup{} = topup, attrs) do
     topup
     |> Topup.changeset(attrs)
     |> Repo.update()
@@ -235,12 +239,12 @@ defmodule Tokengate.Credits.Topups do
 
   @doc "Revoca un top-up: deja de otorgar; lo ya consumido vive en los logs."
   def revoke(%Topup{} = topup) do
-    update(topup, %{status: "revoked"})
+    edit_topup(topup, %{status: "revoked"})
   end
 
   @doc "Reactiva un top-up revocado o agotado."
   def reactivate(%Topup{} = topup) do
-    update(topup, %{status: "active"})
+    edit_topup(topup, %{status: "active"})
   end
 
   def delete(%Topup{} = topup), do: Repo.delete(topup)

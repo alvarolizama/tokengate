@@ -99,7 +99,9 @@ defmodule Tokengate.BudgetsTest do
       })
   end
 
-  defp record_grant_log(member, sub, cost) do
+  # Gasto asentado contra un TOP-UP concreto (el proxy lo persiste en
+  # `request_logs.credit_topup_id`). No cuenta contra el límite del sujeto.
+  defp record_topup_log(member, topup, cost) do
     {:ok, _} =
       Logs.log_request(%{
         group_member_id: member.id,
@@ -107,20 +109,23 @@ defmodule Tokengate.BudgetsTest do
         model_requested: "test-model",
         status_code: 200,
         provider_cost_usd: Decimal.new(cost),
-        credit_subscription_id: sub.id,
+        credit_topup_id: topup.id,
         inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
       })
   end
 
-  # Suscripción default del grupo (una query más, sin tocar los fixtures).
-  defp group_sub(group, attrs) do
-    {:ok, sub} =
-      Tokengate.Credits.create_subscription(
-        Map.merge(%{"units" => 100, "recurrence" => "monthly", "reset_day" => 1}, attrs)
-      )
-
-    {:ok, _} = Tokengate.Credits.set_group_default(group, sub)
-    sub
+  # Gasto debitado al LÍMITE del sujeto (log sin top-up): es lo que cuenta
+  # contra `monthly_spend_limit_usd`.
+  defp record_limit_log(member, cost) do
+    {:ok, _} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        subject_type: "user",
+        model_requested: "test-model",
+        status_code: 200,
+        provider_cost_usd: Decimal.new(cost),
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
   end
 
   # Camino que usan las vistas (Postgres, por lotes): es el que puede diferir
@@ -139,65 +144,72 @@ defmodule Tokengate.BudgetsTest do
       assert Decimal.eq?(budget.monthly_spend_usd, Decimal.new("0"))
       assert is_nil(budget.monthly_limit_usd)
       assert is_nil(budget.monthly_pct)
-      refute budget.exhausted?
-      refute budget.monthly_exhausted?
+      # Sin límite, sin `unlimited_spend` y sin top-up NO hay camino de gasto:
+      # el proxy responde 402. `nil` ya no significa ilimitado.
+      assert budget.exhausted?
+      assert budget.monthly_exhausted?
     end
 
-    test "reports spend recorded in the ETS counter" do
-      member = member_fixture()
-      assert :ok = record(member.id, Decimal.new("33.33"))
+    test "reporta el gasto durable del mes (request_logs), no un contador ETS" do
+      user = user_fixture()
+      group = group_fixture(%{"monthly_spend_limit_usd" => "100.00"})
+      member = member_fixture(group, user)
+
+      record_limit_log(member, "33.33")
 
       budget = Budgets.member_budget(member)
 
       assert Decimal.eq?(budget.monthly_spend_usd, Decimal.new("33.33"))
-      assert is_nil(budget.monthly_limit_usd)
+      assert Decimal.eq?(budget.monthly_limit_usd, Decimal.new("100.00"))
+      refute budget.exhausted?
     end
   end
 
   # Regresión: los usuarios de un grupo con suscripción salían "sin límite"
-  # porque `member_budget` hardcodeaba el límite a `nil` y nunca miraba el
-  # grant. El límite debe ser el crédito del grant (units) y el gasto que
-  # cuenta contra él, lo consumido del grant.
-  describe "member_budget/1 con suscripción de grupo (crédito)" do
-    test "el límite es el crédito del grant, no nil" do
+  # El límite del miembro es el EFECTIVO: propio si lo define, si no el del
+  # grupo. `unlimited_spend` es el único camino a ilimitado y `0` es CERO.
+  describe "member_budget/1 con límite por sujeto" do
+    test "sin límite propio hereda el del grupo (no nil)" do
       user = user_fixture()
-      group = group_fixture()
+      group = group_fixture(%{"monthly_spend_limit_usd" => "10.00"})
       member = member_fixture(group, user)
-      _sub = group_sub(group, %{"units" => 10, "name" => "Grupo"})
 
       budget = Budgets.member_budget(member)
 
       assert budget.has_credit?
       refute is_nil(budget.monthly_limit_usd)
-      assert Decimal.eq?(budget.monthly_limit_usd, Decimal.new("10"))
+      assert Decimal.eq?(budget.monthly_limit_usd, Decimal.new("10.00"))
       assert Decimal.eq?(budget.monthly_spend_usd, Decimal.new("0"))
-      assert Decimal.eq?(budget.credit_remaining_usd, Decimal.new("10"))
+      assert Decimal.eq?(budget.credit_remaining_usd, Decimal.new("10.00"))
       refute budget.exhausted?
     end
 
-    test "el gasto del presupuesto es lo consumido del grant; el real va aparte" do
+    test "lo debitado al límite es el gasto sin top-up; el de top-up va aparte" do
       user = user_fixture()
-      group = group_fixture()
+      group = group_fixture(%{"monthly_spend_limit_usd" => "10.00"})
       member = member_fixture(group, user)
-      sub = group_sub(group, %{"units" => 10})
+      {:ok, topup} =
+        Tokengate.Credits.Topups.create(%{"user_id" => user.id, "amount_usd" => "5.00"})
 
-      record_grant_log(member, sub, "2.00")
-      record_log(member, Decimal.new("1.50"))
+      # 2.00 contra el límite + 1.50 contra un top-up.
+      record_limit_log(member, "2.00")
+      record_topup_log(member, topup, "1.50")
 
       budget = budget_for(member)
 
+      # Contra el límite solo cuenta el request sin top-up…
       assert Decimal.eq?(budget.monthly_spend_usd, Decimal.new("2"))
-      assert Decimal.eq?(budget.real_monthly_spend_usd, Decimal.new("3.5"))
       assert Decimal.eq?(budget.credit_remaining_usd, Decimal.new("8"))
       assert_in_delta budget.monthly_pct, 20.0, 0.01
+      # …y el gasto real del mes incluye ambos.
+      assert Decimal.eq?(budget.real_monthly_spend_usd, Decimal.new("3.5"))
       refute budget.exhausted?
     end
 
-    test "sub de grupo pausada: límite 0 y agotado, no ilimitado" do
+    test "límite 0 es CERO: agotado y al 100%, nunca ilimitado" do
       user = user_fixture()
-      group = group_fixture()
+      group = group_fixture(%{"monthly_spend_limit_usd" => "0"})
       member = member_fixture(group, user)
-      group_sub(group, %{"status" => "paused"})
 
       budget = Budgets.member_budget(member)
 
@@ -207,27 +219,57 @@ defmodule Tokengate.BudgetsTest do
       assert_in_delta budget.monthly_pct, 100.0, 0.01
     end
 
-    test "list_member_budgets/1 resuelve el crédito en lote igual que member_credit" do
+    test "unlimited_spend pasa con cap global: sin pct y sin agotar" do
       user = user_fixture()
-      group = group_fixture()
+      group = group_fixture(%{"unlimited_spend" => true})
       member = member_fixture(group, user)
-      sub = group_sub(group, %{"units" => 7})
-      record_grant_log(member, sub, "1.00")
+
+      budget = Budgets.member_budget(member)
+
+      assert budget.unlimited?
+      refute budget.has_credit?
+      assert is_nil(budget.monthly_limit_usd)
+      assert is_nil(budget.monthly_pct)
+      refute budget.exhausted?
+    end
+
+    test "sin límite, sin ilimitado y sin top-up: agotado (bloqueado de verdad)" do
+      member = member_fixture(group_fixture(), user_fixture())
+
+      budget = Budgets.member_budget(member)
+
+      assert is_nil(budget.monthly_limit_usd)
+      refute budget.unlimited?
+      refute budget.has_credit?
+      assert budget.exhausted?
+    end
+
+    test "un top-up vigente le da camino de gasto a un sujeto sin límite" do
+      user = user_fixture()
+      member = member_fixture(group_fixture(), user)
+      {:ok, _} = Tokengate.Credits.Topups.create(%{"user_id" => user.id, "amount_usd" => "5.00"})
+
+      budget = Budgets.member_budget(member)
+
+      refute budget.exhausted?
+      assert Decimal.eq?(budget.remaining_topup_usd, Decimal.new("5"))
+    end
+
+    test "list_member_budgets/1 resuelve el límite efectivo en lote" do
+      user = user_fixture()
+      group = group_fixture(%{"monthly_spend_limit_usd" => "7.00"})
+      member = member_fixture(group, user)
+      record_limit_log(member, "1.00")
 
       budgets = Budgets.list_member_budgets("Etc/UTC")
       budget = Enum.find(budgets, &(&1.member.id == member.id))
-      credit = Tokengate.Credits.member_credit(member)
 
       assert budget.has_credit?
-      assert Decimal.eq?(budget.monthly_limit_usd, Decimal.new("7"))
+      assert Decimal.eq?(budget.monthly_limit_usd, Decimal.new("7.00"))
       assert Decimal.eq?(budget.monthly_spend_usd, Decimal.new("1"))
-
-      assert budget.monthly_limit_usd
-             |> Decimal.mult(Decimal.new(1_000_000))
-             |> Decimal.to_integer() ==
-               credit.credited_micro
     end
   end
+
 
   describe "list_member_budgets/0" do
     test "includes every member with user and group preloaded" do
@@ -243,35 +285,42 @@ defmodule Tokengate.BudgetsTest do
   end
 
   describe "list_exhausted_member_budgets/0 and count_exhausted/0" do
-    test "only returns members that hit a limit" do
-      ok_member = member_fixture()
-      broke_member = member_fixture()
+    test "marca a quien no tiene camino de gasto, no a quien tiene margen" do
+      # Con límite y sin gasto: tiene margen.
+      ok_group = group_fixture(%{"monthly_spend_limit_usd" => "100.00"})
+      ok_member = member_fixture(ok_group, user_fixture())
 
-      assert :ok = record(ok_member.id, Decimal.new("10.00"))
-      assert :ok = record(broke_member.id, Decimal.new("1000.00"))
+      # Sin límite, sin ilimitado y sin top-up: bloqueado (es lo que el proxy
+      # responde 402 con `:no_credit`).
+      blocked_member = member_fixture(group_fixture(), user_fixture())
 
       exhausted = Budgets.list_exhausted_member_budgets()
+      ids = Enum.map(exhausted, & &1.member.id)
 
-      # No monthly limit anymore → nobody is flagged by it (budget is credit).
-      assert exhausted == []
-      assert Budgets.count_exhausted() == 0
+      assert blocked_member.id in ids
+      refute ok_member.id in ids
+      assert Budgets.count_exhausted() == length(exhausted)
     end
   end
 
   describe "spend_by_user/0" do
     test "rolls up spend across all memberships of a user" do
       user = user_fixture()
-      member_a = member_fixture(nil, user)
-      member_b = member_fixture(nil, user)
+      group_a = group_fixture(%{"monthly_spend_limit_usd" => "10.00"})
+      group_b = group_fixture(%{"monthly_spend_limit_usd" => "1000.00"})
+      member_a = member_fixture(group_a, user)
+      member_b = member_fixture(group_b, user)
 
-      assert :ok = record(member_a.id, Decimal.new("10.00"))
-      assert :ok = record(member_b.id, Decimal.new("1000.00"))
+      record_limit_log(member_a, "2.00")
+      record_limit_log(member_b, "3.00")
 
       spend = Budgets.spend_by_user()
       user_spend = Map.fetch!(spend, user.id)
 
-      assert Decimal.eq?(user_spend.monthly_usd, Decimal.new("1010.00"))
-      assert is_nil(user_spend.monthly_limit_usd)
+      # El límite se suma entre membresías; el gasto es el del usuario (una
+      # sola vez, aunque tenga varias membresías) en el mes UTC.
+      assert Decimal.eq?(user_spend.monthly_usd, Decimal.new("5.00"))
+      assert Decimal.eq?(user_spend.monthly_limit_usd, Decimal.new("1010.00"))
       refute user_spend.exhausted?
     end
 
@@ -285,25 +334,26 @@ defmodule Tokengate.BudgetsTest do
   end
 
   describe "list_group_budgets/0" do
-    test "agrupa por grupo: sin tope mensual, gasto = suma de spend" do
-      group = group_fixture()
+    test "agrupa por grupo: suma los límites y el gasto de sus miembros" do
+      group = group_fixture(%{"monthly_spend_limit_usd" => "300.00"})
       member_a = member_fixture(group)
       member_b = member_fixture(group)
       # Otro grupo que no debe mezclarse
       _other = member_fixture()
 
-      assert :ok = record(member_a.id, Decimal.new("100.00"))
-      assert :ok = record(member_b.id, Decimal.new("50.00"))
+      record_limit_log(member_a, "100.00")
+      record_limit_log(member_b, "50.00")
 
       groups = Budgets.list_group_budgets()
       row = Enum.find(groups, &(&1.group.id == group.id))
 
       assert row.member_count == 2
-      assert is_nil(row.monthly_limit_usd)
-      assert is_nil(row.monthly_pct)
-      assert row.has_unlimited?
-      # gasto real = 100 + 50
+      # Cada miembro hereda el límite del grupo: el rollup los suma.
+      assert Decimal.eq?(row.monthly_limit_usd, Decimal.new("600.00"))
+      refute row.has_unlimited?
+      # gasto del grupo = 100 + 50
       assert Decimal.eq?(row.monthly_spend_usd, Decimal.new("150.00"))
+      assert_in_delta row.monthly_pct, 25.0, 0.01
     end
 
     test "spot check on group budget values" do
@@ -447,8 +497,9 @@ defmodule Tokengate.BudgetsTest do
       member = member_fixture()
       record_log(member, Decimal.new("25.00"))
       # Hold en vuelo en el contador ETS: NO debe reflejarse en el display.
-      {:ok, hold} =
-        Manager.reserve_credits([], Decimal.new("100.00"), Decimal.new("20.00"), false)
+      # El sujeto es ilimitado ⇒ solo se toca el cap global.
+      plan = %{subject: {:user, "cap-test"}, limit_usd: nil, unlimited?: true, topups: []}
+      {:ok, hold} = Manager.reserve_plan(plan, Decimal.new("100.00"), Decimal.new("20.00"), false)
 
       summary = Budgets.global_daily_budget_summary()
 

@@ -20,8 +20,6 @@ defmodule Tokengate.Accounts.Group do
     field :monthly_spend_limit_usd, :decimal
     field :unlimited_spend, :boolean, default: false
 
-    belongs_to :default_subscription, Tokengate.Credits.Subscription
-
     has_many :group_members, Tokengate.Accounts.GroupMember
 
     timestamps(type: :utc_datetime)

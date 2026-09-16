@@ -35,7 +35,9 @@ defmodule Tokengate.Budgets do
           exhausted?: boolean(),
           real_monthly_spend_usd: Decimal.t(),
           has_credit?: boolean(),
-          credit_remaining_usd: Decimal.t() | nil
+          credit_remaining_usd: Decimal.t() | nil,
+          unlimited?: boolean(),
+          remaining_topup_usd: Decimal.t()
         }
 
   @doc """
@@ -47,17 +49,15 @@ defmodule Tokengate.Budgets do
   independent of member count). `list_member_budgets/0` keeps the legacy
   ETS-counter behavior (UTC periods).
 
-  El **límite** de cada miembro es su crédito vigente (default del grupo /
-  subs directas, vía `Credits.member_credits/1`, resuelto en lote): `units`
-  otorgadas en el ciclo contra lo consumido del grant. Antes venía hardcodeado
-  a `nil`, así que todo miembro con suscripción de grupo salía "sin límite".
-  Sin crédito aplicable (tier 3) el límite sigue siendo `nil` — ahí `nil` sí
-  significa ilimitado (solo topa el cap global diario).
+  El **límite** de cada miembro es el efectivo (propio o el del grupo, vía
+  `Credits.summaries/1`, resuelto en lote) y el gasto que cuenta contra él es
+  el del mes UTC. Los top-ups vigentes son el segundo camino de gasto;
+  `unlimited_spend` es el único camino a ilimitado.
   """
   @spec list_member_budgets() :: [member_budget()]
   def list_member_budgets do
     members = list_members_with_group_and_user()
-    credits = Tokengate.Credits.member_credits(members)
+    credits = Tokengate.Credits.summaries(members)
 
     Enum.map(members, fn member ->
       member_budget(member, Manager.spend(member.id), Map.get(credits, member.id))
@@ -68,7 +68,7 @@ defmodule Tokengate.Budgets do
   def list_member_budgets(timezone) do
     members = list_members_with_group_and_user()
     spend = spend_by_member_ids(Enum.map(members, & &1.id), timezone)
-    credits = Tokengate.Credits.member_credits(members)
+    credits = Tokengate.Credits.summaries(members)
 
     Enum.map(members, &member_budget(&1, spend, Map.get(credits, &1.id)))
   end
@@ -98,52 +98,26 @@ defmodule Tokengate.Budgets do
   """
   @spec list_service_budgets() :: [service_budget()]
   def list_service_budgets do
-    # Mes UTC: la ventana en que resetea el presupuesto mensual de cada sujeto.
-    from = Periods.start_of_month_utc("Etc/UTC")
-
-    services = Repo.all(from(s in Accounts.Service, preload: [:subscription]))
-
-    spend =
-      RequestLog
-      |> where([rl], rl.service_id in ^Enum.map(services, & &1.id) and rl.inserted_at >= ^from)
-      |> group_by([rl], rl.service_id)
-      |> select([rl], {rl.service_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
-      |> Repo.all()
-      |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
+    services = Repo.all(from(s in Accounts.Service))
+    summaries = Tokengate.Credits.service_summaries(services)
 
     services
     |> Enum.map(fn service ->
-      real_usd = Map.get(spend, service.id, Decimal.new(0))
+      summary = Map.fetch!(summaries, service.id)
 
-      # Igual que los miembros: el límite del service es su propio grant
-      # (`services.subscription_id`), no un `nil` hardcodeado. Sin sub vinculada
-      # el service es tier 3 → `nil` = ilimitado.
-      case Tokengate.Credits.service_subscription(service) do
-        %Tokengate.Credits.Subscription{} = subscription ->
-          state = Tokengate.Credits.grant_state(subscription, {:service, service.id})
-          limit_usd = from_micro(state.credited_micro)
-          spent_usd = from_micro(state.consumed_micro)
-          remaining = state.credited_micro - state.consumed_micro
-
-          %{
-            service: service,
-            monthly_spend_usd: spent_usd,
-            monthly_limit_usd: limit_usd,
-            monthly_pct: pct(spent_usd, limit_usd),
-            exhausted?: remaining <= 0,
-            real_monthly_spend_usd: real_usd
-          }
-
-        nil ->
-          %{
-            service: service,
-            monthly_spend_usd: real_usd,
-            monthly_limit_usd: nil,
-            monthly_pct: nil,
-            exhausted?: false,
-            real_monthly_spend_usd: real_usd
-          }
-      end
+      # El camino de gasto del servicio: ilimitado, límite con remanente, o
+      # top-ups. Sin ninguno de los tres, `has_path?` es false y el proxy
+      # responde 402 con la capa `:no_credit`.
+      %{
+        service: service,
+        monthly_spend_usd: summary.limit_spend_usd,
+        monthly_limit_usd: summary.limit_usd,
+        monthly_pct: pct(summary.limit_spend_usd, summary.limit_usd),
+        exhausted?: not summary.has_path?,
+        real_monthly_spend_usd: summary.spend_usd,
+        unlimited?: summary.unlimited?,
+        remaining_topup_usd: summary.remaining_topup_usd
+      }
     end)
     |> Enum.sort_by(fn row -> Decimal.to_float(row.monthly_spend_usd) end, :desc)
   end
@@ -163,8 +137,8 @@ defmodule Tokengate.Budgets do
 
   @doc """
   Org-wide global daily cap summary — the honest replacement for the old
-  monthly budget rollup: since the subscription-credits migration there is
-  no monthly limit left anywhere, and the only org-wide spend guard is the
+  monthly budget rollup: the monthly limit belongs to each subject (never to
+  the org), and the only org-wide spend guard is the
   **global daily cap** (`GlobalSettings.daily_max_spend_usd`, kill-switch
   layer 2, UTC day).
 
@@ -298,7 +272,8 @@ defmodule Tokengate.Budgets do
         monthly_spend_usd: monthly_spend_usd,
         real_monthly_spend_usd: real_monthly_spend_usd,
         monthly_pct: pct(monthly_spend_usd, monthly_limit_usd),
-        has_unlimited?: Enum.any?(limits, &is_nil/1)
+        # `nil` ya NO significa ilimitado: lo dice el flag del sujeto.
+        has_unlimited?: Enum.any?(budgets, &Map.get(&1, :unlimited?, false))
       }
     end)
     |> Enum.sort_by(fn row -> Decimal.to_float(row.monthly_spend_usd) end, :desc)
@@ -320,7 +295,7 @@ defmodule Tokengate.Budgets do
       |> order_by([tm], desc: tm.inserted_at)
       |> Repo.all()
 
-    credits = Tokengate.Credits.member_credits(members)
+    credits = Tokengate.Credits.summaries(members)
 
     Enum.map(members, fn member ->
       member_budget(member, Manager.spend(member.id), Map.get(credits, member.id))
@@ -337,7 +312,7 @@ defmodule Tokengate.Budgets do
       |> Repo.all()
 
     spend = spend_by_member_ids(Enum.map(members, & &1.id), timezone)
-    credits = Tokengate.Credits.member_credits(members)
+    credits = Tokengate.Credits.summaries(members)
 
     Enum.map(members, &member_budget(&1, spend, Map.get(credits, &1.id)))
   end
@@ -381,13 +356,11 @@ defmodule Tokengate.Budgets do
           limits -> Enum.reduce(limits, &Decimal.add/2)
         end
 
-      monthly_usd =
-        Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.monthly_spend_usd, &2))
+      # Cada membresía reporta el gasto del MISMO sujeto (el usuario), así que
+      # sumarlas lo contaría N veces: se toma el valor (idéntico) una sola vez.
+      monthly_usd = budgets |> Enum.map(& &1.monthly_spend_usd) |> Enum.max()
 
-      # Gasto real del mes (sin recortar a la ventana del grant): es el número
-      # que va en la columna de dinero de /access/users, no el del presupuesto.
-      real_monthly_usd =
-        Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.real_monthly_spend_usd, &2))
+      real_monthly_usd = budgets |> Enum.map(& &1.real_monthly_spend_usd) |> Enum.max()
 
       {user_id,
        %{
@@ -396,7 +369,7 @@ defmodule Tokengate.Budgets do
          real_monthly_usd: real_monthly_usd,
          monthly_limit_usd: monthly_limit,
          monthly_pct: pct(monthly_usd, monthly_limit),
-         exhausted?: Enum.any?(budgets, & &1.exhausted?)
+         exhausted?: Enum.all?(budgets, & &1.exhausted?)
        }}
     end)
   end
@@ -404,41 +377,63 @@ defmodule Tokengate.Budgets do
   @doc "Builds the budget status map for a single group member (ETS counters)."
   @spec member_budget(GroupMember.t()) :: member_budget()
   def member_budget(%GroupMember{} = member) do
-    credits = Tokengate.Credits.member_credits([member])
+    credits = Tokengate.Credits.summaries([member])
 
     member_budget(member, Manager.spend(member.id), Map.get(credits, member.id))
   end
 
-  # Variante por lotes: el crédito del miembro ya viene resuelto
-  # (`Credits.member_credits/1`) para no disparar queries por miembro.
-  defp member_budget(%GroupMember{} = member, spend, credit) do
-    {daily_usd, real_monthly_usd} = member_spend(spend, member.id)
+  # Variante por lotes: el resumen del sujeto ya viene resuelto
+  # (`Credits.summaries/1`) para no disparar queries por miembro.
+  #
+  # El límite es el efectivo (propio o del grupo) y el gasto que cuenta contra
+  # él es el del mes UTC; los top-ups son el segundo camino. `exhausted?` es
+  # «sin camino de gasto»: límite agotado/sin límite, no ilimitado y sin
+  # top-ups — exactamente lo que el proxy bloquea con 402.
+  defp member_budget(%GroupMember{} = member, spend, summary) do
+    {daily_usd, monthly_usd} = member_spend(spend, member.id)
 
-    has_credit? = credit != nil and Map.get(credit, :has_credit?, false)
+    case summary do
+      %{limit_usd: limit_usd, unlimited?: unlimited?, limit_spend_usd: spent_usd} = summary ->
+        %{
+          member: member,
+          daily_spend_usd: daily_usd,
+          monthly_spend_usd: spent_usd,
+          daily_limit_usd: nil,
+          monthly_limit_usd: limit_usd,
+          daily_pct: nil,
+          monthly_pct: pct(spent_usd, limit_usd),
+          daily_exhausted?: false,
+          monthly_exhausted?: not summary.has_path?,
+          exhausted?: not summary.has_path?,
+          real_monthly_spend_usd: monthly_usd,
+          # `has_credit?` = el sujeto tiene límite mensual definido (propio o
+          # heredado). Un sujeto ilimitado o sin límite no lo tiene.
+          has_credit?: not is_nil(limit_usd),
+          credit_remaining_usd: summary.remaining_limit_usd,
+          unlimited?: unlimited?,
+          remaining_topup_usd: summary.remaining_topup_usd
+        }
 
-    # Con crédito: el límite es lo otorgado por el grant en el ciclo y el gasto
-    # que cuenta contra él es lo consumido del grant (que es lo que el proxy
-    # debita y bloquea). Sin crédito aplicable (tier 3): límite `nil` —
-    # ilimitado de verdad, solo topa el cap global diario.
-    limit_usd = if has_credit?, do: from_micro(credit.credited_micro)
-    spent_usd = if has_credit?, do: from_micro(credit.consumed_micro), else: real_monthly_usd
-    exhausted? = has_credit? and Map.get(credit, :remaining_micro, 0) <= 0
-
-    %{
-      member: member,
-      daily_spend_usd: daily_usd,
-      monthly_spend_usd: spent_usd,
-      daily_limit_usd: nil,
-      monthly_limit_usd: limit_usd,
-      daily_pct: nil,
-      monthly_pct: pct(spent_usd, limit_usd),
-      daily_exhausted?: false,
-      monthly_exhausted?: exhausted?,
-      exhausted?: exhausted?,
-      real_monthly_spend_usd: real_monthly_usd,
-      has_credit?: has_credit?,
-      credit_remaining_usd: if(has_credit?, do: from_micro(Map.get(credit, :remaining_micro, 0)))
-    }
+      nil ->
+        # Sin resumen (no debería pasar): sin límite ni camino conocido.
+        %{
+          member: member,
+          daily_spend_usd: daily_usd,
+          monthly_spend_usd: monthly_usd,
+          daily_limit_usd: nil,
+          monthly_limit_usd: nil,
+          daily_pct: nil,
+          monthly_pct: nil,
+          daily_exhausted?: false,
+          monthly_exhausted?: true,
+          exhausted?: true,
+          real_monthly_spend_usd: monthly_usd,
+          has_credit?: false,
+          credit_remaining_usd: nil,
+          unlimited?: false,
+          remaining_topup_usd: Decimal.new(0)
+        }
+    end
   end
 
   # Gastos del miembro: del contador ETS (`%{daily_usd:, monthly_usd:}`) o del
@@ -448,11 +443,6 @@ defmodule Tokengate.Budgets do
   defp member_spend(%{} = spend, member_id) do
     {get_in(spend, [:daily, member_id]) || Decimal.new(0),
      get_in(spend, [:monthly, member_id]) || Decimal.new(0)}
-  end
-
-  # micro-USD → USD.
-  defp from_micro(micro) when is_integer(micro) do
-    micro |> Decimal.new() |> Decimal.div(Decimal.new(1_000_000))
   end
 
   @doc """

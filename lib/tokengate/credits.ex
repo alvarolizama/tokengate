@@ -181,14 +181,17 @@ defmodule Tokengate.Credits do
   @doc """
   Gasto de varios sujetos en una query por tipo: `%{subject => usd}`.
 
-  Los sujetos ausentes del resultado gastaron 0.
+  `opts[:only_limit]` cuenta solo lo **debitado al límite** (logs sin top-up),
+  que es lo que consume `monthly_spend_limit_usd`. Los sujetos ausentes del
+  resultado gastaron 0.
   """
-  def spend_by_subjects(subjects) do
+  def spend_by_subjects(subjects, opts \\ []) do
     users = for {:user, id} <- subjects, do: id
     services = for {:service, id} <- subjects, do: id
+    only_limit = Keyword.get(opts, :only_limit, false)
 
-    user_spend = spend_grouped_users(users, nil)
-    service_spend = spend_grouped_services(services, nil)
+    user_spend = spend_grouped_users(users, only_limit)
+    service_spend = spend_grouped_services(services, only_limit)
 
     Map.new(subjects, fn
       {:user, id} = subject -> {subject, Map.get(user_spend, id, Decimal.new(0))}
@@ -196,33 +199,38 @@ defmodule Tokengate.Credits do
     end)
   end
 
-  defp spend_grouped_users([], _from), do: %{}
+  defp spend_grouped_users([], _only_limit), do: %{}
 
-  defp spend_grouped_users(user_ids, from) do
+  defp spend_grouped_users(user_ids, only_limit) do
     query =
       RequestLog
       |> join(:inner, [rl], gm in GroupMember, on: gm.id == rl.group_member_id)
       |> where([rl, gm], gm.user_id in ^user_ids)
 
     query
-    |> since(from)
+    |> since(nil)
+    |> only_limit_filter(only_limit)
     |> group_by([_rl, gm], gm.user_id)
     |> select([rl, gm], {gm.user_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
     |> Repo.all()
     |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
   end
 
-  defp spend_grouped_services([], _from), do: %{}
+  defp spend_grouped_services([], _only_limit), do: %{}
 
-  defp spend_grouped_services(service_ids, from) do
+  defp spend_grouped_services(service_ids, only_limit) do
     RequestLog
     |> where([rl], rl.service_id in ^service_ids)
-    |> since(from)
+    |> since(nil)
+    |> only_limit_filter(only_limit)
     |> group_by([rl], rl.service_id)
     |> select([rl], {rl.service_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
     |> Repo.all()
     |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
   end
+
+  defp only_limit_filter(query, false), do: query
+  defp only_limit_filter(query, true), do: where(query, [rl], is_nil(rl.credit_topup_id))
 
   defp spend_query({:service, service_id}, from) do
     RequestLog
@@ -255,12 +263,13 @@ defmodule Tokengate.Credits do
   @spec summary(subject(), limit() | plan()) :: map()
   def summary(subject, %{limit_usd: limit_usd, unlimited?: unlimited?}) do
     spend = monthly_spend_usd(subject)
+    against_limit = spend_debited_to_limit(subject)
     topups = Topups.summary(subject)
 
     remaining_limit =
       case limit_usd do
         nil -> nil
-        limit_usd -> max_decimal(Decimal.sub(limit_usd, spend), Decimal.new(0))
+        limit_usd -> max_decimal(Decimal.sub(limit_usd, against_limit), Decimal.new(0))
       end
 
     %{
@@ -268,6 +277,7 @@ defmodule Tokengate.Credits do
       limit_usd: limit_usd,
       unlimited?: unlimited?,
       spend_usd: spend,
+      limit_spend_usd: against_limit,
       remaining_limit_usd: remaining_limit,
       topups: topups.topups,
       remaining_topup_usd: topups.remaining_topup_usd,
@@ -292,6 +302,7 @@ defmodule Tokengate.Credits do
     members = Enum.map(members, &Repo.preload(&1, [:user, :group]))
     subjects = Enum.map(members, &{:user, &1.user_id})
     spend = spend_by_subjects(subjects)
+    limit_spend = spend_by_subjects(subjects, only_limit: true)
     topups = Topups.summaries(subjects)
 
     Map.new(members, fn member ->
@@ -299,11 +310,12 @@ defmodule Tokengate.Credits do
       limit = user_limit(member.user, member.group)
       {limit_usd, unlimited?} = {limit.limit_usd, limit.unlimited?}
       spent = Map.get(spend, subject, Decimal.new(0))
+      against_limit = Map.get(limit_spend, subject, Decimal.new(0))
 
       remaining_limit =
         case limit_usd do
           nil -> nil
-          limit_usd -> max_decimal(Decimal.sub(limit_usd, spent), Decimal.new(0))
+          limit_usd -> max_decimal(Decimal.sub(limit_usd, against_limit), Decimal.new(0))
         end
 
       topup = Map.get(topups, subject, %{topups: [], remaining_topup_usd: Decimal.new(0)})
@@ -315,6 +327,7 @@ defmodule Tokengate.Credits do
          limit_usd: limit_usd,
          unlimited?: unlimited?,
          spend_usd: spent,
+         limit_spend_usd: against_limit,
          remaining_limit_usd: remaining_limit,
          topups: topup.topups,
          remaining_topup_usd: topup.remaining_topup_usd,
@@ -331,17 +344,19 @@ defmodule Tokengate.Credits do
   def service_summaries(services) when is_list(services) do
     subjects = Enum.map(services, &{:service, &1.id})
     spend = spend_by_subjects(subjects)
+    limit_spend = spend_by_subjects(subjects, only_limit: true)
     topups = Topups.summaries(subjects)
 
     Map.new(services, fn service ->
       subject = {:service, service.id}
       limit = service_limit(service)
       spent = Map.get(spend, subject, Decimal.new(0))
+      against_limit = Map.get(limit_spend, subject, Decimal.new(0))
 
       remaining_limit =
         case limit.limit_usd do
           nil -> nil
-          limit_usd -> max_decimal(Decimal.sub(limit_usd, spent), Decimal.new(0))
+          limit_usd -> max_decimal(Decimal.sub(limit_usd, against_limit), Decimal.new(0))
         end
 
       topup = Map.get(topups, subject, %{topups: [], remaining_topup_usd: Decimal.new(0)})
@@ -353,6 +368,7 @@ defmodule Tokengate.Credits do
          limit_usd: limit.limit_usd,
          unlimited?: limit.unlimited?,
          spend_usd: spent,
+         limit_spend_usd: against_limit,
          remaining_limit_usd: remaining_limit,
          topups: topup.topups,
          remaining_topup_usd: topup.remaining_topup_usd,
