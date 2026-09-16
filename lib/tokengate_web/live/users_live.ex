@@ -22,6 +22,12 @@ defmodule TokengateWeb.UsersLive do
   alias Tokengate.Credits
   alias Tokengate.Metrics.DashboardCache
 
+  # Paginado de la tabla: el listado completo se ordena en memoria (el orden
+  # depende de agregados de consumo), así que la página solo recorta el tramo
+  # que va al stream.
+  @per_page_options [25, 50, 100]
+  @default_per_page 25
+
   @impl true
   def mount(_params, _session, socket) do
     user = socket.assigns[:current_user]
@@ -45,6 +51,11 @@ defmodule TokengateWeb.UsersLive do
       |> assign(:editing_groups_user_id, nil)
       |> assign(:editing_groups_user_name, nil)
       |> assign(:editing_group_ids, [])
+      |> assign(:page, 1)
+      |> assign(:per_page, @default_per_page)
+      |> assign(:per_page_options, @per_page_options)
+      |> assign(:total_count, 0)
+      |> assign(:total_pages, 1)
       |> require_admin_hook()
       |> load_users()
 
@@ -141,13 +152,24 @@ defmodule TokengateWeb.UsersLive do
     sorted =
       sort_users(filtered, socket.assigns.sort_field, socket.assigns.sort_direction, sort_ctx)
 
+    total_count = length(sorted)
+    total_pages = max(1, div(total_count + socket.assigns.per_page - 1, socket.assigns.per_page))
+
+    # La página pedida se recorta al rango vigente: al filtrar, ordenar o
+    # borrar usuarios la última página puede quedarse sin filas.
+    page = socket.assigns.page |> max(1) |> min(total_pages)
+    page_rows = Enum.slice(sorted, (page - 1) * socket.assigns.per_page, socket.assigns.per_page)
+
     socket
     |> assign(:spend_by_user, spend_by_user)
     |> assign(:total_spend_by_user, total_spend_by_user)
     |> assign(:user_groups, user_groups)
     |> assign(:credit_by_user, credit_by_user)
     |> assign(:users_empty?, sorted == [])
-    |> stream(:users, sorted, reset: true)
+    |> assign(:page, page)
+    |> assign(:total_count, total_count)
+    |> assign(:total_pages, total_pages)
+    |> stream(:users, page_rows, reset: true)
   end
 
   defp load_user_groups(users) do
@@ -196,7 +218,7 @@ defmodule TokengateWeb.UsersLive do
   defp sort_value(user, :monthly_spend, ctx) do
     case Map.get(ctx.spend_by_user, user.id) do
       nil -> nil
-      spend -> spend.monthly_usd
+      spend -> spend.real_monthly_usd
     end
   end
 
@@ -255,6 +277,7 @@ defmodule TokengateWeb.UsersLive do
     {:noreply,
      socket
      |> assign(:search_query, query)
+     |> assign(:page, 1)
      |> load_users()}
   end
 
@@ -263,7 +286,31 @@ defmodule TokengateWeb.UsersLive do
     {:noreply,
      socket
      |> update(:filter_today_spend, &(!&1))
+     |> assign(:page, 1)
      |> load_users()}
+  end
+
+  ## Events — paginado ------------------------------------------------------
+
+  def handle_event("go_to_page", %{"page" => page}, socket) do
+    {:noreply,
+     socket
+     |> assign(:page, parse_page(page))
+     |> load_users()}
+  end
+
+  def handle_event("change_per_page", %{"per_page" => per_page}, socket) do
+    case parse_per_page(per_page) do
+      {:ok, value} ->
+        {:noreply,
+         socket
+         |> assign(:per_page, value)
+         |> assign(:page, 1)
+         |> load_users()}
+
+      :error ->
+        {:noreply, socket}
+    end
   end
 
   ## Events — sort ----------------------------------------------------------
@@ -281,6 +328,7 @@ defmodule TokengateWeb.UsersLive do
        socket
        |> assign(:sort_field, sort_field)
        |> assign(:sort_direction, sort_direction)
+       |> assign(:page, 1)
        |> load_users()}
     else
       _ -> {:noreply, socket}
@@ -471,7 +519,27 @@ defmodule TokengateWeb.UsersLive do
     end
   end
 
-  ## Template helpers -----------------------------------------------------
+  ## Template helpers ------------------------------------------------------
+
+  # Params del paginador: un valor inválido no debe romper el evento; la
+  # página se recorta después en `load_users/1`.
+  defp parse_page(page) when is_binary(page) do
+    case Integer.parse(page) do
+      {n, ""} when n > 0 -> n
+      _ -> 1
+    end
+  end
+
+  defp parse_page(_page), do: 1
+
+  defp parse_per_page(value) when is_binary(value) do
+    case Integer.parse(value) do
+      {n, ""} -> if n in @per_page_options, do: {:ok, n}, else: :error
+      _ -> :error
+    end
+  end
+
+  defp parse_per_page(_value), do: :error
 
   defp to_sort_field(field) when is_binary(field) do
     {:ok, String.to_existing_atom(field)}
@@ -612,7 +680,12 @@ defmodule TokengateWeb.UsersLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
+    <Layouts.dashboard
+      flash={@flash}
+      current_scope={@current_user}
+      impersonator={@impersonator}
+      current_path={@current_path}
+    >
       <div class="space-y-6">
         <.header>
           Usuarios
@@ -837,6 +910,14 @@ defmodule TokengateWeb.UsersLive do
             icon="hero-users"
             message="No hay usuarios todavía."
           />
+          <.admin_pagination
+            id="users-pagination"
+            page={@page}
+            per_page={@per_page}
+            total={@total_count}
+            total_pages={@total_pages}
+            per_page_options={@per_page_options}
+          />
         </div>
       </div>
 
@@ -1045,7 +1126,7 @@ defmodule TokengateWeb.UsersLive do
           <span class="text-xs text-base-content/30">—</span>
         <% spend -> %>
           <div class="text-xs font-mono">
-            ${fmt_money(spend.monthly_usd)}
+            ${fmt_money(spend.real_monthly_usd)}
           </div>
       <% end %>
     </td>

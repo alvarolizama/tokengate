@@ -32,6 +32,8 @@ defmodule TokengateWeb.StatsLive.Groups do
   attr :period, :any, required: true
   attr :sort_field, :any, required: true
   attr :sort_direction, :any, required: true
+  attr :per_page, :integer, default: 10
+  attr :shown_counts, :map, required: true
 
   def groups(assigns) do
     ~H"""
@@ -231,8 +233,15 @@ defmodule TokengateWeb.StatsLive.Groups do
               </h2>
               <%= if Stats.has_data?(@breakdown_model) do %>
                 <% model_total = Stats.breakdown_total(@breakdown_model) %>
+                <% model_rows =
+                  Stats.shown_rows(
+                    @breakdown_model,
+                    "group-detail-models",
+                    @shown_counts,
+                    @per_page
+                  ) %>
                 <div class="overflow-x-auto mt-3">
-                  <table class="table table-sm">
+                  <table class="table table-sm" id="group-models">
                     <thead>
                       <tr>
                         <th>
@@ -329,7 +338,7 @@ defmodule TokengateWeb.StatsLive.Groups do
                     </thead>
                     <tbody>
                       <tr
-                        :for={row <- @breakdown_model}
+                        :for={row <- model_rows}
                         id={"bd-group-model-#{row.model_id || "unknown"}"}
                       >
                         <td class="font-medium">
@@ -389,6 +398,12 @@ defmodule TokengateWeb.StatsLive.Groups do
                     </tfoot>
                   </table>
                 </div>
+                <Stats.show_more
+                  key="group-detail-models"
+                  id="group-detail-models-more"
+                  top={length(model_rows)}
+                  total={length(@breakdown_model)}
+                />
               <% else %>
                 <p class="text-sm text-base-content/40 py-6 text-center">
                   Sin datos para este periodo.
@@ -403,8 +418,15 @@ defmodule TokengateWeb.StatsLive.Groups do
               </h2>
               <%= if Stats.has_data?(@breakdown_member) do %>
                 <% member_total = Stats.breakdown_total(@breakdown_member) %>
+                <% member_rows =
+                  Stats.shown_rows(
+                    @breakdown_member,
+                    "group-detail-members",
+                    @shown_counts,
+                    @per_page
+                  ) %>
                 <div class="overflow-x-auto mt-3">
-                  <table class="table table-sm">
+                  <table class="table table-sm" id="group-members">
                     <thead>
                       <tr>
                         <th>
@@ -501,7 +523,7 @@ defmodule TokengateWeb.StatsLive.Groups do
                     </thead>
                     <tbody>
                       <tr
-                        :for={row <- @breakdown_member}
+                        :for={row <- member_rows}
                         id={"bd-group-member-#{row.group_member_id}"}
                       >
                         <td class="font-mono text-sm">
@@ -559,6 +581,12 @@ defmodule TokengateWeb.StatsLive.Groups do
                     </tfoot>
                   </table>
                 </div>
+                <Stats.show_more
+                  key="group-detail-members"
+                  id="group-detail-members-more"
+                  top={length(member_rows)}
+                  total={length(@breakdown_member)}
+                />
               <% else %>
                 <p class="text-sm text-base-content/40 py-6 text-center">
                   Sin datos para este periodo.
@@ -590,6 +618,7 @@ defmodule TokengateWeb.StatsLive.Groups do
               <%!-- El buscador filtra las filas en el render: no toca la DB ni las
                    claves del DashboardCache. --%>
               <% rows = Enum.filter(@breakdown_group, &Stats.matches?(@list_search, &1.group_name)) %>
+              <% list_rows = Stats.shown_rows(rows, "group-list", @shown_counts, @per_page) %>
               <div class="mt-3">
                 <Stats.list_search
                   id="group-list-search"
@@ -702,7 +731,7 @@ defmodule TokengateWeb.StatsLive.Groups do
                       </tr>
                     </thead>
                     <tbody>
-                      <tr :for={row <- rows} id={"bd-group-#{row.group_id}"}>
+                      <tr :for={row <- list_rows} id={"bd-group-#{row.group_id}"}>
                         <td class="font-medium">
                           <.link
                             patch={~p"/stats/groups/#{row.group_id}?period=#{@period}"}
@@ -773,6 +802,12 @@ defmodule TokengateWeb.StatsLive.Groups do
                   </table>
                 </div>
               <% end %>
+              <Stats.show_more
+                key="group-list"
+                id="group-list-more"
+                top={length(list_rows)}
+                total={length(rows)}
+              />
             <% else %>
               <p class="text-sm text-base-content/40 py-6 text-center">
                 Sin datos para este periodo.

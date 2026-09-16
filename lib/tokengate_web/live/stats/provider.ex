@@ -26,6 +26,8 @@ defmodule TokengateWeb.StatsLive.Provider do
   attr :show_services, :boolean, default: true
   attr :breakdown_group, :any, required: true
   attr :period, :any, required: true
+  attr :per_page, :integer, default: 10
+  attr :shown_counts, :map, required: true
   attr :stats_loading, :boolean, default: false
 
   def provider(assigns) do
@@ -134,6 +136,8 @@ defmodule TokengateWeb.StatsLive.Provider do
             </h3>
             <%= if Stats.has_data?(@breakdown_model) do %>
               <% model_total = Stats.breakdown_total(@breakdown_model) %>
+              <% model_rows =
+                Stats.shown_rows(@breakdown_model, "provider-models", @shown_counts, @per_page) %>
               <div class="overflow-x-auto mt-3">
                 <table class="table table-sm" id="provider-models">
                   <thead>
@@ -148,7 +152,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                   </thead>
                   <tbody>
                     <tr
-                      :for={row <- @breakdown_model}
+                      :for={row <- model_rows}
                       id={"provider-model-#{row.model_id || "unknown"}"}
                     >
                       <td class="font-medium">
@@ -200,6 +204,12 @@ defmodule TokengateWeb.StatsLive.Provider do
                   </tfoot>
                 </table>
               </div>
+              <Stats.show_more
+                key="provider-models"
+                id="provider-models-more"
+                top={length(model_rows)}
+                total={length(@breakdown_model)}
+              />
             <% else %>
               <p class="text-sm text-base-content/40 py-6 text-center">
                 Sin datos en este período.
@@ -216,6 +226,8 @@ defmodule TokengateWeb.StatsLive.Provider do
             </h3>
             <%= if Stats.has_data?(@breakdown_user) do %>
               <% user_total = Stats.breakdown_total(@breakdown_user) %>
+              <% user_rows =
+                Stats.shown_rows(@breakdown_user, "provider-users", @shown_counts, @per_page) %>
               <div class="overflow-x-auto mt-3">
                 <table class="table table-sm" id="provider-users">
                   <thead>
@@ -230,7 +242,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                     </tr>
                   </thead>
                   <tbody>
-                    <tr :for={row <- @breakdown_user} id={"provider-user-#{row.user_id}"}>
+                    <tr :for={row <- user_rows} id={"provider-user-#{row.user_id}"}>
                       <td class="font-medium">
                         <.link navigate={~p"/stats/users/#{row.user_id}"} class="link link-hover">
                           {row.user_name || row.user_email}
@@ -240,7 +252,16 @@ defmodule TokengateWeb.StatsLive.Provider do
                         </div>
                       </td>
                       <td class="text-xs text-base-content/60">
-                        {Enum.join(row.group_names, ", ")}
+                        <div class="flex flex-wrap gap-1">
+                          <Stats.group_link
+                            :for={group <- row.groups}
+                            group_id={group.id}
+                            name={group.name}
+                            period={@period}
+                            id={"provider-user-group-#{row.user_id}-#{group.id}"}
+                          />
+                          <span :if={row.groups == []} class="text-base-content/30">—</span>
+                        </div>
                       </td>
                       <td class="text-right font-mono tabular-nums">
                         {Stats.format_number(row.request_count)}
@@ -280,6 +301,12 @@ defmodule TokengateWeb.StatsLive.Provider do
                   </tfoot>
                 </table>
               </div>
+              <Stats.show_more
+                key="provider-users"
+                id="provider-users-more"
+                top={length(user_rows)}
+                total={length(@breakdown_user)}
+              />
             <% else %>
               <p class="text-sm text-base-content/40 py-6 text-center">
                 Sin datos en este período.
@@ -298,6 +325,13 @@ defmodule TokengateWeb.StatsLive.Provider do
               </h3>
               <%= if Stats.has_data?(@breakdown_service) do %>
                 <% service_total = Stats.breakdown_total(@breakdown_service) %>
+                <% service_rows =
+                  Stats.shown_rows(
+                    @breakdown_service,
+                    "provider-services",
+                    @shown_counts,
+                    @per_page
+                  ) %>
                 <div class="overflow-x-auto mt-3">
                   <table class="table table-sm" id="provider-services">
                     <thead>
@@ -311,7 +345,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                       </tr>
                     </thead>
                     <tbody>
-                      <tr :for={row <- @breakdown_service} id={"provider-service-#{row.service_id}"}>
+                      <tr :for={row <- service_rows} id={"provider-service-#{row.service_id}"}>
                         <td class="font-medium">
                           <.link
                             navigate={~p"/stats/services/#{row.service_id}"}
@@ -357,6 +391,12 @@ defmodule TokengateWeb.StatsLive.Provider do
                     </tfoot>
                   </table>
                 </div>
+                <Stats.show_more
+                  key="provider-services"
+                  id="provider-services-more"
+                  top={length(service_rows)}
+                  total={length(@breakdown_service)}
+                />
               <% else %>
                 <p class="text-sm text-base-content/40 py-6 text-center">
                   Sin datos en este período.
@@ -374,6 +414,8 @@ defmodule TokengateWeb.StatsLive.Provider do
             </h3>
             <%= if Stats.has_data?(@breakdown_group) do %>
               <% group_total = Stats.breakdown_total(@breakdown_group) %>
+              <% group_rows =
+                Stats.shown_rows(@breakdown_group, "provider-groups", @shown_counts, @per_page) %>
               <div class="overflow-x-auto mt-3">
                 <table class="table table-sm" id="provider-groups">
                   <thead>
@@ -387,7 +429,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                     </tr>
                   </thead>
                   <tbody>
-                    <tr :for={row <- @breakdown_group} id={"provider-group-#{row.group_id}"}>
+                    <tr :for={row <- group_rows} id={"provider-group-#{row.group_id}"}>
                       <td class="font-medium">
                         <.link
                           patch={~p"/stats/groups/#{row.group_id}?period=#{@period}"}
@@ -433,6 +475,12 @@ defmodule TokengateWeb.StatsLive.Provider do
                   </tfoot>
                 </table>
               </div>
+              <Stats.show_more
+                key="provider-groups"
+                id="provider-groups-more"
+                top={length(group_rows)}
+                total={length(@breakdown_group)}
+              />
             <% else %>
               <p class="text-sm text-base-content/40 py-6 text-center">
                 Sin datos en este período.

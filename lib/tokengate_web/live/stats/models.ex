@@ -24,6 +24,8 @@ defmodule TokengateWeb.StatsLive.Models do
   attr :sort_field, :any, required: true
   attr :sort_direction, :any, required: true
   attr :list_search, :any, default: ""
+  attr :per_page, :integer, default: 10
+  attr :shown_counts, :map, required: true
 
   def models(assigns) do
     ~H"""
@@ -60,6 +62,7 @@ defmodule TokengateWeb.StatsLive.Models do
               |> Enum.with_index(1)
               |> Map.new() %>
             <% rows = Enum.filter(@breakdown_model, &Stats.matches?(@list_search, &1.model_name)) %>
+            <% list_rows = Stats.shown_rows(rows, "model-list", @shown_counts, @per_page) %>
             <div class="mt-3">
               <Stats.list_search
                 id="model-list-search"
@@ -168,7 +171,7 @@ defmodule TokengateWeb.StatsLive.Models do
                   </thead>
                   <tbody>
                     <tr
-                      :for={row <- rows}
+                      :for={row <- list_rows}
                       id={"model-ranking-row-#{row.model_id || "unknown"}"}
                     >
                       <td>
@@ -240,6 +243,12 @@ defmodule TokengateWeb.StatsLive.Models do
                   </tfoot>
                 </table>
               </div>
+              <Stats.show_more
+                key="model-list"
+                id="model-list-more"
+                top={length(list_rows)}
+                total={length(rows)}
+              />
             <% end %>
           <% else %>
             <p class="text-sm text-base-content/40 py-6 text-center">

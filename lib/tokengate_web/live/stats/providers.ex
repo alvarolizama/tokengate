@@ -21,6 +21,8 @@ defmodule TokengateWeb.StatsLive.Providers do
   attr :provider_ranking, :any, required: true
   attr :period, :any, required: true
   attr :list_search, :any, required: true
+  attr :per_page, :integer, default: 10
+  attr :shown_counts, :map, required: true
 
   def providers(assigns) do
     ~H"""
@@ -56,6 +58,7 @@ defmodule TokengateWeb.StatsLive.Providers do
               |> Enum.filter(fn {row, _rank} ->
                 Stats.matches?(@list_search, row.provider_name)
               end) %>
+            <% list_rows = Stats.shown_rows(rows, "provider-list", @shown_counts, @per_page) %>
             <div class="mt-3">
               <Stats.list_search
                 id="provider-list-search"
@@ -84,7 +87,7 @@ defmodule TokengateWeb.StatsLive.Providers do
                     </tr>
                   </thead>
                   <tbody>
-                    <tr :for={{row, rank} <- rows} id={"provider-ranking-row-#{row.provider_id}"}>
+                    <tr :for={{row, rank} <- list_rows} id={"provider-ranking-row-#{row.provider_id}"}>
                       <td>
                         <Stats.medal rank={rank} />
                       </td>
@@ -127,6 +130,12 @@ defmodule TokengateWeb.StatsLive.Providers do
                   </tbody>
                 </table>
               </div>
+              <Stats.show_more
+                key="provider-list"
+                id="provider-list-more"
+                top={length(list_rows)}
+                total={length(rows)}
+              />
             <% end %>
           <% else %>
             <p class="text-sm text-base-content/40 py-6 text-center">

@@ -273,7 +273,11 @@ defmodule TokengateWeb.StatsLive.LiveSection do
               <h2 class="card-title text-base">
                 <.icon name="hero-signal" class="w-5 h-5 text-base-content/60" /> Últimos requests
               </h2>
-              <.link navigate={~p"/logs"} class="btn btn-xs btn-ghost" id="live-feed-all">
+              <.link
+                navigate={~p"/operations/monitoring"}
+                class="btn btn-xs btn-ghost"
+                id="live-feed-all"
+              >
                 Ver todos <.icon name="hero-arrow-right" class="w-3 h-3" />
               </.link>
             </div>

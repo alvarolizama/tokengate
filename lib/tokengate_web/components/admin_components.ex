@@ -227,4 +227,109 @@ defmodule TokengateWeb.AdminComponents do
     </dialog>
     """
   end
+
+  # ---------------------------------------------------------------------------
+  # Paginado de tabla
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Pie de paginado: rango visible, selector de tamaño de página y navegación
+  (ventana alrededor de la página actual).
+
+  Emite `go_to_page` con `%{"page" => n}` y `change_per_page` con
+  `%{"per_page" => n}`. No pinta nada cuando `@total` es 0.
+  """
+  attr :id, :string, required: true
+  attr :page, :integer, required: true
+  attr :per_page, :integer, required: true
+  attr :total, :integer, required: true
+  attr :total_pages, :integer, required: true
+  attr :per_page_options, :list, default: [25, 50, 100]
+
+  def admin_pagination(assigns) do
+    assigns =
+      assign(assigns,
+        from: (assigns.page - 1) * assigns.per_page + 1,
+        to: min(assigns.page * assigns.per_page, assigns.total),
+        window: page_window(assigns.page, assigns.total_pages)
+      )
+
+    ~H"""
+    <div
+      :if={@total > 0}
+      id={@id}
+      class="flex flex-wrap items-center justify-between gap-3 border-t border-base-300 px-4 py-3"
+    >
+      <div class="flex items-center gap-2 text-xs text-base-content/60">
+        <span id={"#{@id}-range"}>{@from}–{@to} de {@total}</span>
+        <select
+          id={"#{@id}-per-page"}
+          name="per_page"
+          phx-change="change_per_page"
+          class="select select-xs select-bordered"
+        >
+          <option :for={n <- @per_page_options} value={n} selected={n == @per_page}>
+            {n} por página
+          </option>
+        </select>
+      </div>
+
+      <div class="flex items-center gap-1" id={"#{@id}-nav"}>
+        <button
+          phx-click="go_to_page"
+          phx-value-page={@page - 1}
+          disabled={@page <= 1}
+          class="btn btn-ghost btn-xs"
+          id={"#{@id}-prev"}
+          title="Página anterior"
+        >
+          <.icon name="hero-chevron-left" class="w-4 h-4" />
+        </button>
+
+        <%= for p <- @window do %>
+          <%= if p == :gap do %>
+            <span class="px-1 text-xs text-base-content/40">…</span>
+          <% else %>
+            <button
+              phx-click="go_to_page"
+              phx-value-page={p}
+              class={["btn btn-xs", p == @page && "btn-primary", p != @page && "btn-ghost"]}
+              id={"#{@id}-page-#{p}"}
+              aria-current={p == @page && "page"}
+            >
+              {p}
+            </button>
+          <% end %>
+        <% end %>
+
+        <button
+          phx-click="go_to_page"
+          phx-value-page={@page + 1}
+          disabled={@page >= @total_pages}
+          class="btn btn-ghost btn-xs"
+          id={"#{@id}-next"}
+          title="Página siguiente"
+        >
+          <.icon name="hero-chevron-right" class="w-4 h-4" />
+        </button>
+      </div>
+    </div>
+    """
+  end
+
+  # Ventana de páginas: `1 … n-1 n n+1 … última`, con `:gap` en los saltos.
+  # Con 7 páginas o menos se muestran todas.
+  defp page_window(_page, total_pages) when total_pages <= 7, do: Enum.to_list(1..total_pages)
+
+  defp page_window(page, total_pages) do
+    start = max(2, min(page - 1, total_pages - 3))
+    middle = Enum.to_list(start..min(start + 2, total_pages - 1))
+
+    [1] ++
+      gap_when(List.first(middle) > 2) ++
+      middle ++ gap_when(List.last(middle) < total_pages - 1) ++ [total_pages]
+  end
+
+  defp gap_when(true), do: [:gap]
+  defp gap_when(false), do: []
 end

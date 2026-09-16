@@ -453,7 +453,7 @@ defmodule Tokengate.Metrics.Rollup do
         user_name: String.t() | nil,
         user_email: String.t(),
         memberships: non_neg_integer,
-        group_names: [String.t()],
+        groups: [%{id: binary, name: String.t()}],
         request_count: integer,
         cost_usd: Decimal,
         prompt_tokens: integer,
@@ -487,7 +487,11 @@ defmodule Tokengate.Metrics.Rollup do
         user_name: u.name,
         user_email: u.email,
         membership_count: count(tm.id, :distinct),
-        group_names: fragment("ARRAY_AGG(DISTINCT ?)", tm.group_id),
+        # `::text` explícito: `group_id` es `:binary_id` (uuid) y un
+        # `ARRAY_AGG` sin tipo llega como lista de 16 bytes crudos, no como
+        # UUID en texto — con esos bytes el lookup de nombres fallaba SIEMPRE y
+        # la columna de grupos salía "—" para todos.
+        group_ids: fragment("ARRAY_AGG(DISTINCT ?::text)", tm.group_id),
         request_count: count(rl.id),
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
@@ -497,7 +501,10 @@ defmodule Tokengate.Metrics.Rollup do
 
     # Resolve group names outside the aggregate so the index-driven join
     # stays a single pass (a join to groups in the GROUP BY would force a
-    # second sort over the whole range scan).
+    # second sort over the whole range scan). El par id+nombre viaja junto:
+    # el id es lo único que permite enlazar el grupo desde el listado, y
+    # resolver el nombre antes de perder el id dejaba el grupo como texto
+    # muerto (el campo se llamaba `group_names` pero traía ids).
     group_names_by_id = Tokengate.Accounts.group_names_by_id()
 
     Repo.all(query)
@@ -507,11 +514,11 @@ defmodule Tokengate.Metrics.Rollup do
         user_name: row.user_name,
         user_email: row.user_email,
         memberships: row.membership_count,
-        group_names:
-          row.group_names
+        groups:
+          row.group_ids
           |> Enum.reject(&is_nil/1)
-          |> Enum.map(&Map.get(group_names_by_id, &1, "—"))
-          |> Enum.sort(),
+          |> Enum.map(&%{id: &1, name: Map.get(group_names_by_id, &1, "—")})
+          |> Enum.sort_by(& &1.name),
         request_count: row.request_count,
         cost_usd: Decimal.new(to_string(row.cost_usd)),
         prompt_tokens: row.prompt_tokens,
@@ -760,6 +767,7 @@ defmodule Tokengate.Metrics.Rollup do
       %{
         group_member_id: binary,
         user_id: binary,
+        group_id: binary,
         group_name: String.t(),
         user_email: String.t(),
         request_count: integer,
@@ -801,6 +809,7 @@ defmodule Tokengate.Metrics.Rollup do
       |> select([rl, tm, t, u], %{
         group_member_id: tm.id,
         user_id: u.id,
+        group_id: t.id,
         group_name: t.name,
         user_email: u.email,
         request_count: count(rl.id),
@@ -815,6 +824,7 @@ defmodule Tokengate.Metrics.Rollup do
       %{
         group_member_id: row.group_member_id,
         user_id: row.user_id,
+        group_id: row.group_id,
         group_name: row.group_name,
         user_email: row.user_email,
         request_count: row.request_count,
@@ -1160,7 +1170,10 @@ defmodule Tokengate.Metrics.Rollup do
   @doc """
   Perfil horario del período, desglosado por proveedor — la misma tarjeta
   que "Hoy por hora · por proveedor" de En vivo, agregada sobre la ventana
-  del Resumen (el día en curso lo mide En vivo, no acá).
+  del Resumen. (Con el período "Hoy" el Resumen NO pasa por acá: ese día lo
+  dibuja con el agregado del día UTC en curso,
+  `Tokengate.Logs.today_usage_by_hour_provider/0`, para que mida la misma
+  ventana que sus KPI y que el tope global.)
 
   Devuelve siempre las 24 horas (`0..23`, zero-filled, para que el eje se
   dibuje siempre). La hora es la **local del timezone**, no UTC: el Resumen

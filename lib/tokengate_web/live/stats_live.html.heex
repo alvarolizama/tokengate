@@ -186,6 +186,8 @@
           <.providers
             provider_ranking={@provider_ranking}
             period={@period}
+            per_page={@per_page}
+            shown_counts={@shown_counts}
             list_search={@list_search}
           />
         <% @live_action == :provider -> %>
@@ -199,6 +201,8 @@
             breakdown_group={@breakdown_group}
             show_services={@current_user.global_role == "admin"}
             period={@period}
+            per_page={@per_page}
+            shown_counts={@shown_counts}
             stats_loading={@stats_loading}
           />
         <% @live_action in [:models, :model] -> %>
@@ -217,6 +221,8 @@
               period={@period}
               sort_field={@sort_field}
               sort_direction={@sort_direction}
+              per_page={@per_page}
+              shown_counts={@shown_counts}
               stats_loading={@stats_loading}
             />
           <% else %>
@@ -225,6 +231,8 @@
               period={@period}
               sort_field={@sort_field}
               sort_direction={@sort_direction}
+              per_page={@per_page}
+              shown_counts={@shown_counts}
               list_search={@list_search}
             />
           <% end %>
@@ -243,6 +251,8 @@
             period={@period}
             sort_field={@sort_field}
             sort_direction={@sort_direction}
+            per_page={@per_page}
+            shown_counts={@shown_counts}
           />
         <% @live_action == :services -> %>
           <.services
@@ -257,6 +267,8 @@
             period={@period}
             sort_field={@sort_field}
             sort_direction={@sort_direction}
+            per_page={@per_page}
+            shown_counts={@shown_counts}
           />
         <% @live_action == :users -> %>
           <.users
@@ -265,6 +277,8 @@
             period={@period}
             sort_field={@sort_field}
             sort_direction={@sort_direction}
+            per_page={@per_page}
+            shown_counts={@shown_counts}
             list_search={@list_search}
           />
         <% @live_action == :group -> %>
@@ -282,6 +296,8 @@
             period={@period}
             sort_field={@sort_field}
             sort_direction={@sort_direction}
+            per_page={@per_page}
+            shown_counts={@shown_counts}
           />
       <% end %>
     </div>

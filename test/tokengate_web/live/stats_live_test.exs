@@ -115,6 +115,154 @@ defmodule TokengateWeb.StatsLiveTest do
 
   defp log_extra(_fixture, _n), do: :ok
 
+  # Suma `n` filas al desglose del detalle de un proveedor o de un modelo:
+  # `:models` crea modelos nuevos servidos por el MISMO proveedor del fixture,
+  # `:providers` despliegues nuevos (proveedor + credencial + modelo del
+  # proveedor) sirviendo el MISMO modelo — el desglose agrupa por despliegue,
+  # no por proveedor. Sirve para llenar una tabla del detalle más allá de la
+  # primera página.
+  defp extra_breakdown_rows(%{member: member, provider: provider}, :models, n) do
+    Enum.each(1..n//1, fn _ ->
+      {:ok, model} =
+        Providers.create_model(%{name: "model-extra-#{unique()}", context_window: 128_000})
+
+      log_serving(member, provider, model)
+    end)
+
+    :ok
+  end
+
+  defp extra_breakdown_rows(%{group: group, provider: provider, model: model}, :users, n) do
+    Enum.each(1..n//1, fn _ ->
+      u = unique()
+
+      {:ok, user} =
+        Accounts.register_user(%{
+          email: "stats-extra-#{u}@example.com",
+          name: "Extra #{u}",
+          password: "password-secret-#{u}1"
+        })
+
+      {:ok, member} = Accounts.create_group_member(%{user_id: user.id, group_id: group.id})
+      log_serving(member, provider, model)
+    end)
+
+    :ok
+  end
+
+  defp extra_breakdown_rows(%{owner: owner, provider: provider, model: model}, :groups, n) do
+    Enum.each(1..n//1, fn _ ->
+      {:ok, group} = Accounts.create_group(%{name: "Stats Extra #{unique()}"})
+      {:ok, member} = Accounts.create_group_member(%{user_id: owner.id, group_id: group.id})
+      log_serving(member, provider, model)
+    end)
+
+    :ok
+  end
+
+  defp extra_breakdown_rows(%{provider: provider, model: model}, :services, n) do
+    Enum.each(1..n//1, fn _ ->
+      {:ok, service} = Accounts.create_service(%{name: "svc-extra-#{unique()}"})
+      log_for_service(service, provider, model)
+    end)
+
+    :ok
+  end
+
+  defp extra_breakdown_rows(%{provider: provider, service: service}, :service_models, n) do
+    Enum.each(1..n//1, fn _ ->
+      {:ok, model} =
+        Providers.create_model(%{name: "model-extra-#{unique()}", context_window: 128_000})
+
+      log_for_service(service, provider, model)
+    end)
+
+    :ok
+  end
+
+  defp extra_breakdown_rows(%{member: member, model: model}, :providers, n) do
+    Enum.each(1..n//1, fn _ ->
+      u = unique()
+
+      {:ok, provider} =
+        Providers.create_provider(%{name: "Prov Extra #{u}", base_url: "http://localhost:1"})
+
+      {:ok, credential} =
+        Providers.create_credential(%{
+          provider_id: provider.id,
+          api_key_encrypted: "sk-#{u}",
+          status: "active"
+        })
+
+      {:ok, model_provider} =
+        Providers.create_model_provider(%{
+          model_id: model.id,
+          credential_id: credential.id,
+          provider_model: "model-extra-#{u}",
+          priority: 1,
+          enabled: true
+        })
+
+      log_serving(member, provider, model, model_provider.id)
+    end)
+
+    :ok
+  end
+
+  defp log_serving(member, provider, model, model_provider_id \\ nil) do
+    {:ok, _log} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        provider_id: provider.id,
+        model_provider_id: model_provider_id,
+        model_id: model.id,
+        model_requested: model.name,
+        agent_type: "api",
+        status_code: 200,
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        provider_cost_usd: "0.005",
+        latency_ms: 42,
+        streaming: false,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+    :ok
+  end
+
+  # Igual que `log_serving/4` pero por servicio (`subject_type: "service"`):
+  # sirve el detalle de servicio, que agrupa por modelo igual que el de modelo.
+  defp log_for_service(service, provider, model) do
+    {:ok, _log} =
+      Logs.log_request(%{
+        subject_type: "service",
+        service_id: service.id,
+        provider_id: provider.id,
+        model_id: model.id,
+        model_requested: model.name,
+        status_code: 200,
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        provider_cost_usd: "0.005",
+        latency_ms: 42,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+    :ok
+  end
+
+  # Cuenta las filas que el navegador ve con ese selector (la tabla puede estar
+  # desplegada en parte): se lee del HTML renderizado, no del assign.
+  defp count_rows(view, selector) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(selector)
+    |> Enum.count()
+  end
+
+  defp pad_hour(hour), do: String.pad_leading(Integer.to_string(hour), 2, "0") <> ":00"
+
   defp group_with_log(opts) do
     u = unique()
 
@@ -276,7 +424,7 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#group-list-search")
     assert has_element?(view, "#bd-group-#{group.id}")
     # El listado tiene UNA sola tabla: el card de tiers de uso por miembro salió
-    # de la pestaña (el mismo agregado sigue en /admin/groups/:id/members).
+    # de la pestaña (el mismo agregado sigue en /access/groups/:id/members).
     refute has_element?(view, "#member-usage-tiers")
   end
 
@@ -328,12 +476,17 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#model-breakdown-row-1", "100.0%")
     assert has_element?(view, "#model-breakdown-row-1", "$0.005")
 
-    # Con "Hoy" el Resumen no dibuja el perfil horario: ese día lo mide En
-    # vivo ("Hoy por hora · por proveedor") y duplicarlo costaba un agregado
-    # crudo por carga.
-    refute has_element?(view, "#hour-distribution")
+    # Con "Hoy" el perfil horario mide el día UTC en curso — la misma ventana
+    # que los KPI y el tope —, con la hora actual marcada: las horas ya
+    # completadas son las que traen tráfico y las que faltan quedan atenuadas.
+    assert has_element?(view, "#hour-distribution")
+    hour = DateTime.utc_now().hour
+    assert has_element?(view, "#hour-distribution", "ahora #{pad_hour(hour)} UTC")
+    assert has_element?(view, "#hour-distribution-hour-#{hour} div[class*='ring-primary']")
+    assert has_element?(view, "#hour-distribution-hint", "1 barra = 1 hora del día UTC")
 
-    # Con una ventana más larga el perfil horario del período sí es único.
+    # Con una ventana más larga es el perfil del período, en la hora local y
+    # sin marca de "ahora": un agregado de muchos días no tiene hora en curso.
     {:ok, long, _html} = live(conn, ~p"/stats/overview?period=30d")
     wait_stats_loaded(long)
 
@@ -341,6 +494,8 @@ defmodule TokengateWeb.StatsLiveTest do
     # leyenda — no el desglose sin costo / con costo que dibujaba el Resumen.
     assert has_element?(long, "#hour-distribution")
     assert has_element?(long, "#hour-distribution-legend")
+    assert has_element?(long, "#hour-distribution-hint", "hora en tu hora local")
+    refute has_element?(long, "#hour-distribution", "ahora ")
     refute render(long) =~ "Sin costo"
   end
 
@@ -389,6 +544,32 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(detail, "#model-detail-header", ma.name)
     assert has_element?(detail, "#model-kpi-cost")
     assert has_element?(detail, "#nav-models.btn-primary")
+  end
+
+  test "detalle del modelo: las tablas largas se despliegan con Ver más", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    fixture = group_with_log(%{cost: "0.005"})
+    # 10 proveedores extra sirviendo el MISMO modelo → 11 filas en su tabla,
+    # una más que la primera página.
+    extra_breakdown_rows(fixture, :providers, 10)
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/stats/models/#{fixture.model.id}?period=today")
+    view = wait_stats_loaded(view)
+
+    # La tabla llega de a 10 filas y el pie sigue midiendo el período completo.
+    assert count_rows(view, "#model-providers tbody tr") == 10
+    assert has_element?(view, "#model-providers-more")
+
+    view |> element("#model-providers-more") |> render_click()
+
+    assert count_rows(view, "#model-providers tbody tr") == 11
+    refute has_element?(view, "#model-providers-more")
+
+    # Cada tabla lleva su propio conteo: las que caben enteras no ganan botón.
+    refute has_element?(view, "#model-groups-more")
+    refute has_element?(view, "#model-members-more")
   end
 
   test "detalle del modelo: un id que no existe avisa en vez de romper", %{conn: conn} do
@@ -771,30 +952,44 @@ defmodule TokengateWeb.StatsLiveTest do
     conn = login(conn, admin, password)
 
     # El Resumen es `assign_async`: su número no se puede verificar por HTTP
-    # (llega por el socket), así que se pina aquí con un log colocado en la
-    # banda que pertenece al día UTC pero NO al día local del usuario
-    # ([00:00 UTC, medianoche local) = las primeras 6h del día UTC en Merida).
-    # Si el KPI midiera el día local, este log no contaría y el card daría 0.
+    # (llega por el socket), así que se pina con un log colocado en la
+    # DIFERENCIA de las dos ventanas — el discriminante que separa "día UTC" de
+    # "día local".
+    #
+    # Cuál es esa diferencia depende de dónde caiga la medianoche local respecto
+    # de la UTC. Con Merida (UTC-6) hay dos casos:
+    #   * antes de las 00:00 UTC, la medianoche local es HOY 06:00 UTC, así que
+    #     el hueco [00:00 UTC, medianoche local) existe: un log ahí lo cuenta el
+    #     día UTC y no el local.
+    #   * entre 00:00 y 06:00 UTC (o sea 18:00–24:00 en Merida) la medianoche
+    #     local ya quedó ANTES del inicio del día UTC: el hueco se invierte y el
+    #     discriminante es el espejo — un log del día local que el día UTC no
+    #     cuenta. Elegir el de arriba a ciegas dejaba el instante fuera de la
+    #     ventana y la guarda reventaba por reloj.
     utc_start = Periods.start_of_day_utc("Etc/UTC")
     local_start = Periods.start_of_day_utc(tz)
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    edge =
-      if DateTime.compare(now, local_start) == :lt do
-        # Dentro de la banda: un minuto atrás (o el inicio del día UTC).
-        max_min = DateTime.add(now, -60, :second)
-
-        if DateTime.compare(max_min, utc_start) == :lt,
-          do: DateTime.add(utc_start, 1, :second),
-          else: max_min
+    {edge, utc_kpi_cost} =
+      if DateTime.compare(local_start, utc_start) == :gt do
+        # Dentro del hueco: 00:00:01 UTC, que el día local (06:00 UTC) no ve.
+        {DateTime.add(utc_start, 1, :second), "$0.7500"}
       else
-        # Fuera de la banda: 00:30 UTC siempre cae dentro de ella.
-        DateTime.add(utc_start, 1800, :second)
+        # Espejo: 00:00:01 local, que el día UTC (00:00 UTC) no ve.
+        {DateTime.add(local_start, 1, :second), "$0.0000"}
       end
 
-    # Guarda: el instante elegido debe estar en la banda discriminante.
-    assert DateTime.compare(edge, utc_start) != :lt
-    assert DateTime.compare(edge, local_start) == :lt
+    # Guarda: el instante elegido cae en la diferencia de las dos ventanas, del
+    # lado que toque — y en el pasado, o la query del período no lo vería.
+    assert DateTime.compare(edge, now) != :gt
+
+    if utc_kpi_cost == "$0.7500" do
+      assert DateTime.compare(edge, utc_start) != :lt
+      assert DateTime.compare(edge, local_start) == :lt
+    else
+      assert DateTime.compare(edge, utc_start) == :lt
+      assert DateTime.compare(edge, local_start) != :lt
+    end
 
     group_with_log(%{cost: "0.7500", inserted_at: edge})
 
@@ -803,9 +998,8 @@ defmodule TokengateWeb.StatsLiveTest do
 
     html = view |> element("#kpi-cost") |> render()
 
-    assert html =~ "$0.7500"
-    # Y difiere del día local, que a esta hora ve 0.
-    refute html =~ "$0.0000"
+    # El KPI mide el día UTC: cuenta el log del hueco y no ve el del día local.
+    assert html =~ utc_kpi_cost
   end
 
   test "En vivo: el pie del tope diario declara el día UTC, no el local", %{conn: conn} do
@@ -1494,6 +1688,113 @@ defmodule TokengateWeb.StatsLiveTest do
       assert has_element?(view, "#provider-metrics-period", "Esta semana")
     end
 
+    test "detalle del proveedor: las tablas largas se despliegan con Ver más", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      fixture = group_with_log(%{cost: "0.005"})
+      # 10 modelos extra que sirve el MISMO proveedor → 11 filas en su tabla.
+      extra_breakdown_rows(fixture, :models, 10)
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/stats/providers/#{fixture.provider.id}?period=today")
+      view = wait_stats_loaded(view)
+
+      # Primera página: 10 filas y el botón para lo que falta. El pie sigue
+      # midiendo el período completo, no lo desplegado.
+      assert count_rows(view, "#provider-models tbody tr") == 10
+      assert has_element?(view, "#provider-models-more")
+
+      view |> element("#provider-models-more") |> render_click()
+
+      assert count_rows(view, "#provider-models tbody tr") == 11
+      refute has_element?(view, "#provider-models-more")
+
+      # Cada tabla lleva su propia clave: desplegar una no despliega las otras.
+      refute has_element?(view, "#provider-users-more")
+      refute has_element?(view, "#provider-services-more")
+      refute has_element?(view, "#provider-groups-more")
+    end
+
+    test "listados: las tablas se despliegan con Ver más", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      fixture = group_with_log(%{cost: "0.005"})
+      # Filas extra por listado → 11 filas en cada tabla, una más que la página.
+      # Servicios pide 11: el log del fixture es por miembro, así que ese
+      # listado sólo ve los servicios extra.
+      extra_breakdown_rows(fixture, :providers, 10)
+      extra_breakdown_rows(fixture, :models, 10)
+      extra_breakdown_rows(fixture, :groups, 10)
+      extra_breakdown_rows(fixture, :users, 10)
+      extra_breakdown_rows(fixture, :services, 11)
+
+      conn = login(conn, admin, password)
+
+      for {path, rows_selector, more_id} <- [
+            {~p"/stats/providers", "#provider-table tbody tr", "#provider-list-more"},
+            {~p"/stats/models", "#model-table tbody tr", "#model-list-more"},
+            {~p"/stats/groups", "#group-table tbody tr", "#group-list-more"},
+            {~p"/stats/users", "#user-table tbody tr", "#user-list-more"},
+            {~p"/stats/services", "#service-table tbody tr", "#service-list-more"}
+          ] do
+        {:ok, list_view, _html} = live(conn, path)
+        list_view = wait_stats_loaded(list_view)
+
+        # Primera página de 10 y el resto detrás del botón...
+        assert count_rows(list_view, rows_selector) == 10
+        assert has_element?(list_view, more_id)
+
+        # ...que al pulsarlo suelta la fila que faltaba y desaparece.
+        list_view |> element(more_id) |> render_click()
+
+        assert count_rows(list_view, rows_selector) == 11
+        refute has_element?(list_view, more_id)
+      end
+    end
+
+    test "detalle de grupo y de servicio: las tablas largas se despliegan con Ver más", %{
+      conn: conn
+    } do
+      %{user: admin, password: password} = register("admin")
+
+      fixture = group_with_log(%{cost: "0.005"})
+      # 10 modelos extra servidos al mismo grupo → 11 filas en su tabla.
+      extra_breakdown_rows(fixture, :models, 10)
+
+      {:ok, service} = Accounts.create_service(%{name: "svc-#{unique()}"})
+      log_for_service(service, fixture.provider, fixture.model)
+      extra_breakdown_rows(%{provider: fixture.provider, service: service}, :service_models, 10)
+
+      conn = login(conn, admin, password)
+
+      {:ok, group_view, _html} = live(conn, ~p"/stats/groups/#{fixture.group.id}?period=today")
+      group_view = wait_stats_loaded(group_view)
+
+      assert count_rows(group_view, "#group-models tbody tr") == 10
+      assert has_element?(group_view, "#group-detail-models-more")
+
+      group_view |> element("#group-detail-models-more") |> render_click()
+
+      assert count_rows(group_view, "#group-models tbody tr") == 11
+      refute has_element?(group_view, "#group-detail-models-more")
+
+      # Los miembros del grupo caben enteros: esa tabla no gana botón.
+      refute has_element?(group_view, "#group-detail-members-more")
+
+      {:ok, service_view, _html} =
+        live(conn, ~p"/stats/services?period=today&service_id=#{service.id}")
+
+      service_view = wait_stats_loaded(service_view)
+
+      assert count_rows(service_view, "#service-models tbody tr") == 10
+      assert has_element?(service_view, "#service-detail-models-more")
+
+      service_view |> element("#service-detail-models-more") |> render_click()
+
+      assert count_rows(service_view, "#service-models tbody tr") == 11
+      refute has_element?(service_view, "#service-detail-models-more")
+    end
+
     test "detalle del proveedor: un id que no existe avisa en vez de romper", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
 
@@ -1643,6 +1944,78 @@ defmodule TokengateWeb.StatsLiveTest do
 
       assigns = :sys.get_state(view.pid).socket.assigns
       assert assigns.list_search == ""
+    end
+  end
+
+  # El grupo de una fila de usuario/miembro es SIEMPRE navegable a su detalle.
+  # El desglose por usuario traía los ids de grupo bajo el campo `group_names` y
+  # los tiraba al resolver el nombre, así que la columna quedaba como texto
+  # muerto; el de miembros ni siquiera seleccionaba el id del grupo.
+  describe "vínculos al grupo desde listados de usuarios y miembros" do
+    test "users: cada grupo de la fila enlaza a su detalle", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      fixture = group_with_log(%{cost: "0.005"})
+
+      # Segunda membresía CON tráfico: el desglose por usuario agrupa las
+      # membresías que tienen logs en el período.
+      {:ok, group_b} = Accounts.create_group(%{name: "Stats Group B #{unique()}"})
+
+      {:ok, member_b} =
+        Accounts.create_group_member(%{user_id: fixture.owner.id, group_id: group_b.id})
+
+      log_serving(member_b, fixture.provider, fixture.model)
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/stats/users?period=today")
+      view = wait_stats_loaded(view)
+
+      for group <- [fixture.group, group_b] do
+        assert has_element?(
+                 view,
+                 "#user-group-#{fixture.owner.id}-#{group.id}[href*='/stats/groups/#{group.id}'][href*='period=today']",
+                 group.name
+               )
+      end
+    end
+
+    test "detalle del proveedor: el grupo de cada usuario enlaza a su detalle", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      fixture = group_with_log(%{cost: "0.005"})
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/stats/providers/#{fixture.provider.id}?period=today")
+      view = wait_stats_loaded(view)
+
+      assert has_element?(
+               view,
+               "#provider-user-group-#{fixture.owner.id}-#{fixture.group.id}[href*='/stats/groups/#{fixture.group.id}']",
+               fixture.group.name
+             )
+    end
+
+    test "detalle del modelo: el grupo de cada miembro y de cada grupo enlaza", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      fixture = group_with_log(%{cost: "0.005"})
+      member = hd(Accounts.list_group_members_for_group(fixture.group.id))
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/stats/models/#{fixture.model.id}?period=today")
+      view = wait_stats_loaded(view)
+
+      # La tabla de miembros lleva el grupo de cada fila enlazado...
+      assert has_element?(
+               view,
+               "#bd-model-member-group-#{member.id}[href*='/stats/groups/#{fixture.group.id}']",
+               fixture.group.name
+             )
+
+      # ...y la de grupos también, igual que en el detalle de proveedor (antes
+      # era texto plano aunque la fila ya traía el id del grupo).
+      assert has_element?(
+               view,
+               "#bd-model-group-link-#{fixture.group.id}[href*='/stats/groups/#{fixture.group.id}']",
+               fixture.group.name
+             )
     end
   end
 end

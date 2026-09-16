@@ -2,19 +2,27 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
   @moduledoc """
   Tarjeta "uso por hora del día, apilado por proveedor".
 
-  Una sola tarjeta para las dos pestañas del hub, para que se lean como el
-  mismo producto en vez de dos gráficas parecidas:
+  Una sola tarjeta para las pestañas del hub, para que se lean como el
+  mismo producto en vez de gráficas parecidas. Todas dibujan las 24 barras
+  del día (zero-filled, para que el eje no desaparezca) y sólo cambian la
+  ventana y las horas:
 
-    * En vivo la dibuja sobre el día UTC en curso: 24 barras, la hora actual
-      marcada y las horas que aún no llegan más apagadas.
-    * El Resumen la dibuja sobre el perfil horario del período, en la hora
-      local del usuario y sin marcas de "ahora" (`now_hour: nil`): un
-      agregado de muchos días no tiene hora en curso.
+    * En vivo la dibuja sobre el día UTC en curso: la hora actual marcada y
+      las horas que aún no llegan más apagadas.
+    * El Resumen con "Hoy" dibuja ese MISMO día UTC — misma consulta y misma
+      ventana que los KPI y el tope —, también con la hora en curso marcada:
+      las horas ya completadas son las que traen tráfico y las que faltan se
+      leen como lo que son.
+    * El Resumen con ventanas de más de un día la dibuja sobre el perfil
+      horario del período, en la hora local del usuario y sin marcas de
+      "ahora" (`now_hour: nil`): un agregado de muchos días no tiene hora en
+      curso.
 
-  Las dos reciben las 24 horas ya zero-filled con la misma forma
+  Todas reciben las 24 horas ya zero-filled con la misma forma
   (`%{hour, total_requests, total_cost_usd, providers}`), que devuelven
-  `Tokengate.Logs.today_usage_by_hour_provider/0` (En vivo) y
-  `Tokengate.Metrics.Rollup.usage_by_hour_of_day_by_provider/1` (Resumen).
+  `Tokengate.Logs.today_usage_by_hour_provider/0` (En vivo y el Resumen en
+  "Hoy") y `Tokengate.Metrics.Rollup.usage_by_hour_of_day_by_provider/1` (el
+  perfil horario del período).
   """
   use TokengateWeb, :html
 

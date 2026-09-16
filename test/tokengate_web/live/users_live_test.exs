@@ -3,6 +3,8 @@ defmodule TokengateWeb.UsersLiveTest do
 
   import Phoenix.LiveViewTest
   alias Tokengate.{Accounts, Credits, Logs}
+  alias Tokengate.Accounts.User
+  alias Tokengate.Repo
 
   defp unique, do: System.unique_integer([:positive])
 
@@ -24,6 +26,22 @@ defmodule TokengateWeb.UsersLiveTest do
     conn
     |> post(~p"/login", %{email: user.email, password: password})
     |> recycle()
+  end
+
+  # Volumen para los tests de paginado. Inserta directo (sin Bcrypt): solo
+  # hacen falta filas, no credenciales válidas. Nombres "Paginado NN" para que
+  # el orden por nombre (el default de la tabla) sea determinista.
+  defp bulk_users(count) do
+    for i <- 1..count do
+      %User{}
+      |> Ecto.Changeset.change(%{
+        email: "pag-#{unique()}-#{i}@example.com",
+        name: "Paginado #{String.pad_leading(Integer.to_string(i), 2, "0")}",
+        password_hash: "not-a-real-hash",
+        global_role: "user"
+      })
+      |> Repo.insert!()
+    end
   end
 
   ## Auth -------------------------------------------------------------------
@@ -587,5 +605,93 @@ defmodule TokengateWeb.UsersLiveTest do
 
     # No delete button for self
     refute has_element?(view, "#delete-#{admin.id}")
+  end
+
+  ## Paginado ---------------------------------------------------------------
+
+  describe "paginated table" do
+    test "page 1 shows 25 users and page 2 the rest", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      users = bulk_users(30)
+      first = Enum.at(users, 0)
+      last = Enum.at(users, 29)
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      # admin + 30 → 31 filas en total
+      assert has_element?(view, "#users-pagination")
+      assert has_element?(view, "#users-pagination-range", "1–25 de 31")
+      assert has_element?(view, "#user-#{first.id}")
+      refute has_element?(view, "#user-#{last.id}")
+      assert has_element?(view, "#users-pagination-prev[disabled]")
+
+      html = view |> element("#users-pagination-next") |> render_click()
+
+      assert html =~ "26–31 de 31"
+      assert has_element?(view, "#users-pagination-page-2[aria-current=page]")
+      assert has_element?(view, "#user-#{last.id}")
+      refute has_element?(view, "#user-#{first.id}")
+      assert has_element?(view, "#users-pagination-next[disabled]")
+
+      view |> element("#users-pagination-prev") |> render_click()
+
+      assert has_element?(view, "#users-pagination-range", "1–25 de 31")
+      assert has_element?(view, "#user-#{first.id}")
+    end
+
+    test "changing page size re-paginates from page 1", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      _users = bulk_users(30)
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#users-pagination-next") |> render_click()
+      assert has_element?(view, "#users-pagination-range", "26–31 de 31")
+
+      html =
+        view
+        |> element("#users-pagination-per-page")
+        |> render_change(%{"per_page" => "100"})
+
+      assert html =~ "1–31 de 31"
+      refute has_element?(view, "#users-pagination-page-2")
+      assert has_element?(view, "#users-pagination-next[disabled]")
+      assert has_element?(view, "#users-pagination-prev[disabled]")
+    end
+
+    test "searching brings the table back to page 1", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      users = bulk_users(30)
+      last = Enum.at(users, 29)
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#users-pagination-next") |> render_click()
+      assert has_element?(view, "#user-#{last.id}")
+
+      view |> element("#search-form") |> render_change(%{"q" => "Paginado 30"})
+
+      assert has_element?(view, "#users-pagination-range", "1–1 de 1")
+      assert has_element?(view, "#user-#{last.id}")
+      refute has_element?(view, "#users-pagination-page-2")
+    end
+
+    test "sorting brings the table back to page 1", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      _users = bulk_users(30)
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#users-pagination-next") |> render_click()
+      assert has_element?(view, "#users-pagination-range", "26–31 de 31")
+
+      view |> element("#sort-name") |> render_click()
+
+      assert has_element?(view, "#users-pagination-range", "1–25 de 31")
+    end
   end
 end

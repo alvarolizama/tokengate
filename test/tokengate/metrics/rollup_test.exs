@@ -1338,7 +1338,11 @@ defmodule Tokengate.Metrics.RollupTest do
       {tm, group} = group_member_fixture()
 
       now = DateTime.utc_now() |> DateTime.truncate(:second)
-      base_minute = DateTime.add(now, -3600, :second)
+      # Ancla el bloque al primer segundo de un minuto: los 10 logs del pico
+      # tienen que caer en el MISMO bucket minuto. Con `now - 1h` el bloque
+      # cruza el límite del minuto cuando el segundo en curso es alto, el pico
+      # se parte en dos buckets y la aserción mide 5..9 según la hora.
+      base_minute = %{DateTime.add(now, -3600, :second) | second: 0}
 
       # 10 requests en el mismo minuto (peak)
       for i <- 0..9 do
@@ -1468,6 +1472,28 @@ defmodule Tokengate.Metrics.RollupTest do
         |> Enum.sum()
 
       assert all_requests == 3
+    end
+
+    # El desglose por usuario tiene que entregar el grupo con su ID y su NOMBRE
+    # juntos: el id es lo único con lo que la UI puede enlazar al grupo, y el
+    # nombre sale de un lookup por ese id. Un `ARRAY_AGG` sin cast sobre una
+    # columna uuid devuelve bytes crudos, el lookup falla y la columna de grupos
+    # queda en "—" para todo el mundo sin que nada se queje.
+    test "cada usuario trae sus grupos con id y nombre" do
+      {tm, group} = group_member_fixture()
+
+      log_request(tm.id, DateTime.add(DateTime.utc_now(), -60, :second), %{
+        cost_usd: Decimal.new("1.000000")
+      })
+
+      from = DateTime.add(DateTime.utc_now(), -1, :day)
+
+      assert [row] = Rollup.breakdown_by_user(from: from, provider_id: nil)
+      assert row.user_id == tm.user_id
+
+      assert [group_entry] = row.groups
+      assert group_entry.id == group.id
+      assert group_entry.name == group.name
     end
   end
 end

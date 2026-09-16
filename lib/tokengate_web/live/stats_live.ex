@@ -57,7 +57,7 @@ defmodule TokengateWeb.StatsLive do
   @reload_interval_ms 3_000
 
   # "En vivo" tab: cadence of the periodic realtime refresh (matching
-  # LogsLive's inflight cadence).
+  # MonitoringLive's inflight cadence).
   @live_refresh_interval_ms 3_000
 
   # "En vivo" feed: how many recent requests to show.
@@ -194,15 +194,26 @@ defmodule TokengateWeb.StatsLive do
     {:noreply, start_data_load(socket)}
   end
 
-  def handle_event("show_more", %{"group-id" => group_id}, socket) do
-    shown = Map.get(socket.assigns.shown_counts, group_id, socket.assigns.per_page)
+  # "Ver más" de los listados largos: Créditos (una clave por grupo) y los
+  # detalles de proveedor y modelo (una clave por tabla). El conteo desplegado
+  # vive en `shown_counts`, así que cada listado se despliega por su cuenta sin
+  # recargar ni volver a consultar: las filas ya están en memoria.
+  def handle_event("show_more", %{"key" => key}, socket) do
+    {:noreply, show_more(socket, key)}
+  end
 
-    {:noreply,
-     assign(
-       socket,
-       :shown_counts,
-       Map.put(socket.assigns.shown_counts, group_id, shown + socket.assigns.per_page)
-     )}
+  def handle_event("show_more", %{"group-id" => group_id}, socket) do
+    {:noreply, show_more(socket, group_id)}
+  end
+
+  defp show_more(socket, key) do
+    shown = Map.get(socket.assigns.shown_counts, key, socket.assigns.per_page)
+
+    assign(
+      socket,
+      :shown_counts,
+      Map.put(socket.assigns.shown_counts, key, shown + socket.assigns.per_page)
+    )
   end
 
   defp toggle_direction(:asc), do: :desc
@@ -538,9 +549,9 @@ defmodule TokengateWeb.StatsLive do
         # vive en En vivo (`live-org-budget`), la pestaña que declaró esa
         # responsabilidad; con período "hoy" era el mismo card duplicado con
         # la misma query.
-        # Con el período "Hoy" la gráfica de perfil horario no se dibuja (ese
-        # día lo mide En vivo), así que su agregado tampoco se pide: sería
-        # una query cuyo resultado nadie lee.
+        # Con el período "Hoy" la gráfica de perfil horario mide el día UTC en
+        # curso — la misma ventana que los KPI y el tope — y sale del agregado
+        # del día (ver hour_usage_tasks/2), no del perfil del período.
         index_admin_tasks(admin?, opts) ++
           hour_usage_tasks(params, opts) ++
           [
@@ -724,12 +735,15 @@ defmodule TokengateWeb.StatsLive do
     ]
   end
 
-  # Perfil horario del período (gráfica "Uso por hora del día"). Sólo aplica a
-  # ventanas de más de un día: en "Hoy" ese día lo mide En vivo, así que el
-  # Resumen no pide el agregado. Devuelve la misma forma que la de En vivo
-  # (`Logs.today_usage_by_hour_provider/0`): las dos alimentan la MISMA tarjeta
-  # (`StatsLive.DayHourChart`).
-  defp hour_usage_tasks(%{period: "today"}, _opts), do: []
+  # Perfil horario (gráfica "Uso por hora del día"). Con ventanas de más de un
+  # día es el perfil del período en la hora local del usuario (rollup); con
+  # "Hoy" es el día UTC en curso — la misma ventana que los KPI y el tope, y la
+  # MISMA consulta del día que ya alimenta la tarjeta de En vivo, así que las
+  # dos pestañas dibujan el mismo día con las mismas horas. Las dos fuentes
+  # devuelven la forma que espera la tarjeta (`StatsLive.DayHourChart`).
+  defp hour_usage_tasks(%{period: "today"}, _opts) do
+    [fn -> {:hour_usage_by_provider, Logs.today_usage_by_hour_provider()} end]
+  end
 
   defp hour_usage_tasks(_params, opts) do
     [fn -> {:hour_usage_by_provider, Rollup.usage_by_hour_of_day_by_provider(opts)} end]

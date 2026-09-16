@@ -504,6 +504,87 @@ defmodule TokengateWeb.StatsHelpers do
   end
 
   @doc """
+  Filas visibles de un listado largo: las primeras `per_page` (o las que el
+  usuario ya haya desplegado con "Ver más").
+
+  El conteo desplegado vive en el socket, por clave de listado, así que cada
+  tabla del detalle se despliega por su cuenta sin tocar los datos cargados.
+  """
+  def shown_rows(rows, key, shown_counts, per_page) do
+    Enum.take(rows, Map.get(shown_counts, key, per_page))
+  end
+
+  @doc """
+  Botón "Ver más" de un listado largo: suelta la siguiente tanda de `per_page`
+  filas sin recargar nada.
+
+  Emite `show_more` con la clave del listado (`key`), que es la que el LiveView
+  usa para llevar el conteo desplegado. El botón no pinta nada cuando ya se ve
+  todo el listado.
+  """
+  attr :key, :string, required: true
+  attr :id, :string, required: true
+  attr :top, :integer, required: true
+  attr :total, :integer, required: true
+
+  def show_more(assigns) do
+    ~H"""
+    <div :if={@total > @top} class="flex justify-center mt-3">
+      <button
+        phx-click="show_more"
+        phx-value-key={@key}
+        class="btn btn-ghost btn-xs"
+        id={@id}
+      >
+        Ver más ({@total - @top} restantes)
+      </button>
+    </div>
+    """
+  end
+
+  @doc """
+  Enlace al detalle de un grupo desde un listado de usuarios o miembros.
+
+  Los desgloses por usuario/miembro ya traen el grupo de cada fila, así que el
+  nombre del grupo es siempre navegable a su detalle: sin esto, un listado de
+  usuarios deja el grupo como texto muerto y no hay camino de ida al grupo.
+
+  Dentro del hub (`/stats`) navega con `patch`: no se sale del LiveView y el
+  enlace arrastra el período elegido, como el resto de los enlaces internos —
+  por eso `period` es obligatorio ahí. Las vistas de stats que son su propio
+  LiveView (`/stats/users/:id`) pasan `navigate: true`, que cruza de LiveView.
+  """
+  attr :group_id, :any, required: true
+  attr :name, :any, required: true
+  attr :period, :any, default: nil
+  attr :navigate, :boolean, default: false
+  attr :id, :string, default: nil
+
+  def group_link(assigns) do
+    ~H"""
+    <.link
+      :if={@navigate}
+      navigate={~p"/stats/groups/#{@group_id}"}
+      class={group_link_class()}
+      title={@name}
+      id={@id}
+    >{@name}</.link>
+    <.link
+      :if={not @navigate}
+      patch={~p"/stats/groups/#{@group_id}?period=#{@period}"}
+      class={group_link_class()}
+      title={@name}
+      id={@id}
+    >{@name}</.link>
+    """
+  end
+
+  # Mismo badge en las dos variantes: si el enlace cambiara de forma al cruzar
+  # de LiveView, la misma columna se vería distinta según la página.
+  defp group_link_class,
+    do: "badge badge-sm badge-ghost max-w-[140px] truncate hover:bg-base-300"
+
+  @doc """
   Rango del listado: 1º/2º/3º destacados (oro/plata/bronce), el resto neutro.
   """
   attr :rank, :any, required: true

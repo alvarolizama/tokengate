@@ -29,6 +29,8 @@ defmodule TokengateWeb.StatsLive.Services do
   attr :period, :any, required: true
   attr :sort_field, :any, required: true
   attr :sort_direction, :any, required: true
+  attr :per_page, :integer, default: 10
+  attr :shown_counts, :map, required: true
 
   def services(assigns) do
     ~H"""
@@ -193,8 +195,15 @@ defmodule TokengateWeb.StatsLive.Services do
               </h2>
               <%= if Stats.has_data?(@breakdown_model) do %>
                 <% model_total = Stats.breakdown_total(@breakdown_model) %>
+                <% model_rows =
+                  Stats.shown_rows(
+                    @breakdown_model,
+                    "service-detail-models",
+                    @shown_counts,
+                    @per_page
+                  ) %>
                 <div class="overflow-x-auto mt-3">
-                  <table class="table table-sm">
+                  <table class="table table-sm" id="service-models">
                     <thead>
                       <tr>
                         <th>
@@ -291,7 +300,7 @@ defmodule TokengateWeb.StatsLive.Services do
                     </thead>
                     <tbody>
                       <tr
-                        :for={row <- @breakdown_model}
+                        :for={row <- model_rows}
                         id={"bd-service-model-#{row.model_id || "unknown"}"}
                       >
                         <td class="font-medium">
@@ -351,6 +360,12 @@ defmodule TokengateWeb.StatsLive.Services do
                     </tfoot>
                   </table>
                 </div>
+                <Stats.show_more
+                  key="service-detail-models"
+                  id="service-detail-models-more"
+                  top={length(model_rows)}
+                  total={length(@breakdown_model)}
+                />
               <% else %>
                 <p class="text-sm text-base-content/40 py-6 text-center">
                   Sin datos para este periodo.
@@ -383,6 +398,7 @@ defmodule TokengateWeb.StatsLive.Services do
                    claves del DashboardCache. --%>
               <% rows =
                 Enum.filter(@breakdown_service, &Stats.matches?(@list_search, &1.service_name)) %>
+              <% list_rows = Stats.shown_rows(rows, "service-list", @shown_counts, @per_page) %>
               <div class="mt-3">
                 <Stats.list_search
                   id="service-list-search"
@@ -495,7 +511,7 @@ defmodule TokengateWeb.StatsLive.Services do
                       </tr>
                     </thead>
                     <tbody>
-                      <tr :for={row <- rows} id={"bd-service-#{row.service_id}"}>
+                      <tr :for={row <- list_rows} id={"bd-service-#{row.service_id}"}>
                         <td class="font-medium">
                           <.link
                             patch={~p"/stats/services?period=#{@period}&service_id=#{row.service_id}"}
@@ -567,6 +583,12 @@ defmodule TokengateWeb.StatsLive.Services do
                   </table>
                 </div>
               <% end %>
+              <Stats.show_more
+                key="service-list"
+                id="service-list-more"
+                top={length(list_rows)}
+                total={length(rows)}
+              />
             <% else %>
               <p class="text-sm text-base-content/40 py-6 text-center">
                 Sin datos para este periodo.

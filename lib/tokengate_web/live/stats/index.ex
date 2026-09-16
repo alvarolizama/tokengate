@@ -260,21 +260,34 @@ defmodule TokengateWeb.StatsLive.Index do
 
         <%!-- Perfil horario: la MISMA tarjeta que "Hoy por hora · por
              proveedor" de En vivo (stats/day_hour_chart.ex) — barras apiladas
-             por proveedor, misma escala √, misma leyenda — aquí agregada
+             por proveedor, misma escala √, misma leyenda — aquí dibujada
              sobre la ventana del Resumen y sin liveness: los datos llegan con
-             la carga del período, no de un push. Sólo con ventanas de más de
-             un día; el día en curso lo mide En vivo. --%>
-        <%= if @period != "today" do %>
-          <DayHourChart.day_hour_chart
-            id="hour-distribution"
-            class="lg:col-span-2"
-            rows={@hour_usage_by_provider}
-            title="Uso por hora del día"
-            hint="barras apiladas · 1 barra = 1 hora del día · color = proveedor · hora en tu hora local · agregado del período"
-            hour_suffix="hora local"
-            empty_note="sin datos en el período"
-          />
-        <% end %>
+             la carga del período, no de un push.
+
+             Con ventanas de más de un día es el perfil del período en la hora
+             local del usuario. Con "Hoy" es el día UTC en curso — la ventana
+             de los KPI y del tope — con la hora actual marcada y las que aún
+             no llegan atenuadas, para que el Resumen y En vivo lean el mismo
+             día: las horas que ya pasaron son las que traen tráfico. --%>
+        <% today? = @period == "today" %>
+        <DayHourChart.day_hour_chart
+          id="hour-distribution"
+          class="lg:col-span-2"
+          rows={@hour_usage_by_provider}
+          title="Uso por hora del día"
+          hint={
+            if today?,
+              do:
+                "barras apiladas · 1 barra = 1 hora del día UTC · color = proveedor · hora en curso marcada",
+              else:
+                "barras apiladas · 1 barra = 1 hora del día · color = proveedor · hora en tu hora local · agregado del período"
+          }
+          hour_suffix={if today?, do: "UTC", else: "hora local"}
+          empty_note={
+            if today?, do: "sin tráfico en el día UTC todavía", else: "sin datos en el período"
+          }
+          now_hour={if today?, do: DateTime.utc_now().hour, else: nil}
+        />
       </div>
     </div>
     """

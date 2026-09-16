@@ -18,6 +18,8 @@ defmodule TokengateWeb.StatsLive.Users do
   attr :sort_field, :any, required: true
   attr :sort_direction, :any, required: true
   attr :list_search, :any, required: true
+  attr :per_page, :integer, default: 10
+  attr :shown_counts, :map, required: true
 
   def users(assigns) do
     ~H"""
@@ -51,6 +53,7 @@ defmodule TokengateWeb.StatsLive.Users do
                 @breakdown_user,
                 &Stats.matches?(@list_search, [&1.user_email, &1.user_name])
               ) %>
+            <% list_rows = Stats.shown_rows(rows, "user-list", @shown_counts, @per_page) %>
             <div class="mt-3">
               <Stats.list_search
                 id="user-list-search"
@@ -154,10 +157,10 @@ defmodule TokengateWeb.StatsLive.Users do
                       </th>
                       <th class="text-right">Costo / req</th>
                       <th>
-                        Presupuesto · mes
+                        Crédito · ciclo
                         <div
                           class="tooltip tooltip-top"
-                          data-tip="Gasto del mes calendario vs límite agregado de sus membresías"
+                          data-tip="Crédito consumido vs otorgado por las suscripciones del usuario (default de sus grupos + subs directas) en el ciclo vigente. Sin suscripción aplicable: sin límite (solo topa el cap global diario)."
                         >
                           <.icon
                             name="hero-question-mark-circle"
@@ -168,7 +171,7 @@ defmodule TokengateWeb.StatsLive.Users do
                     </tr>
                   </thead>
                   <tbody>
-                    <tr :for={row <- rows} id={"bd-user-#{row.user_id}"}>
+                    <tr :for={row <- list_rows} id={"bd-user-#{row.user_id}"}>
                       <td class="font-medium">
                         <.link
                           navigate={~p"/stats/users/#{row.user_id}"}
@@ -180,13 +183,13 @@ defmodule TokengateWeb.StatsLive.Users do
                       </td>
                       <td>
                         <div class="flex flex-wrap gap-1">
-                          <span
-                            :for={name <- row.group_names}
-                            class="badge badge-sm badge-ghost max-w-[140px] truncate"
-                            title={name}
-                          >
-                            {name}
-                          </span>
+                          <Stats.group_link
+                            :for={group <- row.groups}
+                            group_id={group.id}
+                            name={group.name}
+                            period={@period}
+                            id={"user-group-#{row.user_id}-#{group.id}"}
+                          />
                         </div>
                       </td>
                       <td class="text-right font-mono">
@@ -245,6 +248,12 @@ defmodule TokengateWeb.StatsLive.Users do
                   </tfoot>
                 </table>
               </div>
+              <Stats.show_more
+                key="user-list"
+                id="user-list-more"
+                top={length(list_rows)}
+                total={length(rows)}
+              />
             <% end %>
           <% else %>
             <p class="text-sm text-base-content/40 py-6 text-center">

@@ -337,7 +337,12 @@ defmodule TokengateWeb.UserStatsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
+    <Layouts.dashboard
+      flash={@flash}
+      current_scope={@current_user}
+      impersonator={@impersonator}
+      current_path={@current_path}
+    >
       <div class="space-y-6">
         <%!-- Header --%>
         <header class="flex items-center justify-between gap-6 pb-4">
@@ -427,7 +432,17 @@ defmodule TokengateWeb.UserStatsLive do
               <% else %>
                 <ul class="space-y-1 text-sm">
                   <li :for={m <- @memberships} class="flex items-center justify-between">
-                    <span>{(m.group && m.group.name) || "—"}</span>
+                    <span>
+                      <.link
+                        :if={m.group}
+                        navigate={~p"/stats/groups/#{m.group.id}"}
+                        class="link link-hover hover:text-primary"
+                        id={"membership-group-#{m.group.id}"}
+                      >
+                        {m.group.name}
+                      </.link>
+                      <span :if={!m.group}>—</span>
+                    </span>
                     <span class="badge badge-sm badge-ghost">
                       {if m.api_key, do: m.api_key.key_prefix, else: "—"}
                     </span>
