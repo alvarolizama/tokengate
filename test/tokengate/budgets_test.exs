@@ -99,6 +99,37 @@ defmodule Tokengate.BudgetsTest do
       })
   end
 
+  defp record_grant_log(member, sub, cost) do
+    {:ok, _} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        subject_type: "user",
+        model_requested: "test-model",
+        status_code: 200,
+        provider_cost_usd: Decimal.new(cost),
+        credit_subscription_id: sub.id,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+  end
+
+  # Suscripción default del grupo (una query más, sin tocar los fixtures).
+  defp group_sub(group, attrs) do
+    {:ok, sub} =
+      Tokengate.Credits.create_subscription(
+        Map.merge(%{"units" => 100, "recurrence" => "monthly", "reset_day" => 1}, attrs)
+      )
+
+    {:ok, _} = Tokengate.Credits.set_group_default(group, sub)
+    sub
+  end
+
+  # Camino que usan las vistas (Postgres, por lotes): es el que puede diferir
+  # del contador ETS en `member_budget/1`.
+  defp budget_for(member) do
+    Budgets.list_member_budgets("Etc/UTC")
+    |> Enum.find(&(&1.member.id == member.id))
+  end
+
   describe "member_budget/1" do
     test "reports zero spend with no monthly limit (budget is credit now)" do
       member = member_fixture()
@@ -120,6 +151,81 @@ defmodule Tokengate.BudgetsTest do
 
       assert Decimal.eq?(budget.monthly_spend_usd, Decimal.new("33.33"))
       assert is_nil(budget.monthly_limit_usd)
+    end
+  end
+
+  # Regresión: los usuarios de un grupo con suscripción salían "sin límite"
+  # porque `member_budget` hardcodeaba el límite a `nil` y nunca miraba el
+  # grant. El límite debe ser el crédito del grant (units) y el gasto que
+  # cuenta contra él, lo consumido del grant.
+  describe "member_budget/1 con suscripción de grupo (crédito)" do
+    test "el límite es el crédito del grant, no nil" do
+      user = user_fixture()
+      group = group_fixture()
+      member = member_fixture(group, user)
+      _sub = group_sub(group, %{"units" => 10, "name" => "Grupo"})
+
+      budget = Budgets.member_budget(member)
+
+      assert budget.has_credit?
+      refute is_nil(budget.monthly_limit_usd)
+      assert Decimal.eq?(budget.monthly_limit_usd, Decimal.new("10"))
+      assert Decimal.eq?(budget.monthly_spend_usd, Decimal.new("0"))
+      assert Decimal.eq?(budget.credit_remaining_usd, Decimal.new("10"))
+      refute budget.exhausted?
+    end
+
+    test "el gasto del presupuesto es lo consumido del grant; el real va aparte" do
+      user = user_fixture()
+      group = group_fixture()
+      member = member_fixture(group, user)
+      sub = group_sub(group, %{"units" => 10})
+
+      record_grant_log(member, sub, "2.00")
+      record_log(member, Decimal.new("1.50"))
+
+      budget = budget_for(member)
+
+      assert Decimal.eq?(budget.monthly_spend_usd, Decimal.new("2"))
+      assert Decimal.eq?(budget.real_monthly_spend_usd, Decimal.new("3.5"))
+      assert Decimal.eq?(budget.credit_remaining_usd, Decimal.new("8"))
+      assert_in_delta budget.monthly_pct, 20.0, 0.01
+      refute budget.exhausted?
+    end
+
+    test "sub de grupo pausada: límite 0 y agotado, no ilimitado" do
+      user = user_fixture()
+      group = group_fixture()
+      member = member_fixture(group, user)
+      group_sub(group, %{"status" => "paused"})
+
+      budget = Budgets.member_budget(member)
+
+      assert budget.has_credit?
+      assert Decimal.eq?(budget.monthly_limit_usd, Decimal.new("0"))
+      assert budget.exhausted?
+      assert_in_delta budget.monthly_pct, 100.0, 0.01
+    end
+
+    test "list_member_budgets/1 resuelve el crédito en lote igual que member_credit" do
+      user = user_fixture()
+      group = group_fixture()
+      member = member_fixture(group, user)
+      sub = group_sub(group, %{"units" => 7})
+      record_grant_log(member, sub, "1.00")
+
+      budgets = Budgets.list_member_budgets("Etc/UTC")
+      budget = Enum.find(budgets, &(&1.member.id == member.id))
+      credit = Tokengate.Credits.member_credit(member)
+
+      assert budget.has_credit?
+      assert Decimal.eq?(budget.monthly_limit_usd, Decimal.new("7"))
+      assert Decimal.eq?(budget.monthly_spend_usd, Decimal.new("1"))
+
+      assert budget.monthly_limit_usd
+             |> Decimal.mult(Decimal.new(1_000_000))
+             |> Decimal.to_integer() ==
+               credit.credited_micro
     end
   end
 

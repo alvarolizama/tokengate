@@ -190,10 +190,10 @@ defmodule Tokengate.CreditsTest do
       assert ids == expected
     end
 
-    test "paused subscriptions are not granted" do
+    test "a paused direct subscription is granted with 0 credit (revoca, no libera)" do
       user = user_fixture()
 
-      {:ok, _} =
+      {:ok, paused} =
         Credits.create_subscription(%{
           "user_id" => user.id,
           "units" => 1,
@@ -203,7 +203,15 @@ defmodule Tokengate.CreditsTest do
 
       member = member_fixture(nil, user)
 
-      assert Credits.grants_for(member) == []
+      # Sigue en la lista de grants (tier 2) con 0 crédito: el usuario queda
+      # bloqueado en vez de caer a tier 3 (ilimitado).
+      assert [%{tier: 2, subscription: %Subscription{id: id}}] = Credits.grants_for(member)
+      assert id == paused.id
+
+      credit = Credits.member_credit(member)
+      assert credit.has_credit?
+      assert credit.credited_micro == 0
+      assert credit.remaining_micro == 0
     end
   end
 
@@ -235,7 +243,7 @@ defmodule Tokengate.CreditsTest do
       assert service_id == service.id
     end
 
-    test "a paused subscription yields no grants" do
+    test "a paused subscription stays as a 0-credit grant (bloquea, no libera)" do
       sub = group_sub(%{"status" => "paused"})
 
       {:ok, service} =
@@ -244,7 +252,11 @@ defmodule Tokengate.CreditsTest do
           subscription_id: sub.id
         })
 
-      assert Credits.service_grants(service) == []
+      assert [%{tier: 1, subscription: %Subscription{id: id}, service_id: _}] =
+               Credits.service_grants(service)
+
+      assert id == sub.id
+      assert Credits.grant_state(sub, {:service, service.id}).credited_micro == 0
     end
   end
 
@@ -424,6 +436,22 @@ defmodule Tokengate.CreditsTest do
 
       refute cached_entry?(member)
       refute cached_entry?(other_member)
+    end
+
+    # Regresión: `Repo.update` de un changeset sin cambios es un no-op, así que
+    # desvincular con un struct obsoleto (cargado antes de vincular) dejaba el
+    # vínculo fantasma en la BD: la UI decía "sin suscripción" pero el grupo
+    # seguía gateando el crédito de sus miembros.
+    test "set_group_default(group, nil) escribe aunque el struct esté obsoleto" do
+      group = group_fixture()
+      stale = group
+      sub = group_sub(%{"units" => 5})
+
+      {:ok, _} = Credits.set_group_default(group, sub)
+      assert Accounts.get_group(group.id).default_subscription_id == sub.id
+
+      {:ok, _} = Credits.set_group_default(stale, nil)
+      assert Accounts.get_group(group.id).default_subscription_id == nil
     end
   end
 end

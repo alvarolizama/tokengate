@@ -88,31 +88,21 @@ defmodule TokengateWeb.GroupsLive do
     destinations_by_group =
       Observability.list_destinations_for_groups(Enum.map(groups, & &1.id))
 
-    # Budget + spend rollup per group and per member
+    # Budget + spend rollup per group and per member. Se reusa el rollup de
+    # `Budgets` (misma definición de límite/consumo que /stats) en vez de
+    # recomputarlo aquí: la copia local convertía "todos sin límite" en $0.00
+    # en lugar de "sin límite", y el límite venía de un `nil` hardcodeado.
     timezone = socket.assigns[:timezone] || "Etc/UTC"
     member_budgets = Budgets.list_member_budgets(timezone)
 
     group_budgets =
       member_budgets
-      |> Enum.group_by(fn mb -> mb.member.group_id end)
-      |> Map.new(fn {group_id, budgets} ->
-        monthly_limit_usd =
-          budgets
-          |> Enum.map(& &1.monthly_limit_usd)
-          |> Enum.reject(&is_nil/1)
-          |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
+      |> Budgets.rollup_group_budgets()
+      |> Map.new(fn budget -> {budget.group.id, budget} end)
 
-        monthly_spend_usd =
-          Enum.reduce(budgets, Decimal.new(0), &Decimal.add(&1.monthly_spend_usd, &2))
-
-        {group_id,
-         %{
-           monthly_limit_usd: monthly_limit_usd,
-           monthly_spend_usd: monthly_spend_usd,
-           member_count: length(budgets),
-           member_budgets: budgets
-         }}
-      end)
+    # Sub vinculada de cada grupo (incluidas las pausadas) para que la tarjeta
+    # muestre el crédito del grupo, no solo el gasto.
+    group_subscriptions = Tokengate.Credits.group_subscriptions(Enum.map(groups, & &1.id))
 
     socket
     |> assign(:all_groups, groups)
@@ -122,6 +112,7 @@ defmodule TokengateWeb.GroupsLive do
     |> assign(:models_by_org, models_by_org)
     |> assign(:destinations_by_group, destinations_by_group)
     |> assign(:group_budgets, group_budgets)
+    |> assign(:group_subscriptions, group_subscriptions)
   end
 
   # Re-streams the (already loaded) groups filtered by the current search.
@@ -291,7 +282,12 @@ defmodule TokengateWeb.GroupsLive do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.dashboard flash={@flash} current_scope={@current_user} impersonator={@impersonator}>
+    <Layouts.dashboard
+      flash={@flash}
+      current_scope={@current_user}
+      impersonator={@impersonator}
+      current_path={@current_path}
+    >
       <div class="space-y-6">
         <.header>
           Grupos
@@ -407,10 +403,17 @@ defmodule TokengateWeb.GroupsLive do
                 </div>
 
                 <%!-- Compact stats --%>
+                <% credit = group_credit(group, @group_budgets, @group_subscriptions) %>
                 <div class="flex items-center gap-4 text-sm">
                   <div class="text-center">
                     <p class="text-[10px] uppercase tracking-wide text-base-content/40">Gasto/mes</p>
                     <p class="font-bold">${format_decimal(get_spend(group, @group_budgets))}</p>
+                  </div>
+                  <div class="text-center" id={"group-credit-#{group.id}"}>
+                    <p class="text-[10px] uppercase tracking-wide text-base-content/40">
+                      {credit.label}
+                    </p>
+                    <p class={["font-bold", credit.class]}>{credit.value}</p>
                   </div>
                   <%!-- Models badge --%>
                   <button
@@ -474,6 +477,48 @@ defmodule TokengateWeb.GroupsLive do
   ## Render helpers ---------------------------------------------------------
 
   defp get_spend(group, group_budgets) do
-    group_budgets |> Map.get(group.id, %{}) |> Map.get(:monthly_spend_usd, Decimal.new(0))
+    group_budgets
+    |> Map.get(group.id, %{})
+    |> Map.get(:real_monthly_spend_usd, Decimal.new(0))
   end
+
+  # Crédito del grupo para la tarjeta: `sin sub` (no hay nada vinculado),
+  # `pausada` (vinculada pero revocada) o `usado / otorgado` sumando los grants
+  # de sus miembros.
+  defp group_credit(group, group_budgets, group_subscriptions) do
+    case Map.get(group_subscriptions, group.id) do
+      nil ->
+        %{label: "Crédito", value: "sin sub", class: "text-base-content/40"}
+
+      %{status: "paused"} ->
+        %{label: "Crédito", value: "pausada", class: "text-warning"}
+
+      subscription ->
+        credit_value(subscription, Map.get(group_budgets, group.id))
+    end
+  end
+
+  defp credit_value(subscription, %{monthly_limit_usd: nil}) do
+    %{label: credit_label(subscription), value: "sin miembros", class: "text-base-content/40"}
+  end
+
+  defp credit_value(subscription, %{monthly_spend_usd: spent} = budget) do
+    %{
+      label: credit_label(subscription),
+      value: "#{format_decimal(spent)} / #{format_decimal(budget.monthly_limit_usd)}",
+      class: credit_class(budget.monthly_pct)
+    }
+  end
+
+  defp credit_value(subscription, _no_members) do
+    %{label: credit_label(subscription), value: "—", class: "text-base-content/40"}
+  end
+
+  defp credit_label(%{name: name}) when is_binary(name) and name != "", do: "Crédito · #{name}"
+  defp credit_label(_subscription), do: "Crédito"
+
+  defp credit_class(nil), do: "text-base-content/60"
+  defp credit_class(pct) when pct >= 100, do: "text-error"
+  defp credit_class(pct) when pct >= 80, do: "text-warning"
+  defp credit_class(_pct), do: "text-success"
 end

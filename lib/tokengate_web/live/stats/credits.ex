@@ -48,7 +48,7 @@ defmodule TokengateWeb.StatsLive.Credits do
               <.icon name="hero-exclamation-triangle" class="w-4 h-4 text-warning" />
             </div>
             <p class="mt-1 text-2xl font-bold text-base-content" id="credits-count-near">
-              {Enum.count(@budgets, fn b -> is_float(b.daily_pct) and b.daily_pct >= 80.0 end)}
+              {Enum.count(@budgets, fn b -> is_float(b.monthly_pct) and b.monthly_pct >= 80.0 end)}
             </p>
           </div>
         </div>
@@ -82,7 +82,7 @@ defmodule TokengateWeb.StatsLive.Credits do
                 <tr>
                   <th>Grupo</th>
                   <th class="text-right">Miembros</th>
-                  <th class="w-64">Gasto mensual real</th>
+                  <th class="w-64">Crédito (usado / otorgado)</th>
                 </tr>
               </thead>
               <tbody>
@@ -92,7 +92,7 @@ defmodule TokengateWeb.StatsLive.Credits do
                   <td>
                     <%= if is_nil(tb.monthly_limit_usd) do %>
                       <div class="text-xs text-base-content/60">
-                        ${fmt_money(tb.monthly_spend_usd)} · sin límite
+                        ${fmt_money(tb.real_monthly_spend_usd)} · sin crédito de grupo
                       </div>
                     <% else %>
                       <div class="space-y-1">
@@ -107,6 +107,9 @@ defmodule TokengateWeb.StatsLive.Credits do
                           value={bar_value(tb.monthly_pct)}
                           max="100"
                         ></progress>
+                        <div class="text-[11px] text-base-content/40">
+                          real ${fmt_money(tb.real_monthly_spend_usd)}
+                        </div>
                       </div>
                     <% end %>
                   </td>
