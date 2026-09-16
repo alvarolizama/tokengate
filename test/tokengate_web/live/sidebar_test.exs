@@ -46,6 +46,7 @@ defmodule TokengateWeb.SidebarTest do
 
     assert in_section?(view, "sidebar-section-catalogo", "sidebar-link-catalog-providers")
     assert in_section?(view, "sidebar-section-catalogo", "sidebar-link-catalog-models")
+    assert in_section?(view, "sidebar-section-catalogo", "sidebar-link-catalog-labs")
     refute in_section?(view, "sidebar-section-catalogo", "sidebar-link-access-groups")
 
     assert in_section?(view, "sidebar-section-acceso", "sidebar-link-access-groups")

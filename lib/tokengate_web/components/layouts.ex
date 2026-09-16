@@ -289,6 +289,12 @@ defmodule TokengateWeb.Layouts do
                 label="Modelos"
                 icon="hero-rectangle-stack"
               />
+              <.sidebar_link
+                current_path={@current_path}
+                href={~p"/catalog/labs"}
+                label="Labs"
+                icon="hero-beaker"
+              />
             </.sidebar_section>
 
             <.sidebar_section id="sidebar-section-acceso" label="Acceso">

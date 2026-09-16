@@ -15,8 +15,6 @@ defmodule Tokengate.Providers.CatalogRefreshWorkerTest do
   alias Tokengate.Providers.{CatalogProvider, CatalogRefreshWorker, Lab, Provider}
 
   @port 42391
-  @providers_port 42392
-  @models_port 42393
 
   defmodule TestPlug do
     @moduledoc false
@@ -444,7 +442,7 @@ defmodule Tokengate.Providers.CatalogRefreshWorkerTest do
 
       state = Providers.catalog_sync_state()
 
-      assert [warning] = Enum.filter(state.warnings, &(&1["reason"] == "labs_payload_empty"))
+      assert [_warning] = Enum.filter(state.warnings, &(&1["reason"] == "labs_payload_empty"))
 
       # Every seeded lab is still active.
       assert Repo.aggregate(from(l in Lab, where: l.status == "active"), :count) ==

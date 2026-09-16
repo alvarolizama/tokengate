@@ -138,6 +138,7 @@ defmodule TokengateWeb.Router do
       # Catálogo — qué se sirve y a qué costo.
       live "/catalog/providers", ProvidersLive
       live "/catalog/models", ModelsLive
+      live "/catalog/labs", LabsLive
       # Acceso — quién puede usar qué.
       live "/access/groups", GroupsLive
       live "/access/groups/:id/members", GroupMembersLive
