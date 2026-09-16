@@ -27,7 +27,11 @@ defmodule Tokengate.Providers do
     ModelProvider,
     ServiceModel,
     GroupModel,
-    GroupMemberExtraModel
+    GroupMemberExtraModel,
+    CatalogProvider,
+    CatalogRefreshWorker,
+    CatalogSyncState,
+    Lab
   }
 
   # ---------------------------------------------------------------------------
@@ -45,10 +49,21 @@ defmodule Tokengate.Providers do
     |> Repo.insert()
   end
 
+  # Limits live on the provider and the proxy reads them from the cached
+  # (model_providers, credential, provider) snapshot, so a limits change must
+  # drop that cache or the new throttle would only apply after its 60s TTL.
   def update_provider(%Provider{} = provider, attrs) do
     provider
     |> Provider.changeset(attrs)
     |> Repo.update()
+    |> case do
+      {:ok, provider} ->
+        Tokengate.Routing.Cache.invalidate_all()
+        {:ok, provider}
+
+      {:error, changeset} ->
+        {:error, changeset}
+    end
   end
 
   def delete_provider(%Provider{} = provider) do
@@ -99,6 +114,144 @@ defmodule Tokengate.Providers do
 
   def change_provider(%Provider{} = provider, attrs \\ %{}),
     do: Provider.changeset(provider, attrs)
+
+  # ---------------------------------------------------------------------------
+  # Provider catalog (models.dev mirror)
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Every provider models.dev publishes, ordered by name — the source list for
+  the add-provider modal.
+
+  Filtering happens in memory on purpose: the mirror is a few hundred rows and
+  the search must feel instant on every keystroke.
+  """
+  def list_catalog_providers do
+    Repo.all(from c in CatalogProvider, order_by: [asc: c.name])
+  end
+
+  @doc "Number of mirror rows in the given status (\"active\" | \"stale\")."
+  def count_catalog_providers(status) when status in ~w(active stale) do
+    Repo.aggregate(from(c in CatalogProvider, where: c.status == ^status), :count)
+  end
+
+  @doc "Outcome of the last catalog refresh (nil before the first run)."
+  def catalog_sync_state, do: CatalogSyncState.get()
+
+  @doc """
+  Enqueues a models.dev catalog refresh. Debounced by the worker's Oban
+  uniqueness window, so a double click cannot queue two downloads.
+  """
+  def request_catalog_refresh do
+    %{}
+    |> CatalogRefreshWorker.new()
+    |> Oban.insert()
+  end
+
+  @doc "True when a refresh job is queued or running."
+  def catalog_refresh_in_flight?, do: CatalogRefreshWorker.in_flight?()
+
+  # ---------------------------------------------------------------------------
+  # Lab catalog (models.dev labs + custom labs)
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Every lab, ordered by name.
+
+  Options:
+
+    * `:source` — `"builtin"` | `"custom"`
+    * `:status` — `"active"` | `"stale"`
+    * `:search` — case-insensitive match on the name or the key
+
+  The catalog is a few dozen rows, so the filters run in the query and the
+  result is small enough to hand straight to a view.
+  """
+  def list_labs(opts \\ []) do
+    Lab
+    |> order_by([l], asc: l.name)
+    |> filter_lab_source(Keyword.get(opts, :source))
+    |> filter_lab_status(Keyword.get(opts, :status))
+    |> search_labs(Keyword.get(opts, :search))
+    |> Repo.all()
+  end
+
+  defp filter_lab_source(query, nil), do: query
+  defp filter_lab_source(query, source), do: from(l in query, where: l.source == ^source)
+
+  defp filter_lab_status(query, nil), do: query
+  defp filter_lab_status(query, status), do: from(l in query, where: l.status == ^status)
+
+  defp search_labs(query, nil), do: query
+  defp search_labs(query, ""), do: query
+
+  defp search_labs(query, search) do
+    pattern = "%#{search |> String.trim() |> String.downcase()}%"
+
+    from(l in query,
+      where: ilike(l.name, ^pattern) or ilike(l.key, ^pattern)
+    )
+  end
+
+  @doc "A lab by its models.dev key (nil when unknown)."
+  def get_lab(key) when is_binary(key), do: Repo.get(Lab, key)
+  def get_lab(_), do: nil
+
+  @doc "A lab by its models.dev key, raising when unknown."
+  def get_lab!(key), do: Repo.get!(Lab, key)
+
+  @doc "Number of labs in the given status (`\"active\"` | `\"stale\"`)."
+  def count_labs(status) when status in ~w(active stale) do
+    Repo.aggregate(from(l in Lab, where: l.status == ^status), :count)
+  end
+
+  @doc """
+  Creates a CUSTOM lab — one models.dev does not publish.
+
+  `source` is forced to `"custom"` here, not taken from the attrs: a row the
+  operator creates must never look like a catalog row (a refresh would ignore
+  it either way, but the distinction is what the UI keys off). `name` is
+  required, `key` is the slug (`"my-lab"`), and `logo_url`/`icon` are the two
+  ways to give it a mark — the URL wins when both are set.
+  """
+  def create_custom_lab(attrs) do
+    %Lab{}
+    |> Lab.changeset(force_source(attrs, "custom"))
+    |> Repo.insert()
+  end
+
+  @doc """
+  Updates a custom lab. A builtin lab is catalog-owned: it returns a changeset
+  carrying a `:builtin` error instead of silently dropping the changes.
+  """
+  def update_custom_lab(%Lab{source: "custom"} = lab, attrs) do
+    lab
+    |> Lab.changeset(force_source(attrs, "custom"))
+    |> Repo.update()
+  end
+
+  def update_custom_lab(%Lab{}, _attrs) do
+    {:error,
+     %Lab{}
+     |> Ecto.Changeset.change()
+     |> Ecto.Changeset.add_error(:builtin, "es de catálogo: no se puede editar")}
+  end
+
+  @doc "Deletes a custom lab (builtin rows: `{:error, :builtin}`)."
+  def delete_custom_lab(%Lab{source: "custom"} = lab), do: Repo.delete(lab)
+  def delete_custom_lab(%Lab{}), do: {:error, :builtin}
+
+  @doc "Changeset for the custom-lab form."
+  def change_lab(%Lab{} = lab, attrs \\ %{}), do: Lab.changeset(lab, attrs)
+
+  # `source` is owned by this context, not by the attrs. Both spellings of the
+  # key are cleared, so a form param named "source" cannot slip through beside
+  # the forced value.
+  defp force_source(attrs, source) do
+    attrs
+    |> Map.drop(["source", :source])
+    |> Map.put("source", source)
+  end
 
   # ---------------------------------------------------------------------------
   # Provider Credentials
@@ -719,6 +872,36 @@ defmodule Tokengate.Providers do
             {:error, changeset}
         end
     end
+  end
+
+  @doc """
+  Map `%{service_id => [model_id, ...]}` of the models granted to each of the
+  given services. One query for the whole set — the read-only supervisor area
+  draws badges per service from this instead of one query per card.
+  """
+  @spec granted_models_by_service([binary()]) :: %{binary() => [binary()]}
+  def granted_models_by_service(service_ids) when is_list(service_ids) do
+    if service_ids == [] do
+      %{}
+    else
+      Repo.all(
+        from sma in ServiceModel,
+          where: sma.service_id in ^service_ids,
+          select: {sma.service_id, sma.model_id}
+      )
+      |> Enum.group_by(fn {service_id, _} -> service_id end, fn {_, model_id} -> model_id end)
+    end
+  end
+
+  @doc """
+  Models of the catalog for the given ids, ordered by name. Returns `[]` for an
+  empty list (no `IN ()` round-trip).
+  """
+  @spec models_by_ids([binary()]) :: [Model.t()]
+  def models_by_ids([]), do: []
+
+  def models_by_ids(model_ids) when is_list(model_ids) do
+    Repo.all(from m in Model, where: m.id in ^model_ids, order_by: [asc: m.name])
   end
 
   # ---------------------------------------------------------------------------

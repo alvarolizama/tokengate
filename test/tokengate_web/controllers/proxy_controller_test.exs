@@ -32,6 +32,7 @@ defmodule TokengateWeb.ProxyControllerTest do
       if pid = :persistent_term.get({__MODULE__, :test_pid}, nil) do
         send(pid, {:provider_request, payload})
         send(pid, {:provider_request_headers, conn.req_headers})
+        send(pid, {:provider_request_path, conn.request_path})
       end
 
       cond do
@@ -75,6 +76,35 @@ defmodule TokengateWeb.ProxyControllerTest do
             "data" => data,
             "usage" => %{"prompt_tokens" => 11, "total_tokens" => 11, "cost" => 0.000011}
           })
+
+        # The six non-chat services, each answered with a shape of its own.
+        # `images` and `music` share the `/generations` segment, so every one
+        # of them is matched by its own marker — an operator override that
+        # keeps the segment (as in the override test) still lands here.
+        "rerank" in conn.path_info ->
+          json(conn, 200, %{
+            "results" => [%{"index" => 0, "relevance_score" => 0.91}],
+            "usage" => %{"prompt_tokens" => 12, "total_tokens" => 12}
+          })
+
+        "transcriptions" in conn.path_info ->
+          json(conn, 200, %{"text" => "hola mundo"})
+
+        "speech" in conn.path_info ->
+          json(conn, 200, %{"audio" => "SUQzBAAAAAA"})
+
+        "images" in conn.path_info ->
+          json(conn, 200, %{
+            "created" => 1,
+            "data" => [%{"b64_json" => "aW1n"}],
+            "usage" => %{"input_tokens" => 100, "output_tokens" => 200, "total_tokens" => 300}
+          })
+
+        "videos" in conn.path_info ->
+          json(conn, 200, %{"id" => "video-job-1", "status" => "queued"})
+
+        "music" in conn.path_info ->
+          json(conn, 200, %{"id" => "music-1", "status" => "succeeded"})
 
         "slowstream" in conn.path_info ->
           Process.sleep(300)
@@ -218,7 +248,8 @@ defmodule TokengateWeb.ProxyControllerTest do
       Providers.create_provider(%{
         name: "Provider #{u}",
         base_url: provider_url,
-        billing_type: Map.get(opts, :billing_type, "pay_per_token")
+        billing_type: Map.get(opts, :billing_type, "pay_per_token"),
+        path_overrides: Map.get(opts, :path_overrides, %{})
       })
 
     {:ok, credential} =
@@ -248,6 +279,7 @@ defmodule TokengateWeb.ProxyControllerTest do
       user: user,
       member: member,
       token: token,
+      provider: provider,
       model: model,
       model_provider: model_provider,
       credit_subscription: credit_subscription
@@ -532,10 +564,11 @@ defmodule TokengateWeb.ProxyControllerTest do
   } do
     %{token: token, model: model} = proxy_fixture(%{})
 
-    # Saturate the only credential's RPM so every route attempt is rejected
-    # with provider_rate_limited — the cascade then exhausts on rate limits.
+    # Saturate the provider's RPM so every route attempt is rejected with
+    # provider_rate_limited — the cascade then exhausts on rate limits.
     [mp] = Providers.list_model_providers(model.id)
-    {:ok, cred} = Providers.update_credential(mp.credential, %{max_rpm: 1})
+    {:ok, _provider} = Providers.update_provider(mp.credential.provider, %{max_rpm: 1})
+    cred = mp.credential
     :ok = Limits.acquire(cred.id, %{rpm_limit: 1, concurrency_limit: nil})
 
     conn =
@@ -683,12 +716,10 @@ defmodule TokengateWeb.ProxyControllerTest do
     [model_provider] =
       Providers.list_model_providers(model.id) |> Enum.sort_by(& &1.priority)
 
-    {:ok, _credential} =
-      Providers.update_credential(model_provider.credential, %{receive_timeout_ms: 200})
-
     {:ok, _provider} =
       Providers.update_provider(model_provider.credential.provider, %{
-        base_url: "http://localhost:#{@port}/hang"
+        base_url: "http://localhost:#{@port}/hang",
+        receive_timeout_ms: 200
       })
   end
 
@@ -987,7 +1018,7 @@ defmodule TokengateWeb.ProxyControllerTest do
   end
 
   # Catalog-driven: a model_provider backed by a provider whose catalog key
-  # is "fireworks" must NEVER receive session_id (Fireworks 400s on unknown
+  # is "fireworks-ai" must NEVER receive session_id (Fireworks 400s on unknown
   # body fields) without any operator configuring omit_body_fields. The hint
   # narrowing is provider knowledge (Catalog.session_hint_fields/1), not
   # per-row data. The fixture's custom provider keeps its local test URL —
@@ -1023,7 +1054,7 @@ defmodule TokengateWeb.ProxyControllerTest do
   end
 
   # Points the model's only model_provider at a provider whose catalog key is
-  # "fireworks", keeping the fixture's local test URL. Builtin rows are
+  # "fireworks-ai", keeping the fixture's local test URL. Builtin rows are
   # identity-locked (they point at the real Fireworks endpoint), so the
   # builtin is dropped and the local provider row gets stamped with the key.
   defp make_provider_fireworks(model) do
@@ -1031,12 +1062,12 @@ defmodule TokengateWeb.ProxyControllerTest do
     credential = Repo.get!(Tokengate.Providers.Credential, mp.credential_id)
     provider = Repo.get!(Tokengate.Providers.Provider, credential.provider_id)
 
-    case Repo.get_by(Tokengate.Providers.Provider, key: "fireworks") do
+    case Repo.get_by(Tokengate.Providers.Provider, key: "fireworks-ai") do
       nil -> :ok
       builtin -> {:ok, _} = Repo.delete(builtin)
     end
 
-    {:ok, _} = Providers.update_provider(provider, %{key: "fireworks"})
+    {:ok, _} = Providers.update_provider(provider, %{key: "fireworks-ai"})
     Tokengate.Routing.Cache.invalidate_all()
   end
 
@@ -1146,26 +1177,25 @@ defmodule TokengateWeb.ProxyControllerTest do
     %{token: token, model: model} = proxy_fixture(%{})
 
     # Saturate the first credential's only concurrency slot
-    {:ok, cred1} =
-      Providers.update_credential(
-        hd(Providers.list_model_providers(model.id)).credential,
-        %{max_concurrent: 1}
-      )
+    mp1 = hd(Providers.list_model_providers(model.id))
+    {:ok, _provider1} = Providers.update_provider(mp1.credential.provider, %{max_concurrent: 1})
+    cred1 = mp1.credential
 
     :ok = Limits.acquire(cred1.id, %{rpm_limit: nil, concurrency_limit: 1})
 
-    # Second credential at lower priority (higher number)
+    # Second credential at lower priority (higher number), on a provider that
+    # still has headroom.
     {:ok, provider2} =
       Providers.create_provider(%{
         name: "Healthy #{u}",
-        base_url: "http://localhost:#{@port}"
+        base_url: "http://localhost:#{@port}",
+        max_concurrent: 5
       })
 
     {:ok, cred2} =
       Providers.create_credential(%{
         provider_id: provider2.id,
-        api_key_encrypted: "sk-healthy-#{u}",
-        max_concurrent: 5
+        api_key_encrypted: "sk-healthy-#{u}"
       })
 
     {:ok, _ap2} =
@@ -1192,7 +1222,8 @@ defmodule TokengateWeb.ProxyControllerTest do
     # Saturate the only credential's concurrency slot
     [mp] = Providers.list_model_providers(model.id)
 
-    {:ok, cred} = Providers.update_credential(mp.credential, %{max_concurrent: 1})
+    {:ok, _provider} = Providers.update_provider(mp.credential.provider, %{max_concurrent: 1})
+    cred = mp.credential
     :ok = Limits.acquire(cred.id, %{rpm_limit: nil, concurrency_limit: 1})
 
     conn =
@@ -1211,7 +1242,8 @@ defmodule TokengateWeb.ProxyControllerTest do
     # Saturate the only credential's concurrency slot → gate error
     [mp] = Providers.list_model_providers(model.id)
 
-    {:ok, cred} = Providers.update_credential(mp.credential, %{max_concurrent: 1})
+    {:ok, _provider} = Providers.update_provider(mp.credential.provider, %{max_concurrent: 1})
+    cred = mp.credential
     :ok = Limits.acquire(cred.id, %{rpm_limit: nil, concurrency_limit: 1})
 
     conn =
@@ -1724,4 +1756,170 @@ defmodule TokengateWeb.ProxyControllerTest do
     entry = Enum.find(models, &(&1["id"] == model.name))
     assert entry["model_type"] == "embedding"
   end
+
+  ## Las seis capacidades ruteadas por path #####################################
+  #
+  # One test per route: the gateway's public segment must land upstream as
+  # base_url + the path `ProviderPaths` resolves for that service, the body
+  # travels untouched, and the log row is labelled with the service key the
+  # Capacidades modal uses (not with the route's name).
+
+  test "POST /v1/rerank lands on base_url + /rerank", %{conn: conn} do
+    conn =
+      assert_service_route(conn, "/v1/rerank", "/rerank", "rerank", %{
+        "query" => "hola",
+        "documents" => ["uno", "dos"]
+      })
+
+    assert [%{"relevance_score" => 0.91}] = json_body(conn)["results"]
+  end
+
+  test "POST /v1/audio/transcriptions lands on base_url + /audio/transcriptions", %{conn: conn} do
+    conn =
+      assert_service_route(conn, "/v1/audio/transcriptions", "/audio/transcriptions", "stt", %{
+        "input" => "audio"
+      })
+
+    assert json_body(conn)["text"] == "hola mundo"
+  end
+
+  test "POST /v1/audio/speech lands on base_url + /audio/speech", %{conn: conn} do
+    conn =
+      assert_service_route(conn, "/v1/audio/speech", "/audio/speech", "tts", %{"input" => "hola"})
+
+    assert json_body(conn)["audio"] == "SUQzBAAAAAA"
+  end
+
+  test "POST /v1/videos lands on base_url + /videos", %{conn: conn} do
+    conn = assert_service_route(conn, "/v1/videos", "/videos", "video", %{"prompt" => "un gato"})
+
+    assert json_body(conn)["id"] == "video-job-1"
+  end
+
+  test "POST /v1/music/generations lands on base_url + /music/generations", %{conn: conn} do
+    conn =
+      assert_service_route(conn, "/v1/music/generations", "/music/generations", "music", %{
+        "prompt" => "cumbia"
+      })
+
+    assert json_body(conn)["id"] == "music-1"
+  end
+
+  test "POST /v1/images/generations lands on base_url + /images/generations", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture()
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/images/generations", %{"model" => model.name, "prompt" => "un gato"})
+
+    assert %{"data" => [%{"b64_json" => "aW1n"}]} = json_response(conn, 200)
+    assert_receive {:provider_request_path, "/images/generations"}
+  end
+
+  # An override saved from the Capacidades modal is the ONLY source of the
+  # upstream path: it wins over the generic default of the service.
+  test "an operator override on the provider row beats the generic default", %{conn: conn} do
+    %{token: token, model: model} =
+      proxy_fixture(%{path_overrides: %{"video" => "/custom/videos"}})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/videos", %{"model" => model.name, "prompt" => "un perro"})
+
+    assert json_response(conn, 200)
+    assert_receive {:provider_request_path, "/custom/videos"}
+  end
+
+  # The image API reports its tokens as `input_tokens`/`output_tokens`: they
+  # must drive the cost exactly like a chat usage object would.
+  test "images: the image API's token names drive the cost", %{conn: conn} do
+    %{
+      token: token,
+      model: model,
+      member: member,
+      model_provider: model_provider,
+      credit_subscription: credit_subscription
+    } = proxy_fixture(%{credit_units: 100})
+
+    {:ok, _} =
+      Providers.update_model_provider(model_provider, %{
+        input_cost_per_million: "1.00",
+        output_cost_per_million: "2.00"
+      })
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/images/generations", %{"model" => model.name, "prompt" => "un gato"})
+
+    assert json_response(conn, 200)
+
+    # 100 in × $1/M + 200 out × $2/M = 0.0005
+    assert get_resp_header(conn, "x-tokengate-cost") == ["0.000500"]
+    assert %{consumed_micro: 500} = Budgets.credit_spend(credit_subscription.id, member.user_id)
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert log.request_type == "image"
+    assert log.prompt_tokens == 100
+    assert log.completion_tokens == 200
+    assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000500"))
+  end
+
+  # A service whose upstream reports no usage at all (video answers with a job
+  # id): the request's own text is estimated, so manual pricing still books
+  # something — and with no manual pricing the cost is the honest $0.
+  test "video: no upstream usage falls back to the estimate over the request", %{conn: conn} do
+    %{token: token, model: model, member: member} = proxy_fixture()
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/videos", %{"model" => model.name, "prompt" => "un gato que baila"})
+
+    assert json_response(conn, 200)
+    assert get_resp_header(conn, "x-tokengate-cost") == ["0"]
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert log.request_type == "video"
+    assert log.prompt_tokens > 0
+    assert log.completion_tokens == 0
+  end
+
+  # Drives one of the six services end to end and returns the conn: the
+  # fixture's provider points at the test server, so the path the wire saw is
+  # what `ProviderPaths` resolved for the service.
+  defp assert_service_route(conn, gateway, upstream_path, request_type, body) do
+    %{token: token, model: model, member: member} = proxy_fixture()
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(gateway, Map.merge(%{"model" => model.name}, body))
+
+    assert json_response(conn, 200)
+
+    assert_receive {:provider_request_path, ^upstream_path}
+    assert_receive {:provider_request, received}
+
+    # The client's own fields travel untouched; the model is rewritten to the
+    # provider's own id.
+    Enum.each(body, fn {key, value} -> assert received[key] == value end)
+    assert received["model"] =~ "gpt-4o-real"
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert log.request_type == request_type
+    assert log.status_code == 200
+
+    conn
+  end
+
+  defp json_body(conn), do: json_response(conn, 200)
 end

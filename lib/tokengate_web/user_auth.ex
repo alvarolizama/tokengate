@@ -12,6 +12,8 @@ defmodule TokengateWeb.UserAuth do
     * `:require_authenticated` — redirects to `/login` when no current_user.
     * `:require_admin`         — redirects non-admins (or unauthenticated visitors)
       to `/login` or `/dashboard` respectively.
+    * `:require_service_supervisor` — the supervised-services area: requires a live
+      `service_supervisors` row (not a role). Non-supervisors go to `/dashboard`.
 
   All three also assign `:current_path` (the request path, refreshed on every
   navigation) so the sidebar can highlight the active link.
@@ -89,6 +91,44 @@ defmodule TokengateWeb.UserAuth do
 
       _non_admin ->
         {:halt, Phoenix.LiveView.redirect(socket, to: "/dashboard")}
+    end
+  end
+
+  # Gates the supervised-services area: access is granted **only** by a live
+  # `service_supervisors` row, never by the user's global role.
+  #
+  # Unauthenticated visitors go to `/login`; a signed-in user who does not
+  # supervise any service goes to `/dashboard` with an error flash. Because the
+  # check hits the database on every mount (including socket reconnects, where
+  # plugs don't run again), removing a user as supervisor revokes the access.
+  def on_mount(:require_service_supervisor, _params, session, socket) do
+    user = fetch_user(session)
+
+    socket =
+      socket
+      |> assign_new(:current_user, fn -> user end)
+      |> assign_new(:impersonator, fn -> fetch_impersonator(session) end)
+      |> assign_timezone(user)
+      |> attach_timezone_handler()
+      |> attach_path_handler()
+
+    case user do
+      nil ->
+        {:halt, Phoenix.LiveView.redirect(socket, to: "/login")}
+
+      %{id: user_id} = user ->
+        if Accounts.count_services_for_supervisor(user_id) > 0 do
+          track_presence(socket, user)
+          {:cont, socket}
+        else
+          {:halt,
+           socket
+           |> Phoenix.LiveView.put_flash(
+             :error,
+             "Solo los supervisores de servicios pueden acceder a esta sección."
+           )
+           |> Phoenix.LiveView.redirect(to: "/dashboard")}
+        end
     end
   end
 

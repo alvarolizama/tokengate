@@ -250,6 +250,25 @@ defmodule Tokengate.Accounts do
   end
 
   @doc """
+  Changeset (sin cambios) para el formulario de cambio de contraseña
+  propio: valida en submit vía `change_password_changeset/2`, aquí solo
+  prepara el `to_form`.
+  """
+  def change_user_password(%User{} = user, attrs \\ %{}) do
+    User.change_password_changeset(user, attrs)
+  end
+
+  @doc """
+  A user changes their OWN password: requires their current password
+  (re-authentication) and validates the complexity of the new one.
+  """
+  def update_user_password(%User{} = user, attrs) do
+    user
+    |> User.change_password_changeset(attrs)
+    |> Repo.update()
+  end
+
+  @doc """
   Finds a user by their Google ID.
   """
   def get_user_by_google_id(google_id) when is_binary(google_id) do
@@ -766,6 +785,10 @@ defmodule Tokengate.Accounts do
   Strategy: try the insert; if a unique-constraint violation fires on
   `[service_id, user_id]`, fetch and return the existing row. Any other
   changeset error is returned as `{:error, changeset}`.
+
+  On success it broadcasts `{:supervisor_added, service_id}` on the user's
+  topic, so a page the supervisor already has open picks up the new service
+  without a reload.
   """
   def add_service_supervisor(service_id, user_id)
       when is_binary(service_id) and is_binary(user_id) do
@@ -774,6 +797,7 @@ defmodule Tokengate.Accounts do
     |> Repo.insert()
     |> case do
       {:ok, %ServiceSupervisor{} = supervisor} ->
+        broadcast_supervisor_change(user_id, {:supervisor_added, service_id})
         {:ok, supervisor}
 
       {:error, changeset} ->
@@ -788,6 +812,12 @@ defmodule Tokengate.Accounts do
   @doc """
   Removes a supervisor (user) from a service. Idempotent: returns
   `{:ok, :not_found}` if the pair doesn't exist, `{:ok, :removed}` otherwise.
+
+  Removing the row is what revokes the supervisor's access to that service's
+  read-only stats — so on an actual removal it broadcasts
+  `{:supervisor_removed, service_id}` on the user's topic. Any LiveView of the
+  supervised area for that user reacts in the same instant instead of waiting
+  for the next navigation or socket reconnect.
   """
   def remove_service_supervisor(service_id, user_id)
       when is_binary(service_id) and is_binary(user_id) do
@@ -798,10 +828,50 @@ defmodule Tokengate.Accounts do
       %ServiceSupervisor{} = supervisor ->
         Repo.delete(supervisor)
         |> case do
-          {:ok, _} -> {:ok, :removed}
-          {:error, changeset} -> {:error, changeset}
+          {:ok, _} ->
+            broadcast_supervisor_change(user_id, {:supervisor_removed, service_id})
+            {:ok, :removed}
+
+          {:error, changeset} ->
+            {:error, changeset}
         end
     end
+  end
+
+  @doc """
+  PubSub topic carrying the supervision changes of one user.
+
+  Both events — `{:supervisor_added, service_id}` and
+  `{:supervisor_removed, service_id}` — are published here, so the supervised
+  area has a single subscription point per user.
+  """
+  def supervised_services_topic(user_id) when is_binary(user_id),
+    do: "supervised_services:" <> user_id
+
+  @doc """
+  Whether the user supervises that service **right now**.
+
+  This is the single source of truth for the read-only supervised area: access
+  is granted by the `service_supervisors` row, never by the user's global role,
+  so removing the row removes the access on the next mount (and in-flight
+  views react through the PubSub broadcast).
+  """
+  def supervises_service?(user_id, service_id)
+      when is_binary(user_id) and is_binary(service_id) do
+    Repo.exists?(
+      from ss in ServiceSupervisor,
+        where: ss.user_id == ^user_id and ss.service_id == ^service_id
+    )
+  end
+
+  def supervises_service?(_, _), do: false
+
+  defp broadcast_supervisor_change(user_id, event) do
+    Phoenix.PubSub.broadcast(
+      Tokengate.PubSub,
+      supervised_services_topic(user_id),
+      event
+    )
   end
 
   @doc """
@@ -817,6 +887,21 @@ defmodule Tokengate.Accounts do
         preload: [:api_key]
     )
   end
+
+  @doc """
+  Number of services a user supervises. Lightweight count (no joins, no
+  preloads) used where only "does this user supervise anything?" matters —
+  e.g. the sidebar entry for the read-only supervised view.
+  """
+  def count_services_for_supervisor(user_id) when is_binary(user_id) do
+    Repo.one(
+      from ss in ServiceSupervisor,
+        where: ss.user_id == ^user_id,
+        select: count(ss.id)
+    )
+  end
+
+  def count_services_for_supervisor(_), do: 0
 
   @doc """
   Returns the user_ids (binary_ids) that supervise the given service.

@@ -6,7 +6,8 @@ defmodule Tokengate.ProvidersTest do
     Provider,
     Credential,
     Model,
-    ModelProvider
+    ModelProvider,
+    ProviderLimits
   }
 
   # ---------------------------------------------------------------------------
@@ -215,6 +216,77 @@ defmodule Tokengate.ProvidersTest do
       assert updated.base_url == "https://api.anthropic.com"
     end
 
+    test "the operational limits live on the provider" do
+      provider = provider_fixture()
+
+      {:ok, updated} =
+        Providers.update_provider(provider, %{
+          max_rpm: 500,
+          max_concurrent: 10,
+          max_concurrent_per_user: 3,
+          receive_timeout_ms: 90_000
+        })
+
+      assert updated.max_rpm == 500
+      assert updated.max_concurrent == 10
+      assert updated.max_concurrent_per_user == 3
+      assert updated.receive_timeout_ms == 90_000
+    end
+
+    test "a blank limit means 'no limit' (nil), never 0" do
+      provider = provider_fixture()
+      {:ok, with_limits} = Providers.update_provider(provider, %{max_rpm: 500})
+
+      # Blanking the field clears the limit: Ecto casts "" to nil and
+      # `validate_number` skips nil, so "no limit" is expressed as nil.
+      {:ok, cleared} = Providers.update_provider(with_limits, %{max_rpm: ""})
+
+      assert cleared.max_rpm == nil
+    end
+
+    test "a 0 limit is rejected: it would block every request" do
+      provider = provider_fixture()
+
+      {:error, changeset} =
+        Providers.update_provider(provider, %{max_rpm: 0, max_concurrent: 0})
+
+      assert "debe ser mayor a 0" in errors_on(changeset).max_rpm
+      assert "debe ser mayor a 0" in errors_on(changeset).max_concurrent
+    end
+
+    test "a builtin keeps its catalog identity while its limits stay editable" do
+      unique = System.unique_integer([:positive])
+
+      # Builtins are materialized by CatalogSync with a raw change — the
+      # operator changeset intentionally locks identity, so it cannot create
+      # one (there is nothing to lock yet).
+      {:ok, provider} =
+        %Provider{}
+        |> Ecto.Changeset.change(
+          name: "Catalog Prov #{unique}",
+          base_url: "https://catalog-#{unique}.example.com/v1",
+          source: "builtin",
+          key: "catalog-prov-#{unique}",
+          dialect: "openai",
+          capabilities: ["llm"],
+          status: "active"
+        )
+        |> Tokengate.Repo.insert()
+
+      {:ok, updated} =
+        Providers.update_provider(provider, %{
+          name: "Renamed",
+          base_url: "https://evil.example.com",
+          max_rpm: 42
+        })
+
+      # Identity is catalog-owned (boot sync would overwrite it anyway)...
+      assert updated.name == provider.name
+      assert updated.base_url == provider.base_url
+      # ...but the throttle belongs to the operator.
+      assert updated.max_rpm == 42
+    end
+
     test "create_provider/1 defaults status to active" do
       provider = provider_fixture()
       assert provider.status == "active"
@@ -269,6 +341,28 @@ defmodule Tokengate.ProvidersTest do
   end
 
   # ---------------------------------------------------------------------------
+  # Provider limits
+  # ---------------------------------------------------------------------------
+
+  describe "provider limits" do
+    test "the receive timeout is the provider's, falling back to the global default" do
+      provider = provider_fixture()
+      credential_fixture(provider)
+
+      # NULL on the provider = whatever the global config says (120s shipped).
+      assert ProviderLimits.receive_timeout_ms(provider) ==
+               Application.get_env(:tokengate, :proxy, [])[:receive_timeout_ms]
+
+      {:ok, with_timeout} = Providers.update_provider(provider, %{receive_timeout_ms: 45_000})
+      assert ProviderLimits.receive_timeout_ms(with_timeout) == 45_000
+    end
+
+    test "the shipped global default is 120s" do
+      assert Application.get_env(:tokengate, :proxy, [])[:receive_timeout_ms] == 120_000
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Credential tests
   # ---------------------------------------------------------------------------
 
@@ -277,7 +371,6 @@ defmodule Tokengate.ProvidersTest do
       credential = credential_fixture()
       assert %Credential{} = credential
       assert credential.status == "active"
-      assert credential.max_rpm == nil
     end
 
     test "create_credential/1 with invalid status" do
@@ -291,10 +384,23 @@ defmodule Tokengate.ProvidersTest do
       assert "is invalid" in errors_on(changeset).status
     end
 
-    test "create_credential/1 with max_rpm and max_concurrent" do
-      credential = credential_fixture(nil, %{max_rpm: 500, max_concurrent: 10})
-      assert credential.max_rpm == 500
-      assert credential.max_concurrent == 10
+    test "a credential carries no limits of its own — it inherits the provider's" do
+      provider = provider_fixture()
+
+      {:ok, _provider} =
+        Providers.update_provider(provider, %{max_rpm: 500, max_concurrent: 10})
+
+      credential = credential_fixture(provider, %{max_rpm: 500, max_concurrent: 10})
+
+      # Per-key limit attrs are not part of the credential schema anymore: the
+      # proxy reads them from `credential.provider`, so every key of a provider
+      # shares one throttle.
+      refute Map.has_key?(credential, :max_rpm)
+      refute Map.has_key?(credential, :max_concurrent)
+
+      loaded = credential.id |> Providers.get_credential!() |> Tokengate.Repo.preload(:provider)
+      assert loaded.provider.max_rpm == 500
+      assert loaded.provider.max_concurrent == 10
     end
   end
 

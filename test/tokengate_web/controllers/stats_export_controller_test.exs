@@ -180,6 +180,109 @@ defmodule TokengateWeb.StatsExportControllerTest do
     assert get(conn, ~p"/stats/export?type=providers&period=90d").resp_body =~ old_provider.name
   end
 
+  # Un servicio (subject_type "service") con un log propio.
+  defp service_with_log(opts \\ []) do
+    u = unique()
+
+    {:ok, service} = Accounts.create_service(%{name: "Svc #{u}"})
+
+    {:ok, provider} =
+      Providers.create_provider(%{name: "PS #{u}", base_url: "http://localhost:1"})
+
+    {:ok, _log} =
+      Logs.log_request(%{
+        subject_type: "service",
+        service_id: service.id,
+        provider_id: provider.id,
+        model_requested: "gpt-4o",
+        model_responded: "gpt-4o",
+        status_code: 200,
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        provider_cost_usd: "0.005",
+        latency_ms: 42,
+        inserted_at:
+          Keyword.get(opts, :inserted_at) || DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+    %{service: service}
+  end
+
+  test "services export: una fila por servicio, y sólo para admins", %{conn: conn} do
+    %{service: service} = service_with_log()
+    %{user: admin, password: admin_password} = register("admin")
+
+    conn =
+      conn
+      |> login(admin, admin_password)
+      |> get(~p"/stats/export?type=services&period=today")
+
+    body = response(conn, 200)
+
+    assert body =~ "servicio,requests,costo,tokens_in,tokens_out,tps,latencia_ms"
+
+    row = body |> String.split("\n") |> Enum.find(&String.contains?(&1, service.name))
+    [_, requests, cost, tin, tout, tps, latency] = String.split(row, ",")
+
+    assert requests == "1"
+    assert cost == "0.005000"
+    assert tin == "100"
+    assert tout == "50"
+    # 50 tokens / 42 ms
+    assert tps == "1190.5"
+    assert latency == "42"
+
+    [disposition] = get_resp_header(conn, "content-disposition")
+    assert disposition =~ "estadisticas_servicios_"
+    assert disposition =~ ".csv"
+
+    # La pestaña Servicios es admin-only y `breakdown_by_service/1` no sabe
+    # filtrar por scope de miembro: un no-admin no baja el ranking completo.
+    %{user: plain, password: plain_password} = register("user")
+
+    forbidden_conn =
+      build_conn()
+      |> login(plain, plain_password)
+      |> get(~p"/stats/export?type=services&period=today")
+
+    assert response(forbidden_conn, 403) =~ "no autorizado"
+  end
+
+  test "services export: celda de latencia vacía cuando no hay muestras", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    u = unique()
+    {:ok, service} = Accounts.create_service(%{name: "NoLat #{u}"})
+
+    {:ok, provider} =
+      Providers.create_provider(%{name: "PN #{u}", base_url: "http://localhost:1"})
+
+    # Un log de servicio sin latencia registrada: 0 sería un dato falso.
+    {:ok, _} =
+      Logs.log_request(%{
+        subject_type: "service",
+        service_id: service.id,
+        provider_id: provider.id,
+        model_requested: "gpt-4o",
+        status_code: 200,
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        provider_cost_usd: "0.001",
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+    conn =
+      conn
+      |> login(admin, password)
+      |> get(~p"/stats/export?type=services&period=today")
+
+    row =
+      response(conn, 200) |> String.split("\n") |> Enum.find(&String.contains?(&1, service.name))
+
+    refute row == nil
+    assert String.ends_with?(row, ",")
+  end
+
   test "logs export neutralizes CSV formula injection in client_agent", %{conn: conn} do
     u = unique()
 

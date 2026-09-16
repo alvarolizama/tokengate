@@ -261,6 +261,49 @@ defmodule Tokengate.AccountsTest do
   end
 
   # ---------------------------------------------------------------------------
+  # User changes own password
+  # ---------------------------------------------------------------------------
+
+  describe "update_user_password/2" do
+    test "changes the password with the correct current password" do
+      user = user_fixture(%{"password" => "OldPassword123"})
+
+      assert {:ok, %User{}} =
+               Accounts.update_user_password(user, %{
+                 "current_password" => "OldPassword123",
+                 "password" => "NewPassword456"
+               })
+
+      assert {:ok, _} = Accounts.authenticate_user(user.email, "NewPassword456")
+      assert {:error, :unauthorized} = Accounts.authenticate_user(user.email, "OldPassword123")
+    end
+
+    test "rejects a wrong current password" do
+      user = user_fixture(%{"password" => "OldPassword123"})
+
+      assert {:error, changeset} =
+               Accounts.update_user_password(user, %{
+                 "current_password" => "WrongPassword789",
+                 "password" => "NewPassword456"
+               })
+
+      assert "no es correcta" in errors_on(changeset).current_password
+    end
+
+    test "validates the complexity of the new password" do
+      user = user_fixture(%{"password" => "OldPassword123"})
+
+      assert {:error, changeset} =
+               Accounts.update_user_password(user, %{
+                 "current_password" => "OldPassword123",
+                 "password" => "short1"
+               })
+
+      assert "should be at least 12 character(s)" in errors_on(changeset).password
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Group member + API key creation (atomic)
   # ---------------------------------------------------------------------------
 
@@ -611,6 +654,70 @@ defmodule Tokengate.AccountsTest do
       user = user_fixture()
 
       assert {:ok, :not_found} = Accounts.remove_service_supervisor(service.id, user.id)
+    end
+
+    # The supervision row is the ONLY thing that grants the read-only
+    # supervised area, so its presence/absence is the access check.
+    test "supervises_service?/2 mirrors the row" do
+      service = service_fixture()
+      other = service_fixture()
+      user = user_fixture()
+
+      refute Accounts.supervises_service?(user.id, service.id)
+
+      {:ok, _} = Accounts.add_service_supervisor(service.id, user.id)
+      assert Accounts.supervises_service?(user.id, service.id)
+      refute Accounts.supervises_service?(user.id, other.id)
+
+      {:ok, :removed} = Accounts.remove_service_supervisor(service.id, user.id)
+      refute Accounts.supervises_service?(user.id, service.id)
+    end
+
+    test "supervises_service?/2 is false for nil args instead of raising" do
+      service = service_fixture()
+
+      refute Accounts.supervises_service?(nil, service.id)
+      refute Accounts.supervises_service?("some-user", nil)
+      refute Accounts.supervises_service?(nil, nil)
+    end
+
+    test "add_service_supervisor/2 broadcasts {:supervisor_added, service_id}" do
+      service = service_fixture()
+      user = user_fixture()
+
+      Phoenix.PubSub.subscribe(Tokengate.PubSub, Accounts.supervised_services_topic(user.id))
+
+      {:ok, _} = Accounts.add_service_supervisor(service.id, user.id)
+
+      assert_receive {:supervisor_added, service_id}
+      assert service_id == service.id
+
+      # Idempotent re-add (the row already exists) is not a new assignment,
+      # so it does not wake anyone up.
+      {:ok, _} = Accounts.add_service_supervisor(service.id, user.id)
+      refute_receive {:supervisor_added, _}, 50
+    end
+
+    test "remove_service_supervisor/2 broadcasts {:supervisor_removed, service_id}" do
+      service = service_fixture()
+      user = user_fixture()
+
+      {:ok, _} = Accounts.add_service_supervisor(service.id, user.id)
+      Phoenix.PubSub.subscribe(Tokengate.PubSub, Accounts.supervised_services_topic(user.id))
+
+      {:ok, :removed} = Accounts.remove_service_supervisor(service.id, user.id)
+
+      assert_receive {:supervisor_removed, service_id}
+      assert service_id == service.id
+
+      # Removing a pair that is already gone changes nothing.
+      {:ok, :not_found} = Accounts.remove_service_supervisor(service.id, user.id)
+      refute_receive {:supervisor_removed, _}, 50
+    end
+
+    test "supervised_services_topic/1 is per user" do
+      refute Accounts.supervised_services_topic("a") == Accounts.supervised_services_topic("b")
+      assert Accounts.supervised_services_topic("a") == "supervised_services:a"
     end
 
     test "service_supervisor_ids/1 returns the supervising user ids" do

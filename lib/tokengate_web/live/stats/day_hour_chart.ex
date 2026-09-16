@@ -184,6 +184,7 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
               "w-2 h-2 rounded-sm shrink-0",
               Stats.provider_legend_color(entry.provider_name, @legend)
             ]} />
+            <Stats.provider_logo logo_url={entry.provider_logo_url} />
             <span
               class="text-[10px] text-base-content/60 truncate max-w-[110px]"
               title={entry.provider_name}
@@ -240,6 +241,7 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
     Enum.map(row.providers, fn provider ->
       %{
         provider_name: provider.provider_name,
+        provider_logo_url: Map.get(provider, :provider_logo_url),
         height_pct: Float.round(provider.requests / total * 100, 1),
         color: Stats.provider_legend_color(provider.provider_name, legend)
       }

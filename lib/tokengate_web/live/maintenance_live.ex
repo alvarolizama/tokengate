@@ -17,12 +17,18 @@ defmodule TokengateWeb.MaintenanceLive do
   alias Tokengate.Budgets.Manager, as: Budgets
   alias Tokengate.GlobalSettings
   alias Tokengate.Logs
+  alias Tokengate.Providers
+  alias Tokengate.Providers.CatalogRefreshWorker
   alias Tokengate.Repo
   alias Tokengate.Routing.StickyTracker
 
   @impl true
   def mount(_params, _session, socket) do
     user = socket.assigns[:current_user]
+
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(Tokengate.PubSub, CatalogRefreshWorker.topic())
+    end
 
     socket =
       socket
@@ -41,10 +47,26 @@ defmodule TokengateWeb.MaintenanceLive do
       |> assign(:users, Accounts.list_users())
       |> assign_global_settings()
       |> assign_exemptions()
+      |> assign_catalog()
       |> require_admin_hook()
 
     {:ok, socket}
   end
+
+  # Catalog state for the "models.dev" card: last refresh outcome (including
+  # base-URL drift warnings) and whether one is queued/running.
+  defp assign_catalog(socket) do
+    state = Providers.catalog_sync_state()
+
+    socket
+    |> assign(:catalog_state, state)
+    |> assign(:catalog_warnings, (state && state.warnings) || [])
+    |> assign(:catalog_refreshing, Providers.catalog_refresh_in_flight?())
+    |> assign(:catalog_active_count, Providers.count_catalog_providers("active"))
+    |> assign(:catalog_stale_count, Providers.count_catalog_providers("stale"))
+  end
+
+  defp fmt_dt(%DateTime{} = dt), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M UTC")
 
   defp require_admin_hook(socket) do
     attach_hook(socket, :require_admin, :handle_event, fn _event, _params, socket ->
@@ -112,6 +134,31 @@ defmodule TokengateWeb.MaintenanceLive do
      |> assign(:confirm_sticky_reset, false)
      |> assign(:sticky_count, 0)
      |> put_flash(:info, "Sticky sessions reiniciadas.")}
+  end
+
+  # Enqueues the models.dev refresh. The download and the mirror upsert run in
+  # Oban (with retries), so the page only flips the button to its busy state;
+  # the worker broadcasts when it finishes and the card re-renders with the
+  # outcome.
+  @impl true
+  def handle_event("refresh_catalog", _params, socket) do
+    case Providers.request_catalog_refresh() do
+      {:ok, _job} ->
+        Tokengate.Auditing.audit(
+          socket.assigns.current_user,
+          "settings.catalog_refresh",
+          "catalog_providers",
+          nil
+        )
+
+        {:noreply,
+         socket
+         |> assign(:catalog_refreshing, true)
+         |> put_flash(:info, "Actualización del catálogo encolada.")}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "No se pudo encolar la actualización.")}
+    end
   end
 
   @impl true
@@ -221,6 +268,18 @@ defmodule TokengateWeb.MaintenanceLive do
     Exemptions.remove(id)
     {:noreply, socket |> assign_exemptions() |> put_flash(:info, "Exención eliminada.")}
   end
+
+  ## Catalog refresh notifications ------------------------------------------
+
+  @impl true
+  def handle_info({:catalog_refresh_done}, socket) do
+    {:noreply,
+     socket
+     |> assign_catalog()
+     |> put_flash(:info, "Catálogo de proveedores actualizado.")}
+  end
+
+  def handle_info(_msg, socket), do: {:noreply, socket}
 
   ## Render -----------------------------------------------------------------
 
@@ -464,6 +523,67 @@ defmodule TokengateWeb.MaintenanceLive do
                   Reiniciar
                 </button>
               </div>
+            </div>
+
+            <div class="divider my-2"></div>
+
+            <%!-- External data, not user data: the refresh upserts the mirror
+                 from models.dev and re-materializes provider identity. Nothing
+                 is deleted, so it belongs in the caution zone. --%>
+            <div class="flex items-start justify-between gap-4" id="catalog-refresh-card">
+              <div>
+                <h3 class="font-semibold text-base-content">Catálogo de proveedores (models.dev)</h3>
+                <p class="text-sm text-base-content/60">
+                  Vuelve a bajar el catálogo de proveedores y actualiza nombre, base URL, docs y logo
+                  de los builtins. No toca credenciales, modelos, routing ni proveedores custom, y no
+                  borra nada: lo que ya no está upstream se marca como obsoleto.
+                  <span :if={@catalog_state && @catalog_state.synced_at}>
+                    Última actualización:
+                    <span class="font-mono">{fmt_dt(@catalog_state.synced_at)}</span>
+                    ({@catalog_state.source || "—"}).
+                  </span>
+                  <span :if={@catalog_state && @catalog_state.error} class="text-error">
+                    Último intento falló: {@catalog_state.error}
+                  </span>
+                </p>
+
+                <ul
+                  :if={@catalog_warnings != []}
+                  class="text-xs text-warning mt-1 space-y-0.5"
+                  id="catalog-drift-warnings"
+                >
+                  <li :for={warning <- @catalog_warnings}>
+                    <span :if={warning["reason"] == "base_url_changed"}>
+                      <span class="font-mono">{warning["key"]}</span>
+                      cambió su base URL ({warning["from"]} → {warning["to"]}) y tiene
+                      <span class="font-mono">{warning["credentials"]}</span>
+                      credencial(es) en uso.
+                    </span>
+                    <span :if={warning["reason"] == "already_stale"}>
+                      <span class="font-mono">{warning["key"]}</span>
+                      ya no aparece en models.dev y tiene
+                      <span class="font-mono">{warning["credentials"]}</span>
+                      credencial(es) en uso (no se ha borrado nada).
+                    </span>
+                  </li>
+                </ul>
+
+                <p class="text-xs text-base-content/40 mt-1">
+                  Proveedores en el catálogo: <span class="font-mono">{@catalog_active_count}</span>
+                  activos, <span class="font-mono">{@catalog_stale_count}</span>
+                  obsoletos.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                phx-click="refresh_catalog"
+                class="btn btn-warning btn-outline btn-sm shrink-0"
+                id="refresh-catalog-btn"
+                disabled={@catalog_refreshing}
+              >
+                {if @catalog_refreshing, do: "Actualizando…", else: "Actualizar ahora"}
+              </button>
             </div>
           </div>
         </div>

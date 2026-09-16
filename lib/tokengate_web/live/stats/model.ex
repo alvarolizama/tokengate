@@ -201,6 +201,7 @@ defmodule TokengateWeb.StatsLive.Model do
                       class="flex items-center gap-1.5"
                     >
                       <span class={["w-2 h-2 rounded-sm shrink-0", Stats.sparkline_color(idx)]} />
+                      <Stats.provider_logo logo_url={Map.get(pivoted.logos, label)} />
                       <span class="text-[10px] truncate flex-1">{label}</span>
                       <span class="text-[9px] text-base-content/50 shrink-0">
                         {Stats.format_number(
@@ -329,9 +330,12 @@ defmodule TokengateWeb.StatsLive.Model do
                     >
                       <td class="text-base-content/60">{idx}</td>
                       <td>
-                        <div class="font-medium">
-                          {row.provider_name}{if row.provider_model,
-                            do: " · #{row.provider_model}"}
+                        <div class="flex items-center gap-2">
+                          <Stats.provider_logo logo_url={row.provider_logo_url} />
+                          <div class="font-medium">
+                            {row.provider_name}{if row.provider_model,
+                              do: " · #{row.provider_model}"}
+                          </div>
                         </div>
                         <div
                           :if={row.credential_name}

@@ -1459,6 +1459,9 @@ defmodule Tokengate.Metrics.RollupTest do
       assert service_row.service_id == service.id
       assert service_row.request_count == 1
       assert Decimal.equal?(service_row.cost_usd, Decimal.new("0.500000"))
+      # Sin latencia registrada la media es nil (celda vacía en el CSV),
+      # nunca un 0 que se leería como "instantáneo".
+      assert service_row.avg_latency_ms == nil
 
       # Los grupos que lo usan.
       assert [group_row] = Rollup.breakdown_by_group(from: from, provider_id: provider_a.id)
@@ -1494,6 +1497,107 @@ defmodule Tokengate.Metrics.RollupTest do
       assert [group_entry] = row.groups
       assert group_entry.id == group.id
       assert group_entry.name == group.name
+    end
+  end
+
+  # ---------------------------------------------------------------------
+  # service_summaries/2
+  # ---------------------------------------------------------------------
+
+  describe "service_summaries/2" do
+    test "agrega por service_id e incluye el conteo de errores" do
+      {:ok, service} = Accounts.create_service(%{name: "svc-summary-#{System.unique_integer()}"})
+      {:ok, other} = Accounts.create_service(%{name: "svc-otro-#{System.unique_integer()}"})
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      # 2 OK + 1 error para el servicio, uno ajeno que NO debe contarse.
+      for _ <- 1..2 do
+        {:ok, _} =
+          Logs.log_request(%{
+            subject_type: "service",
+            service_id: service.id,
+            model_requested: "gpt-4o-svc",
+            status_code: 200,
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            cache_read_tokens: 10,
+            cost_usd: Decimal.new("0.500000"),
+            latency_ms: 300,
+            inserted_at: now
+          })
+      end
+
+      {:ok, _} =
+        Logs.log_request(%{
+          subject_type: "service",
+          service_id: service.id,
+          model_requested: "gpt-4o-svc",
+          status_code: 503,
+          prompt_tokens: 10,
+          completion_tokens: 5,
+          cost_usd: Decimal.new("0.250000"),
+          latency_ms: 700,
+          inserted_at: now
+        })
+
+      {:ok, _} =
+        Logs.log_request(%{
+          subject_type: "service",
+          service_id: other.id,
+          model_requested: "gpt-4o-svc",
+          status_code: 200,
+          cost_usd: Decimal.new("9.990000"),
+          inserted_at: now
+        })
+
+      summaries = Rollup.service_summaries([service.id], from: DateTime.add(now, -3600, :second))
+
+      assert Map.keys(summaries) == [service.id]
+      row = summaries[service.id]
+
+      assert row.request_count == 3
+      assert row.error_count == 1
+      assert Decimal.equal?(row.cost_usd, Decimal.new("1.250000"))
+      assert row.prompt_tokens == 210
+      assert row.completion_tokens == 105
+      assert row.cache_read_tokens == 20
+      # Media por request con latencia registrada: (300+300+700)/3.
+      assert row.avg_latency_ms == 433.3
+    end
+
+    test "los servicios sin tráfico no aparecen en el mapa" do
+      {:ok, service} = Accounts.create_service(%{name: "svc-mudo-#{System.unique_integer()}"})
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      assert Rollup.service_summaries([service.id], from: DateTime.add(now, -3600, :second)) ==
+               %{}
+    end
+
+    test "lista vacía devuelve mapa vacío sin tocar la DB" do
+      assert Rollup.service_summaries([]) == %{}
+    end
+
+    test "la ventana excluye lo anterior al from" do
+      {:ok, service} = Accounts.create_service(%{name: "svc-window-#{System.unique_integer()}"})
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      {:ok, _} =
+        Logs.log_request(%{
+          subject_type: "service",
+          service_id: service.id,
+          model_requested: "gpt-4o-svc",
+          status_code: 200,
+          cost_usd: Decimal.new("1.000000"),
+          inserted_at: DateTime.add(now, -10, :day)
+        })
+
+      summaries = Rollup.service_summaries([service.id], from: DateTime.add(now, -1, :day))
+      assert summaries == %{}
+
+      summaries = Rollup.service_summaries([service.id], from: DateTime.add(now, -30, :day))
+      assert summaries[service.id].request_count == 1
     end
   end
 end

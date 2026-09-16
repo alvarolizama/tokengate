@@ -34,7 +34,13 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
 
   @impl true
   def chat_completion(provider, credential, payload, opts \\ []) do
-    post_json(provider, credential, "/chat/completions", payload, opts)
+    post_json(
+      provider,
+      credential,
+      service_path(provider, :chat),
+      payload,
+      opts
+    )
   end
 
   @doc """
@@ -47,7 +53,13 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   """
   @impl true
   def embeddings(provider, credential, payload, opts \\ []) do
-    post_json(provider, credential, "/embeddings", payload, opts)
+    post_json(
+      provider,
+      credential,
+      service_path(provider, :embeddings),
+      payload,
+      opts
+    )
   end
 
   @doc """
@@ -58,6 +70,23 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   @impl true
   def list_embedding_models(provider, credential) do
     list_models_at(provider, credential, "/models")
+  end
+
+  @doc """
+  Posts a passthrough request to one of the provider's non-chat services:
+  `:rerank`, `:stt` (`/audio/transcriptions`), `:tts` (`/audio/speech`),
+  `:image`, `:video` or `:music`.
+
+  Same rule as embeddings: the payload is forwarded exactly as received and
+  the upstream response is returned untouched. The only thing this adapter
+  contributes is the URL — `base_url` + the path `ProviderPaths` resolves
+  for that service (operator override → catalog hardcode → generic
+  OpenAI-compatible default), or an absolute URL from any of those tiers,
+  used as-is.
+  """
+  @impl true
+  def service_post(provider, credential, service, payload, opts \\ []) do
+    post_json(provider, credential, service_path(provider, service), payload, opts)
   end
 
   @doc """
@@ -84,15 +113,10 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   end
 
   # Shared non-streaming POST transport: identical headers, timeout and
-  # error classification regardless of the endpoint segment. A custom
-  # provider may pin the full URL per service (chat_url/embeddings_url);
-  # nil falls through to base_url + path.
+  # error classification regardless of the endpoint segment. The URL is
+  # base_url + the service path (see service_path/3).
   defp post_json(provider, credential, path, payload, opts) do
-    url =
-      case override_url(provider, path) do
-        nil -> build_url(provider, path)
-        full -> full
-      end
+    url = build_url(provider, path)
 
     api_key = Map.get(credential, :api_key_encrypted) || Map.get(credential, "api_key_encrypted")
     receive_timeout = Keyword.get(opts, :receive_timeout, @default_receive_timeout)
@@ -359,26 +383,28 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   ## URL & header helpers #####################################################
 
   defp chat_completions_url(provider) do
-    override_url(provider, "/chat/completions") || base_url(provider) <> "/chat/completions"
+    build_url(provider, service_path(provider, :chat))
   end
 
   defp models_url(provider) do
-    override_url(provider, "/models") || base_url(provider) <> "/models"
+    build_url(provider, service_path(provider, :models))
   end
 
-  # Per-service full-URL override for custom providers (nil = none).
-  # "/chat/completions" -> chat_url, "/models" -> models_url,
-  # "/embeddings" -> embeddings_url; any other path derives from base_url.
-  defp override_url(provider, "/chat/completions"),
-    do: Map.get(provider, :chat_url) || Map.get(provider, "chat_url")
+  # Per-service path, resolved in three tiers (`ProviderPaths`): the
+  # provider's own override, the catalog code override, then the generic
+  # OpenAI-compatible default. Identity is code, not row data, so an exotic
+  # endpoint travels with the release while the operator can still point a
+  # service at a different path without one.
+  defp service_path(provider, service) do
+    Tokengate.Providers.ProviderPaths.resolve(provider, service) || default_service_path(service)
+  end
 
-  defp override_url(provider, "/models"),
-    do: Map.get(provider, :models_url) || Map.get(provider, "models_url")
-
-  defp override_url(provider, "/embeddings"),
-    do: Map.get(provider, :embeddings_url) || Map.get(provider, "embeddings_url")
-
-  defp override_url(_provider, _path), do: nil
+  # Last resort for a service outside the `ProviderPaths` vocabulary: the
+  # adapter still books a sane URL instead of crashing on nil.
+  defp default_service_path(:chat), do: "/chat/completions"
+  defp default_service_path(:models), do: "/models"
+  defp default_service_path(:embeddings), do: "/embeddings"
+  defp default_service_path(_service), do: "/"
 
   defp base_url(provider) do
     (Map.get(provider, :base_url) || Map.get(provider, "base_url") || "")
@@ -386,8 +412,9 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   end
 
   # Builds a URL from a provider and a path segment. If the path is already
-  # an absolute URL (https://...), returns it directly — this lets
-  # embedding_base_url override the full endpoint when it differs from base_url.
+  # an absolute URL (https://...), returns it directly — a provider whose
+  # service lives on another host declares it that way in
+  # `Catalog.@customizations` (`:paths`).
   defp build_url(_provider, "http://" <> _ = url), do: url
   defp build_url(_provider, "https://" <> _ = url), do: url
   defp build_url(provider, path), do: base_url(provider) <> path

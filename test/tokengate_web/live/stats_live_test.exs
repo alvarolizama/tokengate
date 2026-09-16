@@ -1595,17 +1595,17 @@ defmodule TokengateWeb.StatsLiveTest do
       # Podio: medalla (icono) en 1º/2º/3º con su color; el 1º (más requests) manda.
       assert has_element?(
                view,
-               "#provider-ranking-row-#{a.provider.id} span[aria-label='Puesto 1'][class*='amber'] .hero-trophy"
+               "#provider-ranking-row-#{a.provider.id} span[aria-label='Puesto 1'][class*='warning'] .hero-trophy"
              )
 
       assert has_element?(
                view,
-               "#provider-ranking-row-#{b.provider.id} span[aria-label='Puesto 2'][class*='slate'] .hero-trophy"
+               "#provider-ranking-row-#{b.provider.id} span[aria-label='Puesto 2'][class*='base-300'] .hero-trophy"
              )
 
       assert has_element?(
                view,
-               "#provider-ranking-row-#{c.provider.id} span[aria-label='Puesto 3'][class*='orange'] .hero-trophy"
+               "#provider-ranking-row-#{c.provider.id} span[aria-label='Puesto 3'][class*='secondary'] .hero-trophy"
              )
 
       # El nombre abre el interior del proveedor arrastrando el período.
@@ -1826,7 +1826,7 @@ defmodule TokengateWeb.StatsLiveTest do
       # requests, así que va 1º con medalla de oro.
       assert has_element?(
                view,
-               "#model-ranking-row-#{a.model.id} span[aria-label='Puesto 1'][class*='amber'] .hero-trophy"
+               "#model-ranking-row-#{a.model.id} span[aria-label='Puesto 1'][class*='warning'] .hero-trophy"
              )
 
       # El nombre enlaza al detalle propio del modelo.

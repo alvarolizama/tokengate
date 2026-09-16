@@ -294,15 +294,23 @@ defmodule TokengateWeb.GroupsLive do
           <:subtitle>Gestiona grupos, presupuestos, límites y modelos</:subtitle>
           <:actions>
             <div class="flex items-center gap-2">
-              <input
-                type="text"
-                name="group_search"
-                value={@group_search}
-                placeholder="Buscar grupo…"
+              <%!-- Un `phx-change` exige que el input viva dentro de un <form>:
+                   sin él, LiveView lanza "form events require the input to be
+                   inside a form" y el buscador nunca llega al servidor. --%>
+              <form
+                id="groups-search-form"
                 phx-change="search_groups"
+                phx-submit="search_groups"
                 phx-debounce="200"
-                class="input input-sm w-48"
-              />
+              >
+                <input
+                  type="text"
+                  name="group_search"
+                  value={@group_search}
+                  placeholder="Buscar grupo…"
+                  class="input input-sm w-48"
+                />
+              </form>
               <.button phx-click="new_group" id="new-group-btn">
                 <.icon name="hero-plus" class="w-4 h-4" /> Nuevo grupo
               </.button>

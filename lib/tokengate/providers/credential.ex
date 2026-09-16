@@ -3,6 +3,11 @@ defmodule Tokengate.Providers.Credential do
   API credentials for a provider. The `api_key_encrypted` field stores
   the key as-is for now; encryption-at-rest is a post-MVP concern.
 
+  A credential is deliberately thin: an alias plus a secret. The operational
+  limits (RPM, concurrency, per-user concurrency, receive timeout) belong to
+  the provider (`Tokengate.Providers.Provider`) and are inherited by every
+  credential attached to it.
+
   ## Status
 
     * `active`   – credential is eligible for routing.
@@ -23,10 +28,6 @@ defmodule Tokengate.Providers.Credential do
   schema "provider_credentials" do
     field :name, :string
     field :api_key_encrypted, :string
-    field :max_rpm, :integer
-    field :max_concurrent, :integer
-    field :max_concurrent_per_user, :integer
-    field :receive_timeout_ms, :integer
     field :status, :string, default: "active"
     field :error_reason, :string
     field :error_message, :string
@@ -38,8 +39,7 @@ defmodule Tokengate.Providers.Credential do
     timestamps(type: :utc_datetime)
   end
 
-  @shared ~w(provider_id name max_rpm max_concurrent max_concurrent_per_user receive_timeout_ms
-    status error_reason error_message error_at)a
+  @shared ~w(provider_id name status error_reason error_message error_at)a
 
   @doc false
   def create_changeset(credential, attrs) do

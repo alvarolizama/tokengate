@@ -77,7 +77,10 @@ config :tokengate, Oban,
        # Daily request_logs partition maintenance: create upcoming daily
        # partitions, backfill stray days out of the default partition, drop
        # partitions past retention. (fixes.md C1)
-       {"5 0 * * *", Tokengate.Logs.PartitionWorker}
+       {"5 0 * * *", Tokengate.Logs.PartitionWorker},
+       # Weekly refresh of the provider catalog from models.dev (provider-level
+       # data only). The maintenance page can also enqueue it on demand.
+       {"30 4 * * 1", Tokengate.Providers.CatalogRefreshWorker}
      ]}
   ],
   queues: [default: 10, logs: 20, webhooks: 10, budgets: 5]

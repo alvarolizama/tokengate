@@ -411,7 +411,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
   describe "fireworks-backed provider form" do
     defp fw_fixtures do
-      Repo.get_by(Tokengate.Providers.Provider, key: "fireworks")
+      Repo.get_by(Tokengate.Providers.Provider, key: "fireworks-ai")
       |> case do
         nil -> :ok
         builtin -> {:ok, _} = Repo.delete(builtin)
@@ -419,7 +419,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
       provider =
         create_provider(%{
-          key: "fireworks",
+          key: "fireworks-ai",
           name: "Fireworks AI (probe)",
           base_url: "http://localhost:1"
         })
@@ -500,7 +500,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
       # Drop the builtin row to own the unique key, then stamp it on a local
       # provider (same trick as the proxy controller test).
-      Repo.get_by(Tokengate.Providers.Provider, key: "fireworks")
+      Repo.get_by(Tokengate.Providers.Provider, key: "fireworks-ai")
       |> case do
         nil -> :ok
         builtin -> {:ok, _} = Repo.delete(builtin)
@@ -508,7 +508,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
       provider =
         create_provider(%{
-          key: "fireworks",
+          key: "fireworks-ai",
           name: "Fireworks AI (probe)",
           base_url: "http://localhost:1"
         })

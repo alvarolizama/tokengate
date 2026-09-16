@@ -1,5 +1,8 @@
 defmodule TokengateWeb.SubscriptionsLiveTest do
-  @moduledoc "Tests for the Subscriptions admin page (credit subscriptions CRUD)."
+  @moduledoc """
+  Tests for the Subscriptions admin page — recurring (monthly) credit
+  subscriptions only. Los top-ups viven en `TopupsLiveTest`.
+  """
 
   use TokengateWeb.ConnCase, async: false
 
@@ -63,7 +66,6 @@ defmodule TokengateWeb.SubscriptionsLiveTest do
         "subscription" => %{
           "name" => "Plan Base",
           "units" => "1000",
-          "recurrence" => "monthly",
           "reset_day" => "1",
           "rollover_mode" => "reset",
           "status" => "active"
@@ -76,10 +78,14 @@ defmodule TokengateWeb.SubscriptionsLiveTest do
       sub = hd(Credits.list_subscriptions())
       assert sub.units == 1000
       assert sub.user_id == nil
+      # Esta página es la de recurrentes: la recurrencia se fija en mensual.
+      assert sub.recurrence == "monthly"
       assert Credits.group_ids_for(sub) == [group.id]
     end
 
-    test "creates direct subscriptions for multiple users (search + select)", %{conn: conn} do
+    test "creates direct monthly subscriptions for multiple users (search + select)", %{
+      conn: conn
+    } do
       %{user: admin, password: pass} = register("admin")
 
       {:ok, u1} =
@@ -115,9 +121,9 @@ defmodule TokengateWeb.SubscriptionsLiveTest do
       |> form("#subscription-form", %{
         "scope" => "user",
         "subscription" => %{
-          "name" => "Multi",
+          "name" => "Directa",
           "units" => "50",
-          "recurrence" => "none",
+          "reset_day" => "1",
           "status" => "active"
         }
       })
@@ -127,7 +133,7 @@ defmodule TokengateWeb.SubscriptionsLiveTest do
 
       subs = Credits.list_subscriptions()
       assert Enum.map(subs, & &1.user_id) |> Enum.sort() == Enum.sort([u1.id, u2.id])
-      assert Enum.all?(subs, &(&1.units == 50 and &1.recurrence == "none"))
+      assert Enum.all?(subs, &(&1.units == 50 and &1.recurrence == "monthly"))
     end
 
     test "deletes a subscription and clears the group default", %{conn: conn} do
@@ -153,6 +159,53 @@ defmodule TokengateWeb.SubscriptionsLiveTest do
 
       assert Tokengate.Repo.get!(Tokengate.Accounts.Group, group.id).default_subscription_id ==
                nil
+    end
+
+    test "deactivates and reactivates a subscription from the table", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+
+      {:ok, sub} =
+        Credits.create_subscription(%{
+          "units" => 100,
+          "recurrence" => "monthly",
+          "reset_day" => 1
+        })
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/credit/subscriptions")
+
+      view |> element("#toggle-subscription-status-#{sub.id}") |> render_click()
+
+      assert render(view) =~ "Suscripción desactivada"
+      assert Credits.get_subscription!(sub.id).status == "paused"
+      assert has_element?(view, "#toggle-subscription-status-#{sub.id}", "Reactivar")
+      assert render(view) =~ "Pausada"
+
+      view |> element("#toggle-subscription-status-#{sub.id}") |> render_click()
+
+      assert render(view) =~ "Suscripción reactivada"
+      assert Credits.get_subscription!(sub.id).status == "active"
+    end
+
+    test "lists only recurring subscriptions, top-ups live elsewhere", %{conn: conn} do
+      %{user: admin, password: pass} = register("admin")
+
+      {:ok, monthly} =
+        Credits.create_subscription(%{
+          "units" => 100,
+          "recurrence" => "monthly",
+          "reset_day" => 1
+        })
+
+      {:ok, topup} = Credits.create_subscription(%{"units" => 10, "recurrence" => "none"})
+
+      conn = login(conn, admin, pass)
+      {:ok, view, _html} = live(conn, ~p"/credit/subscriptions")
+
+      assert has_element?(view, "#edit-subscription-#{monthly.id}")
+      refute has_element?(view, "#edit-subscription-#{topup.id}")
+      # Sin top-ups en la lista no hay nada que archivar.
+      refute has_element?(view, "#toggle-archived-btn")
     end
 
     test "shows per-subscription usage in the Consumo column", %{conn: conn} do
@@ -203,89 +256,6 @@ defmodule TokengateWeb.SubscriptionsLiveTest do
       {:ok, view, _html} = live(conn, ~p"/credit/subscriptions")
 
       assert has_element?(view, "#sub-usage-#{sub.id}", "—")
-    end
-  end
-
-  describe "auto-archived subscriptions" do
-    test "hides expired top-ups and shows them via toggle", %{conn: conn} do
-      %{user: admin, password: pass} = register("admin")
-
-      {:ok, sub} =
-        Credits.create_subscription(%{
-          "units" => 50,
-          "recurrence" => "none",
-          "expires_at" => DateTime.add(DateTime.utc_now(), -1, :day) |> DateTime.truncate(:second)
-        })
-
-      conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/credit/subscriptions")
-
-      # Oculta la sub vencida y muestra el contador del toggle.
-      refute has_element?(view, "#edit-subscription-#{sub.id}")
-      assert has_element?(view, "#toggle-archived-btn", "Ver archivadas (1)")
-
-      # Al togglear, la sub aparece con badge "Vencida".
-      view |> element("#toggle-archived-btn") |> render_click()
-      assert has_element?(view, "#edit-subscription-#{sub.id}")
-      assert has_element?(view, "#archived-badge-#{sub.id}", "Vencida")
-
-      # Toggle de nuevo → se oculta.
-      view |> element("#toggle-archived-btn") |> render_click()
-      refute has_element?(view, "#edit-subscription-#{sub.id}")
-    end
-
-    test "hides drained top-ups (lifetime spend >= units)", %{conn: conn} do
-      %{user: admin, password: pass} = register("admin")
-      {:ok, group} = Accounts.create_group(%{name: "Drain Group #{unique()}"})
-
-      {:ok, sub} =
-        Credits.create_subscription(%{
-          "units" => 10,
-          "recurrence" => "none"
-        })
-
-      %{user: member_user} = register("user")
-
-      {:ok, member} =
-        Accounts.create_group_member(%{"user_id" => member_user.id, "group_id" => group.id})
-
-      # $12 gastados de 10 créditos → agotada.
-      {:ok, _} =
-        Tokengate.Logs.log_request(%{
-          group_member_id: member.id,
-          model_requested: "gpt-4",
-          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
-          provider_cost_usd: Decimal.new("12.00"),
-          credit_subscription_id: sub.id
-        })
-
-      conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/credit/subscriptions")
-
-      refute has_element?(view, "#edit-subscription-#{sub.id}")
-
-      view |> element("#toggle-archived-btn") |> render_click()
-      assert has_element?(view, "#archived-badge-#{sub.id}", "Agotada")
-    end
-
-    test "active top-ups and monthly subs are never archived", %{conn: conn} do
-      %{user: admin, password: pass} = register("admin")
-
-      {:ok, _topup} =
-        Credits.create_subscription(%{"units" => 20, "recurrence" => "none"})
-
-      {:ok, _monthly} =
-        Credits.create_subscription(%{
-          "units" => 100,
-          "recurrence" => "monthly",
-          "reset_day" => 1
-        })
-
-      conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/credit/subscriptions")
-
-      assert has_element?(view, "#toggle-archived-btn") == false
-      assert render(view) =~ "No hay suscripciones" == false
     end
   end
 end

@@ -27,6 +27,9 @@ defmodule Tokengate.Accounts.User do
 
     # Virtual
     field :password, :string, virtual: true
+    # Virtual: contraseña actual, exigida para autorizar un cambio de
+    # contraseña propio (re-autenticación). Nunca se persiste.
+    field :current_password, :string, virtual: true
 
     has_many :group_members, Tokengate.Accounts.GroupMember
 
@@ -117,6 +120,19 @@ defmodule Tokengate.Accounts.User do
     |> validate_timezone()
   end
 
+  @doc """
+  Changeset for a user changing their OWN password. Re-authenticates with
+  `current_password` and validates the complexity of the new one.
+  """
+  def change_password_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:current_password, :password])
+    |> validate_required([:current_password, :password])
+    |> validate_current_password()
+    |> validate_password()
+    |> put_password_hash()
+  end
+
   defp validate_timezone(changeset) do
     changeset
     |> validate_change(:timezone, fn :timezone, tz ->
@@ -147,8 +163,29 @@ defmodule Tokengate.Accounts.User do
 
   defp put_password_hash(changeset) do
     case get_change(changeset, :password) do
-      nil -> changeset
-      password -> put_change(changeset, :password_hash, Bcrypt.hash_pwd_salt(password))
+      nil ->
+        changeset
+
+      password ->
+        put_change(changeset, :password_hash, Bcrypt.hash_pwd_salt(password))
+    end
+  end
+
+  # Re-autenticación: sin hash que comparar no hay sesión válida y el error
+  # es genérico (no se filtra si el usuario tiene o no contraseña local).
+  defp validate_current_password(changeset) do
+    current = get_change(changeset, :current_password)
+    hash = changeset.data.password_hash
+
+    cond do
+      not is_binary(current) ->
+        add_error(changeset, :current_password, "no puede estar vacío")
+
+      is_binary(hash) and Bcrypt.verify_pass(current, hash) ->
+        changeset
+
+      true ->
+        add_error(changeset, :current_password, "no es correcta")
     end
   end
 end

@@ -94,9 +94,10 @@ defmodule TokengateWeb.StatsLive.Providers do
                       <td class="font-medium">
                         <.link
                           patch={~p"/stats/providers/#{row.provider_id}?period=#{@period}"}
-                          class="link link-hover inline-flex items-center gap-1"
+                          class="link link-hover inline-flex items-center gap-2"
                           id={"provider-link-#{row.provider_id}"}
                         >
+                          <Stats.provider_logo logo_url={row.provider_logo_url} />
                           {row.provider_name}
                           <.icon name="hero-chevron-right" class="w-3.5 h-3.5 text-base-content/40" />
                         </.link>

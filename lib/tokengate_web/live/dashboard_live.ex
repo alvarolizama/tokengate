@@ -32,8 +32,6 @@ defmodule TokengateWeb.DashboardLive do
   alias TokengateWeb.KpiHelpers
   alias TokengateWeb.StatsHelpers, as: Stats
 
-  import Ecto.Query
-
   @pubsub Tokengate.PubSub
   @metrics_topic "metrics:updated"
   @reload_interval_ms 2_000
@@ -164,13 +162,7 @@ defmodule TokengateWeb.DashboardLive do
   # Count of services the user supervises (read-only role). Used to show a
   # shortcut card on /dashboard when > 0.
   defp count_supervised_services(user) do
-    import Ecto.Query
-
-    Tokengate.Repo.one(
-      from ss in Tokengate.Accounts.ServiceSupervisor,
-        where: ss.user_id == ^user.id,
-        select: count(ss.id)
-    )
+    Accounts.count_services_for_supervisor(user.id)
   end
 
   @impl true
@@ -189,10 +181,10 @@ defmodule TokengateWeb.DashboardLive do
              |> assign(:new_token, new_token)
              |> assign(:new_token_group, member.group.name)
              |> load_personal_data(user)
-             |> put_flash(:info, "Clave reemplazada correctamente.")}
+             |> put_flash(:info, "Clave regenerada correctamente.")}
 
           {:error, _changeset} ->
-            {:noreply, put_flash(socket, :error, "No se pudo reemplazar la clave.")}
+            {:noreply, put_flash(socket, :error, "No se pudo regenerar la clave.")}
         end
     end
   end

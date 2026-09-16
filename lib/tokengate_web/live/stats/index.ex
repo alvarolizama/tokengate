@@ -176,6 +176,9 @@ defmodule TokengateWeb.StatsLive.Index do
                   title={row.provider_name}
                   id={"provider-breakdown-row-#{rank}"}
                 >
+                  <:leading>
+                    <Stats.provider_logo logo_url={row.provider_logo_url} size="md" />
+                  </:leading>
                   <:metrics>
                     <Stats.metric_cell
                       label="Requests"

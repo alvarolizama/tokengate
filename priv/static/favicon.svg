@@ -1,8 +1,10 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- TokenGate favicon — mismos colores que el logo (primary del tema `dim`):
+       #9fe88d primary · #62efbd success · #6fbb5c hub · #c9f7be núcleo -->
   <defs>
     <linearGradient id="tg-gate" x1="12" y1="12" x2="52" y2="52" gradientUnits="userSpaceOnUse">
-      <stop stop-color="#6366F1"/>
-      <stop offset="1" stop-color="#A855F7"/>
+      <stop stop-color="#9fe88d"/>
+      <stop offset="1" stop-color="#62efbd"/>
     </linearGradient>
   </defs>
 
@@ -12,7 +14,7 @@
         stroke-linejoin="round"/>
 
   <!-- Connection lines: hub → provider nodes -->
-  <g stroke="#60a5fa" stroke-width="3" stroke-linecap="round" opacity="0.7">
+  <g stroke="#62efbd" stroke-width="3" stroke-linecap="round" opacity="0.7">
     <line x1="32" y1="32" x2="21" y2="21.5"/>
     <line x1="32" y1="32" x2="44" y2="22.5"/>
     <line x1="32" y1="32" x2="43.5" y2="43.5"/>
@@ -20,12 +22,12 @@
   </g>
 
   <!-- Provider nodes -->
-  <circle cx="21" cy="21.5" r="5" fill="#60a5fa"/>
-  <circle cx="44" cy="22.5" r="4.5" fill="#818cf8"/>
-  <circle cx="43.5" cy="43.5" r="4.5" fill="#a78bfa"/>
-  <circle cx="20.5" cy="43" r="5" fill="#60a5fa"/>
+  <circle cx="21" cy="21.5" r="5" fill="#9fe88d"/>
+  <circle cx="44" cy="22.5" r="4.5" fill="#62efbd"/>
+  <circle cx="43.5" cy="43.5" r="4.5" fill="#6fbb5c"/>
+  <circle cx="20.5" cy="43" r="5" fill="#9fe88d"/>
 
   <!-- Gateway hub -->
-  <circle cx="32" cy="32" r="8" fill="#3b82f6"/>
-  <circle cx="32" cy="32" r="4.2" fill="#93c5fd"/>
+  <circle cx="32" cy="32" r="8" fill="#6fbb5c"/>
+  <circle cx="32" cy="32" r="4.2" fill="#c9f7be"/>
 </svg>

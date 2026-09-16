@@ -54,6 +54,7 @@ defmodule TokengateWeb.SidebarTest do
     refute in_section?(view, "sidebar-section-acceso", "sidebar-link-catalog-models")
 
     assert in_section?(view, "sidebar-section-credito", "sidebar-link-credit-subscriptions")
+    assert in_section?(view, "sidebar-section-credito", "sidebar-link-credit-topups")
     refute in_section?(view, "sidebar-section-credito", "sidebar-link-operations-monitoring")
 
     assert in_section?(view, "sidebar-section-operaciones", "sidebar-link-operations-monitoring")
@@ -107,6 +108,7 @@ defmodule TokengateWeb.SidebarTest do
           {"sidebar-link-access-users", "/access/users"},
           {"sidebar-link-access-services", "/access/services"},
           {"sidebar-link-credit-subscriptions", "/credit/subscriptions"},
+          {"sidebar-link-credit-topups", "/credit/topups"},
           {"sidebar-link-operations-monitoring", "/operations/monitoring"},
           {"sidebar-link-operations-observability", "/operations/observability"},
           {"sidebar-link-operations-maintenance", "/operations/maintenance"}

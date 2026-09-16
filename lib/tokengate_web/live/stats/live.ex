@@ -297,6 +297,12 @@ defmodule TokengateWeb.StatsLive.LiveSection do
                 <span class="text-base-content/50 truncate flex-1" title={feed_who(log)}>
                   {feed_who(log)}
                 </span>
+                <%!-- Logo del proveedor del catálogo (models.dev): junto al
+                     status, el upstream que atendió la request — sólo si la
+                     log trae proveedor preloaded. --%>
+                <span :if={log.provider} class="shrink-0">
+                  <Stats.provider_logo logo_url={log.provider.logo_url} />
+                </span>
                 <span
                   :if={provider_mismatch?(log)}
                   class="shrink-0"

@@ -2,8 +2,10 @@ defmodule TokengateWeb.ProvidersLive do
   @moduledoc """
   Admin CRUD for providers + per-provider credential management.
 
-  Providers are global (not org-scoped). Each provider can carry multiple
-  credentials (api_key_encrypted, max_rpm, max_concurrent, status).
+  The provider owns the operational limits (`max_rpm`, `max_concurrent`,
+  `max_concurrent_per_user`, `receive_timeout_ms`) and every credential of
+  that provider inherits them — a credential is just an alias + API key.
+  Those fields are editable for builtins too; their catalog identity isn't.
 
   Pricing is managed per ModelProvider (model × credential) in the
   Models section, not here.
@@ -18,7 +20,16 @@ defmodule TokengateWeb.ProvidersLive do
 
   import Ecto.Query, only: [from: 2]
   alias Tokengate.Providers
-  alias Tokengate.Providers.{Provider, Credential, ModelProvider}
+
+  alias Tokengate.Providers.{
+    Catalog,
+    Provider,
+    Credential,
+    ModelProvider,
+    ProviderLimits,
+    ProviderPaths
+  }
+
   alias Tokengate.Repo
 
   @impl true
@@ -37,6 +48,13 @@ defmodule TokengateWeb.ProvidersLive do
       |> assign(:credential_form, nil)
       |> assign(:editing_credential_id, nil)
       |> assign(:providers_tab, "builtin")
+      |> assign(:catalog_modal_open, false)
+      |> assign(:catalog_query, "")
+      |> assign(:editing_provider_builtin?, false)
+      |> assign(:paths_form, nil)
+      |> assign(:paths_provider_id, nil)
+      |> assign(:paths_provider_name, nil)
+      |> assign(:path_service_rows, [])
       |> assign(:is_admin, user && user.global_role == "admin")
       |> assign(:credential_inflight, %{})
       |> require_admin_hook()
@@ -116,38 +134,52 @@ defmodule TokengateWeb.ProvidersLive do
         |> Map.new(fn cred -> {cred.id, Map.get(all, cred.id, :closed)} end)
       end)
 
-    # ALL catalog builtins — offered in the "agregar proveedor" menu grouped
-    # by billing surface (subscription first). `active?` marks the ones that
-    # already have credentials: they render disabled with a check (the
-    # provider is live; adding another key happens from its own card).
-    catalog_builtins =
-      from(p in Provider,
-        left_join: c in assoc(p, :credentials),
-        where: p.source == "builtin",
-        order_by: [asc: p.name],
-        distinct: true,
-        group_by: p.id,
-        select: %{
-          id: p.id,
-          name: p.name,
-          key: p.key,
-          capabilities: p.capabilities,
-          active?: count(c.id) > 0
-        }
-      )
-      |> Repo.all()
-      |> Enum.map(fn b ->
-        entry = Tokengate.Providers.Catalog.get(b.key)
-        Map.put(b, :billing, entry && entry.billing)
-      end)
-
     socket
     |> assign(:providers, providers)
-    |> assign(:catalog_builtins, catalog_builtins)
     |> assign(:providers_empty?, providers == [])
     |> assign(:provider_model_counts, provider_model_counts)
     |> assign(:breaker_statuses, breaker_statuses)
+    |> load_catalog()
     |> assign_inflight()
+  end
+
+  # Catalog rows for the add-provider modal: the models.dev mirror decorated
+  # with the live state (already activated = has a credential). Rows the
+  # gateway cannot serve (no base URL, templated URL, no OpenAI-compatible
+  # dialect) never enter the picker — they could not be activated anyway.
+  # Capabilities stay OUT of the picker and of the cards: they are code
+  # configuration, not something the operator sets here.
+  defp load_catalog(socket) do
+    activated_keys =
+      from(p in Provider,
+        join: c in assoc(p, :credentials),
+        where: not is_nil(p.key),
+        distinct: true,
+        select: p.key
+      )
+      |> Repo.all()
+      |> MapSet.new()
+
+    entries =
+      Providers.list_catalog_providers()
+      |> Enum.filter(&Catalog.supported?/1)
+      |> Enum.map(fn row ->
+        %{
+          key: row.key,
+          name: row.name,
+          base_url: Catalog.base_url(row),
+          doc_url: row.doc_url,
+          logo_url: row.logo_url,
+          status: row.status,
+          reason: Catalog.unsupported_reason(row),
+          activated?: MapSet.member?(activated_keys, row.key)
+        }
+      end)
+
+    socket
+    |> assign(:catalog_entries, entries)
+    |> assign(:catalog_total, length(entries))
+    |> assign(:catalog_results, entries)
   end
 
   # Live in-flight counts per credential (open upstream connections), recomputed
@@ -176,21 +208,73 @@ defmodule TokengateWeb.ProvidersLive do
   ## Events — provider CRUD ------------------------------------------------
 
   @impl true
-  # Custom provider creation — reachable from the "Agregar proveedor"
-  # dropdown (last entry). Every custom is OpenAI-compatible; capabilities
-  # and per-service URLs are configurable.
+  # Adds a custom provider: no catalog entry exists for it, so the form asks
+  # for the base URL alone. Dialect, paths and capabilities are NOT asked for
+  # — they are code (dialect default + Catalog customization).
   def handle_event("new_custom_provider", _params, socket) do
     changeset =
       Providers.change_provider(%Provider{
         source: "custom",
-        dialect: "openai",
-        capabilities: ["llm"]
+        dialect: "openai"
       })
 
     {:noreply,
      socket
+     |> assign(:catalog_modal_open, false)
      |> assign(:form, to_form(changeset, as: :provider))
-     |> assign(:editing_provider_id, :new)}
+     |> assign(:editing_provider_id, :new)
+     |> assign(:editing_provider_builtin?, false)}
+  end
+
+  # Opens the models.dev catalog modal — the "Agregar proveedor" entry point
+  # (the old dropdown could not scale to a few hundred providers).
+  def handle_event("open_catalog_modal", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:catalog_modal_open, true)
+     |> filter_catalog("")}
+  end
+
+  def handle_event("close_catalog_modal", _params, socket) do
+    {:noreply, assign(socket, :catalog_modal_open, false)}
+  end
+
+  # Search over name and models.dev id. In memory: the mirror is a few hundred
+  # rows, so every keystroke is instant and costs no query.
+  def handle_event("search_catalog", params, socket) do
+    {:noreply, filter_catalog(socket, params["query"] || "")}
+  end
+
+  # Attaching an API key IS what activates a catalog provider: the credential
+  # modal opens with the provider already assigned. Builtin rows are
+  # materialized at boot, so the row exists before its first key.
+  def handle_event("activate_catalog_provider", %{"key" => key}, socket) do
+    entry = Enum.find(socket.assigns.catalog_entries, &(&1.key == key))
+
+    cond do
+      is_nil(entry) ->
+        {:noreply, put_flash(socket, :error, "Proveedor desconocido.")}
+
+      true ->
+        case Repo.get_by(Provider, key: key) do
+          nil ->
+            {:noreply,
+             put_flash(socket, :error, "#{entry.name} todavía no está materializado. Reintenta.")}
+
+          provider ->
+            changeset =
+              Providers.change_credential(%Credential{
+                provider_id: provider.id,
+                status: "active"
+              })
+
+            {:noreply,
+             socket
+             |> assign(:catalog_modal_open, false)
+             |> assign(:credential_form, to_form(changeset, as: :credential))
+             |> assign(:editing_credential_id, nil)}
+        end
+    end
   end
 
   # Tab switch for the provider list: builtin (default) or custom. Local UI
@@ -200,21 +284,6 @@ defmodule TokengateWeb.ProvidersLive do
     {:noreply, assign(socket, :providers_tab, tab)}
   end
 
-  # Opens the credential modal for a builtin that isn't shown in the list
-  # (it has no credentials yet) — the fastest way to "activate" a catalog
-  # provider: attach an API key to it.
-  def handle_event("activate_builtin", %{"id" => provider_id}, socket) do
-    provider = Providers.get_provider!(provider_id)
-
-    changeset =
-      Providers.change_credential(%Credential{provider_id: provider.id, status: "active"})
-
-    {:noreply,
-     socket
-     |> assign(:credential_form, to_form(changeset, as: :credential))
-     |> assign(:editing_credential_id, nil)}
-  end
-
   def handle_event("cancel_form", _params, socket) do
     {:noreply,
      socket
@@ -222,6 +291,50 @@ defmodule TokengateWeb.ProvidersLive do
      |> assign(:editing_provider_id, nil)}
   end
 
+  ## Events — capability paths ----------------------------------------------
+
+  # Opens the Capacidades modal: one path input per service, pre-filled with
+  # the provider's own overrides — an empty input means "inherit", which is
+  # the normal state.
+  def handle_event("edit_paths", %{"id" => provider_id}, socket) do
+    provider = Providers.get_provider!(provider_id)
+    {:noreply, open_paths_modal(socket, provider, ProviderPaths.overrides(provider))}
+  end
+
+  def handle_event("cancel_paths", _params, socket) do
+    {:noreply, close_paths_modal(socket)}
+  end
+
+  # An empty input is dropped by `normalize/1`, so "leave it blank" and "clear
+  # an override" are the same gesture and the column keeps one shape.
+  def handle_event("save_paths", %{"paths" => params}, socket) do
+    provider = Providers.get_provider!(socket.assigns.paths_provider_id)
+    submitted = Map.delete(params, "provider_id")
+
+    case ProviderPaths.normalize(submitted) do
+      {:ok, overrides} ->
+        case Providers.update_provider(provider, %{path_overrides: overrides}) do
+          {:ok, _provider} ->
+            {:noreply,
+             socket
+             |> put_flash(:info, paths_flash(overrides))
+             |> close_paths_modal()
+             |> load_providers()}
+
+          {:error, changeset} ->
+            {:noreply,
+             reject_paths(socket, provider, submitted, changeset_error_message(changeset))}
+        end
+
+      {:error, message} ->
+        {:noreply, reject_paths(socket, provider, submitted, message)}
+    end
+  end
+
+  # Editing a builtin is allowed on purpose: its operational limits belong to
+  # the operator while its identity (name, base_url) stays catalog-owned — the
+  # form renders those read-only and the changeset discards any change to them
+  # anyway.
   def handle_event("edit_provider", %{"id" => provider_id}, socket) do
     provider = Providers.get_provider!(provider_id)
     changeset = Providers.change_provider(provider)
@@ -229,7 +342,8 @@ defmodule TokengateWeb.ProvidersLive do
     {:noreply,
      socket
      |> assign(:form, to_form(changeset, as: :provider))
-     |> assign(:editing_provider_id, provider.id)}
+     |> assign(:editing_provider_id, provider.id)
+     |> assign(:editing_provider_builtin?, provider.source == "builtin")}
   end
 
   def handle_event("save_provider", %{"provider" => provider_params}, socket) do
@@ -495,12 +609,9 @@ defmodule TokengateWeb.ProvidersLive do
     end
   end
 
-  # Capabilities are derived, not chosen: a custom serves embeddings iff an
-  # embeddings URL resolves (explicit override or base-url derivation is
-  # decided by what the user typed — an explicit Embeddings URL means yes).
+  # Capabilities for a custom come straight from the form (there is no catalog
+  # entry to derive them from); builtins get them from `Catalog`.
   defp save_provider(socket, :new, provider_params) do
-    provider_params = derive_capabilities(provider_params)
-
     case Providers.create_provider(provider_params) do
       {:ok, _provider} ->
         {:noreply,
@@ -517,7 +628,6 @@ defmodule TokengateWeb.ProvidersLive do
 
   defp save_provider(socket, provider_id, provider_params) when is_binary(provider_id) do
     provider = Providers.get_provider!(provider_id)
-    provider_params = derive_capabilities(provider_params)
 
     case Providers.update_provider(provider, provider_params) do
       {:ok, _provider} ->
@@ -533,20 +643,103 @@ defmodule TokengateWeb.ProvidersLive do
     end
   end
 
-  # Derives capabilities from what the user actually configured: embeddings
-  # iff an explicit embeddings_url is set (llm always — chat is the primary
-  # surface of a custom provider).
-  defp derive_capabilities(provider_params) do
-    has_embeddings =
-      provider_params
-      |> Map.get("embeddings_url", "")
-      |> then(&(&1 not in [nil, ""]))
+  # Catalog search: filters the in-memory mirror by name or models.dev id.
+  defp filter_catalog(socket, query) do
+    needle = query |> to_string() |> String.trim() |> String.downcase()
 
-    Map.put(
-      provider_params,
-      "capabilities",
-      if(has_embeddings, do: ["llm", "embedding"], else: ["llm"])
-    )
+    results =
+      if needle == "" do
+        socket.assigns.catalog_entries
+      else
+        Enum.filter(socket.assigns.catalog_entries, fn entry ->
+          String.contains?(String.downcase(entry.name), needle) or
+            String.contains?(String.downcase(entry.key), needle)
+        end)
+      end
+
+    socket
+    |> assign(:catalog_query, query)
+    |> assign(:catalog_results, results)
+  end
+
+  ## Private helpers — capability paths ------------------------------------
+
+  # Modal state for one provider: the form (pre-filled with what the operator
+  # last typed, so a rejected save loses nothing) plus the rows the template
+  # renders — label, the path in effect as the placeholder, and a hint saying
+  # which tier wins today.
+  defp open_paths_modal(socket, provider, values) do
+    params =
+      Enum.reduce(ProviderPaths.services(), %{"provider_id" => provider.id}, fn service, acc ->
+        Map.put(acc, service.key, path_value(values, service.key))
+      end)
+
+    socket
+    |> assign(:paths_provider_id, provider.id)
+    |> assign(:paths_provider_name, provider.name)
+    |> assign(:path_service_rows, path_service_rows(provider))
+    |> assign(:paths_form, to_form(params, as: :paths))
+  end
+
+  defp close_paths_modal(socket) do
+    socket
+    |> assign(:paths_form, nil)
+    |> assign(:paths_provider_id, nil)
+    |> assign(:paths_provider_name, nil)
+    |> assign(:path_service_rows, [])
+  end
+
+  # Keeps the modal open with what was typed and says why nothing was saved.
+  defp reject_paths(socket, provider, submitted, message) do
+    socket
+    |> put_flash(:error, message)
+    |> open_paths_modal(provider, submitted)
+  end
+
+  defp path_value(values, key) do
+    case Map.get(values, key) do
+      value when is_binary(value) -> value
+      _ -> ""
+    end
+  end
+
+  defp path_service_rows(provider) do
+    Enum.map(ProviderPaths.describe_all(provider), fn description ->
+      %{
+        key: description.key,
+        label: description.label,
+        placeholder: description.effective,
+        hint: path_hint(description)
+      }
+    end)
+  end
+
+  # Says where the path in effect comes from, so an override that is not the
+  # one being edited is still visible from inside the modal.
+  defp path_hint(%{source: :provider, catalog: catalog, default: default}),
+    do: "Override propio · default: #{catalog || default}"
+
+  defp path_hint(%{source: :catalog, default: default}),
+    do: "Path del catálogo · default: #{default}"
+
+  defp path_hint(_description), do: "Default del adapter"
+
+  defp paths_flash(overrides) do
+    case map_size(overrides) do
+      0 -> "Paths restablecidos: cada capacidad usa su default."
+      n -> "Paths actualizados (#{n} #{if n == 1, do: "override", else: "overrides"})."
+    end
+  end
+
+  defp changeset_error_message(changeset) do
+    details =
+      changeset
+      |> Ecto.Changeset.traverse_errors(fn {message, _opts} -> message end)
+      |> Enum.map_join(" · ", fn {field, messages} ->
+        "#{field}: #{Enum.join(messages, ", ")}"
+      end)
+
+    "No se pudieron guardar los paths — #{details}"
   end
 
   ## Helpers ---------------------------------------------------------------
@@ -555,8 +748,21 @@ defmodule TokengateWeb.ProvidersLive do
   def credentials_for(%{credentials: creds}), do: creds
   def credentials_for(_), do: []
 
+  @doc "How many capabilities this provider overrides — the badge on its button."
+  def path_override_count(provider), do: map_size(ProviderPaths.overrides(provider))
+
   @doc "Model count for a provider (from the counts map)."
   def model_count(provider_id, counts), do: Map.get(counts, provider_id, 0)
+
+  @doc """
+  Timeout label for a provider: the effective value, flagging when it is the
+  global default rather than a value set on the provider.
+  """
+  def timeout_label(provider) do
+    ms = ProviderLimits.receive_timeout_ms(provider)
+
+    if is_nil(provider.receive_timeout_ms), do: "#{ms} ms (global)", else: "#{ms} ms"
+  end
 
   @doc "Mask an api key for display: show only the last 4 chars."
   def mask_key(nil), do: "—"
@@ -618,78 +824,172 @@ defmodule TokengateWeb.ProvidersLive do
         <.header>
           Proveedores
           <:subtitle>Providers de LLM y credenciales</:subtitle>
+          <:actions>
+            <.button phx-click="open_catalog_modal" id="add-provider-btn">
+              <.icon name="hero-plus" class="w-4 h-4" /> Agregar proveedor
+            </.button>
+          </:actions>
         </.header>
 
-        <div class="flex justify-end">
-          <div class="dropdown dropdown-end">
-            <div tabindex="0" role="button" class="btn btn-primary btn-sm" id="add-provider-btn">
-              <.icon name="hero-plus" class="w-4 h-4" /> Agregar proveedor
-            </div>
-            <div
-              tabindex="0"
-              class="dropdown-content z-50 menu bg-base-100 border border-base-300 rounded-box w-80 p-2 shadow-lg"
-            >
-              <div
-                :for={
-                  {label, group} <- [
-                    {"Suscripción (plan incluido)",
-                     Enum.filter(@catalog_builtins, &(&1.billing == "subscription"))},
-                    {"Pay-per-token",
-                     Enum.filter(@catalog_builtins, &(&1.billing == "pay_per_token"))}
-                  ]
-                }
-                :if={group != []}
-              >
-                <div class="px-2 pt-1 pb-1 text-xs font-semibold opacity-60">
-                  {label}
+        <%!-- Add-provider modal: searchable list of what the gateway can
+             serve. Rows without base URL, with a templated URL or without an
+             OpenAI-compatible dialect are filtered out; rows already
+             carrying a credential render as activated (more keys come from
+             their own card). --%>
+        <div
+          :if={@catalog_modal_open}
+          class="fixed inset-0 z-50 flex items-center justify-center p-4"
+          id="catalog-modal"
+        >
+          <div class="absolute inset-0 bg-black/50" phx-click="close_catalog_modal" />
+          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-3xl">
+            <div class="card-body p-5 max-h-[85vh] flex flex-col">
+              <div class="flex items-start justify-between gap-4">
+                <div>
+                  <h2 class="text-lg font-semibold">Agregar proveedor</h2>
+                  <p class="text-xs text-base-content/60 mt-1">
+                    Catálogo de models.dev ({@catalog_total} proveedores). Elegir uno abre su
+                    credencial.
+                  </p>
                 </div>
-                <div :for={b <- group} class="flex items-center">
-                  <button
-                    phx-click={not b.active? && "activate_builtin"}
-                    phx-value-id={b.id}
-                    disabled={b.active?}
-                    title={
-                      if b.active?,
-                        do: "Ya activo — agrega más API keys desde su tarjeta",
-                        else: "Adjuntar una API key"
-                    }
-                    class={[
-                      "text-left px-2 py-1.5 rounded text-sm flex items-center gap-2 flex-1 min-w-0",
-                      if(b.active?,
-                        do: "opacity-50 cursor-default",
-                        else: "hover:bg-base-200"
-                      )
-                    ]}
-                    id={"activate-#{b.id}"}
-                  >
-                    <span class="truncate flex-1">{b.name}</span>
-                    <span class="flex gap-1 shrink-0 items-center">
-                      <span
-                        :if={b.active?}
-                        class="text-[10px] text-success inline-flex items-center gap-0.5"
-                      >
-                        <.icon name="hero-check-circle" class="w-3 h-3" /> activo
-                      </span>
-                      <span
-                        :for={cap <- b.capabilities}
-                        class="text-[10px] uppercase tracking-wide badge badge-ghost badge-sm"
-                      >
-                        {cap}
-                      </span>
-                    </span>
-                  </button>
-                </div>
-                <div class="border-t border-base-300 my-1"></div>
+                <button
+                  type="button"
+                  phx-click="close_catalog_modal"
+                  class="btn btn-ghost btn-sm btn-circle"
+                  id="close-catalog-modal"
+                  aria-label="Cerrar"
+                >
+                  <.icon name="hero-x-mark" class="w-4 h-4" />
+                </button>
               </div>
 
+              <form
+                id="catalog-search-form"
+                phx-change="search_catalog"
+                phx-submit="search_catalog"
+                class="mt-2"
+              >
+                <input
+                  type="text"
+                  name="query"
+                  id="catalog-search"
+                  value={@catalog_query}
+                  placeholder="Buscar proveedor o id (openrouter, fireworks, qwen…)"
+                  class="input input-sm w-full"
+                  autocomplete="off"
+                />
+              </form>
+
               <button
+                type="button"
                 phx-click="new_custom_provider"
-                class="text-left px-2 py-1.5 rounded hover:bg-base-200 text-sm flex justify-between items-center"
+                class="text-left px-3 py-2 mt-2 rounded-lg border border-dashed border-base-300 hover:bg-base-200 flex justify-between items-center"
                 id="new-custom-provider-btn"
               >
-                <span>Custom provider</span>
+                <span class="flex items-center gap-2">
+                  <.icon name="hero-wrench-screwdriver" class="w-4 h-4" />
+                  <span class="font-medium">Custom provider</span>
+                </span>
                 <span class="text-xs opacity-50">OPENAI-COMPATIBLE</span>
               </button>
+
+              <div class="divider my-1"></div>
+
+              <div
+                class="overflow-y-auto flex-1 min-h-0 -mx-1 px-1"
+                id="catalog-results"
+                phx-update="replace"
+              >
+                <div
+                  :for={entry <- @catalog_results}
+                  id={"catalog-row-#{entry.key}"}
+                  class="rounded-lg hover:bg-base-200"
+                >
+                  <div class="flex items-center gap-3 p-2">
+                    <div
+                      tabindex="0"
+                      role="button"
+                      id={"activate-catalog-#{entry.key}"}
+                      phx-click={
+                        if(not entry.activated?,
+                          do: "activate_catalog_provider",
+                          else: nil
+                        )
+                      }
+                      phx-value-key={entry.key}
+                      class={[
+                        "flex items-center gap-3 flex-1 min-w-0 rounded-lg text-left",
+                        if(not entry.activated?,
+                          do: "cursor-pointer",
+                          else: "cursor-default"
+                        )
+                      ]}
+                    >
+                      <%!-- Mismo chip claro que las cards: el logo del catálogo
+                           es fill="currentColor" (negro dentro de un <img>). --%>
+                      <span class="flex items-center justify-center w-8 h-8 shrink-0 rounded-lg bg-white overflow-hidden">
+                        <img
+                          :if={entry.logo_url}
+                          src={entry.logo_url}
+                          alt=""
+                          class="w-5 h-5 object-contain"
+                          loading="lazy"
+                        />
+                        <.icon
+                          :if={!entry.logo_url}
+                          name="hero-server-stack"
+                          class="w-4 h-4 text-neutral-600"
+                        />
+                      </span>
+
+                      <span class="flex-1 min-w-0">
+                        <span class="flex items-center gap-2">
+                          <span class="font-medium truncate">{entry.name}</span>
+                          <code class="text-[10px] text-base-content/40 truncate">
+                            {entry.key}
+                          </code>
+                        </span>
+                        <span class="block text-[11px] text-base-content/50 truncate">
+                          {entry.base_url || "—"}
+                        </span>
+                      </span>
+
+                      <span class="flex gap-1 shrink-0 items-center">
+                        <span
+                          :if={entry.activated?}
+                          class="text-[10px] text-success inline-flex items-center gap-0.5"
+                        >
+                          <.icon name="hero-check-circle" class="w-3 h-3" /> activo
+                        </span>
+                      </span>
+                    </div>
+
+                    <a
+                      :if={entry.doc_url}
+                      href={entry.doc_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="btn btn-ghost btn-xs shrink-0"
+                      id={"docs-#{entry.key}"}
+                      title={"Documentación de #{entry.name}"}
+                    >
+                      <.icon name="hero-arrow-top-right-on-square" class="w-3 h-3" />
+                    </a>
+                  </div>
+                </div>
+
+                <div
+                  :if={@catalog_results == []}
+                  class="text-center py-8 text-base-content/40 text-sm"
+                  id="catalog-empty"
+                >
+                  Ningún proveedor coincide con la búsqueda.
+                </div>
+              </div>
+
+              <p class="text-[11px] text-base-content/40 mt-2 shrink-0" id="catalog-count">
+                {@catalog_results |> length()} de {@catalog_total}
+              </p>
             </div>
           </div>
         </div>
@@ -704,59 +1004,62 @@ defmodule TokengateWeb.ProvidersLive do
                 {if @editing_provider_id == :new, do: "Nuevo proveedor", else: "Editar proveedor"}
               </h2>
               <.form for={@form} id="provider-form" phx-submit="save_provider">
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
-                  <div class="space-y-3">
-                    <.input
-                      field={@form[:name]}
-                      type="text"
-                      label="Nombre"
-                      placeholder="mi-relay"
-                      hint="Identificador único del proveedor custom."
-                    />
-                    <.input
-                      field={@form[:base_url]}
-                      type="text"
-                      label="Base URL"
-                      placeholder="https://relay.example.com/v1"
-                      hint="URL base (OpenAI-compatible). El adapter agrega /chat/completions, /models y /embeddings."
-                    />
-                    <.input
-                      :if={@editing_provider_id == :new}
-                      field={@form[:billing_type]}
-                      type="select"
-                      label="Facturación"
-                      options={[
-                        {"Pay per token", "pay_per_token"},
-                        {"Suscripción (plan incluido)", "subscription"}
-                      ]}
-                      hint="Se elige una vez al crear el proveedor. Suscripción = costo $0 (no se cobra ni reserva budget)."
-                    />
-                  </div>
+                <div class="space-y-3">
+                  <.input
+                    field={@form[:name]}
+                    type="text"
+                    label="Nombre"
+                    placeholder="mi-relay"
+                    disabled={@editing_provider_builtin?}
+                    hint={
+                      if @editing_provider_builtin?,
+                        do: "Identidad del catálogo — no editable. Aquí solo se editan los límites.",
+                        else: "Identificador único del proveedor custom."
+                    }
+                  />
+                  <.input
+                    field={@form[:base_url]}
+                    type="text"
+                    label="Base URL"
+                    placeholder="https://relay.example.com/v1"
+                    disabled={@editing_provider_builtin?}
+                    hint="URL base (OpenAI-compatible)."
+                  />
+                </div>
 
-                  <div class="space-y-3 border-t sm:border-t-0 sm:border-l border-base-300 sm:pl-6">
-                    <p class="text-xs opacity-60">
-                      URLs por servicio (opcional) — vacío = derivar del Base URL.
-                    </p>
+                <%!-- Limits live on the provider: every API key of this provider
+                     inherits them (a credential is just an alias + secret). --%>
+                <div class="pt-4 mt-4 border-t border-base-200">
+                  <h3 class="text-sm font-semibold mb-1">Límites del proveedor</h3>
+                  <p class="text-xs text-base-content/50 mb-3">
+                    Se aplican a todas las API keys de este proveedor, que los heredan. Vacío = sin límite.
+                  </p>
+                  <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-5">
                     <.input
-                      field={@form[:chat_url]}
-                      type="text"
-                      label="Chat URL"
-                      placeholder="https://relay.example.com/api/chat/completions"
-                      hint="Vacío = Base URL + /chat/completions."
+                      field={@form[:max_rpm]}
+                      type="number"
+                      label="Max RPM"
+                      hint="Requests por minuto en todo el proveedor. Vacío = sin límite."
                     />
                     <.input
-                      field={@form[:models_url]}
-                      type="text"
-                      label="Models URL"
-                      placeholder="https://relay.example.com/api/models"
-                      hint="Vacío = Base URL + /models."
+                      field={@form[:max_concurrent]}
+                      type="number"
+                      label="Max concurrencia"
+                      hint="Requests simultáneos en todo el proveedor. Vacío = sin límite."
                     />
                     <.input
-                      field={@form[:embeddings_url]}
-                      type="text"
-                      label="Embeddings URL"
-                      placeholder="https://relay.example.com/api/embeddings"
-                      hint="Vacío = Base URL + /embeddings."
+                      field={@form[:max_concurrent_per_user]}
+                      type="number"
+                      label="Max concurrencia por usuario"
+                      hint="Tope simultáneo por usuario. Vacío = sin límite."
+                    />
+                    <.input
+                      field={@form[:receive_timeout_ms]}
+                      type="number"
+                      label="Timeout (ms)"
+                      hint={
+                        "Tiempo máximo de espera por respuesta. Vacío = default global (#{ProviderLimits.default_receive_timeout_ms()} ms)."
+                      }
                     />
                   </div>
                 </div>
@@ -806,30 +1109,6 @@ defmodule TokengateWeb.ProvidersLive do
                         else: "El token que entrega el proveedor (sk-...)."
                     }
                   />
-                  <.input
-                    field={@credential_form[:max_rpm]}
-                    type="number"
-                    label="Max RPM"
-                    hint="Requests por minuto. Vacío o 0 = sin límite."
-                  />
-                  <.input
-                    field={@credential_form[:max_concurrent]}
-                    type="number"
-                    label="Max concurrencia"
-                    hint="Requests simultáneos en toda la key. Vacío = sin límite."
-                  />
-                  <.input
-                    field={@credential_form[:max_concurrent_per_user]}
-                    type="number"
-                    label="Max concurrencia por usuario"
-                    hint="Tope simultáneo por usuario en esta key. Vacío = sin límite."
-                  />
-                  <.input
-                    field={@credential_form[:receive_timeout_ms]}
-                    type="number"
-                    label="Timeout (ms)"
-                    hint="Tiempo máximo de espera por respuesta. Vacío = default global (60s)."
-                  />
                 </div>
                 <div class="flex gap-2 pt-4 mt-5 border-t border-base-200 justify-end">
                   <button type="button" phx-click="cancel_credential" class="btn btn-ghost btn-sm">
@@ -837,6 +1116,61 @@ defmodule TokengateWeb.ProvidersLive do
                   </button>
                   <button type="submit" class="btn btn-primary btn-sm" id="save-credential-btn">
                     {(@editing_credential_id && "Actualizar") || "Guardar"}
+                  </button>
+                </div>
+              </.form>
+            </div>
+          </div>
+        </div>
+
+        <%!-- Capacidades modal: one path per service. Empty inherits — the
+             catalog code path when the builtin declares one, else the generic
+             adapter default; anything typed overrides it. --%>
+        <div
+          :if={@paths_form}
+          class="fixed inset-0 z-50 flex items-center justify-center p-4"
+          id="paths-modal"
+        >
+          <div class="absolute inset-0 bg-black/50" phx-click="cancel_paths" />
+          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-3xl">
+            <div class="card-body p-6 max-h-[85vh] overflow-y-auto">
+              <div class="flex items-start justify-between gap-4">
+                <div>
+                  <h2 class="text-lg font-semibold">Capacidades</h2>
+                  <p class="text-xs text-base-content/60 mt-1">
+                    Path de cada servicio de <span class="font-medium">{@paths_provider_name}</span>. Se
+                    resuelve como <code>base_url</code> + path; vacío = default del adapter.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  phx-click="cancel_paths"
+                  class="btn btn-ghost btn-sm btn-circle"
+                  id="close-paths-modal"
+                  aria-label="Cerrar"
+                >
+                  <.icon name="hero-x-mark" class="w-4 h-4" />
+                </button>
+              </div>
+
+              <.form for={@paths_form} id="paths-form" phx-submit="save_paths">
+                <.input field={@paths_form[:provider_id]} type="hidden" />
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-5 mt-4">
+                  <.input
+                    :for={service <- @path_service_rows}
+                    field={@paths_form[service.key]}
+                    type="text"
+                    label={service.label}
+                    placeholder={service.placeholder}
+                    hint={service.hint}
+                  />
+                </div>
+                <div class="flex gap-2 pt-4 mt-5 border-t border-base-200 justify-end">
+                  <button type="button" phx-click="cancel_paths" class="btn btn-ghost btn-sm">
+                    Cancelar
+                  </button>
+                  <button type="submit" class="btn btn-primary btn-sm" id="save-paths-btn">
+                    Guardar
                   </button>
                 </div>
               </.form>
@@ -904,6 +1238,26 @@ defmodule TokengateWeb.ProvidersLive do
               <div class="flex items-start justify-between gap-4">
                 <div>
                   <div class="flex items-center gap-2">
+                    <%!-- Chip claro fijo: los logos del catálogo usan
+                         fill="currentColor" y dentro de un <img> eso resuelve a
+                         negro — sobre el card oscuro (tema dim) quedaban
+                         invisibles. El icono genérico (proveedor sin logo del
+                         catálogo, o sea los customs) se pinta oscuro para el
+                         mismo chip. --%>
+                    <span class="flex items-center justify-center w-7 h-7 shrink-0 rounded-lg bg-white overflow-hidden">
+                      <img
+                        :if={provider.logo_url}
+                        src={provider.logo_url}
+                        alt=""
+                        class="w-4 h-4 object-contain"
+                        loading="lazy"
+                      />
+                      <.icon
+                        :if={!provider.logo_url}
+                        name="hero-server-stack"
+                        class="w-4 h-4 text-neutral-600"
+                      />
+                    </span>
                     <h3 class="font-semibold text-base-content">{provider.name}</h3>
 
                     <span class={[
@@ -912,11 +1266,46 @@ defmodule TokengateWeb.ProvidersLive do
                     ]}>
                       {if provider.status == "active", do: "Activo", else: "Desactivado"}
                     </span>
+
+                    <a
+                      :if={provider.doc_url}
+                      href={provider.doc_url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="link link-hover text-xs text-base-content/50"
+                      id={"provider-docs-#{provider.id}"}
+                    >
+                      <.icon name="hero-arrow-top-right-on-square" class="w-3 h-3" /> Docs
+                    </a>
                   </div>
                   <p class="text-xs text-base-content/50 mt-1 font-mono">{provider.base_url}</p>
                   <p class="text-xs text-base-content/50 mt-0.5">
                     {length(credentials_for(provider))} credenciales
                   </p>
+
+                  <%!-- Provider-level limits: everything below this line (every
+                       key of this provider) inherits them. --%>
+                  <div
+                    class="mt-2 flex flex-wrap items-center gap-1.5"
+                    id={"provider-limits-#{provider.id}"}
+                  >
+                    <span class="text-[10px] uppercase tracking-wide text-base-content/40">Límites</span>
+                    <span class="badge badge-ghost badge-sm" title="Requests por minuto">
+                      RPM {provider.max_rpm || "∞"}
+                    </span>
+                    <span
+                      class="badge badge-ghost badge-sm"
+                      title="Concurrencia máxima del proveedor"
+                    >
+                      Conc. {provider.max_concurrent || "∞"}
+                    </span>
+                    <span class="badge badge-ghost badge-sm" title="Concurrencia máxima por usuario">
+                      Conc./usuario {provider.max_concurrent_per_user || "∞"}
+                    </span>
+                    <span class="badge badge-ghost badge-sm font-mono" title="Timeout de recepción">
+                      {timeout_label(provider)}
+                    </span>
+                  </div>
                 </div>
                 <div class="flex gap-2 items-center">
                   <button
@@ -927,10 +1316,29 @@ defmodule TokengateWeb.ProvidersLive do
                   >
                     {if provider.status == "active", do: "Desactivar", else: "Activar"}
                   </button>
-                  <%!-- Catalog builtins: identity is catalog-owned (changeset locks
-                       it and boot sync overwrites it) — no edit affordance. --%>
+                  <%!-- Capacidades: the per-service path overrides (base_url +
+                       path). Available on builtins too — paths are operational,
+                       not catalog identity. The badge counts the overridden
+                       services. --%>
                   <button
-                    :if={provider.source != "builtin"}
+                    phx-click="edit_paths"
+                    phx-value-id={provider.id}
+                    class="btn btn-sm btn-ghost"
+                    id={"paths-#{provider.id}"}
+                    title="Configurar el path de cada capacidad (base_url + path)"
+                  >
+                    <.icon name="hero-adjustments-horizontal" class="w-4 h-4" /> Capacidades
+                    <span
+                      :if={path_override_count(provider) > 0}
+                      class="badge badge-xs badge-primary"
+                    >
+                      {path_override_count(provider)}
+                    </span>
+                  </button>
+                  <%!-- Builtins are editable too, but ONLY for their limits: the
+                       form renders the catalog identity read-only and the
+                       changeset drops any change to it. --%>
+                  <button
                     phx-click="edit_provider"
                     phx-value-id={provider.id}
                     class="btn btn-sm btn-ghost"
@@ -975,10 +1383,6 @@ defmodule TokengateWeb.ProvidersLive do
                         <th>Alias</th>
                         <th>Key</th>
                         <th>En vuelo</th>
-                        <th>Max RPM</th>
-                        <th>Max conc.</th>
-                        <th>Conc./usuario</th>
-                        <th>Timeout</th>
                         <th>Breaker</th>
                         <th></th>
                       </tr>
@@ -1006,10 +1410,6 @@ defmodule TokengateWeb.ProvidersLive do
                             {inflight}
                           </span>
                         </td>
-                        <td>{cred.max_rpm || "—"}</td>
-                        <td>{cred.max_concurrent || "—"}</td>
-                        <td>{cred.max_concurrent_per_user || "—"}</td>
-                        <td class="font-mono text-xs">{cred.receive_timeout_ms || 60_000} ms</td>
                         <td>
                           <% breaker = Map.get(@breaker_statuses, cred.id, :closed) %>
                           <div class="flex items-center gap-2">

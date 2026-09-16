@@ -92,12 +92,22 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/operations/observability")
 
+    # El binding vive en el FORM, no en el input: un `phx-change` sin <form>
+    # alrededor lanza en el cliente y el evento nunca llega al servidor.
+    assert has_element?(view, "#observability-search-form input[name='search']")
+
     # No match — destination disappears
-    view |> element("input[name='search']") |> render_change(%{"search" => "zzz-no-match"})
+    view
+    |> element("#observability-search-form")
+    |> render_change(%{"search" => "zzz-no-match"})
+
     refute has_element?(view, "#edit-destination-#{destination.id}")
 
     # Match by name — destination reappears
-    view |> element("input[name='search']") |> render_change(%{"search" => destination.name})
+    view
+    |> element("#observability-search-form")
+    |> render_change(%{"search" => destination.name})
+
     assert has_element?(view, "#edit-destination-#{destination.id}")
   end
 
@@ -110,14 +120,16 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/operations/observability")
 
+    assert has_element?(view, "#observability-group-filter-form select#group-filter")
+
     view
-    |> element("#group-filter")
+    |> element("#observability-group-filter-form")
     |> render_change(%{"group_filter" => other_group.id})
 
     refute has_element?(view, "#edit-destination-#{destination.id}")
 
     view
-    |> element("#group-filter")
+    |> element("#observability-group-filter-form")
     |> render_change(%{"group_filter" => group.id})
 
     assert has_element?(view, "#edit-destination-#{destination.id}")

@@ -218,26 +218,39 @@ defmodule TokengateWeb.ObservabilityLive do
           </:subtitle>
           <:actions>
             <div class="flex items-center gap-2">
-              <input
-                type="text"
-                name="search"
-                value={@search}
-                placeholder="Buscar nombre o URL…"
+              <%!-- Igual que en grupos: el phx-change necesita un <form> alrededor.
+                   El select lleva su PROPIO phx-change, que tiene precedencia
+                   sobre el del form. --%>
+              <form
+                id="observability-search-form"
                 phx-change="search"
+                phx-submit="search"
                 phx-debounce="200"
-                class="input input-sm w-48"
-              />
-              <select
-                name="group_filter"
-                phx-change="filter_group"
-                class="select select-sm w-44"
-                id="group-filter"
               >
-                <option value="">Todos los grupos</option>
-                <option :for={group <- @groups} value={group.id} selected={@group_filter == group.id}>
-                  {group.name}
-                </option>
-              </select>
+                <input
+                  type="text"
+                  name="search"
+                  value={@search}
+                  placeholder="Buscar nombre o URL…"
+                  class="input input-sm w-48"
+                />
+              </form>
+              <form id="observability-group-filter-form" phx-change="filter_group">
+                <select
+                  name="group_filter"
+                  class="select select-sm w-44"
+                  id="group-filter"
+                >
+                  <option value="">Todos los grupos</option>
+                  <option
+                    :for={group <- @groups}
+                    value={group.id}
+                    selected={@group_filter == group.id}
+                  >
+                    {group.name}
+                  </option>
+                </select>
+              </form>
               <.button phx-click="new_destination" id="new-destination-btn">
                 <.icon name="hero-plus" class="w-4 h-4" /> Nuevo webhook
               </.button>

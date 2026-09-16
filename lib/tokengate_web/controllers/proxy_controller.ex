@@ -11,6 +11,12 @@ defmodule TokengateWeb.ProxyController do
     * `POST /v1/embeddings` — embeddings passthrough. Non-streaming only.
       The request is forwarded as received and the upstream response is
       returned untouched; TokenGate only adds auth and cost tracking.
+    * `POST /v1/rerank`, `/v1/audio/transcriptions`, `/v1/audio/speech`,
+      `/v1/images/generations`, `/v1/videos`, `/v1/music/generations` — the
+      rest of a provider's services, same passthrough contract as
+      embeddings. Each URL is `base_url` + the path `ProviderPaths` resolves
+      for that service (operator override → catalog hardcode → generic
+      default), so one provider serves all of them off one `base_url`.
 
   ## Two-gate throttling
 
@@ -20,12 +26,13 @@ defmodule TokengateWeb.ProxyController do
        Limits are derived from group defaults + member overrides and keyed by
        the user's API key.
 
-    2. **Credential limits** — protects the provider API key from upstream
-       rate limits (provider-side). Limits are configured per credential
-       (`max_rpm`, `max_concurrent`, `max_concurrent_per_user`). The global
+    2. **Provider limits** — protects the provider API key from upstream
+       rate limits (provider-side). Limits are configured on the provider
+       (`max_rpm`, `max_concurrent`, `max_concurrent_per_user`) and inherited
+       by every credential — an API key is just an alias + secret. The global
        gates are keyed by credential.id; the per-user concurrency gate is
        keyed by {credential.id, api_key_id} so one heavy user can't swallow
-       every slot of a shared subscription credential — when it trips, only
+       every slot of a shared subscription provider — when it trips, only
        that user falls back to the next provider.
 
   Both gates must pass for a request to proceed. Group limits are acquired
@@ -48,6 +55,7 @@ defmodule TokengateWeb.ProxyController do
   alias Tokengate.Logs.WriteWorker
   alias Tokengate.Metrics.Collector
   alias Tokengate.Providers
+  alias Tokengate.Providers.{Credential, Provider, ProviderLimits}
 
   alias Tokengate.Proxy.{
     CacheControlInjector,
@@ -178,10 +186,58 @@ defmodule TokengateWeb.ProxyController do
     ProviderAdapter.dispatch(provider).embeddings(provider, credential, payload, opts)
   end
 
-  # Shared gate pipeline for non-streaming, non-chat endpoints (embeddings):
-  # same two-gate throttle, routing, budget check, inflight
-  # registry, fallback matrix and cost accounting as chat — minus the
-  # chat-only payload transforms (guard rails, prompt optimizer, reasoning).
+  ## The rest of a provider's services #########################################
+  #
+  # Six capabilities that only differ in the upstream path, so they all run
+  # through `service_passthrough/2` — the embeddings pipeline with the
+  # service (not the endpoint) as the argument. The service key is the
+  # `ProviderPaths` vocabulary and is the SAME one the Capacidades modal
+  # writes, so an operator override lands on the wire without a redeploy.
+
+  @doc "Reranks documents against a query at the provider's rerank service."
+  def rerank(conn, _params), do: service_passthrough(conn, :rerank)
+
+  @doc "Audio → text (transcription) at the provider's speech-to-text service."
+  def transcriptions(conn, _params), do: service_passthrough(conn, :stt)
+
+  @doc "Text → audio (speech synthesis) at the provider's text-to-speech service."
+  def speech(conn, _params), do: service_passthrough(conn, :tts)
+
+  @doc "Image generation at the provider's images service."
+  def image_generations(conn, _params), do: service_passthrough(conn, :image)
+
+  @doc "Video generation at the provider's videos service."
+  def video_generations(conn, _params), do: service_passthrough(conn, :video)
+
+  @doc "Music generation at the provider's music service."
+  def music_generations(conn, _params), do: service_passthrough(conn, :music)
+
+  # Shared entry point for the six non-chat services: same gates, routing,
+  # fallback matrix, budget hold and accounting as embeddings — the only
+  # difference is the path the adapter resolves for `service`.
+  #
+  # They route as `llm`: the model catalogue's `model_type` vocabulary is
+  # still `llm | embedding` (DB CHECK, see `Catalog`), so the capability
+  # here is what selects the UPSTREAM PATH, not the model row — a service
+  # model is registered like any other model and a group grant is what
+  # decides who reaches it.
+  defp service_passthrough(conn, service) do
+    payload = conn.body_params
+
+    simple_proxy(conn, payload, "llm", &adapter_service(&1, &2, &3, &4, service), service)
+  end
+
+  # The service through the dialect adapter of the routed provider: the
+  # adapter owns the URL (base_url + the path `ProviderPaths` resolves).
+  defp adapter_service(provider, credential, payload, opts, service) do
+    ProviderAdapter.dispatch(provider).service_post(provider, credential, service, payload, opts)
+  end
+
+  # Shared gate pipeline for non-streaming, non-chat endpoints (embeddings
+  # and the six path-routed services): same two-gate throttle, routing,
+  # budget check, inflight registry, fallback matrix and cost accounting as
+  # chat — minus the chat-only payload transforms (guard rails, prompt
+  # optimizer, reasoning).
   defp simple_proxy(conn, payload, capability, adapter_fun, kind) do
     # Same stable idempotency key as the chat path — shared by every
     # upstream attempt of this request.
@@ -496,16 +552,103 @@ defmodule TokengateWeb.ProxyController do
     {usage, body}
   end
 
-  defp estimate_embedding_usage(payload) do
-    tokens =
-      payload["input"]
-      |> List.wrap()
-      |> Enum.reduce(0, fn
-        s, acc when is_binary(s) -> acc + TokenEstimator.estimate_completion(s)
-        _, acc -> acc
-      end)
+  # The six path-routed services. Their response shapes have almost nothing
+  # in common — rerank reports tokens, image generation reports the same
+  # counters under other names, and tts/stt/video/music report none at all
+  # (audio bytes, a transcript, a job id) — so the rule is:
+  #
+  #   1. what the upstream reported wins (chat names, then the image API's);
+  #   2. otherwise the request's own text is estimated, so manual pricing
+  #      still books something proportional (the same honest estimate the
+  #      embeddings path has always used);
+  #   3. no text at all estimates to zero, and zero is `CostCalculator`'s
+  #      explicit $0 — we never invent a cost.
+  defp simple_usage(payload, body, kind)
+       when kind in [:rerank, :stt, :tts, :image, :video, :music] do
+    {reported_or_estimated_usage(payload, body), body}
+  end
 
-    %{prompt_tokens: tokens, completion_tokens: 0, cache_read_tokens: 0, cache_creation_tokens: 0}
+  defp reported_or_estimated_usage(payload, body) do
+    reported = UsageNormalizer.normalize(:openai, body)
+
+    cond do
+      reported != nil and not zero_usage?(reported) -> reported
+      tokens = image_tokens(body) -> tokens
+      true -> estimated_usage(payload)
+    end
+  end
+
+  # `usage` present but all-zero means the upstream has no token shape to
+  # offer (it echoed an empty object, or a shape we don't read); it must not
+  # shadow the estimate.
+  defp zero_usage?(usage) do
+    Enum.all?(
+      [:prompt_tokens, :completion_tokens, :cache_read_tokens, :cache_creation_tokens],
+      &(Map.get(usage, &1, 0) == 0)
+    )
+  end
+
+  # The other token naming an upstream may use for the same counters
+  # (`input_tokens` / `output_tokens`, which is how the image generation API
+  # labels them) maps onto the internal shape when present.
+  defp image_tokens(%{"usage" => %{} = usage}) do
+    case {count(usage["input_tokens"]), count(usage["output_tokens"])} do
+      {nil, nil} ->
+        nil
+
+      {prompt, completion} ->
+        %{
+          prompt_tokens: prompt || 0,
+          completion_tokens: completion || 0,
+          cache_read_tokens: 0,
+          cache_creation_tokens: 0
+        }
+    end
+  end
+
+  defp image_tokens(_body), do: nil
+
+  defp count(value) when is_integer(value) and value >= 0, do: value
+  defp count(_value), do: nil
+
+  defp estimate_embedding_usage(payload) do
+    %{
+      prompt_tokens: estimate_strings(payload["input"]),
+      completion_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0
+    }
+  end
+
+  defp estimated_usage(payload) do
+    %{
+      prompt_tokens: estimated_prompt_tokens(payload),
+      completion_tokens: 0,
+      cache_read_tokens: 0,
+      cache_creation_tokens: 0
+    }
+  end
+
+  # The request fields that carry the service's own text: `input` (tts, and
+  # stt's JSON variant), `prompt` (image/video/music) and `query` (rerank).
+  @estimated_text_fields ~w(input prompt query)
+
+  defp estimated_prompt_tokens(payload) do
+    Enum.reduce(@estimated_text_fields, 0, fn field, acc ->
+      acc + estimate_strings(payload[field])
+    end)
+  end
+
+  # A field may be a bare string or a list of strings (embeddings inputs,
+  # rerank documents); anything else — multimodal blocks, objects — is not
+  # guessed at.
+  defp estimate_strings(value) do
+    value
+    |> List.wrap()
+    |> Enum.reduce(0, fn
+      s, acc when is_binary(s) -> acc + TokenEstimator.estimate_completion(s)
+      _, acc -> acc
+    end)
   end
 
   ## Pipeline steps ############################################################
@@ -558,23 +701,28 @@ defmodule TokengateWeb.ProxyController do
   end
 
   # Two-level provider-side gate, keyed by credential.id globally and by
-  # {credential.id, api_key_id} per user:
+  # {credential.id, api_key_id} per user. The limits themselves are owned by
+  # the PROVIDER (every key of a provider inherits them):
   #
-  #   1. Global — `max_rpm` / `max_concurrent` protect the upstream API key
-  #      itself (quota and saturation). Shared by every user of the credential.
-  #   2. Per user — `max_concurrent_per_user` stops a single heavy user from
-  #      swallowing every slot of a shared subscription credential. When it
-  #      trips, only that user falls back to the next provider; everyone else
-  #      keeps using the subscription. nil means unlimited (track but don't block).
+  #   1. Global — `provider.max_rpm` / `provider.max_concurrent` protect the
+  #      upstream API key itself (quota and saturation). Shared by every user
+  #      of the credential.
+  #   2. Per user — `provider.max_concurrent_per_user` stops a single heavy
+  #      user from swallowing every slot of a shared subscription provider.
+  #      When it trips, only that user falls back to the next provider;
+  #      everyone else keeps using it. nil means unlimited (track but don't
+  #      block).
   defp acquire_credential_limits(credential, key_id) do
+    provider = provider_of(credential)
+
     case Limits.acquire(credential.id, %{
-           rpm_limit: credential.max_rpm,
-           concurrency_limit: credential.max_concurrent
+           rpm_limit: provider.max_rpm,
+           concurrency_limit: provider.max_concurrent
          }) do
       :ok ->
         case Limits.acquire_concurrency(
                {credential.id, key_id},
-               credential.max_concurrent_per_user
+               provider.max_concurrent_per_user
              ) do
           :ok ->
             :ok
@@ -839,13 +987,21 @@ defmodule TokengateWeb.ProxyController do
 
   ## Provider execution with fallback ##########################################
 
-  # Upstream receive timeout: the credential's own value wins when set; nil
-  # falls back to the global config default (60s). Credentials created before
-  # the default was relaxed carry an explicit value and keep it.
+  # Upstream receive timeout: the provider's own value wins when set; nil
+  # falls back to the global config default (see ProviderLimits).
   defp receive_timeout(credential) do
-    credential.receive_timeout_ms ||
-      Application.get_env(:tokengate, :proxy, [])
-      |> Keyword.get(:receive_timeout_ms, 60_000)
+    credential |> provider_of() |> ProviderLimits.receive_timeout_ms()
+  end
+
+  # The limits are provider-owned, so every gate below needs the provider
+  # struct. Routing already preloads it (`credential: :provider`) and serves it
+  # from the 60s routing cache, so the normal path is a plain struct read with
+  # no DB hit. A credential that reaches us without it loaded (tests, direct
+  # callers) pays one query instead of silently applying no limits at all.
+  defp provider_of(%Credential{provider: %Provider{} = provider}), do: provider
+
+  defp provider_of(%Credential{} = credential) do
+    Tokengate.Repo.preload(credential, :provider).provider
   end
 
   # Extracts whitelisted client headers to forward upstream, plus the

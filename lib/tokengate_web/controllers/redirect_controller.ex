@@ -68,6 +68,11 @@ defmodule TokengateWeb.RedirectController do
     redirect(conn, to: append_query(~p"/operations/monitoring", conn))
   end
 
+  @doc "``/dashboard/services/supervised`` → ``/services/supervised``"
+  def supervised_services(conn, _params) do
+    redirect(conn, to: append_query(~p"/services/supervised", conn))
+  end
+
   defp append_query(path, conn) do
     case conn.query_string do
       "" -> path

@@ -77,6 +77,10 @@ defmodule TokengateWeb.Router do
     # La página de logs se promovió a /operations/monitoring.
     get "/logs", RedirectController, :logs
 
+    # Los servicios supervisados dejaron de ser una subpágina del
+    # dashboard: viven en /services/supervised (sección propia).
+    get "/dashboard/services/supervised", RedirectController, :supervised_services
+
     # Refactor /stats: el detalle de miembro se consolidó en el detalle
     # de usuario. El prefijo /admin se retiró en favor de las
     # sub-secciones del sidebar, así que sus rutas legacy
@@ -101,11 +105,14 @@ defmodule TokengateWeb.Router do
       live "/dashboard", DashboardLive
     end
 
-    # Read-only view of the services the current user supervises. Open to
-    # any authenticated user (admin or not) — supervisors are read-only.
+    # Read-only views of the services the current user supervises. Access is
+    # granted ONLY by a live `service_supervisors` row — no role involved — so
+    # removing a user as supervisor revokes the access (checked on every mount,
+    # sockets included, plus a hot PubSub notice for views already open).
     live_session :service_viewer,
-      on_mount: [{TokengateWeb.UserAuth, :require_authenticated}] do
-      live "/dashboard/services/supervised", SupervisedServicesLive
+      on_mount: [{TokengateWeb.UserAuth, :require_service_supervisor}] do
+      live "/services/supervised", SupervisedServicesLive
+      live "/services/supervised/:service_id", SupervisedServiceStatsLive
     end
 
     live_session :admin,
@@ -136,8 +143,10 @@ defmodule TokengateWeb.Router do
       live "/access/groups/:id/members", GroupMembersLive
       live "/access/users", UsersLive
       live "/access/services", ServicesLive
-      # Crédito — suscripciones y top-ups.
+      # Crédito — suscripciones recurrentes y top-ups (una página cada una;
+      # mismo modelo, vista distinta: subs mensuales vs crédito de una vez).
       live "/credit/subscriptions", SubscriptionsLive
+      live "/credit/topups", TopupsLive
       # Operaciones — logs en vivo, webhooks y danger zone.
       live "/operations/monitoring", MonitoringLive
       live "/operations/observability", ObservabilityLive
@@ -158,6 +167,17 @@ defmodule TokengateWeb.Router do
     get "/models", ProxyController, :models
     post "/chat/completions", ProxyController, :chat_completions
     post "/embeddings", ProxyController, :embeddings
+
+    # The rest of a provider's services. The segment here is the gateway's
+    # public name for the capability, NOT the upstream path: the URL is
+    # `base_url` + what `ProviderPaths` resolves (operator override in the
+    # Capacidades modal → catalog hardcode → generic default).
+    post "/rerank", ProxyController, :rerank
+    post "/audio/transcriptions", ProxyController, :transcriptions
+    post "/audio/speech", ProxyController, :speech
+    post "/images/generations", ProxyController, :image_generations
+    post "/videos", ProxyController, :video_generations
+    post "/music/generations", ProxyController, :music_generations
   end
 
   # Other scopes may use custom stacks.

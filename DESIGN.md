@@ -24,7 +24,9 @@ idéntico entre apps; lo específico de cada una vive en **Custom**.
 1. **daisyUI nativo + Tailwind.** No inventes componentes si daisyUI ya trae
    (`btn`, `card`, `table`, `badge`, `input`, `select`, `alert`, `modal`,
    `dropdown`, `tabs`). CSS propio sólo para convenciones **globales**.
-2. **Un solo tema: `dark`.** Las tres apps corren daisyUI `dark --default`.
+2. **Un solo tema por app, elegido en `app.css`.** La convención familiar es
+   daisyUI `dark --default`. **TokenGate corre `dim --default`** (excepción
+   consciente, ver §Custom — Dran y Gorim siguen en `dark`).
    Nada de hex/oklch hardcodeado en plantillas: siempre las vars del tema.
 3. **Reusar antes de crear.** Mira `*Web.CoreComponents` antes de escribir markup
    a mano (inputs, tablas, headers, iconos ya están).
@@ -37,12 +39,12 @@ idéntico entre apps; lo específico de cada una vive en **Custom**.
 /* assets/css/app.css */
 @plugin "../vendor/heroicons";
 @plugin "../vendor/daisyui" {
-  themes: dark --default;   /* ← tema ÚNICO de la familia */
+  themes: dark --default;   /* ← tema ÚNICO de la familia (TokenGate: dim, §Custom) */
 }
 ```
 
 ```heex
-<%!-- lib/<app>_web/components/layouts/root.html.heex --%>
+<%!-- lib/<app>_web/components/layouts/root.html.heex — TokenGate: data-theme="dim" --%>
 <html data-theme="dark">
 ```
 
@@ -155,7 +157,7 @@ Reglas:
 - **Hover de fila, sin zebra** — regla global (una vez por app):
   ```css
   .table tbody tr { transition: background-color 150ms ease; }
-  .table tbody tr:hover { background-color: color-mix(in oklab, var(--b2) 60%, transparent); }
+  .table tbody tr:hover { background-color: color-mix(in oklab, var(--color-base-200) 60%, transparent); }
   ```
 - **Colecciones con `stream` + `phx-update="stream"`** (nunca listas grandes
   asignadas). El `id` de cada fila es el del item.
@@ -430,9 +432,42 @@ Reglas:
 
 Este `DESIGN.md` es de **TokenGate**, la referencia del Commons: si dudas del look de un control, mira cómo lo resuelve un LiveView de TokenGate antes de inventar.
 
-Tema **`dark` (único)** · `<html lang="en" data-theme="dark">`.
-> Cambio reciente: antes corría `night --default, light`; se fijó a `dark` para
-> alinear con la familia.
+Tema **`dim` (único)** · `<html lang="en" data-theme="dim">`.
+> Excepción consciente a la convención familiar (`dark`): TokenGate corre
+> `dim`. Dran y Gorim siguen en `dark --default`.
+> Historial: `night --default, light` → `dark` (alinear con la familia) →
+> `fantasy` → `garden` → `dim` (decisión actual: es `light` atenuado —
+> daisyUI lo genera de la paleta de `light`, theme genérico y luminoso).
+
+**Paleta real de `dim`.** Fuente de verdad: los `oklch()` que el plugin emite
+en `priv/static/assets/css/app.css`. Los hex son conversión aproximada (sin
+gamut-mapping), sólo para leer la tabla. Contraste = WCAG del par con su
+`*-content`.
+
+| Token | oklch | ≈hex | Rol · contraste |
+|---|---|---|---|
+| `--color-base-100` | `oklch(30.857% 0.023 264.149)` | `#2a303c` | fondo de app · texto 7.9:1 ✅ |
+| `--color-base-200` | `oklch(28.036% 0.019 264.182)` | `#242933` | paneles / hover de fila · 8.7:1 ✅ |
+| `--color-base-300` | `oklch(26.346% 0.018 262.177)` | `#20252e` | chips, bordes · 9.2:1 ✅ |
+| `--color-base-content` | `oklch(82.901% 0.031 222.959)` | `#b2ccd6` | texto principal |
+| `--color-primary` | `oklch(86.133% 0.141 139.549)` | `#9fe88d` | verde lima (el botón por defecto) · 13.0:1 ✅ |
+| `--color-secondary` | `oklch(73.375% 0.165 35.353)` | `#ff7d5d` | coral · 7.9:1 ✅ |
+| `--color-accent` | `oklch(74.229% 0.133 311.379)` | `#c792e9` | lila · 8.2:1 ✅ |
+| `--color-neutral` | `oklch(24.731% 0.02 264.094)` | `#1c212b` | panels/chips oscuros · 9.6:1 ✅ |
+| `--color-success` | `oklch(86.171% 0.142 166.534)` | `#62efbd` | ok, en vivo · 13.2:1 ✅ |
+| `--color-warning` | `oklch(86.163% 0.142 94.818)` | `#efd057` | aviso, oro del podio · 12.5:1 ✅ |
+| `--color-error` | `oklch(82.418% 0.099 33.756)` | `#ffae9b` | destructivo · 10.9:1 ✅ |
+| `--color-info` | `oklch(86.078% 0.142 206.182)` | `#28ebff` | informativo · 13.0:1 ✅ |
+
+`color-scheme: dark` · radios `box 1rem` / `field 0.5rem` / `selector 1rem` ·
+`--border 1px` · `--depth 0` · `--noise 0`.
+
+> **El primary pinta todos los botones por defecto.** `CoreComponents.button/1`
+> sin `variant` emite `btn-primary btn-soft`, así que el verde `#9fe88d` es el
+> color esperado, no un bug de CSS. Para otro color usá la utilidad explícita
+> (`btn-secondary` coral, `btn-accent` lila) — **no** redefinas el primary del
+> tema. En `dim` TODOS los pares `color/content` pasan AA (≥7.9:1): no hay la
+> advertencia de contraste que traía garden (primary 3.84:1).
 
 ### T1. `app.css` (mínimo: ~40 líneas)
 
@@ -441,13 +476,46 @@ Sólo tema + heroicons + `@custom-variant` de LiveView + `[data-phx-session]` y
 
 ```css
 .table tbody tr { transition: background-color 150ms ease; }
-.table tbody tr:hover { background-color: color-mix(in oklab, var(--b2) 60%, transparent); }
+.table tbody tr:hover { background-color: color-mix(in oklab, var(--color-base-200) 60%, transparent); }
 ```
 
 **No hay utilidades tipográficas propias**: usa Tailwind + daisyUI directo
 (`text-lg font-semibold leading-8` para títulos, `text-sm text-base-content/70`
 para subtítulos, `text-xs text-base-content/50` para metadata, eyebrow
 `text-xs font-semibold uppercase tracking-wide text-base-content/40`).
+
+#### ¿Qué hay de CSS propio? (inventario)
+
+El snippet de la doc de daisyUI (`@import "tailwindcss"; @plugin "daisyui";`) es
+el mínimo para un Tailwind pelado. Este archivo agrega lo que Phoenix y el
+producto necesitan — y nada más:
+
+| Bloque | Para qué |
+|---|---|
+| `@import "tailwindcss" source(none)` + `@source` ×3 | escaneo explícito de clases (v4 no autodescubre) |
+| `@import "phoenix-colocated/…"` + `@source` de `_build/dev/phoenix-colocated` | CSS de hooks colocados en LiveView (dev) |
+| `@plugin "../vendor/heroicons"` | `<.icon name="hero-…">` |
+| `@plugin "../vendor/daisyui" { themes: dim --default }` | el tema |
+| `@custom-variant phx-click-loading` / `phx-submit-loading` / `phx-change-loading` | estados de carga de LiveView |
+| `[data-phx-session], [data-phx-teleported-src] { display: contents }` | que los wrappers de LiveView no rompan el layout |
+| `.table tbody tr:hover`, `transition` (§C6) | hover de fila unificado |
+| `@keyframes reset-colon-blink` + `.reset-colon` + `prefers-reduced-motion` | el `:` que late en el contador del tope diario |
+
+**Regla: ningún bloque propio declara color.** El único color del CSS custom es
+el hover de tabla, y sale de `var(--color-base-200)`. Si hace falta un color, se
+usa el token/utility del tema — nunca hex, oklch ni la paleta cruda de Tailwind.
+
+**Excepciones documentadas** (las dos únicas):
+
+- **Paleta categórica del proveedor.** `StatsHelpers.provider_legend_color/2`
+  usa 16 `bg-*-500` de Tailwind crudo. Es intencional: hacen falta 16 colores
+  distinguibles y el tema trae 11 tokens; no son "colores de UI" sino series.
+- **Podio de rankings** (`rank_badge/1`, `medal/1`) tokenizado: 1º
+  `bg-warning text-warning-content` (12.5:1 en dim), 2º `bg-base-300
+  text-base-content` (9.2:1), 3º `bg-secondary text-secondary-content`
+  (7.9:1). Antes eran `amber-200` / `slate-200` / `orange-300`, elegidos para
+  fondo oscuro: sobre el `base-100` de garden (claro) daban **1.0–1.4:1**,
+  es decir invisibles. Los tokens actuales funcionan en cualquier tema.
 
 ### T2. Dos shells
 
@@ -523,5 +591,7 @@ Sin librería (ver **Commons C9**). Dos formas reales:
 - `lib/tokengate_web/live/group_members_live.ex` — modal overlay, autocomplete de
   email, tabla, empty state.
 - `lib/tokengate_web/live/observability_live.ex` — tabla canónica card + `table-sm`.
-- `assets/css/app.css` — tema `dark --default` + regla global de tablas.
+- `assets/css/app.css` — tema `dim --default`, regla global de tablas
+  (`var(--color-base-200)`: en daisyUI 5 los alias `--b1/--b2/--b3` ya no existen)
+  y el latido `.reset-colon`. Inventario de CSS propio en §T1.
 - Skills: `liveview-ui-wiring` (pickers), `phoenix-daisyui-theming` (tema).

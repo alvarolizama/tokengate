@@ -831,8 +831,9 @@ defmodule TokengateWeb.ServicesLive do
               <div>
                 <p class="text-sm font-medium">Supervisores</p>
                 <p class="text-xs text-base-content/60">
-                  Ven sus servicios asignados en <code>/dashboard/services/supervised</code>
-                  (solo lectura).
+                  Ven sus servicios asignados en <code>/services/supervised</code> (solo lectura):
+                  resumen por servicio y stats completos por servicio. Al quitar a un supervisor
+                  pierde el acceso de inmediato.
                 </p>
               </div>
               <button
@@ -875,13 +876,16 @@ defmodule TokengateWeb.ServicesLive do
             </div>
 
             <div :if={@supervisor_search_service_id == @detail_service_id} class="mt-3">
+              <%!-- `phx-keyup` es el mecanismo de este buscador (el handler
+                   recibe %{"value" => q}); el `phx-change` que estaba aquí
+                   sobraba y reventaba en el cliente en cada tecla (un
+                   phx-change exige un <form> alrededor). --%>
               <.input
                 type="text"
                 name="supervisor_query"
                 value={@supervisor_search_query}
                 placeholder="Buscar por email o nombre…"
                 phx-keyup="search_supervisor_users"
-                phx-change="search_supervisor_users"
                 id="supervisor-search"
               />
               <div

@@ -23,10 +23,11 @@ config :tokengate,
        String.to_integer(System.get_env("FIRST_TOKEN_TIMEOUT_MS", "30000"))
 
 # ---------------------------------------------------------------------------
-# Proxy upstream timeout (default; per-credential receive_timeout_ms overrides)
+# Proxy upstream timeout — global fallback, applied to providers that set no
+# `receive_timeout_ms` of their own (limits live on the provider).
 # ---------------------------------------------------------------------------
 config :tokengate, :proxy,
-  receive_timeout_ms: String.to_integer(System.get_env("PROXY_RECEIVE_TIMEOUT_MS", "60000"))
+  receive_timeout_ms: String.to_integer(System.get_env("PROXY_RECEIVE_TIMEOUT_MS", "120000"))
 
 # ---------------------------------------------------------------------------
 # Routing health: a provider that answers but takes longer than

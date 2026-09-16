@@ -142,6 +142,47 @@ defmodule TokengateWeb.KpiHelpers do
     """
   end
 
+  @doc """
+  Compact metric tile (label + value + optional sub-line) for grids that need
+  more cells than the 4-card `kpi_cards/1` — e.g. one row per supervised
+  service. Same accent vocabulary, a size down.
+  """
+  attr :id, :string, required: true
+  attr :label, :string, required: true
+  attr :value, :string, required: true
+  attr :icon, :string, required: true
+
+  attr :accent, :string,
+    default: "primary",
+    doc: "primary | accent | success | warning | error | neutral"
+
+  attr :sub, :string, default: nil, doc: "sub-línea corta bajo el valor"
+
+  def metric_tile(assigns) do
+    ~H"""
+    <div
+      id={@id}
+      class="rounded-xl border border-base-300 bg-base-100 px-3 py-2.5 transition-colors hover:border-primary/40"
+    >
+      <div class="flex items-center justify-between gap-2">
+        <span class="text-[10px] font-medium text-base-content/60 uppercase tracking-wide">
+          {@label}
+        </span>
+        <.icon name={@icon} class={["w-4 h-4 shrink-0", tile_tone(@accent)]} />
+      </div>
+      <p class="mt-1 text-lg font-bold text-base-content tabular-nums leading-6">{@value}</p>
+      <p :if={@sub} class="text-[10px] text-base-content/40 truncate" title={@sub}>{@sub}</p>
+    </div>
+    """
+  end
+
+  defp tile_tone("success"), do: "text-success"
+  defp tile_tone("accent"), do: "text-accent"
+  defp tile_tone("warning"), do: "text-warning"
+  defp tile_tone("error"), do: "text-error"
+  defp tile_tone("neutral"), do: "text-base-content/40"
+  defp tile_tone(_), do: "text-primary"
+
   defp accent_bg("primary"), do: "bg-primary/10"
   defp accent_bg("accent"), do: "bg-accent/10"
   defp accent_bg("error"), do: "bg-error/10"

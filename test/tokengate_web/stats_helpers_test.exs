@@ -170,19 +170,19 @@ defmodule TokengateWeb.StatsHelpersTest do
       podium = render_component(&Stats.medal/1, %{rank: 1})
 
       assert podium =~ "aria-label=\"Puesto 1\""
-      assert podium =~ "amber"
+      assert podium =~ "warning"
       # El icono del hub es una clase heroicons (máscara con currentColor):
       # el color del puesto lo hereda del span.
       assert podium =~ "hero-trophy"
 
       second = render_component(&Stats.medal/1, %{rank: 2})
       assert second =~ "aria-label=\"Puesto 2\""
-      assert second =~ "slate"
+      assert second =~ "base-300"
       assert second =~ "hero-trophy"
 
       third = render_component(&Stats.medal/1, %{rank: 3})
       assert third =~ "aria-label=\"Puesto 3\""
-      assert third =~ "orange"
+      assert third =~ "secondary"
       assert third =~ "hero-trophy"
 
       rest = render_component(&Stats.medal/1, %{rank: 7})

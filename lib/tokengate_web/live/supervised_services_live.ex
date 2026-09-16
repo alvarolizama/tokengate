@@ -1,51 +1,58 @@
 defmodule TokengateWeb.SupervisedServicesLive do
   @moduledoc """
-  Read-only view of the services the current user supervises.
+  Read-only summary of the services the current user supervises.
 
-  Supervisors need visibility into spend, request volume, tokens, latency,
-  and current API-key / model configuration for the services they own —
-  but they must NOT be able to mutate anything. All admin actions
-  (create / edit / delete / regenerate key / revoke key / toggle model)
-  live exclusively in `TokengateWeb.ServicesLive` behind the `:admin`
-  live_session.
+  Two things live here that are *not* an admin concern:
 
-  Intentionally NOT defined: any `handle_event/3` callback. The view is
-  pure display — even if a malicious client fired a `phx-click` event
-  directly at the WebSocket, it would simply error because no handler is
-  attached.
+    * **Access** — the only thing that grants this page is a live row in
+      `service_supervisors` for the signed-in user (enforced by the
+      `:require_service_supervisor` `on_mount` hook on the router's
+      `:service_viewer` session). Removing the user as supervisor revokes the
+      access on the next mount, and a view already open reacts in the same
+      instant through the `{:supervisor_removed, service_id}` PubSub notice.
+    * **A summary per service** — spend, volume, tokens, errors and latency for
+      the last 30 days, plus its API-key status and granted models. The full
+      breakdown (period selector, per-model table, daily chart, recent requests)
+      lives in `SupervisedServiceStatsLive` at `/services/supervised/:id`.
+
+  Mutations stay out of reach: an admin action (create / edit / delete /
+  regenerate key / revoke key / toggle model) lives exclusively in
+  `TokengateWeb.ServicesLive` behind the `:admin` live_session.
+
+  Intentionally NOT defined: any `handle_event/3` callback. The view is pure
+  display — even a hostile client firing a `phx-click` straight at the
+  WebSocket finds no handler, and the `:read_only` hook halts every event
+  before it reaches one.
   """
 
   use TokengateWeb, :live_view
 
-  import Ecto.Query, only: [from: 2]
+  import TokengateWeb.KpiHelpers, only: [metric_tile: 1]
+
   alias Tokengate.Accounts
+  alias Tokengate.Metrics.DashboardCache
+  alias Tokengate.Metrics.Rollup
   alias Tokengate.Periods
-  alias Tokengate.Providers.{Model, ServiceModel}
+  alias Tokengate.Providers
   alias Tokengate.Repo
+  alias TokengateWeb.StatsHelpers, as: Stats
 
-  # Averaging latencies returns a Decimal/Number depending on the DB; we
-  # format it into a float-string for display.
-  defp format_latency(%Decimal{} = d) do
-    ms = d |> Decimal.round(0) |> Decimal.to_string()
-    ms <> " ms"
-  end
-
-  defp format_latency(value) when is_number(value) do
-    ms = value |> Float.round(0) |> :erlang.float_to_binary(decimals: 0)
-    ms <> " ms"
-  end
-
-  defp format_latency(_), do: "—"
+  # Same window the card labels advertise ("30 días").
+  @summary_period "30d"
 
   @impl true
   def mount(_params, _session, socket) do
-    user = socket.assigns[:current_user]
+    user = socket.assigns.current_user
+
+    if connected?(socket) do
+      Phoenix.PubSub.subscribe(Tokengate.PubSub, Accounts.supervised_services_topic(user.id))
+    end
 
     socket =
       socket
       |> assign(:page_title, "Mis servicios supervisados · Tokengate")
       |> attach_read_only_hook()
-      |> load_services(user)
+      |> load_services()
 
     {:ok, socket}
   end
@@ -58,100 +65,160 @@ defmodule TokengateWeb.SupervisedServicesLive do
   ## hook MUST return `{:cont, socket}` or `{:halt, socket}` — it is NOT a
   ## `handle_event/3` callback, so it does not require `{:noreply, ...}`.
   defp attach_read_only_hook(socket) do
-    attach_hook(socket, :read_only, :handle_event, fn _event, _params, socket ->
-      {:halt, put_flash(socket, :error, "Esta vista es de solo lectura.")}
+    attach_hook(socket, :read_only, :handle_event, fn event, _params, socket ->
+      # `set-timezone` is the app-wide sidebar selector: it writes the user's
+      # own timezone, never service data, so it stays allowed here.
+      if event in ["set-timezone"] do
+        {:cont, socket}
+      else
+        {:halt, put_flash(socket, :error, "Esta vista es de solo lectura.")}
+      end
     end)
   end
 
+  ## Supervision changes ---------------------------------------------------
+
+  ## A service was assigned to this supervisor while the page was open: reload
+  ## the summary so the new card appears without a manual refresh.
+  @impl true
+  def handle_info({:supervisor_added, _service_id}, socket) do
+    {:noreply, load_services(socket)}
+  end
+
+  ## Revocation in the same instant: the removed card disappears, and when the
+  ## user has no supervised service left the whole page is out of reach, so it
+  ## redirects to the dashboard.
+  def handle_info({:supervisor_removed, _service_id}, socket) do
+    socket = load_services(socket)
+
+    if socket.assigns.services_empty? do
+      {:noreply,
+       socket
+       |> put_flash(:error, "Ya no supervisas ningún servicio.")
+       |> push_navigate(to: ~p"/dashboard")}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info(_msg, socket), do: {:noreply, socket}
+
   ## Data loading --------------------------------------------------------
 
-  defp load_services(socket, %{id: user_id}) when is_binary(user_id) do
-    services = Accounts.services_for_supervisor(user_id)
+  defp load_services(socket) do
+    user = socket.assigns.current_user
+    timezone = socket.assigns[:timezone] || "Etc/UTC"
+
+    services =
+      user.id
+      |> Accounts.services_for_supervisor()
+      |> Repo.preload(:subscription)
+
     service_ids = Enum.map(services, & &1.id)
 
     # granted_models: %{service_id => [model_id, ...]} — scoped to the
     # supervisor's services only (never load the whole grant table into the
-    # socket, even if the template only renders this supervisor's rows).
-    granted_models =
-      from(sma in ServiceModel,
-        where: sma.service_id in ^service_ids,
-        select: {sma.service_id, sma.model_id}
-      )
-      |> Repo.all()
-      |> Enum.group_by(fn {service_id, _} -> service_id end, fn {_, model_id} -> model_id end)
-
-    # Only the models actually granted to these services — not the full catalog.
-    granted_alias_ids = granted_models |> Map.values() |> List.flatten() |> Enum.uniq()
+    # socket, even if the template only renders this supervisor's rows), and
+    # only the catalog rows actually granted (not the full catalog).
+    granted_models = Providers.granted_models_by_service(service_ids)
 
     models =
-      if granted_alias_ids == [] do
-        []
-      else
-        from(ma in Model, where: ma.id in ^granted_alias_ids, order_by: [asc: ma.name])
-        |> Repo.all()
-      end
+      granted_models
+      |> Map.values()
+      |> List.flatten()
+      |> Enum.uniq()
+      |> Providers.models_by_ids()
 
-    timezone = socket.assigns[:timezone] || "Etc/UTC"
-    thirty_days_ago = Periods.period_bounds("30d", timezone).from
+    bounds = Periods.period_bounds(@summary_period, timezone)
 
-    stats =
-      from(l in Tokengate.Logs.RequestLog,
-        where: l.group_member_id in ^service_ids,
-        where: l.inserted_at >= ^thirty_days_ago,
-        group_by: l.group_member_id,
-        select: %{
-          service_id: l.group_member_id,
-          total_cost: sum(l.provider_cost_usd),
-          total_requests: count(l.id),
-          total_input_tokens: sum(l.prompt_tokens),
-          total_output_tokens: sum(l.completion_tokens),
-          avg_latency_ms: avg(l.latency_ms)
-        }
+    # One aggregate per service for the whole set, shared between every
+    # supervisor looking at their page for ~5s (DashboardCache TTL): without
+    # it, N supervisors with M services each would run N×M group-by queries.
+    summaries =
+      DashboardCache.fetch_or_compute(
+        {:supervised_services_summary, user.id, @summary_period, timezone},
+        fn -> Rollup.service_summaries(service_ids, from: bounds.from, to: bounds.to) end
       )
-      |> Repo.all()
-      |> Map.new(fn s -> {s.service_id, s} end)
 
     socket
-    |> stream(:services, services, reset: true)
+    |> stream(:services, services,
+      reset: true,
+      dom_id: &"supervised-service-#{&1.id}"
+    )
     |> assign(:services_empty?, services == [])
+    |> assign(:service_count, length(services))
     |> assign(:granted_models, granted_models)
     |> assign(:models, models)
-    |> assign(:service_stats, stats)
+    |> assign(:summaries, summaries)
+    |> assign(:totals, totals(summaries))
   end
 
-  defp load_services(socket, _user), do: assign(socket, :services_empty?, true)
+  defp totals(summaries) do
+    summaries
+    |> Map.values()
+    |> Enum.reduce(
+      %{
+        cost_usd: Decimal.new(0),
+        request_count: 0,
+        error_count: 0,
+        prompt_tokens: 0,
+        completion_tokens: 0
+      },
+      fn row, acc ->
+        %{
+          cost_usd: Decimal.add(acc.cost_usd, row.cost_usd),
+          request_count: acc.request_count + row.request_count,
+          error_count: acc.error_count + row.error_count,
+          prompt_tokens: acc.prompt_tokens + row.prompt_tokens,
+          completion_tokens: acc.completion_tokens + row.completion_tokens
+        }
+      end
+    )
+  end
+
+  defp summary_for(summaries, service_id) do
+    Map.get(summaries, service_id, %{
+      cost_usd: Decimal.new(0),
+      request_count: 0,
+      error_count: 0,
+      prompt_tokens: 0,
+      completion_tokens: 0,
+      cache_read_tokens: 0,
+      avg_latency_ms: nil,
+      avg_tps: nil
+    })
+  end
 
   ## Template helpers ----------------------------------------------------
-  # Aliases for granted ids — reuses the helper signature from ServicesLive
-  # so both views look identical from the outside.
 
-  def granted_alias_ids(granted_models, service_id) do
-    Map.get(granted_models, service_id, [])
+  defp error_rate(0, _errors), do: nil
+  defp error_rate(requests, errors), do: Float.round(errors / requests, 4)
+
+  defp error_rate_label(requests, errors) do
+    case error_rate(requests, errors) do
+      nil -> "sin requests"
+      rate -> "#{Stats.format_percent(rate)} de error"
+    end
   end
 
-  def model_names_for(granted_models, service_id, all_models) do
-    granted_alias_ids(granted_models, service_id)
-    |> Enum.map(&Enum.find(all_models, fn a -> a.id == &1 end))
-    |> Enum.reject(&is_nil/1)
+  # Cifras por debajo del centavo se muestran con 4 decimales: en el resumen
+  # de un servicio pequeño un "$0.00" redondeado se lee como "no gastó nada".
+  defp format_cost(%Decimal{} = d) do
+    rounded_away? =
+      Decimal.compare(d, Decimal.new(0)) == :gt and Decimal.compare(d, Decimal.new("0.01")) == :lt
+
+    if rounded_away? do
+      "$" <> (d |> Decimal.round(4) |> Decimal.to_string())
+    else
+      "$" <> Stats.format_decimal(d)
+    end
   end
 
-  def format_decimal(%Decimal{} = d), do: d |> Decimal.round(2) |> Decimal.to_string()
-  def format_decimal(nil), do: "—"
-  def format_decimal(value), do: to_string(value)
+  defp format_cost(_), do: "$0.00"
 
-  def format_number(n) when is_integer(n) do
-    n
-    |> Integer.to_string()
-    |> String.reverse()
-    |> String.replace(~r/(\d{3})(?=\d)/, "\\1,")
-    |> String.reverse()
-  end
-
-  def format_number(%Decimal{} = d),
-    do: d |> Decimal.round(0) |> Decimal.to_string() |> format_number()
-
-  def format_number(nil), do: "0"
-  def format_number(n), do: to_string(n)
+  defp subscription_label(%{subscription: %{name: name}}) when is_binary(name), do: name
+  defp subscription_label(%{subscription: nil}), do: "Crédito ilimitado"
+  defp subscription_label(_service), do: "Crédito ilimitado"
 
   ## Render --------------------------------------------------------------
 
@@ -195,14 +262,71 @@ defmodule TokengateWeb.SupervisedServicesLive do
           </div>
         </div>
 
-        <div id="supervised-services" phx-update="stream">
-          <div
+        <%!-- Totales del conjunto supervisado: la foto de arriba antes de
+             entrar servicio por servicio. --%>
+        <section
+          :if={not @services_empty?}
+          id="supervised-totals"
+          class="card bg-base-100 border border-base-300 shadow-sm"
+        >
+          <div class="card-body gap-4">
+            <div class="flex items-center justify-between">
+              <h2 class="card-title text-base">
+                <.icon name="hero-chart-pie" class="w-5 h-5 text-base-content/60" />
+                Resumen de tus servicios
+              </h2>
+              <span class="text-[10px] text-base-content/40 hidden sm:inline">
+                últimos 30 días
+              </span>
+            </div>
+
+            <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+              <.metric_tile
+                id="totals-services"
+                label="Servicios"
+                value={Integer.to_string(@service_count)}
+                icon="hero-wrench-screwdriver"
+                accent="primary"
+              />
+              <.metric_tile
+                id="totals-cost"
+                label="Gasto real"
+                value={format_cost(@totals.cost_usd)}
+                icon="hero-currency-dollar"
+                accent="success"
+              />
+              <.metric_tile
+                id="totals-requests"
+                label="Requests"
+                value={Stats.format_number(@totals.request_count)}
+                icon="hero-bolt"
+                accent="accent"
+                sub={
+                  "#{Stats.format_compact(@totals.prompt_tokens)} in / #{Stats.format_compact(@totals.completion_tokens)} out"
+                }
+              />
+              <.metric_tile
+                id="totals-errors"
+                label="Errores"
+                value={Stats.format_number(@totals.error_count)}
+                icon="hero-exclamation-triangle"
+                accent={if @totals.error_count > 0, do: "error", else: "neutral"}
+                sub={error_rate_label(@totals.request_count, @totals.error_count)}
+              />
+            </div>
+          </div>
+        </section>
+
+        <div id="supervised-services" phx-update="stream" class="space-y-4">
+          <article
             :for={{id, service} <- @streams.services}
             id={id}
-            class="card bg-base-100 border border-base-300 shadow-sm mb-4"
+            class="card bg-base-100 border border-base-300 shadow-sm"
           >
-            <div class="card-body">
-              <div class="flex items-start justify-between">
+            <div class="card-body gap-4">
+              <% stats = summary_for(@summaries, service.id) %>
+
+              <header class="flex flex-wrap items-start justify-between gap-3">
                 <div>
                   <h3 class="font-semibold text-base-content flex items-center gap-2">
                     {service.name}
@@ -210,119 +334,22 @@ defmodule TokengateWeb.SupervisedServicesLive do
                       <.icon name="hero-eye" class="w-3 h-3 mr-1" /> Solo lectura
                     </span>
                   </h3>
-                  <div class="flex flex-wrap gap-2 mt-2">
+
+                  <div class="flex flex-wrap items-center gap-2 mt-2">
                     <span class="badge badge-outline badge-sm">
-                      {service.concurrency_limit} conc.
+                      {service.concurrency_limit || 5} conc.
                     </span>
                     <span class="badge badge-outline badge-sm">
-                      {service.rpm_limit} RPM
+                      {service.rpm_limit || 60} RPM
                     </span>
-                  </div>
-                </div>
-              </div>
+                    <span class="badge badge-ghost badge-sm">{subscription_label(service)}</span>
 
-              <% stats =
-                Map.get(@service_stats, service.id, %{
-                  total_cost: Decimal.new(0),
-                  total_requests: 0,
-                  total_input_tokens: 0,
-                  total_output_tokens: 0,
-                  avg_latency_ms: nil
-                }) %>
-
-              <div class="mt-3 grid grid-cols-2 md:grid-cols-4 gap-3">
-                <div class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-4">
-                    <div class="flex items-center justify-between">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                        Gasto real
-                      </span>
-                      <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-success/10">
-                        <.icon name="hero-currency-dollar" class="w-4 h-4 text-success" />
-                      </span>
-                    </div>
-                    <p class="mt-1.5 text-lg font-bold text-base-content">
-                      ${format_decimal(stats.total_cost || 0)}
-                    </p>
-                    <p class="text-xs text-base-content/40">30 días</p>
-                  </div>
-                </div>
-
-                <div class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-4">
-                    <div class="flex items-center justify-between">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                        Requests
-                      </span>
-                      <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-primary/10">
-                        <.icon name="hero-bolt" class="w-4 h-4 text-primary" />
-                      </span>
-                    </div>
-                    <p class="mt-1.5 text-lg font-bold text-base-content">
-                      {format_number(stats.total_requests || 0)}
-                    </p>
-                    <p class="text-xs text-base-content/40">30 días</p>
-                  </div>
-                </div>
-
-                <div class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-4">
-                    <div class="flex items-center justify-between">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                        Tokens In
-                      </span>
-                      <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-accent/10">
-                        <.icon name="hero-arrow-down-tray" class="w-4 h-4 text-accent" />
-                      </span>
-                    </div>
-                    <p class="mt-1.5 text-lg font-bold text-base-content">
-                      {format_number(stats.total_input_tokens || 0)}
-                    </p>
-                    <p class="text-xs text-base-content/40">30 días</p>
-                  </div>
-                </div>
-
-                <div class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-4">
-                    <div class="flex items-center justify-between">
-                      <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                        Tokens Out
-                      </span>
-                      <span class="flex items-center justify-center w-8 h-8 rounded-lg bg-warning/10">
-                        <.icon name="hero-arrow-up-tray" class="w-4 h-4 text-warning" />
-                      </span>
-                    </div>
-                    <p class="mt-1.5 text-lg font-bold text-base-content">
-                      {format_number(stats.total_output_tokens || 0)}
-                    </p>
-                    <p class="text-xs text-base-content/40">30 días</p>
-                  </div>
-                </div>
-              </div>
-
-              <div class="mt-4 grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div class="card bg-base-100 border border-base-300 shadow-sm">
-                  <div class="card-body p-4">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                      Latencia media
-                    </span>
-                    <p class="mt-1.5 text-lg font-bold text-base-content">
-                      {format_latency(stats.avg_latency_ms)}
-                    </p>
-                    <p class="text-xs text-base-content/40">30 días</p>
-                  </div>
-                </div>
-
-                <div class="card bg-base-100 border border-base-300 shadow-sm md:col-span-2">
-                  <div class="card-body p-4">
-                    <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                      API Key
-                    </span>
                     <%= if service.api_key do %>
-                      <p class="mt-1.5 text-sm font-semibold text-base-content">
+                      <span class="badge badge-ghost badge-sm gap-1">
+                        <.icon name="hero-key" class="w-3 h-3" />
                         <span class="font-mono">{service.api_key.key_prefix}</span>…
                         <span class={[
-                          "badge badge-xs ml-1",
+                          "badge badge-xs",
                           if(service.api_key.status == "active",
                             do: "badge-success",
                             else: "badge-error"
@@ -330,17 +357,77 @@ defmodule TokengateWeb.SupervisedServicesLive do
                         ]}>
                           {service.api_key.status}
                         </span>
-                      </p>
-                      <p class="text-xs text-base-content/40 mt-1">Prefijo de la clave activa.</p>
+                      </span>
                     <% else %>
-                      <p class="mt-1.5 text-sm font-semibold text-base-content/40">Sin clave</p>
+                      <span class="badge badge-ghost badge-sm">Sin API key</span>
                     <% end %>
                   </div>
                 </div>
+
+                <.link
+                  navigate={~p"/services/supervised/#{service.id}"}
+                  id={"service-stats-link-#{service.id}"}
+                  class="btn btn-sm btn-primary"
+                >
+                  <.icon name="hero-chart-bar" class="w-4 h-4" /> Ver stats completos
+                </.link>
+              </header>
+
+              <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+                <.metric_tile
+                  id={"metric-cost-#{service.id}"}
+                  label="Gasto real"
+                  value={format_cost(stats.cost_usd)}
+                  icon="hero-currency-dollar"
+                  accent="success"
+                  sub="30 días"
+                />
+                <.metric_tile
+                  id={"metric-requests-#{service.id}"}
+                  label="Requests"
+                  value={Stats.format_number(stats.request_count)}
+                  icon="hero-bolt"
+                  accent="primary"
+                  sub="30 días"
+                />
+                <.metric_tile
+                  id={"metric-input-#{service.id}"}
+                  label="Tokens in"
+                  value={Stats.format_compact(stats.prompt_tokens)}
+                  icon="hero-arrow-down-tray"
+                  accent="accent"
+                  sub={"cache hit #{Stats.cache_hit_pct(stats.prompt_tokens, stats.cache_read_tokens)}"}
+                />
+                <.metric_tile
+                  id={"metric-output-#{service.id}"}
+                  label="Tokens out"
+                  value={Stats.format_compact(stats.completion_tokens)}
+                  icon="hero-arrow-up-tray"
+                  accent="warning"
+                  sub={"#{Stats.format_tps(stats.avg_tps)} tps"}
+                />
+                <.metric_tile
+                  id={"metric-errors-#{service.id}"}
+                  label="Errores"
+                  value={Stats.format_number(stats.error_count)}
+                  icon="hero-exclamation-triangle"
+                  accent={if stats.error_count > 0, do: "error", else: "neutral"}
+                  sub={error_rate_label(stats.request_count, stats.error_count)}
+                />
+                <.metric_tile
+                  id={"metric-latency-#{service.id}"}
+                  label="Latencia media"
+                  value={Stats.format_ms(stats.avg_latency_ms)}
+                  icon="hero-clock"
+                  accent="neutral"
+                  sub="30 días"
+                />
               </div>
 
-              <div class="mt-4">
-                <p class="text-sm font-medium mb-2">Modelos permitidos</p>
+              <div class="flex flex-wrap items-center gap-2">
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
+                  Modelos permitidos
+                </span>
                 <div class="flex flex-wrap gap-2" id={"models-#{service.id}"}>
                   <%= if model_names_for(@granted_models, service.id, @models) == [] do %>
                     <p class="text-xs text-base-content/40">
@@ -358,10 +445,22 @@ defmodule TokengateWeb.SupervisedServicesLive do
                 </div>
               </div>
             </div>
-          </div>
+          </article>
         </div>
       </div>
     </Layouts.dashboard>
     """
+  end
+
+  # Aliases for granted ids — reuses the helper signature from ServicesLive
+  # so both views look identical from the outside.
+  def granted_alias_ids(granted_models, service_id) do
+    Map.get(granted_models, service_id, [])
+  end
+
+  def model_names_for(granted_models, service_id, all_models) do
+    granted_alias_ids(granted_models, service_id)
+    |> Enum.map(&Enum.find(all_models, fn a -> a.id == &1 end))
+    |> Enum.reject(&is_nil/1)
   end
 end

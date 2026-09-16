@@ -437,6 +437,8 @@ defmodule TokengateWeb.DashboardLiveTest do
 
     assert html =~ "Nueva clave generada"
     assert has_element?(view, "#new-token-alert")
+    # Aviso de éxito (clave creada), no de advertencia.
+    assert has_element?(view, "#new-token-alert.alert-success")
     assert has_element?(view, "#new-token-value")
   end
 
@@ -452,6 +454,28 @@ defmodule TokengateWeb.DashboardLiveTest do
     html = view |> element("#revoke-#{member.id}") |> render_click()
     assert html =~ "Revocada"
     refute has_element?(view, "#revoke-#{member.id}")
+  end
+
+  test "dashboard explains the difference between regenerating and revoking a key", %{conn: conn} do
+    %{owner: owner, member: member, owner_password: password} = group_with_member()
+
+    conn = login(conn, owner, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    assert has_element?(view, "#replace-#{member.id}")
+    assert has_element?(view, "#revoke-#{member.id}")
+
+    help = view |> element("#key-actions-help-#{member.id}") |> render()
+    assert help =~ "Regenerar"
+    assert help =~ "Revocar"
+
+    html = view |> element("#revoke-#{member.id}") |> render_click()
+    assert html =~ "Revocada"
+
+    # Sin clave activa no hay nada que revocar: la aclaración desaparece y
+    # queda únicamente la acción de regenerar.
+    refute has_element?(view, "#key-actions-help-#{member.id}")
+    assert has_element?(view, "#replace-#{member.id}")
   end
 
   test "user cannot revoke another member's key from dashboard", %{conn: conn} do
@@ -492,5 +516,208 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert has_element?(view, "#group-#{group.id}")
     assert html =~ "Gasto mensual"
     _ = member
+  end
+
+  ## Group card: no shortcut to /access/groups -------------------------------
+
+  # El enlace al hub de grupos se retiró: /access/groups vive en la
+  # live_session :admin y un no-admin rebotaba a /dashboard al pulsarlo.
+  # La tarjeta ya no lleva flecha para ningún rol.
+  test "the group card never links to /access/groups", %{conn: conn} do
+    %{user: admin, password: admin_password} = register("admin")
+    _group_with_log = group_with_log(%{user: admin})
+
+    admin_conn = login(conn, admin, admin_password)
+    {:ok, admin_view, _html} = live(admin_conn, ~p"/dashboard")
+
+    %{group: admin_group} = group_with_log(%{user: admin})
+
+    # Scoped to the card: the sidebar DOES link to /access/groups for admins.
+    refute has_element?(admin_view, "#group-#{admin_group.id} a[href='/access/groups']")
+
+    %{user: user, password: user_password} = register("user")
+    %{group: user_group} = group_with_log(%{user: user})
+
+    user_conn = login(build_conn(), user, user_password)
+    {:ok, user_view, _html} = live(user_conn, ~p"/dashboard")
+
+    refute has_element?(user_view, "#group-#{user_group.id} a[href='/access/groups']")
+  end
+
+  test "the supervised-services card points at /services/supervised", %{conn: conn} do
+    %{user: user, password: password} = register("user")
+    _group = group_with_log(%{user: user})
+
+    u = unique()
+    {:ok, service} = Accounts.create_service(%{name: "Bot #{u}"})
+    {:ok, _} = Accounts.add_service_supervisor(service.id, user.id)
+
+    conn = login(conn, user, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    assert has_element?(view, "#supervised-services-card[href='/services/supervised']")
+  end
+
+  ## Group card: copy button next to the API key ----------------------------
+
+  test "the API key row has a copy button targeting the masked key", %{conn: conn} do
+    %{group: group, owner: owner, member: member, owner_password: password} =
+      group_with_member()
+
+    conn = login(conn, owner, password)
+    {:ok, view, html} = live(conn, ~p"/dashboard")
+
+    copy_id = "copy-key-#{member.id}"
+    text_id = "api-key-text-#{member.id}"
+    row_id = "api-key-row-#{member.id}"
+
+    # Ambos en la MISMA fila, y la clave antes del botón: el botón va al lado
+    # de la clave, no junto a la etiqueta "CLAVE API".
+    assert has_element?(view, "##{row_id} code##{text_id}")
+    assert has_element?(view, "##{row_id} button##{copy_id}[data-target='#{text_id}']")
+    assert has_element?(view, "##{copy_id}")
+
+    # La fila está separada de la etiqueta, no la contiene.
+    refute has_element?(view, "##{row_id} p")
+
+    row_html = view |> element("##{row_id}") |> render()
+    assert elem(:binary.match(row_html, text_id), 0) < elem(:binary.match(row_html, copy_id), 0)
+
+    # The masked prefix shown on the card is what the button copies.
+    member = Accounts.get_group_member!(member.id, :with_assoc)
+    prefix = member.api_key.key_prefix
+    assert html =~ "#{prefix}••••"
+    _ = group
+  end
+
+  ## Topbar: cuenta en modal (reemplaza a la página /profile) -----------------
+
+  test "the topbar avatar opens the account modal instead of linking to /profile", %{conn: conn} do
+    %{user: user, password: password} = register("user")
+
+    conn = login(conn, user, password)
+    {:ok, view, html} = live(conn, ~p"/dashboard")
+
+    # El botón de la página /profile se retiró junto con la página.
+    refute has_element?(view, "#profile-button")
+
+    assert has_element?(view, "#profile-avatar-button[phx-click='open_profile']")
+    assert has_element?(view, "#profile-modal-dialog.modal")
+    assert has_element?(view, "#profile-password-form")
+    assert html =~ user.email
+  end
+
+  test "both avatars are true circles (matching width and height)", %{conn: conn} do
+    %{user: user, password: password} = register("user")
+
+    conn = login(conn, user, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    # daisyUI solo dimensiona `.avatar > div`, así que el círculo no puede
+    # depender de esa clase: necesita ancho Y alto explícitos e iguales.
+    # `w-9` sin alto daba una píldora de 36×24 (y `w-12`, 48×24 en el modal).
+    for {id, size} <- [{"#profile-avatar-button", "9"}, {"#profile-modal-dialog", "12"}] do
+      css = "#{id} span.bg-primary.w-#{size}.h-#{size}.rounded-full"
+      assert has_element?(view, css), "avatar no cuadrado en #{id}"
+    end
+  end
+
+  test "the modal shows account data and the change-password form", %{conn: conn} do
+    %{user: user, password: password} = register("admin")
+
+    conn = login(conn, user, password)
+    {:ok, view, html} = live(conn, ~p"/dashboard")
+
+    assert has_element?(view, "#profile-modal-title", user.name)
+    assert has_element?(view, "#profile-password-form input[name='profile[current_password]']")
+    assert has_element?(view, "#profile-password-form input[name='profile[password]']")
+    assert has_element?(view, "#save-password-btn")
+    assert html =~ "Cambiar contraseña"
+    assert html =~ "Administrador"
+  end
+
+  test "the modal opens and closes through the component state", %{conn: conn} do
+    %{user: user, password: password} = register("user")
+
+    conn = login(conn, user, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    # Cerrado: el servidor lo dice y el hook .ProfileModal no lo abre.
+    assert has_element?(view, "#profile-modal-dialog.modal[data-open='false']")
+
+    view |> element("#profile-avatar-button") |> render_click()
+    assert has_element?(view, "#profile-modal-dialog[data-open='true']")
+
+    # El hook avisa del cierre nativo (Esc / backdrop / X).
+    view |> with_target("#profile-modal") |> render_click("close_modal", %{})
+    assert has_element?(view, "#profile-modal-dialog[data-open='false']")
+  end
+
+  test "reopening the modal clears the previous form state", %{conn: conn} do
+    %{user: user, password: password} = register("user")
+
+    conn = login(conn, user, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    view |> element("#profile-avatar-button") |> render_click()
+
+    html =
+      view
+      |> element("#profile-password-form")
+      |> render_submit(%{
+        "profile" => %{
+          "current_password" => "no-es-la-mia-#{unique()}",
+          "password" => "Password123456"
+        }
+      })
+
+    assert html =~ "no es correcta"
+
+    view |> with_target("#profile-modal") |> render_click("close_modal", %{})
+    view |> element("#profile-avatar-button") |> render_click()
+
+    refute render(view) =~ "no es correcta"
+  end
+
+  test "the modal changes the password with the right current one", %{conn: conn} do
+    %{user: user, password: password} = register("user")
+    new_password = "password-nueva-#{unique()}1"
+
+    conn = login(conn, user, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    html =
+      view
+      |> element("#profile-password-form")
+      |> render_submit(%{
+        "profile" => %{"current_password" => password, "password" => new_password}
+      })
+
+    assert html =~ "Contraseña actualizada."
+    assert has_element?(view, "#profile-password-saved")
+
+    assert {:ok, _} = Accounts.authenticate_user(user.email, new_password)
+    assert {:error, :unauthorized} = Accounts.authenticate_user(user.email, password)
+  end
+
+  test "the modal rejects a wrong current password", %{conn: conn} do
+    %{user: user, password: password} = register("user")
+
+    conn = login(conn, user, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    html =
+      view
+      |> element("#profile-password-form")
+      |> render_submit(%{
+        "profile" => %{
+          "current_password" => "no-es-la-mia-#{unique()}",
+          "password" => "Password123456"
+        }
+      })
+
+    refute html =~ "Contraseña actualizada."
+    assert html =~ "no es correcta"
+    assert {:ok, _} = Accounts.authenticate_user(user.email, password)
   end
 end

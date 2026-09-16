@@ -321,8 +321,11 @@ defmodule TokengateWeb.StatsHelpers do
   end
 
   @doc """
-  Leyenda de proveedores agregados: nombre, requests totales, costo total.
-  Ordenada por requests desc.
+  Leyenda de proveedores agregados: nombre, logo del catálogo, requests
+  totales y costo total. Ordenada por requests desc.
+
+  El logo y el id del proveedor se colapsan por nombre (varios ids pueden
+  compartir nombre): sirve el del primer id que traiga identidad del catálogo.
   """
   def provider_legend(rows) do
     rows
@@ -336,7 +339,13 @@ defmodule TokengateWeb.StatsHelpers do
           Decimal.add(acc, e.cost_usd)
         end)
 
-      %{provider_name: provider_name, requests: requests, cost_usd: cost}
+      %{
+        provider_name: provider_name,
+        provider_logo_url: Enum.find_value(entries, &Map.get(&1, :provider_logo_url)),
+        provider_stats_id: Enum.find_value(entries, &Map.get(&1, :provider_stats_id)),
+        requests: requests,
+        cost_usd: cost
+      }
     end)
     |> Enum.sort_by(& &1.requests, :desc)
   end
@@ -385,7 +394,16 @@ defmodule TokengateWeb.StatsHelpers do
         {label, by_date}
       end)
 
-    %{days: days, series: series}
+    # Logo de la etiqueta para las leyendas del sparkline (sólo las series de
+    # proveedores traen `label_logo`; las de modelos vienen nil → fallback).
+    logos =
+      rows
+      |> Enum.group_by(& &1.label)
+      |> Map.new(fn {label, entries} ->
+        {label, Enum.find_value(entries, &Map.get(&1, :label_logo))}
+      end)
+
+    %{days: days, series: series, logos: logos}
   end
 
   @doc "Max single-day count across all labels (for scaling the chart)."
@@ -472,6 +490,52 @@ defmodule TokengateWeb.StatsHelpers do
         nil -> false
         field -> String.contains?(field |> to_string() |> String.downcase(), q)
       end)
+  end
+
+  # ── Identidad del proveedor (logo del catálogo) ─────────────────────────
+
+  @doc """
+  Chip con el logo del proveedor (identidad del catálogo models.dev) y el
+  icono genérico de fallback para los customs, que no tienen logo.
+
+  El chip es blanco FIJO: los logos del catálogo usan `fill="currentColor"` y
+  dentro de un `<img>` eso resuelve a negro — sobre el card oscuro (tema dim)
+  desaparecían. El icono de fallback va oscuro para el mismo chip.
+
+  `size` controla el chip ("sm" 24px para leyendas y listados, "md" 32px para
+  cabeceras); el logo se centra dentro con `object-contain` porque los SVG del
+  catálogo no vienen todos con el mismo aspect ratio.
+  """
+  attr :logo_url, :any, default: nil
+  attr :size, :string, default: "sm", values: ~w(sm md)
+  attr :rest, :global
+
+  def provider_logo(assigns) do
+    ~H"""
+    <span
+      class={[
+        "flex items-center justify-center shrink-0 rounded-lg bg-white overflow-hidden",
+        if(@size == "md", do: "w-8 h-8", else: "w-6 h-6")
+      ]}
+      {@rest}
+    >
+      <img
+        :if={@logo_url}
+        src={@logo_url}
+        alt=""
+        class={["object-contain", if(@size == "md", do: "w-5 h-5", else: "w-4 h-4")]}
+        loading="lazy"
+      />
+      <.icon
+        :if={!@logo_url}
+        name="hero-server-stack"
+        class={[
+          "text-neutral-600",
+          if(@size == "md", do: "w-4 h-4", else: "w-3.5 h-3.5")
+        ]}
+      />
+    </span>
+    """
   end
 
   # ── Ranked list (listados de Users, Models y Providers) ────────────────
@@ -600,9 +664,9 @@ defmodule TokengateWeb.StatsHelpers do
     """
   end
 
-  defp rank_class(1), do: "bg-amber-400/20 text-amber-200 border-amber-400/30"
-  defp rank_class(2), do: "bg-slate-400/20 text-slate-200 border-slate-400/30"
-  defp rank_class(3), do: "bg-orange-700/25 text-orange-300 border-orange-700/40"
+  defp rank_class(1), do: "bg-warning text-warning-content border-warning"
+  defp rank_class(2), do: "bg-base-300 text-base-content border-base-300"
+  defp rank_class(3), do: "bg-secondary text-secondary-content border-secondary"
   defp rank_class(_), do: "bg-base-200 text-base-content/50 border-transparent"
 
   @doc """
@@ -628,26 +692,33 @@ defmodule TokengateWeb.StatsHelpers do
     """
   end
 
-  defp medal_class(1), do: "text-amber-400"
-  defp medal_class(2), do: "text-slate-300"
-  defp medal_class(3), do: "text-orange-400"
+  defp medal_class(1), do: "bg-warning text-warning-content rounded"
+  defp medal_class(2), do: "bg-base-300 text-base-content rounded"
+  defp medal_class(3), do: "bg-secondary text-secondary-content rounded"
   defp medal_class(_), do: "font-mono text-sm tabular-nums text-base-content/50"
 
   @doc """
   Fila de un listado rankeado: rango + título (con subtítulo opcional) y el
   slot `:metrics` a la derecha. Misma estructura en los tres rankings.
+
+  El slot `:leading` pinta lo que va pegado al título por delante — hoy el chip
+  del logo del proveedor en el reparto del Resumen — sin cambiar el ranking.
   """
   attr :rank, :any, required: true
   attr :title, :any, required: true
   attr :subtitle, :any, default: nil
   attr :href, :string, default: nil
   attr :rest, :global, include: ~w(id)
+  slot :leading
   slot :metrics
 
   def ranked_row(assigns) do
     ~H"""
     <li class="flex items-center gap-3 px-1 py-2.5 border-b border-base-300 last:border-b-0" {@rest}>
       <.rank_badge rank={@rank} />
+      <div :if={@leading != []} class="shrink-0">
+        {render_slot(@leading)}
+      </div>
       <div class="min-w-0 flex-1">
         <%= if @href do %>
           <.link navigate={@href} class="font-medium truncate link link-hover block">

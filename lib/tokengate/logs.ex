@@ -747,13 +747,16 @@ defmodule Tokengate.Logs do
       )
       |> Repo.all()
 
-    names = provider_names_by_id(rows)
+    identities = provider_identity_by_id(rows)
 
     rows
     |> Enum.map(fn row ->
+      identity = Map.get(identities, row.provider_id, %{name: @no_provider, logo_url: nil})
+
       %{
         hour: row.hour,
-        provider_name: Map.get(names, row.provider_id, @no_provider),
+        provider_name: identity.name || @no_provider,
+        provider_logo_url: identity.logo_url,
         requests: row.request_count,
         cost_usd: Decimal.new(to_string(row.cost_usd))
       }
@@ -771,6 +774,9 @@ defmodule Tokengate.Logs do
           |> Enum.map(fn {name, entries} ->
             %{
               provider_name: name,
+              # El logo también se colapsa: sirve el del primer id que traiga
+              # uno del catálogo.
+              provider_logo_url: Enum.find_value(entries, & &1.provider_logo_url),
               requests: Enum.reduce(entries, 0, &(&1.requests + &2)),
               cost_usd:
                 Enum.reduce(entries, Decimal.new(0), fn e, acc ->
@@ -793,10 +799,10 @@ defmodule Tokengate.Logs do
     end)
   end
 
-  # Nombres de los proveedores presentes en las filas agregadas, en un solo
-  # viaje (tabla pequeña). Un id nil o ya borrado cae al fallback del
-  # llamador en vez de desaparecer del gráfico.
-  defp provider_names_by_id(rows) do
+  # Identidad de cada proveedor presente en las filas agregadas (nombre y logo
+  # del catálogo), en una sola consulta: el logo de models.dev viaja con la
+  # misma tarjeta que el nombre, sin un lookup por proveedor.
+  defp provider_identity_by_id(rows) do
     ids = rows |> Enum.map(& &1.provider_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
 
     case ids do
@@ -806,9 +812,9 @@ defmodule Tokengate.Logs do
       ids ->
         Tokengate.Providers.Provider
         |> where([p], p.id in ^ids)
-        |> select([p], {p.id, p.name})
+        |> select([p], {p.id, p.name, p.logo_url})
         |> Repo.all()
-        |> Map.new()
+        |> Map.new(fn {id, name, logo_url} -> {id, %{name: name, logo_url: logo_url}} end)
     end
   end
 

@@ -547,7 +547,9 @@ defmodule Tokengate.Metrics.Rollup do
         cost_usd: Decimal,
         prompt_tokens: integer,
         completion_tokens: integer,
-        avg_tps: float | nil
+        cache_read_tokens: integer,
+        avg_tps: float | nil,
+        avg_latency_ms: float | nil
       }
 
   ## Options
@@ -580,7 +582,8 @@ defmodule Tokengate.Metrics.Rollup do
         prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
         completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
         cache_read_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_read_tokens),
-        total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms),
+        latency_count: fragment("COUNT(?)", rl.latency_ms)
       })
 
     Repo.all(query)
@@ -593,8 +596,89 @@ defmodule Tokengate.Metrics.Rollup do
         prompt_tokens: row.prompt_tokens,
         completion_tokens: row.completion_tokens,
         cache_read_tokens: row.cache_read_tokens,
-        avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
+        avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms),
+        # Media por request con latencia (SUM ignora los NULL), igual que
+        # `summary_from_rollup/1`: sin ninguna latencia registrada es nil, no 0.
+        avg_latency_ms: compute_avg_latency(row.total_latency_ms, row.latency_count)
       }
+    end)
+  end
+
+  # -----------------------------------------------------------------------
+  # service_summaries/2
+  # -----------------------------------------------------------------------
+
+  @doc """
+  Per-service aggregates for an explicit set of service ids, keyed by
+  `service_id` — the summary line the supervised-services view draws per
+  service (and their totals) without one query per card.
+
+  Services carry `service_id` on `request_logs` (`group_member_id` is null),
+  which is why this filters on `service_id` and not on the member column.
+
+  Each value is:
+
+      %{
+        service_id: binary,
+        request_count: integer,
+        error_count: integer,   # responses with status_code >= 400
+        cost_usd: Decimal,
+        prompt_tokens: integer,
+        completion_tokens: integer,
+        cache_read_tokens: integer,
+        avg_latency_ms: float | nil,
+        avg_tps: float | nil
+      }
+
+  Service ids without any log in the window are simply absent from the map —
+  the caller falls back to zeros.
+
+  ## Options
+
+    * `:from` — `inserted_at >= from` (DateTime)
+    * `:to`   — `inserted_at <= to` (DateTime)
+  """
+  @spec service_summaries([binary()], keyword()) :: %{binary() => map()}
+  def service_summaries(service_ids, opts \\ [])
+
+  def service_summaries([], _opts), do: %{}
+
+  def service_summaries(service_ids, opts) when is_list(service_ids) do
+    from = Keyword.get(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    query =
+      RequestLog
+      |> where([rl], rl.service_id in ^service_ids)
+      |> maybe_from(from)
+      |> maybe_to(to)
+      |> group_by([rl], rl.service_id)
+      |> select([rl], %{
+        service_id: rl.service_id,
+        request_count: count(rl.id),
+        error_count: fragment("SUM(CASE WHEN ? >= 400 THEN 1 ELSE 0 END)", rl.status_code),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
+        prompt_tokens: fragment("COALESCE(SUM(?), 0)", rl.prompt_tokens),
+        completion_tokens: fragment("COALESCE(SUM(?), 0)", rl.completion_tokens),
+        cache_read_tokens: fragment("COALESCE(SUM(?), 0)", rl.cache_read_tokens),
+        total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms),
+        latency_count: fragment("COUNT(?)", rl.latency_ms)
+      })
+
+    Repo.all(query)
+    |> Map.new(fn row ->
+      {row.service_id,
+       %{
+         service_id: row.service_id,
+         request_count: row.request_count,
+         error_count: row.error_count || 0,
+         cost_usd: Decimal.new(to_string(row.cost_usd)),
+         prompt_tokens: row.prompt_tokens,
+         completion_tokens: row.completion_tokens,
+         cache_read_tokens: row.cache_read_tokens,
+         avg_latency_ms: compute_avg_latency(row.total_latency_ms, row.latency_count),
+         avg_tps: compute_tps(row.completion_tokens, row.total_latency_ms)
+       }}
     end)
   end
 
@@ -722,11 +806,20 @@ defmodule Tokengate.Metrics.Rollup do
       |> join(:left, [rl, mp, c], p in Tokengate.Providers.Provider, on: c.provider_id == p.id)
       |> maybe_from(from)
       |> maybe_to(to)
-      |> group_by([rl, mp, c, p], [rl.model_provider_id, p.name, mp.provider_model, c.name])
+      |> group_by([rl, mp, c, p], [
+        rl.model_provider_id,
+        p.id,
+        p.name,
+        p.logo_url,
+        mp.provider_model,
+        c.name
+      ])
       |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
       |> select([rl, mp, c, p], %{
         model_provider_id: rl.model_provider_id,
+        provider_id: p.id,
         provider_name: p.name,
+        provider_logo_url: p.logo_url,
         provider_model: mp.provider_model,
         credential_name: c.name,
         request_count: count(rl.id),
@@ -741,7 +834,9 @@ defmodule Tokengate.Metrics.Rollup do
     |> Enum.map(fn row ->
       %{
         model_provider_id: row.model_provider_id,
+        provider_id: row.provider_id,
         provider_name: row.provider_name || "—",
+        provider_logo_url: row.provider_logo_url,
         provider_model: row.provider_model,
         credential_name: row.credential_name,
         request_count: row.request_count,
@@ -961,10 +1056,16 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_join_group(group_id)
       |> maybe_from(from)
       |> maybe_to(to)
-      |> group_by([rl, p], [rl.provider_id, p.name])
+      |> group_by([rl, p], [rl.provider_id, p.name, p.key, p.logo_url, p.doc_url])
       |> select([rl, p], %{
         provider_id: rl.provider_id,
         provider_name: p.name,
+        # Identidad del catálogo: viaja con la fila para que la tabla y el
+        # detalle puedan pintar el logo y los datos del proveedor sin una
+        # segunda query por fila.
+        provider_key: p.key,
+        provider_logo_url: p.logo_url,
+        provider_doc_url: p.doc_url,
         request_count: count(rl.id),
         error_count: fragment("COUNT(*) FILTER (WHERE ? >= 400)", rl.status_code),
         avg_latency_ms: fragment("AVG(?)", rl.latency_ms),
@@ -1033,7 +1134,10 @@ defmodule Tokengate.Metrics.Rollup do
       _ ->
         Map.merge(base, %{
           provider_id: row.provider_id,
-          provider_name: row.provider_name
+          provider_name: row.provider_name,
+          provider_key: Map.get(row, :provider_key),
+          provider_logo_url: Map.get(row, :provider_logo_url),
+          provider_doc_url: Map.get(row, :provider_doc_url)
         })
     end
   end
@@ -1254,7 +1358,7 @@ defmodule Tokengate.Metrics.Rollup do
       )
       |> Repo.all()
 
-    names = provider_names_by_id(rows)
+    identities = provider_identity_by_id(rows)
     by_hour = Enum.group_by(rows, & &1.hour)
 
     for hour <- 0..23 do
@@ -1264,16 +1368,20 @@ defmodule Tokengate.Metrics.Rollup do
       providers =
         by_hour
         |> Map.get(hour, [])
-        |> Enum.group_by(&Map.get(names, &1.provider_id, @no_provider))
+        |> Enum.map(&with_provider_identity(&1, identities))
+        |> Enum.group_by(& &1.provider_name)
         |> Enum.map(fn {provider_name, entries} ->
-          requests = Enum.reduce(entries, 0, &(&1.request_count + &2))
-
-          cost =
-            Enum.reduce(entries, Decimal.new(0), fn e, acc ->
-              Decimal.add(acc, Decimal.new(to_string(e.cost_usd)))
-            end)
-
-          %{provider_name: provider_name, requests: requests, cost_usd: cost}
+          %{
+            provider_name: provider_name,
+            # El logo también se colapsa: si dos ids comparten nombre, sirve
+            # cualquiera de los dos que traiga logo del catálogo.
+            provider_logo_url: Enum.find_value(entries, & &1.provider_logo_url),
+            requests: Enum.reduce(entries, 0, &(&1.requests + &2)),
+            cost_usd:
+              Enum.reduce(entries, Decimal.new(0), fn e, acc ->
+                Decimal.add(acc, e.cost_usd)
+              end)
+          }
         end)
         |> Enum.sort_by(& &1.requests, :desc)
 
@@ -1287,10 +1395,10 @@ defmodule Tokengate.Metrics.Rollup do
     end
   end
 
-  # Nombre de cada proveedor presente en las filas agregadas, en una sola
-  # consulta. Un id nil o ya borrado cae al `@no_provider` del llamador en
-  # vez de desaparecer del gráfico.
-  defp provider_names_by_id(rows) do
+  # Identidad de cada proveedor presente en las filas agregadas (nombre y logo
+  # del catálogo), en una sola consulta. Un id nil o ya borrado cae al
+  # `@no_provider` del llamador en vez de desaparecer del gráfico.
+  defp provider_identity_by_id(rows) do
     ids = rows |> Enum.map(& &1.provider_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
 
     case ids do
@@ -1298,10 +1406,21 @@ defmodule Tokengate.Metrics.Rollup do
         %{}
 
       ids ->
-        from(p in Provider, where: p.id in ^ids, select: {p.id, p.name})
+        from(p in Provider, where: p.id in ^ids, select: {p.id, p.name, p.logo_url})
         |> Repo.all()
-        |> Map.new()
+        |> Map.new(fn {id, name, logo_url} -> {id, %{name: name, logo_url: logo_url}} end)
     end
+  end
+
+  defp with_provider_identity(row, identities) do
+    identity = Map.get(identities, row.provider_id, %{name: @no_provider, logo_url: nil})
+
+    %{
+      provider_name: identity.name || @no_provider,
+      provider_logo_url: identity.logo_url,
+      requests: row.request_count,
+      cost_usd: Decimal.new(to_string(row.cost_usd))
+    }
   end
 
   # -----------------------------------------------------------------------
@@ -1345,7 +1464,7 @@ defmodule Tokengate.Metrics.Rollup do
       )
       |> group_by(
         [rl, ma, mp, c, p],
-        [ma.id, ma.name, mp.id, p.name]
+        [ma.id, ma.name, mp.id, p.id, p.name, p.logo_url]
       )
       |> select(
         [rl, ma, mp, c, p],
@@ -1353,7 +1472,11 @@ defmodule Tokengate.Metrics.Rollup do
           model_id: ma.id,
           model_name: ma.name,
           provider_id: mp.id,
+          # Id del PROVEEDOR (no del model_provider): es el que abre su
+          # detalle en /stats/providers/:id desde el Resumen.
+          provider_stats_id: p.id,
           provider_name: p.name,
+          provider_logo_url: p.logo_url,
           request_count: count(rl.id),
           cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
         }
@@ -1364,7 +1487,9 @@ defmodule Tokengate.Metrics.Rollup do
           model_id: row.model_id,
           model_name: row.model_name || "—",
           provider_id: row.provider_id,
+          provider_stats_id: row.provider_stats_id,
           provider_name: row.provider_name || "—",
+          provider_logo_url: row.provider_logo_url,
           request_count: row.request_count,
           cost_usd: Decimal.new(to_string(row.cost_usd))
         }
@@ -1389,6 +1514,8 @@ defmodule Tokengate.Metrics.Rollup do
 
           %{
             provider_name: provider_name,
+            provider_stats_id: List.first(p_entries).provider_stats_id,
+            provider_logo_url: Enum.find_value(p_entries, & &1.provider_logo_url),
             requests: requests,
             cost_usd: cost
           }
@@ -2370,6 +2497,16 @@ defmodule Tokengate.Metrics.Rollup do
 
   defp compute_tps(_, _), do: nil
 
+  # Media de latencia por request con latencia registrada. nil cuando no hay
+  # ninguna muestra — un 0 inventado se leería como "instantáneo".
+  defp compute_avg_latency(_total_ms, 0), do: nil
+
+  defp compute_avg_latency(total_ms, count) when is_integer(count) and count > 0 do
+    Float.round(total_ms / count, 1)
+  end
+
+  defp compute_avg_latency(_total_ms, _count), do: nil
+
   defp to_utc_datetime(%DateTime{} = dt), do: dt
 
   defp to_utc_datetime(%NaiveDateTime{} = ndt) do
@@ -2445,17 +2582,19 @@ defmodule Tokengate.Metrics.Rollup do
             ^timezone
           ),
         label: p.name,
+        label_logo: p.logo_url,
         id: rl.id
       })
       |> subquery()
 
     query =
       from(b in bucketed,
-        group_by: [b.bucket, b.label],
+        group_by: [b.bucket, b.label, b.label_logo],
         order_by: [b.bucket, b.label],
         select: %{
           date: b.bucket,
           label: b.label,
+          label_logo: b.label_logo,
           request_count: count(b.id)
         }
       )
@@ -2465,6 +2604,7 @@ defmodule Tokengate.Metrics.Rollup do
       %{
         date: to_utc_datetime(row.date),
         label: row.label || "—",
+        label_logo: row.label_logo,
         request_count: row.request_count
       }
     end)

@@ -1,0 +1,261 @@
+{
+  "aisingapore": {
+    "name": "Aisingapore",
+    "logo_url": "https://models.dev/logos/labs/aisingapore.svg",
+    "model_count": 1,
+    "last_released": "2025-09-23",
+    "last_updated": "2025-09-23"
+  },
+  "alibaba": {
+    "name": "Alibaba",
+    "logo_url": "https://models.dev/logos/labs/alibaba.svg",
+    "model_count": 49,
+    "last_released": "2026-09-02",
+    "last_updated": "2026-09-02"
+  },
+  "amazon": {
+    "name": "Amazon",
+    "logo_url": "https://models.dev/logos/labs/amazon.svg",
+    "model_count": 5,
+    "last_released": "2025-12-02",
+    "last_updated": "2025-12-01"
+  },
+  "anthropic": {
+    "name": "Anthropic",
+    "logo_url": "https://models.dev/logos/labs/anthropic.svg",
+    "model_count": 25,
+    "last_released": "2026-09-01",
+    "last_updated": "2026-09-01"
+  },
+  "arcee-ai": {
+    "name": "Arcee Ai",
+    "logo_url": "https://models.dev/logos/labs/arcee-ai.svg",
+    "model_count": 4,
+    "last_released": "2026-04-01",
+    "last_updated": "2026-05-28"
+  },
+  "bytedance-seed": {
+    "name": "Bytedance Seed",
+    "logo_url": "https://models.dev/logos/labs/bytedance-seed.svg",
+    "model_count": 12,
+    "last_released": "2026-06-23",
+    "last_updated": "2026-06-23"
+  },
+  "cohere": {
+    "name": "Cohere",
+    "logo_url": "https://models.dev/logos/labs/cohere.svg",
+    "model_count": 14,
+    "last_released": "2026-06-09",
+    "last_updated": "2026-06-09"
+  },
+  "deepreinforce": {
+    "name": "Deepreinforce",
+    "logo_url": "https://models.dev/logos/labs/deepreinforce.svg",
+    "model_count": 5,
+    "last_released": "2026-08-18",
+    "last_updated": "2026-08-23"
+  },
+  "deepseek": {
+    "name": "DeepSeek",
+    "logo_url": "https://models.dev/logos/labs/deepseek.svg",
+    "model_count": 17,
+    "last_released": "2026-09-10",
+    "last_updated": "2026-09-10"
+  },
+  "google": {
+    "name": "Google",
+    "logo_url": "https://models.dev/logos/labs/google.svg",
+    "model_count": 49,
+    "last_released": "2026-09-02",
+    "last_updated": "2026-09-02"
+  },
+  "ibm": {
+    "name": "Ibm",
+    "logo_url": "https://models.dev/logos/labs/ibm.svg",
+    "model_count": 2,
+    "last_released": "2025-10-02",
+    "last_updated": "2025-10-02"
+  },
+  "inclusionai": {
+    "name": "Inclusionai",
+    "logo_url": "https://models.dev/logos/labs/inclusionai.svg",
+    "model_count": 1,
+    "last_released": "2026-08-27",
+    "last_updated": "2026-08-27"
+  },
+  "meituan": {
+    "name": "Meituan",
+    "logo_url": "https://models.dev/logos/labs/meituan.svg",
+    "model_count": 1,
+    "last_released": "2026-06-30",
+    "last_updated": "2026-06-30"
+  },
+  "meta": {
+    "name": "Meta",
+    "logo_url": "https://models.dev/logos/labs/meta.svg",
+    "model_count": 13,
+    "last_released": "2026-09-02",
+    "last_updated": "2026-09-02"
+  },
+  "microsoft": {
+    "name": "Microsoft",
+    "logo_url": "https://models.dev/logos/labs/microsoft.svg",
+    "model_count": 3,
+    "last_released": "2026-08-11",
+    "last_updated": "2026-08-11"
+  },
+  "minimax": {
+    "name": "MiniMax",
+    "logo_url": "https://models.dev/logos/labs/minimax.svg",
+    "model_count": 9,
+    "last_released": "2026-06-01",
+    "last_updated": "2026-08-25"
+  },
+  "mistral": {
+    "name": "Mistral",
+    "logo_url": "https://models.dev/logos/labs/mistral.svg",
+    "model_count": 33,
+    "last_released": "2026-04-29",
+    "last_updated": "2026-04-29"
+  },
+  "moonshotai": {
+    "name": "Moonshot AI",
+    "logo_url": "https://models.dev/logos/labs/moonshotai.svg",
+    "model_count": 8,
+    "last_released": "2026-09-11",
+    "last_updated": "2026-09-11"
+  },
+  "nvidia": {
+    "name": "Nvidia",
+    "logo_url": "https://models.dev/logos/labs/nvidia.svg",
+    "model_count": 21,
+    "last_released": "2026-08-11",
+    "last_updated": "2026-08-11"
+  },
+  "openai": {
+    "name": "OpenAI",
+    "logo_url": "https://models.dev/logos/labs/openai.svg",
+    "model_count": 60,
+    "last_released": "2026-09-04",
+    "last_updated": "2026-09-04"
+  },
+  "openbmb": {
+    "name": "Openbmb",
+    "logo_url": "https://models.dev/logos/labs/openbmb.svg",
+    "model_count": 2,
+    "last_released": "2026-09-06",
+    "last_updated": "2026-09-12"
+  },
+  "perplexity": {
+    "name": "Perplexity",
+    "logo_url": "https://models.dev/logos/labs/perplexity.svg",
+    "model_count": 4,
+    "last_released": "2025-02-01",
+    "last_updated": "2025-09-01"
+  },
+  "poolside": {
+    "name": "Poolside",
+    "logo_url": "https://models.dev/logos/labs/poolside.svg",
+    "model_count": 4,
+    "last_released": "2026-07-21",
+    "last_updated": "2026-07-21"
+  },
+  "sakana": {
+    "name": "Sakana AI",
+    "logo_url": "https://models.dev/logos/labs/sakana.svg",
+    "model_count": 3,
+    "last_released": "2026-08-03",
+    "last_updated": "2026-08-03"
+  },
+  "sarvam": {
+    "name": "Sarvam AI",
+    "logo_url": "https://models.dev/logos/labs/sarvam.svg",
+    "model_count": 2,
+    "last_released": "2026-02-18",
+    "last_updated": "2026-02-18"
+  },
+  "sdaia": {
+    "name": "Sdaia",
+    "logo_url": "https://models.dev/logos/labs/sdaia.svg",
+    "model_count": 1,
+    "last_released": "2025-01-23",
+    "last_updated": "2025-01-23"
+  },
+  "stepfun": {
+    "name": "StepFun",
+    "logo_url": "https://models.dev/logos/labs/stepfun.svg",
+    "model_count": 3,
+    "last_released": "2026-05-29",
+    "last_updated": "2026-05-29"
+  },
+  "swiss-ai": {
+    "name": "Swiss Ai",
+    "logo_url": "https://models.dev/logos/labs/swiss-ai.svg",
+    "model_count": 2,
+    "last_released": "2025-09-02",
+    "last_updated": "2025-09-02"
+  },
+  "tencent": {
+    "name": "Tencent",
+    "logo_url": "https://models.dev/logos/labs/tencent.svg",
+    "model_count": 3,
+    "last_released": "2026-08-28",
+    "last_updated": "2026-08-28"
+  },
+  "thinkingmachines": {
+    "name": "Thinking Machines",
+    "logo_url": "https://models.dev/logos/labs/thinkingmachines.svg",
+    "model_count": 2,
+    "last_released": "2026-07-30",
+    "last_updated": "2026-07-30"
+  },
+  "trendyol": {
+    "name": "Trendyol",
+    "logo_url": "https://models.dev/logos/labs/trendyol.svg",
+    "model_count": 1,
+    "last_released": "2026-02-19",
+    "last_updated": "2026-02-20"
+  },
+  "upstage": {
+    "name": "Upstage",
+    "logo_url": "https://models.dev/logos/labs/upstage.svg",
+    "model_count": 3,
+    "last_released": "2026-08-06",
+    "last_updated": "2026-08-06"
+  },
+  "vispark": {
+    "name": "Vispark",
+    "logo_url": "https://models.dev/logos/labs/vispark.svg",
+    "model_count": 3,
+    "last_released": "2024-05-15",
+    "last_updated": "2026-09"
+  },
+  "writer": {
+    "name": "Writer",
+    "logo_url": "https://models.dev/logos/labs/writer.svg",
+    "model_count": 2,
+    "last_released": "2025-04-28",
+    "last_updated": "2025-04-28"
+  },
+  "xai": {
+    "name": "xAI",
+    "logo_url": "https://models.dev/logos/labs/xai.svg",
+    "model_count": 10,
+    "last_released": "2026-08-12",
+    "last_updated": "2026-08-12"
+  },
+  "xiaomi": {
+    "name": "Xiaomi",
+    "logo_url": "https://models.dev/logos/labs/xiaomi.svg",
+    "model_count": 6,
+    "last_released": "2026-06-08",
+    "last_updated": "2026-06-09"
+  },
+  "zhipuai": {
+    "name": "Zhipu AI",
+    "logo_url": "https://models.dev/logos/labs/zhipuai.svg",
+    "model_count": 17,
+    "last_released": "2026-08-26",
+    "last_updated": "2026-08-26"
+  }
+}

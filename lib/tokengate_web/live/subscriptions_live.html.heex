@@ -7,7 +7,7 @@
   <div class="space-y-6">
     <.header>
       Suscripciones
-      <:subtitle>Crédito por grupo (default) o por usuario (directo / top-up)</:subtitle>
+      <:subtitle>Crédito recurrente por grupo (default) o por usuario (directo)</:subtitle>
       <:actions>
         <div class="flex items-center gap-3">
           <.form
@@ -35,19 +35,6 @@
           <.button phx-click="new_subscription" id="new-subscription-btn">
             <.icon name="hero-plus" class="w-4 h-4" /> Nueva suscripción
           </.button>
-          <button
-            :if={@archived_count > 0}
-            phx-click="toggle_archived"
-            id="toggle-archived-btn"
-            class="btn btn-ghost btn-sm gap-1"
-          >
-            <.icon name="hero-archive-box-arrow-down" class="w-4 h-4" />
-            <%= if @show_archived do %>
-              Ocultar archivadas
-            <% else %>
-              Ver archivadas ({@archived_count})
-            <% end %>
-          </button>
         </div>
       </:actions>
     </.header>
@@ -78,7 +65,7 @@
                 >
                   <option value="group" selected={@sub_scope == "group"}>Grupo (default)</option>
                   <option value="user" selected={@sub_scope == "user"}>
-                    Usuario (directa / top-up)
+                    Usuario (directa)
                   </option>
                 </select>
               </div>
@@ -160,14 +147,8 @@
               </div>
             </div>
 
-            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-3">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
               <.input field={@form[:units]} type="number" min="0" label="Créditos por ciclo" />
-              <.input
-                field={@form[:recurrence]}
-                type="select"
-                label="Recurrencia"
-                options={[{"Mensual", "monthly"}, {"Top-up (una vez)", "none"}]}
-              />
               <.input
                 field={@form[:reset_day]}
                 type="number"
@@ -183,7 +164,7 @@
               />
             </div>
 
-            <div class="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-3">
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
               <.input
                 field={@form[:rollover_mode]}
                 type="select"
@@ -226,6 +207,7 @@
           <tr>
             <th>
               <.sort_button
+                event="sort_subscriptions"
                 field={:target}
                 label="Objetivo"
                 current={@sort_field}
@@ -234,6 +216,7 @@
             </th>
             <th class="text-right">
               <.sort_button
+                event="sort_subscriptions"
                 field={:units}
                 label="Créditos"
                 current={@sort_field}
@@ -244,14 +227,7 @@
             <th class="text-right">Consumo</th>
             <th>
               <.sort_button
-                field={:recurrence}
-                label="Recurrencia"
-                current={@sort_field}
-                direction={@sort_direction}
-              />
-            </th>
-            <th>
-              <.sort_button
+                event="sort_subscriptions"
                 field={:reset_day}
                 label="Corte"
                 current={@sort_field}
@@ -260,6 +236,7 @@
             </th>
             <th>
               <.sort_button
+                event="sort_subscriptions"
                 field={:rollover}
                 label="Rollover"
                 current={@sort_field}
@@ -268,6 +245,7 @@
             </th>
             <th>
               <.sort_button
+                event="sort_subscriptions"
                 field={:status}
                 label="Estado"
                 current={@sort_field}
@@ -278,35 +256,21 @@
           </tr>
         </thead>
         <tbody id="subscriptions" phx-update="stream">
-          <tr
-            :for={{dom_id, sub} <- @streams.subscriptions}
-            id={dom_id}
-            class={archived?(sub, assigns) && "opacity-50"}
-          >
-            <td class="font-medium">{target_label(sub, assigns)}</td>
+          <tr :for={{dom_id, sub} <- @streams.subscriptions} id={dom_id}>
+            <td class="font-medium">{Credit.target_label(sub, assigns)}</td>
             <td class="text-right font-mono">{sub.units}</td>
             <td id={"sub-usage-#{sub.id}"} class="w-40">
-              {render_usage_cell(sub, assigns)}
+              {Credit.render_usage_cell(sub, assigns)}
             </td>
-            <td>{recurrence_label(sub.recurrence)}</td>
             <td>{sub.reset_day || "—"}</td>
             <td>{rollover_label(sub)}</td>
             <td>
-              <div class="flex items-center gap-1">
-                <span class={[
-                  "badge badge-sm",
-                  if(sub.status == "active", do: "badge-success", else: "badge-ghost")
-                ]}>
-                  {sub.status}
-                </span>
-                <span
-                  :if={archived?(sub, assigns)}
-                  class="badge badge-sm badge-warning badge-outline"
-                  id={"archived-badge-#{sub.id}"}
-                >
-                  {archived_reason(sub, assigns)}
-                </span>
-              </div>
+              <span class={[
+                "badge badge-sm",
+                if(sub.status == "active", do: "badge-success", else: "badge-ghost")
+              ]}>
+                {Credit.status_label(sub.status)}
+              </span>
             </td>
             <td class="text-right">
               <div class="flex gap-1 justify-end">
@@ -317,6 +281,14 @@
                   id={"edit-subscription-#{sub.id}"}
                 >
                   Editar
+                </button>
+                <button
+                  phx-click="toggle_subscription_status"
+                  phx-value-id={sub.id}
+                  class="btn btn-ghost btn-xs"
+                  id={"toggle-subscription-status-#{sub.id}"}
+                >
+                  {if sub.status == "active", do: "Desactivar", else: "Reactivar"}
                 </button>
                 <button
                   phx-click="delete_subscription"
@@ -338,7 +310,7 @@
         id="subscriptions-empty"
       >
         <.icon name="hero-banknotes" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-        <p>No hay suscripciones — los sujetos sin crédito no tienen tope propio.</p>
+        <p>No hay suscripciones — el crédito recurrente de grupos y usuarios vive aquí.</p>
       </div>
     </div>
   </div>

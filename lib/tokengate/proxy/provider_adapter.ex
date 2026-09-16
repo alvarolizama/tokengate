@@ -114,6 +114,30 @@ defmodule Tokengate.Proxy.ProviderAdapter do
                  error_message :: String.t() | nil}
 
   @doc """
+  Posts a passthrough request to one of the provider's non-chat services —
+  `:rerank`, `:stt`, `:tts`, `:image`, `:video`, `:music`.
+
+  The URL is `base_url` + the path the service resolves to (the
+  `ProviderPaths` vocabulary: operator override, then catalog hardcode,
+  then the generic OpenAI-compatible default). Payload and response are
+  forwarded untouched, like `embeddings/4`; cost/usage normalization is
+  the caller's, since the shapes differ per service.
+
+  Returns the same 4-tuple shape as `embeddings/4`.
+  """
+  @callback service_post(
+              provider :: map(),
+              credential :: map(),
+              service :: atom(),
+              payload :: map(),
+              opts :: keyword()
+            ) ::
+              {:ok, body :: map(), latency_ms :: non_neg_integer(),
+               resp_headers :: [{String.t(), String.t()}]}
+              | {:error, failure_reason(), status :: non_neg_integer() | nil,
+                 error_message :: String.t() | nil}
+
+  @doc """
   Lists the model ids the provider exposes for embeddings. Dialects vary:
   OpenAI-compatible exposes them under `/models`, OpenRouter under
   `/embeddings/models`. Returns `{:ok, [model_id]}` or `{:error, reason}`.

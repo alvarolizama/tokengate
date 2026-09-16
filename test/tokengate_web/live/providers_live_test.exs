@@ -2,10 +2,18 @@ defmodule TokengateWeb.ProvidersLiveTest do
   use TokengateWeb.ConnCase, async: false
 
   import Phoenix.LiveViewTest
-  import Ecto.Query
   alias Tokengate.{Accounts, Providers}
 
   defp unique, do: System.unique_integer([:positive])
+
+  # The catalog mirror is seeded at boot (outside the test sandbox, and it can
+  # be cut short), so make it deterministic here: the add-provider modal reads
+  # the mirror, not the vendored snapshot.
+  setup do
+    Tokengate.Providers.CatalogSeed.seed_if_empty()
+    :ok = Tokengate.Providers.CatalogSync.sync()
+    :ok
+  end
 
   defp register_admin do
     u = unique()
@@ -102,6 +110,29 @@ defmodule TokengateWeb.ProvidersLiveTest do
     refute has_element?(view, "#providers-empty")
   end
 
+  # El chip del logo es claro a propósito: los logos de models.dev usan
+  # fill="currentColor" y dentro de un <img> eso resuelve a negro — sobre el
+  # card oscuro (tema dim) quedaban invisibles. Un proveedor sin logo del
+  # catálogo (los customs) cae al icono genérico, oscuro sobre ese chip.
+  test "el chip del logo: claro para el catálogo, genérico para los sin logo", %{conn: conn} do
+    with_logo = create_provider(%{logo_url: "https://models.dev/logos/openrouter.svg"})
+    without_logo = create_provider()
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_custom_tab(conn)
+
+    assert has_element?(
+             view,
+             "#providers-#{with_logo.id} span.bg-white img[src='https://models.dev/logos/openrouter.svg']"
+           )
+
+    assert has_element?(
+             view,
+             "#providers-#{without_logo.id} span.bg-white span.hero-server-stack.text-neutral-600"
+           )
+  end
+
   ## Provider CRUD ---------------------------------------------------------
 
   test "admin creates a provider", %{conn: conn} do
@@ -110,25 +141,59 @@ defmodule TokengateWeb.ProvidersLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live_custom_tab(conn)
 
+    # The entry point is the catalog modal; "Custom provider" lives inside it.
+    view |> element("#add-provider-btn") |> render_click()
+    assert has_element?(view, "#catalog-modal")
     view |> element("#new-custom-provider-btn") |> render_click()
     assert has_element?(view, "#provider-form")
+    refute has_element?(view, "#catalog-modal")
+
+    # Capabilities are code configuration, not a form field: a custom only
+    # takes name + base URL.
+    refute has_element?(view, "#provider_capabilities")
+    refute has_element?(view, "#provider-form input[name='provider[capabilities][]']")
 
     html =
       view
       |> form("#provider-form",
         provider: %{
           name: "anthropic",
-          base_url: "https://api.anthropic.com/v1",
-          billing_type: "pay_per_token"
+          base_url: "https://api.anthropic.com/v1"
         }
       )
       |> render_submit()
 
     assert html =~ "Proveedor creado."
 
+    # A custom has no catalog entry to derive capabilities from, so what gets
+    # stored is the schema default (chat).
+    created = Tokengate.Repo.get_by!(Providers.Provider, name: "anthropic")
+    assert created.capabilities == ["llm"]
+
     # The new custom provider lives on the Custom tab.
     view |> element("#tab-providers-custom") |> render_click()
     assert render(view) =~ "anthropic"
+  end
+
+  test "editing a provider leaves its capabilities alone (not a form field)", %{conn: conn} do
+    provider = create_provider(%{capabilities: ["llm", "embedding", "stt"]})
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_custom_tab(conn)
+
+    view |> element("#edit-#{provider.id}") |> render_click()
+    refute has_element?(view, "#provider_capabilities")
+    # Neither the form nor the card shows the set anymore.
+    refute render(view) =~ "stt"
+
+    html = view |> form("#provider-form", provider: %{max_rpm: "60"}) |> render_submit()
+    assert html =~ "Proveedor actualizado."
+
+    reloaded = Providers.get_provider!(provider.id)
+    assert reloaded.max_rpm == 60
+    # The form never mentions them, so the stored set is untouched.
+    assert reloaded.capabilities == ["llm", "embedding", "stt"]
   end
 
   test "admin edits a provider", %{conn: conn} do
@@ -227,9 +292,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
         credential: %{
           provider_id: provider.id,
           name: "Producción",
-          api_key_encrypted: "sk-tes...abcd",
-          max_rpm: "500",
-          max_concurrent: "10"
+          api_key_encrypted: "sk-tes...abcd"
         }
       )
       |> render_submit()
@@ -237,11 +300,10 @@ defmodule TokengateWeb.ProvidersLiveTest do
     assert html =~ "Credencial creada."
     assert html =~ "Producción"
     assert html =~ "••••••abcd"
-    assert html =~ "500"
 
     [cred] = Providers.list_credentials_for_provider(provider.id)
 
-    # Edit the credential — cambiar model y dejar API key vacío
+    # Edit the credential — cambiar el alias y dejar API key vacío
     view |> element("#edit-credential-#{cred.id}") |> render_click()
     assert has_element?(view, "#credential-form")
 
@@ -250,22 +312,18 @@ defmodule TokengateWeb.ProvidersLiveTest do
       |> form("#credential-form",
         credential: %{
           name: "Staging",
-          api_key_encrypted: "",
-          max_rpm: "300",
-          max_concurrent: "5"
+          api_key_encrypted: ""
         }
       )
       |> render_submit()
 
     assert html =~ "Credencial actualizada."
     assert html =~ "Staging"
-    assert html =~ "300"
 
     # Verificar que el API key NO se perdió
     [updated] = Providers.list_credentials_for_provider(provider.id)
     assert updated.api_key_encrypted == "sk-tes...abcd"
-    assert updated.max_rpm == 300
-    assert updated.max_concurrent == 5
+    assert updated.name == "Staging"
 
     # Toggle it off
     html = view |> element("#toggle-credential-btn-#{cred.id}") |> render_click()
@@ -279,36 +337,87 @@ defmodule TokengateWeb.ProvidersLiveTest do
 
   ## Builtin (catalog) providers ------------------------------------------------
 
-  # The "Agregar proveedor" dropdown lists EVERY builtin: dormant ones are
-  # clickable (attach an API key), active ones render disabled with a check.
-  # Deterministic: pick two REAL catalog builtins by key and force their
-  # dormant state inside this test's sandbox (delete stray credentials —
-  # other tests in this file may have attached some within shared state).
-  # TODO(sandbox): this test passes only when the LiveView process shares the
-  # sandbox transaction that created the credential — flaky across suite
-  # orderings. The UI contract (dormant enabled / active disabled with check)
-  # is exercised manually; re-enable once the visibility issue is root-caused.
-  @tag :skip
-  test "add-provider menu lists all builtins; active ones disabled with check", %{conn: conn} do
-    pick = fn key_prefix ->
-      key =
-        Providers.Catalog.all()
-        |> Enum.map(& &1.key)
-        |> Enum.find(&String.starts_with?(&1, key_prefix))
+  test "catálogo: el modal busca en el espejo y activa un proveedor", %{conn: conn} do
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/providers")
 
-      from(p in Providers.Provider, where: p.key == ^key, limit: 1) |> Tokengate.Repo.one!()
-    end
+    refute has_element?(view, "#catalog-modal")
+    view |> element("#add-provider-btn") |> render_click()
+    assert has_element?(view, "#catalog-modal")
 
-    dormant = pick.("openrouter")
-    active = pick.("fireworks")
+    # The whole mirror is listed, with the custom entry point and the doc link.
+    assert has_element?(view, "#catalog-row-fireworks-ai")
+    assert has_element?(view, "#catalog-row-fireworks-ai a#docs-fireworks-ai")
+    assert has_element?(view, "#new-custom-provider-btn")
 
-    # Force the pair's state inside this sandbox transaction.
-    from(c in Providers.Credential, where: c.provider_id in ^[dormant.id, active.id])
-    |> Tokengate.Repo.delete_all()
+    # El buscador vive dentro de un <form>: un `phx-change` suelto sobre un
+    # input sin form revienta en el cliente ("form events require the input to
+    # be inside a form") y el evento nunca llega al servidor.
+    assert has_element?(view, "#catalog-search-form input#catalog-search")
 
-    {:ok, _} =
+    # Search filters by name and by models.dev id, and says when nothing matches.
+    view |> render_change("search_catalog", %{"query" => "FIREWORKS"})
+    assert has_element?(view, "#catalog-row-fireworks-ai")
+    refute has_element?(view, "#catalog-row-openrouter")
+
+    view |> render_change("search_catalog", %{"query" => "opencode"})
+    assert has_element?(view, "#catalog-row-opencode")
+    # `deepseek` is a separate provider: the mirror is a provider catalog, not
+    # a model catalog, so no model name ever matches.
+    refute has_element?(view, "#catalog-row-deepseek")
+
+    view |> render_change("search_catalog", %{"query" => "zzz-no-existe"})
+    assert has_element?(view, "#catalog-empty")
+    refute has_element?(view, "#catalog-row-fireworks-ai")
+
+    # Capabilities are code configuration, not picker chrome: neither a declared
+    # set nor a "sin declarar" placeholder ever shows on a row.
+    view |> render_change("search_catalog", %{"query" => "302ai"})
+    assert has_element?(view, "#catalog-row-302ai")
+    refute has_element?(view, "#catalog-row-302ai .badge")
+
+    view |> render_change("search_catalog", %{"query" => "fireworks"})
+    assert has_element?(view, "#catalog-row-fireworks-ai")
+    refute has_element?(view, "#catalog-row-fireworks-ai .badge")
+    refute render(view) =~ "sin declarar"
+
+    # Activating a provider opens the credential modal pre-assigned to it.
+    view |> render_change("search_catalog", %{"query" => "fireworks"})
+    view |> element("#activate-catalog-fireworks-ai") |> render_click()
+
+    refute has_element?(view, "#catalog-modal")
+    assert has_element?(view, "#credential-form")
+
+    provider = Tokengate.Repo.get_by!(Providers.Provider, key: "fireworks-ai")
+
+    assert has_element?(
+             view,
+             "#credential-form input[name='credential[provider_id]'][value='#{provider.id}']"
+           )
+  end
+
+  test "catálogo: el buscador no lista lo que el gateway no puede servir", %{conn: conn} do
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/providers")
+
+    view |> element("#add-provider-btn") |> render_click()
+    view |> render_change("search_catalog", %{"query" => "anthropic"})
+
+    # Not listed at all: no base URL upstream means nothing to activate, so
+    # the picker only offers rows the gateway can actually serve.
+    refute has_element?(view, "#catalog-row-anthropic")
+    refute render(view) =~ "no publica su base URL"
+  end
+
+  test "catálogo: un proveedor ya activo no se vuelve a activar", %{conn: conn} do
+    provider =
+      Tokengate.Repo.get_by!(Providers.Provider, key: "moonshotai")
+
+    {:ok, _cred} =
       Providers.create_credential(%{
-        provider_id: active.id,
+        provider_id: provider.id,
         api_key_encrypted: "sk-live",
         status: "active"
       })
@@ -317,23 +426,15 @@ defmodule TokengateWeb.ProvidersLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/catalog/providers")
 
-    # Force a server re-render so the credential state lands in the
-    # dropdown (the mount may have raced the fixture writes in shared mode).
-    view |> Phoenix.LiveViewTest.element("#tab-providers-custom") |> render_click()
-    view |> Phoenix.LiveViewTest.element("#tab-providers-builtin") |> render_click()
+    view |> element("#add-provider-btn") |> render_click()
+    view |> render_change("search_catalog", %{"query" => "moonshotai"})
 
-    html = render(view)
-    assert html =~ "Agregar proveedor"
-
-    # Dormant: enabled (no disabled attribute — it fires activate_builtin).
-    refute html =~ "id=\"activate-#{dormant.id}\" disabled"
-
-    # Active: disabled with the "activo" check badge.
-    assert html =~ "id=\"activate-#{active.id}\" disabled"
-    assert html =~ "activo"
+    assert has_element?(view, "#catalog-row-moonshotai")
+    refute has_element?(view, "#activate-catalog-moonshotai[phx-click]")
+    assert render(view) =~ "activo"
   end
 
-  test "builtin providers offer no Editar button", %{conn: conn} do
+  test "builtin providers are editable for their limits only", %{conn: conn} do
     # Builtins are seeded like CatalogSync does (raw change, bypassing the
     # operator changeset that locks identity fields).
     {:ok, builtin} =
@@ -366,16 +467,61 @@ defmodule TokengateWeb.ProvidersLiveTest do
     # Builtin card lives on the DEFAULT tab — plain mount, no switch.
     {:ok, view, _html} = live(conn, ~p"/catalog/providers")
 
-    # Builtin: no edit affordance at all (identity is catalog-owned; boot
-    # sync would overwrite any edit). Custom keeps it — on ITS tab.
-    refute has_element?(view, "#edit-#{builtin.id}")
+    # Builtin: the limits are the operator's, so the card is editable — but the
+    # catalog identity inside the form stays read-only.
+    assert has_element?(view, "#edit-#{builtin.id}")
     refute has_element?(view, "#providers-#{custom.id}")
+
+    view |> element("#edit-#{builtin.id}") |> render_click()
+    assert has_element?(view, "#provider-form")
+    assert has_element?(view, "#provider-form input[name='provider[name]'][disabled]")
+    assert has_element?(view, "#provider-form input[name='provider[base_url]'][disabled]")
+    refute has_element?(view, "#provider-form input[name='provider[max_rpm]'][disabled]")
+
+    html =
+      view
+      |> form("#provider-form", provider: %{max_rpm: "120", receive_timeout_ms: "90000"})
+      |> render_submit()
+
+    assert html =~ "Proveedor actualizado."
+
+    reloaded = Providers.get_provider!(builtin.id)
+    assert reloaded.max_rpm == 120
+    assert reloaded.receive_timeout_ms == 90_000
+    # Identity untouched.
+    assert reloaded.name == builtin.name
+    assert reloaded.base_url == builtin.base_url
+
+    # The card shows the limits the keys below it inherit.
+    custom_tab_html = render(view)
+    assert custom_tab_html =~ "RPM 120"
+    assert custom_tab_html =~ "90000 ms"
 
     view |> element("#tab-providers-custom") |> render_click()
     assert has_element?(view, "#edit-#{custom.id}")
     # Both keep the status toggle
     assert has_element?(view, "#toggle-provider-#{builtin.id}") ||
              has_element?(view, "#toggle-provider-#{custom.id}")
+  end
+
+  test "a provider with no limits shows them as unlimited and the timeout as global", %{
+    conn: conn
+  } do
+    provider = create_provider()
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_custom_tab(conn)
+
+    html = render(view)
+    assert html =~ "RPM ∞"
+    assert html =~ "Conc. ∞"
+    assert html =~ "Conc./usuario ∞"
+
+    assert html =~
+             "#{Tokengate.Providers.ProviderLimits.default_receive_timeout_ms()} ms (global)"
+
+    assert has_element?(view, "#provider-limits-#{provider.id}")
   end
 
   test "custom edit modal keeps identity fields editable", %{conn: conn} do
@@ -403,5 +549,134 @@ defmodule TokengateWeb.ProvidersLiveTest do
 
     assert has_element?(view, "#new-credential-#{provider.id}")
     assert render(view) =~ "API key"
+  end
+
+  ## Capacidades (per-service paths) ---------------------------------------
+
+  test "capacidades: el botón va justo a la izquierda de Editar", %{conn: conn} do
+    provider = create_provider()
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_custom_tab(conn)
+
+    html = render(view)
+    paths_at = :binary.match(html, ~s(id="paths-#{provider.id}"))
+
+    assert paths_at != :nomatch
+    assert paths_at < :binary.match(html, ~s(id="edit-#{provider.id}"))
+  end
+
+  test "capacidades: el modal lista el vocabulario y guarda solo lo escrito", %{conn: conn} do
+    provider = create_provider()
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_custom_tab(conn)
+
+    refute has_element?(view, "#paths-modal")
+
+    view |> element("#paths-#{provider.id}") |> render_click()
+    assert has_element?(view, "#paths-modal")
+
+    # One input per capability, empty by default: an empty input inherits.
+    for service <- ~w(chat models embeddings rerank stt tts image video music) do
+      assert has_element?(view, "#paths-form input[name='paths[#{service}]'][value='']")
+    end
+
+    html =
+      view
+      |> form("#paths-form", paths: %{chat: "/v1/chat", video: "/v1/videos"})
+      |> render_submit()
+
+    assert html =~ "Paths actualizados (2 overrides)."
+    refute has_element?(view, "#paths-modal")
+
+    reloaded = Providers.get_provider!(provider.id)
+    assert reloaded.path_overrides == %{"chat" => "/v1/chat", "video" => "/v1/videos"}
+
+    # The card badge counts them, and reopening shows what was stored.
+    assert has_element?(view, "#paths-#{provider.id}", "2")
+
+    view |> element("#paths-#{provider.id}") |> render_click()
+    assert has_element?(view, "#paths-form input[name='paths[chat]'][value='/v1/chat']")
+  end
+
+  test "capacidades: un path inválido no se guarda y el modal sigue abierto", %{conn: conn} do
+    provider = create_provider()
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_custom_tab(conn)
+
+    view |> element("#paths-#{provider.id}") |> render_click()
+
+    html =
+      view
+      |> form("#paths-form", paths: %{chat: "chat/completions"})
+      |> render_submit()
+
+    assert html =~ "debe empezar con /"
+    assert has_element?(view, "#paths-modal")
+    assert Providers.get_provider!(provider.id).path_overrides == %{}
+  end
+
+  test "capacidades: quitar el override devuelve la capacidad a su default", %{conn: conn} do
+    provider = create_provider(%{path_overrides: %{"chat" => "/v1/chat"}})
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_custom_tab(conn)
+
+    view |> element("#paths-#{provider.id}") |> render_click()
+    assert has_element?(view, "#paths-form input[name='paths[chat]'][value='/v1/chat']")
+
+    html = view |> form("#paths-form", paths: %{chat: ""}) |> render_submit()
+
+    assert html =~ "Paths restablecidos"
+    assert Providers.get_provider!(provider.id).path_overrides == %{}
+  end
+
+  test "capacidades: un builtin también puede sobrescribir sus paths", %{conn: conn} do
+    {:ok, builtin} =
+      %Providers.Provider{}
+      |> Ecto.Changeset.change(
+        key: "catalog-paths-#{unique()}",
+        name: "Catalog Paths #{unique()}",
+        base_url: "https://catalog-#{unique()}.example.com/v1",
+        source: "builtin",
+        dialect: "openai",
+        billing_type: "pay_per_token",
+        capabilities: ["llm"],
+        status: "active"
+      )
+      |> Tokengate.Repo.insert()
+
+    {:ok, _cred} =
+      Providers.create_credential(%{
+        provider_id: builtin.id,
+        name: "Producción",
+        api_key_encrypted: "«redacted:sk-…»",
+        status: "active"
+      })
+
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/providers")
+
+    view |> element("#paths-#{builtin.id}") |> render_click()
+
+    html =
+      view
+      |> form("#paths-form", paths: %{image: "/v1/images"})
+      |> render_submit()
+
+    assert html =~ "Paths actualizados (1 override)."
+
+    reloaded = Providers.get_provider!(builtin.id)
+    assert reloaded.path_overrides == %{"image" => "/v1/images"}
+    # Identity stays catalog-owned.
+    assert reloaded.name == builtin.name
+    assert reloaded.base_url == builtin.base_url
   end
 end

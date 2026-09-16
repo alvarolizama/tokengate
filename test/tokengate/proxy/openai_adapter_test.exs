@@ -14,6 +14,12 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
     @moduledoc false
     import Plug.Conn
 
+    # The generic default paths of the six services the proxy routes by path
+    # (the `ProviderPaths` vocabulary). The test server answers 200 on any of
+    # them — and on the same path behind a `/custom` prefix, which is what the
+    # path-override tests point at — so callers assert which path the wire saw.
+    @service_paths ~w(/rerank /audio/transcriptions /audio/speech /images/generations /videos /music/generations)
+
     def init(opts), do: opts
 
     def call(conn, _opts) do
@@ -49,13 +55,30 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
         conn.request_path == "/models" ->
           json(conn, 200, %{"data" => []})
 
+        # Only reachable through a provider path override: the generic surface
+        # would book /chat/completions.
+        conn.request_path == "/custom/chat/completions" ->
+          chat(conn, body)
+
         conn.request_path == "/chat/completions" ->
           chat(conn, body)
+
+        # The six path-routed services: any of their default paths — or the
+        # same path behind the `/custom` prefix an operator override in the
+        # test uses — answers 200, so the caller can assert which path the
+        # wire actually saw.
+        service_path?(conn.request_path) ->
+          json(conn, 200, %{"object" => "service", "model" => "whatever"})
 
         true ->
           json(conn, 404, %{"error" => "not found"})
       end
     end
+
+    # The generic defaults from `ProviderPaths`, the table the adapter
+    # resolves against — the vocabulary is closed, so the test spells out the
+    # same six segments the router exposes.
+    defp service_path?(path), do: String.trim_leading(path, "/custom") in @service_paths
 
     defp chat(conn, body) do
       payload = Jason.decode!(body)
@@ -181,6 +204,39 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
                  receive_timeout: 50
                )
     end
+
+    # The provider's own path override (Capacidades modal) is what the wire
+    # sees: base_url + the override, not base_url + the adapter default.
+    test "honours the provider's own path override", %{credential: credential} do
+      provider = %{
+        base_url: "http://localhost:#{@port}",
+        path_overrides: %{"chat" => "/custom/chat/completions"}
+      }
+
+      assert {:ok, body, _latency, _resp_headers} =
+               OpenAIAdapter.chat_completion(provider, credential, %{
+                 "model" => "gpt-4o",
+                 "messages" => []
+               })
+
+      assert body["id"] == "chatcmpl-1"
+      assert_receive {:captured, %{path: "/custom/chat/completions", method: "POST"}}
+    end
+
+    test "an override of another capability leaves chat on the default path", %{
+      provider: provider,
+      credential: credential
+    } do
+      provider = Map.put(provider, :path_overrides, %{"embeddings" => "/embed"})
+
+      assert {:ok, _body, _latency, _resp_headers} =
+               OpenAIAdapter.chat_completion(provider, credential, %{
+                 "model" => "gpt-4o",
+                 "messages" => []
+               })
+
+      assert_receive {:captured, %{path: "/chat/completions"}}
+    end
   end
 
   describe "stream_chat_completion/4" do
@@ -238,6 +294,79 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
       assert_receive {:sse_error, {:bad_request, 400, message}}
       assert message =~ "bad request"
     end
+  end
+
+  describe "service_post/5" do
+    # One test per capability: the default path from the `ProviderPaths`
+    # table, then the operator's override for the same service — the wire
+    # must see `base_url` + each one, never the other.
+    test "rerank: /rerank, and the operator's override wins", ctx do
+      assert_service_path(:rerank, "/rerank", ctx)
+    end
+
+    test "stt: /audio/transcriptions, and the operator's override wins", ctx do
+      assert_service_path(:stt, "/audio/transcriptions", ctx)
+    end
+
+    test "tts: /audio/speech, and the operator's override wins", ctx do
+      assert_service_path(:tts, "/audio/speech", ctx)
+    end
+
+    test "image: /images/generations, and the operator's override wins", ctx do
+      assert_service_path(:image, "/images/generations", ctx)
+    end
+
+    test "video: /videos, and the operator's override wins", ctx do
+      assert_service_path(:video, "/videos", ctx)
+    end
+
+    test "music: /music/generations, and the operator's override wins", ctx do
+      assert_service_path(:music, "/music/generations", ctx)
+    end
+
+    test "the body travels untouched and the key is the credential's", %{
+      provider: provider,
+      credential: credential
+    } do
+      payload = %{"model" => "rerank-v1", "query" => "hola", "top_n" => 3, "documents" => ["a"]}
+
+      assert {:ok, body, _latency, _headers} =
+               OpenAIAdapter.service_post(provider, credential, :rerank, payload)
+
+      assert body["object"] == "service"
+      assert_receive {:captured, %{body: raw, auth: ["Bearer sk-test-key"]}}
+      assert Jason.decode!(raw) == payload
+    end
+
+    test "a service outside the vocabulary books the root path instead of crashing", %{
+      provider: provider,
+      credential: credential
+    } do
+      # `service_post/5` is only called with the `ProviderPaths` vocabulary, but
+      # an unknown key must not raise: the adapter books base_url + "/" and
+      # lets the upstream's answer classify.
+      assert {:error, :client_error, 404, _message} =
+               OpenAIAdapter.service_post(provider, credential, :nonexistent, %{"model" => "x"})
+
+      assert_receive {:captured, %{path: "/", method: "POST"}}
+    end
+  end
+
+  # The default path first, then the same service with the provider's own
+  # override (Capacidades modal) — which must win over the generic default.
+  defp assert_service_path(service, default, %{provider: provider, credential: credential}) do
+    assert {:ok, _body, _latency, _headers} =
+             OpenAIAdapter.service_post(provider, credential, service, %{"model" => "x"})
+
+    assert_receive {:captured, %{path: ^default, method: "POST"}}
+
+    override = "/custom" <> default
+    overridden = Map.put(provider, :path_overrides, %{to_string(service) => override})
+
+    assert {:ok, _body, _latency, _headers} =
+             OpenAIAdapter.service_post(overridden, credential, service, %{"model" => "x"})
+
+    assert_receive {:captured, %{path: ^override, method: "POST"}}
   end
 
   describe "health_check/2" do

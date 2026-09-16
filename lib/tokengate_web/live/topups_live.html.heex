@@ -1,0 +1,281 @@
+<Layouts.dashboard
+  flash={@flash}
+  current_scope={@current_user}
+  impersonator={@impersonator}
+  current_path={@current_path}
+>
+  <div class="space-y-6">
+    <.header>
+      Top-ups
+      <:subtitle>Crédito de una vez por usuario</:subtitle>
+      <:actions>
+        <div class="flex items-center gap-3">
+          <.form
+            for={%{}}
+            phx-change="search_topups"
+            phx-submit="search_topups"
+            id="topup-search-form"
+          >
+            <div class="relative">
+              <.icon
+                name="hero-magnifying-glass"
+                class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40"
+              />
+              <input
+                type="text"
+                name="q"
+                placeholder="Buscar por usuario…"
+                value={@search_query}
+                phx-debounce="300"
+                class="input input-sm input-bordered pl-9 w-64"
+                id="topup-search"
+              />
+            </div>
+          </.form>
+          <.button phx-click="new_topup" id="new-topup-btn">
+            <.icon name="hero-plus" class="w-4 h-4" /> Nuevo top-up
+          </.button>
+          <button
+            :if={@archived_count > 0}
+            phx-click="toggle_archived"
+            id="toggle-archived-btn"
+            class="btn btn-ghost btn-sm gap-1"
+          >
+            <.icon name="hero-archive-box-arrow-down" class="w-4 h-4" />
+            <%= if @show_archived do %>
+              Ocultar archivados
+            <% else %>
+              Ver archivados ({@archived_count})
+            <% end %>
+          </button>
+        </div>
+      </:actions>
+    </.header>
+
+    <%!-- Form modal --%>
+    <div :if={@form} class="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div class="absolute inset-0 bg-black/50" phx-click="cancel_topup" />
+      <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
+        <div class="card-body p-6">
+          <h2 class="text-lg font-semibold mb-4">
+            {if @editing_topup_id == :new, do: "Nuevo top-up", else: "Editar top-up"}
+          </h2>
+          <.form
+            for={@form}
+            id="topup-form"
+            phx-change="topup_form_change"
+            phx-submit="save_topup"
+          >
+            <div id="topup-users">
+              <label class="text-xs text-base-content/60 block mb-1">Usuarios</label>
+
+              <div :if={@topup_users != []} class="flex flex-wrap gap-2 mb-2">
+                <span
+                  :for={u <- @topup_users}
+                  class="badge badge-primary badge-sm gap-1"
+                  id={"topup-user-#{u.id}"}
+                >
+                  {u.label}
+                  <button
+                    type="button"
+                    phx-click="remove_topup_user"
+                    phx-value-user-id={u.id}
+                    class="ml-1 leading-none opacity-70 hover:opacity-100"
+                    aria-label="Quitar usuario"
+                  >
+                    ×
+                  </button>
+                </span>
+              </div>
+
+              <.input
+                type="text"
+                name="topup_user_query"
+                value={@topup_user_query}
+                placeholder="Buscar por email o nombre…"
+                id="topup-user-search"
+                autocomplete="off"
+              />
+
+              <div
+                :if={@topup_user_query != "" and @topup_user_results == []}
+                class="text-xs text-base-content/40 mt-2"
+              >
+                Sin coincidencias.
+              </div>
+
+              <div
+                :if={@topup_user_results != []}
+                class="mt-2 max-h-40 overflow-y-auto border border-base-300 rounded-md"
+              >
+                <button
+                  :for={u <- @topup_user_results}
+                  type="button"
+                  id={"add-topup-user-#{u.id}"}
+                  phx-click="add_topup_user"
+                  phx-value-user-id={u.id}
+                  phx-value-label={u.name || u.email}
+                  class="w-full text-left px-3 py-2 text-sm hover:bg-base-100 border-b border-base-300 last:border-b-0"
+                >
+                  <div class="font-medium">{u.name || u.email}</div>
+                  <div class="text-xs text-base-content/60">{u.email}</div>
+                </button>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+              <.input field={@form[:name]} type="text" label="Nombre (opcional)" />
+              <.input field={@form[:units]} type="number" min="0" label="Créditos" />
+              <.input
+                field={@form[:status]}
+                type="select"
+                label="Estado"
+                options={[{"Activo", "active"}, {"Pausado", "paused"}]}
+              />
+            </div>
+
+            <div class="mt-3">
+              <.input
+                type="date"
+                name="topup_expires_on"
+                value={@topup_expires_on}
+                label="Vence (opcional)"
+                hint="Vacío = sin vencimiento"
+                id="topup-expires-on"
+              />
+            </div>
+
+            <div class="flex gap-2 mt-4 justify-end">
+              <button type="button" phx-click="cancel_topup" class="btn btn-ghost btn-sm">
+                Cancelar
+              </button>
+              <button type="submit" class="btn btn-primary btn-sm" id="save-topup-btn">
+                Guardar
+              </button>
+            </div>
+          </.form>
+        </div>
+      </div>
+    </div>
+
+    <%!-- Compact table --%>
+    <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
+      <table class="table table-sm">
+        <thead>
+          <tr>
+            <th>
+              <.sort_button
+                event="sort_topups"
+                field={:target}
+                label="Objetivo"
+                current={@sort_field}
+                direction={@sort_direction}
+              />
+            </th>
+            <th class="text-right">
+              <.sort_button
+                event="sort_topups"
+                field={:units}
+                label="Créditos"
+                current={@sort_field}
+                direction={@sort_direction}
+                align="right"
+              />
+            </th>
+            <th class="text-right">Consumo</th>
+            <th>
+              <.sort_button
+                event="sort_topups"
+                field={:expires_at}
+                label="Vence"
+                current={@sort_field}
+                direction={@sort_direction}
+              />
+            </th>
+            <th>
+              <.sort_button
+                event="sort_topups"
+                field={:status}
+                label="Estado"
+                current={@sort_field}
+                direction={@sort_direction}
+              />
+            </th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="topups" phx-update="stream">
+          <tr
+            :for={{dom_id, sub} <- @streams.topups}
+            id={dom_id}
+            class={Credit.archived?(sub, @archived_ids) && "opacity-50"}
+          >
+            <td class="font-medium">{Credit.target_label(sub, assigns)}</td>
+            <td class="text-right font-mono">{sub.units}</td>
+            <td id={"topup-usage-#{sub.id}"} class="w-40">
+              {Credit.render_usage_cell(sub, assigns)}
+              <div :if={sub.status == "paused"} class="text-[10px] text-warning mt-0.5">
+                saldo revocado
+              </div>
+            </td>
+            <td class="text-xs">{expires_label(sub.expires_at)}</td>
+            <td>
+              <div class="flex items-center gap-1">
+                <span class={[
+                  "badge badge-sm",
+                  if(sub.status == "active", do: "badge-success", else: "badge-ghost")
+                ]}>
+                  {Credit.topup_status_label(sub.status)}
+                </span>
+                <span
+                  :if={Credit.archived?(sub, @archived_ids)}
+                  class="badge badge-sm badge-warning badge-outline"
+                  id={"archived-badge-#{sub.id}"}
+                >
+                  {Credit.archived_reason(sub)}
+                </span>
+              </div>
+            </td>
+            <td class="text-right">
+              <div class="flex gap-1 justify-end">
+                <button
+                  phx-click="edit_topup"
+                  phx-value-id={sub.id}
+                  class="btn btn-ghost btn-xs"
+                  id={"edit-topup-#{sub.id}"}
+                >
+                  Editar
+                </button>
+                <button
+                  phx-click="toggle_topup_status"
+                  phx-value-id={sub.id}
+                  class="btn btn-ghost btn-xs"
+                  id={"toggle-topup-status-#{sub.id}"}
+                >
+                  {if sub.status == "active", do: "Desactivar", else: "Reactivar"}
+                </button>
+                <button
+                  phx-click="revoke_topup"
+                  phx-value-id={sub.id}
+                  data-confirm="¿Revocar este top-up? El saldo restante deja de otorgarse."
+                  class="btn btn-ghost btn-xs text-error"
+                  id={"revoke-topup-#{sub.id}"}
+                >
+                  <.icon name="hero-trash" class="w-4 h-4" /> Revocar
+                </button>
+              </div>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+      <div
+        :if={@topups_empty?}
+        class="text-center py-12 text-base-content/40"
+        id="topups-empty"
+      >
+        <.icon name="hero-arrow-up-circle" class="w-10 h-10 mx-auto mb-2 opacity-40" />
+        <p>No hay top-ups — ningún usuario tiene crédito de una vez.</p>
+      </div>
+    </div>
+  </div>
+</Layouts.dashboard>

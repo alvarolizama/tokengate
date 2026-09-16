@@ -61,12 +61,14 @@ defmodule TokengateWeb.StatsLive.Provider do
       <% row = @provider && Enum.find(@provider_ranking, &(&1.provider_id == @provider.id)) %>
       <div class="flex items-center gap-3 flex-wrap" id="provider-detail-header">
         <h2 class="text-lg font-semibold flex items-center gap-2">
-          <.icon name="hero-server-stack" class="w-5 h-5 text-base-content/60" />
+          <Stats.provider_logo logo_url={@provider && @provider.logo_url} size="md" />
           {if @provider, do: @provider.name, else: "…"}
         </h2>
         <span :if={row} class={["badge badge-sm", Stats.tier_badge_class(row.tier)]}>
           {row.tier}
         </span>
+        <%!-- Identidad del catálogo models.dev: sólo el logo; sin key ni enlace
+             a docs en el encabezado. --%>
         <span :if={row && row.score} class="text-xs text-base-content/50">
           score {row.score}
         </span>

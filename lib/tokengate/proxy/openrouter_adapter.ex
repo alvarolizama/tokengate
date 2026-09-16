@@ -27,6 +27,10 @@ defmodule Tokengate.Proxy.OpenRouterAdapter do
   defdelegate embeddings(provider, credential, payload, opts \\ []), to: OpenAIAdapter
 
   @impl true
+  defdelegate service_post(provider, credential, service, payload, opts \\ []),
+    to: OpenAIAdapter
+
+  @impl true
   def list_embedding_models(provider, credential) do
     # OpenRouter lists its embedding catalogue at /embeddings/models.
     OpenAIAdapter.list_models_at(provider, credential, "/embeddings/models")

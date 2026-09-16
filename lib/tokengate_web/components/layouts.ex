@@ -75,7 +75,7 @@ defmodule TokengateWeb.Layouts do
   end
 
   @doc """
-  Renders the dashboard (ops console) layout — a dark, premium sidebar +
+  Renders the dashboard (ops console) layout — a premium, theme-driven sidebar +
   topbar shell used by authenticated LiveViews (DashboardLive and the
   admin LiveViews under the `:admin` live_session).
 
@@ -175,7 +175,17 @@ defmodule TokengateWeb.Layouts do
           </span>
         </div>
 
-        <div class="avatar avatar-placeholder">
+        <%!-- El avatar abre en un modal la cuenta y el cambio de contraseña
+             (la página /profile se retiró). --%>
+        <.live_component
+          :if={@current_scope}
+          module={TokengateWeb.ProfileModal}
+          id="profile-modal"
+          user={@current_scope}
+          initials={initials(@current_scope)}
+        />
+
+        <div :if={is_nil(@current_scope)} class="avatar avatar-placeholder">
           <div class="bg-primary text-primary-content w-9 rounded-full">
             <span class="text-sm font-semibold">{initials(@current_scope)}</span>
           </div>
@@ -199,15 +209,21 @@ defmodule TokengateWeb.Layouts do
   attr :current_scope, :map, default: nil
   attr :alert_count, :integer, default: 0
   attr :current_path, :string, default: nil
+  attr :supervised_count, :integer, default: 0
 
   defp dashboard_sidebar(assigns) do
     assigns =
       if admin?(assigns.current_scope) do
         creds = Tokengate.Providers.count_error_credentials()
         breakers = Tokengate.Routing.CircuitBreakerManager.count_open()
-        assign(assigns, :alert_count, creds + breakers)
-      else
+
         assigns
+        |> assign(:alert_count, creds + breakers)
+        # The supervised-services entry is for non-admins only: an admin
+        # already reaches every service from /access/services.
+        |> assign(:supervised_count, 0)
+      else
+        assign(assigns, :supervised_count, supervised_services_count(assigns.current_scope))
       end
 
     ~H"""
@@ -230,6 +246,17 @@ defmodule TokengateWeb.Layouts do
               label="Dashboard"
               icon="hero-chart-bar-square"
             />
+
+            <%!-- Los no-admins que supervisan servicios entran a su vista de
+                 solo lectura desde aquí (para admins el enlace es /access/services). --%>
+            <%= if not admin?(@current_scope) and @supervised_count > 0 do %>
+              <.sidebar_link
+                current_path={@current_path}
+                href={~p"/services/supervised"}
+                label="Servicios supervisados"
+                icon="hero-eye"
+              />
+            <% end %>
 
             <%= if admin?(@current_scope) do %>
               <.sidebar_link
@@ -291,6 +318,12 @@ defmodule TokengateWeb.Layouts do
                 href={~p"/credit/subscriptions"}
                 label="Suscripciones"
                 icon="hero-banknotes"
+              />
+              <.sidebar_link
+                current_path={@current_path}
+                href={~p"/credit/topups"}
+                label="Top-ups"
+                icon="hero-arrow-up-circle"
               />
             </.sidebar_section>
 
@@ -435,6 +468,13 @@ defmodule TokengateWeb.Layouts do
 
   defp admin?(%{global_role: "admin"}), do: true
   defp admin?(_), do: false
+
+  # Solo importa "¿supervisa algo?": un count ligero evita cargar los
+  # servicios (con su api_key) en cada render del sidebar.
+  defp supervised_services_count(%{id: id}),
+    do: Tokengate.Accounts.count_services_for_supervisor(id)
+
+  defp supervised_services_count(_), do: 0
 
   defp initials(nil), do: "—"
 

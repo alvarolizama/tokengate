@@ -17,7 +17,7 @@
    curl -sLO https://github.com/saadeghi/daisyui/releases/latest/download/daisyui.js
    Make sure to look at the daisyUI changelog: https://daisyui.com/docs/changelog/ */
 @plugin "../vendor/daisyui" {
-  themes: dark --default;
+  themes: dim --default;
 }
 
 /* Add variants based on LiveView classes */
@@ -37,7 +37,7 @@
   transition: background-color 150ms ease;
 }
 .table tbody tr:hover {
-  background-color: color-mix(in oklab, var(--b2) 60%, transparent);
+  background-color: color-mix(in oklab, var(--color-base-200) 60%, transparent);
 }
 
 /* Separador ":" del contador de reinicio del tope diario (En vivo y Resumen).

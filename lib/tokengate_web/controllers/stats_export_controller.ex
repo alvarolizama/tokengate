@@ -3,7 +3,7 @@ defmodule TokengateWeb.StatsExportController do
   CSV export endpoint for stats data.
 
   Accepts query params:
-    * `type`   — `models`, `groups`, `providers`, `errors`, or `logs` (required)
+    * `type`   — `models`, `groups`, `providers`, `services`, `errors`, or `logs` (required)
     * `period` — `today`, `week`, `month`, `7d`, `30d`, `90d` (default: `7d`)
     * `model_id` — filter by model (for models type only)
     * `group_id`  — filter by group (for groups type only)
@@ -71,6 +71,19 @@ defmodule TokengateWeb.StatsExportController do
     {:ok, build_errors_csv(user, opts, timezone)}
   end
 
+  # La tabla de servicios es admin-only en el hub (la ruta vive en la
+  # live_session :admin) y su agregado (`Rollup.breakdown_by_service/1`)
+  # rankea por servicio sin filtrar por `member_ids`: un manager exportaría
+  # el tráfico de servicios de la organización entera. Mismo criterio que el
+  # ranking de proveedores: si no eres admin, no baja.
+  defp build_csv(user, "services", _params, opts, timezone) do
+    if admin?(user) do
+      {:ok, build_services_csv(opts, timezone)}
+    else
+      {:error, :forbidden}
+    end
+  end
+
   defp build_csv(user, "logs", _params, opts, timezone) do
     {:ok, build_logs_csv(user, opts, timezone)}
   end
@@ -129,6 +142,46 @@ defmodule TokengateWeb.StatsExportController do
 
   defp csv_ms(nil), do: ""
   defp csv_ms(ms), do: to_string(round(ms))
+
+  ## Services CSV ---------------------------------------------------------
+
+  # Una fila por servicio, del MISMO agregado que pinta la tabla del hub
+  # (`Rollup.breakdown_by_service/1`): el CSV y la pantalla no pueden decir
+  # cosas distintas — igual que proveedores.
+  defp build_services_csv(opts, timezone) do
+    rows = Rollup.breakdown_by_service(opts)
+
+    header = ~w(servicio requests costo tokens_in tokens_out tps latencia_ms)
+
+    csv =
+      [header | Enum.map(rows, &row_to_csv_service/1)]
+      |> Enum.map(&Enum.join(&1, ","))
+      |> Enum.join("\n")
+
+    {"estadisticas_servicios_#{Periods.local_today(timezone)}.csv", csv}
+  end
+
+  defp row_to_csv_service(row) do
+    [
+      csv_escape(row.service_name),
+      row.request_count,
+      decimal_to_csv(Map.get(row, :cost_usd)),
+      Map.get(row, :prompt_tokens, 0),
+      Map.get(row, :completion_tokens, 0),
+      tps_to_csv(Map.get(row, :avg_tps)),
+      latency_to_csv(Map.get(row, :avg_latency_ms))
+    ]
+  end
+
+  # Sin muestras de latencia la celda va vacía, no un 0 que se leería como
+  # "instantáneo" (misma regla que el score de proveedores).
+  defp latency_to_csv(nil), do: ""
+  defp latency_to_csv(%Decimal{} = d), do: d |> Decimal.round(0) |> Decimal.to_string()
+
+  defp latency_to_csv(n) when is_float(n),
+    do: n |> Float.round(0) |> trunc() |> Integer.to_string()
+
+  defp latency_to_csv(n) when is_integer(n), do: Integer.to_string(n)
 
   ## Models CSV -----------------------------------------------------------
 

@@ -31,6 +31,18 @@ defmodule TokengateWeb.RedirectControllerTest do
       conn = get(conn, "/dashboard/credits")
       assert redirected_to(conn) == "/stats/overview"
     end
+
+    test "/dashboard/services/supervised → /services/supervised", %{conn: conn} do
+      conn = get(conn, "/dashboard/services/supervised")
+      assert redirected_to(conn) == "/services/supervised"
+    end
+
+    test "/dashboard/services/supervised?period=30d → /services/supervised?period=30d", %{
+      conn: conn
+    } do
+      conn = get(conn, "/dashboard/services/supervised?period=30d")
+      assert redirected_to(conn) == "/services/supervised?period=30d"
+    end
   end
 
   # El prefijo /admin se partió en las sub-secciones del sidebar

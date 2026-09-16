@@ -61,12 +61,75 @@ defmodule Tokengate.Providers.ProviderTest do
           name: "test",
           base_url: "https://api.example.com/v1",
           dialect: "cohere",
-          capabilities: ["rerank"]
+          capabilities: ["moderation"]
         })
 
       refute changeset.valid?
       assert %{dialect: [_]} = errors_on(changeset)
       assert %{capabilities: [_]} = errors_on(changeset)
+    end
+
+    test "accepts the whole capability vocabulary, not just llm/embedding" do
+      changeset =
+        Provider.changeset(%Provider{}, %{
+          name: "multimodal-relay",
+          base_url: "https://api.example.com/v1",
+          capabilities: ["llm", "stt", "tts", "image", "video", "rerank", "embedding"]
+        })
+
+      assert changeset.valid?
+    end
+
+    test "casts path overrides and drops the blank ones" do
+      changeset =
+        Provider.changeset(%Provider{}, %{
+          name: "mi-relay",
+          base_url: "https://relay.example.com/v1",
+          path_overrides: %{"chat" => "/v1/chat", "stt" => "", "music" => "/music/generations/"}
+        })
+
+      assert changeset.valid?
+
+      assert Ecto.Changeset.get_change(changeset, :path_overrides) ==
+               %{"chat" => "/v1/chat", "music" => "/music/generations"}
+    end
+
+    test "rejects an unknown capability and an unrooted path" do
+      base = %{name: "mi-relay", base_url: "https://relay.example.com/v1"}
+
+      unknown =
+        Provider.changeset(%Provider{}, Map.put(base, :path_overrides, %{"moderation" => "/m"}))
+
+      assert %{path_overrides: [unknown_message]} = errors_on(unknown)
+      assert unknown_message =~ "moderation"
+
+      unrooted =
+        Provider.changeset(%Provider{}, Map.put(base, :path_overrides, %{"chat" => "chat"}))
+
+      assert %{path_overrides: [_]} = errors_on(unrooted)
+    end
+
+    test "a builtin keeps its path overrides while its identity stays locked" do
+      builtin = %Provider{
+        source: "builtin",
+        key: "openrouter",
+        name: "OpenRouter",
+        base_url: "https://openrouter.ai/api/v1"
+      }
+
+      changeset =
+        Provider.changeset(builtin, %{
+          name: "renamed",
+          base_url: "https://elsewhere.example.com/v1",
+          path_overrides: %{"embeddings" => "/embeddings"}
+        })
+
+      refute Map.has_key?(changeset.changes, :name)
+      refute Map.has_key?(changeset.changes, :base_url)
+
+      assert Ecto.Changeset.get_change(changeset, :path_overrides) == %{
+               "embeddings" => "/embeddings"
+             }
     end
   end
 

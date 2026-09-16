@@ -72,7 +72,14 @@ defmodule TokengateWeb.GroupsLiveTest do
 
     # Type a search term that matches no group → triggers empty state deterministically
     no_match_term = "zzz-no-match-#{System.unique_integer([:positive])}"
-    view |> element("input[name='group_search']") |> render_change(%{group_search: no_match_term})
+
+    # El binding vive en el FORM: un `phx-change` suelto en el input revienta
+    # en el cliente ("form events require the input to be inside a form").
+    assert has_element?(view, "#groups-search-form input[name='group_search']")
+
+    view
+    |> element("#groups-search-form")
+    |> render_change(%{group_search: no_match_term})
 
     assert has_element?(view, "#groups-empty")
   end

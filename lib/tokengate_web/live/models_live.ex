@@ -963,11 +963,11 @@ defmodule TokengateWeb.ModelsLive do
   ## Helpers ---------------------------------------------------------------
 
   # True when the form's selected credential belongs to the Fireworks
-  # provider (catalog key "fireworks"). Gates the service_tier checkbox —
+  # provider (catalog key "fireworks-ai"). Gates the service_tier checkbox —
   # Priority is a Fireworks-only serving path.
   defp credential_is_fireworks?(credential_id, socket) when is_binary(credential_id) do
     case Enum.find(socket.assigns.credentials_for_select, &(&1.id == credential_id)) do
-      %{provider: %{key: "fireworks"}} -> true
+      %{provider: %{key: "fireworks-ai"}} -> true
       _ -> false
     end
   end
@@ -1150,13 +1150,17 @@ defmodule TokengateWeb.ModelsLive do
   def billing_label(_), do: "Pay per token"
 
   # Billing surface of the model_provider's provider — an organizational
-  # label only (it does not drive routing, cost or budget anymore). Falls
-  # back to "pay_per_token" when the association isn't loaded.
-  defp provider_billing_type(%ModelProvider{credential: %{provider: %{billing_type: type}}})
+  # label only (it does not drive routing, cost or budget anymore). It is a
+  # CATALOG label: only a builtin has an upstream surface to name, so a custom
+  # provider has none and the badge is skipped (nil). Falls back to nil when
+  # the association isn't loaded.
+  defp provider_billing_type(%ModelProvider{
+         credential: %{provider: %{source: "builtin", billing_type: type}}
+       })
        when is_binary(type),
        do: type
 
-  defp provider_billing_type(_), do: "pay_per_token"
+  defp provider_billing_type(_), do: nil
 
   def enabled_badge(true), do: "badge-success"
   def enabled_badge(_), do: "badge-ghost"
@@ -1233,13 +1237,9 @@ defmodule TokengateWeb.ModelsLive do
           Modelos
           <:subtitle>Configura models y sus proveedores de routing</:subtitle>
           <:actions :if={@is_admin}>
-            <button
-              phx-click="new_model"
-              class="btn btn-primary btn-sm"
-              id="new-model-btn"
-            >
+            <.button phx-click="new_model" id="new-model-btn">
               <.icon name="hero-plus" class="w-4 h-4" /> Nuevo Modelo
-            </button>
+            </.button>
           </:actions>
         </.header>
 
@@ -1464,11 +1464,14 @@ defmodule TokengateWeb.ModelsLive do
                             </td>
                             <td><code class="text-sm">{ap.provider_model}</code></td>
                             <td>
-                              <span class={[
-                                "badge",
-                                "badge-sm",
-                                billing_badge(provider_billing_type(ap))
-                              ]}>
+                              <span
+                                :if={provider_billing_type(ap)}
+                                class={[
+                                  "badge",
+                                  "badge-sm",
+                                  billing_badge(provider_billing_type(ap))
+                                ]}
+                              >
                                 {billing_label(provider_billing_type(ap))}
                               </span>
                             </td>

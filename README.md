@@ -9,7 +9,7 @@
 ### OpenAI-compatible LLM API gateway
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-8B5CF6.svg)](./mix.exs)
+[![Version](https://img.shields.io/badge/version-1.0.0-9FE88D.svg)](./mix.exs)
 [![Elixir](https://img.shields.io/badge/Elixir-1.18+-4B275F?logo=elixir&logoColor=white)](https://elixir-lang.org)
 [![Phoenix](https://img.shields.io/badge/Phoenix-1.8_LiveView-FD4F00?logo=phoenixframework&logoColor=white)](https://www.phoenixframework.org)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-partitioned-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org)
@@ -44,8 +44,8 @@ Think "LiteLLM, but as an Elixir app with a real admin UI".
 - **FIFO queue** for saturated included credentials — requests queue (tiered timeouts)
   instead of immediately falling back to pay-per-token, maximizing subscription use.
 - **Two-gate throttling** — per-member limits (RPM, concurrency) protect TokenGate;
-  per-credential limits (`max_rpm`, `max_concurrent`, `max_concurrent_per_user`)
-  protect the upstream key.
+  per-provider limits (`max_rpm`, `max_concurrent`, `max_concurrent_per_user`)
+  protect the upstream keys — every credential of a provider inherits them.
 
 ## Cache intelligence
 
@@ -72,11 +72,14 @@ Think "LiteLLM, but as an Elixir app with a real admin UI".
 ## Credits & budgets
 
 - **Credit subscriptions** — a subscription grants `units` of credit per cycle
-  (1 credit = $1), monthly with a cut-off day (with optional rollover % and cap) or a
+  (1 credit = $1): monthly with a cut-off day (with optional rollover % and cap) or a
   one-shot **top-up**. Group defaults (one sub shared by every member of the group) and
   direct user subs/top-ups, drained group-default first then direct credit, earliest
-  expiry first. Expired or fully-drained top-ups auto-archive in the admin list
-  (toggle to reveal).
+  expiry first. Recurring subs and top-ups have **separate admin pages** (`/credit/subscriptions`
+  and `/credit/topups`); a subscription can be deactivated (stops granting until
+  reactivated), and a top-up can also be **revoked** (deleted) or deactivated — the table
+  shows how much of the top-up was consumed and, once the remaining balance hits 0 (drained)
+  or it expires, it auto-archives (toggle to reveal).
 - **Subjects without any applicable subscription are unlimited** (tier 3) — shown as
   "Ilimitado", not "no credit".
 - **Daily spending cap per credential** — once reached, the router skips it until the
@@ -96,12 +99,14 @@ Think "LiteLLM, but as an Elixir app with a real admin UI".
 | `/stats` | Analytics hub — live pulse + tabs: overview, models, services, groups, users, credits. Role-scoped, prev-period deltas, CSV export. Hourly rollup (`request_metrics_hourly`) keeps period switching fast |
 | `/logs` | Live request log, filters, in-flight requests, CSV export |
 | `/calculator` | Real provider spend vs estimated cost with custom pricing |
-| `/dashboard/services` (+ `/supervised`) | Machine-to-machine API keys with their own budget/limits/grants |
+| `/access/services` | Machine-to-machine API keys with their own budget/limits/grants, plus supervisor assignment |
+| `/services/supervised` (+ `/:service_id`) | Read-only view for service supervisors: summary per supervised service (30d spend, requests, tokens, errors, latency, key status, granted models) and full per-service stats (period selector, daily usage per model, per-model breakdown, status classes, recent requests, roster). Access comes from a live `service_supervisors` row — no role grants it, and removing the row revokes it immediately |
 | `/catalog/providers` | Provider CRUD, multiple credentials each, per-provider sticky TTL and cache_control toggle |
 | `/catalog/models` | Alias CRUD — providers by priority, `billing_mode`, exclusive scope |
 | `/access/groups` (+ members) | Group defaults, per-member extras and grants, observability webhooks |
 | `/access/users` | User CRUD, suspend, impersonation, per-user stats, credit column |
-| `/credit/subscriptions` | Credit subscriptions & top-ups with auto-archiving |
+| `/credit/subscriptions` | Recurring (monthly) credit subscriptions — group defaults + direct user subs; deactivate/reactivate |
+| `/credit/topups` | One-shot top-ups per user: consumed vs granted, deactivate (revokes remaining balance) / revoke, auto-archived when drained or expired |
 | `/operations/observability` | OTLP/JSON webhook destinations (HMAC-signed, delivered via Oban) |
 | `/operations/maintenance` | Config overview, danger zone, global daily cap kill-switch |
 
@@ -197,7 +202,7 @@ docker run -p 4000:4000 --env-file .env tokengate
 ## Tech stack
 
 Phoenix 1.8 + LiveView · Bandit · Ecto/Postgres (RANGE partitions) · Finch (upstream
-HTTP/SSE) · Req (outbound) · Oban · Tailwind CSS v4 + daisyUI (dark) · esbuild ·
+HTTP/SSE) · Req (outbound) · Oban · Tailwind CSS v4 + daisyUI (dim) · esbuild ·
 bcrypt_elixir
 
 ## Development
