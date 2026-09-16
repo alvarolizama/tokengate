@@ -28,6 +28,7 @@ defmodule Tokengate.Providers do
     ServiceModel,
     GroupModel,
     GroupMemberExtraModel,
+    GroupMemberDeniedModel,
     CatalogProvider,
     CatalogRefreshWorker,
     CatalogSyncState,
@@ -799,6 +800,95 @@ defmodule Tokengate.Providers do
     do: GroupMemberExtraModel.changeset(tmea, attrs)
 
   # ---------------------------------------------------------------------------
+  # Group Member Denied Models
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Returns model ids denied to a specific group member.
+  """
+  def list_denied_model_ids_for_member(group_member_id) do
+    from(tmda in GroupMemberDeniedModel,
+      where: tmda.group_member_id == ^group_member_id,
+      select: tmda.model_id
+    )
+    |> Repo.all()
+  end
+
+  @doc """
+  Revokes a model from an individual group member: adds a deny row for it
+  (regardless of whether the access came from the group or from an extra
+  grant), so effective access = (group ∪ extras) − denied.
+
+  Idempotent: returns `{:error, :already_denied}` when the deny already
+  exists. Invalidates the routing cache for the member.
+  """
+  def deny_model(group_member_id, model_id) do
+    # Un sujeto o un modelo inexistente es `:not_found`, no un changeset con
+    # error de FK: el llamador (y la UI) distingue "no existe" de "ya estaba
+    # denegado". Se comprueba antes de insertar para no depender del texto del
+    # error de Postgres.
+    with {:ok, _member} <- fetch_group_member(group_member_id),
+         {:ok, _model} <- fetch_model(model_id) do
+      %GroupMemberDeniedModel{}
+      |> GroupMemberDeniedModel.changeset(%{
+        group_member_id: group_member_id,
+        model_id: model_id
+      })
+      |> Repo.insert()
+      |> case do
+        {:ok, _tmda} = ok ->
+          Tokengate.Routing.Cache.invalidate_accessible_models(nil, group_member_id)
+          ok
+
+        other ->
+          normalize_unique_error(other, :already_denied)
+      end
+    end
+  end
+
+  defp fetch_group_member(id) do
+    case Tokengate.Accounts.get_group_member(id) do
+      nil -> {:error, :not_found}
+      member -> {:ok, member}
+    end
+  end
+
+  defp fetch_model(id) do
+    case Repo.get(Model, id) do
+      nil -> {:error, :not_found}
+      model -> {:ok, model}
+    end
+  end
+
+  @doc """
+  Restores a model's access for an individual group member by removing the
+  deny row (undeny). Idempotent: returns `{:ok, nil}` when there was nothing
+  to remove. Invalidates the routing cache for the member.
+  """
+  def allow_model(group_member_id, model_id) do
+    case Repo.get_by(GroupMemberDeniedModel,
+           group_member_id: group_member_id,
+           model_id: model_id
+         ) do
+      nil ->
+        {:ok, nil}
+
+      record ->
+        case Repo.delete(record) do
+          {:ok, tmda} ->
+            Tokengate.Routing.Cache.invalidate_accessible_models(nil, group_member_id)
+            {:ok, tmda}
+
+          {:error, changeset} ->
+            {:error, changeset}
+        end
+    end
+  end
+
+  def change_group_member_denied_model(%GroupMemberDeniedModel{} = tmda, attrs \\ %{}),
+    do: GroupMemberDeniedModel.changeset(tmda, attrs)
+
+  # ---------------------------------------------------------------------------
   # Group Model Aliases
   # ---------------------------------------------------------------------------
 
@@ -949,7 +1039,16 @@ defmodule Tokengate.Providers do
         select: tmea.model_id
       )
 
-    all_ids = group_alias_ids |> union(^member_alias_ids)
+    denied_alias_ids =
+      from(tmda in GroupMemberDeniedModel,
+        where: tmda.group_member_id == ^member_id,
+        select: tmda.model_id
+      )
+
+    all_ids =
+      group_alias_ids
+      |> union(^member_alias_ids)
+      |> except(^denied_alias_ids)
 
     from(ma in Model,
       join: id in subquery(all_ids),
@@ -960,10 +1059,100 @@ defmodule Tokengate.Providers do
   end
 
   @doc """
-  Batch variant of `list_accessible_models/1` for a list of group members
-  (e.g. all memberships of one user). Runs a constant number of queries
-  regardless of membership count — one for group grants, one for individual
-  grants, one for the models — instead of 2N+1.
+  Effective model access for ONE group member:
+  `(group grants ∪ individual extras) − individual denies`.
+
+  Returns `{accessible_models, extra_ids, denied_ids}` — the union-minus-
+  denied list plus the ids of both individual sets, so callers (LiveView
+  picker) can render the 3 states (granted / extra / denied) without extra
+  queries.
+  """
+  @spec list_accessible_models_for_member(map()) :: {[Model.t()], [binary()], [binary()]}
+  def list_accessible_models_for_member(%{service_name: name} = member)
+      when is_binary(name) do
+    # Service (virtual group member) — service_models only; denies are a
+    # group-member concept and do not apply.
+    service_id = member.id
+
+    alias_ids =
+      from(sma in ServiceModel,
+        where: sma.service_id == ^service_id,
+        select: sma.model_id
+      )
+
+    models =
+      from(ma in Model,
+        join: id in subquery(alias_ids),
+        on: ma.id == id.model_id
+      )
+      |> Repo.all()
+      |> Enum.uniq_by(& &1.id)
+
+    {models, [], []}
+  end
+
+  def list_accessible_models_for_member(group_member) do
+    member_id = group_member.id
+    group_id = group_member.group.id
+
+    group_alias_ids =
+      from(tma in GroupModel,
+        where: tma.group_id == ^group_id,
+        select: tma.model_id
+      )
+
+    member_alias_ids =
+      from(tmea in GroupMemberExtraModel,
+        where: tmea.group_member_id == ^member_id,
+        select: tmea.model_id
+      )
+
+    denied_alias_ids =
+      from(tmda in GroupMemberDeniedModel,
+        where: tmda.group_member_id == ^member_id,
+        select: tmda.model_id
+      )
+
+    all_ids =
+      group_alias_ids
+      |> union(^member_alias_ids)
+      |> except(^denied_alias_ids)
+
+    accessible =
+      from(ma in Model,
+        join: id in subquery(all_ids),
+        on: ma.id == id.model_id
+      )
+      |> Repo.all()
+      |> Enum.uniq_by(& &1.id)
+
+    denied_ids =
+      from(tmda in GroupMemberDeniedModel,
+        where: tmda.group_member_id == ^member_id,
+        select: tmda.model_id
+      )
+      |> Repo.all()
+
+    extra_ids =
+      from(tmea in GroupMemberExtraModel,
+        where: tmea.group_member_id == ^member_id,
+        select: tmea.model_id
+      )
+      |> Repo.all()
+
+    {accessible, extra_ids, denied_ids}
+  end
+
+  @doc """
+  Batch variant of `list_accessible_models_for_member/1` for a list of group
+  members (e.g. all memberships of one user). Runs a constant number of
+  queries regardless of membership count — one for group grants, one for
+  individual grants, one for individual denies, one for the models — instead
+  of 3N+1.
+
+  Returns `%{member_id => [model, ...]}` with the EFFECTIVE access per member:
+  `(their group's grants ∪ their extras) − their denies`. Service virtual
+  members get their own service_models (group-independent, no denies).
   """
   def list_accessible_models_for_members(members) when is_list(members) do
     {service_members, real_members} =
@@ -979,45 +1168,101 @@ defmodule Tokengate.Providers do
     member_ids = Enum.map(real_members, & &1.id)
     service_ids = Enum.map(service_members, & &1.id)
 
-    group_alias_ids =
+    group_ids_by_group =
       if group_ids == [] do
-        []
+        %{}
       else
         Repo.all(
           from tma in GroupModel,
             where: tma.group_id in ^group_ids,
-            select: tma.model_id
+            select: {tma.group_id, tma.model_id}
         )
+        |> Enum.group_by(fn {group_id, _} -> group_id end, fn {_, model_id} -> model_id end)
       end
 
-    member_alias_ids =
+    extra_by_member =
       if member_ids == [] do
-        []
+        %{}
       else
         Repo.all(
           from tmea in GroupMemberExtraModel,
             where: tmea.group_member_id in ^member_ids,
-            select: tmea.model_id
+            select: {tmea.group_member_id, tmea.model_id}
         )
+        |> Enum.group_by(fn {member_id, _} -> member_id end, fn {_, model_id} -> model_id end)
       end
 
-    service_alias_ids =
+    denied_by_member =
+      if member_ids == [] do
+        %{}
+      else
+        Repo.all(
+          from tmda in GroupMemberDeniedModel,
+            where: tmda.group_member_id in ^member_ids,
+            select: {tmda.group_member_id, tmda.model_id}
+        )
+        |> Enum.group_by(fn {member_id, _} -> member_id end, fn {_, model_id} -> model_id end)
+      end
+
+    service_ids_by_service =
       if service_ids == [] do
-        []
+        %{}
       else
         Repo.all(
           from sma in ServiceModel,
             where: sma.service_id in ^service_ids,
-            select: sma.model_id
+            select: {sma.service_id, sma.model_id}
         )
+        |> Enum.group_by(fn {service_id, _} -> service_id end, fn {_, model_id} -> model_id end)
       end
 
-    all_ids = Enum.uniq(group_alias_ids ++ member_alias_ids ++ service_alias_ids)
+    # Effective ids per member = (their group grants ∪ their extras) − their
+    # denies. A denied model id without a corresponding grant is a no-op for
+    # that member (`--` on a smaller list).
+    effective_ids_by_member =
+      Map.new(real_members, fn member ->
+        granted =
+          Enum.uniq(
+            Map.get(group_ids_by_group, member.group.id, []) ++
+              Map.get(extra_by_member, member.id, [])
+          )
+
+        {member.id, granted -- Map.get(denied_by_member, member.id, [])}
+      end)
+
+    all_ids =
+      effective_ids_by_member
+      |> Map.values()
+      |> Kernel.++(Map.values(service_ids_by_service))
+      |> List.flatten()
+      |> Enum.uniq()
 
     if all_ids == [] do
-      []
+      %{}
     else
-      Repo.all(from ma in Model, where: ma.id in ^all_ids)
+      models_by_id =
+        Map.new(Repo.all(from ma in Model, where: ma.id in ^all_ids), fn model ->
+          {model.id, model}
+        end)
+
+      Map.merge(effective_ids_by_member, service_ids_by_service, fn _id,
+                                                                    member_ids,
+                                                                    service_ids ->
+        Enum.uniq(member_ids ++ service_ids)
+      end)
+      |> Map.new(fn {member_id, ids} ->
+        models =
+          ids
+          |> Enum.flat_map(fn id ->
+            case Map.fetch(models_by_id, id) do
+              {:ok, model} -> [model]
+              :error -> []
+            end
+          end)
+          |> Enum.sort_by(& &1.name)
+
+        {member_id, models}
+      end)
     end
   end
 
@@ -1029,6 +1274,24 @@ defmodule Tokengate.Providers do
     do: {:error, :already_granted}
 
   defp normalize_unique_error(error), do: error
+
+  # Same as `normalize_unique_error/1` but with a custom reason for the
+  # unique-violation case (e.g. `:already_denied` for deny rows).
+  # El changeset marca el índice único como `constraint: :unique` (con el
+  # nombre del índice), no como `unique: [...]`: se aceptan ambas formas para
+  # no depender de cómo Ecto reporte el conflicto.
+  defp normalize_unique_error({:error, %Ecto.Changeset{} = cs}, reason) do
+    if Enum.any?(cs.errors, fn
+         {_field, {_msg, opts}} -> Keyword.get(opts, :constraint) == :unique
+         _ -> false
+       end) do
+      {:error, reason}
+    else
+      {:error, cs}
+    end
+  end
+
+  defp normalize_unique_error(error, _reason), do: error
 
   # Convert a string UUID to its 16-byte binary representation so it can be
   # used in raw SQL fragments against :binary_id columns.

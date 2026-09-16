@@ -516,6 +516,7 @@ defmodule TokengateWeb.CoreComponents do
   attr :target_value, :string, required: true
   attr :locked_ids, :list, default: []
   attr :extra_ids, :list, default: []
+  attr :denied_ids, :list, default: []
   attr :empty_text, :string, default: "No hay modelos disponibles."
 
   def model_picker(assigns) do
@@ -531,6 +532,7 @@ defmodule TokengateWeb.CoreComponents do
           "badge badge-sm transition-all",
           cond do
             model.id in @locked_ids -> "badge-primary opacity-60"
+            model.id in @denied_ids -> "badge-error badge-outline line-through opacity-70"
             model.id in @extra_ids -> "badge-accent"
             model.id in @granted_ids -> "badge-primary"
             true -> "badge-outline cursor-pointer hover:badge-primary/50"
@@ -541,6 +543,7 @@ defmodule TokengateWeb.CoreComponents do
         title={
           cond do
             model.id in @locked_ids -> "Otorgado por el grupo (gestiónalo en Grupos)"
+            model.id in @denied_ids -> "Quitado para este miembro (clic para restaurar)"
             model.id in @extra_ids -> "Extra individual"
             true -> nil
           end

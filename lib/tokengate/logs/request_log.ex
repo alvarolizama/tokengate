@@ -73,9 +73,10 @@ defmodule Tokengate.Logs.RequestLog do
       foreign_key: :service_id,
       type: :binary_id
 
-    belongs_to :credit_subscription, Tokengate.Credits.Subscription,
-      foreign_key: :credit_subscription_id,
-      type: :binary_id
+    # `credit_subscription_id` se conserva como evidencia histórica del modelo
+    # viejo (su tabla se dropeó), así que la columna se lee como binario crudo:
+    # referenciarla como asociación apuntaría a un schema que ya no existe.
+    field :credit_subscription_id, :binary_id
 
     # Qué top-up se debitó en este request (NULL = se debitó el límite del
     # sujeto, o no hubo débito). Convive con `credit_subscription_id`, que se

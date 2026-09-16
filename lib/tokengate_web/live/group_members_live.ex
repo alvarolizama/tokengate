@@ -20,7 +20,7 @@ defmodule TokengateWeb.GroupMembersLive do
   alias Tokengate.Accounts
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Providers
-  alias Tokengate.Providers.{Model, GroupMemberExtraModel, GroupModel}
+  alias Tokengate.Providers.{Model, GroupMemberExtraModel, GroupMemberDeniedModel, GroupModel}
   alias Tokengate.Repo
 
   @impl true
@@ -111,6 +111,15 @@ defmodule TokengateWeb.GroupMembersLive do
       extra_models
       |> Enum.group_by(fn {tm_id, _} -> tm_id end, fn {_, model_id} -> model_id end)
 
+    # Per-member denied model ids (3rd picker state: "quitado")
+    denied_models =
+      from(tmda in GroupMemberDeniedModel,
+        where: tmda.group_member_id in ^Enum.map(members, & &1.id),
+        select: {tmda.group_member_id, tmda.model_id}
+      )
+      |> Repo.all()
+      |> Enum.group_by(fn {tm_id, _} -> tm_id end, fn {_, model_id} -> model_id end)
+
     # Member budgets with spend — one batched query for every member instead
     # of one SUM per member (N+1).
     model_map = Map.new(org_alias_ids, fn a -> {a.id, a.name} end)
@@ -144,6 +153,7 @@ defmodule TokengateWeb.GroupMembersLive do
     |> assign(:org_models, org_alias_ids)
     |> assign(:group_alias_ids, group_alias_ids)
     |> assign(:extra_models, extra_aliases_simple)
+    |> assign(:denied_models, denied_models)
     |> assign(:model_map, model_map)
     |> assign(:group_monthly_spend, group_monthly_spend)
     |> assign(:usage_tiers, usage_tiers)
@@ -427,7 +437,7 @@ defmodule TokengateWeb.GroupMembersLive do
     end
   end
 
-  ## Events — extra model grants -----------------------------------------
+  ## Events — extra model grants / denies (picker de 3 estados) ------------
 
   @impl true
   def handle_event(
@@ -441,12 +451,23 @@ defmodule TokengateWeb.GroupMembersLive do
       {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
     else
       existing = Map.get(socket.assigns.extra_models, member_id, [])
+      denied = Map.get(socket.assigns.denied_models, member_id, [])
 
       result =
-        if model_id in existing do
-          Providers.revoke_extra_model(member_id, model_id)
-        else
-          Providers.grant_extra_model(member_id, model_id)
+        cond do
+          # Estado "quitado" → permitir de nuevo (borra el deny).
+          model_id in denied ->
+            Providers.allow_model(member_id, model_id)
+
+          # Estado "heredado" o "agregado" → quitar:
+          #   heredado  → crea un deny (resta del union)
+          #   agregado  → revoca el extra y deja el deny por si venía de heredado
+          model_id in existing ->
+            Providers.deny_model(member_id, model_id)
+
+          # Estado "sin acceso" → agregar como extra.
+          true ->
+            Providers.grant_extra_model(member_id, model_id)
         end
 
       case result do
@@ -534,6 +555,10 @@ defmodule TokengateWeb.GroupMembersLive do
 
   defp extra_model_ids(extra_models, member_id) do
     Map.get(extra_models, member_id, [])
+  end
+
+  defp denied_model_ids(denied_models, member_id) do
+    Map.get(denied_models, member_id, [])
   end
 
   defp format_decimal(%Decimal{} = d), do: d |> Decimal.round(2) |> Decimal.to_string()
@@ -957,6 +982,7 @@ defmodule TokengateWeb.GroupMembersLive do
                     models={@org_models}
                     granted_ids={MapSet.to_list(@group_alias_ids)}
                     extra_ids={extra_model_ids(@extra_models, member.id)}
+                    denied_ids={denied_model_ids(@denied_models, member.id)}
                     toggle_event="toggle_extra_model"
                     target_value={member.id}
                     empty_text="No hay modelos disponibles."
