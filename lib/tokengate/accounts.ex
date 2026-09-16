@@ -704,7 +704,7 @@ defmodule Tokengate.Accounts do
         where:
           ak.key_hash == ^key_hash and ak.status == "active" and
             ak.subject_type == "service",
-        preload: [:api_key, :subscription]
+        preload: [:api_key]
 
     case Repo.one(query) do
       %Service{} = service -> {:ok, service}

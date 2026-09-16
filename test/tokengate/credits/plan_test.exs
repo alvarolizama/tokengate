@@ -30,7 +30,11 @@ defmodule Tokengate.Credits.PlanTest do
   # Fixtures
   # ---------------------------------------------------------------------------
 
+  # El alta (registration_changeset) no castea los campos de gasto: se crean
+  # aparte, igual que haría un admin desde la UI.
   defp user_fixture(attrs \\ %{}) do
+    {spend, rest} = Map.split(attrs, ["monthly_spend_limit_usd", "unlimited_spend", :monthly_spend_limit_usd, :unlimited_spend])
+
     {:ok, user} =
       Accounts.register_user(
         Map.merge(
@@ -39,11 +43,16 @@ defmodule Tokengate.Credits.PlanTest do
             "name" => "Test User",
             "password" => "ValidPassword123"
           },
-          attrs
+          rest
         )
       )
 
-    user
+    if map_size(spend) == 0 do
+      user
+    else
+      {:ok, updated} = Accounts.update_user(user, spend)
+      updated
+    end
   end
 
   defp group_fixture(attrs \\ %{}) do
