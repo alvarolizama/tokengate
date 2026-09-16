@@ -1,12 +1,29 @@
 defmodule Tokengate.Providers.Catalog do
   @moduledoc """
-  Compile-time catalog of builtin providers.
+  The provider catalog: remote identity from models.dev + code customizations.
 
-  A provider's identity is code, not user data: its base URL, API dialect
-  and capabilities belong in the repo, released with the app. The database
-  only stores what the user contributes (credentials) and their relations
-  (models, routing, pricing). Custom providers created by operators are
-  first-class rows with `source: "custom"` and the same contract.
+  ## Two halves, on purpose
+
+    * **Remote (data)** — every provider models.dev publishes: id, name, base
+      URL, doc URL, logo URL, env var and npm package. Lives in the
+      `catalog_providers` table (seeded from the vendored snapshot in
+      `priv/models_dev/providers.json` at first boot, refreshed asynchronously
+      by `CatalogRefreshWorker`). Nothing here is hand-maintained.
+    * **Code (customizations)** — the properties models.dev does NOT publish
+      and the gateway needs anyway: `capabilities`, `dialect`, per-service
+      `paths`, and the per-upstream quirks (Fireworks' strict body
+      validation). They live in `@customizations`, keyed by models.dev id, and
+      are applied at READ time.
+
+  That split is what makes a refresh safe: the worker only writes remote rows,
+  so a new provider or a moved base URL lands without a redeploy, while
+  nothing it does can touch a customization.
+
+  Unsupported providers never enter the add-provider picker (`providers_live`
+  filters with `supported?/1` before listing) — `unsupported_reason/1` remains
+  the shared definition of "cannot be served" (no base URL, templated URL,
+  no OpenAI-compatible dialect) and is what keeps such rows out of the
+  boot-time materialization too.
 
   ## Dialects
 
@@ -15,12 +32,32 @@ defmodule Tokengate.Providers.Catalog do
     * `"openrouter"` — same surface, but embedding models are listed at
       `{base}/embeddings/models`.
 
+  A provider is usable when it has a base URL and its npm package maps to a
+  dialect. **models.dev's npm field is not a capability statement**: it says
+  which client library reaches the provider, not which endpoints exist.
+
+  ## Capabilities
+
+  `#{inspect(~w(llm embedding rerank stt tts image video))}` — what a provider
+  can serve, declared per provider IN CODE. models.dev has no field for it: an
+  embedding model and a chat model both report
+  `modalities: %{input: ["text"], output: ["text"]}` and only `family` or the
+  model id hints at the difference. A provider with no entry here is treated
+  as chat — add the capabilities the day a real case needs them.
+
+  The vocabulary here is what a provider may DECLARE. What the proxy routes is
+  `/v1/chat/completions`, `/v1/models`, `/v1/embeddings` and the six
+  path-routed services (`rerank`, `stt`, `tts`, `image`, `video`, `music` —
+  see `ProviderPaths`), so `music` is routable without being declarable here.
+  `Model.model_type` is still `llm | embedding` (DB CHECK): those six route by
+  credential, and the capability only selects the upstream path.
+
   ## Session-hint fields (`:session_hint_fields`)
 
   The gateway attaches the conversation key to the upstream body as a
   cache-routing hint (`session_id` for OpenRouter, `prompt_cache_key` for
   OpenAI-style upstreams). Which fields are SAFE to send is provider
-  knowledge, so it lives here rather than in the proxy:
+  knowledge, so it lives here:
 
     * omitting the key → `["session_id", "prompt_cache_key"]`, the
       historical behaviour (both hints, tolerated as unknown fields);
@@ -29,22 +66,39 @@ defmodule Tokengate.Providers.Catalog do
       declares `prompt_cache_key` alone — `session_id` is OpenRouter's
       convention and must not reach it.
 
-  ## Catalog rule
+  ## Custom provider capabilities
 
-  Only providers that serve `/embeddings` under the SAME base path as chat
-  carry the `embedding` capability. Providers with a separate embedding
-  surface are LLM-only (use a custom provider if really needed).
+  A custom has no models.dev entry to derive from, so its capabilities come
+  from the form (the operator picks what that relay serves).
 
-  The boot-time sync (`Tokengate.Providers.CatalogSync`) upserts every
-  builtin entry by `key` and never touches `custom` rows.
+  ## Paths
+
+  Every service lives at `base_url` + a path. The path resolves in three
+  tiers, highest first: the provider's own `path_overrides` (set from the
+  Capacidades modal), the `:paths` entry here (a builtin whose service does
+  not live where the generic surface says), and the generic
+  OpenAI-compatible default — see `Tokengate.Providers.ProviderPaths`.
   """
 
   @dialects ~w(openai openrouter)
   @sources ~w(builtin custom)
-  @capabilities ~w(llm embedding)
-  # Billing surfaces: subscription plans (flat rate, rate-limited) vs
-  # pay-per-token. Customs are their own group in the UI.
+
+  # What a provider can serve. Declared in code, per provider (@customizations).
+  @capabilities ~w(llm embedding rerank stt tts image video)
+
+  # Billing surfaces. models.dev has no such field: a plan is a commercial fact
+  # about an endpoint (a coding plan lives on its own base URL), so it is a
+  # CODE label here and syncs into `providers.billing_type`, which the Models
+  # table renders. It decides nothing else.
   @billing_modes ~w(subscription pay_per_token)
+
+  # models.dev npm package -> dialect. Anything absent is unsupported until a
+  # dialect (a thin adapter) exists for it.
+  @dialect_by_npm %{
+    "@ai-sdk/openai-compatible" => "openai",
+    "@ai-sdk/openai" => "openai",
+    "@openrouter/ai-sdk-provider" => "openrouter"
+  }
 
   # Hints attached to every chat body unless a provider narrows the list.
   # OpenRouter reads `session_id`; the OpenAI-compatible surface reads
@@ -64,106 +118,247 @@ defmodule Tokengate.Providers.Catalog do
   # are deliberately left alone.
   @fireworks_omit_body_fields ~w(session_id)
 
-  @builtin [
-    %{
-      key: "openrouter",
-      name: "OpenRouter",
-      base_url: "https://openrouter.ai/api/v1",
-      dialect: "openrouter",
-      billing: "pay_per_token",
-      capabilities: ["llm", "embedding"]
+  # ---------------------------------------------------------------------------
+  # Code customizations, by models.dev id.
+  #
+  # Recognised keys, all optional:
+  #   * :capabilities         — what the provider serves (see @capabilities)
+  #   * :dialect              — only when npm would resolve it wrong
+  #   * :base_url             — only when models.dev's URL is wrong for us
+  #   * :paths                — per-service path suffix overrides, e.g.
+  #                             %{embeddings: "/embed"}; the atom keys are the
+  #                             vocabulary in `ProviderPaths` and only apply
+  #                             when the provider has no operator override
+  #   * :session_hint_fields  — narrows the cache hints the gateway may ADD
+  #   * :omit_body_fields     — fields the gateway must STRIP from the body
+  # ---------------------------------------------------------------------------
+  @customizations %{
+    "openrouter" => %{
+      capabilities: ~w(llm embedding),
+      dialect: "openrouter"
     },
-    %{
-      key: "fireworks",
-      name: "Fireworks AI",
-      base_url: "https://api.fireworks.ai/inference/v1",
-      dialect: "openai",
-      billing: "pay_per_token",
-      capabilities: ["llm", "embedding"],
+    "fireworks-ai" => %{
+      capabilities: ~w(llm embedding),
       session_hint_fields: @fireworks_session_hint_fields,
       omit_body_fields: @fireworks_omit_body_fields
     },
-    %{
-      key: "qwen_cloud",
-      name: "Qwen Cloud",
-      base_url: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    "alibaba-cn" => %{capabilities: ~w(llm embedding)},
+    "alibaba-token-plan" => %{capabilities: ~w(llm), billing: "subscription"},
+    "opencode" => %{capabilities: ~w(llm)},
+    "opencode-go" => %{capabilities: ~w(llm), billing: "subscription"},
+    "moonshotai" => %{capabilities: ~w(llm)},
+    # models.dev reaches the Kimi coding plan with the Anthropic SDK, but the
+    # same base URL serves an OpenAI-compatible surface and that is what this
+    # gateway speaks to it today: keep the working dialect explicit.
+    "kimi-for-coding" => %{
+      capabilities: ~w(llm),
       dialect: "openai",
-      billing: "pay_per_token",
-      capabilities: ["llm", "embedding"]
+      billing: "subscription"
     },
-    %{
-      key: "qwen_cloud_token_plan",
-      name: "Qwen Cloud (Token Plan)",
-      base_url: "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
-      dialect: "openai",
-      billing: "subscription",
-      capabilities: ["llm"]
-    },
-    %{
-      key: "opencode_zen",
-      name: "OpenCode Zen",
-      base_url: "https://opencode.ai/zen/v1",
-      dialect: "openai",
-      billing: "pay_per_token",
-      capabilities: ["llm"]
-    },
-    %{
-      key: "opencode_go",
-      name: "OpenCode Go",
-      base_url: "https://opencode.ai/zen/go/v1",
-      dialect: "openai",
-      billing: "subscription",
-      capabilities: ["llm"]
-    },
-    %{
-      key: "kimi",
-      name: "Kimi (Moonshot)",
-      base_url: "https://api.moonshot.ai/v1",
-      dialect: "openai",
-      billing: "pay_per_token",
-      capabilities: ["llm"]
-    },
-    %{
-      key: "kimi_code",
-      name: "Kimi Code (suscripción)",
-      base_url: "https://api.kimi.com/coding/v1",
-      dialect: "openai",
-      billing: "subscription",
-      capabilities: ["llm"]
-    },
-    %{
-      key: "zai",
-      name: "Z.AI",
-      base_url: "https://api.z.ai/api/paas/v4",
-      dialect: "openai",
-      billing: "pay_per_token",
-      capabilities: ["llm"]
-    },
-    %{
-      key: "zai_coding_plan",
-      name: "Z.AI (GLM Coding Plan)",
-      base_url: "https://api.z.ai/api/coding/paas/v4",
-      dialect: "openai",
-      billing: "subscription",
-      capabilities: ["llm"]
-    }
-  ]
+    "zai" => %{capabilities: ~w(llm)},
+    "zai-coding-plan" => %{capabilities: ~w(llm), billing: "subscription"}
+  }
 
-  @doc "All builtin catalog entries."
-  @spec all() :: [map()]
-  def all, do: @builtin
+  # Vendored snapshot of the provider-level payload: seed for a fresh database
+  # and offline fallback. The live mirror is the `catalog_providers` table.
+  @snapshot_path Path.expand("../../../priv/models_dev/providers.json", __DIR__)
+  @external_resource @snapshot_path
+  @snapshot @snapshot_path |> File.read!() |> Jason.decode!()
 
-  @doc "Fetches a builtin entry by key."
-  @spec get(String.t()) :: map() | nil
-  def get(key) when is_binary(key), do: Enum.find(@builtin, &(&1.key == key))
+  @doc """
+  The vendored snapshot as entries with atom keys, sorted by key.
 
-  @doc "Builtin entries that declare the given capability."
-  @spec by_capability(String.t()) :: [map()]
-  def by_capability(capability) when is_binary(capability),
-    do: Enum.filter(@builtin, &(capability in &1.capabilities))
+  Used to seed `catalog_providers` and as a deterministic fixture; the running
+  catalog is the mirror table, not this.
+  """
+  @spec snapshot() :: [map()]
+  def snapshot do
+    @snapshot
+    |> Enum.map(fn {key, entry} ->
+      %{
+        key: key,
+        name: Map.get(entry, "name"),
+        base_url: Map.get(entry, "base_url"),
+        doc_url: Map.get(entry, "doc_url"),
+        logo_url: Map.get(entry, "logo_url"),
+        env: Map.get(entry, "env") || [],
+        npm: Map.get(entry, "npm")
+      }
+    end)
+    |> Enum.sort_by(& &1.key)
+  end
+
+  @doc "Number of providers in the vendored snapshot."
+  @spec snapshot_size() :: non_neg_integer()
+  def snapshot_size, do: map_size(@snapshot)
+
+  @doc "The code customization for a models.dev id, or nil when there is none."
+  @spec customization(String.t() | nil) :: map() | nil
+  def customization(key) when is_binary(key), do: Map.get(@customizations, key)
+  def customization(_), do: nil
+
+  # Single accessor for every customization key, driven by a runtime key name
+  # so the whole documented set works (:capabilities, :dialect, :base_url,
+  # :paths, :session_hint_fields, :omit_body_fields) instead of one clause per
+  # key — the escape hatch must not need a new function when it is used.
+  defp option(key, name, default) do
+    case customization(key) do
+      %{} = config -> Map.get(config, name, default)
+      _ -> default
+    end
+  end
+
+  @doc """
+  Capabilities declared for a provider in code (possibly empty).
+
+      iex> Tokengate.Providers.Catalog.capabilities("fireworks-ai")
+      ["llm", "embedding"]
+
+      iex> Tokengate.Providers.Catalog.capabilities("anthropic")
+      []
+  """
+  @spec capabilities(String.t() | nil) :: [String.t()]
+  def capabilities(key) do
+    case option(key, :capabilities, []) do
+      caps when is_list(caps) -> caps
+      _ -> []
+    end
+  end
+
+  @doc """
+  Billing label declared in code for a provider (`nil` when it is a plain
+  pay-per-token endpoint, which is the default).
+
+  models.dev publishes no billing information, so the plans live here:
+
+      iex> Tokengate.Providers.Catalog.billing("zai-coding-plan")
+      "subscription"
+
+      iex> Tokengate.Providers.Catalog.billing("openrouter")
+      nil
+  """
+  @spec billing(String.t() | nil) :: String.t() | nil
+  def billing(key) do
+    case option(key, :billing, nil) do
+      mode when mode in @billing_modes -> mode
+      _ -> nil
+    end
+  end
+
+  @doc "Valid billing labels."
+  def billing_modes, do: @billing_modes
 
   @doc "Valid dialects."
   def dialects, do: @dialects
+
+  @doc "Valid sources."
+  def sources, do: @sources
+
+  @doc "Valid capabilities (the vocabulary, not per-provider)."
+  def capabilities, do: @capabilities
+
+  @doc """
+  Resolves a provider's dialect: the code customization first, else the
+  models.dev npm package.
+
+  Returns `{:ok, dialect}` or `{:error, reason}`, the reason being a
+  Spanish, UI-ready sentence.
+  """
+  @spec dialect(map() | String.t() | nil) :: {:ok, String.t()} | {:error, String.t()}
+  def dialect(%{} = entry) do
+    key = Map.get(entry, :key) || Map.get(entry, "key")
+
+    case option(key, :dialect, nil) do
+      dialect when is_binary(dialect) ->
+        {:ok, dialect}
+
+      _ ->
+        dialect_from_npm(Map.get(entry, :npm) || Map.get(entry, "npm"))
+    end
+  end
+
+  def dialect(key) when is_binary(key), do: dialect(%{key: key, npm: nil})
+  def dialect(_), do: {:error, "sin dialecto"}
+
+  defp dialect_from_npm(npm) do
+    case Map.get(@dialect_by_npm, npm) do
+      nil -> {:error, "dialecto no soportado (#{npm || "sin paquete npm"})"}
+      dialect -> {:ok, dialect}
+    end
+  end
+
+  @doc """
+  Why a provider cannot be used yet (nil when it can), in Spanish — the
+  add-provider modal shows it on the disabled rows.
+  """
+  @spec unsupported_reason(map() | nil) :: String.t() | nil
+  def unsupported_reason(nil), do: "sin datos"
+
+  def unsupported_reason(entry) when is_map(entry) do
+    base = Map.get(entry, :base_url) || Map.get(entry, "base_url")
+
+    cond do
+      is_nil(base) ->
+        "models.dev no publica su base URL"
+
+      # models.dev publishes a few account-scoped URLs as templates
+      # (${ACCOUNT_ID}, ${DATABRICKS_HOST}, …): without the operator's own
+      # substitution they are not an endpoint, so the row stays unmaterialized
+      # instead of pointing at a URL that cannot resolve.
+      String.contains?(base, "${") ->
+        "models.dev publica su base URL como plantilla (necesita tu cuenta o endpoint)"
+
+      match?({:error, _}, dialect(entry)) ->
+        {:error, reason} = dialect(entry)
+        reason
+
+      true ->
+        nil
+    end
+  end
+
+  @doc "True when the gateway can route to this provider (base URL + dialect)."
+  @spec supported?(map() | nil) :: boolean()
+  def supported?(entry), do: unsupported_reason(entry) == nil
+
+  @doc """
+  Base URL for a provider: the code override when set, else the remote one,
+  trailing slash trimmed.
+  """
+  @spec base_url(map() | nil) :: String.t() | nil
+  def base_url(nil), do: nil
+
+  def base_url(entry) when is_map(entry) do
+    key = Map.get(entry, :key) || Map.get(entry, "key")
+
+    override = option(key, :base_url, nil)
+
+    url =
+      if is_binary(override) do
+        override
+      else
+        Map.get(entry, :base_url) || Map.get(entry, "base_url")
+      end
+
+    if is_binary(url), do: String.trim_trailing(url, "/")
+  end
+
+  @doc """
+  Path suffix for one service, overridable per provider in code.
+
+      iex> Tokengate.Providers.Catalog.path_suffix("openrouter", service: :chat, default: "/chat/completions")
+      "/chat/completions"
+  """
+  @spec path_suffix(String.t() | nil, keyword()) :: String.t()
+  def path_suffix(key, opts) do
+    service = Keyword.fetch!(opts, :service)
+    default = Keyword.fetch!(opts, :default)
+
+    case option(key, :paths, %{}) do
+      %{} = paths -> Map.get(paths, service, default)
+      _ -> default
+    end
+  end
 
   @doc """
   Body fields the gateway may attach as cache-routing hints for `key`.
@@ -172,7 +367,7 @@ defmodule Tokengate.Providers.Catalog do
   the list (or unknown/custom keys). A strict provider declares only the
   fields it documents, so the gateway never sends it an unknown one.
 
-      iex> Tokengate.Providers.Catalog.session_hint_fields("fireworks")
+      iex> Tokengate.Providers.Catalog.session_hint_fields("fireworks-ai")
       ["prompt_cache_key"]
 
       iex> Tokengate.Providers.Catalog.session_hint_fields("openrouter")
@@ -180,8 +375,8 @@ defmodule Tokengate.Providers.Catalog do
   """
   @spec session_hint_fields(String.t() | nil) :: [String.t()]
   def session_hint_fields(key \\ nil) do
-    case key && get(key) do
-      %{session_hint_fields: fields} when is_list(fields) -> fields
+    case option(key, :session_hint_fields, @default_session_hint_fields) do
+      fields when is_list(fields) -> fields
       _ -> @default_session_hint_fields
     end
   end
@@ -198,7 +393,7 @@ defmodule Tokengate.Providers.Catalog do
   it does not accept, so a client-supplied value (e.g. `session_id`) never
   reaches it.
 
-      iex> Tokengate.Providers.Catalog.omit_body_fields("fireworks")
+      iex> Tokengate.Providers.Catalog.omit_body_fields("fireworks-ai")
       ["session_id"]
 
       iex> Tokengate.Providers.Catalog.omit_body_fields("openrouter")
@@ -206,38 +401,15 @@ defmodule Tokengate.Providers.Catalog do
   """
   @spec omit_body_fields(String.t() | nil) :: [String.t()]
   def omit_body_fields(key \\ nil) do
-    case key && get(key) do
-      %{omit_body_fields: fields} when is_list(fields) -> fields
+    case option(key, :omit_body_fields, []) do
+      fields when is_list(fields) -> fields
       _ -> []
     end
   end
 
-  @doc "Valid sources."
-  def sources, do: @sources
-
-  @doc "Valid capabilities."
-  def capabilities, do: @capabilities
-
-  @doc "Valid billing surfaces."
-  def billing_modes, do: @billing_modes
-
   @doc """
-  Builtin entries grouped for UI display: subscription plans first
-  (better economics), then pay-per-token. Customs are a separate group
-  rendered by the caller.
-  """
-  @spec grouped() :: %{subscription: [map()], pay_per_token: [map()]}
-  def grouped do
-    @builtin
-    |> Enum.group_by(& &1.billing)
-    |> Map.put_new("subscription", [])
-    |> Map.put_new("pay_per_token", [])
-    |> then(&%{subscription: &1["subscription"], pay_per_token: &1["pay_per_token"]})
-  end
-
-  @doc """
-  Normalizes a base URL for catalog matching: trailing slash trimmed,
-  host downcased. `https://OpenRouter.ai/api/v1/` and
+  Normalizes a base URL for catalog matching: trailing slash trimmed, case
+  downcased. `https://OpenRouter.ai/api/v1/` and
   `https://openrouter.ai/api/v1` match.
   """
   @spec normalize_base_url(nil | String.t()) :: nil | String.t()
@@ -245,39 +417,5 @@ defmodule Tokengate.Providers.Catalog do
 
   def normalize_base_url(url) when is_binary(url) do
     url |> String.trim_trailing("/") |> String.downcase()
-  end
-
-  @doc """
-  Finds the builtin entry whose base_url matches the given URL
-  (normalized). Returns the entry map or nil.
-  """
-  @spec match_by_base_url(nil | String.t()) :: map() | nil
-  def match_by_base_url(nil), do: nil
-
-  def match_by_base_url(base_url) do
-    normalized = normalize_base_url(base_url)
-    Enum.find(@builtin, &(normalize_base_url(&1.base_url) == normalized))
-  end
-
-  @doc """
-  True when a raw provider row's `embedding_base_url` override, if any,
-  differs from the default `{base_url}/embeddings` path. Rows that do
-  (possible in production) would change behaviour when the override column
-  is dropped — the migration surfaces them instead of silently breaking.
-  Takes a plain map (raw DB row), not a schema struct.
-  """
-  @spec embedding_override_conflict?(map()) :: boolean()
-  def embedding_override_conflict?(row) when is_map(row) do
-    case Map.get(row, :embedding_base_url) do
-      nil ->
-        false
-
-      "" ->
-        false
-
-      override ->
-        base = Map.get(row, :base_url) || ""
-        normalize_base_url(override) != normalize_base_url(base <> "/embeddings")
-    end
   end
 end
