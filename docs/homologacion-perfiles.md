@@ -617,3 +617,209 @@ Lo que **no** cambia es a propósito: el proxy y el enforcement. Renombrar
 `request_logs.group_member_id` es un `ALTER TABLE`, no un cambio de lógica; el
 cache de auth sigue resolviendo por hash de token (`accounts.ex:1229`), y el
 limitador ETS (`Tokengate.Limits`) no se toca.
+
+---
+
+## 12. Estado de ejecución y correcciones verificadas
+
+Ejecutado en 5 olas sobre worktrees aislados. Cada rama se verificó de forma
+independiente antes de integrar (no se aceptó el auto-reporte de ningún agente).
+
+### 12.1 Rama de integración
+
+`wt/integracion` (commit `cbe253b`) = checkpoint `b132e30` + olas 1. `main`
+sigue en `a45f158` y el árbol de trabajo del usuario quedó intacto; el WIP
+original está preservado en `b132e30` (rama `wip/checkpoint-homologacion`).
+
+| Rama | Fase | Commit | Tests reales | Estado |
+|---|---|---|---|---|
+| `wt/th1` | F0 `Service.status` | `0fca26f` | 10 + 62 + 137 | ✅ integrada |
+| `wt/th2` | F3 `SubjectStats` | `a669c1d` | 13 | ✅ integrada |
+| `wt/th6` | F7 paginado en DB | `3d06263` | 8 + 99 + 42 | ✅ integrada |
+| `wt/th3` | F4a rutas | `1579970` | 39 | ✅ integrada |
+| `wt/th4` | F4b textos | `d37f84a` | 35 + 404 | ✅ integrada |
+| `wt/th5` | F5 migración de DB | `7ac9190` | 8 | ⏸️ **retenida a propósito** |
+
+**Suite completa verificada tras integrar la ola 1** (no solo los tests
+tocados): `MIX_ENV=test MIX_TEST_PARTITION=7 mix test` → **1480 passed, 0
+failures** en 307.7s. Baseline de la misma máquina antes de la ola 1:
+**1453 passed, 0 failures** en 315.1s. Es decir **+27 tests nuevos y cero
+regresiones**. Los `[error] Postgrex.Protocol ... disconnected` del log son
+ruido del sandbox al morir un owner, no fallos: el resultado dice 0 failures.
+
+`wt/th5` **no se integra todavía**: su migración renombra las tablas y rompe la
+aplicación entera hasta que aterrice el rename de código (F5-código). Dejarla en
+el árbol con migraciones pendientes es una mina: cualquier `mix ecto.migrate`
+posterior la aplicaría y tiraría la app. Se integra EN LA MISMA OLA que el
+rename de código.
+
+### 12.2 Correcciones a este documento (verificadas contra la DB y el código)
+
+1. **§2.4.1 — mi diagnóstico era parcialmente incorrecto.** El predicado `WHEN`
+   del trigger **no** se rompe: Postgres lo guarda como `pg_node_tree` con
+   *attnums*, no con nombres, y se re-renderiza solo tras el rename. Lo que se
+   rompe es el **cuerpo `plpgsql`**, que sí es texto. Verificado reproduciendo el
+   error (`ERROR: record "new" has no field "group_member_id"`) con el rename
+   ingenuo en una transacción revertida. La mitigación (dropear función y
+   trigger, renombrar, recrear) sigue siendo obligatoria — pero por el cuerpo,
+   no por el predicado.
+2. **`group_members.group_role` ya no existe**: lo dropeó
+   `20260912213521:67`. No hay columna muerta que limpiar; inventar
+   `member_role` habría añadido una.
+3. **Solo UN índice único parcial** lleva el literal `'group'`
+   (`budget_exemptions_global_daily_*`); el de `user_daily` lo purgó
+   `20260913151502`. La migración los trata condicionalmente para no resucitarlo.
+4. **`services.group_id` es una isla legacy y NO se renombra** — corrección a
+   §2.3. La desacopló `20260914044359` pero quedó la columna, con FK
+   `services_group_id_fkey → groups(id)`, sin campo en el schema
+   `Service`. La leen y escriben por SQL crudo un **test congelado**
+   (`test/tokengate/accounts_test.exs:142-165`) y `accounts.ex:66`; el nombre del
+   constraint se cita en `accounts.ex:95`. Renombrarla rompería ambos por
+   nombre. El *walker* genérico excluye `services`.
+5. **Orden obligatorio: columnas ANTES que tablas**, con guardas `IF EXISTS` que
+   leen el nombre vivo de la tabla. Renombrar las tablas primero hacía que los
+   renames de columna se saltaran **en silencio** (lo detectó el diff de
+   inventario, no un test).
+6. **6 identificadores no vuelven byte a byte** tras el `down`: `limit_profile`
+   es 5 bytes más largo que `group` por aparición y Postgres trunca a 63 bytes.
+   Mismo OID y misma definición, rótulo más corto. Medido y listado.
+7. **§2.5 — los redirects son 302, no 301.** `RedirectController` usa
+   `redirect/2` sin `status`, y ese es su comportamiento histórico para toda
+   página movida. Convertirlo a 301 real exige tocar todo el controlador. Si se
+   quiere 301, es una decisión aparte, no un detalle de esta fase.
+
+### 12.3 Hallazgo nuevo, no previsto en el plan: el enforcement de suspensión
+
+`services.status` **no suspende nada por sí solo**. En
+`lib/tokengate_web/plugs/api_auth.ex`:
+
+- `service_to_virtual_member/1` hardcodea `status: "active"` en el `GroupMember`
+  virtual;
+- `active_membership/1` es quien decide `:ok | :inactive` y lee ese mismo campo.
+
+Consecuencia: un servicio marcado `suspended` **sigue autenticando y sirviendo
+tráfico**. La columna es informativa. F0 no queda cerrada con la migración: hace
+falta copiar `service.status` al miembro virtual **y** verificar si el cache de
+auth (`api_key_cache.ex`) exige invalidación al cambiar el status. Es lo que
+hace la ola 2.
+
+### 12.4 Verificación independiente de las olas 1 y 2
+
+Ningún entregable se aceptó por auto-reporte. Comprobado a mano:
+
+**Paridad de columnas (w8)** — extraídas las etiquetas `<th>` reales de las dos
+tablas y normalizados los tres pares legítimamente distintos (columna de
+identidad, `Rol`↔`Estado`, `Perfiles de límites`↔`Supervisores`), las dos
+secuencias quedan idénticas:
+
+```
+USERS   : Identidad · Rol · Perfiles de límites · Límites · Crédito · ciclo · Modelos · Claves · Requests 30d · Google · Gasto mensual · Gasto total · Creado · acciones
+SERVICES: Identidad · Estado · Supervisores        · Límites · Crédito · ciclo · Modelos · Claves · Requests 30d ·        Gasto mensual · Gasto total · Creado · acciones
+```
+
+`Google` es la única columna exclusiva de users — exactamente la asimetría
+correcta (§8).
+
+**Acciones de fila** — el orden está impuesto ESTRUCTURALMENTE por
+`AdminRowActions` (`detalle → editar → {render_slot(@specific)} → eliminar`), no
+por convención escrita: las dos tablas lo consumen
+(`users_live.ex:1716-1768`, `services_live.ex:1320-1349`), así que no puede
+volver a derivar. Iconos desambiguados: `hero-eye` es sólo «Ver detalle»,
+`hero-identification` impersonar, `hero-arrow-path` contraseña, `hero-lock-*`
+estado. El defecto original (el mismo `hero-key` para claves y para reset de
+contraseña en la misma fila) está muerto.
+
+**Enforcement de suspensión (w9)** — cadena verificada a mano:
+`service_to_virtual_member/1` copia `service.status`; `build_auth_entry/1`
+(`accounts.ex:1667`) es su único consumidor; `active_membership/1` decide sobre
+ese campo. `update_service/2` (`accounts.ex:1203`) termina en
+`invalidate_member_auth_cache(service.id)` → **suspensión inmediata, sin TTL**.
+Resultado exacto: **403** con cuerpo
+`{"error":{"code":"membership_inactive","message":"Group membership is not active","type":"authentication_error"}}`
+— idéntico al rechazo de un usuario suspendido, sin revocar la API key. El test
+del agente es **rojo sin el fix** (comprobado con `git stash` del archivo: el
+servicio suspendido recibía 200). TTL del cache: 60 s (`api_key_cache.ex:57`),
+que sólo aplica si alguien escribe el status saltándose `update_service/2`.
+
+**Flakiness de la suite:** primera corrida completa de la ola 2 → 1508/1510 con
+2 fallos; con `--seed 0` → **1510/1510**. Son fallos DEPENDIENTES DEL ORDEN, no
+regresiones. Los sospechosos por diseño son los tests nuevos que manipulan el
+cache ETS global de auth. Caracterización con varios seeds en curso.
+
+### 12.5 Medición del alcance de F5 (el rename) y deuda abierta
+
+**Superficie real del rename**, medida sobre la integración actual (no estimada):
+**1752** identificadores `group*` en `lib/` y **1924** en `test/` → **3676
+ocurrencias**, en **44 de 89** archivos de test. Los archivos más cargados:
+`metrics/rollup.ex` (245), `accounts.ex` (152), `providers.ex` (130),
+`groups_live.ex` (112), `models_live.ex` (83), `stats_live.ex` (80),
+`logs.ex` (80), `stats/groups.ex` (72).
+
+**F5 es atómico y por tanto serial**: no se puede partir en «capa de datos» y
+«capa web» porque `lib/tokengate_web` referencia módulos de `lib/tokengate`; un
+rename a medias no compila. Y no puede correr en paralelo con F2 porque ambos
+tocan `users_live.ex` / `services_live.ex`. Va último, en solitario, con la
+migración de `wt/th5` integrada en el mismo cambio.
+
+**Deuda de formato encontrada y corregida**: `w8` y `w10` dejaron 5 archivos sin
+formatear (`admin_components.ex`, `services_live.ex`, `users_live.ex` y los dos
+tests de LiveView). `mix precommit` incluye `format`, así que rompía el alias
+exigido por AGENTS.md. Corregido en `aa26e82`; `mix format --check-formatted`
+sale limpio.
+
+**🔴 Dos causas de fallo intermitente, y una es un defecto real de la suite.**
+
+**Causa 1 — `ProxyControllerTest` bindea un puerto FIJO.** Verificado:
+`test/tokengate_web/controllers/proxy_controller_test.exs:20` declara
+`@port 41236` y la línea 288 lo usa en `start_supervised!({Bandit, ..., port:
+@port})`. El puerto **no se deriva de `MIX_TEST_PARTITION`**, así que **dos
+`mix test` concurrentes colisionan siempre** con `:eaddrinuse`, y el fallo
+aparece como 10 tests en rojo (todo el `describe` que comparte ese setup), no
+como un error de entorno evidente.
+
+Consecuencia que va más allá de este trabajo: el proyecto **soporta** particiones
+de CI (`config/test.exs` usa `tokengate_test#{System.get_env("MIX_TEST_PARTITION")}`),
+pero con el puerto fijo **una CI particionada fallaría**. Es un defecto
+preexistente de la suite, no introducido por ninguna ola. Arreglo mínimo:
+`@port String.to_integer(System.get_env("MIX_TEST_PORT") || "41236")` o derivarlo
+del `MIX_TEST_PARTITION`.
+
+Esto **invalida fallos intermitentes observados antes** por mi culpa y no por el
+código: la primera corrida completa de la ola 2 dio 1508/1510 y los 2 fallos
+coincidieron con agentes (`w10`, `w11`) corriendo sus propias suites en
+paralelo. Lo mismo con los 1518/1528 posteriores. **Una corrida autoritativa
+exige la máquina en solitario.**
+
+**Causa 2 — DESCARTADA: era contaminación mía.** Hubo un segundo fallo, una
+sola vez, que atribuí a que un test de `w8` asumía la página 1:
+
+```
+test "la columna Modelos cuenta los del perfil y abre el modal"
+     (TokengateWeb.UsersLiveTest)
+```
+
+**Ese diagnóstico era especulación mía y es falso.** Dos comprobaciones lo
+desmienten:
+
+1. Estático: el test crea **2 usuarios** (`register("admin")` + `register("user")`)
+   y el `per_page` por defecto es 25, así que ambos caen en la página 1 con
+   cualquier orden. No hay dependencia de página que valga. Además
+   `load_models_count/1` recibe las membresías de los usuarios de la página, así
+   que el conteo viaja con la fila.
+2. De proceso: ese fallo ocurrió en una corrida donde **yo mergeé `w10` en
+   `/tmp/th-int` mientras la suite corría**. `w10` reescribió precisamente el
+   modal de modelos que ese test ejercita. La suite corrió contra un árbol a
+   medio cambiar.
+
+O sea: **no hay evidencia de un flake real en el código**. Las dos
+observaciones de fallo intermitente tienen explicación inocente — puerto fijo
+(concurrencia) y mi propia contaminación. Queda pendiente **una corrida
+autoritativa con la máquina en solitario** para fijarlo por escrito; hasta
+entonces no se afirma que la suite sea verde de forma estable.
+
+### 12.6 Invariantes que la suite ya no cubría y ahora sí
+
+`load-more-*-stats-logs` y los eventos de filtro de las dos páginas de detalle
+**no** estaban cubiertos por los tests del repo (los cubrió un arnés desechable
+durante F3). Con F3 fusionado conviene añadirlos a los dos archivos de test.
+
