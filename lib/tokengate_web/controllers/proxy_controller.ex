@@ -6,8 +6,10 @@ defmodule TokengateWeb.ProxyController do
       (group grants + individual extras), each with its `context_window`.
     * `POST /v1/chat/completions` — transparent passthrough to the routed
       provider with full cost tracking. The response `usage` object gains
-      `estimated_cost_usd` (market price) and `cost_usd` (provider price),
-      plus `X-Tokengate-Cost` / `X-Tokengate-Savings` headers.
+      `cost_usd` (the provider's own cost, USD) and the `X-Tokengate-Cost`
+      header carries the same amount. There is a single cost dimension: the
+      market-price fields (`estimated_cost_usd`) and the savings header were
+      removed with `market_*`.
     * `POST /v1/embeddings` — embeddings passthrough. Non-streaming only.
       The request is forwarded as received and the upstream response is
       returned untouched; TokenGate only adds auth and cost tracking.
