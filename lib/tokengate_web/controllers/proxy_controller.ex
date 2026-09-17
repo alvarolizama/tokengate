@@ -75,6 +75,15 @@ defmodule TokengateWeb.ProxyController do
 
   @max_attempts 9
   @max_retries_per_provider 3
+
+  # Política de 400 (ver `next_candidate/4`): antes de descartar la credencial
+  # se reemite el MISMO body a la MISMA key — un reintento inmediato y, si
+  # también falla, otro tras esta pausa. Agotados los dos, la credencial se
+  # excluye y el cascade sigue con la siguiente key. En ningún caso cuenta como
+  # fallo del breaker ni desactiva la key.
+  @max_bad_request_retries 2
+  @bad_request_retry_delay_ms 3_000
+
   # Cap on the per-credential rate-limit backoff inside the routing cascade,
   # so a provider demanding a long retry window can't stall the request:
   # the cascade moves on to the next credential after at most this long.
@@ -421,10 +430,12 @@ defmodule TokengateWeb.ProxyController do
         {:error, :bad_request, status, error_message} ->
           # 400: the provider rejected THIS body for its own reasons — often
           # provider-specific (a field only it refuses, a limit only its model
-          # enforces, a prefix over its context window). The request falls back
-          # to the next candidate, but the rejection is recorded as a
-          # NON-counting failure: the credential is NOT deactivated and the
-          # breaker does NOT count it.
+          # enforces, a prefix over its context window). The shared policy
+          # (`next_candidate/4`) reemits the body to the SAME credential twice
+          # (the second attempt after @bad_request_retry_delay_ms) and only then
+          # falls back to the next candidate. Either way the rejection is a
+          # NON-counting failure: the credential is NOT deactivated, stays in
+          # the pool, and the breaker does NOT count it.
           Router.record_outcome(route, {:failure, :bad_request})
 
           if attempts_left > 1 do
@@ -509,6 +520,7 @@ defmodule TokengateWeb.ProxyController do
 
     # Per-provider retry: same policy as retry_with_fallback.
     {exclude, provider_retries} = next_candidate(route, exclude, provider_retries, reason)
+    maybe_wait_before_retry(reason, provider_retries)
 
     case Router.route(route.model.name, member, %{
            :api_key_hash => conn.assigns.api_key_hash,
@@ -742,18 +754,32 @@ defmodule TokengateWeb.ProxyController do
   #     the milliseconds a retry takes, and each retry would cost another
   #     full timeout of client-perceived latency, so we exclude the
   #     credential immediately and move on.
-  #   * `:bad_request` — the provider rejected the body (400). Replaying the
-  #     identical payload to the same provider gets the identical 400, so the
-  #     credential is excluded immediately and the cascade moves on. The
-  #     rejection says nothing about credential health, so it is never counted
-  #     as a failure (no breaker penalty, no deactivation).
+  #   * `:bad_request` — the provider rejected the body (400). A 400 is often
+  #     *route*-specific rather than body-specific: it names a field the
+  #     resolved upstream refuses or a limit only that model enforces, and a
+  #     marketplace can resolve a DIFFERENT upstream for the very next attempt.
+  #     So the same credential gets up to @max_bad_request_retries attempts —
+  #     one immediate, the next after @bad_request_retry_delay_ms — before it is
+  #     excluded and the cascade moves to the next key. The rejection says
+  #     nothing about credential health: it is never counted as a failure (no
+  #     breaker penalty, no deactivation), so the key stays in the pool for
+  #     every other request.
   #   * any other reason — fast failures (5xx, 429, connection refused) are
   #     often transient and cost almost nothing to retry, so the same
   #     provider gets up to @max_retries_per_provider attempts before being
   #     excluded.
-  defp next_candidate(route, exclude, _provider_retries, reason)
-       when reason in [:timeout, :bad_request] do
+  defp next_candidate(route, exclude, _provider_retries, :timeout) do
     {[route.credential.id | exclude], 0}
+  end
+
+  # 400: retry the same credential before dropping it from this cascade (see the
+  # policy note above).
+  defp next_candidate(route, exclude, provider_retries, :bad_request) do
+    if provider_retries < @max_bad_request_retries do
+      {exclude, provider_retries + 1}
+    else
+      {[route.credential.id | exclude], 0}
+    end
   end
 
   defp next_candidate(route, exclude, provider_retries, _reason) do
@@ -763,6 +789,18 @@ defmodule TokengateWeb.ProxyController do
       {[route.credential.id | exclude], 0}
     end
   end
+
+  # Pausa antes de reemitir el body a la MISMA credencial. `provider_retries`
+  # llega YA incrementado por `next_candidate/4`: el primer reintento de un 400
+  # sale inmediato (es el barato y el que más acierta) y a partir del segundo se
+  # respeta @bad_request_retry_delay_ms, para no martillar a un upstream que
+  # acaba de rechazar. Solo aplica a :bad_request — los demás motivos ya tienen
+  # su timing (timeout: sin reintento; rate limit: el backoff del proveedor).
+  defp maybe_wait_before_retry(:bad_request, provider_retries) when provider_retries >= 2 do
+    Process.sleep(@bad_request_retry_delay_ms)
+  end
+
+  defp maybe_wait_before_retry(_reason, _provider_retries), do: :ok
 
   # Two-level provider-side gate, keyed by credential.id globally and by
   # {credential.id, api_key_id} per user. The limits themselves are owned by
@@ -1212,10 +1250,12 @@ defmodule TokengateWeb.ProxyController do
         {:error, :bad_request, status, error_message} ->
           # 400: the provider rejected THIS body for its own reasons — often
           # provider-specific (a field only it refuses, a limit only its model
-          # enforces, a prefix over its context window). The request falls back
-          # to the next candidate, but the rejection is recorded as a
-          # NON-counting failure: the credential is NOT deactivated and the
-          # breaker does NOT count it.
+          # enforces, a prefix over its context window). The shared policy
+          # (`next_candidate/4`) reemits the body to the SAME credential twice
+          # (the second attempt after @bad_request_retry_delay_ms) and only then
+          # falls back to the next candidate. Either way the rejection is a
+          # NON-counting failure: the credential is NOT deactivated, stays in
+          # the pool, and the breaker does NOT count it.
           Router.record_outcome(route, {:failure, :bad_request})
 
           if attempts_left > 1 do
@@ -1313,8 +1353,11 @@ defmodule TokengateWeb.ProxyController do
     # next provider immediately; the condition that hung it won't clear in
     # the milliseconds a retry takes, and each retry would cost a full
     # receive_timeout of client-perceived latency. Fast errors (5xx, 429)
-    # are often transient, so those keep the per-provider retries.
+    # are often transient, so those keep the per-provider retries. A 400 goes
+    # through the shared policy too (see `next_candidate/4`): same credential
+    # twice before it is dropped.
     {exclude, provider_retries} = next_candidate(route, exclude, provider_retries, reason)
+    maybe_wait_before_retry(reason, provider_retries)
 
     request_context = %{
       "messages" => payload["messages"] || [],
@@ -1422,12 +1465,12 @@ defmodule TokengateWeb.ProxyController do
             Router.record_outcome(route, {:failure, breaker_reason(reason)})
 
             cond do
-              # 400: the provider rejected THIS body. That is often
-              # provider-specific, so move to the next candidate (no
-              # same-provider retry — the identical payload gets the identical
-              # 400). The rejection was already recorded above as a
-              # non-counting failure: no breaker penalty, credential stays
-              # enabled.
+              # 400: the provider rejected THIS body. That rejection is often
+              # provider-specific, so the shared policy retries the SAME
+              # credential twice (second attempt after
+              # @bad_request_retry_delay_ms) and only then moves to the next
+              # candidate. It was already recorded above as a non-counting
+              # failure: no breaker penalty, credential stays enabled.
               reason == :bad_request and attempts_left > 1 ->
                 log_fallback_attempt(conn, route, member, status, error_message)
 
@@ -1499,10 +1542,11 @@ defmodule TokengateWeb.ProxyController do
          status,
          error_message
        ) do
-    # Same policy as retry_with_fallback: timeouts and 400s fall back
-    # immediately, fast errors retry the same provider up to
-    # @max_retries_per_provider.
+    # Same shared policy as retry_with_fallback: timeouts fall back
+    # immediately, 400s get their two same-credential attempts, and fast
+    # errors retry the same provider up to @max_retries_per_provider.
     {exclude, provider_retries} = next_candidate(route, exclude, provider_retries, reason)
+    maybe_wait_before_retry(reason, provider_retries)
 
     request_context = %{
       "messages" => payload["messages"] || [],

@@ -1201,13 +1201,17 @@ defmodule TokengateWeb.ProxyControllerTest do
   test "a 400 that every candidate rejects is surfaced to the client", %{
     conn: conn
   } do
-    %{token: token, model: model} = proxy_fixture(%{})
+    %{token: token, model: model, model_provider: model_provider} = proxy_fixture(%{})
+    credential_id = model_provider.credential_id
     # A field the gateway does NOT know about and therefore never strips: the
     # operator-configured strict upstream rejects it. The gateway now walks the
-    # candidate pool on a 400 (the rejection can be provider-specific), but with
-    # a single candidate there is nowhere to go — the upstream 4xx must reach
-    # the client untouched, never a 503.
+    # candidate pool on a 400 (the rejection can be provider-specific), and the
+    # 400 policy retries the same key before dropping it, but with a single
+    # candidate there is nowhere to go — the upstream 4xx must reach the client
+    # untouched, never a 503.
     :persistent_term.put({ProviderPlug, :reject_body_fields}, ["totally_unknown_field"])
+
+    start = System.monotonic_time(:millisecond)
 
     conn =
       conn
@@ -1221,7 +1225,19 @@ defmodule TokengateWeb.ProxyControllerTest do
         ]
       })
 
+    elapsed = System.monotonic_time(:millisecond) - start
+
     assert %{"error" => %{"code" => "upstream_client_error"}} = json_response(conn, 400)
+
+    # Solo hay una credencial: la política de 400 reemite el body dos veces en
+    # ESA misma key (la segunda tras @bad_request_retry_delay_ms) y recién
+    # entonces el cascade se queda sin candidatos y surfacea el 4xx al cliente.
+    assert length(collect_provider_hits()) == 3
+    assert elapsed >= 3_000, "expected the 2nd 400 retry to wait 3s, took #{elapsed}ms"
+
+    assert Providers.get_credential!(credential_id).status == "active"
+    assert CircuitBreakerManager.status(credential_id) == :closed
+    assert CircuitBreakerManager.details(credential_id).failures == 0
   end
 
   # A 400 means "this body is wrong for ME", not "this credential is sick": the
@@ -1233,12 +1249,14 @@ defmodule TokengateWeb.ProxyControllerTest do
     credential_id = make_first_provider_reject(model)
     add_healthy_fallback(model, u)
 
-    # More rounds than the breaker threshold (5): if a 400 counted as a failure
-    # the breaker would be open by now and the credential excluded from the
-    # pool. A fresh API key per round keeps the router's sticky routing (keyed
-    # by api_key_hash + model) from pinning later rounds to the provider that
-    # already answered, so every round starts at the rejecting one.
-    for i <- 1..6 do
+    # Two rounds are enough to clear the breaker threshold (5): a 400 now costs
+    # THREE attempts on the same credential, so if the rejection counted this
+    # credential would be at 6 failures and the breaker open — and the second
+    # round would not start here anymore. A fresh API key per round keeps the
+    # router's sticky routing (keyed by api_key_hash + model) from pinning later
+    # rounds to the provider that already answered, so every round starts at the
+    # rejecting one.
+    for i <- 1..2 do
       {:ok, _api_key, token} = Accounts.replace_api_key(member)
 
       conn =
@@ -1257,10 +1275,12 @@ defmodule TokengateWeb.ProxyControllerTest do
     rejects = Enum.count(hits, &(&1["model"] =~ "gpt-4o-real"))
     served = Enum.count(hits, &(&1["model"] =~ "gpt-4o-healthy"))
 
-    # One attempt per provider per round: a 400 is never replayed to the
-    # provider that just rejected it.
+    # Three attempts on the rejecting credential per round — the original one
+    # plus the two same-key retries of the 400 policy (the second after the
+    # 3-second pause). Only then does the cascade move on, and the fallback
+    # serves every round.
     assert rejects == 6, "expected 6 rejections from the primary provider, got #{rejects}"
-    assert served == 6, "expected 6 answers from the fallback, got #{served}"
+    assert served == 2, "expected 2 answers from the fallback, got #{served}"
 
     assert Providers.get_credential!(credential_id).status == "active"
     assert CircuitBreakerManager.status(credential_id) == :closed
@@ -1896,9 +1916,10 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     assert %{"error" => %{"code" => "upstream_client_error"}} = json_response(conn, 400)
 
-    # Both candidates were tried — one attempt each: a 400 is never replayed to
-    # the provider that just rejected it.
-    assert length(collect_provider_hits()) == 2
+    # Cada credencial se reintenta dos veces antes de excluirla (1 + 2 de la
+    # política de 400 por cada una de las dos credenciales): recién agotados los
+    # dos reintentos de la última, el cascade se queda sin candidatos.
+    assert length(collect_provider_hits()) == 6
 
     assert Providers.get_credential!(credential_id).status == "active"
     assert CircuitBreakerManager.status(credential_id) == :closed
@@ -1923,8 +1944,9 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert body =~ ~s("content":"qué")
     assert body =~ "data: [DONE]"
 
-    # One rejected attempt + one served attempt.
-    assert length(collect_provider_hits()) == 2
+    # Tres intentos en la credencial que rechaza (1 + los 2 reintentos de la
+    # política de 400) + uno servido por el fallback.
+    assert length(collect_provider_hits()) == 4
 
     assert Providers.get_credential!(credential_id).status == "active"
     assert CircuitBreakerManager.details(credential_id).failures == 0
@@ -2020,9 +2042,10 @@ defmodule TokengateWeb.ProxyControllerTest do
     body = json_response(conn, 200)
     assert [%{"embedding" => [0.1, 0.2, 0.3]}] = body["data"]
 
-    # One rejected attempt (primary) + one served attempt (the fallback).
+    # Tres intentos en la credencial que rechaza (1 + los 2 reintentos de la
+    # política de 400) + uno servido por el fallback.
     hits = collect_provider_hits()
-    assert Enum.count(hits, &(&1["model"] =~ "gpt-4o-real")) == 1
+    assert Enum.count(hits, &(&1["model"] =~ "gpt-4o-real")) == 3
     assert Enum.count(hits, &(&1["model"] =~ "gpt-4o-healthy")) == 1
 
     assert Providers.get_credential!(credential_id).status == "active"
