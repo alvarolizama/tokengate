@@ -1657,14 +1657,27 @@ defmodule TokengateWeb.ProxyController do
     |> Map.update!("messages", &PromptOptimizer.lazy_cleanup/1)
     |> Map.update!("messages", &PromptOptimizer.strip_reasoning/1)
     |> attach_session_hint(session_key, provider_key(route_ctx))
-    |> CacheControlInjector.inject(Map.get(route_ctx, :cache_control_enabled, false))
+    |> CacheControlInjector.inject(cache_control_injection?(route_ctx))
     |> drop_strict_fields(provider_key(route_ctx))
     # Operator overrides run LAST so they can strip/replace anything the
-    # gateway injected (e.g. Fireworks must drop `session_id`).
+    # gateway injected (a per-row `omit_body_fields` can pull the session hint
+    # back out, and `extra_body` can replace it).
     |> apply_request_overrides(route_ctx)
   end
 
   defp maybe_optimize(payload, _model_model), do: payload
+
+  # Will the `cache_control` breakpoint be injected? The model_provider row is
+  # necessary but NOT sufficient: the breakpoint is Anthropic-style
+  # content-parts, so an upstream whose API cannot take that shape
+  # (`Catalog.cache_control_allowed?/1` — Fireworks types `content` as a plain
+  # string and 400s on the extra part field) never gets one, no matter what the
+  # row says. Rows written by SQL, a seed or the API can still carry the flag
+  # true: only the admin form forces it off, and only at save time.
+  defp cache_control_injection?(route_ctx) do
+    Map.get(route_ctx, :cache_control_enabled, false) == true and
+      Tokengate.Providers.Catalog.cache_control_allowed?(provider_key(route_ctx))
+  end
 
   # Per model_provider upstream overrides, applied last in the payload
   # pipeline so they win over every gateway injection (session hints,
@@ -1815,8 +1828,14 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
-  defp stream_error_reason({reason, _status}), do: reason
+  defp stream_error_reason({reason, _status}) when is_atom(reason), do: reason
   defp stream_error_reason(reason) when is_atom(reason), do: reason
+  # Un Task que muere por excepción entrega `{excepción, stacktrace}` como
+  # reason. Dejarlo pasar tal cual (struct) revienta más tarde en
+  # `error_details/1`, que hace `to_string/1` sobre el reason: 500 sin fila de
+  # log. Un crash sin clasificar es un fallo del proveedor visto desde el
+  # cliente, así que degrada al reason genérico.
+  defp stream_error_reason({_exception, _stacktrace}), do: :server_error
   defp stream_error_reason(_), do: :server_error
 
   defp stream_loop(conn, pid, ref, pending_chunk, route, member, payload, acc) do

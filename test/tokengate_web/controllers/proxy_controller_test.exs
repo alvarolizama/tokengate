@@ -1757,6 +1757,83 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert provider_payload["messages"] == [%{"role" => "system", "content" => "sé breve"}]
   end
 
+  ## cache_control breakpoint ##################################################
+
+  # The row toggle is the operator's INTENT; the catalog decides applicability.
+  # Fireworks types `content` as a plain string and 400s on the Anthropic-style
+  # content-parts shape the breakpoint needs, so it must not receive one even
+  # when the row carries `cache_control_enabled: true` (rows written by SQL, a
+  # seed or the API bypass the admin form that forces the flag off).
+  test "fireworks never receives the cache_control breakpoint, even with the row flag on", %{
+    conn: conn
+  } do
+    %{token: token, model: model} = proxy_fixture(%{})
+    [mp] = Providers.list_model_providers(model.id)
+
+    {:ok, _} = Providers.update_model_provider(mp, %{cache_control_enabled: true})
+    make_provider_fireworks(model)
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", %{
+        "model" => model.name,
+        "messages" => [
+          %{"role" => "system", "content" => "You are a helpful assistant."},
+          %{"role" => "user", "content" => "hola, ¿cómo vas?"}
+        ]
+      })
+
+    assert json_response(conn, 200)
+
+    receive do
+      {:provider_request, payload} ->
+        system = Enum.find(payload["messages"], &(&1["role"] == "system"))
+        # Plain string content: no extra part for a strict validator to reject.
+        assert is_binary(system["content"])
+        refute inspect(payload) =~ "cache_control"
+    after
+      0 -> flunk("expected an upstream request")
+    end
+  end
+
+  # The control for the test above: the same row flag on a tolerant provider
+  # DOES produce the breakpoint, so the guard is a filter and not a mute.
+  test "a tolerant upstream with the row flag on still gets the breakpoint", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture(%{})
+    [mp] = Providers.list_model_providers(model.id)
+
+    {:ok, _} = Providers.update_model_provider(mp, %{cache_control_enabled: true})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", %{
+        "model" => model.name,
+        "messages" => [
+          %{"role" => "system", "content" => "You are a helpful assistant."},
+          %{"role" => "user", "content" => "hola, ¿cómo vas?"}
+        ]
+      })
+
+    assert json_response(conn, 200)
+
+    receive do
+      {:provider_request, payload} ->
+        system = Enum.find(payload["messages"], &(&1["role"] == "system"))
+
+        assert [
+                 %{
+                   "type" => "text",
+                   "text" => "You are a helpful assistant.",
+                   "cache_control" => %{"type" => "ephemeral"}
+                 }
+               ] = system["content"]
+    after
+      0 -> flunk("expected an upstream request")
+    end
+  end
+
   ## Streaming #################################################################
 
   # Un `stream_options` en null explícito es un caso REAL de SDK (y el

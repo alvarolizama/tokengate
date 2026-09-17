@@ -109,6 +109,14 @@ defmodule Tokengate.Providers.Catalog do
   # the body field bought nothing and cost a strict upstream a 400.
   @default_session_hint_fields ~w(prompt_cache_key)
 
+  # Providers whose API cannot take the Anthropic-style content-parts shape a
+  # `cache_control` breakpoint requires (Fireworks types `content` as a plain
+  # string and 400s on the extra part field). The breakpoint is never injected
+  # for them, whatever the model_provider ROW says: the admin form forces the
+  # flag off at save time, but a row written by SQL, a seed or the API can
+  # still carry `cache_control_enabled: true`.
+  @cache_control_opt_out ~w(fireworks-ai)
+
   # ---------------------------------------------------------------------------
   # Code customizations, by models.dev id.
   #
@@ -373,6 +381,24 @@ defmodule Tokengate.Providers.Catalog do
   @doc "The default session-hint fields (tolerant upstreams)."
   @spec default_session_hint_fields() :: [String.t()]
   def default_session_hint_fields, do: @default_session_hint_fields
+
+  @doc """
+  Whether the Anthropic-style `cache_control` breakpoint may be injected for
+  `key`.
+
+  An upstream that cannot take the content-parts shape answers 400 on the
+  extra part field, so it never gets one — the model_provider row's
+  `cache_control_enabled` is necessary but not sufficient (that row can be
+  written by SQL, a seed or the API; only the admin form forces it off).
+
+      iex> Tokengate.Providers.Catalog.cache_control_allowed?("fireworks-ai")
+      false
+
+      iex> Tokengate.Providers.Catalog.cache_control_allowed?("openrouter")
+      true
+  """
+  @spec cache_control_allowed?(String.t() | nil) :: boolean()
+  def cache_control_allowed?(key), do: key not in @cache_control_opt_out
 
   @doc """
   Body fields the gateway must strip for a strict provider, by catalog key.

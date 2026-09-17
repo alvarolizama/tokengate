@@ -512,6 +512,21 @@ defmodule Tokengate.Providers.CatalogTest do
     end
   end
 
+  describe "cache_control_allowed?/1" do
+    test "fireworks opts out: its API rejects the content-parts shape" do
+      # El breakpoint es content-parts estilo Anthropic; fireworks tipa
+      # `content` como string plano. El flag de la FILA no basta.
+      refute Catalog.cache_control_allowed?("fireworks-ai")
+    end
+
+    test "every other key (and nil) allows it" do
+      assert Catalog.cache_control_allowed?("openrouter")
+      assert Catalog.cache_control_allowed?("zai")
+      assert Catalog.cache_control_allowed?(nil)
+      assert Catalog.cache_control_allowed?("mi-custom")
+    end
+  end
+
   describe "omit_body_fields/1" do
     test "no provider declares a stripped field anymore" do
       # Fireworks used to declare `session_id` here because the gateway
