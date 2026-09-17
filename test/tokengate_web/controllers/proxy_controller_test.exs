@@ -1168,19 +1168,15 @@ defmodule TokengateWeb.ProxyControllerTest do
 
   ## Per-provider request overrides ###########################################
 
-  # Reproduces the Fireworks 400 regression: the gateway injects
-  # `session_id` (OpenRouter's routing hint) into every chat body and
-  # Fireworks strictly rejects unknown fields. With the model_provider
-  # override omit_body_fields=["session_id"] the same request passes.
-  #
-  # The body needs a system + user opener so SessionId.derive/2 produces a
-  # fingerprint session_key — that's what triggers the gateway injection.
-  test "omit_body_fields strips gateway-injected fields for the strict upstream", %{conn: conn} do
+  # The per-ROW omission knob is what an operator reaches for when an upstream
+  # rejects a field the gateway sends — the field name is not hardcoded here,
+  # and it can be any key the gateway or the client put in the body.
+  test "omit_body_fields strips a gateway-attached field for the strict upstream", %{conn: conn} do
     %{token: token, model: model} = proxy_fixture(%{})
     [mp] = Providers.list_model_providers(model.id)
 
-    {:ok, _} = Providers.update_model_provider(mp, %{omit_body_fields: ["session_id"]})
-    :persistent_term.put({ProviderPlug, :reject_body_fields}, ["session_id"])
+    {:ok, _} = Providers.update_model_provider(mp, %{omit_body_fields: ["prompt_cache_key"]})
+    :persistent_term.put({ProviderPlug, :reject_body_fields}, ["prompt_cache_key"])
 
     conn =
       conn
@@ -1196,7 +1192,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert json_response(conn, 200)
 
     receive do
-      {:provider_request, payload} -> refute Map.has_key?(payload, "session_id")
+      {:provider_request, payload} -> refute Map.has_key?(payload, "prompt_cache_key")
     after
       0 -> flunk("expected an upstream request")
     end
@@ -1271,14 +1267,17 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert CircuitBreakerManager.details(credential_id).failures == 0
   end
 
-  # Catalog-driven: a model_provider backed by a provider whose catalog key
-  # is "fireworks-ai" must NEVER receive session_id (Fireworks 400s on unknown
-  # body fields) without any operator configuring omit_body_fields. The hint
-  # narrowing is provider knowledge (Catalog.session_hint_fields/1), not
-  # per-row data. The fixture's custom provider keeps its local test URL —
-  # only the catalog key is stamped onto it (builtin rows are identity-locked
-  # and point at the real Fireworks endpoint).
-  test "a fireworks-keyed provider never receives session_id (catalog-driven)", %{conn: conn} do
+  # The gateway never injects `session_id` into any upstream body — not even
+  # for a provider whose catalog key is "fireworks-ai", where a body field the
+  # vendor does not document is a 400. The one hint that travels is
+  # `prompt_cache_key`, and this is the request shape that used to trigger the
+  # injection (system + user opener ⇒ a fingerprint session_key is derivable).
+  # The fixture's custom provider keeps its local test URL — only the catalog
+  # key is stamped onto it (builtin rows are identity-locked and point at the
+  # real Fireworks endpoint).
+  test "no upstream ever receives a session_id body hint (fireworks-keyed included)", %{
+    conn: conn
+  } do
     %{token: token, model: model} = proxy_fixture(%{})
 
     make_provider_fireworks(model)
@@ -1299,7 +1298,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     receive do
       {:provider_request, payload} ->
         refute Map.has_key?(payload, "session_id"),
-               "fireworks must not receive the OpenRouter-style session_id"
+               "the gateway must not attach the OpenRouter-style session_id"
 
         assert Map.has_key?(payload, "prompt_cache_key")
     after
@@ -1325,15 +1324,52 @@ defmodule TokengateWeb.ProxyControllerTest do
     Tokengate.Routing.Cache.invalidate_all()
   end
 
-  # Regression: the exact Fireworks case. The CLIENT puts `session_id` in the
-  # body (OpenRouter's convention); Fireworks validates strictly and 400s on
-  # unknown fields. The catalog declares session_id as omit_body_fields for
-  # fireworks, so the gateway must STRIP it even though the client sent it —
-  # `attach_session_hint` alone only narrows what the gateway adds.
-  test "a client-supplied session_id is stripped before reaching fireworks", %{conn: conn} do
+  # Passthrough, and a deliberate behaviour change: the gateway no longer
+  # strips a `session_id` the CLIENT put in its body. It used to, for
+  # fireworks only, because the gateway also INJECTED that field and right
+  # after stripped its own injection plus the client's. With the injection
+  # gone the stripping went with it — the field is the client's, and the
+  # gateway is a passthrough for everything it does not own.
+  #
+  # The client's session_id still does its job: it is input #1 of
+  # SessionId.derive/2, so it becomes the conversation key, which is then
+  # attached under the one hint the gateway sends.
+  test "a client-supplied session_id travels untouched (no longer stripped)", %{conn: conn} do
     %{token: token, model: model} = proxy_fixture(%{})
 
-    make_provider_fireworks(model)
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", %{
+        "model" => model.name,
+        "session_id" => "client-conv-abc",
+        "messages" => [
+          %{"role" => "system", "content" => "You are a helpful assistant."},
+          %{"role" => "user", "content" => "hola, ¿cómo vas?"}
+        ]
+      })
+
+    assert json_response(conn, 200)
+
+    receive do
+      {:provider_request, payload} ->
+        assert payload["session_id"] == "client-conv-abc"
+        # El hint que sí mandamos viaja con la MISMA clave derivada.
+        assert payload["prompt_cache_key"] == "client-conv-abc"
+    after
+      0 -> flunk("expected an upstream request")
+    end
+  end
+
+  # The escape hatch for an upstream that would reject that client field: the
+  # per-ROW omission override (the catalog-wide one is gone). Worth pinning
+  # because it is the answer to "what if a client sends session_id to a strict
+  # provider?".
+  test "the per-row omit_body_fields override still rescues a strict upstream", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture(%{})
+    [mp] = Providers.list_model_providers(model.id)
+
+    {:ok, _} = Providers.update_model_provider(mp, %{omit_body_fields: ["session_id"]})
     :persistent_term.put({ProviderPlug, :reject_body_fields}, ["session_id"])
 
     conn =

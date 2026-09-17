@@ -1682,11 +1682,13 @@ defmodule TokengateWeb.ProxyController do
   # Attaches the conversation key as the upstream cache-routing hint.
   #
   # WHICH fields are safe to attach is provider knowledge declared in the
-  # catalog: `session_id` is OpenRouter's convention, `prompt_cache_key` is
-  # the OpenAI-compatible one. Tolerant upstreams ignore unknown fields, but
-  # a strict one (Fireworks) rejects them with a 400 — so the field list is
-  # narrowed per provider instead of assumed. See
-  # `Tokengate.Providers.Catalog.session_hint_fields/1`.
+  # catalog. Today that is `prompt_cache_key` for every provider — the
+  # OpenAI-compatible convention, also honored by OpenRouter as a routing key.
+  # `session_id` is NOT attached to anyone: OpenRouter's documented sticky key
+  # travels in the `x-session-id` header (every outbound request carries it),
+  # and the body field made a strict upstream (Fireworks) answer 400. The list
+  # still comes from the catalog so a provider documenting neither can be
+  # narrowed. See `Tokengate.Providers.Catalog.session_hint_fields/1`.
   defp attach_session_hint(payload, nil, _provider_key), do: payload
 
   defp attach_session_hint(payload, session_key, provider_key) when is_binary(session_key) do
@@ -1695,11 +1697,14 @@ defmodule TokengateWeb.ProxyController do
     |> Enum.reduce(payload, fn field, acc -> Map.put_new(acc, field, session_key) end)
   end
 
-  # Removes the body fields a strict provider does not accept. `attach_session_hint`
-  # only narrows what the gateway ADDS — a `session_id` the client already put
-  # in the body still travels and Fireworks rejects it with a 400. Tolerant
-  # providers declare nothing here, so their body is untouched. `model`,
-  # `messages` and `stream_options` are protected: the gateway owns them.
+  # Removes the body fields a provider's catalog entry declares unacceptable.
+  # Nothing declares any today (the Fireworks `session_id` entry is gone: that
+  # field is no longer injected at all), so this pass is a no-op for every
+  # provider — it stays as the seam for a strict upstream, and as the reason
+  # `Catalog.omit_body_fields/1` still exists. Per-ROW omissions are a
+  # different knob (`apply_request_overrides`, driven by the model_provider
+  # column). `model`, `messages` and `stream_options` are protected: the
+  # gateway owns them.
   defp drop_strict_fields(payload, provider_key) do
     case Tokengate.Providers.Catalog.omit_body_fields(provider_key) do
       [] -> payload

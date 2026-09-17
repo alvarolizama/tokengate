@@ -53,9 +53,12 @@ Think "LiteLLM, but as an Elixir app with a real admin UI".
   caches, with per-provider TTL overrides. Every outbound request also carries an
   `x-session-affinity` header so providers with automatic prefix caching group a
   session's requests onto the replica holding the cached prefix.
-- **Conversation session key** — the gateway derives a per-conversation `session_id`
-  (client-provided or hashed from the conversation opening) for cache-affinity routing
-  and per-conversation cache-hit observability.
+- **Conversation session key** — the gateway derives a per-conversation key
+  (client-provided `session_id` / `prompt_cache_key`, or hashed from the conversation
+  opening) for cache-affinity routing and per-conversation cache-hit observability.
+  It travels upstream as `prompt_cache_key` (body) and `x-session-id` /
+  `x-session-affinity` (headers); the OpenRouter-style `session_id` body field is
+  never sent, so no upstream is handed a field it may reject.
 - **Explicit `cache_control` injection** — per model-provider toggle: injects
   Anthropic-style cache breakpoints into system prompts and tool definitions for
   upstreams that honor them (Anthropic, z.ai, OpenRouter passthrough).

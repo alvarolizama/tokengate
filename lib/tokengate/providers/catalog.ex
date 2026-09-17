@@ -11,8 +11,8 @@ defmodule Tokengate.Providers.Catalog do
       by `CatalogRefreshWorker`). Nothing here is hand-maintained.
     * **Code (customizations)** — the properties models.dev does NOT publish
       and the gateway needs anyway: `capabilities`, `dialect`, per-service
-      `paths`, and the per-upstream quirks (Fireworks' strict body
-      validation). They live in `@customizations`, keyed by models.dev id, and
+      `paths`, and the per-upstream quirks (a strict body validator, an
+      exotic path). They live in `@customizations`, keyed by models.dev id, and
       are applied at READ time.
 
   That split is what makes a refresh safe: the worker only writes remote rows,
@@ -55,16 +55,16 @@ defmodule Tokengate.Providers.Catalog do
   ## Session-hint fields (`:session_hint_fields`)
 
   The gateway attaches the conversation key to the upstream body as a
-  cache-routing hint (`session_id` for OpenRouter, `prompt_cache_key` for
-  OpenAI-style upstreams). Which fields are SAFE to send is provider
-  knowledge, so it lives here:
+  cache-routing hint. The hint is `prompt_cache_key` — the OpenAI-compatible
+  convention, and the one OpenRouter honors as a routing key — for EVERY
+  provider. `session_id` is OpenRouter's own body convention and is never
+  sent: OpenRouter's documented sticky key travels in the `x-session-id`
+  HEADER, which every outbound request already carries, so the body field
+  bought nothing while making a strict upstream (Fireworks) answer 400.
 
-    * omitting the key → `["session_id", "prompt_cache_key"]`, the
-      historical behaviour (both hints, tolerated as unknown fields);
-    * a provider that validates its body strictly declares ONLY the fields
-      it documents. Fireworks rejects unknown body fields with a 400, so it
-      declares `prompt_cache_key` alone — `session_id` is OpenRouter's
-      convention and must not reach it.
+  The per-key list stays as the seam for an upstream that does not document
+  `prompt_cache_key` (once it is narrowed, the gateway never adds it), but
+  nothing declares one today.
 
   ## Custom provider capabilities
 
@@ -101,22 +101,13 @@ defmodule Tokengate.Providers.Catalog do
   }
 
   # Hints attached to every chat body unless a provider narrows the list.
-  # OpenRouter reads `session_id`; the OpenAI-compatible surface reads
-  # `prompt_cache_key`. Both are harmless no-ops on tolerant upstreams.
-  @default_session_hint_fields ~w(session_id prompt_cache_key)
-
-  # Fireworks documents `prompt_cache_key` (and
-  # `prompt_cache_isolation_key`) and validates strictly: an unknown body
-  # field is a 400. `session_id` is OpenRouter's convention, NOT Fireworks'.
-  @fireworks_session_hint_fields ~w(prompt_cache_key)
-
-  # Fields the gateway must actively STRIP before a strict upstream sees the
-  # body. `session_hint_fields` only narrows what attach_session_hint ADDS; a
-  # `session_id` the CLIENT put in the request body still travels, and
-  # Fireworks rejects it with a 400. Reasoning flags (`reasoning_effort`,
-  # `thinking`) and `reasoning_content` ARE documented by Fireworks, so they
-  # are deliberately left alone.
-  @fireworks_omit_body_fields ~w(session_id)
+  # `prompt_cache_key` is the OpenAI-compatible convention for grouping
+  # requests onto the same prompt cache (it is also what OpenRouter honors as
+  # a routing key). `session_id` is OpenRouter's own convention and is NO
+  # longer sent to anyone: OpenRouter takes the sticky key from the
+  # `x-session-id` HEADER (which every outbound request already carries), so
+  # the body field bought nothing and cost a strict upstream a 400.
+  @default_session_hint_fields ~w(prompt_cache_key)
 
   # ---------------------------------------------------------------------------
   # Code customizations, by models.dev id.
@@ -137,11 +128,7 @@ defmodule Tokengate.Providers.Catalog do
       capabilities: ~w(llm embedding),
       dialect: "openrouter"
     },
-    "fireworks-ai" => %{
-      capabilities: ~w(llm embedding),
-      session_hint_fields: @fireworks_session_hint_fields,
-      omit_body_fields: @fireworks_omit_body_fields
-    },
+    "fireworks-ai" => %{capabilities: ~w(llm embedding)},
     "alibaba-cn" => %{capabilities: ~w(llm embedding)},
     "alibaba-token-plan" => %{capabilities: ~w(llm), billing: "subscription"},
     "opencode" => %{capabilities: ~w(llm)},
@@ -363,15 +350,17 @@ defmodule Tokengate.Providers.Catalog do
   @doc """
   Body fields the gateway may attach as cache-routing hints for `key`.
 
-  Returns `@default_session_hint_fields` for a provider that does not narrow
-  the list (or unknown/custom keys). A strict provider declares only the
-  fields it documents, so the gateway never sends it an unknown one.
-
-      iex> Tokengate.Providers.Catalog.session_hint_fields("fireworks-ai")
-      ["prompt_cache_key"]
+  Returns `@default_session_hint_fields` — currently only
+  `prompt_cache_key`, for every provider. The per-key override stays as the
+  seam for an upstream that does not document that field, but nothing
+  declares one today: narrowing the list was how Fireworks used to be spared
+  the OpenRouter-style `session_id`, which is now simply never sent.
 
       iex> Tokengate.Providers.Catalog.session_hint_fields("openrouter")
-      ["session_id", "prompt_cache_key"]
+      ["prompt_cache_key"]
+
+      iex> Tokengate.Providers.Catalog.session_hint_fields(nil)
+      ["prompt_cache_key"]
   """
   @spec session_hint_fields(String.t() | nil) :: [String.t()]
   def session_hint_fields(key \\ nil) do
@@ -388,15 +377,16 @@ defmodule Tokengate.Providers.Catalog do
   @doc """
   Body fields the gateway must strip for a strict provider, by catalog key.
 
-  Empty for tolerant providers and for unknown/custom keys (nothing is
-  removed). A provider that validates its body strictly declares the fields
-  it does not accept, so a client-supplied value (e.g. `session_id`) never
-  reaches it.
-
-      iex> Tokengate.Providers.Catalog.omit_body_fields("fireworks-ai")
-      ["session_id"]
+  Empty for every provider today, and for unknown/custom keys: the one entry
+  that existed declared `session_id` for Fireworks, and that field is no
+  longer injected at all, so there was nothing left to strip. The seam stays
+  for an upstream that rejects a field the gateway DOES send, or one a client
+  sends and the operator wants removed.
 
       iex> Tokengate.Providers.Catalog.omit_body_fields("openrouter")
+      []
+
+      iex> Tokengate.Providers.Catalog.omit_body_fields(nil)
       []
   """
   @spec omit_body_fields(String.t() | nil) :: [String.t()]
