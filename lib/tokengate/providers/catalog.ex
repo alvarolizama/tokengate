@@ -187,6 +187,63 @@ defmodule Tokengate.Providers.Catalog do
   @spec snapshot_size() :: non_neg_integer()
   def snapshot_size, do: map_size(@snapshot)
 
+  # Origin every models.dev asset (logos) and payload lives on. NOT the same as
+  # `base_url/1`, which resolves a PROVIDER's endpoint.
+  @upstream_origin "https://models.dev"
+
+  @doc "The models.dev origin this catalog mirrors."
+  @spec origin() :: String.t()
+  def origin, do: @upstream_origin
+
+  @doc """
+  Normalizes the raw models.dev `/api.json` payload into PROVIDER-level entries.
+
+  Provider-level fields only: the payload is ~4.5 MB and the bulk of it is
+  per-model data, which `ModelCatalog.derive/3` consumes separately from the same
+  payload. `api` is models.dev's base URL key; `base_url` is accepted too so a
+  future schema rename does not blank the catalog.
+
+  The provider LOGO is always built on the models.dev origin, whoever served the
+  payload: it is an asset id, not a mirror-relative path.
+  """
+  @spec normalize_providers(map() | any()) :: [map()]
+  def normalize_providers(body) when is_map(body) do
+    body
+    |> Enum.filter(fn {id, value} -> is_binary(id) and is_map(value) end)
+    |> Enum.map(fn {id, value} ->
+      %{
+        key: id,
+        name: normalize_name(id, value),
+        base_url: normalize_url(value["api"] || value["base_url"]),
+        doc_url: normalize_url(value["doc"]),
+        logo_url: "#{@upstream_origin}/logos/#{id}.svg",
+        env: value |> Map.get("env") |> List.wrap() |> Enum.filter(&is_binary/1),
+        npm: value["npm"],
+        status: "active"
+      }
+    end)
+  end
+
+  def normalize_providers(_), do: []
+
+  defp normalize_name(id, value) do
+    case value["name"] do
+      name when is_binary(name) and name != "" -> name
+      _ -> id
+    end
+  end
+
+  defp normalize_url(nil), do: nil
+
+  defp normalize_url(url) when is_binary(url) do
+    case String.trim_trailing(url, "/") do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp normalize_url(_), do: nil
+
   @doc "The code customization for a models.dev id, or nil when there is none."
   @spec customization(String.t() | nil) :: map() | nil
   def customization(key) when is_binary(key), do: Map.get(@customizations, key)

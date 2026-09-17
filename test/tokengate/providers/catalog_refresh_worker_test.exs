@@ -12,7 +12,15 @@ defmodule Tokengate.Providers.CatalogRefreshWorkerTest do
   import Ecto.Query
 
   alias Tokengate.Providers
-  alias Tokengate.Providers.{CatalogProvider, CatalogRefreshWorker, Lab, Provider}
+
+  alias Tokengate.Providers.{
+    CatalogModel,
+    CatalogModelOffer,
+    CatalogProvider,
+    CatalogRefreshWorker,
+    Lab,
+    Provider
+  }
 
   @port 42391
 
@@ -248,13 +256,14 @@ defmodule Tokengate.Providers.CatalogRefreshWorkerTest do
 
       assert :ok = perform()
 
-      # The providers half emits no drift warning; the lab half cannot derive
-      # labs from `{}` (this payload has no model list), which is recorded as a
-      # labs warning, not a provider one.
-      refute Enum.any?(
-               Providers.catalog_sync_state().warnings,
-               &(&1["reason"] != "labs_payload_empty")
-             )
+      # The providers half emits no drift warning; the lab and model halves
+      # cannot derive anything from `{}` (this payload has no model list), which
+      # is recorded as a warning each, not a provider one.
+      no_provider_warnings =
+        Providers.catalog_sync_state().warnings
+        |> Enum.reject(&(&1["reason"] in ["labs_payload_empty", "models_payload_empty"]))
+
+      assert no_provider_warnings == []
     end
   end
 
@@ -447,6 +456,177 @@ defmodule Tokengate.Providers.CatalogRefreshWorkerTest do
       # Every seeded lab is still active.
       assert Repo.aggregate(from(l in Lab, where: l.status == "active"), :count) ==
                Providers.LabCatalog.snapshot_size()
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Models — the same Bandit serves both payloads; the model mirror (dimension +
+  # offers) is derived from them. `catalog_models` / `catalog_model_offers` are
+  # seeded from the vendored snapshot at boot, so these tests start from a full
+  # mirror and watch what a refresh ADDS and what it SWEEPS.
+  # ---------------------------------------------------------------------------
+
+  defp model(key), do: Repo.get(CatalogModel, key)
+
+  defp offer(provider_key, model_key) do
+    Repo.one(
+      from(o in CatalogModelOffer,
+        where: o.provider_key == ^provider_key and o.model_key == ^model_key
+      )
+    )
+  end
+
+  # A provider the gateway can serve, with one model that carries a price and a
+  # canonical counterpart in /models.json.
+  defp models_provider_payload do
+    %{
+      "alpha" => %{
+        "id" => "alpha",
+        "name" => "Alpha Cloud",
+        "api" => "https://api.alpha.example/v1",
+        "doc" => "https://docs.alpha.example",
+        "env" => ["ALPHA_API_KEY"],
+        "npm" => "@ai-sdk/openai-compatible",
+        "models" => %{
+          "openai/gpt-5" => %{
+            "id" => "openai/gpt-5",
+            "name" => "GPT-5",
+            "limit" => %{"context" => 400_000, "output" => 128_000},
+            "cost" => %{"input" => 1.25, "output" => 10.0, "cache_read" => 0.125}
+          },
+          # Only this provider publishes it: no canonical entry exists.
+          "accounts/alpha/private-lane" => %{
+            "id" => "accounts/alpha/private-lane",
+            "name" => "Private Lane",
+            "limit" => %{"context" => 32_000, "output" => 4_096}
+          }
+        }
+      }
+    }
+  end
+
+  defp models_canonical_payload do
+    %{
+      "openai/gpt-5" => %{
+        "id" => "openai/gpt-5",
+        "name" => "GPT-5",
+        "description" => "Frontier model",
+        "limit" => %{"context" => 400_000, "output" => 128_000},
+        "release_date" => "2026-01-10",
+        "tool_call" => true
+      }
+    }
+  end
+
+  describe "models" do
+    # The mirror is seeded from the vendored snapshot at boot, so it starts full
+    # of real rows. These tests assert on what a refresh WRITES, so they need it
+    # empty: with real rows in place the fixture's ids would mostly be updates.
+    setup do
+      Repo.delete_all(CatalogModelOffer)
+      Repo.delete_all(CatalogModel)
+      :ok
+    end
+
+    test "derives the model dimension and the offers from the two payloads" do
+      serve!(%{
+        "/api.json" => models_provider_payload(),
+        "/models.json" => models_canonical_payload()
+      })
+
+      assert :ok = perform()
+
+      state = Providers.catalog_sync_state()
+      assert state.error == nil
+      assert state.models_inserted >= 2
+      assert state.offers_inserted >= 2
+
+      # A canonical id: the canonical payload is the authority for what it IS.
+      canonical = model("openai/gpt-5")
+      assert canonical.canonical == true
+      assert canonical.lab_key == "openai"
+      assert canonical.context_limit == 400_000
+      assert "tool_call" in canonical.features
+      assert canonical.status == "active"
+
+      # An id only the provider publishes: still a row, no lab, not canonical.
+      private = model("accounts/alpha/private-lane")
+      assert private.canonical == false
+      assert private.lab_key == nil
+      assert private.name == "Private Lane"
+
+      # The offer carries the id to send upstream and that provider's price.
+      servable = offer("alpha", "openai/gpt-5")
+      assert servable.provider_model == "openai/gpt-5"
+      assert Decimal.equal?(servable.cost_input, Decimal.new("1.25"))
+      assert servable.status == "active"
+    end
+
+    test "the market price of a model comes from its cheapest offer" do
+      # /models.json publishes no price at all, so the model row inherits the
+      # cheapest lane serving it.
+      payload =
+        put_in(models_provider_payload(), ["alpha", "models", "openai/gpt-5", "cost"], %{
+          "input" => 0.5,
+          "output" => 4.0
+        })
+
+      serve!(%{"/api.json" => payload, "/models.json" => models_canonical_payload()})
+      assert :ok = perform()
+
+      assert Decimal.equal?(model("openai/gpt-5").cost_input, Decimal.new("0.5"))
+    end
+
+    test "an unchanged payload rewrites nothing" do
+      serve!(%{
+        "/api.json" => models_provider_payload(),
+        "/models.json" => models_canonical_payload()
+      })
+
+      assert :ok = perform()
+      first = model("openai/gpt-5")
+
+      assert :ok = perform()
+      second = model("openai/gpt-5")
+
+      assert second.fingerprint == first.fingerprint
+
+      state = Providers.catalog_sync_state()
+      assert state.models_inserted == 0
+      assert state.offers_inserted == 0
+    end
+
+    test "an empty models payload is refused, not swept to stale" do
+      # Nothing at all: no provider serves anything and there is no canonical
+      # list. A refresh must refuse that instead of sweeping the whole catalog
+      # stale.
+      serve!(%{"/api.json" => %{}, "/models.json" => %{}})
+
+      assert :ok = perform()
+
+      state = Providers.catalog_sync_state()
+      assert [_] = Enum.filter(state.warnings, &(&1["reason"] == "models_payload_empty"))
+
+      # Nothing was marked stale by a refused payload.
+      assert Repo.aggregate(from(m in CatalogModel, where: m.status == "stale"), :count) == 0
+      assert Repo.aggregate(from(o in CatalogModelOffer, where: o.status == "stale"), :count) == 0
+    end
+
+    test "a models fetch failure is a warning and changes nothing" do
+      serve!(%{"/api.json" => models_provider_payload()}, 200)
+      # `:labs_refresh_url` overrides the derived URL, so point it at a port with
+      # no server at all.
+      Application.put_env(:tokengate, :labs_refresh_url, "http://127.0.0.1:9/models.json")
+
+      assert :ok = perform()
+
+      state = Providers.catalog_sync_state()
+      assert state.error == nil
+
+      assert [warning] = Enum.filter(state.warnings, &(&1["reason"] == "models_fetch_failed"))
+      assert warning["message"] =~ "no se pudo descargar"
+
+      assert Repo.aggregate(from(m in CatalogModel, where: m.status == "stale"), :count) == 0
     end
   end
 end

@@ -16,8 +16,20 @@ defmodule Tokengate.Providers.CatalogSync do
       (a materialized provider may be serving traffic).
 
   Also seeds the mirrors from the vendored snapshots when they are empty
-  (providers and labs), so this is the single entry point that makes a fresh
-  instance usable.
+  (providers, labs and models), so `sync/0` is the single entry point that makes
+  a fresh instance usable.
+
+  ## Two entry points, on purpose
+
+  `sync/0` is the BOOT path: it seeds the three mirrors and then materializes.
+  `materialize/0` is the REFRESH path (called by `CatalogRefreshWorker` after it
+  wrote the mirror): it materializes only, and seeds nothing.
+
+  The split matters because seeding from a snapshot is a boot concern. A refresh
+  that seeded would write rows the live payload it just downloaded is about to
+  describe — the operator would see counters for a run that wrote nothing (the
+  snapshot did), and the refresh's own insert path would never run on a fresh
+  database.
 
   Idempotent; failures are logged, not raised (the app must boot).
   """
@@ -28,9 +40,22 @@ defmodule Tokengate.Providers.CatalogSync do
   alias Tokengate.Providers.{Catalog, CatalogProvider, CatalogSeed, Provider}
   alias Tokengate.Repo
 
+  @doc "Boot path: seed the mirrors from the vendored snapshots, then materialize."
   def sync do
     CatalogSeed.seed_if_empty()
     CatalogSeed.seed_labs_if_empty()
+    CatalogSeed.seed_models_if_empty()
+    materialize()
+  end
+
+  @doc """
+  Materialize the mirror into the operator's `providers` table.
+
+  Called at boot (after the seeds, via `sync/0`) and by the refresh worker right
+  after it wrote the mirror — that is what makes a base URL fix land on a running
+  instance without a restart. Seeds nothing: see the moduledoc.
+  """
+  def materialize do
     entries = Repo.all(from c in CatalogProvider, order_by: [asc: c.key])
 
     {materialized, skipped} =

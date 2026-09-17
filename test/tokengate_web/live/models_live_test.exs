@@ -3,10 +3,28 @@ defmodule TokengateWeb.ModelsLiveTest do
 
   import Phoenix.LiveViewTest
   alias Tokengate.{Accounts, Providers}
+  alias Tokengate.Providers.{CatalogModel, CatalogModelOffer}
   alias Tokengate.Repo
+  alias TokengateWeb.ModelsLive
   import Ecto.Query
 
   defp unique, do: System.unique_integer([:positive])
+
+  # A provider carrying a models.dev `key`, which is what an offer joins to.
+  # Created as a custom on purpose: a builtin's identity (name, base_url) is
+  # catalog-owned and the changeset locks it, so a test must not build one by
+  # hand — `key` is all `providers_serving/1` needs.
+  defp create_keyed_provider(key, attrs \\ %{}) do
+    {:ok, provider} =
+      Providers.create_provider(
+        Map.merge(
+          %{name: key, base_url: "http://localhost:1", key: key, source: "custom"},
+          attrs
+        )
+      )
+
+    provider
+  end
 
   defp register(role) do
     u = unique()
@@ -1195,6 +1213,416 @@ defmodule TokengateWeb.ModelsLiveTest do
       first_pos < second_pos
     else
       _ -> false
+    end
+  end
+
+  # -- Model catalog picker --------------------------------------------------
+
+  # A catalog row, exactly as the refresh writes one.
+  defp create_catalog_model(key, attrs \\ %{}) do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    base = %{
+      key: key,
+      name: attrs[:name] || key,
+      lab_key: attrs[:lab_key],
+      description: attrs[:description] || "Una descripción",
+      canonical: attrs[:canonical] || false,
+      context_limit: attrs[:context_limit] || 128_000,
+      output_limit: 8_192,
+      cost_input: attrs[:cost_input],
+      cost_output: attrs[:cost_output],
+      cost_cache_read: nil,
+      cost_cache_write: nil,
+      modalities: %{},
+      features: attrs[:features] || [],
+      release_date: nil,
+      last_updated: nil,
+      license: nil,
+      status: "active",
+      fetched_at: now,
+      entered_at: now
+    }
+
+    %CatalogModel{}
+    |> Ecto.Changeset.change(Map.drop(base, [:entered_at]))
+    |> Repo.insert!()
+  end
+
+  defp create_offer(provider_key, model_key, attrs \\ %{}) do
+    %CatalogModelOffer{}
+    |> Ecto.Changeset.change(%{
+      provider_key: provider_key,
+      model_key: model_key,
+      provider_model: attrs[:provider_model] || model_key,
+      cost_input: attrs[:cost_input],
+      cost_output: attrs[:cost_output],
+      tiers: [],
+      lifecycle: "stable",
+      experimental: false,
+      status: "active"
+    })
+    |> Repo.insert!()
+  end
+
+  describe "model catalog picker" do
+    # The picker reads the mirror it finds in the database. The boot seed fills
+    # it with the whole vendored catalog (~3120 rows), which would push these
+    # fixtures past the picker's first page: isolate them.
+    setup do
+      Repo.delete_all(Tokengate.Providers.CatalogModelOffer)
+      Repo.delete_all(Tokengate.Providers.CatalogModel)
+      :ok
+    end
+
+    test "creating a model offers the catalog first and a custom tab", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+      view |> element("#new-model-btn") |> render_click()
+
+      assert has_element?(view, "#model-form")
+      assert has_element?(view, "#tab-catalog")
+      assert has_element?(view, "#tab-custom")
+      assert has_element?(view, "#catalog-search")
+      # The picker is the default tab: a new model starts from the catalog.
+      assert has_element?(view, "#catalog-picker")
+
+      # The custom tab hides the picker but keeps the form (nothing is lost).
+      view |> element("#tab-custom") |> render_click()
+      refute has_element?(view, "#catalog-picker")
+      assert has_element?(view, "#model-form")
+    end
+
+    test "searching narrows the catalog and picking fills the form", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      _ =
+        create_catalog_model("openai/gpt-5-nano",
+          name: "GPT-5 Nano",
+          lab_key: "openai",
+          context_limit: 400_000
+        )
+
+      _ = create_catalog_model("zai/glm-5.2", name: "GLM-5.2", lab_key: "zai")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#new-model-btn") |> render_click()
+
+      # Every catalog row is filterable in memory. The DOM id is derived from
+      # the key with `dom_key/1` (keys carrying `/` get a hash suffix), so the
+      # test builds the selector the same way instead of hardcoding it.
+      nano_id = "catalog-row-" <> ModelsLive.dom_key("openai/gpt-5-nano")
+      glm_id = "catalog-row-" <> ModelsLive.dom_key("zai/glm-5.2")
+
+      assert has_element?(view, "##{nano_id}")
+
+      view |> element("#catalog-search") |> render_change(%{"q" => "glm"})
+
+      assert has_element?(view, "##{glm_id}")
+      refute has_element?(view, "##{nano_id}")
+
+      # Picking prefills the operator's form with the catalog metadata.
+      view |> element("##{glm_id}") |> render_click()
+
+      assert has_element?(view, "#catalog-linked")
+      html = render(view)
+      assert html =~ "zai/glm-5.2"
+      assert html =~ ~s(value="glm-5.2")
+    end
+
+    test "a search with no match points at the custom tab", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      _ = create_catalog_model("openai/gpt-5-nano")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#new-model-btn") |> render_click()
+
+      view |> element("#catalog-search") |> render_change(%{"q" => "no-existe-xyz"})
+
+      assert has_element?(view, "#catalog-empty")
+      refute has_element?(view, "#catalog-results")
+    end
+
+    test "saving a picked model stores the catalog link and the lab", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      _ =
+        create_catalog_model("openai/gpt-5-nano",
+          name: "GPT-5 Nano",
+          lab_key: "openai",
+          context_limit: 400_000,
+          cost_input: Decimal.new("0.045")
+        )
+
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#new-model-btn") |> render_click()
+      view |> element("#catalog-row-#{ModelsLive.dom_key("openai/gpt-5-nano")}") |> render_click()
+
+      view
+      |> form("#model-form", %{
+        "model" => %{"name" => "gpt-5-nano-cat", "context_window" => "400000"}
+      })
+      |> render_submit()
+
+      saved = Providers.get_model_by_name("gpt-5-nano-cat")
+      assert saved.catalog_model_key == "openai/gpt-5-nano"
+      assert saved.lab_key == "openai"
+    end
+
+    test "an already-registered catalog entry is flagged in the picker", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      _ = create_catalog_model("openai/gpt-5-nano", name: "GPT-5 Nano")
+
+      _existing =
+        create_model(%{name: "ya-existe", catalog_model_key: "openai/gpt-5-nano"})
+
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#new-model-btn") |> render_click()
+
+      html = view |> element("#catalog-row-#{ModelsLive.dom_key("openai/gpt-5-nano")}") |> render()
+      assert html =~ "ya existe"
+    end
+
+  end
+
+
+  # -- The picker against the REAL, seeded mirror ----------------------------
+
+  # No setup clearing the mirror on purpose: these run against the vendored
+  # catalog (~3120 models) a fresh instance seeds. The isolated tests above prove
+  # the behaviour; this proves the SIZE does not break it.
+  describe "model catalog picker (real mirror)" do
+    # The boot task that seeds the mirror runs OUTSIDE the Ecto sandbox, so the
+    # test database may hold nothing. Seed it here, from the vendored snapshot:
+    # that is what a fresh instance would have.
+    setup do
+      Tokengate.Providers.CatalogSeed.seed_models_if_empty()
+      :ok
+    end
+
+    test "the picker renders and searches the mirror the database actually holds", %{conn: conn} do
+      # The isolated tests above prove the BEHAVIOUR; this one proves the SIZE
+      # does not break it. It deliberately does NOT clear the mirror: it runs
+      # against the real vendored catalog (~3120 models) that a fresh instance
+      # seeds, which is the case a hand-made fixture cannot catch.
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#new-model-btn") |> render_click()
+
+      # The modal opens with the whole catalog loaded in memory.
+      assert has_element?(view, "#catalog-picker")
+      assert has_element?(view, "#catalog-search")
+
+      # The first page is filled from the real mirror (whatever its size).
+      assert has_element?(view, "#catalog-results")
+      assert render(view) =~ "catalog-row-"
+
+      # A search over thousands of rows stays a render, not a crash.
+      view |> element("#catalog-search") |> render_change(%{"q" => "gpt-5-nano"})
+
+      assert has_element?(view, "#catalog-results")
+      html = render(view)
+      assert html =~ "Mostrando"
+
+      # And a term nobody publishes answers with the empty state.
+      view |> element("#catalog-search") |> render_change(%{"q" => "zzz-no-existe-zzz"})
+      assert has_element?(view, "#catalog-empty")
+    end
+  end
+  # -- Provider + API key in one modal ---------------------------------------
+
+  describe "provider then API key" do
+    # The picker reads the mirror it finds in the database. The boot seed fills
+    # it with the whole vendored catalog (~3120 rows), which would push these
+    # fixtures past the picker's first page: isolate them.
+    setup do
+      Repo.delete_all(Tokengate.Providers.CatalogModelOffer)
+      Repo.delete_all(Tokengate.Providers.CatalogModel)
+      :ok
+    end
+
+    test "the provider picker lists only what serves the model, cheapest first", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      cheap = create_keyed_provider("cheap-cloud", %{name: "Cheap Cloud"})
+      pricey = create_keyed_provider("pricey-cloud", %{name: "Pricey Cloud"})
+      _other = create_keyed_provider("unrelated", %{name: "Unrelated"})
+
+      _ = create_catalog_model("openai/gpt-5-nano", name: "GPT-5 Nano")
+      _ = create_offer("pricey-cloud", "openai/gpt-5-nano", cost_input: Decimal.new("9.0"))
+      _ = create_offer("cheap-cloud", "openai/gpt-5-nano", cost_input: Decimal.new("0.5"))
+
+      model_record =
+        create_model(%{name: "nano", catalog_model_key: "openai/gpt-5-nano"})
+
+      assert cheap.id && pricey.id
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#new-ap-#{model_record.id}") |> render_click()
+
+      assert has_element?(view, "#provider-results")
+      assert has_element?(view, "#provider-row-cheap-cloud")
+      assert has_element?(view, "#provider-row-pricey-cloud")
+      # A provider with no offer for this model is not offered at all.
+      refute has_element?(view, "#provider-row-unrelated")
+
+      html = render(view)
+      assert order_before?(html, "cheap-cloud", "pricey-cloud")
+    end
+
+    test "picking a provider narrows the credentials and prefills the model id", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      provider = create_keyed_provider("alpha", %{name: "Alpha Cloud"})
+      other = create_keyed_provider("beta", %{name: "Beta Cloud"})
+
+      {:ok, alpha_cred} =
+        Providers.create_credential(%{
+          provider_id: provider.id,
+          name: "Alpha key",
+          api_key_encrypted: "sk-alpha-1234",
+          status: "active"
+        })
+
+      {:ok, _beta_cred} =
+        Providers.create_credential(%{
+          provider_id: other.id,
+          name: "Beta key",
+          api_key_encrypted: "sk-beta-1234",
+          status: "active"
+        })
+
+      _ = create_catalog_model("openai/gpt-5-nano")
+      _ = create_offer("alpha", "openai/gpt-5-nano", cost_input: Decimal.new("0.5"))
+
+      model_record = create_model(%{name: "nano2", catalog_model_key: "openai/gpt-5-nano"})
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#new-ap-#{model_record.id}") |> render_click()
+      view |> element("#provider-row-alpha") |> render_click()
+
+      assert has_element?(view, "#selected-provider")
+
+      # The credential select holds only THIS provider's keys, and the provider's
+      # own model id came from the offer.
+      html = render(view)
+      assert html =~ "Alpha key"
+      refute html =~ "Beta key"
+      assert html =~ "openai/gpt-5-nano"
+
+      # The one existing key is preselected: nothing to choose.
+      assert has_element?(
+               view,
+               "select[name='model_provider[credential_id]'] option[value='#{alpha_cred.id}'][selected]"
+             )
+    end
+
+    test "a provider with no key can get one without leaving the modal", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      provider = create_keyed_provider("alpha", %{name: "Alpha Cloud"})
+      _ = create_catalog_model("openai/gpt-5-nano")
+      _ = create_offer("alpha", "openai/gpt-5-nano")
+      model_record = create_model(%{name: "nano3", catalog_model_key: "openai/gpt-5-nano"})
+
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#new-ap-#{model_record.id}") |> render_click()
+      view |> element("#provider-row-alpha") |> render_click()
+
+      assert has_element?(view, "#no-credentials-hint")
+
+      view |> element("#new-credential-inline") |> render_click()
+      assert has_element?(view, "#inline-credential-form")
+      assert has_element?(view, "#inline-credential")
+
+      view
+      |> form("#inline-credential", %{
+        "credential" => %{
+          "name" => "Primera key",
+          "api_key_encrypted" => "sk-brand-new-0001"
+        }
+      })
+      |> render_submit()
+
+      # Created, and left selected: the model is one click from routable.
+      [credential] = Providers.list_credentials_for_provider(provider.id)
+      assert credential.name == "Primera key"
+      refute has_element?(view, "#no-credentials-hint")
+
+      assert has_element?(
+               view,
+               "select[name='model_provider[credential_id]'] option[value='#{credential.id}'][selected]"
+             )
+    end
+
+    test "the whole flow creates a routable model_provider", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      provider = create_keyed_provider("alpha", %{name: "Alpha Cloud"})
+      _ = create_catalog_model("openai/gpt-5-nano")
+      _ = create_offer("alpha", "openai/gpt-5-nano", cost_input: Decimal.new("0.5"))
+
+      model_record = create_model(%{name: "nano4", catalog_model_key: "openai/gpt-5-nano"})
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#new-ap-#{model_record.id}") |> render_click()
+      view |> element("#provider-row-alpha") |> render_click()
+      view |> element("#new-credential-inline") |> render_click()
+
+      view
+      |> form("#inline-credential", %{
+        "credential" => %{"name" => "Prod", "api_key_encrypted" => "sk-prod-9999"}
+      })
+      |> render_submit()
+
+      view
+      |> form("#model-provider-form", %{
+        "model_provider" => %{"provider_model" => "openai/gpt-5-nano", "enabled" => "true"}
+      })
+      |> render_submit()
+
+      [mp] = Providers.list_model_providers(model_record.id)
+      assert mp.provider_model == "openai/gpt-5-nano"
+      assert mp.credential.provider_id == provider.id
+      assert mp.enabled == true
+    end
+
+    test "a custom model keeps every active provider to choose from", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      _ = create_keyed_provider("alpha", %{name: "Alpha Cloud"})
+      _ = create_keyed_provider("beta", %{name: "Beta Cloud"})
+
+      # No catalog link: nothing to narrow by, so the whole active list is
+      # offered. The search box is how the operator reaches the one they want.
+      model_record = create_model(%{name: "by-hand"})
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#new-ap-#{model_record.id}") |> render_click()
+
+      assert has_element?(view, "#provider-search")
+
+      view |> element("#provider-search") |> render_change(%{"q" => "Alpha"})
+      assert has_element?(view, "#provider-row-alpha")
+
+      view |> element("#provider-search") |> render_change(%{"q" => "Beta"})
+      assert has_element?(view, "#provider-row-beta")
     end
   end
 end

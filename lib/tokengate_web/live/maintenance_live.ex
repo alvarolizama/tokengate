@@ -60,6 +60,10 @@ defmodule TokengateWeb.MaintenanceLive do
     |> assign(:catalog_refreshing, Providers.catalog_refresh_in_flight?())
     |> assign(:catalog_active_count, Providers.count_catalog_providers("active"))
     |> assign(:catalog_stale_count, Providers.count_catalog_providers("stale"))
+    |> assign(:lab_active_count, Providers.count_labs("active"))
+    |> assign(:model_active_count, Providers.count_catalog_models("active"))
+    |> assign(:model_stale_count, Providers.count_catalog_models("stale"))
+    |> assign(:offer_count, Providers.count_catalog_offers())
   end
 
   defp fmt_dt(%DateTime{} = dt), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M UTC")
@@ -430,11 +434,11 @@ defmodule TokengateWeb.MaintenanceLive do
                  is deleted, so it belongs in the caution zone. --%>
             <div class="flex items-start justify-between gap-4" id="catalog-refresh-card">
               <div>
-                <h3 class="font-semibold text-base-content">Catálogo de proveedores (models.dev)</h3>
+                <h3 class="font-semibold text-base-content">Catálogo de models.dev</h3>
                 <p class="text-sm text-base-content/60">
-                  Vuelve a bajar el catálogo de proveedores y actualiza nombre, base URL, docs y logo
-                  de los builtins. No toca credenciales, modelos, routing ni proveedores custom, y no
-                  borra nada: lo que ya no está upstream se marca como obsoleto.
+                  Vuelve a bajar el catálogo (proveedores, labs y modelos) y actualiza nombre, base URL,
+                  docs y logo de los builtins. No toca credenciales, modelos propios, routing ni
+                  proveedores custom, y no borra nada: lo que ya no está upstream se marca como obsoleto.
                   <span :if={@catalog_state && @catalog_state.synced_at}>
                     Última actualización:
                     <span class="font-mono">{fmt_dt(@catalog_state.synced_at)}</span>
@@ -467,9 +471,14 @@ defmodule TokengateWeb.MaintenanceLive do
                 </ul>
 
                 <p class="text-xs text-base-content/40 mt-1">
-                  Proveedores en el catálogo: <span class="font-mono">{@catalog_active_count}</span>
+                  Proveedores: <span class="font-mono">{@catalog_active_count}</span>
                   activos, <span class="font-mono">{@catalog_stale_count}</span>
-                  obsoletos.
+                  obsoletos · Labs: <span class="font-mono">{@lab_active_count}</span>
+                  ·
+                  Modelos: <span class="font-mono">{@model_active_count}</span>
+                  (<span class="font-mono">{@model_stale_count}</span>
+                  obsoletos), <span class="font-mono">{@offer_count}</span>
+                  ofertas.
                 </p>
               </div>
 
