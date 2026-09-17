@@ -901,6 +901,41 @@ defmodule TokengateWeb.ProxyControllerTest do
     end)
   end
 
+  test "el texto del upstream viaja al cliente y a request_logs en un 400 sin fallback", %{
+    conn: conn
+  } do
+    %{token: token, model: model} = proxy_fixture()
+    make_first_provider_reject(model)
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+    # El mensaje genérico se conserva como PREFIJO (un cliente que matchea esa
+    # cadena sigue funcionando) y el detalle del vendor se anexa: sin él, el
+    # 400 es indiagnosticable desde el lado del cliente.
+    assert %{"error" => %{"code" => "upstream_client_error", "message" => message}} =
+             json_response(conn, 400)
+
+    assert message =~ "Provider rejected the request (400)"
+    assert message =~ "Invalid parameter: unsupported field"
+
+    Oban.drain_queue(queue: :logs)
+
+    log =
+      Repo.one(
+        from l in RequestLog,
+          where: l.model_id == ^model.id and l.status_code == 400,
+          order_by: [desc: l.inserted_at],
+          limit: 1
+      )
+
+    assert log, "no se escribió la fila 400"
+    assert log.error_reason == "bad_request"
+    assert log.error_message == "Invalid parameter: unsupported field"
+  end
+
   ## Timeout retry policy ######################################################
 
   # Adds a second, healthy provider+credential at lower priority so the

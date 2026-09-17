@@ -20,7 +20,8 @@ defmodule Tokengate.Proxy.PromptOptimizer do
       `thinking` block) from historical `assistant` messages. Reasoning is
       an output artifact: re-sending it in the conversation history burns
       input tokens that the model recomputes anyway, and it breaks prefix
-      stability when clients truncate it differently each turn.
+      stability when clients truncate it differently each turn. Assistant
+      turns that carry `tool_calls` are the exception — see below.
 
   Both functions return a brand-new list; the input is never mutated.
   """
@@ -97,16 +98,41 @@ defmodule Tokengate.Proxy.PromptOptimizer do
   client intentionally included it) follows the same rule — reasoning is
   never a useful prefix. The LAST assistant message is treated identically:
   providers recompute reasoning server-side regardless.
+
+  **Exception: assistant messages that carry `tool_calls` are passed through
+  untouched.** A thinking-mode backend whose client is expected to continue
+  the tool loop requires the reasoning of the tool-call turn back in the
+  history, and rejects the whole request (400) when it is missing — the
+  saving of one field is not worth a dead request:
+
+      {"error": {"message": "The `reasoning_content` in the thinking mode
+       must be passed back to the API."}}
+
+  Anthropic's extended-thinking API states the same requirement for its
+  `thinking` blocks around `tool_use`. Turns WITHOUT tool calls are still
+  stripped: there the reasoning is pure output artifact.
   """
   @spec strip_reasoning([map()]) :: [map()]
   def strip_reasoning(messages) when is_list(messages) do
     Enum.map(messages, fn
-      %{"role" => "assistant"} = msg -> strip_reasoning_fields(msg)
-      msg -> msg
+      %{"role" => "assistant"} = msg ->
+        if tool_call_turn?(msg), do: msg, else: strip_reasoning_fields(msg)
+
+      msg ->
+        msg
     end)
   end
 
   def strip_reasoning(_), do: []
+
+  # A turn that asked for tools: its reasoning is part of the turn's
+  # contract with a thinking-mode upstream, not a disposable artifact.
+  defp tool_call_turn?(message) do
+    case Map.get(message, "tool_calls") do
+      [_ | _] -> true
+      _ -> false
+    end
+  end
 
   defp strip_reasoning_fields(message) do
     message

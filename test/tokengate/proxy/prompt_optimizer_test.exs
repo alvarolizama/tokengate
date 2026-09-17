@@ -514,6 +514,98 @@ defmodule Tokengate.Proxy.PromptOptimizerTest do
       assert PromptOptimizer.strip_reasoning(messages) == messages
     end
 
+    # Regression: a thinking-mode upstream (Surplus Intelligence serving
+    # `deepseek-v4.1-flash`) demands the tool-call turn's reasoning back and
+    # rejects the whole request with 400 when it is gone:
+    #   "The `reasoning_content` in the thinking mode must be passed back to
+    #    the API."
+    # Verified against the live upstream: the same body is 200 with the
+    # field and 400 without it.
+    test "keeps reasoning artifacts on an assistant turn that carries tool_calls" do
+      tool_turn = %{
+        "role" => "assistant",
+        "content" => "",
+        "reasoning_content" => "debo llamar la herramienta",
+        "thinking" => %{"type" => "enabled"},
+        "reasoning" => %{"effort" => "high"},
+        "tool_calls" => [
+          %{
+            "id" => "call_00_1",
+            "type" => "function",
+            "function" => %{"name" => "terminal", "arguments" => "{}"}
+          }
+        ]
+      }
+
+      assert PromptOptimizer.strip_reasoning([tool_turn]) == [tool_turn]
+    end
+
+    test "keeps the tool-call turn's reasoning and still strips plain assistant turns" do
+      tool_turn = %{
+        "role" => "assistant",
+        "content" => "",
+        "reasoning_content" => "pienso antes de la herramienta",
+        "tool_calls" => [
+          %{
+            "id" => "call_00_1",
+            "type" => "function",
+            "function" => %{"name" => "terminal", "arguments" => "{}"}
+          }
+        ]
+      }
+
+      messages = [
+        %{"role" => "system", "content" => "sys"},
+        %{"role" => "user", "content" => "corre el test"},
+        tool_turn,
+        %{"role" => "tool", "tool_call_id" => "call_00_1", "content" => "ok"},
+        %{
+          "role" => "assistant",
+          "content" => "respuesta",
+          "reasoning_content" => "esto ya es artefacto de salida"
+        },
+        %{"role" => "user", "content" => "gracias"}
+      ]
+
+      assert PromptOptimizer.strip_reasoning(messages) == [
+               %{"role" => "system", "content" => "sys"},
+               %{"role" => "user", "content" => "corre el test"},
+               tool_turn,
+               %{"role" => "tool", "tool_call_id" => "call_00_1", "content" => "ok"},
+               %{"role" => "assistant", "content" => "respuesta"},
+               %{"role" => "user", "content" => "gracias"}
+             ]
+    end
+
+    test "an empty or non-list tool_calls value is not a tool-call turn" do
+      messages = [
+        %{
+          "role" => "assistant",
+          "content" => "x",
+          "tool_calls" => [],
+          "reasoning_content" => "y"
+        },
+        %{
+          "role" => "assistant",
+          "content" => "x",
+          "tool_calls" => nil,
+          "reasoning_content" => "y"
+        },
+        %{
+          "role" => "assistant",
+          "content" => "x",
+          "tool_calls" => "nope",
+          "reasoning_content" => "y"
+        }
+      ]
+
+      assert PromptOptimizer.strip_reasoning(messages) == [
+               %{"role" => "assistant", "content" => "x", "tool_calls" => []},
+               %{"role" => "assistant", "content" => "x", "tool_calls" => nil},
+               %{"role" => "assistant", "content" => "x", "tool_calls" => "nope"}
+             ]
+    end
+
     test "empty list and non-list inputs" do
       assert PromptOptimizer.strip_reasoning([]) == []
       assert PromptOptimizer.strip_reasoning(nil) == []

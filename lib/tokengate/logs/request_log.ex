@@ -111,6 +111,16 @@ defmodule Tokengate.Logs.RequestLog do
 
   @required ~w(model_requested inserted_at subject_type)a
 
+  # `request_logs.error_message` es `varchar(255)` pero el adapter recorta el
+  # mensaje del vendor a 500: cuando el vendor devuelve un texto largo (Surplus
+  # envuelve SU envelope de error en `message`, ~380 chars), el INSERT fallaba
+  # entero con Postgrex 22001 (`string_data_right_truncation`) y la fila se
+  # perdía entre reintentos de Oban — el rechazo desaparecía del dashboard y de
+  # la página de Logs. Se recorta en el borde de datos (no en la respuesta al
+  # cliente: ahí el detalle largo sirve para diagnosticar) para que TODOS los
+  # caminos — éxito con fallback, error final, gate — queden cubiertos igual.
+  @error_message_max_bytes 255
+
   @doc false
   def changeset(request_log, attrs) do
     request_log
@@ -121,9 +131,43 @@ defmodule Tokengate.Logs.RequestLog do
     # `provider_cost_usd`. The keys are applied in list order, so the last
     # non-nil value wins; explicit `provider_cost_usd` always takes precedence.
     |> merge_legacy_cost_keys(attrs)
+    |> clamp_error_message()
     |> validate_required(@required)
     |> validate_inclusion(:subject_type, ["user", "service"])
     |> validate_subject_id()
+  end
+
+  defp clamp_error_message(changeset) do
+    update_change(changeset, :error_message, &clamp_bytes(&1, @error_message_max_bytes))
+  end
+
+  defp clamp_bytes(nil, _max), do: nil
+
+  defp clamp_bytes(message, max) when is_binary(message) do
+    if byte_size(message) <= max do
+      message
+    else
+      # El marcador de recorte "…" ocupa 3 bytes en UTF-8: se descuentan del
+      # presupuesto o el resultado vuelve a pasarse de la columna.
+      truncate_to_bytes(message, max - byte_size("…")) <> "…"
+    end
+  end
+
+  # Corta a `max` bytes y retrocede hasta el último límite de carácter válido:
+  # `binary_part/3` a un offset crudo puede partir un multibyte y dejar UTF-8
+  # inválido, que Postgres rechazaría igual (ahora por encoding).
+  defp truncate_to_bytes(bin, max) do
+    bin
+    |> :binary.part(0, min(byte_size(bin), max))
+    |> trim_invalid_tail()
+  end
+
+  defp trim_invalid_tail(bin) do
+    if String.valid?(bin) do
+      bin
+    else
+      trim_invalid_tail(:binary.part(bin, 0, byte_size(bin) - 1))
+    end
   end
 
   # A log must reference its subject: `group_member_id` for users, `service_id`

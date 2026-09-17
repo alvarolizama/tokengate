@@ -692,4 +692,35 @@ defmodule Tokengate.LogsTest do
       assert Logs.realtime_summary(%{group_member_id: tm.id}, 900).request_count == 1
     end
   end
+
+  # `request_logs.error_message` es varchar(255) mientras el adapter recorta el
+  # mensaje del vendor a 500: sin recorte el INSERT falla entero (Postgrex 22001
+  # string_data_right_truncation) y la fila del rechazo se pierde.
+  describe "error_message clamp" do
+    test "un mensaje del vendor más largo que la columna se recorta y la fila se inserta" do
+      long = String.duplicate("x", 400)
+
+      {log, _tm} = log_fixture(%{error_message: long, status_code: 400})
+
+      assert log.id
+      assert log.error_message != long
+      assert byte_size(log.error_message) <= 255
+      assert String.ends_with?(log.error_message, "…")
+    end
+
+    test "el recorte no parte un carácter multibyte" do
+      long = String.duplicate("á", 300)
+
+      {log, _tm} = log_fixture(%{error_message: long, status_code: 400})
+
+      assert byte_size(log.error_message) <= 255
+      assert String.valid?(log.error_message)
+      assert String.ends_with?(log.error_message, "…")
+    end
+
+    test "un mensaje que cabe en la columna viaja intacto" do
+      {log, _tm} = log_fixture(%{error_message: "provider exploded", status_code: 500})
+      assert log.error_message == "provider exploded"
+    end
+  end
 end

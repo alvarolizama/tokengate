@@ -2103,10 +2103,18 @@ defmodule TokengateWeb.ProxyController do
 
     provider_status = provider_status_from_error(error)
 
+    # El texto del vendor (ya scrubbeado y truncado por el adapter) es la
+    # ÚNICA pista accionable de un rechazo upstream. Sin pasarlo a las dos
+    # salidas — la fila de `request_logs.error_message` y el body del
+    # cliente — el diagnóstico queda en "Provider rejected the request (400)"
+    # y no hay forma de saber QUÉ campo rechazó el upstream.
+    upstream_message = Keyword.get(opts, :error_message)
+
     enqueue_error_log(conn, route, member,
       client_status: client_status,
       provider_status: provider_status,
       error_reason: Keyword.get(opts, :error_reason, code),
+      error_message: upstream_message,
       latency_ms: Keyword.get(opts, :latency_ms, 0),
       streaming: conn.body_params["stream"] == true
     )
@@ -2124,7 +2132,7 @@ defmodule TokengateWeb.ProxyController do
       streaming: conn.body_params["stream"] == true
     })
 
-    render_proxy_error(conn, error)
+    render_proxy_error(conn, error, upstream_message)
   end
 
   # Gate-level errors (before routing succeeded): no provider was contacted,
@@ -2301,8 +2309,18 @@ defmodule TokengateWeb.ProxyController do
   defp breaker_reason(:client_error), do: :client_error
   defp breaker_reason(_), do: :server_error
 
-  defp render_proxy_error(conn, error) do
+  defp render_proxy_error(conn, error, upstream_message \\ nil) do
     {status, type, code, message} = error_details(error)
+
+    # El detalle del upstream se ANEXA al mensaje genérico (el prefijo se
+    # conserva: un cliente que matchea "Provider rejected the request (400)"
+    # sigue funcionando) porque el texto del vendor nombra el campo culpable
+    # y sin él el 400 es indiagnosticable desde el lado del cliente.
+    message =
+      case upstream_message do
+        detail when is_binary(detail) and detail != "" -> message <> ": " <> detail
+        _ -> message
+      end
 
     body = %{"error" => %{"message" => message, "type" => type, "code" => code}}
 
