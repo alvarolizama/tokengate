@@ -1,5 +1,28 @@
 # Paridad usuario ↔ servicio — plan
 
+> **SUPERSEDED por `docs/homologacion-perfiles.md`** (2026-09-16).
+>
+> Qué de este doc sigue vigente y qué ya no:
+>
+> - **P1 (plegar `extra_concurrency`/`extra_rpm`) — HECHO**:
+>   `20260917033703_fold_member_extras_into_user.exs`; `GroupMember` ya no tiene
+>   los campos. **Su §4.4 y §4.6 quedan obsoletos.**
+> - **P3 (read-side de crédito simétrico) — HECHO**: `Budgets.list_service_budgets/0`
+>   ya expone `has_credit?`, `credit_remaining_usd`, `remaining_topup_usd`.
+> - **P0 — resuelto** por P1 (eliminar, no devolver UI).
+> - **W4 / idea extra (`request_logs.user_id`) — HECHO**:
+>   `20260917033650_add_user_id_to_request_logs.exs`.
+> - **§8 (CASCADE de `group_member_id`) — sigue ABIERTO**. El plan nuevo lo
+>   recomienda resolver en la misma migración que el rename, para no pasar dos
+>   veces por la tabla más grande.
+> - **§7 (inventario de tablas, paginado, deriva columna por columna) — VIGENTE**
+>   y absorbido por el doc nuevo.
+> - Todo el vocabulario «grupo» de este doc **queda obsoleto** por D1:
+>   la entidad pasa a llamarse **Perfil de límites**.
+>
+> El doc nuevo es autocontenido; este se conserva por el inventario de §7 y el
+> análisis de §8.
+
 Objetivo: que **usuario** y **servicio** sean dos encarnaciones del mismo
 concepto (**sujeto que gasta**) y compartan estructura donde aplique:
 gestión de modelos, concurrencia, RPM, ilimitado, límite mensual, top-ups,
