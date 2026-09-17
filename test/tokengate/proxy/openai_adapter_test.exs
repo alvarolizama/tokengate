@@ -223,6 +223,34 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
       assert Jason.decode!(raw) == payload
     end
 
+    # Los SDK serializan como null explícito los knobs que no usan. Omitir el
+    # campo es válido; mandarlo en null es un 400 en un upstream estricto
+    # (Surplus Intelligence), así que el adapter los quita al codificar.
+    test "top-level nulls never reach the wire", %{provider: provider, credential: credential} do
+      payload = %{
+        "model" => "gpt-4o",
+        "messages" => [%{"role" => "user", "content" => "hola"}],
+        "max_tokens" => nil,
+        "temperature" => 0.7,
+        "stream" => nil,
+        "tools" => nil
+      }
+
+      assert {:ok, _body, _latency, _resp_headers} =
+               OpenAIAdapter.chat_completion(provider, credential, payload)
+
+      assert_receive {:captured, %{body: raw}}
+
+      decoded = Jason.decode!(raw)
+      refute Map.has_key?(decoded, "max_tokens")
+      refute Map.has_key?(decoded, "stream")
+      refute Map.has_key?(decoded, "tools")
+      # Lo que sí venía con valor viaja intacto.
+      assert decoded["temperature"] == 0.7
+      assert decoded["messages"] == payload["messages"]
+      refute raw =~ "null"
+    end
+
     test "429 classifies as :rate_limited", %{credential: credential} do
       assert {:error, :rate_limited, 429, _} =
                OpenAIAdapter.chat_completion(provider_to("/limited"), credential, %{})

@@ -1543,8 +1543,21 @@ defmodule TokengateWeb.ProxyController do
     end
   end
 
+  # `stream_options` is the gateway's: the plan needs real usage for cost
+  # accounting, so `include_usage` is forced on regardless of what the client
+  # sent. The client's value is merged, not replaced — but a client may send
+  # an explicit `null` (SDKs serialise unused knobs that way) and
+  # `Map.get(payload, "stream_options", %{})` would NOT fall back to the
+  # default, because the key exists with a nil value: `Map.put(nil, …)` then
+  # raised BadMapError and a streaming request died with a 500. A
+  # non-map value (a string, a list) is refused the same way.
   defp ensure_stream_options(payload) do
-    options = Map.get(payload, "stream_options", %{})
+    options =
+      case Map.get(payload, "stream_options") do
+        %{} = map -> map
+        _ -> %{}
+      end
+
     Map.put(payload, "stream_options", Map.put(options, "include_usage", true))
   end
 
@@ -1560,7 +1573,10 @@ defmodule TokengateWeb.ProxyController do
         payload
 
       guard_rails ->
-        messages = Map.get(payload, "messages", [])
+        # `payload["messages"] || []` — not `Map.get(…, [])`: an explicit
+        # `null` in the client body returns nil (the key exists), and
+        # `[msg | nil]` is an improper list that dies later in Jason.encode!.
+        messages = payload["messages"] || []
 
         case messages do
           [%{"role" => "system", "content" => content} | rest] ->

@@ -582,6 +582,43 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000007"))
   end
 
+  # Un SDK serializa como null explícito los knobs que no usa. Omitir el campo
+  # es válido aguas arriba; mandarlo en null no lo es (Surplus responde 400 y
+  # el cliente lo lee como error del gateway), así que el proxy los quita antes
+  # de codificar y el body llega limpio.
+  test "client-sent nulls are stripped before the body reaches the upstream", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture(%{credit_units: 100})
+
+    body =
+      chat_body(model.name)
+      |> Map.merge(%{
+        "max_tokens" => nil,
+        "temperature" => nil,
+        "top_p" => nil,
+        "stream" => nil,
+        "tools" => nil,
+        "stop" => nil
+      })
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", body)
+
+    assert json_response(conn, 200)
+
+    assert_receive {:provider_request, upstream_payload}
+
+    for knob <- ~w(max_tokens temperature top_p stream tools stop) do
+      refute Map.has_key?(upstream_payload, knob),
+             "el knob #{knob} en null llegó al upstream"
+    end
+
+    # El contenido del cliente viaja intacto.
+    assert upstream_payload["model"] =~ "gpt-4o-real"
+    assert upstream_payload["messages"] == body["messages"]
+  end
+
   test "402 when the user's credit is exhausted", %{conn: conn} do
     # A zero-credit group subscription: the member's only grant has no room, so
     # the next request is rejected before being dispatched.
@@ -1606,7 +1643,52 @@ defmodule TokengateWeb.ProxyControllerTest do
            ]
   end
 
+  # Misma familia de bug: `messages: null` explícito con un modelo que tiene
+  # guard_rails — `Map.get(payload, "messages", [])` devolvía nil y
+  # `[msg | nil]` es una improper list que muere después en Jason.encode!.
+  test "un messages en null no rompe el payload cuando el modelo tiene guard_rails", %{
+    conn: conn
+  } do
+    %{token: token, model: model} = proxy_fixture()
+
+    {:ok, _} = Providers.update_model(model, %{"guard_rails" => "sé breve"})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", %{"model" => model.name, "messages" => nil})
+
+    assert json_response(conn, 200)
+
+    assert_receive {:provider_request, provider_payload}
+
+    # El guard_rails entra como único mensaje, sin improper list.
+    assert provider_payload["messages"] == [%{"role" => "system", "content" => "sé breve"}]
+  end
+
   ## Streaming #################################################################
+
+  # Un `stream_options` en null explícito es un caso REAL de SDK (y el
+  # `Map.get(payload, "stream_options", %{})` de ensure_stream_options no cae al
+  # default: la clave existe con valor nil → `Map.put(nil, …)` reventaba).
+  test "stream: a null stream_options from the client does not crash the proxy", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture()
+
+    body = Map.merge(chat_body(model.name), %{"stream" => true, "stream_options" => nil})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", body)
+
+    assert conn.state == :chunked
+    assert response(conn, 200) =~ "[DONE]"
+
+    # El gateway sigue siendo el dueño del stream_options que necesita para
+    # contabilizar usage.
+    assert_receive {:provider_request, upstream_payload}
+    assert upstream_payload["stream_options"]["include_usage"] == true
+  end
 
   test "stream: SSE passthrough with usage cost injection and async log", %{conn: conn} do
     %{token: token, model: model, member: member} = proxy_fixture()

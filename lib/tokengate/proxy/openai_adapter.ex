@@ -9,11 +9,16 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   endpoint segment. The adapter is a thin transport layer — the request
   payload is encoded and forwarded **exactly
   as received**. No system prompts are injected, no messages are modified,
-  no fields are stripped or added. The only mutation the adapter performs
-  is enforcing `stream: true` on the streaming path, because that flag is
-  what activates the SSE transport — the caller already sets it, and the
-  adapter only ensures it is present so a misconfigured caller still gets a
-  stream rather than a buffered body.
+  no fields are stripped or added. Two mutations are sanctioned:
+
+    * enforcing `stream: true` on the streaming path, because that flag is
+      what activates the SSE transport — the caller already sets it, and the
+      adapter only ensures it is present so a misconfigured caller still gets
+      a stream rather than a buffered body;
+    * `Tokengate.Proxy.RequestPayload.strip_nulls/1`, which drops top-level
+      keys whose value is an explicit `null`: SDKs serialise unused knobs as
+      null and a strict upstream (Surplus Intelligence) answers 400 for them.
+      Nested nulls are left alone — `messages` uses them meaningfully.
 
   Embeddings follow the passthrough rule: the payload is
   forwarded exactly as received and the upstream response is returned
@@ -28,6 +33,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   @behaviour Tokengate.Proxy.ProviderAdapter
   alias Tokengate.Proxy.ProviderAdapter
   alias Tokengate.Proxy.RawResponse
+  alias Tokengate.Proxy.RequestPayload
 
   @default_receive_timeout 180_000
 
@@ -130,7 +136,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
     api_key = Map.get(credential, :api_key_encrypted) || Map.get(credential, "api_key_encrypted")
     receive_timeout = Keyword.get(opts, :receive_timeout, @default_receive_timeout)
     forwarded_headers = Keyword.get(opts, :forwarded_headers, %{})
-    body = Jason.encode!(payload)
+    body = encode(payload)
 
     request =
       Finch.build(:post, url, headers(api_key, forwarded_headers), body)
@@ -203,8 +209,18 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
         {raw, Keyword.get(opts, :content_type) || "application/octet-stream"}
 
       _ ->
-        {Jason.encode!(payload), "application/json"}
+        {encode(payload), "application/json"}
     end
+  end
+
+  # Encodes the outbound payload, dropping top-level `null`s first: SDKs
+  # serialise the knobs they do not use as null and strict upstreams 400 on
+  # them (see `Tokengate.Proxy.RequestPayload`). A raw body never reaches
+  # here — those bytes go upstream untouched.
+  defp encode(payload) do
+    payload
+    |> RequestPayload.strip_nulls()
+    |> Jason.encode!()
   end
 
   # 2xx response of a service: JSON decodes to a map as always; anything else
@@ -240,7 +256,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
     # Enforce stream: true. The caller is expected to set it (passthrough),
     # but a missing flag would silently produce a buffered body instead of an
     # SSE stream, so we make sure it is present.
-    stream_payload = Map.put(payload, "stream", true)
+    stream_payload = Map.put(payload, "stream", true) |> RequestPayload.strip_nulls()
     body = Jason.encode!(stream_payload)
 
     request =
