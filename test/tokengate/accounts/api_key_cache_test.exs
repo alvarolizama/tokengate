@@ -23,7 +23,7 @@ defmodule Tokengate.Accounts.ApiKeyCacheTest do
 
     {:ok, _api_key, token} = Accounts.replace_api_key(member)
 
-    %{member: member, token: token, group: group}
+    %{member: member, token: token, group: group, user: user}
   end
 
   setup do
@@ -32,13 +32,16 @@ defmodule Tokengate.Accounts.ApiKeyCacheTest do
   end
 
   test "resolve_auth_by_api_key/1 returns member + limits for a valid token" do
-    %{member: member, token: token} = member_with_key()
+    %{member: member, token: token, user: user} = member_with_key()
 
     entry = Accounts.resolve_auth_by_api_key(token)
 
     assert %{member: resolved, limits: limits} = entry
     assert resolved.id == member.id
     assert resolved.group.id == member.group_id
+    # El entry lleva el dueño precargado: la regla `propio || contenedor ||
+    # default` necesita las dos puntas dentro de lo cacheado.
+    assert resolved.user.id == user.id
     assert resolved.api_key.key_prefix == String.slice(token, 0, 8)
     assert limits.rpm_limit == 120
     assert limits.concurrency_limit == 10
@@ -108,6 +111,41 @@ defmodule Tokengate.Accounts.ApiKeyCacheTest do
 
     assert %{limits: %{rpm_limit: 999}} = Accounts.resolve_auth_by_api_key(token)
     assert member.group_id == group.id
+  end
+
+  # Gemelo del de arriba, pero editando al DUEÑO: los defaults propios del
+  # usuario son el primer eslabón de `effective_limits/1`, así que editarlos
+  # tiene que tumbar el entry cacheado igual que editar el grupo.
+  test "editing the USER drops the cached entry and the next resolve sees the new limits" do
+    %{token: token, user: user} = member_with_key()
+
+    assert %{limits: %{rpm_limit: 120, concurrency_limit: 10}} =
+             Accounts.resolve_auth_by_api_key(token)
+
+    key_hash = Accounts.hash_api_key(token)
+    assert [{^key_hash, _entry, _exp}] = :ets.lookup(ApiKeyCache.table(), key_hash)
+
+    {:ok, _user} =
+      Accounts.admin_update_user(user, %{
+        "default_rpm_limit" => 999,
+        "default_concurrency_limit" => 42
+      })
+
+    # La entrada se fue del cache, no se sirvió la vieja.
+    assert :ets.lookup(ApiKeyCache.table(), key_hash) == []
+
+    assert %{limits: %{rpm_limit: 999, concurrency_limit: 42}} =
+             Accounts.resolve_auth_by_api_key(token)
+  end
+
+  test "update_user/2 also drops the cached entry" do
+    %{token: token, user: user} = member_with_key()
+
+    assert %{limits: %{rpm_limit: 120}} = Accounts.resolve_auth_by_api_key(token)
+
+    {:ok, _user} = Accounts.update_user(user, %{"default_rpm_limit" => 77})
+
+    assert %{limits: %{rpm_limit: 77}} = Accounts.resolve_auth_by_api_key(token)
   end
 
   test "degrades to a direct DB lookup when the ETS table is gone" do
