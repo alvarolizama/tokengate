@@ -82,8 +82,9 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       {:ok, _view, html} = live(conn, ~p"/stats/services/#{service.id}")
 
       assert html =~ service.name
-      # El modelo nuevo declara el límite del servicio (aquí: sin límite).
-      assert html =~ "Sin límite"
+      # El modelo declara el presupuesto del servicio (aquí: sin presupuesto
+      # mensual, solo podría gastar contra top-ups).
+      assert html =~ "Sin presupuesto"
     end
 
     test "admin sees the service's logs", %{conn: conn} do

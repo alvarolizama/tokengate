@@ -221,7 +221,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
   defp limit_label(%{monthly_spend_limit_usd: %Decimal{} = limit}),
     do: "Límite $#{Decimal.to_string(limit)}/mes"
 
-  defp limit_label(_service), do: "Sin límite (solo top-ups)"
+  defp limit_label(_service), do: gettext("No budget") <> " (solo top-ups)"
 
   ## Render --------------------------------------------------------------
 

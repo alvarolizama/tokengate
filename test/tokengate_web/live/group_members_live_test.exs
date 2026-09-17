@@ -65,7 +65,7 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     }
   end
 
-  defp group_url(group), do: "/access/groups/#{group.id}/members"
+  defp group_url(group), do: "/budget/months/#{group.id}/members"
 
   # --------------------------------------------------------------------------
   # Access control
@@ -164,7 +164,7 @@ defmodule TokengateWeb.GroupMembersLiveTest do
       |> form("#add-member-form", %{"add_member[email]" => taken.email})
       |> render_submit()
 
-    assert html =~ "ya pertenece a otra sub mensual"
+    assert html =~ "ya pertenece a otro presupuesto mensual"
     refute Repo.get_by(Tokengate.Accounts.GroupMember, user_id: taken.id, group_id: group.id)
   end
 

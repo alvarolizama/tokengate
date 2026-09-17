@@ -343,7 +343,7 @@ defmodule TokengateWeb.ServiceStatsLive do
               {@service.name}
             </h1>
             <p class="text-sm text-base-content/70">
-              Sub: {limit_label(@service)}
+              Presupuesto: {limit_label(@service)}
             </p>
           </div>
           <div class="flex-1"></div>
@@ -702,12 +702,12 @@ defmodule TokengateWeb.ServiceStatsLive do
 
   defp safe_sub_count(_, suffix), do: "0" <> suffix
 
-  # Etiqueta del gasto del servicio: ilimitado, su límite mensual, o sin límite
-  # (solo top-ups) — el modelo nuevo no tiene suscripciones.
+  # Etiqueta del gasto del servicio: ilimitado, su techo mensual, o sin
+  # presupuesto (solo top-ups) — el modelo no tiene suscripciones.
   defp limit_label(%{unlimited_spend: true}), do: "Ilimitado"
 
   defp limit_label(%{monthly_spend_limit_usd: %Decimal{} = limit}),
     do: "Límite $#{Decimal.to_string(limit)}/mes"
 
-  defp limit_label(_), do: "Sin límite"
+  defp limit_label(_), do: gettext("No budget")
 end

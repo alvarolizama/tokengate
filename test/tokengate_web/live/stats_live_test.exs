@@ -436,7 +436,7 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#group-list-search")
     assert has_element?(view, "#bd-group-#{group.id}")
     # El listado tiene UNA sola tabla: el card de tiers de uso por miembro salió
-    # de la pestaña (el mismo agregado sigue en /access/groups/:id/members).
+    # de la pestaña (el mismo agregado sigue en /budget/months/:id/members).
     refute has_element?(view, "#member-usage-tiers")
   end
 

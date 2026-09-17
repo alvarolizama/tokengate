@@ -229,46 +229,72 @@ defmodule TokengateWeb.UsersLive do
 
   defp sort_value(user, :inserted_at, _ctx), do: user.inserted_at
 
-  # Límite efectivo + gasto del mes por usuario, en lote (una query por sujeto).
-  # El usuario hereda el límite de su grupo si no define el suyo.
+  # Presupuesto + top-ups por usuario, en lote (una query por tipo de sujeto).
+  # El usuario hereda el techo del presupuesto mensual al que pertenece si no
+  # define el suyo; sin presupuesto mensual el sujeto es él mismo y su único
+  # camino de gasto son sus top-ups.
   defp load_users_credit(users) do
-    users
-    |> Enum.map(& &1.id)
-    |> Tokengate.Accounts.list_users_with_memberships()
-    |> Map.new(fn {user_id, memberships} ->
-      case memberships do
-        [] ->
-          {user_id,
-           %{
-             limit_usd: nil,
-             unlimited?: false,
-             spend_usd: Decimal.new(0),
-             limit_spend_usd: Decimal.new(0),
-             remaining_limit_usd: nil
-           }}
+    memberships = Tokengate.Accounts.list_users_with_memberships(Enum.map(users, & &1.id))
 
-        memberships ->
-          summaries = Credits.summaries(memberships)
-          member_ids = Enum.map(memberships, & &1.id)
+    summaries =
+      memberships
+      |> Enum.flat_map(fn {_user_id, ms} -> ms end)
+      |> Credits.summaries()
 
-          # El primer resumen con camino de gasto gana (normalmente hay uno:
-          # un usuario pertenece a un solo grupo).
-          case Enum.find(member_ids, &Map.has_key?(summaries, &1)) do
-            nil ->
-              {user_id,
-               %{
-                 limit_usd: nil,
-                 unlimited?: false,
-                 spend_usd: Decimal.new(0),
-                 limit_spend_usd: Decimal.new(0),
-                 remaining_limit_usd: nil
-               }}
+    # Sin presupuesto mensual el único camino es el top-up, así que hay que
+    # leerlo (en lote, no por usuario): sin esto la columna diría «sin
+    # presupuesto» a quien sí tiene crédito para gastar.
+    own_subjects =
+      for user <- users,
+          Map.get(memberships, user.id, []) == [],
+          do: {:user, user.id}
 
-            id ->
-              {user_id, Map.fetch!(summaries, id)}
-          end
+    own_topups = Credits.Topups.summaries(own_subjects)
+
+    Map.new(users, fn user ->
+      case Map.get(memberships, user.id, []) do
+        [] -> {user.id, own_credit(user, Map.get(own_topups, {:user, user.id}))}
+        memberships -> {user.id, membership_credit(memberships, summaries)}
       end
     end)
+  end
+
+  # Usuario sin presupuesto mensual: su techo es el propio (habitualmente
+  # ninguno) y solo los top-ups le dan camino de gasto.
+  defp own_credit(user, topup) do
+    limit = Credits.user_limit(user, nil)
+
+    %{
+      limit_usd: limit.limit_usd,
+      unlimited?: limit.unlimited?,
+      spend_usd: Decimal.new(0),
+      limit_spend_usd: Decimal.new(0),
+      remaining_limit_usd: nil,
+      topups: (topup && topup.topups) || [],
+      remaining_topup_usd: (topup && topup.remaining_topup_usd) || Decimal.new(0)
+    }
+  end
+
+  # Usuario con presupuesto mensual: el resumen del motor (límite efectivo +
+  # top-ups vigentes) de la membresía.
+  defp membership_credit(memberships, summaries) do
+    # El primer resumen con camino de gasto gana (normalmente hay uno: un
+    # usuario pertenece a un solo presupuesto mensual).
+    case Enum.find(Enum.map(memberships, & &1.id), &Map.has_key?(summaries, &1)) do
+      nil ->
+        %{
+          limit_usd: nil,
+          unlimited?: false,
+          spend_usd: Decimal.new(0),
+          limit_spend_usd: Decimal.new(0),
+          remaining_limit_usd: nil,
+          topups: [],
+          remaining_topup_usd: Decimal.new(0)
+        }
+
+      id ->
+        Map.fetch!(summaries, id)
+    end
   end
 
   # nils always sort last, in both directions (users without spend/groups data).
@@ -761,7 +787,7 @@ defmodule TokengateWeb.UsersLive do
           "global_role" => user.global_role
         })
 
-        # Un usuario pertenece a UNA sola sub mensual: la sub es el sujeto que
+        # Un usuario pertenece a UN solo presupuesto mensual: es el sujeto que
         # le aporta su límite mensual heredado. Se crea la membresía + una key
         # inicial (la key cuelga del usuario: N keys con label).
         result =
@@ -782,7 +808,7 @@ defmodule TokengateWeb.UsersLive do
              socket
              |> put_flash(
                :warning,
-               "Usuario creado pero la sub no se pudo asignar: #{format_errors(changeset)}"
+               "Usuario creado pero el presupuesto no se pudo asignar: #{format_errors(changeset)}"
              )
              |> assign(:form, nil)
              |> assign(:editing_user_id, nil)
@@ -826,8 +852,8 @@ defmodule TokengateWeb.UsersLive do
           }
         )
 
-        # La sub (antes grupo) se mueve, no se acumula: un usuario tiene una
-        # sola sub. `sync_user_sub/2` es el único punto que toca membresías.
+        # El presupuesto mensual (antes grupo/sub) se mueve, no se acumula: un
+        # usuario tiene uno solo. `sync_user_sub/2` es el único punto que toca membresías.
         case Accounts.sync_user_sub(user_id, sub_id) do
           :ok ->
             {:noreply,
@@ -842,7 +868,10 @@ defmodule TokengateWeb.UsersLive do
           {:error, reason} ->
             {:noreply,
              socket
-             |> put_flash(:error, "Usuario actualizado, pero la sub no se pudo mover: #{reason}")
+             |> put_flash(
+               :error,
+               "Usuario actualizado, pero el presupuesto no se pudo mover: #{reason}"
+             )
              |> assign(:form, nil)
              |> assign(:editing_user_id, nil)
              |> assign(:editing_user_sub_id, nil)
@@ -855,7 +884,7 @@ defmodule TokengateWeb.UsersLive do
     end
   end
 
-  # Sub mensual vigente del usuario (una sola por la invariante de la DB).
+  # Presupuesto mensual vigente del usuario (uno solo por la invariante de la DB).
   defp current_sub_id(user_id) do
     case Accounts.list_group_members_for_user(user_id) do
       [member | _] -> member.group_id
@@ -982,10 +1011,10 @@ defmodule TokengateWeb.UsersLive do
             <.input
               field={@form[:sub_id]}
               type="select"
-              label="Sub mensual"
+              label={gettext("Monthly budget")}
               options={Enum.map(@all_groups, fn t -> {t.name, t.id} end)}
-              prompt="Sin sub"
-              hint="Un usuario pertenece a UNA sola sub mensual: su límite de gasto heredado sale de aquí."
+              prompt={gettext("No monthly budget")}
+              hint="Un usuario pertenece a UN solo presupuesto mensual: su techo de gasto heredado sale de aquí."
             />
             <div class="flex gap-2 mt-4 justify-end">
               <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
@@ -1022,7 +1051,7 @@ defmodule TokengateWeb.UsersLive do
                 field={@form[:default_concurrency_limit]}
                 type="number"
                 label="Concurrencia"
-                hint="Límite absoluto; vacío = hereda del grupo."
+                hint="Límite absoluto; vacío = hereda del presupuesto mensual."
               />
               <.input
                 field={@form[:default_rpm_limit]}
@@ -1031,17 +1060,18 @@ defmodule TokengateWeb.UsersLive do
                 hint="Límite absoluto; vacío = hereda del grupo."
               />
             </div>
-            <%!-- Select único: mover de sub reemplaza la anterior (la sub vieja
-                 pierde key y logs del usuario en cascada). El valor vigente sale
-                 de `editing_user_sub_id`: el changeset no trae params de membresía. --%>
+            <%!-- Select único: mover de presupuesto mensual reemplaza el anterior
+                 (el viejo pierde key y logs del usuario en cascada). El valor
+                 vigente sale de `editing_user_sub_id`: el changeset no trae
+                 params de membresía. --%>
             <.input
               field={@form[:sub_id]}
               type="select"
-              label="Sub mensual"
+              label={gettext("Monthly budget")}
               options={Enum.map(@all_groups, fn t -> {t.name, t.id} end)}
-              prompt="Sin sub"
+              prompt={gettext("No monthly budget")}
               value={@editing_user_sub_id}
-              hint="Un usuario pertenece a UNA sola sub mensual. Cambiarla reemplaza la anterior."
+              hint="Un usuario pertenece a UN solo presupuesto mensual. Cambiarlo reemplaza el anterior."
             />
             <div class="flex gap-2 mt-4 justify-end">
               <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
@@ -1424,6 +1454,15 @@ defmodule TokengateWeb.UsersLive do
 
   defp credit_pct(_), do: nil
 
+  # ¿Trae crédito de top-up vigente? Sin presupuesto mensual es el único camino
+  # de gasto del sujeto.
+  defp has_topup_credit?(credit) do
+    case Map.get(credit, :remaining_topup_usd) do
+      %Decimal{} = remaining -> Decimal.compare(remaining, 0) == :gt
+      _ -> false
+    end
+  end
+
   # Formatea micro-USD como USD.
   # El template formatea en micro-USD; los montos nuevos son Decimal USD.
   defp decimal_to_micro(nil), do: 0
@@ -1504,13 +1543,26 @@ defmodule TokengateWeb.UsersLive do
           >
             Ilimitado
           </span>
-        <% %{limit_usd: nil} -> %>
-          <span
-            class="badge badge-sm badge-warning badge-outline"
-            title="Sin límite propio ni del grupo: solo top-ups"
-          >
-            Sin límite
-          </span>
+        <% %{limit_usd: nil} = credit -> %>
+          <%!-- Sin presupuesto mensual: solo hay camino de gasto si trae
+               top-ups vigentes. Sin ellos el proxy responde 402, así que el
+               estado real es «sin presupuesto», no «sin límite» (que se leía
+               como si no tuviera tope). --%>
+          <%= if has_topup_credit?(credit) do %>
+            <span
+              class="badge badge-sm badge-info badge-outline"
+              title="Sin presupuesto mensual: gasta solo contra sus top-ups (crédito de un solo uso)"
+            >
+              Top-up ${format_micro(decimal_to_micro(credit.remaining_topup_usd))}
+            </span>
+          <% else %>
+            <span
+              class="badge badge-sm badge-warning badge-outline"
+              title="Sin presupuesto mensual ni top-ups: no puede gastar hasta que se le asigne un presupuesto o un top-up"
+            >
+              {gettext("No budget")}
+            </span>
+          <% end %>
         <% credit -> %>
           <div class="flex items-center gap-2">
             <span class="text-xs font-mono">

@@ -214,7 +214,7 @@ defmodule TokengateWeb.ServicesLive do
   defp limit_search_text(%{monthly_spend_limit_usd: %Decimal{} = limit}),
     do: Decimal.to_string(limit)
 
-  defp limit_search_text(_), do: "sin límite"
+  defp limit_search_text(_), do: String.downcase(gettext("No budget"))
 
   defp compare_vals(%Decimal{} = a, %Decimal{} = b), do: Decimal.compare(a, b)
 
@@ -636,7 +636,7 @@ defmodule TokengateWeb.ServicesLive do
   defp limit_label(%{monthly_spend_limit_usd: %Decimal{} = limit}),
     do: "$#{Decimal.to_string(limit)}/mes"
 
-  defp limit_label(_service), do: "Sin límite"
+  defp limit_label(_service), do: gettext("No budget")
 
   ## Render ----------------------------------------------------------------
 
@@ -700,7 +700,7 @@ defmodule TokengateWeb.ServicesLive do
                 step="0.01"
                 min="0"
                 label="Límite mensual (USD)"
-                hint="0 = cero (no deja gastar). Vacío = sin límite propio (solo top-ups)."
+                hint="0 = cero (no deja gastar). Vacío = sin presupuesto (solo top-ups)."
               />
               <.input
                 field={@form[:unlimited_spend]}

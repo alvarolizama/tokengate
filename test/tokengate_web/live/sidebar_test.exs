@@ -41,13 +41,13 @@ defmodule TokengateWeb.SidebarTest do
 
     assert has_element?(view, "#sidebar-section-catalogo", "Catálogo")
     assert has_element?(view, "#sidebar-section-acceso", "Acceso")
-    assert has_element?(view, "#sidebar-section-credito", "Crédito")
+    assert has_element?(view, "#sidebar-section-budget", "Presupuesto")
     assert has_element?(view, "#sidebar-section-operaciones", "Operaciones")
 
     assert in_section?(view, "sidebar-section-catalogo", "sidebar-link-catalog-providers")
     assert in_section?(view, "sidebar-section-catalogo", "sidebar-link-catalog-models")
     assert in_section?(view, "sidebar-section-catalogo", "sidebar-link-catalog-labs")
-    refute in_section?(view, "sidebar-section-catalogo", "sidebar-link-access-groups")
+    refute in_section?(view, "sidebar-section-catalogo", "sidebar-link-budget-months")
 
     assert in_section?(view, "sidebar-section-acceso", "sidebar-link-access-users")
     assert in_section?(view, "sidebar-section-acceso", "sidebar-link-access-services")
@@ -55,11 +55,11 @@ defmodule TokengateWeb.SidebarTest do
 
     # Crédito tiene DOS links: las subs mensuales (el sujeto que aporta el
     # límite de gasto) y los top-ups. La página de grupos se movió aquí.
-    assert in_section?(view, "sidebar-section-credito", "sidebar-link-access-groups")
-    assert in_section?(view, "sidebar-section-credito", "sidebar-link-credit-topups")
-    refute in_section?(view, "sidebar-section-credito", "sidebar-link-credit-subscriptions")
-    refute in_section?(view, "sidebar-section-credito", "sidebar-link-operations-monitoring")
-    refute in_section?(view, "sidebar-section-credito", "sidebar-link-access-users")
+    assert in_section?(view, "sidebar-section-budget", "sidebar-link-budget-months")
+    assert in_section?(view, "sidebar-section-budget", "sidebar-link-budget-topups")
+    refute in_section?(view, "sidebar-section-budget", "sidebar-link-credit-subscriptions")
+    refute in_section?(view, "sidebar-section-budget", "sidebar-link-operations-monitoring")
+    refute in_section?(view, "sidebar-section-budget", "sidebar-link-access-users")
 
     assert in_section?(view, "sidebar-section-operaciones", "sidebar-link-operations-monitoring")
 
@@ -71,7 +71,7 @@ defmodule TokengateWeb.SidebarTest do
 
     assert in_section?(view, "sidebar-section-operaciones", "sidebar-link-operations-maintenance")
     refute in_section?(view, "sidebar-section-operaciones", "sidebar-link-credit-subscriptions")
-    refute in_section?(view, "sidebar-section-operaciones", "sidebar-link-credit-topups")
+    refute in_section?(view, "sidebar-section-operaciones", "sidebar-link-budget-topups")
 
     # The old single "Administración" block is gone.
     refute has_element?(view, "nav p", "Administración")
@@ -80,7 +80,7 @@ defmodule TokengateWeb.SidebarTest do
     html = render(view)
 
     positions =
-      Enum.map(~w(catalogo acceso credito operaciones), fn section ->
+      Enum.map(~w(catalogo acceso budget operaciones), fn section ->
         {pos, _len} = :binary.match(html, "sidebar-section-#{section}")
         pos
       end)
@@ -94,7 +94,7 @@ defmodule TokengateWeb.SidebarTest do
           {"sidebar-link-catalog-labs", "sidebar-link-catalog-providers"},
           {"sidebar-link-catalog-providers", "sidebar-link-catalog-models"},
           {"sidebar-link-access-services", "sidebar-link-access-users"},
-          {"sidebar-link-access-groups", "sidebar-link-credit-topups"}
+          {"sidebar-link-budget-months", "sidebar-link-budget-topups"}
         ] do
       assert link_position(html, first) < link_position(html, second),
              "expected #{first} to render before #{second}"
@@ -127,10 +127,10 @@ defmodule TokengateWeb.SidebarTest do
     for {id, href} <- [
           {"sidebar-link-catalog-providers", "/catalog/providers"},
           {"sidebar-link-catalog-models", "/catalog/models"},
-          {"sidebar-link-access-groups", "/access/groups"},
+          {"sidebar-link-budget-months", "/budget/months"},
           {"sidebar-link-access-users", "/access/users"},
           {"sidebar-link-access-services", "/access/services"},
-          {"sidebar-link-credit-topups", "/credit/topups"},
+          {"sidebar-link-budget-topups", "/budget/topups"},
           {"sidebar-link-operations-monitoring", "/operations/monitoring"},
           {"sidebar-link-operations-observability", "/operations/observability"},
           {"sidebar-link-operations-maintenance", "/operations/maintenance"}
@@ -147,5 +147,6 @@ defmodule TokengateWeb.SidebarTest do
     assert has_element?(view, "#sidebar-link-dashboard[aria-current=page]")
     refute has_element?(view, "#sidebar-section-catalogo")
     refute has_element?(view, "#sidebar-section-operaciones")
+    refute has_element?(view, "#sidebar-section-budget")
   end
 end

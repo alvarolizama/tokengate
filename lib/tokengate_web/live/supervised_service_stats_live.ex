@@ -279,7 +279,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
   defp limit_label(%{monthly_spend_limit_usd: %Decimal{} = limit}),
     do: "Límite $#{Decimal.to_string(limit)}/mes"
 
-  defp limit_label(_service), do: "Sin límite (solo top-ups)"
+  defp limit_label(_service), do: gettext("No budget") <> " (solo top-ups)"
 
   defp supervisor_label(%{user: %{name: name, email: email}}) when is_binary(name),
     do: "#{name} · #{email}"
@@ -342,7 +342,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
               </span>
             </h1>
             <p class="text-sm text-base-content/70">
-              Sub: {limit_label(@service)} · últimos {period_label(@period)}
+              Presupuesto: {limit_label(@service)} · últimos {period_label(@period)}
             </p>
           </div>
 

@@ -17,14 +17,31 @@ defmodule TokengateWeb.RedirectController do
   end
 
   @doc """
-  ``/credit/subscriptions`` → ``/credit/topups``.
+  ``/credit/subscriptions`` → ``/budget/topups``.
 
-  Las suscripciones desaparecieron del modelo: el gasto se gobierna con el
-  límite mensual del sujeto más los top-ups. La página se elimina, pero un
+  Las suscripciones desaparecieron del modelo: el presupuesto se gobierna con el
+  techo mensual del sujeto más los top-ups. La página se elimina, pero un
   bookmark viejo no puede quedar en 404.
   """
   def credit_subscriptions(conn, _params) do
-    redirect(conn, to: append_query(~p"/credit/topups", conn))
+    redirect(conn, to: append_query(~p"/budget/topups", conn))
+  end
+
+  @doc """
+  ``/access/groups[...rest]`` → ``/budget/months[...rest]``.
+
+  Los grupos eran el contenedor del que cada usuario hereda su presupuesto
+  mensual; la sección «Crédito» pasó a «Presupuesto» y sus rutas a ``/budget``.
+  La subruta se conserva (``/access/groups/:id/members`` →
+  ``/budget/months/:id/members``) y la query string también.
+  """
+  def budget_months(conn, params) do
+    redirect(conn, to: append_query(append_rest(~p"/budget/months", params), conn))
+  end
+
+  @doc "``/credit/topups[...rest]`` → ``/budget/topups[...rest]``."
+  def budget_topups(conn, params) do
+    redirect(conn, to: append_query(append_rest(~p"/budget/topups", params), conn))
   end
 
   @doc """
@@ -88,6 +105,14 @@ defmodule TokengateWeb.RedirectController do
     case conn.query_string do
       "" -> path
       qs -> "#{path}?#{qs}"
+    end
+  end
+
+  # Preserva la subruta capturada por un glob (`*rest`) al mover un prefijo.
+  defp append_rest(path, params) do
+    case params |> Map.get("rest", []) |> List.wrap() |> Enum.join("/") do
+      "" -> path
+      rest -> "#{path}/#{rest}"
     end
   end
 end

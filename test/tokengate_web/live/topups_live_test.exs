@@ -88,7 +88,7 @@ defmodule TokengateWeb.TopupsLiveTest do
     test "renders the top-ups list for admin", %{conn: conn} do
       %{user: admin, password: pass} = register("admin")
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/credit/topups")
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
 
       assert has_element?(view, "#topups")
       assert render(view) =~ "Top-ups"
@@ -100,7 +100,7 @@ defmodule TokengateWeb.TopupsLiveTest do
     test "redirects non-admin away", %{conn: conn} do
       %{user: user, password: pass} = register("user")
       conn = login(conn, user, pass)
-      {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/credit/topups")
+      {:error, {:redirect, %{to: "/dashboard"}}} = live(conn, ~p"/budget/topups")
     end
   end
 
@@ -119,7 +119,7 @@ defmodule TokengateWeb.TopupsLiveTest do
       })
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/credit/topups")
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
 
       html = render(view)
       assert html =~ user.email
@@ -135,7 +135,7 @@ defmodule TokengateWeb.TopupsLiveTest do
       consume(topup, "2.50")
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/credit/topups")
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
 
       assert has_element?(view, "#topup-usage-#{topup.id}")
       assert render(view) =~ "$2.50"
@@ -148,7 +148,7 @@ defmodule TokengateWeb.TopupsLiveTest do
       user = user_fixture()
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/credit/topups")
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
 
       view |> element("#new-topup-btn") |> render_click()
       view |> element("#select-owner-#{user.id}") |> render_click()
@@ -174,7 +174,7 @@ defmodule TokengateWeb.TopupsLiveTest do
       service = service_fixture()
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/credit/topups")
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
 
       view |> element("#new-topup-btn") |> render_click()
       view |> element("#owner-kind-service") |> render_click()
@@ -197,7 +197,7 @@ defmodule TokengateWeb.TopupsLiveTest do
       user = user_fixture()
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/credit/topups")
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
 
       view |> element("#new-topup-btn") |> render_click()
       view |> element("#select-owner-#{user.id}") |> render_click()
@@ -220,7 +220,7 @@ defmodule TokengateWeb.TopupsLiveTest do
       assert Topups.grants_credit?(topup)
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/credit/topups")
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
 
       assert render(view) =~ "Top-up desactivado" == false
       view |> element("#toggle-topup-status-#{topup.id}") |> render_click()
@@ -241,7 +241,7 @@ defmodule TokengateWeb.TopupsLiveTest do
       consume(topup, "3.00")
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/credit/topups")
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
 
       view |> element("#revoke-topup-#{topup.id}") |> render_click()
 
@@ -263,7 +263,7 @@ defmodule TokengateWeb.TopupsLiveTest do
       consume(topup, "1.00")
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/credit/topups")
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
 
       refute has_element?(view, "#edit-topup-#{topup.id}")
       assert has_element?(view, "#toggle-archived-btn", "Ver archivados (1)")
@@ -288,7 +288,7 @@ defmodule TokengateWeb.TopupsLiveTest do
         })
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/credit/topups")
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
 
       refute has_element?(view, "#edit-topup-#{topup.id}")
       assert has_element?(view, "#toggle-archived-btn", "Ver archivados (1)")
@@ -304,7 +304,7 @@ defmodule TokengateWeb.TopupsLiveTest do
       topup = topup_fixture(%{"user_id" => user.id, "amount_usd" => "20.00"})
 
       conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/credit/topups")
+      {:ok, view, _html} = live(conn, ~p"/budget/topups")
 
       assert has_element?(view, "#edit-topup-#{topup.id}")
       refute has_element?(view, "#toggle-archived-btn")

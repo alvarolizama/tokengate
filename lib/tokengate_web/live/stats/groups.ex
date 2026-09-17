@@ -72,7 +72,7 @@ defmodule TokengateWeb.StatsLive.Groups do
               <div class="w-full max-w-xs" id="group-budget-bar">
                 <span class="text-xs text-base-content/50 block mb-1">
                   Presupuesto · mes {if(@group_budget.has_unlimited?,
-                    do: "· algún miembro sin límite",
+                    do: "· algún miembro sin presupuesto",
                     else: ""
                   )}
                 </span>

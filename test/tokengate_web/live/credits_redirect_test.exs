@@ -25,13 +25,13 @@ defmodule TokengateWeb.CreditsRedirectTest do
 
   # Las suscripciones desaparecieron con el modelo de límite mensual +
   # top-ups: la página se elimina, pero los bookmarks viejos no quedan en 404.
-  test "/credit/subscriptions redirects to /credit/topups", %{conn: conn} do
+  test "/credit/subscriptions redirects to /budget/topups", %{conn: conn} do
     conn = get(conn, "/credit/subscriptions")
-    assert redirected_to(conn) == "/credit/topups"
+    assert redirected_to(conn) == "/budget/topups"
   end
 
   test "/credit/subscriptions deep paths redirect too", %{conn: conn} do
     conn = get(conn, "/credit/subscriptions/whatever")
-    assert redirected_to(conn) == "/credit/topups"
+    assert redirected_to(conn) == "/budget/topups"
   end
 end

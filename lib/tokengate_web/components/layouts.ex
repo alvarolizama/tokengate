@@ -316,18 +316,19 @@ defmodule TokengateWeb.Layouts do
               />
             </.sidebar_section>
 
-            <.sidebar_section id="sidebar-section-credito" label="Crédito">
-              <%!-- Las subs mensuales son el sujeto que aporta el límite de
-                   gasto mensual, así que viven en Crédito, no en Acceso. --%>
+            <.sidebar_section id="sidebar-section-budget" label={gettext("Budget")}>
+              <%!-- Los presupuestos mensuales con el sujeto del que cada usuario
+                   hereda su techo de gasto; los top-ups son crédito extra de un
+                   solo uso. Por eso la sección es Presupuesto, no Acceso. --%>
               <.sidebar_link
                 current_path={@current_path}
-                href={~p"/access/groups"}
-                label="Monthly Subs"
+                href={~p"/budget/months"}
+                label={gettext("Monthly budgets")}
                 icon="hero-user-group"
               />
               <.sidebar_link
                 current_path={@current_path}
-                href={~p"/credit/topups"}
+                href={~p"/budget/topups"}
                 label="Top-ups"
                 icon="hero-arrow-up-circle"
               />
@@ -416,8 +417,8 @@ defmodule TokengateWeb.Layouts do
   end
 
   # A link is active on its own route and on any of its sub-routes, so
-  # drill-downs keep the parent entry lit (e.g. /access/groups/42/members
-  # highlights Monthly Subs).
+  # drill-downs keep the parent entry lit (e.g. /budget/months/42/members
+  # highlights Monthly budgets).
   defp active_path?(nil, _href), do: false
 
   defp active_path?(path, href) when is_binary(path) and is_binary(href) do

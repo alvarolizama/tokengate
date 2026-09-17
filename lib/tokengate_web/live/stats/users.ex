@@ -160,7 +160,7 @@ defmodule TokengateWeb.StatsLive.Users do
                         Crédito · ciclo
                         <div
                           class="tooltip tooltip-top"
-                          data-tip="Gasto del usuario contra su límite mensual efectivo (el suyo o el heredado de su grupo) en el ciclo vigente. Sin límite aplicable: solo top-ups."
+                          data-tip="Gasto del usuario contra su techo mensual efectivo (el suyo o el heredado de su presupuesto mensual) en el ciclo vigente. Sin presupuesto aplicable: solo top-ups."
                         >
                           <.icon
                             name="hero-question-mark-circle"

@@ -1,0 +1,30 @@
+## Traducciones del vocabulario de presupuesto (dominio `default`).
+##
+## Los `msgid` están en INGLÉS (idioma fuente, el que se escribe en el código) y
+## el `msgstr` en español, que es el idioma por defecto de la UI
+## (`config :tokengate, TokengateWeb.Gettext, default_locale: "es"`).
+##
+## Vocabulario: **budget** (presupuesto) es el techo mensual del sujeto; un
+## «monthly budget» es el presupuesto mensual que un usuario hereda de su
+## contenedor; un **top-up** es crédito extra de un solo uso.
+msgid ""
+msgstr ""
+"Language: es\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+## Sidebar y páginas de la sección
+msgid "Budget"
+msgstr "Presupuesto"
+
+msgid "Monthly budgets"
+msgstr "Presupuestos mensuales"
+
+msgid "Monthly budget"
+msgstr "Presupuesto mensual"
+
+## Estado de un sujeto sin presupuesto mensual
+msgid "No budget"
+msgstr "Sin presupuesto"
+
+msgid "No monthly budget"
+msgstr "Sin presupuesto"

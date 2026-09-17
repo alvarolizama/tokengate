@@ -1,15 +1,17 @@
 defmodule TokengateWeb.GroupsLive do
   @moduledoc """
-  Admin-only CRUD for monthly subs (grupos) + per-sub model grants.
+  Admin-only CRUD for monthly budgets (antes «subs», internamente «grupos»)
+  + per-budget model grants.
 
   Only admins (global_role == "admin") can access this page. Non-admins
   are redirected to /dashboard with an error flash.
 
-  Una sub mensual (internamente «grupo») es el sujeto que aporta el límite de
+  Un presupuesto mensual (internamente «grupo», antes «sub») es el sujeto que
+  aporta el techo de
   gasto mensual y los límites de concurrencia/RPM a sus miembros. El límite
   mensual se edita aquí, en su propio formulario.
 
-  Los webhooks de observabilidad ya no cuelgan de la sub: son globales y se
+  Los webhooks de observabilidad ya no cuelgan del presupuesto: son globales y se
   gestionan en `TokengateWeb.ObservabilityLive` (/operations/observability).
   """
 
@@ -35,7 +37,7 @@ defmodule TokengateWeb.GroupsLive do
     else
       socket =
         socket
-        |> assign(:page_title, "Monthly Subs · Tokengate")
+        |> assign(:page_title, gettext("Monthly budgets") <> " · Tokengate")
         |> assign(:is_admin, true)
         |> require_admin_hook()
         |> assign(:form, nil)
@@ -280,8 +282,8 @@ defmodule TokengateWeb.GroupsLive do
     >
       <div class="space-y-6">
         <.header>
-          Monthly Subs
-          <:subtitle>Gestiona las subs mensuales: presupuesto, límites y modelos</:subtitle>
+          {gettext("Monthly budgets")}
+          <:subtitle>Gestiona los presupuestos mensuales: techo, top-ups y modelos</:subtitle>
           <:actions>
             <div class="flex items-center gap-2">
               <%!-- Un `phx-change` exige que el input viva dentro de un <form>:
@@ -297,12 +299,12 @@ defmodule TokengateWeb.GroupsLive do
                   type="text"
                   name="group_search"
                   value={@group_search}
-                  placeholder="Buscar sub…"
+                  placeholder="Buscar presupuesto…"
                   class="input input-sm w-48"
                 />
               </form>
               <.button phx-click="new_group" id="new-group-btn">
-                <.icon name="hero-plus" class="w-4 h-4" /> Nueva sub
+                <.icon name="hero-plus" class="w-4 h-4" /> Nuevo presupuesto
               </.button>
             </div>
           </:actions>
@@ -314,14 +316,16 @@ defmodule TokengateWeb.GroupsLive do
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
             <div class="card-body p-6">
               <h2 class="text-lg font-semibold mb-4">
-                {if @editing_group_id == :new, do: "Nueva sub mensual", else: "Editar sub mensual"}
+                {if @editing_group_id == :new,
+                  do: "Nuevo presupuesto mensual",
+                  else: "Editar presupuesto mensual"}
               </h2>
               <.form for={@form} id="group-form" phx-submit="save_group">
                 <.input
                   field={@form[:name]}
                   type="text"
                   label="Nombre"
-                  hint="Nombre identificativo de la sub."
+                  hint="Nombre identificativo del presupuesto."
                 />
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <.input
@@ -337,7 +341,7 @@ defmodule TokengateWeb.GroupsLive do
                     hint="Requests por minuto por miembro."
                   />
                 </div>
-                <%!-- El límite mensual de la sub es el techo que heredan sus
+                <%!-- El techo mensual del presupuesto es el que heredan sus
                      miembros cuando no definen el suyo. --%>
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
                   <.input
@@ -346,7 +350,7 @@ defmodule TokengateWeb.GroupsLive do
                     step="0.01"
                     min="0"
                     label="Límite mensual (USD)"
-                    hint="Techo mensual de la sub. 0 = cero (no deja gastar). Vacío = sin límite (solo top-ups)."
+                    hint="Techo mensual del presupuesto. 0 = cero (no deja gastar). Vacío = sin presupuesto (solo top-ups)."
                   />
                   <.input
                     field={@form[:unlimited_spend]}
@@ -437,7 +441,7 @@ defmodule TokengateWeb.GroupsLive do
                     phx-value-id={group.id}
                     class="badge badge-sm badge-outline gap-1 hover:badge-primary transition-colors cursor-pointer"
                     id={"edit-models-#{group.id}"}
-                    title="Gestionar modelos de la sub"
+                    title="Gestionar modelos del presupuesto"
                   >
                     <.icon name="hero-rectangle-stack" class="w-3 h-3" />
                     {length(Map.get(@granted_models, group.id, []))} modelos
@@ -499,14 +503,14 @@ defmodule TokengateWeb.GroupsLive do
 
     cond do
       group.unlimited_spend ->
-        %{label: "Límite de la sub", value: "ilimitado", class: "text-success"}
+        %{label: gettext("Monthly budget"), value: "ilimitado", class: "text-success"}
 
       is_nil(budget) or is_nil(budget.monthly_limit_usd) ->
-        %{label: "Límite de la sub", value: "sin límite", class: "text-warning"}
+        %{label: gettext("Monthly budget"), value: gettext("No budget"), class: "text-warning"}
 
       true ->
         %{
-          label: "Límite de la sub",
+          label: gettext("Monthly budget"),
           value:
             "#{format_decimal(budget.monthly_spend_usd)} / #{format_decimal(budget.monthly_limit_usd)}",
           class: credit_class(budget.monthly_pct)

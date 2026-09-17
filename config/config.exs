@@ -27,6 +27,14 @@ config :phoenix_live_view,
   # the attribute set on all root tags. Used for Phoenix.LiveView.ColocatedCSS.
   root_tag_attribute: "phx-r"
 
+# Configure Gettext. Los mensajes se escriben en **inglés** (msgid, la fuente) y
+# el español vive en priv/gettext/es/LC_MESSAGES/*.po; el idioma por defecto de
+# la UI es español. Un msgid sin traducción sale tal cual (en inglés), así que
+# todo string visible que se agregue debe traer su entrada en el .po.
+config :tokengate, TokengateWeb.Gettext,
+  default_locale: "es",
+  locales: ~w(en es)
+
 # Configure the mailer
 #
 # By default it uses the "Local" adapter which stores the emails

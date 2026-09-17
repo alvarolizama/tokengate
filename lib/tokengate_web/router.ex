@@ -98,11 +98,20 @@ defmodule TokengateWeb.Router do
     get "/stats/credits", RedirectController, :stats_credits
     get "/stats/credits/*rest", RedirectController, :stats_credits
 
-    # La página de suscripciones desapareció con el modelo: el crédito se
-    # gobierna con el límite mensual del sujeto y los top-ups. Un bookmark
-    # viejo cae en la única página de crédito que queda.
+    # La página de suscripciones desapareció con el modelo: el presupuesto se
+    # gobierna con el techo mensual del sujeto y los top-ups. Un bookmark
+    # viejo cae en la página de top-ups, que es la única de crédito extra.
     get "/credit/subscriptions", RedirectController, :credit_subscriptions
     get "/credit/subscriptions/*rest", RedirectController, :credit_subscriptions
+
+    # La sección «Crédito» pasó a llamarse «Presupuesto» y sus rutas viven
+    # bajo /budget/*: los presupuestos mensuales (antes /access/groups) y los
+    # top-ups (antes /credit/topups). La subruta se preserva
+    # (/access/groups/:id/members → /budget/months/:id/members).
+    get "/access/groups", RedirectController, :budget_months
+    get "/access/groups/*rest", RedirectController, :budget_months
+    get "/credit/topups", RedirectController, :budget_topups
+    get "/credit/topups/*rest", RedirectController, :budget_topups
   end
 
   # Authenticated browser dashboard. The on_mount hook mirrors the plug
@@ -142,7 +151,7 @@ defmodule TokengateWeb.Router do
       live "/calculator", CalculatorLive
 
       # Las rutas admin se agrupan por la sub-sección del sidebar a la
-      # que pertenecen (Catálogo / Acceso / Crédito / Operaciones). El
+      # que pertenecen (Catálogo / Acceso / Presupuesto / Operaciones). El
       # prefijo /admin se retiró: no hay redirects legacy, un bookmark
       # a /admin/* responde 404.
       # Catálogo — qué se sirve y a qué costo.
@@ -150,14 +159,15 @@ defmodule TokengateWeb.Router do
       live "/catalog/models", ModelsLive
       live "/catalog/labs", LabsLive
       # Acceso — quién puede usar qué.
-      live "/access/groups", GroupsLive
-      live "/access/groups/:id/members", GroupMembersLive
       live "/access/users", UsersLive
       live "/access/services", ServicesLive
-      # Crédito — una sola página: los top-ups (crédito extra de un solo uso).
-      # El gasto ordinario se gobierna con el límite mensual de cada sujeto,
-      # que se edita en su propia página (Acceso).
-      live "/credit/topups", TopupsLive
+      # Presupuesto — qué techo mensual tiene cada sujeto y qué crédito extra
+      # lleva encima. Los presupuestos mensuales (antes «subs») son el sujeto
+      # del que cada usuario hereda su techo; los top-ups son crédito de un
+      # solo uso. El gasto ordinario se edita en la página de su sujeto.
+      live "/budget/months", GroupsLive
+      live "/budget/months/:id/members", GroupMembersLive
+      live "/budget/topups", TopupsLive
       # Operaciones — logs en vivo, webhooks y danger zone.
       live "/operations/monitoring", MonitoringLive
       live "/operations/observability", ObservabilityLive

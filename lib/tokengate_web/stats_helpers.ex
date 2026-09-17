@@ -822,7 +822,7 @@ defmodule TokengateWeb.StatsHelpers do
         <span :if={@limit} class="text-base-content/40">
           / {format_decimal(@limit)}
         </span>
-        <span :if={is_nil(@limit)} class="text-base-content/40"> · sin límite</span>
+        <span :if={is_nil(@limit)} class="text-base-content/40"> · {gettext("No budget")}</span>
       </span>
     </div>
     """
@@ -840,7 +840,7 @@ defmodule TokengateWeb.StatsHelpers do
 
   @doc """
   Badge de estado de presupuesto para tablas: OK / ≥80% / agotado /
-  sin límite.
+  sin presupuesto (sin techo mensual asignado).
   """
   attr :pct, :any, default: nil
   attr :exhausted?, :any, default: false
@@ -862,7 +862,7 @@ defmodule TokengateWeb.StatsHelpers do
         <% @pct != nil and @pct >= 80 -> %>
           ≥80%
         <% @pct == nil -> %>
-          sin límite
+          {gettext("No budget")}
         <% true -> %>
           OK
       <% end %>

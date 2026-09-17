@@ -1,0 +1,79 @@
+## This file is a PO Template file.
+##
+## "msgid"s here are often extracted from source code.
+## Add new messages manually only if they're dynamic
+## messages that can't be statically extracted.
+##
+## Run "mix gettext.extract" to bring this file up to
+## date. Leave "msgstr"s empty as changing them here has no
+## effect: edit them in PO (.po) files instead.
+#
+msgid ""
+msgstr ""
+
+#: lib/tokengate_web/components/core_components.ex:414
+#, elixir-autogen, elixir-format
+msgid "Actions"
+msgstr ""
+
+#: lib/tokengate_web/components/layouts.ex:529
+#: lib/tokengate_web/components/layouts.ex:544
+#, elixir-autogen, elixir-format
+msgid "Attempting to reconnect"
+msgstr ""
+
+#: lib/tokengate_web/components/layouts.ex:319
+#, elixir-autogen, elixir-format
+msgid "Budget"
+msgstr ""
+
+#: lib/tokengate_web/live/groups_live.ex:506
+#: lib/tokengate_web/live/groups_live.ex:509
+#: lib/tokengate_web/live/groups_live.ex:513
+#: lib/tokengate_web/live/users_live.ex:1014
+#: lib/tokengate_web/live/users_live.ex:1070
+#, elixir-autogen, elixir-format
+msgid "Monthly budget"
+msgstr ""
+
+#: lib/tokengate_web/components/layouts.ex:326
+#: lib/tokengate_web/live/groups_live.ex:40
+#: lib/tokengate_web/live/groups_live.ex:285
+#, elixir-autogen, elixir-format
+msgid "Monthly budgets"
+msgstr ""
+
+#: lib/tokengate_web/live/dashboard_live.html.heex:225
+#: lib/tokengate_web/live/groups_live.ex:509
+#: lib/tokengate_web/live/service_stats_live.ex:712
+#: lib/tokengate_web/live/services_live.ex:217
+#: lib/tokengate_web/live/services_live.ex:639
+#: lib/tokengate_web/live/supervised_service_stats_live.ex:282
+#: lib/tokengate_web/live/supervised_services_live.ex:224
+#: lib/tokengate_web/live/users_live.ex:1563
+#: lib/tokengate_web/stats_helpers.ex:825
+#: lib/tokengate_web/stats_helpers.ex:865
+#, elixir-autogen, elixir-format
+msgid "No budget"
+msgstr ""
+
+#: lib/tokengate_web/live/users_live.ex:1016
+#: lib/tokengate_web/live/users_live.ex:1072
+#, elixir-autogen, elixir-format
+msgid "No monthly budget"
+msgstr ""
+
+#: lib/tokengate_web/components/layouts.ex:536
+#, elixir-autogen, elixir-format
+msgid "Something went wrong!"
+msgstr ""
+
+#: lib/tokengate_web/components/layouts.ex:521
+#, elixir-autogen, elixir-format
+msgid "We can't find the internet"
+msgstr ""
+
+#: lib/tokengate_web/components/core_components.ex:80
+#, elixir-autogen, elixir-format
+msgid "close"
+msgstr ""

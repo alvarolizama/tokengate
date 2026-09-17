@@ -1,6 +1,6 @@
 defmodule TokengateWeb.GroupMembersLive do
   @moduledoc """
-  Per-sub member management (antes «grupo», ahora sub mensual).
+  Per-budget member management (antes «grupo», ahora presupuesto mensual).
 
   Access:
     - admin: manages members of any group.
@@ -9,11 +9,11 @@ defmodule TokengateWeb.GroupMembersLive do
   Supports:
     - Add member by email.
     - Remove member.
-    - Per-member extra model grants (individual grants beyond the sub's
+    - Per-member extra model grants (individual grants beyond the budget's
       models) with the 3-state picker in the details modal.
 
   Las API keys y los extras de concurrencia/RPM NO se gestionan aquí: las keys
-  cuelgan del usuario y los límites los aporta la sub (o el propio sujeto en su
+  cuelgan del usuario y el techo lo aporta el presupuesto mensual (o el propio sujeto en su
   página).
   """
 
@@ -373,12 +373,12 @@ defmodule TokengateWeb.GroupMembersLive do
     to_form(%{"email" => ""}, as: :add_member)
   end
 
-  # La invariante «un usuario = una sub» sale como error de índice único en
+  # La invariante «un usuario = un presupuesto» sale como error de índice único en
   # `user_id`; se traduce a algo accionable en vez del críptico "has already
   # been taken".
   defp format_add_member_error(changeset) do
     if Keyword.has_key?(changeset.errors, :user_id) do
-      "Ese usuario ya pertenece a otra sub mensual. Quítalo de ella primero."
+      "Ese usuario ya pertenece a otro presupuesto mensual. Quítalo de él primero."
     else
       format_changeset_errors(changeset)
     end
@@ -494,10 +494,10 @@ defmodule TokengateWeb.GroupMembersLive do
                     </div>
                   </div>
                 </div>
-                <%!-- Un usuario pertenece a UNA sola sub mensual, así que sólo
+                <%!-- Un usuario pertenece a UN solo presupuesto mensual, así que sólo
                      puede estar en una: si ya tiene otra, el alta falla. --%>
                 <p class="text-xs text-base-content/50 mt-3">
-                  Cada usuario pertenece a una sola sub mensual. Si ya tiene otra, quítalo
+                  Cada usuario pertenece a un solo presupuesto mensual. Si ya tiene otro, quítalo
                   de ella primero.
                 </p>
                 <p :if={@add_member_error} class="text-sm text-error mt-4" id="add-member-error">

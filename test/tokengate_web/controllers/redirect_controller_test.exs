@@ -45,6 +45,41 @@ defmodule TokengateWeb.RedirectControllerTest do
     end
   end
 
+  # La sección «Crédito» pasó a «Presupuesto» y sus rutas a /budget/*: los
+  # presupuestos mensuales (antes /access/groups) y los top-ups (antes
+  # /credit/topups). Los bookmarks viejos no quedan en 404.
+  describe "sección Presupuesto (/budget/*)" do
+    test "/access/groups → /budget/months", %{conn: conn} do
+      conn = get(conn, "/access/groups")
+      assert redirected_to(conn) == "/budget/months"
+    end
+
+    test "/access/groups/:id/members → /budget/months/:id/members", %{conn: conn} do
+      conn = get(conn, "/access/groups/42/members")
+      assert redirected_to(conn) == "/budget/months/42/members"
+    end
+
+    test "/access/groups/:id/members?period=7d → subruta y query preservadas", %{conn: conn} do
+      conn = get(conn, "/access/groups/42/members?period=7d")
+      assert redirected_to(conn) == "/budget/months/42/members?period=7d"
+    end
+
+    test "/credit/topups → /budget/topups", %{conn: conn} do
+      conn = get(conn, "/credit/topups")
+      assert redirected_to(conn) == "/budget/topups"
+    end
+
+    test "/credit/topups?archived=true → query preservada", %{conn: conn} do
+      conn = get(conn, "/credit/topups?archived=true")
+      assert redirected_to(conn) == "/budget/topups?archived=true"
+    end
+
+    test "/credit/subscriptions → /budget/topups", %{conn: conn} do
+      conn = get(conn, "/credit/subscriptions")
+      assert redirected_to(conn) == "/budget/topups"
+    end
+  end
+
   # El prefijo /admin se partió en las sub-secciones del sidebar
   # (/catalog, /access, /credit, /operations). Se decidió NO dejar
   # redirects: estas URLs responden 404 a propósito, no es un olvido.
