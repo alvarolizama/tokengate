@@ -1,15 +1,16 @@
 defmodule TokengateWeb.GroupsLive do
   @moduledoc """
-  Admin-only CRUD for groups + per-group model grants.
+  Admin-only CRUD for monthly subs (grupos) + per-sub model grants.
 
   Only admins (global_role == "admin") can access this page. Non-admins
   are redirected to /dashboard with an error flash.
 
-  Groups carry default budgets and limits applied to all members. Models
-  can be granted per-group via the group_models join table.
+  Una sub mensual (internamente «grupo») es el sujeto que aporta el límite de
+  gasto mensual y los límites de concurrencia/RPM a sus miembros. El límite
+  mensual se edita aquí, en su propio formulario.
 
-  Webhook management was extracted to `TokengateWeb.ObservabilityLive`
-  (/operations/observability); each group card links there with a counter badge.
+  Los webhooks de observabilidad ya no cuelgan de la sub: son globales y se
+  gestionan en `TokengateWeb.ObservabilityLive` (/operations/observability).
   """
 
   use TokengateWeb, :live_view
@@ -18,7 +19,6 @@ defmodule TokengateWeb.GroupsLive do
   alias Tokengate.Accounts
   alias Tokengate.Accounts.Group
   alias Tokengate.Budgets
-  alias Tokengate.Observability
   alias Tokengate.Providers
   alias Tokengate.Providers.{Model, GroupModel}
   alias Tokengate.Repo
@@ -35,7 +35,7 @@ defmodule TokengateWeb.GroupsLive do
     else
       socket =
         socket
-        |> assign(:page_title, "Grupos · Tokengate")
+        |> assign(:page_title, "Monthly Subs · Tokengate")
         |> assign(:is_admin, true)
         |> require_admin_hook()
         |> assign(:form, nil)
@@ -84,10 +84,6 @@ defmodule TokengateWeb.GroupsLive do
       |> Repo.all()
       |> Enum.group_by(fn _ma -> "all" end)
 
-    # Single query for all groups' destinations (only for the counter badges)
-    destinations_by_group =
-      Observability.list_destinations_for_groups(Enum.map(groups, & &1.id))
-
     # Budget + spend rollup per group and per member. Se reusa el rollup de
     # `Budgets` (misma definición de límite/consumo que /stats) en vez de
     # recomputarlo aquí: la copia local convertía "todos sin límite" en $0.00
@@ -106,7 +102,6 @@ defmodule TokengateWeb.GroupsLive do
     |> assign(:groups_empty?, groups == [])
     |> assign(:granted_models, granted_models)
     |> assign(:models_by_org, models_by_org)
-    |> assign(:destinations_by_group, destinations_by_group)
     |> assign(:group_budgets, group_budgets)
   end
 
@@ -285,8 +280,8 @@ defmodule TokengateWeb.GroupsLive do
     >
       <div class="space-y-6">
         <.header>
-          Grupos
-          <:subtitle>Gestiona grupos, presupuestos, límites y modelos</:subtitle>
+          Monthly Subs
+          <:subtitle>Gestiona las subs mensuales: presupuesto, límites y modelos</:subtitle>
           <:actions>
             <div class="flex items-center gap-2">
               <%!-- Un `phx-change` exige que el input viva dentro de un <form>:
@@ -302,12 +297,12 @@ defmodule TokengateWeb.GroupsLive do
                   type="text"
                   name="group_search"
                   value={@group_search}
-                  placeholder="Buscar grupo…"
+                  placeholder="Buscar sub…"
                   class="input input-sm w-48"
                 />
               </form>
               <.button phx-click="new_group" id="new-group-btn">
-                <.icon name="hero-plus" class="w-4 h-4" /> Nuevo grupo
+                <.icon name="hero-plus" class="w-4 h-4" /> Nueva sub
               </.button>
             </div>
           </:actions>
@@ -319,14 +314,14 @@ defmodule TokengateWeb.GroupsLive do
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
             <div class="card-body p-6">
               <h2 class="text-lg font-semibold mb-4">
-                {if @editing_group_id == :new, do: "Nuevo grupo", else: "Editar grupo"}
+                {if @editing_group_id == :new, do: "Nueva sub mensual", else: "Editar sub mensual"}
               </h2>
               <.form for={@form} id="group-form" phx-submit="save_group">
                 <.input
                   field={@form[:name]}
                   type="text"
                   label="Nombre"
-                  hint="Nombre identificativo del grupo."
+                  hint="Nombre identificativo de la sub."
                 />
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <.input
@@ -340,6 +335,24 @@ defmodule TokengateWeb.GroupsLive do
                     type="number"
                     label="RPM"
                     hint="Requests por minuto por miembro."
+                  />
+                </div>
+                <%!-- El límite mensual de la sub es el techo que heredan sus
+                     miembros cuando no definen el suyo. --%>
+                <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
+                  <.input
+                    field={@form[:monthly_spend_limit_usd]}
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    label="Límite mensual (USD)"
+                    hint="Techo mensual de la sub. 0 = cero (no deja gastar). Vacío = sin límite (solo top-ups)."
+                  />
+                  <.input
+                    field={@form[:unlimited_spend]}
+                    type="checkbox"
+                    label="Ilimitado"
+                    hint="Único camino a ilimitado; gana sobre el límite."
                   />
                 </div>
                 <div class="flex gap-2 mt-4 justify-end">
@@ -424,21 +437,11 @@ defmodule TokengateWeb.GroupsLive do
                     phx-value-id={group.id}
                     class="badge badge-sm badge-outline gap-1 hover:badge-primary transition-colors cursor-pointer"
                     id={"edit-models-#{group.id}"}
-                    title="Gestionar modelos del grupo"
+                    title="Gestionar modelos de la sub"
                   >
                     <.icon name="hero-rectangle-stack" class="w-3 h-3" />
                     {length(Map.get(@granted_models, group.id, []))} modelos
                   </button>
-                  <%!-- Webhooks badge — links to Observability --%>
-                  <.link
-                    navigate={~p"/operations/observability"}
-                    class="badge badge-sm badge-ghost gap-1 hover:bg-base-200 transition-colors"
-                    id={"webhooks-link-#{group.id}"}
-                    title="Gestionar webhooks en Observabilidad"
-                  >
-                    <.icon name="hero-bell-alert" class="w-3 h-3" />
-                    {length(Map.get(@destinations_by_group, group.id, []))} webhooks
-                  </.link>
                 </div>
 
                 <%!-- Actions --%>
@@ -485,29 +488,27 @@ defmodule TokengateWeb.GroupsLive do
     |> Map.get(:real_monthly_spend_usd, Decimal.new(0))
   end
 
-  # Límite del grupo para la tarjeta: el grupo es el override masivo de sus
-  # miembros, así que muestra su propio límite mensual y el gasto agregado.
-  # `unlimited_spend` es el único ilimitado; sin límite, el grupo no habilita
-  # gasto a sus miembros (salvo top-ups).
+  # Límite de la sub para la tarjeta. El número que se edita es el límite de la
+  # propia sub, pero ese valor lo HEREDA cada miembro (no es un pozo común), así
+  # que el consumo agregado contra ese número mediría cosas distintas. La barra
+  # usa el rollup de `Budgets` —suma de los límites efectivos de los miembros
+  # contra la suma de su gasto debitado—, que es la misma definición que /stats
+  # y hace que numerador, denominador y % sean coherentes.
   defp group_credit(group, group_budgets) do
     budget = Map.get(group_budgets, group.id)
 
     cond do
       group.unlimited_spend ->
-        %{label: "Límite del grupo", value: "ilimitado", class: "text-success"}
+        %{label: "Límite de la sub", value: "ilimitado", class: "text-success"}
 
-      is_nil(group.monthly_spend_limit_usd) ->
-        %{label: "Límite del grupo", value: "sin límite", class: "text-warning"}
-
-      is_nil(budget) ->
-        %{label: "Límite del grupo", value: "—", class: "text-base-content/40"}
+      is_nil(budget) or is_nil(budget.monthly_limit_usd) ->
+        %{label: "Límite de la sub", value: "sin límite", class: "text-warning"}
 
       true ->
-        spent = budget.monthly_spend_usd || Decimal.new(0)
-
         %{
-          label: "Límite del grupo",
-          value: "#{format_decimal(spent)} / #{format_decimal(group.monthly_spend_limit_usd)}",
+          label: "Límite de la sub",
+          value:
+            "#{format_decimal(budget.monthly_spend_usd)} / #{format_decimal(budget.monthly_limit_usd)}",
           class: credit_class(budget.monthly_pct)
         }
     end

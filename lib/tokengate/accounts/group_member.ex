@@ -37,6 +37,8 @@ defmodule Tokengate.Accounts.GroupMember do
     |> validate_inclusion(:status, ["active", "suspended"])
     |> validate_number(:extra_concurrency, greater_than: 0)
     |> validate_number(:extra_rpm, greater_than: 0)
+    |> unique_constraint(:user_id, name: :group_members_user_id_unique_index)
+    # El único (user_id, group_id) sigue vivo como red de seguridad.
     |> unique_constraint(:group_id, name: :group_members_user_group_unique_index)
     |> assoc_constraint(:user)
     |> assoc_constraint(:group)

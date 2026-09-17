@@ -165,20 +165,22 @@ defmodule Tokengate.AccountsTest do
              ) == nil
     end
 
-    test "deletes a group and its observability destinations" do
+    # Los destinos de observabilidad dejaron de colgar de la sub: borrar un
+    # grupo ya no toca los webhooks (son globales).
+    test "deleting a group leaves the observability destinations alone" do
       group = group_fixture()
+      name = "Dest #{System.unique_integer([:positive])}"
 
-      {:ok, _dest} =
+      {:ok, dest} =
         Tokengate.Observability.create_destination(%{
-          "name" => "Dest #{System.unique_integer([:positive])}",
+          "name" => name,
           "type" => "otlp_webhook",
-          "url" => "https://example.com/otlp",
-          "group_id" => group.id
+          "url" => "https://example.com/otlp"
         })
 
       assert {:ok, _} = Accounts.delete_group(group)
       assert Accounts.get_group(group.id) == nil
-      assert Tokengate.Observability.list_destinations(group.id) == []
+      assert Tokengate.Observability.get_destination(dest.id)
     end
   end
 

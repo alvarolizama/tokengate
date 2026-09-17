@@ -264,8 +264,13 @@ defmodule Tokengate.DemoSeeds do
       )
       |> Repo.delete_all()
 
+    # Los webhooks demo son globales: no cuelgan de ninguna sub, así que la
+    # limpieza los borra por nombre y no por grupo.
     {destinations, _} =
-      from(d in Destination, where: d.group_id in ^demo_group_ids) |> Repo.delete_all()
+      from(d in Destination,
+        where: d.name in ["Datadog · producción", "Grafana Cloud · growth"]
+      )
+      |> Repo.delete_all()
 
     # Join tables sin cascade.
     {extras, _} =
@@ -1114,8 +1119,7 @@ defmodule Tokengate.DemoSeeds do
         name: "Datadog · producción",
         type: "otlp_webhook",
         url: "https://hooks.internal.example.com/otlp/tokengate",
-        headers: %{"x-api-key" => "demo-datadog-key", "x-tenant" => "acme"},
-        group_id: org.groups.platform.id
+        headers: %{"x-api-key" => "demo-datadog-key", "x-tenant" => "acme"}
       })
 
     {:ok, _} =
@@ -1123,11 +1127,10 @@ defmodule Tokengate.DemoSeeds do
         name: "Grafana Cloud · growth",
         type: "otlp_webhook",
         url: "https://otlp-gateway-prod.grafana.net/otlp/v1/logs",
-        headers: %{"authorization" => "Bearer demo-grafana-token"},
-        group_id: org.groups.growth.id
+        headers: %{"authorization" => "Bearer demo-grafana-token"}
       })
 
-    IO.puts("· observabilidad: 2 webhooks OTLP")
+    IO.puts("· observabilidad: 2 webhooks OTLP (globales)")
   end
 
   defp seed_misc(org) do

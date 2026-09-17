@@ -132,7 +132,7 @@ defmodule TokengateWeb.StatsLiveTest do
     :ok
   end
 
-  defp extra_breakdown_rows(%{group: group, provider: provider, model: model}, :users, n) do
+  defp extra_breakdown_rows(%{provider: provider, model: model}, :users, n) do
     Enum.each(1..n//1, fn _ ->
       u = unique()
 
@@ -143,6 +143,9 @@ defmodule TokengateWeb.StatsLiveTest do
           password: "password-secret-#{u}1"
         })
 
+      # Cada usuario extra necesita su PROPIA sub: un usuario vive en una sola.
+      {:ok, group} = Accounts.create_group(%{name: "User Sub #{u}"})
+
       {:ok, member} = Accounts.create_group_member(%{user_id: user.id, group_id: group.id})
       log_serving(member, provider, model)
     end)
@@ -150,10 +153,19 @@ defmodule TokengateWeb.StatsLiveTest do
     :ok
   end
 
-  defp extra_breakdown_rows(%{owner: owner, provider: provider, model: model}, :groups, n) do
+  defp extra_breakdown_rows(%{provider: provider, model: model}, :groups, n) do
     Enum.each(1..n//1, fn _ ->
-      {:ok, group} = Accounts.create_group(%{name: "Stats Extra #{unique()}"})
-      {:ok, member} = Accounts.create_group_member(%{user_id: owner.id, group_id: group.id})
+      u = unique()
+      {:ok, group} = Accounts.create_group(%{name: "Stats Extra #{u}"})
+
+      {:ok, user} =
+        Accounts.register_user(%{
+          email: "stats-group-owner-#{u}@example.com",
+          name: "Group Owner #{u}",
+          password: "password-secret-#{u}1"
+        })
+
+      {:ok, member} = Accounts.create_group_member(%{user_id: user.id, group_id: group.id})
       log_serving(member, provider, model)
     end)
 
@@ -1731,7 +1743,8 @@ defmodule TokengateWeb.StatsLiveTest do
       extra_breakdown_rows(fixture, :providers, 10)
       extra_breakdown_rows(fixture, :models, 10)
       extra_breakdown_rows(fixture, :groups, 10)
-      extra_breakdown_rows(fixture, :users, 10)
+      # Sin filas extra de `:users`: cada grupo extra trae su propio dueño (un
+      # usuario vive en UNA sola sub), así que esa tabla ya llega a 11 filas.
       extra_breakdown_rows(fixture, :services, 11)
 
       conn = login(conn, admin, password)
@@ -1957,31 +1970,23 @@ defmodule TokengateWeb.StatsLiveTest do
   # El desglose por usuario traía los ids de grupo bajo el campo `group_names` y
   # los tiraba al resolver el nombre, así que la columna quedaba como texto
   # muerto; el de miembros ni siquiera seleccionaba el id del grupo.
+  #
+  # Un usuario ahora vive en UNA sola sub, así que la fila lleva un único
+  # vínculo: el caso multi-grupo dejó de existir por invariante de la DB.
   describe "vínculos al grupo desde listados de usuarios y miembros" do
-    test "users: cada grupo de la fila enlaza a su detalle", %{conn: conn} do
+    test "users: el grupo de la fila enlaza a su detalle", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
       fixture = group_with_log(%{cost: "0.005"})
-
-      # Segunda membresía CON tráfico: el desglose por usuario agrupa las
-      # membresías que tienen logs en el período.
-      {:ok, group_b} = Accounts.create_group(%{name: "Stats Group B #{unique()}"})
-
-      {:ok, member_b} =
-        Accounts.create_group_member(%{user_id: fixture.owner.id, group_id: group_b.id})
-
-      log_serving(member_b, fixture.provider, fixture.model)
 
       conn = login(conn, admin, password)
       {:ok, view, _html} = live(conn, ~p"/stats/users?period=today")
       view = wait_stats_loaded(view)
 
-      for group <- [fixture.group, group_b] do
-        assert has_element?(
-                 view,
-                 "#user-group-#{fixture.owner.id}-#{group.id}[href*='/stats/groups/#{group.id}'][href*='period=today']",
-                 group.name
-               )
-      end
+      assert has_element?(
+               view,
+               "#user-group-#{fixture.owner.id}-#{fixture.group.id}[href*='/stats/groups/#{fixture.group.id}'][href*='period=today']",
+               fixture.group.name
+             )
     end
 
     test "detalle del proveedor: el grupo de cada usuario enlaza a su detalle", %{conn: conn} do

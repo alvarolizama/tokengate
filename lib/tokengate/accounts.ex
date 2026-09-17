@@ -50,18 +50,12 @@ defmodule Tokengate.Accounts do
 
   def delete_group(%Group{} = group) do
     alias Tokengate.Providers.{GroupModel, GroupMemberExtraModel}
-    alias Tokengate.Observability.Destination
 
     group = Repo.preload(group, group_members: :api_key)
 
     Repo.transaction(fn ->
       # Delete group_models (FK group_id)
       from(t in GroupModel, where: t.group_id == ^group.id)
-      |> Repo.delete_all()
-
-      # Delete observability destinations (FK group_id, no ON DELETE action —
-      # they only make sense while their group exists).
-      from(d in Destination, where: d.group_id == ^group.id)
       |> Repo.delete_all()
 
       # Detach services. `services.group_id` is a legacy column (the Service
@@ -511,6 +505,63 @@ defmodule Tokengate.Accounts do
 
   def change_group_member(%GroupMember{} = group_member, attrs \\ %{}) do
     GroupMember.changeset(group_member, attrs)
+  end
+
+  @doc """
+  Mueve a un usuario a su sub mensual (`sub_id`), o lo deja sin sub cuando es
+  `nil`. Invariante del modelo: **un usuario pertenece a una sola sub**.
+
+  Mover no acumula: la membresía anterior se elimina primero (con su key, sus
+  extras y su historial, por las FKs en cascada) y luego se crea la nueva. La
+  sub anterior conserva sus logs ya exportados; el consumo del usuario pasa a
+  contar contra la sub nueva.
+
+  Devuelve `:ok` o `{:error, reason}`. Nada se toca si el usuario ya está en
+  esa sub.
+  """
+  @spec sync_user_sub(term(), term() | nil) :: :ok | {:error, String.t()}
+  def sync_user_sub(user_id, sub_id) do
+    current = list_group_members_for_user(user_id)
+
+    cond do
+      sub_id == nil ->
+        delete_memberships(current)
+
+      Enum.any?(current, &(&1.group_id == sub_id)) ->
+        :ok
+
+      true ->
+        case delete_memberships(current) do
+          :ok ->
+            case create_group_member(%{
+                   user_id: user_id,
+                   group_id: sub_id,
+                   status: "active"
+                 }) do
+              {:ok, _member} -> :ok
+              {:error, changeset} -> {:error, format_membership_errors(changeset)}
+            end
+
+          {:error, _} = error ->
+            error
+        end
+    end
+  end
+
+  defp delete_memberships(memberships) do
+    Enum.reduce_while(memberships, :ok, fn member, :ok ->
+      case delete_group_member(member) do
+        {:ok, _} -> {:cont, :ok}
+        {:error, _} -> {:halt, {:error, "no se pudo quitar la membresía anterior"}}
+      end
+    end)
+  end
+
+  defp format_membership_errors(changeset) do
+    changeset
+    |> Ecto.Changeset.traverse_errors(fn {msg, _} -> msg end)
+    |> Enum.flat_map(fn {field, msgs} -> Enum.map(msgs, &"#{field} #{&1}") end)
+    |> Enum.join(", ")
   end
 
   # ---------------------------------------------------------------------------

@@ -214,21 +214,19 @@ defmodule TokengateWeb.UsersLiveTest do
     assert has_element?(view, "tr#user-#{admin.id}")
   end
 
-  test "a user with two groups appears once, with all their group badges", %{conn: conn} do
+  test "a user with a sub appears once, with their sub badge", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    %{user: multi} = register("user")
+    %{user: member_user} = register("user")
 
-    {:ok, group_a} = Accounts.create_group(%{name: "Multi A #{unique()}"})
-    {:ok, group_b} = Accounts.create_group(%{name: "Multi B #{unique()}"})
-    {:ok, _} = Accounts.create_group_member(%{user_id: multi.id, group_id: group_a.id})
-    {:ok, _} = Accounts.create_group_member(%{user_id: multi.id, group_id: group_b.id})
+    {:ok, sub} = Accounts.create_group(%{name: "Multi A #{unique()}"})
+    {:ok, _} = Accounts.create_group_member(%{user_id: member_user.id, group_id: sub.id})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/access/users")
 
-    # Single row for the user, showing both group badges.
-    assert has_element?(view, "tr#user-#{multi.id}", group_a.name)
-    assert has_element?(view, "tr#user-#{multi.id}", group_b.name)
+    # Una sola fila por usuario, con su sub mensual. (Un usuario no puede
+    # tener dos: la DB lo impide con un índice único sobre user_id.)
+    assert has_element?(view, "tr#user-#{member_user.id}", sub.name)
   end
 
   test "clicking the Usuario sort header re-orders rows alphabetically", %{conn: conn} do
@@ -278,7 +276,7 @@ defmodule TokengateWeb.UsersLiveTest do
 
   ## Create user ------------------------------------------------------------
 
-  test "admin can create a new user without groups", %{conn: conn} do
+  test "admin can create a new user without a sub", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/access/users")
@@ -298,21 +296,23 @@ defmodule TokengateWeb.UsersLiveTest do
       })
       |> render_submit()
 
-    assert html =~ "Usuario creado con 0 grupo(s)"
+    assert html =~ "Usuario creado"
   end
 
-  test "admin can create a new user with multiple groups", %{conn: conn} do
+  test "admin can create a new user with a sub", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
 
-    {:ok, group_a} = Accounts.create_group(%{name: "Group A #{unique()}"})
-    {:ok, group_b} = Accounts.create_group(%{name: "Group B #{unique()}"})
+    {:ok, sub} = Accounts.create_group(%{name: "Group A #{unique()}"})
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/access/users")
 
     view |> element("#new-user-btn") |> render_click()
     assert has_element?(view, "#user-form")
-    assert has_element?(view, "select[name='user[group_ids][]']")
+
+    # Select único: un usuario pertenece a UNA sola sub mensual.
+    assert has_element?(view, "select[name='user[sub_id]']")
+    refute has_element?(view, "select[name='user[group_ids][]']")
 
     html =
       view
@@ -322,19 +322,19 @@ defmodule TokengateWeb.UsersLiveTest do
           name: "Multi Group",
           password: "valid-password-123",
           global_role: "user",
-          group_ids: [group_a.id, group_b.id]
+          sub_id: sub.id
         }
       })
       |> render_submit()
 
-    assert html =~ "Usuario creado con 2 grupo(s)"
+    assert html =~ "Usuario creado"
 
-    # Verify user was created and has 2 memberships with API keys
+    # Verify user was created and has 1 membership with an API key
     user = Accounts.get_user_by_email("multigroup@example.com")
     assert user
 
     memberships = Accounts.list_group_members_for_user(user.id)
-    assert length(memberships) == 2
+    assert length(memberships) == 1
 
     for member <- memberships do
       assert member.api_key

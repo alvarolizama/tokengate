@@ -2,14 +2,13 @@ defmodule TokengateWeb.ObservabilityLive do
   @moduledoc """
   Admin-only CRUD for observability destinations (OTLP webhooks).
 
-  Centralizes webhook management that used to live inline in each group
-  card. Destinations are listed in a single compact table with search and
-  group filter; groups link here instead of embedding webhook sections.
+  La observabilidad es de toda la instalación: los webhooks ya no cuelgan de un
+  grupo ni se filtran por él. Destinations live in a single compact table with
+  search.
   """
 
   use TokengateWeb, :live_view
 
-  alias Tokengate.Accounts
   alias Tokengate.Observability
   alias Tokengate.Observability.Destination
 
@@ -25,9 +24,7 @@ defmodule TokengateWeb.ObservabilityLive do
         |> require_admin_hook()
         |> assign(:form, nil)
         |> assign(:editing_destination_id, nil)
-        |> assign(:editing_group_id, nil)
         |> assign(:search, "")
-        |> assign(:group_filter, "")
         |> load_data()
 
       {:ok, socket}
@@ -56,30 +53,22 @@ defmodule TokengateWeb.ObservabilityLive do
 
   defp load_data(socket) do
     destinations = Observability.list_all_destinations()
-    groups = Accounts.list_groups()
-    group_names = Map.new(groups, fn g -> {g.id, g.name} end)
 
     socket
     |> assign(:all_destinations, destinations)
-    |> assign(:groups, groups)
-    |> assign(:group_names, group_names)
     |> stream_destinations()
   end
 
-  # Pure in-memory filter + re-stream: zero queries on search/filter events.
+  # Pure in-memory filter + re-stream: zero queries on search events.
   defp stream_destinations(socket) do
     search = String.downcase(socket.assigns[:search] || "")
-    group_filter = socket.assigns[:group_filter] || ""
 
     filtered =
       Enum.filter(socket.assigns.all_destinations, fn d ->
         name = String.downcase(d.name || "")
         url = String.downcase(d.url || "")
-        group_name = String.downcase(Map.get(socket.assigns.group_names, d.group_id, ""))
 
-        (search == "" or String.contains?(name, search) or String.contains?(url, search) or
-           String.contains?(group_name, search)) and
-          (group_filter == "" or d.group_id == group_filter)
+        search == "" or String.contains?(name, search) or String.contains?(url, search)
       end)
 
     socket
@@ -94,18 +83,13 @@ defmodule TokengateWeb.ObservabilityLive do
     {:noreply, socket |> assign(:search, search) |> stream_destinations()}
   end
 
-  def handle_event("filter_group", %{"group_filter" => group_id}, socket) do
-    {:noreply, socket |> assign(:group_filter, group_id) |> stream_destinations()}
-  end
-
   def handle_event("new_destination", _params, socket) do
     changeset = Observability.change_destination(%Destination{})
 
     {:noreply,
      socket
      |> assign(:form, to_form(changeset, as: :destination))
-     |> assign(:editing_destination_id, :new)
-     |> assign(:editing_group_id, nil)}
+     |> assign(:editing_destination_id, :new)}
   end
 
   def handle_event("edit_destination", %{"id" => id}, socket) do
@@ -115,16 +99,14 @@ defmodule TokengateWeb.ObservabilityLive do
     {:noreply,
      socket
      |> assign(:form, to_form(changeset, as: :destination))
-     |> assign(:editing_destination_id, destination.id)
-     |> assign(:editing_group_id, destination.group_id)}
+     |> assign(:editing_destination_id, destination.id)}
   end
 
   def handle_event("cancel_form", _params, socket) do
     {:noreply,
      socket
      |> assign(:form, nil)
-     |> assign(:editing_destination_id, nil)
-     |> assign(:editing_group_id, nil)}
+     |> assign(:editing_destination_id, nil)}
   end
 
   def handle_event("save_destination", %{"destination" => destination_params}, socket) do
@@ -159,7 +141,6 @@ defmodule TokengateWeb.ObservabilityLive do
          |> put_flash(:info, "Webhook guardado.")
          |> assign(:form, nil)
          |> assign(:editing_destination_id, nil)
-         |> assign(:editing_group_id, nil)
          |> load_data()}
 
       {:error, %Ecto.Changeset{} = changeset} ->
@@ -214,13 +195,11 @@ defmodule TokengateWeb.ObservabilityLive do
         <.header>
           Observabilidad
           <:subtitle>
-            Webhooks de telemetría (OTLP) para todos los grupos, en un solo lugar
+            Webhooks de telemetría (OTLP) de toda la instalación, en un solo lugar
           </:subtitle>
           <:actions>
             <div class="flex items-center gap-2">
-              <%!-- Igual que en grupos: el phx-change necesita un <form> alrededor.
-                   El select lleva su PROPIO phx-change, que tiene precedencia
-                   sobre el del form. --%>
+              <%!-- El phx-change necesita un <form> alrededor. --%>
               <form
                 id="observability-search-form"
                 phx-change="search"
@@ -234,22 +213,6 @@ defmodule TokengateWeb.ObservabilityLive do
                   placeholder="Buscar nombre o URL…"
                   class="input input-sm w-48"
                 />
-              </form>
-              <form id="observability-group-filter-form" phx-change="filter_group">
-                <select
-                  name="group_filter"
-                  class="select select-sm w-44"
-                  id="group-filter"
-                >
-                  <option value="">Todos los grupos</option>
-                  <option
-                    :for={group <- @groups}
-                    value={group.id}
-                    selected={@group_filter == group.id}
-                  >
-                    {group.name}
-                  </option>
-                </select>
               </form>
               <.button phx-click="new_destination" id="new-destination-btn">
                 <.icon name="hero-plus" class="w-4 h-4" /> Nuevo webhook
@@ -272,14 +235,6 @@ defmodule TokengateWeb.ObservabilityLive do
                   type="text"
                   label="Nombre"
                   hint="Nombre identificativo del webhook. Ej.: «Datadog - Producción»."
-                />
-                <.input
-                  field={@form[:group_id]}
-                  type="select"
-                  label="Grupo"
-                  options={Enum.map(@groups, fn g -> {g.name, g.id} end)}
-                  prompt="Selecciona un grupo"
-                  hint="La telemetría de los miembros de este grupo se enviará al webhook."
                 />
                 <.input
                   field={@form[:url]}
@@ -313,7 +268,6 @@ defmodule TokengateWeb.ObservabilityLive do
             <thead>
               <tr>
                 <th>Webhook</th>
-                <th>Grupo</th>
                 <th>Tipo</th>
                 <th>URL</th>
                 <th class="text-right">Acciones</th>
@@ -329,11 +283,6 @@ defmodule TokengateWeb.ObservabilityLive do
                     <.icon name="hero-bell-alert" class="w-4 h-4 text-primary shrink-0" />
                     <span class="font-medium text-sm">{destination.name}</span>
                   </div>
-                </td>
-                <td>
-                  <span class="badge badge-sm badge-ghost">
-                    {Map.get(@group_names, destination.group_id, "—")}
-                  </span>
                 </td>
                 <td>
                   <span class="badge badge-sm badge-primary/20 border-primary/30 text-primary">

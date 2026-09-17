@@ -1,6 +1,10 @@
 defmodule Tokengate.Observability.Destination do
   @moduledoc """
   An observability destination for exporting telemetry (OTLP webhooks, etc.).
+
+  Un destino NO pertenece a ningún sujeto: la observabilidad es de toda la
+  instalación, así que cada webhook recibe la telemetría de todos los
+  miembros. (Antes colgaba de un grupo y sólo recibía la suya.)
   """
 
   use Ecto.Schema
@@ -17,13 +21,11 @@ defmodule Tokengate.Observability.Destination do
     field :url, :string
     field :headers, :map, default: %{}
 
-    belongs_to :group, Tokengate.Accounts.Group
-
     timestamps(type: :utc_datetime)
   end
 
-  @permitted ~w(name type url headers group_id)a
-  @required ~w(name type group_id)a
+  @permitted ~w(name type url headers)a
+  @required ~w(name type)a
 
   @doc false
   def changeset(destination, attrs) do

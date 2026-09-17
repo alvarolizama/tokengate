@@ -1,7 +1,9 @@
 defmodule TokengateWeb.ObservabilityLiveTest do
   @moduledoc """
-  Tests for the Observability section (webhook destinations extracted
-  from GroupsLive).
+  Tests for the Observability section (global OTLP webhook destinations).
+
+  La observabilidad es de toda la instalación: los destinos ya no pertenecen a
+  una sub mensual ni se filtran por ella.
   """
   use TokengateWeb.ConnCase, async: false
 
@@ -32,21 +34,14 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     |> recycle()
   end
 
-  defp group_fixture do
-    u = unique()
-    {:ok, group} = Accounts.create_group(%{name: "Group #{u}"})
-    group
-  end
-
-  defp destination_fixture(group) do
+  defp destination_fixture do
     u = unique()
 
     {:ok, destination} =
       Observability.create_destination(%{
         name: "Datadog #{u}",
         type: "otlp_webhook",
-        url: "https://example.com/otlp-#{u}",
-        group_id: group.id
+        url: "https://example.com/otlp-#{u}"
       })
 
     destination
@@ -71,9 +66,8 @@ defmodule TokengateWeb.ObservabilityLiveTest do
   # Listing and filtering
   # --------------------------------------------------------------------------
 
-  test "admin sees destinations with group name", %{conn: conn} do
-    group = group_fixture()
-    destination = destination_fixture(group)
+  test "admin sees destinations", %{conn: conn} do
+    destination = destination_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
@@ -81,12 +75,11 @@ defmodule TokengateWeb.ObservabilityLiveTest do
 
     assert html =~ "Observabilidad"
     assert has_element?(view, "#edit-destination-#{destination.id}")
-    assert render(view) =~ group.name
+    assert render(view) =~ destination.name
   end
 
   test "search filters destinations in memory", %{conn: conn} do
-    group = group_fixture()
-    destination = destination_fixture(group)
+    destination = destination_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
@@ -111,28 +104,16 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     assert has_element?(view, "#edit-destination-#{destination.id}")
   end
 
-  test "group filter narrows the list", %{conn: conn} do
-    group = group_fixture()
-    destination = destination_fixture(group)
-    other_group = group_fixture()
+  # Los webhooks ya no cuelgan de una sub mensual: no hay filtro por grupo.
+  test "no group filter is rendered", %{conn: conn} do
+    destination_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/operations/observability")
 
-    assert has_element?(view, "#observability-group-filter-form select#group-filter")
-
-    view
-    |> element("#observability-group-filter-form")
-    |> render_change(%{"group_filter" => other_group.id})
-
-    refute has_element?(view, "#edit-destination-#{destination.id}")
-
-    view
-    |> element("#observability-group-filter-form")
-    |> render_change(%{"group_filter" => group.id})
-
-    assert has_element?(view, "#edit-destination-#{destination.id}")
+    refute has_element?(view, "#observability-group-filter-form")
+    refute has_element?(view, "#group-filter")
   end
 
   # --------------------------------------------------------------------------
@@ -140,7 +121,6 @@ defmodule TokengateWeb.ObservabilityLiveTest do
   # --------------------------------------------------------------------------
 
   test "new destination modal opens", %{conn: conn} do
-    group_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
@@ -151,7 +131,6 @@ defmodule TokengateWeb.ObservabilityLiveTest do
   end
 
   test "creates a destination from the modal", %{conn: conn} do
-    group = group_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
@@ -164,7 +143,6 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     |> render_submit(%{
       destination: %{
         name: "New hook",
-        group_id: group.id,
         url: "https://example.com/new",
         headers: ""
       }
@@ -177,8 +155,7 @@ defmodule TokengateWeb.ObservabilityLiveTest do
   end
 
   test "deletes a destination", %{conn: conn} do
-    group = group_fixture()
-    destination = destination_fixture(group)
+    destination = destination_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)

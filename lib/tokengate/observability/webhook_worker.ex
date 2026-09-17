@@ -24,8 +24,9 @@ defmodule Tokengate.Observability.WebhookWorker do
   ## Dispatch
 
   `dispatch/1` is a plain function (not the worker callback) that resolves
-  all destinations for a request log's group (via the group member) and
-  enqueues one `WebhookWorker` job per destination, batching the log ids.
+  every destination and enqueues one `WebhookWorker` job per destination,
+  batching the log ids. Los destinos son globales: no se filtran por el grupo
+  del request log.
   """
 
   use Oban.Worker,
@@ -33,7 +34,6 @@ defmodule Tokengate.Observability.WebhookWorker do
     max_attempts: 5
 
   import Ecto.Query, warn: false
-  alias Tokengate.Accounts.GroupMember
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Observability.Destination
   alias Tokengate.Observability.OtlpBuilder
@@ -77,30 +77,22 @@ defmodule Tokengate.Observability.WebhookWorker do
   end
 
   @doc """
-  Resolves all observability destinations for the request log's group (via
-  the group member) and enqueues one `WebhookWorker` job per destination.
+  Resolves every observability destination and enqueues one `WebhookWorker`
+  job per destination, batching the log id.
+
+  La observabilidad es de TODA la instalación: un webhook no filtra por grupo,
+  así que todo request log —con o sin miembro— se exporta a cada destino.
 
   Returns `{:ok, count}` where `count` is the number of jobs enqueued.
-  Returns `{:ok, 0}` if no destinations are configured or if the request
-  log has no group member.
+  Returns `{:ok, 0}` when no destinations are configured.
   """
   @spec dispatch(RequestLog.t()) :: {:ok, non_neg_integer()}
-  def dispatch(%RequestLog{id: log_id, group_member_id: tm_id} = _request_log)
-      when is_binary(log_id) and is_binary(tm_id) do
-    group_member = Repo.get(GroupMember, tm_id)
-    group_id = group_member && group_member.group_id
-
-    destinations =
-      if group_id do
-        Tokengate.Observability.list_destinations(group_id)
-      else
-        []
-      end
-
+  def dispatch(%RequestLog{id: log_id}) when is_binary(log_id) do
     log_id_str = to_string(log_id)
 
     count =
-      Enum.reduce(destinations, 0, fn destination, acc ->
+      Tokengate.Observability.list_all_destinations()
+      |> Enum.reduce(0, fn destination, acc ->
         %{destination_id: destination.id, request_log_ids: [log_id_str]}
         |> __MODULE__.new()
         |> Oban.insert!()

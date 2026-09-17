@@ -51,6 +51,7 @@ defmodule TokengateWeb.UsersLive do
       |> assign(:editing_groups_user_id, nil)
       |> assign(:editing_groups_user_name, nil)
       |> assign(:editing_group_ids, [])
+      |> assign(:editing_user_sub_id, nil)
       |> assign(:keys_user_id, nil)
       |> assign(:keys_user_name, nil)
       |> assign(:keys, [])
@@ -518,8 +519,9 @@ defmodule TokengateWeb.UsersLive do
 
     {:noreply,
      socket
-     |> assign(:form, to_form(changeset, as: :user))
+     |> assign(:form, to_form(Map.put(changeset, :params, %{}), as: :user))
      |> assign(:editing_user_id, user.id)
+     |> assign(:editing_user_sub_id, current_sub_id(user_id))
      |> assign(:form_mode, :edit)}
   end
 
@@ -528,6 +530,7 @@ defmodule TokengateWeb.UsersLive do
      socket
      |> assign(:form, nil)
      |> assign(:editing_user_id, nil)
+     |> assign(:editing_user_sub_id, nil)
      |> assign(:form_mode, nil)
      |> assign(:reset_user_id, nil)}
   end
@@ -720,8 +723,8 @@ defmodule TokengateWeb.UsersLive do
   end
 
   defp save_new_user(socket, user_params) do
-    {group_ids, user_params} = Map.pop(user_params, "group_ids", [])
-    group_ids = group_ids |> List.wrap() |> Enum.reject(&(&1 in ["", nil]))
+    {sub_id, user_params} = Map.pop(user_params, "sub_id", nil)
+    sub_id = if sub_id in ["", nil], do: nil, else: sub_id
 
     case Accounts.admin_create_user(user_params) do
       {:ok, user} ->
@@ -730,44 +733,42 @@ defmodule TokengateWeb.UsersLive do
           "global_role" => user.global_role
         })
 
-        # Create group memberships + one initial key per membership. The key
-        # cuelga del usuario (N keys con label): se crea con la API nueva, no
-        # con el modelo viejo de key única.
-        results =
-          Enum.map(group_ids, fn group_id ->
+        # Un usuario pertenece a UNA sola sub mensual: la sub es el sujeto que
+        # le aporta su límite mensual heredado. Se crea la membresía + una key
+        # inicial (la key cuelga del usuario: N keys con label).
+        result =
+          if sub_id do
             with {:ok, member} <-
                    Accounts.create_group_member(%{
                      user_id: user.id,
-                     group_id: group_id,
+                     group_id: sub_id,
                      status: "active"
                    }) do
               create_initial_key(user, member)
             end
-          end)
+          end
 
-        failed = Enum.filter(results, &match?({:error, _}, &1))
+        case result do
+          {:error, changeset} ->
+            {:noreply,
+             socket
+             |> put_flash(
+               :warning,
+               "Usuario creado pero la sub no se pudo asignar: #{format_errors(changeset)}"
+             )
+             |> assign(:form, nil)
+             |> assign(:editing_user_id, nil)
+             |> assign(:form_mode, nil)
+             |> load_users()}
 
-        if failed == [] do
-          {:noreply,
-           socket
-           |> put_flash(:info, "Usuario creado con #{length(group_ids)} grupo(s).")
-           |> assign(:form, nil)
-           |> assign(:editing_user_id, nil)
-           |> assign(:form_mode, nil)
-           |> assign(:all_groups, Accounts.list_groups())
-           |> load_users()}
-        else
-          {:noreply,
-           socket
-           |> put_flash(
-             :warning,
-             "Usuario creado pero #{length(failed)} grupo(s) no se pudieron asignar."
-           )
-           |> assign(:form, nil)
-           |> assign(:editing_user_id, nil)
-           |> assign(:form_mode, nil)
-           |> assign(:all_groups, Accounts.list_groups())
-           |> load_users()}
+          _ ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Usuario creado.")
+             |> assign(:form, nil)
+             |> assign(:editing_user_id, nil)
+             |> assign(:form_mode, nil)
+             |> load_users()}
         end
 
       {:error, changeset} ->
@@ -778,6 +779,8 @@ defmodule TokengateWeb.UsersLive do
   defp save_edit_user(socket, user_params) do
     user_id = socket.assigns.editing_user_id
     user = Accounts.get_user!(user_id)
+    {sub_id, user_params} = Map.pop(user_params, "sub_id", nil)
+    sub_id = if sub_id in ["", nil], do: nil, else: sub_id
 
     # Prevent removing admin from the root seed user
     user_params = protect_root_user(user, user_params)
@@ -795,17 +798,48 @@ defmodule TokengateWeb.UsersLive do
           }
         )
 
-        {:noreply,
-         socket
-         |> put_flash(:info, "Usuario actualizado.")
-         |> assign(:form, nil)
-         |> assign(:editing_user_id, nil)
-         |> assign(:form_mode, nil)
-         |> load_users()}
+        # La sub (antes grupo) se mueve, no se acumula: un usuario tiene una
+        # sola sub. `sync_user_sub/2` es el único punto que toca membresías.
+        case Accounts.sync_user_sub(user_id, sub_id) do
+          :ok ->
+            {:noreply,
+             socket
+             |> put_flash(:info, "Usuario actualizado.")
+             |> assign(:form, nil)
+             |> assign(:editing_user_id, nil)
+             |> assign(:editing_user_sub_id, nil)
+             |> assign(:form_mode, nil)
+             |> load_users()}
+
+          {:error, reason} ->
+            {:noreply,
+             socket
+             |> put_flash(:error, "Usuario actualizado, pero la sub no se pudo mover: #{reason}")
+             |> assign(:form, nil)
+             |> assign(:editing_user_id, nil)
+             |> assign(:editing_user_sub_id, nil)
+             |> assign(:form_mode, nil)
+             |> load_users()}
+        end
 
       {:error, changeset} ->
         {:noreply, assign(socket, :form, to_form(changeset, as: :user))}
     end
+  end
+
+  # Sub mensual vigente del usuario (una sola por la invariante de la DB).
+  defp current_sub_id(user_id) do
+    case Accounts.list_group_members_for_user(user_id) do
+      [member | _] -> member.group_id
+      [] -> nil
+    end
+  end
+
+  defp format_errors(changeset) do
+    changeset
+    |> Ecto.Changeset.traverse_errors(fn {msg, _} -> msg end)
+    |> Enum.flat_map(fn {field, msgs} -> Enum.map(msgs, &"#{field} #{&1}") end)
+    |> Enum.join(", ")
   end
 
   defp create_initial_key(user, member) do
@@ -918,12 +952,12 @@ defmodule TokengateWeb.UsersLive do
               prompt="Selecciona un rol"
             />
             <.input
-              field={@form[:group_ids]}
+              field={@form[:sub_id]}
               type="select"
-              multiple
-              label="Grupos"
+              label="Sub mensual"
               options={Enum.map(@all_groups, fn t -> {t.name, t.id} end)}
-              hint="Mantén Ctrl/Cmd para seleccionar múltiples grupos."
+              prompt="Sin sub"
+              hint="Un usuario pertenece a UNA sola sub mensual: su límite de gasto heredado sale de aquí."
             />
             <div class="flex gap-2 mt-4 justify-end">
               <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>

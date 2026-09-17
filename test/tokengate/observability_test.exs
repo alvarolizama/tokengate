@@ -1,6 +1,5 @@
 defmodule Tokengate.ObservabilityTest do
   use Tokengate.DataCase, async: true
-  alias Tokengate.Accounts
   alias Tokengate.Observability
   alias Tokengate.Observability.Destination
 
@@ -8,28 +7,13 @@ defmodule Tokengate.ObservabilityTest do
   # Fixtures
   # ---------------------------------------------------------------------------
 
-  defp group_fixture do
-    {:ok, group} =
-      Accounts.create_group(%{
-        "name" => "Platform Group",
-        "monthly_budget_per_user_usd" => "100.00",
-        "default_concurrency_limit" => 10,
-        "default_rpm_limit" => 120
-      })
-
-    group
-  end
-
   defp valid_destination_attrs(attrs \\ %{}) do
-    group = group_fixture()
-
     Map.merge(
       %{
         name: "Honeycomb",
         type: "otlp_webhook",
         url: "https://api.honeycomb.io",
-        headers: %{"X-Api-Key" => "secret"},
-        group_id: group.id
+        headers: %{"X-Api-Key" => "secret"}
       },
       attrs
     )
@@ -55,81 +39,55 @@ defmodule Tokengate.ObservabilityTest do
       assert dest.type == "otlp_webhook"
       assert dest.url == "https://api.honeycomb.io"
       assert dest.headers == %{"X-Api-Key" => "secret"}
-      assert dest.group_id == attrs.group_id
     end
 
     test "applies default type when type omitted" do
-      group = group_fixture()
-
       {:ok, dest} =
         Observability.create_destination(%{
           name: "Default Dest",
-          type: "otlp_webhook",
-          group_id: group.id
+          type: "otlp_webhook"
         })
 
       assert dest.type == "otlp_webhook"
     end
 
     test "validates type inclusion" do
-      group = group_fixture()
-
       {:error, changeset} =
         Observability.create_destination(%{
           name: "Bad",
-          type: "invalid_type",
-          group_id: group.id
+          type: "invalid_type"
         })
 
       assert "is invalid" in errors_on(changeset).type
     end
 
-    test "requires name, group_id" do
+    # Un destino ya no requiere un grupo: es global.
+    # Un destino ya no requiere un grupo: es global.
+    test "requires a name" do
       {:error, changeset} = Observability.create_destination(%{})
 
       assert errors_on(changeset).name
-      assert errors_on(changeset).group_id
     end
   end
 
   # ---------------------------------------------------------------------------
-  # list_destinations
+  # list_all_destinations/0
   # ---------------------------------------------------------------------------
 
-  describe "list_destinations/1" do
-    test "returns destinations scoped to the given group" do
-      dest1 = destination_fixture(%{name: "Dest1"})
-      destination_fixture(%{name: "Dest2"})
+  describe "list_all_destinations/0" do
+    test "returns every destination, ordered by name" do
+      destination_fixture(%{name: "Zulu"})
+      destination_fixture(%{name: "Alpha"})
 
-      results = Observability.list_destinations(dest1.group_id)
+      names = Observability.list_all_destinations() |> Enum.map(& &1.name)
 
-      assert length(results) == 1
-      assert hd(results).name == "Dest1"
+      assert "Alpha" in names
+      assert "Zulu" in names
+      assert names == Enum.sort(names)
     end
 
-    test "returns all destinations for a group" do
-      group = group_fixture()
-
-      destination_fixture(%{name: "Dest1", group_id: group.id})
-      destination_fixture(%{name: "Dest2", group_id: group.id})
-
-      assert length(Observability.list_destinations(group.id)) == 2
-    end
-
-    test "returns empty list when no destinations for group" do
-      group = group_fixture()
-
-      assert Observability.list_destinations(group.id) == []
-    end
-
-    test "does not return destinations from other groups" do
-      dest1 = destination_fixture(%{name: "Dest1"})
-      dest2 = destination_fixture(%{name: "Dest2"})
-
-      refute dest1.group_id == dest2.group_id
-
-      assert length(Observability.list_destinations(dest1.group_id)) == 1
-      assert length(Observability.list_destinations(dest2.group_id)) == 1
+    test "returns an empty list when none configured" do
+      assert Observability.list_all_destinations() == []
     end
   end
 
@@ -175,7 +133,7 @@ defmodule Tokengate.ObservabilityTest do
       dest = destination_fixture()
       {:ok, _} = Observability.delete_destination(dest)
 
-      assert Observability.list_destinations(dest.group_id) == []
+      assert Observability.list_all_destinations() == []
     end
   end
 end

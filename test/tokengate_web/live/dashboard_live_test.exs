@@ -53,33 +53,36 @@ defmodule TokengateWeb.DashboardLiveTest do
     {:ok, member} =
       Accounts.create_group_member(%{user_id: owner.id, group_id: group.id})
 
-    if cost = Map.get(opts, :cost) do
-      {:ok, provider} =
-        Providers.create_provider(%{
-          name: "P #{u}",
-          base_url: "http://localhost:1"
-        })
+    provider =
+      if Map.get(opts, :cost) do
+        {:ok, provider} =
+          Providers.create_provider(%{
+            name: "P #{u}",
+            base_url: "http://localhost:1"
+          })
 
-      inserted_at =
-        Map.get(opts, :inserted_at) || DateTime.utc_now() |> DateTime.truncate(:second)
+        inserted_at =
+          Map.get(opts, :inserted_at) || DateTime.utc_now() |> DateTime.truncate(:second)
 
-      {:ok, _log} =
-        Logs.log_request(%{
-          group_member_id: member.id,
-          provider_id: provider.id,
-          model_id: nil,
-          model_requested: "gpt-4o",
-          model_responded: "gpt-4o",
-          agent_type: "claude-code",
-          status_code: 200,
-          prompt_tokens: 100,
-          completion_tokens: 50,
-          provider_cost_usd: cost,
-          latency_ms: 42,
-          streaming: false,
-          inserted_at: inserted_at
-        })
-    end
+        {:ok, _log} =
+          Logs.log_request(%{
+            group_member_id: member.id,
+            provider_id: provider.id,
+            model_id: nil,
+            model_requested: "gpt-4o",
+            model_responded: "gpt-4o",
+            agent_type: "claude-code",
+            status_code: 200,
+            prompt_tokens: 100,
+            completion_tokens: 50,
+            provider_cost_usd: opts.cost,
+            latency_ms: 42,
+            streaming: false,
+            inserted_at: inserted_at
+          })
+
+        provider
+      end
 
     password =
       case Map.get(opts, :user) do
@@ -87,7 +90,7 @@ defmodule TokengateWeb.DashboardLiveTest do
         _ -> nil
       end
 
-    %{group: group, owner: owner, member: member, owner_password: password}
+    %{group: group, owner: owner, member: member, provider: provider, owner_password: password}
   end
 
   defp group_with_member(opts \\ %{}) do
@@ -165,14 +168,31 @@ defmodule TokengateWeb.DashboardLiveTest do
 
     now = DateTime.utc_now() |> DateTime.truncate(:second)
 
-    # current 7d window
-    group_with_log(%{cost: "0.005", user: admin, inserted_at: DateTime.add(now, -3600, :second)})
-    # previous 7d window (8 days back falls in the shifted span)
-    group_with_log(%{
-      cost: "0.004",
-      user: admin,
-      inserted_at: DateTime.add(now, -8 * 86_400, :second)
-    })
+    # Un usuario tiene UNA sub: las dos ventanas se insertan como logs de la
+    # misma membresía, con distinto `inserted_at`.
+    fixture =
+      group_with_log(%{
+        cost: "0.005",
+        user: admin,
+        inserted_at: DateTime.add(now, -3600, :second)
+      })
+
+    {:ok, _log} =
+      Logs.log_request(%{
+        group_member_id: fixture.member.id,
+        provider_id: fixture.provider.id,
+        model_id: nil,
+        model_requested: "gpt-4o",
+        model_responded: "gpt-4o",
+        agent_type: "claude-code",
+        status_code: 200,
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        provider_cost_usd: Decimal.new("0.004"),
+        latency_ms: 42,
+        streaming: false,
+        inserted_at: DateTime.add(now, -8 * 86_400, :second)
+      })
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/dashboard")
@@ -520,17 +540,17 @@ defmodule TokengateWeb.DashboardLiveTest do
 
   ## Group card: no shortcut to /access/groups -------------------------------
 
-  # El enlace al hub de grupos se retiró: /access/groups vive en la
+  # El enlace al hub de subs se retiró: /access/groups vive en la
   # live_session :admin y un no-admin rebotaba a /dashboard al pulsarlo.
   # La tarjeta ya no lleva flecha para ningún rol.
   test "the group card never links to /access/groups", %{conn: conn} do
     %{user: admin, password: admin_password} = register("admin")
-    _group_with_log = group_with_log(%{user: admin})
+    # Un usuario pertenece a UNA sola sub: una membresía por usuario basta
+    # para poblar la tarjeta del dashboard.
+    %{group: admin_group} = group_with_log(%{user: admin})
 
     admin_conn = login(conn, admin, admin_password)
     {:ok, admin_view, _html} = live(admin_conn, ~p"/dashboard")
-
-    %{group: admin_group} = group_with_log(%{user: admin})
 
     # Scoped to the card: the sidebar DOES link to /access/groups for admins.
     refute has_element?(admin_view, "#group-#{admin_group.id} a[href='/access/groups']")

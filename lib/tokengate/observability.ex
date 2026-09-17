@@ -1,6 +1,9 @@
 defmodule Tokengate.Observability do
   @moduledoc """
   The Observability context: manages telemetry export destinations.
+
+  Los destinos son globales: la observabilidad es de toda la instalación, no
+  de un grupo. Cada webhook recibe la telemetría de todos los sujetos.
   """
 
   import Ecto.Query, warn: false
@@ -11,24 +14,12 @@ defmodule Tokengate.Observability do
   # Destinations
   # ---------------------------------------------------------------------------
 
-  @doc "Returns all observability destinations for the given group."
-  def list_destinations(group_id) do
-    Repo.all(from d in Destination, where: d.group_id == ^group_id)
-  end
-
   @doc """
-  Returns all observability destinations for the given groups in a single
-  query, grouped by group_id (`%{group_id => [Destination]}`). Groups without
-  destinations are absent from the map — callers should default to `[]`.
+  Returns all destinations, ordered by name. Every destination receives the
+  telemetry of the whole installation — there is no per-group scoping.
   """
-  def list_destinations_for_groups(group_ids) when is_list(group_ids) do
-    Repo.all(from d in Destination, where: d.group_id in ^group_ids)
-    |> Enum.group_by(& &1.group_id)
-  end
-
-  @doc "Returns all destinations ordered by name."
   def list_all_destinations do
-    Repo.all(from d in Destination, order_by: [asc: d.name], preload: [:group])
+    Repo.all(from d in Destination, order_by: [asc: d.name])
   end
 
   @doc "Gets a single destination. Raises if not found."

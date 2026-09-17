@@ -142,28 +142,22 @@ defmodule TokengateWeb.UserStatsLiveTest do
       assert html =~ "$0"
     end
 
-    test "cada membresía enlaza a su grupo", %{conn: conn} do
+    test "la membresía única enlaza a su grupo", %{conn: conn} do
       {group, user} = fixture_user_with_memberships()
-
-      # Segunda membresía: la lista de "Membresías (consolidado)" es la de las
-      # membresías del usuario, no la de los grupos con tráfico.
-      {:ok, other_group} = Accounts.create_group(%{name: "Other #{unique()}"})
-      {:ok, _} = Accounts.create_group_member(%{group_id: other_group.id, user_id: user.id})
 
       %{user: admin, password: password} = register("admin")
       conn = login(conn, admin, password)
 
       {:ok, view, _html} = live(conn, ~p"/stats/users/#{user.id}")
 
-      # El nombre del grupo lleva a su detalle: sin el enlace el grupo quedaba
-      # como texto muerto y no había camino de ida al grupo.
-      for g <- [group, other_group] do
-        assert has_element?(
-                 view,
-                 "#membership-group-#{g.id}[href*='/stats/groups/#{g.id}']",
-                 g.name
-               )
-      end
+      # Un usuario pertenece a UNA sola sub: su detalle lista esa membresía, y
+      # el nombre del grupo lleva a su detalle (sin el enlace quedaba como
+      # texto muerto).
+      assert has_element?(
+               view,
+               "#membership-group-#{group.id}[href*='/stats/groups/#{group.id}']",
+               group.name
+             )
     end
   end
 

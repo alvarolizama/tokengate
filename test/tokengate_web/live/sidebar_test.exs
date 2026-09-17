@@ -49,16 +49,17 @@ defmodule TokengateWeb.SidebarTest do
     assert in_section?(view, "sidebar-section-catalogo", "sidebar-link-catalog-labs")
     refute in_section?(view, "sidebar-section-catalogo", "sidebar-link-access-groups")
 
-    assert in_section?(view, "sidebar-section-acceso", "sidebar-link-access-groups")
     assert in_section?(view, "sidebar-section-acceso", "sidebar-link-access-users")
     assert in_section?(view, "sidebar-section-acceso", "sidebar-link-access-services")
     refute in_section?(view, "sidebar-section-acceso", "sidebar-link-catalog-models")
 
-    # Crédito tiene UN solo link (Top-ups): las suscripciones desaparecieron
-    # con el modelo de límite mensual + top-ups.
+    # Crédito tiene DOS links: las subs mensuales (el sujeto que aporta el
+    # límite de gasto) y los top-ups. La página de grupos se movió aquí.
+    assert in_section?(view, "sidebar-section-credito", "sidebar-link-access-groups")
     assert in_section?(view, "sidebar-section-credito", "sidebar-link-credit-topups")
     refute in_section?(view, "sidebar-section-credito", "sidebar-link-credit-subscriptions")
     refute in_section?(view, "sidebar-section-credito", "sidebar-link-operations-monitoring")
+    refute in_section?(view, "sidebar-section-credito", "sidebar-link-access-users")
 
     assert in_section?(view, "sidebar-section-operaciones", "sidebar-link-operations-monitoring")
 
@@ -87,13 +88,13 @@ defmodule TokengateWeb.SidebarTest do
     assert positions == Enum.sort(positions)
 
     # Inside a section the links render in this order too. Labs goes before
-    # Proveedores (a lab is independent from any provider) and Servicios
-    # before Grupos (a service does not depend on a group).
+    # Proveedores (a lab is independent from any provider); in Crédito las
+    # subs mensuales van antes de los top-ups.
     for {first, second} <- [
           {"sidebar-link-catalog-labs", "sidebar-link-catalog-providers"},
           {"sidebar-link-catalog-providers", "sidebar-link-catalog-models"},
-          {"sidebar-link-access-services", "sidebar-link-access-groups"},
-          {"sidebar-link-access-groups", "sidebar-link-access-users"}
+          {"sidebar-link-access-services", "sidebar-link-access-users"},
+          {"sidebar-link-access-groups", "sidebar-link-credit-topups"}
         ] do
       assert link_position(html, first) < link_position(html, second),
              "expected #{first} to render before #{second}"

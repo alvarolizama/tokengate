@@ -300,19 +300,13 @@ defmodule TokengateWeb.Layouts do
             </.sidebar_section>
 
             <.sidebar_section id="sidebar-section-acceso" label="Acceso">
-              <%!-- Servicios va antes de Grupos: un servicio no depende de un
-                   grupo, así que se lista primero. --%>
+              <%!-- Servicios va antes de Usuarios: un servicio no depende de
+                   una sub mensual, así que se lista primero. --%>
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/access/services"}
                 label="Servicios"
                 icon="hero-wrench-screwdriver"
-              />
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/access/groups"}
-                label="Grupos"
-                icon="hero-user-group"
               />
               <.sidebar_link
                 current_path={@current_path}
@@ -323,6 +317,14 @@ defmodule TokengateWeb.Layouts do
             </.sidebar_section>
 
             <.sidebar_section id="sidebar-section-credito" label="Crédito">
+              <%!-- Las subs mensuales son el sujeto que aporta el límite de
+                   gasto mensual, así que viven en Crédito, no en Acceso. --%>
+              <.sidebar_link
+                current_path={@current_path}
+                href={~p"/access/groups"}
+                label="Monthly Subs"
+                icon="hero-user-group"
+              />
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/credit/topups"}
@@ -415,7 +417,7 @@ defmodule TokengateWeb.Layouts do
 
   # A link is active on its own route and on any of its sub-routes, so
   # drill-downs keep the parent entry lit (e.g. /access/groups/42/members
-  # highlights Grupos).
+  # highlights Monthly Subs).
   defp active_path?(nil, _href), do: false
 
   defp active_path?(path, href) when is_binary(path) and is_binary(href) do

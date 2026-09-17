@@ -67,7 +67,7 @@ defmodule TokengateWeb.GroupsLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, html} = live(conn, ~p"/access/groups")
 
-    assert html =~ "Grupos"
+    assert html =~ "Monthly Subs"
     assert has_element?(view, "#new-group-btn")
 
     # Type a search term that matches no group → triggers empty state deterministically
@@ -268,16 +268,53 @@ defmodule TokengateWeb.GroupsLiveTest do
   end
 
   # --------------------------------------------------------------------------
-  # Webhooks — managed in ObservabilityLive since the extraction
+  # Webhooks — global now: they no longer hang off a group
   # --------------------------------------------------------------------------
 
-  test "webhooks badge links to observability section", %{conn: conn} do
+  test "the group card has no webhooks badge", %{conn: conn} do
     %{group: group} = group_fixture()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/access/groups")
 
-    assert has_element?(view, "#webhooks-link-#{group.id}")
+    # La observabilidad es de toda la instalación, así que un webhook no
+    # pertenece a la sub y la tarjeta no lleva contador ni enlace.
+    refute has_element?(view, "#webhooks-link-#{group.id}")
+  end
+
+  # --------------------------------------------------------------------------
+  # Monthly limit — editable from the sub form (comment 2 on the Editar button)
+  # --------------------------------------------------------------------------
+
+  test "the edit modal carries the monthly spend limit", %{conn: conn} do
+    %{group: group} = group_fixture()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/access/groups")
+
+    view |> element("#edit-#{group.id}") |> render_click()
+
+    assert has_element?(view, "#group-form input[name='group[monthly_spend_limit_usd]']")
+    assert has_element?(view, "#group-form input[name='group[unlimited_spend]']")
+  end
+
+  test "admin sets the group monthly limit", %{conn: conn} do
+    %{group: group} = group_fixture()
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/access/groups")
+
+    view |> element("#edit-#{group.id}") |> render_click()
+
+    view
+    |> form("#group-form", %{
+      group: %{name: group.name, monthly_spend_limit_usd: "250.50"}
+    })
+    |> render_submit()
+
+    assert Accounts.get_group!(group.id).monthly_spend_limit_usd == Decimal.new("250.50")
   end
 end

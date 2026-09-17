@@ -1,17 +1,20 @@
 defmodule TokengateWeb.GroupMembersLive do
   @moduledoc """
-  Per-group member management.
+  Per-sub member management (antes «grupo», ahora sub mensual).
 
   Access:
     - admin: manages members of any group.
     - user: denied — redirected to /dashboard.
 
   Supports:
-    - Add member by email (creates group_member + auto-generates API key).
+    - Add member by email.
     - Remove member.
-    - Per-member extras: extra_concurrency, extra_rpm,
-      extra_model_models (individual grants
-      beyond group models) with optional per-model daily budget.
+    - Per-member extra model grants (individual grants beyond the sub's
+      models) with the 3-state picker in the details modal.
+
+  Las API keys y los extras de concurrencia/RPM NO se gestionan aquí: las keys
+  cuelgan del usuario y los límites los aporta la sub (o el propio sujeto en su
+  página).
   """
 
   use TokengateWeb, :live_view
@@ -34,17 +37,12 @@ defmodule TokengateWeb.GroupMembersLive do
           socket
           |> assign(:page_title, "Miembros · Tokengate")
           |> assign(:group, group)
-          |> assign(:editing_member_id, nil)
           |> assign(:editing_details_member_id, nil)
-          |> assign(:new_token, nil)
-          |> assign(:new_token_member_id, nil)
           |> assign(:show_add_modal?, false)
           |> assign(:add_form, add_member_form())
           |> assign(:add_member_error, nil)
           |> assign(:email_suggestions, [])
           |> assign(:member_search, "")
-          |> assign(:user_key_form, user_key_form())
-          |> assign(:new_user_key_token, nil)
           |> load_data()
 
         {:ok, socket}
@@ -124,8 +122,6 @@ defmodule TokengateWeb.GroupMembersLive do
 
     # Member budgets with spend — one batched query for every member instead
     # of one SUM per member (N+1).
-    model_map = Map.new(org_alias_ids, fn a -> {a.id, a.name} end)
-
     monthly_spend_by_member =
       members
       |> Enum.map(& &1.id)
@@ -156,44 +152,12 @@ defmodule TokengateWeb.GroupMembersLive do
     |> assign(:group_alias_ids, group_alias_ids)
     |> assign(:extra_models, extra_aliases_simple)
     |> assign(:denied_models, denied_models)
-    |> assign(:model_map, model_map)
     |> assign(:group_monthly_spend, group_monthly_spend)
     |> assign(:usage_tiers, usage_tiers)
-    |> load_exclusive_providers(members)
-    |> load_user_keys(members)
   end
 
   defp days_ago(n) do
     DateTime.add(DateTime.utc_now(), -n * 86400, :second)
-  end
-
-  defp load_exclusive_providers(socket, members) do
-    member_ids = Enum.map(members, & &1.id)
-
-    # Query exclusive providers where any member in this group is the target
-    import Ecto.Query, only: [from: 2]
-    alias Tokengate.Providers.ModelProvider
-
-    exclusive_providers =
-      from(mp in ModelProvider,
-        where: mp.exclusive_to_group_member_id in ^member_ids,
-        preload: [credential: [:provider], model: []]
-      )
-      |> Repo.all()
-
-    # Group by member_id for easy lookup
-    grouped =
-      exclusive_providers
-      |> Enum.group_by(& &1.exclusive_to_group_member_id)
-
-    assign(socket, :exclusive_providers, grouped)
-  end
-
-  defp load_user_keys(socket, members) do
-    keys =
-      Map.new(members, fn m -> {m.id, Accounts.list_api_keys_for_user(m.user_id)} end)
-
-    assign(socket, :user_keys, keys)
   end
 
   ## Events — add member --------------------------------------------------
@@ -251,39 +215,30 @@ defmodule TokengateWeb.GroupMembersLive do
     group = socket.assigns.group
 
     with {:ok, email} <- Map.fetch(params, "email"),
-         {:ok, user} <- fetch_user_by_email(email),
-         {:ok, concurrency} <- parse_integer(params["extra_concurrency"]),
-         {:ok, rpm} <- parse_integer(params["extra_rpm"]) do
-      attrs = %{
-        user_id: user.id,
-        group_id: group.id,
-        extra_concurrency: concurrency,
-        extra_rpm: rpm
-      }
+         {:ok, user} <- fetch_user_by_email(email) do
+      attrs = %{user_id: user.id, group_id: group.id}
 
       case Accounts.create_group_member(attrs) do
         {:ok, _member} ->
           {:noreply,
            socket
-           |> put_flash(:info, "Miembro añadido. Genera su API key desde la sección API Keys.")
+           |> put_flash(:info, "Miembro añadido.")
            |> assign(:show_add_modal?, false)
            |> assign(:add_form, add_member_form())
            |> assign(:add_member_error, nil)
            |> load_data()}
 
         {:error, changeset} ->
-          msg = format_changeset_errors(changeset)
-
           {:noreply,
            socket
-           |> assign(:add_member_error, msg)
+           |> assign(:add_member_error, format_add_member_error(changeset))
            |> assign(:add_form, to_form(params, as: :add_member))}
       end
     else
       :error ->
         {:noreply,
          socket
-         |> assign(:add_member_error, "Valores inválidos: revisa que sean números válidos.")
+         |> assign(:add_member_error, "Escribe el email del usuario.")
          |> assign(:add_form, to_form(params, as: :add_member))}
 
       nil ->
@@ -291,25 +246,6 @@ defmodule TokengateWeb.GroupMembersLive do
          socket
          |> assign(:add_member_error, "No existe un usuario con ese email.")
          |> assign(:add_form, to_form(params, as: :add_member))}
-    end
-  end
-
-  @impl true
-  def handle_event("clear_sticky_routes", %{"id" => member_id}, socket) do
-    member = Accounts.get_group_member!(member_id, :with_assoc)
-
-    if member.group_id != socket.assigns.group.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
-    else
-      Accounts.clear_group_member_sticky_routes(member)
-
-      {:noreply,
-       socket
-       |> put_flash(
-         :info,
-         "Sticky routes limpiadas para #{member.user.email}. Su próxima petición se re-ruteará."
-       )
-       |> load_data()}
     end
   end
 
@@ -336,182 +272,16 @@ defmodule TokengateWeb.GroupMembersLive do
     end
   end
 
-  ## Events — API key management --------------------------------------------
-
-  @impl true
-  def handle_event("replace_key", %{"id" => member_id}, socket) do
-    member = Accounts.get_group_member!(member_id)
-
-    if member.group_id != socket.assigns.group.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
-    else
-      case Accounts.replace_api_key(member) do
-        {:ok, _api_key, new_token} ->
-          {:noreply,
-           socket
-           |> assign(:new_token, new_token)
-           |> assign(:new_token_member_id, member_id)
-           |> put_flash(:info, "Clave regenerada correctamente.")
-           |> load_data()}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudo regenerar la clave.")}
-      end
-    end
-  end
-
-  @impl true
-  def handle_event("revoke_key", %{"id" => member_id}, socket) do
-    member = Accounts.get_group_member!(member_id, :with_assoc)
-
-    if member.group_id != socket.assigns.group.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
-    else
-      case member.api_key do
-        nil ->
-          {:noreply, put_flash(socket, :error, "Esta membresía no tiene clave.")}
-
-        api_key ->
-          case Accounts.revoke_api_key(api_key) do
-            {:ok, _} ->
-              {:noreply,
-               socket
-               |> put_flash(:info, "Clave revocada.")
-               |> load_data()}
-
-            {:error, _} ->
-              {:noreply, put_flash(socket, :error, "No se pudo revocar la clave.")}
-          end
-      end
-    end
-  end
-
-  @impl true
-  def handle_event("dismiss_new_token", _params, socket) do
-    {:noreply, assign(socket, :new_token, nil)}
-  end
-
-  ## Events — keys del usuario (N keys con label) ---------------------------
-
-  @impl true
-  def handle_event("create_user_key", %{"id" => member_id} = params, socket) do
-    member = Accounts.get_group_member!(member_id)
-
-    if member.group_id != socket.assigns.group.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
-    else
-      label = get_in(params, ["user_key", "label"]) || ""
-      {token, key_hash, key_prefix} = Accounts.generate_api_key_material()
-
-      attrs = %{
-        "subject_type" => "member",
-        "user_id" => member.user_id,
-        "group_member_id" => member.id,
-        "label" => String.trim(label),
-        "key_hash" => key_hash,
-        "key_prefix" => key_prefix,
-        "status" => "active"
-      }
-
-      case Accounts.create_api_key(attrs) do
-        {:ok, _api_key} ->
-          {:noreply,
-           socket
-           |> assign(:new_user_key_token, token)
-           |> assign(:user_key_form, user_key_form())
-           |> put_flash(:info, "Key creada correctamente.")
-           |> load_data()}
-
-        {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudo crear la key.")}
-      end
-    end
-  end
-
-  @impl true
-  def handle_event("revoke_user_key", %{"id" => member_id, "key_id" => key_id}, socket) do
-    member = Accounts.get_group_member!(member_id)
-
-    if member.group_id != socket.assigns.group.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
-    else
-      case Enum.find(Accounts.list_api_keys_for_user(member.user_id), &(&1.id == key_id)) do
-        nil ->
-          {:noreply, put_flash(socket, :error, "Esta key no pertenece a este usuario.")}
-
-        api_key ->
-          case Accounts.revoke_api_key(api_key) do
-            {:ok, _} ->
-              {:noreply,
-               socket
-               |> put_flash(:info, "Key revocada.")
-               |> load_data()}
-
-            {:error, _} ->
-              {:noreply, put_flash(socket, :error, "No se pudo revocar la key.")}
-          end
-      end
-    end
-  end
-
-  ## Events — override edits ---------------------------------------------
-
-  @impl true
-  def handle_event("edit_overrides", %{"id" => member_id}, socket) do
-    {:noreply, assign(socket, :editing_member_id, member_id)}
-  end
+  ## Events — details modal (modelos del miembro) ---------------------------
 
   @impl true
   def handle_event("open_details", %{"id" => member_id}, socket) do
-    {:noreply,
-     socket
-     |> assign(:editing_details_member_id, member_id)
-     |> assign(:new_user_key_token, nil)
-     |> assign(:user_key_form, user_key_form())}
+    {:noreply, assign(socket, :editing_details_member_id, member_id)}
   end
 
   @impl true
   def handle_event("close_details", _params, socket) do
     {:noreply, assign(socket, :editing_details_member_id, nil)}
-  end
-
-  @impl true
-  def handle_event("cancel_overrides", _params, socket) do
-    {:noreply, assign(socket, :editing_member_id, nil)}
-  end
-
-  @impl true
-  def handle_event("save_overrides", %{"overrides" => override_params} = params, socket) do
-    member_id = params["id"]
-    member = Accounts.get_group_member!(member_id)
-
-    if member.group_id != socket.assigns.group.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
-    else
-      with {:ok, concurrency} <- parse_integer(override_params["extra_concurrency"]),
-           {:ok, rpm} <- parse_integer(override_params["extra_rpm"]) do
-        attrs = %{
-          extra_concurrency: concurrency,
-          extra_rpm: rpm
-        }
-
-        case Accounts.update_group_member(member, attrs) do
-          {:ok, _} ->
-            {:noreply,
-             socket
-             |> put_flash(:info, "Extras actualizados.")
-             |> assign(:editing_member_id, nil)
-             |> load_data()}
-
-          {:error, _} ->
-            {:noreply, put_flash(socket, :error, "No se pudieron actualizar los extras.")}
-        end
-      else
-        :error ->
-          {:noreply,
-           put_flash(socket, :error, "Valores inválidos: revisa que sean números válidos.")}
-      end
-    end
   end
 
   ## Events — extra model grants / denies (picker de 3 estados) ------------
@@ -591,32 +361,19 @@ defmodule TokengateWeb.GroupMembersLive do
 
   ## Helpers --------------------------------------------------------------
 
-  defp parse_integer(""), do: {:ok, nil}
-  defp parse_integer(nil), do: {:ok, nil}
-  defp parse_integer(value) when is_integer(value), do: {:ok, value}
-
-  defp parse_integer(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {int, ""} -> {:ok, int}
-      _ -> :error
-    end
-  end
-
-  defp parse_integer(_), do: :error
-
-  defp user_key_form do
-    to_form(%{"label" => ""}, as: :user_key)
-  end
-
   defp add_member_form do
-    to_form(
-      %{
-        "email" => "",
-        "extra_concurrency" => "",
-        "extra_rpm" => ""
-      },
-      as: :add_member
-    )
+    to_form(%{"email" => ""}, as: :add_member)
+  end
+
+  # La invariante «un usuario = una sub» sale como error de índice único en
+  # `user_id`; se traduce a algo accionable en vez del críptico "has already
+  # been taken".
+  defp format_add_member_error(changeset) do
+    if Keyword.has_key?(changeset.errors, :user_id) do
+      "Ese usuario ya pertenece a otra sub mensual. Quítalo de ella primero."
+    else
+      format_changeset_errors(changeset)
+    end
   end
 
   defp fetch_user_by_email(email) do
@@ -648,9 +405,6 @@ defmodule TokengateWeb.GroupMembersLive do
   defp format_decimal(nil), do: "—"
   defp format_decimal(value), do: to_string(value)
 
-  defp masked_key(%{api_key: %{key_prefix: prefix}}) when is_binary(prefix), do: "#{prefix}••••"
-  defp masked_key(_), do: "Sin clave"
-
   defp get_member_tier(usage_tiers, member_id) do
     Enum.find(usage_tiers, &(&1.group_member_id == member_id))
   end
@@ -674,7 +428,7 @@ defmodule TokengateWeb.GroupMembersLive do
       <div class="space-y-6">
         <.header>
           Miembros de {@group.name}
-          <:subtitle>Añade miembros, gestiona roles y extras</:subtitle>
+          <:subtitle>Añade y quita miembros de la sub</:subtitle>
           <:actions>
             <.link navigate={~p"/access/groups"} class="btn btn-ghost" id="back-to-groups">
               <.icon name="hero-arrow-left" class="w-4 h-4" /> Volver
@@ -731,19 +485,13 @@ defmodule TokengateWeb.GroupMembersLive do
                       </button>
                     </div>
                   </div>
-                  <.input
-                    field={@add_form[:extra_concurrency]}
-                    type="number"
-                    label="Extra concurrencia"
-                    placeholder="0"
-                  />
-                  <.input
-                    field={@add_form[:extra_rpm]}
-                    type="number"
-                    label="Extra RPM"
-                    placeholder="0"
-                  />
                 </div>
+                <%!-- Un usuario pertenece a UNA sola sub mensual, así que sólo
+                     puede estar en una: si ya tiene otra, el alta falla. --%>
+                <p class="text-xs text-base-content/50 mt-3">
+                  Cada usuario pertenece a una sola sub mensual. Si ya tiene otra, quítalo
+                  de ella primero.
+                </p>
                 <p :if={@add_member_error} class="text-sm text-error mt-4" id="add-member-error">
                   <.icon name="hero-exclamation-circle" class="w-4 h-4 inline mr-1" />
                   {@add_member_error}
@@ -759,71 +507,6 @@ defmodule TokengateWeb.GroupMembersLive do
                   </button>
                   <button type="submit" class="btn btn-primary btn-sm" id="add-member-btn-submit">
                     Añadir
-                  </button>
-                </div>
-              </.form>
-            </div>
-          </div>
-        </div>
-
-        <%!-- Overrides form (modal) --%>
-        <div
-          :if={@editing_member_id}
-          class="fixed inset-0 z-50 flex items-center justify-center p-4"
-          id={"overrides-form-#{@editing_member_id}"}
-        >
-          <div class="absolute inset-0 bg-black/50" phx-click="cancel_overrides" />
-          <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
-            <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">Extras del miembro</h2>
-              <% member = Enum.find(@members, &(&1.id == @editing_member_id)) %>
-              <.form
-                :if={member}
-                for={
-                  to_form(%{
-                    "extra_concurrency" =>
-                      if(member.extra_concurrency,
-                        do: to_string(member.extra_concurrency),
-                        else: ""
-                      ),
-                    "extra_rpm" => if(member.extra_rpm, do: to_string(member.extra_rpm), else: "")
-                  })
-                }
-                id={"override-form-#{@editing_member_id}"}
-                phx-submit="save_overrides"
-                phx-value-id={@editing_member_id}
-              >
-                <div class="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  <.input
-                    field={to_form(%{})[:extra_concurrency]}
-                    type="number"
-                    label="Extra concurrencia"
-                    name="overrides[extra_concurrency]"
-                    value={
-                      if(member.extra_concurrency,
-                        do: to_string(member.extra_concurrency),
-                        else: ""
-                      )
-                    }
-                  />
-                  <.input
-                    field={to_form(%{})[:extra_rpm]}
-                    type="number"
-                    label="Extra RPM"
-                    name="overrides[extra_rpm]"
-                    value={if(member.extra_rpm, do: to_string(member.extra_rpm), else: "")}
-                  />
-                </div>
-                <div class="flex gap-2 mt-4 justify-end">
-                  <button type="button" phx-click="cancel_overrides" class="btn btn-ghost btn-sm">
-                    Cancelar
-                  </button>
-                  <button
-                    type="submit"
-                    class="btn btn-primary btn-sm"
-                    id={"save-overrides-#{@editing_member_id}"}
-                  >
-                    Guardar
                   </button>
                 </div>
               </.form>
@@ -855,26 +538,6 @@ defmodule TokengateWeb.GroupMembersLive do
         </div>
 
         <div id="members">
-          <%!-- New token reveal (after regenerate) — banner above the table --%>
-          <div
-            :if={@new_token && @new_token_member_id}
-            class="alert alert-warning mb-4"
-            id={"new-token-#{@new_token_member_id}"}
-          >
-            <.icon name="hero-exclamation-triangle" class="w-5 h-5 shrink-0" />
-            <div class="flex-1 text-sm">
-              <p class="font-semibold">Guarda esta clave ahora — no se volverá a mostrar:</p>
-              <code class="text-xs font-mono break-all">{@new_token}</code>
-            </div>
-            <button
-              phx-click="dismiss_new_token"
-              class="btn btn-sm btn-ghost"
-              id={"dismiss-token-#{@new_token_member_id}"}
-            >
-              <.icon name="hero-x-mark" class="w-4 h-4" />
-            </button>
-          </div>
-
           <div
             :if={!@members_empty?}
             class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm"
@@ -897,20 +560,6 @@ defmodule TokengateWeb.GroupMembersLive do
                     <p class="font-medium text-sm">{member.user.email}</p>
                     <p class="text-xs text-base-content/50">{member.user.name}</p>
                     <div class="flex items-center gap-1.5 mt-1 flex-wrap">
-                      <code class="text-xs font-mono">{masked_key(member)}</code>
-                      <%= if member.api_key do %>
-                        <span class={[
-                          "badge badge-xs",
-                          if(member.api_key.status == "active",
-                            do: "badge-success",
-                            else: "badge-error"
-                          )
-                        ]}>
-                          {if(member.api_key.status == "active", do: "Activa", else: "Revocada")}
-                        </span>
-                      <% else %>
-                        <span class="badge badge-xs badge-ghost">Sin clave</span>
-                      <% end %>
                       <span class="badge badge-xs badge-ghost capitalize">{member.status}</span>
                     </div>
                   </td>
@@ -918,16 +567,10 @@ defmodule TokengateWeb.GroupMembersLive do
                     <p>
                       <span class="text-base-content/50">Conc.</span>
                       {@group.default_concurrency_limit}
-                      <span :if={member.extra_concurrency} class="text-success font-medium">
-                        +{member.extra_concurrency}
-                      </span>
                     </p>
                     <p>
                       <span class="text-base-content/50">RPM</span>
                       {@group.default_rpm_limit}
-                      <span :if={member.extra_rpm} class="text-success font-medium">
-                        +{member.extra_rpm}
-                      </span>
                     </p>
                   </td>
                   <td>
@@ -937,7 +580,7 @@ defmodule TokengateWeb.GroupMembersLive do
                         phx-value-id={member.id}
                         class="badge badge-sm badge-outline gap-1 hover:badge-primary cursor-pointer transition-colors"
                         id={"details-#{member.id}"}
-                        title="Modelos y API keys exclusivas"
+                        title="Modelos del miembro"
                       >
                         <.icon name="hero-rectangle-stack" class="w-3 h-3" />
                         {length(MapSet.to_list(@group_alias_ids))} grupo
@@ -975,46 +618,6 @@ defmodule TokengateWeb.GroupMembersLive do
                         <.icon name="hero-chart-bar" class="w-3.5 h-3.5" />
                       </.link>
                       <button
-                        phx-click="edit_overrides"
-                        phx-value-id={member.id}
-                        class="btn btn-xs btn-ghost"
-                        id={"edit-overrides-#{member.id}"}
-                        title="Editar extras"
-                      >
-                        <.icon name="hero-pencil" class="w-3.5 h-3.5" />
-                      </button>
-                      <button
-                        phx-click="replace_key"
-                        phx-value-id={member.id}
-                        class="btn btn-xs btn-ghost"
-                        id={"replace-key-#{member.id}"}
-                        title="Regenerar clave"
-                        data-confirm="¿Regenerar clave? La clave actual dejará de funcionar inmediatamente."
-                      >
-                        <.icon name="hero-key" class="w-3.5 h-3.5" />
-                      </button>
-                      <%= if member.api_key && member.api_key.status == "active" do %>
-                        <button
-                          phx-click="revoke_key"
-                          phx-value-id={member.id}
-                          class="btn btn-xs btn-ghost text-error"
-                          id={"revoke-key-#{member.id}"}
-                          title="Revocar clave"
-                          data-confirm="¿Revocar clave? Esta acción no se puede deshacer."
-                        >
-                          <.icon name="hero-no-symbol" class="w-3.5 h-3.5" />
-                        </button>
-                      <% end %>
-                      <button
-                        phx-click="clear_sticky_routes"
-                        phx-value-id={member.id}
-                        class="btn btn-xs btn-ghost"
-                        id={"clear-sticky-#{member.id}"}
-                        title="Limpiar sticky routes (fuerza re-ruteo)"
-                      >
-                        <.icon name="hero-arrow-path" class="w-3.5 h-3.5" />
-                      </button>
-                      <button
                         phx-click="remove_member"
                         phx-value-id={member.id}
                         class="btn btn-xs btn-ghost text-error"
@@ -1040,7 +643,7 @@ defmodule TokengateWeb.GroupMembersLive do
           </div>
         </div>
 
-        <%!-- Member details modal — modelos + API keys exclusivas --%>
+        <%!-- Member details modal — modelos --%>
         <div
           :if={@editing_details_member_id}
           class="fixed inset-0 z-50 flex items-center justify-center p-4"
@@ -1070,122 +673,6 @@ defmodule TokengateWeb.GroupMembersLive do
                     target_value={member.id}
                     empty_text="No hay modelos disponibles."
                   />
-                </div>
-
-                <div class="mt-4 pt-4 border-t border-base-200" id={"user-keys-#{member.id}"}>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">
-                    Keys del usuario
-                  </p>
-                  <% user_keys = Map.get(@user_keys || %{}, member.id, []) %>
-
-                  <%= if user_keys == [] do %>
-                    <p class="text-xs text-base-content/40" id={"user-keys-empty-#{member.id}"}>
-                      Este usuario no tiene keys.
-                    </p>
-                  <% else %>
-                    <div class="space-y-1">
-                      <div
-                        :for={key <- user_keys}
-                        class="flex items-center justify-between text-xs py-1 px-2 rounded bg-base-200/50 hover:bg-base-200 transition-colors"
-                        id={"user-key-#{key.id}"}
-                      >
-                        <div class="flex items-center gap-2 min-w-0">
-                          <span class={[
-                            "badge badge-xs",
-                            if(key.status == "active", do: "badge-success", else: "badge-error")
-                          ]}>
-                            {if key.status == "active", do: "Activa", else: "Revocada"}
-                          </span>
-                          <span class="font-medium truncate">{key.label || "sin label"}</span>
-                          <code class="text-base-content/50 font-mono">{key.key_prefix}••••</code>
-                        </div>
-                        <button
-                          :if={key.status == "active"}
-                          phx-click="revoke_user_key"
-                          phx-value-id={member.id}
-                          phx-value-key_id={key.id}
-                          class="btn btn-xs btn-ghost text-error"
-                          id={"revoke-user-key-#{key.id}"}
-                          title="Revocar key"
-                          data-confirm="¿Revocar esta key? Esta acción no se puede deshacer."
-                        >
-                          <.icon name="hero-no-symbol" class="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  <% end %>
-
-                  <div
-                    :if={@new_user_key_token}
-                    class="alert alert-warning mt-3"
-                    id={"new-user-key-token-#{member.id}"}
-                  >
-                    <.icon name="hero-exclamation-triangle" class="w-4 h-4 shrink-0" />
-                    <div class="flex-1 text-xs">
-                      <p class="font-semibold">Guarda esta key ahora — no se volverá a mostrar:</p>
-                      <code class="font-mono break-all">{@new_user_key_token}</code>
-                    </div>
-                  </div>
-
-                  <.form
-                    for={@user_key_form}
-                    id={"user-key-form-#{member.id}"}
-                    phx-submit="create_user_key"
-                    phx-value-id={member.id}
-                    class="mt-3"
-                  >
-                    <div class="flex items-end gap-2">
-                      <div class="flex-1">
-                        <.input
-                          field={@user_key_form[:label]}
-                          type="text"
-                          label="Nueva key"
-                          placeholder="label (p. ej. producción)"
-                        />
-                      </div>
-                      <button
-                        type="submit"
-                        class="btn btn-primary btn-sm mb-1"
-                        id={"create-user-key-#{member.id}"}
-                      >
-                        <.icon name="hero-plus" class="w-4 h-4" /> Crear
-                      </button>
-                    </div>
-                  </.form>
-                </div>
-
-                <div class="mt-4 pt-4 border-t border-base-200">
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">
-                    API Keys Exclusivas
-                  </p>
-                  <% member_exclusive = Map.get(@exclusive_providers || %{}, member.id, []) %>
-                  <%= if member_exclusive == [] do %>
-                    <p class="text-xs text-base-content/40">Sin keys exclusivas asignadas.</p>
-                  <% else %>
-                    <div class="space-y-1">
-                      <div
-                        :for={mp <- member_exclusive}
-                        class="flex items-center justify-between text-xs py-1 px-2 rounded bg-base-200/50"
-                      >
-                        <div class="flex items-center gap-2 min-w-0">
-                          <span class="badge badge-xs badge-warning">exclusiva</span>
-                          <span class="font-medium truncate">{mp.model.name}</span>
-                          <span class="text-base-content/40">·</span>
-                          <span class="text-base-content/50">
-                            {if mp.credential && mp.credential.provider,
-                              do: mp.credential.provider.name,
-                              else: "—"}
-                          </span>
-                          <span class="text-base-content/40 font-mono">
-                            {if mp.credential,
-                              do: TokengateWeb.ModelsLive.mask_key(mp.credential.api_key_encrypted),
-                              else: "—"}
-                          </span>
-                        </div>
-                        <span class="badge badge-xs badge-ghost">{mp.provider_model}</span>
-                      </div>
-                    </div>
-                  <% end %>
                 </div>
 
                 <div class="flex justify-end mt-4">

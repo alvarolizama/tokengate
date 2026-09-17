@@ -117,17 +117,14 @@ defmodule TokengateWeb.GroupMembersLiveTest do
 
     html =
       view
-      |> form("#add-member-form", %{
-        "add_member[email]" => new_user.email,
-        "add_member[extra_concurrency]" => "2",
-        "add_member[extra_rpm]" => "100"
-      })
+      |> form("#add-member-form", %{"add_member[email]" => new_user.email})
       |> render_submit()
 
     assert html =~ "Miembro añadido"
     assert html =~ new_user.email
 
-    # Verify the group_member was created with overrides
+    # La membresía se crea sin key ni extras: las keys cuelgan del usuario y
+    # los límites los aporta la sub.
     member =
       Repo.get_by(
         Tokengate.Accounts.GroupMember,
@@ -136,11 +133,36 @@ defmodule TokengateWeb.GroupMembersLiveTest do
       )
 
     assert member != nil
-    assert member.extra_concurrency == 2
-    assert member.extra_rpm == 100
+    assert member.extra_concurrency == nil
+    assert member.extra_rpm == nil
 
     api_key = Repo.get_by(Tokengate.Accounts.ApiKey, group_member_id: member.id)
     assert api_key == nil
+  end
+
+  # La invariante «un usuario = una sub mensual» sale como error de índice
+  # único; la UI lo traduce a algo accionable en vez del críptico "has already
+  # been taken".
+  test "adding a user who already has another sub shows an actionable error", %{conn: conn} do
+    %{group: group} = group_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    %{user: taken} = register("user")
+    {:ok, other_sub} = Accounts.create_group(%{name: "Otra Sub #{unique()}"})
+    {:ok, _} = Accounts.create_group_member(%{user_id: taken.id, group_id: other_sub.id})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, group_url(group))
+
+    view |> element("#new-member-btn") |> render_click()
+
+    html =
+      view
+      |> form("#add-member-form", %{"add_member[email]" => taken.email})
+      |> render_submit()
+
+    assert html =~ "ya pertenece a otra sub mensual"
+    refute Repo.get_by(Tokengate.Accounts.GroupMember, user_id: taken.id, group_id: group.id)
   end
 
   test "add member modal can be cancelled", %{conn: conn} do
@@ -196,63 +218,6 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     refute has_element?(view, "#remove-#{member.id}")
 
     refute Repo.get(Tokengate.Accounts.GroupMember, member.id)
-  end
-
-  # --------------------------------------------------------------------------
-  # Overrides (extra_monthly_budget_usd, extra_concurrency)
-  # --------------------------------------------------------------------------
-
-  test "admin edits and saves overrides", %{conn: conn} do
-    %{group: group, member: member} = group_with_member()
-    %{user: admin, password: password} = register("admin")
-
-    conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, group_url(group))
-
-    # Open the overrides form
-    view |> element("#edit-overrides-#{member.id}") |> render_click()
-    assert has_element?(view, "#override-form-#{member.id}")
-
-    html =
-      view
-      |> form("#override-form-#{member.id}", %{
-        overrides: %{
-          extra_concurrency: "3"
-        }
-      })
-      |> render_submit()
-
-    assert html =~ "Extras actualizados"
-
-    updated = Repo.get!(Tokengate.Accounts.GroupMember, member.id)
-    assert updated.extra_concurrency == 3
-  end
-
-  test "overrides can be cleared with empty values", %{conn: conn} do
-    %{group: group, member: member} = group_with_member()
-    %{user: admin, password: password} = register("admin")
-
-    # Pre-set values
-    {:ok, _} = Accounts.update_group_member(member, %{extra_concurrency: 5})
-
-    conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, group_url(group))
-
-    view |> element("#edit-overrides-#{member.id}") |> render_click()
-
-    html =
-      view
-      |> form("#override-form-#{member.id}", %{
-        overrides: %{
-          extra_concurrency: ""
-        }
-      })
-      |> render_submit()
-
-    assert html =~ "Extras actualizados"
-
-    updated = Repo.get!(Tokengate.Accounts.GroupMember, member.id)
-    assert updated.extra_concurrency == nil
   end
 
   # --------------------------------------------------------------------------
@@ -345,158 +310,34 @@ defmodule TokengateWeb.GroupMembersLiveTest do
   end
 
   # --------------------------------------------------------------------------
-  # API key management
+  # API keys y extras: FUERA de esta página
   # --------------------------------------------------------------------------
 
-  test "admin can regenerate a member's API key", %{conn: conn} do
+  # Las keys cuelgan del usuario y los extras de concurrencia/RPM los aporta la
+  # sub, así que esta página no debe ofrecer ninguno de esos controles.
+  test "the page carries no API key, extra or sticky controls", %{conn: conn} do
     %{group: group, member: member} = group_with_member()
     %{user: admin, password: password} = register("admin")
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, group_url(group))
 
-    html = view |> element("#replace-key-#{member.id}") |> render_click()
-
-    assert html =~ "Clave regenerada"
-    assert has_element?(view, "#new-token-#{member.id}")
-  end
-
-  test "admin can clear a member's sticky routes", %{conn: conn} do
-    %{group: group, member: member} = group_with_member()
-    %{user: admin, password: password} = register("admin")
-
-    conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, group_url(group))
-
-    assert has_element?(view, "#clear-sticky-#{member.id}")
-
-    html = view |> element("#clear-sticky-#{member.id}") |> render_click()
-
-    assert html =~ "Sticky routes limpiadas"
-  end
-
-  test "admin can revoke a member's API key", %{conn: conn} do
-    %{group: group, member: member} = group_with_member()
-    %{user: admin, password: password} = register("admin")
-
-    conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, group_url(group))
-
-    assert has_element?(view, "#revoke-key-#{member.id}")
-
-    html = view |> element("#revoke-key-#{member.id}") |> render_click()
-
-    assert html =~ "Clave revocada"
+    refute has_element?(view, "#replace-key-#{member.id}")
     refute has_element?(view, "#revoke-key-#{member.id}")
-  end
+    refute has_element?(view, "#edit-overrides-#{member.id}")
+    # Limpiar sticky vive a nivel sujeto (usuario / servicio), no por membresía.
+    refute has_element?(view, "#clear-sticky-#{member.id}")
 
-  test "member card shows API key status badge", %{conn: conn} do
-    %{group: group} = group_with_member()
-    %{user: admin, password: password} = register("admin")
+    # El modal de alta sólo pide el email.
+    view |> element("#new-member-btn") |> render_click()
+    refute has_element?(view, "#add-member-form input[name='add_member[extra_concurrency]']")
+    refute has_element?(view, "#add-member-form input[name='add_member[extra_rpm]']")
 
-    conn = login(conn, admin, password)
-    {:ok, _view, html} = live(conn, group_url(group))
-
-    assert html =~ "Activa"
-  end
-
-  # --------------------------------------------------------------------------
-  # User keys (N keys con label) en el panel de detalles
-  # --------------------------------------------------------------------------
-
-  test "details panel lists the user's keys", %{conn: conn} do
-    %{group: group, member: member} = group_with_member()
-    %{user: admin, password: password} = register("admin")
-
-    # El fixture crea la key histórica del member (sin user_id); aquí añadimos
-    # dos keys propias del usuario con label.
-    created =
-      for label <- ["key alpha", "key beta"] do
-        {:ok, key} =
-          Accounts.create_api_key(%{
-            "subject_type" => "member",
-            "user_id" => member.user_id,
-            "label" => label,
-            "key_hash" => Accounts.hash_api_key("tg-test-key-#{unique()}"),
-            "key_prefix" => "tg-testk",
-            "status" => "active"
-          })
-
-        key
-      end
-
-    keys = Accounts.list_api_keys_for_user(member.user_id)
-    assert length(keys) == 2
-
-    conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, group_url(group))
-
+    # El detalle del miembro sigue existiendo (picker de modelos), sin keys.
+    view |> element("#cancel-add-member") |> render_click()
     view |> element("#details-#{member.id}") |> render_click()
-
-    assert has_element?(view, "#user-keys-#{member.id}")
-    html = render(view)
-
-    assert html =~ "Keys del usuario"
-    assert html =~ "key alpha"
-    assert html =~ "key beta"
-
-    for key <- created do
-      assert has_element?(view, "#user-key-#{key.id}")
-    end
-  end
-
-  test "creating a key from the details panel adds it to the list", %{conn: conn} do
-    %{group: group, member: member} = group_with_member()
-    %{user: admin, password: password} = register("admin")
-
-    before_count = length(Accounts.list_api_keys_for_user(member.user_id))
-
-    conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, group_url(group))
-
-    view |> element("#details-#{member.id}") |> render_click()
-
-    html =
-      view
-      |> form("#user-key-form-#{member.id}", %{"user_key" => %{"label" => "key de prueba"}})
-      |> render_submit()
-
-    assert html =~ "Key creada correctamente"
-
-    keys = Accounts.list_api_keys_for_user(member.user_id)
-    assert length(keys) == before_count + 1
-    assert Enum.any?(keys, &(&1.label == "key de prueba"))
-
-    # La nueva key aparece en el panel.
-    new_key = Enum.find(keys, &(&1.label == "key de prueba"))
-    assert has_element?(view, "#user-key-#{new_key.id}")
-  end
-
-  test "revoking a user key from the details panel removes it from the list", %{conn: conn} do
-    %{group: group, member: member} = group_with_member()
-    %{user: admin, password: password} = register("admin")
-
-    {:ok, extra_key} =
-      Accounts.create_api_key(%{
-        "subject_type" => "member",
-        "user_id" => member.user_id,
-        "label" => "key a revocar",
-        "key_hash" => Accounts.hash_api_key("tg-revoke-#{unique()}"),
-        "key_prefix" => "tg-revok",
-        "status" => "active"
-      })
-
-    conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, group_url(group))
-
-    view |> element("#details-#{member.id}") |> render_click()
-    assert has_element?(view, "#user-key-#{extra_key.id}")
-
-    html = view |> element("#revoke-user-key-#{extra_key.id}") |> render_click()
-    assert html =~ "Key revocada"
-
-    refute has_element?(view, "#user-key-#{extra_key.id}")
-    revoked = Tokengate.Repo.get!(Tokengate.Accounts.ApiKey, extra_key.id)
-    assert revoked.status == "revoked"
+    assert has_element?(view, "#member-details-#{member.id}")
+    refute has_element?(view, "#user-keys-#{member.id}")
+    refute has_element?(view, "#user-key-form-#{member.id}")
   end
 end

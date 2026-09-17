@@ -297,23 +297,20 @@ defmodule Tokengate.BudgetsTest do
   end
 
   describe "spend_by_user/0" do
-    test "rolls up spend across all memberships of a user" do
+    # Un usuario pertenece a UNA sola sub mensual: su gasto y su límite se
+    # resuelven contra esa única membresía (el multi-grupo ya no existe).
+    test "rolls up spend for a user's single membership" do
       user = user_fixture()
-      group_a = group_fixture(%{"monthly_spend_limit_usd" => "10.00"})
-      group_b = group_fixture(%{"monthly_spend_limit_usd" => "1000.00"})
-      member_a = member_fixture(group_a, user)
-      member_b = member_fixture(group_b, user)
+      group = group_fixture(%{"monthly_spend_limit_usd" => "10.00"})
+      member = member_fixture(group, user)
 
-      record_limit_log(member_a, "2.00")
-      record_limit_log(member_b, "3.00")
+      record_limit_log(member, "2.00")
 
       spend = Budgets.spend_by_user()
       user_spend = Map.fetch!(spend, user.id)
 
-      # El límite se suma entre membresías; el gasto es el del usuario (una
-      # sola vez, aunque tenga varias membresías) en el mes UTC.
-      assert Decimal.eq?(user_spend.monthly_usd, Decimal.new("5.00"))
-      assert Decimal.eq?(user_spend.monthly_limit_usd, Decimal.new("1010.00"))
+      assert Decimal.eq?(user_spend.monthly_usd, Decimal.new("2.00"))
+      assert Decimal.eq?(user_spend.monthly_limit_usd, Decimal.new("10.00"))
       refute user_spend.exhausted?
     end
 
