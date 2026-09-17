@@ -2043,6 +2043,7 @@ defmodule TokengateWeb.ProxyController do
 
     %{
       "group_member_id" => subject.group_member_id,
+      "user_id" => member.user_id,
       "service_id" => subject.service_id,
       "subject_type" => subject.subject_type,
       "provider_id" => route.model_provider.credential.provider_id,
@@ -2148,6 +2149,7 @@ defmodule TokengateWeb.ProxyController do
 
     %{
       "group_member_id" => subject.group_member_id,
+      "user_id" => member.user_id,
       "service_id" => subject.service_id,
       "subject_type" => subject.subject_type,
       "provider_id" => route.model_provider.credential.provider_id,
@@ -2186,6 +2188,7 @@ defmodule TokengateWeb.ProxyController do
 
     %{
       "group_member_id" => subject.group_member_id,
+      "user_id" => member.user_id,
       "service_id" => subject.service_id,
       "subject_type" => subject.subject_type,
       "model_id" => model_id_for_name(model),
