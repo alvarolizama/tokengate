@@ -132,6 +132,17 @@ defmodule Tokengate.Routing.StickyTracker do
   end
 
   @doc """
+  Drops all sticky entries for every hash in `api_key_hashes` in one pass.
+
+  Un sujeto (usuario o servicio) tiene N keys; limpiar su stickiness es limpiar
+  la de todas ellas. Un solo call en vez de N.
+  """
+  @spec clear_all_for_api_key_hashes([binary()]) :: :ok
+  def clear_all_for_api_key_hashes(api_key_hashes) when is_list(api_key_hashes) do
+    GenServer.call(__MODULE__, {:clear_all_for_api_key_hashes, api_key_hashes})
+  end
+
+  @doc """
   Drops all sticky entries pointing at any of the given `model_provider_ids`.
 
   Called when a provider goes down so that traffic is redistributed.
@@ -212,6 +223,28 @@ defmodule Tokengate.Routing.StickyTracker do
     # ETS match pattern: delete every key that starts with this api_key_hash.
     # The key is {api_key_hash, model_id}; we match the first element.
     :ets.select_delete(@table, [{{{api_key_hash, :_}, :_}, [], [true]}])
+    {:reply, :ok, state}
+  end
+
+  @impl true
+  def handle_call({:clear_all_for_api_key_hashes, api_key_hashes}, _from, state) do
+    # Una pasada por el hash set en vez de un select_delete por key: los
+    # sujetos con N keys (usuario o servicio) limpian todas de una vez.
+    hash_set = MapSet.new(api_key_hashes)
+
+    :ets.foldl(
+      fn
+        {{api_key_hash, _model_id} = key, _value}, acc when is_binary(api_key_hash) ->
+          if MapSet.member?(hash_set, api_key_hash), do: :ets.delete(@table, key)
+          acc
+
+        _other, acc ->
+          acc
+      end,
+      :ok,
+      @table
+    )
+
     {:reply, :ok, state}
   end
 

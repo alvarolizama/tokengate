@@ -771,27 +771,35 @@ defmodule Tokengate.Accounts do
   end
 
   @doc """
-  Clears all sticky routing entries for a group member's API key.
+  Limpia las sticky routes de un **usuario** — todas sus keys, no una sola.
 
-  This forces the next requests from that member to re-evaluate provider
-  availability instead of sticking to a potentially degraded provider.
-  Returns `:ok` even when the member has no API key or no sticky entries.
+  Las sticky se llavean por `{api_key_hash, model_id}` y un usuario tiene N keys
+  activas, así que limpiar «su» stickiness es limpiar la de todas ellas. Fuerza
+  que su próxima petición re-evalúe proveedores en vez de quedarse pegado a uno
+  degradado. Devuelve `:ok` sin keys o sin entradas.
   """
-  def clear_group_member_sticky_routes(%GroupMember{} = group_member) do
-    group_member = Repo.preload(group_member, [:api_key])
-
-    if group_member.api_key && group_member.api_key.key_hash do
-      Tokengate.Routing.StickyTracker.clear_all_for_api_key_hash(group_member.api_key.key_hash)
-    end
+  def clear_user_sticky_routes(user_id) when is_binary(user_id) do
+    user_id
+    |> list_api_keys_for_user()
+    |> Enum.map(& &1.key_hash)
+    |> then(&Tokengate.Routing.StickyTracker.clear_all_for_api_key_hashes/1)
 
     :ok
   end
 
-  def clear_group_member_sticky_routes(group_member_id) when is_binary(group_member_id) do
-    case get_group_member(group_member_id) do
-      nil -> :ok
-      %GroupMember{} = tm -> clear_group_member_sticky_routes(tm)
-    end
+  @doc """
+  Limpia las sticky routes de un **servicio** — todas sus keys.
+
+  Un servicio tiene N keys activas con label, así que limpiar «su» stickiness es
+  limpiar la de todas ellas. Devuelve `:ok` sin keys o sin entradas.
+  """
+  def clear_service_sticky_routes(service_id) when is_binary(service_id) do
+    service_id
+    |> list_api_keys_for_service()
+    |> Enum.map(& &1.key_hash)
+    |> then(&Tokengate.Routing.StickyTracker.clear_all_for_api_key_hashes/1)
+
+    :ok
   end
 
   # ---------------------------------------------------------------------------

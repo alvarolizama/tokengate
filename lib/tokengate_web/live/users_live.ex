@@ -503,6 +503,34 @@ defmodule TokengateWeb.UsersLive do
     {:noreply, assign(socket, :new_key_token, nil)}
   end
 
+  # Limpia las sticky routes del USUARIO (todas sus keys): su próxima petición
+  # re-evalúa proveedores en vez de quedarse pegado a uno degradado.
+  def handle_event("clear_user_sticky_routes", %{"id" => user_id}, socket) do
+    case Accounts.get_user(user_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Usuario no encontrado.")}
+
+      user ->
+        Accounts.clear_user_sticky_routes(user_id)
+
+        Tokengate.Auditing.audit(
+          socket.assigns.current_user,
+          "routing.clear_sticky",
+          "user",
+          user_id,
+          %{"email" => user.email}
+        )
+
+        {:noreply,
+         socket
+         |> put_flash(
+           :info,
+           "Sticky routes limpiadas para #{user.name || user.email}. Su próxima petición se re-ruteará."
+         )
+         |> load_user_keys(user_id)}
+    end
+  end
+
   def handle_event("new_user", _params, socket) do
     changeset = User.admin_create_changeset(%User{}, %{})
 
@@ -987,6 +1015,18 @@ defmodule TokengateWeb.UsersLive do
               label="Estado"
               options={[{"Activo", "active"}, {"Suspendido", "suspended"}]}
             />
+            <%!-- Select único: mover de sub reemplaza la anterior (la sub vieja
+                 pierde key y logs del usuario en cascada). El valor vigente sale
+                 de `editing_user_sub_id`: el changeset no trae params de membresía. --%>
+            <.input
+              field={@form[:sub_id]}
+              type="select"
+              label="Sub mensual"
+              options={Enum.map(@all_groups, fn t -> {t.name, t.id} end)}
+              prompt="Sin sub"
+              value={@editing_user_sub_id}
+              hint="Un usuario pertenece a UNA sola sub mensual. Cambiarla reemplaza la anterior."
+            />
             <div class="flex gap-2 mt-4 justify-end">
               <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
               <button type="submit" class="btn btn-primary btn-sm" id="update-user-btn">Guardar</button>
@@ -1199,6 +1239,28 @@ defmodule TokengateWeb.UsersLive do
         <p class="text-xs text-base-content/50 mb-4">
           Un usuario puede tener varias claves activas, cada una con su etiqueta.
         </p>
+
+        <%!-- Acción a nivel USUARIO: la stickiness es de todas sus keys, no de
+             una sola, así que vive aquí y no en la página de miembros. --%>
+        <div class="flex items-center justify-between gap-3 p-3 mb-4 rounded-lg bg-base-200/50">
+          <div class="min-w-0">
+            <p class="text-sm font-medium">Ruteo sticky</p>
+            <p class="text-xs text-base-content/60">
+              Fuerza que su próxima petición re-evalúe proveedores en vez de quedarse
+              pegado a uno degradado.
+            </p>
+          </div>
+          <button
+            type="button"
+            phx-click="clear_user_sticky_routes"
+            phx-value-id={@keys_user_id}
+            class="btn btn-ghost btn-sm shrink-0"
+            id="clear-user-sticky-btn"
+            title="Limpiar sticky routes del usuario (todas sus keys)"
+          >
+            <.icon name="hero-arrow-path" class="w-4 h-4" /> Limpiar sticky
+          </button>
+        </div>
 
         <div :if={@new_key_token} class="alert alert-success mb-4 py-2" id="new-key-token">
           <div class="w-full">

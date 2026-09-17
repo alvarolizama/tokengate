@@ -152,4 +152,54 @@ defmodule TokengateWeb.ServicesLiveTest do
     assert html =~ "Servicio eliminado"
     assert Accounts.get_service(service.id) == nil
   end
+
+  # Los servicios tienen la misma función que los usuarios: limpiar su stickiness
+  # (todas sus keys) para forzar el re-ruteo en la próxima petición.
+  test "limpiar sticky routes del servicio (todas sus keys)", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    service = service_fixture()
+
+    # Dos keys del servicio: la stickiness es del sujeto, no de una key.
+    {_t1, h1, p1} = Accounts.generate_api_key_material()
+    {_t2, h2, p2} = Accounts.generate_api_key_material()
+
+    for {h, p} <- [{h1, p1}, {h2, p2}] do
+      {:ok, _} =
+        Accounts.create_api_key(%{
+          "subject_type" => "service",
+          "service_id" => service.id,
+          "key_hash" => h,
+          "key_prefix" => p,
+          "label" => "k-#{p}"
+        })
+    end
+
+    other_hash = "hash-de-otro-servicio"
+
+    for hash <- [h1, h2, other_hash] do
+      Tokengate.Routing.StickyTracker.put(hash, "model-1", "ap-1")
+    end
+
+    _ = :sys.get_state(Tokengate.Routing.StickyTracker)
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/access/services")
+
+    view
+    |> element("button[phx-click='view_detail'][phx-value-id='#{service.id}']")
+    |> render_click()
+
+    assert has_element?(view, "#clear-service-sticky-btn")
+
+    html = view |> element("#clear-service-sticky-btn") |> render_click()
+
+    assert html =~ "Sticky routes limpiadas"
+
+    for hash <- [h1, h2] do
+      assert Tokengate.Routing.StickyTracker.get(hash, "model-1") == nil
+    end
+
+    # La de otro servicio sobrevive.
+    assert Tokengate.Routing.StickyTracker.get(other_hash, "model-1") == "ap-1"
+  end
 end

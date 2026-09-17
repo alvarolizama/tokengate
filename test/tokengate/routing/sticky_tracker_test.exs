@@ -161,6 +161,34 @@ defmodule Tokengate.Routing.StickyTrackerTest do
     end
   end
 
+  describe "clear_all_for_api_key_hashes/1" do
+    # Un sujeto (usuario / servicio) tiene N keys: limpiar su stickiness es
+    # limpiar la de todas ellas en una sola pasada.
+    test "drops stickies for every given hash and leaves the rest alone" do
+      StickyTracker.put("key-a", "model-1", "ap-1")
+      StickyTracker.put("key-b", "model-1", "ap-2")
+      StickyTracker.put("key-b", "model-2", "ap-3")
+      StickyTracker.put("key-other", "model-1", "ap-4")
+      _ = :sys.get_state(StickyTracker)
+
+      assert StickyTracker.clear_all_for_api_key_hashes(["key-a", "key-b"]) == :ok
+
+      assert StickyTracker.get("key-a", "model-1") == nil
+      assert StickyTracker.get("key-b", "model-1") == nil
+      assert StickyTracker.get("key-b", "model-2") == nil
+      # La key de OTRO sujeto sobrevive.
+      assert StickyTracker.get("key-other", "model-1") == "ap-4"
+    end
+
+    test "an empty list is a no-op" do
+      StickyTracker.put("key-a", "model-1", "ap-1")
+      _ = :sys.get_state(StickyTracker)
+
+      assert StickyTracker.clear_all_for_api_key_hashes([]) == :ok
+      assert StickyTracker.get("key-a", "model-1") == "ap-1"
+    end
+  end
+
   describe "clear_all/0" do
     test "drops every sticky entry in the table" do
       StickyTracker.put("key-a", "model-1", "ap-1")

@@ -410,6 +410,34 @@ defmodule TokengateWeb.ServicesLive do
     {:noreply, assign(socket, :new_token, nil)}
   end
 
+  # Limpia las sticky routes del SERVICIO (todas sus keys): su próxima petición
+  # re-evalúa proveedores en vez de quedarse pegado a uno degradado.
+  def handle_event("clear_service_sticky_routes", %{"id" => service_id}, socket) do
+    case Accounts.get_service(service_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Servicio no encontrado.")}
+
+      service ->
+        Accounts.clear_service_sticky_routes(service_id)
+
+        Tokengate.Auditing.audit(
+          socket.assigns.current_user,
+          "routing.clear_sticky",
+          "service",
+          service_id,
+          %{"name" => service.name}
+        )
+
+        {:noreply,
+         socket
+         |> put_flash(
+           :info,
+           "Sticky routes limpiadas para #{service.name}. Su próxima petición se re-ruteará."
+         )
+         |> load_services()}
+    end
+  end
+
   ## Events — model grants ------------------------------------------------
 
   def handle_event("toggle_model", %{"target-id" => service_id, "model-id" => model_id}, socket) do
@@ -821,6 +849,30 @@ defmodule TokengateWeb.ServicesLive do
                   </button>
                 <% end %>
               </div>
+            </div>
+          </div>
+
+          <%!-- Ruteo sticky: a nivel SERVICIO (todas sus keys), igual que en
+               usuarios. Fuerza re-evaluar proveedores en la próxima petición. --%>
+          <div class="mt-4 p-3 bg-base-200 rounded-lg">
+            <div class="flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <p class="text-sm font-medium">Ruteo sticky</p>
+                <p class="text-xs text-base-content/60">
+                  Fuerza que su próxima petición re-evalúe proveedores en vez de quedarse
+                  pegado a uno degradado.
+                </p>
+              </div>
+              <button
+                type="button"
+                phx-click="clear_service_sticky_routes"
+                phx-value-id={@detail_service_id}
+                class="btn btn-ghost btn-sm shrink-0"
+                id="clear-service-sticky-btn"
+                title="Limpiar sticky routes del servicio (todas sus keys)"
+              >
+                <.icon name="hero-arrow-path" class="w-4 h-4" /> Limpiar sticky
+              </button>
             </div>
           </div>
 

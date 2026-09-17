@@ -775,5 +775,40 @@ defmodule TokengateWeb.UsersLiveTest do
       assert labels == ["ci", "nueva"]
       assert has_element?(view, "#new-key-token")
     end
+
+    # La stickiness es DEL USUARIO (todas sus keys), no de una key ni de una
+    # membresía: la acción vive en este modal y limpia las N keys de golpe.
+    test "clearing sticky routes drops the stickies of ALL the user's keys", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{user: target} = register("user")
+      _k1 = create_key(target, "laptop")
+      _k2 = create_key(target, "server")
+
+      hashes = Accounts.list_api_keys_for_user(target.id) |> Enum.map(& &1.key_hash)
+      other_hash = "hash-de-otro-usuario"
+
+      for hash <- hashes ++ [other_hash] do
+        Tokengate.Routing.StickyTracker.put(hash, "model-1", "ap-1")
+      end
+
+      _ = :sys.get_state(Tokengate.Routing.StickyTracker)
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#keys-#{target.id}") |> render_click()
+      assert has_element?(view, "#clear-user-sticky-btn")
+
+      html = view |> element("#clear-user-sticky-btn") |> render_click()
+
+      assert html =~ "Sticky routes limpiadas"
+
+      for hash <- hashes do
+        assert Tokengate.Routing.StickyTracker.get(hash, "model-1") == nil
+      end
+
+      # La de otro usuario sobrevive.
+      assert Tokengate.Routing.StickyTracker.get(other_hash, "model-1") == "ap-1"
+    end
   end
 end
