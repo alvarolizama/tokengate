@@ -1388,12 +1388,12 @@ defmodule TokengateWeb.ModelsLiveTest do
       {:ok, view, _html} = live(conn, ~p"/catalog/models")
       view |> element("#new-model-btn") |> render_click()
 
-      html = view |> element("#catalog-row-#{ModelsLive.dom_key("openai/gpt-5-nano")}") |> render()
+      html =
+        view |> element("#catalog-row-#{ModelsLive.dom_key("openai/gpt-5-nano")}") |> render()
+
       assert html =~ "ya existe"
     end
-
   end
-
 
   # -- The picker against the REAL, seeded mirror ----------------------------
 
@@ -1440,6 +1440,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       assert has_element?(view, "#catalog-empty")
     end
   end
+
   # -- Provider + API key in one modal ---------------------------------------
 
   describe "provider then API key" do
