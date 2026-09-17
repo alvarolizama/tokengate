@@ -276,6 +276,28 @@ defmodule TokengateWeb.LabsLive do
                     </div>
                     <p class="text-xs text-base-content/50 font-mono truncate">{lab.key}</p>
                   </div>
+
+                  <%!-- Acciones al mismo nivel que el nombre, arriba a la derecha. --%>
+                  <%= if lab.source == "custom" do %>
+                    <div class="card-actions justify-end shrink-0 -mt-1 -mr-1">
+                      <button
+                        phx-click="edit_lab"
+                        phx-value-key={lab.key}
+                        class="btn btn-ghost btn-xs"
+                        id={"edit-lab-#{lab.key}"}
+                      >
+                        <.icon name="hero-pencil-square" class="w-3.5 h-3.5" /> Editar
+                      </button>
+                      <button
+                        phx-click="confirm_delete"
+                        phx-value-key={lab.key}
+                        class="btn btn-ghost btn-xs text-error"
+                        id={"delete-lab-#{lab.key}"}
+                      >
+                        <.icon name="hero-trash" class="w-3.5 h-3.5" /> Eliminar
+                      </button>
+                    </div>
+                  <% end %>
                 </div>
 
                 <div class="mt-3 flex items-center gap-4 text-xs text-base-content/60">
@@ -287,34 +309,13 @@ defmodule TokengateWeb.LabsLive do
                     <.icon name="hero-calendar-days" class="w-3.5 h-3.5" />
                     {lab.last_updated}
                   </span>
-                </div>
-
-                <div class="card-actions justify-end mt-2">
-                  <%= if lab.source == "custom" do %>
-                    <button
-                      phx-click="edit_lab"
-                      phx-value-key={lab.key}
-                      class="btn btn-ghost btn-xs"
-                      id={"edit-lab-#{lab.key}"}
-                    >
-                      <.icon name="hero-pencil-square" class="w-3.5 h-3.5" /> Editar
-                    </button>
-                    <button
-                      phx-click="confirm_delete"
-                      phx-value-key={lab.key}
-                      class="btn btn-ghost btn-xs text-error"
-                      id={"delete-lab-#{lab.key}"}
-                    >
-                      <.icon name="hero-trash" class="w-3.5 h-3.5" /> Eliminar
-                    </button>
-                  <% else %>
-                    <span
-                      class="text-[11px] uppercase tracking-wide text-base-content/30"
-                      title="La identidad de un lab de catálogo la escribe el refresh de models.dev"
-                    >
-                      De catálogo
-                    </span>
-                  <% end %>
+                  <span
+                    :if={lab.source != "custom"}
+                    class="ml-auto text-[11px] uppercase tracking-wide text-base-content/30"
+                    title="La identidad de un lab de catálogo la escribe el refresh de models.dev"
+                  >
+                    De catálogo
+                  </span>
                 </div>
               </div>
             </div>

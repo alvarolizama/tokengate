@@ -72,6 +72,38 @@ defmodule TokengateWeb.LabsLiveTest do
       assert has_element?(view, "#lab-mark-#{lab.key} .hero-sparkles")
     end
 
+    test "las acciones del custom van al mismo nivel que el nombre (arriba a la derecha)", %{
+      conn: conn
+    } do
+      lab = create_lab(%{"name" => "Mi Lab"})
+
+      {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/labs")
+
+      # Editar/Eliminar viven en la MISMA fila que el nombre: en el HTML de la
+      # tarjeta aparecen antes del bloque de metadatos (`mt-3`) y después del
+      # nombre, en lugar de en un bloque de acciones al final.
+      html = render(view)
+      name_pos = elem(:binary.match(html, "lab-name-#{lab.key}"), 0)
+      actions_pos = elem(:binary.match(html, ~s(id="edit-lab-#{lab.key}")), 0)
+      delete_pos = elem(:binary.match(html, ~s(id="delete-lab-#{lab.key}")), 0)
+
+      assert name_pos < actions_pos, "Editar debe ir después del nombre"
+      assert name_pos < delete_pos, "Eliminar debe ir después del nombre"
+
+      # Y no quedan duplicados: una sola instancia de cada botón en la tarjeta.
+      assert length(Regex.scan(~r/id="edit-lab-#{lab.key}"/, html)) == 1
+      assert length(Regex.scan(~r/id="delete-lab-#{lab.key}"/, html)) == 1
+    end
+
+    test "un lab de catálogo no tiene acciones y conserva su etiqueta", %{conn: conn} do
+      {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/labs")
+
+      assert has_element?(view, "#lab-name-openai", "OpenAI")
+      refute has_element?(view, "#edit-lab-openai")
+      refute has_element?(view, "#delete-lab-openai")
+      assert render(view) =~ "De catálogo"
+    end
+
     test "la marca usa el logo cuando lo hay", %{conn: conn} do
       lab = create_lab(%{"logo_url" => "https://cdn.example.com/l.png"})
 
