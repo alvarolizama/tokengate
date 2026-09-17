@@ -31,6 +31,7 @@ defmodule Tokengate.Repo.Migrations.AddProviderCatalogFields do
   use Ecto.Migration
 
   require Logger
+
   # ── Catálogo congelado ─────────────────────────────────────────────────────
   #
   # Esta migración se escribió cuando el catálogo de proveedores vivía en
