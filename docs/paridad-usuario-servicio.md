@@ -518,3 +518,33 @@ que exigen joins/agregados. Migrarlo es reescribir `sort_users` como
 `order_by` de SQL — **es el trabajo más caro de P4** y conviene hacerlo
 cuando se toque `request_logs.user_id` (idea extra de §5), porque ese join
 es justo el que hoy se paga para el orden por gasto.
+
+
+---
+
+## 8. Hallazgo verificado: el CASCADE de `group_member_id` (pendiente de decisión)
+
+`request_logs.group_member_id` referencia `group_members` con
+**`ON DELETE CASCADE`**. Verificado con una transacción revertida: 1 fila de
+log → `DELETE FROM group_members` → **0 filas**.
+
+Consecuencia, y contradice lo que este plan prometía en §5: añadir
+`request_logs.user_id` (W4, mergeado) **no** hace que «la historia del usuario
+sobreviva al cambio de sub». `user_id` ya viaja en la fila y la agregación por
+usuario ya no paga join, pero el FK borra la fila entera cuando se borra la
+membresía — y cambiar de sub borra membresías
+(`20260917011526_one_monthly_sub_per_user.exs`).
+
+Igual que el `credit_subscription_id` del modelo viejo, la pregunta no es
+técnica sino de semántica de datos. Opciones:
+
+| Opción | Cambio | Efecto |
+|---|---|---|
+| A — referencia débil | `group_member_id` nullable + `ON DELETE SET NULL`; `user_id` dueño durable; `users` conserva su cascade | la historia del usuario **sobrevive** al cambio de sub; el log deja de decir a qué sub pertenecía |
+| B — dejar el cascade | — | cambiar de sub borra historia; el log siempre dice a qué sub pertenecía |
+| C — tercera vía | tabla de membresías histórica, o `group_member_id` como uuid crudo sin FK | conserva la atribución **y** la fila, a costa de una tabla o de perder integridad referencial |
+
+**Recomendado: A**, con B como red de seguridad si la atribución por sub es
+requisito de negocio. **No se decidió**: es un cambio de semántica de datos y
+el usuario no respondió a tiempo. Queda como `?01` en el ledger, no
+silenciado.
