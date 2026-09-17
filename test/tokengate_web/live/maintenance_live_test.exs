@@ -3,15 +3,9 @@ defmodule TokengateWeb.SettingsLiveTest do
 
   import Phoenix.LiveViewTest
   import Ecto.Query
-  alias Tokengate.{Accounts, Budgets, GlobalSettings, Logs, Providers}
+  alias Tokengate.{Accounts, Logs, Providers}
 
-  # `:tokengate_budgets` es una tabla ETS nombrada (singleton): sin limpiar el
-  # contador global entre tests, el gasto acumulado de un caso hace fallar al
-  # siguiente (p. ej. un `reserve` contra un cap bajo). Igual que en
-  # `budgets_test.exs`.
   setup do
-    :ets.delete(:tokengate_budgets, {:global, :daily})
-
     # Oban runs in manual mode in tests, so a refresh job enqueued here never
     # drains. Clear leftovers so the busy-state assertions measure THIS test.
     Tokengate.Repo.delete_all(
@@ -218,99 +212,25 @@ defmodule TokengateWeb.SettingsLiveTest do
     end
   end
 
-  describe "global daily cap" do
-    test "renders the cap section and saves it", %{conn: conn} do
+  # El tope diario global es una palanca de presupuesto y se mudó a
+  # /budget/global (`global_cap_live_test.exs`): aquí solo queda el pin de que
+  # NO se renderiza en esta página.
+  describe "tope diario global — ya no vive aquí" do
+    test "la página no renderiza la tarjeta del tope ni sus exclusiones", %{conn: conn} do
       %{user: admin, password: pass} = register("admin")
       conn = login(conn, admin, pass)
       {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
 
-      assert has_element?(view, "#global-cap-form")
-      assert render(view) =~ "Límite de gasto diario global"
+      refute has_element?(view, "#global-cap-card")
+      refute has_element?(view, "#global-cap-form")
+      refute has_element?(view, "#global-exemption-form")
 
-      view
-      |> form("#global-cap-form", global_settings: %{daily_max_spend_usd: "50.00"})
-      |> render_submit()
-
-      assert render(view) =~ "Límite diario global actualizado"
-      assert GlobalSettings.get_daily_cap() |> Decimal.to_string() =~ "50"
-    end
-
-    test "muestra el gasto real de request_logs, no el contador ETS de enforcement", %{conn: conn} do
-      %{user: admin, password: pass} = register("admin")
-
-      # Gasto durable del día UTC: es el número que debe verse.
-      insert_log(cost: Decimal.new("1.25"))
-
-      # Hold en vuelo en el contador ETS: NO debe ser el número principal.
-      # Arranca en el gasto durable (semilla desde DB) y suma el hold.
-      {:ok, hold} =
-        Tokengate.Budgets.Manager.reserve(
-          nil,
-          nil,
-          Decimal.new("10.00"),
-          Decimal.new("0.25"),
-          false
-        )
-
-      conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
-
-      # 1.25 real + 0.25 hold = 1.50 en el contador ETS.
-      assert render(view) =~ "$1.25"
-      refute render(view) =~ "$1.50 /"
-
-      # Con drift, el contador de enforcement se muestra como referencia.
-      assert has_element?(view, "#global-enforcement-drift")
-      assert render(view) =~ "$1.50"
-
-      :ok = Tokengate.Budgets.Manager.release(nil, hold)
-    end
-
-    test "sin drift no muestra la línea del contador de enforcement", %{conn: conn} do
-      %{user: admin, password: pass} = register("admin")
-      insert_log(cost: Decimal.new("1.250000"))
-
-      conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
-
-      # El reconciliador (SyncWorker) alinea el contador ETS con la DB: ambos
-      # coinciden y no hay drift que mostrar.
-      :ok = Tokengate.Budgets.Manager.set_global_from_db(1_250_000)
-
-      view |> element("#global-cap-card") |> render()
-
-      refute has_element?(view, "#global-enforcement-drift")
-    end
-
-    test "adds and removes a global exemption", %{conn: conn} do
-      %{user: admin, password: pass} = register("admin")
-
-      {:ok, target} =
-        Accounts.register_user(%{
-          email: "target-#{unique()}@example.com",
-          name: "Target",
-          password: "password-secret-1"
-        })
-
-      conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
-
-      view
-      |> form("#global-exemption-form",
-        global_subject: %{subject_type: "user", subject_id: target.id}
-      )
-      |> render_submit()
-
-      assert render(view) =~ "Exención agregada."
-      assert render(view) =~ target.email
-
-      exemption = hd(Budgets.Exemptions.list_for_scope("global_daily"))
-
-      view
-      |> element("#global-exemption-" <> exemption.id <> " button")
-      |> render_click()
-
-      assert render(view) =~ "Exención eliminada."
+      # Las zonas que sí son de esta página siguen ahí, en orden.
+      html = render(view)
+      assert has_element?(view, "#catalog-refresh-card")
+      assert has_element?(view, "#danger-zone-card", "Zona de peligro")
+      assert has_element?(view, "#caution-zone-card", "Zona de precaución")
+      assert String.contains?(html, "Mantenimiento")
     end
   end
 end

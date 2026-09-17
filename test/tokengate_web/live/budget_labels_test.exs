@@ -151,9 +151,12 @@ defmodule TokengateWeb.BudgetLabelsTest do
     assert has_element?(view, "#sidebar-section-budget", "Presupuesto")
     refute has_element?(view, "#sidebar-section-credito")
 
-    # Los dos enlaces de la sección, con su prefijo de URL.
+    # Los enlaces de la sección, con su prefijo de URL.
     assert has_element?(view, "#sidebar-link-budget-months[href=\"/budget/months\"]")
     assert has_element?(view, "#sidebar-link-budget-topups[href=\"/budget/topups\"]")
+    # El tope diario global se mudó de Mantenimiento a Presupuesto.
+    assert has_element?(view, "#sidebar-link-budget-global[href=\"/budget/global\"]")
+    assert has_element?(view, "#sidebar-link-budget-global", "Tope diario global")
 
     # El drill-down deja el padre encendido.
     {:ok, view2, _} = live(recycle(conn), ~p"/budget/months/#{group_fixture(%{}).id}/members")

@@ -319,7 +319,9 @@ defmodule TokengateWeb.Layouts do
             <.sidebar_section id="sidebar-section-budget" label={gettext("Budget")}>
               <%!-- Los presupuestos mensuales con el sujeto del que cada usuario
                    hereda su techo de gasto; los top-ups son crédito extra de un
-                   solo uso. Por eso la sección es Presupuesto, no Acceso. --%>
+                   solo uso, y el tope diario global es el kill-switch que corta
+                   TODO el gateway (con sus exclusiones). Por eso la sección es
+                   Presupuesto, no Acceso ni Operaciones. --%>
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/budget/months"}
@@ -331,6 +333,12 @@ defmodule TokengateWeb.Layouts do
                 href={~p"/budget/topups"}
                 label="Top-ups"
                 icon="hero-arrow-up-circle"
+              />
+              <.sidebar_link
+                current_path={@current_path}
+                href={~p"/budget/global"}
+                label="Tope diario global"
+                icon="hero-globe-americas"
               />
             </.sidebar_section>
 

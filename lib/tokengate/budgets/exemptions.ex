@@ -87,11 +87,29 @@ defmodule Tokengate.Budgets.Exemptions do
   end
 
   @doc "Label for an exemption's subject, for the admin UI."
-  def subject_label(%Exemption{subject_type: "user", user: %{name: name, email: email}}) do
+  def subject_label(%Exemption{subject_type: "group", group: %{name: _}} = exemption),
+    do: "Grupo: " <> subject_name(exemption)
+
+  def subject_label(%Exemption{subject_type: type} = exemption) when type in ["user", "service"],
+    do: subject_name(exemption)
+
+  def subject_label(_), do: "sujeto eliminado"
+
+  @doc """
+  Bare subject text — no type prefix, so a table can show the type in its own
+  column (`subject_type_label/1`).
+  """
+  def subject_name(%Exemption{subject_type: "user", user: %{name: name, email: email}}) do
     "#{name} (#{email})"
   end
 
-  def subject_label(%Exemption{subject_type: "group", group: %{name: name}}), do: "Grupo: #{name}"
-  def subject_label(%Exemption{subject_type: "service", service: %{name: name}}), do: name
-  def subject_label(_), do: "sujeto eliminado"
+  def subject_name(%Exemption{subject_type: "group", group: %{name: name}}), do: name
+  def subject_name(%Exemption{subject_type: "service", service: %{name: name}}), do: name
+  def subject_name(_), do: "sujeto eliminado"
+
+  @doc "Display label for an exemption's subject type."
+  def subject_type_label(%Exemption{subject_type: "user"}), do: "Usuario"
+  def subject_type_label(%Exemption{subject_type: "group"}), do: "Grupo"
+  def subject_type_label(%Exemption{subject_type: "service"}), do: "Servicio"
+  def subject_type_label(_), do: "—"
 end

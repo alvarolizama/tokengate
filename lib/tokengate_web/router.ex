@@ -164,10 +164,13 @@ defmodule TokengateWeb.Router do
       # Presupuesto — qué techo mensual tiene cada sujeto y qué crédito extra
       # lleva encima. Los presupuestos mensuales (antes «subs») son el sujeto
       # del que cada usuario hereda su techo; los top-ups son crédito de un
-      # solo uso. El gasto ordinario se edita en la página de su sujeto.
+      # solo uso. El gasto ordinario se edita en la página de su sujeto. El
+      # tope diario global (kill-switch de todo el gateway y sus exenciones)
+      # también vive aquí: es una palanca de presupuesto, no de operaciones.
       live "/budget/months", GroupsLive
       live "/budget/months/:id/members", GroupMembersLive
       live "/budget/topups", TopupsLive
+      live "/budget/global", GlobalCapLive
       # Operaciones — logs en vivo, webhooks y danger zone.
       live "/operations/monitoring", MonitoringLive
       live "/operations/observability", ObservabilityLive

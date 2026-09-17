@@ -53,10 +53,12 @@ defmodule TokengateWeb.SidebarTest do
     assert in_section?(view, "sidebar-section-acceso", "sidebar-link-access-services")
     refute in_section?(view, "sidebar-section-acceso", "sidebar-link-catalog-models")
 
-    # Crédito tiene DOS links: las subs mensuales (el sujeto que aporta el
-    # límite de gasto) y los top-ups. La página de grupos se movió aquí.
+    # Presupuesto tiene TRES links: los presupuestos mensuales (el sujeto que
+    # aporta el techo de gasto), los top-ups y el tope diario global (el
+    # kill-switch que corta todo el gateway, con sus exclusiones).
     assert in_section?(view, "sidebar-section-budget", "sidebar-link-budget-months")
     assert in_section?(view, "sidebar-section-budget", "sidebar-link-budget-topups")
+    assert in_section?(view, "sidebar-section-budget", "sidebar-link-budget-global")
     refute in_section?(view, "sidebar-section-budget", "sidebar-link-credit-subscriptions")
     refute in_section?(view, "sidebar-section-budget", "sidebar-link-operations-monitoring")
     refute in_section?(view, "sidebar-section-budget", "sidebar-link-access-users")
@@ -94,7 +96,8 @@ defmodule TokengateWeb.SidebarTest do
           {"sidebar-link-catalog-labs", "sidebar-link-catalog-providers"},
           {"sidebar-link-catalog-providers", "sidebar-link-catalog-models"},
           {"sidebar-link-access-services", "sidebar-link-access-users"},
-          {"sidebar-link-budget-months", "sidebar-link-budget-topups"}
+          {"sidebar-link-budget-months", "sidebar-link-budget-topups"},
+          {"sidebar-link-budget-topups", "sidebar-link-budget-global"}
         ] do
       assert link_position(html, first) < link_position(html, second),
              "expected #{first} to render before #{second}"
@@ -131,6 +134,7 @@ defmodule TokengateWeb.SidebarTest do
           {"sidebar-link-access-users", "/access/users"},
           {"sidebar-link-access-services", "/access/services"},
           {"sidebar-link-budget-topups", "/budget/topups"},
+          {"sidebar-link-budget-global", "/budget/global"},
           {"sidebar-link-operations-monitoring", "/operations/monitoring"},
           {"sidebar-link-operations-observability", "/operations/observability"},
           {"sidebar-link-operations-maintenance", "/operations/maintenance"}
