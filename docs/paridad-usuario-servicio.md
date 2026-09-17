@@ -571,3 +571,33 @@ técnica sino de semántica de datos. Opciones:
 requisito de negocio. **No se decidió**: es un cambio de semántica de datos y
 el usuario no respondió a tiempo. Queda como `?01` en el ledger, no
 silenciado.
+
+
+---
+
+## 9. Hallazgo verificado: los límites se aplican **por key**, no por sujeto
+
+El bucket ETS de concurrencia/RPM se indexa con **`member.api_key.id`**
+(`proxy_controller.ex:108,284,911` → `Limits.acquire(key_id, …)` →
+`manager.ex:140`, `manager.ex:81-100`). El bucket es **de la key**.
+
+Consecuencia: un sujeto con N keys activas tiene **N × su cupo efectivo**.
+
+| Antes de W2 | Después de W2 |
+|---|---|
+| servicio = 1 key = 1 bucket | servicio = N keys = N buckets |
+| usuario = N keys = N buckets (desde el contrato anterior) | igual |
+
+Así que W2 **sí logra la paridad** (ambos sujetos tienen N keys), pero el hueco
+que los usuarios ya tenían se **extiende a los servicios**: un servicio de 5
+claves pasa a tener 5× su RPM y 5× su concurrencia declaradas.
+
+No es un detalle cosmético: el sujeto puede **multiplicar su propio cupo
+acuñando keys**. `unlimited_spend` está bien gobernado (es explícito y
+auditable), pero un `rpm_limit = 60` deja de significar 60 RPM del sujeto y
+pasa a significar 60 RPM *por key*.
+
+Arreglo posible (decisión de diseño, no de implementación): indexar el bucket
+por **sujeto** (`{:user, id}` / `{:service, id}`) en vez de por key. Toca
+`proxy_controller.ex` (los 3 sitios que derivan `key_id`) y `Limits`, no el
+modelo de datos. Queda como `?03` en el ledger.
