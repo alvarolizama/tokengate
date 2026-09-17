@@ -121,6 +121,44 @@ defmodule Tokengate.BudgetsTest do
       })
   end
 
+  # ---------------------------------------------------------------------------
+  # Fixtures del sujeto SERVICIO (W3): mismo motor de gasto, otra encarnación.
+  # ---------------------------------------------------------------------------
+
+  defp service_fixture(attrs \\ %{}) do
+    {:ok, service} =
+      Accounts.create_service(
+        Map.merge(%{"name" => "Service #{System.unique_integer([:positive])}"}, attrs)
+      )
+
+    service
+  end
+
+  # Gasto de un servicio: `subject_type: "service"` + su columna propia.
+  # Sin `credit_topup_id` va contra su límite mensual.
+  defp record_service_log(service, cost, opts \\ []) do
+    {:ok, _} =
+      Logs.log_request(%{
+        subject_type: "service",
+        service_id: service.id,
+        model_requested: "test-model",
+        status_code: 200,
+        provider_cost_usd: Decimal.new(cost),
+        credit_topup_id: Keyword.get(opts, :topup_id),
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+  end
+
+  defp service_budget_for(service) do
+    Budgets.list_service_budgets()
+    |> Enum.find(&(&1.service.id == service.id))
+  end
+
+  # Las cuatro llaves de crédito que el claim P5 exige idénticas en los dos
+  # shapes. Se comparan como SUBCONJUNTO porque el resto del shape lleva lo que
+  # legítimamente difiere (ver el test de `Map.keys/1`).
+  @credit_keys ~w(has_credit? credit_remaining_usd unlimited? remaining_topup_usd)a
+
   # Camino que usan las vistas (Postgres, por lotes): es el que puede diferir
   # del contador ETS en `member_budget/1`.
   defp budget_for(member) do
@@ -274,6 +312,164 @@ defmodule Tokengate.BudgetsTest do
       assert budget
       assert budget.member.user.email == Accounts.get_user!(member.user_id).email
       assert %Accounts.Group{} = budget.member.group
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # W3 / P5 — el read-side de crédito del SERVICIO tiene la forma del miembro.
+  # ---------------------------------------------------------------------------
+
+  describe "list_service_budgets/0 — read-side de crédito simétrico" do
+    test "P5: las llaves de crédito de los dos shapes son las mismas" do
+      group = group_fixture(%{"monthly_spend_limit_usd" => "10.00"})
+      member = member_fixture(group, user_fixture())
+      service = service_fixture(%{"monthly_spend_limit_usd" => "10.00"})
+
+      member_budget = budget_for(member)
+      service_budget = service_budget_for(service)
+
+      # Aserción literal del claim: el subconjunto de crédito es idéntico.
+      assert Enum.all?(@credit_keys, &Map.has_key?(service_budget, &1))
+      assert Enum.all?(@credit_keys, &Map.has_key?(member_budget, &1))
+
+      service_credit_keys = service_budget |> Map.take(@credit_keys) |> Map.keys() |> Enum.sort()
+      member_credit_keys = member_budget |> Map.take(@credit_keys) |> Map.keys() |> Enum.sort()
+
+      assert service_credit_keys == member_credit_keys
+
+      # Y con insumos iguales (mismo límite, mismo gasto cero) los VALORES de
+      # cada llave de crédito coinciden.
+      for key <- @credit_keys do
+        assert Map.fetch!(service_budget, key) == Map.fetch!(member_budget, key),
+               "la llave #{inspect(key)} difiere entre los dos shapes"
+      end
+
+      # Las llaves legítimamente distintas, declaradas: `:service` vs `:member`
+      # (la identidad del sujeto) y las de día local del miembro (`daily_*`,
+      # `monthly_exhausted?` — display legacy de una ventana que el servicio no
+      # tiene). Nada más: cualquier otra diferencia rompe este assert.
+      service_keys = service_budget |> Map.keys() |> MapSet.new()
+      member_keys = member_budget |> Map.keys() |> MapSet.new()
+
+      assert MapSet.difference(service_keys, member_keys) == MapSet.new([:service])
+
+      assert MapSet.difference(member_keys, service_keys) ==
+               MapSet.new([
+                 :member,
+                 :daily_spend_usd,
+                 :daily_limit_usd,
+                 :daily_pct,
+                 :daily_exhausted?,
+                 :monthly_exhausted?
+               ])
+
+      # El resto del shape (mes UTC) también coincide llave por llave.
+      @credit_keys
+      |> Kernel.++(
+        ~w(monthly_spend_usd monthly_limit_usd monthly_pct exhausted? real_monthly_spend_usd)a
+      )
+      |> Enum.each(fn key ->
+        assert Map.has_key?(service_budget, key) and Map.has_key?(member_budget, key),
+               "falta la llave #{inspect(key)}"
+      end)
+    end
+
+    test "servicio con límite propio: has_credit? y credit_remaining_usd, igual que el miembro" do
+      service = service_fixture(%{"monthly_spend_limit_usd" => "10.00"})
+      record_service_log(service, "2.00")
+
+      budget = service_budget_for(service)
+
+      assert budget.has_credit?
+      assert Decimal.eq?(budget.monthly_limit_usd, Decimal.new("10.00"))
+      assert Decimal.eq?(budget.monthly_spend_usd, Decimal.new("2"))
+      assert Decimal.eq?(budget.credit_remaining_usd, Decimal.new("8"))
+      assert_in_delta budget.monthly_pct, 20.0, 0.01
+      refute budget.unlimited?
+      refute budget.exhausted?
+    end
+
+    test "lo debitado al límite y lo de top-up se separan como en el miembro" do
+      service = service_fixture(%{"monthly_spend_limit_usd" => "10.00"})
+
+      {:ok, topup} =
+        Tokengate.Credits.Topups.create(%{"service_id" => service.id, "amount_usd" => "5.00"})
+
+      record_service_log(service, "2.00")
+      record_service_log(service, "1.50", topup_id: topup.id)
+
+      budget = service_budget_for(service)
+
+      # Contra el límite solo cuenta el request sin top-up…
+      assert Decimal.eq?(budget.monthly_spend_usd, Decimal.new("2"))
+      assert Decimal.eq?(budget.credit_remaining_usd, Decimal.new("8"))
+      # …y el gasto real del mes incluye ambos.
+      assert Decimal.eq?(budget.real_monthly_spend_usd, Decimal.new("3.5"))
+      refute budget.exhausted?
+    end
+
+    test "límite 0 es CERO también en el servicio: has_credit? sí, crédito 0, agotado" do
+      service = service_fixture(%{"monthly_spend_limit_usd" => "0"})
+
+      budget = service_budget_for(service)
+
+      assert budget.has_credit?
+      assert Decimal.eq?(budget.monthly_limit_usd, Decimal.new("0"))
+      assert Decimal.eq?(budget.credit_remaining_usd, Decimal.new("0"))
+      assert_in_delta budget.monthly_pct, 100.0, 0.01
+      assert budget.exhausted?
+    end
+
+    test "servicio ilimitado: unlimited? sí, has_credit? no, sin remanente" do
+      service = service_fixture(%{"unlimited_spend" => true})
+
+      budget = service_budget_for(service)
+
+      assert budget.unlimited?
+      refute budget.has_credit?
+      assert is_nil(budget.monthly_limit_usd)
+      assert is_nil(budget.credit_remaining_usd)
+      assert is_nil(budget.monthly_pct)
+      refute budget.exhausted?
+    end
+
+    test "sin límite, sin ilimitado y sin top-up: sin crédito y agotado (el 402 del proxy)" do
+      service = service_fixture()
+
+      budget = service_budget_for(service)
+
+      refute budget.has_credit?
+      assert is_nil(budget.credit_remaining_usd)
+      refute budget.unlimited?
+      assert budget.exhausted?
+    end
+
+    test "un top-up vigente le da camino de gasto sin darle crédito" do
+      service = service_fixture()
+
+      {:ok, _} =
+        Tokengate.Credits.Topups.create(%{"service_id" => service.id, "amount_usd" => "5.00"})
+
+      budget = service_budget_for(service)
+
+      refute budget.has_credit?
+      assert is_nil(budget.credit_remaining_usd)
+      assert Decimal.eq?(budget.remaining_topup_usd, Decimal.new("5"))
+      refute budget.exhausted?
+    end
+
+    test "ordena por gasto contra el límite, descendente" do
+      low = service_fixture(%{"monthly_spend_limit_usd" => "10.00"})
+      high = service_fixture(%{"monthly_spend_limit_usd" => "10.00"})
+      record_service_log(low, "1.00")
+      record_service_log(high, "9.00")
+
+      spends =
+        Budgets.list_service_budgets()
+        |> Enum.filter(&(&1.service.id in [low.id, high.id]))
+        |> Enum.map(&Decimal.to_float(&1.monthly_spend_usd))
+
+      assert spends == [9.0, 1.0]
     end
   end
 
