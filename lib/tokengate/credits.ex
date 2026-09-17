@@ -206,16 +206,16 @@ defmodule Tokengate.Credits do
   defp spend_grouped_users([], _only_limit), do: %{}
 
   defp spend_grouped_users(user_ids, only_limit) do
-    query =
-      RequestLog
-      |> join(:inner, [rl], gm in GroupMember, on: gm.id == rl.group_member_id)
-      |> where([rl, gm], gm.user_id in ^user_ids)
-
-    query
+    # Lectura directa de la columna del sujeto, **idéntica** a la de servicios:
+    # el sufijo tiene que quedarse sin `join`. El usuario ya no depende de que
+    # la membresía (`group_members`, que el cambio de sub borra en cascada)
+    # siga existiendo para poder agregarse.
+    RequestLog
+    |> where([rl], rl.user_id in ^user_ids)
     |> since(nil)
     |> only_limit_filter(only_limit)
-    |> group_by([_rl, gm], gm.user_id)
-    |> select([rl, gm], {gm.user_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
+    |> group_by([rl], rl.user_id)
+    |> select([rl], {rl.user_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
     |> Repo.all()
     |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
   end
@@ -243,9 +243,9 @@ defmodule Tokengate.Credits do
   end
 
   defp spend_query({:user, user_id}, from) do
+    # Columna directa: mismo query que el servicio, sin `join` a membresías.
     RequestLog
-    |> join(:inner, [rl], gm in GroupMember, on: gm.id == rl.group_member_id)
-    |> where([rl, gm], gm.user_id == ^user_id)
+    |> where([rl], rl.user_id == ^user_id)
     |> since(from)
   end
 

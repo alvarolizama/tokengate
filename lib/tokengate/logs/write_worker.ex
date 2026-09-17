@@ -23,6 +23,9 @@ defmodule Tokengate.Logs.WriteWorker do
   def perform(%Oban.Job{args: args}) do
     attrs = %{
       group_member_id: args["group_member_id"],
+      # El sujeto del gasto viaja en la fila: sin la columna, agregar por
+      # usuario exigía un `join` a `group_members` que el servicio no paga.
+      user_id: args["user_id"],
       service_id: args["service_id"],
       subject_type: args["subject_type"] || "user",
       provider_id: args["provider_id"],
