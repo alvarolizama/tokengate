@@ -644,10 +644,14 @@ defmodule Tokengate.Accounts do
   Revokes the existing API key for the group member and issues a new one,
   returning the new plaintext token.
 
-  Because of the unique constraint on `group_member_id` (one active key per
-  member), this replaces the key material in place: the old token is
-  invalidated (its hash/prefix are overwritten) and a new token is
-  generated. Returns `{:ok, api_key, new_token}` or `{:error, changeset}`.
+  Replaces the key material in place: the old token is invalidated (its
+  hash/prefix are overwritten) and a new token is generated.
+
+  La key queda **del usuario** (`user_id`), igual que las keys creadas por el
+  alta de claves con etiqueta; `group_member_id` se conserva para trazabilidad
+  y para la resolución del plug. Sin `user_id`, una key creada aquí sería
+  invisible a `list_api_keys_for_user/1` (el panel de claves del usuario).
+  Returns `{:ok, api_key, new_token}` or `{:error, changeset}`.
   """
   def replace_api_key(%GroupMember{id: group_member_id} = group_member) do
     {new_token, new_hash, new_prefix} = generate_api_key_material()
@@ -659,6 +663,7 @@ defmodule Tokengate.Accounts do
       if group_member.api_key do
         group_member.api_key
         |> ApiKey.changeset(%{
+          "user_id" => group_member.user_id,
           "key_hash" => new_hash,
           "key_prefix" => new_prefix,
           "status" => "active"
@@ -672,6 +677,7 @@ defmodule Tokengate.Accounts do
         %ApiKey{}
         |> ApiKey.changeset(%{
           "subject_type" => "member",
+          "user_id" => group_member.user_id,
           "group_member_id" => group_member_id,
           "key_hash" => new_hash,
           "key_prefix" => new_prefix,

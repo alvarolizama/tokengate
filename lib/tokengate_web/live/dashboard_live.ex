@@ -22,12 +22,16 @@ defmodule TokengateWeb.DashboardLive do
 
   use TokengateWeb, :live_view
 
+  import TokengateWeb.AdminComponents
   import TokengateWeb.KpiHelpers, only: [kpi_cards: 1]
+  import TokengateWeb.KeysPanel
 
   alias Tokengate.Accounts
   alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Periods
+  alias Tokengate.Providers
+  alias Tokengate.Providers.Model
   alias TokengateWeb.KpiHelpers
   alias TokengateWeb.StatsHelpers, as: Stats
 
@@ -64,6 +68,11 @@ defmodule TokengateWeb.DashboardLive do
       |> assign(:new_token, nil)
       |> assign(:new_token_group, nil)
       |> assign(:supervised_services_count, count_supervised_services(user))
+      |> assign(:model_marks, %{})
+      |> assign(:keys_modal_open, false)
+      |> assign(:keys, [])
+      |> assign(:keys_spend, %{})
+      |> assign(:new_key_token, nil)
       |> load_personal_data(user)
 
     if connected?(socket) do
@@ -219,6 +228,119 @@ defmodule TokengateWeb.DashboardLive do
     {:noreply, assign(socket, :new_token, nil)}
   end
 
+  ## Events — mis claves API (N claves con etiqueta del usuario logueado) ----
+
+  # La gestión es SIEMPRE del usuario logueado: el `current_user` del socket fija
+  # el dueño, nunca un id que venga del cliente. Reutiliza el panel compartido
+  # (`KeysPanel`) para tener la misma UX que la página admin de usuarios.
+  @impl true
+  def handle_event("manage_keys", _params, socket) do
+    user = socket.assigns[:current_user]
+
+    {:noreply,
+     socket
+     |> assign(:keys_modal_open, true)
+     |> assign(:new_key_token, nil)
+     |> load_user_keys(user.id)}
+  end
+
+  def handle_event("cancel_manage_keys", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:keys_modal_open, false)
+     |> assign(:keys, [])
+     |> assign(:keys_spend, %{})
+     |> assign(:new_key_token, nil)}
+  end
+
+  def handle_event("create_key", %{"key" => key_params}, socket) do
+    user = socket.assigns[:current_user]
+    {token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+    attrs = %{
+      "subject_type" => "member",
+      "user_id" => user.id,
+      "label" => String.trim(key_params["label"] || ""),
+      "key_hash" => key_hash,
+      "key_prefix" => key_prefix,
+      "status" => "active"
+    }
+
+    attrs = if attrs["label"] == "", do: Map.delete(attrs, "label"), else: attrs
+
+    case Accounts.create_api_key(attrs) do
+      {:ok, api_key} ->
+        Tokengate.Auditing.audit(
+          user,
+          "api_key.create",
+          "api_key",
+          api_key.id,
+          %{"label" => api_key.label, "user_id" => user.id, "origin" => "dashboard"}
+        )
+
+        {:noreply,
+         socket
+         |> assign(:new_key_token, token)
+         |> put_flash(:info, "Clave creada. Cópiala ahora: no se vuelve a mostrar.")
+         |> load_user_keys(user.id)}
+
+      {:error, _changeset} ->
+        {:noreply, put_flash(socket, :error, "No se pudo crear la clave.")}
+    end
+  end
+
+  def handle_event("revoke_user_key", %{"key-id" => api_key_id}, socket) do
+    user = socket.assigns[:current_user]
+
+    # Solo las claves del propio usuario: el id llega del cliente, así que se
+    # verifica la propiedad antes de revocar.
+    with %{} = api_key <- Accounts.get_api_key(api_key_id),
+         true <- api_key.user_id == user.id do
+      case Accounts.revoke_api_key(api_key) do
+        {:ok, _} ->
+          Tokengate.Auditing.audit(
+            user,
+            "api_key.revoke",
+            "api_key",
+            api_key.id,
+            %{"label" => api_key.label, "user_id" => user.id, "origin" => "dashboard"}
+          )
+
+          {:noreply,
+           socket
+           |> put_flash(:info, "Clave revocada.")
+           |> load_user_keys(user.id)}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "No se pudo revocar la clave.")}
+      end
+    else
+      _ -> {:noreply, put_flash(socket, :error, "Clave no encontrada.")}
+    end
+  end
+
+  def handle_event("dismiss_new_key_token", _params, socket) do
+    {:noreply, assign(socket, :new_key_token, nil)}
+  end
+
+  def handle_event("clear_user_sticky_routes", _params, socket) do
+    user = socket.assigns[:current_user]
+    Accounts.clear_user_sticky_routes(user.id)
+
+    Tokengate.Auditing.audit(
+      user,
+      "routing.clear_sticky",
+      "user",
+      user.id,
+      %{"origin" => "dashboard"}
+    )
+
+    {:noreply,
+     socket
+     |> put_flash(:info, "Sticky routes limpiadas. Tu próxima petición se re-ruteará.")
+     |> load_user_keys(user.id)}
+  end
+
   ## Events — period selector -----------------------------------------------
 
   @impl true
@@ -284,6 +406,18 @@ defmodule TokengateWeb.DashboardLive do
     |> assign(:memberships, memberships)
     |> assign(:groups, groups)
     |> assign(:has_access, has_access)
+  end
+
+  # Keys activas del usuario logueado + consumo por key (una sola query por
+  # lote). Se cargan solo al abrir el modal: el dashboard no paga el costo en
+  # cada render.
+  defp load_user_keys(socket, user_id) do
+    keys = Accounts.list_api_keys_for_user(user_id)
+    spend = Accounts.spend_by_api_key(Enum.map(keys, & &1.id))
+
+    socket
+    |> assign(:keys, keys)
+    |> assign(:keys_spend, spend)
   end
 
   # Synchronous load used at mount (static render + tests need the data
@@ -407,10 +541,33 @@ defmodule TokengateWeb.DashboardLive do
       tokens_series: tokens_series,
       tps_series: tps_series,
       breakdown_model: breakdown_model,
+      model_marks: model_marks_for(breakdown_model),
       top_models: top_model_rows(breakdown_model),
       breakdown_member: breakdown_member,
       top_members: top_member_rows(breakdown_member)
     }
+  end
+
+  # Marca de cada modelo del desglose, resuelta en lote: `%{model_id => mark}`.
+  # El desglose sale de los logs y solo trae id + nombre; la marca (logo del lab
+  # o su icono de reserva) vive en el catálogo, así que se resuelve con una query
+  # de modelos por id y un índice de labs — nunca una consulta por fila.
+  defp model_marks_for(breakdown_model) do
+    ids =
+      breakdown_model
+      |> Enum.map(& &1.model_id)
+      |> Enum.reject(&is_nil/1)
+      |> Enum.uniq()
+
+    if ids == [] do
+      %{}
+    else
+      labs_by_key = Map.new(Providers.list_labs(), &{&1.key, &1})
+
+      ids
+      |> Providers.models_by_ids()
+      |> Map.new(fn model -> {model.id, Model.mark(model, labs_by_key)} end)
+    end
   end
 
   # Applies the cached (or freshly computed) metrics bundle to the socket.
@@ -427,6 +584,7 @@ defmodule TokengateWeb.DashboardLive do
     |> assign(:tokens_series, bundle.tokens_series)
     |> assign(:tps_series, bundle.tps_series)
     |> assign(:breakdown_model, bundle.breakdown_model)
+    |> assign(:model_marks, Map.get(bundle, :model_marks, %{}))
     |> assign(:top_models, bundle.top_models)
     |> assign(:breakdown_member, bundle.breakdown_member)
     |> assign(:top_members, bundle.top_members)
@@ -810,6 +968,31 @@ defmodule TokengateWeb.DashboardLive do
     |> Decimal.new()
     |> Decimal.div(Decimal.new(1_000_000))
     |> format_decimal()
+  end
+
+  ## Componentes — marca del modelo ---------------------------------------
+
+  # La marca del modelo: logo del lab cuando lo tiene, si no un hero icon. El
+  # chip claro es fijo porque los logos del catálogo son oscuros y el tema también
+  # (mismo criterio que las cards de modelos/labs). Un modelo sin marca conocida
+  # (o fuera del catálogo) cae al icono genérico.
+  attr :mark, :any, default: nil
+  attr :id, :string, required: true
+
+  defp model_mark(assigns) do
+    ~H"""
+    <span
+      id={@id}
+      class="flex items-center justify-center shrink-0 w-7 h-7 rounded-lg border border-base-300 bg-white overflow-hidden"
+    >
+      <%= case @mark || {:icon, Model.default_icon()} do %>
+        <% {:logo, url} -> %>
+          <img src={url} alt="" class="w-4 h-4 object-contain" loading="lazy" />
+        <% {:icon, icon} -> %>
+          <.icon name={icon} class="w-4 h-4 text-base-content/70" />
+      <% end %>
+    </span>
+    """
   end
 
   ## Chart components ------------------------------------------------------

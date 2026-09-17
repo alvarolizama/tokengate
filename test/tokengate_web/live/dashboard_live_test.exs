@@ -740,4 +740,140 @@ defmodule TokengateWeb.DashboardLiveTest do
     assert html =~ "no es correcta"
     assert {:ok, _} = Accounts.authenticate_user(user.email, password)
   end
+
+  ## Gestión de llaves propias (botón «Gestionar llaves») -------------------
+
+  test "el dashboard abre el panel de llaves del usuario logueado", %{conn: conn} do
+    %{group: group, owner: owner, member: member, owner_password: password} =
+      group_with_member()
+
+    conn = login(conn, owner, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    # El botón vive en la tarjeta; el modal no está en el DOM hasta abrirlo.
+    assert has_element?(view, "#manage-keys-#{group.id}")
+    refute has_element?(view, "#user-keys-modal")
+
+    view |> element("#manage-keys-#{group.id}") |> render_click()
+
+    assert has_element?(view, "#user-keys-modal")
+    assert has_element?(view, "#new-key-form")
+
+    # La llave ya existente del usuario se lista en el panel.
+    member = Accounts.get_group_member!(member.id, :with_assoc)
+    assert has_element?(view, "#key-#{member.api_key.id}")
+  end
+
+  test "el usuario crea y revoca sus llaves desde el dashboard", %{conn: conn} do
+    %{group: group, owner: owner, owner_password: password} = group_with_member()
+
+    conn = login(conn, owner, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    view |> element("#manage-keys-#{group.id}") |> render_click()
+    refute has_element?(view, "#new-key-token")
+
+    view
+    |> element("#new-key-form")
+    |> render_submit(%{"key" => %{"label" => "laptop"}})
+
+    # El token se muestra UNA sola vez, y la clave nueva aparece en la lista.
+    assert has_element?(view, "#new-key-token")
+
+    created =
+      owner.id
+      |> Accounts.list_api_keys_for_user()
+      |> Enum.find(&(&1.label == "laptop"))
+
+    assert created
+    assert has_element?(view, "#key-#{created.id}")
+
+    view |> render_click("revoke_user_key", %{"key-id" => created.id})
+
+    # Revocada: sale de la lista (solo se listan las activas).
+    refute has_element?(view, "#key-#{created.id}")
+  end
+
+  test "un usuario no puede revocar la llave de otro desde el dashboard", %{conn: conn} do
+    %{owner: owner, owner_password: password} = group_with_member()
+    %{owner: other_owner} = group_with_member()
+
+    other_key = Accounts.list_api_keys_for_user(other_owner.id) |> List.first()
+    assert other_key
+
+    conn = login(conn, owner, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    html = render_click(view, "revoke_user_key", %{"key-id" => other_key.id})
+
+    assert html =~ "Clave no encontrada."
+    # La llave ajena sigue activa.
+    assert Accounts.get_api_key(other_key.id).status == "active"
+  end
+
+  ## Marca del laboratorio en el desglose por modelo ------------------------
+
+  test "el desglose por modelo muestra el logo del laboratorio", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    Collector.reset()
+
+    u = unique()
+
+    {:ok, lab} =
+      Providers.create_custom_lab(%{
+        "name" => "Lab #{u}",
+        "key" => "lab-#{u}",
+        "logo_url" => "https://logos.test/#{u}.svg"
+      })
+
+    {:ok, model} =
+      Providers.create_model(%{
+        name: "modelo-#{u}",
+        context_window: 128_000,
+        lab_key: lab.key
+      })
+
+    fixture = group_with_log(%{cost: "0.005", user: admin})
+
+    # Un log con `model_id` real: el desglose resuelve id + nombre del catálogo y
+    # la marca sale del lab vinculado.
+    {:ok, _log} =
+      Logs.log_request(%{
+        group_member_id: fixture.member.id,
+        provider_id: fixture.provider.id,
+        model_id: model.id,
+        model_requested: model.name,
+        model_responded: model.name,
+        agent_type: "claude-code",
+        status_code: 200,
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        provider_cost_usd: Decimal.new("0.005"),
+        latency_ms: 42,
+        streaming: false,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    assert has_element?(
+             view,
+             "#bd-model-mark-#{model.id} img[src='https://logos.test/#{u}.svg']"
+           )
+  end
+
+  test "el desglose cae al icono genérico cuando el modelo no tiene marca", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    Collector.reset()
+
+    # Sin `model_id`, el desglose agrupa bajo el id nulo: no hay marca que
+    # resolver, así que se pinta el icono genérico del modelo.
+    group_with_log(%{cost: "0.005", user: admin})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    assert has_element?(view, "#bd-model-mark-unknown")
+  end
 end

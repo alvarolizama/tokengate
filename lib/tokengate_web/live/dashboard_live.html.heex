@@ -116,7 +116,18 @@
 
                 <%!-- API key section --%>
                 <div class="mt-3">
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide">Clave API</p>
+                  <div class="flex items-center justify-between gap-2">
+                    <p class="text-xs text-base-content/50 uppercase tracking-wide">Clave API</p>
+                    <button
+                      type="button"
+                      phx-click="manage_keys"
+                      class="btn btn-ghost btn-xs"
+                      id={"manage-keys-#{t.group.id}"}
+                      title="Ver, crear y revocar tus claves API"
+                    >
+                      <.icon name="hero-key" class="w-3.5 h-3.5" /> Gestionar llaves
+                    </button>
+                  </div>
                   <div class="flex items-center gap-1" id={"api-key-row-#{t.membership.id}"}>
                     <code class="text-sm font-mono" id={"api-key-text-#{t.membership.id}"}>
                       {masked_key(t)}
@@ -374,7 +385,15 @@
                             :for={row <- @breakdown_model}
                             id={"bd-model-#{row.model_id || "unknown"}"}
                           >
-                            <td class="font-medium">{row.model_name}</td>
+                            <td class="font-medium">
+                              <div class="flex items-center gap-2">
+                                <.model_mark
+                                  mark={Map.get(@model_marks, row.model_id)}
+                                  id={"bd-model-mark-#{row.model_id || "unknown"}"}
+                                />
+                                <span>{row.model_name}</span>
+                              </div>
+                            </td>
                             <td class="text-right font-mono">
                               {format_number(row.request_count)}
                             </td>
@@ -529,4 +548,37 @@
       <% end %>
     <% end %>
   </div>
+
+  <%!-- Mis claves API — el usuario logueado gestiona sus N claves con etiqueta
+       desde el mismo panel que la página admin de usuarios. --%>
+  <.admin_modal
+    :if={@keys_modal_open}
+    id="user-keys-modal"
+    on_close="cancel_manage_keys"
+    width="max-w-2xl"
+  >
+    <h2 class="text-lg font-semibold mb-1">Mis claves API</h2>
+    <p class="text-xs text-base-content/50 mb-4">
+      Puedes tener varias claves activas, cada una con su etiqueta.
+    </p>
+
+    <.keys_panel
+      subject_kind="user"
+      subject_id={@current_user.id}
+      keys={@keys}
+      spend={@keys_spend}
+      new_token={@new_key_token}
+      create_event="create_key"
+      revoke_event="revoke_user_key"
+      dismiss_event="dismiss_new_key_token"
+      sticky_event="clear_user_sticky_routes"
+      empty_text="Aún no tienes claves activas."
+    />
+
+    <div class="flex gap-2 mt-4 justify-end">
+      <button type="button" phx-click="cancel_manage_keys" class="btn btn-ghost btn-sm">
+        Cerrar
+      </button>
+    </div>
+  </.admin_modal>
 </Layouts.dashboard>
