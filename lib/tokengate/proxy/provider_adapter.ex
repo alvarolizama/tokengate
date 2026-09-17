@@ -202,6 +202,40 @@ defmodule Tokengate.Proxy.ProviderAdapter do
   defp classify_reason(_reason), do: :connection_error
 
   @doc """
+  Classifies an exception **raised** by `Finch.request/3` (as opposed to the
+  `{:error, _}` it returns) into a failure reason, or `nil` when the exception
+  is not Finch's and must keep propagating.
+
+  `Finch.HTTP1.Pool` does not return an error for a pool-checkout timeout: it
+  re-raises NimblePool's exit as a `RuntimeError` whose message is the only
+  signal available ("Finch was unable to provide a connection within the
+  timeout due to excess queuing for connections…"). `Finch` also *raises*
+  `%Finch.Error{reason: :pool_not_available}` when the pool is not up. Both are
+  ordinary transport failures from the gateway's point of view, so they are
+  normalized here and the caller turns them into `{:error, reason}` like any
+  other connection failure.
+
+  Returning `nil` is the contract for "not mine": the caller re-raises, so a
+  genuine bug in our own code is never swallowed as a provider error.
+  """
+  @spec classify_raise(Exception.t()) :: failure_reason() | nil
+  def classify_raise(%Finch.Error{reason: reason}), do: classify_reason(reason)
+
+  def classify_raise(%RuntimeError{message: message}) when is_binary(message) do
+    if pool_checkout_timeout?(message), do: :connection_error, else: nil
+  end
+
+  def classify_raise(_exception), do: nil
+
+  # El mensaje es la ÚNICA señal que Finch da de un checkout agotado (no hay
+  # struct propio): se ancla en el texto estable del vendor
+  # (`deps/finch/lib/finch/http1/pool.ex`, rama `{:timeout, {NimblePool,
+  # :checkout, _}}`). Si Finch cambia la redacción, esto devuelve `nil` y el
+  # raise vuelve a propagarse — preferimos un crash visible a tragarse un error
+  # desconocido como si fuera del proveedor.
+  defp pool_checkout_timeout?(message), do: String.contains?(message, "excess queuing")
+
+  @doc """
   Resolves the adapter module for a provider.
 
   Resolution order: an explicit `:dialect` field on the provider map wins

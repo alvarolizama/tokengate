@@ -128,4 +128,84 @@ defmodule Tokengate.Proxy.ProviderAdapterTest do
                Tokengate.Proxy.OpenAIAdapter
     end
   end
+
+  describe "classify_raise/1" do
+    # `Finch.request/3` RAISES (no devuelve `{:error, _}`) cuando el checkout del
+    # pool expira por saturación, y para `:pool_not_available`. Ambos escapaban a
+    # todas las cláusulas `{:error, error}` y mataban el request con un 500 sin
+    # clasificar y SIN fila en `request_logs`.
+    test "a Finch error raised (not returned) is classified like a returned one" do
+      assert ProviderAdapter.classify_raise(%Finch.Error{reason: :pool_not_available}) ==
+               :connection_error
+
+      assert ProviderAdapter.classify_raise(%Finch.Error{reason: :request_timeout}) == :timeout
+    end
+
+    test "a pool checkout timeout raised as RuntimeError maps to :connection_error" do
+      # Redacción tomada textual de `deps/finch/lib/finch/http1/pool.ex` (rama
+      # `{:timeout, {NimblePool, :checkout, _}}`): Finch no da señal
+      # estructurada para este caso, el mensaje ES la señal.
+      raised = %RuntimeError{
+        message:
+          "Finch was unable to provide a connection within the timeout due to excess queuing " <>
+            "for connections. Consider adjusting the pool size, count, timeout or reducing the " <>
+            "rate of requests if it is possible that the downstream service is unable to keep " <>
+            "up with the current rate.\n"
+      }
+
+      assert ProviderAdapter.classify_raise(raised) == :connection_error
+    end
+
+    # El contrato que evita tragarse bugs propios: solo se clasifica lo de Finch.
+    # Cualquier otro raise debe seguir explotando (el caller re-lanza).
+    test "an unrelated exception is not classified" do
+      assert ProviderAdapter.classify_raise(%RuntimeError{message: "boom"}) == nil
+      assert ProviderAdapter.classify_raise(%ArgumentError{message: "nope"}) == nil
+      assert ProviderAdapter.classify_raise(%Finch.TransportError{reason: :econnrefused}) == nil
+      assert ProviderAdapter.classify_raise(:some_atom) == nil
+    end
+
+    # Reproduce el raise REAL contra la dependencia (no uno sintético): un pool
+    # Finch de tamaño 1 con una conexión colgada hace que el 2.º request reviente
+    # en el checkout. Fija que el ancla de texto ("excess queuing") siga siendo la
+    # que Finch emite de verdad — si el vendor cambia la redacción, este test
+    # truena y `classify_raise/1` empieza a devolver nil (el raise vuelve a
+    # propagarse visible en vez de degradar en silencio).
+    test "the real Finch pool-checkout raise is classified" do
+      {:ok, listen} = :gen_tcp.listen(0, [:binary, active: false, reuseaddr: true, backlog: 8])
+      {:ok, port} = :inet.port(listen)
+
+      on_exit(fn -> :gen_tcp.close(listen) end)
+
+      finch = :"pool_raise_finch_#{System.unique_integer([:positive])}"
+      start_supervised!({Finch, name: finch, pools: %{:default => [size: 1, count: 1]}})
+
+      request = Finch.build(:get, "http://127.0.0.1:#{port}/hang")
+
+      # `async_request/3` toma una conexión del pool y devuelve sin esperar
+      # respuesta; el `accept` de abajo SINCRONIZA (no es una carrera: hasta que
+      # el listener no ve la conexión, no se sigue). Así la ÚNICA conexión del
+      # pool queda ocupada por un request que nunca recibirá nada y el siguiente
+      # checkout no puede más que expirar.
+      ref = Finch.async_request(request, finch, pool_timeout: 500)
+      {:ok, socket} = :gen_tcp.accept(listen, 2_000)
+
+      try do
+        raised =
+          try do
+            Finch.request(request, finch, pool_timeout: 200)
+            :no_raise
+          rescue
+            e -> e
+          end
+
+        assert %RuntimeError{message: message} = raised
+        assert message =~ "excess queuing"
+        assert ProviderAdapter.classify_raise(raised) == :connection_error
+      after
+        :gen_tcp.close(socket)
+        Finch.cancel_async_request(ref)
+      end
+    end
+  end
 end

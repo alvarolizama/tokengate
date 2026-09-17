@@ -114,7 +114,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
     api_key = Map.get(credential, :api_key_encrypted) || Map.get(credential, "api_key_encrypted")
     request = Finch.build(:get, url, headers(api_key))
 
-    case Finch.request(request, finch_name(), receive_timeout: @default_receive_timeout) do
+    case checked_request(request, @default_receive_timeout) do
       {:ok, %Finch.Response{status: status, body: resp_body}} when status in 200..299 ->
         decoded = decode!(resp_body)
         {:ok, extract_model_ids(decoded)}
@@ -143,7 +143,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
 
     start = System.monotonic_time(:millisecond)
 
-    case Finch.request(request, finch_name(), receive_timeout: receive_timeout) do
+    case checked_request(request, receive_timeout) do
       {:ok, %Finch.Response{status: status, body: resp_body, headers: resp_headers}}
       when status in 200..299 ->
         latency = System.monotonic_time(:millisecond) - start
@@ -185,7 +185,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
 
     start = System.monotonic_time(:millisecond)
 
-    case Finch.request(request, finch_name(), receive_timeout: receive_timeout) do
+    case checked_request(request, receive_timeout) do
       {:ok, %Finch.Response{status: status, body: resp_body, headers: resp_headers}}
       when status in 200..299 ->
         latency = System.monotonic_time(:millisecond) - start
@@ -221,6 +221,30 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
     payload
     |> RequestPayload.strip_nulls()
     |> Jason.encode!()
+  end
+
+  # `Finch.request/3` RAISES in two cases that the `{:error, error}` clause of
+  # every caller below would otherwise miss entirely, and the request died as an
+  # unclassified 500 (Plug's HTML error page in dev) with NO request_logs row —
+  # the failure vanished from the dashboard:
+  #
+  #   * pool checkout timeout under saturation: `Finch.HTTP1.Pool` re-raises
+  #     NimblePool's exit as a generic `%RuntimeError{}` ("unable to provide a
+  #     connection within the timeout due to excess queuing…");
+  #   * `%Finch.Error{reason: :pool_not_available}` when the pool is not up.
+  #
+  # Both are transport failures, so they are normalized to the same
+  # `{:error, reason}` shape and the normal matrix takes over (breaker,
+  # per-provider retries, fallback, log row). Anything else keeps raising:
+  # `classify_raise/1` returns nil for exceptions it does not own.
+  defp checked_request(request, receive_timeout) do
+    Finch.request(request, finch_name(), receive_timeout: receive_timeout)
+  rescue
+    e in [Finch.Error, RuntimeError] ->
+      case ProviderAdapter.classify_raise(e) do
+        nil -> reraise e, __STACKTRACE__
+        reason -> {:error, reason}
+      end
   end
 
   # 2xx response of a service: JSON decodes to a map as always; anything else
@@ -277,44 +301,58 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
         }
 
         result =
-          Finch.stream_while(
-            request,
-            finch_name(),
-            acc,
-            fn entry, acc ->
-              case entry do
-                {:status, status} when status in 200..299 ->
-                  {:cont, %{acc | status: status}}
+          try do
+            Finch.stream_while(
+              request,
+              finch_name(),
+              acc,
+              fn entry, acc ->
+                case entry do
+                  {:status, status} when status in 200..299 ->
+                    {:cont, %{acc | status: status}}
 
-                # Non-2xx: the body is a JSON error envelope. Do NOT halt on
-                # the status — keep reading so the provider's message can be
-                # extracted (Fireworks names the offending field there).
-                # Halting at the status used to discard it, leaving every
-                # upstream 4xx logged with a NULL error_message.
-                {:status, status} ->
-                  {:cont, %{acc | status: status, error_status: status}}
+                  # Non-2xx: the body is a JSON error envelope. Do NOT halt on
+                  # the status — keep reading so the provider's message can be
+                  # extracted (Fireworks names the offending field there).
+                  # Halting at the status used to discard it, leaving every
+                  # upstream 4xx logged with a NULL error_message.
+                  {:status, status} ->
+                    {:cont, %{acc | status: status, error_status: status}}
 
-                {:headers, headers} ->
-                  normalized = normalize_headers(headers)
-                  send(caller, {:sse_headers, normalized})
-                  {:cont, %{acc | headers: normalized}}
+                  {:headers, headers} ->
+                    normalized = normalize_headers(headers)
+                    send(caller, {:sse_headers, normalized})
+                    {:cont, %{acc | headers: normalized}}
 
-                {:data, data} ->
-                  if acc.error_status do
-                    {:cont, %{acc | error_body: acc.error_body <> data}}
-                  else
-                    case forward_sse(acc, data) do
-                      {:cont, acc} -> {:cont, acc}
-                      {:halt, acc} -> {:halt, acc}
+                  {:data, data} ->
+                    if acc.error_status do
+                      {:cont, %{acc | error_body: acc.error_body <> data}}
+                    else
+                      case forward_sse(acc, data) do
+                        {:cont, acc} -> {:cont, acc}
+                        {:halt, acc} -> {:halt, acc}
+                      end
                     end
-                  end
 
-                {:trailers, _trailers} ->
-                  {:cont, acc}
+                  {:trailers, _trailers} ->
+                    {:cont, acc}
+                end
+              end,
+              receive_timeout: receive_timeout
+            )
+          rescue
+            # El checkout del pool también revienta en el path de streaming
+            # (mismo raise de Finch: ver `checked_request/2`). Sin este rescue el
+            # Task moría y el `{:DOWN, _, _, _, {excepción, stack}}` viajaba como
+            # `reason` hasta `error_details/1`, que hace `to_string/1` sobre él:
+            # 500 sin fila en logs. Aquí vuelve como el mismo tuple que ya
+            # manejan los callers (`{:error, reason, acc}`).
+            e in [Finch.Error, RuntimeError] ->
+              case ProviderAdapter.classify_raise(e) do
+                nil -> reraise e, __STACKTRACE__
+                reason -> {:error, reason, acc}
               end
-            end,
-            receive_timeout: receive_timeout
-          )
+          end
 
         case result do
           {:ok, %{error_status: status} = acc} when is_integer(status) ->
@@ -342,7 +380,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
     api_key = Map.get(credential, :api_key_encrypted) || Map.get(credential, "api_key_encrypted")
     request = Finch.build(:get, url, headers(api_key))
 
-    case Finch.request(request, finch_name(), receive_timeout: @default_receive_timeout) do
+    case checked_request(request, @default_receive_timeout) do
       {:ok, %Finch.Response{status: status}} when status in 200..299 ->
         :ok
 
@@ -364,7 +402,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
     api_key = Map.get(credential, :api_key_encrypted) || Map.get(credential, "api_key_encrypted")
     request = Finch.build(:get, url, headers(api_key))
 
-    case Finch.request(request, finch_name(), receive_timeout: @default_receive_timeout) do
+    case checked_request(request, @default_receive_timeout) do
       {:ok, %Finch.Response{status: status, body: resp_body}} when status in 200..299 ->
         decoded = decode!(resp_body)
         models = extract_model_ids(decoded)
