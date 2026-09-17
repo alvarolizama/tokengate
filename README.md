@@ -89,7 +89,8 @@ Think "LiteLLM, but as an Elixir app with a real admin UI".
   exclusion lists evaluated before the global one.
 - **Cost tracking** — the provider-reported usage cost is recorded per request and
   returned in the `X-Tokengate-Cost` header (LiteLLM upstreams via
-  `x-litellm-response-cost`). No upstream cost → $0 recorded, no phantom estimates.
+  `x-litellm-response-cost`; Surplus Intelligence via `usage.buyer_cost_micro` or
+  `x-si-buyer-cost-micro`, both micro-USD). No upstream cost → $0 recorded, no phantom estimates.
 
 ## Admin & dashboards (LiveView)
 

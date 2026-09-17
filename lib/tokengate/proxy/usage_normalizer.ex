@@ -107,7 +107,11 @@ defmodule Tokengate.Proxy.UsageNormalizer do
 
   Checks, in order of preference:
     1. Body: `body["usage"]["cost"]` (OpenRouter) or `body["cost"]` (some providers)
-    2. Headers: `x-litellm-response-cost` (LiteLLM proxy)
+    2. Body: `body["usage"]["buyer_cost_micro"]` (Surplus Intelligence) — an
+       integer in micro-USD, converted to USD
+    3. Headers: `x-litellm-response-cost` (LiteLLM proxy)
+    4. Headers: `x-si-buyer-cost-micro` (Surplus Intelligence) — same micro-USD
+       unit as the body field
 
   Returns a `Decimal.t()` or `nil` when the provider doesn't report a cost.
 
@@ -126,10 +130,19 @@ defmodule Tokengate.Proxy.UsageNormalizer do
       get_in(body, ["usage", "cost"]) ||
         Map.get(body, "cost")
 
-    to_decimal(body_cost) || extract_header_cost(resp_headers)
+    to_decimal(body_cost) || micro_body_cost(body) || extract_header_cost(resp_headers)
   end
 
   def extract_reported_cost(_provider, _body, _resp_headers), do: nil
+
+  # Surplus Intelligence (marketplace) reports what it charged the buyer in
+  # micro-USD — the same unit its on-chain settlement uses (1 micro = $0.000001).
+  # The field rides `usage` in the body, so it survives streaming too (the
+  # final chunk carries the same `usage`); the header is the fallback for
+  # responses with no JSON body.
+  @si_cost_header "x-si-buyer-cost-micro"
+  @micro_cost_key "buyer_cost_micro"
+  @micro_usd Decimal.new(1_000_000)
 
   # Extracts cost from LiteLLM proxy response headers.
   # LiteLLM injects `x-litellm-response-cost` (USD as a float string, e.g.
@@ -140,10 +153,37 @@ defmodule Tokengate.Proxy.UsageNormalizer do
 
   defp extract_header_cost(headers) when is_list(headers) do
     case List.keyfind(headers, @litellm_cost_header, 0) do
-      {@litellm_cost_header, value} -> to_decimal(value)
+      {@litellm_cost_header, value} ->
+        to_decimal(value)
+
+      _ ->
+        case List.keyfind(headers, @si_cost_header, 0) do
+          {@si_cost_header, value} -> micro_to_usd(value)
+          _ -> nil
+        end
+    end
+  end
+
+  defp micro_body_cost(body) when is_map(body) do
+    body |> get_in(["usage", @micro_cost_key]) |> micro_to_usd()
+  end
+
+  defp micro_body_cost(_body), do: nil
+
+  defp micro_to_usd(value) when is_integer(value) and value >= 0 do
+    Decimal.div(Decimal.new(value), @micro_usd)
+  end
+
+  defp micro_to_usd(value) when is_binary(value) do
+    case Integer.parse(String.trim(value)) do
+      {micro, ""} when micro >= 0 -> micro_to_usd(micro)
       _ -> nil
     end
   end
+
+  # Floats would silently truncate a sub-micro remainder; only exact integers
+  # are accepted (a partial micro-USD is not a thing the marketplace reports).
+  defp micro_to_usd(_value), do: nil
 
   defp to_decimal(nil), do: nil
   defp to_decimal(%Decimal{} = d), do: d

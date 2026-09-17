@@ -91,6 +91,78 @@ defmodule Tokengate.Proxy.UsageNormalizerTest do
     end
   end
 
+  describe "extract_reported_cost/3 — Surplus Intelligence micro-USD" do
+    # Surplus Intelligence charges in micro-USD (`buyer_cost_micro`), the same
+    # unit its Base/USDC settlement uses: 3 micro = $0.000003.
+    test "reads usage.buyer_cost_micro from the body and converts to USD" do
+      body = %{
+        "usage" => %{"prompt_tokens" => 35, "completion_tokens" => 16, "buyer_cost_micro" => 123}
+      }
+
+      assert Decimal.equal?(
+               UsageNormalizer.extract_reported_cost(:openai, body),
+               Decimal.new("0.000123")
+             )
+    end
+
+    test "reads the x-si-buyer-cost-micro header when the body is silent" do
+      headers = [{"x-si-buyer-cost-micro", "123"}]
+
+      assert Decimal.equal?(
+               UsageNormalizer.extract_reported_cost(:openai, %{}, headers),
+               Decimal.new("0.000123")
+             )
+    end
+
+    test "a streaming final chunk carries the same micro-USD cost" do
+      chunk = %{
+        "usage" => %{"prompt_tokens" => 35, "completion_tokens" => 16, "buyer_cost_micro" => 3}
+      }
+
+      assert Decimal.equal?(
+               UsageNormalizer.extract_reported_cost(:openai, chunk),
+               Decimal.new("0.000003")
+             )
+    end
+
+    test "a body cost wins over the micro-USD header" do
+      body = %{"usage" => %{"buyer_cost_micro" => 5}}
+
+      assert Decimal.equal?(
+               UsageNormalizer.extract_reported_cost(:openai, body, [
+                 {"x-si-buyer-cost-micro", "999"}
+               ]),
+               Decimal.new("0.000005")
+             )
+    end
+
+    test "the LiteLLM header keeps precedence over the Surplus header" do
+      headers = [{"x-litellm-response-cost", "0.000420"}, {"x-si-buyer-cost-micro", "999"}]
+
+      assert Decimal.equal?(
+               UsageNormalizer.extract_reported_cost(:openai, %{}, headers),
+               Decimal.new("0.000420")
+             )
+    end
+
+    test "a malformed micro value degrades to nil (manual pricing / $0 take over)" do
+      assert UsageNormalizer.extract_reported_cost(:openai, %{
+               "usage" => %{"buyer_cost_micro" => "abc"}
+             }) ==
+               nil
+
+      assert UsageNormalizer.extract_reported_cost(:openai, %{}, [
+               {"x-si-buyer-cost-micro", "1.5"}
+             ]) ==
+               nil
+    end
+
+    test "no reported cost at all stays nil (regression guard)" do
+      assert UsageNormalizer.extract_reported_cost(:openai, %{"usage" => %{"prompt_tokens" => 5}}) ==
+               nil
+    end
+  end
+
   describe "Fireworks cached-prompt headers" do
     @body %{"usage" => %{"prompt_tokens" => 1000, "completion_tokens" => 50}}
 

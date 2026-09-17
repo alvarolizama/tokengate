@@ -162,6 +162,36 @@ defmodule TokengateWeb.ProxyControllerTest do
           Process.sleep(300)
           stream(conn)
 
+        # Surplus Intelligence (marketplace) shape: the cost it charged the
+        # buyer is micro-USD on the body's usage AND on a response header.
+        "surplus-market" in conn.path_info ->
+          conn
+          |> put_resp_header("x-si-buyer-cost-micro", "123")
+          |> json(200, %{
+            "id" => "chatcmpl-surplus",
+            "object" => "chat.completion",
+            "choices" => [
+              %{"index" => 0, "message" => %{"role" => "assistant", "content" => "qué onda"}}
+            ],
+            "usage" => %{
+              "prompt_tokens" => 20,
+              "completion_tokens" => 10,
+              "total_tokens" => 30,
+              "buyer_cost_micro" => 123
+            }
+          })
+
+        # Body-less (binary) Surplus answer: the micro-USD cost is only in the
+        # header, so the header fallback is the only way to book it.
+        "surplus-binary-speech" in conn.path_info ->
+          conn
+          |> put_resp_content_type("audio/mpeg")
+          |> put_resp_header("x-si-buyer-cost-micro", "7")
+          |> send_resp(200, <<0xFF, 0xFB, 0x90, 0x02>>)
+
+        "surplus-stream" in conn.path_info ->
+          surplus_stream(conn)
+
         "hang" in conn.path_info ->
           # Simulates a hung/saturated provider: never answers within any
           # reasonable receive_timeout. The caller must configure a short
@@ -208,6 +238,30 @@ defmodule TokengateWeb.ProxyControllerTest do
           {:ok, conn} -> {:cont, conn}
           # Client closed the connection after the terminal frame — nothing
           # more to write, don't raise a MatchError.
+          {:error, :closed} -> {:halt, conn}
+        end
+      end)
+    end
+
+    # Surplus Intelligence streaming: the micro-USD cost rides the final usage
+    # chunk (the marketplace sets no cost header on a streamed answer), so the
+    # body is the only place the cost appears.
+    defp surplus_stream(conn) do
+      conn =
+        conn
+        |> put_resp_content_type("text/event-stream")
+        |> send_chunked(200)
+
+      frames = [
+        ~s(data: {"choices":[{"delta":{"content":"qué"}}]}\n\n),
+        ~s(data: {"choices":[{"delta":{"content":" onda"}}]}\n\n),
+        ~s(data: {"choices":[],"usage":{"prompt_tokens":20,"completion_tokens":2,"total_tokens":22,"buyer_cost_micro":45}}\n\n),
+        "data: [DONE]\n\n"
+      ]
+
+      Enum.reduce_while(frames, conn, fn frame, conn ->
+        case chunk(conn, frame) do
+          {:ok, conn} -> {:cont, conn}
           {:error, :closed} -> {:halt, conn}
         end
       end)
@@ -445,6 +499,87 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert log.prompt_tokens == 20
     assert log.model_provider_id == model_provider.id
     assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000150"))
+  end
+
+  # Surplus Intelligence is an OpenAI-compatible marketplace that reports what
+  # it charged the buyer in micro-USD (`usage.buyer_cost_micro`, mirrored on the
+  # `x-si-buyer-cost-micro` header). Without the micro-USD branch the
+  # marketplace's real cost was invisible: the proxy found no `usage.cost` and
+  # booked $0.
+  test "a Surplus-shaped upstream books its micro-USD cost (body field)", %{conn: conn} do
+    %{token: token, model: model, member: member} =
+      proxy_fixture(%{credit_units: 100, path_overrides: %{"chat" => "/surplus-market"}})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+    body = json_response(conn, 200)
+    assert get_in(body, ["choices", Access.at(0), "message", "content"]) == "qué onda"
+
+    # 123 micro-USD = $0.000123
+    assert get_resp_header(conn, "x-tokengate-cost") == ["0.000123"]
+    assert %{consumed_micro: 123} = Budgets.limit_spend({:user, member.user_id})
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000123"))
+  end
+
+  test "a streamed Surplus answer books the micro-USD cost from its final chunk", %{conn: conn} do
+    %{token: token, model: model, member: member} =
+      proxy_fixture(%{credit_units: 100, path_overrides: %{"chat" => "/surplus-stream"}})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", Map.put(chat_body(model.name), "stream", true))
+
+    assert conn.state == :chunked
+
+    frames = conn |> response(200) |> String.split("\n\n", trim: true)
+
+    # The usage frame carries the injected cost derived from the micro-USD value
+    # the marketplace reported (45 micro-USD = $0.000045).
+    usage_json =
+      frames |> Enum.find(&(&1 =~ "usage")) |> String.trim_leading("data: ") |> Jason.decode!()
+
+    assert_in_delta usage_json["usage"]["cost_usd"], 0.000045, 0.0000001
+
+    assert %{consumed_micro: 45} = Budgets.limit_spend({:user, member.user_id})
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert log.streaming == true
+    assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000045"))
+  end
+
+  # A body-less (binary) Surplus answer has no usage payload to read: only the
+  # header carries the cost.
+  test "a header-only micro-USD cost is booked when the upstream sends no body", %{conn: conn} do
+    %{token: token, model: model, member: member} =
+      proxy_fixture(%{
+        credit_units: 100,
+        path_overrides: %{"tts" => "/surplus-binary-speech"}
+      })
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/audio/speech", %{"model" => model.name, "input" => "hola"})
+
+    assert response(conn, 200) == <<0xFF, 0xFB, 0x90, 0x02>>
+    # 7 micro-USD = $0.000007
+    assert get_resp_header(conn, "x-tokengate-cost") == ["0.000007"]
+    assert %{consumed_micro: 7} = Budgets.limit_spend({:user, member.user_id})
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000007"))
   end
 
   test "402 when the user's credit is exhausted", %{conn: conn} do
