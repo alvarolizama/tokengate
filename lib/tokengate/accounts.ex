@@ -737,6 +737,45 @@ defmodule Tokengate.Accounts do
   end
 
   @doc """
+  Keys activas de N servicios, agrupadas por `service_id` (una sola query).
+
+  Alimenta la columna «Claves» de la tabla de servicios sin pagar un N+1 por
+  fila.
+  """
+  def list_api_keys_for_services(service_ids) when is_list(service_ids) do
+    if service_ids == [] do
+      %{}
+    else
+      Repo.all(
+        from ak in ApiKey,
+          where: ak.service_id in ^service_ids and ak.status == "active",
+          order_by: [desc: ak.inserted_at]
+      )
+      |> Enum.group_by(& &1.service_id)
+    end
+  end
+
+  @doc """
+  Cuenta de keys activas por usuario, en lote (una sola query).
+
+  Alimenta la columna «Claves» de la tabla de usuarios — mismo dato y misma
+  columna que en servicios.
+  """
+  def count_active_api_keys_by_user(user_ids) when is_list(user_ids) do
+    if user_ids == [] do
+      %{}
+    else
+      from(ak in ApiKey,
+        where: ak.user_id in ^user_ids and ak.status == "active",
+        group_by: ak.user_id,
+        select: {ak.user_id, count(ak.id)}
+      )
+      |> Repo.all()
+      |> Map.new()
+    end
+  end
+
+  @doc """
   Consumo por key desde los logs: `%{api_key_id => %{requests: n, cost_usd: Decimal}}`.
 
   Solo cuenta el histórico con `api_key_id` (las filas viejas se agrupan por
@@ -834,15 +873,17 @@ defmodule Tokengate.Accounts do
   def delete_service(%Service{} = service) do
     alias Tokengate.Providers.ServiceModel
 
-    service = Repo.preload(service, [:api_key, :models])
+    service = Repo.preload(service, [:models])
 
     Repo.transaction(fn ->
       # Delete service_models
       from(sma in ServiceModel, where: sma.service_id == ^service.id)
       |> Repo.delete_all()
 
-      # Delete api key
-      if service.api_key, do: Repo.delete!(service.api_key)
+      # Delete ALL api keys of the service: un servicio tiene N claves con
+      # etiqueta, igual que un usuario. Borrar solo una dejaría huérfanas.
+      from(ak in ApiKey, where: ak.service_id == ^service.id)
+      |> Repo.delete_all()
 
       # Delete the service itself
       service
@@ -870,23 +911,30 @@ defmodule Tokengate.Accounts do
   @doc """
   Looks up a service by a presented API key token.
   Returns `{:ok, service}` only when the token matches an active API key
-  of subject_type "service". The returned service has `:api_key` preloaded.
+  of subject_type "service". The returned service has `:api_key` preloaded
+  con la clave **presentada**.
   Returns `{:error, :not_found}` otherwise.
+
+  Un servicio tiene N claves activas, así que la clave se resuelve por hash y
+  viaja en el servicio (misma forma que `get_group_member_by_api_key/1` para
+  usuarios): el proxy llavea el bucket de límites y la atribución del log por
+  esa key, y precargar la asociación `has_one` devolvería una cualquiera de las
+  N.
   """
   def get_service_by_api_key(token) when is_binary(token) do
     key_hash = hash_api_key(token)
 
-    query =
-      from s in Service,
-        join: ak in assoc(s, :api_key),
-        where:
-          ak.key_hash == ^key_hash and ak.status == "active" and
-            ak.subject_type == "service",
-        preload: [:api_key]
-
-    case Repo.one(query) do
-      %Service{} = service -> {:ok, service}
-      nil -> {:error, :not_found}
+    with %ApiKey{subject_type: "service", service_id: service_id} = api_key <-
+           Repo.one(
+             from ak in ApiKey,
+               where: ak.key_hash == ^key_hash and ak.status == "active",
+               where: ak.subject_type == "service"
+           ),
+         %Service{} = service <-
+           Repo.one(from s in Service, where: s.id == ^service_id) do
+      {:ok, %{service | api_key: api_key}}
+    else
+      _ -> {:error, :not_found}
     end
   end
 

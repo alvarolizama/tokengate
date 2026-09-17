@@ -16,6 +16,7 @@ defmodule TokengateWeb.UsersLive do
   use TokengateWeb, :live_view
 
   import TokengateWeb.AdminComponents
+  import TokengateWeb.KeysPanel
 
   alias Tokengate.Accounts
   alias Tokengate.Accounts.User
@@ -56,6 +57,7 @@ defmodule TokengateWeb.UsersLive do
       |> assign(:keys_user_name, nil)
       |> assign(:keys, [])
       |> assign(:keys_spend, %{})
+      |> assign(:keys_counts, %{})
       |> assign(:new_key_token, nil)
       |> assign(:page, 1)
       |> assign(:per_page, @default_per_page)
@@ -123,6 +125,10 @@ defmodule TokengateWeb.UsersLive do
 
     user_groups = load_user_groups(filtered)
 
+    # Conteo de claves activas por usuario — misma columna «Claves» que la
+    # tabla de servicios, en una sola query (nada de N+1 por fila).
+    keys_counts = Accounts.count_active_api_keys_by_user(Enum.map(filtered, & &1.id))
+
     # Límite de gasto efectivo por usuario (propio o heredado del perfil de límites) más el
     # gasto del mes. En lote: una query por sujeto, nunca una por membresía.
     users_credit =
@@ -166,6 +172,7 @@ defmodule TokengateWeb.UsersLive do
     |> assign(:spend_by_user, spend_by_user)
     |> assign(:total_spend_by_user, total_spend_by_user)
     |> assign(:user_groups, user_groups)
+    |> assign(:keys_counts, keys_counts)
     |> assign(:users_credit, users_credit)
     |> assign(:users_empty?, sorted == [])
     |> assign(:page, page)
@@ -1145,11 +1152,12 @@ defmodule TokengateWeb.UsersLive do
                   <.sort_button
                     event="sort_users"
                     field={:credit}
-                    label="Crédito"
+                    label="Límite mensual"
                     current={@sort_field}
                     direction={@sort_direction}
                   />
                 </th>
+                <th>Claves</th>
                 <th>Google</th>
                 <th class="text-right">
                   <.sort_button
@@ -1191,6 +1199,7 @@ defmodule TokengateWeb.UsersLive do
                   spend_by_user={@spend_by_user}
                   total_spend_by_user={@total_spend_by_user}
                   users_credit={@users_credit}
+                  keys_counts={@keys_counts}
                   current_user={@current_user}
                   timezone={@timezone}
                 />
@@ -1213,6 +1222,40 @@ defmodule TokengateWeb.UsersLive do
           />
         </div>
       </div>
+
+      <%!-- Keys modal — N claves con etiqueta (mismo panel que Servicios) --%>
+      <.admin_modal
+        :if={@keys_user_id}
+        id="user-keys-modal"
+        on_close="cancel_manage_keys"
+        width="max-w-2xl"
+      >
+        <h2 class="text-lg font-semibold mb-1">
+          Claves API de <span class="text-primary">{@keys_user_name}</span>
+        </h2>
+        <p class="text-xs text-base-content/50 mb-4">
+          Un usuario puede tener varias claves activas, cada una con su etiqueta.
+        </p>
+
+        <.keys_panel
+          subject_kind="user"
+          subject_id={@keys_user_id}
+          keys={@keys}
+          spend={@keys_spend}
+          new_token={@new_key_token}
+          create_event="create_key"
+          revoke_event="revoke_user_key"
+          dismiss_event="dismiss_new_key_token"
+          sticky_event="clear_user_sticky_routes"
+          empty_text="Este usuario no tiene claves activas."
+        />
+
+        <div class="flex gap-2 mt-4 justify-end">
+          <button type="button" phx-click="cancel_manage_keys" class="btn btn-ghost btn-sm">
+            Cerrar
+          </button>
+        </div>
+      </.admin_modal>
 
       <%!-- Groups view modal — read-only; memberships are managed in Perfiles de límites → Miembros --%>
       <.admin_modal
@@ -1268,138 +1311,6 @@ defmodule TokengateWeb.UsersLive do
         </p>
         <div class="flex gap-2 mt-2 justify-end">
           <button type="button" phx-click="cancel_edit_groups" class="btn btn-primary btn-sm">
-            Cerrar
-          </button>
-        </div>
-      </.admin_modal>
-
-      <%!-- API keys modal — N keys con label por usuario --%>
-      <.admin_modal
-        :if={@keys_user_id}
-        id="user-keys-modal"
-        on_close="cancel_manage_keys"
-        width="max-w-2xl"
-      >
-        <h2 class="text-lg font-semibold mb-1">
-          Claves API de <span class="text-primary">{@keys_user_name}</span>
-        </h2>
-        <p class="text-xs text-base-content/50 mb-4">
-          Un usuario puede tener varias claves activas, cada una con su etiqueta.
-        </p>
-
-        <%!-- Acción a nivel USUARIO: la stickiness es de todas sus keys, no de
-             una sola, así que vive aquí y no en la página de miembros. --%>
-        <div class="flex items-center justify-between gap-3 p-3 mb-4 rounded-lg bg-base-200/50">
-          <div class="min-w-0">
-            <p class="text-sm font-medium">Ruteo sticky</p>
-            <p class="text-xs text-base-content/60">
-              Fuerza que su próxima petición re-evalúe proveedores en vez de quedarse
-              pegado a uno degradado.
-            </p>
-          </div>
-          <button
-            type="button"
-            phx-click="clear_user_sticky_routes"
-            phx-value-id={@keys_user_id}
-            class="btn btn-ghost btn-sm shrink-0"
-            id="clear-user-sticky-btn"
-            title="Limpiar sticky routes del usuario (todas sus keys)"
-          >
-            <.icon name="hero-arrow-path" class="w-4 h-4" /> Limpiar sticky
-          </button>
-        </div>
-
-        <div :if={@new_key_token} class="alert alert-success mb-4 py-2" id="new-key-token">
-          <div class="w-full">
-            <p class="text-xs mb-1 font-semibold">
-              Cópiala ahora: no se vuelve a mostrar.
-            </p>
-            <code class="text-xs font-mono break-all">{@new_key_token}</code>
-            <div class="flex justify-end mt-2">
-              <button
-                type="button"
-                phx-click="dismiss_new_key_token"
-                class="btn btn-xs btn-ghost"
-                id="dismiss-new-key-token"
-              >
-                Listo
-              </button>
-            </div>
-          </div>
-        </div>
-
-        <div class="space-y-2 mb-4">
-          <%= for key <- @keys do %>
-            <div
-              class="flex items-center justify-between gap-2 p-2 rounded-lg bg-base-200/50"
-              id={"key-#{key.id}"}
-            >
-              <div class="min-w-0">
-                <div class="flex items-center gap-2">
-                  <span class="text-sm font-semibold truncate">{key.label || "sin etiqueta"}</span>
-                  <span class={[
-                    "badge badge-xs",
-                    if(key.status == "active", do: "badge-success", else: "badge-ghost")
-                  ]}>
-                    {if key.status == "active", do: "Activa", else: "Revocada"}
-                  </span>
-                </div>
-                <div class="text-xs font-mono text-base-content/50">
-                  {key.key_prefix}•••• <% spend = Map.get(@keys_spend, key.id) %>
-                  <span class="ml-2 text-base-content/40">
-                    {if spend,
-                      do: "#{spend.requests} req · $#{fmt_money(spend.cost_usd)}",
-                      else: "sin consumo"}
-                  </span>
-                </div>
-              </div>
-              <button
-                :if={key.status == "active"}
-                type="button"
-                phx-click="revoke_user_key"
-                phx-value-key-id={key.id}
-                class="btn btn-xs btn-ghost text-error shrink-0"
-                id={"revoke-key-#{key.id}"}
-                data-confirm="¿Revocar esta clave? El token deja de funcionar."
-              >
-                Revocar
-              </button>
-            </div>
-          <% end %>
-          <%= if @keys == [] do %>
-            <p class="text-sm text-base-content/50 py-2" id="no-keys">
-              Este usuario no tiene claves activas.
-            </p>
-          <% end %>
-        </div>
-
-        <.form
-          for={%{}}
-          id="new-key-form"
-          phx-submit="create_key"
-          class="border-t border-base-300 pt-3"
-        >
-          <div class="flex items-end gap-2">
-            <div class="flex-1">
-              <label class="label py-1" for="new-key-label">
-                <span class="label-text text-xs">Nueva clave</span>
-              </label>
-              <input
-                type="text"
-                name="key[label]"
-                id="new-key-label"
-                class="input input-sm input-bordered w-full"
-                placeholder="ci, laptop, server..."
-              />
-            </div>
-            <button type="submit" class="btn btn-primary btn-sm" id="create-key-btn">
-              Crear clave
-            </button>
-          </div>
-        </.form>
-
-        <div class="flex gap-2 mt-4 justify-end">
-          <button type="button" phx-click="cancel_manage_keys" class="btn btn-ghost btn-sm">
             Cerrar
           </button>
         </div>
@@ -1501,6 +1412,7 @@ defmodule TokengateWeb.UsersLive do
   attr :spend_by_user, :map, required: true
   attr :total_spend_by_user, :map, required: true
   attr :users_credit, :map, required: true
+  attr :keys_counts, :map, required: true
   attr :current_user, :map, required: true
   attr :timezone, :string, required: true
 
@@ -1582,6 +1494,13 @@ defmodule TokengateWeb.UsersLive do
       <% end %>
     </td>
     <td>
+      <.keys_badge
+        subject_id={@user.id}
+        count={Map.get(@keys_counts, @user.id, 0)}
+        open_event="manage_keys"
+      />
+    </td>
+    <td>
       <%= if google_badge(@user) do %>
         <span class="badge badge-sm badge-ghost"><.icon name="hero-globe-alt" class="w-3 h-3" />
         Google</span>
@@ -1619,17 +1538,29 @@ defmodule TokengateWeb.UsersLive do
           class="btn btn-xs btn-ghost"
           id={"stats-#{@user.id}"}
           title="Ver stats consolidados de este usuario"
+          aria-label="Ver stats del usuario"
         >
           <.icon name="hero-chart-bar" class="w-3 h-3" />
         </.link>
         <button
-          phx-click="manage_keys"
+          phx-click="edit_user"
           phx-value-id={@user.id}
           class="btn btn-xs btn-ghost"
-          id={"keys-#{@user.id}"}
-          title="Gestionar claves API del usuario"
+          id={"edit-#{@user.id}"}
+          title="Editar usuario"
+          aria-label="Editar usuario"
         >
-          <.icon name="hero-key" class="w-3 h-3" />
+          <.icon name="hero-pencil" class="w-3 h-3" />
+        </button>
+        <button
+          phx-click="reset_password"
+          phx-value-id={@user.id}
+          class="btn btn-xs btn-ghost"
+          id={"pwd-#{@user.id}"}
+          title="Restablecer contraseña"
+          aria-label="Restablecer contraseña"
+        >
+          <.icon name="hero-arrow-path" class="w-3 h-3" />
         </button>
         <.link
           :if={@user.id != @current_user.id && !root_admin?(@user)}
@@ -1639,30 +1570,17 @@ defmodule TokengateWeb.UsersLive do
           id={"impersonate-#{@user.id}"}
           data-confirm={"¿Ver el dashboard como #{@user.email}?"}
           title="Ver como este usuario"
+          aria-label="Ver como este usuario"
         >
-          <.icon name="hero-eye" class="w-3 h-3" />
+          <.icon name="hero-identification" class="w-3 h-3" />
         </.link>
-        <button
-          phx-click="edit_user"
-          phx-value-id={@user.id}
-          class="btn btn-xs btn-ghost"
-          id={"edit-#{@user.id}"}
-        >
-          <.icon name="hero-pencil" class="w-3 h-3" />
-        </button>
-        <button
-          phx-click="reset_password"
-          phx-value-id={@user.id}
-          class="btn btn-xs btn-ghost"
-          id={"pwd-#{@user.id}"}
-        >
-          <.icon name="hero-key" class="w-3 h-3" />
-        </button>
         <button
           phx-click="toggle_status"
           phx-value-id={@user.id}
           class="btn btn-xs btn-ghost"
           id={"status-#{@user.id}"}
+          title={if @user.status == "active", do: "Suspender usuario", else: "Activar usuario"}
+          aria-label={if @user.status == "active", do: "Suspender usuario", else: "Activar usuario"}
           data-confirm={
             if @user.status == "active",
               do: "¿Suspender usuario?",
@@ -1683,6 +1601,7 @@ defmodule TokengateWeb.UsersLive do
           class="btn btn-xs btn-ghost text-error"
           id={"delete-#{@user.id}"}
           title="Eliminar usuario"
+          aria-label="Eliminar usuario"
         >
           <.icon name="hero-trash" class="w-3 h-3" />
         </button>

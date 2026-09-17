@@ -185,8 +185,10 @@ defmodule TokengateWeb.ServicesLiveTest do
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/access/services")
 
+    # El ruteo sticky del servicio vive en su panel de claves (igual que en
+    # usuarios), no en el modal de detalle.
     view
-    |> element("button[phx-click='view_detail'][phx-value-id='#{service.id}']")
+    |> element("#keys-#{service.id}")
     |> render_click()
 
     assert has_element?(view, "#clear-service-sticky-btn")
@@ -201,5 +203,108 @@ defmodule TokengateWeb.ServicesLiveTest do
 
     # La de otro servicio sobrevive.
     assert Tokengate.Routing.StickyTracker.get(other_hash, "model-1") == "ap-1"
+  end
+
+  ## API keys (N claves con etiqueta, igual que un usuario) -----------------
+
+  describe "claves API del servicio" do
+    defp create_service_key(service, label) do
+      {_token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+      {:ok, key} =
+        Accounts.create_api_key(%{
+          "subject_type" => "service",
+          "service_id" => service.id,
+          "key_hash" => key_hash,
+          "key_prefix" => key_prefix,
+          "label" => label
+        })
+
+      key
+    end
+
+    test "la columna Claves cuenta las N claves y abre el panel", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      service = service_fixture()
+      k1 = create_service_key(service, "ci")
+      k2 = create_service_key(service, "server")
+
+      conn = login(conn, admin, password)
+      {:ok, view, html} = live(conn, ~p"/access/services")
+
+      assert html =~ "Claves"
+      assert has_element?(view, "#keys-#{service.id}", "2 claves")
+
+      view |> element("#keys-#{service.id}") |> render_click()
+
+      assert has_element?(view, "#service-keys-modal")
+      assert has_element?(view, "#key-#{k1.id}", "ci")
+      assert has_element?(view, "#key-#{k2.id}", "server")
+      assert has_element?(view, "#revoke-key-#{k1.id}")
+      assert has_element?(view, "#new-key-form")
+    end
+
+    test "crear una clave con etiqueta no toca las existentes", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      service = service_fixture()
+      k1 = create_service_key(service, "ci")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/services")
+
+      view |> element("#keys-#{service.id}") |> render_click()
+      assert has_element?(view, "#key-#{k1.id}", "ci")
+
+      html =
+        view
+        |> form("#new-key-form", %{key: %{label: "nueva"}})
+        |> render_submit()
+
+      assert html =~ "Clave creada"
+      assert has_element?(view, "#new-key-token")
+      assert has_element?(view, "#key-#{k1.id}", "ci")
+
+      labels =
+        Accounts.list_api_keys_for_service(service.id) |> Enum.map(& &1.label) |> Enum.sort()
+
+      assert labels == ["ci", "nueva"]
+    end
+
+    test "revocar una clave no afecta a las demás", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      service = service_fixture()
+      k1 = create_service_key(service, "revocar")
+      k2 = create_service_key(service, "seguir")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/services")
+
+      view |> element("#keys-#{service.id}") |> render_click()
+      view |> element("#revoke-key-#{k1.id}") |> render_click()
+
+      refute has_element?(view, "#key-#{k1.id}")
+      assert has_element?(view, "#key-#{k2.id}", "seguir")
+
+      assert Accounts.get_api_key(k1.id).status == "revoked"
+      assert Accounts.get_api_key(k2.id).status == "active"
+      assert Enum.map(Accounts.list_api_keys_for_service(service.id), & &1.id) == [k2.id]
+    end
+
+    test "eliminar el servicio borra TODAS sus claves", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      service = service_fixture()
+      k1 = create_service_key(service, "una")
+      k2 = create_service_key(service, "otra")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/services")
+
+      view |> element("#delete-#{service.id}") |> render_click()
+      view |> element("#confirm-delete-service") |> render_click()
+
+      assert Accounts.get_service(service.id) == nil
+      assert Accounts.get_api_key(k1.id) == nil
+      assert Accounts.get_api_key(k2.id) == nil
+    end
   end
 end

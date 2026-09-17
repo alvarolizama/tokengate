@@ -17,7 +17,7 @@
 #   * 2 proveedores custom + credenciales nuevas sobre builtins, una de ellas
 #     en `error` y otra `disabled` (para probar reactivación).
 #   * 11 modelos nuevos (9 llm + 2 embedding) con market pricing, precio manual,
-#     `prompt_cache_enabled`, `pinned`, TTL sticky, `cache_control`, `extra_body`
+#     `prompt_cache_enabled`, `pinned`, TTL sticky, `extra_body`
 #     y rutas exclusivas de usuario / grupo / servicio.
 #   * ~11k `request_logs` repartidos por hora local de cada sujeto, con
 #     streaming, thinking, caché, fallbacks, errores de gate y de proveedor.
@@ -491,8 +491,7 @@ defmodule Tokengate.DemoSeeds do
         prompt_cache_enabled: true,
         pinned: true,
         routes: [
-          {openrouter, "anthropic/claude-opus-4.7", 0, {15.0, 75.0, 1.50},
-           cache_control_enabled: true},
+          {openrouter, "anthropic/claude-opus-4.7", 0, {15.0, 75.0, 1.50}, []},
           {lite_llm, "anthropic/claude-opus-4.7", 1, nil, []}
         ]
       },
@@ -502,8 +501,7 @@ defmodule Tokengate.DemoSeeds do
         market: {3.0, 15.0, 0.30},
         prompt_cache_enabled: true,
         routes: [
-          {openrouter, "anthropic/claude-sonnet-4.7", 0, {3.0, 15.0, 0.30},
-           cache_control_enabled: true},
+          {openrouter, "anthropic/claude-sonnet-4.7", 0, {3.0, 15.0, 0.30}, []},
           {lite_llm, "anthropic/claude-sonnet-4.7", 1, nil, []}
         ]
       },

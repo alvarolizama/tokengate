@@ -598,26 +598,36 @@ defmodule Tokengate.BudgetsTest do
 
     test "el daily sí sigue el día local del visor" do
       member = member_fixture()
-      # Zona con offset POSITIVO: su medianoche cae ANTES de la de UTC, así que
-      # su día arranca unas horas antes del día UTC. La frontera así construida
-      # queda siempre en el pasado (a cualquier hora del día), a diferencia de
-      # anclar a la medianoche local futura.
+      # Tokio (+9, sin DST) va 9 h por delante de UTC: cuál de las dos
+      # medianoches abre la ventana depende de la hora de corrida, así que el
+      # ancla se elige con la relación REAL entre ambas. Antes el test anclaba
+      # solo al caso "UTC aún no cruzó medianoche", y fallaba entre las 15:00
+      # y las 24:00 UTC, cuando Tokio ya cambió de fecha.
       tz = "Asia/Tokyo"
       tokyo_start = Periods.start_of_day_utc(tz)
+      utc_start = Periods.start_of_day_utc("Etc/UTC")
 
-      # 60s dentro del día de Tokio: en su ventana diaria, pero ANTERIOR al
-      # arranque del día UTC (que empieza más tarde).
-      log_request(member.id, DateTime.add(tokyo_start, 60, :second), "1.50")
+      daily = fn tz ->
+        Budgets.spend_by_member_ids([member.id], tz).daily
+        |> Map.get(member.id, Decimal.new(0))
+      end
 
-      tokyo = Budgets.spend_by_member_ids([member.id], tz)
-      utc = Budgets.spend_by_member_ids([member.id], "Etc/UTC")
+      if DateTime.compare(tokyo_start, utc_start) == :lt do
+        # El día local arrancó antes: su primer instante queda ANTES del
+        # arranque del día UTC (que todavía no empezó), así que el visor de
+        # Tokio lo ve y el de UTC no.
+        log_request(member.id, tokyo_start, "1.50")
 
-      # El visor de Tokio ve el log dentro de su día…
-      assert Decimal.eq?(Map.get(tokyo.daily, member.id, Decimal.new(0)), Decimal.new("1.50"))
+        assert Decimal.eq?(daily.(tz), Decimal.new("1.50"))
+        assert Decimal.eq?(daily.("Etc/UTC"), Decimal.new("0"))
+      else
+        # Tokio ya cambió de fecha: su día arranca DENTRO del día UTC, así que
+        # la medianoche UTC es el instante que separa a los dos visores.
+        log_request(member.id, utc_start, "1.50")
 
-      # …y el visor UTC no: prueba que la ventana diaria sigue al visor y no al
-      # reloj UTC.
-      assert Decimal.eq?(Map.get(utc.daily, member.id, Decimal.new(0)), Decimal.new("0"))
+        assert Decimal.eq?(daily.("Etc/UTC"), Decimal.new("1.50"))
+        assert Decimal.eq?(daily.(tz), Decimal.new("0"))
+      end
     end
 
     test "list_member_budgets lee el gasto mensual del mes UTC" do

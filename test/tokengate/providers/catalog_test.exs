@@ -136,6 +136,21 @@ defmodule Tokengate.Providers.CatalogTest do
       assert Catalog.unsupported_reason(templated) =~ "plantilla"
     end
 
+    test "a code base_url override makes a row models.dev publishes without one usable" do
+      # cerebras llega del catálogo con base_url NULL; su URL vive en la
+      # customización de código. El gate de supported?/1 tiene que ver la URL
+      # EFECTIVA, o el proveedor queda deshabilitado aunque el override exista.
+      row = %{key: "cerebras", base_url: nil, npm: "@ai-sdk/cerebras"}
+
+      assert Catalog.base_url(row) == "https://api.cerebras.ai/v1"
+      assert Catalog.dialect(row) == {:ok, "openai"}
+      assert Catalog.unsupported_reason(row) == nil
+      assert Catalog.supported?(row)
+
+      # Sin override sigue siendo inservible: el gate no se relaja.
+      refute Catalog.supported?(%{key: "sin-url", base_url: nil, npm: "@ai-sdk/openai"})
+    end
+
     test "base_url/1 trims the trailing slash and honours nothing else by default" do
       assert Catalog.base_url(%{key: "x", base_url: "https://x.example.com/v1/"}) ==
                "https://x.example.com/v1"
@@ -509,21 +524,6 @@ defmodule Tokengate.Providers.CatalogTest do
     test "session_id is gone from the default hints" do
       refute "session_id" in Catalog.default_session_hint_fields()
       assert Catalog.default_session_hint_fields() == ["prompt_cache_key"]
-    end
-  end
-
-  describe "cache_control_allowed?/1" do
-    test "fireworks opts out: its API rejects the content-parts shape" do
-      # El breakpoint es content-parts estilo Anthropic; fireworks tipa
-      # `content` como string plano. El flag de la FILA no basta.
-      refute Catalog.cache_control_allowed?("fireworks-ai")
-    end
-
-    test "every other key (and nil) allows it" do
-      assert Catalog.cache_control_allowed?("openrouter")
-      assert Catalog.cache_control_allowed?("zai")
-      assert Catalog.cache_control_allowed?(nil)
-      assert Catalog.cache_control_allowed?("mi-custom")
     end
   end
 

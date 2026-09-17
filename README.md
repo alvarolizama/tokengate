@@ -59,9 +59,6 @@ Think "LiteLLM, but as an Elixir app with a real admin UI".
   It travels upstream as `prompt_cache_key` (body) and `x-session-id` /
   `x-session-affinity` (headers); the OpenRouter-style `session_id` body field is
   never sent, so no upstream is handed a field it may reject.
-- **Explicit `cache_control` injection** — per model-provider toggle: injects
-  Anthropic-style cache breakpoints into system prompts and tool definitions for
-  upstreams that honor them (Anthropic, z.ai, OpenRouter passthrough).
 - **Local response cache** — identical requests (same model + normalized payload) are
   served from a local cache without touching the upstream: faster answers, $0 cost.
 - **Prompt optimizer** — every chat completion gets system messages hoisted and deduped
@@ -105,7 +102,7 @@ Think "LiteLLM, but as an Elixir app with a real admin UI".
 | `/calculator` | Real provider spend vs estimated cost with custom pricing |
 | `/access/services` | Machine-to-machine API keys with their own budget/limits/grants, plus supervisor assignment |
 | `/services/supervised` (+ `/:service_id`) | Read-only view for service supervisors: summary per supervised service (30d spend, requests, tokens, errors, latency, key status, granted models) and full per-service stats (period selector, daily usage per model, per-model breakdown, status classes, recent requests, roster). Access comes from a live `service_supervisors` row — no role grants it, and removing the row revokes it immediately |
-| `/catalog/providers` | Provider CRUD, multiple credentials each, per-provider sticky TTL and cache_control toggle |
+| `/catalog/providers` | Provider CRUD, multiple credentials each, per-provider sticky TTL |
 | `/catalog/models` | Alias CRUD — providers by priority, `billing_mode`, exclusive scope |
 | `/access/groups` (+ members) | Group defaults, per-member extras and grants, observability webhooks |
 | `/access/users` | User CRUD, suspend, impersonation, per-user stats, credit column |

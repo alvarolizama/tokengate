@@ -137,24 +137,29 @@ de escritura lo mide el `fingerprint`, no el diff.
    con el modelo recién creado y la lista de proveedores **ya filtrada a los que
    sirven ese modelo**.
 
-### B) Proveedor + API key, en el mismo modal (evoluciona `models_live.ex:1625`)
+### B) API key + Proveedor, en el mismo modal (evoluciona `models_live.ex:1625`)
 
-Hoy el modal pide una credencial de una lista plana de todas las activas
-(`:1644`). Pasa a dos pasos:
+La **API key manda**: el proveedor de una fila es, por definición, el que emitió
+la key, así que el modal lo **deriva** de ella en vez de pedirlo como paso
+previo (la lista plana de credenciales se conserva, pero ya no se exige elegir
+proveedor antes).
 
-1. **Proveedor**: selector con **solo los proveedores que sirven el modelo**
-   (de `catalog_model_offers`), ordenados por precio, marcando los que ya tienen
-   credencial activa y los que ya están asignados a ese modelo. Un proveedor que
-   sirve el modelo pero no está materializado se puede crear como custom ahí mismo.
-2. **Credencial**: select limitado a las credenciales **de ese proveedor** +
-   botón **«＋ Nueva API key»** que despliega alias + key (los mismos campos de
-   `providers_live.ex:1088`), crea la credencial (`Providers.create_credential/1`,
-   `providers.ex:287`) y **la deja seleccionada**. "Lo que la key necesite" queda
-   cubierto por lo que ya existe por proveedor: `path_overrides` (modal
-   Capacidades), `max_rpm`/`max_concurrent`/timeout a nivel proveedor, y
-   `sticky_ttl`/`service_tier`/`cache_control` a nivel model_provider.
-3. `provider_model` se **prellena con el id de la oferta** (D6) y se mantiene el
-   dropdown del `/models` en vivo (`:748`) como validación/override.
+1. **Credencial**: select con las credenciales activas (todas, o solo las del
+   proveedor que se haya filtrado) + botón **«＋ Nueva API key»** que despliega
+   alias + key (los mismos campos de `providers_live.ex:1088`), crea la
+   credencial (`Providers.create_credential/1`, `providers.ex:287`) y **la deja
+   seleccionada**. Al elegirla queda fijado el proveedor del chip.
+2. **Proveedor (derivado / filtro)**: el buscador sigue ahí, pero filtra las API
+   keys por proveedor; los proveedores que sirven el modelo siguen listados con
+   su precio de lista, y el chip muestra el proveedor que resolvió la key (aunque
+   no publique oferta para este modelo: el proveedor lo nombra la credencial).
+   "Lo que la key necesite" queda cubierto por lo que ya existe por proveedor:
+   `path_overrides` (modal Capacidades), `max_rpm`/`max_concurrent`/timeout a
+   nivel proveedor, y `sticky_ttl`/`service_tier` a nivel model_provider.
+3. `provider_model` y los costos manuales se **prellenan con la oferta**
+   (`Providers.offer_for/2`) del proveedor de la key para ese modelo — solo en
+   los campos vacíos — y se mantiene el dropdown del `/models` en vivo (`:748`)
+   como validación/override.
 
 ### C) Modelo custom a mano (se conserva)
 
@@ -165,10 +170,10 @@ pierde: es el mismo camino de hoy, solo reubicado en una pestaña.
 
 El botón `Asignar Proveedor` (`models_live.ex:1333`) abre **el mismo modal B**.
 La mejora concreta que se pide —"solo mejorar el modal"— es exactamente la de B:
-**proveedor primero** (no la lista plana de credenciales) y **crear la key sin
-salir** a `/catalog/providers`. Para asignar la **segunda** key de un modelo solo
-hay que repetir el paso, con el select de credencial marcando cuáles ya están
-usadas en ese scope (hoy ya existe la validación:
+**la key resuelve el proveedor** (no hace falta elegir proveedor primero) y
+**crear la key sin salir** a `/catalog/providers`. Para asignar la **segunda**
+key de un modelo solo hay que repetir el paso, con el select de credencial
+marcando cuáles ya están usadas en ese scope (hoy ya existe la validación:
 `Providers.list_available_credentials_for_scope/3`, `providers.ex:638`).
 
 ---
@@ -313,4 +318,30 @@ tiene que llegar al insert o la fila se guarda como custom.
 Tests nuevos: `test/tokengate/providers/model_catalog_test.exs` (15) y los
 describe `model catalog picker` / `provider then API key` en
 `models_live_test.exs` (10), más 5 en `catalog_refresh_worker_test.exs`.
+
+### 9.8 La relación con el proveedor se deriva de la API key
+
+Síntoma: el modal pedía elegir proveedor **antes** de la key, aunque el
+proveedor no es una decisión aparte — cada credencial pertenece a un proveedor y
+`model_providers` cuelga de la credencial (`credential_id`), no del proveedor.
+La key es lo único que el operador necesita elegir.
+
+Ahora `provider_form_changed` (`models_live.ex`) llama a
+`apply_credential_provider/2`: resuelve el proveedor de la key elegida
+(`credentials_for_select` → `provider`), lo deja fijado en el chip, y aplica
+`put_offer_defaults/2` con `Providers.offer_for/2` (el modelo del proveedor y
+los costos de lista de esa oferta, **solo en campos vacíos**). El buscador de
+proveedores no se va: filtra las keys, y el placeholder del select ya no exige
+haber elegido uno.
+
+Dos matices que importan:
+
+- **Sin oferta no hay precio.** Un proveedor que no sirve el modelo (sin fila en
+  `catalog_model_offers`) igual resuelve el chip — el nombre sale de la
+  credencial, ver `provider_chip_name/3` — pero no rellena nada.
+- **Abrir en edición también rellena**: si la fila ya tiene proveedor
+  identificado (su credencial lo dice) y el precio manual está vacío, la oferta
+  llegó como default del form. Es un valor **visible y editable**, no un write
+  silencioso: nada se guarda hasta pulsar Guardar, y si el precio ya existía,
+  el del operador gana.
 

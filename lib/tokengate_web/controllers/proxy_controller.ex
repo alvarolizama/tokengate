@@ -58,7 +58,6 @@ defmodule TokengateWeb.ProxyController do
   alias Tokengate.Providers.{Credential, Provider, ProviderLimits}
 
   alias Tokengate.Proxy.{
-    CacheControlInjector,
     CostCalculator,
     OpenAIAdapter,
     ProviderAdapter,
@@ -1640,11 +1639,9 @@ defmodule TokengateWeb.ProxyController do
   # models: system messages are hoisted to the front and deduped
   # (stable_prefix), then noisy tool output is trimmed and deduped
   # (lazy_cleanup), reasoning artifacts are stripped from historical
-  # assistant messages (strip_reasoning), the conversation's session key is
+  # assistant messages (strip_reasoning), and the conversation's session key is
   # attached as OpenRouter's `session_id` / OpenAI's `prompt_cache_key`
-  # upstream routing hint, and — when the model_provider enables it — an
-  # Anthropic-style `cache_control` breakpoint is injected on the stable
-  # system prefix. All passes are pure; the input is never mutated.
+  # upstream routing hint. All passes are pure; the input is never mutated.
   # Non-LLM models (and embeddings routes, which never call this function)
   # pass through unchanged.
   defp maybe_optimize(payload, %{model_type: "llm"} = route_ctx) do
@@ -1657,7 +1654,6 @@ defmodule TokengateWeb.ProxyController do
     |> Map.update!("messages", &PromptOptimizer.lazy_cleanup/1)
     |> Map.update!("messages", &PromptOptimizer.strip_reasoning/1)
     |> attach_session_hint(session_key, provider_key(route_ctx))
-    |> CacheControlInjector.inject(cache_control_injection?(route_ctx))
     |> drop_strict_fields(provider_key(route_ctx))
     # Operator overrides run LAST so they can strip/replace anything the
     # gateway injected (a per-row `omit_body_fields` can pull the session hint
@@ -1667,21 +1663,9 @@ defmodule TokengateWeb.ProxyController do
 
   defp maybe_optimize(payload, _model_model), do: payload
 
-  # Will the `cache_control` breakpoint be injected? The model_provider row is
-  # necessary but NOT sufficient: the breakpoint is Anthropic-style
-  # content-parts, so an upstream whose API cannot take that shape
-  # (`Catalog.cache_control_allowed?/1` — Fireworks types `content` as a plain
-  # string and 400s on the extra part field) never gets one, no matter what the
-  # row says. Rows written by SQL, a seed or the API can still carry the flag
-  # true: only the admin form forces it off, and only at save time.
-  defp cache_control_injection?(route_ctx) do
-    Map.get(route_ctx, :cache_control_enabled, false) == true and
-      Tokengate.Providers.Catalog.cache_control_allowed?(provider_key(route_ctx))
-  end
-
   # Per model_provider upstream overrides, applied last in the payload
-  # pipeline so they win over every gateway injection (session hints,
-  # cache_control). Defaults are no-ops. `model`, `messages` and
+  # pipeline so they win over every gateway injection (session hints).
+  # Defaults are no-ops. `model`, `messages` and
   # `stream_options` are protected: the gateway owns them (model mapping,
   # passthrough body, usage accounting) and an override there would break
   # routing or cost tracking.
@@ -1726,9 +1710,6 @@ defmodule TokengateWeb.ProxyController do
     %{
       model_type: route.model && route.model.model_type,
       session_key: conn.assigns[:session_key],
-      cache_control_enabled:
-        Map.get(route.model_provider || %{}, :cache_control_enabled, false) == true or
-          Map.get(route.model_provider || %{}, "cache_control_enabled", false) == true,
       model_provider: route.model_provider,
       extra_body: model_provider_setting(route, :extra_body),
       omit_body_fields: model_provider_setting(route, :omit_body_fields),

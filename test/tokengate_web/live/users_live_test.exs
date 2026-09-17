@@ -186,7 +186,7 @@ defmodule TokengateWeb.UsersLiveTest do
 
       # Desc default → el de mayor saldo primero.
       html = render(view)
-      assert html =~ "Crédito"
+      assert html =~ "Límite mensual"
 
       rich_first? = fn html ->
         Regex.scan(~r/id="user-([0-9a-f-]+)"/, html)
@@ -767,6 +767,18 @@ defmodule TokengateWeb.UsersLiveTest do
       assert has_element?(view, "#key-#{k2.id}", "server")
       assert has_element?(view, "#revoke-key-#{k1.id}")
       assert has_element?(view, "#revoke-key-#{k2.id}")
+    end
+
+    test "la columna Claves cuenta las keys activas del usuario", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{user: target} = register("user")
+      _k1 = create_key(target, "laptop")
+      _k2 = create_key(target, "server")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      assert has_element?(view, "#keys-#{target.id}", "2 claves")
     end
 
     test "revoking one key does not affect the other", %{conn: conn} do

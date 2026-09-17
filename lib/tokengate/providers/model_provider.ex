@@ -71,11 +71,6 @@ defmodule Tokengate.Providers.ModelProvider do
     # form so operators can type `900` instead of `900_000`. Synced by
     # `sync_sticky_ttl_fields/1` before saving.
     field :sticky_ttl_seconds, :integer, virtual: true
-    # Explicit Anthropic-style cache_control injection on the stable system
-    # prefix. Off by default: only upstreams that honor cache_control
-    # breakpoints (Anthropic, z.ai's OpenAI-compatible endpoint, OpenRouter
-    # passthrough) benefit; elsewhere it's dead payload weight.
-    field :cache_control_enabled, :boolean, default: false
     # Per-upstream request overrides (defaults are no-ops):
     #   * extra_body — JSON merged into the upstream request body (e.g.
     #     Fireworks' `{"service_tier": "priority"}` serving-path opt-in).
@@ -123,7 +118,6 @@ defmodule Tokengate.Providers.ModelProvider do
       :enabled,
       :sticky_ttl_ms,
       :sticky_ttl_seconds,
-      :cache_control_enabled,
       :extra_body,
       :omit_body_fields,
       :omit_headers,

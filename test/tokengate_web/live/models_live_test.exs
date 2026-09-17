@@ -81,6 +81,15 @@ defmodule TokengateWeb.ModelsLiveTest do
     model_record
   end
 
+  defp create_custom_lab(attrs) do
+    u = unique()
+
+    {:ok, lab} =
+      Providers.create_custom_lab(Map.merge(%{"name" => "Lab #{u}", "key" => "lab-#{u}"}, attrs))
+
+    lab
+  end
+
   defp create_model_provider(model, provider, attrs \\ %{}) do
     u = unique()
 
@@ -177,6 +186,12 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert has_element?(view, "#model_market_input_price_per_1m")
     assert has_element?(view, "#model_market_output_price_per_1m")
     assert has_element?(view, "#model_market_cache_price_per_1m")
+
+    # The form copy must answer "¿esto se usa para algún cálculo?": the prices
+    # feed the Calculator's market estimate, not billing.
+    note = view |> element("#market-prices-note") |> render()
+    assert note =~ "Calculador"
+    assert note =~ "no se usa para facturación"
 
     html =
       view
@@ -450,67 +465,9 @@ defmodule TokengateWeb.ModelsLiveTest do
       {provider, credential}
     end
 
-    test "saving a fireworks provider leaves cache_control off; regular defaults on", %{
+    test "shows the service_tier checkbox and the automatic-cache note for fireworks", %{
       conn: conn
     } do
-      %{user: admin, password: password} = register("admin")
-      {_fw_provider, fw_cred} = fw_fixtures()
-
-      regular_provider = create_provider()
-      model_a = create_model()
-      model_b = create_model()
-
-      regular_cred =
-        Tokengate.Repo.insert!(%Tokengate.Providers.Credential{
-          provider_id: regular_provider.id,
-          name: "Reg Cred #{unique()}",
-          api_key_encrypted: "sk-reg",
-          status: "active"
-        })
-
-      conn = login(conn, admin, password)
-      {:ok, view, _html} = live(conn, ~p"/catalog/models")
-
-      # Regular provider: save → cache_control ON by default.
-      view |> element("#new-ap-#{model_a.id}") |> render_click()
-
-      view
-      |> form("#model-provider-form", %{
-        model_provider: %{
-          credential_id: regular_cred.id,
-          provider_model: "m",
-          priority: 1,
-          enabled: true
-        }
-      })
-      |> render_submit()
-
-      regular =
-        Repo.one!(from mp in Tokengate.Providers.ModelProvider, where: mp.model_id == ^model_a.id)
-
-      assert regular.cache_control_enabled == true
-
-      # Fireworks: select the credential (flips the form), then save → OFF.
-      view |> element("#new-ap-#{model_b.id}") |> render_click()
-
-      view
-      |> form("#model-provider-form", %{
-        model_provider: %{
-          credential_id: fw_cred.id,
-          provider_model: "fw-m",
-          priority: 1,
-          enabled: true
-        }
-      })
-      |> render_submit()
-
-      fw =
-        Repo.one!(from mp in Tokengate.Providers.ModelProvider, where: mp.model_id == ^model_b.id)
-
-      assert fw.cache_control_enabled == false
-    end
-
-    test "hides cache_control and shows the service_tier checkbox for fireworks", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
 
       # Drop the builtin row to own the unique key, then stamp it on a local
@@ -551,40 +508,8 @@ defmodule TokengateWeb.ModelsLiveTest do
 
       # The priority checkbox appears…
       assert has_element?(view, "input[name='model_provider[service_tier_priority]']")
-      # …and the Anthropic-style cache_control toggle does NOT (it breaks
-      # Fireworks: strict validation rejects the content-parts format).
-      refute has_element?(view, "input[name='model_provider[cache_control_enabled]']")
       # The automatic prompt-cache note is visible.
       assert render(view) =~ "activa por defecto"
-    end
-
-    test "non-fireworks credentials keep the cache_control toggle and no priority checkbox", %{
-      conn: conn
-    } do
-      %{user: admin, password: password} = register("admin")
-      provider = create_provider()
-      model_record = create_model()
-
-      credential =
-        Tokengate.Repo.insert!(%Tokengate.Providers.Credential{
-          provider_id: provider.id,
-          name: "Other Cred",
-          api_key_encrypted: "sk-other",
-          status: "active"
-        })
-
-      conn = login(conn, admin, password)
-      {:ok, view, _html} = live(conn, ~p"/catalog/models")
-      view |> element("#new-ap-#{model_record.id}") |> render_click()
-
-      view
-      |> form("#model-provider-form", %{
-        model_provider: %{credential_id: credential.id, provider_model: "any", priority: 1}
-      })
-      |> render_change()
-
-      assert has_element?(view, "input[name='model_provider[cache_control_enabled]']")
-      refute has_element?(view, "input[name='model_provider[service_tier_priority]']")
     end
   end
 
@@ -1232,7 +1157,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       output_limit: 8_192,
       cost_input: attrs[:cost_input],
       cost_output: attrs[:cost_output],
-      cost_cache_read: nil,
+      cost_cache_read: attrs[:cost_cache_read],
       cost_cache_write: nil,
       modalities: %{},
       features: attrs[:features] || [],
@@ -1286,7 +1211,9 @@ defmodule TokengateWeb.ModelsLiveTest do
       assert has_element?(view, "#model-form")
       assert has_element?(view, "#tab-catalog")
       assert has_element?(view, "#tab-custom")
-      assert has_element?(view, "#catalog-search")
+      # El buscador necesita un form ancestro: sin él el phx-change muere en el
+      # navegador (LiveViewTest lo despacharía igual, así que se aspira el anidado).
+      assert has_element?(view, "form#catalog-search-form input#catalog-search")
       # The picker is the default tab: a new model starts from the catalog.
       assert has_element?(view, "#catalog-picker")
 
@@ -1332,6 +1259,35 @@ defmodule TokengateWeb.ModelsLiveTest do
       html = render(view)
       assert html =~ "zai/glm-5.2"
       assert html =~ ~s(value="glm-5.2")
+    end
+
+    test "picking a catalog row prefills the market prices", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      _ =
+        create_catalog_model("openai/gpt-5-nano",
+          name: "GPT-5 Nano",
+          lab_key: "openai",
+          cost_input: Decimal.new("0.045"),
+          cost_output: Decimal.new("0.18"),
+          cost_cache_read: Decimal.new("0.0045")
+        )
+
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#new-model-btn") |> render_click()
+
+      view
+      |> element("#catalog-row-#{ModelsLive.dom_key("openai/gpt-5-nano")}")
+      |> render_click()
+
+      # The catalog quotes $/1M, so the three prices land straight in the
+      # inputs: the operator sees the market baseline without typing it. The
+      # rendered value keeps the column scale (numeric(12,6)).
+      assert has_element?(view, "#model_market_input_price_per_1m[value='0.045000']")
+      assert has_element?(view, "#model_market_output_price_per_1m[value='0.180000']")
+      assert has_element?(view, "#model_market_cache_price_per_1m[value='0.004500']")
     end
 
     test "a search with no match points at the custom tab", %{conn: conn} do
@@ -1392,6 +1348,122 @@ defmodule TokengateWeb.ModelsLiveTest do
         view |> element("#catalog-row-#{ModelsLive.dom_key("openai/gpt-5-nano")}") |> render()
 
       assert html =~ "ya existe"
+    end
+
+    test "editar ofrece el mismo picker y re-vincula sin crear otra fila", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      _ =
+        create_catalog_model("openai/gpt-5-nano",
+          name: "GPT-5 Nano",
+          lab_key: "openai",
+          context_limit: 400_000
+        )
+
+      # Una fila a mano: no nació del catálogo, así que no tiene vínculo.
+      model_record = create_model(%{name: "a-mano-#{unique()}"})
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#edit-model-#{model_record.id}") |> render_click()
+
+      # Mismo picker que al crear: pestañas, buscador y listado al teclear.
+      assert has_element?(view, "#model-form-tabs")
+      assert has_element?(view, "#tab-catalog")
+      assert has_element?(view, "#catalog-picker")
+      assert has_element?(view, "form#catalog-search-form input#catalog-search")
+      assert has_element?(view, "#catalog-hint")
+      refute has_element?(view, "#catalog-linked")
+
+      view |> element("#catalog-search") |> render_change(%{"q" => "gpt-5-nano"})
+
+      row = "catalog-row-#{ModelsLive.dom_key("openai/gpt-5-nano")}"
+      assert has_element?(view, "##{row}")
+
+      view |> element("##{row}") |> render_click()
+
+      # El vínculo se refleja antes de guardar.
+      assert has_element?(view, "#catalog-linked")
+
+      relinked = "re-vinculado-#{unique()}"
+
+      view
+      |> form("#model-form", %{"model" => %{"name" => relinked}})
+      |> render_submit()
+
+      saved = Providers.get_model_by_name(relinked)
+
+      # Es la MISMA fila —rellenar no puede convertir el update en un insert— y
+      # el vínculo con el catálogo (con su lab) quedó guardado.
+      assert saved.id == model_record.id
+      assert saved.catalog_model_key == "openai/gpt-5-nano"
+      assert saved.lab_key == "openai"
+      assert saved.context_window == 400_000
+    end
+  end
+
+  # -- Marca del modelo (lab + icono) ---------------------------------------
+
+  describe "marca del modelo" do
+    test "con lab vinculado la marca es la del lab y no se ofrece icono propio", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      lab = create_custom_lab(%{"name" => "Mi Lab", "icon" => "hero-fire"})
+      model_record = create_model(%{lab_key: lab.key})
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+      # La card del listado ya lleva la marca del lab.
+      assert has_element?(view, "#model-mark-#{model_record.id} .hero-fire")
+
+      view |> element("#edit-model-#{model_record.id}") |> render_click()
+
+      assert has_element?(view, "#model-mark-preview-inner .hero-fire")
+      assert has_element?(view, "#model-mark-origin", "Marca del lab Mi Lab.")
+      # Con un lab vinculado el icono propio queda en espera: no hay picker.
+      refute has_element?(view, "#model-icon-picker")
+    end
+
+    test "sin lab la marca es el icono genérico y la paleta fija uno propio", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#new-model-btn") |> render_click()
+
+      assert has_element?(view, "#model-icon-picker")
+      assert has_element?(view, "#model-mark-preview-inner .hero-cpu-chip")
+      assert has_element?(view, "#model-mark-origin", "Icono genérico")
+
+      view |> element("#model-icon-choice-hero-bolt") |> render_click()
+      assert has_element?(view, "#model-mark-preview-inner .hero-bolt")
+      assert has_element?(view, "#model-mark-origin", "Icono propio del modelo.")
+
+      view
+      |> form("#model-form", %{
+        model: %{name: "marca-propia", context_window: 128_000}
+      })
+      |> render_submit()
+
+      saved = Tokengate.Providers.get_model_by_name("marca-propia")
+      assert saved.icon == "hero-bolt"
+      # Y la card del listado la reusa.
+      assert has_element?(view, "#model-mark-#{saved.id} .hero-bolt")
+    end
+
+    test "un lab_key sin fila en labs se sigue ofreciendo en el select", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      model_record = create_model(%{lab_key: "lab-fantasma", icon: "hero-rocket-launch"})
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#edit-model-#{model_record.id}") |> render_click()
+
+      # Si el select no pudiera representarlo, guardar borraría el vínculo.
+      assert has_element?(view, "#model-form option[value='lab-fantasma']")
+      # Un vínculo sin fila no da marca: manda el icono propio del modelo.
+      assert has_element?(view, "#model-mark-preview-inner .hero-rocket-launch")
+      assert has_element?(view, "#model-icon-picker")
     end
   end
 
@@ -1528,6 +1600,208 @@ defmodule TokengateWeb.ModelsLiveTest do
       assert has_element?(
                view,
                "select[name='model_provider[credential_id]'] option[value='#{alpha_cred.id}'][selected]"
+             )
+    end
+
+    test "picking the API key derives its provider and fills the list price", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      provider = create_keyed_provider("alpha", %{name: "Alpha Cloud"})
+
+      {:ok, cred} =
+        Providers.create_credential(%{
+          provider_id: provider.id,
+          name: "Alpha key",
+          api_key_encrypted: "sk-alpha-1111",
+          status: "active"
+        })
+
+      _ = create_catalog_model("openai/gpt-5-nano")
+
+      _ =
+        create_offer("alpha", "openai/gpt-5-nano",
+          cost_input: Decimal.new("0.5"),
+          cost_output: Decimal.new("2.0")
+        )
+
+      model_record = create_model(%{name: "nano-key", catalog_model_key: "openai/gpt-5-nano"})
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#new-ap-#{model_record.id}") |> render_click()
+
+      # Nothing picked yet: no provider chip, and the key list is open.
+      refute has_element?(view, "#selected-provider")
+
+      # Choosing ONLY the key resolves the provider (no provider click).
+      view
+      |> form("#model-provider-form", %{model_provider: %{credential_id: cred.id}})
+      |> render_change()
+
+      assert has_element?(view, "#selected-provider")
+      assert render(view) =~ "Alpha Cloud"
+
+      # The offer for that provider+model preloaded the provider model id and
+      # the list prices.
+      assert has_element?(
+               view,
+               "input[name='model_provider[provider_model]'][value='openai/gpt-5-nano']"
+             )
+
+      # El input guarda el Decimal con la escala de la columna ("0.500000").
+      assert has_element?(
+               view,
+               "input[name='model_provider[input_cost_per_million]'][value^='0.5']"
+             )
+
+      assert has_element?(
+               view,
+               "input[name='model_provider[output_cost_per_million]'][value^='2.0']"
+             )
+    end
+
+    test "an operator-typed provider model survives picking the API key", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      provider = create_keyed_provider("alpha", %{name: "Alpha Cloud"})
+
+      {:ok, cred} =
+        Providers.create_credential(%{
+          provider_id: provider.id,
+          name: "Alpha key",
+          api_key_encrypted: "sk-alpha-3333",
+          status: "active"
+        })
+
+      _ = create_catalog_model("openai/gpt-5-nano")
+      _ = create_offer("alpha", "openai/gpt-5-nano", cost_input: Decimal.new("0.5"))
+
+      model_record = create_model(%{name: "nano-typed", catalog_model_key: "openai/gpt-5-nano"})
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#new-ap-#{model_record.id}") |> render_click()
+
+      typed = %{
+        provider_model: "mi-tier-dedicado",
+        priority: 7
+      }
+
+      view
+      |> form("#model-provider-form", %{model_provider: typed})
+      |> render_change()
+
+      # Picking the key re-renders the form: what the operator already typed
+      # (and phx-change just submitted) must survive the offer defaults.
+      view
+      |> form("#model-provider-form", %{model_provider: Map.put(typed, :credential_id, cred.id)})
+      |> render_change()
+
+      assert has_element?(
+               view,
+               "input[name='model_provider[provider_model]'][value='mi-tier-dedicado']"
+             )
+
+      assert has_element?(view, "input[name='model_provider[priority]'][value='7']")
+
+      # Only the still-empty field takes the offer.
+      assert has_element?(
+               view,
+               "input[name='model_provider[input_cost_per_million]'][value^='0.5']"
+             )
+    end
+
+    test "a key from a provider that does not serve the model derives the provider only", %{
+      conn: conn
+    } do
+      %{user: admin, password: password} = register("admin")
+
+      # "unrelated" publishes no offer for the catalog model.
+      provider = create_keyed_provider("unrelated", %{name: "Unrelated Cloud"})
+
+      {:ok, cred} =
+        Providers.create_credential(%{
+          provider_id: provider.id,
+          name: "Unrelated key",
+          api_key_encrypted: "sk-unrelated-1111",
+          status: "active"
+        })
+
+      _ = create_catalog_model("openai/gpt-5-nano")
+      model_record = create_model(%{name: "nano-other", catalog_model_key: "openai/gpt-5-nano"})
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#new-ap-#{model_record.id}") |> render_click()
+
+      view
+      |> form("#model-provider-form", %{model_provider: %{credential_id: cred.id}})
+      |> render_change()
+
+      # The provider is known (the key names it) even though it has no offer.
+      assert has_element?(view, "#selected-provider")
+      html = render(view)
+      assert html =~ "Unrelated Cloud"
+
+      # No offer: nothing to fill.
+      refute has_element?(
+               view,
+               "input[name='model_provider[provider_model]'][value='openai/gpt-5-nano']"
+             )
+
+      refute has_element?(
+               view,
+               "input[name='model_provider[input_cost_per_million]'][value^='0.5']"
+             )
+    end
+
+    test "editing a row whose provider is identified fills the empty list price", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      provider = create_keyed_provider("alpha", %{name: "Alpha Cloud"})
+
+      {:ok, cred} =
+        Providers.create_credential(%{
+          provider_id: provider.id,
+          name: "Alpha key",
+          api_key_encrypted: "sk-alpha-2222",
+          status: "active"
+        })
+
+      _ = create_catalog_model("openai/gpt-5-nano")
+      _ = create_offer("alpha", "openai/gpt-5-nano", cost_input: Decimal.new("0.7"))
+
+      model_record = create_model(%{name: "nano-edit", catalog_model_key: "openai/gpt-5-nano"})
+
+      # Stored row with no manual price: the modal fills it from models.dev.
+      {:ok, mp} =
+        Providers.create_model_provider(%{
+          model_id: model_record.id,
+          credential_id: cred.id,
+          provider_model: "openai/gpt-5-nano",
+          priority: 1,
+          enabled: true
+        })
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#edit-ap-#{mp.id}") |> render_click()
+
+      assert has_element?(
+               view,
+               "input[name='model_provider[input_cost_per_million]'][value^='0.7']"
+             )
+
+      # An operator-set price still wins over the offer.
+      {:ok, _} =
+        Providers.update_model_provider(mp, %{input_cost_per_million: Decimal.new("9.5")})
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+      view |> element("#edit-ap-#{mp.id}") |> render_click()
+
+      assert has_element?(
+               view,
+               "input[name='model_provider[input_cost_per_million]'][value^='9.5']"
              )
     end
 

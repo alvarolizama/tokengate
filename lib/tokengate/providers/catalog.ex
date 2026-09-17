@@ -97,6 +97,7 @@ defmodule Tokengate.Providers.Catalog do
   @dialect_by_npm %{
     "@ai-sdk/openai-compatible" => "openai",
     "@ai-sdk/openai" => "openai",
+    "@ai-sdk/cerebras" => "openai",
     "@openrouter/ai-sdk-provider" => "openrouter"
   }
 
@@ -108,14 +109,6 @@ defmodule Tokengate.Providers.Catalog do
   # `x-session-id` HEADER (which every outbound request already carries), so
   # the body field bought nothing and cost a strict upstream a 400.
   @default_session_hint_fields ~w(prompt_cache_key)
-
-  # Providers whose API cannot take the Anthropic-style content-parts shape a
-  # `cache_control` breakpoint requires (Fireworks types `content` as a plain
-  # string and 400s on the extra part field). The breakpoint is never injected
-  # for them, whatever the model_provider ROW says: the admin form forces the
-  # flag off at save time, but a row written by SQL, a seed or the API can
-  # still carry `cache_control_enabled: true`.
-  @cache_control_opt_out ~w(fireworks-ai)
 
   # ---------------------------------------------------------------------------
   # Code customizations, by models.dev id.
@@ -151,7 +144,15 @@ defmodule Tokengate.Providers.Catalog do
       billing: "subscription"
     },
     "zai" => %{capabilities: ~w(llm)},
-    "zai-coding-plan" => %{capabilities: ~w(llm), billing: "subscription"}
+    "zai-coding-plan" => %{capabilities: ~w(llm), billing: "subscription"},
+    # models.dev no publica base URL para Cerebras y resuelve su dialecto por
+    # el SDK (`@ai-sdk/cerebras`), que no está en la tabla npm→dialecto. El
+    # endpoint sí es OpenAI-compatible, así que ambos datos van en código.
+    "cerebras" => %{
+      capabilities: ~w(llm),
+      dialect: "openai",
+      base_url: "https://api.cerebras.ai/v1"
+    }
   }
 
   # Vendored snapshot of the provider-level payload: seed for a fresh database
@@ -347,7 +348,11 @@ defmodule Tokengate.Providers.Catalog do
   def unsupported_reason(nil), do: "sin datos"
 
   def unsupported_reason(entry) when is_map(entry) do
-    base = Map.get(entry, :base_url) || Map.get(entry, "base_url")
+    # The EFFECTIVE URL, not the raw row: a provider models.dev publishes
+    # without a base URL (cerebras) can carry it in its code customization, and
+    # this gate has to see the same URL the materializer stores — otherwise the
+    # override would never make the provider usable.
+    base = base_url(entry)
 
     cond do
       is_nil(base) ->
@@ -438,24 +443,6 @@ defmodule Tokengate.Providers.Catalog do
   @doc "The default session-hint fields (tolerant upstreams)."
   @spec default_session_hint_fields() :: [String.t()]
   def default_session_hint_fields, do: @default_session_hint_fields
-
-  @doc """
-  Whether the Anthropic-style `cache_control` breakpoint may be injected for
-  `key`.
-
-  An upstream that cannot take the content-parts shape answers 400 on the
-  extra part field, so it never gets one — the model_provider row's
-  `cache_control_enabled` is necessary but not sufficient (that row can be
-  written by SQL, a seed or the API; only the admin form forces it off).
-
-      iex> Tokengate.Providers.Catalog.cache_control_allowed?("fireworks-ai")
-      false
-
-      iex> Tokengate.Providers.Catalog.cache_control_allowed?("openrouter")
-      true
-  """
-  @spec cache_control_allowed?(String.t() | nil) :: boolean()
-  def cache_control_allowed?(key), do: key not in @cache_control_opt_out
 
   @doc """
   Body fields the gateway must strip for a strict provider, by catalog key.

@@ -238,7 +238,6 @@ CREATE TABLE public.model_providers (
     output_cost_per_million numeric(12,6),
     cache_cost_per_million numeric(12,6),
     exclusive_to_service_id uuid,
-    cache_control_enabled boolean DEFAULT false NOT NULL,
     extra_body jsonb DEFAULT '{}'::jsonb NOT NULL,
     omit_body_fields character varying(255)[] DEFAULT ARRAY[]::character varying[] NOT NULL,
     omit_headers character varying(255)[] DEFAULT ARRAY[]::character varying[] NOT NULL

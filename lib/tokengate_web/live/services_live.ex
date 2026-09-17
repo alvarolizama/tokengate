@@ -11,6 +11,7 @@ defmodule TokengateWeb.ServicesLive do
 
   import Ecto.Query, only: [from: 2]
   import TokengateWeb.AdminComponents
+  import TokengateWeb.KeysPanel
   alias Tokengate.Accounts
   alias Tokengate.Accounts.Service
   alias Tokengate.Budgets
@@ -41,6 +42,11 @@ defmodule TokengateWeb.ServicesLive do
         |> assign(:form, nil)
         |> assign(:editing_service_id, nil)
         |> assign(:new_token, nil)
+        |> assign(:keys_service_id, nil)
+        |> assign(:keys_service_name, nil)
+        |> assign(:keys, [])
+        |> assign(:keys_spend, %{})
+        |> assign(:keys_by_service, %{})
         |> assign(:delete_target_id, nil)
         |> assign(:delete_target_name, nil)
         |> assign(:detail_service_id, nil)
@@ -77,10 +83,11 @@ defmodule TokengateWeb.ServicesLive do
   defp load_services(socket) do
     services =
       from(s in Service,
-        preload: [:api_key],
         order_by: [asc: s.name]
       )
       |> Repo.all()
+
+    service_ids = Enum.map(services, & &1.id)
 
     granted_models =
       from(sma in ServiceModel, select: {sma.service_id, sma.model_id})
@@ -115,6 +122,7 @@ defmodule TokengateWeb.ServicesLive do
     |> assign(:monthly_spend_by_service, monthly_spend)
     |> assign(:total_spend_by_service, total_spend)
     |> assign(:supervisors_map, build_supervisors_map(Enum.map(services, & &1.id)))
+    |> assign(:keys_by_service, Accounts.list_api_keys_for_services(service_ids))
     |> stream_services()
   end
 
@@ -360,53 +368,105 @@ defmodule TokengateWeb.ServicesLive do
     {:noreply, assign(socket, :models_service_id, nil)}
   end
 
-  ## Events — API key management -----------------------------------------
+  ## Events — API keys (N keys con etiqueta, igual que un usuario) ---------
 
-  def handle_event("generate_key", %{"id" => service_id}, socket) do
-    service = Accounts.get_service!(service_id)
+  # Las claves de un servicio se cargan solo al abrir su panel: el listado no
+  # paga N+1 por cada fila.
+  def handle_event("manage_keys", %{"id" => service_id}, socket) do
+    case Accounts.get_service(service_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Servicio no encontrado.")}
 
-    case Accounts.generate_service_api_key(service) do
-      {:ok, _api_key, new_token} ->
+      service ->
         {:noreply,
          socket
-         |> assign(:new_token, new_token)
-         |> put_flash(:info, "Clave generada correctamente.")
-         |> load_services()}
-
-      {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo generar la clave.")}
+         |> assign(:keys_service_id, service.id)
+         |> assign(:keys_service_name, service.name)
+         |> assign(:new_token, nil)
+         |> load_service_keys(service.id)}
     end
   end
 
-  def handle_event("revoke_key", %{"id" => service_id}, socket) do
-    service = Accounts.get_service!(service_id)
+  def handle_event("cancel_manage_keys", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:keys_service_id, nil)
+     |> assign(:keys_service_name, nil)
+     |> assign(:keys, [])
+     |> assign(:keys_spend, %{})
+     |> assign(:new_token, nil)}
+  end
 
-    service =
-      if service.api_key do
-        Repo.preload(service, :api_key)
-      else
-        service
+  def handle_event("create_service_key", %{"key" => key_params}, socket) do
+    service_id = socket.assigns.keys_service_id
+
+    if service_id do
+      {token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+      attrs = %{
+        "subject_type" => "service",
+        "service_id" => service_id,
+        "label" => String.trim(key_params["label"] || ""),
+        "key_hash" => key_hash,
+        "key_prefix" => key_prefix,
+        "status" => "active"
+      }
+
+      attrs = if attrs["label"] == "", do: Map.delete(attrs, "label"), else: attrs
+
+      case Accounts.create_api_key(attrs) do
+        {:ok, api_key} ->
+          Tokengate.Auditing.audit(
+            socket.assigns.current_user,
+            "api_key.create",
+            "api_key",
+            api_key.id,
+            %{"label" => api_key.label, "service_id" => service_id}
+          )
+
+          {:noreply,
+           socket
+           |> assign(:new_token, token)
+           |> put_flash(:info, "Clave creada. Cópiala ahora: no se vuelve a mostrar.")
+           |> load_service_keys(service_id)
+           |> load_services()}
+
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, "No se pudo crear la clave.")}
       end
-
-    case service.api_key do
-      nil ->
-        {:noreply, put_flash(socket, :error, "Este servicio no tiene clave.")}
-
-      api_key ->
-        case Accounts.revoke_service_api_key(api_key) do
-          {:ok, _} ->
-            {:noreply,
-             socket
-             |> put_flash(:info, "Clave revocada.")
-             |> load_services()}
-
-          {:error, _} ->
-            {:noreply, put_flash(socket, :error, "No se pudo revocar la clave.")}
-        end
+    else
+      {:noreply, socket}
     end
   end
 
-  def handle_event("dismiss_new_token", _params, socket) do
+  def handle_event("revoke_service_key", %{"key-id" => api_key_id}, socket) do
+    with %{} = api_key <- Accounts.get_service_api_key(api_key_id),
+         true <- api_key.service_id == socket.assigns.keys_service_id do
+      case Accounts.revoke_service_api_key(api_key) do
+        {:ok, _} ->
+          Tokengate.Auditing.audit(
+            socket.assigns.current_user,
+            "api_key.revoke",
+            "api_key",
+            api_key.id,
+            %{"label" => api_key.label, "service_id" => api_key.service_id}
+          )
+
+          {:noreply,
+           socket
+           |> put_flash(:info, "Clave revocada.")
+           |> load_service_keys(socket.assigns.keys_service_id)
+           |> load_services()}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "No se pudo revocar la clave.")}
+      end
+    else
+      _ -> {:noreply, put_flash(socket, :error, "Clave no encontrada.")}
+    end
+  end
+
+  def handle_event("dismiss_new_key_token", _params, socket) do
     {:noreply, assign(socket, :new_token, nil)}
   end
 
@@ -434,7 +494,7 @@ defmodule TokengateWeb.ServicesLive do
            :info,
            "Sticky routes limpiadas para #{service.name}. Su próxima petición se re-ruteará."
          )
-         |> load_services()}
+         |> load_service_keys(service_id)}
     end
   end
 
@@ -543,6 +603,16 @@ defmodule TokengateWeb.ServicesLive do
 
   ## Private helpers — save ----------------------------------------------
 
+  # Keys activas del servicio + consumo por key, cargadas solo al abrir el panel.
+  defp load_service_keys(socket, service_id) do
+    keys = Accounts.list_api_keys_for_service(service_id)
+    spend = Accounts.spend_by_api_key(Enum.map(keys, & &1.id))
+
+    socket
+    |> assign(:keys, keys)
+    |> assign(:keys_spend, spend)
+  end
+
   defp save_service(socket, :new, service_params) do
     case Accounts.create_service(service_params) do
       {:ok, _service} ->
@@ -615,9 +685,6 @@ defmodule TokengateWeb.ServicesLive do
   def format_number(nil), do: "0"
   def format_number(n), do: to_string(n)
 
-  def key_status_badge("active"), do: "badge-success"
-  def key_status_badge(_), do: "badge-error"
-
   defp stats_for(assigns, service_id) do
     Map.get(
       assigns.service_stats,
@@ -668,19 +735,6 @@ defmodule TokengateWeb.ServicesLive do
           </:actions>
         </.header>
 
-        <%!-- New token banner --%>
-        <div :if={@new_token} class="alert alert-success" id="new-token-banner">
-          <.icon name="hero-key" class="w-5 h-5 shrink-0" />
-          <div>
-            <p class="font-semibold">Clave generada</p>
-            <p class="text-sm opacity-80">Cópiala ahora, no se volverá a mostrar.</p>
-            <code class="block mt-2 p-2 bg-black/10 rounded text-sm font-mono break-all">
-              {@new_token}
-            </code>
-          </div>
-          <button phx-click="dismiss_new_token" class="btn btn-ghost btn-sm">Cerrar</button>
-        </div>
-
         <%!-- Service form (create / edit) — modal --%>
         <.admin_modal :if={@form} id="service-form-modal" on_close="cancel_form">
           <h2 class="text-lg font-semibold mb-4">
@@ -730,6 +784,40 @@ defmodule TokengateWeb.ServicesLive do
           </.form>
         </.admin_modal>
 
+        <%!-- Keys modal — N claves con etiqueta (mismo panel que Usuarios) --%>
+        <.admin_modal
+          :if={@keys_service_id}
+          id="service-keys-modal"
+          on_close="cancel_manage_keys"
+          width="max-w-2xl"
+        >
+          <h2 class="text-lg font-semibold mb-1">
+            Claves API de <span class="text-primary">{@keys_service_name}</span>
+          </h2>
+          <p class="text-xs text-base-content/50 mb-4">
+            Un servicio puede tener varias claves activas, cada una con su etiqueta.
+          </p>
+
+          <.keys_panel
+            subject_kind="service"
+            subject_id={@keys_service_id}
+            keys={@keys}
+            spend={@keys_spend}
+            new_token={@new_token}
+            create_event="create_service_key"
+            revoke_event="revoke_service_key"
+            dismiss_event="dismiss_new_key_token"
+            sticky_event="clear_service_sticky_routes"
+            empty_text="Este servicio no tiene claves activas."
+          />
+
+          <div class="flex gap-2 mt-4 justify-end">
+            <button type="button" phx-click="cancel_manage_keys" class="btn btn-ghost btn-sm">
+              Cerrar
+            </button>
+          </div>
+        </.admin_modal>
+
         <%!-- Models modal — manage model grants per service --%>
         <.admin_modal
           :if={@models_service_id}
@@ -757,7 +845,7 @@ defmodule TokengateWeb.ServicesLive do
           </div>
         </.admin_modal>
 
-        <%!-- Detail modal — stats + API key + supervisores --%>
+        <%!-- Detail modal — stats + supervisores (las claves viven en su propio modal) --%>
         <.admin_modal
           :if={@detail_service_id && detail_service(assigns)}
           id="service-detail-modal"
@@ -801,78 +889,6 @@ defmodule TokengateWeb.ServicesLive do
                 <p class="text-lg font-bold">{format_number(stats.total_output_tokens)}</p>
                 <p class="text-xs text-base-content/40">30 días</p>
               </div>
-            </div>
-          </div>
-
-          <%!-- API key --%>
-          <div class="mt-4 p-3 bg-base-200 rounded-lg">
-            <div class="flex items-center justify-between">
-              <div>
-                <p class="text-sm font-medium">API Key</p>
-                <%= if detail_service(assigns).api_key do %>
-                  <p class="text-xs text-base-content/60">
-                    <span class="font-mono">{detail_service(assigns).api_key.key_prefix}</span>…
-                    <span class={[
-                      "badge badge-xs",
-                      key_status_badge(detail_service(assigns).api_key.status)
-                    ]}>
-                      {detail_service(assigns).api_key.status}
-                    </span>
-                  </p>
-                <% else %>
-                  <p class="text-xs text-base-content/40">Sin clave</p>
-                <% end %>
-              </div>
-              <div class="flex gap-1">
-                <button
-                  phx-click="generate_key"
-                  phx-value-id={@detail_service_id}
-                  class="btn btn-primary btn-xs"
-                  title={
-                    if detail_service(assigns).api_key,
-                      do: "Regenerar clave",
-                      else: "Generar clave"
-                  }
-                >
-                  <.icon name="hero-key" class="w-4 h-4" />
-                  {if detail_service(assigns).api_key, do: "Regenerar", else: "Generar"}
-                </button>
-                <%= if detail_service(assigns).api_key && detail_service(assigns).api_key.status == "active" do %>
-                  <button
-                    phx-click="revoke_key"
-                    phx-value-id={@detail_service_id}
-                    data-confirm="¿Revocar esta clave? El servicio dejará de funcionar inmediatamente."
-                    class="btn btn-error btn-xs"
-                    title="Revocar clave"
-                  >
-                    <.icon name="hero-no-symbol" class="w-4 h-4" />
-                  </button>
-                <% end %>
-              </div>
-            </div>
-          </div>
-
-          <%!-- Ruteo sticky: a nivel SERVICIO (todas sus keys), igual que en
-               usuarios. Fuerza re-evaluar proveedores en la próxima petición. --%>
-          <div class="mt-4 p-3 bg-base-200 rounded-lg">
-            <div class="flex items-center justify-between gap-3">
-              <div class="min-w-0">
-                <p class="text-sm font-medium">Ruteo sticky</p>
-                <p class="text-xs text-base-content/60">
-                  Fuerza que su próxima petición re-evalúe proveedores en vez de quedarse
-                  pegado a uno degradado.
-                </p>
-              </div>
-              <button
-                type="button"
-                phx-click="clear_service_sticky_routes"
-                phx-value-id={@detail_service_id}
-                class="btn btn-ghost btn-sm shrink-0"
-                id="clear-service-sticky-btn"
-                title="Limpiar sticky routes del servicio (todas sus keys)"
-              >
-                <.icon name="hero-arrow-path" class="w-4 h-4" /> Limpiar sticky
-              </button>
             </div>
           </div>
 
@@ -1019,7 +1035,7 @@ defmodule TokengateWeb.ServicesLive do
                   />
                 </th>
                 <th>Modelos</th>
-                <th>API Key</th>
+                <th>Claves</th>
                 <th class="text-right">
                   <.sort_button
                     event="sort_services"
@@ -1071,6 +1087,7 @@ defmodule TokengateWeb.ServicesLive do
                   monthly_spend={@monthly_spend_by_service}
                   total_spend={@total_spend_by_service}
                   supervisors_map={@supervisors_map}
+                  keys_by_service={@keys_by_service}
                   timezone={@timezone}
                 />
               </tr>
@@ -1096,6 +1113,7 @@ defmodule TokengateWeb.ServicesLive do
   attr :monthly_spend, :map, required: true
   attr :total_spend, :map, required: true
   attr :supervisors_map, :map, required: true
+  attr :keys_by_service, :map, required: true
   attr :timezone, :string, required: true
 
   defp service_row(assigns) do
@@ -1124,15 +1142,11 @@ defmodule TokengateWeb.ServicesLive do
       </button>
     </td>
     <td>
-      <%= case @service.api_key do %>
-        <% nil -> %>
-          <span class="text-xs text-base-content/30">Sin clave</span>
-        <% api_key -> %>
-          <div class="flex items-center gap-1">
-            <span class="text-xs font-mono">{api_key.key_prefix}…</span>
-            <span class={["badge badge-xs", key_status_badge(api_key.status)]}>{api_key.status}</span>
-          </div>
-      <% end %>
+      <.keys_badge
+        subject_id={@service.id}
+        count={length(Map.get(@keys_by_service, @service.id, []))}
+        open_event="manage_keys"
+      />
     </td>
     <td class="text-right text-xs font-mono">
       {format_number(stat_for(@stats, @service.id, :total_requests))}
@@ -1163,26 +1177,29 @@ defmodule TokengateWeb.ServicesLive do
           class="btn btn-xs btn-ghost"
           id={"stats-#{@service.id}"}
           title="Ver stats consolidadas de este servicio"
+          aria-label="Ver stats del servicio"
         >
           <.icon name="hero-chart-bar" class="w-3 h-3" />
         </.link>
-        <button
-          phx-click="view_detail"
-          phx-value-id={@service.id}
-          class="btn btn-xs btn-ghost"
-          id={"detail-#{@service.id}"}
-          title="Ver detalle: stats, clave y supervisores"
-        >
-          <.icon name="hero-eye" class="w-3 h-3" />
-        </button>
         <button
           phx-click="edit_service"
           phx-value-id={@service.id}
           class="btn btn-xs btn-ghost"
           id={"edit-#{@service.id}"}
-          title="Editar"
+          title="Editar servicio"
+          aria-label="Editar servicio"
         >
           <.icon name="hero-pencil" class="w-3 h-3" />
+        </button>
+        <button
+          phx-click="view_detail"
+          phx-value-id={@service.id}
+          class="btn btn-xs btn-ghost"
+          id={"detail-#{@service.id}"}
+          title="Ver detalle: stats y supervisores"
+          aria-label="Ver detalle del servicio"
+        >
+          <.icon name="hero-eye" class="w-3 h-3" />
         </button>
         <button
           phx-click="open_delete_modal"
@@ -1190,7 +1207,8 @@ defmodule TokengateWeb.ServicesLive do
           phx-value-name={@service.name}
           class="btn btn-xs btn-ghost text-error"
           id={"delete-#{@service.id}"}
-          title="Eliminar"
+          title="Eliminar servicio"
+          aria-label="Eliminar servicio"
         >
           <.icon name="hero-trash" class="w-3 h-3" />
         </button>

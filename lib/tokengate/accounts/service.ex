@@ -30,6 +30,11 @@ defmodule Tokengate.Accounts.Service do
     field :monthly_spend_limit_usd, :decimal
     field :unlimited_spend, :boolean, default: false
 
+    # N claves activas con etiqueta, igual que un usuario: la asociación
+    # canónica es `api_keys`. `has_one :api_key` se conserva porque hay
+    # consumidores que resuelven UNA clave (auth del proxy, stats de servicio
+    # supervisado); `api_keys` es la que usa la gestión de claves.
+    has_many :api_keys, Tokengate.Accounts.ApiKey
     has_one :api_key, Tokengate.Accounts.ApiKey
     has_many :models, Tokengate.Providers.ServiceModel
     has_many :supervisors, Tokengate.Accounts.ServiceSupervisor

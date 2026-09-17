@@ -823,3 +823,49 @@ entonces no se afirma que la suite sea verde de forma estable.
 **no** estaban cubiertos por los tests del repo (los cubrió un arnés desechable
 durante F3). Con F3 fusionado conviene añadirlos a los dos archivos de test.
 
+---
+
+## 13. Incremento de homologación de UX aplicado en `main` (claves + orden)
+
+Las olas de §12 quedaron en ramas sin integrar; en `main` se aplicó un
+incremento equivalente pero acotado a lo que pidió el usuario. Estado real:
+
+| Punto | Antes | Ahora |
+|---|---|---|
+| Claves | usuarios: modal con N claves; servicios: 1 clave dentro del modal de detalle | mismo panel (`components/keys_panel.ex`) en ambas páginas, **N claves con etiqueta** en los dos sujetos |
+| Columna de límite | `Crédito` (usuarios) vs `Límite mensual` (servicios) | `Límite mensual` en ambas |
+| Columna de claves | servicios: `API Key` (prefijo+estado) | `Claves` (conteo clickeable) **en ambas** |
+| Ruteo sticky | servicios: en el modal de detalle | en el panel de claves, como en usuarios |
+| Acciones de fila | orden distinto e iconos repetidos (`hero-key` para claves *y* contraseña) | `stats → editar → específicas → eliminar`, `title`/`aria-label` en todas, iconos desambiguados |
+| Modales | orden distinto | `formulario → claves → modelos → detalle/relación → eliminar` |
+
+### 13.1 Hallazgo: `has_one :api_key` con N claves rompía la identidad del proxy
+
+Al habilitar N claves por servicio, `get_service_by_api_key/1` —que precargaba la
+asociación `has_one`— devolvía **una clave cualquiera** del servicio, no la
+presentada. El proxy llavea el bucket de límites (`Limits.acquire(key_id, …)`) y
+la atribución del log (`api_key_id`) por `member.api_key`, así que la segunda
+clave de un servicio autenticaba con la identidad de la primera. Se cerró
+resolviendo la clave por hash y adjuntándola al servicio, **misma forma que
+`get_group_member_by_api_key/1`** para usuarios (que ya lo hacía bien).
+
+Verificado con `test/tokengate/accounts/service_api_keys_test.exs`: cada una de
+las N claves autentica y la presentada llega precargada.
+
+### 13.2 Verificación
+
+`MIX_ENV=test MIX_TEST_PARTITION=31 mix test` → **1506/1507 passed** (334.8 s).
+El único rojo (`BudgetsTest` «el daily sí sigue el día local del visor»)
+**también falla en `main` limpio** (comprobado con los cambios en `git stash`) y
+en aislamiento: es preexistente y depende del reloj, no de este cambio.
+`mix format --check-formatted` y `MIX_ENV=test mix compile --warnings-as-errors`
+limpios.
+
+### 13.3 Lo que sigue asimétrico a propósito
+
+`Modelos` (solo servicios), `Estado`/`Supervisores` (falta en servicios),
+`Requests 30d` (falta en usuarios), `Límites` conc·RPM (falta en ambas) y
+`Google` (solo usuarios) quedan como están: añadirlas es F1/§4 y no un
+reordenamiento. La paridad de **orden** ya se cumple sobre las columnas comunes.
+
+
