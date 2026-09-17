@@ -108,6 +108,12 @@ defmodule Tokengate.Budgets do
       # El camino de gasto del servicio: ilimitado, límite con remanente, o
       # top-ups. Sin ninguno de los tres, `has_path?` es false y el proxy
       # responde 402 con la capa `:no_credit`.
+      #
+      # Mismo shape de crédito que `member_budget/1`: `has_credit?` = el
+      # sujeto tiene límite mensual definido (el del servicio, que no hereda
+      # de nadie), `credit_remaining_usd` = lo que le queda de ese límite.
+      # `monthly_spend_usd` es, en ambos, el gasto debitado al LÍMITE
+      # (`summary.limit_spend_usd`), no el gasto real del mes.
       %{
         service: service,
         monthly_spend_usd: summary.limit_spend_usd,
@@ -115,6 +121,8 @@ defmodule Tokengate.Budgets do
         monthly_pct: pct(summary.limit_spend_usd, summary.limit_usd),
         exhausted?: not summary.has_path?,
         real_monthly_spend_usd: summary.spend_usd,
+        has_credit?: not is_nil(summary.limit_usd),
+        credit_remaining_usd: summary.remaining_limit_usd,
         unlimited?: summary.unlimited?,
         remaining_topup_usd: summary.remaining_topup_usd
       }
@@ -125,6 +133,12 @@ defmodule Tokengate.Budgets do
   @typedoc """
   Service-level budget view: the service's own monthly cap vs its real
   spend in the UTC month.
+
+  Mismo shape de crédito que `t:member_budget/0` (`has_credit?`,
+  `credit_remaining_usd`, `unlimited?`, `remaining_topup_usd`): la clave de
+  identidad (`:service` vs `:member`) y las columnas de día local del miembro
+  (`daily_*`, `monthly_exhausted?`, que en el miembro son display legacy) son
+  las únicas diferencias. Un servicio no tiene ventana diaria.
   """
   @type service_budget :: %{
           service: Tokengate.Accounts.Service.t(),
@@ -132,7 +146,11 @@ defmodule Tokengate.Budgets do
           monthly_limit_usd: Decimal.t() | nil,
           monthly_pct: float() | nil,
           exhausted?: boolean(),
-          real_monthly_spend_usd: Decimal.t()
+          real_monthly_spend_usd: Decimal.t(),
+          has_credit?: boolean(),
+          credit_remaining_usd: Decimal.t() | nil,
+          unlimited?: boolean(),
+          remaining_topup_usd: Decimal.t()
         }
 
   @doc """
