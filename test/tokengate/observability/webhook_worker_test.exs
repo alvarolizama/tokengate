@@ -327,7 +327,7 @@ defmodule Tokengate.Observability.WebhookWorkerTest do
     end
 
     # La observabilidad es de toda la instalación: el destino de OTRA sub
-    # mensual también recibe el log — ya no hay filtro por grupo.
+    # mensual también recibe el log — ya no hay filtro por perfil de límites.
     test "enqueues destinations regardless of the log's group" do
       {tm1, _group1} = group_member_fixture()
       {_tm2, _group2} = group_member_fixture()

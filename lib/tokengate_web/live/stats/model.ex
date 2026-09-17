@@ -3,7 +3,7 @@ defmodule TokengateWeb.StatsLive.Model do
   Detalle de un modelo (`/stats/models/:model_id`, action `:model`).
 
   Es el "interior" del ranking de modelos: las métricas del modelo en el
-  período, los proveedores que lo sirven y los grupos y miembros que lo usan.
+  período, los proveedores que lo sirven y los perfiles de límites y miembros que lo usan.
   Todo respeta el período elegido en el selector del hub.
 
   Gemelo de `TokengateWeb.StatsLive.Provider`: el tier/score/p95 salen de la
@@ -409,7 +409,8 @@ defmodule TokengateWeb.StatsLive.Model do
         <div class="card bg-base-100 border border-base-300 shadow-sm">
           <div class="card-body">
             <h2 class="card-title text-base">
-              <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" /> Grupos que lo usan
+              <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" />
+              Perfiles de límites que lo usan
             </h2>
             <%= if Stats.has_data?(@breakdown_group) do %>
               <% group_total = Stats.breakdown_total(@breakdown_group) %>
@@ -425,7 +426,7 @@ defmodule TokengateWeb.StatsLive.Model do
                           phx-value-field="group_name"
                           class="flex items-center gap-1 hover:text-primary"
                         >
-                          Grupo
+                          Perfil de límites
                           <.sort_icon
                             field={:group_name}
                             current={@sort_field}
@@ -501,7 +502,7 @@ defmodule TokengateWeb.StatsLive.Model do
                   </tbody>
                   <tfoot>
                     <tr class="font-bold bg-base-200">
-                      <td>Total · {length(@breakdown_group)} grupos</td>
+                      <td>Total · {length(@breakdown_group)} perfiles de límites</td>
                       <td class="text-right font-mono">
                         {Stats.format_number(group_total.request_count)}
                       </td>
@@ -545,7 +546,7 @@ defmodule TokengateWeb.StatsLive.Model do
                           phx-value-field="group_name"
                           class="flex items-center gap-1 hover:text-primary"
                         >
-                          Grupo
+                          Perfil de límites
                           <.sort_icon
                             field={:group_name}
                             current={@sort_field}

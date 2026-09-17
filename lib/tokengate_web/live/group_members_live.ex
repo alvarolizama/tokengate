@@ -1,6 +1,6 @@
 defmodule TokengateWeb.GroupMembersLive do
   @moduledoc """
-  Per-budget member management (antes «grupo», ahora presupuesto mensual).
+  Per-limit-profile member management (vocabulario de UI: «perfil de límites»).
 
   Access:
     - admin: manages members of any group.
@@ -13,7 +13,7 @@ defmodule TokengateWeb.GroupMembersLive do
       models) with the 3-state picker in the details modal.
 
   Las API keys y los extras de concurrencia/RPM NO se gestionan aquí: las keys
-  cuelgan del usuario y el techo lo aporta el presupuesto mensual (o el propio sujeto en su
+  cuelgan del usuario y el techo lo aporta el perfil de límites (o el propio sujeto en su
   página).
   """
 
@@ -60,7 +60,7 @@ defmodule TokengateWeb.GroupMembersLive do
   defp check_access(%{global_role: "admin"}, _group), do: :ok
 
   defp check_access(_user, _group) do
-    {:denied, "No tienes permisos para gestionar este grupo."}
+    {:denied, "No tienes permisos para gestionar este perfil de límites."}
   end
 
   ## Data loading ---------------------------------------------------------
@@ -145,7 +145,7 @@ defmodule TokengateWeb.GroupMembersLive do
     usage_tiers = Rollup.member_usage_tiers(group.id, from: days_ago(30))
 
     # Límites EFECTIVOS por miembro — la misma regla única que el proxy usa
-    # (`propio del usuario || default del grupo || default del módulo`).
+    # (`propio del usuario || default del perfil de límites || default del módulo`).
     # `@group` ya está en memoria y `:user` viene preloadeado por
     # `list_group_members_for_group/1`: sin query extra ni N+1.
     member_limits =
@@ -265,7 +265,7 @@ defmodule TokengateWeb.GroupMembersLive do
 
     # Verify the member belongs to this group
     if member.group_id != socket.assigns.group.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
+      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este perfil de límites.")}
     else
       case Accounts.delete_group_member(member) do
         {:ok, _} ->
@@ -303,7 +303,7 @@ defmodule TokengateWeb.GroupMembersLive do
     member = Accounts.get_group_member!(member_id)
 
     if member.group_id != socket.assigns.group.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
+      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este perfil de límites.")}
     else
       existing = Map.get(socket.assigns.extra_models, member_id, [])
       denied = Map.get(socket.assigns.denied_models, member_id, [])
@@ -352,7 +352,7 @@ defmodule TokengateWeb.GroupMembersLive do
     member = Accounts.get_group_member!(member_id)
 
     if member.group_id != socket.assigns.group.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
+      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este perfil de límites.")}
     else
       case Providers.set_extra_model(member_id, model_id) do
         {:ok, _} ->
@@ -378,7 +378,7 @@ defmodule TokengateWeb.GroupMembersLive do
   # been taken".
   defp format_add_member_error(changeset) do
     if Keyword.has_key?(changeset.errors, :user_id) do
-      "Ese usuario ya pertenece a otro presupuesto mensual. Quítalo de él primero."
+      "Ese usuario ya pertenece a otro perfil de límites. Quítalo de él primero."
     else
       format_changeset_errors(changeset)
     end
@@ -436,9 +436,9 @@ defmodule TokengateWeb.GroupMembersLive do
       <div class="space-y-6">
         <.header>
           Miembros de {@group.name}
-          <:subtitle>Añade y quita miembros de la sub</:subtitle>
+          <:subtitle>Añade y quita miembros del perfil de límites</:subtitle>
           <:actions>
-            <.link navigate={~p"/access/groups"} class="btn btn-ghost" id="back-to-groups">
+            <.link navigate={~p"/budget/profiles"} class="btn btn-ghost" id="back-to-groups">
               <.icon name="hero-arrow-left" class="w-4 h-4" /> Volver
             </.link>
           </:actions>
@@ -497,8 +497,8 @@ defmodule TokengateWeb.GroupMembersLive do
                 <%!-- Un usuario pertenece a UN solo presupuesto mensual, así que sólo
                      puede estar en una: si ya tiene otra, el alta falla. --%>
                 <p class="text-xs text-base-content/50 mt-3">
-                  Cada usuario pertenece a un solo presupuesto mensual. Si ya tiene otro, quítalo
-                  de ella primero.
+                  Cada usuario pertenece a un solo perfil de límites. Si ya tiene otro, quítalo
+                  de él primero.
                 </p>
                 <p :if={@add_member_error} class="text-sm text-error mt-4" id="add-member-error">
                   <.icon name="hero-exclamation-circle" class="w-4 h-4 inline mr-1" />
@@ -522,7 +522,7 @@ defmodule TokengateWeb.GroupMembersLive do
           </div>
         </div>
 
-        <%!-- Resumen del grupo — fila compacta --%>
+        <%!-- Resumen del perfil de límites — fila compacta --%>
         <div class="card bg-base-100 border border-base-300 shadow-sm" id="group-config">
           <div class="card-body p-4">
             <div class="flex flex-wrap items-center gap-x-8 gap-y-3">
@@ -581,7 +581,7 @@ defmodule TokengateWeb.GroupMembersLive do
                       <span
                         :if={own_conc?}
                         class="badge badge-xs badge-accent"
-                        title="Override propio del usuario sobre el default del grupo"
+                        title="Override propio del usuario sobre el default del perfil de límites"
                       >
                         propio
                       </span>
@@ -592,7 +592,7 @@ defmodule TokengateWeb.GroupMembersLive do
                       <span
                         :if={own_rpm?}
                         class="badge badge-xs badge-accent"
-                        title="Override propio del usuario sobre el default del grupo"
+                        title="Override propio del usuario sobre el default del perfil de límites"
                       >
                         propio
                       </span>
@@ -608,7 +608,7 @@ defmodule TokengateWeb.GroupMembersLive do
                         title="Modelos del miembro"
                       >
                         <.icon name="hero-rectangle-stack" class="w-3 h-3" />
-                        {length(MapSet.to_list(@group_alias_ids))} grupo
+                        {length(MapSet.to_list(@group_alias_ids))} del perfil de límites
                       </button>
                       <span
                         :if={extra_model_ids(@extra_models, member.id) != []}
@@ -664,7 +664,7 @@ defmodule TokengateWeb.GroupMembersLive do
             id="members-empty"
           >
             <.icon name="hero-users" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-            <p>Este grupo no tiene miembros todavía.</p>
+            <p>Este perfil de límites no tiene miembros todavía.</p>
           </div>
         </div>
 
@@ -685,7 +685,7 @@ defmodule TokengateWeb.GroupMembersLive do
                 <div>
                   <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">Modelos</p>
                   <p class="text-xs text-base-content/40 mb-2">
-                    Los modelos del grupo están otorgados a todos los miembros; los extras son
+                    Los modelos del perfil de límites están otorgados a todos los miembros; los extras son
                     individuales.
                   </p>
                   <.model_picker

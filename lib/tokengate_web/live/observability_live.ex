@@ -3,7 +3,7 @@ defmodule TokengateWeb.ObservabilityLive do
   Admin-only CRUD for observability destinations (OTLP webhooks).
 
   La observabilidad es de toda la instalación: los webhooks ya no cuelgan de un
-  grupo ni se filtran por él. Destinations live in a single compact table with
+  perfil de límites ni se filtran por él. Destinations live in a single compact table with
   search.
   """
 

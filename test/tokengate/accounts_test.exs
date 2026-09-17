@@ -166,7 +166,7 @@ defmodule Tokengate.AccountsTest do
     end
 
     # Los destinos de observabilidad dejaron de colgar de la sub: borrar un
-    # grupo ya no toca los webhooks (son globales).
+    # perfil de límites ya no toca los webhooks (son globales).
     test "deleting a group leaves the observability destinations alone" do
       group = group_fixture()
       name = "Dest #{System.unique_integer([:positive])}"
@@ -520,7 +520,7 @@ defmodule Tokengate.AccountsTest do
 
       {:ok, tm} = Accounts.create_group_member(valid_group_member_attrs(user, group))
 
-      # 15 — NO 15 + 10: el default del grupo es contenedor, no sumando.
+      # 15 — NO 15 + 10: el default del perfil de límites es contenedor, no sumando.
       assert Accounts.effective_limits(tm).concurrency_limit == 15
     end
 
@@ -530,7 +530,7 @@ defmodule Tokengate.AccountsTest do
 
       {:ok, tm} = Accounts.create_group_member(valid_group_member_attrs(user, group))
 
-      # 160 — NO 160 + 120: el default del grupo es contenedor, no sumando.
+      # 160 — NO 160 + 120: el default del perfil de límites es contenedor, no sumando.
       assert Accounts.effective_limits(tm).rpm_limit == 160
       assert Accounts.effective_limits(tm).concurrency_limit == 10
     end

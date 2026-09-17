@@ -4,7 +4,7 @@ defmodule Tokengate.Observability.Destination do
 
   Un destino NO pertenece a ningún sujeto: la observabilidad es de toda la
   instalación, así que cada webhook recibe la telemetría de todos los
-  miembros. (Antes colgaba de un grupo y sólo recibía la suya.)
+  miembros. (Antes colgaba de un perfil de límites y sólo recibía la suya.)
   """
 
   use Ecto.Schema

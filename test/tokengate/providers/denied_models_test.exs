@@ -1,6 +1,6 @@
 defmodule Tokengate.Providers.DeniedModelsTest do
   @moduledoc """
-  W4: acceso efectivo a modelos por sujeto — `(grupo ∪ extras) − denegados`.
+  W4: acceso efectivo a modelos por sujeto — `(perfil de límites ∪ extras) − denegados`.
 
   Cubre la API nueva (`list_accessible_models_for_member/1`, `deny_model/2`,
   `allow_model/2`, batch `list_accessible_models_for_members/1`) y la
@@ -80,7 +80,7 @@ defmodule Tokengate.Providers.DeniedModelsTest do
       assert ids(accessible) == ids([g1, extra])
       assert MapSet.new(extra_ids) == ids([extra])
       assert MapSet.new(denied_ids) == ids([g2])
-      # El denegado NO está en accesibles aunque siga otorgado al grupo.
+      # El denegado NO está en accesibles aunque siga otorgado al perfil de límites.
       refute g2.id in Enum.map(accessible, & &1.id)
     end
 
@@ -94,7 +94,7 @@ defmodule Tokengate.Providers.DeniedModelsTest do
       {accessible, _extra_ids, denied_ids} = Providers.list_accessible_models_for_member(member)
       assert accessible == []
       assert denied_ids == [extra.id]
-      # Sanity: el grupo en sí no otorga nada — la resta no inventa acceso.
+      # Sanity: el perfil de límites en sí no otorga nada — la resta no inventa acceso.
       assert Providers.list_accessible_models(group_member_only(group)) == []
     end
 
@@ -213,7 +213,7 @@ defmodule Tokengate.Providers.DeniedModelsTest do
 
   describe "list_accessible_models_for_members/1 (batch)" do
     test "applies the per-member subtraction in one call" do
-      # Los dos miembros del MISMO grupo (una lista de grant por grupo, no dos).
+      # Los dos miembros del MISMO perfil de límites (una lista de grant por perfil de límites, no dos).
       %{member: m1, group: group} = group_member_fixture()
       %{member: m2} = group_member_fixture(group)
 

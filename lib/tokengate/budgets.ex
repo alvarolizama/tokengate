@@ -49,7 +49,7 @@ defmodule Tokengate.Budgets do
   independent of member count). `list_member_budgets/0` keeps the legacy
   ETS-counter behavior (UTC periods).
 
-  El **límite** de cada miembro es el efectivo (propio o el del grupo, vía
+  El **límite** de cada miembro es el efectivo (propio o el del perfil de límites, vía
   `Credits.summaries/1`, resuelto en lote) y el gasto que cuenta contra él es
   el del mes UTC. Los top-ups vigentes son el segundo camino de gasto;
   `unlimited_spend` es el único camino a ilimitado.
@@ -403,7 +403,7 @@ defmodule Tokengate.Budgets do
   # Variante por lotes: el resumen del sujeto ya viene resuelto
   # (`Credits.summaries/1`) para no disparar queries por miembro.
   #
-  # El límite es el efectivo (propio o del grupo) y el gasto que cuenta contra
+  # El límite es el efectivo (propio o del perfil de límites) y el gasto que cuenta contra
   # él es el del mes UTC; los top-ups son el segundo camino. `exhausted?` es
   # «sin camino de gasto»: límite agotado/sin límite, no ilimitado y sin
   # top-ups — exactamente lo que el proxy bloquea con 402.

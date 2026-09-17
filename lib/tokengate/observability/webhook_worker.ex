@@ -25,7 +25,7 @@ defmodule Tokengate.Observability.WebhookWorker do
 
   `dispatch/1` is a plain function (not the worker callback) that resolves
   every destination and enqueues one `WebhookWorker` job per destination,
-  batching the log ids. Los destinos son globales: no se filtran por el grupo
+  batching the log ids. Los destinos son globales: no se filtran por el perfil de límites
   del request log.
   """
 
@@ -80,7 +80,7 @@ defmodule Tokengate.Observability.WebhookWorker do
   Resolves every observability destination and enqueues one `WebhookWorker`
   job per destination, batching the log id.
 
-  La observabilidad es de TODA la instalación: un webhook no filtra por grupo,
+  La observabilidad es de TODA la instalación: un webhook no filtra por perfil de límites,
   así que todo request log —con o sin miembro— se exporta a cada destino.
 
   Returns `{:ok, count}` where `count` is the number of jobs enqueued.

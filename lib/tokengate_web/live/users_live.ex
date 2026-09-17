@@ -123,7 +123,7 @@ defmodule TokengateWeb.UsersLive do
 
     user_groups = load_user_groups(filtered)
 
-    # Límite de gasto efectivo por usuario (propio o heredado del grupo) más el
+    # Límite de gasto efectivo por usuario (propio o heredado del perfil de límites) más el
     # gasto del mes. En lote: una query por sujeto, nunca una por membresía.
     users_credit =
       DashboardCache.fetch_or_compute(
@@ -852,7 +852,7 @@ defmodule TokengateWeb.UsersLive do
           }
         )
 
-        # El presupuesto mensual (antes grupo/sub) se mueve, no se acumula: un
+        # El presupuesto mensual (antes perfil de límites/sub) se mueve, no se acumula: un
         # usuario tiene uno solo. `sync_user_sub/2` es el único punto que toca membresías.
         case Accounts.sync_user_sub(user_id, sub_id) do
           :ok ->
@@ -1045,19 +1045,19 @@ defmodule TokengateWeb.UsersLive do
               options={[{"Activo", "active"}, {"Suspendido", "suspended"}]}
             />
             <%!-- Límites propios del usuario: primer eslabón de la regla
-                 `propio || contenedor || default`. Vacío = hereda del grupo. --%>
+                 `propio || contenedor || default`. Vacío = hereda del perfil de límites. --%>
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <.input
                 field={@form[:default_concurrency_limit]}
                 type="number"
                 label="Concurrencia"
-                hint="Límite absoluto; vacío = hereda del presupuesto mensual."
+                hint="Límite absoluto; vacío = hereda del perfil de límites."
               />
               <.input
                 field={@form[:default_rpm_limit]}
                 type="number"
                 label="RPM"
-                hint="Límite absoluto; vacío = hereda del grupo."
+                hint="Límite absoluto; vacío = hereda del perfil de límites."
               />
             </div>
             <%!-- Select único: mover de presupuesto mensual reemplaza el anterior
@@ -1136,7 +1136,7 @@ defmodule TokengateWeb.UsersLive do
                   <.sort_button
                     event="sort_users"
                     field={:groups}
-                    label="Grupos"
+                    label="Perfiles de límites"
                     current={@sort_field}
                     direction={@sort_direction}
                   />
@@ -1214,7 +1214,7 @@ defmodule TokengateWeb.UsersLive do
         </div>
       </div>
 
-      <%!-- Groups view modal — read-only; memberships are managed in Grupos → Miembros --%>
+      <%!-- Groups view modal — read-only; memberships are managed in Perfiles de límites → Miembros --%>
       <.admin_modal
         :if={@editing_groups_user_id}
         id="user-groups-modal"
@@ -1222,7 +1222,7 @@ defmodule TokengateWeb.UsersLive do
         width="max-w-md"
       >
         <h2 class="text-lg font-semibold mb-4">
-          Grupos de <span class="text-primary">{@editing_groups_user_name}</span>
+          Perfiles de límites de <span class="text-primary">{@editing_groups_user_name}</span>
         </h2>
         <div class="space-y-2">
           <%= for group <- @all_groups do %>
@@ -1249,9 +1249,9 @@ defmodule TokengateWeb.UsersLive do
               </div>
               <%= if group.id in @editing_group_ids do %>
                 <.link
-                  navigate={~p"/access/groups/#{group}/members"}
+                  navigate={~p"/budget/profiles/#{group}/members"}
                   class="btn btn-xs btn-ghost"
-                  title="Gestionar membresías del grupo"
+                  title="Gestionar membresías del perfil de límites"
                 >
                   Miembros
                 </.link>
@@ -1259,11 +1259,12 @@ defmodule TokengateWeb.UsersLive do
             </div>
           <% end %>
           <%= if @all_groups == [] do %>
-            <p class="text-sm text-base-content/50 py-2">No hay grupos creados.</p>
+            <p class="text-sm text-base-content/50 py-2">No hay perfiles de límites creados.</p>
           <% end %>
         </div>
         <p class="text-xs text-base-content/40 mt-3">
-          Las membresías se gestionan desde <strong>Grupos → Miembros</strong> de cada grupo.
+          Las membresías se gestionan desde <strong>Perfiles de límites → Miembros</strong>
+          de cada perfil.
         </p>
         <div class="flex gap-2 mt-2 justify-end">
           <button type="button" phx-click="cancel_edit_groups" class="btn btn-primary btn-sm">
@@ -1416,7 +1417,7 @@ defmodule TokengateWeb.UsersLive do
         cancel_button_id="cancel-delete-user"
         warning_intro="Se borrará permanentemente toda su data:"
         warning_items={[
-          "Membresías de grupos",
+          "Membresías de perfiles de límites",
           "Claves API",
           "Todo el historial de consumo (request_logs)",
           "Los logs de auditoría perderán la atribución al usuario"
@@ -1526,7 +1527,7 @@ defmodule TokengateWeb.UsersLive do
           phx-value-id={@user.id}
           class="btn btn-xs btn-ghost"
           id={"groups-#{@user.id}"}
-          title="Ver grupos del usuario"
+          title="Ver perfiles de límites del usuario"
         >
           <.icon name="hero-eye" class="w-3 h-3" />
         </button>

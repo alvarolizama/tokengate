@@ -742,7 +742,7 @@ defmodule TokengateWeb.MonitoringLive do
   defp member_display(%{subject_type: "service"}), do: "—"
   defp member_display(log), do: member_email(log)
 
-  # The "Grupo" cell resolves from the member's group (user requests) or the
+  # The "Perfil de límites" cell resolves from the member's group (user requests) or the
   # service's group (service requests — including in-flight rows that carry
   # group_name from the virtual member).
   defp member_group(%{group_member: %{group: %{name: name}}}), do: name
@@ -950,7 +950,7 @@ defmodule TokengateWeb.MonitoringLive do
             type="select"
             prompt="Todos"
             options={@group_options}
-            label="Grupo"
+            label="Perfil de límites"
           />
           <.input
             field={@form[:subject_type]}
@@ -1057,7 +1057,7 @@ defmodule TokengateWeb.MonitoringLive do
                 <th>Modelo</th>
                 <th>Tipo</th>
                 <th>Usuario</th>
-                <th>Grupo</th>
+                <th>Perfil de límites</th>
                 <th>Agente</th>
                 <th>API Key</th>
                 <th class="border-r border-base-200">Proveedor</th>

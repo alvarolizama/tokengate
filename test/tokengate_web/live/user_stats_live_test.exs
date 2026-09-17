@@ -151,11 +151,11 @@ defmodule TokengateWeb.UserStatsLiveTest do
       {:ok, view, _html} = live(conn, ~p"/stats/users/#{user.id}")
 
       # Un usuario pertenece a UNA sola sub: su detalle lista esa membresía, y
-      # el nombre del grupo lleva a su detalle (sin el enlace quedaba como
+      # el nombre del perfil de límites lleva a su detalle (sin el enlace quedaba como
       # texto muerto).
       assert has_element?(
                view,
-               "#membership-group-#{group.id}[href*='/stats/groups/#{group.id}']",
+               "#membership-group-#{group.id}[href*='/stats/profiles/#{group.id}']",
                group.name
              )
     end

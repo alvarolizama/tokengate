@@ -63,7 +63,7 @@ defmodule TokengateWeb.StatsLive.LiveSection do
                 :if={@org_budget.exempt_count > 0}
                 class="badge badge-sm badge-ghost"
                 id="live-org-budget-exempt"
-                title="Usuarios, grupos o servicios exentos del tope diario global"
+                title="Usuarios, perfiles de límites o servicios exentos del tope diario global"
               >
                 {@org_budget.exempt_count} exentos
               </span>

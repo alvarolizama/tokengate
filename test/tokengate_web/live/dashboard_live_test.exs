@@ -517,7 +517,7 @@ defmodule TokengateWeb.DashboardLiveTest do
 
     # No group assigned — should show empty state, not auto-create General
     assert has_element?(view, "#no-group-state")
-    assert html =~ "No tienes ningún grupo asignado"
+    assert html =~ "No tienes ningún perfil de límites asignado"
     refute html =~ "General", "should not auto-create General group"
     refute html =~ "Endpoint de la API", "should not show endpoint info without group"
     refute has_element?(view, "#api-usage-info")
@@ -538,12 +538,12 @@ defmodule TokengateWeb.DashboardLiveTest do
     _ = member
   end
 
-  ## Group card: no shortcut to /budget/months -------------------------------
+  ## Group card: no shortcut to /budget/profiles -----------------------------
 
-  # El enlace al hub de subs se retiró: /budget/months vive en la
+  # El enlace al hub de subs se retiró: /budget/profiles vive en la
   # live_session :admin y un no-admin rebotaba a /dashboard al pulsarlo.
   # La tarjeta ya no lleva flecha para ningún rol.
-  test "the group card never links to /budget/months", %{conn: conn} do
+  test "the group card never links to /budget/profiles", %{conn: conn} do
     %{user: admin, password: admin_password} = register("admin")
     # Un usuario pertenece a UNA sola sub: una membresía por usuario basta
     # para poblar la tarjeta del dashboard.
@@ -552,8 +552,8 @@ defmodule TokengateWeb.DashboardLiveTest do
     admin_conn = login(conn, admin, admin_password)
     {:ok, admin_view, _html} = live(admin_conn, ~p"/dashboard")
 
-    # Scoped to the card: the sidebar DOES link to /budget/months for admins.
-    refute has_element?(admin_view, "#group-#{admin_group.id} a[href='/budget/months']")
+    # Scoped to the card: the sidebar DOES link to /budget/profiles for admins.
+    refute has_element?(admin_view, "#group-#{admin_group.id} a[href='/budget/profiles']")
 
     %{user: user, password: user_password} = register("user")
     %{group: user_group} = group_with_log(%{user: user})
@@ -561,7 +561,7 @@ defmodule TokengateWeb.DashboardLiveTest do
     user_conn = login(build_conn(), user, user_password)
     {:ok, user_view, _html} = live(user_conn, ~p"/dashboard")
 
-    refute has_element?(user_view, "#group-#{user_group.id} a[href='/budget/months']")
+    refute has_element?(user_view, "#group-#{user_group.id} a[href='/budget/profiles']")
   end
 
   test "the supervised-services card points at /services/supervised", %{conn: conn} do

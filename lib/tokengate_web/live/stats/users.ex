@@ -1,7 +1,7 @@
 defmodule TokengateWeb.StatsLive.Users do
   @moduledoc """
   Sección users de /stats — consumo consolidado por USUARIO (una fila por
-  usuario, agregando todas sus membresías de grupo), no por membresía.
+  usuario, agregando todas sus membresías de perfil de límites), no por membresía.
 
   Template renderizado por `TokengateWeb.StatsLive` vía import; helpers de
   formato vía `TokengateWeb.StatsHelpers`.
@@ -41,7 +41,7 @@ defmodule TokengateWeb.StatsLive.Users do
           </h2>
           <p class="text-xs text-base-content/60">
             Una fila por usuario con su información básica en el período
-            ({Stats.period_label(@period)}). Consolida todas sus membresías de grupo y
+            ({Stats.period_label(@period)}). Consolida su perfil de límites y
             el nombre abre el detalle: sus métricas y sus últimos requests.
           </p>
           <%= if Stats.has_data?(@breakdown_user) do %>
@@ -84,7 +84,7 @@ defmodule TokengateWeb.StatsLive.Users do
                           />
                         </button>
                       </th>
-                      <th>Grupos</th>
+                      <th>Perfiles de límites</th>
                       <th class="text-right">
                         <button
                           phx-click="sort"

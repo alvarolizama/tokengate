@@ -14,9 +14,9 @@ defmodule TokengateWeb.GlobalCapLive do
       rechaza con 402 hasta el día siguiente. El medidor muestra el gasto real
       de `request_logs` (misma fuente que Estadísticas) y, solo cuando
       discrepa, el contador ETS de enforcement como referencia de drift.
-    * **Exclusiones al tope** — usuarios, grupos o servicios cuyo gasto no
-      cuenta para el tope global (sigue contando para su propio presupuesto
-      mensual o top-up).
+    * **Exclusiones al tope** — usuarios, perfiles de límites o servicios cuyo
+      gasto no cuenta para el tope global (sigue contando para su propio
+      presupuesto mensual o top-up).
   """
 
   use TokengateWeb, :live_view
@@ -231,7 +231,9 @@ defmodule TokengateWeb.GlobalCapLive do
                 <label class="text-xs text-base-content/60 block mb-1">Tipo</label>
                 <select name="global_subject[subject_type]" class="select select-bordered select-sm">
                   <option value="user" selected={@global_subject_type == "user"}>Usuario</option>
-                  <option value="group" selected={@global_subject_type == "group"}>Grupo</option>
+                  <option value="group" selected={@global_subject_type == "group"}>
+                    Perfil de límites
+                  </option>
                   <option value="service" selected={@global_subject_type == "service"}>
                     Servicio
                   </option>
@@ -246,7 +248,11 @@ defmodule TokengateWeb.GlobalCapLive do
                   <option value="">
                     {if @global_subject_type == "user",
                       do: "Usuario…",
-                      else: if(@global_subject_type == "group", do: "Grupo…", else: "Servicio…")}
+                      else:
+                        if(@global_subject_type == "group",
+                          do: "Perfil de límites…",
+                          else: "Servicio…"
+                        )}
                   </option>
                   <%= for {label, id} <- subject_options(@global_subject_type, assigns) do %>
                     <option value={id}>{label}</option>

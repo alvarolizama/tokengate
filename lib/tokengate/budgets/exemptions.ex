@@ -2,7 +2,7 @@ defmodule Tokengate.Budgets.Exemptions do
   @moduledoc """
   CRUD + hot-path lookup for budget exemptions (`budget_exemptions` table).
 
-  An exemption excludes a user, group or service from one of the daily
+  An exemption excludes a user, limit profile or service from one of the daily
   spending caps (see `Tokengate.Budgets.Exemption` for the scope semantics).
 
   `exempt?/4` is called on the proxy pre-flight for every request — it does
@@ -21,10 +21,10 @@ defmodule Tokengate.Budgets.Exemptions do
   Whether `subject` is exempt from `scope` for this request.
 
   `subject` is `%{type: "user", id: user_id}`, `%{type: "group", id: group_id}`
-  or `%{type: "service", id: service_id}`. A group member inherits their
-  group's exemptions: both `{"user", user_id}` and `{"group", group_id}` rows
+  or `%{type: "service", id: service_id}`. A profile member inherits their
+  profile's exemptions: both `{"user", user_id}` and `{"group", group_id}` rows
   are checked for members (the UI offers the group alternative exactly so
-  admins can exempt a whole group without touching each member).
+  admins can exempt a whole profile without touching each member).
 
   Unknown subject types are never exempt.
   """
@@ -62,7 +62,7 @@ defmodule Tokengate.Budgets.Exemptions do
 
   @doc """
   Number of exemptions configured for a scope — e.g. how many users,
-  groups or services are exempt from the global daily cap. Display-only
+  limit profiles or services are exempt from the global daily cap. Display-only
   (the admin UI badge on the stats cards).
   """
   @spec count_for_scope(String.t()) :: non_neg_integer()
@@ -88,7 +88,7 @@ defmodule Tokengate.Budgets.Exemptions do
 
   @doc "Label for an exemption's subject, for the admin UI."
   def subject_label(%Exemption{subject_type: "group", group: %{name: _}} = exemption),
-    do: "Grupo: " <> subject_name(exemption)
+    do: "Perfil de límites: " <> subject_name(exemption)
 
   def subject_label(%Exemption{subject_type: type} = exemption) when type in ["user", "service"],
     do: subject_name(exemption)
@@ -109,7 +109,7 @@ defmodule Tokengate.Budgets.Exemptions do
 
   @doc "Display label for an exemption's subject type."
   def subject_type_label(%Exemption{subject_type: "user"}), do: "Usuario"
-  def subject_type_label(%Exemption{subject_type: "group"}), do: "Grupo"
+  def subject_type_label(%Exemption{subject_type: "group"}), do: "Perfil de límites"
   def subject_type_label(%Exemption{subject_type: "service"}), do: "Servicio"
   def subject_type_label(_), do: "—"
 end

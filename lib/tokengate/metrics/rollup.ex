@@ -490,7 +490,7 @@ defmodule Tokengate.Metrics.Rollup do
         # `::text` explícito: `group_id` es `:binary_id` (uuid) y un
         # `ARRAY_AGG` sin tipo llega como lista de 16 bytes crudos, no como
         # UUID en texto — con esos bytes el lookup de nombres fallaba SIEMPRE y
-        # la columna de grupos salía "—" para todos.
+        # la columna de perfiles de límites salía "—" para todos.
         group_ids: fragment("ARRAY_AGG(DISTINCT ?::text)", tm.group_id),
         request_count: count(rl.id),
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
@@ -502,8 +502,8 @@ defmodule Tokengate.Metrics.Rollup do
     # Resolve group names outside the aggregate so the index-driven join
     # stays a single pass (a join to groups in the GROUP BY would force a
     # second sort over the whole range scan). El par id+nombre viaja junto:
-    # el id es lo único que permite enlazar el grupo desde el listado, y
-    # resolver el nombre antes de perder el id dejaba el grupo como texto
+    # el id es lo único que permite enlazar el perfil de límites desde el listado, y
+    # resolver el nombre antes de perder el id dejaba el perfil de límites como texto
     # muerto (el campo se llamaba `group_names` pero traía ids).
     group_names_by_id = Tokengate.Accounts.group_names_by_id()
 
@@ -1684,7 +1684,7 @@ defmodule Tokengate.Metrics.Rollup do
   # -----------------------------------------------------------------------
 
   @doc """
-  Clasifica a los miembros de un grupo en 3 tiers de uso: alto, regular, bajo.
+  Clasifica a los miembros de un perfil de límites en 3 tiers de uso: alto, regular, bajo.
 
   Combina volumen (tokens, costo, requests), frecuencia (días activos),
   y concurrencia (pico de requests simultáneos por minuto) en un score

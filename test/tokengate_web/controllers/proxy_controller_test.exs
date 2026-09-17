@@ -296,8 +296,8 @@ defmodule TokengateWeb.ProxyControllerTest do
   defp proxy_fixture(opts \\ %{}) do
     u = unique()
 
-    # El gasto del grupo ahora es su límite mensual. Sin `:credit_units` y sin
-    # `:unlimited` el grupo NO deja gastar (los miembros quedarían sin camino
+    # El gasto del perfil de límites ahora es su límite mensual. Sin `:credit_units` y sin
+    # `:unlimited` el perfil de límites NO deja gastar (los miembros quedarían sin camino
     # salvo top-up) — que es exactamente la conducta nueva.
     group_attrs =
       %{
@@ -383,7 +383,7 @@ defmodule TokengateWeb.ProxyControllerTest do
       provider: provider,
       model: model,
       model_provider: model_provider,
-      # El límite mensual del grupo (nil = sin límite propio): es lo que el
+      # El límite mensual del perfil de límites (nil = sin límite propio): es lo que el
       # proxy debita y lo que los tests comparan contra el gasto.
       credit_limit_usd: group.monthly_spend_limit_usd
     }

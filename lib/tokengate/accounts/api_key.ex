@@ -1,7 +1,7 @@
 defmodule Tokengate.Accounts.ApiKey do
   @moduledoc """
   API key unificada. `subject_type` distingue el dueño:
-  `"member"` — key de un GroupMember (usuario en un grupo);
+  `"member"` — key de un GroupMember (usuario en un perfil de límites);
   `"service"` — key de un Service.
   """
   use Ecto.Schema

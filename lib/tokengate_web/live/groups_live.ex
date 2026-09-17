@@ -1,17 +1,16 @@
 defmodule TokengateWeb.GroupsLive do
   @moduledoc """
-  Admin-only CRUD for monthly budgets (antes «subs», internamente «grupos»)
-  + per-budget model grants.
+  Admin-only CRUD for limit profiles («Perfil de límites»; antes «sub» y «grupo»)
+  + per-profile model grants.
 
   Only admins (global_role == "admin") can access this page. Non-admins
   are redirected to /dashboard with an error flash.
 
-  Un presupuesto mensual (internamente «grupo», antes «sub») es el sujeto que
-  aporta el techo de
-  gasto mensual y los límites de concurrencia/RPM a sus miembros. El límite
-  mensual se edita aquí, en su propio formulario.
+  Un perfil de límites (internamente «group», antes «sub» en la UI) es el sujeto
+  que aporta el techo de gasto mensual y los límites de concurrencia/RPM a sus
+  miembros. El límite mensual se edita aquí, en su propio formulario.
 
-  Los webhooks de observabilidad ya no cuelgan del presupuesto: son globales y se
+  Los webhooks de observabilidad ya no cuelgan del perfil de límites: son globales y se
   gestionan en `TokengateWeb.ObservabilityLive` (/operations/observability).
   """
 
@@ -37,7 +36,7 @@ defmodule TokengateWeb.GroupsLive do
     else
       socket =
         socket
-        |> assign(:page_title, gettext("Monthly budgets") <> " · Tokengate")
+        |> assign(:page_title, gettext("Perfiles de límites") <> " · Tokengate")
         |> assign(:is_admin, true)
         |> require_admin_hook()
         |> assign(:form, nil)
@@ -177,7 +176,7 @@ defmodule TokengateWeb.GroupsLive do
       {:ok, _} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Grupo eliminado.")
+         |> put_flash(:info, "Perfil de límites eliminado.")
          |> load_groups()}
 
       {:error, %Ecto.Changeset{} = changeset} ->
@@ -189,7 +188,7 @@ defmodule TokengateWeb.GroupsLive do
         {:noreply, put_flash(socket, :error, "No se pudo eliminar: #{msg}")}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo eliminar el grupo.")}
+        {:noreply, put_flash(socket, :error, "No se pudo eliminar el perfil de límites.")}
     end
   end
 
@@ -236,7 +235,7 @@ defmodule TokengateWeb.GroupsLive do
       {:ok, _group} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Grupo creado.")
+         |> put_flash(:info, "Perfil de límites creado.")
          |> assign(:form, nil)
          |> assign(:editing_group_id, nil)
          |> load_groups()}
@@ -253,7 +252,7 @@ defmodule TokengateWeb.GroupsLive do
       {:ok, _group} ->
         {:noreply,
          socket
-         |> put_flash(:info, "Grupo actualizado.")
+         |> put_flash(:info, "Perfil de límites actualizado.")
          |> assign(:form, nil)
          |> assign(:editing_group_id, nil)
          |> load_groups()}
@@ -282,8 +281,8 @@ defmodule TokengateWeb.GroupsLive do
     >
       <div class="space-y-6">
         <.header>
-          {gettext("Monthly budgets")}
-          <:subtitle>Gestiona los presupuestos mensuales: techo, top-ups y modelos</:subtitle>
+          {gettext("Perfiles de límites")}
+          <:subtitle>Gestiona los perfiles de límites: techo, top-ups y modelos</:subtitle>
           <:actions>
             <div class="flex items-center gap-2">
               <%!-- Un `phx-change` exige que el input viva dentro de un <form>:
@@ -299,12 +298,12 @@ defmodule TokengateWeb.GroupsLive do
                   type="text"
                   name="group_search"
                   value={@group_search}
-                  placeholder="Buscar presupuesto…"
+                  placeholder="Buscar perfil de límites…"
                   class="input input-sm w-48"
                 />
               </form>
               <.button phx-click="new_group" id="new-group-btn">
-                <.icon name="hero-plus" class="w-4 h-4" /> Nuevo presupuesto
+                <.icon name="hero-plus" class="w-4 h-4" /> Nuevo perfil de límites
               </.button>
             </div>
           </:actions>
@@ -317,15 +316,15 @@ defmodule TokengateWeb.GroupsLive do
             <div class="card-body p-6">
               <h2 class="text-lg font-semibold mb-4">
                 {if @editing_group_id == :new,
-                  do: "Nuevo presupuesto mensual",
-                  else: "Editar presupuesto mensual"}
+                  do: "Nuevo perfil de límites",
+                  else: "Editar perfil de límites"}
               </h2>
               <.form for={@form} id="group-form" phx-submit="save_group">
                 <.input
                   field={@form[:name]}
                   type="text"
                   label="Nombre"
-                  hint="Nombre identificativo del presupuesto."
+                  hint="Nombre identificativo del perfil de límites."
                 />
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <.input
@@ -350,7 +349,7 @@ defmodule TokengateWeb.GroupsLive do
                     step="0.01"
                     min="0"
                     label="Límite mensual (USD)"
-                    hint="Techo mensual del presupuesto. 0 = cero (no deja gastar). Vacío = sin presupuesto (solo top-ups)."
+                    hint="Techo mensual del perfil de límites. 0 = cero (no deja gastar). Vacío = sin presupuesto (solo top-ups)."
                   />
                   <.input
                     field={@form[:unlimited_spend]}
@@ -379,7 +378,7 @@ defmodule TokengateWeb.GroupsLive do
           <div class="absolute inset-0 bg-black/50" phx-click="close_models" />
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
             <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">Modelos del grupo</h2>
+              <h2 class="text-lg font-semibold mb-4">Modelos del perfil de límites</h2>
               <.model_picker
                 id={"model-picker-#{@editing_models_group_id}"}
                 models={Map.get(@models_by_org, "all", [])}
@@ -405,7 +404,7 @@ defmodule TokengateWeb.GroupsLive do
         <div id="groups" phx-update="stream">
           <div :if={@groups_empty?} class="text-center py-12 text-base-content/40" id="groups-empty">
             <.icon name="hero-user-group" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-            <p>No hay grupos todavía.</p>
+            <p>No hay perfiles de límites todavía.</p>
           </div>
           <div
             :for={{id, group} <- @streams.groups}
@@ -441,7 +440,7 @@ defmodule TokengateWeb.GroupsLive do
                     phx-value-id={group.id}
                     class="badge badge-sm badge-outline gap-1 hover:badge-primary transition-colors cursor-pointer"
                     id={"edit-models-#{group.id}"}
-                    title="Gestionar modelos del presupuesto"
+                    title="Gestionar modelos del perfil de límites"
                   >
                     <.icon name="hero-rectangle-stack" class="w-3 h-3" />
                     {length(Map.get(@granted_models, group.id, []))} modelos
@@ -451,7 +450,7 @@ defmodule TokengateWeb.GroupsLive do
                 <%!-- Actions --%>
                 <div class="flex gap-1 shrink-0">
                   <.link
-                    navigate={~p"/access/groups/#{group}/members"}
+                    navigate={~p"/budget/profiles/#{group}/members"}
                     class="btn btn-sm btn-ghost"
                     id={"members-link-#{group.id}"}
                   >
@@ -470,7 +469,7 @@ defmodule TokengateWeb.GroupsLive do
                     phx-value-id={group.id}
                     class="btn btn-sm btn-ghost text-error"
                     id={"delete-#{group.id}"}
-                    data-confirm="¿Eliminar grupo? Esta acción no se puede deshacer."
+                    data-confirm="¿Eliminar perfil de límites? Esta acción no se puede deshacer."
                   >
                     Eliminar
                   </button>

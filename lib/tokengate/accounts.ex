@@ -24,7 +24,7 @@ defmodule Tokengate.Accounts do
   def list_groups, do: Repo.all(Group)
 
   @doc """
-  Mapa `%{group_id => name}` de todos los grupos — resolución de nombres
+  Mapa `%{group_id => name}` de todos los perfiles de límites — resolución de nombres
   para agregados que agrupan por id (evita joins extra en el GROUP BY).
   """
   def group_names_by_id do
@@ -93,11 +93,11 @@ defmodule Tokengate.Accounts do
       |> Ecto.Changeset.change()
       |> Ecto.Changeset.foreign_key_constraint(:id,
         name: "services_group_id_fkey",
-        message: "el grupo todavía tiene servicios asociados"
+        message: "el perfil de límites todavía tiene servicios asociados"
       )
       |> Ecto.Changeset.foreign_key_constraint(:id,
         name: "observability_destinations_group_id_fkey",
-        message: "el grupo todavía tiene destinos de observabilidad"
+        message: "el perfil de límites todavía tiene destinos de observabilidad"
       )
       |> Repo.delete()
       |> case do
@@ -402,7 +402,7 @@ defmodule Tokengate.Accounts do
   end
 
   @doc """
-  Membresías (con grupo y usuario precargados) de varios usuarios en una query:
+  Membresías (con perfil de límites y usuario precargados) de varios usuarios en una query:
   `%{user_id => [GroupMember, ...]}`. Para los tableros que resuelven el límite
   efectivo de cada usuario sin disparar una consulta por fila.
   """
@@ -581,7 +581,7 @@ defmodule Tokengate.Accounts do
 
   La key es **del usuario** (N activas con label): se busca la key por hash y se
   resuelve la **membresía** de su `user_id` — el proxy sigue recibiendo un
-  `GroupMember` y no cambia de forma. Un usuario pertenece a un solo grupo, así
+  `GroupMember` y no cambia de forma. Un usuario pertenece a un solo perfil de límites, así
   que la membresía es única en la práctica; si hubiera varias se toma la
   primera por fecha de alta (determinista).
 
@@ -1144,7 +1144,7 @@ defmodule Tokengate.Accounts do
     → default del módulo (5/60). Un servicio no tiene contenedor.
 
   Los límites son **absolutos, nunca aditivos**: el extra por miembro que se
-  sumaba al default del grupo ya no existe (migración
+  sumaba al default del perfil de límites ya no existe (migración
   `fold_member_extras_into_user` lo plegó al default propio del usuario).
 
   Spending is **not** here: budgets are credit subscriptions (`Tokengate.Credits`),
@@ -1185,7 +1185,7 @@ defmodule Tokengate.Accounts do
     effective_limits(group_member)
   end
 
-  # Miembro real: `propio` del usuario, si no `contenedor` del grupo, si no el
+  # Miembro real: `propio` del usuario, si no `contenedor` del perfil de límites, si no el
   # default del módulo. `member_for_key/1` ya preloardea ambos.
   def effective_limits(%GroupMember{} = group_member) do
     %{
@@ -1335,7 +1335,7 @@ defmodule Tokengate.Accounts do
   # Los defaults propios del usuario (conc/RPM) son el primer eslabón de
   # `effective_limits/1`, y ese map viaja cacheado en cada entry de sus API
   # keys: editar el usuario debe tumbar todas sus entradas — no basta con la
-  # invalidación por grupo, que solo cubre el contenedor.
+  # invalidación por perfil de límites, que solo cubre el contenedor.
   defp invalidate_user_auth_cache({:ok, _} = result, user_id) do
     safe_invalidate(fn -> ApiKeyCache.invalidate_user(user_id) end)
     result

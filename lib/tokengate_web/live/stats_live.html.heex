@@ -109,14 +109,14 @@
         <.icon name="hero-rectangle-stack" class="w-4 h-4" /> Modelos
       </.link>
       <.link
-        patch={~p"/stats/groups?period=#{@period}"}
+        patch={~p"/stats/profiles?period=#{@period}"}
         class={[
           "join-item btn btn-sm",
           if(@live_action in [:groups, :group], do: "btn-primary", else: "btn-ghost")
         ]}
         id="nav-groups"
       >
-        <.icon name="hero-user-group" class="w-4 h-4" /> Grupos
+        <.icon name="hero-user-group" class="w-4 h-4" /> Perfiles de límites
       </.link>
       <.link
         patch={~p"/stats/users?period=#{@period}"}

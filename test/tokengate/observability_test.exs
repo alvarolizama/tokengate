@@ -61,8 +61,8 @@ defmodule Tokengate.ObservabilityTest do
       assert "is invalid" in errors_on(changeset).type
     end
 
-    # Un destino ya no requiere un grupo: es global.
-    # Un destino ya no requiere un grupo: es global.
+    # Un destino ya no requiere un perfil de límites: es global.
+    # Un destino ya no requiere un perfil de límites: es global.
     test "requires a name" do
       {:error, changeset} = Observability.create_destination(%{})
 

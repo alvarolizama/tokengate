@@ -104,7 +104,7 @@ defmodule TokengateWeb.ObservabilityLiveTest do
     assert has_element?(view, "#edit-destination-#{destination.id}")
   end
 
-  # Los webhooks ya no cuelgan de una sub mensual: no hay filtro por grupo.
+  # Los webhooks ya no cuelgan de una sub mensual: no hay filtro por perfil de límites.
   test "no group filter is rendered", %{conn: conn} do
     destination_fixture()
     %{user: admin, password: password} = register("admin")

@@ -88,9 +88,9 @@
       <%= if @groups == [] and not @has_access do %>
         <div class="text-center py-12 text-base-content/50" id="no-group-state">
           <.icon name="hero-user-group" class="w-10 h-10 mx-auto mb-3 opacity-40" />
-          <p class="font-medium">No tienes ningún grupo asignado.</p>
+          <p class="font-medium">No tienes ningún perfil de límites asignado.</p>
           <p class="text-sm mt-1 text-base-content/40">
-            Contacta al administrador para que te asigne un grupo.
+            Contacta al administrador para que te asigne un perfil de límites.
           </p>
         </div>
       <% else %>
@@ -147,7 +147,7 @@
                       data-confirm="¿Regenerar clave? La clave actual dejará de funcionar inmediatamente y se emitirá una nueva."
                       class="btn btn-sm btn-primary"
                       id={"replace-#{t.membership.id}"}
-                      title="Regenerar: emite una clave nueva y anula la actual. El grupo sigue funcionando, ahora con la clave nueva."
+                      title="Regenerar: emite una clave nueva y anula la actual. El perfil de límites sigue funcionando, ahora con la clave nueva."
                     >
                       <.icon name="hero-arrow-path" class="w-4 h-4" /> Regenerar clave
                     </button>
@@ -159,7 +159,7 @@
                         data-confirm="¿Revocar clave? La clave queda anulada y NO se emite otra."
                         class="btn btn-sm btn-ghost text-error"
                         id={"revoke-#{t.membership.id}"}
-                        title="Revocar: anula la clave sin emitir una nueva. El grupo queda sin acceso hasta que generes otra."
+                        title="Revocar: anula la clave sin emitir una nueva. El perfil de límites queda sin acceso hasta que generes otra."
                       >
                         <.icon name="hero-no-symbol" class="w-4 h-4" /> Revocar
                       </button>
@@ -348,7 +348,7 @@
                         ]}
                         id="tab-group"
                       >
-                        Por grupo
+                        Por perfil de límites
                       </button>
                     <% end %>
                   </div>
@@ -406,7 +406,7 @@
                       <table class="table table-sm">
                         <thead>
                           <tr>
-                            <th>Grupo</th>
+                            <th>Perfil de límites</th>
                             <th>Usuario</th>
                             <th class="text-right">Requests</th>
                             <th class="text-right">Costo</th>
@@ -453,7 +453,7 @@
                       <table class="table table-sm">
                         <thead>
                           <tr>
-                            <th>Grupo</th>
+                            <th>Perfil de límites</th>
                             <th class="text-right">Requests</th>
                             <th class="text-right">Costo</th>
                             <th class="text-right">Tokens in</th>

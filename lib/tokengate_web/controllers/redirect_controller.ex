@@ -10,7 +10,7 @@ defmodule TokengateWeb.RedirectController do
 
   El tab Créditos se disolvió: el uso de presupuesto (gasto vs límite)
   vive dentro de cada dimensión — barra org en En vivo/Resumen, columnas
-  en Usuarios/Grupos/Servicios.
+  en Usuarios/Perfiles de límites/Servicios.
   """
   def stats_credits(conn, _params) do
     redirect(conn, to: ~p"/stats/overview")
@@ -28,15 +28,29 @@ defmodule TokengateWeb.RedirectController do
   end
 
   @doc """
-  ``/access/groups[...rest]`` → ``/budget/months[...rest]``.
+  ``/access/groups[...rest]`` y ``/budget/months[...rest]`` →
+  ``/budget/profiles[...rest]``.
 
-  Los grupos eran el contenedor del que cada usuario hereda su presupuesto
-  mensual; la sección «Crédito» pasó a «Presupuesto» y sus rutas a ``/budget``.
-  La subruta se conserva (``/access/groups/:id/members`` →
-  ``/budget/months/:id/members``) y la query string también.
+  Los grupos eran el contenedor del que cada usuario hereda su techo mensual;
+  la sección «Crédito» pasó a «Presupuesto» y ahora el sujeto se llama «perfil
+  de límites», así que las dos generaciones anteriores de la URL
+  (``/access/groups`` y ``/budget/months``) caen en la página nueva. La subruta
+  se conserva (``/access/groups/:id/members`` →
+  ``/budget/profiles/:id/members``) y la query string también.
   """
   def budget_months(conn, params) do
-    redirect(conn, to: append_query(append_rest(~p"/budget/months", params), conn))
+    redirect(conn, to: append_query(append_rest(~p"/budget/profiles", params), conn))
+  end
+
+  @doc """
+  ``/stats/groups[...rest]`` → ``/stats/profiles[...rest]``.
+
+  El hub de stats llamaba «grupos» al sujeto del techo mensual; el vocabulario
+  es «perfil de límites». La subruta se conserva (``/stats/groups/:group_id`` →
+  ``/stats/profiles/:group_id``) y la query string también.
+  """
+  def stats_profiles(conn, params) do
+    redirect(conn, to: append_query(append_rest(~p"/stats/profiles", params), conn))
   end
 
   @doc "``/credit/topups[...rest]`` → ``/budget/topups[...rest]``."

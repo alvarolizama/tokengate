@@ -1112,7 +1112,7 @@ defmodule TokengateWeb.ModelsLive do
          put_flash(
            socket,
            :error,
-           "Selecciona al menos un grupo o usuario para el scope exclusivo."
+           "Selecciona al menos un perfil de límites o usuario para el scope exclusivo."
          )}
 
       true ->
@@ -1578,11 +1578,11 @@ defmodule TokengateWeb.ModelsLive do
     do: "Exclusivo miembro"
 
   def scope_label(%ModelProvider{exclusive_to_group_id: id}) when not is_nil(id),
-    do: "Exclusivo grupo"
+    do: "Exclusivo perfil de límites"
 
   def scope_label(%ModelProvider{}), do: "Global"
   def scope_label("member"), do: "Exclusivo miembro"
-  def scope_label("group"), do: "Exclusivo grupo"
+  def scope_label("group"), do: "Exclusivo perfil de límites"
   def scope_label(_), do: "Global"
 
   @doc "Resolve scope to human-readable label with target name"
@@ -1596,7 +1596,7 @@ defmodule TokengateWeb.ModelsLive do
 
       mp.exclusive_to_group_id ->
         group = Enum.find(assigns.groups_for_select || [], &(&1.id == mp.exclusive_to_group_id))
-        if group, do: group.name, else: "Grupo"
+        if group, do: group.name, else: "Perfil de límites"
 
       true ->
         "Todos"
@@ -1626,7 +1626,7 @@ defmodule TokengateWeb.ModelsLive do
   def scope_group(%ModelProvider{}), do: 0
 
   @doc "Group header label (nil for the global group — no header needed)"
-  def scope_group_label(1), do: "Exclusivos por grupo"
+  def scope_group_label(1), do: "Exclusivos por perfil de límites"
   def scope_group_label(2), do: "Exclusivos por usuario"
   def scope_group_label(_), do: nil
 
@@ -2552,7 +2552,7 @@ defmodule TokengateWeb.ModelsLive do
                     <div class="mb-2">
                       <label class="text-sm font-medium text-base-content">Alcance (Scope)</label>
                       <p class="text-xs text-base-content/50 mb-2">
-                        Global = todos los miembros con acceso. Exclusivo = solo el miembro o grupo seleccionado.
+                        Global = todos los miembros con acceso. Exclusivo = solo el miembro o perfil de límites seleccionado.
                       </p>
                       <div class="flex gap-2">
                         <button
@@ -2569,7 +2569,7 @@ defmodule TokengateWeb.ModelsLive do
                           phx-value-scope="group"
                           class={["btn btn-sm", @current_scope == "group" && "btn-info"]}
                         >
-                          <.icon name="hero-users" class="w-4 h-4" /> Grupo
+                          <.icon name="hero-users" class="w-4 h-4" /> Perfil de límites
                         </button>
                         <button
                           type="button"
@@ -2720,12 +2720,12 @@ defmodule TokengateWeb.ModelsLive do
                     <%= if @current_scope == "group" do %>
                       <% is_new? = @editing_ap_id == :new %>
                       <div class="relative" phx-click-away="close_scope_pickers">
-                        <label class="text-sm font-medium text-base-content">Grupo exclusivo</label>
+                        <label class="text-sm font-medium text-base-content">Perfil de límites exclusivo</label>
                         <p class="text-xs text-base-content/50 mb-1">
                           <%= if is_new? do %>
-                            Puedes seleccionar múltiples grupos. Se creará un proveedor exclusivo por cada uno.
+                            Puedes seleccionar múltiples perfiles de límites. Se creará un proveedor exclusivo por cada uno.
                           <% else %>
-                            Solo los miembros de este grupo podrán usar esta API key para este modelo.
+                            Solo los miembros de este perfil de límites podrán usar esta API key para este modelo.
                           <% end %>
                         </p>
                         <%= if is_new? do %>
@@ -2741,7 +2741,7 @@ defmodule TokengateWeb.ModelsLive do
                             type="text"
                             name="model_provider[scope_group_id_display]"
                             value={@scope_group_search}
-                            placeholder="Escribe para buscar grupo…"
+                            placeholder="Escribe para buscar perfil de límites…"
                             phx-focus="open_scope_picker"
                             phx-value-picker="group"
                             phx-change="scope_group_search"
@@ -2793,7 +2793,7 @@ defmodule TokengateWeb.ModelsLive do
                             type="text"
                             name="model_provider[scope_group_id_display]"
                             value={@scope_group_search}
-                            placeholder="Escribe para buscar grupo…"
+                            placeholder="Escribe para buscar perfil de límites…"
                             phx-focus="open_scope_picker"
                             phx-value-picker="group"
                             phx-change="scope_group_search"

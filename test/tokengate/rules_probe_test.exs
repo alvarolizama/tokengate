@@ -4,8 +4,8 @@ defmodule Tokengate.RulesProbeTest do
   las tres reglas del modelo de crédito enunciadas por el usuario:
 
     1. un usuario sin sub no tiene presupuesto ni crédito;
-    2. el ilimitado solo se consigue agregándose a un grupo ilimitado;
-    3. un usuario sin grupo, solo con top-up, puede tener crédito.
+    2. el ilimitado solo se consigue agregándose a un perfil de límites ilimitado;
+    3. un usuario sin perfil de límites, solo con top-up, puede tener crédito.
 
   Cada test imprime lo que hace hoy el sistema; se borra después de usarlo.
   """

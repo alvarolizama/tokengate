@@ -115,7 +115,7 @@ defmodule Tokengate.Accounts.ApiKeyCacheTest do
 
   # Gemelo del de arriba, pero editando al DUEÑO: los defaults propios del
   # usuario son el primer eslabón de `effective_limits/1`, así que editarlos
-  # tiene que tumbar el entry cacheado igual que editar el grupo.
+  # tiene que tumbar el entry cacheado igual que editar el perfil de límites.
   test "editing the USER drops the cached entry and the next resolve sees the new limits" do
     %{token: token, user: user} = member_with_key()
 

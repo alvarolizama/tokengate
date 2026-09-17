@@ -607,11 +607,11 @@ defmodule TokengateWeb.StatsHelpers do
   end
 
   @doc """
-  Enlace al detalle de un grupo desde un listado de usuarios o miembros.
+  Enlace al detalle de un perfil de límites desde un listado de usuarios o miembros.
 
-  Los desgloses por usuario/miembro ya traen el grupo de cada fila, así que el
-  nombre del grupo es siempre navegable a su detalle: sin esto, un listado de
-  usuarios deja el grupo como texto muerto y no hay camino de ida al grupo.
+  Los desgloses por usuario/miembro ya traen el perfil de límites de cada fila, así que el
+  nombre del perfil de límites es siempre navegable a su detalle: sin esto, un listado de
+  usuarios deja el perfil de límites como texto muerto y no hay camino de ida al perfil de límites.
 
   Dentro del hub (`/stats`) navega con `patch`: no se sale del LiveView y el
   enlace arrastra el período elegido, como el resto de los enlaces internos —
@@ -628,14 +628,14 @@ defmodule TokengateWeb.StatsHelpers do
     ~H"""
     <.link
       :if={@navigate}
-      navigate={~p"/stats/groups/#{@group_id}"}
+      navigate={~p"/stats/profiles/#{@group_id}"}
       class={group_link_class()}
       title={@name}
       id={@id}
     >{@name}</.link>
     <.link
       :if={not @navigate}
-      patch={~p"/stats/groups/#{@group_id}?period=#{@period}"}
+      patch={~p"/stats/profiles/#{@group_id}?period=#{@period}"}
       class={group_link_class()}
       title={@name}
       id={@id}
@@ -793,12 +793,16 @@ defmodule TokengateWeb.StatsHelpers do
   Barra de uso de presupuesto (gasto vs límite del mes UTC). El tamaño
   lo pone `pct` (0-100+); el color cruza el 80%. `nil` en pct = sin
   límite (barra neutra). Reutilizada por En vivo, Resumen, Usuarios,
-  Grupos y Servicios.
+  Perfiles de límites y Servicios.
   """
   attr :spend, :any, required: true, doc: "Decimal — gasto del mes UTC"
   attr :limit, :any, default: nil, doc: "Decimal | nil — límite mensual (nil = ilimitado)"
   attr :pct, :any, default: nil, doc: "float | nil — 0-100+ ya calculado"
-  attr :label, :string, default: "Mes", doc: "Prefijo del texto (Mes, Grupo, Servicio…)"
+
+  attr :label, :string,
+    default: "Mes",
+    doc: "Prefijo del texto (Mes, Perfil de límites, Servicio…)"
+
   attr :compact, :boolean, default: false, doc: "Versión mini para tablas"
 
   def budget_bar(assigns) do

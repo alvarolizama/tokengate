@@ -542,7 +542,7 @@ defmodule TokengateWeb.CoreComponents do
         disabled={model.id in @locked_ids}
         title={
           cond do
-            model.id in @locked_ids -> "Otorgado por el grupo (gestiónalo en Grupos)"
+            model.id in @locked_ids -> "Otorgado por tu perfil de límites"
             model.id in @denied_ids -> "Quitado para este miembro (clic para restaurar)"
             model.id in @extra_ids -> "Extra individual"
             true -> nil

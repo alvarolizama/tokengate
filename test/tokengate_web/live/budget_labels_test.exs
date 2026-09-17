@@ -12,8 +12,9 @@ defmodule TokengateWeb.BudgetLabelsTest do
       (o por el flag propio, que la UI no expone).
 
   Y el renombre de vocabulario: la sección del sidebar es «Presupuesto»
-  (`/budget/*`), el contenedor es un «presupuesto mensual» y las etiquetas
-  visibles salen de gettext con msgid en inglés y traducción al español.
+  (`/budget/*`), el contenedor es un «perfil de límites» y las etiquetas
+  visibles salen de gettext (el msgid se renderiza tal cual cuando no hay
+  traducción; el resto se traduce al español desde un msgid en inglés).
   """
 
   use TokengateWeb.ConnCase, async: false
@@ -145,34 +146,58 @@ defmodule TokengateWeb.BudgetLabelsTest do
   test "el sidebar agrupa bajo Presupuesto con las rutas /budget/*", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
-    {:ok, view, _} = live(conn, ~p"/budget/months")
+    {:ok, view, _} = live(conn, ~p"/budget/profiles")
 
     # Etiqueta de sección traducida (msgid "Budget" → "Presupuesto").
     assert has_element?(view, "#sidebar-section-budget", "Presupuesto")
     refute has_element?(view, "#sidebar-section-credito")
 
     # Los enlaces de la sección, con su prefijo de URL.
-    assert has_element?(view, "#sidebar-link-budget-months[href=\"/budget/months\"]")
+    assert has_element?(view, "#sidebar-link-budget-profiles[href=\"/budget/profiles\"]")
     assert has_element?(view, "#sidebar-link-budget-topups[href=\"/budget/topups\"]")
     # El tope diario global se mudó de Mantenimiento a Presupuesto.
     assert has_element?(view, "#sidebar-link-budget-global[href=\"/budget/global\"]")
     assert has_element?(view, "#sidebar-link-budget-global", "Tope diario global")
 
     # El drill-down deja el padre encendido.
-    {:ok, view2, _} = live(recycle(conn), ~p"/budget/months/#{group_fixture(%{}).id}/members")
-    assert has_element?(view2, "#sidebar-link-budget-months[aria-current=page]")
+    profile = group_fixture(%{})
+
+    {:ok, view2, _} =
+      live(recycle(conn), ~p"/budget/profiles/#{profile.id}/members")
+
+    assert has_element?(view2, "#sidebar-link-budget-profiles[aria-current=page]")
   end
 
-  test "la página de presupuestos se titula en español", %{conn: conn} do
+  test "la página de perfiles de límites se titula en español", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     conn = login(conn, admin, password)
-    {:ok, view, _} = live(conn, ~p"/budget/months")
+    {:ok, view, _} = live(conn, ~p"/budget/profiles")
 
-    assert render(view) =~ "Presupuestos mensuales"
+    assert render(view) =~ "Perfiles de límites"
 
     view |> element("#new-group-btn") |> render_click()
     assert has_element?(view, "#group-form input[name='group[monthly_spend_limit_usd]']")
     assert has_element?(view, "#group-form input[name='group[unlimited_spend]']")
+  end
+
+  # El contenedor tiene un solo nombre en toda la UI: el que el usuario ve en
+  # Usuarios y en Monitoreo es el mismo que en el sidebar. Sin esto, la
+  # etiqueta vuelve a derivar por superficie.
+  test "Usuarios y Monitoreo llaman «Perfiles de límites» al contenedor", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    profile = group_fixture(%{name: "Perfil visible #{unique()}"})
+    conn = login(conn, admin, password)
+
+    {:ok, users_view, users_html} = live(conn, ~p"/access/users")
+    assert users_html =~ "Perfiles de límites"
+    refute users_html =~ "Grupos</th>"
+
+    users_view |> element("#groups-#{admin.id}") |> render_click()
+    assert render(users_view) =~ "Perfiles de límites de"
+
+    {:ok, monitoring, monitoring_html} = live(recycle(conn), ~p"/operations/monitoring")
+    assert monitoring_html =~ "Perfil de límites"
+    assert monitoring_html =~ profile.name
   end
 
   test "el form de usuario llama «Presupuesto mensual» al contenedor", %{conn: conn} do
@@ -203,7 +228,7 @@ defmodule TokengateWeb.BudgetLabelsTest do
     conn = login(conn, admin, password)
 
     # 1. el presupuesto mensual se marca ilimitado
-    {:ok, groups_view, _} = live(conn, ~p"/budget/months")
+    {:ok, groups_view, _} = live(conn, ~p"/budget/profiles")
     groups_view |> element("#edit-#{budget.id}") |> render_click()
 
     groups_view

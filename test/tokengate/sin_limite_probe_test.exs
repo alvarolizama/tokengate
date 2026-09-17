@@ -161,7 +161,7 @@ defmodule Tokengate.SinLimiteProbeTest do
     user_no_sub_limit = user_fixture(%{"monthly_spend_limit_usd" => "100.00"})
     measure("U · SIN sub + límite propio 100", plan_without_sub(user_no_sub_limit))
 
-    # --- con sub (grupo) ---
+    # --- con sub (perfil de límites) ---
     member = fn attrs -> member_fixture(group_fixture(attrs), user_fixture()) end
 
     measure("U · sub SIN límite (nil), sin top-up", Credits.plan(member.(%{})))
@@ -278,7 +278,7 @@ defmodule Tokengate.SinLimiteProbeTest do
     plan = Credits.plan(service)
     assert {:ok, %{kind: :topup}} = Manager.reserve_plan(plan, nil, @cost, false)
 
-    # 6. Un `%GroupMember{}` sin grupo también resuelve (la resolución del
+    # 6. Un `%GroupMember{}` sin perfil de límites también resuelve (la resolución del
     #    motor es user primero; lo que falta es la membresía para autenticar).
     assert %{limit_usd: nil, unlimited?: false, source: nil} =
              Credits.user_limit(user, nil)

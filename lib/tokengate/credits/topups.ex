@@ -114,7 +114,7 @@ defmodule Tokengate.Credits.Topups do
   topups: [...], remaining_topup_usd, has_grant?}`.
 
   `subject` es `{:user, user_id}` o `{:service, service_id}`. El límite mensual
-  del sujeto lo resuelve el llamador (grupo para usuarios, propio para
+  del sujeto lo resuelve el llamador (perfil de límites para usuarios, propio para
   servicios); aquí solo se leen los top-ups.
   """
   def summary({:user, user_id} = subject) do

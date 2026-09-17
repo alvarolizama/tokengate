@@ -60,7 +60,7 @@ defmodule TokengateWeb.StatsExportController do
   # en la live_session :admin) y su ranking NO admite scoping por miembro —
   # `Rollup.provider_ranking/2` agrega por proveedor sin filtrar por
   # `member_ids`. Un manager exportaría, entonces, el tráfico de la
-  # organización entera; el mismo criterio que el drill-down de grupos: si no
+  # organización entera; el mismo criterio que el drill-down de perfiles de límites: si no
   # eres admin, no baja.
   defp build_csv(user, "providers", _params, opts, timezone) do
     if admin?(user) do
@@ -232,9 +232,9 @@ defmodule TokengateWeb.StatsExportController do
 
     header =
       if group_id do
-        ~w(usuario grupo requests costo tokens_in tokens_out tps)
+        ~w(usuario perfil requests costo tokens_in tokens_out tps)
       else
-        ~w(grupo requests costo tokens_in tokens_out tps)
+        ~w(perfil requests costo tokens_in tokens_out tps)
       end
 
     csv =
@@ -242,8 +242,8 @@ defmodule TokengateWeb.StatsExportController do
       |> Enum.map(&Enum.join(&1, ","))
       |> Enum.join("\n")
 
-    suffix = if group_id, do: "_grupo", else: ""
-    {"estadisticas_grupos#{suffix}_#{Periods.local_today(timezone)}.csv", csv}
+    suffix = if group_id, do: "_perfil_limites", else: ""
+    {"estadisticas_perfiles#{suffix}_#{Periods.local_today(timezone)}.csv", csv}
   end
 
   ## Errors CSV -----------------------------------------------------------
@@ -260,7 +260,7 @@ defmodule TokengateWeb.StatsExportController do
     key_labels = api_key_labels(rows)
 
     header =
-      ~w(fecha estado modelo proveedor usuario grupo api_key error_reason prov_status latencia_ms costo_usd)
+      ~w(fecha estado modelo proveedor usuario perfil api_key error_reason prov_status latencia_ms costo_usd)
 
     csv =
       [header | Enum.map(rows, &row_to_csv_error(&1, key_labels))]
@@ -283,7 +283,7 @@ defmodule TokengateWeb.StatsExportController do
     key_labels = api_key_labels(rows)
 
     header =
-      ~w(fecha estado modelo usuario grupo agente api_key proveedor prov_key prov_status error_reason error_message streaming think effort tokens_in tokens_out cache_read cache_creation latencia_ms ttft_ms costo_usd)
+      ~w(fecha estado modelo usuario perfil agente api_key proveedor prov_key prov_status error_reason error_message streaming think effort tokens_in tokens_out cache_read cache_creation latencia_ms ttft_ms costo_usd)
 
     csv =
       [header | Enum.map(rows, &row_to_csv_log(&1, key_labels))]

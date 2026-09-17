@@ -46,7 +46,7 @@ defmodule TokengateWeb.StatsLive.Providers do
             Una fila por proveedor con su información básica en el período
             ({Stats.period_label(@period)}). El podio va marcado con medalla y el
             nombre abre el detalle: sus métricas, sus modelos y los usuarios,
-            servicios y grupos que lo usan.
+            servicios y perfiles de límites que lo usan.
           </p>
           <%= if Stats.has_data?(@provider_ranking) do %>
             <%!-- El puesto se toma de la clasificación completa, no del listado

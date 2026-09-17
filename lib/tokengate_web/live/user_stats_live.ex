@@ -435,7 +435,7 @@ defmodule TokengateWeb.UserStatsLive do
                     <span>
                       <.link
                         :if={m.group}
-                        navigate={~p"/stats/groups/#{m.group.id}"}
+                        navigate={~p"/stats/profiles/#{m.group.id}"}
                         class="link link-hover hover:text-primary"
                         id={"membership-group-#{m.group.id}"}
                       >

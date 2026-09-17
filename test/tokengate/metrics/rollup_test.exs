@@ -1463,7 +1463,7 @@ defmodule Tokengate.Metrics.RollupTest do
       # nunca un 0 que se leería como "instantáneo".
       assert service_row.avg_latency_ms == nil
 
-      # Los grupos que lo usan.
+      # Los perfiles de límites que lo usan.
       assert [group_row] = Rollup.breakdown_by_group(from: from, provider_id: provider_a.id)
       assert group_row.request_count == 1
       assert Decimal.equal?(group_row.cost_usd, Decimal.new("1.000000"))
@@ -1477,10 +1477,10 @@ defmodule Tokengate.Metrics.RollupTest do
       assert all_requests == 3
     end
 
-    # El desglose por usuario tiene que entregar el grupo con su ID y su NOMBRE
-    # juntos: el id es lo único con lo que la UI puede enlazar al grupo, y el
+    # El desglose por usuario tiene que entregar el perfil de límites con su ID y su NOMBRE
+    # juntos: el id es lo único con lo que la UI puede enlazar al perfil de límites, y el
     # nombre sale de un lookup por ese id. Un `ARRAY_AGG` sin cast sobre una
-    # columna uuid devuelve bytes crudos, el lookup falla y la columna de grupos
+    # columna uuid devuelve bytes crudos, el lookup falla y la columna de perfiles de límites
     # queda en "—" para todo el mundo sin que nada se queje.
     test "cada usuario trae sus grupos con id y nombre" do
       {tm, group} = group_member_fixture()

@@ -658,7 +658,7 @@ defmodule TokengateWeb.ServicesLive do
               <.admin_search
                 event="search_services"
                 value={@search_query}
-                placeholder="Buscar por nombre o grupo..."
+                placeholder="Buscar por nombre o perfil de límites..."
                 input_id="service-search"
               />
               <.button phx-click="new_service" id="new-service-btn">

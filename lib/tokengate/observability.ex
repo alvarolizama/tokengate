@@ -3,7 +3,7 @@ defmodule Tokengate.Observability do
   The Observability context: manages telemetry export destinations.
 
   Los destinos son globales: la observabilidad es de toda la instalación, no
-  de un grupo. Cada webhook recibe la telemetría de todos los sujetos.
+  de un perfil de límites. Cada webhook recibe la telemetría de todos los sujetos.
   """
 
   import Ecto.Query, warn: false

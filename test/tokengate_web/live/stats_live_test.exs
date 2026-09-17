@@ -424,19 +424,19 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#model-ranking-row-#{ma.id}")
   end
 
-  test "member usage tiers live in /stats/groups now", %{conn: conn} do
+  test "member usage tiers live in /stats/profiles now", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     %{group: group} = group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/stats/groups")
+    {:ok, view, _html} = live(conn, ~p"/stats/profiles")
     wait_stats_loaded(view)
 
     assert has_element?(view, "#group-table")
     assert has_element?(view, "#group-list-search")
     assert has_element?(view, "#bd-group-#{group.id}")
     # El listado tiene UNA sola tabla: el card de tiers de uso por miembro salió
-    # de la pestaña (el mismo agregado sigue en /budget/months/:id/members).
+    # de la pestaña (el mismo agregado sigue en /budget/profiles/:id/members).
     refute has_element?(view, "#member-usage-tiers")
   end
 
@@ -602,7 +602,7 @@ defmodule TokengateWeb.StatsLiveTest do
     group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/stats/groups")
+    {:ok, view, _html} = live(conn, ~p"/stats/profiles")
     wait_stats_loaded(view)
 
     assert has_element?(view, "#csv-groups")
@@ -614,7 +614,7 @@ defmodule TokengateWeb.StatsLiveTest do
     %{group: group} = group_with_log(%{cost: "0.005"})
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live(conn, ~p"/stats/groups?group_id=#{group.id}")
+    {:ok, view, _html} = live(conn, ~p"/stats/profiles?group_id=#{group.id}")
     wait_stats_loaded(view)
 
     assert has_element?(view, "#group-kpi-requests")
@@ -750,7 +750,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
     assert conn.status == 200
 
-    assert ["attachment; filename=\"estadisticas_grupos_" <> _] =
+    assert ["attachment; filename=\"estadisticas_perfiles_" <> _] =
              get_resp_header(conn, "content-disposition")
   end
 
@@ -1696,7 +1696,7 @@ defmodule TokengateWeb.StatsLiveTest do
       assert has_element?(view, "#provider-kpi-latency")
       assert view |> element("#provider-kpi-cost") |> render() =~ "0.01"
 
-      # Los modelos que sirve y los usuarios/servicios/grupos que lo usan.
+      # Los modelos que sirve y los usuarios/servicios/perfiles de límites que lo usan.
       assert has_element?(view, "#provider-models #provider-model-#{fixture.model.id}")
       assert has_element?(view, "#provider-users #provider-user-#{fixture.owner.id}")
       assert has_element?(view, "#provider-groups #provider-group-#{fixture.group.id}")
@@ -1743,7 +1743,7 @@ defmodule TokengateWeb.StatsLiveTest do
       extra_breakdown_rows(fixture, :providers, 10)
       extra_breakdown_rows(fixture, :models, 10)
       extra_breakdown_rows(fixture, :groups, 10)
-      # Sin filas extra de `:users`: cada grupo extra trae su propio dueño (un
+      # Sin filas extra de `:users`: cada perfil de límites extra trae su propio dueño (un
       # usuario vive en UNA sola sub), así que esa tabla ya llega a 11 filas.
       extra_breakdown_rows(fixture, :services, 11)
 
@@ -1752,7 +1752,7 @@ defmodule TokengateWeb.StatsLiveTest do
       for {path, rows_selector, more_id} <- [
             {~p"/stats/providers", "#provider-table tbody tr", "#provider-list-more"},
             {~p"/stats/models", "#model-table tbody tr", "#model-list-more"},
-            {~p"/stats/groups", "#group-table tbody tr", "#group-list-more"},
+            {~p"/stats/profiles", "#group-table tbody tr", "#group-list-more"},
             {~p"/stats/users", "#user-table tbody tr", "#user-list-more"},
             {~p"/stats/services", "#service-table tbody tr", "#service-list-more"}
           ] do
@@ -1777,7 +1777,7 @@ defmodule TokengateWeb.StatsLiveTest do
       %{user: admin, password: password} = register("admin")
 
       fixture = group_with_log(%{cost: "0.005"})
-      # 10 modelos extra servidos al mismo grupo → 11 filas en su tabla.
+      # 10 modelos extra servidos al mismo perfil de límites → 11 filas en su tabla.
       extra_breakdown_rows(fixture, :models, 10)
 
       {:ok, service} = Accounts.create_service(%{name: "svc-#{unique()}"})
@@ -1786,7 +1786,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
       conn = login(conn, admin, password)
 
-      {:ok, group_view, _html} = live(conn, ~p"/stats/groups/#{fixture.group.id}?period=today")
+      {:ok, group_view, _html} = live(conn, ~p"/stats/profiles/#{fixture.group.id}?period=today")
       group_view = wait_stats_loaded(group_view)
 
       assert count_rows(group_view, "#group-models tbody tr") == 10
@@ -1797,7 +1797,7 @@ defmodule TokengateWeb.StatsLiveTest do
       assert count_rows(group_view, "#group-models tbody tr") == 11
       refute has_element?(group_view, "#group-detail-models-more")
 
-      # Los miembros del grupo caben enteros: esa tabla no gana botón.
+      # Los miembros del perfil de límites caben enteros: esa tabla no gana botón.
       refute has_element?(group_view, "#group-detail-members-more")
 
       {:ok, service_view, _html} =
@@ -1903,8 +1903,8 @@ defmodule TokengateWeb.StatsLiveTest do
 
       conn = login(conn, admin, password)
 
-      # Grupos: el buscador filtra por nombre de grupo.
-      {:ok, groups, _html} = live(conn, ~p"/stats/groups")
+      # Perfiles de límites: el buscador filtra por nombre de perfil de límites.
+      {:ok, groups, _html} = live(conn, ~p"/stats/profiles")
       groups = wait_stats_loaded(groups)
 
       assert has_element?(groups, "#bd-group-#{a.group.id}")
@@ -1966,13 +1966,13 @@ defmodule TokengateWeb.StatsLiveTest do
     end
   end
 
-  # El grupo de una fila de usuario/miembro es SIEMPRE navegable a su detalle.
-  # El desglose por usuario traía los ids de grupo bajo el campo `group_names` y
+  # El perfil de límites de una fila de usuario/miembro es SIEMPRE navegable a su detalle.
+  # El desglose por usuario traía los ids de perfil de límites bajo el campo `group_names` y
   # los tiraba al resolver el nombre, así que la columna quedaba como texto
-  # muerto; el de miembros ni siquiera seleccionaba el id del grupo.
+  # muerto; el de miembros ni siquiera seleccionaba el id del perfil de límites.
   #
   # Un usuario ahora vive en UNA sola sub, así que la fila lleva un único
-  # vínculo: el caso multi-grupo dejó de existir por invariante de la DB.
+  # vínculo: el caso multi-perfil de límites dejó de existir por invariante de la DB.
   describe "vínculos al grupo desde listados de usuarios y miembros" do
     test "users: el grupo de la fila enlaza a su detalle", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
@@ -1984,7 +1984,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
       assert has_element?(
                view,
-               "#user-group-#{fixture.owner.id}-#{fixture.group.id}[href*='/stats/groups/#{fixture.group.id}'][href*='period=today']",
+               "#user-group-#{fixture.owner.id}-#{fixture.group.id}[href*='/stats/profiles/#{fixture.group.id}'][href*='period=today']",
                fixture.group.name
              )
     end
@@ -1999,7 +1999,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
       assert has_element?(
                view,
-               "#provider-user-group-#{fixture.owner.id}-#{fixture.group.id}[href*='/stats/groups/#{fixture.group.id}']",
+               "#provider-user-group-#{fixture.owner.id}-#{fixture.group.id}[href*='/stats/profiles/#{fixture.group.id}']",
                fixture.group.name
              )
     end
@@ -2013,18 +2013,18 @@ defmodule TokengateWeb.StatsLiveTest do
       {:ok, view, _html} = live(conn, ~p"/stats/models/#{fixture.model.id}?period=today")
       view = wait_stats_loaded(view)
 
-      # La tabla de miembros lleva el grupo de cada fila enlazado...
+      # La tabla de miembros lleva el perfil de límites de cada fila enlazado...
       assert has_element?(
                view,
-               "#bd-model-member-group-#{member.id}[href*='/stats/groups/#{fixture.group.id}']",
+               "#bd-model-member-group-#{member.id}[href*='/stats/profiles/#{fixture.group.id}']",
                fixture.group.name
              )
 
-      # ...y la de grupos también, igual que en el detalle de proveedor (antes
-      # era texto plano aunque la fila ya traía el id del grupo).
+      # ...y la de perfiles de límites también, igual que en el detalle de proveedor (antes
+      # era texto plano aunque la fila ya traía el id del perfil de límites).
       assert has_element?(
                view,
-               "#bd-model-group-link-#{fixture.group.id}[href*='/stats/groups/#{fixture.group.id}']",
+               "#bd-model-group-link-#{fixture.group.id}[href*='/stats/profiles/#{fixture.group.id}']",
                fixture.group.name
              )
     end

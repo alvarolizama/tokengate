@@ -6,8 +6,8 @@ defmodule Tokengate.Credits do
   crédito contra el sujeto que lo paga:
 
     * **usuario** — límite propio (`users.monthly_spend_limit_usd`) o, si no
-      define el suyo, el de su grupo; `unlimited_spend` (propio o heredado del
-      grupo) lo exime del tope; sus top-ups son el segundo camino de gasto.
+      define el suyo, el de su perfil de límites; `unlimited_spend` (propio o heredado del
+      perfil de límites) lo exime del tope; sus top-ups son el segundo camino de gasto.
     * **servicio** — límite propio (`services.monthly_spend_limit_usd`) con su
       `unlimited_spend`, más sus top-ups.
 
@@ -15,7 +15,7 @@ defmodule Tokengate.Credits do
 
   | estado | significado |
   |---|---|
-  | `monthly_spend_limit_usd IS NULL` | **sin límite propio**: el usuario hereda el de su grupo; un grupo/servicio sin límite no deja gastar salvo top-ups |
+  | `monthly_spend_limit_usd IS NULL` | **sin límite propio**: el usuario hereda el de su perfil de límites; un perfil de límites/servicio sin límite no deja gastar salvo top-ups |
   | `monthly_spend_limit_usd = 0` | **cero**: no hay límite disponible (jamás «ilimitado») |
   | `monthly_spend_limit_usd > 0` | límite mensual del sujeto, en USD |
   | `unlimited_spend = true` | único camino a ilimitado; gana sobre límite y top-ups |
@@ -46,7 +46,7 @@ defmodule Tokengate.Credits do
   @type limit :: %{limit_usd: Decimal.t() | nil, unlimited?: boolean(), source: atom() | nil}
 
   @doc """
-  Límite efectivo del miembro: el suyo si lo define, si no el del grupo.
+  Límite efectivo del miembro: el suyo si lo define, si no el del perfil de límites.
   """
   @spec user_limit(GroupMember.t()) :: limit()
   def user_limit(%GroupMember{} = member) do
@@ -383,7 +383,7 @@ defmodule Tokengate.Credits do
   # Auxiliares
   # ---------------------------------------------------------------------------
 
-  @doc "El grupo de un usuario, o `nil` (un usuario pertenece a un solo grupo)."
+  @doc "El perfil de límites de un usuario, o `nil` (un usuario pertenece a un solo perfil de límites)."
   def group_for_user(user_id) do
     Repo.one(
       from(gm in GroupMember,

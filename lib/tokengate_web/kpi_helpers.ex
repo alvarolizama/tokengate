@@ -105,7 +105,7 @@ defmodule TokengateWeb.KpiHelpers do
 
   @doc """
   Tarjeta KPI canónica del hub /stats — formato único para En vivo,
-  Resumen, Modelos, Grupos, Servicios y Usuarios:
+  Resumen, Modelos, Perfiles de límites, Servicios y Usuarios:
 
     * label en uppercase + icono en chip de color (accent: primary |
       accent | error | warning | neutral)

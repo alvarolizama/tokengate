@@ -45,23 +45,41 @@ defmodule TokengateWeb.RedirectControllerTest do
     end
   end
 
-  # La sección «Crédito» pasó a «Presupuesto» y sus rutas a /budget/*: los
-  # presupuestos mensuales (antes /access/groups) y los top-ups (antes
-  # /credit/topups). Los bookmarks viejos no quedan en 404.
+  # El vocabulario «perfil de límites» reemplazó a «perfiles de límites» / «presupuestos
+  # mensuales»: la página vive en /budget/profiles y las dos generaciones
+  # anteriores de la URL caen ahí con un redirect que preserva subruta y
+  # query string (bookmarks viejos no quedan en 404).
   describe "sección Presupuesto (/budget/*)" do
-    test "/access/groups → /budget/months", %{conn: conn} do
+    test "/access/groups → /budget/profiles", %{conn: conn} do
       conn = get(conn, "/access/groups")
-      assert redirected_to(conn) == "/budget/months"
+      assert redirected_to(conn) == "/budget/profiles"
     end
 
-    test "/access/groups/:id/members → /budget/months/:id/members", %{conn: conn} do
+    test "/access/groups/:id/members → /budget/profiles/:id/members (subruta preservada)", %{
+      conn: conn
+    } do
       conn = get(conn, "/access/groups/42/members")
-      assert redirected_to(conn) == "/budget/months/42/members"
+      assert redirected_to(conn) == "/budget/profiles/42/members"
     end
 
     test "/access/groups/:id/members?period=7d → subruta y query preservadas", %{conn: conn} do
       conn = get(conn, "/access/groups/42/members?period=7d")
-      assert redirected_to(conn) == "/budget/months/42/members?period=7d"
+      assert redirected_to(conn) == "/budget/profiles/42/members?period=7d"
+    end
+
+    test "/budget/months → /budget/profiles", %{conn: conn} do
+      conn = get(conn, "/budget/months")
+      assert redirected_to(conn) == "/budget/profiles"
+    end
+
+    test "/budget/months/:id/members → /budget/profiles/:id/members", %{conn: conn} do
+      conn = get(conn, "/budget/months/42/members")
+      assert redirected_to(conn) == "/budget/profiles/42/members"
+    end
+
+    test "/budget/months/:id/members?page=2&q=x → subruta y query preservadas", %{conn: conn} do
+      conn = get(conn, "/budget/months/42/members?page=2&q=x")
+      assert redirected_to(conn) == "/budget/profiles/42/members?page=2&q=x"
     end
 
     test "/credit/topups → /budget/topups", %{conn: conn} do
@@ -77,6 +95,36 @@ defmodule TokengateWeb.RedirectControllerTest do
     test "/credit/subscriptions → /budget/topups", %{conn: conn} do
       conn = get(conn, "/credit/subscriptions")
       assert redirected_to(conn) == "/budget/topups"
+    end
+  end
+
+  # El hub de stats llamaba «perfiles de límites» al sujeto del techo mensual; ahora es
+  # «perfil de límites» (/stats/profiles).
+  describe "hub de stats (/stats/profiles)" do
+    test "/stats/groups → /stats/profiles", %{conn: conn} do
+      conn = get(conn, "/stats/groups")
+      assert redirected_to(conn) == "/stats/profiles"
+    end
+
+    test "/stats/groups/:group_id → /stats/profiles/:group_id (subruta preservada)", %{conn: conn} do
+      conn = get(conn, "/stats/groups/42")
+      assert redirected_to(conn) == "/stats/profiles/42"
+    end
+
+    test "/stats/groups/:group_id?period=today → subruta y query preservadas", %{conn: conn} do
+      conn = get(conn, "/stats/groups/42?period=today&group_id=42")
+      assert redirected_to(conn) == "/stats/profiles/42?period=today&group_id=42"
+    end
+  end
+
+  # Los redirects de este controller usan `redirect/2` (302), la misma
+  # convención que el resto de las páginas movidas. Está fijado aquí para que
+  # un cambio de status sea deliberado y visible.
+  describe "status de los redirects" do
+    test "un bookmark viejo responde 302 con Location al destino nuevo", %{conn: conn} do
+      conn = get(conn, "/budget/months")
+      assert conn.status == 302
+      assert get_resp_header(conn, "location") == ["/budget/profiles"]
     end
   end
 

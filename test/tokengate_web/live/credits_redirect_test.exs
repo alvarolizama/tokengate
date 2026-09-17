@@ -1,8 +1,8 @@
 defmodule TokengateWeb.CreditsRedirectTest do
   @moduledoc """
   El tab Créditos se disolvió en cada dimensión del hub /stats: barra org
-  en En vivo/Resumen, columnas de presupuesto en Usuarios/Grupos/Servicios
-  y barra de grupo en el hub. Estos tests cubren los redirects de los
+  en En vivo/Resumen, columnas de presupuesto en Usuarios/Perfiles de límites/Servicios
+  y barra de perfil de límites en el hub. Estos tests cubren los redirects de los
   bookmarks antiguos.
   """
 

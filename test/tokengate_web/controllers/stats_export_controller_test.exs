@@ -89,7 +89,7 @@ defmodule TokengateWeb.StatsExportControllerTest do
       |> login(admin, password)
       |> get(~p"/stats/export?type=groups&group_id=#{group.id}")
 
-    assert response(conn, 200) =~ "usuario,grupo"
+    assert response(conn, 200) =~ "usuario,perfil"
   end
 
   test "plain member of the group cannot export its drill-down", %{conn: conn} do

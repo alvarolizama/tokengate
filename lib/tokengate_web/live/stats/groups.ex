@@ -54,12 +54,12 @@ defmodule TokengateWeb.StatsLive.Groups do
 
       <%= if @group_filter do %>
         <div class="space-y-6">
-          <%!-- Breadcrumb — el hub vive en /stats/groups/:id (action :group);
+          <%!-- Breadcrumb — el hub vive en /stats/profiles/:id (action :group);
                el drill-down ?group_id= de :groups usa el mismo template --%>
           <div class="flex items-center justify-between flex-wrap gap-2">
             <div class="flex items-center gap-2 text-xs text-base-content/60">
-              <.link navigate={~p"/stats/groups?period=#{@period}"} class="hover:underline">
-                Grupos
+              <.link navigate={~p"/stats/profiles?period=#{@period}"} class="hover:underline">
+                Perfiles de límites
               </.link>
               <span>›</span>
               <span class="font-medium text-base-content/80">
@@ -414,7 +414,8 @@ defmodule TokengateWeb.StatsLive.Groups do
           <div class="card bg-base-100 border border-base-300 shadow-sm">
             <div class="card-body">
               <h2 class="card-title text-base">
-                <.icon name="hero-user" class="w-5 h-5 text-base-content/60" /> Miembros del grupo
+                <.icon name="hero-user" class="w-5 h-5 text-base-content/60" />
+                Miembros del perfil de límites
               </h2>
               <%= if Stats.has_data?(@breakdown_member) do %>
                 <% member_total = Stats.breakdown_total(@breakdown_member) %>
@@ -599,17 +600,18 @@ defmodule TokengateWeb.StatsLive.Groups do
             class="btn btn-sm btn-ghost"
             id="clear-group-filter"
           >
-            <.icon name="hero-x-mark" class="w-4 h-4" /> Quitar filtro de grupo
+            <.icon name="hero-x-mark" class="w-4 h-4" /> Quitar filtro de perfil de límites
           </button>
         </div>
       <% else %>
         <div class="card bg-base-100 border border-base-300 shadow-sm">
           <div class="card-body">
             <h2 class="card-title text-base">
-              <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" /> Grupos
+              <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" />
+              Perfiles de límites
             </h2>
             <p class="text-xs text-base-content/60">
-              Una fila por grupo con su información básica en el período
+              Una fila por perfil de límites con su información básica en el período
               ({Stats.period_label(@period)}). El nombre abre el detalle: sus métricas,
               sus miembros y los modelos que consume.
             </p>
@@ -623,7 +625,7 @@ defmodule TokengateWeb.StatsLive.Groups do
                 <Stats.list_search
                   id="group-list-search"
                   value={@list_search}
-                  placeholder="Filtrar por grupo…"
+                  placeholder="Filtrar por perfil de límites…"
                 />
               </div>
               <%= if rows == [] do %>
@@ -641,7 +643,7 @@ defmodule TokengateWeb.StatsLive.Groups do
                             phx-value-field="group_name"
                             class="flex items-center gap-1 hover:text-primary"
                           >
-                            Grupo
+                            Perfil de límites
                             <.sort_icon
                               field={:group_name}
                               current={@sort_field}
@@ -734,7 +736,7 @@ defmodule TokengateWeb.StatsLive.Groups do
                       <tr :for={row <- list_rows} id={"bd-group-#{row.group_id}"}>
                         <td class="font-medium">
                           <.link
-                            patch={~p"/stats/groups/#{row.group_id}?period=#{@period}"}
+                            patch={~p"/stats/profiles/#{row.group_id}?period=#{@period}"}
                             class="link link-hover"
                           >{row.group_name}</.link>
                         </td>
@@ -776,7 +778,7 @@ defmodule TokengateWeb.StatsLive.Groups do
                     </tbody>
                     <tfoot>
                       <tr class="font-bold bg-base-200">
-                        <td>Total · {length(rows)} grupos</td>
+                        <td>Total · {length(rows)} perfiles de límites</td>
                         <td class="text-right font-mono">
                           {Stats.format_number(group_total.request_count)}
                         </td>

@@ -1,6 +1,6 @@
 defmodule Tokengate.Accounts.Service do
   @moduledoc """
-  Servicio — consumidor machine de la API, independiente de grupos.
+  Servicio — consumidor machine de la API, independiente de perfiles de límites.
 
   El gasto se gobierna con su **límite mensual propio**
   (`monthly_spend_limit_usd`) más sus **top-ups**; `unlimited_spend` es el

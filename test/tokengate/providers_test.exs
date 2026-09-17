@@ -847,7 +847,7 @@ defmodule Tokengate.ProvidersTest do
         })
 
       refute changeset.valid?
-      # El índice es por target ahora (modelo + grupo), no por credencial:
+      # El índice es por target ahora (modelo + perfil de límites), no por credencial:
       # el error se reporta en el campo del target.
       assert changeset.errors[:exclusive_to_group_id] != nil
     end
@@ -908,7 +908,7 @@ defmodule Tokengate.ProvidersTest do
           exclusive_to_group_id: group.id
         })
 
-      # Otra credencial, MISMO grupo y modelo → debe fallar.
+      # Otra credencial, MISMO perfil de límites y modelo → debe fallar.
       {:error, changeset} =
         Providers.create_model_provider(%{
           model_id: model_.id,

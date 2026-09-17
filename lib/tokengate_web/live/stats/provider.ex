@@ -3,7 +3,7 @@ defmodule TokengateWeb.StatsLive.Provider do
   Detalle de un proveedor (`/stats/providers/:provider_id`, action `:provider`).
 
   Es el "interior" del ranking de proveedores: las métricas del proveedor en el
-  período, los modelos que sirve y los usuarios, servicios y grupos que lo usan.
+  período, los modelos que sirve y los usuarios, servicios y perfiles de límites que lo usan.
   Todo respeta el período elegido en el selector del hub — el enlace de entrada
   arrastra `?period=` y el header lo mantiene a la vista.
 
@@ -235,7 +235,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                   <thead>
                     <tr>
                       <th>Usuario</th>
-                      <th>Grupos</th>
+                      <th>Perfiles de límites</th>
                       <th class="text-right">Requests</th>
                       <th class="text-right">Tokens in</th>
                       <th class="text-right">Tokens out</th>
@@ -408,11 +408,12 @@ defmodule TokengateWeb.StatsLive.Provider do
           </div>
         <% end %>
 
-        <%!-- Grupos que lo usan --%>
+        <%!-- Perfiles de límites que lo usan --%>
         <div class="card bg-base-100 border border-base-300 shadow-sm">
           <div class="card-body">
             <h3 class="card-title text-base">
-              <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" /> Grupos que lo usan
+              <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" />
+              Perfiles de límites que lo usan
             </h3>
             <%= if Stats.has_data?(@breakdown_group) do %>
               <% group_total = Stats.breakdown_total(@breakdown_group) %>
@@ -422,7 +423,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                 <table class="table table-sm" id="provider-groups">
                   <thead>
                     <tr>
-                      <th>Grupo</th>
+                      <th>Perfil de límites</th>
                       <th class="text-right">Requests</th>
                       <th class="text-right">Tokens in</th>
                       <th class="text-right">Tokens out</th>
@@ -434,7 +435,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                     <tr :for={row <- group_rows} id={"provider-group-#{row.group_id}"}>
                       <td class="font-medium">
                         <.link
-                          patch={~p"/stats/groups/#{row.group_id}?period=#{@period}"}
+                          patch={~p"/stats/profiles/#{row.group_id}?period=#{@period}"}
                           class="link link-hover"
                         >
                           {row.group_name}
@@ -459,7 +460,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                   </tbody>
                   <tfoot>
                     <tr class="font-bold bg-base-200">
-                      <td>Total · {length(@breakdown_group)} grupos</td>
+                      <td>Total · {length(@breakdown_group)} perfiles de límites</td>
                       <td class="text-right font-mono tabular-nums">
                         {Stats.format_number(group_total.request_count)}
                       </td>

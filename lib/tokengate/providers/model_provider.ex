@@ -160,11 +160,12 @@ defmodule Tokengate.Providers.ModelProvider do
     |> foreign_key_constraint(:exclusive_to_group_id)
     |> foreign_key_constraint(:exclusive_to_service_id)
     # Un exclusivo es único por (modelo, target): solo puede haber UNA fila
-    # exclusiva por grupo/usuario/servicio para un modelo. Y la misma
+    # exclusiva por perfil de límites/usuario/servicio para un modelo. Y la misma
     # credencial no puede repetirse en scope global.
     |> unique_constraint(:exclusive_to_group_id,
       name: :model_providers_group_exclusive_target_unique_index,
-      message: "este modelo ya tiene un proveedor exclusivo para este grupo (solo se permite uno)"
+      message:
+        "este modelo ya tiene un proveedor exclusivo para este perfil de límites (solo se permite uno)"
     )
     |> unique_constraint(:exclusive_to_group_member_id,
       name: :model_providers_member_exclusive_target_unique_index,

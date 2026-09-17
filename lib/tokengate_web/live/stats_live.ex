@@ -194,7 +194,7 @@ defmodule TokengateWeb.StatsLive do
     {:noreply, start_data_load(socket)}
   end
 
-  # "Ver más" de los listados largos: Créditos (una clave por grupo) y los
+  # "Ver más" de los listados largos: Créditos (una clave por perfil de límites) y los
   # detalles de proveedor y modelo (una clave por tabla). El conteo desplegado
   # vive en `shown_counts`, así que cada listado se despliega por su cuenta sin
   # recargar ni volver a consultar: las filas ya están en memoria.
@@ -412,7 +412,7 @@ defmodule TokengateWeb.StatsLive do
 
   # Pure orchestration: no socket, no assigns — everything runs off plain
   # values so it can execute inside an async task (queries in parallel).
-  # Bundle completo de las pestañas de datos (Modelos, Grupos, Servicios,
+  # Bundle completo de las pestañas de datos (Modelos, Perfiles de límites, Servicios,
   # Usuarios, Proveedores): contadores + desgloses.
   defp compute_data_assigns(params) do
     opts = period_opts(params)
@@ -563,7 +563,7 @@ defmodule TokengateWeb.StatsLive do
       :models ->
         # La pestaña es la tabla de consumo por modelo. El drill-down por query
         # string (?model_id=) sigue vivo como ALIAS del detalle: los enlaces que
-        # ya existen (proveedor, grupo, servicio) entran por ahí y renderizan la
+        # ya existen (proveedor, perfil de límites, servicio) entran por ahí y renderizan la
         # misma vista que `/stats/models/:id`, con las mismas queries.
         case params.model_filter do
           nil ->
@@ -577,7 +577,7 @@ defmodule TokengateWeb.StatsLive do
 
       :model ->
         # Interior de la tabla de modelos: métricas del modelo, los proveedores
-        # que lo sirven y quién lo usa (grupos y miembros).
+        # que lo sirven y quién lo usa (perfiles de límites y miembros).
         model_detail_tasks(params.model_filter, params.user, opts)
 
       :providers ->
@@ -586,7 +586,7 @@ defmodule TokengateWeb.StatsLive do
 
       :provider ->
         # Interior de la tabla de proveedores: métricas del proveedor, los
-        # modelos que sirve y quién lo usa (usuarios, servicios, grupos).
+        # modelos que sirve y quién lo usa (usuarios, servicios, perfiles de límites).
         provider_id = params.provider_id
         admin? = params.user.global_role == "admin"
 
@@ -712,7 +712,7 @@ defmodule TokengateWeb.StatsLive do
   # Detalle de un modelo: el bundle que alimenta la vista de detalle, tanto por
   # la ruta propia (`/stats/models/:id`, action `:model`) como por el alias
   # `?model_id=` de la pestaña Modelos. Los proveedores que lo sirven y los
-  # grupos/miembros que lo usan son los MISMOS tres desgloses que ya tenía el
+  # perfiles de límites/miembros que lo usan son los MISMOS tres desgloses que ya tenía el
   # drill-down: acá sólo cambia de dónde entran.
   defp model_detail_tasks(model_id, user, opts) do
     [
@@ -832,7 +832,7 @@ defmodule TokengateWeb.StatsLive do
     end
   end
 
-  # Mismo criterio de scoping para los grupos que usan un proveedor.
+  # Mismo criterio de scoping para los perfiles de límites que usan un proveedor.
   defp breakdown_by_group_for_provider(user, provider_id, opts) do
     case Accounts.scope_group_ids(user) do
       nil -> Rollup.breakdown_by_group(Keyword.put(opts, :provider_id, provider_id))

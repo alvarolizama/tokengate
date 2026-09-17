@@ -65,7 +65,7 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     }
   end
 
-  defp group_url(group), do: "/budget/months/#{group.id}/members"
+  defp group_url(group), do: "/budget/profiles/#{group.id}/members"
 
   # --------------------------------------------------------------------------
   # Access control
@@ -164,7 +164,7 @@ defmodule TokengateWeb.GroupMembersLiveTest do
       |> form("#add-member-form", %{"add_member[email]" => taken.email})
       |> render_submit()
 
-    assert html =~ "ya pertenece a otro presupuesto mensual"
+    assert html =~ "ya pertenece a otro perfil de límites"
     refute Repo.get_by(Tokengate.Accounts.GroupMember, user_id: taken.id, group_id: group.id)
   end
 
@@ -309,7 +309,7 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     {:ok, view, html} = live(conn, group_url(group))
 
     assert has_element?(view, "#members-empty")
-    assert html =~ "Este grupo no tiene miembros"
+    assert html =~ "Este perfil de límites no tiene miembros"
   end
 
   # --------------------------------------------------------------------------
@@ -345,7 +345,7 @@ defmodule TokengateWeb.GroupMembersLiveTest do
   end
 
   # La columna «Límites» muestra el EFECTIVO del miembro (lo que el proxy
-  # aplica), no el default crudo del grupo: propio del usuario primero.
+  # aplica), no el default crudo del perfil de límites: propio del usuario primero.
   test "the Límites column shows the member's effective limits, badged on own override", %{
     conn: conn
   } do
@@ -357,7 +357,7 @@ defmodule TokengateWeb.GroupMembersLiveTest do
 
     cell = view |> element("#limits-#{member.id}") |> render()
 
-    # Sin propios: el miembro hereda el default del grupo.
+    # Sin propios: el miembro hereda el default del perfil de límites.
     assert cell =~ "5"
     assert cell =~ "60"
     refute cell =~ "propio"

@@ -196,9 +196,9 @@ defmodule Tokengate.BudgetsTest do
     end
   end
 
-  # Regresión: los usuarios de un grupo con suscripción salían "sin límite"
+  # Regresión: los usuarios de un perfil de límites con suscripción salían "sin límite"
   # El límite del miembro es el EFECTIVO: propio si lo define, si no el del
-  # grupo. `unlimited_spend` es el único camino a ilimitado y `0` es CERO.
+  # perfil de límites. `unlimited_spend` es el único camino a ilimitado y `0` es CERO.
   describe "member_budget/1 con límite por sujeto" do
     test "sin límite propio hereda el del grupo (no nil)" do
       user = user_fixture()
@@ -494,7 +494,7 @@ defmodule Tokengate.BudgetsTest do
 
   describe "spend_by_user/0" do
     # Un usuario pertenece a UNA sola sub mensual: su gasto y su límite se
-    # resuelven contra esa única membresía (el multi-grupo ya no existe).
+    # resuelven contra esa única membresía (el multi-perfil de límites ya no existe).
     test "rolls up spend for a user's single membership" do
       user = user_fixture()
       group = group_fixture(%{"monthly_spend_limit_usd" => "10.00"})
@@ -524,7 +524,7 @@ defmodule Tokengate.BudgetsTest do
       group = group_fixture(%{"monthly_spend_limit_usd" => "300.00"})
       member_a = member_fixture(group)
       member_b = member_fixture(group)
-      # Otro grupo que no debe mezclarse
+      # Otro perfil de límites que no debe mezclarse
       _other = member_fixture()
 
       record_limit_log(member_a, "100.00")
@@ -534,10 +534,10 @@ defmodule Tokengate.BudgetsTest do
       row = Enum.find(groups, &(&1.group.id == group.id))
 
       assert row.member_count == 2
-      # Cada miembro hereda el límite del grupo: el rollup los suma.
+      # Cada miembro hereda el límite del perfil de límites: el rollup los suma.
       assert Decimal.eq?(row.monthly_limit_usd, Decimal.new("600.00"))
       refute row.has_unlimited?
-      # gasto del grupo = 100 + 50
+      # gasto del perfil de límites = 100 + 50
       assert Decimal.eq?(row.monthly_spend_usd, Decimal.new("150.00"))
       assert_in_delta row.monthly_pct, 25.0, 0.01
     end

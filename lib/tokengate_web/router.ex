@@ -94,9 +94,16 @@ defmodule TokengateWeb.Router do
     get "/stats/members/:member_id/*rest", RedirectController, :stats_member
 
     # El tab Créditos se disolvió: el uso de presupuesto vive dentro de
-    # cada dimensión (En vivo, Resumen, Usuarios, Grupos, Servicios).
+    # cada dimensión (En vivo, Resumen, Usuarios, Perfiles de límites, Servicios).
     get "/stats/credits", RedirectController, :stats_credits
     get "/stats/credits/*rest", RedirectController, :stats_credits
+
+    # El hub de stats llamaba «grupos» al sujeto del techo mensual; el
+    # vocabulario es ahora «perfil de límites», así que las URLs viejas
+    # (/stats/groups[...rest]) caen en /stats/profiles[...rest] con la
+    # subruta y la query string preservadas.
+    get "/stats/groups", RedirectController, :stats_profiles
+    get "/stats/groups/*rest", RedirectController, :stats_profiles
 
     # La página de suscripciones desapareció con el modelo: el presupuesto se
     # gobierna con el techo mensual del sujeto y los top-ups. Un bookmark
@@ -104,12 +111,16 @@ defmodule TokengateWeb.Router do
     get "/credit/subscriptions", RedirectController, :credit_subscriptions
     get "/credit/subscriptions/*rest", RedirectController, :credit_subscriptions
 
-    # La sección «Crédito» pasó a llamarse «Presupuesto» y sus rutas viven
-    # bajo /budget/*: los presupuestos mensuales (antes /access/groups) y los
-    # top-ups (antes /credit/topups). La subruta se preserva
-    # (/access/groups/:id/members → /budget/months/:id/members).
+    # La sección «Crédito» pasó a «Presupuesto» y el sujeto del techo mensual
+    # se llama ahora «perfil de límites»: su página vive en /budget/profiles.
+    # Las dos generaciones anteriores de esa URL (/access/groups y
+    # /budget/months) siguen respondiendo con un redirect permanente. La
+    # subruta se preserva (/access/groups/:id/members →
+    # /budget/profiles/:id/members) y la query string también.
     get "/access/groups", RedirectController, :budget_months
     get "/access/groups/*rest", RedirectController, :budget_months
+    get "/budget/months", RedirectController, :budget_months
+    get "/budget/months/*rest", RedirectController, :budget_months
     get "/credit/topups", RedirectController, :budget_topups
     get "/credit/topups/*rest", RedirectController, :budget_topups
   end
@@ -142,8 +153,11 @@ defmodule TokengateWeb.Router do
       live "/stats/models/:model_id", StatsLive, :model
       live "/stats/services", StatsLive, :services
       live "/stats/services/:service_id", ServiceStatsLive
-      live "/stats/groups", StatsLive, :groups
-      live "/stats/groups/:group_id", StatsLive, :group
+      # El sujeto del techo mensual se llama «perfil de límites»: la página
+      # sigue siendo el hub de StatsLive (acciones :groups/:group) y las URLs
+      # viejas /stats/groups[...] redirigen aquí.
+      live "/stats/profiles", StatsLive, :groups
+      live "/stats/profiles/:group_id", StatsLive, :group
       live "/stats/providers", StatsLive, :providers
       live "/stats/providers/:provider_id", StatsLive, :provider
       live "/stats/users", StatsLive, :users
@@ -162,13 +176,13 @@ defmodule TokengateWeb.Router do
       live "/access/users", UsersLive
       live "/access/services", ServicesLive
       # Presupuesto — qué techo mensual tiene cada sujeto y qué crédito extra
-      # lleva encima. Los presupuestos mensuales (antes «subs») son el sujeto
-      # del que cada usuario hereda su techo; los top-ups son crédito de un
-      # solo uso. El gasto ordinario se edita en la página de su sujeto. El
-      # tope diario global (kill-switch de todo el gateway y sus exenciones)
+      # lleva encima. Los perfiles de límites (antes «subs» / «grupos») son el
+      # sujeto del que cada usuario hereda su techo; los top-ups son crédito
+      # de un solo uso. El gasto ordinario se edita en la página de su sujeto.
+      # El tope diario global (kill-switch de todo el gateway y sus exenciones)
       # también vive aquí: es una palanca de presupuesto, no de operaciones.
-      live "/budget/months", GroupsLive
-      live "/budget/months/:id/members", GroupMembersLive
+      live "/budget/profiles", GroupsLive
+      live "/budget/profiles/:id/members", GroupMembersLive
       live "/budget/topups", TopupsLive
       live "/budget/global", GlobalCapLive
       # Operaciones — logs en vivo, webhooks y danger zone.

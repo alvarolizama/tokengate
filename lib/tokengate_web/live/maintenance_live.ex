@@ -303,7 +303,7 @@ defmodule TokengateWeb.MaintenanceLive do
                 <h3 class="font-semibold text-base-content">Eliminar historial de logs</h3>
                 <p class="text-sm text-base-content/60">
                   Borra todas las filas de <code>request_logs</code>.
-                  No afecta usuarios, grupos, models, proveedores ni API keys.
+                  No afecta usuarios, perfiles de límites, models, proveedores ni API keys.
                   Actualmente hay <span class="font-mono font-semibold">{@log_count}</span> registros.
                 </p>
               </div>
@@ -333,7 +333,7 @@ defmodule TokengateWeb.MaintenanceLive do
               todos los registros de <code>request_logs</code>. No se pueden recuperar.
             </p>
             <p class="text-sm text-base-content/70">
-              Usuarios, grupos, models, proveedores y API keys no se ven afectados.
+              Usuarios, perfiles de límites, models, proveedores y API keys no se ven afectados.
             </p>
             <div class="flex gap-2 mt-4 justify-end">
               <button type="button" phx-click="cancel_reset" class="btn btn-ghost btn-sm">

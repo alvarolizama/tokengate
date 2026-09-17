@@ -14,7 +14,7 @@ defmodule Tokengate.Accounts.ApiKeyCache do
      %{member: %GroupMember{group: %Group{}, user: %User{}}, limits: %{concurrency_limit:, rpm_limit:, credit_plan: %{subject:, limit_usd:, unlimited?:, topups: [...]}}, subject_type: "user" | "service"}
 
   El miembro viaja con `:group` y `:user` precargados: `effective_limits/1`
-  resuelve `propio (usuario) || contenedor (grupo) || default`, así que ambos
+  resuelve `propio (usuario) || contenedor (perfil de límites) || default`, así que ambos
   extremos de la regla tienen que estar dentro del entry cacheado.
 
   Caching the limits alongside the member avoids the extra preload/query
@@ -140,9 +140,9 @@ defmodule Tokengate.Accounts.ApiKeyCache do
   Drops every entry of a **user** (across all their memberships).
 
   El plan de gasto del usuario (su límite y SUS top-ups) viaja en cada entrada
-  de sus keys: un top-up nuevo o revocado debe tumbar todas. Con un grupo por
+  de sus keys: un top-up nuevo o revocado debe tumbar todas. Con un perfil de límites por
   usuario basta con `invalidate_group/1`, pero el plan es del usuario, no del
-  grupo — invalidar por usuario es lo correcto.
+  perfil de límites — invalidar por usuario es lo correcto.
   """
   @spec invalidate_user(term()) :: :ok
   def invalidate_user(user_id) do

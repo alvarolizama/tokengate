@@ -317,15 +317,15 @@ defmodule TokengateWeb.Layouts do
             </.sidebar_section>
 
             <.sidebar_section id="sidebar-section-budget" label={gettext("Budget")}>
-              <%!-- Los presupuestos mensuales con el sujeto del que cada usuario
+              <%!-- Los perfiles de límites son el sujeto del que cada usuario
                    hereda su techo de gasto; los top-ups son crédito extra de un
                    solo uso, y el tope diario global es el kill-switch que corta
                    TODO el gateway (con sus exclusiones). Por eso la sección es
                    Presupuesto, no Acceso ni Operaciones. --%>
               <.sidebar_link
                 current_path={@current_path}
-                href={~p"/budget/months"}
-                label={gettext("Monthly budgets")}
+                href={~p"/budget/profiles"}
+                label={gettext("Perfiles de límites")}
                 icon="hero-user-group"
               />
               <.sidebar_link
@@ -425,8 +425,8 @@ defmodule TokengateWeb.Layouts do
   end
 
   # A link is active on its own route and on any of its sub-routes, so
-  # drill-downs keep the parent entry lit (e.g. /budget/months/42/members
-  # highlights Monthly budgets).
+  # drill-downs keep the parent entry lit (e.g. /budget/profiles/42/members
+  # highlights Perfiles de límites).
   defp active_path?(nil, _href), do: false
 
   defp active_path?(path, href) when is_binary(path) and is_binary(href) do

@@ -73,7 +73,7 @@ defmodule TokengateWeb.SortHeaderAlignTest do
 
     numeric_fields = ~w(request_count cost_usd prompt_tokens completion_tokens avg_tps)
 
-    for path <- ["/stats/models", "/stats/groups", "/stats/users", "/stats/services"] do
+    for path <- ["/stats/models", "/stats/profiles", "/stats/users", "/stats/services"] do
       {:ok, view, _html} = live(conn, path)
 
       # Stats load async (assign_async) — sync with the LiveView until done.

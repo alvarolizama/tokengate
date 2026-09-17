@@ -2456,7 +2456,7 @@ defmodule TokengateWeb.ProxyController do
   defp error_details({:budget_exceeded, %{layer: :subject}}),
     do: {402, "billing_error", "budget_exceeded", "Monthly spend limit exceeded"}
 
-  # «Sin crédito»: no hay límite mensual (ni propio ni del grupo), no está
+  # «Sin crédito»: no hay límite mensual (ni propio ni del perfil de límites), no está
   # marcado ilimitado y no hay top-ups vigentes. Copy propio — NO comparte el
   # mensaje del tope global ni el del límite agotado.
   defp error_details({:budget_exceeded, %{layer: :no_credit}}),
