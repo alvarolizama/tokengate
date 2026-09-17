@@ -1015,6 +1015,22 @@ defmodule TokengateWeb.UsersLive do
               label="Estado"
               options={[{"Activo", "active"}, {"Suspendido", "suspended"}]}
             />
+            <%!-- Límites propios del usuario: primer eslabón de la regla
+                 `propio || contenedor || default`. Vacío = hereda del grupo. --%>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <.input
+                field={@form[:default_concurrency_limit]}
+                type="number"
+                label="Concurrencia"
+                hint="Límite absoluto; vacío = hereda del grupo."
+              />
+              <.input
+                field={@form[:default_rpm_limit]}
+                type="number"
+                label="RPM"
+                hint="Límite absoluto; vacío = hereda del grupo."
+              />
+            </div>
             <%!-- Select único: mover de sub reemplaza la anterior (la sub vieja
                  pierde key y logs del usuario en cascada). El valor vigente sale
                  de `editing_user_sub_id`: el changeset no trae params de membresía. --%>

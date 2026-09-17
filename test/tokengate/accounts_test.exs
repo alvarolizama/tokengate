@@ -502,7 +502,7 @@ defmodule Tokengate.AccountsTest do
   # ---------------------------------------------------------------------------
 
   describe "effective_limits/1" do
-    test "returns group defaults when no member extras are set" do
+    test "returns group defaults when the user has no own limits (propio || contenedor)" do
       group = group_fixture()
       user = user_fixture()
 
@@ -514,26 +514,77 @@ defmodule Tokengate.AccountsTest do
       assert limits.rpm_limit == 120
     end
 
-    test "adds extra_concurrency to group default" do
+    test "the user's own concurrency wins over the group default (absolute, never added)" do
       group = group_fixture()
-      user = user_fixture()
+      user = user_fixture(%{"default_concurrency_limit" => 15})
 
-      {:ok, tm} =
-        Accounts.create_group_member(
-          valid_group_member_attrs(user, group, %{"extra_concurrency" => 5})
-        )
+      {:ok, tm} = Accounts.create_group_member(valid_group_member_attrs(user, group))
 
+      # 15 — NO 15 + 10: el default del grupo es contenedor, no sumando.
       assert Accounts.effective_limits(tm).concurrency_limit == 15
     end
 
-    test "adds extra_rpm to group default" do
+    test "the user's own rpm wins over the group default (absolute, never added)" do
+      group = group_fixture()
+      user = user_fixture(%{"default_rpm_limit" => 160})
+
+      {:ok, tm} = Accounts.create_group_member(valid_group_member_attrs(user, group))
+
+      # 160 — NO 160 + 120: el default del grupo es contenedor, no sumando.
+      assert Accounts.effective_limits(tm).rpm_limit == 160
+      assert Accounts.effective_limits(tm).concurrency_limit == 10
+    end
+
+    test "a member without preloads resolves propio || contenedor (preloads :user)" do
+      group = group_fixture()
+      user = user_fixture(%{"default_rpm_limit" => 200})
+
+      {:ok, tm} = Accounts.create_group_member(valid_group_member_attrs(user, group))
+
+      # Sin precargar: la única regla tiene que traer dueño y contenedor.
+      assert %Ecto.Association.NotLoaded{} = tm.user
+      assert %Ecto.Association.NotLoaded{} = tm.group
+
+      limits = Accounts.effective_limits(tm)
+
+      assert limits.rpm_limit == 200
+      assert limits.concurrency_limit == 10
+    end
+
+    test "editing the user's own limits moves the member's effective limits" do
       group = group_fixture()
       user = user_fixture()
 
-      {:ok, tm} =
-        Accounts.create_group_member(valid_group_member_attrs(user, group, %{"extra_rpm" => 40}))
+      {:ok, tm} = Accounts.create_group_member(valid_group_member_attrs(user, group))
 
-      assert Accounts.effective_limits(tm).rpm_limit == 160
+      assert Accounts.effective_limits(tm).concurrency_limit == 10
+      assert Accounts.effective_limits(tm).rpm_limit == 120
+
+      {:ok, _user} =
+        Accounts.admin_update_user(user, %{
+          "default_concurrency_limit" => 40,
+          "default_rpm_limit" => 400
+        })
+
+      limits = Accounts.effective_limits(tm)
+
+      assert limits.concurrency_limit == 40
+      assert limits.rpm_limit == 400
+    end
+
+    test "a member without own limits or group default falls back to the module default" do
+      # Contenedor sin defaults (fila construida a mano): el último eslabón.
+      group = %Group{
+        id: Ecto.UUID.generate(),
+        default_concurrency_limit: nil,
+        default_rpm_limit: nil
+      }
+
+      user = %User{id: Ecto.UUID.generate()}
+
+      member = %GroupMember{id: Ecto.UUID.generate(), group: group, user: user}
+
+      assert Accounts.effective_limits(member) == %{concurrency_limit: 5, rpm_limit: 60}
     end
 
     test "service virtual member uses the service's absolute limits" do

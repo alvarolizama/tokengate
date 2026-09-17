@@ -133,8 +133,11 @@ defmodule TokengateWeb.GroupMembersLiveTest do
       )
 
     assert member != nil
-    assert member.extra_concurrency == nil
-    assert member.extra_rpm == nil
+    # La membresía ya no guarda límites propios: el effective sale del usuario
+    # (`propio || contenedor || default`) y, sin propios, hereda de la sub.
+    refute Map.has_key?(member, :extra_concurrency)
+    refute Map.has_key?(member, :extra_rpm)
+    assert Repo.get!(Tokengate.Accounts.User, new_user.id).default_concurrency_limit == nil
 
     api_key = Repo.get_by(Tokengate.Accounts.ApiKey, group_member_id: member.id)
     assert api_key == nil
@@ -339,5 +342,38 @@ defmodule TokengateWeb.GroupMembersLiveTest do
     assert has_element?(view, "#member-details-#{member.id}")
     refute has_element?(view, "#user-keys-#{member.id}")
     refute has_element?(view, "#user-key-form-#{member.id}")
+  end
+
+  # La columna «Límites» muestra el EFECTIVO del miembro (lo que el proxy
+  # aplica), no el default crudo del grupo: propio del usuario primero.
+  test "the Límites column shows the member's effective limits, badged on own override", %{
+    conn: conn
+  } do
+    %{group: group, owner: owner, member: member} = group_with_member(%{})
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, group_url(group))
+
+    cell = view |> element("#limits-#{member.id}") |> render()
+
+    # Sin propios: el miembro hereda el default del grupo.
+    assert cell =~ "5"
+    assert cell =~ "60"
+    refute cell =~ "propio"
+
+    {:ok, _owner} =
+      Accounts.admin_update_user(owner, %{
+        "default_concurrency_limit" => 12,
+        "default_rpm_limit" => 144
+      })
+
+    {:ok, view, _html} = live(conn, group_url(group))
+    cell = view |> element("#limits-#{member.id}") |> render()
+
+    # Con propios: mandan los del usuario y se marcan como override.
+    assert cell =~ "12"
+    assert cell =~ "144"
+    assert cell =~ "propio"
   end
 end

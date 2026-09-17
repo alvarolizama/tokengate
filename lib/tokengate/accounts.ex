@@ -174,6 +174,7 @@ defmodule Tokengate.Accounts do
     user
     |> User.admin_update_changeset(attrs)
     |> Repo.update()
+    |> invalidate_user_auth_cache(user.id)
   end
 
   @doc """
@@ -188,7 +189,9 @@ defmodule Tokengate.Accounts do
   Returns `{:ok, user}` or `{:error, changeset}`.
   """
   def delete_user(%User{} = user) do
-    Repo.delete(user)
+    user
+    |> Repo.delete()
+    |> invalidate_user_auth_cache(user.id)
   end
 
   def change_user(%User{} = user, attrs \\ %{}) do
@@ -223,6 +226,7 @@ defmodule Tokengate.Accounts do
     user
     |> User.admin_update_changeset(attrs)
     |> Repo.update()
+    |> invalidate_user_auth_cache(user.id)
   end
 
   @doc """
@@ -1128,34 +1132,40 @@ defmodule Tokengate.Accounts do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Computes the effective per-request limits for a group member: group defaults
-  plus member overrides.
+  Computes the effective per-request limits for a **sujeto** with one rule,
+  the same for usuario and servicio:
 
-  - `concurrency_limit`: group default + member's `extra_concurrency` (when not
-    nil). The group default is always present (defaults to 5).
-  - `rpm_limit`: group's `default_rpm_limit` + member's `extra_rpm` (when not
-    nil). The group default is always present (defaults to 60).
+      propio || contenedor || default
+
+  - **usuario (miembro)**: `user.default_concurrency_limit` /
+    `user.default_rpm_limit` (propio) → `group.default_*` (contenedor) →
+    default del módulo (5 conc / 60 rpm).
+  - **servicio**: `service.concurrency_limit` / `service.rpm_limit` (propio)
+    → default del módulo (5/60). Un servicio no tiene contenedor.
+
+  Los límites son **absolutos, nunca aditivos**: el extra por miembro que se
+  sumaba al default del grupo ya no existe (migración
+  `fold_member_extras_into_user` lo plegó al default propio del usuario).
 
   Spending is **not** here: budgets are credit subscriptions (`Tokengate.Credits`),
   enforced separately in the proxy.
 
   Service virtual members (GroupMember with the backing Service's id) are
   resolved to their Service limits so the proxy controller can use a single
-  code path. Services are independent of groups: their limits are absolute
-  (defaults 5/60 when nil).
+  code path.
   """
   # Service virtual member — resolve the backing service for its absolute
   # limits.
   def effective_limits(%GroupMember{group: nil, id: id}) do
     case get_service(id) do
       %Service{} = service -> effective_limits(service)
-      nil -> %{concurrency_limit: 5, rpm_limit: 60}
+      nil -> default_limits()
     end
   end
 
-  # Service virtual member with its real group loaded: the extras live on
-  # the backing Service, not on the virtual member's nil extra fields, so
-  # delegate to the Service branch.
+  # Service virtual member with its real group loaded: the limits live on
+  # the backing Service, not on the virtual member, so delegate to the
+  # Service branch.
   def effective_limits(%GroupMember{service_name: name} = member)
       when is_binary(name) do
     case get_service(member.id) do
@@ -1164,35 +1174,65 @@ defmodule Tokengate.Accounts do
     end
   end
 
+  # Miembro sin precargar: se traen contenedor y dueño juntos.
   def effective_limits(%GroupMember{group: %Ecto.Association.NotLoaded{}} = group_member) do
-    group_member = Repo.preload(group_member, [:group])
+    group_member = Repo.preload(group_member, [:group, :user])
     effective_limits(group_member)
   end
 
-  def effective_limits(%GroupMember{} = group_member) do
-    group = group_member.group
+  def effective_limits(%GroupMember{user: %Ecto.Association.NotLoaded{}} = group_member) do
+    group_member = Repo.preload(group_member, [:user])
+    effective_limits(group_member)
+  end
 
+  # Miembro real: `propio` del usuario, si no `contenedor` del grupo, si no el
+  # default del módulo. `member_for_key/1` ya preloardea ambos.
+  def effective_limits(%GroupMember{} = group_member) do
     %{
       concurrency_limit:
-        combine_integer(group.default_concurrency_limit, group_member.extra_concurrency),
-      rpm_limit: combine_integer(group.default_rpm_limit, group_member.extra_rpm)
+        resolve_limit(
+          own_limit(group_member.user, :default_concurrency_limit),
+          container_limit(group_member.group, :default_concurrency_limit),
+          :concurrency_limit
+        ),
+      rpm_limit:
+        resolve_limit(
+          own_limit(group_member.user, :default_rpm_limit),
+          container_limit(group_member.group, :default_rpm_limit),
+          :rpm_limit
+        )
     }
   end
 
   def effective_limits(%Service{} = service) do
     %{
-      concurrency_limit: absolute_limit(service.concurrency_limit, :concurrency_limit),
-      rpm_limit: absolute_limit(service.rpm_limit, :rpm_limit)
+      concurrency_limit: resolve_limit(service.concurrency_limit, nil, :concurrency_limit),
+      rpm_limit: resolve_limit(service.rpm_limit, nil, :rpm_limit)
     }
   end
 
-  # Service sin límite propio → default del schema (5 conc / 60 rpm).
-  defp absolute_limit(nil, key), do: Map.fetch!(Service.default_limits(), key)
-  defp absolute_limit(value, _key) when is_integer(value), do: value
+  # La regla única: propio, si no contenedor, si no default del módulo.
+  defp resolve_limit(own, _container, _key) when is_integer(own), do: own
 
-  defp combine_integer(base, nil), do: base
-  defp combine_integer(nil, extra), do: extra
-  defp combine_integer(base, extra), do: base + extra
+  defp resolve_limit(nil, container, _key) when is_integer(container), do: container
+
+  defp resolve_limit(nil, nil, key), do: Map.fetch!(Service.default_limits(), key)
+
+  # `:user` precargado → sus defaults propios; nil/NotLoaded → sin propio.
+  defp own_limit(%User{} = user, field), do: Map.get(user, field)
+  defp own_limit(_user, _field), do: nil
+
+  # `:group` precargado → sus defaults; nil/NotLoaded → sin contenedor.
+  defp container_limit(%Group{} = group, field), do: Map.get(group, field)
+  defp container_limit(_group, _field), do: nil
+
+  # Sujeto sin propio ni contenedor: solo el default del módulo.
+  defp default_limits do
+    %{
+      concurrency_limit: Map.fetch!(Service.default_limits(), :concurrency_limit),
+      rpm_limit: Map.fetch!(Service.default_limits(), :rpm_limit)
+    }
+  end
 
   # ---------------------------------------------------------------------------
   # API key generation helpers
@@ -1291,6 +1331,17 @@ defmodule Tokengate.Accounts do
   end
 
   defp invalidate_group_auth_cache(result, _group_id), do: result
+
+  # Los defaults propios del usuario (conc/RPM) son el primer eslabón de
+  # `effective_limits/1`, y ese map viaja cacheado en cada entry de sus API
+  # keys: editar el usuario debe tumbar todas sus entradas — no basta con la
+  # invalidación por grupo, que solo cubre el contenedor.
+  defp invalidate_user_auth_cache({:ok, _} = result, user_id) do
+    safe_invalidate(fn -> ApiKeyCache.invalidate_user(user_id) end)
+    result
+  end
+
+  defp invalidate_user_auth_cache(result, _user_id), do: result
 
   defp tap_invalidate_api_key({:ok, _} = result, %ApiKey{} = key) do
     safe_invalidate(fn ->

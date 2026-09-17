@@ -144,8 +144,16 @@ defmodule TokengateWeb.GroupMembersLive do
     # Usage tiers for this group (last 30 days)
     usage_tiers = Rollup.member_usage_tiers(group.id, from: days_ago(30))
 
+    # Límites EFECTIVOS por miembro — la misma regla única que el proxy usa
+    # (`propio del usuario || default del grupo || default del módulo`).
+    # `@group` ya está en memoria y `:user` viene preloadeado por
+    # `list_group_members_for_group/1`: sin query extra ni N+1.
+    member_limits =
+      Map.new(members, fn m -> {m.id, Accounts.effective_limits(%{m | group: group})} end)
+
     socket
     |> assign(:members, members)
+    |> assign(:member_limits, member_limits)
     |> assign(:member_budgets, Map.new(member_budgets, fn b -> {b.member_id, b} end))
     |> assign(:members_empty?, members == [])
     |> assign(:org_models, org_alias_ids)
@@ -556,6 +564,9 @@ defmodule TokengateWeb.GroupMembersLive do
               <tbody>
                 <tr :for={member <- @members} id={"members-#{member.id}"} class="align-top">
                   <% mb = Map.get(@member_budgets, member.id, %{monthly_spend: Decimal.new(0)}) %>
+                  <% limits = Map.fetch!(@member_limits, member.id) %>
+                  <% own_conc? = not is_nil(member.user.default_concurrency_limit) %>
+                  <% own_rpm? = not is_nil(member.user.default_rpm_limit) %>
                   <td>
                     <p class="font-medium text-sm">{member.user.email}</p>
                     <p class="text-xs text-base-content/50">{member.user.name}</p>
@@ -563,14 +574,28 @@ defmodule TokengateWeb.GroupMembersLive do
                       <span class="badge badge-xs badge-ghost capitalize">{member.status}</span>
                     </div>
                   </td>
-                  <td class="text-xs whitespace-nowrap">
-                    <p>
+                  <td class="text-xs whitespace-nowrap" id={"limits-#{member.id}"}>
+                    <p class="flex items-center gap-1">
                       <span class="text-base-content/50">Conc.</span>
-                      {@group.default_concurrency_limit}
+                      {limits.concurrency_limit}
+                      <span
+                        :if={own_conc?}
+                        class="badge badge-xs badge-accent"
+                        title="Override propio del usuario sobre el default del grupo"
+                      >
+                        propio
+                      </span>
                     </p>
-                    <p>
+                    <p class="flex items-center gap-1">
                       <span class="text-base-content/50">RPM</span>
-                      {@group.default_rpm_limit}
+                      {limits.rpm_limit}
+                      <span
+                        :if={own_rpm?}
+                        class="badge badge-xs badge-accent"
+                        title="Override propio del usuario sobre el default del grupo"
+                      >
+                        propio
+                      </span>
                     </p>
                   </td>
                   <td>

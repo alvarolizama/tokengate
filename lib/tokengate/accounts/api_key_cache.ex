@@ -5,13 +5,17 @@ defmodule Tokengate.Accounts.ApiKeyCache do
   The proxy hot path (`TokengateWeb.Plugs.ApiAuth`) used to hit Postgres on
   every request: member lookup with preloads (group, user, api_key) plus the
   service-key fallback. This cache stores the fully-assembled "auth entry"
-  — the resolved `GroupMember` (or virtual service member) together with its
-  `effective_limits` — keyed by `sha256(presented_token)`, so authenticated
-  requests skip the database entirely.
+   — the resolved `GroupMember` (or virtual service member) together with its
+   `effective_limits` — keyed by `sha256(presented_token)`, so authenticated
+   requests skip the database entirely.
 
   ## Entry shape
 
-      %{member: %GroupMember{}, limits: %{concurrency_limit:, rpm_limit:, credit_plan: %{subject:, limit_usd:, unlimited?:, topups: [...]}}, subject_type: "user" | "service"}
+     %{member: %GroupMember{group: %Group{}, user: %User{}}, limits: %{concurrency_limit:, rpm_limit:, credit_plan: %{subject:, limit_usd:, unlimited?:, topups: [...]}}, subject_type: "user" | "service"}
+
+  El miembro viaja con `:group` y `:user` precargados: `effective_limits/1`
+  resuelve `propio (usuario) || contenedor (grupo) || default`, así que ambos
+  extremos de la regla tienen que estar dentro del entry cacheado.
 
   Caching the limits alongside the member avoids the extra preload/query
   `Accounts.effective_limits/1` performs for service-backed members.
@@ -28,6 +32,10 @@ defmodule Tokengate.Accounts.ApiKeyCache do
     * membership/service/group edits (status, limits) — `update_group_member/1`,
       `update_service/2`, `update_group/2` invalidate by id (group invalidates
       every member of the group).
+    * user edits/deletion — `update_user/2`, `admin_update_user/2`,
+      `delete_user/1` invalidate by id, which drops every entry of that user
+      across all their memberships: los defaults propios del usuario son el
+      primer eslabón de `effective_limits/1` y el plan de gasto es suyo.
     * membership/service/group deletion — `delete_group_member/1`,
       `delete_service/1`, `delete_group/1` invalidate by id (group invalidates
       every member of the group).

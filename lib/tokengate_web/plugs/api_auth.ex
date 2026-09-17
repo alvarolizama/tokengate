@@ -73,8 +73,6 @@ defmodule TokengateWeb.Plugs.ApiAuth do
       id: service.id,
       group_id: nil,
       user_id: nil,
-      extra_concurrency: nil,
-      extra_rpm: nil,
       status: "active",
       service_name: service.name,
       # Preloaded associations (virtual)

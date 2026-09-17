@@ -388,6 +388,46 @@ defmodule TokengateWeb.UsersLiveTest do
     assert updated.global_role == "admin"
   end
 
+  test "admin can set a user's own concurrency/RPM limits from the edit form", %{conn: conn} do
+    %{user: admin, password: admin_password} = register("admin")
+    %{user: target} = register("user")
+    conn = login(conn, admin, admin_password)
+    {:ok, view, _html} = live(conn, ~p"/access/users")
+
+    view |> element("#edit-#{target.id}") |> render_click()
+
+    # Los límites propios del usuario son el primer eslabón de la regla única
+    # `propio || contenedor || default`: el form de edición los expone.
+    assert has_element?(view, "#user-edit-form input[name='user[default_concurrency_limit]']")
+    assert has_element?(view, "#user-edit-form input[name='user[default_rpm_limit]']")
+
+    html =
+      view
+      |> form("#user-edit-form", %{
+        user: %{
+          name: target.name,
+          global_role: "user",
+          status: "active",
+          default_concurrency_limit: "12",
+          default_rpm_limit: "144"
+        }
+      })
+      |> render_submit()
+
+    assert html =~ "Usuario actualizado"
+
+    updated = Accounts.get_user!(target.id)
+    assert updated.default_concurrency_limit == 12
+    assert updated.default_rpm_limit == 144
+
+    # El form los vuelve a leer del usuario (no son un input de un solo uso).
+    view |> element("#edit-#{target.id}") |> render_click()
+
+    assert view
+           |> element("#user-edit-form input[name='user[default_concurrency_limit]']")
+           |> render() =~ ~s(value="12")
+  end
+
   ## Suspend/activate -------------------------------------------------------
 
   test "admin can suspend a user", %{conn: conn} do
