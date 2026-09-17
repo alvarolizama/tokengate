@@ -405,31 +405,26 @@ defmodule Tokengate.BudgetsTest do
 
     test "el daily sí sigue el día local del visor" do
       member = member_fixture()
-      # Zona con offset NEGATIVO: su medianoche cae DESPUÉS de la de UTC, así
-      # que las dos ventanas diarias nunca coinciden del todo — el test
-      # discrimina a cualquier hora.
-      tz = "America/Los_Angeles"
+      # Zona con offset POSITIVO: su medianoche cae ANTES de la de UTC, así que
+      # su día arranca unas horas antes del día UTC. La frontera así construida
+      # queda siempre en el pasado (a cualquier hora del día), a diferencia de
+      # anclar a la medianoche local futura.
+      tz = "Asia/Tokyo"
+      tokyo_start = Periods.start_of_day_utc(tz)
 
-      # 00:01 UTC de hoy: dentro del día UTC, fuera del día de Los Ángeles
-      # (que aún no ha empezado).
-      log_request(
-        member.id,
-        DateTime.add(Periods.start_of_day_utc("Etc/UTC"), 60, :second),
-        "1.50"
-      )
+      # 60s dentro del día de Tokio: en su ventana diaria, pero ANTERIOR al
+      # arranque del día UTC (que empieza más tarde).
+      log_request(member.id, DateTime.add(tokyo_start, 60, :second), "1.50")
 
+      tokyo = Budgets.spend_by_member_ids([member.id], tz)
       utc = Budgets.spend_by_member_ids([member.id], "Etc/UTC")
-      la = Budgets.spend_by_member_ids([member.id], tz)
 
-      # El mapa solo trae miembros con gasto en la ventana; los callers lo
-      # leen como `get_in(...) || Decimal.new(0)` (sin entrada = 0).
-      assert Decimal.eq?(Map.get(utc.daily, member.id, Decimal.new(0)), Decimal.new("1.50"))
-      assert Decimal.eq?(Map.get(la.daily, member.id, Decimal.new(0)), Decimal.new("0"))
+      # El visor de Tokio ve el log dentro de su día…
+      assert Decimal.eq?(Map.get(tokyo.daily, member.id, Decimal.new(0)), Decimal.new("1.50"))
 
-      # …y el log del inicio de SU día sí entra en su ventana.
-      log_request(member.id, DateTime.add(Periods.start_of_day_utc(tz), 60, :second), "2.00")
-      la2 = Budgets.spend_by_member_ids([member.id], tz)
-      assert Decimal.eq?(Map.get(la2.daily, member.id, Decimal.new(0)), Decimal.new("2.00"))
+      # …y el visor UTC no: prueba que la ventana diaria sigue al visor y no al
+      # reloj UTC.
+      assert Decimal.eq?(Map.get(utc.daily, member.id, Decimal.new(0)), Decimal.new("0"))
     end
 
     test "list_member_budgets lee el gasto mensual del mes UTC" do

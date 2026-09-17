@@ -1,8 +1,12 @@
 defmodule TokengateWeb.MonitoringLive do
   @moduledoc false
   use TokengateWeb, :live_view
-  alias Tokengate.{Accounts, Logs}
+  import Ecto.Query, warn: false
+
+  alias Tokengate.{Accounts, Logs, Repo}
+  alias Tokengate.Accounts.ApiKey
   alias Tokengate.Logs.Inflight
+  alias Tokengate.Logs.RequestLog
   alias Tokengate.Providers
 
   @page_size 50
@@ -36,6 +40,7 @@ defmodule TokengateWeb.MonitoringLive do
       |> assign(:pending, [])
       |> assign(:model_options, model_options())
       |> assign(:group_options, group_options())
+      |> assign(:api_key_options, api_key_options())
       |> assign(:is_admin, user.global_role == "admin")
       |> require_admin_hook()
 
@@ -173,6 +178,7 @@ defmodule TokengateWeb.MonitoringLive do
     group_id = filters["group_id"]
     subject_type = filters["subject_type"]
     error_reason = filters["error_reason"]
+    api_key_id = filters["api_key_id"]
 
     agent in ["", nil, log.agent_type] and
       status_class_match?(log.status_code, status_class) and
@@ -181,8 +187,13 @@ defmodule TokengateWeb.MonitoringLive do
       group_id_match?(log, group_id) and
       subject_type_match?(log, subject_type) and
       error_reason_match?(log, error_reason) and
+      api_key_match?(log, api_key_id) and
       date_range_match?(log.inserted_at, filters["from"], filters["to"], timezone)
   end
+
+  defp api_key_match?(_log, ""), do: true
+  defp api_key_match?(_log, nil), do: true
+  defp api_key_match?(log, api_key_id), do: log.api_key_id == api_key_id
 
   defp group_id_match?(_log, ""), do: true
   defp group_id_match?(_log, nil), do: true
@@ -247,6 +258,7 @@ defmodule TokengateWeb.MonitoringLive do
     |> maybe_put_filter(filters, "group_id", :group_id)
     |> maybe_put_filter(filters, "streaming", :streaming)
     |> maybe_put_filter(filters, "error_reason", :error_reason)
+    |> maybe_put_filter(filters, "api_key_id", :api_key_id)
   end
 
   defp maybe_put_filter(acc, filters, key, field) do
@@ -375,6 +387,31 @@ defmodule TokengateWeb.MonitoringLive do
     |> Enum.sort_by(&elem(&1, 0))
   end
 
+  # Solo las keys vivas que ya aparecen en los logs: el selector no lista keys
+  # sin actividad y no paga un scan de toda la tabla api_keys.
+  defp api_key_options do
+    used_ids =
+      Repo.all(
+        from rl in RequestLog,
+          where: not is_nil(rl.api_key_id),
+          distinct: true,
+          select: rl.api_key_id
+      )
+
+    labels =
+      Repo.all(
+        from ak in ApiKey,
+          where: ak.id in ^used_ids,
+          select: {ak.id, ak.label, ak.key_prefix}
+      )
+
+    display_by_id = Map.new(labels, fn {id, label, prefix} -> {id, label || prefix} end)
+
+    used_ids
+    |> Enum.map(fn id -> {Map.get(display_by_id, id) || id, id} end)
+    |> Enum.sort_by(&elem(&1, 0))
+  end
+
   defp date_range_match?(_dt, "", "", _timezone), do: true
   defp date_range_match?(_dt, nil, nil, _timezone), do: true
 
@@ -494,7 +531,8 @@ defmodule TokengateWeb.MonitoringLive do
       "model_search" => "",
       "group_id" => "",
       "subject_type" => "",
-      "error_reason" => ""
+      "error_reason" => "",
+      "api_key_id" => ""
     }
   end
 
@@ -512,6 +550,7 @@ defmodule TokengateWeb.MonitoringLive do
       |> maybe_put_group_id(form_filters["group_id"])
       |> maybe_put(:subject_type, form_filters["subject_type"])
       |> maybe_put(:error_reason, form_filters["error_reason"])
+      |> maybe_put(:api_key_id, form_filters["api_key_id"])
       |> maybe_put(:from, parse_from_date(form_filters["from"], timezone))
       |> maybe_put(:to, parse_to_date(form_filters["to"], timezone))
       |> maybe_put_scope(socket.assigns[:scope_member_ids])
@@ -595,6 +634,7 @@ defmodule TokengateWeb.MonitoringLive do
       socket
       |> assign(:filters, filter_params)
       |> assign(:form, to_form(filter_params, as: :filter))
+      |> assign(:api_key_options, api_key_options())
       |> assign(:cursor, nil)
       |> assign(:top_models_cache, nil)
       |> assign(:top_users_cache, nil)
@@ -712,6 +752,32 @@ defmodule TokengateWeb.MonitoringLive do
 
   defp provider_name(%{provider: %{name: name}}), do: name
   defp provider_name(_), do: "—"
+
+  # "API Key": label de la key viva (join por `api_key_id`), si no el prefijo
+  # histórico (`api_key_prefix`), que es lo único que tienen las filas viejas.
+  # Las opciones del selector ya traen {display, id} de las keys con logs, así
+  # que el label sale de ahí sin una query por fila.
+  defp api_key_display(%{api_key_id: id}, options) when is_binary(id) do
+    case api_key_option_display(options, id) do
+      label when is_binary(label) and label != "" -> label
+      _ -> api_key_display_from_prefix(id)
+    end
+  end
+
+  defp api_key_display(log, _options), do: api_key_display_from_prefix(log)
+
+  # Las filas viejas no tienen `api_key_id`: se cae al prefijo histórico.
+  defp api_key_display_from_prefix(%{api_key_prefix: prefix})
+       when is_binary(prefix) and prefix != "",
+       do: prefix
+
+  defp api_key_display_from_prefix(%{api_key_prefix: prefix}) when prefix != nil,
+    do: to_string(prefix)
+
+  defp api_key_display_from_prefix(_), do: "—"
+
+  defp api_key_option_display(options, id),
+    do: Map.new(options, &{elem(&1, 1), elem(&1, 0)})[id] || ""
 
   defp prov_key_display(%{credential_name: name, provider_key_prefix: prefix})
        when is_binary(name) and name != "" and is_binary(prefix) and prefix != "",
@@ -856,7 +922,7 @@ defmodule TokengateWeb.MonitoringLive do
           for={@form}
           id="logs-filter-form"
           phx-change="filter"
-          class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-8 gap-3"
+          class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-9 gap-3"
         >
           <.input
             field={@form[:status_class]}
@@ -892,6 +958,13 @@ defmodule TokengateWeb.MonitoringLive do
             prompt="Todos"
             options={[{"Usuario", "user"}, {"Servicio", "service"}]}
             label="Tipo"
+          />
+          <.input
+            field={@form[:api_key_id]}
+            type="select"
+            prompt="Todas"
+            options={@api_key_options}
+            label="API Key"
           />
           <.input
             field={@form[:error_reason]}
@@ -1047,7 +1120,7 @@ defmodule TokengateWeb.MonitoringLive do
                   <td class="text-sm">{member_display(log)}</td>
                   <td class="text-sm">{member_group(log)}</td>
                   <td class="text-sm">{log.client_agent || "—"}</td>
-                  <td class="text-sm">{log.api_key_prefix || "—"}</td>
+                  <td class="text-sm">{api_key_display(log, @api_key_options)}</td>
                   <td class="text-sm border-r border-base-200">{provider_name(log)}</td>
                   <td class="text-sm">{prov_key_display(log)}</td>
                   <td class="text-sm">—</td>
@@ -1089,7 +1162,7 @@ defmodule TokengateWeb.MonitoringLive do
                   <td class="text-sm" title={log.agent_type}>
                     {log.client_agent || "—"}
                   </td>
-                  <td class="text-sm">{log.api_key_prefix || "—"}</td>
+                  <td class="text-sm">{api_key_display(log, @api_key_options)}</td>
                   <td class="text-sm border-r border-base-200">{provider_name(log)}</td>
                   <td
                     class="text-sm"

@@ -14,10 +14,13 @@ defmodule TokengateWeb.StatsExportController do
   """
 
   use TokengateWeb, :controller
+  import Ecto.Query
   alias Tokengate.Accounts
+  alias Tokengate.Accounts.ApiKey
   alias Tokengate.Logs
   alias Tokengate.Metrics.Rollup
   alias Tokengate.Periods
+  alias Tokengate.Repo
 
   def export(conn, params) do
     user = conn.assigns[:current_user]
@@ -254,12 +257,13 @@ defmodule TokengateWeb.StatsExportController do
       |> Map.put(:group_member_ids, Accounts.scope_member_ids(user))
 
     rows = Logs.list_logs_for_export(filters)
+    key_labels = api_key_labels(rows)
 
     header =
       ~w(fecha estado modelo proveedor usuario grupo api_key error_reason prov_status latencia_ms costo_usd)
 
     csv =
-      [header | Enum.map(rows, &row_to_csv_error/1)]
+      [header | Enum.map(rows, &row_to_csv_error(&1, key_labels))]
       |> Enum.map(&Enum.join(&1, ","))
       |> Enum.join("\n")
 
@@ -276,19 +280,44 @@ defmodule TokengateWeb.StatsExportController do
       |> Map.put(:group_member_ids, Accounts.scope_member_ids(user))
 
     rows = Logs.list_logs_for_export(filters)
+    key_labels = api_key_labels(rows)
 
     header =
       ~w(fecha estado modelo usuario grupo agente api_key proveedor prov_key prov_status error_reason error_message streaming think effort tokens_in tokens_out cache_read cache_creation latencia_ms ttft_ms costo_usd)
 
     csv =
-      [header | Enum.map(rows, &row_to_csv_log/1)]
+      [header | Enum.map(rows, &row_to_csv_log(&1, key_labels))]
       |> Enum.map(&Enum.join(&1, ","))
       |> Enum.join("\n")
 
     {"logs_#{Periods.local_today(timezone)}.csv", csv}
   end
 
-  defp row_to_csv_log(log) do
+  # La columna `api_key` nombra la key que autenticó el request: el label de la
+  # key viva cuando `api_key_id` está seteado, y el prefijo histórico cuando el
+  # log viene de antes de que se guardara el id. Una sola query por lote de ids
+  # — nunca una por fila.
+  defp api_key_labels(rows) do
+    rows
+    |> Enum.map(& &1.api_key_id)
+    |> Enum.reject(&is_nil/1)
+    |> Enum.uniq()
+    |> api_key_labels_by_id()
+  end
+
+  defp api_key_labels_by_id([]), do: %{}
+
+  defp api_key_labels_by_id(ids) do
+    Repo.all(from ak in ApiKey, where: ak.id in ^ids, select: {ak.id, ak.label, ak.key_prefix})
+    |> Map.new(fn {id, label, prefix} -> {id, label || prefix || id} end)
+  end
+
+  defp csv_api_key(log, key_labels) do
+    label = log.api_key_id && Map.get(key_labels, log.api_key_id)
+    csv_escape(label || log.api_key_prefix)
+  end
+
+  defp row_to_csv_log(log, key_labels) do
     [
       csv_escape(format_datetime_csv(log.inserted_at)),
       log.status_code,
@@ -296,7 +325,7 @@ defmodule TokengateWeb.StatsExportController do
       csv_escape(log.group_member && log.group_member.user && log.group_member.user.email),
       csv_escape(log.group_member && log.group_member.group && log.group_member.group.name),
       csv_escape(log.client_agent),
-      csv_escape(log.api_key_prefix),
+      csv_api_key(log, key_labels),
       csv_escape(log.provider && log.provider.name),
       csv_escape(log.provider_key_prefix),
       log.provider_status_code,
@@ -319,7 +348,7 @@ defmodule TokengateWeb.StatsExportController do
   defp model_display_csv(requested, responded) when requested == responded, do: requested
   defp model_display_csv(requested, responded), do: "#{requested} → #{responded}"
 
-  defp row_to_csv_error(log) do
+  defp row_to_csv_error(log, key_labels) do
     [
       csv_escape(format_datetime_csv(log.inserted_at)),
       log.status_code,
@@ -327,7 +356,7 @@ defmodule TokengateWeb.StatsExportController do
       csv_escape(log.provider && log.provider.name),
       csv_escape(log.group_member && log.group_member.user && log.group_member.user.email),
       csv_escape(log.group_member && log.group_member.group && log.group_member.group.name),
-      csv_escape(log.api_key_prefix),
+      csv_api_key(log, key_labels),
       csv_escape(log.error_reason),
       log.provider_status_code,
       log.latency_ms,

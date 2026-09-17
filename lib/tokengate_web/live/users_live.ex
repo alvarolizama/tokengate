@@ -51,6 +51,11 @@ defmodule TokengateWeb.UsersLive do
       |> assign(:editing_groups_user_id, nil)
       |> assign(:editing_groups_user_name, nil)
       |> assign(:editing_group_ids, [])
+      |> assign(:keys_user_id, nil)
+      |> assign(:keys_user_name, nil)
+      |> assign(:keys, [])
+      |> assign(:keys_spend, %{})
+      |> assign(:new_key_token, nil)
       |> assign(:page, 1)
       |> assign(:per_page, @default_per_page)
       |> assign(:per_page_options, @per_page_options)
@@ -394,6 +399,109 @@ defmodule TokengateWeb.UsersLive do
      |> assign(:editing_group_ids, [])}
   end
 
+  ## Events — API keys (N keys con label por usuario) -----------------------
+
+  # Las keys de un usuario se cargan solo al abrir su modal: el listado de
+  # usuarios no paga N+1 por cada fila.
+  def handle_event("manage_keys", %{"id" => user_id}, socket) do
+    case Accounts.get_user(user_id) do
+      nil ->
+        {:noreply, put_flash(socket, :error, "Usuario no encontrado.")}
+
+      user ->
+        {:noreply,
+         socket
+         |> assign(:keys_user_id, user.id)
+         |> assign(:keys_user_name, user.name || user.email)
+         |> assign(:new_key_token, nil)
+         |> load_user_keys(user.id)}
+    end
+  end
+
+  def handle_event("cancel_manage_keys", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:keys_user_id, nil)
+     |> assign(:keys_user_name, nil)
+     |> assign(:keys, [])
+     |> assign(:keys_spend, %{})
+     |> assign(:new_key_token, nil)}
+  end
+
+  def handle_event("create_key", %{"key" => key_params}, socket) do
+    user_id = socket.assigns.keys_user_id
+
+    if user_id do
+      {token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+      attrs = %{
+        "subject_type" => "member",
+        "user_id" => user_id,
+        "label" => String.trim(key_params["label"] || ""),
+        "key_hash" => key_hash,
+        "key_prefix" => key_prefix,
+        "status" => "active"
+      }
+
+      attrs = if attrs["label"] == "", do: Map.delete(attrs, "label"), else: attrs
+
+      case Accounts.create_api_key(attrs) do
+        {:ok, api_key} ->
+          Tokengate.Auditing.audit(
+            socket.assigns.current_user,
+            "api_key.create",
+            "api_key",
+            api_key.id,
+            %{
+              "label" => api_key.label,
+              "user_id" => user_id
+            }
+          )
+
+          {:noreply,
+           socket
+           |> assign(:new_key_token, token)
+           |> put_flash(:info, "Clave creada. Cópiala ahora: no se vuelve a mostrar.")
+           |> load_user_keys(user_id)}
+
+        {:error, _changeset} ->
+          {:noreply, put_flash(socket, :error, "No se pudo crear la clave.")}
+      end
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("revoke_user_key", %{"key-id" => api_key_id}, socket) do
+    with %{} = api_key <- Accounts.get_api_key(api_key_id),
+         true <- api_key.user_id == socket.assigns.keys_user_id do
+      case Accounts.revoke_api_key(api_key) do
+        {:ok, _} ->
+          Tokengate.Auditing.audit(
+            socket.assigns.current_user,
+            "api_key.revoke",
+            "api_key",
+            api_key.id,
+            %{"label" => api_key.label, "user_id" => api_key.user_id}
+          )
+
+          {:noreply,
+           socket
+           |> put_flash(:info, "Clave revocada.")
+           |> load_user_keys(socket.assigns.keys_user_id)}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "No se pudo revocar la clave.")}
+      end
+    else
+      _ -> {:noreply, put_flash(socket, :error, "Clave no encontrada.")}
+    end
+  end
+
+  def handle_event("dismiss_new_key_token", _params, socket) do
+    {:noreply, assign(socket, :new_key_token, nil)}
+  end
+
   def handle_event("new_user", _params, socket) do
     changeset = User.admin_create_changeset(%User{}, %{})
 
@@ -558,6 +666,16 @@ defmodule TokengateWeb.UsersLive do
 
   ## Template helpers ------------------------------------------------------
 
+  # Keys activas del usuario + consumo por key (una sola query por lote).
+  defp load_user_keys(socket, user_id) do
+    keys = Accounts.list_api_keys_for_user(user_id)
+    spend = Accounts.spend_by_api_key(Enum.map(keys, & &1.id))
+
+    socket
+    |> assign(:keys, keys)
+    |> assign(:keys_spend, spend)
+  end
+
   # Params del paginador: un valor inválido no debe romper el evento; la
   # página se recorta después en `load_users/1`.
   defp parse_page(page) when is_binary(page) do
@@ -612,7 +730,9 @@ defmodule TokengateWeb.UsersLive do
           "global_role" => user.global_role
         })
 
-        # Create group memberships + API keys for each selected group
+        # Create group memberships + one initial key per membership. The key
+        # cuelga del usuario (N keys con label): se crea con la API nueva, no
+        # con el modelo viejo de key única.
         results =
           Enum.map(group_ids, fn group_id ->
             with {:ok, member} <-
@@ -620,9 +740,8 @@ defmodule TokengateWeb.UsersLive do
                      user_id: user.id,
                      group_id: group_id,
                      status: "active"
-                   }),
-                 {:ok, _api_key, _token} <- Accounts.replace_api_key(member) do
-              {:ok, member}
+                   }) do
+              create_initial_key(user, member)
             end
           end)
 
@@ -686,6 +805,23 @@ defmodule TokengateWeb.UsersLive do
 
       {:error, changeset} ->
         {:noreply, assign(socket, :form, to_form(changeset, as: :user))}
+    end
+  end
+
+  defp create_initial_key(user, member) do
+    {_token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+    case Accounts.create_api_key(%{
+           "subject_type" => "member",
+           "user_id" => user.id,
+           "group_member_id" => member.id,
+           "label" => "inicial",
+           "key_hash" => key_hash,
+           "key_prefix" => key_prefix,
+           "status" => "active"
+         }) do
+      {:ok, _api_key} -> {:ok, member}
+      {:error, changeset} -> {:error, changeset}
     end
   end
 
@@ -1016,6 +1152,116 @@ defmodule TokengateWeb.UsersLive do
         </div>
       </.admin_modal>
 
+      <%!-- API keys modal — N keys con label por usuario --%>
+      <.admin_modal
+        :if={@keys_user_id}
+        id="user-keys-modal"
+        on_close="cancel_manage_keys"
+        width="max-w-2xl"
+      >
+        <h2 class="text-lg font-semibold mb-1">
+          Claves API de <span class="text-primary">{@keys_user_name}</span>
+        </h2>
+        <p class="text-xs text-base-content/50 mb-4">
+          Un usuario puede tener varias claves activas, cada una con su etiqueta.
+        </p>
+
+        <div :if={@new_key_token} class="alert alert-success mb-4 py-2" id="new-key-token">
+          <div class="w-full">
+            <p class="text-xs mb-1 font-semibold">
+              Cópiala ahora: no se vuelve a mostrar.
+            </p>
+            <code class="text-xs font-mono break-all">{@new_key_token}</code>
+            <div class="flex justify-end mt-2">
+              <button
+                type="button"
+                phx-click="dismiss_new_key_token"
+                class="btn btn-xs btn-ghost"
+                id="dismiss-new-key-token"
+              >
+                Listo
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="space-y-2 mb-4">
+          <%= for key <- @keys do %>
+            <div
+              class="flex items-center justify-between gap-2 p-2 rounded-lg bg-base-200/50"
+              id={"key-#{key.id}"}
+            >
+              <div class="min-w-0">
+                <div class="flex items-center gap-2">
+                  <span class="text-sm font-semibold truncate">{key.label || "sin etiqueta"}</span>
+                  <span class={[
+                    "badge badge-xs",
+                    if(key.status == "active", do: "badge-success", else: "badge-ghost")
+                  ]}>
+                    {if key.status == "active", do: "Activa", else: "Revocada"}
+                  </span>
+                </div>
+                <div class="text-xs font-mono text-base-content/50">
+                  {key.key_prefix}•••• <% spend = Map.get(@keys_spend, key.id) %>
+                  <span class="ml-2 text-base-content/40">
+                    {if spend,
+                      do: "#{spend.requests} req · $#{fmt_money(spend.cost_usd)}",
+                      else: "sin consumo"}
+                  </span>
+                </div>
+              </div>
+              <button
+                :if={key.status == "active"}
+                type="button"
+                phx-click="revoke_user_key"
+                phx-value-key-id={key.id}
+                class="btn btn-xs btn-ghost text-error shrink-0"
+                id={"revoke-key-#{key.id}"}
+                data-confirm="¿Revocar esta clave? El token deja de funcionar."
+              >
+                Revocar
+              </button>
+            </div>
+          <% end %>
+          <%= if @keys == [] do %>
+            <p class="text-sm text-base-content/50 py-2" id="no-keys">
+              Este usuario no tiene claves activas.
+            </p>
+          <% end %>
+        </div>
+
+        <.form
+          for={%{}}
+          id="new-key-form"
+          phx-submit="create_key"
+          class="border-t border-base-300 pt-3"
+        >
+          <div class="flex items-end gap-2">
+            <div class="flex-1">
+              <label class="label py-1" for="new-key-label">
+                <span class="label-text text-xs">Nueva clave</span>
+              </label>
+              <input
+                type="text"
+                name="key[label]"
+                id="new-key-label"
+                class="input input-sm input-bordered w-full"
+                placeholder="ci, laptop, server..."
+              />
+            </div>
+            <button type="submit" class="btn btn-primary btn-sm" id="create-key-btn">
+              Crear clave
+            </button>
+          </div>
+        </.form>
+
+        <div class="flex gap-2 mt-4 justify-end">
+          <button type="button" phx-click="cancel_manage_keys" class="btn btn-ghost btn-sm">
+            Cerrar
+          </button>
+        </div>
+      </.admin_modal>
+
       <%!-- Delete confirmation modal — warns about irreversible data loss --%>
       <.admin_delete_modal
         id="delete-user-modal"
@@ -1211,6 +1457,15 @@ defmodule TokengateWeb.UsersLive do
         >
           <.icon name="hero-chart-bar" class="w-3 h-3" />
         </.link>
+        <button
+          phx-click="manage_keys"
+          phx-value-id={@user.id}
+          class="btn btn-xs btn-ghost"
+          id={"keys-#{@user.id}"}
+          title="Gestionar claves API del usuario"
+        >
+          <.icon name="hero-key" class="w-3 h-3" />
+        </button>
         <.link
           :if={@user.id != @current_user.id && !root_admin?(@user)}
           href={~p"/impersonate/#{@user.id}"}

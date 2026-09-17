@@ -43,6 +43,8 @@ defmodule TokengateWeb.GroupMembersLive do
           |> assign(:add_member_error, nil)
           |> assign(:email_suggestions, [])
           |> assign(:member_search, "")
+          |> assign(:user_key_form, user_key_form())
+          |> assign(:new_user_key_token, nil)
           |> load_data()
 
         {:ok, socket}
@@ -158,6 +160,7 @@ defmodule TokengateWeb.GroupMembersLive do
     |> assign(:group_monthly_spend, group_monthly_spend)
     |> assign(:usage_tiers, usage_tiers)
     |> load_exclusive_providers(members)
+    |> load_user_keys(members)
   end
 
   defp days_ago(n) do
@@ -184,6 +187,13 @@ defmodule TokengateWeb.GroupMembersLive do
       |> Enum.group_by(& &1.exclusive_to_group_member_id)
 
     assign(socket, :exclusive_providers, grouped)
+  end
+
+  defp load_user_keys(socket, members) do
+    keys =
+      Map.new(members, fn m -> {m.id, Accounts.list_api_keys_for_user(m.user_id)} end)
+
+    assign(socket, :user_keys, keys)
   end
 
   ## Events — add member --------------------------------------------------
@@ -381,6 +391,69 @@ defmodule TokengateWeb.GroupMembersLive do
     {:noreply, assign(socket, :new_token, nil)}
   end
 
+  ## Events — keys del usuario (N keys con label) ---------------------------
+
+  @impl true
+  def handle_event("create_user_key", %{"id" => member_id} = params, socket) do
+    member = Accounts.get_group_member!(member_id)
+
+    if member.group_id != socket.assigns.group.id do
+      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
+    else
+      label = get_in(params, ["user_key", "label"]) || ""
+      {token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+      attrs = %{
+        "subject_type" => "member",
+        "user_id" => member.user_id,
+        "group_member_id" => member.id,
+        "label" => String.trim(label),
+        "key_hash" => key_hash,
+        "key_prefix" => key_prefix,
+        "status" => "active"
+      }
+
+      case Accounts.create_api_key(attrs) do
+        {:ok, _api_key} ->
+          {:noreply,
+           socket
+           |> assign(:new_user_key_token, token)
+           |> assign(:user_key_form, user_key_form())
+           |> put_flash(:info, "Key creada correctamente.")
+           |> load_data()}
+
+        {:error, _} ->
+          {:noreply, put_flash(socket, :error, "No se pudo crear la key.")}
+      end
+    end
+  end
+
+  @impl true
+  def handle_event("revoke_user_key", %{"id" => member_id, "key_id" => key_id}, socket) do
+    member = Accounts.get_group_member!(member_id)
+
+    if member.group_id != socket.assigns.group.id do
+      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este grupo.")}
+    else
+      case Enum.find(Accounts.list_api_keys_for_user(member.user_id), &(&1.id == key_id)) do
+        nil ->
+          {:noreply, put_flash(socket, :error, "Esta key no pertenece a este usuario.")}
+
+        api_key ->
+          case Accounts.revoke_api_key(api_key) do
+            {:ok, _} ->
+              {:noreply,
+               socket
+               |> put_flash(:info, "Key revocada.")
+               |> load_data()}
+
+            {:error, _} ->
+              {:noreply, put_flash(socket, :error, "No se pudo revocar la key.")}
+          end
+      end
+    end
+  end
+
   ## Events — override edits ---------------------------------------------
 
   @impl true
@@ -390,7 +463,11 @@ defmodule TokengateWeb.GroupMembersLive do
 
   @impl true
   def handle_event("open_details", %{"id" => member_id}, socket) do
-    {:noreply, assign(socket, :editing_details_member_id, member_id)}
+    {:noreply,
+     socket
+     |> assign(:editing_details_member_id, member_id)
+     |> assign(:new_user_key_token, nil)
+     |> assign(:user_key_form, user_key_form())}
   end
 
   @impl true
@@ -526,6 +603,10 @@ defmodule TokengateWeb.GroupMembersLive do
   end
 
   defp parse_integer(_), do: :error
+
+  defp user_key_form do
+    to_form(%{"label" => ""}, as: :user_key)
+  end
 
   defp add_member_form do
     to_form(
@@ -989,6 +1070,88 @@ defmodule TokengateWeb.GroupMembersLive do
                     target_value={member.id}
                     empty_text="No hay modelos disponibles."
                   />
+                </div>
+
+                <div class="mt-4 pt-4 border-t border-base-200" id={"user-keys-#{member.id}"}>
+                  <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">
+                    Keys del usuario
+                  </p>
+                  <% user_keys = Map.get(@user_keys || %{}, member.id, []) %>
+
+                  <%= if user_keys == [] do %>
+                    <p class="text-xs text-base-content/40" id={"user-keys-empty-#{member.id}"}>
+                      Este usuario no tiene keys.
+                    </p>
+                  <% else %>
+                    <div class="space-y-1">
+                      <div
+                        :for={key <- user_keys}
+                        class="flex items-center justify-between text-xs py-1 px-2 rounded bg-base-200/50 hover:bg-base-200 transition-colors"
+                        id={"user-key-#{key.id}"}
+                      >
+                        <div class="flex items-center gap-2 min-w-0">
+                          <span class={[
+                            "badge badge-xs",
+                            if(key.status == "active", do: "badge-success", else: "badge-error")
+                          ]}>
+                            {if key.status == "active", do: "Activa", else: "Revocada"}
+                          </span>
+                          <span class="font-medium truncate">{key.label || "sin label"}</span>
+                          <code class="text-base-content/50 font-mono">{key.key_prefix}••••</code>
+                        </div>
+                        <button
+                          :if={key.status == "active"}
+                          phx-click="revoke_user_key"
+                          phx-value-id={member.id}
+                          phx-value-key_id={key.id}
+                          class="btn btn-xs btn-ghost text-error"
+                          id={"revoke-user-key-#{key.id}"}
+                          title="Revocar key"
+                          data-confirm="¿Revocar esta key? Esta acción no se puede deshacer."
+                        >
+                          <.icon name="hero-no-symbol" class="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  <% end %>
+
+                  <div
+                    :if={@new_user_key_token}
+                    class="alert alert-warning mt-3"
+                    id={"new-user-key-token-#{member.id}"}
+                  >
+                    <.icon name="hero-exclamation-triangle" class="w-4 h-4 shrink-0" />
+                    <div class="flex-1 text-xs">
+                      <p class="font-semibold">Guarda esta key ahora — no se volverá a mostrar:</p>
+                      <code class="font-mono break-all">{@new_user_key_token}</code>
+                    </div>
+                  </div>
+
+                  <.form
+                    for={@user_key_form}
+                    id={"user-key-form-#{member.id}"}
+                    phx-submit="create_user_key"
+                    phx-value-id={member.id}
+                    class="mt-3"
+                  >
+                    <div class="flex items-end gap-2">
+                      <div class="flex-1">
+                        <.input
+                          field={@user_key_form[:label]}
+                          type="text"
+                          label="Nueva key"
+                          placeholder="label (p. ej. producción)"
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        class="btn btn-primary btn-sm mb-1"
+                        id={"create-user-key-#{member.id}"}
+                      >
+                        <.icon name="hero-plus" class="w-4 h-4" /> Crear
+                      </button>
+                    </div>
+                  </.form>
                 </div>
 
                 <div class="mt-4 pt-4 border-t border-base-200">

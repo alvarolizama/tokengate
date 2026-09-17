@@ -692,4 +692,88 @@ defmodule TokengateWeb.UsersLiveTest do
       assert has_element?(view, "#users-pagination-range", "1–25 de 31")
     end
   end
+
+  ## API keys (N keys con label) --------------------------------------------
+
+  describe "user API keys" do
+    defp create_key(user, label) do
+      {_token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+      {:ok, key} =
+        Accounts.create_api_key(%{
+          "subject_type" => "member",
+          "user_id" => user.id,
+          "key_hash" => key_hash,
+          "key_prefix" => key_prefix,
+          "label" => label
+        })
+
+      key
+    end
+
+    test "shows all keys of a user with their labels", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{user: target} = register("user")
+      k1 = create_key(target, "laptop")
+      k2 = create_key(target, "server")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#keys-#{target.id}") |> render_click()
+
+      assert has_element?(view, "#user-keys-modal")
+      assert has_element?(view, "#key-#{k1.id}", "laptop")
+      assert has_element?(view, "#key-#{k2.id}", "server")
+      assert has_element?(view, "#revoke-key-#{k1.id}")
+      assert has_element?(view, "#revoke-key-#{k2.id}")
+    end
+
+    test "revoking one key does not affect the other", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{user: target} = register("user")
+      k1 = create_key(target, "revocar")
+      k2 = create_key(target, "seguir")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#keys-#{target.id}") |> render_click()
+      assert has_element?(view, "#key-#{k1.id}")
+      assert has_element?(view, "#key-#{k2.id}")
+
+      view |> element("#revoke-key-#{k1.id}") |> render_click()
+
+      # La revocada sale de la lista (la lista solo trae activas)…
+      refute has_element?(view, "#key-#{k1.id}")
+      # …y la otra sigue viva.
+      assert has_element?(view, "#key-#{k2.id}", "seguir")
+
+      assert Accounts.get_api_key(k1.id).status == "revoked"
+      assert Accounts.get_api_key(k2.id).status == "active"
+      assert Enum.map(Accounts.list_api_keys_for_user(target.id), & &1.id) == [k2.id]
+    end
+
+    test "creating a key with a label adds it alongside the existing ones", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      %{user: target} = register("user")
+      k1 = create_key(target, "ci")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      view |> element("#keys-#{target.id}") |> render_click()
+      assert has_element?(view, "#key-#{k1.id}", "ci")
+
+      html =
+        view
+        |> form("#new-key-form", %{key: %{label: "nueva"}})
+        |> render_submit()
+
+      assert html =~ "Clave creada"
+      labels = Accounts.list_api_keys_for_user(target.id) |> Enum.map(& &1.label) |> Enum.sort()
+      assert labels == ["ci", "nueva"]
+      assert has_element?(view, "#new-key-token")
+    end
+  end
 end

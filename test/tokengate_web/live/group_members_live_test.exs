@@ -399,4 +399,104 @@ defmodule TokengateWeb.GroupMembersLiveTest do
 
     assert html =~ "Activa"
   end
+
+  # --------------------------------------------------------------------------
+  # User keys (N keys con label) en el panel de detalles
+  # --------------------------------------------------------------------------
+
+  test "details panel lists the user's keys", %{conn: conn} do
+    %{group: group, member: member} = group_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    # El fixture crea la key histórica del member (sin user_id); aquí añadimos
+    # dos keys propias del usuario con label.
+    created =
+      for label <- ["key alpha", "key beta"] do
+        {:ok, key} =
+          Accounts.create_api_key(%{
+            "subject_type" => "member",
+            "user_id" => member.user_id,
+            "label" => label,
+            "key_hash" => Accounts.hash_api_key("tg-test-key-#{unique()}"),
+            "key_prefix" => "tg-testk",
+            "status" => "active"
+          })
+
+        key
+      end
+
+    keys = Accounts.list_api_keys_for_user(member.user_id)
+    assert length(keys) == 2
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, group_url(group))
+
+    view |> element("#details-#{member.id}") |> render_click()
+
+    assert has_element?(view, "#user-keys-#{member.id}")
+    html = render(view)
+
+    assert html =~ "Keys del usuario"
+    assert html =~ "key alpha"
+    assert html =~ "key beta"
+
+    for key <- created do
+      assert has_element?(view, "#user-key-#{key.id}")
+    end
+  end
+
+  test "creating a key from the details panel adds it to the list", %{conn: conn} do
+    %{group: group, member: member} = group_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    before_count = length(Accounts.list_api_keys_for_user(member.user_id))
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, group_url(group))
+
+    view |> element("#details-#{member.id}") |> render_click()
+
+    html =
+      view
+      |> form("#user-key-form-#{member.id}", %{"user_key" => %{"label" => "key de prueba"}})
+      |> render_submit()
+
+    assert html =~ "Key creada correctamente"
+
+    keys = Accounts.list_api_keys_for_user(member.user_id)
+    assert length(keys) == before_count + 1
+    assert Enum.any?(keys, &(&1.label == "key de prueba"))
+
+    # La nueva key aparece en el panel.
+    new_key = Enum.find(keys, &(&1.label == "key de prueba"))
+    assert has_element?(view, "#user-key-#{new_key.id}")
+  end
+
+  test "revoking a user key from the details panel removes it from the list", %{conn: conn} do
+    %{group: group, member: member} = group_with_member()
+    %{user: admin, password: password} = register("admin")
+
+    {:ok, extra_key} =
+      Accounts.create_api_key(%{
+        "subject_type" => "member",
+        "user_id" => member.user_id,
+        "label" => "key a revocar",
+        "key_hash" => Accounts.hash_api_key("tg-revoke-#{unique()}"),
+        "key_prefix" => "tg-revok",
+        "status" => "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, group_url(group))
+
+    view |> element("#details-#{member.id}") |> render_click()
+    assert has_element?(view, "#user-key-#{extra_key.id}")
+
+    html = view |> element("#revoke-user-key-#{extra_key.id}") |> render_click()
+    assert html =~ "Key revocada"
+
+    refute has_element?(view, "#user-key-#{extra_key.id}")
+    revoked = Tokengate.Repo.get!(Tokengate.Accounts.ApiKey, extra_key.id)
+    assert revoked.status == "revoked"
+  end
 end

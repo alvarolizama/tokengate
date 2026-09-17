@@ -318,6 +318,10 @@ defmodule Tokengate.Providers.CatalogTest do
     end
 
     test "records the seed in the sync state" do
+      # `seed_if_empty/0` y `sync/0` son no-ops cuando el mirror ya está
+      # sembrado, y ninguno escribe el sync state: eso solo lo hace `seed/0`.
+      # Sin forzar el seed, este test depende de qué otro test corrió antes.
+      Tokengate.Providers.CatalogSeed.seed()
       state = Tokengate.Providers.catalog_sync_state()
       assert state.source in ["snapshot", "models.dev"]
       assert state.synced_at

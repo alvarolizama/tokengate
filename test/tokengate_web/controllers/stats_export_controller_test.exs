@@ -323,6 +323,80 @@ defmodule TokengateWeb.StatsExportControllerTest do
     assert body =~ "'=cmd|'/c calc'!A1"
   end
 
+  test "logs export: la columna api_key muestra el label de la key viva", %{conn: conn} do
+    u = unique()
+
+    {:ok, group} = Accounts.create_group(%{name: "Group #{u}"})
+    %{user: user, password: password} = register("user")
+
+    {:ok, member} =
+      Accounts.create_group_member(%{user_id: user.id, group_id: group.id})
+
+    {:ok, provider} =
+      Providers.create_provider(%{name: "P #{u}", base_url: "http://localhost:1"})
+
+    {:ok, key} =
+      Accounts.create_api_key(%{
+        subject_type: "member",
+        user_id: user.id,
+        group_member_id: member.id,
+        label: "Key Larga #{u}",
+        key_hash: "hash-#{u}",
+        key_prefix: "tg_live_#{u}"
+      })
+
+    {:ok, _log} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        provider_id: provider.id,
+        model_requested: "gpt-4o",
+        model_responded: "gpt-4o",
+        agent_type: "api",
+        api_key_id: key.id,
+        api_key_prefix: "tg_live_#{u}",
+        status_code: 200,
+        prompt_tokens: 1,
+        completion_tokens: 1,
+        provider_cost_usd: "0",
+        latency_ms: 1,
+        streaming: false,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+    # Un log histórico sin api_key_id: la celda cae al prefijo de siempre.
+    {:ok, _old_log} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        provider_id: provider.id,
+        model_requested: "gpt-4o",
+        agent_type: "api",
+        api_key_prefix: "tg_old_#{u}",
+        status_code: 200,
+        prompt_tokens: 1,
+        completion_tokens: 1,
+        provider_cost_usd: "0",
+        latency_ms: 1,
+        streaming: false,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+    conn =
+      conn
+      |> login(user, password)
+      |> get(~p"/stats/export?type=logs&period=today")
+
+    body = response(conn, 200)
+    rows = body |> String.split("\n") |> Enum.drop(1) |> Enum.reject(&(&1 == ""))
+
+    key_row = Enum.find(rows, &String.contains?(&1, "Key Larga #{u}"))
+    refute key_row == nil
+    # El label de la key viva, no su prefijo.
+    refute key_row =~ "tg_live_#{u}"
+
+    old_row = Enum.find(rows, &String.contains?(&1, "tg_old_#{u}"))
+    refute old_row == nil
+  end
+
   describe "logs export period coverage" do
     # The UI list is capped at 500 rows; exports must NOT be, otherwise a
     # busy day alone would eat the whole CSV and 30d/90d exports would only

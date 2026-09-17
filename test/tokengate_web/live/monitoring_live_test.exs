@@ -305,6 +305,91 @@ defmodule TokengateWeb.MonitoringLiveTest do
     refute html =~ "err-model"
   end
 
+  ## API key filter ------------------------------------------------------------
+
+  defp api_key_for(owner, member, suffix) do
+    u = unique()
+
+    {:ok, key} =
+      Accounts.create_api_key(%{
+        subject_type: "member",
+        user_id: owner.id,
+        group_member_id: member.id,
+        label: "Clave #{suffix} #{u}",
+        key_hash: "hash-#{suffix}-#{u}",
+        key_prefix: "sk-#{suffix}-#{u}-"
+      })
+
+    key
+  end
+
+  defp log_for_key(member, key, model_name) do
+    {:ok, log} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        model_requested: model_name,
+        model_responded: model_name,
+        status_code: 200,
+        api_key_id: key.id,
+        api_key_prefix: key.key_prefix,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+    log
+  end
+
+  test "filtering by an api key returns only that key's logs", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{owner: owner, member: member} = member_with_log()
+    u = unique()
+
+    key_a = api_key_for(owner, member, "a")
+    key_b = api_key_for(owner, member, "b")
+
+    _log_a = log_for_key(member, key_a, "key-a-model-#{u}")
+    log_b = log_for_key(member, key_b, "key-b-model-#{u}")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/monitoring")
+
+    # Ambas keys aparecen en el selector con su label
+    assert has_element?(view, "#logs-filter-form select[name='filter[api_key_id]']")
+
+    assert has_element?(
+             view,
+             "#logs-filter-form select[name='filter[api_key_id]'] option",
+             key_a.label
+           )
+
+    # La columna "API Key" muestra el label de la key viva, no el prefijo
+    assert has_element?(view, "#logs td", key_a.label)
+    assert has_element?(view, "#logs td", key_b.label)
+    refute has_element?(view, "#logs td", key_a.key_prefix)
+
+    view
+    |> form("#logs-filter-form", filter: %{api_key_id: key_a.id})
+    |> render_change()
+
+    html = render(view)
+    assert html =~ "key-a-model-#{u}"
+    refute html =~ "key-b-model-#{u}"
+    assert has_element?(view, "#logs td", key_a.label)
+    refute has_element?(view, "#logs td", key_b.label)
+    assert log_b.id
+  end
+
+  test "api key column falls back to the historical prefix without a live key", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{owner: owner} = member_with_log()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/monitoring")
+
+    assert has_element?(view, "#logs td", owner.email)
+    # Sin key viva, la celda cae al prefijo histórico
+    assert has_element?(view, "#logs td", "sk-logs-")
+  end
+
   ## System monitor section -------------------------------------------------
 
   test "non-admin is redirected away from the logs dashboard", %{conn: conn} do

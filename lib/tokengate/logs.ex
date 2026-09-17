@@ -182,6 +182,7 @@ defmodule Tokengate.Logs do
     |> maybe_where(:service_id, filters)
     |> maybe_where_subject_id(filters)
     |> maybe_where(:subject_type, filters)
+    |> maybe_where(:api_key_id, filters)
     |> maybe_where_member_ids(filters)
     |> maybe_where_group_id(filters)
     |> maybe_where(:provider_id, filters)
