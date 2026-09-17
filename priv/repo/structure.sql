@@ -259,9 +259,6 @@ CREATE TABLE public.models (
     lazy_cleanup_enabled boolean DEFAULT false CONSTRAINT model_aliases_lazy_cleanup_enabled_not_null NOT NULL,
     model_type character varying(255) DEFAULT 'llm'::character varying CONSTRAINT model_aliases_model_type_not_null NOT NULL,
     pinned boolean DEFAULT false CONSTRAINT model_aliases_pinned_not_null NOT NULL,
-    market_input_price_per_1m numeric(12,6),
-    market_output_price_per_1m numeric(12,6),
-    market_cache_price_per_1m numeric(12,6),
     CONSTRAINT model_aliases_model_type_check CHECK (((model_type)::text = ANY (ARRAY[('llm'::character varying)::text, ('embedding'::character varying)::text])))
 );
 

@@ -199,17 +199,13 @@ defmodule Tokengate.Providers.ModelCatalogTest do
         ModelCatalog.to_model_params(%{
           key: "openai/gpt-5-nano",
           lab_key: "openai",
-          context_limit: 400_000,
-          cost_input: Decimal.new("0.045"),
-          cost_output: Decimal.new("0.36"),
-          cost_cache_read: Decimal.new("0.0045")
+          context_limit: 400_000
         })
 
       assert params.name == "gpt-5-nano"
       assert params.context_window == 400_000
       assert params.catalog_model_key == "openai/gpt-5-nano"
       assert params.lab_key == "openai"
-      assert Decimal.equal?(params.market_input_price_per_1m, Decimal.new("0.045"))
     end
   end
 

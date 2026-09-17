@@ -427,24 +427,6 @@ defmodule Tokengate.ProvidersTest do
       assert "has already been taken" in errors_on(changeset).name
     end
 
-    test "informational market prices round-trip through create/update" do
-      model_ =
-        model_fixture(%{
-          market_input_price_per_1m: Decimal.new("1.250000"),
-          market_output_price_per_1m: Decimal.new("10.000000"),
-          market_cache_price_per_1m: Decimal.new("0.125000")
-        })
-
-      assert Decimal.eq?(model_.market_input_price_per_1m, Decimal.new("1.25"))
-      assert Decimal.eq?(model_.market_output_price_per_1m, Decimal.new("10"))
-      assert Decimal.eq?(model_.market_cache_price_per_1m, Decimal.new("0.125"))
-
-      {:ok, updated} =
-        Providers.update_model(model_, %{market_cache_price_per_1m: nil})
-
-      assert is_nil(updated.market_cache_price_per_1m)
-    end
-
     test "get_model_by_name/1 returns the model by name" do
       model_ = model_fixture(%{name: "unique-model"})
 

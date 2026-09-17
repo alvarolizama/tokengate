@@ -50,7 +50,6 @@ defmodule TokengateWeb.CalculatorLive do
       |> assign(:cost_output, "15.00")
       |> assign(:chart_data, [])
       |> assign(:summary, nil)
-      |> assign(:market_prices, nil)
 
     {:ok, socket}
   end
@@ -70,7 +69,6 @@ defmodule TokengateWeb.CalculatorLive do
       |> assign(:cost_input, cost_input)
       |> assign(:cost_cache, cost_cache)
       |> assign(:cost_output, cost_output)
-      |> assign(:market_prices, market_pricing(socket.assigns.models, model_id))
 
     socket =
       if model_id && model_id != "" do
@@ -82,30 +80,6 @@ defmodule TokengateWeb.CalculatorLive do
       end
 
     {:noreply, socket}
-  end
-
-  # Fill the custom pricing inputs with the model's market prices so the
-  # operator can start from a documented baseline and tweak from there.
-  def handle_event("use_market_prices", _params, socket) do
-    case socket.assigns.market_prices do
-      %{input: input, cache: cache, output: output} = market ->
-        {:noreply,
-         socket
-         |> assign(:cost_input, fmt_price(input))
-         |> assign(:cost_cache, fmt_price(cache))
-         |> assign(:cost_output, fmt_price(output))
-         |> load_chart_data(
-           socket.assigns.selected_model_id,
-           socket.assigns.period,
-           fmt_price(input),
-           fmt_price(cache),
-           fmt_price(output)
-         )
-         |> assign(:market_prices, market)}
-
-      _ ->
-        {:noreply, socket}
-    end
   end
 
   def handle_event(_event, _params, socket), do: {:noreply, socket}
@@ -144,9 +118,6 @@ defmodule TokengateWeb.CalculatorLive do
     cost_cache = parse_decimal(cost_cache_str, Decimal.new("0.30"))
     cost_output = parse_decimal(cost_output_str, Decimal.new("15.00"))
 
-    # Market pricing of the selected model (nil when not set).
-    market = market_pricing(socket.assigns.models, model_id)
-
     # Per-million multiplier: price is per 1M tokens → cost = tokens * price * 1e-6
     per_million = Decimal.new("0.000001")
 
@@ -183,7 +154,6 @@ defmodule TokengateWeb.CalculatorLive do
           request_count: row.request_count,
           real_cost: row.cost_usd,
           estimated_cost: estimated_cost,
-          market_estimated_cost: market_estimate(market, prompt, cached, completion),
           prompt_tokens: prompt,
           completion_tokens: completion,
           cache_read_tokens: cached
@@ -197,17 +167,6 @@ defmodule TokengateWeb.CalculatorLive do
       end)
       |> Decimal.round(4)
 
-    # Total estimated cost using the model's market prices (nil when the
-    # model has no market pricing configured).
-    total_market_estimated =
-      if market do
-        chart_data
-        |> Enum.reduce(Decimal.new(0), fn row, acc ->
-          Decimal.add(acc, row.market_estimated_cost)
-        end)
-        |> Decimal.round(4)
-      end
-
     # Total real cost from cost_summary (same source as Stats)
     total_real = Decimal.round(summary_data.total_cost_usd, 4)
 
@@ -216,8 +175,6 @@ defmodule TokengateWeb.CalculatorLive do
     summary = %{
       total_real: total_real,
       total_estimated: total_estimated,
-      total_market_estimated: total_market_estimated,
-      has_market_pricing: not is_nil(market),
       difference: difference,
       total_requests: summary_data.request_count,
       total_prompt: summary_data.total_prompt_tokens,
@@ -237,45 +194,6 @@ defmodule TokengateWeb.CalculatorLive do
       {d, ""} -> d
       _ -> default
     end
-  end
-
-  # Market prices for the selected model, or nil when unset. The cache rate
-  # degrades to the input rate when only input+output are documented (the
-  # same 2-term fallback convention as CostCalculator).
-  defp market_pricing(models, model_id) do
-    case Enum.find(models, &(&1.id == model_id)) do
-      %{
-        market_input_price_per_1m: %Decimal{} = input,
-        market_output_price_per_1m: %Decimal{} = output
-      } = model ->
-        cache =
-          case model.market_cache_price_per_1m do
-            %Decimal{} = cache_price -> cache_price
-            _ -> input
-          end
-
-        %{input: input, cache: cache, output: output}
-
-      _ ->
-        nil
-    end
-  end
-
-  # 3-term estimate (non-cached × input + cached × cache + completion × output)
-  # using the model's market prices. Returns nil when market pricing is unset —
-  # the chart skips the line and the total is gated by has_market_pricing.
-  defp market_estimate(nil, _prompt, _cached, _completion), do: nil
-
-  defp market_estimate(%{input: input, cache: cache, output: output}, prompt, cached, completion) do
-    non_cached = max(prompt - cached, 0)
-    per_million = Decimal.new("0.000001")
-
-    input
-    |> Decimal.mult(Decimal.new(non_cached))
-    |> Decimal.mult(per_million)
-    |> Decimal.add(cache |> Decimal.mult(Decimal.new(cached)) |> Decimal.mult(per_million))
-    |> Decimal.add(output |> Decimal.mult(Decimal.new(completion)) |> Decimal.mult(per_million))
-    |> Decimal.round(6)
   end
 
   # ── Template helpers ──────────────────────────────────────────────────────
@@ -327,16 +245,7 @@ defmodule TokengateWeb.CalculatorLive do
       max_val =
         chart_data
         |> Enum.map(fn row ->
-          max(
-            Decimal.to_float(row.real_cost),
-            max(
-              Decimal.to_float(row.estimated_cost),
-              if(is_nil(row.market_estimated_cost),
-                do: 0.0,
-                else: Decimal.to_float(row.market_estimated_cost)
-              )
-            )
-          )
+          max(Decimal.to_float(row.real_cost), Decimal.to_float(row.estimated_cost))
         end)
         |> Enum.max()
         |> max(0.01)
@@ -352,35 +261,15 @@ defmodule TokengateWeb.CalculatorLive do
           real_y = pad_top + plot_h - Decimal.to_float(row.real_cost) / max_val * plot_h
           est_y = pad_top + plot_h - Decimal.to_float(row.estimated_cost) / max_val * plot_h
 
-          market_y =
-            if is_nil(row.market_estimated_cost),
-              do: nil,
-              else:
-                pad_top + plot_h - Decimal.to_float(row.market_estimated_cost) / max_val * plot_h
-
-          {Float.round(x, 1), Float.round(real_y, 1), Float.round(est_y, 1),
-           market_y && Float.round(market_y, 1)}
+          {Float.round(x, 1), Float.round(real_y, 1), Float.round(est_y, 1)}
         end)
 
-      real_pts = points |> Enum.map(fn {x, y, _, _} -> "#{x},#{y}" end) |> Enum.join(" ")
-      est_pts = points |> Enum.map(fn {x, _, y, _} -> "#{x},#{y}" end) |> Enum.join(" ")
-
-      market_pts =
-        if Enum.any?(chart_data, &(&1.market_estimated_cost != nil)) do
-          points
-          |> Enum.map(fn
-            {_x, _, _, nil} -> nil
-            {x, _, _, y} -> "#{x},#{y}"
-          end)
-          |> Enum.reject(&is_nil/1)
-          |> Enum.join(" ")
-        else
-          ""
-        end
+      real_pts = points |> Enum.map(fn {x, y, _} -> "#{x},#{y}" end) |> Enum.join(" ")
+      est_pts = points |> Enum.map(fn {x, _, y} -> "#{x},#{y}" end) |> Enum.join(" ")
 
       # Real cost area path (for fill)
-      {first_x, _, _, _} = List.first(points)
-      {last_x, _, _, _} = List.last(points)
+      {first_x, _, _} = List.first(points)
+      {last_x, _, _} = List.last(points)
       real_area = "M#{first_x},#{pad_top + plot_h} L#{real_pts} L#{last_x},#{pad_top + plot_h} Z"
 
       y_ticks = build_y_ticks(max_val, plot_h, pad_top, pad_left)
@@ -389,7 +278,6 @@ defmodule TokengateWeb.CalculatorLive do
       %{
         real_points: real_pts,
         est_points: est_pts,
-        market_points: market_pts,
         real_area: real_area,
         max_val: max_val,
         y_ticks: y_ticks,
@@ -463,31 +351,4 @@ defmodule TokengateWeb.CalculatorLive do
   end
 
   def periods, do: @periods
-
-  @doc """
-  Market-price line for the selected model, rendered under the Model select.
-  One string built in Elixir so HEEx cannot inject whitespace between "$"
-  and the value.
-  """
-  def market_line(%{input: input, cache: cache, output: output}) do
-    "in $" <>
-      fmt_price(input) <>
-      " · cache $" <>
-      fmt_price(cache) <>
-      " · out $" <> fmt_price(output) <> " /1M"
-  end
-
-  def fmt_price(nil), do: "—"
-
-  # Trim trailing zeros without Decimal.normalize, which emits scientific
-  # notation for whole numbers ("10.000000" -> "1E+1").
-  def fmt_price(%Decimal{} = d) do
-    s = Decimal.to_string(d)
-
-    if String.contains?(s, ".") do
-      s |> String.trim_trailing("0") |> String.trim_trailing(".")
-    else
-      s
-    end
-  end
 end

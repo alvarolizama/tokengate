@@ -331,10 +331,9 @@ defmodule Tokengate.Providers.ModelCatalog do
 
     * `:name` is `short_name/1` (the id without its lab prefix);
     * `:model_type` is `model_type_hint/1`, the operator confirms it;
-    * `:context_window` and the market prices come from the canonical entry, so a
-      display-only price is filled with the real one. A missing context window is
-      left empty on purpose: the form requires it and a value invented here would
-      be worse than one gap to fill.
+    * `:context_window` comes from the canonical entry. A missing context window
+      is left empty on purpose: the form requires it and a value invented here
+      would be worse than one gap to fill.
   """
   @spec to_model_params(map()) :: map()
   def to_model_params(catalog_model) when is_map(catalog_model) do
@@ -343,10 +342,7 @@ defmodule Tokengate.Providers.ModelCatalog do
       context_window: Map.get(catalog_model, :context_limit),
       model_type: model_type_hint(catalog_model.key),
       catalog_model_key: catalog_model.key,
-      lab_key: Map.get(catalog_model, :lab_key),
-      market_input_price_per_1m: Map.get(catalog_model, :cost_input),
-      market_output_price_per_1m: Map.get(catalog_model, :cost_output),
-      market_cache_price_per_1m: Map.get(catalog_model, :cost_cache_read)
+      lab_key: Map.get(catalog_model, :lab_key)
     }
   end
 

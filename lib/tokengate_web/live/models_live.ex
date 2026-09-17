@@ -222,7 +222,7 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   # Picking a catalog row PRE-FILLS the form the operator already has open: name
-  # (the id without its lab prefix), context window, market prices, model type
+  # (the id without its lab prefix), context window, model type
   # and the link back to the catalog entry. Nothing is locked — every field stays
   # editable and nothing is written until the form is submitted.
   #
@@ -1712,8 +1712,8 @@ defmodule TokengateWeb.ModelsLive do
   def fmt_dec(n), do: to_string(n)
 
   @doc """
-  Format a market price compactly for the model card row: trims trailing
-  zeros ("1.250000" -> "1.25"). Display-only. Deliberately avoids
+  Format a price compactly for the picker rows: trims trailing zeros
+  ("1.250000" -> "1.25"). Display-only. Deliberately avoids
   Decimal.normalize, which emits scientific notation for whole numbers
   ("10.000000" -> "1E+1").
   """
@@ -1730,25 +1730,6 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   def fmt_price(n), do: fmt_dec(n)
-
-  @doc "True when at least one market price is set (Decimals may be nil)."
-  def has_market_prices?(model) do
-    not is_nil(model.market_input_price_per_1m) or
-      not is_nil(model.market_output_price_per_1m) or
-      not is_nil(model.market_cache_price_per_1m)
-  end
-
-  @doc """
-  Full market-price line for the model card row. Built as ONE string in
-  Elixir so HEEx cannot inject whitespace between "$" and the value.
-  """
-  def market_line(model) do
-    "· in $" <>
-      fmt_price(model.market_input_price_per_1m) <>
-      " · out $" <>
-      fmt_price(model.market_output_price_per_1m) <>
-      " · cache $" <> fmt_price(model.market_cache_price_per_1m) <> " /1M"
-  end
 
   @doc "Empty-state message for the models list"
   def empty_state_message, do: "No hay models configurados."
@@ -1988,13 +1969,6 @@ defmodule TokengateWeb.ModelsLive do
                         title={"#{model.context_window} tokens"}
                       >
                         · {format_compact(model.context_window)} ctx
-                      </span>
-                      <span
-                        :if={has_market_prices?(model)}
-                        class="text-xs text-base-content/50 tabular-nums"
-                        title="Precio de mercado de referencia — alimenta el «Estimado Mercado» del Calculador; no se usa para facturación"
-                      >
-                        {market_line(model)}
                       </span>
                       <span
                         :if={model.model_type != "llm"}
@@ -2445,47 +2419,6 @@ defmodule TokengateWeb.ModelsLive do
                       ]}
                       hint="Define qué endpoint lo sirve: /v1/chat/completions o /v1/embeddings."
                     />
-
-                    <div
-                      id="market-prices-note"
-                      class="divider my-2 text-xs text-base-content/50"
-                    >
-                      Precio de mercado de referencia — alimenta el «Estimado Mercado» del
-                      Calculador; no se usa para facturación
-                    </div>
-                    <%!--
-                      Market prices ARE used, but only in the Calculator: the
-                      «Estimado Mercado» KPI and chart line, and the "usar
-                      precios de mercado" baseline of the custom pricing form
-                      (`calculator_live.ex` → `market_estimate/4`). Billing
-                      (`CostCalculator`) never reads them: real cost comes from
-                      upstream-reported usage or the provider's manual fallback
-                      rates. Keep this distinction visible in the form copy so
-                      the field is not mistaken for a billing rate.
-                    --%>
-                    <div class="grid grid-cols-3 gap-2">
-                      <.input
-                        field={@form[:market_input_price_per_1m]}
-                        type="number"
-                        step="0.000001"
-                        min="0"
-                        label="Entrada $/1M"
-                      />
-                      <.input
-                        field={@form[:market_output_price_per_1m]}
-                        type="number"
-                        step="0.000001"
-                        min="0"
-                        label="Salida $/1M"
-                      />
-                      <.input
-                        field={@form[:market_cache_price_per_1m]}
-                        type="number"
-                        step="0.000001"
-                        min="0"
-                        label="Cache $/1M"
-                      />
-                    </div>
                   </div>
 
                   <div class="space-y-1">

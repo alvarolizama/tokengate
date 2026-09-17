@@ -22,9 +22,8 @@ defmodule Tokengate.Providers.CatalogModel do
   `status: "stale"` (`#{inspect(~w(active stale))}`), because an operator may
   already have a `model_providers` row serving traffic through it.
 
-  Costs on this row are the CANONICAL market prices (display-only, like
-  `models.market_*`). The price a provider charges for a specific model lives on
-  `CatalogModelOffer`.
+  Costs on this row are the CANONICAL market prices (display-only). The price a
+  provider charges for a specific model lives on `CatalogModelOffer`.
   """
 
   use Ecto.Schema

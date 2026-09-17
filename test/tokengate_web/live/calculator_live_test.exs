@@ -26,15 +26,12 @@ defmodule TokengateWeb.CalculatorLiveTest do
     |> recycle()
   end
 
-  defp market_alias_fixture do
+  defp model_fixture do
     {:ok, model_} =
       Providers.create_model(%{
-        name: "calc-market-#{unique()}",
+        name: "calc-model-#{unique()}",
         context_window: 128_000,
-        model_type: "llm",
-        market_input_price_per_1m: "1.25",
-        market_output_price_per_1m: "10",
-        market_cache_price_per_1m: "0.125"
+        model_type: "llm"
       })
 
     model_
@@ -53,8 +50,7 @@ defmodule TokengateWeb.CalculatorLiveTest do
     assert html =~ "Cache"
     assert html =~ "Salida"
     assert html =~ "/1M"
-    # Market shortcut disabled until a model with pricing is selected
-    assert has_element?(view, "#use-market-prices[disabled]")
+    _ = view
   end
 
   test "regular user is redirected from calculator", %{conn: conn} do
@@ -64,9 +60,9 @@ defmodule TokengateWeb.CalculatorLiveTest do
     assert to =~ "/dashboard"
   end
 
-  test "selecting a model with market prices shows the market line", %{conn: conn} do
+  test "selecting a model renders the real and custom estimate cards", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-    model_ = market_alias_fixture()
+    model_ = model_fixture()
     conn = login(conn, admin, password)
 
     {:ok, view, _html} = live(conn, ~p"/calculator")
@@ -82,49 +78,20 @@ defmodule TokengateWeb.CalculatorLiveTest do
       })
       |> render_change()
 
-    # Market prices of the selected model, rendered as a single line.
-    assert html =~ "Mercado: in $1.25 · cache $0.125 · out $10 /1M"
-  end
-
-  test "market estimate card renders alongside real and custom estimates", %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
-    model_ = market_alias_fixture()
-    conn = login(conn, admin, password)
-
-    {:ok, view, _html} = live(conn, ~p"/calculator")
-
-    html =
-      view
-      |> form("#calculator-form", %{
-        model_id: model_.id,
-        period: "7d",
-        cost_input: "3.00",
-        cost_cache: "0.30",
-        cost_output: "15.00"
-      })
-      |> render_change()
-
-    # The three spends render even with zero traffic in the period.
+    # Ambas comparativas renderizan aunque no haya tráfico en el periodo.
     assert has_element?(view, "#calc-real")
     assert has_element?(view, "#calc-estimated")
-    assert has_element?(view, "#calc-market")
 
-    # Custom inputs keep the submitted values.
+    # Los inputs custom conservan lo enviado.
     assert html =~ ~s(value="3.00")
     assert html =~ ~s(value="15.00")
   end
 
-  test "market estimate card is hidden when the model has no market prices", %{conn: conn} do
+  test "the market estimate is gone from the calculator", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
-
-    {:ok, model_} =
-      Providers.create_model(%{
-        name: "calc-plain-#{unique()}",
-        context_window: 128_000,
-        model_type: "llm"
-      })
-
+    model_ = model_fixture()
     conn = login(conn, admin, password)
+
     {:ok, view, _html} = live(conn, ~p"/calculator")
 
     html =
@@ -132,31 +99,9 @@ defmodule TokengateWeb.CalculatorLiveTest do
       |> form("#calculator-form", %{model_id: model_.id, period: "7d"})
       |> render_change()
 
-    assert has_element?(view, "#calc-estimated")
     refute has_element?(view, "#calc-market")
-    # Market shortcut stays disabled without market pricing
-    assert has_element?(view, "#use-market-prices[disabled]")
-  end
-
-  test "use_market_prices fills the custom inputs with market prices", %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
-    model_ = market_alias_fixture()
-    conn = login(conn, admin, password)
-
-    {:ok, view, _html} = live(conn, ~p"/calculator")
-
-    view
-    |> form("#calculator-form", %{model_id: model_.id, period: "7d"})
-    |> render_change()
-
-    # Button enabled now that market prices are available
-    refute has_element?(view, "#use-market-prices[disabled]")
-
-    html = view |> element("#use-market-prices") |> render_click()
-
-    # Custom inputs now carry the market prices
-    assert html =~ ~s(value="1.25")
-    assert html =~ ~s(value="0.125")
-    assert html =~ ~s(value="10")
+    refute has_element?(view, "#use-market-prices")
+    refute html =~ "Estimado Mercado"
+    refute html =~ "Mercado:"
   end
 end

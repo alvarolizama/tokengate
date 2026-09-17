@@ -175,52 +175,6 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert model_record.lazy_cleanup_enabled == false
   end
 
-  test "model form renders informational market prices and persists them", %{conn: conn} do
-    %{user: admin, password: password} = register("admin")
-    conn = login(conn, admin, password)
-
-    {:ok, view, _html} = live(conn, ~p"/catalog/models")
-
-    view |> element("#new-model-btn") |> render_click()
-
-    assert has_element?(view, "#model_market_input_price_per_1m")
-    assert has_element?(view, "#model_market_output_price_per_1m")
-    assert has_element?(view, "#model_market_cache_price_per_1m")
-
-    # The form copy must answer "¿esto se usa para algún cálculo?": the prices
-    # feed the Calculator's market estimate, not billing.
-    note = view |> element("#market-prices-note") |> render()
-    assert note =~ "Calculador"
-    assert note =~ "no se usa para facturación"
-
-    html =
-      view
-      |> form("#model-form", %{
-        model: %{
-          name: "gpt-4o-market",
-          context_window: 128_000,
-          market_input_price_per_1m: "1.25",
-          market_output_price_per_1m: "10",
-          market_cache_price_per_1m: "0.125"
-        }
-      })
-      |> render_submit()
-
-    assert html =~ "Modelo creado"
-
-    # Market prices surface on the model card row (display-only).
-    html = render(view)
-    assert html =~ "gpt-4o-market"
-    # Exact single-line render (HEEx must not split "$" from the value).
-    assert html =~ "· in $1.25 · out $10 · cache $0.125 /1M"
-
-    model_record = Tokengate.Providers.get_model_by_name("gpt-4o-market")
-
-    assert Decimal.eq?(model_record.market_input_price_per_1m, Decimal.new("1.25"))
-    assert Decimal.eq?(model_record.market_output_price_per_1m, Decimal.new("10"))
-    assert Decimal.eq?(model_record.market_cache_price_per_1m, Decimal.new("0.125"))
-  end
-
   test "admin can edit an existing model", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     model_record = create_model()
@@ -1261,16 +1215,13 @@ defmodule TokengateWeb.ModelsLiveTest do
       assert html =~ ~s(value="glm-5.2")
     end
 
-    test "picking a catalog row prefills the market prices", %{conn: conn} do
+    test "picking a catalog row prefills the form", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
 
       _ =
         create_catalog_model("openai/gpt-5-nano",
           name: "GPT-5 Nano",
-          lab_key: "openai",
-          cost_input: Decimal.new("0.045"),
-          cost_output: Decimal.new("0.18"),
-          cost_cache_read: Decimal.new("0.0045")
+          lab_key: "openai"
         )
 
       conn = login(conn, admin, password)
@@ -1282,12 +1233,11 @@ defmodule TokengateWeb.ModelsLiveTest do
       |> element("#catalog-row-#{ModelsLive.dom_key("openai/gpt-5-nano")}")
       |> render_click()
 
-      # The catalog quotes $/1M, so the three prices land straight in the
-      # inputs: the operator sees the market baseline without typing it. The
-      # rendered value keeps the column scale (numeric(12,6)).
-      assert has_element?(view, "#model_market_input_price_per_1m[value='0.045000']")
-      assert has_element?(view, "#model_market_output_price_per_1m[value='0.180000']")
-      assert has_element?(view, "#model_market_cache_price_per_1m[value='0.004500']")
+      # El catálogo prellena lo que define al modelo (nombre corto, ventana de
+      # contexto y el vínculo de vuelta); nada queda bloqueado.
+      assert has_element?(view, "#model_name[value='gpt-5-nano']")
+      assert has_element?(view, "#model_context_window[value='128000']")
+      assert has_element?(view, "#catalog-linked")
     end
 
     test "a search with no match points at the custom tab", %{conn: conn} do

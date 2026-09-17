@@ -42,14 +42,6 @@ defmodule Tokengate.Providers.Model do
     # lab that carries no mark. Operator-owned, like the lab's own `icon`; a
     # linked lab always wins in the UI.
     field :icon, :string
-    # Informational market prices (USD per 1M tokens). Display-only:
-    # the billing chain (CostCalculator / manual_pricing / backfill) never
-    # reads these — it uses provider-reported costs plus the per-provider
-    # manual fallback on model_providers. Prefilled from the catalog when the
-    # model is created from it.
-    field :market_input_price_per_1m, :decimal
-    field :market_output_price_per_1m, :decimal
-    field :market_cache_price_per_1m, :decimal
 
     has_many :model_providers, Tokengate.Providers.ModelProvider
 
@@ -69,10 +61,7 @@ defmodule Tokengate.Providers.Model do
       :pinned,
       :catalog_model_key,
       :lab_key,
-      :icon,
-      :market_input_price_per_1m,
-      :market_output_price_per_1m,
-      :market_cache_price_per_1m
+      :icon
     ])
     |> validate_required([:name, :context_window])
     |> validate_inclusion(:model_type, @model_types)

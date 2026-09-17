@@ -16,7 +16,7 @@
 #   * 3 servicios máquina (con sub propia, one-shot y sin sub) + supervisores.
 #   * 2 proveedores custom + credenciales nuevas sobre builtins, una de ellas
 #     en `error` y otra `disabled` (para probar reactivación).
-#   * 11 modelos nuevos (9 llm + 2 embedding) con market pricing, precio manual,
+#   * 11 modelos nuevos (9 llm + 2 embedding) con precio manual,
 #     `prompt_cache_enabled`, `pinned`, TTL sticky, `extra_body`
 #     y rutas exclusivas de usuario / grupo / servicio.
 #   * ~11k `request_logs` repartidos por hora local de cada sujeto, con
@@ -487,7 +487,6 @@ defmodule Tokengate.DemoSeeds do
       %{
         name: "claude-opus-4.7",
         context_window: 200_000,
-        market: {15.0, 75.0, 1.50},
         prompt_cache_enabled: true,
         pinned: true,
         routes: [
@@ -498,7 +497,6 @@ defmodule Tokengate.DemoSeeds do
       %{
         name: "claude-sonnet-4.7",
         context_window: 200_000,
-        market: {3.0, 15.0, 0.30},
         prompt_cache_enabled: true,
         routes: [
           {openrouter, "anthropic/claude-sonnet-4.7", 0, {3.0, 15.0, 0.30}, []},
@@ -508,7 +506,6 @@ defmodule Tokengate.DemoSeeds do
       %{
         name: "gpt-5",
         context_window: 400_000,
-        market: {1.25, 10.0, 0.125},
         prompt_cache_enabled: true,
         pinned: true,
         routes: [
@@ -519,7 +516,6 @@ defmodule Tokengate.DemoSeeds do
       %{
         name: "gpt-5-mini",
         context_window: 400_000,
-        market: {0.25, 2.0, 0.025},
         prompt_cache_enabled: true,
         routes: [
           {openrouter, "openai/gpt-5-mini", 0, {0.25, 2.0, 0.025}, []},
@@ -529,7 +525,6 @@ defmodule Tokengate.DemoSeeds do
       %{
         name: "gemini-3-pro",
         context_window: 1_000_000,
-        market: {1.25, 10.0, 0.31},
         prompt_cache_enabled: true,
         routes: [
           {openrouter, "google/gemini-3-pro", 0, {1.25, 10.0, 0.31}, []}
@@ -538,7 +533,6 @@ defmodule Tokengate.DemoSeeds do
       %{
         name: "grok-4",
         context_window: 256_000,
-        market: {3.0, 15.0, 0.75},
         prompt_cache_enabled: true,
         routes: [
           {openrouter, "x-ai/grok-4", 0, {3.0, 15.0, 0.75}, []}
@@ -547,7 +541,6 @@ defmodule Tokengate.DemoSeeds do
       %{
         name: "kimi-k2",
         context_window: 256_000,
-        market: {0.60, 2.50, 0.12},
         routes: [
           {moonshot, "moonshotai/kimi-k2-0905", 0, {0.60, 2.50, 0.12}, []},
           {openrouter, "moonshotai/kimi-k2-0905", 1, nil, []}
@@ -556,7 +549,6 @@ defmodule Tokengate.DemoSeeds do
       %{
         name: "glm-5.2",
         context_window: 200_000,
-        market: {0.60, 2.20, 0.11},
         prompt_cache_enabled: true,
         routes: [
           {zai, "glm-5.2", 0, {0.60, 2.20, 0.11}, []},
@@ -567,7 +559,6 @@ defmodule Tokengate.DemoSeeds do
       %{
         name: "qwen3-coder",
         context_window: 256_000,
-        market: {0.30, 1.20, 0.06},
         lazy_cleanup_enabled: true,
         routes: [
           {opencode, "qwen3-coder", 0, {0.30, 1.20, 0.06}, []},
@@ -578,7 +569,6 @@ defmodule Tokengate.DemoSeeds do
         name: "bge-m3",
         context_window: 8_192,
         model_type: "embedding",
-        market: {0.01, 0.0, 0.0},
         routes: [
           {lite_llm, "/models/bge-m3", 0, {0.01, 0.0, 0.0}, []}
         ]
@@ -587,7 +577,6 @@ defmodule Tokengate.DemoSeeds do
         name: "text-embedding-3-large",
         context_window: 8_191,
         model_type: "embedding",
-        market: {0.13, 0.0, 0.0},
         routes: [
           {openrouter, "openai/text-embedding-3-large", 0, {0.13, 0.0, 0.0}, []}
         ]
@@ -654,10 +643,7 @@ defmodule Tokengate.DemoSeeds do
             model_type: Map.get(spec, :model_type, "llm"),
             prompt_cache_enabled: Map.get(spec, :prompt_cache_enabled, false),
             lazy_cleanup_enabled: Map.get(spec, :lazy_cleanup_enabled, false),
-            pinned: Map.get(spec, :pinned, false),
-            market_input_price_per_1m: price(elem(spec.market, 0)),
-            market_output_price_per_1m: price(elem(spec.market, 1)),
-            market_cache_price_per_1m: price(elem(spec.market, 2))
+            pinned: Map.get(spec, :pinned, false)
           })
 
         model
@@ -666,10 +652,6 @@ defmodule Tokengate.DemoSeeds do
         model
     end
   end
-
-  defp price(nil), do: nil
-  defp price(float) when is_float(float), do: Decimal.from_float(float) |> Decimal.round(6)
-  defp price(int) when is_integer(int), do: Decimal.new(int)
 
   defp model_by_name(name), do: Repo.get_by(Model, name: name)
 

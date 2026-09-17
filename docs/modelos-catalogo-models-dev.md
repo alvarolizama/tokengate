@@ -23,7 +23,7 @@ Fecha: 2026-09-17 · Base: `main` (hay WIP sin commitear en `maintenance_live`,
 |---|---|---|
 | D1 | El espejo cubre **solo ofertas de proveedores que Tokengate puede servir** (`Catalog.supported?/1`) | 181 de 220 proveedores · 6101 ofertas · 2953 modelos. Los 39 no soportados no entran al picker porque no son enrutables |
 | D2 | `models.name` (la API pública que mandan los clientes) se **prellena con el id de models.dev** y queda **editable** | `openai/gpt-5-nano`, `glm-5.2`… El operador puede acortarlo; el vínculo con el catálogo se guarda aparte (`models.catalog_model_key`) y no depende del nombre |
-| D3 | Los precios del catálogo **prellenan** campos editables: `models.market_*` (display) y `model_providers.*_cost_per_million` (fallback de facturación) | Nada se factura distinto por sí solo; el operador ve el precio real y lo corrige si quiere |
+| D3 | Los precios del catálogo **prellenan** `model_providers.*_cost_per_million` (fallback de facturación) | Nada se factura distinto por sí solo; el operador ve el precio real y lo corrige si quiere |
 | D4 | Se agrega `models.lab_key` → `labs` (FK nullable) y el logo del lab en la tarjeta | Reusa la tabla `labs` que ya existe y ya trae logos |
 | D5 | El refresh **no agrega descargas**: reusa los dos payloads que `CatalogRefreshWorker` ya baja | `api.json` ya se baja (worker:75) y `models.json` ya se baja para labs (worker:357) |
 | D6 | El id de la oferta = el id que models.dev publica por proveedor, y se usa como `provider_model` sugerido | Hoy ese id **es igual** a la clave canónica (medido: 0 diferencias en 7843 entradas); se mantiene el hint del `/models` en vivo como validación |
@@ -131,7 +131,7 @@ de escritura lo mide el `fingerprint`, no el diff.
    `ctx`, precio in/out, **"N proveedores"** y badge **"ya existe"** si
    `models.name` ya está dado de alta.
 4. Click en la fila → `pick_catalog_model` prellena el formulario existente
-   (`name`, `context_window`, `market_*`, `model_type`) + `catalog_model_key`.
+   (`name`, `context_window`, `model_type`) + `catalog_model_key`.
    El formulario sigue siendo el de hoy: todo editable, nada bloqueado.
 5. Guardar → crea el modelo (`Providers.create_model/1`) y **encadena** el paso B
    con el modelo recién creado y la lista de proveedores **ya filtrada a los que
@@ -244,11 +244,11 @@ deps.audit, format, test).
 
 ## 9. Lo que cambió respecto al plan (hallazgos al implementar)
 
-### 9.1 `/models.json` no publica precios — el `market_*` sale de la mejor oferta
+### 9.1 `/models.json` no publica precios — el `cost_*` del espejo sale de la mejor oferta
 
 Medido: **0 de los 403 canónicos traen `cost`**. El plan asumía que el precio de
-mercado del modelo venía del canónico; no existe. El precio real vive solo en el
-registro de cada proveedor, así que el `cost_*` de `catalog_models` es la
+referencia del modelo venía del canónico; no existe. El precio real vive solo en
+el registro de cada proveedor, así que el `cost_*` de `catalog_models` es la
 **oferta más barata** que sirve el modelo (`cheapest_by_model/1`): una oferta sin
 precio nunca le gana a una que sí lo tiene, y entre dos con precio gana el menor
 input. Es lo honesto: "este modelo se consigue desde aquí".
