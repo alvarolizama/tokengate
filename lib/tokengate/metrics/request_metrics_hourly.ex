@@ -20,6 +20,10 @@ defmodule Tokengate.Metrics.RequestMetricsHourly do
     field :day, :date
 
     field :hour_utc, :utc_datetime
+    # Identidad durable del gasto (misma que request_logs.user_id): las
+    # lecturas por usuario se sirven del rollup sin depender de que la
+    # membresía (group_member_id) siga viva. NULL en los buckets de servicio.
+    field :user_id, :binary_id
     field :group_member_id, :binary_id
     field :model_id, :binary_id
     field :provider_id, :binary_id
@@ -38,7 +42,7 @@ defmodule Tokengate.Metrics.RequestMetricsHourly do
     field :updated_at, :utc_datetime
   end
 
-  @fields ~w(day hour_utc group_member_id model_id provider_id request_count error_count
+  @fields ~w(day hour_utc user_id group_member_id model_id provider_id request_count error_count
     prompt_tokens completion_tokens cache_read_tokens cache_creation_tokens cost_micro
     total_latency_ms latency_count)a
 

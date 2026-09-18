@@ -84,6 +84,7 @@ defmodule Tokengate.Metrics.StatsQueries do
       parts = [
         Rollup.summary_from_rollup(
           member_ids: filters[:member_ids] || filters[:group_member_ids],
+          user_ids: filters[:user_ids],
           from: rollup_from,
           to: bound
         )
@@ -227,7 +228,8 @@ defmodule Tokengate.Metrics.StatsQueries do
   defp rollup_breakdown(:model, opts) do
     Rollup.breakdown_by_model_from_rollup(
       from: ceil_hour(Keyword.fetch!(opts, :from)),
-      to: tail_floor()
+      to: tail_floor(),
+      user_ids: opts[:user_ids]
     )
   end
 
@@ -235,7 +237,8 @@ defmodule Tokengate.Metrics.StatsQueries do
     Rollup.breakdown_by_member_from_rollup(
       from: ceil_hour(Keyword.fetch!(opts, :from)),
       to: tail_floor(),
-      member_ids: opts[:member_ids]
+      member_ids: opts[:member_ids],
+      user_ids: opts[:user_ids]
     )
   end
 
@@ -243,7 +246,8 @@ defmodule Tokengate.Metrics.StatsQueries do
     Rollup.breakdown_by_group_from_rollup(
       from: ceil_hour(Keyword.fetch!(opts, :from)),
       to: tail_floor(),
-      member_ids: opts[:member_ids]
+      member_ids: opts[:member_ids],
+      user_ids: opts[:user_ids]
     )
   end
 
@@ -340,6 +344,7 @@ defmodule Tokengate.Metrics.StatsQueries do
       }
     )
     |> maybe_member_ids(opts[:member_ids])
+    |> maybe_user_ids(opts[:user_ids])
     |> Repo.all()
     |> Enum.map(&{&1.hour, &1.n})
   end
@@ -348,6 +353,11 @@ defmodule Tokengate.Metrics.StatsQueries do
 
   defp maybe_member_ids(query, ids),
     do: where(query, [rl], rl.group_member_id in ^ids)
+
+  defp maybe_user_ids(query, nil), do: query
+
+  defp maybe_user_ids(query, ids),
+    do: where(query, [rl], rl.user_id in ^ids)
 
   # ---------------------------------------------------------------------
   # Merging
@@ -449,7 +459,7 @@ defmodule Tokengate.Metrics.StatsQueries do
       rollup_scope?(filters_or_opts)
   end
 
-  @rollup_keys [:from, :to, :timezone, :member_ids, :group_member_ids]
+  @rollup_keys [:from, :to, :timezone, :member_ids, :group_member_ids, :user_ids]
 
   defp rollup_scope?(filters) when is_map(filters),
     do: filters |> Map.keys() |> Enum.all?(&(&1 in @rollup_keys))

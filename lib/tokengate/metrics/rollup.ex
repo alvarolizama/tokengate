@@ -283,6 +283,7 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
+      |> maybe_user_ids(Keyword.get(opts, :user_ids))
       |> join(:left, [rl], ma in Model, on: rl.model_id == ma.id, as: :model)
       |> group_by([model: ma], ma.id)
       |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
@@ -397,18 +398,27 @@ defmodule Tokengate.Metrics.Rollup do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
+    # Atribución por USUARIO (`rl.user_id`), no por membresía: los logs cuya
+    # membresía fue rotada (group_member_id NULL tras el SET NULL) siguen
+    # contando para su usuario. La membresía y su grupo se resuelven con LEFT
+    # JOIN — cuando viven dan el contexto (grupo, miembro), cuando no, la fila
+    # sobrevive con "—".
     query =
       RequestLog
-      |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
-      |> join(:inner, [_, tm], t in assoc(tm, :group))
-      |> join(:inner, [_, tm], u in assoc(tm, :user))
+      |> join(:left, [rl], tm in GroupMember, on: rl.group_member_id == tm.id, as: :member)
+      |> join(:left, [member: tm], t in assoc(tm, :group), as: :group)
+      |> join(:left, [rl], u in Tokengate.Accounts.User, on: rl.user_id == u.id, as: :user)
       |> maybe_member_group_filter(group_id)
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
-      |> group_by([rl, tm, t, u], [tm.id, t.id, u.id])
+      |> maybe_user_ids(Keyword.get(opts, :user_ids))
+      # Sólo logs de usuario: los de servicio (user_id nil) no son "miembros"
+      # — sin esto aparecerían como fila "—" en rankings que enlazan user_id.
+      |> where([rl], rl.subject_type == "user")
+      |> group_by([rl, member: tm, group: t, user: u], [u.id, tm.id, t.id])
       |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
-      |> select([rl, tm, t, u], %{
+      |> select([rl, member: tm, group: t, user: u], %{
         group_member_id: tm.id,
         user_id: u.id,
         group_name: t.name,
@@ -474,24 +484,29 @@ defmodule Tokengate.Metrics.Rollup do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
+    # Atribución por USUARIO (`rl.user_id`): un usuario cuya membresía fue
+    # rotada sigue apareciendo en el ranking con TODO su histórico — antes
+    # el INNER JOIN a group_members lo hacía desaparecer junto a su gasto.
+    # El contexto (membresías/grupos) se resuelve con LEFT JOIN.
     query =
       RequestLog
-      |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
-      |> join(:inner, [_, tm], u in assoc(tm, :user))
+      |> join(:left, [rl], tm in GroupMember, on: rl.group_member_id == tm.id, as: :member)
+      |> join(:left, [rl], u in Tokengate.Accounts.User, on: rl.user_id == u.id, as: :user)
+      |> where([user: u], not is_nil(u.id))
       |> maybe_provider_id(Keyword.get(opts, :provider_id))
       |> maybe_from(from)
       |> maybe_to(to)
-      |> group_by([rl, tm, u], u.id)
+      |> group_by([user: u], u.id)
       |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
-      |> select([rl, tm, u], %{
+      |> select([rl, member: tm, user: u], %{
         user_id: u.id,
         user_name: u.name,
         user_email: u.email,
         membership_count: count(tm.id, :distinct),
         # `::text` explícito: `group_id` es `:binary_id` (uuid) y un
         # `ARRAY_AGG` sin tipo llega como lista de 16 bytes crudos, no como
-        # UUID en texto — con esos bytes el lookup de nombres fallaba SIEMPRE y
-        # la columna de perfiles de límites salía "—" para todos.
+        # UUID en texto — con esos bytes el lookup de nombres fallaba SIEMPRE
+        # y la columna de perfiles de límites salía "—" para todos.
         group_ids: fragment("ARRAY_AGG(DISTINCT ?::text)", tm.group_id),
         request_count: count(rl.id),
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd),
@@ -515,8 +530,10 @@ defmodule Tokengate.Metrics.Rollup do
         user_name: row.user_name,
         user_email: row.user_email,
         memberships: row.membership_count,
+        # `|| []`: un usuario cuyos logs son todos post-rotación no tiene
+        # grupo que agregar — ARRAY_AGG devuelve NULL, no array vacío.
         groups:
-          row.group_ids
+          (row.group_ids || [])
           |> Enum.reject(&is_nil/1)
           |> Enum.map(&%{id: &1, name: Map.get(group_names_by_id, &1, "—")})
           |> Enum.sort_by(& &1.name),
@@ -716,6 +733,12 @@ defmodule Tokengate.Metrics.Rollup do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
+    # INNER JOIN member/group: la atribución por GRUPO es exclusiva de los
+    # logs con membresía viva — un log rotado no pertenece a ningún grupo
+    # actual y un log de servicio tampoco (tiene su propio breakdown). Sin el
+    # INNER, filas con group_id nil llegan a consumidores que enlazan por ese
+    # id (tab Grupos de /stats) y revientan el route. El dinero rotado sigue
+    # contando en las vistas por USUARIO (identidad durable).
     query =
       RequestLog
       |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
@@ -723,6 +746,8 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_provider_id(Keyword.get(opts, :provider_id))
       |> maybe_from(from)
       |> maybe_to(to)
+      |> maybe_member_ids(Keyword.get(opts, :member_ids))
+      |> maybe_user_ids(Keyword.get(opts, :user_ids))
       |> group_by([rl, _, t], t.id)
       |> order_by([rl], desc: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd))
       |> select([rl, _, t], %{
@@ -2052,6 +2077,29 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   @doc """
+  Same as `hourly_series_for_members/3`, but scoped by **user id** — the
+  durable identity (`request_logs.user_id`). Survives membership rotation:
+  a log written under a since-deleted membership still counts for its user,
+  both in the rollup half (`user_id` bucket dimension) and in the raw
+  fallback.
+
+  `[]` when `user_ids` is `[]`.
+  """
+  def hourly_series_for_users(user_ids, opts \\ [], timezone \\ "Etc/UTC")
+      when is_list(user_ids) do
+    case hourly_series_from_rollup(Keyword.merge(opts, timezone: timezone, user_ids: user_ids)) do
+      [] when user_ids != [] ->
+        request_logs_series_for_users(user_ids, opts, timezone)
+
+      [] ->
+        []
+
+      rows ->
+        rows
+    end
+  end
+
+  @doc """
   Hour-bucketed series served directly from the `request_metrics_hourly`
   rollup table (no fallback). See `hourly_series_for_members/3`.
 
@@ -2068,12 +2116,14 @@ defmodule Tokengate.Metrics.Rollup do
     to = Keyword.get(opts, :to)
     timezone = Keyword.get(opts, :timezone, "Etc/UTC")
     member_ids = Keyword.get(opts, :member_ids)
+    user_ids = Keyword.get(opts, :user_ids)
 
     bucketed =
       RequestMetricsHourly
       |> maybe_rollup_from(from)
       |> maybe_rollup_to(to)
       |> maybe_rollup_member_ids(member_ids)
+      |> maybe_rollup_user_ids(user_ids)
       |> select([m], %{
         bucket:
           fragment(
@@ -2143,6 +2193,39 @@ defmodule Tokengate.Metrics.Rollup do
       })
       |> subquery()
 
+    series_from_bucketed(bucketed)
+  end
+
+  # Raw fallback scoped by user id — same shape, durable identity. Logs whose
+  # membership was rotated (group_member_id NULL) still match here.
+  defp request_logs_series_for_users(user_ids, opts, timezone) do
+    from = Keyword.fetch!(opts, :from)
+    to = Keyword.get(opts, :to)
+
+    bucketed =
+      RequestLog
+      |> where([rl], rl.user_id in ^user_ids and rl.inserted_at >= ^from)
+      |> maybe_to(to)
+      |> select([rl], %{
+        bucket:
+          fragment(
+            "date_trunc('hour', ? AT TIME ZONE ?) AT TIME ZONE ?",
+            rl.inserted_at,
+            ^timezone,
+            ^timezone
+          ),
+        id: rl.id,
+        provider_cost_usd: rl.provider_cost_usd,
+        prompt_tokens: rl.prompt_tokens,
+        completion_tokens: rl.completion_tokens,
+        latency_ms: rl.latency_ms
+      })
+      |> subquery()
+
+    series_from_bucketed(bucketed)
+  end
+
+  defp series_from_bucketed(bucketed) do
     query =
       from(b in bucketed,
         group_by: b.bucket,
@@ -2228,12 +2311,14 @@ defmodule Tokengate.Metrics.Rollup do
     from = Keyword.fetch!(opts, :from)
     to = Keyword.get(opts, :to)
     member_ids = Keyword.get(opts, :member_ids)
+    user_ids = Keyword.get(opts, :user_ids)
 
     result =
       RequestMetricsHourly
       |> maybe_rollup_from(from)
       |> maybe_rollup_to(to)
       |> maybe_rollup_member_ids(member_ids)
+      |> maybe_rollup_user_ids(user_ids)
       |> select([m], %{
         total_cost_micro: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro),
         total_prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.prompt_tokens),
@@ -2324,6 +2409,7 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_rollup_from(Keyword.fetch!(opts, :from))
       |> maybe_rollup_to(Keyword.get(opts, :to))
       |> maybe_rollup_member_ids(Keyword.get(opts, :member_ids))
+      |> maybe_rollup_user_ids(Keyword.get(opts, :user_ids))
       |> join(:left, [m], ma in Model, on: m.model_id == ma.id, as: :model)
       |> group_by([model: ma], ma.id)
       |> order_by([m], desc: fragment("COALESCE(SUM(?), 0)", m.cost_micro))
@@ -2367,9 +2453,15 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_rollup_from(Keyword.fetch!(opts, :from))
       |> maybe_rollup_to(Keyword.get(opts, :to))
       |> maybe_rollup_member_ids(Keyword.get(opts, :member_ids))
+      |> maybe_rollup_user_ids(Keyword.get(opts, :user_ids))
       |> join(:left, [m], tm in GroupMember, on: m.group_member_id == tm.id, as: :member)
       |> join(:left, [member: tm], t in assoc(tm, :group), as: :group)
-      |> join(:left, [member: tm], u in assoc(tm, :user), as: :user)
+      # Usuario por la columna DURABLE del bucket (m.user_id), no vía
+      # membresía: un huérfano (membresía muerta) conserva su usuario.
+      |> join(:left, [m], u in Tokengate.Accounts.User, on: m.user_id == u.id, as: :user)
+      # Sólo buckets con usuario atribuible (los de servicio llevan
+      # user_id nil): los rankings de miembros enlazan user_id/user_email.
+      |> where([user: u], not is_nil(u.id))
       |> group_by([member: tm, group: t, user: u], [tm.id, t.id, u.id])
       |> order_by([m], desc: fragment("COALESCE(SUM(?), 0)", m.cost_micro))
       |> select([m, member: tm, group: t, user: u], %{
@@ -2416,8 +2508,14 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_rollup_from(Keyword.fetch!(opts, :from))
       |> maybe_rollup_to(Keyword.get(opts, :to))
       |> maybe_rollup_member_ids(Keyword.get(opts, :member_ids))
+      |> maybe_rollup_user_ids(Keyword.get(opts, :user_ids))
       |> join(:left, [m], tm in GroupMember, on: m.group_member_id == tm.id, as: :member)
       |> join(:left, [member: tm], t in assoc(tm, :group), as: :group)
+      # Sólo filas con GRUPO atribuible: los huérfanos (membresía muerta) y
+      # los buckets de servicio dejan group_id nil y revientan a los
+      # consumidores que enlazan por ese id (tab Grupos de /stats). Ese
+      # dinero se atribuye en las vistas por usuario, no aquí.
+      |> where([group: t], not is_nil(t.id))
       |> group_by([group: t], t.id)
       |> order_by([m], desc: fragment("COALESCE(SUM(?), 0)", m.cost_micro))
       |> select([m, group: t], %{
@@ -2469,6 +2567,15 @@ defmodule Tokengate.Metrics.Rollup do
 
   defp maybe_rollup_member_ids(query, member_ids) when is_list(member_ids) do
     where(query, [m], m.group_member_id in ^member_ids)
+  end
+
+  # Identidad durable: los buckets post-rotación llevan group_member_id NULL
+  # pero user_id presente — el scoping por usuario SIEMPRE pasa por aquí,
+  # nunca por member_ids, o pierde el histórico de membresías rotadas.
+  defp maybe_rollup_user_ids(query, nil), do: query
+
+  defp maybe_rollup_user_ids(query, user_ids) when is_list(user_ids) do
+    where(query, [m], m.user_id in ^user_ids)
   end
 
   # Integer micro-USD → Decimal USD (6dp), same convention as the Collector.
@@ -2535,6 +2642,14 @@ defmodule Tokengate.Metrics.Rollup do
 
   defp maybe_member_ids(query, member_ids) when is_list(member_ids) do
     where(query, [rl], rl.group_member_id in ^member_ids)
+  end
+
+  # Scoping por usuario (identidad durable, `request_logs.user_id`): los logs
+  # cuya membresía fue rotada (group_member_id NULL) siguen contando.
+  defp maybe_user_ids(query, nil), do: query
+
+  defp maybe_user_ids(query, user_ids) when is_list(user_ids) do
+    where(query, [rl], rl.user_id in ^user_ids)
   end
 
   # Single service_id filter (used for service drill-down).

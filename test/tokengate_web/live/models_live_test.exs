@@ -1181,6 +1181,28 @@ defmodule TokengateWeb.ModelsLiveTest do
       assert has_element?(view, "#model-form")
     end
 
+    # Regresión: escribir el nombre con el ícono vacío crasheaba el render (la
+    # vista previa le pasaba `name: ""` a `<.icon>`), mataba el proceso y el
+    # navegador reconectaba con el modal «reiniciado».
+    test "typing on the custom tab with a blank icon keeps the modal alive", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+      view |> element("#new-model-btn") |> render_click()
+      view |> element("#tab-custom") |> render_click()
+
+      html =
+        view
+        |> form("#model-form", %{"model" => %{"name" => "mi-modelo"}})
+        |> render_change()
+
+      assert has_element?(view, "#model-form")
+      assert has_element?(view, "#model_name[value='mi-modelo']")
+      assert html =~ "mi-modelo"
+    end
+
     test "searching narrows the catalog and picking fills the form", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
 

@@ -28,9 +28,8 @@ defmodule TokengateWeb.UserStatsLive do
   def mount(%{"user_id" => user_id}, _session, socket) do
     user = Accounts.get_user!(user_id)
     memberships = Accounts.list_group_members_for_user(user.id)
-    member_ids = Enum.map(memberships, & &1.id)
 
-    if connected?(socket) and member_ids != [] do
+    if connected?(socket) do
       Phoenix.PubSub.subscribe(Tokengate.PubSub, "logs:new")
     end
 
@@ -39,7 +38,6 @@ defmodule TokengateWeb.UserStatsLive do
       |> assign(:page_title, gettext("Stats") <> " · #{user.email} · Tokengate")
       |> assign(:user, user)
       |> assign(:memberships, memberships)
-      |> assign(:group_member_ids, member_ids)
       |> assign(:timezone, socket.assigns[:timezone] || "Etc/UTC")
       |> assign(:is_admin, socket.assigns[:current_user].global_role == "admin")
       |> assign(:filters, default_filters())
@@ -71,7 +69,9 @@ defmodule TokengateWeb.UserStatsLive do
 
   @impl true
   def handle_info({:new_log, log}, socket) do
-    if log.group_member_id in socket.assigns.group_member_ids do
+    # Identidad durable: el log pertenece al usuario por `user_id`, no por
+    # la membresía — un log post-rotación (member nil) también es suyo.
+    if log.user_id == socket.assigns.user.id do
       timezone = socket.assigns.timezone
       filters = socket.assigns.filters
 
@@ -138,10 +138,13 @@ defmodule TokengateWeb.UserStatsLive do
   ## Data loading ---------------------------------------------------------
 
   defp load_summary(socket) do
-    ids = socket.assigns.group_member_ids
     user_id = socket.assigns.user.id
 
-    # The two member_stats calls are the expensive part of every PubSub
+    # Stats por USUARIO (identidad durable): sobrevive a la rotación de la
+    # membresía — antes se scopeaba por `group_member_ids` y al rotar, el
+    # histórico desaparecía de esta página aunque el crédito ya se hubiera
+    # debitado.
+    # The two user_stats calls are the expensive part of every PubSub
     # refresh here (each runs ~4 Postgres aggregates). Wrap them in the
     # shared DashboardCache ETS (5s TTL, keyed per user + window) so N
     # admins watching this page share one recompute every ~5s instead of
@@ -150,67 +153,61 @@ defmodule TokengateWeb.UserStatsLive do
     |> assign(
       :summary_5d,
       DashboardCache.fetch_or_compute({:member_stats, user_id, "5d"}, fn ->
-        Logs.member_stats(ids, from: days_ago(5))
+        Logs.user_stats(user_id, from: days_ago(5))
       end)
     )
     |> assign(
       :summary_30d,
       DashboardCache.fetch_or_compute({:member_stats, user_id, "30d"}, fn ->
-        Logs.member_stats(ids, from: days_ago(30))
+        Logs.user_stats(user_id, from: days_ago(30))
       end)
     )
   end
 
   defp load_logs(socket, mode) do
-    ids = socket.assigns.group_member_ids
+    # Filtrado por usuario (identidad durable): los logs post-rotación
+    # también aparecen.
+    base_filters =
+      socket.assigns.filters
+      |> Map.put("user_ids", [socket.assigns.user.id])
+      |> drop_empty_filters()
 
-    if ids == [] do
-      socket
-      |> assign(:has_more, false)
-      |> stream(:logs, [], reset: true)
-    else
-      base_filters =
-        socket.assigns.filters
-        |> Map.put("group_member_ids", ids)
-        |> drop_empty_filters()
+    logs =
+      case mode do
+        :reset ->
+          Logs.list_logs(Map.put(base_filters, "limit", @page_size))
 
-      logs =
-        case mode do
-          :reset ->
-            Logs.list_logs(Map.put(base_filters, "limit", @page_size))
+        :more ->
+          cursor_filters =
+            if socket.assigns.cursor do
+              Map.put(base_filters, "before", socket.assigns.cursor)
+            else
+              base_filters
+            end
 
-          :more ->
-            cursor_filters =
-              if socket.assigns.cursor do
-                Map.put(base_filters, "before", socket.assigns.cursor)
-              else
-                base_filters
-              end
-
-            Logs.list_logs(Map.put(cursor_filters, "limit", @page_size))
-        end
-
-      has_more = length(logs) == @page_size
-
-      socket =
-        socket
-        |> assign(:has_more, has_more)
-        |> case do
-          s when mode == :reset ->
-            s |> stream(:logs, logs, reset: true)
-
-          s ->
-            s |> stream(:logs, logs)
-        end
-
-      case logs do
-        [] ->
-          socket
-
-        _ ->
-          oldest = List.last(logs)
-          assign(socket, :cursor, oldest.inserted_at)
+          Logs.list_logs(Map.put(cursor_filters, "limit", @page_size))
       end
+
+    has_more = length(logs) == @page_size
+
+    socket =
+      socket
+      |> assign(:has_more, has_more)
+      |> case do
+        s when mode == :reset ->
+          s |> stream(:logs, logs, reset: true)
+
+        s ->
+          s |> stream(:logs, logs)
+      end
+
+    case logs do
+      [] ->
+        socket
+
+      _ ->
+        oldest = List.last(logs)
+        assign(socket, :cursor, oldest.inserted_at)
     end
   end
 

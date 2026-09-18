@@ -1503,12 +1503,22 @@ defmodule TokengateWeb.ModelsLive do
 
   # El formulario abierto manda sobre la fila guardada: lo que se elige se ve en
   # la vista previa antes de guardar.
+  #
+  # Los blanks llegan como `""` (el valor del form sale de los params crudos,
+  # no del changeset normalizado), y `""` es truthy: sin este filtro la vista
+  # previa le pasaría `name: ""` a `<.icon>` y el render crashearía la vista
+  # entera — el modal «se reinicia» al primer teclado en la pestaña custom.
   defp preview_model(form) do
     %Model{
-      lab_key: form[:lab_key].value || nil,
-      icon: form[:icon].value || nil
+      lab_key: blank_to_nil(form[:lab_key].value),
+      icon: blank_to_nil(form[:icon].value)
     }
   end
+
+  defp blank_to_nil(value) when is_binary(value),
+    do: if(value == "", do: nil, else: value)
+
+  defp blank_to_nil(value), do: value
 
   defp linked_lab(form, labs_by_key) do
     Map.get(labs_by_key || %{}, form[:lab_key].value)

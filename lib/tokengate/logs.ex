@@ -187,6 +187,7 @@ defmodule Tokengate.Logs do
     |> maybe_where(:subject_type, filters)
     |> maybe_where(:api_key_id, filters)
     |> maybe_where_member_ids(filters)
+    |> maybe_where_user_ids(filters)
     |> maybe_where_group_id(filters)
     |> maybe_where(:provider_id, filters)
     |> maybe_where(:credential_id, filters)
@@ -235,6 +236,17 @@ defmodule Tokengate.Logs do
     case value do
       nil -> query
       ids when is_list(ids) -> where(query, [rl], rl.group_member_id in ^ids)
+    end
+  end
+
+  # Scoping por usuario (identidad durable): el camino del dashboard y de
+  # cualquier lectura que deba cuadrar con el motor de créditos.
+  defp maybe_where_user_ids(query, filters) do
+    value = Map.get(filters, :user_ids) || Map.get(filters, "user_ids")
+
+    case value do
+      nil -> query
+      ids when is_list(ids) -> where(query, [rl], rl.user_id in ^ids)
     end
   end
 
@@ -989,6 +1001,58 @@ defmodule Tokengate.Logs do
   defp apply_member_stats_range(query, _), do: query
 
   @doc """
+  Aggregated stats for a single **user**, scoped by the durable identity
+  (`request_logs.user_id`) instead of by memberships — mirror of
+  `member_stats/2`. Survives membership rotation: a user whose group was
+  changed keeps ALL their history in these numbers, matching what the
+  credit engine debited.
+
+  Returns the same shape as `member_stats/2`.
+  """
+  def user_stats(user_id, opts \\ []) when is_binary(user_id) do
+    opts_map =
+      cond do
+        is_map(opts) -> opts
+        is_list(opts) -> Map.new(opts)
+        true -> %{}
+      end
+
+    range =
+      opts_map
+      |> Map.take([:from, :to])
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+
+    base = where(RequestLog, [rl], rl.user_id == ^user_id)
+
+    summary =
+      cost_summary(Map.merge(%{user_ids: [user_id]}, range))
+
+    status_class_breakdown = status_breakdown_for_user(user_id, opts_map)
+    top_models = top_models_for_user(user_id, 5, opts_map)
+
+    last_request_at =
+      base
+      |> apply_member_stats_range(range)
+      |> select([rl], rl.inserted_at)
+      |> order_by([rl], desc: rl.inserted_at)
+      |> limit(1)
+      |> Repo.one()
+
+    realtime_window =
+      base
+      |> apply_member_stats_range(range)
+      |> realtime_summary_for_member()
+
+    Map.merge(summary, %{
+      status_breakdown: status_class_breakdown,
+      top_models: top_models,
+      last_request_at: last_request_at,
+      realtime_5min: realtime_window
+    })
+  end
+
+  @doc """
   Aggregated stats for a single **service** (the service-detail stats page).
 
   Mirror of `member_stats/2` for the service subject: a service has no
@@ -1092,6 +1156,27 @@ defmodule Tokengate.Logs do
           optional(String.t()) => non_neg_integer()
         }
   def status_breakdown_for_ids(ids, opts \\ []) do
+    status_breakdown_scoped(
+      where(RequestLog, [rl], rl.group_member_id in ^ids),
+      opts
+    )
+  end
+
+  @doc """
+  Same as `status_breakdown_for_ids/2`, but scoped by **user id** — the
+  durable identity (`request_logs.user_id`). Survives membership rotation.
+  """
+  @spec status_breakdown_for_user(binary(), keyword() | map()) :: %{
+          optional(String.t()) => non_neg_integer()
+        }
+  def status_breakdown_for_user(user_id, opts \\ []) when is_binary(user_id) do
+    status_breakdown_scoped(
+      where(RequestLog, [rl], rl.user_id == ^user_id),
+      opts
+    )
+  end
+
+  defp status_breakdown_scoped(%Ecto.Query{} = base, opts) do
     opts_map =
       cond do
         is_map(opts) -> opts
@@ -1107,8 +1192,7 @@ defmodule Tokengate.Logs do
 
     empty = %{"2xx" => 0, "4xx" => 0, "5xx" => 0}
 
-    RequestLog
-    |> where([rl], rl.group_member_id in ^ids)
+    base
     |> apply_member_stats_range(range)
     |> group_by([rl], fragment("CASE WHEN ? BETWEEN 200 AND 299 THEN '2xx'
                                  WHEN ? BETWEEN 400 AND 499 THEN '4xx'
@@ -1134,6 +1218,29 @@ defmodule Tokengate.Logs do
           %{required(atom()) => term()}
         ]
   def top_models_for_ids(ids, limit, opts \\ []) do
+    top_models_scoped(
+      where(RequestLog, [rl], rl.group_member_id in ^ids),
+      limit,
+      opts
+    )
+  end
+
+  @doc """
+  Same as `top_models_for_ids/3`, but scoped by **user id** — the durable
+  identity (`request_logs.user_id`). Survives membership rotation.
+  """
+  @spec top_models_for_user(binary(), pos_integer(), keyword() | map()) :: [
+          %{required(atom()) => term()}
+        ]
+  def top_models_for_user(user_id, limit, opts \\ []) when is_binary(user_id) do
+    top_models_scoped(
+      where(RequestLog, [rl], rl.user_id == ^user_id),
+      limit,
+      opts
+    )
+  end
+
+  defp top_models_scoped(%Ecto.Query{} = base, limit, opts) do
     opts_map =
       cond do
         is_map(opts) -> opts
@@ -1147,8 +1254,7 @@ defmodule Tokengate.Logs do
       |> Enum.reject(fn {_k, v} -> is_nil(v) end)
       |> Map.new()
 
-    RequestLog
-    |> where([rl], rl.group_member_id in ^ids)
+    base
     |> apply_member_stats_range(range)
     |> group_by([rl], rl.model_requested)
     |> select([rl], %{

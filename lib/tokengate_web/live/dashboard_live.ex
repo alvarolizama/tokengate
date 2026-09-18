@@ -64,7 +64,12 @@ defmodule TokengateWeb.DashboardLive do
       |> assign(:breakdown_group, [])
       |> assign(:active_breakdown, "model")
       |> assign(:scope_label, "Personal")
-      |> assign(:scope_member_ids, user_member_ids(user))
+      # Scope por USUARIO (identidad durable, `request_logs.user_id`): la
+      # misma que usa el motor de créditos. Antes se scopeaba por las
+      # membresías ACTUALES (`group_member_id`): al rotar una membresía, su
+      # histórico quedaba fuera del dashboard aunque el presupuesto ya lo
+      # hubiera debitado — el KPI de costo no cuadraba con el saldo.
+      |> assign(:scope_user_ids, [user.id])
       |> assign(:new_token, nil)
       |> assign(:new_token_group, nil)
       |> assign(:supervised_services_count, count_supervised_services(user))
@@ -148,12 +153,6 @@ defmodule TokengateWeb.DashboardLive do
   # ---------------------------------------------------------------------------
   # Scope helpers ----------------------------------------------------------
   # ---------------------------------------------------------------------------
-
-  # User-wide scope: EVERY user (admin included) sees only their own
-  # memberships on /dashboard. The org-wide view lives in /stats.
-  defp user_member_ids(user) do
-    user.id |> Accounts.list_group_members_for_user() |> Enum.map(& &1.id)
-  end
 
   # Count of services the user supervises (read-only role). Used to show a
   # shortcut card on /dashboard when > 0.
@@ -407,11 +406,11 @@ defmodule TokengateWeb.DashboardLive do
     period = socket.assigns[:period] || "today"
     timezone = socket.assigns[:timezone] || "Etc/UTC"
     cache_key = DashboardCache.build_key(user.id, period, timezone)
-    member_ids = socket.assigns[:scope_member_ids] || []
+    user_ids = socket.assigns[:scope_user_ids] || []
 
     bundle =
       DashboardCache.fetch_or_compute(cache_key, fn ->
-        compute_metrics_bundle(member_ids, period, timezone)
+        compute_metrics_bundle(user_ids, period, timezone)
       end)
 
     apply_metrics_bundle(socket, bundle)
@@ -426,12 +425,12 @@ defmodule TokengateWeb.DashboardLive do
   # TTL) dispatches the Postgres work to `start_async/3` so the click
   # replies instantly while `loading: true`; the bundle lands via
   # `handle_async/3`. The task closure captures only plain values (user id,
-  # period, timezone, member ids) — never the socket.
+  # period, timezone, user ids) — never the socket.
   defp load_metrics_async(socket, user) do
     period = socket.assigns[:period] || "today"
     timezone = socket.assigns[:timezone] || "Etc/UTC"
     cache_key = DashboardCache.build_key(user.id, period, timezone)
-    member_ids = socket.assigns[:scope_member_ids] || []
+    user_ids = socket.assigns[:scope_user_ids] || []
 
     case DashboardCache.fetch(cache_key) do
       {:ok, bundle} ->
@@ -443,7 +442,7 @@ defmodule TokengateWeb.DashboardLive do
         |> start_async(:metrics_bundle, fn ->
           bundle =
             DashboardCache.fetch_or_compute(cache_key, fn ->
-              compute_metrics_bundle(member_ids, period, timezone)
+              compute_metrics_bundle(user_ids, period, timezone)
             end)
 
           {period, bundle}
@@ -454,15 +453,19 @@ defmodule TokengateWeb.DashboardLive do
   # Computes the full metrics bundle from Postgres. This is the expensive
   # path — called only on cache miss, inside the async task. Runs on plain
   # values (no socket) so it is safe to execute in another process.
-  defp compute_metrics_bundle(member_ids, period, timezone) do
+  #
+  # `user_ids` es la identidad durable (`request_logs.user_id`): el MISMO
+  # sujeto que agota el motor de créditos. Las membresías ya no participan
+  # en el scoping — su rotación no puede volver a esconder el histórico.
+  defp compute_metrics_bundle(user_ids, period, timezone) do
     %{from: from, to: to} = Periods.period_bounds(period, timezone)
     opts = [from: from, to: to]
 
     # Summary
-    summary = fetch_summary(member_ids, opts)
+    summary = fetch_summary(user_ids, opts)
 
     # Delta vs the previous equivalent period (same shape as /stats KPIs).
-    prev_summary = fetch_prev_summary(member_ids, period, timezone)
+    prev_summary = fetch_prev_summary(user_ids, period, timezone)
     deltas = compute_deltas(summary, prev_summary)
 
     metrics = %{
@@ -482,10 +485,10 @@ defmodule TokengateWeb.DashboardLive do
 
     # Chart series
     series =
-      if member_ids == [] do
+      if user_ids == [] do
         []
       else
-        hourly_series_for_members(member_ids, opts, timezone)
+        hourly_series_for_users(user_ids, opts, timezone)
       end
 
     series_with_tps =
@@ -509,7 +512,7 @@ defmodule TokengateWeb.DashboardLive do
     tps_series = to_chart_points(series_with_tps, period, :tps, &tps_tooltip/1, timezone)
 
     # Breakdowns
-    breakdown_opts = Keyword.put(opts, :member_ids, member_ids)
+    breakdown_opts = Keyword.put(opts, :user_ids, user_ids)
     breakdown_model = Rollup.breakdown_by_model(nil, breakdown_opts)
     breakdown_member = Rollup.breakdown_by_member(nil, breakdown_opts)
 
@@ -576,30 +579,27 @@ defmodule TokengateWeb.DashboardLive do
   end
 
   # User-wide: every user (admin included) sees only their own consumption.
-  # `member_ids` arrive pre-resolved from the socket assigns (computed once
-  # at mount), so no extra membership query is needed inside the bundle.
+  # `user_ids` llegan del socket (el propio id, resuelto al montar).
   #
   # Lee por el MISMO camino que /stats (`StatsQueries.summary/1`: rollup para
-  # la parte antigua + cola raw de las últimas 3h), acotado a las membresías
-  # del usuario y a la ventana del período. No usa
-  # `Rollup.summary_for_members/1` (rollup-only): ese confía en que la tabla
-  # `request_metrics_hourly` esté completa — si el RollupWorker va atrasado o
-  # el backfill no cubre la ventana, subcuenta en silencio y el KPI deja de
-  # cuadrar con En vivo / Resumen de stats, que sí leen la cola fresca.
-  defp fetch_summary(member_ids, opts) do
+  # la parte antigua + cola raw de las últimas 3h), acotado al USUARIO y a la
+  # ventana del período. La identidad es la misma del motor de créditos
+  # (`request_logs.user_id`), así el KPI cuadra con el saldo aunque la
+  # membresía se haya rotado.
+  defp fetch_summary(user_ids, opts) do
     StatsQueries.summary(
       from: Keyword.fetch!(opts, :from),
       to: Keyword.get(opts, :to),
-      group_member_ids: member_ids
+      user_ids: user_ids
     )
   end
 
   # Previous equivalent period (e.g. yesterday, previous 7d) for the KPI
   # deltas — same computation as /stats (`StatsLive.previous_summary/3`).
-  defp fetch_prev_summary(member_ids, period, timezone) do
+  defp fetch_prev_summary(user_ids, period, timezone) do
     %{from: from, to: to} = Periods.previous_period_bounds(period, timezone)
 
-    StatsQueries.summary(from: from, to: to, group_member_ids: member_ids)
+    StatsQueries.summary(from: from, to: to, user_ids: user_ids)
   end
 
   # Delta percentages vs the previous period; nil when the previous value is
@@ -637,11 +637,10 @@ defmodule TokengateWeb.DashboardLive do
   end
 
   # Hour-bucketed chart series. Rollup-first via
-  # `Rollup.hourly_series_for_members/3` (`request_metrics_hourly`), with
-  # the request_logs fallback built in — the exact query this LiveView used
-  # before the rollup existed now lives in `Rollup` for parity testing.
-  defp hourly_series_for_members(member_ids, opts, timezone) do
-    Rollup.hourly_series_for_members(member_ids, opts, timezone)
+  # `Rollup.hourly_series_for_users/3` (`request_metrics_hourly` + fallback
+  # raw), scoped by user id — the durable identity.
+  defp hourly_series_for_users(user_ids, opts, timezone) do
+    Rollup.hourly_series_for_users(user_ids, opts, timezone)
   end
 
   defp to_token_points(series, period, timezone) do

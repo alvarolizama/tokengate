@@ -30,22 +30,34 @@ defmodule Tokengate.Metrics.Rollup.HourlyAggregate do
   `request_metrics_hourly`.
 
   `from` and `to` must be UTC `DateTime`s; the range is clamped to whole
-  hours (`date_trunc('hour', ...)`). Each execution re-writes the complete
-  content of every touched hour bucket, so results converge regardless of
-  run order or repetition.
+  hours (`date_trunc('hour', ...)`). Each execution **deletes the hour range
+  and re-inserts it** from `request_logs`, so the rollup content for the
+  range is a pure function of the raw table — regardless of run order,
+  repetition, or **key changes** (the bucket key now carries `user_id`, and
+  membership rotation rewrites `group_member_id` to NULL; an upsert-only
+  writer would leave stale rows under the old key and double-count).
+
+  The delete+insert pair runs in ONE transaction: a reader never sees the
+  window half-written.
 
   Returns `{:ok, rows_written}` with the Postgres command tag row count
-  (rows inserted + updated).
+  (rows inserted).
   """
   @spec aggregate_hours(DateTime.t(), DateTime.t()) :: {:ok, non_neg_integer()}
   def aggregate_hours(from, to) when is_struct(from, DateTime) and is_struct(to, DateTime) do
     from = DateTime.truncate(from, :second)
     to = DateTime.truncate(to, :second)
 
-    sql = """
+    delete_sql = """
+    DELETE FROM request_metrics_hourly
+     WHERE hour_utc >= $1 AND hour_utc < $2
+    """
+
+    insert_sql = """
     WITH bucketed AS (
       SELECT
         date_trunc('hour', rl.inserted_at) AS hour_utc,
+        rl.user_id,
         rl.group_member_id,
         rl.model_id,
         rl.provider_id,
@@ -60,7 +72,7 @@ defmodule Tokengate.Metrics.Rollup.HourlyAggregate do
       WHERE rl.inserted_at >= $1 AND rl.inserted_at < $2
     )
     INSERT INTO request_metrics_hourly
-      (id, day, hour_utc, group_member_id, model_id, provider_id,
+      (id, day, hour_utc, user_id, group_member_id, model_id, provider_id,
        request_count, error_count, prompt_tokens, completion_tokens,
        cache_read_tokens, cache_creation_tokens, cost_micro,
        total_latency_ms, latency_count, inserted_at, updated_at)
@@ -68,6 +80,7 @@ defmodule Tokengate.Metrics.Rollup.HourlyAggregate do
       gen_random_uuid(),
       b.hour_utc::date,
       b.hour_utc,
+      b.user_id,
       b.group_member_id,
       b.model_id,
       b.provider_id,
@@ -83,8 +96,8 @@ defmodule Tokengate.Metrics.Rollup.HourlyAggregate do
       now(),
       now()
     FROM bucketed b
-    GROUP BY b.hour_utc, b.group_member_id, b.model_id, b.provider_id
-    ON CONFLICT (day, hour_utc, group_member_id, model_id, provider_id)
+    GROUP BY b.hour_utc, b.user_id, b.group_member_id, b.model_id, b.provider_id
+    ON CONFLICT (day, hour_utc, user_id, group_member_id, model_id, provider_id)
     DO UPDATE SET
       request_count = EXCLUDED.request_count,
       error_count = EXCLUDED.error_count,
@@ -98,8 +111,26 @@ defmodule Tokengate.Metrics.Rollup.HourlyAggregate do
       updated_at = now()
     """
 
-    result = Repo.query!(sql, [from, to])
-    {:ok, result.num_rows}
+    Repo.transaction(fn ->
+      Repo.query!(delete_sql, [from, to], log: false)
+      Repo.query!(insert_sql, [from, to], log: false)
+    end)
+
+    {:ok, rows_written} = count_rows(from, to)
+    {:ok, rows_written}
+  end
+
+  # Row count for the aggregated range — the INSERT tag under a transaction
+  # wrapper is not surfaced, so the count answers "rows written" explicitly.
+  defp count_rows(from, to) do
+    result =
+      Repo.one(
+        from m in Tokengate.Metrics.RequestMetricsHourly,
+          where: m.hour_utc >= ^from and m.hour_utc < ^to,
+          select: count(m.id)
+      )
+
+    {:ok, result}
   end
 
   @doc """
