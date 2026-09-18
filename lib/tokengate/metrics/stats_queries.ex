@@ -65,41 +65,96 @@ defmodule Tokengate.Metrics.StatsQueries do
       from = Map.get(filters, :from)
       to = Map.get(filters, :to)
 
-      merge_summaries(
+      # El rollup sólo puede responder buckets de hora COMPLETOS dentro de
+      # la ventana, así que ésta se parte en tres tramos disjuntos:
+      #
+      #   [from, ceil_hour(from))            — crudo (bucket parcial inicial)
+      #   [ceil_hour(from), bound)           — rollup (buckets completos)
+      #   [bound, to]                        — crudo (bucket de corte + cola)
+      #
+      # con `bound = floor_hour(min(to || ahora, corte_fresco))`. Sin esta
+      # partición alineada a la hora, una ventana que termina justo en un
+      # borde de hora (los períodos anteriores de los deltas terminan en el
+      # inicio exacto del actual) se comía el bucket entero que arranca en
+      # `to` (`hour_utc <= to`), y un arranque a media hora perdía su bucket
+      # parcial: ni rollup (`hour_utc >= from`) ni cola cruda lo cubrían.
+      bound = rollup_bound(to)
+      rollup_from = ceil_hour(from)
+
+      parts = [
         Rollup.summary_from_rollup(
           member_ids: filters[:member_ids] || filters[:group_member_ids],
-          from: from,
-          to: rollup_upper_bound(to)
-        ),
-        raw_summary(Map.put(filters, :from, raw_tail_start(from)))
-      )
+          from: rollup_from,
+          to: bound
+        )
+        | raw_edge_summaries(filters, from, rollup_from, bound, to)
+      ]
+
+      Enum.reduce(parts, &merge_summaries/2)
     else
       raw_summary(filters)
     end
   end
 
-  # The rollup half never reads past the window end. The rollup is only fresh
-  # up to `now - @tail_hours`, but a window that ENDS before that cutoff (the
-  # previous-period summaries behind the KPI deltas) must not pick up newer
-  # rows just because the rollup happens to hold them — that inflated every
-  # past-window delta on /stats and /dashboard.
-  defp rollup_upper_bound(nil), do: tail_from()
+  # Fin de la parte rollup: la ventana acotada al corte fresco y alineada a
+  # la hora — los buckets se leen con `<` (ver `maybe_rollup_to`), así que
+  # el bucket que arranca exactamente en `bound` queda para el lado crudo.
+  defp rollup_bound(nil), do: tail_floor()
 
-  defp rollup_upper_bound(%DateTime{} = to) do
-    cutoff = tail_from()
+  defp rollup_bound(%DateTime{} = to) do
+    cutoff = tail_floor()
 
-    if DateTime.compare(to, cutoff) == :lt, do: to, else: cutoff
+    if DateTime.compare(to, cutoff) == :lt, do: floor_hour(to), else: cutoff
   end
 
-  # The raw tail starts where the rollup stops. For a window that ends before
-  # the cutoff the range is empty (the rollup already answered it whole).
-  defp raw_tail_start(from) do
-    cutoff = tail_from()
+  # Tramos crudos de los bordes de la ventana: el bucket parcial del inicio
+  # (sólo cuando `from` no cae en borde de hora) y todo lo posterior al
+  # límite del rollup — bucket de corte incluido, que es el que doblaba o
+  # se perdía cuando el corte era al segundo y no al borde de hora.
+  #
+  # Los límites se acotan con min/max contra la ventana: en ventanas más
+  # cortas que una hora (rollup_from > bound) el tramo rollup queda vacío
+  # y los crudos tienen que repartirse [from, to] sin solaparse ni
+  # salirse de la ventana pedida.
+  defp raw_edge_summaries(filters, from, rollup_from, bound, to) do
+    start_edge =
+      if DateTime.compare(rollup_from, from) == :gt do
+        edge_to = min_dt(DateTime.add(rollup_from, -1, :second), to)
+        [raw_summary(Map.merge(filters, %{from: from, to: edge_to}))]
+      else
+        []
+      end
 
-    case DateTime.compare(from, cutoff) do
-      :lt -> cutoff
-      _ -> from
-    end
+    tail_start = max_dt(bound, rollup_from)
+    start_edge ++ [raw_summary(Map.merge(filters, %{from: tail_start, to: to}))]
+  end
+
+  defp min_dt(%DateTime{} = a, nil), do: a
+
+  defp min_dt(%DateTime{} = a, %DateTime{} = b) do
+    if DateTime.compare(a, b) == :lt, do: a, else: b
+  end
+
+  defp max_dt(%DateTime{} = a, %DateTime{} = b) do
+    if DateTime.compare(a, b) == :gt, do: a, else: b
+  end
+
+  # El corte fresco alineado a la hora: los buckets >= este instante se
+  # leen de request_logs. Alinear evita el solape/descubrimiento del bucket
+  # que contiene el corte cuando éste cae a media hora.
+  defp tail_floor do
+    DateTime.add(DateTime.utc_now(), -@tail_hours * 3600, :second) |> floor_hour()
+  end
+
+  defp floor_hour(%DateTime{} = dt),
+    do: %{dt | minute: 0, second: 0, microsecond: {0, 0}}
+
+  defp ceil_hour(%DateTime{} = dt) do
+    floored = floor_hour(dt)
+
+    if DateTime.compare(floored, dt) == :eq,
+      do: floored,
+      else: DateTime.add(floored, 3600, :second)
   end
 
   # ---------------------------------------------------------------------
@@ -162,22 +217,32 @@ defmodule Tokengate.Metrics.StatsQueries do
   # Rollup-side queries
   # ---------------------------------------------------------------------
 
+  # Los breakdowns híbridos parten la ventana en el MISMO corte alineado a
+  # la hora que el summary: el rollup responde [from, tail_floor) con
+  # buckets completos (semántica `<`) y el crudo [tail_floor, to]. El corte
+  # anterior era al segundo (`tail_from/0`): el bucket que contiene el corte
+  # quedaba a caballo de los dos lados — contado doble o descubierto según
+  # `<=`/`<` — y un arranque de ventana a media hora perdía su bucket
+  # parcial en el lado rollup.
   defp rollup_breakdown(:model, opts) do
-    Rollup.breakdown_by_model_from_rollup(from: Keyword.fetch!(opts, :from), to: tail_from())
+    Rollup.breakdown_by_model_from_rollup(
+      from: ceil_hour(Keyword.fetch!(opts, :from)),
+      to: tail_floor()
+    )
   end
 
   defp rollup_breakdown(:member, opts) do
     Rollup.breakdown_by_member_from_rollup(
-      from: Keyword.fetch!(opts, :from),
-      to: tail_from(),
+      from: ceil_hour(Keyword.fetch!(opts, :from)),
+      to: tail_floor(),
       member_ids: opts[:member_ids]
     )
   end
 
   defp rollup_breakdown(:group, opts) do
     Rollup.breakdown_by_group_from_rollup(
-      from: Keyword.fetch!(opts, :from),
-      to: tail_from(),
+      from: ceil_hour(Keyword.fetch!(opts, :from)),
+      to: tail_floor(),
       member_ids: opts[:member_ids]
     )
   end
@@ -186,7 +251,7 @@ defmodule Tokengate.Metrics.StatsQueries do
     timezone = Keyword.get(opts, :timezone, "Etc/UTC")
 
     from(m in Tokengate.Metrics.RequestMetricsHourly,
-      where: m.hour_utc >= ^Keyword.fetch!(opts, :from) and m.hour_utc < ^tail_from(),
+      where: m.hour_utc >= ^Keyword.fetch!(opts, :from) and m.hour_utc < ^tail_floor(),
       group_by: fragment("1"),
       select: %{
         hour:
@@ -221,29 +286,45 @@ defmodule Tokengate.Metrics.StatsQueries do
     |> Logs.cost_summary()
   end
 
-  defp raw_breakdown(:model, group_id, opts) do
-    Rollup.breakdown_by_model(group_id, tail_opts(opts))
+  defp raw_breakdown(kind, group_id, opts) do
+    from = Keyword.fetch!(opts, :from)
+    to = Keyword.get(opts, :to)
+    rollup_from = ceil_hour(from)
+
+    # Mismo particionado que el summary: bucket parcial inicial crudo +
+    # cola desde el corte alineado. En ventanas cortas el tramo rollup
+    # queda vacío y los crudos se reparten la ventana completa.
+    start_rows =
+      if DateTime.compare(rollup_from, from) == :gt do
+        edge_to = min_dt(DateTime.add(rollup_from, -1, :second), to)
+        raw_breakdown_query(kind, group_id, opts, from, edge_to)
+      else
+        []
+      end
+
+    tail_rows =
+      raw_breakdown_query(kind, group_id, opts, max_dt(tail_floor(), rollup_from), to)
+
+    merge_rows(start_rows, tail_rows)
   end
 
-  defp raw_breakdown(:member, group_id, opts) do
-    Rollup.breakdown_by_member(group_id, tail_opts(opts))
+  defp raw_breakdown_query(:model, group_id, opts, from, to) do
+    Rollup.breakdown_by_model(group_id, Keyword.merge(opts, from: from, to: to))
   end
 
-  defp raw_breakdown(:group, _group_id, opts) do
-    Rollup.breakdown_by_group(tail_opts(opts))
+  defp raw_breakdown_query(:member, group_id, opts, from, to) do
+    Rollup.breakdown_by_member(group_id, Keyword.merge(opts, from: from, to: to))
   end
 
-  defp tail_opts(opts) do
-    opts
-    |> Keyword.put(:from, tail_from())
-    |> Keyword.put(:to, Keyword.get(opts, :to))
+  defp raw_breakdown_query(:group, _group_id, opts, from, to) do
+    Rollup.breakdown_by_group(Keyword.merge(opts, from: from, to: to))
   end
 
   defp tail_hour_counts(opts) do
     timezone = Keyword.get(opts, :timezone, "Etc/UTC")
 
     from(rl in RequestLog,
-      where: rl.inserted_at >= ^tail_from(),
+      where: rl.inserted_at >= ^tail_floor(),
       group_by: fragment("1"),
       select: %{
         hour:
@@ -273,6 +354,9 @@ defmodule Tokengate.Metrics.StatsQueries do
   # ---------------------------------------------------------------------
 
   # Sums the additive counters of two Logs.cost_summary/1-shaped maps.
+  # `total_latency_ms` via Map.get: la cara cruda (`Logs.cost_summary/1`)
+  # no lo devuelve — sin él, el avg_tps combinado perdía la latencia del
+  # tramo crudo y el KPI quedaba sesgado.
   defp merge_summaries(a, b) do
     %{
       total_cost_usd: Decimal.add(a.total_cost_usd, b.total_cost_usd),
@@ -281,6 +365,8 @@ defmodule Tokengate.Metrics.StatsQueries do
       total_cache_read_tokens: a.total_cache_read_tokens + b.total_cache_read_tokens,
       total_cache_creation_tokens: a.total_cache_creation_tokens + b.total_cache_creation_tokens,
       request_count: a.request_count + b.request_count,
+      total_latency_ms:
+        (Map.get(a, :total_latency_ms) || 0) + (Map.get(b, :total_latency_ms) || 0),
       avg_tps: merged_tps(a, b)
     }
   end

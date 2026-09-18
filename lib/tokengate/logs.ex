@@ -530,6 +530,10 @@ defmodule Tokengate.Logs do
       total_cache_read_tokens: result.total_cache_read_tokens,
       total_cache_creation_tokens: result.total_cache_creation_tokens,
       request_count: result.request_count,
+      # Lo devuelve el SELECT pero hace falta en el mapa: el lado crudo del
+      # híbrido (`StatsQueries.merge_summaries/2`) suma latency para el
+      # avg_tps combinado — sin él, el KPI TPS pierde la latencia fresca.
+      total_latency_ms: result.total_latency_ms,
       avg_latency_ms: avg_to_float(result.avg_latency_ms),
       avg_ttft_ms: avg_to_float(result.avg_ttft_ms),
       avg_tps: compute_avg_tps(result.total_completion_tokens, result.total_latency_ms)

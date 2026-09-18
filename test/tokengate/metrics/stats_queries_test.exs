@@ -85,6 +85,9 @@ defmodule Tokengate.Metrics.StatsQueriesTest do
   defp hours_ago(h),
     do: DateTime.add(DateTime.utc_now(), -h * 3600, :second) |> DateTime.truncate(:second)
 
+  defp floor_to_hour(%DateTime{} = dt),
+    do: %{dt | minute: 0, second: 0, microsecond: {0, 0}}
+
   describe "hybrid parity (rollup populated, tail raw)" do
     setup do
       original = Application.get_env(:tokengate, :stats_rollup)
@@ -209,6 +212,99 @@ defmodule Tokengate.Metrics.StatsQueriesTest do
       assert hybrid.request_count == raw.request_count
       assert Decimal.compare(hybrid.total_cost_usd, raw.total_cost_usd) == :eq
       assert Decimal.compare(hybrid.total_cost_usd, Decimal.new("3.000000")) == :eq
+    end
+
+    test "summary over a window ENDING on an exact hour edge does not swallow the next bucket" do
+      {member, _group} = group_member_fixture()
+
+      # Inside the window (48h ago, whole hours). The window ends at an
+      # EXACT hour boundary: the bucket that STARTS at `to` belongs to the
+      # next period and must stay out (this is the previous-period shape
+      # behind every KPI delta).
+      log_request(member.id, hours_ago(48), cost_usd: Decimal.new("1.000000"))
+      log_request(member.id, hours_ago(47), cost_usd: Decimal.new("2.000000"))
+
+      to = hours_ago(30) |> floor_to_hour()
+
+      # Right AT the window end — inside (`inserted_at <= to` on the raw side).
+      log_request(member.id, to, cost_usd: Decimal.new("4.000000"))
+
+      # 60s AFTER the edge: lives in the bucket STARTING at `to` — outside
+      # the window, and exactly what `hour_utc <= to` used to swallow whole.
+      log_request(member.id, DateTime.add(to, 60, :second), cost_usd: Decimal.new("8.000000"))
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      from = hours_ago(48)
+
+      hybrid = StatsQueries.summary(%{from: from, to: to})
+      raw = Logs.cost_summary(%{from: from, to: to})
+
+      assert hybrid.request_count == raw.request_count
+      assert Decimal.compare(hybrid.total_cost_usd, raw.total_cost_usd) == :eq
+      # 1 + 2 + 4 = 7; the 8.00 row after the edge must NOT be folded in.
+      assert Decimal.compare(hybrid.total_cost_usd, Decimal.new("7.000000")) == :eq
+    end
+
+    test "summary over a window STARTING mid-hour keeps its partial first bucket" do
+      {member, _group} = group_member_fixture()
+
+      # from = 47h30m ago (mid-hour): the first bucket [from, ceil_hour(from))
+      # is PARTIAL and must be answered raw, not dropped. Both rows are 47h
+      # ago — one before the hour edge, one just after it.
+      from = hours_ago(47) |> DateTime.add(-1800, :second)
+      after_edge = hours_ago(47) |> DateTime.add(60, :second)
+
+      log_request(member.id, from, cost_usd: Decimal.new("1.000000"))
+      log_request(member.id, after_edge, cost_usd: Decimal.new("2.000000"))
+      log_request(member.id, hours_ago(46), cost_usd: Decimal.new("4.000000"))
+      # Pre-window row: 30 minutes before `from` — must stay out.
+      log_request(member.id, DateTime.add(from, -60, :second), cost_usd: Decimal.new("16.000000"))
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      hybrid = StatsQueries.summary(%{from: from, to: to})
+      raw = Logs.cost_summary(%{from: from, to: to})
+
+      assert hybrid.request_count == raw.request_count
+      assert Decimal.compare(hybrid.total_cost_usd, raw.total_cost_usd) == :eq
+      # 1 + 2 + 4 = 7; the 16.00 pre-window row must NOT be folded in.
+      assert Decimal.compare(hybrid.total_cost_usd, Decimal.new("7.000000")) == :eq
+    end
+
+    test "merged avg_tps counts the raw tail latency" do
+      {member, _group} = group_member_fixture()
+
+      # Rollup part: 48h ago — 50 tokens in 500ms (100 tps).
+      log_request(member.id, hours_ago(48),
+        cost_usd: Decimal.new("1.000000"),
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        latency_ms: 500
+      )
+
+      # Fresh tail: 1h ago — 50 tokens in 1500ms (33.3 tps).
+      log_request(member.id, hours_ago(1),
+        cost_usd: Decimal.new("1.000000"),
+        prompt_tokens: 100,
+        completion_tokens: 50,
+        latency_ms: 1500
+      )
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      hybrid = StatsQueries.summary(%{from: from, to: to})
+      raw = Logs.cost_summary(%{from: from, to: to})
+
+      # 100 tokens / 2.0s = 50 tps overall; losing the tail's latency would
+      # read 100 tokens / 0.5s = 200 tps.
+      assert hybrid.avg_tps == raw.avg_tps
+      assert hybrid.avg_tps == 50.0
     end
   end
 

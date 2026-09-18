@@ -245,9 +245,12 @@ defmodule Tokengate.DemoSeeds do
       )
       |> Repo.delete_all()
 
-    # El rollup del rango se reconstruye completo al final desde request_logs.
-    {rollup, _} =
-      from(m in RequestMetricsHourly, where: m.hour_utc >= ^from) |> Repo.delete_all()
+    # El rollup se reconstruye DESDE CERO al final desde request_logs: sin
+    # el wipe completo, las filas de corridas anteriores anteriores al
+    # `from` del dataset (p.ej. de cuando "hoy" era otra fecha) quedaban
+    # huérfanas — sin logs que las respalden — e inflaban para siempre los
+    # timeframes largos (90d) del Resumen híbrido.
+    {rollup, _} = Repo.delete_all(RequestMetricsHourly)
 
     # La auditoría es **append-only** (trigger que rechaza UPDATE/DELETE), así
     # que el wipe no puede borrar sus filas: se cuentan y `seed_audit/1` las

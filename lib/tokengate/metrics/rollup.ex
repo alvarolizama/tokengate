@@ -2456,8 +2456,13 @@ defmodule Tokengate.Metrics.Rollup do
 
   defp maybe_rollup_to(query, nil), do: query
 
+  # Semántica exclusiva: un bucket de hora cubre [hour_utc, hour_utc + 1h),
+  # así que sólo responde contenido ANTERIOR a `to`. Con `<=`, una ventana
+  # que termina justo en un borde de hora (los períodos anteriores de los
+  # deltas) se tragaba el bucket entero que arranca en `to` — hasta una hora
+  # de tráfico fuera de la ventana en cada KPI.
   defp maybe_rollup_to(query, %DateTime{} = to) do
-    where(query, [m], m.hour_utc <= ^to)
+    where(query, [m], m.hour_utc < ^to)
   end
 
   defp maybe_rollup_member_ids(query, nil), do: query
