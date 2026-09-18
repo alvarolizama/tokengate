@@ -189,16 +189,18 @@ defmodule TokengateWeb.UsersLive do
 
   ## Sorting ---------------------------------------------------------------
 
-  # Applies the selected column sort. Admins keep floating to the top within
-  # each group (as before); the column comparator breaks the rest.
+  # Applies the selected column sort. Every column sorts strictly by its own
+  # value: pinning admins to the top (as it used to) made every other column
+  # look unsorted — an admin with no spend beat the top spender. Ties fall back
+  # to the name so the order stays stable.
   defp sort_users(users, field, direction, ctx) do
     Enum.sort_by(
       users,
-      fn u -> {if(u.global_role == "admin", do: 0, else: 1), sort_value(u, field, ctx)} end,
-      fn {role_a, val_a}, {role_b, val_b} ->
-        cond do
-          role_a != role_b -> role_a < role_b
-          true -> compare_sort_values(val_a, val_b, direction)
+      fn u -> {sort_value(u, field, ctx), String.downcase(u.name || u.email)} end,
+      fn {val_a, name_a}, {val_b, name_b} ->
+        case compare_sort_values(val_a, val_b, direction) do
+          :eq -> compare_sort_values(name_a, name_b, :asc) != :gt
+          order -> order == :lt
         end
       end
     )
@@ -334,31 +336,28 @@ defmodule TokengateWeb.UsersLive do
   end
 
   # nils always sort last, in both directions (users without spend/groups data).
+  # Returns :lt/:gt/:eq so a tie can be broken by the secondary column.
+  defp compare_sort_values(nil, nil, _direction), do: :eq
+  defp compare_sort_values(nil, _b, _direction), do: :gt
+  defp compare_sort_values(_a, nil, _direction), do: :lt
+
   defp compare_sort_values(a, b, direction) do
-    case {a, b} do
-      {nil, nil} ->
-        true
-
-      {nil, _} ->
-        false
-
-      {_, nil} ->
-        true
-
-      _ ->
-        if direction == :asc, do: compare_vals(a, b) != :gt, else: compare_vals(a, b) != :lt
+    case {compare_vals(a, b), direction} do
+      {:eq, _} -> :eq
+      {:lt, :asc} -> :lt
+      {:lt, :desc} -> :gt
+      {:gt, :asc} -> :gt
+      {:gt, :desc} -> :lt
     end
   end
 
   defp compare_vals(%Decimal{} = a, %Decimal{} = b), do: Decimal.compare(a, b)
 
-  defp compare_vals(%DateTime{} = a, %DateTime{} = b) do
-    case DateTime.compare(a, b) do
-      :lt -> :lt
-      :gt -> :gt
-      :eq -> :eq
-    end
-  end
+  # Calendar structs: term order compares the struct as a map — day before
+  # month/year — so a column that hands one over would read as unsorted. Each
+  # module's own compare/2 is the chronological one.
+  defp compare_vals(%mod{} = a, %mod{} = b) when mod in [DateTime, NaiveDateTime, Date],
+    do: mod.compare(a, b)
 
   defp compare_vals(a, b) when is_binary(a) and is_binary(b) do
     cond do

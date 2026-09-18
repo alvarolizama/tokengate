@@ -48,6 +48,32 @@ defmodule TokengateWeb.UsersLiveTest do
     end
   end
 
+  # Usuario insertado con fecha de creación y estado explícitos: para revisar
+  # que cada columna ordena por SU valor («Creado» incluido).
+  defp user_created_at(name, %DateTime{} = at, status \\ "active") do
+    %User{}
+    |> Ecto.Changeset.change(%{
+      email: "created-#{unique()}@example.com",
+      name: name,
+      password_hash: "not-a-real-hash",
+      global_role: "user",
+      status: status,
+      inserted_at: at
+    })
+    |> Repo.insert!()
+  end
+
+  # Gasto atribuido a una membresía (para las columnas de consumo).
+  defp spend_via(member, usd) do
+    {:ok, _} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        model_requested: "gpt-4",
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+        provider_cost_usd: Decimal.new(usd)
+      })
+  end
+
   ## Auth -------------------------------------------------------------------
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
@@ -349,6 +375,83 @@ defmodule TokengateWeb.UsersLiveTest do
     # Toggle back to asc.
     view |> element("#sort-name") |> render_click()
     assert row_order.(view) == ["user-#{alpha.id}", "user-#{zeta.id}"]
+  end
+
+  test "every column sorts by its own value (and no longer pins admins on top)",
+       %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    # Ana: creada hace 5 días, grupo Zeta (techo 200), 10 de consumo.
+    # Beto: creado hace 10 días, grupo Alfa (techo 50), 40 de consumo.
+    # Carla: creada hace 20 días, suspendida, sin grupo y sin gasto.
+    carla = user_created_at("Carla", DateTime.add(now, -20, :day), "suspended")
+    beto = user_created_at("Beto", DateTime.add(now, -10, :day))
+    ana = user_created_at("Ana", DateTime.add(now, -5, :day))
+
+    {:ok, alfa} = Accounts.create_group(%{name: "Alfa", monthly_spend_limit_usd: "50.00"})
+    {:ok, zeta} = Accounts.create_group(%{name: "Zeta", monthly_spend_limit_usd: "200.00"})
+
+    {:ok, member_beto} =
+      Accounts.create_group_member(%{"user_id" => beto.id, "group_id" => alfa.id})
+
+    {:ok, member_ana} =
+      Accounts.create_group_member(%{"user_id" => ana.id, "group_id" => zeta.id})
+
+    spend_via(member_beto, "40.00")
+    spend_via(member_ana, "10.00")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/access/users")
+
+    first_row = fn html ->
+      Regex.scan(~r/<tr[^>]+id="user-([^"]+)"/, html)
+      |> List.first()
+      |> Enum.at(1)
+    end
+
+    # Rol: asc = "admin" primero (legítimo); desc = "user", desempatado por
+    # nombre → Ana. Antes el admin quedaba anclado arriba en ambas.
+    html = view |> element("#sort-role") |> render_click()
+    assert first_row.(html) == to_string(admin.id)
+
+    html = view |> element("#sort-role") |> render_click()
+    assert first_row.(html) == to_string(ana.id)
+
+    # Estado: asc = activos primero (desempate por nombre → Ana); desc =
+    # suspendidas primero (Carla).
+    html = view |> element("#sort-status") |> render_click()
+    assert first_row.(html) == to_string(ana.id)
+
+    html = view |> element("#sort-status") |> render_click()
+    assert first_row.(html) == to_string(carla.id)
+
+    # Perfiles de límites: desc por nombre de grupo → Zeta (Ana) arriba.
+    html = view |> element("#sort-groups") |> render_click()
+    html = view |> element("#sort-groups") |> render_click()
+    assert first_row.(html) == to_string(ana.id)
+
+    # Techo mensual: el orden es por CONSUMO → Beto (40 de 50) antes que Ana
+    # (10 de 200).
+    html = view |> element("#sort-credit") |> render_click()
+    assert first_row.(html) == to_string(beto.id)
+
+    # Gasto del mes: desc → Beto (40) antes que Ana (10).
+    html = view |> element("#sort-monthly_spend") |> render_click()
+    assert first_row.(html) == to_string(beto.id)
+
+    # Gasto total: desc → Beto.
+    html = view |> element("#sort-total_spend") |> render_click()
+    assert first_row.(html) == to_string(beto.id)
+
+    # Creado: desc → el admin, que se registró ahora mismo.
+    html = view |> element("#sort-inserted_at") |> render_click()
+    assert first_row.(html) == to_string(admin.id)
+
+    # Creado: asc → Carla (la más antigua), con el admin al final y no anclado.
+    html = view |> element("#sort-inserted_at") |> render_click()
+    assert first_row.(html) == to_string(carla.id)
   end
 
   ## Create user ------------------------------------------------------------

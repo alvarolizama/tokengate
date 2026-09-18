@@ -118,6 +118,46 @@ defmodule TokengateWeb.ServicesLiveTest do
     assert html =~ "▼"
   end
 
+  test "ordenar por gasto pone primero al que más gasta, no al que no tiene datos",
+       %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    caro = service_fixture()
+    barato = service_fixture()
+    sin_gasto = service_fixture()
+
+    {:ok, _} =
+      Tokengate.Logs.log_request(%{
+        subject_type: "service",
+        service_id: caro.id,
+        model_requested: "gpt-4o",
+        provider_cost_usd: Decimal.new("50.00"),
+        latency_ms: 100
+      })
+
+    {:ok, _} =
+      Tokengate.Logs.log_request(%{
+        subject_type: "service",
+        service_id: barato.id,
+        model_requested: "gpt-4o",
+        provider_cost_usd: Decimal.new("1.00"),
+        latency_ms: 100
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/access/services")
+
+    # Primer click = desc (más gasto primero). El que no tiene datos pinta
+    # $0.00, así que va al final, no encabezando el listado.
+    html = view |> element("#sort-monthly_spend") |> render_click()
+
+    ids =
+      Regex.scan(~r/<tr[^>]+id="service-([^"]+)"/, html)
+      |> Enum.map(&Enum.at(&1, 1))
+      |> Enum.filter(&(&1 in [to_string(caro.id), to_string(barato.id), to_string(sin_gasto.id)]))
+
+    assert ids == [to_string(caro.id), to_string(barato.id), to_string(sin_gasto.id)]
+  end
+
   test "muestra las columnas Gasto mensual y Gasto total", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     service = service_fixture()

@@ -206,9 +206,12 @@ defmodule TokengateWeb.ServicesLive do
 
     Enum.sort_by(
       services,
-      fn s -> sort_value(s, field, ctx) end,
-      fn a, b ->
-        if direction == :asc, do: compare_vals(a, b) != :gt, else: compare_vals(a, b) != :lt
+      fn s -> {sort_value(s, field, ctx), String.downcase(s.name || "")} end,
+      fn {val_a, name_a}, {val_b, name_b} ->
+        case compare_sort_values(val_a, val_b, direction) do
+          :eq -> compare_sort_values(name_a, name_b, :asc) != :gt
+          order -> order == :lt
+        end
       end
     )
   end
@@ -237,17 +240,11 @@ defmodule TokengateWeb.ServicesLive do
 
   defp compare_vals(%Decimal{} = a, %Decimal{} = b), do: Decimal.compare(a, b)
 
-  defp compare_vals(%DateTime{} = a, %DateTime{} = b) do
-    case DateTime.compare(a, b) do
-      :lt -> :lt
-      :gt -> :gt
-      :eq -> :eq
-    end
-  end
-
-  defp compare_vals(nil, nil), do: :eq
-  defp compare_vals(nil, _b), do: :gt
-  defp compare_vals(_a, nil), do: :lt
+  # Calendar structs: term order compares the struct as a map — day before
+  # month/year — so a column that hands one over would read as unsorted. Each
+  # module's own compare/2 is the chronological one.
+  defp compare_vals(%mod{} = a, %mod{} = b) when mod in [DateTime, NaiveDateTime, Date],
+    do: mod.compare(a, b)
 
   defp compare_vals(a, b) when is_binary(a) and is_binary(b) do
     cond do
@@ -262,6 +259,23 @@ defmodule TokengateWeb.ServicesLive do
       a < b -> :lt
       a > b -> :gt
       true -> :eq
+    end
+  end
+
+  # Sin dato (nil) va SIEMPRE al final, en ambas direcciones: el listado pinta
+  # $0.00 en esas celdas, así que no pueden encabezar un "de mayor a menor".
+  # :lt/:gt/:eq para poder desempatar por el nombre.
+  defp compare_sort_values(nil, nil, _direction), do: :eq
+  defp compare_sort_values(nil, _b, _direction), do: :gt
+  defp compare_sort_values(_a, nil, _direction), do: :lt
+
+  defp compare_sort_values(a, b, direction) do
+    case {compare_vals(a, b), direction} do
+      {:eq, _} -> :eq
+      {:lt, :asc} -> :lt
+      {:lt, :desc} -> :gt
+      {:gt, :asc} -> :gt
+      {:gt, :desc} -> :lt
     end
   end
 
