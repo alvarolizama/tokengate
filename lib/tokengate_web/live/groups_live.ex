@@ -174,6 +174,8 @@ defmodule TokengateWeb.GroupsLive do
 
     case Accounts.delete_group(group) do
       {:ok, _} ->
+        audit(socket, "group.delete", "group", group.id, %{"name" => group.name})
+
         {:noreply,
          socket
          |> put_flash(:info, "Perfil de límites eliminado.")
@@ -197,15 +199,22 @@ defmodule TokengateWeb.GroupsLive do
   def handle_event("toggle_model", %{"target-id" => group_id, "model-id" => model_id}, socket) do
     group_alias_ids = Map.get(socket.assigns.granted_models, group_id, [])
 
+    granted? = model_id not in group_alias_ids
+
     result =
-      if model_id in group_alias_ids do
-        Providers.revoke_model_from_group(group_id, model_id)
-      else
+      if granted? do
         Providers.grant_model_to_group(group_id, model_id)
+      else
+        Providers.revoke_model_from_group(group_id, model_id)
       end
 
     case result do
       {:ok, _} ->
+        audit(socket, "group.model_access_toggle", "group", group_id, %{
+          "model_id" => model_id,
+          "granted" => granted?
+        })
+
         {:noreply,
          socket
          |> put_flash(:info, "Modelos actualizados.")
@@ -232,7 +241,9 @@ defmodule TokengateWeb.GroupsLive do
 
   defp save_group(socket, :new, group_params) do
     case Accounts.create_group(group_params) do
-      {:ok, _group} ->
+      {:ok, group} ->
+        audit(socket, "group.create", "group", group.id, %{"name" => group.name})
+
         {:noreply,
          socket
          |> put_flash(:info, "Perfil de límites creado.")
@@ -249,7 +260,19 @@ defmodule TokengateWeb.GroupsLive do
     group = Accounts.get_group!(group_id)
 
     case Accounts.update_group(group, group_params) do
-      {:ok, _group} ->
+      {:ok, updated} ->
+        audit(socket, "group.update", "group", updated.id, %{
+          "name" => updated.name,
+          "changes" =>
+            Map.take(group_params, [
+              "name",
+              "default_concurrency_limit",
+              "default_rpm_limit",
+              "monthly_spend_limit_usd",
+              "unlimited_spend"
+            ])
+        })
+
         {:noreply,
          socket
          |> put_flash(:info, "Perfil de límites actualizado.")

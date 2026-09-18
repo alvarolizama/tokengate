@@ -201,6 +201,41 @@ defmodule Tokengate.Providers.CatalogRefreshWorkerTest do
       # Its materialized row survives: it may be serving traffic.
       assert provider("deepseek")
     end
+
+    test "a code-owned provider models.dev never publishes is NOT swept stale" do
+      # El refresh solo es dueño de las filas que models.dev publica. Surplus no
+      # está en su payload —ni estará nunca—, así que un barrido ingenuo lo
+      # dejaría `stale`; y como `materialize/1` salta las filas stale, quedaría
+      # congelado con un warning `already_stale` en cada corrida semanal.
+      assert :ok = Tokengate.Providers.CatalogSync.ensure_code_providers()
+      assert mirror("surplus-intelligence").status == "active"
+
+      serve!(%{
+        "/api.json" => %{
+          "alpha" => %{
+            "id" => "alpha",
+            "name" => "Alpha",
+            "api" => "https://api.alpha.example/v1",
+            "doc" => "https://docs.alpha.example",
+            "npm" => "@ai-sdk/openai-compatible"
+          }
+        }
+      })
+
+      assert :ok = perform()
+
+      row = mirror("surplus-intelligence")
+      assert row.status == "active"
+      assert row.base_url == "https://api.surplusintelligence.ai/v1"
+
+      # Y sigue materializado sin reiniciar: el refresh lo vuelve a materializar
+      # en la misma corrida.
+      assert provider("surplus-intelligence")
+
+      # Ningún warning lo nombra: no se reporta como algo que "desapareció".
+      state = Providers.catalog_sync_state()
+      refute Enum.any?(state.warnings || [], &(&1["key"] == "surplus-intelligence"))
+    end
   end
 
   describe "base URL drift" do
@@ -295,7 +330,11 @@ defmodule Tokengate.Providers.CatalogRefreshWorkerTest do
 
       assert {:error, reason} = perform()
       assert reason =~ "503"
-      assert Repo.aggregate(CatalogProvider, :count) == Providers.Catalog.snapshot_size()
+
+      # Nada se perdió: el mirror sigue con el snapshot + los code-owned (que no
+      # vienen de models.dev y por eso no los toca un fetch fallido).
+      assert Repo.aggregate(CatalogProvider, :count) ==
+               Providers.Catalog.snapshot_size() + length(Providers.Catalog.code_provider_keys())
     end
   end
 

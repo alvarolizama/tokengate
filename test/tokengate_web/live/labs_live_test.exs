@@ -112,24 +112,18 @@ defmodule TokengateWeb.LabsLiveTest do
       assert has_element?(view, "#lab-mark-#{lab.key} img[src='https://cdn.example.com/l.png']")
     end
 
-    test "el filtro por origen y la búsqueda", %{conn: conn} do
+    test "sin filtros: siempre builtin y custom juntos, sin tabs ni buscador", %{conn: conn} do
       lab = create_lab(%{"name" => "Zzz Unique Lab"})
 
       {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/labs")
 
-      # Sólo custom: openai desaparece, el custom queda.
-      view |> element("#lab-tab-custom") |> render_click()
-      assert has_element?(view, "#lab-name-#{lab.key}")
-      refute has_element?(view, "#lab-name-openai")
+      # La pantalla no acota: ni tabs de origen ni buscador.
+      refute has_element?(view, "#lab-source-tabs")
+      refute has_element?(view, "#search-form")
 
-      # Búsqueda por nombre.
-      view |> element("#search-form") |> render_change(%{"q" => "Zzz Unique"})
+      # Las dos fuentes conviven en el listado.
+      assert has_element?(view, "#lab-name-openai")
       assert has_element?(view, "#lab-name-#{lab.key}")
-
-      # Búsqueda sin resultados → estado vacío.
-      view |> element("#search-form") |> render_change(%{"q" => "no-existe-nada"})
-      assert has_element?(view, "#labs-empty")
-      refute has_element?(view, "#lab-name-#{lab.key}")
     end
   end
 

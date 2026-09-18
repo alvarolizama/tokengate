@@ -38,6 +38,13 @@ defmodule Tokengate.Application do
         id: :partition_boot_ensure,
         restart: :temporary
       ),
+      # Ensure upcoming audit_logs monthly partitions exist at boot. One-shot,
+      # idempotent, never raises (no-op when :audit_partition_boot_ensure is false).
+      Supervisor.child_spec(
+        {Task, fn -> Tokengate.Auditing.PartitionWorker.ensure_on_boot() end},
+        id: :audit_partition_boot_ensure,
+        restart: :temporary
+      ),
       # Materialize the builtin provider catalog (upsert by key, never
       # touches custom rows). One-shot, idempotent, failures logged not
       # raised — the app must boot.

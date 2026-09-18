@@ -87,6 +87,8 @@ defmodule TokengateWeb.OAuthController do
   end
 
   defp create_session(conn, user) do
+    audit_conn(conn, user, "auth.google_login", "user", user.id, %{"email" => user.email})
+
     conn
     |> configure_session(renew: true)
     |> put_session(:user_id, user.id)

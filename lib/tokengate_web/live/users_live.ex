@@ -17,6 +17,7 @@ defmodule TokengateWeb.UsersLive do
 
   import TokengateWeb.AdminComponents
   import TokengateWeb.KeysPanel
+  import TokengateWeb.StatsHelpers, only: [budget_cell: 1, format_usd: 1]
 
   alias Tokengate.Accounts
   alias Tokengate.Accounts.User
@@ -208,11 +209,15 @@ defmodule TokengateWeb.UsersLive do
   defp sort_value(user, :role, _ctx), do: user.global_role || ""
   defp sort_value(user, :status, _ctx), do: user.status || ""
 
-  # Remanente del límite mensual efectivo (nil = sin límite definido).
+  # Consumo del límite mensual efectivo (nil = sin límite definido): la misma
+  # cifra que muestra la celda, para que el orden coincida con lo que se lee.
   defp sort_value(user, :credit, ctx) do
     case Map.get(ctx.users_credit, user.id) do
-      %{remaining_limit_usd: %Decimal{} = rem} -> Decimal.to_float(rem)
-      _ -> nil
+      %{limit_usd: limit, limit_spend_usd: %Decimal{} = spent} when not is_nil(limit) ->
+        Decimal.to_float(spent)
+
+      _ ->
+        nil
     end
   end
 
@@ -248,37 +253,62 @@ defmodule TokengateWeb.UsersLive do
       |> Enum.flat_map(fn {_user_id, ms} -> ms end)
       |> Credits.summaries()
 
-    # Sin presupuesto mensual el único camino es el top-up, así que hay que
-    # leerlo (en lote, no por usuario): sin esto la columna diría «sin
-    # presupuesto» a quien sí tiene crédito para gastar.
+    # Sin membresía no hay resumen del motor: el sujeto es el propio usuario y
+    # hay que leer su gasto y sus top-ups igual que en el resto de superficies
+    # (en lote, no por usuario). Sin esto la columna diría «sin presupuesto» a
+    # quien sí tiene crédito, y ceros a quien tiene techo propio con gasto.
     own_subjects =
       for user <- users,
           Map.get(memberships, user.id, []) == [],
           do: {:user, user.id}
 
+    own_spend = Credits.spend_by_subjects(own_subjects)
+    own_limit_spend = Credits.spend_by_subjects(own_subjects, only_limit: true)
     own_topups = Credits.Topups.summaries(own_subjects)
 
     Map.new(users, fn user ->
+      subject = {:user, user.id}
+
       case Map.get(memberships, user.id, []) do
-        [] -> {user.id, own_credit(user, Map.get(own_topups, {:user, user.id}))}
-        memberships -> {user.id, membership_credit(memberships, summaries)}
+        [] ->
+          {user.id,
+           own_credit(
+             user,
+             Map.get(own_spend, subject, Decimal.new(0)),
+             Map.get(own_limit_spend, subject, Decimal.new(0)),
+             Map.get(own_topups, subject)
+           )}
+
+        memberships ->
+          {user.id, membership_credit(memberships, summaries)}
       end
     end)
   end
 
-  # Usuario sin presupuesto mensual: su techo es el propio (habitualmente
-  # ninguno) y solo los top-ups le dan camino de gasto.
-  defp own_credit(user, topup) do
+  # Usuario sin membresía: el sujeto es él mismo. Su techo es el propio
+  # (habitualmente ninguno) y, si lo tiene, el gasto que lo consume y su
+  # remanente salen de los logs — antes se fijaban a cero, así que un techo
+  # propio sin membresía se leía como agotado. Los top-ups siguen siendo el
+  # segundo camino cuando no hay techo.
+  defp own_credit(user, spend, against_limit, topup) do
     limit = Credits.user_limit(user, nil)
+    remaining_topup = (topup && topup.remaining_topup_usd) || Decimal.new(0)
+
+    remaining_limit =
+      case limit.limit_usd do
+        nil -> nil
+        limit_usd -> max_decimal(Decimal.sub(limit_usd, against_limit), Decimal.new(0))
+      end
 
     %{
       limit_usd: limit.limit_usd,
       unlimited?: limit.unlimited?,
-      spend_usd: Decimal.new(0),
-      limit_spend_usd: Decimal.new(0),
-      remaining_limit_usd: nil,
+      spend_usd: spend,
+      limit_spend_usd: against_limit,
+      remaining_limit_usd: remaining_limit,
       topups: (topup && topup.topups) || [],
-      remaining_topup_usd: (topup && topup.remaining_topup_usd) || Decimal.new(0)
+      remaining_topup_usd: remaining_topup,
+      has_path?: Credits.has_path?(limit.unlimited?, remaining_limit, remaining_topup)
     }
   end
 
@@ -481,16 +511,10 @@ defmodule TokengateWeb.UsersLive do
 
       case Accounts.create_api_key(attrs) do
         {:ok, api_key} ->
-          Tokengate.Auditing.audit(
-            socket.assigns.current_user,
-            "api_key.create",
-            "api_key",
-            api_key.id,
-            %{
-              "label" => api_key.label,
-              "user_id" => user_id
-            }
-          )
+          audit(socket, "api_key.create", "api_key", api_key.id, %{
+            "label" => api_key.label,
+            "user_id" => user_id
+          })
 
           {:noreply,
            socket
@@ -511,13 +535,10 @@ defmodule TokengateWeb.UsersLive do
          true <- api_key.user_id == socket.assigns.keys_user_id do
       case Accounts.revoke_api_key(api_key) do
         {:ok, _} ->
-          Tokengate.Auditing.audit(
-            socket.assigns.current_user,
-            "api_key.revoke",
-            "api_key",
-            api_key.id,
-            %{"label" => api_key.label, "user_id" => api_key.user_id}
-          )
+          audit(socket, "api_key.revoke", "api_key", api_key.id, %{
+            "label" => api_key.label,
+            "user_id" => api_key.user_id
+          })
 
           {:noreply,
            socket
@@ -546,13 +567,7 @@ defmodule TokengateWeb.UsersLive do
       user ->
         Accounts.clear_user_sticky_routes(user_id)
 
-        Tokengate.Auditing.audit(
-          socket.assigns.current_user,
-          "routing.clear_sticky",
-          "user",
-          user_id,
-          %{"email" => user.email}
-        )
+        audit(socket, "routing.clear_sticky", "user", user_id, %{"email" => user.email})
 
         {:noreply,
          socket
@@ -623,13 +638,7 @@ defmodule TokengateWeb.UsersLive do
 
     case Accounts.reset_user_password(user, user_params) do
       {:ok, _user} ->
-        Tokengate.Auditing.audit(
-          socket.assigns.current_user,
-          "user.reset_password",
-          "user",
-          user.id,
-          %{"email" => user.email}
-        )
+        audit(socket, "user.reset_password", "user", user.id, %{"email" => user.email})
 
         {:noreply,
          socket
@@ -655,13 +664,10 @@ defmodule TokengateWeb.UsersLive do
 
       case Accounts.admin_update_user(user, %{"status" => new_status}) do
         {:ok, _} ->
-          Tokengate.Auditing.audit(
-            socket.assigns.current_user,
-            "user.toggle_status",
-            "user",
-            user.id,
-            %{"email" => user.email, "status" => new_status}
-          )
+          audit(socket, "user.toggle_status", "user", user.id, %{
+            "email" => user.email,
+            "status" => new_status
+          })
 
           msg = if new_status == "active", do: "Usuario activado.", else: "Usuario suspendido."
           {:noreply, socket |> put_flash(:info, msg) |> load_users()}
@@ -706,13 +712,7 @@ defmodule TokengateWeb.UsersLive do
       true ->
         case Accounts.delete_user(user) do
           {:ok, _} ->
-            Tokengate.Auditing.audit(
-              socket.assigns.current_user,
-              "user.delete",
-              "user",
-              user.id,
-              %{"email" => user.email}
-            )
+            audit(socket, "user.delete", "user", user.id, %{"email" => user.email})
 
             {:noreply,
              socket
@@ -770,17 +770,21 @@ defmodule TokengateWeb.UsersLive do
   defp toggle_sort_direction(:desc), do: :asc
 
   # Text-ish columns start asc; numeric/date columns start desc (most useful
-  # first: biggest spenders, newest users). Crédito: desc = más saldo primero.
+  # first: biggest spenders, newest users). Crédito: desc = más consumo primero.
   defp default_direction_for(field)
        when field in [:credit, :monthly_spend, :total_spend, :inserted_at],
        do: :desc
 
   defp default_direction_for(_), do: :asc
 
-  defp fmt_money(%Decimal{} = d) do
-    d
-    |> Decimal.round(4)
-    |> Decimal.to_string()
+  # Gasto del mes de un usuario: ausente en el agregado = no gastó (los usuarios
+  # sin membresía no aparecen), no un dato desconocido. Un sujeto sin requests
+  # tiene que leerse «$0.00», no «—».
+  defp user_monthly_spend(spend_by_user, user_id) do
+    case Map.get(spend_by_user, user_id) do
+      %{real_monthly_usd: %Decimal{} = spend} -> spend
+      _ -> Decimal.new(0)
+    end
   end
 
   defp save_new_user(socket, user_params) do
@@ -789,7 +793,7 @@ defmodule TokengateWeb.UsersLive do
 
     case Accounts.admin_create_user(user_params) do
       {:ok, user} ->
-        Tokengate.Auditing.audit(socket.assigns.current_user, "user.create", "user", user.id, %{
+        audit(socket, "user.create", "user", user.id, %{
           "email" => user.email,
           "global_role" => user.global_role
         })
@@ -848,16 +852,21 @@ defmodule TokengateWeb.UsersLive do
 
     case Accounts.admin_update_user(user, user_params) do
       {:ok, updated} ->
-        Tokengate.Auditing.audit(
-          socket.assigns.current_user,
-          "user.update",
-          "user",
-          updated.id,
-          %{
-            "email" => updated.email,
-            "changes" => Map.take(user_params, ["name", "global_role", "status"])
-          }
-        )
+        audit(socket, "user.update", "user", updated.id, %{
+          "email" => updated.email,
+          "changes" =>
+            user_params
+            |> Map.take([
+              "name",
+              "global_role",
+              "status",
+              "monthly_spend_limit_usd",
+              "unlimited_spend",
+              "default_concurrency_limit",
+              "default_rpm_limit"
+            ])
+            |> Map.put("group_id", sub_id)
+        })
 
         # El presupuesto mensual (antes perfil de límites/sub) se mueve, no se acumula: un
         # usuario tiene uno solo. `sync_user_sub/2` es el único punto que toca membresías.
@@ -1112,6 +1121,9 @@ defmodule TokengateWeb.UsersLive do
           <table class="table table-sm">
             <thead>
               <tr>
+                <%!-- Orden: identidad → campos QUE COMPARTE con Servicios (mismo
+                     orden en ambas tablas) → resto de campos propios → Creado →
+                     acciones. --%>
                 <th>
                   <.sort_button
                     event="sort_users"
@@ -1119,6 +1131,36 @@ defmodule TokengateWeb.UsersLive do
                     label="Usuario"
                     current={@sort_field}
                     direction={@sort_direction}
+                  />
+                </th>
+                <th>Claves</th>
+                <th>
+                  <.sort_button
+                    event="sort_users"
+                    field={:credit}
+                    label="Límite mensual (mes UTC)"
+                    current={@sort_field}
+                    direction={@sort_direction}
+                  />
+                </th>
+                <th class="text-right">
+                  <.sort_button
+                    event="sort_users"
+                    field={:monthly_spend}
+                    label="Gasto mensual"
+                    current={@sort_field}
+                    direction={@sort_direction}
+                    align="right"
+                  />
+                </th>
+                <th class="text-right">
+                  <.sort_button
+                    event="sort_users"
+                    field={:total_spend}
+                    label="Gasto total"
+                    current={@sort_field}
+                    direction={@sort_direction}
+                    align="right"
                   />
                 </th>
                 <th>
@@ -1148,37 +1190,7 @@ defmodule TokengateWeb.UsersLive do
                     direction={@sort_direction}
                   />
                 </th>
-                <th>
-                  <.sort_button
-                    event="sort_users"
-                    field={:credit}
-                    label="Límite mensual"
-                    current={@sort_field}
-                    direction={@sort_direction}
-                  />
-                </th>
-                <th>Claves</th>
                 <th>Google</th>
-                <th class="text-right">
-                  <.sort_button
-                    event="sort_users"
-                    field={:monthly_spend}
-                    label="Gasto mensual"
-                    current={@sort_field}
-                    direction={@sort_direction}
-                    align="right"
-                  />
-                </th>
-                <th class="text-right">
-                  <.sort_button
-                    event="sort_users"
-                    field={:total_spend}
-                    label="Gasto total"
-                    current={@sort_field}
-                    direction={@sort_direction}
-                    align="right"
-                  />
-                </th>
                 <th>
                   <.sort_button
                     event="sort_users"
@@ -1349,61 +1361,9 @@ defmodule TokengateWeb.UsersLive do
 
   ## Credit helpers ------------------------------------------------------------
 
-  # Porcentaje consumido del límite mensual efectivo (nil = sin límite → sin
-  # barra). Un límite en cero está al 100%: bloquea todo.
-  defp credit_pct(%{limit_usd: limit, limit_spend_usd: spent}) when not is_nil(limit) do
-    if Decimal.compare(limit, 0) != :gt do
-      100.0
-    else
-      spent
-      |> Decimal.div(limit)
-      |> Decimal.mult(100)
-      |> Decimal.round(1)
-      |> Decimal.to_float()
-      |> min(100.0)
-    end
-  end
-
-  defp credit_pct(_), do: nil
-
-  # ¿Trae crédito de top-up vigente? Sin presupuesto mensual es el único camino
-  # de gasto del sujeto.
-  defp has_topup_credit?(credit) do
-    case Map.get(credit, :remaining_topup_usd) do
-      %Decimal{} = remaining -> Decimal.compare(remaining, 0) == :gt
-      _ -> false
-    end
-  end
-
-  # Formatea micro-USD como USD.
-  # El template formatea en micro-USD; los montos nuevos son Decimal USD.
-  defp decimal_to_micro(nil), do: 0
-
-  defp decimal_to_micro(%Decimal{} = d) do
-    d |> Decimal.mult(1_000_000) |> Decimal.round(0, :half_up) |> Decimal.to_integer()
-  end
-
-  defp format_micro(micro) when is_integer(micro) do
-    micro
-    |> Decimal.new()
-    |> Decimal.div(Decimal.new(1_000_000))
-    |> Decimal.round(2, :half_up)
-    |> Decimal.to_string(:normal)
-  end
-
-  defp credit_bar_width(nil), do: "width: 0%"
-
-  defp credit_bar_width(pct) when is_number(pct), do: "width: #{min(pct, 100)}%"
-
-  defp credit_bar_class(pct) when is_number(pct) do
-    cond do
-      pct >= 90 -> "bg-error"
-      pct >= 70 -> "bg-warning"
-      true -> "bg-success"
-    end
-  end
-
-  defp credit_bar_class(_), do: "bg-base-300"
+  # Remanente del techo: nunca negativo (un gasto por encima del techo —top-ups
+  # o un techo bajado a mitad de ciclo— deja 0, no un saldo en contra).
+  defp max_decimal(a, b), do: if(Decimal.compare(a, b) == :lt, do: b, else: a)
 
   ## Components ---------------------------------------------------------------
 
@@ -1420,6 +1380,26 @@ defmodule TokengateWeb.UsersLive do
     ~H"""
     <td>
       <.admin_identity initials={initials(@user)} title={@user.name} subtitle={@user.email} />
+    </td>
+    <td>
+      <.keys_badge
+        subject_id={@user.id}
+        count={Map.get(@keys_counts, @user.id, 0)}
+        open_event="manage_keys"
+      />
+    </td>
+    <td id={"credit-#{@user.id}"} class="min-w-[150px]">
+      <.budget_cell credit={Map.get(@users_credit, @user.id)} />
+    </td>
+    <td id={"spend-#{@user.id}"} class="text-right">
+      <div class="text-xs font-mono">
+        ${format_usd(user_monthly_spend(@spend_by_user, @user.id))}
+      </div>
+    </td>
+    <td id={"total-spend-#{@user.id}"} class="text-right">
+      <div class="text-xs font-mono">
+        ${format_usd(Map.get(@total_spend_by_user, @user.id, Decimal.new(0)))}
+      </div>
     </td>
     <td>
       <span class={["badge", "badge-sm", role_badge(@user.global_role)]}>{@user.global_role}</span>
@@ -1445,87 +1425,12 @@ defmodule TokengateWeb.UsersLive do
         </button>
       </div>
     </td>
-    <td id={"credit-#{@user.id}"}>
-      <%= case Map.get(@users_credit, @user.id) do %>
-        <% nil -> %>
-          <span class="text-xs text-base-content/30">—</span>
-        <% %{unlimited?: true} -> %>
-          <span
-            class="badge badge-sm badge-success badge-outline"
-            title="Marcado ilimitado: solo topa el cap global diario"
-          >
-            Ilimitado
-          </span>
-        <% %{limit_usd: nil} = credit -> %>
-          <%!-- Sin presupuesto mensual: solo hay camino de gasto si trae
-               top-ups vigentes. Sin ellos el proxy responde 402, así que el
-               estado real es «sin presupuesto», no «sin límite» (que se leía
-               como si no tuviera tope). --%>
-          <%= if has_topup_credit?(credit) do %>
-            <span
-              class="badge badge-sm badge-info badge-outline"
-              title="Sin presupuesto mensual: gasta solo contra sus top-ups (crédito de un solo uso)"
-            >
-              Top-up ${format_micro(decimal_to_micro(credit.remaining_topup_usd))}
-            </span>
-          <% else %>
-            <span
-              class="badge badge-sm badge-warning badge-outline"
-              title="Sin presupuesto mensual ni top-ups: no puede gastar hasta que se le asigne un presupuesto o un top-up"
-            >
-              {gettext("No budget")}
-            </span>
-          <% end %>
-        <% credit -> %>
-          <div class="flex items-center gap-2">
-            <span class="text-xs font-mono">
-              ${format_micro(decimal_to_micro(credit.remaining_limit_usd))}
-              <span class="text-base-content/40">/ ${format_micro(decimal_to_micro(credit.limit_usd))}</span>
-            </span>
-            <% cpct = credit_pct(credit) %>
-            <div class="w-16 h-1.5 rounded-full bg-base-200 overflow-hidden">
-              <div
-                class={["h-full rounded-full transition-all", credit_bar_class(cpct)]}
-                style={credit_bar_width(cpct)}
-              >
-              </div>
-            </div>
-          </div>
-      <% end %>
-    </td>
-    <td>
-      <.keys_badge
-        subject_id={@user.id}
-        count={Map.get(@keys_counts, @user.id, 0)}
-        open_event="manage_keys"
-      />
-    </td>
     <td>
       <%= if google_badge(@user) do %>
         <span class="badge badge-sm badge-ghost"><.icon name="hero-globe-alt" class="w-3 h-3" />
         Google</span>
       <% else %>
         <span class="text-xs text-base-content/30">—</span>
-      <% end %>
-    </td>
-    <td id={"spend-#{@user.id}"} class="text-right">
-      <%= case Map.get(@spend_by_user, @user.id) do %>
-        <% nil -> %>
-          <span class="text-xs text-base-content/30">—</span>
-        <% spend -> %>
-          <div class="text-xs font-mono">
-            ${fmt_money(spend.real_monthly_usd)}
-          </div>
-      <% end %>
-    </td>
-    <td id={"total-spend-#{@user.id}"} class="text-right">
-      <%= case Map.get(@total_spend_by_user, @user.id) do %>
-        <% nil -> %>
-          <span class="text-xs text-base-content/30">—</span>
-        <% total -> %>
-          <div class="text-xs font-mono">
-            ${fmt_money(total)}
-          </div>
       <% end %>
     </td>
     <td class="text-xs text-base-content/50">

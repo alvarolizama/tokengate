@@ -873,4 +873,104 @@ defmodule TokengateWeb.StatsHelpers do
     </span>
     """
   end
+
+  @doc """
+  Monto en USD con 2 decimales: los techos y top-ups se leen como dinero, y
+  `format_decimal/1` deja 4 decimales (útil para métricas, ruidoso aquí).
+  """
+  def format_usd(%Decimal{} = d) do
+    d
+    |> Decimal.round(2, :half_up)
+    |> Decimal.to_string(:normal)
+  end
+
+  @doc """
+  Porcentaje consumido del techo mensual (`nil` = sin techo definido → sin
+  barra). Un techo en cero está al 100%: bloquea todo.
+  """
+  def credit_pct(%{limit_usd: limit, limit_spend_usd: spent}) when not is_nil(limit) do
+    if Decimal.compare(limit, Decimal.new(0)) == :gt do
+      spent
+      |> Decimal.div(limit)
+      |> Decimal.mult(Decimal.new(100))
+      |> Decimal.round(1)
+      |> Decimal.to_float()
+      |> min(100.0)
+    else
+      100.0
+    end
+  end
+
+  def credit_pct(_), do: nil
+
+  @doc """
+  ¿Trae crédito de top-up vigente? Sin techo mensual es el único camino de gasto
+  del sujeto.
+  """
+  def has_topup_credit?(credit) do
+    case Map.get(credit, :remaining_topup_usd) do
+      %Decimal{} = remaining -> Decimal.compare(remaining, Decimal.new(0)) == :gt
+      _ -> false
+    end
+  end
+
+  @doc """
+  Celda de techo mensual compartida por las tablas de Usuarios y Servicios:
+  ilimitado, sin presupuesto (con o sin top-up) o barra de consumo contra el
+  techo. Un solo componente para que las dos tablas no deriven en lecturas
+  distintas del mismo dato.
+
+  `credit` es el resumen del motor (`Credits.summaries/1` / `service_summaries/1`)
+  y el contenedor (`<td id="credit-…">`) lo pone quien la usa.
+  """
+  attr :credit, :any, required: true, doc: "resumen del motor (map) o nil"
+
+  def budget_cell(assigns) do
+    ~H"""
+    <%= case @credit do %>
+      <% nil -> %>
+        <span class="text-base-content/30">—</span>
+      <% %{unlimited?: true} -> %>
+        <span
+          class="badge badge-sm badge-success badge-outline"
+          title="Marcado ilimitado: solo topa el cap global diario"
+        >
+          Ilimitado
+        </span>
+      <% %{limit_usd: nil} = credit -> %>
+        <%!-- Sin techo mensual sólo hay camino de gasto si trae top-ups
+             vigentes. Sin ellos el proxy responde 402, así que el estado real
+             es «sin presupuesto», no «sin límite» (que se leía como si no
+             tuviera tope). --%>
+        <%= if has_topup_credit?(credit) do %>
+          <span
+            class="badge badge-sm badge-info badge-outline"
+            title="Sin presupuesto mensual: gasta solo contra sus top-ups (crédito de un solo uso)"
+          >
+            Top-up ${format_usd(credit.remaining_topup_usd)}
+          </span>
+        <% else %>
+          <span
+            class="badge badge-sm badge-warning badge-outline"
+            title="Sin presupuesto mensual ni top-ups: no puede gastar hasta que se le asigne un presupuesto o un top-up"
+          >
+            {gettext("No budget")}
+          </span>
+        <% end %>
+      <% credit -> %>
+        <%!-- Consumo debitado al techo contra el techo (la misma lectura que
+             /stats y el dashboard): cifra y barra crecen en el mismo sentido. --%>
+        <% cpct = credit_pct(credit) %>
+        <div class="flex items-center gap-2">
+          <.budget_bar
+            compact
+            spend={credit.limit_spend_usd}
+            limit={credit.limit_usd}
+            pct={cpct}
+          />
+          <.budget_badge pct={cpct} />
+        </div>
+    <% end %>
+    """
+  end
 end

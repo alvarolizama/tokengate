@@ -63,13 +63,7 @@ defmodule TokengateWeb.GlobalCapLive do
   def handle_event("save_global_cap", %{"global_settings" => params}, socket) do
     case GlobalSettings.update(params) do
       {:ok, _settings} ->
-        Tokengate.Auditing.audit(
-          socket.assigns.current_user,
-          "budget.update_global_daily_cap",
-          "global_settings",
-          nil,
-          params
-        )
+        audit(socket, "budget.update_global_daily_cap", "global_settings", "global", params)
 
         {:noreply,
          socket
@@ -103,7 +97,9 @@ defmodule TokengateWeb.GlobalCapLive do
           |> Map.put(to_string(Exemption.subject_field(subject_type)), subject_id)
 
         case Exemptions.add(attrs) do
-          {:ok, _exemption} ->
+          {:ok, exemption} ->
+            audit(socket, "exemption.add", "exemption", exemption.id, attrs)
+
             {:noreply, socket |> assign_exemptions() |> put_flash(:info, "Exención agregada.")}
 
           {:error, changeset} ->
@@ -114,6 +110,9 @@ defmodule TokengateWeb.GlobalCapLive do
 
   def handle_event("remove_global_exemption", %{"id" => id}, socket) do
     Exemptions.remove(id)
+
+    audit(socket, "exemption.remove", "exemption", id, %{})
+
     {:noreply, socket |> assign_exemptions() |> put_flash(:info, "Exención eliminada.")}
   end
 

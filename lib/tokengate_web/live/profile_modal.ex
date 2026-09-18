@@ -53,6 +53,15 @@ defmodule TokengateWeb.ProfileModal do
 
     case Accounts.update_user_password(user, params) do
       {:ok, user} ->
+        Tokengate.Auditing.log(
+          user,
+          "auth.password_change",
+          "user",
+          user.id,
+          %{"email" => user.email},
+          %{origin: "web"}
+        )
+
         {:noreply,
          socket
          |> assign(:user, user)

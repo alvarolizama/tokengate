@@ -134,6 +134,52 @@ defmodule TokengateWeb.ServicesLiveTest do
     assert has_element?(view, "#total-spend-#{service.id}", "$1.50")
   end
 
+  test "un servicio sin requests muestra $0.00 en las dos columnas de gasto", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    service = service_fixture()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/access/services")
+
+    # No aparece en los agregados (no tiene logs): es $0.00, no «—».
+    assert has_element?(view, "#monthly-spend-#{service.id}", "$0.00")
+    assert has_element?(view, "#total-spend-#{service.id}", "$0.00")
+  end
+
+  test "la columna Límite mensual lee consumo/techo, igual que en Usuarios", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    {:ok, group} =
+      Accounts.create_group(%{name: "Credit Svc Group #{System.unique_integer([:positive])}"})
+
+    {:ok, service} =
+      Accounts.create_service(%{
+        name: "Credit Service #{System.unique_integer([:positive])}",
+        group_id: group.id,
+        monthly_spend_limit_usd: "50.00",
+        concurrency_limit: 5,
+        rpm_limit: 60
+      })
+
+    # $20 consumidos del techo: la celda y su barra miden lo mismo (antes la
+    # columna solo imprimía el techo como texto: «$50.00/mes»).
+    {:ok, _} =
+      Tokengate.Logs.log_request(%{
+        subject_type: "service",
+        service_id: service.id,
+        model_requested: "gpt-4o",
+        provider_cost_usd: Decimal.new("20.00"),
+        latency_ms: 100
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/access/services")
+
+    assert has_element?(view, "#credit-#{service.id}", "20.0000 / 50.0000")
+    # El gasto real del mes sigue en su propia columna (incluye top-ups).
+    assert has_element?(view, "#monthly-spend-#{service.id}", "$20.00")
+  end
+
   test "eliminar servicio via modal de confirmación", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     service = service_fixture()

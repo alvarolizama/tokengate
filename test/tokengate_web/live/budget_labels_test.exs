@@ -113,8 +113,9 @@ defmodule TokengateWeb.BudgetLabelsTest do
     refute topup_badge =~ "Sin presupuesto"
     refute topup_badge =~ "Sin límite"
 
-    # 3. Con presupuesto mensual: su techo y la barra de consumo.
-    assert budget_badge =~ "$50"
+    # 3. Con presupuesto mensual: su techo y la barra de consumo (consumido /
+    # techo, la misma lectura que /stats y el dashboard).
+    assert budget_badge =~ "0.0000 / 50.0000"
     refute budget_badge =~ "Sin presupuesto"
 
     # 4. Ilimitado (y el badge dice de qué cap protege: no es «sin techo»).
@@ -302,8 +303,10 @@ defmodule TokengateWeb.BudgetLabelsTest do
     conn = login(conn, admin, password)
     {:ok, view, _} = live(conn, ~p"/access/users")
 
-    # El techo está agotado: la barra lo refleja y no hay «sin presupuesto».
-    assert badge_text(view, plain) =~ "$0"
+    # El techo está agotado: la barra lo refleja, el badge lo dice y no hay
+    # «sin presupuesto».
+    assert badge_text(view, plain) =~ "10.0000 / 10.0000"
+    assert badge_text(view, plain) =~ "Agotado"
     refute badge_text(view, plain) =~ "Sin presupuesto"
   end
 end

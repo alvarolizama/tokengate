@@ -262,7 +262,11 @@ defmodule TokengateWeb.AdminComponents do
     >
       <div class="flex items-center gap-2 text-xs text-base-content/60">
         <span id={"#{@id}-range"}>{@from}–{@to} de {@total}</span>
+        <%!-- El selector de tamaño sólo aparece cuando la tabla NO cabe en la
+             página más pequeña: con menos filas no puede cambiar nada y se lee
+             como un control roto. --%>
         <select
+          :if={@total > Enum.min(@per_page_options)}
           id={"#{@id}-per-page"}
           name="per_page"
           phx-change="change_per_page"

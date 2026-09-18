@@ -135,7 +135,18 @@ defmodule TokengateWeb.ObservabilityLive do
       end
 
     case result do
-      {:ok, _destination} ->
+      {:ok, destination} ->
+        audit(
+          socket,
+          if(socket.assigns.editing_destination_id == :new,
+            do: "destination.create",
+            else: "destination.update"
+          ),
+          "destination",
+          destination.id,
+          %{"name" => destination.name}
+        )
+
         {:noreply,
          socket
          |> put_flash(:info, "Webhook guardado.")
@@ -153,6 +164,10 @@ defmodule TokengateWeb.ObservabilityLive do
 
     case Observability.delete_destination(destination) do
       {:ok, _} ->
+        audit(socket, "destination.delete", "destination", destination.id, %{
+          "name" => destination.name
+        })
+
         {:noreply,
          socket
          |> put_flash(:info, "Webhook eliminado.")

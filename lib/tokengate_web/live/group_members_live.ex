@@ -227,7 +227,13 @@ defmodule TokengateWeb.GroupMembersLive do
       attrs = %{user_id: user.id, group_id: group.id}
 
       case Accounts.create_group_member(attrs) do
-        {:ok, _member} ->
+        {:ok, member} ->
+          audit(socket, "group_member.add", "group_member", member.id, %{
+            "group_id" => group.id,
+            "user_id" => user.id,
+            "email" => user.email
+          })
+
           {:noreply,
            socket
            |> put_flash(:info, "Miembro añadido.")
@@ -269,6 +275,11 @@ defmodule TokengateWeb.GroupMembersLive do
     else
       case Accounts.delete_group_member(member) do
         {:ok, _} ->
+          audit(socket, "group_member.remove", "group_member", member.id, %{
+            "group_id" => member.group_id,
+            "user_id" => member.user_id
+          })
+
           {:noreply,
            socket
            |> put_flash(:info, "Miembro eliminado.")
@@ -329,6 +340,10 @@ defmodule TokengateWeb.GroupMembersLive do
 
       case result do
         {:ok, _} ->
+          audit(socket, "group_member.model_access_change", "group_member", member_id, %{
+            "model_id" => model_id
+          })
+
           {:noreply,
            socket
            |> put_flash(:info, "Modelos actualizados.")
@@ -356,6 +371,10 @@ defmodule TokengateWeb.GroupMembersLive do
     else
       case Providers.set_extra_model(member_id, model_id) do
         {:ok, _} ->
+          audit(socket, "group_member.extra_model_update", "group_member", member_id, %{
+            "model_id" => model_id
+          })
+
           {:noreply,
            socket
            |> put_flash(:info, "Alias actualizado.")

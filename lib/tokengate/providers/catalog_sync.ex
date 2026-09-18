@@ -54,6 +54,7 @@ defmodule Tokengate.Providers.CatalogSync do
     CatalogSeed.seed_if_empty()
     CatalogSeed.seed_labs_if_empty()
     CatalogSeed.seed_models_if_empty()
+    ensure_code_providers()
     materialize()
     request_refresh_if_model_mirror_empty()
   end
@@ -130,6 +131,55 @@ defmodule Tokengate.Providers.CatalogSync do
     :ok
   rescue
     e -> Logger.error("[catalog sync] failed: #{Exception.message(e)}")
+  end
+
+  @doc """
+  Upserts the CODE-OWNED provider rows into the mirror.
+
+  A provider models.dev does not publish at all (its row, name, base URL and
+  logo exist only in `Catalog.@code_providers`) still has to reach
+  `catalog_providers`, because that mirror is the single input `materialize/0`
+  reads.
+
+  Two reasons this is not the vendored snapshot's job:
+
+    * `CatalogSeed.seed_if_empty/0` only seeds an EMPTY table, so a running
+      instance — which never goes back to empty — would never see the row;
+    * `priv/models_dev/providers.json` is read at COMPILE time, so it is baked
+      into the release image and a hand edit drifts from the code.
+
+  Idempotent on the same rule as `apply_entries/1`: a row whose fingerprint
+  already matches is not written, so an unchanged boot issues zero updates.
+  Never raises — the app must boot.
+  """
+  @spec ensure_code_providers() :: :ok
+  def ensure_code_providers do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    Enum.each(Catalog.code_providers(), fn entry ->
+      attrs =
+        entry
+        |> Map.merge(%{fetched_at: now, status: "active"})
+        |> Map.put(:fingerprint, CatalogProvider.fingerprint(entry))
+
+      case Repo.get(CatalogProvider, entry.key) do
+        nil ->
+          %CatalogProvider{} |> CatalogProvider.changeset(attrs) |> Repo.insert()
+
+        %CatalogProvider{fingerprint: fingerprint, status: "active"}
+        when fingerprint == attrs.fingerprint ->
+          :ok
+
+        %CatalogProvider{} = row ->
+          row |> CatalogProvider.changeset(attrs) |> Repo.update()
+      end
+    end)
+
+    :ok
+  rescue
+    e ->
+      Logger.error("[catalog sync] code-owned providers failed: #{Exception.message(e)}")
+      :ok
   end
 
   # The lab mirror: upserts builtin rows from the vendored snapshot. Kept as a

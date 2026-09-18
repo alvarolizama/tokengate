@@ -234,7 +234,15 @@ defmodule TokengateWeb.TopupsLive do
       end
 
     case result do
-      {:ok, _topup} ->
+      {:ok, topup} ->
+        audit(
+          socket,
+          if(socket.assigns.editing_topup_id, do: "topup.update", else: "topup.create"),
+          "topup",
+          topup.id,
+          %{"amount_usd" => to_string(topup.amount_usd), "label" => topup.label}
+        )
+
         {:noreply,
          socket
          |> assign(:form, nil)
@@ -262,8 +270,15 @@ defmodule TokengateWeb.TopupsLive do
       end
 
     case result do
-      {:ok, _} -> {:noreply, socket |> load_topups() |> put_flash(:info, message)}
-      {:error, _} -> {:noreply, put_flash(socket, :error, "No se pudo cambiar el estado.")}
+      {:ok, _} ->
+        audit(socket, "topup.toggle_status", "topup", topup.id, %{
+          "status" => if(topup.status == "active", do: "inactive", else: "active")
+        })
+
+        {:noreply, socket |> load_topups() |> put_flash(:info, message)}
+
+      {:error, _} ->
+        {:noreply, put_flash(socket, :error, "No se pudo cambiar el estado.")}
     end
   end
 
@@ -272,6 +287,8 @@ defmodule TokengateWeb.TopupsLive do
 
     case Topups.revoke(topup) do
       {:ok, _} ->
+        audit(socket, "topup.revoke", "topup", topup.id, %{"label" => topup.label})
+
         {:noreply, socket |> load_topups() |> put_flash(:info, "Top-up revocado.")}
 
       {:error, _} ->

@@ -50,22 +50,10 @@ defmodule TokengateWeb.ProvidersLiveTest do
     |> recycle()
   end
 
-  # The providers list defaults to the builtin tab; custom providers only
-  # render after switching. Helper: mount + switch to the Custom tab. The
-  # tabs only render when at least one provider is visible — when the list
-  # is empty the tab is absent and we stay on the default.
-  defp live_custom_tab(conn) do
-    {:ok, view, _html} = live(conn, ~p"/catalog/providers")
-
-    view =
-      if Phoenix.LiveViewTest.has_element?(view, "#tab-providers-custom") do
-        view |> Phoenix.LiveViewTest.element("#tab-providers-custom") |> render_click()
-        view
-      else
-        view
-      end
-
-    {:ok, view, render(view)}
+  # La lista de proveedores ya no tiene tabs: se monta una vez y el render
+  # trae la lista entera (builtin primero, custom al final).
+  defp live_providers(conn) do
+    live(conn, ~p"/catalog/providers")
   end
 
   defp create_provider(attrs \\ %{}) do
@@ -104,7 +92,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, html} = live_custom_tab(conn)
+    {:ok, view, html} = live_providers(conn)
 
     assert html =~ "Proveedores"
     assert has_element?(view, "#providers-#{provider.id}")
@@ -120,7 +108,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live_custom_tab(conn)
+    {:ok, view, _html} = live_providers(conn)
 
     assert has_element?(view, "#providers.grid.gap-3.lg\\:grid-cols-2")
     refute has_element?(view, "#providers.space-y-3")
@@ -136,7 +124,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live_custom_tab(conn)
+    {:ok, view, _html} = live_providers(conn)
 
     assert has_element?(
              view,
@@ -149,13 +137,56 @@ defmodule TokengateWeb.ProvidersLiveTest do
            )
   end
 
+  test "una sola lista sin tabs: builtin primero y custom al final", %{conn: conn} do
+    u = unique()
+
+    # Un builtin visible (los builtin solo salen con credencial) y un custom.
+    {:ok, builtin} =
+      %Providers.Provider{}
+      |> Ecto.Changeset.change(
+        key: "catalog-prov-#{u}",
+        name: "Zzz Builtin #{u}",
+        base_url: "https://catalog-#{u}.example.com/v1",
+        source: "builtin",
+        dialect: "openai",
+        billing_type: "pay_per_token",
+        capabilities: ["llm"],
+        status: "active"
+      )
+      |> Tokengate.Repo.insert()
+
+    {:ok, _cred} =
+      Providers.create_credential(%{
+        provider_id: builtin.id,
+        name: "Producción",
+        api_key_encrypted: "***",
+        status: "active"
+      })
+
+    # El custom se llama «Aaa…» a propósito: alfabéticamente iría ANTES que el
+    # builtin «Zzz…», así que si el orden dependiera del nombre esta aserción
+    # fallaría. Va al final por ser custom.
+    custom = create_provider(%{name: "Aaa Custom #{u}"})
+
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, html} = live_providers(conn)
+
+    refute has_element?(view, "#providers-tabs")
+
+    {builtin_at, _} = :binary.match(html, ~s(id="providers-#{builtin.id}"))
+    {custom_at, _} = :binary.match(html, ~s(id="providers-#{custom.id}"))
+
+    assert builtin_at < custom_at
+  end
+
   ## Provider CRUD ---------------------------------------------------------
 
   test "admin creates a provider", %{conn: conn} do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live_custom_tab(conn)
+    {:ok, view, _html} = live_providers(conn)
 
     # The entry point is the catalog modal; "Custom provider" lives inside it.
     view |> element("#add-provider-btn") |> render_click()
@@ -186,8 +217,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     created = Tokengate.Repo.get_by!(Providers.Provider, name: "anthropic")
     assert created.capabilities == ["llm"]
 
-    # The new custom provider lives on the Custom tab.
-    view |> element("#tab-providers-custom") |> render_click()
+    # El custom aparece en la misma lista que los builtin (ya no hay tab).
     assert render(view) =~ "anthropic"
   end
 
@@ -196,7 +226,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live_custom_tab(conn)
+    {:ok, view, _html} = live_providers(conn)
 
     view |> element("#edit-#{provider.id}") |> render_click()
     refute has_element?(view, "#provider_capabilities")
@@ -217,7 +247,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live_custom_tab(conn)
+    {:ok, view, _html} = live_providers(conn)
 
     view |> element("#edit-#{provider.id}") |> render_click()
     assert has_element?(view, "#provider-form")
@@ -241,7 +271,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live_custom_tab(conn)
+    {:ok, view, _html} = live_providers(conn)
 
     html = view |> element("#delete-#{provider.id}") |> render_click()
 
@@ -278,7 +308,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live_custom_tab(conn)
+    {:ok, view, _html} = live_providers(conn)
 
     html = view |> element("#delete-#{provider.id}") |> render_click()
 
@@ -293,7 +323,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live_custom_tab(conn)
+    {:ok, view, _html} = live_providers(conn)
 
     # Credentials panel is always open
     assert has_element?(view, "#credentials-panel-#{provider.id}")
@@ -480,13 +510,13 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    # Builtin card lives on the DEFAULT tab — plain mount, no switch.
+    # Una sola lista: el builtin y el custom salen juntos en el mismo render.
     {:ok, view, _html} = live(conn, ~p"/catalog/providers")
 
     # Builtin: the limits are the operator's, so the card is editable — but the
     # catalog identity inside the form stays read-only.
     assert has_element?(view, "#edit-#{builtin.id}")
-    refute has_element?(view, "#providers-#{custom.id}")
+    assert has_element?(view, "#providers-#{custom.id}")
 
     view |> element("#edit-#{builtin.id}") |> render_click()
     assert has_element?(view, "#provider-form")
@@ -509,11 +539,10 @@ defmodule TokengateWeb.ProvidersLiveTest do
     assert reloaded.base_url == builtin.base_url
 
     # The card shows the limits the keys below it inherit.
-    custom_tab_html = render(view)
-    assert custom_tab_html =~ "RPM 120"
-    assert custom_tab_html =~ "90000 ms"
+    limits_html = render(view)
+    assert limits_html =~ "RPM 120"
+    assert limits_html =~ "90000 ms"
 
-    view |> element("#tab-providers-custom") |> render_click()
     assert has_element?(view, "#edit-#{custom.id}")
     # Both keep the status toggle
     assert has_element?(view, "#toggle-provider-#{builtin.id}") ||
@@ -527,7 +556,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live_custom_tab(conn)
+    {:ok, view, _html} = live_providers(conn)
 
     html = render(view)
     assert html =~ "RPM ∞"
@@ -545,7 +574,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live_custom_tab(conn)
+    {:ok, view, _html} = live_providers(conn)
 
     view |> element("#edit-#{provider.id}") |> render_click()
 
@@ -561,7 +590,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live_custom_tab(conn)
+    {:ok, view, _html} = live_providers(conn)
 
     assert has_element?(view, "#new-credential-#{provider.id}")
     assert render(view) =~ "API key"
@@ -574,7 +603,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live_custom_tab(conn)
+    {:ok, view, _html} = live_providers(conn)
 
     html = render(view)
     paths_at = :binary.match(html, ~s(id="paths-#{provider.id}"))
@@ -588,7 +617,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live_custom_tab(conn)
+    {:ok, view, _html} = live_providers(conn)
 
     refute has_element?(view, "#paths-modal")
 
@@ -630,7 +659,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live_custom_tab(conn)
+    {:ok, view, _html} = live_providers(conn)
 
     view |> element("#paths-#{provider.id}") |> render_click()
 
@@ -649,7 +678,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     %{user: admin, password: password} = register_admin()
 
     conn = login(conn, admin, password)
-    {:ok, view, _html} = live_custom_tab(conn)
+    {:ok, view, _html} = live_providers(conn)
 
     view |> element("#paths-#{provider.id}") |> render_click()
     assert has_element?(view, "#paths-form input[name='paths[chat]'][value='/v1/chat']")

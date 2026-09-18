@@ -312,6 +312,11 @@ defmodule TokengateWeb.ModelsLive do
 
       case Providers.update_model(model, %{pinned: new_pinned}) do
         {:ok, _updated} ->
+          audit(socket, "model.pin_toggle", "model", model.id, %{
+            "name" => model.name,
+            "pinned" => new_pinned
+          })
+
           {:noreply, load_models(socket)}
 
         {:error, _changeset} ->
@@ -349,6 +354,16 @@ defmodule TokengateWeb.ModelsLive do
 
       case Providers.update_model(model, model_params) do
         {:ok, _updated} ->
+          audit(socket, "model.guard_rails_update", "model", model.id, %{
+            "name" => model.name,
+            "changes" =>
+              Map.take(model_params, [
+                "guard_rails",
+                "prompt_cache_enabled",
+                "lazy_cleanup_enabled"
+              ])
+          })
+
           {:noreply,
            socket
            |> put_flash(:info, "Guard rails actualizados.")
@@ -411,6 +426,10 @@ defmodule TokengateWeb.ModelsLive do
       else
         case Providers.delete_model(model_record) do
           {:ok, _} ->
+            audit(socket, "model.delete", "model", model_record.id, %{
+              "name" => model_record.name
+            })
+
             {:noreply,
              socket
              |> put_flash(:info, "Modelo eliminado.")
@@ -540,6 +559,11 @@ defmodule TokengateWeb.ModelsLive do
 
         case Providers.create_credential(attrs) do
           {:ok, credential} ->
+            audit(socket, "credential.create", "credential", credential.id, %{
+              "provider_id" => credential.provider_id,
+              "name" => credential.name
+            })
+
             socket =
               socket
               |> assign_form_data()
@@ -885,6 +909,11 @@ defmodule TokengateWeb.ModelsLive do
 
       case Providers.update_model_provider(ap, %{enabled: new_enabled}) do
         {:ok, _} ->
+          audit(socket, "model_provider.toggle_status", "model_provider", ap.id, %{
+            "model_id" => ap.model_id,
+            "enabled" => new_enabled
+          })
+
           {:noreply,
            socket
            |> put_flash(
@@ -907,6 +936,10 @@ defmodule TokengateWeb.ModelsLive do
 
       case Providers.delete_model_provider(ap) do
         {:ok, _} ->
+          audit(socket, "model_provider.delete", "model_provider", ap.id, %{
+            "model_id" => ap.model_id
+          })
+
           {:noreply,
            socket
            |> put_flash(:info, "Proveedor eliminado del modelo.")
@@ -943,6 +976,8 @@ defmodule TokengateWeb.ModelsLive do
             end)
           end)
 
+        audit(socket, "model_provider.reorder", "model", model_id, %{"ids" => ids})
+
         {:noreply, load_models(socket)}
       else
         {:noreply, put_flash(socket, :error, "Orden inválido para este modelo.")}
@@ -956,7 +991,9 @@ defmodule TokengateWeb.ModelsLive do
 
   defp save_model(socket, :new, model_params) do
     case Providers.create_model(model_params) do
-      {:ok, _model} ->
+      {:ok, model} ->
+        audit(socket, "model.create", "model", model.id, %{"name" => model.name})
+
         {:noreply,
          socket
          |> put_flash(:info, "Modelo creado.")
@@ -973,7 +1010,20 @@ defmodule TokengateWeb.ModelsLive do
     model_record = Providers.get_model!(model_id)
 
     case Providers.update_model(model_record, model_params) do
-      {:ok, _model} ->
+      {:ok, updated} ->
+        audit(socket, "model.update", "model", updated.id, %{
+          "name" => updated.name,
+          "changes" =>
+            Map.take(model_params, [
+              "name",
+              "context_window",
+              "model_type",
+              "catalog_model_key",
+              "lab_key",
+              "icon"
+            ])
+        })
+
         {:noreply,
          socket
          |> put_flash(:info, "Modelo actualizado.")
@@ -1187,6 +1237,17 @@ defmodule TokengateWeb.ModelsLive do
                 do: "Proveedor asignado al modelo.",
                 else: "#{count} proveedores asignados al modelo."
 
+            audit(
+              socket,
+              "model_provider.create",
+              "model",
+              socket.assigns.provider_form_model_id,
+              %{
+                "count" => count,
+                "scope" => scope
+              }
+            )
+
             {:noreply,
              socket
              |> put_flash(:info, msg)
@@ -1211,7 +1272,19 @@ defmodule TokengateWeb.ModelsLive do
     ap_params = apply_provider_defaults(ap_params, socket)
 
     case Providers.update_model_provider(ap, ap_params) do
-      {:ok, _ap} ->
+      {:ok, updated_ap} ->
+        audit(socket, "model_provider.update", "model_provider", updated_ap.id, %{
+          "model_id" => updated_ap.model_id,
+          "changes" =>
+            Map.take(ap_params, [
+              "provider_model",
+              "enabled",
+              "priority",
+              "exclusive_to_group_id",
+              "exclusive_to_group_member_id"
+            ])
+        })
+
         {:noreply,
          socket
          |> put_flash(:info, "Proveedor actualizado.")

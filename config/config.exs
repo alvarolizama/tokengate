@@ -86,6 +86,10 @@ config :tokengate, Oban,
        # partitions, backfill stray days out of the default partition, drop
        # partitions past retention. (fixes.md C1)
        {"5 0 * * *", Tokengate.Logs.PartitionWorker},
+       # Daily audit_logs monthly partition maintenance: create upcoming
+       # months, backfill strays out of the default partition, drop months
+       # past the ~90-day retention.
+       {"10 0 * * *", Tokengate.Auditing.PartitionWorker},
        # Weekly refresh of the provider catalog from models.dev (provider-level
        # data only). The maintenance page can also enqueue it on demand.
        {"30 4 * * 1", Tokengate.Providers.CatalogRefreshWorker}
@@ -97,6 +101,10 @@ config :tokengate, Oban,
 # Disabled in test.exs — fixtures insert arbitrary historical dates that must
 # stay in the default partition.
 config :tokengate, :partition_boot_ensure, true
+
+# At-boot audit_logs monthly-partition ensure
+# (Tokengate.Auditing.PartitionWorker.ensure_on_boot/0). Disabled in test.exs.
+config :tokengate, :audit_partition_boot_ensure, true
 
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason

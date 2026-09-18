@@ -100,7 +100,10 @@ defmodule TokengateWeb.DashboardLive do
     case Map.get(unsigned_params, "period") do
       period when period in ~w(today 7d 30d 90d) ->
         {:noreply,
-         socket |> assign(:period, period) |> load_metrics_async(socket.assigns.current_user)}
+         socket
+         |> assign(:period, period)
+         |> load_personal_data(socket.assigns.current_user)
+         |> load_metrics_async(socket.assigns.current_user)}
 
       _ ->
         {:noreply, socket}
@@ -144,6 +147,7 @@ defmodule TokengateWeb.DashboardLive do
     {:noreply,
      socket
      |> assign(:reload_scheduled, false)
+     |> load_personal_data(user)
      |> load_metrics_async(user)}
   end
 
@@ -188,7 +192,7 @@ defmodule TokengateWeb.DashboardLive do
              socket
              |> assign(:new_token, new_token)
              |> assign(:new_token_group, member.group.name)
-             |> load_personal_data(user)
+             |> reload_personal_data(user)
              |> put_flash(:info, "Clave regenerada correctamente.")}
 
           {:error, _changeset} ->
@@ -214,7 +218,7 @@ defmodule TokengateWeb.DashboardLive do
               {:ok, _} ->
                 {:noreply,
                  socket
-                 |> load_personal_data(user)
+                 |> reload_personal_data(user)
                  |> put_flash(:info, "Clave revocada.")}
 
               {:error, _} ->
@@ -270,13 +274,10 @@ defmodule TokengateWeb.DashboardLive do
 
     case Accounts.create_api_key(attrs) do
       {:ok, api_key} ->
-        Tokengate.Auditing.audit(
-          user,
-          "api_key.create",
-          "api_key",
-          api_key.id,
-          %{"label" => api_key.label, "user_id" => user.id, "origin" => "dashboard"}
-        )
+        audit(socket, "api_key.create", "api_key", api_key.id, %{
+          "label" => api_key.label,
+          "user_id" => user.id
+        })
 
         {:noreply,
          socket
@@ -298,13 +299,10 @@ defmodule TokengateWeb.DashboardLive do
          true <- api_key.user_id == user.id do
       case Accounts.revoke_api_key(api_key) do
         {:ok, _} ->
-          Tokengate.Auditing.audit(
-            user,
-            "api_key.revoke",
-            "api_key",
-            api_key.id,
-            %{"label" => api_key.label, "user_id" => user.id, "origin" => "dashboard"}
-          )
+          audit(socket, "api_key.revoke", "api_key", api_key.id, %{
+            "label" => api_key.label,
+            "user_id" => user.id
+          })
 
           {:noreply,
            socket
@@ -327,13 +325,7 @@ defmodule TokengateWeb.DashboardLive do
     user = socket.assigns[:current_user]
     Accounts.clear_user_sticky_routes(user.id)
 
-    Tokengate.Auditing.audit(
-      user,
-      "routing.clear_sticky",
-      "user",
-      user.id,
-      %{"origin" => "dashboard"}
-    )
+    audit(socket, "routing.clear_sticky", "user", user.id, %{"email" => user.email})
 
     {:noreply,
      socket
@@ -347,7 +339,12 @@ defmodule TokengateWeb.DashboardLive do
   def handle_event("set_period", %{"period" => period}, socket)
       when period in ~w(today 7d 30d 90d) do
     user = socket.assigns[:current_user]
-    {:noreply, socket |> assign(:period, period) |> load_metrics_async(user)}
+
+    {:noreply,
+     socket
+     |> assign(:period, period)
+     |> load_personal_data(user)
+     |> load_metrics_async(user)}
   end
 
   def handle_event("set_breakdown", %{"tab" => tab}, socket)
@@ -378,10 +375,31 @@ defmodule TokengateWeb.DashboardLive do
   end
 
   defp load_personal_data(socket, user) do
-    memberships = Accounts.list_group_members_for_user(user.id)
+    # Estas tarjetas se refrescan en cada cambio de período y en cada reload de
+    # pubsub (no sólo al montar), así que la pasada de queries del resumen de
+    # crédito se cachea con el mismo TTL de 5s que el resto del dashboard.
+    data =
+      DashboardCache.fetch_or_compute({:dashboard_personal, user.id}, fn ->
+        build_personal_data(user)
+      end)
 
-    # El resumen del sujeto (límite efectivo + top-ups) se resuelve en lote:
-    # una pasada para todas las membresías.
+    socket
+    |> assign(:memberships, data.memberships)
+    |> assign(:groups, data.groups)
+    |> assign(:has_access, data.has_access)
+  end
+
+  # Invalidación explícita: los eventos que mutan la membresía o su clave
+  # (regenerar/revocar) no pueden esperar al TTL para reflejar el cambio.
+  defp reload_personal_data(socket, user) do
+    DashboardCache.invalidate({:dashboard_personal, user.id})
+    load_personal_data(socket, user)
+  end
+
+  # El resumen del sujeto (límite efectivo + top-ups) se resuelve en lote:
+  # una pasada para todas las membresías.
+  defp build_personal_data(user) do
+    memberships = Accounts.list_group_members_for_user(user.id)
     summaries = Tokengate.Credits.summaries(memberships)
 
     groups =
@@ -400,12 +418,11 @@ defmodule TokengateWeb.DashboardLive do
 
     # Admins always see the full org-wide dashboard. Regular users need at
     # least one group membership to access API keys, endpoint info, and metrics.
-    has_access = user.global_role == "admin" or groups != []
-
-    socket
-    |> assign(:memberships, memberships)
-    |> assign(:groups, groups)
-    |> assign(:has_access, has_access)
+    %{
+      memberships: memberships,
+      groups: groups,
+      has_access: user.global_role == "admin" or groups != []
+    }
   end
 
   # Keys activas del usuario logueado + consumo por key (una sola query por

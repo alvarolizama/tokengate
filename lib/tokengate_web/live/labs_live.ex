@@ -38,13 +38,10 @@ defmodule TokengateWeb.LabsLive do
       socket
       |> assign(:page_title, "Labs · Tokengate")
       |> assign(:is_admin, user && user.global_role == "admin")
-      |> assign(:source_filter, "all")
-      |> assign(:search, "")
       |> assign(:form, nil)
       |> assign(:editing_key, nil)
       |> assign(:delete_target, nil)
       |> assign(:icon_choices, @icon_choices)
-      |> assign(:counts, lab_counts())
       |> require_admin_hook()
       |> stream_configure(:labs, dom_id: &"lab-#{&1.key}")
       |> load_labs()
@@ -64,44 +61,19 @@ defmodule TokengateWeb.LabsLive do
 
   ## Data loading -----------------------------------------------------------
 
+  # Sin filtros de ningún tipo: builtin y custom se listan siempre juntos y
+  # completos. La pantalla es para ver y administrar labs, no para acotarlos.
   defp load_labs(socket) do
-    labs =
-      Providers.list_labs(
-        source: source_opt(socket.assigns.source_filter),
-        search: socket.assigns.search
-      )
+    labs = Providers.list_labs()
 
     socket
     |> stream(:labs, labs, reset: true)
     |> assign(:labs_empty?, labs == [])
-    |> assign(:counts, lab_counts())
-  end
-
-  defp source_opt("all"), do: nil
-  defp source_opt(other), do: other
-
-  defp lab_counts do
-    %{
-      all: length(Providers.list_labs()),
-      builtin: length(Providers.list_labs(source: "builtin")),
-      custom: length(Providers.list_labs(source: "custom"))
-    }
-  end
-
-  ## Events — filtros -------------------------------------------------------
-
-  @impl true
-  def handle_event("filter_source", %{"source" => source}, socket)
-      when source in ~w(all builtin custom) do
-    {:noreply, socket |> assign(:source_filter, source) |> load_labs()}
-  end
-
-  def handle_event("search", %{"q" => query}, socket) do
-    {:noreply, socket |> assign(:search, query) |> load_labs()}
   end
 
   ## Events — form ----------------------------------------------------------
 
+  @impl true
   def handle_event("new_lab", _params, socket) do
     changeset =
       Providers.change_lab(%Lab{})
@@ -159,6 +131,8 @@ defmodule TokengateWeb.LabsLive do
 
     case Providers.delete_custom_lab(lab) do
       {:ok, _} ->
+        audit(socket, "lab.delete", "lab", lab.key, %{"name" => lab.name})
+
         {:noreply,
          socket
          |> put_flash(:info, "Lab «#{lab.name}» eliminado.")
@@ -178,6 +152,8 @@ defmodule TokengateWeb.LabsLive do
   defp save_lab(socket, :new, params) do
     case Providers.create_custom_lab(params) do
       {:ok, lab} ->
+        audit(socket, "lab.create", "lab", lab.key, %{"name" => lab.name})
+
         {:noreply,
          socket
          |> put_flash(:info, "Lab «#{lab.name}» creado.")
@@ -195,6 +171,8 @@ defmodule TokengateWeb.LabsLive do
 
     case Providers.update_custom_lab(lab, params) do
       {:ok, lab} ->
+        audit(socket, "lab.update", "lab", lab.key, %{"name" => lab.name})
+
         {:noreply,
          socket
          |> put_flash(:info, "Lab «#{lab.name}» actualizado.")
@@ -229,37 +207,13 @@ defmodule TokengateWeb.LabsLive do
           </:actions>
         </.header>
 
-        <div class="flex items-center justify-between gap-4 flex-wrap">
-          <div class="join" id="lab-source-tabs" role="tablist">
-            <button
-              :for={{label, value} <- source_tabs(@counts)}
-              phx-click="filter_source"
-              phx-value-source={value}
-              class={[
-                "join-item btn btn-sm",
-                if(@source_filter == value, do: "btn-primary", else: "btn-ghost")
-              ]}
-              id={"lab-tab-#{value}"}
-            >
-              {label}
-            </button>
-          </div>
-
-          <.admin_search
-            event="search"
-            value={@search}
-            placeholder="Buscar por nombre o key…"
-            input_id="lab-search"
-          />
-        </div>
-
         <%!-- El estado vacío va FUERA del contenedor del stream: phx-update
              solo administra los hijos con id de stream. --%>
         <.admin_empty_state
           :if={@labs_empty?}
           id="labs-empty"
           icon="hero-beaker"
-          message={empty_message(@source_filter, @search)}
+          message="No hay labs que mostrar."
         />
 
         <div id="labs" phx-update="stream" class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -493,21 +447,6 @@ defmodule TokengateWeb.LabsLive do
   end
 
   ## Helpers ----------------------------------------------------------------
-
-  defp source_tabs(counts) do
-    [
-      {"Todos (#{counts.all})", "all"},
-      {"models.dev (#{counts.builtin})", "builtin"},
-      {"Custom (#{counts.custom})", "custom"}
-    ]
-  end
-
-  defp empty_message("custom", ""), do: "Todavía no hay labs custom. Crea el primero."
-
-  defp empty_message(_source, search) when search != "",
-    do: "Ningún lab coincide con «#{search}»."
-
-  defp empty_message(_source, _search), do: "No hay labs que mostrar."
 
   # El changeset no trae `model_count`/`source`/`status` (son del catálogo), así
   # que la vista previa los rellena para que `Lab.mark/1` pueda decidir.

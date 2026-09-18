@@ -12,9 +12,11 @@ defmodule TokengateWeb.ServicesLive do
   import Ecto.Query, only: [from: 2]
   import TokengateWeb.AdminComponents
   import TokengateWeb.KeysPanel
+  import TokengateWeb.StatsHelpers, only: [budget_cell: 1, format_usd: 1]
   alias Tokengate.Accounts
   alias Tokengate.Accounts.Service
   alias Tokengate.Budgets
+  alias Tokengate.Credits
   alias Tokengate.Logs
   alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Providers
@@ -109,6 +111,14 @@ defmodule TokengateWeb.ServicesLive do
         Budgets.spend_by_service()
       end)
 
+    # Techo de cada servicio + consumo debitado (el mismo par
+    # consumido/techo que la columna de Usuarios). Agregado whole-table
+    # cacheado (5s TTL) igual que el resto de la tabla.
+    service_credit =
+      DashboardCache.fetch_or_compute({:services_credit}, fn ->
+        Credits.service_summaries(services)
+      end)
+
     total_spend =
       DashboardCache.fetch_or_compute({:services_total_spend}, fn ->
         Logs.total_spend_by_service()
@@ -120,6 +130,7 @@ defmodule TokengateWeb.ServicesLive do
     |> assign(:models, models)
     |> assign(:service_stats, stats)
     |> assign(:monthly_spend_by_service, monthly_spend)
+    |> assign(:service_credit, service_credit)
     |> assign(:total_spend_by_service, total_spend)
     |> assign(:supervisors_map, build_supervisors_map(Enum.map(services, & &1.id)))
     |> assign(:keys_by_service, Accounts.list_api_keys_for_services(service_ids))
@@ -329,6 +340,8 @@ defmodule TokengateWeb.ServicesLive do
 
     case Accounts.delete_service(service) do
       {:ok, _} ->
+        audit(socket, "service.delete", "service", service.id, %{"name" => service.name})
+
         {:noreply,
          socket
          |> put_flash(:info, "Servicio eliminado.")
@@ -416,13 +429,10 @@ defmodule TokengateWeb.ServicesLive do
 
       case Accounts.create_api_key(attrs) do
         {:ok, api_key} ->
-          Tokengate.Auditing.audit(
-            socket.assigns.current_user,
-            "api_key.create",
-            "api_key",
-            api_key.id,
-            %{"label" => api_key.label, "service_id" => service_id}
-          )
+          audit(socket, "api_key.create", "api_key", api_key.id, %{
+            "label" => api_key.label,
+            "service_id" => service_id
+          })
 
           {:noreply,
            socket
@@ -444,13 +454,10 @@ defmodule TokengateWeb.ServicesLive do
          true <- api_key.service_id == socket.assigns.keys_service_id do
       case Accounts.revoke_service_api_key(api_key) do
         {:ok, _} ->
-          Tokengate.Auditing.audit(
-            socket.assigns.current_user,
-            "api_key.revoke",
-            "api_key",
-            api_key.id,
-            %{"label" => api_key.label, "service_id" => api_key.service_id}
-          )
+          audit(socket, "api_key.revoke", "api_key", api_key.id, %{
+            "label" => api_key.label,
+            "service_id" => api_key.service_id
+          })
 
           {:noreply,
            socket
@@ -480,13 +487,7 @@ defmodule TokengateWeb.ServicesLive do
       service ->
         Accounts.clear_service_sticky_routes(service_id)
 
-        Tokengate.Auditing.audit(
-          socket.assigns.current_user,
-          "routing.clear_sticky",
-          "service",
-          service_id,
-          %{"name" => service.name}
-        )
+        audit(socket, "routing.clear_sticky", "service", service_id, %{"name" => service.name})
 
         {:noreply,
          socket
@@ -503,15 +504,22 @@ defmodule TokengateWeb.ServicesLive do
   def handle_event("toggle_model", %{"target-id" => service_id, "model-id" => model_id}, socket) do
     service_alias_ids = Map.get(socket.assigns.granted_models, service_id, [])
 
+    granted? = model_id not in service_alias_ids
+
     result =
-      if model_id in service_alias_ids do
-        Providers.revoke_model_from_service(service_id, model_id)
-      else
+      if granted? do
         Providers.grant_model_to_service(service_id, model_id)
+      else
+        Providers.revoke_model_from_service(service_id, model_id)
       end
 
     case result do
       {:ok, _} ->
+        audit(socket, "service.model_access_toggle", "service", service_id, %{
+          "model_id" => model_id,
+          "granted" => granted?
+        })
+
         # Surgical refresh: only granted_models changes here.
         granted_models =
           from(sma in ServiceModel, select: {sma.service_id, sma.model_id})
@@ -565,6 +573,8 @@ defmodule TokengateWeb.ServicesLive do
   def handle_event("add_supervisor", %{"service-id" => service_id, "user-id" => user_id}, socket) do
     case Accounts.add_service_supervisor(service_id, user_id) do
       {:ok, _supervisor} ->
+        audit(socket, "service_supervisor.add", "service", service_id, %{"user_id" => user_id})
+
         {:noreply,
          socket
          |> put_flash(:info, "Supervisor agregado.")
@@ -584,6 +594,8 @@ defmodule TokengateWeb.ServicesLive do
       ) do
     case Accounts.remove_service_supervisor(service_id, user_id) do
       {:ok, _} ->
+        audit(socket, "service_supervisor.remove", "service", service_id, %{"user_id" => user_id})
+
         {:noreply,
          socket
          |> put_flash(:info, "Supervisor removido.")
@@ -615,7 +627,9 @@ defmodule TokengateWeb.ServicesLive do
 
   defp save_service(socket, :new, service_params) do
     case Accounts.create_service(service_params) do
-      {:ok, _service} ->
+      {:ok, service} ->
+        audit(socket, "service.create", "service", service.id, %{"name" => service.name})
+
         {:noreply,
          socket
          |> put_flash(:info, "Servicio creado.")
@@ -632,7 +646,18 @@ defmodule TokengateWeb.ServicesLive do
     service = Accounts.get_service!(service_id)
 
     case Accounts.update_service(service, service_params) do
-      {:ok, _service} ->
+      {:ok, updated} ->
+        audit(socket, "service.update", "service", updated.id, %{
+          "name" => updated.name,
+          "changes" =>
+            Map.take(service_params, [
+              "name",
+              "status",
+              "default_concurrency_limit",
+              "default_rpm_limit"
+            ])
+        })
+
         {:noreply,
          socket
          |> put_flash(:info, "Servicio actualizado.")
@@ -1025,22 +1050,15 @@ defmodule TokengateWeb.ServicesLive do
                     direction={@sort_direction}
                   />
                 </th>
-                <th>
-                  <.sort_button
-                    event="sort_services"
-                    field={:limit}
-                    label="Límite mensual"
-                    current={@sort_field}
-                    direction={@sort_direction}
-                  />
-                </th>
-                <th>Modelos</th>
+                <%!-- Orden: identidad → campos QUE COMPARTE con Usuarios (mismo
+                     orden en ambas tablas) → resto de campos propios → Creado →
+                     acciones. --%>
                 <th>Claves</th>
                 <th class="text-right">
                   <.sort_button
                     event="sort_services"
-                    field={:requests}
-                    label="Requests 30d"
+                    field={:limit}
+                    label="Límite mensual (mes UTC)"
                     current={@sort_field}
                     direction={@sort_direction}
                     align="right"
@@ -1066,6 +1084,17 @@ defmodule TokengateWeb.ServicesLive do
                     align="right"
                   />
                 </th>
+                <th>Modelos</th>
+                <th class="text-right">
+                  <.sort_button
+                    event="sort_services"
+                    field={:requests}
+                    label="Requests 30d"
+                    current={@sort_field}
+                    direction={@sort_direction}
+                    align="right"
+                  />
+                </th>
                 <th>
                   <.sort_button
                     event="sort_services"
@@ -1086,6 +1115,7 @@ defmodule TokengateWeb.ServicesLive do
                   stats={@service_stats}
                   monthly_spend={@monthly_spend_by_service}
                   total_spend={@total_spend_by_service}
+                  service_credit={@service_credit}
                   supervisors_map={@supervisors_map}
                   keys_by_service={@keys_by_service}
                   timezone={@timezone}
@@ -1112,6 +1142,7 @@ defmodule TokengateWeb.ServicesLive do
   attr :stats, :map, required: true
   attr :monthly_spend, :map, required: true
   attr :total_spend, :map, required: true
+  attr :service_credit, :map, required: true
   attr :supervisors_map, :map, required: true
   attr :keys_by_service, :map, required: true
   attr :timezone, :string, required: true
@@ -1126,8 +1157,21 @@ defmodule TokengateWeb.ServicesLive do
         truncate
       />
     </td>
-    <td class="text-sm">
-      {limit_label(@service)}
+    <td>
+      <.keys_badge
+        subject_id={@service.id}
+        count={length(Map.get(@keys_by_service, @service.id, []))}
+        open_event="manage_keys"
+      />
+    </td>
+    <td class="min-w-[150px]" id={"credit-#{@service.id}"}>
+      <.budget_cell credit={Map.get(@service_credit, @service.id)} />
+    </td>
+    <td class="text-right text-xs font-mono" id={"monthly-spend-#{@service.id}"}>
+      ${format_usd(Map.get(@monthly_spend, @service.id, Decimal.new(0)))}
+    </td>
+    <td class="text-right text-xs font-mono" id={"total-spend-#{@service.id}"}>
+      ${format_usd(Map.get(@total_spend, @service.id, Decimal.new(0)))}
     </td>
     <td>
       <button
@@ -1141,31 +1185,8 @@ defmodule TokengateWeb.ServicesLive do
         {length(Map.get(@granted_models, @service.id, []))} modelos
       </button>
     </td>
-    <td>
-      <.keys_badge
-        subject_id={@service.id}
-        count={length(Map.get(@keys_by_service, @service.id, []))}
-        open_event="manage_keys"
-      />
-    </td>
     <td class="text-right text-xs font-mono">
       {format_number(stat_for(@stats, @service.id, :total_requests))}
-    </td>
-    <td class="text-right text-xs font-mono" id={"monthly-spend-#{@service.id}"}>
-      <%= case Map.get(@monthly_spend, @service.id) do %>
-        <% nil -> %>
-          <span class="text-base-content/30">—</span>
-        <% v -> %>
-          ${format_decimal(v)}
-      <% end %>
-    </td>
-    <td class="text-right text-xs font-mono" id={"total-spend-#{@service.id}"}>
-      <%= case Map.get(@total_spend, @service.id) do %>
-        <% nil -> %>
-          <span class="text-base-content/30">—</span>
-        <% v -> %>
-          ${format_decimal(v)}
-      <% end %>
     </td>
     <td class="text-xs text-base-content/50">
       {format_date(@service.inserted_at, @timezone)}

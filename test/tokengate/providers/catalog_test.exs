@@ -158,6 +158,54 @@ defmodule Tokengate.Providers.CatalogTest do
       assert Catalog.base_url(nil) == nil
     end
 
+    test "a code-owned provider models.dev never publishes is usable from code alone" do
+      # Surplus es el caso MÁS extremo que Cerebras: models.dev no publica su
+      # fila en absoluto, así que no hay nada remoto que completar — ni base
+      # URL, ni npm del que derivar el dialecto. Toda su identidad está en
+      # código, y el gate de supported?/1 tiene que aceptarla.
+      row = %{key: "surplus-intelligence", base_url: nil, npm: nil}
+
+      assert Catalog.base_url(row) == "https://api.surplusintelligence.ai/v1"
+      assert Catalog.dialect(row) == {:ok, "openai"}
+      assert Catalog.unsupported_reason(row) == nil
+      assert Catalog.supported?(row)
+      assert Catalog.capabilities("surplus-intelligence") == ["llm", "embedding"]
+    end
+
+    test "the video path of a code-owned provider overrides the generic default" do
+      # El default genérico de video es `/videos`, que en Surplus responde 404:
+      # su generación vive en `/video/generations`. Es exactamente el caso que
+      # existe para `:paths` en la customización.
+      assert Catalog.path_suffix("surplus-intelligence",
+               service: :video,
+               default: "/videos"
+             ) == "/video/generations"
+
+      # Los servicios que SÍ coinciden con el default no llevan override.
+      assert Catalog.path_suffix("surplus-intelligence",
+               service: :chat,
+               default: "/chat/completions"
+             ) == "/chat/completions"
+
+      assert Catalog.path_suffix("surplus-intelligence",
+               service: :embeddings,
+               default: "/embeddings"
+             ) == "/embeddings"
+    end
+
+    test "code_providers/0 carries the fields the mirror stores" do
+      assert [%{key: "surplus-intelligence"} = entry] = Catalog.code_providers()
+
+      assert entry.name == "Surplus Intelligence"
+      assert entry.base_url == "https://api.surplusintelligence.ai/v1"
+      assert is_binary(entry.doc_url) and entry.doc_url != ""
+      assert is_binary(entry.logo_url) and entry.logo_url != ""
+      assert entry.status == "active"
+
+      # Y las keys son consultables para que el refresh no las barra a stale.
+      assert "surplus-intelligence" in Catalog.code_provider_keys()
+    end
+
     test "path_suffix/2 defaults to the dialect path when no override exists" do
       assert Catalog.path_suffix("openrouter", service: :chat, default: "/chat/completions") ==
                "/chat/completions"
@@ -320,12 +368,18 @@ defmodule Tokengate.Providers.CatalogTest do
 
   describe "CatalogSeed" do
     test "the mirror holds the whole snapshot exactly once" do
-      assert Repo.aggregate(CatalogProvider, :count) == Catalog.snapshot_size()
+      # El mirror es el snapshot MÁS los proveedores code-owned: filas que
+      # models.dev no publica y que existen solo en código, así que no pueden
+      # venir del snapshot.
+      assert Repo.aggregate(CatalogProvider, :count) ==
+               Catalog.snapshot_size() + length(Catalog.code_provider_keys())
     end
 
     test "re-seeding is a no-op on rows that already exist" do
       assert Tokengate.Providers.CatalogSeed.seed() == 0
-      assert Repo.aggregate(CatalogProvider, :count) == Catalog.snapshot_size()
+
+      assert Repo.aggregate(CatalogProvider, :count) ==
+               Catalog.snapshot_size() + length(Catalog.code_provider_keys())
     end
 
     test "seed_if_empty is a no-op on a seeded mirror" do

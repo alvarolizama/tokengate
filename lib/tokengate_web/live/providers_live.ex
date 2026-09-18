@@ -47,7 +47,6 @@ defmodule TokengateWeb.ProvidersLive do
       |> assign(:editing_provider_id, nil)
       |> assign(:credential_form, nil)
       |> assign(:editing_credential_id, nil)
-      |> assign(:providers_tab, "builtin")
       |> assign(:catalog_modal_open, false)
       |> assign(:catalog_query, "")
       |> assign(:editing_provider_builtin?, false)
@@ -87,7 +86,10 @@ defmodule TokengateWeb.ProvidersLive do
         # Seeded builtins without API keys stay invisible until a
         # credential attaches to them.
         where: not is_nil(c.id) or p.source == "custom",
-        order_by: [asc: p.name]
+        # Builtin primero, custom al final (`false` ordena antes que `true` en
+        # Postgres) y, dentro de cada grupo, por nombre. La lista ya no se
+        # filtra por origen: se muestra entera.
+        order_by: [asc: p.source == "custom", asc: p.name]
       )
       |> Repo.all()
 
@@ -277,13 +279,6 @@ defmodule TokengateWeb.ProvidersLive do
     end
   end
 
-  # Tab switch for the provider list: builtin (default) or custom. Local UI
-  # state only — no URL/route change, the list is already loaded.
-  def handle_event("set_providers_tab", %{"tab" => tab}, socket)
-      when tab in ~w(builtin custom) do
-    {:noreply, assign(socket, :providers_tab, tab)}
-  end
-
   def handle_event("cancel_form", _params, socket) do
     {:noreply,
      socket
@@ -315,6 +310,11 @@ defmodule TokengateWeb.ProvidersLive do
       {:ok, overrides} ->
         case Providers.update_provider(provider, %{path_overrides: overrides}) do
           {:ok, _provider} ->
+            audit(socket, "provider.paths_update", "provider", provider.id, %{
+              "name" => provider.name,
+              "path_overrides" => overrides
+            })
+
             {:noreply,
              socket
              |> put_flash(:info, paths_flash(overrides))
@@ -379,6 +379,11 @@ defmodule TokengateWeb.ProvidersLive do
 
     case Providers.update_provider(provider, %{status: new_status}) do
       {:ok, _} ->
+        audit(socket, "provider.toggle_status", "provider", provider.id, %{
+          "name" => provider.name,
+          "status" => new_status
+        })
+
         {:noreply,
          socket
          |> put_flash(
@@ -437,17 +442,11 @@ defmodule TokengateWeb.ProvidersLive do
 
       case Providers.update_credential(cred, cred_params) do
         {:ok, _cred} ->
-          Tokengate.Auditing.audit(
-            socket.assigns.current_user,
-            "credential.update",
-            "credential",
-            cred.id,
-            %{
-              "provider_id" => cred.provider_id,
-              "name" => cred.name,
-              "key_rotated" => Map.has_key?(cred_params, "api_key_encrypted")
-            }
-          )
+          audit(socket, "credential.update", "credential", cred.id, %{
+            "provider_id" => cred.provider_id,
+            "name" => cred.name,
+            "key_rotated" => Map.has_key?(cred_params, "api_key_encrypted")
+          })
 
           {:noreply,
            socket
@@ -462,13 +461,10 @@ defmodule TokengateWeb.ProvidersLive do
     else
       case Providers.create_credential(cred_params) do
         {:ok, cred} ->
-          Tokengate.Auditing.audit(
-            socket.assigns.current_user,
-            "credential.create",
-            "credential",
-            cred.id,
-            %{"provider_id" => cred.provider_id, "name" => cred.name}
-          )
+          audit(socket, "credential.create", "credential", cred.id, %{
+            "provider_id" => cred.provider_id,
+            "name" => cred.name
+          })
 
           {:noreply,
            socket
@@ -494,13 +490,11 @@ defmodule TokengateWeb.ProvidersLive do
 
       case Providers.update_credential(cred, %{status: new_status}) do
         {:ok, _} ->
-          Tokengate.Auditing.audit(
-            socket.assigns.current_user,
-            "credential.toggle_status",
-            "credential",
-            cred.id,
-            %{"provider_id" => cred.provider_id, "name" => cred.name, "status" => new_status}
-          )
+          audit(socket, "credential.toggle_status", "credential", cred.id, %{
+            "provider_id" => cred.provider_id,
+            "name" => cred.name,
+            "status" => new_status
+          })
 
           {:noreply,
            socket
@@ -522,6 +516,11 @@ defmodule TokengateWeb.ProvidersLive do
     if cred.status == "error" do
       case Providers.reactivate_credential(cred) do
         {:ok, _} ->
+          audit(socket, "credential.reactivate", "credential", cred.id, %{
+            "provider_id" => cred.provider_id,
+            "name" => cred.name
+          })
+
           {:noreply,
            socket
            |> put_flash(:info, "Credencial reactivada.")
@@ -540,6 +539,11 @@ defmodule TokengateWeb.ProvidersLive do
 
     Tokengate.Routing.CircuitBreakerManager.reset(cred.id)
 
+    audit(socket, "credential.breaker_reset", "credential", cred.id, %{
+      "provider_id" => cred.provider_id,
+      "name" => cred.name
+    })
+
     {:noreply,
      socket
      |> put_flash(:info, "Circuit breaker reseteado.")
@@ -551,6 +555,11 @@ defmodule TokengateWeb.ProvidersLive do
 
     case Providers.delete_credential(cred) do
       {:ok, _} ->
+        audit(socket, "credential.delete", "credential", cred.id, %{
+          "provider_id" => cred.provider_id,
+          "name" => cred.name
+        })
+
         {:noreply,
          socket
          |> put_flash(:info, "Credencial eliminada.")
@@ -587,6 +596,8 @@ defmodule TokengateWeb.ProvidersLive do
       try do
         case Providers.delete_provider(provider) do
           {:ok, _} ->
+            audit(socket, "provider.delete", "provider", provider.id, %{"name" => provider.name})
+
             {:noreply,
              socket
              |> put_flash(:info, "Proveedor eliminado.")
@@ -613,7 +624,12 @@ defmodule TokengateWeb.ProvidersLive do
   # entry to derive them from); builtins get them from `Catalog`.
   defp save_provider(socket, :new, provider_params) do
     case Providers.create_provider(provider_params) do
-      {:ok, _provider} ->
+      {:ok, provider} ->
+        audit(socket, "provider.create", "provider", provider.id, %{
+          "name" => provider.name,
+          "key" => provider.key
+        })
+
         {:noreply,
          socket
          |> put_flash(:info, "Proveedor creado.")
@@ -630,7 +646,24 @@ defmodule TokengateWeb.ProvidersLive do
     provider = Providers.get_provider!(provider_id)
 
     case Providers.update_provider(provider, provider_params) do
-      {:ok, _provider} ->
+      {:ok, updated} ->
+        audit(socket, "provider.update", "provider", updated.id, %{
+          "name" => updated.name,
+          "changes" =>
+            Map.take(provider_params, [
+              "name",
+              "status",
+              "base_url",
+              "billing_type",
+              "dialect",
+              "capabilities",
+              "max_rpm",
+              "max_concurrent",
+              "max_concurrent_per_user",
+              "receive_timeout_ms"
+            ])
+        })
+
         {:noreply,
          socket
          |> put_flash(:info, "Proveedor actualizado.")
@@ -1188,53 +1221,11 @@ defmodule TokengateWeb.ProvidersLive do
           <p>No hay proveedores todavía.</p>
         </div>
 
-        <%!-- Tabs: builtin first, then custom — the list below filters by
-             the active tab. --%>
-        <div :if={@providers != []} class="join" id="providers-tabs" role="tablist">
-          <button
-            phx-click="set_providers_tab"
-            phx-value-tab="builtin"
-            class={[
-              "join-item btn btn-sm",
-              if(@providers_tab == "builtin", do: "btn-primary", else: "btn-ghost")
-            ]}
-            id="tab-providers-builtin"
-          >
-            <.icon name="hero-cube" class="w-4 h-4" /> Built In
-          </button>
-          <button
-            phx-click="set_providers_tab"
-            phx-value-tab="custom"
-            class={[
-              "join-item btn btn-sm",
-              if(@providers_tab == "custom", do: "btn-primary", else: "btn-ghost")
-            ]}
-            id="tab-providers-custom"
-          >
-            <.icon name="hero-wrench-screwdriver" class="w-4 h-4" /> Custom
-          </button>
-        </div>
-
-        <div
-          :if={@providers != [] and Enum.filter(@providers, &(&1.source == @providers_tab)) == []}
-          class="text-center py-8 text-base-content/40"
-          id={"providers-tab-empty-#{@providers_tab}"}
-        >
-          <p>
-            {if @providers_tab == "builtin",
-              do:
-                "Ningún proveedor builtin tiene credenciales todavía — agrega uno desde \"Agregar proveedor\".",
-              else:
-                "No hay proveedores custom — créalos desde \"Agregar proveedor\" → Custom provider."}
-          </p>
-        </div>
-
-        <%!-- Dos cards por fila: la lista dejó de ser una sola columna. El grid
-             estira cada card a la altura de su fila, así que el par sale
-             parejo aunque un proveedor tenga más credenciales que el otro. --%>
+        <%!-- Una sola lista, sin tabs: builtin primero y custom al final
+             (lo fija el `order_by` de `load_providers/1`). --%>
         <div id="providers" class="grid gap-3 lg:grid-cols-2">
           <div
-            :for={provider <- Enum.filter(@providers, &(&1.source == @providers_tab))}
+            :for={provider <- @providers}
             id={"providers-#{provider.id}"}
             class="card bg-base-100 border border-base-300 shadow-sm"
           >

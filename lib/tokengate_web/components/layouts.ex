@@ -351,6 +351,12 @@ defmodule TokengateWeb.Layouts do
               />
               <.sidebar_link
                 current_path={@current_path}
+                href={~p"/operations/audit"}
+                label="Auditoría"
+                icon="hero-clipboard-document-list"
+              />
+              <.sidebar_link
+                current_path={@current_path}
                 href={~p"/operations/observability"}
                 label="Observabilidad"
                 icon="hero-bell-alert"

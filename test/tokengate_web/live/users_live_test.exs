@@ -102,11 +102,40 @@ defmodule TokengateWeb.UsersLiveTest do
     {:ok, view, _html} = live(conn, ~p"/access/users")
 
     assert has_element?(view, "#spend-#{member_user.id}", "$7.25")
-    assert has_element?(view, "#spend-#{admin.id}", "—")
+    # Sin requests el gasto es $0.00 (ausencia en el agregado = no gastó), no «—»:
+    # «—» se leía como «no se calculó».
+    assert has_element?(view, "#spend-#{admin.id}", "$0.00")
+    assert has_element?(view, "#total-spend-#{admin.id}", "$0.00")
+  end
+
+  test "un usuario sin requests muestra $0.00 en las dos columnas de gasto", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{user: member_without_logs} = register("user")
+    %{user: without_membership} = register("user")
+
+    {:ok, group} = Accounts.create_group(%{"name" => "Sin logs #{unique()}"})
+
+    {:ok, _} =
+      Accounts.create_group_member(%{
+        "user_id" => member_without_logs.id,
+        "group_id" => group.id
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/access/users")
+
+    # Con membresía y sin logs: el agregado del mes trae la fila (0), el total
+    # histórico no — los dos tienen que leerse igual.
+    assert has_element?(view, "#spend-#{member_without_logs.id}", "$0.00")
+    assert has_element?(view, "#total-spend-#{member_without_logs.id}", "$0.00")
+
+    # Sin membresía no aparece en ningún agregado: tampoco es «—».
+    assert has_element?(view, "#spend-#{without_membership.id}", "$0.00")
+    assert has_element?(view, "#total-spend-#{without_membership.id}", "$0.00")
   end
 
   describe "credit column" do
-    test "shows remaining/total limit for a user in a group with a monthly limit", %{conn: conn} do
+    test "shows consumed/total limit for a user in a group with a monthly limit", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
       %{user: member_user} = register("user")
 
@@ -119,7 +148,8 @@ defmodule TokengateWeb.UsersLiveTest do
       {:ok, member} =
         Accounts.create_group_member(%{"user_id" => member_user.id, "group_id" => group.id})
 
-      # $30 consumidos del límite mensual del ciclo.
+      # $30 consumidos del techo: la celda lee consumido / techo (misma
+      # lectura que /stats y el dashboard), no el remanente.
       {:ok, _} =
         Logs.log_request(%{
           group_member_id: member.id,
@@ -131,8 +161,7 @@ defmodule TokengateWeb.UsersLiveTest do
       conn = login(conn, admin, password)
       {:ok, view, _html} = live(conn, ~p"/access/users")
 
-      assert has_element?(view, "#credit-#{member_user.id}", "$70.00")
-      assert has_element?(view, "#credit-#{member_user.id}", "$100.00")
+      assert has_element?(view, "#credit-#{member_user.id}", "30.0000 / 100.0000")
     end
 
     test "shows Ilimitado badge for users marked unlimited", %{conn: conn} do
@@ -151,7 +180,41 @@ defmodule TokengateWeb.UsersLiveTest do
       assert has_element?(view, "#credit-#{plain.id}", "Ilimitado")
     end
 
-    test "credit column is sortable (desc default: most remaining first)", %{conn: conn} do
+    test "un techo propio sin membresía muestra su gasto real, no ceros", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+
+      # Sin membresía no hay clave API, así que este estado solo llega por
+      # datos heredados (backfill). El `request_logs` necesita un
+      # `group_member_id` (lo exige el changeset para `subject_type: "user"`) y
+      # aquí se usa el de otra membresía: el gasto del sujeto se agrega por la
+      # columna `user_id`, que es la que mira la columna de crédito.
+      %{user: orphan} = register("user")
+
+      {:ok, orphan} =
+        Accounts.update_user(orphan, %{"monthly_spend_limit_usd" => "100.00"})
+
+      {:ok, group} = Accounts.create_group(%{name: "Orphanholder #{unique()}"})
+
+      {:ok, elsewhere} =
+        Accounts.create_group_member(%{"user_id" => admin.id, "group_id" => group.id})
+
+      {:ok, _} =
+        Logs.log_request(%{
+          group_member_id: elsewhere.id,
+          user_id: orphan.id,
+          model_requested: "gpt-4",
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+          provider_cost_usd: Decimal.new("30.00")
+        })
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      assert Accounts.list_group_members_for_user(orphan.id) == []
+      assert has_element?(view, "#credit-#{orphan.id}", "30.0000 / 100.0000")
+    end
+
+    test "credit column is sortable (desc default: most consumed first)", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
 
       %{user: rich} = register("user")
@@ -169,10 +232,12 @@ defmodule TokengateWeb.UsersLiveTest do
       {:ok, member_rich} =
         Accounts.create_group_member(%{"user_id" => rich.id, "group_id" => group_rich.id})
 
-      {:ok, _} =
+      {:ok, poor_member} =
         Accounts.create_group_member(%{"user_id" => poor.id, "group_id" => group_poor.id})
 
-      # El rico gasta poco (queda más remanente); el pobre consume casi todo.
+      # El rico consume poco de un techo grande (10/200); el pobre consume casi
+      # todo el suyo (40/50). El orden es por CONSUMO, así que el pobre va
+      # primero — el remanente (190 vs 10) ordenaría al revés.
       {:ok, _} =
         Logs.log_request(%{
           group_member_id: member_rich.id,
@@ -181,12 +246,20 @@ defmodule TokengateWeb.UsersLiveTest do
           provider_cost_usd: Decimal.new("10.00")
         })
 
+      {:ok, _} =
+        Logs.log_request(%{
+          group_member_id: poor_member.id,
+          model_requested: "gpt-4",
+          inserted_at: DateTime.utc_now() |> DateTime.truncate(:second),
+          provider_cost_usd: Decimal.new("40.00")
+        })
+
       conn = login(conn, admin, password)
       {:ok, view, _html} = live(conn, ~p"/access/users")
 
-      # Desc default → el de mayor saldo primero.
-      html = render(view)
-      assert html =~ "Límite mensual"
+      # El default de la tabla es por nombre (rich se registró primero), así
+      # que hay que pedir el orden por crédito: desc = más consumo primero.
+      html = view |> element("#sort-credit") |> render_click()
 
       rich_first? = fn html ->
         Regex.scan(~r/id="user-([0-9a-f-]+)"/, html)
@@ -194,7 +267,7 @@ defmodule TokengateWeb.UsersLiveTest do
         |> Enum.filter(&(&1 in [to_string(rich.id), to_string(poor.id)]))
       end
 
-      assert rich_first?.(html) == [to_string(rich.id), to_string(poor.id)]
+      assert rich_first?.(html) == [to_string(poor.id), to_string(rich.id)]
     end
   end
 
@@ -660,6 +733,8 @@ defmodule TokengateWeb.UsersLiveTest do
       # admin + 30 → 31 filas en total
       assert has_element?(view, "#users-pagination")
       assert has_element?(view, "#users-pagination-range", "1–25 de 31")
+      # Con más filas que la página más pequeña, el selector de tamaño sí pinta.
+      assert has_element?(view, "#users-pagination-per-page")
       assert has_element?(view, "#user-#{first.id}")
       refute has_element?(view, "#user-#{last.id}")
       assert has_element?(view, "#users-pagination-prev[disabled]")
@@ -697,6 +772,22 @@ defmodule TokengateWeb.UsersLiveTest do
       refute has_element?(view, "#users-pagination-page-2")
       assert has_element?(view, "#users-pagination-next[disabled]")
       assert has_element?(view, "#users-pagination-prev[disabled]")
+    end
+
+    test "el selector de tamaño sólo se pinta cuando la tabla no cabe en una página",
+         %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      _users = bulk_users(3)
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/users")
+
+      # admin + 3 → 4 filas: caben en la página más pequeña (25), así que el
+      # selector no puede cambiar nada y se leía como un control roto.
+      assert has_element?(view, "#users-pagination-range", "1–4 de 4")
+      refute has_element?(view, "#users-pagination-per-page")
+      assert has_element?(view, "#users-pagination-prev[disabled]")
+      assert has_element?(view, "#users-pagination-next[disabled]")
     end
 
     test "searching brings the table back to page 1", %{conn: conn} do

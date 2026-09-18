@@ -51,6 +51,8 @@ defmodule TokengateWeb.SessionController do
         # Reset the brute-force counter for this IP on success.
         TokengateWeb.Plugs.LoginRateLimit.clear(conn)
 
+        audit_conn(conn, user, "auth.login", "user", user.id, %{"email" => user.email})
+
         conn
         |> configure_session(renew: true)
         |> put_session(:user_id, user.id)
@@ -62,6 +64,11 @@ defmodule TokengateWeb.SessionController do
         # let an unauthenticated visitor enumerate which emails are registered
         # and suspended. The real reason is logged server-side.
         Logger.warning("login_failed status=#{reason}")
+
+        audit_conn(conn, nil, "auth.login_failed", "session", email, %{
+          "email" => email,
+          "reason" => to_string(reason)
+        })
 
         conn
         |> put_flash(:error, "Credenciales inválidas.")
@@ -76,6 +83,10 @@ defmodule TokengateWeb.SessionController do
   DELETE /logout — clears the session and redirects to `/login`.
   """
   def delete(conn, _params) do
+    if user = conn.assigns[:current_user] do
+      audit_conn(conn, user, "auth.logout", "user", user.id, %{"email" => user.email})
+    end
+
     conn
     |> clear_session()
     |> put_flash(:info, "Sesión cerrada.")
@@ -140,7 +151,7 @@ defmodule TokengateWeb.SessionController do
       |> redirect(to: "/access/users")
     else
       {:ok, _} =
-        Tokengate.Auditing.audit(admin, "impersonate.start", "user", target.id, %{
+        audit_conn(conn, admin, "impersonate.start", "user", target.id, %{
           "email" => target.email
         })
 
@@ -168,11 +179,12 @@ defmodule TokengateWeb.SessionController do
         target = conn.assigns[:current_user]
 
         {:ok, _} =
-          Tokengate.Auditing.audit(
+          audit_conn(
+            conn,
             impersonator_id,
             "impersonate.stop",
             "user",
-            target && target.id,
+            (target && target.id) || impersonator_id,
             %{"email" => target && target.email}
           )
 

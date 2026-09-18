@@ -202,6 +202,11 @@ defmodule Tokengate.Providers.CatalogRefreshWorker do
   ## Apply ------------------------------------------------------------------
 
   defp apply_entries(entries) do
+    # FIRST: the code-owned rows (providers models.dev does not publish). They
+    # have to be in the mirror BEFORE it is read here, so `existing` is complete
+    # and the sweep below sees their real status.
+    CatalogSync.ensure_code_providers()
+
     now = DateTime.utc_now() |> DateTime.truncate(:second)
     existing = Repo.all(CatalogProvider) |> Map.new(&{&1.key, &1})
 
@@ -263,10 +268,19 @@ defmodule Tokengate.Providers.CatalogRefreshWorker do
   defp mark_stale(existing, entries, now, warnings) do
     upstream_keys = MapSet.new(entries, & &1.key)
 
+    # Los code-owned NO son datos que desaparecieron: son datos que models.dev
+    # nunca tuvo. Barrerlos a `stale` los dejaría congelados —`materialize/1`
+    # salta las filas stale— y la página de mantenimiento los reportaría como
+    # `already_stale` en cada refresh.
+    code_owned = MapSet.new(Catalog.code_provider_keys())
+
     gone =
       existing
       |> Map.values()
-      |> Enum.filter(&(&1.status == "active" and not MapSet.member?(upstream_keys, &1.key)))
+      |> Enum.filter(
+        &(&1.status == "active" and not MapSet.member?(upstream_keys, &1.key) and
+            not MapSet.member?(code_owned, &1.key))
+      )
 
     Enum.each(gone, fn row ->
       row

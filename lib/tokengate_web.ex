@@ -44,6 +44,9 @@ defmodule TokengateWeb do
 
       import Plug.Conn
 
+      # Audit logging with request context (see TokengateWeb.Audit).
+      import TokengateWeb.Audit, only: [audit_conn: 5, audit_conn: 6]
+
       unquote(verified_routes())
     end
   end
@@ -51,6 +54,9 @@ defmodule TokengateWeb do
   def live_view do
     quote do
       use Phoenix.LiveView
+
+      # Audit logging with request context (see TokengateWeb.Audit).
+      import TokengateWeb.Audit, only: [audit: 4, audit: 5]
 
       unquote(html_helpers())
     end

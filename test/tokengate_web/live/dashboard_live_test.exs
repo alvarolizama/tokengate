@@ -876,4 +876,56 @@ defmodule TokengateWeb.DashboardLiveTest do
 
     assert has_element?(view, "#bd-model-mark-unknown")
   end
+
+  # Las tarjetas de presupuesto se re-leen en cada cambio de período y en cada
+  # reload de pubsub. Antes se calculaban sólo al montar, así que mostraban el
+  # gasto del instante del mount hasta recargar la página entera.
+  test "la tarjeta de presupuesto se re-lee al cambiar de período", %{conn: conn} do
+    u = unique()
+
+    {:ok, group} =
+      Accounts.create_group(%{name: "Budget #{u}", monthly_spend_limit_usd: "100.00"})
+
+    {:ok, owner} =
+      Accounts.register_user(%{
+        email: "budget-owner-#{u}@example.com",
+        name: "Budget Owner #{u}",
+        password: "password-secret-#{u}1"
+      })
+
+    {:ok, member} =
+      Accounts.create_group_member(%{user_id: owner.id, group_id: group.id})
+
+    {:ok, _} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        user_id: owner.id,
+        model_requested: "gpt-4o",
+        provider_cost_usd: Decimal.new("10.00")
+      })
+
+    conn = login(conn, owner, "password-secret-#{u}1")
+    {:ok, view, _html} = live(conn, ~p"/dashboard")
+
+    assert has_element?(view, "#group-#{group.id}", "10.0000 / 100.0000")
+
+    # Gasto nuevo después del mount. La invalidación salta el TTL de 5 s del
+    # DashboardCache para que la aserción mida el refresco de la tarjeta, no el
+    # vencimiento de la caché.
+    {:ok, _} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        user_id: owner.id,
+        model_requested: "gpt-4o",
+        provider_cost_usd: Decimal.new("5.00")
+      })
+
+    Tokengate.Metrics.DashboardCache.invalidate_all()
+
+    view |> element("#period-7d") |> render_click()
+
+    # El número se re-lee junto con la tarjeta. `has_element?` normaliza el
+    # `<span>` interno del componente compartido, que separa gasto de techo.
+    assert has_element?(view, "#group-#{group.id}", "15.0000 / 100.0000")
+  end
 end

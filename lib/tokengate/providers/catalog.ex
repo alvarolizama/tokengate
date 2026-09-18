@@ -15,6 +15,14 @@ defmodule Tokengate.Providers.Catalog do
       exotic path). They live in `@customizations`, keyed by models.dev id, and
       are applied at READ time.
 
+  There is a third case, and it is not a half: a provider models.dev does not
+  publish AT ALL (Surplus Intelligence). It has no remote row to complete — the
+  way Cerebras, which models.dev lists with `base_url: null`, does — so its
+  WHOLE row lives in `@code_providers` and `CatalogSync.ensure_code_providers/0`
+  upserts it into the mirror on every boot. `CatalogRefreshWorker` never sweeps
+  those keys to `stale` (`code_provider_keys/0`): they are not data that
+  disappeared upstream, they are data upstream never had.
+
   That split is what makes a refresh safe: the worker only writes remote rows,
   so a new provider or a moved base URL lands without a redeploy, while
   nothing it does can touch a customization.
@@ -152,6 +160,50 @@ defmodule Tokengate.Providers.Catalog do
       capabilities: ~w(llm),
       dialect: "openai",
       base_url: "https://api.cerebras.ai/v1"
+    },
+    # Surplus Intelligence es un marketplace de inferencia, no un proveedor
+    # clásico: el gateway le habla como a cualquier endpoint OpenAI-compatible
+    # (su propio router elige el seller más barato por dentro) y su superficie
+    # de administración —llaves, balance, order book— NO se integra aquí.
+    #
+    # models.dev no lo publica en absoluto: no hay medio dato remoto que
+    # completar como en Cerebras, cuya fila existe y solo le faltan base URL y
+    # dialecto. Por eso además de esta customización necesita su fila en
+    # `@code_providers`.
+    "surplus-intelligence" => %{
+      capabilities: ~w(llm embedding),
+      dialect: "openai",
+      base_url: "https://api.surplusintelligence.ai/v1",
+      # Su generación de video NO vive en el default genérico (`/videos`, que
+      # responde 404 en su API): es `/video/generations`, verificado. El resto
+      # de sus servicios sí coinciden con el default (`/chat/completions`,
+      # `/models`, `/embeddings`, `/audio/speech`, `/audio/transcriptions`,
+      # `/images/generations`, `/music/generations`).
+      paths: %{video: "/video/generations"}
+    }
+  }
+
+  # Proveedores cuya fila ENTERA vive en código porque models.dev no los
+  # publica. `CatalogSync.ensure_code_providers/0` las upserta en
+  # `catalog_providers` en cada arranque y `CatalogRefreshWorker` nunca las
+  # marca `stale` (ver `code_provider_keys/0`).
+  #
+  # Por qué en código y no en el snapshot: `CatalogSeed.seed_if_empty/0` solo
+  # siembra con la tabla VACÍA, así que meter la fila en
+  # `priv/models_dev/providers.json` no haría nada en una instancia ya viva —y
+  # ese archivo se lee en tiempo de COMPILACIÓN, o sea que queda horneado en la
+  # imagen de release y una edición a mano se separa del código.
+  #
+  # Campos: los mismos que `normalize_providers/1` emite, en el shape que
+  # `CatalogProvider` almacena. `env` y `npm` son informativos.
+  @code_providers %{
+    "surplus-intelligence" => %{
+      name: "Surplus Intelligence",
+      base_url: "https://api.surplusintelligence.ai/v1",
+      doc_url: "https://www.surplusintelligence.ai/docs",
+      logo_url: "https://www.surplusintelligence.ai/surplus-logo.png",
+      env: ["SURPLUS_API_KEY"],
+      npm: nil
     }
   }
 
@@ -249,6 +301,30 @@ defmodule Tokengate.Providers.Catalog do
   @spec customization(String.t() | nil) :: map() | nil
   def customization(key) when is_binary(key), do: Map.get(@customizations, key)
   def customization(_), do: nil
+
+  @doc """
+  Providers models.dev does NOT publish, whose full row lives in code.
+
+  Returned in the shape `CatalogProvider` stores (sorted by key), so
+  `CatalogSync.ensure_code_providers/0` can upsert them through the same
+  changeset and fingerprint the refresh uses.
+  """
+  @spec code_providers() :: [map()]
+  def code_providers do
+    @code_providers
+    |> Enum.map(fn {key, entry} -> Map.merge(entry, %{key: key, status: "active"}) end)
+    |> Enum.sort_by(& &1.key)
+  end
+
+  @doc """
+  Keys of the code-owned providers.
+
+  The refresh must never sweep these to `stale`: they are not data that
+  disappeared upstream, they are data upstream never had. Marking them stale
+  would freeze them out of the next materialization.
+  """
+  @spec code_provider_keys() :: [String.t()]
+  def code_provider_keys, do: @code_providers |> Map.keys() |> Enum.sort()
 
   # Single accessor for every customization key, driven by a runtime key name
   # so the whole documented set works (:capabilities, :dialect, :base_url,

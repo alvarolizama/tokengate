@@ -31,6 +31,12 @@ defmodule TokengateWeb.Router do
     plug :accepts, ["json"]
   end
 
+  # Admin-only routes reached by a plain GET (CSV exports). The user is
+  # loaded by `:browser`, then require_admin redirects non-admins.
+  pipeline :admin_auth do
+    plug TokengateWeb.Plugs.DashboardAuth, action: :require_admin
+  end
+
   pipeline :proxy_api do
     # No `:accepts` negotiation: this API is a passthrough. A tts client may
     # legitimately ask for `Accept: audio/mpeg` and the response content-type
@@ -198,6 +204,7 @@ defmodule TokengateWeb.Router do
       # Operaciones — logs en vivo, webhooks y danger zone.
       live "/operations/monitoring", MonitoringLive
       live "/operations/observability", ObservabilityLive
+      live "/operations/audit", AuditLive
       live "/operations/maintenance", MaintenanceLive
     end
   end
@@ -206,6 +213,12 @@ defmodule TokengateWeb.Router do
   scope "/stats", TokengateWeb do
     pipe_through [:browser, :browser_auth]
     get "/export", StatsExportController, :export
+  end
+
+  # Audit CSV export — admin only.
+  scope "/operations", TokengateWeb do
+    pipe_through [:browser, :browser_auth, :admin_auth]
+    get "/audit/export", AuditExportController, :export
   end
 
   # OpenAI-compatible proxy API — authenticated via bearer API key
