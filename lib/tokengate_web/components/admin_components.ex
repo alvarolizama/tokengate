@@ -241,18 +241,16 @@ defmodule TokengateWeb.AdminComponents do
   # ---------------------------------------------------------------------------
 
   @doc """
-  Pie de paginado: rango visible, selector de tamaño de página y navegación
-  (ventana alrededor de la página actual).
+  Pie de paginado: rango visible y navegación (ventana alrededor de la página
+  actual). El tamaño de página lo fija quien lo usa.
 
-  Emite `go_to_page` con `%{"page" => n}` y `change_per_page` con
-  `%{"per_page" => n}`. No pinta nada cuando `@total` es 0.
+  Emite `go_to_page` con `%{"page" => n}`. No pinta nada cuando `@total` es 0.
   """
   attr :id, :string, required: true
   attr :page, :integer, required: true
   attr :per_page, :integer, required: true
   attr :total, :integer, required: true
   attr :total_pages, :integer, required: true
-  attr :per_page_options, :list, default: [25, 50, 100]
 
   def admin_pagination(assigns) do
     assigns =
@@ -270,20 +268,6 @@ defmodule TokengateWeb.AdminComponents do
     >
       <div class="flex items-center gap-2 text-xs text-base-content/60">
         <span id={"#{@id}-range"}>{@from}–{@to} de {@total}</span>
-        <%!-- El selector de tamaño sólo aparece cuando la tabla NO cabe en la
-             página más pequeña: con menos filas no puede cambiar nada y se lee
-             como un control roto. --%>
-        <select
-          :if={@total > Enum.min(@per_page_options)}
-          id={"#{@id}-per-page"}
-          name="per_page"
-          phx-change="change_per_page"
-          class="select select-xs select-bordered"
-        >
-          <option :for={n <- @per_page_options} value={n} selected={n == @per_page}>
-            {n} por página
-          </option>
-        </select>
       </div>
 
       <div class="flex items-center gap-1" id={"#{@id}-nav"}>

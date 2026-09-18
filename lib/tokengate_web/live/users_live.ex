@@ -26,9 +26,9 @@ defmodule TokengateWeb.UsersLive do
 
   # Paginado de la tabla: el listado completo se ordena en memoria (el orden
   # depende de agregados de consumo), así que la página solo recorta el tramo
-  # que va al stream.
-  @per_page_options [25, 50, 100]
-  @default_per_page 25
+  # que va al stream. El tamaño de página es fijo: el selector de "N por
+  # página" no aportaba nada y se leía como un control roto.
+  @per_page 30
 
   @impl true
   def mount(_params, _session, socket) do
@@ -61,8 +61,7 @@ defmodule TokengateWeb.UsersLive do
       |> assign(:keys_counts, %{})
       |> assign(:new_key_token, nil)
       |> assign(:page, 1)
-      |> assign(:per_page, @default_per_page)
-      |> assign(:per_page_options, @per_page_options)
+      |> assign(:per_page, @per_page)
       |> assign(:total_count, 0)
       |> assign(:total_pages, 1)
       |> require_admin_hook()
@@ -405,20 +404,6 @@ defmodule TokengateWeb.UsersLive do
      |> load_users()}
   end
 
-  def handle_event("change_per_page", %{"per_page" => per_page}, socket) do
-    case parse_per_page(per_page) do
-      {:ok, value} ->
-        {:noreply,
-         socket
-         |> assign(:per_page, value)
-         |> assign(:page, 1)
-         |> load_users()}
-
-      :error ->
-        {:noreply, socket}
-    end
-  end
-
   ## Events — sort ----------------------------------------------------------
   def handle_event("sort_users", %{"field" => field}, socket) do
     with {:ok, field} <- to_sort_field(field),
@@ -757,15 +742,6 @@ defmodule TokengateWeb.UsersLive do
   end
 
   defp parse_page(_page), do: 1
-
-  defp parse_per_page(value) when is_binary(value) do
-    case Integer.parse(value) do
-      {n, ""} -> if n in @per_page_options, do: {:ok, n}, else: :error
-      _ -> :error
-    end
-  end
-
-  defp parse_per_page(_value), do: :error
 
   defp to_sort_field(field) when is_binary(field) do
     {:ok, String.to_existing_atom(field)}
@@ -1266,7 +1242,6 @@ defmodule TokengateWeb.UsersLive do
             per_page={@per_page}
             total={@total_count}
             total_pages={@total_pages}
-            per_page_options={@per_page_options}
           />
         </div>
       </div>

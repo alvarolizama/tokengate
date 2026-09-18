@@ -725,27 +725,25 @@ defmodule TokengateWeb.UsersLiveTest do
   ## Paginado ---------------------------------------------------------------
 
   describe "paginated table" do
-    test "page 1 shows 25 users and page 2 the rest", %{conn: conn} do
+    test "page 1 shows 30 users and page 2 the rest", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
-      users = bulk_users(30)
+      users = bulk_users(35)
       first = Enum.at(users, 0)
-      last = Enum.at(users, 29)
+      last = Enum.at(users, 34)
 
       conn = login(conn, admin, password)
       {:ok, view, _html} = live(conn, ~p"/access/users")
 
-      # admin + 30 → 31 filas en total
+      # admin + 35 → 36 filas en total, 30 por página.
       assert has_element?(view, "#users-pagination")
-      assert has_element?(view, "#users-pagination-range", "1–25 de 31")
-      # Con más filas que la página más pequeña, el selector de tamaño sí pinta.
-      assert has_element?(view, "#users-pagination-per-page")
+      assert has_element?(view, "#users-pagination-range", "1–30 de 36")
       assert has_element?(view, "#user-#{first.id}")
       refute has_element?(view, "#user-#{last.id}")
       assert has_element?(view, "#users-pagination-prev[disabled]")
 
       html = view |> element("#users-pagination-next") |> render_click()
 
-      assert html =~ "26–31 de 31"
+      assert html =~ "31–36 de 36"
       assert has_element?(view, "#users-pagination-page-2[aria-current=page]")
       assert has_element?(view, "#user-#{last.id}")
       refute has_element?(view, "#user-#{first.id}")
@@ -753,51 +751,28 @@ defmodule TokengateWeb.UsersLiveTest do
 
       view |> element("#users-pagination-prev") |> render_click()
 
-      assert has_element?(view, "#users-pagination-range", "1–25 de 31")
+      assert has_element?(view, "#users-pagination-range", "1–30 de 36")
       assert has_element?(view, "#user-#{first.id}")
     end
 
-    test "changing page size re-paginates from page 1", %{conn: conn} do
+    test "there is no page-size selector: 30 rows per page, fixed", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
-      _users = bulk_users(30)
+      _users = bulk_users(35)
 
       conn = login(conn, admin, password)
       {:ok, view, _html} = live(conn, ~p"/access/users")
 
-      view |> element("#users-pagination-next") |> render_click()
-      assert has_element?(view, "#users-pagination-range", "26–31 de 31")
-
-      html =
-        view
-        |> element("#users-pagination-per-page")
-        |> render_change(%{"per_page" => "100"})
-
-      assert html =~ "1–31 de 31"
-      refute has_element?(view, "#users-pagination-page-2")
-      assert has_element?(view, "#users-pagination-next[disabled]")
-      assert has_element?(view, "#users-pagination-prev[disabled]")
-    end
-
-    test "el selector de tamaño sólo se pinta cuando la tabla no cabe en una página",
-         %{conn: conn} do
-      %{user: admin, password: password} = register("admin")
-      _users = bulk_users(3)
-
-      conn = login(conn, admin, password)
-      {:ok, view, _html} = live(conn, ~p"/access/users")
-
-      # admin + 3 → 4 filas: caben en la página más pequeña (25), así que el
-      # selector no puede cambiar nada y se leía como un control roto.
-      assert has_element?(view, "#users-pagination-range", "1–4 de 4")
+      # El rango ya prueba que la página son 30 filas; que no quede ningún
+      # control de tamaño es justo lo que se pidió quitar.
+      assert has_element?(view, "#users-pagination-range", "1–30 de 36")
       refute has_element?(view, "#users-pagination-per-page")
-      assert has_element?(view, "#users-pagination-prev[disabled]")
-      assert has_element?(view, "#users-pagination-next[disabled]")
+      refute has_element?(view, "#users-pagination select")
     end
 
     test "searching brings the table back to page 1", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
-      users = bulk_users(30)
-      last = Enum.at(users, 29)
+      users = bulk_users(35)
+      last = Enum.at(users, 34)
 
       conn = login(conn, admin, password)
       {:ok, view, _html} = live(conn, ~p"/access/users")
@@ -805,7 +780,7 @@ defmodule TokengateWeb.UsersLiveTest do
       view |> element("#users-pagination-next") |> render_click()
       assert has_element?(view, "#user-#{last.id}")
 
-      view |> element("#search-form") |> render_change(%{"q" => "Paginado 30"})
+      view |> element("#search-form") |> render_change(%{"q" => "Paginado 35"})
 
       assert has_element?(view, "#users-pagination-range", "1–1 de 1")
       assert has_element?(view, "#user-#{last.id}")
@@ -814,17 +789,17 @@ defmodule TokengateWeb.UsersLiveTest do
 
     test "sorting brings the table back to page 1", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
-      _users = bulk_users(30)
+      _users = bulk_users(35)
 
       conn = login(conn, admin, password)
       {:ok, view, _html} = live(conn, ~p"/access/users")
 
       view |> element("#users-pagination-next") |> render_click()
-      assert has_element?(view, "#users-pagination-range", "26–31 de 31")
+      assert has_element?(view, "#users-pagination-range", "31–36 de 36")
 
       view |> element("#sort-name") |> render_click()
 
-      assert has_element?(view, "#users-pagination-range", "1–25 de 31")
+      assert has_element?(view, "#users-pagination-range", "1–30 de 36")
     end
   end
 
