@@ -111,12 +111,13 @@ defmodule TokengateWeb.ProxyController do
 
     {think, effort} = Tokengate.Proxy.Reasoning.parse(payload)
 
-    # Conversation-level cache affinity key. Prompt caches are keyed by
+    # Conversation-level cache affinity key. Affinity is keyed by
     # conversation, not by API key — without this, parallel conversations
     # sharing one key evict each other's cached prefixes upstream. Derived
     # from session_id / x-session-id / prompt_cache_key when the client
     # provides one, else hashed from the conversation opening (OpenRouter's
-    # own fingerprint heuristic). nil falls back to api_key_hash.
+    # own fingerprint heuristic). Used for sticky routing and logging ONLY —
+    # it never travels in the upstream body. nil falls back to api_key_hash.
     session_key =
       SessionId.derive(payload, session_id_header(conn))
 
@@ -1653,25 +1654,23 @@ defmodule TokengateWeb.ProxyController do
   # models: system messages are hoisted to the front and deduped
   # (stable_prefix), then noisy tool output is trimmed and deduped
   # (lazy_cleanup), reasoning artifacts are stripped from historical
-  # assistant messages (strip_reasoning), and the conversation's session key is
-  # attached as OpenRouter's `session_id` / OpenAI's `prompt_cache_key`
-  # upstream routing hint. All passes are pure; the input is never mutated.
+  # assistant messages (strip_reasoning). All passes are pure; the input is
+  # never mutated. No cache-routing body hint (`prompt_cache_key`,
+  # `session_id`) is attached to anyone — strict upstreams (Fireworks) 400 on
+  # undocumented body fields; affinity travels in the session HEADER only.
   # Non-LLM models (and embeddings routes, which never call this function)
   # pass through unchanged.
   defp maybe_optimize(payload, %{model_type: "llm"} = route_ctx) do
     messages = payload["messages"] || []
 
-    session_key = Map.get(route_ctx, :session_key)
-
     payload
     |> Map.put("messages", PromptOptimizer.stable_prefix(messages))
     |> Map.update!("messages", &PromptOptimizer.lazy_cleanup/1)
     |> Map.update!("messages", &PromptOptimizer.strip_reasoning/1)
-    |> attach_session_hint(session_key, provider_key(route_ctx))
     |> drop_strict_fields(provider_key(route_ctx))
     # Operator overrides run LAST so they can strip/replace anything the
-    # gateway injected (a per-row `omit_body_fields` can pull the session hint
-    # back out, and `extra_body` can replace it).
+    # gateway or the client put in the body (a per-row `omit_body_fields`
+    # can pull a client field back out, and `extra_body` can add/replace).
     |> apply_request_overrides(route_ctx)
   end
 
@@ -1720,33 +1719,14 @@ defmodule TokengateWeb.ProxyController do
   # Context for the pre-flight transform pipeline: everything the passes
   # need that isn't in the payload itself. Built once per attempt from the
   # conn assigns and the routed model_provider.
-  defp optimize_ctx(conn, route) do
+  defp optimize_ctx(_conn, route) do
     %{
       model_type: route.model && route.model.model_type,
-      session_key: conn.assigns[:session_key],
       model_provider: route.model_provider,
       extra_body: model_provider_setting(route, :extra_body),
       omit_body_fields: model_provider_setting(route, :omit_body_fields),
       omit_headers: model_provider_setting(route, :omit_headers)
     }
-  end
-
-  # Attaches the conversation key as the upstream cache-routing hint.
-  #
-  # WHICH fields are safe to attach is provider knowledge declared in the
-  # catalog. Today that is `prompt_cache_key` for every provider — the
-  # OpenAI-compatible convention, also honored by OpenRouter as a routing key.
-  # `session_id` is NOT attached to anyone: OpenRouter's documented sticky key
-  # travels in the `x-session-id` header (every outbound request carries it),
-  # and the body field made a strict upstream (Fireworks) answer 400. The list
-  # still comes from the catalog so a provider documenting neither can be
-  # narrowed. See `Tokengate.Providers.Catalog.session_hint_fields/1`.
-  defp attach_session_hint(payload, nil, _provider_key), do: payload
-
-  defp attach_session_hint(payload, session_key, provider_key) when is_binary(session_key) do
-    provider_key
-    |> Tokengate.Providers.Catalog.session_hint_fields()
-    |> Enum.reduce(payload, fn field, acc -> Map.put_new(acc, field, session_key) end)
   end
 
   # Removes the body fields a provider's catalog entry declares unacceptable.

@@ -559,28 +559,6 @@ defmodule Tokengate.Providers.CatalogTest do
     end
   end
 
-  describe "session_hint_fields/1" do
-    test "every provider gets prompt_cache_key, and session_id is never hinted" do
-      # `session_id` is OpenRouter's own body convention; the gateway stopped
-      # sending it to anyone (OpenRouter's sticky key travels in the
-      # x-session-id HEADER). So the narrowing override is unused today: every
-      # key resolves to the same single field.
-      assert Catalog.session_hint_fields("fireworks-ai") == ["prompt_cache_key"]
-      assert Catalog.session_hint_fields("openrouter") == ["prompt_cache_key"]
-      assert Catalog.session_hint_fields("moonshotai") == ["prompt_cache_key"]
-    end
-
-    test "unknown, custom and nil keys fall back to the same list" do
-      assert Catalog.session_hint_fields("nope") == Catalog.default_session_hint_fields()
-      assert Catalog.session_hint_fields(nil) == Catalog.default_session_hint_fields()
-    end
-
-    test "session_id is gone from the default hints" do
-      refute "session_id" in Catalog.default_session_hint_fields()
-      assert Catalog.default_session_hint_fields() == ["prompt_cache_key"]
-    end
-  end
-
   describe "omit_body_fields/1" do
     test "no provider declares a stripped field anymore" do
       # Fireworks used to declare `session_id` here because the gateway

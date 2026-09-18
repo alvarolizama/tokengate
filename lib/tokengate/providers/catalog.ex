@@ -60,20 +60,6 @@ defmodule Tokengate.Providers.Catalog do
   `Model.model_type` is still `llm | embedding` (DB CHECK): those six route by
   credential, and the capability only selects the upstream path.
 
-  ## Session-hint fields (`:session_hint_fields`)
-
-  The gateway attaches the conversation key to the upstream body as a
-  cache-routing hint. The hint is `prompt_cache_key` — the OpenAI-compatible
-  convention, and the one OpenRouter honors as a routing key — for EVERY
-  provider. `session_id` is OpenRouter's own body convention and is never
-  sent: OpenRouter's documented sticky key travels in the `x-session-id`
-  HEADER, which every outbound request already carries, so the body field
-  bought nothing while making a strict upstream (Fireworks) answer 400.
-
-  The per-key list stays as the seam for an upstream that does not document
-  `prompt_cache_key` (once it is narrowed, the gateway never adds it), but
-  nothing declares one today.
-
   ## Custom provider capabilities
 
   A custom has no models.dev entry to derive from, so its capabilities come
@@ -109,14 +95,12 @@ defmodule Tokengate.Providers.Catalog do
     "@openrouter/ai-sdk-provider" => "openrouter"
   }
 
-  # Hints attached to every chat body unless a provider narrows the list.
-  # `prompt_cache_key` is the OpenAI-compatible convention for grouping
-  # requests onto the same prompt cache (it is also what OpenRouter honors as
-  # a routing key). `session_id` is OpenRouter's own convention and is NO
-  # longer sent to anyone: OpenRouter takes the sticky key from the
-  # `x-session-id` HEADER (which every outbound request already carries), so
-  # the body field bought nothing and cost a strict upstream a 400.
-  @default_session_hint_fields ~w(prompt_cache_key)
+  # Hints attached to the body: NONE. The gateway used to attach
+  # `prompt_cache_key` (OpenAI's prompt-cache routing convention) to every
+  # chat body, but strict upstreams (Fireworks) answer 400 on undocumented
+  # body fields, so the gateway attaches nothing now — cache affinity lives
+  # in the `x-session-affinity` / `x-session-id` HEADERs only, and the
+  # implicit upstream prefix cache is content-keyed anyway.
 
   # ---------------------------------------------------------------------------
   # Code customizations, by models.dev id.
@@ -129,7 +113,6 @@ defmodule Tokengate.Providers.Catalog do
   #                             %{embeddings: "/embed"}; the atom keys are the
   #                             vocabulary in `ProviderPaths` and only apply
   #                             when the provider has no operator override
-  #   * :session_hint_fields  — narrows the cache hints the gateway may ADD
   #   * :omit_body_fields     — fields the gateway must STRIP from the body
   # ---------------------------------------------------------------------------
   @customizations %{
@@ -328,7 +311,7 @@ defmodule Tokengate.Providers.Catalog do
 
   # Single accessor for every customization key, driven by a runtime key name
   # so the whole documented set works (:capabilities, :dialect, :base_url,
-  # :paths, :session_hint_fields, :omit_body_fields) instead of one clause per
+  # :paths, :omit_body_fields) instead of one clause per
   # key — the escape hatch must not need a new function when it is used.
   defp option(key, name, default) do
     case customization(key) do
@@ -493,33 +476,6 @@ defmodule Tokengate.Providers.Catalog do
       _ -> default
     end
   end
-
-  @doc """
-  Body fields the gateway may attach as cache-routing hints for `key`.
-
-  Returns `@default_session_hint_fields` — currently only
-  `prompt_cache_key`, for every provider. The per-key override stays as the
-  seam for an upstream that does not document that field, but nothing
-  declares one today: narrowing the list was how Fireworks used to be spared
-  the OpenRouter-style `session_id`, which is now simply never sent.
-
-      iex> Tokengate.Providers.Catalog.session_hint_fields("openrouter")
-      ["prompt_cache_key"]
-
-      iex> Tokengate.Providers.Catalog.session_hint_fields(nil)
-      ["prompt_cache_key"]
-  """
-  @spec session_hint_fields(String.t() | nil) :: [String.t()]
-  def session_hint_fields(key \\ nil) do
-    case option(key, :session_hint_fields, @default_session_hint_fields) do
-      fields when is_list(fields) -> fields
-      _ -> @default_session_hint_fields
-    end
-  end
-
-  @doc "The default session-hint fields (tolerant upstreams)."
-  @spec default_session_hint_fields() :: [String.t()]
-  def default_session_hint_fields, do: @default_session_hint_fields
 
   @doc """
   Body fields the gateway must strip for a strict provider, by catalog key.

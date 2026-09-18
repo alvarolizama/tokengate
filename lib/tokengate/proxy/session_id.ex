@@ -2,11 +2,12 @@ defmodule Tokengate.Proxy.SessionId do
   @moduledoc """
   Derives a stable per-conversation session key for cache affinity.
 
-  Prompt caches (z.ai, OpenRouter, OpenAI `prompt_cache_key`) are keyed by
-  conversation, but TokenGate's API keys are not: one key typically carries
-  many parallel conversations, and they evict each other's cached prefixes
-  when they share a single affinity domain. This module derives a key that
-  separates them.
+  Prompt caches upstream are keyed by conversation, but TokenGate's API keys
+  are not: one key typically carries many parallel conversations, and they
+  evict each other's cached prefixes when they share a single affinity
+  domain. This module derives a key that separates them. The key drives
+  sticky routing and the session HEADERs only — it is never attached to
+  the upstream body.
 
   Resolution order (first match wins):
 
@@ -14,7 +15,7 @@ defmodule Tokengate.Proxy.SessionId do
        OpenRouter's documented limit).
     2. Client-provided `x-session-id` header (via the caller).
     3. Client-provided `prompt_cache_key` body field (OpenAI convention —
-       OpenRouter already honors it as a routing key).
+       read here for affinity only; the gateway never sends it upstream).
     4. Derived: SHA-256 of the first `system` message content plus the
        first non-system message content — the same heuristic OpenRouter
        uses to fingerprint a conversation's opening.

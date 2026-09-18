@@ -3314,9 +3314,7 @@ defmodule TokengateWeb.ModelsLive do
                         <.icon name="hero-bolt" class="w-3.5 h-3.5 inline text-success" />
                         {gettext("Prompt cache:")} <b>{gettext("on by default")}</b>
                         {gettext(
-                          "on Fireworks (prefix matching, cached tokens at a discount). TokenGate already sends"
-                        )} prompt_cache_key + x-session-affinity {gettext(
-                          "per conversation and logs the cached tokens — no configuration required."
+                          "on Fireworks (prefix matching, cached tokens at a discount). TokenGate keeps conversations sticky via the x-session-affinity header and logs the cached tokens — no configuration required."
                         )}
                       </p>
                     <% end %>

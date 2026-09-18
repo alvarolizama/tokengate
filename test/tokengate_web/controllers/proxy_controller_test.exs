@@ -1169,9 +1169,9 @@ defmodule TokengateWeb.ProxyControllerTest do
   ## Per-provider request overrides ###########################################
 
   # The per-ROW omission knob is what an operator reaches for when an upstream
-  # rejects a field the gateway sends — the field name is not hardcoded here,
-  # and it can be any key the gateway or the client put in the body.
-  test "omit_body_fields strips a gateway-attached field for the strict upstream", %{conn: conn} do
+  # rejects a field it receives — the field name is not hardcoded here, and it
+  # can be any key the client put in the body (the gateway attaches none).
+  test "omit_body_fields strips a client-supplied field for the strict upstream", %{conn: conn} do
     %{token: token, model: model} = proxy_fixture(%{})
     [mp] = Providers.list_model_providers(model.id)
 
@@ -1183,6 +1183,7 @@ defmodule TokengateWeb.ProxyControllerTest do
       |> authed_conn(token)
       |> post(~p"/v1/chat/completions", %{
         "model" => model.name,
+        "prompt_cache_key" => "client-cache-key",
         "messages" => [
           %{"role" => "system", "content" => "You are a helpful assistant."},
           %{"role" => "user", "content" => "hola, ¿cómo vas?"}
@@ -1287,17 +1288,19 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert CircuitBreakerManager.details(credential_id).failures == 0
   end
 
-  # The gateway never injects `session_id` into any upstream body — not even
-  # for a provider whose catalog key is "fireworks-ai", where a body field the
-  # vendor does not document is a 400. The one hint that travels is
-  # `prompt_cache_key`, and this is the request shape that used to trigger the
-  # injection (system + user opener ⇒ a fingerprint session_key is derivable).
+  # The gateway never injects `session_id` NOR `prompt_cache_key` into any
+  # upstream body — not even for a provider whose catalog key is
+  # "fireworks-ai", where a body field the vendor does not document is a 400.
+  # Cache affinity travels in the session HEADER only. This is the request
+  # shape that used to trigger the injection (system + user opener ⇒ a
+  # fingerprint session_key is derivable).
   # The fixture's custom provider keeps its local test URL — only the catalog
   # key is stamped onto it (builtin rows are identity-locked and point at the
   # real Fireworks endpoint).
-  test "no upstream ever receives a session_id body hint (fireworks-keyed included)", %{
-    conn: conn
-  } do
+  test "no upstream ever receives a session_id or prompt_cache_key body hint (fireworks-keyed included)",
+       %{
+         conn: conn
+       } do
     %{token: token, model: model} = proxy_fixture(%{})
 
     make_provider_fireworks(model)
@@ -1320,7 +1323,8 @@ defmodule TokengateWeb.ProxyControllerTest do
         refute Map.has_key?(payload, "session_id"),
                "the gateway must not attach the OpenRouter-style session_id"
 
-        assert Map.has_key?(payload, "prompt_cache_key")
+        refute Map.has_key?(payload, "prompt_cache_key"),
+               "the gateway must not attach the prompt_cache_key body hint"
     after
       0 -> flunk("expected an upstream request")
     end
@@ -1374,8 +1378,8 @@ defmodule TokengateWeb.ProxyControllerTest do
     receive do
       {:provider_request, payload} ->
         assert payload["session_id"] == "client-conv-abc"
-        # El hint que sí mandamos viaja con la MISMA clave derivada.
-        assert payload["prompt_cache_key"] == "client-conv-abc"
+        # El gateway no inyecta ningún hint de caché: affinity solo en HEADER.
+        refute Map.has_key?(payload, "prompt_cache_key")
     after
       0 -> flunk("expected an upstream request")
     end
@@ -1410,7 +1414,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     receive do
       {:provider_request, payload} ->
         refute Map.has_key?(payload, "session_id")
-        assert Map.has_key?(payload, "prompt_cache_key")
+        refute Map.has_key?(payload, "prompt_cache_key")
     after
       0 -> flunk("expected an upstream request")
     end
@@ -1763,8 +1767,8 @@ defmodule TokengateWeb.ProxyControllerTest do
   # content-parts estilo Anthropic y los upstreams que tipan `content` como
   # string lo rechazan con un 400 que tumba la request completa (Cerebras:
   # "wrong_api_format"; Fireworks: 400 de su validador estricto). El prefijo
-  # system viaja como string plano, y el hint de caché que sí acepta todo el
-  # mundo (`prompt_cache_key`) sigue viajando: el caché implícito no se pierde.
+  # system viaja como string plano. Tampoco viaja `prompt_cache_key`: el
+  # caché implícito upstream es content-keyed, no se pierde.
   test "no upstream receives a cache_control breakpoint; the system prefix stays a string", %{
     conn: conn
   } do
@@ -1791,8 +1795,8 @@ defmodule TokengateWeb.ProxyControllerTest do
         # String plano: nada que un validador estricto pueda rechazar.
         assert is_binary(system["content"])
         refute inspect(payload) =~ "cache_control"
-        # El hint de caché que sí mandamos sigue ahí.
-        assert payload["prompt_cache_key"] == "client-conv-abc"
+        # Ningún hint de caché en el body: affinity solo en HEADER.
+        refute Map.has_key?(payload, "prompt_cache_key")
     after
       0 -> flunk("expected an upstream request")
     end
