@@ -211,19 +211,19 @@ defmodule TokengateWeb.StatsChartsTest do
       assert has_element?(
                view,
                "#live-minute-chart-header-stats",
-               "prom. 0.1 req/min · pico 4 req/min"
+               "avg 0.1 req/min · peak 4 req/min"
              )
 
       assert has_element?(
                view,
                "#live-tokens-minute-chart-header-stats",
-               "prom. 13 tok/min · pico 600 tok/min"
+               "avg 13 tok/min · peak 600 tok/min"
              )
 
       assert has_element?(
                view,
                "#live-cost-minute-chart-header-stats",
-               "prom. $0.000083/min · pico $0.004/min"
+               "avg $0.000083/min · peak $0.004/min"
              )
     end
 

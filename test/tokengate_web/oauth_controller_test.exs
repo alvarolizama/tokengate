@@ -19,7 +19,7 @@ defmodule TokengateWeb.OAuthControllerTest do
         })
 
       assert redirected_to(conn, 302) =~ "/login"
-      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "No se pudo completar"
+      assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "Could not complete"
     end
   end
 

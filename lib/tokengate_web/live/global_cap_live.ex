@@ -34,7 +34,7 @@ defmodule TokengateWeb.GlobalCapLive do
 
     socket =
       socket
-      |> assign(:page_title, "Tope diario global · Tokengate")
+      |> assign(:page_title, gettext("Global daily cap") <> " · Tokengate")
       |> assign(:is_admin, user && user.global_role == "admin")
       |> assign(:global_subject_type, "user")
       |> assign(:groups, Accounts.list_groups())
@@ -68,7 +68,7 @@ defmodule TokengateWeb.GlobalCapLive do
         {:noreply,
          socket
          |> assign_global_settings()
-         |> put_flash(:info, "Tope diario global actualizado.")}
+         |> put_flash(:info, gettext("Global daily cap updated."))}
 
       {:error, changeset} ->
         {:noreply, assign(socket, :global_form, to_form(changeset, as: :global_settings))}
@@ -86,10 +86,10 @@ defmodule TokengateWeb.GlobalCapLive do
 
     cond do
       subject_type in [nil, ""] ->
-        {:noreply, put_flash(socket, :error, "Selecciona un tipo de sujeto.")}
+        {:noreply, put_flash(socket, :error, gettext("Pick a subject type."))}
 
       subject_id in [nil, ""] ->
-        {:noreply, put_flash(socket, :error, "Selecciona a quién excluir.")}
+        {:noreply, put_flash(socket, :error, gettext("Pick who to exclude."))}
 
       true ->
         attrs =
@@ -100,7 +100,8 @@ defmodule TokengateWeb.GlobalCapLive do
           {:ok, exemption} ->
             audit(socket, "exemption.add", "exemption", exemption.id, attrs)
 
-            {:noreply, socket |> assign_exemptions() |> put_flash(:info, "Exención agregada.")}
+            {:noreply,
+             socket |> assign_exemptions() |> put_flash(:info, gettext("Exemption added."))}
 
           {:error, changeset} ->
             {:noreply, put_flash(socket, :error, exemption_error(changeset))}
@@ -113,7 +114,7 @@ defmodule TokengateWeb.GlobalCapLive do
 
     audit(socket, "exemption.remove", "exemption", id, %{})
 
-    {:noreply, socket |> assign_exemptions() |> put_flash(:info, "Exención eliminada.")}
+    {:noreply, socket |> assign_exemptions() |> put_flash(:info, gettext("Exemption removed."))}
   end
 
   ## Render -----------------------------------------------------------------
@@ -131,7 +132,7 @@ defmodule TokengateWeb.GlobalCapLive do
         <.header>
           Tope diario global
           <:subtitle>
-            Tope de gasto por día UTC para todos los sujetos, y quién queda exento
+            {gettext("Spend cap per UTC day for all subjects, and who is exempt")}
           </:subtitle>
         </.header>
 
@@ -142,9 +143,8 @@ defmodule TokengateWeb.GlobalCapLive do
               <.icon name="hero-globe-americas" class="w-5 h-5" /> El tope
             </h2>
             <p class="text-sm text-base-content/60">
-              Tope máximo de gasto total por día (UTC), sumando todos los sujetos.
-              Cuando se alcanza, toda nueva request se rechaza con 402 hasta el día
-              siguiente. Vacío = sin tope.
+              {gettext("Maximum total spend cap per day (UTC), adding up all subjects.")}
+              {gettext("When it is reached, every new request is rejected with 402 until the next")} siguiente. Vacío = sin tope.
             </p>
 
             <.form for={@global_form} id="global-cap-form" phx-submit="save_global_cap">
@@ -153,8 +153,12 @@ defmodule TokengateWeb.GlobalCapLive do
                 type="number"
                 step="0.01"
                 min="0"
-                label="USD por día"
-                hint="Ej: 50.00 — se corta todo cuando el gasto total del día llega a este monto."
+                label={gettext("USD per day")}
+                hint={
+                  gettext(
+                    "E.g. 50.00 — everything is cut off when the total spend of the day reaches this amount."
+                  )
+                }
               />
               <div class="flex gap-2 mt-3">
                 <button type="submit" class="btn btn-primary btn-sm" id="save-global-cap-btn">
@@ -165,7 +169,7 @@ defmodule TokengateWeb.GlobalCapLive do
 
             <div class="mt-4">
               <div class="flex justify-between text-sm">
-                <span class="text-base-content/60">Gastado hoy (total)</span>
+                <span class="text-base-content/60">{gettext("Spent today (total)")}</span>
                 <span class="font-mono font-semibold">
                   ${Decimal.round(@global_daily_spend, 2)}
                   <%= if @global_daily_cap do %>
@@ -185,21 +189,21 @@ defmodule TokengateWeb.GlobalCapLive do
                 />
               <% end %>
               <p class="text-xs text-base-content/40 mt-1">
-                Gasto real de <code>request_logs</code>, día UTC
-                (misma fuente que Estadísticas).
+                {gettext("Real spend from")} <code>request_logs</code>{gettext(", UTC day")} (misma fuente que Estadísticas).
               </p>
               <%= if @global_daily_enforcement && drift?(@global_daily_enforcement, @global_daily_spend) do %>
                 <p class="text-xs text-warning mt-1" id="global-enforcement-drift">
-                  Contador de enforcement:
+                  {gettext("Enforcement counter:")}
                   <span class="font-mono">
                     ${Decimal.round(@global_daily_enforcement, 2)}
                   </span>
                   — incluye los holds de las requests en vuelo.
                   <%= if Decimal.compare(@global_daily_enforcement, @global_daily_spend) == :gt do %>
-                    Si no baja en unos minutos, es drift: el <code>GlobalSyncWorker</code>
-                    lo reconcilia contra la DB.
+                    {gettext("If it does not go down in a few minutes, it is drift: the")}
+                    <code>GlobalSyncWorker</code>
+                    {gettext("reconciles it against the DB.")}
                   <% else %>
-                    Se sincroniza contra la DB al vuelo.
+                    {gettext("It syncs against the DB on the fly.")}
                   <% end %>
                 </p>
               <% end %>
@@ -212,11 +216,11 @@ defmodule TokengateWeb.GlobalCapLive do
           <div class="card-body">
             <h2 class="card-title flex items-center gap-2">
               <.icon name="hero-shield-exclamation" class="w-5 h-5 text-warning" />
-              Exclusiones al tope
+              {gettext("Cap exclusions")}
             </h2>
             <p class="text-sm text-base-content/60">
-              El gasto de estos sujetos no cuenta para el tope global (sigue
-              contando para su propio presupuesto mensual o top-up).
+              {gettext("The spend of these subjects does not count toward the global cap (it still")}
+              {gettext("counts toward their own monthly budget or top-up).")}
             </p>
 
             <.form
@@ -227,30 +231,32 @@ defmodule TokengateWeb.GlobalCapLive do
               class="flex flex-wrap gap-2 items-end"
             >
               <div>
-                <label class="text-xs text-base-content/60 block mb-1">Tipo</label>
+                <label class="text-xs text-base-content/60 block mb-1">{gettext("Type")}</label>
                 <select name="global_subject[subject_type]" class="select select-bordered select-sm">
-                  <option value="user" selected={@global_subject_type == "user"}>Usuario</option>
+                  <option value="user" selected={@global_subject_type == "user"}>
+                    {gettext("User")}
+                  </option>
                   <option value="group" selected={@global_subject_type == "group"}>
-                    Perfil de límites
+                    {gettext("Limit profile")}
                   </option>
                   <option value="service" selected={@global_subject_type == "service"}>
-                    Servicio
+                    {gettext("Service")}
                   </option>
                 </select>
               </div>
               <div class="flex-1 min-w-48">
-                <label class="text-xs text-base-content/60 block mb-1">Sujeto</label>
+                <label class="text-xs text-base-content/60 block mb-1">{gettext("Subject")}</label>
                 <select
                   name="global_subject[subject_id]"
                   class="select select-bordered select-sm w-full"
                 >
                   <option value="">
                     {if @global_subject_type == "user",
-                      do: "Usuario…",
+                      do: gettext("User…"),
                       else:
                         if(@global_subject_type == "group",
-                          do: "Perfil de límites…",
-                          else: "Servicio…"
+                          do: gettext("Limit profile…"),
+                          else: gettext("Service…")
                         )}
                   </option>
                   <%= for {label, id} <- subject_options(@global_subject_type, assigns) do %>
@@ -259,7 +265,7 @@ defmodule TokengateWeb.GlobalCapLive do
                 </select>
               </div>
               <button type="submit" class="btn btn-primary btn-sm" id="add-global-exemption-btn">
-                Excluir
+                {gettext("Exclude")}
               </button>
             </.form>
 
@@ -267,8 +273,8 @@ defmodule TokengateWeb.GlobalCapLive do
               <table class="table table-sm">
                 <thead>
                   <tr>
-                    <th>Sujeto</th>
-                    <th>Tipo</th>
+                    <th>{gettext("Subject")}</th>
+                    <th>{gettext("Type")}</th>
                     <th></th>
                   </tr>
                 </thead>
@@ -286,7 +292,7 @@ defmodule TokengateWeb.GlobalCapLive do
                         phx-click="remove_global_exemption"
                         phx-value-id={e.id}
                         class="btn btn-ghost btn-xs text-error"
-                        aria-label="Quitar exención"
+                        aria-label={gettext("Remove exemption")}
                         id={"remove-global-exemption-" <> e.id}
                       >
                         <.icon name="hero-x-mark" class="w-3 h-3" /> Quitar
@@ -303,7 +309,9 @@ defmodule TokengateWeb.GlobalCapLive do
               id="global-exemptions-empty"
             >
               <.icon name="hero-shield-check" class="w-8 h-8 mx-auto mb-2 opacity-40" />
-              <p class="text-sm">Sin exclusiones — todos los sujetos cuentan para el tope global.</p>
+              <p class="text-sm">
+                {gettext("No exclusions — every subject counts toward the global cap.")}
+              </p>
             </div>
           </div>
         </div>
@@ -382,10 +390,11 @@ defmodule TokengateWeb.GlobalCapLive do
   defp exemption_error(changeset) do
     case changeset.errors do
       [] ->
-        "No se pudo agregar la exención."
+        gettext("Could not add the exemption.")
 
       errors ->
-        "No se pudo agregar la exención: " <>
+        gettext("Could not add the exemption:") <>
+          " " <>
           (errors |> Enum.map(fn {_, {m, _}} -> m end) |> Enum.join(", "))
     end
   end

@@ -162,9 +162,9 @@ defmodule TokengateWeb.AuditLive do
         <.form for={@form} id="audit-filters" phx-change="filter" phx-submit="filter">
           <div class="card bg-base-100 border border-base-300 mb-4">
             <div class="card-body grid grid-cols-1 md:grid-cols-3 lg:grid-cols-6 gap-3">
-              <.input field={@form[:actor_email]} type="text" label="Actor (email)" />
+              <.input field={@form[:actor_email]} type="text" label={gettext("Actor (email)")} />
               <.input field={@form[:entity_type]} type="text" label="Entidad" />
-              <.input field={@form[:action]} type="text" label="Acción" />
+              <.input field={@form[:action]} type="text" label={gettext("Action")} />
               <.input field={@form[:ip]} type="text" label="IP" />
               <.input field={@form[:from]} type="date" label="Desde" />
               <.input field={@form[:to]} type="date" label="Hasta" />
@@ -174,22 +174,28 @@ defmodule TokengateWeb.AuditLive do
 
         <div class="flex items-center justify-between text-sm text-base-content/60">
           <span>
-            {@total} {if @total == 1, do: "evento", else: "eventos"} · página {@page} de {@total_pages}
+            {@total} {if @total == 1, do: gettext("event"), else: gettext("events")} · {gettext(
+              "page %{page} of %{total_pages}",
+              page: @page,
+              total_pages: @total_pages
+            )}
           </span>
-          <button phx-click="clear_filters" class="btn btn-xs" id="audit-clear">Limpiar filtros</button>
+          <button phx-click="clear_filters" class="btn btn-xs" id="audit-clear">{gettext(
+            "Clear filters"
+          )}</button>
         </div>
 
         <div class="overflow-x-auto rounded-box border border-base-300 bg-base-100">
           <table class="table table-sm" id="audit-table">
             <thead>
               <tr>
-                <th>Fecha</th>
-                <th>Actor</th>
-                <th>Acción</th>
-                <th>Entidad</th>
-                <th>Actuando como</th>
-                <th>IP</th>
-                <th>Detalle</th>
+                <th>{gettext("Date")}</th>
+                <th>{gettext("Actor")}</th>
+                <th>{gettext("Action")}</th>
+                <th>{gettext("Entity")}</th>
+                <th>{gettext("Acting as")}</th>
+                <th>{gettext("IP")}</th>
+                <th>{gettext("Detail")}</th>
               </tr>
             </thead>
             <tbody>
@@ -218,14 +224,16 @@ defmodule TokengateWeb.AuditLive do
                 <td class="font-mono text-xs">{log.ip || "—"}</td>
                 <td class="max-w-xs">
                   <details>
-                    <summary class="cursor-pointer text-xs text-base-content/60">ver</summary>
+                    <summary class="cursor-pointer text-xs text-base-content/60">
+                      {gettext("view")}
+                    </summary>
                     <pre class="whitespace-pre-wrap break-all text-xs">{changes_text(log.changes)}</pre>
                   </details>
                 </td>
               </tr>
               <tr :if={@logs == []}>
                 <td colspan="7" class="text-center text-base-content/50 py-8">
-                  Sin eventos para los filtros seleccionados.
+                  {gettext("No events for the selected filters.")}
                 </td>
               </tr>
             </tbody>

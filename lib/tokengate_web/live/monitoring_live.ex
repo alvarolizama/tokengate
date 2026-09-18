@@ -816,7 +816,7 @@ defmodule TokengateWeb.MonitoringLive do
       <div class="space-y-6">
         <.header>
           Monitoring
-          <:subtitle>Registro de solicitudes a la API en tiempo real</:subtitle>
+          <:subtitle>{gettext("Real-time API request log")}</:subtitle>
         </.header>
 
         <%!-- KPI strip: summary cards, 4 in a row --%>
@@ -864,7 +864,7 @@ defmodule TokengateWeb.MonitoringLive do
             <div class="card-body p-4">
               <div class="flex items-center justify-between">
                 <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Rendimiento
+                  {gettext("Performance")}
                 </p>
                 <.icon name="hero-arrow-trending-up" class="w-4 h-4 text-base-content/40" />
               </div>
@@ -876,7 +876,7 @@ defmodule TokengateWeb.MonitoringLive do
                   </p>
                 </div>
                 <div class="flex items-center justify-between">
-                  <p class="text-xs text-base-content/40">Latencia prom</p>
+                  <p class="text-xs text-base-content/40">{gettext("Avg latency")}</p>
                   <p class="text-2xl font-bold text-base-content text-right" id="summary-latency">
                     {if @summary.avg_latency_ms, do: "#{@summary.avg_latency_ms} ms", else: "—"}
                   </p>
@@ -889,13 +889,13 @@ defmodule TokengateWeb.MonitoringLive do
             <div class="card-body p-4">
               <div class="flex items-center justify-between">
                 <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Errores
+                  {gettext("Errors")}
                 </p>
                 <.icon name="hero-exclamation-triangle" class="w-4 h-4 text-base-content/40" />
               </div>
               <div class="mt-1 space-y-1">
                 <div class="flex items-center justify-between">
-                  <p class="text-xs text-base-content/40">Errores</p>
+                  <p class="text-xs text-base-content/40">{gettext("Errors")}</p>
                   <p
                     class={[
                       "text-2xl font-bold text-right",
@@ -907,7 +907,7 @@ defmodule TokengateWeb.MonitoringLive do
                   </p>
                 </div>
                 <div class="flex items-center justify-between">
-                  <p class="text-xs text-base-content/40">Tasa</p>
+                  <p class="text-xs text-base-content/40">{gettext("Rate")}</p>
                   <p class="text-2xl font-bold text-base-content text-right" id="summary-error-rate">
                     {@summary.error_rate}%
                   </p>
@@ -929,13 +929,13 @@ defmodule TokengateWeb.MonitoringLive do
             type="select"
             prompt="Todos"
             options={[{"2xx", "2xx"}, {"4xx", "4xx"}, {"5xx", "5xx"}]}
-            label="Estado"
+            label={gettext("Status")}
           />
           <.input
             field={@form[:streaming]}
             type="select"
             prompt="Todos"
-            options={[{"Sí", "true"}, {"No", "false"}]}
+            options={[{gettext("Yes"), "true"}, {gettext("No"), "false"}]}
             label="Streaming"
           />
           <.input
@@ -943,20 +943,20 @@ defmodule TokengateWeb.MonitoringLive do
             type="select"
             prompt="Todos"
             options={@model_options}
-            label="Modelo"
+            label={gettext("Model")}
           />
           <.input
             field={@form[:group_id]}
             type="select"
             prompt="Todos"
             options={@group_options}
-            label="Perfil de límites"
+            label={gettext("Limit profile")}
           />
           <.input
             field={@form[:subject_type]}
             type="select"
             prompt="Todos"
-            options={[{"Usuario", "user"}, {"Servicio", "service"}]}
+            options={[{gettext("User"), "user"}, {gettext("Service"), "service"}]}
             label="Tipo"
           />
           <.input
@@ -1025,68 +1025,68 @@ defmodule TokengateWeb.MonitoringLive do
                   colspan="7"
                   class="text-[10px] uppercase tracking-wider text-primary/70 bg-primary/5 border-r border-base-200"
                 >
-                  Cliente
+                  {gettext("Client")}
                 </th>
                 <th
                   colspan="5"
                   class="text-[10px] uppercase tracking-wider text-warning/70 bg-warning/5 border-r border-base-200"
                 >
-                  Proveedor
+                  {gettext("Provider")}
                 </th>
                 <th
                   colspan="4"
                   class="text-[10px] uppercase tracking-wider text-accent/70 bg-accent/5 border-r border-base-200"
                 >
-                  Respuesta
+                  {gettext("Response")}
                 </th>
                 <th
                   colspan="6"
                   class="text-[10px] uppercase tracking-wider text-info/70 bg-info/5 border-r border-base-200"
                 >
-                  Rendimiento
+                  {gettext("Performance")}
                 </th>
                 <th
                   colspan="1"
                   class="text-[10px] uppercase tracking-wider text-success/70 bg-success/5"
                 >
-                  Costos
+                  {gettext("Costs")}
                 </th>
               </tr>
               <tr>
-                <th>Fecha</th>
-                <th>Modelo</th>
-                <th>Tipo</th>
-                <th>Usuario</th>
-                <th>Perfil de límites</th>
-                <th>Agente</th>
-                <th>API Key</th>
-                <th class="border-r border-base-200">Proveedor</th>
-                <th title="API key o model del proveedor">Prov. Key</th>
-                <th title="Código HTTP del proveedor">Prov. Status</th>
+                <th>{gettext("Date")}</th>
+                <th>{gettext("Model")}</th>
+                <th>{gettext("Type")}</th>
+                <th>{gettext("User")}</th>
+                <th>{gettext("Limit profile")}</th>
+                <th>{gettext("Agent")}</th>
+                <th>{gettext("API key")}</th>
+                <th class="border-r border-base-200">{gettext("Provider")}</th>
+                <th title={gettext("Provider API key or model")}>{gettext("Prov. key")}</th>
+                <th title={gettext("Provider HTTP status")}>{gettext("Prov. status")}</th>
                 <th
-                  title="Razón del error del proveedor"
+                  title={gettext("Provider error reason")}
                   colspan="2"
                   class="border-r border-base-200"
                 >
-                  Error
+                  {gettext("Error")}
                 </th>
-                <th title="Código HTTP enviado al cliente">Estado</th>
-                <th>Think</th>
-                <th>Effort</th>
-                <th class="border-r border-base-200">Streaming</th>
-                <th class="text-right">Input</th>
-                <th class="text-right">Output</th>
-                <th class="text-right" title="Cache read">Cache R</th>
-                <th class="text-right">TPS</th>
-                <th title="Time to first token — solo streaming">TTFT</th>
-                <th class="border-r border-base-200">Latencia</th>
-                <th class="text-right">Costo</th>
+                <th title={gettext("HTTP status sent to the client")}>{gettext("Status")}</th>
+                <th>{gettext("Think")}</th>
+                <th>{gettext("Effort")}</th>
+                <th class="border-r border-base-200">{gettext("Streaming")}</th>
+                <th class="text-right">{gettext("Input")}</th>
+                <th class="text-right">{gettext("Output")}</th>
+                <th class="text-right" title={gettext("Cache read")}>{gettext("Cache R")}</th>
+                <th class="text-right">{gettext("TPS")}</th>
+                <th title={gettext("Time to first token — streaming only")}>TTFT</th>
+                <th class="border-r border-base-200">{gettext("Latency")}</th>
+                <th class="text-right">{gettext("Cost")}</th>
               </tr>
             </thead>
             <tbody id="logs" phx-update="stream">
               <tr id="logs-empty" class="hidden only:table-row">
                 <td colspan="23" class="text-center py-8 text-base-content/40">
-                  No hay logs que coincidan con los filtros.
+                  {gettext("No logs match the filters.")}
                 </td>
               </tr>
               <tr
@@ -1111,10 +1111,10 @@ defmodule TokengateWeb.MonitoringLive do
                       :if={log.subject_type == "service"}
                       class="badge badge-sm badge-info"
                     >
-                      Servicio
+                      {gettext("Service")}
                     </span>
                     <span :if={log.subject_type != "service"} class="badge badge-sm badge-ghost">
-                      Usuario
+                      {gettext("User")}
                     </span>
                   </td>
                   <td class="text-sm">{member_display(log)}</td>
@@ -1126,12 +1126,12 @@ defmodule TokengateWeb.MonitoringLive do
                   <td class="text-sm">—</td>
                   <td colspan="2" class="text-sm border-r border-base-200">—</td>
                   <td>
-                    <span class="badge badge-sm badge-warning">En vuelo</span>
+                    <span class="badge badge-sm badge-warning">{gettext("In flight")}</span>
                   </td>
                   <td><.think_badge value={log.think} /></td>
                   <td class="text-sm">{log.effort || "—"}</td>
                   <td class="text-sm border-r border-base-200">
-                    {if log.streaming, do: "Sí", else: "No"}
+                    {if log.streaming, do: gettext("Yes"), else: gettext("No")}
                   </td>
                   <td class="text-sm text-right tabular-nums">—</td>
                   <td class="text-sm text-right tabular-nums">—</td>
@@ -1151,10 +1151,10 @@ defmodule TokengateWeb.MonitoringLive do
                       :if={log.subject_type == "service"}
                       class="badge badge-sm badge-info"
                     >
-                      Servicio
+                      {gettext("Service")}
                     </span>
                     <span :if={log.subject_type != "service"} class="badge badge-sm badge-ghost">
-                      Usuario
+                      {gettext("User")}
                     </span>
                   </td>
                   <td class="text-sm">{member_display(log)}</td>
@@ -1198,7 +1198,11 @@ defmodule TokengateWeb.MonitoringLive do
                     <span
                       :if={log.status_code == 200 && log.error_reason}
                       class="badge badge-sm badge-warning ml-1"
-                      title="El proveedor falló y la request fue recuperada por fallback a otro proveedor"
+                      title={
+                        gettext(
+                          "The provider failed and the request was recovered by falling back to another provider"
+                        )
+                      }
                     >
                       fallback
                     </span>
@@ -1206,7 +1210,7 @@ defmodule TokengateWeb.MonitoringLive do
                   <td><.think_badge value={log.think} /></td>
                   <td class="text-sm">{log.effort || "—"}</td>
                   <td class="text-sm border-r border-base-200">
-                    {if log.streaming, do: "Sí", else: "No"}
+                    {if log.streaming, do: gettext("Yes"), else: gettext("No")}
                   </td>
                   <td class="text-sm text-right tabular-nums">{format_number(log.prompt_tokens)}</td>
                   <td class="text-sm text-right tabular-nums">

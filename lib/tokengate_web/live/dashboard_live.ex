@@ -193,10 +193,10 @@ defmodule TokengateWeb.DashboardLive do
              |> assign(:new_token, new_token)
              |> assign(:new_token_group, member.group.name)
              |> reload_personal_data(user)
-             |> put_flash(:info, "Clave regenerada correctamente.")}
+             |> put_flash(:info, gettext("Key regenerated successfully."))}
 
           {:error, _changeset} ->
-            {:noreply, put_flash(socket, :error, "No se pudo regenerar la clave.")}
+            {:noreply, put_flash(socket, :error, gettext("Could not regenerate the key."))}
         end
     end
   end
@@ -211,7 +211,7 @@ defmodule TokengateWeb.DashboardLive do
       member ->
         case member.api_key do
           nil ->
-            {:noreply, put_flash(socket, :error, "Esta membresía no tiene clave.")}
+            {:noreply, put_flash(socket, :error, gettext("This membership has no key."))}
 
           api_key ->
             case Accounts.revoke_api_key(api_key) do
@@ -219,10 +219,10 @@ defmodule TokengateWeb.DashboardLive do
                 {:noreply,
                  socket
                  |> reload_personal_data(user)
-                 |> put_flash(:info, "Clave revocada.")}
+                 |> put_flash(:info, gettext("Key revoked."))}
 
               {:error, _} ->
-                {:noreply, put_flash(socket, :error, "No se pudo revocar la clave.")}
+                {:noreply, put_flash(socket, :error, gettext("Could not revoke the key."))}
             end
         end
     end
@@ -282,11 +282,11 @@ defmodule TokengateWeb.DashboardLive do
         {:noreply,
          socket
          |> assign(:new_key_token, token)
-         |> put_flash(:info, "Clave creada. Cópiala ahora: no se vuelve a mostrar.")
+         |> put_flash(:info, gettext("Key created. Copy it now: it is not shown again."))
          |> load_user_keys(user.id)}
 
       {:error, _changeset} ->
-        {:noreply, put_flash(socket, :error, "No se pudo crear la clave.")}
+        {:noreply, put_flash(socket, :error, gettext("Could not create the key."))}
     end
   end
 
@@ -306,14 +306,14 @@ defmodule TokengateWeb.DashboardLive do
 
           {:noreply,
            socket
-           |> put_flash(:info, "Clave revocada.")
+           |> put_flash(:info, gettext("Key revoked."))
            |> load_user_keys(user.id)}
 
         {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudo revocar la clave.")}
+          {:noreply, put_flash(socket, :error, gettext("Could not revoke the key."))}
       end
     else
-      _ -> {:noreply, put_flash(socket, :error, "Clave no encontrada.")}
+      _ -> {:noreply, put_flash(socket, :error, gettext("Key not found."))}
     end
   end
 
@@ -329,7 +329,7 @@ defmodule TokengateWeb.DashboardLive do
 
     {:noreply,
      socket
-     |> put_flash(:info, "Sticky routes limpiadas. Tu próxima petición se re-ruteará.")
+     |> put_flash(:info, gettext("Sticky routes cleared. Your next request will be re-routed."))
      |> load_user_keys(user.id)}
   end
 
@@ -740,7 +740,7 @@ defmodule TokengateWeb.DashboardLive do
   end
 
   defp usd_tooltip(value), do: "#{Float.round(value, 6)} USD"
-  defp requests_tooltip(value), do: "#{trunc(value)} requests"
+  defp requests_tooltip(value), do: gettext("%{count} requests", count: trunc(value))
   defp tps_tooltip(value), do: "#{Float.round(value, 1)} tps"
 
   defp empty_metrics do
@@ -871,29 +871,29 @@ defmodule TokengateWeb.DashboardLive do
   defp format_chart_value(val) when val > 0, do: "#{Float.round(val, 2)}"
   defp format_chart_value(_), do: "0"
 
-  def period_label("today"), do: "Hoy"
-  def period_label("7d"), do: "7 días"
-  def period_label("30d"), do: "30 días"
-  def period_label("90d"), do: "90 días"
-  def period_label(_), do: "Hoy"
+  def period_label("today"), do: gettext("Today")
+  def period_label("7d"), do: gettext("7 days")
+  def period_label("30d"), do: gettext("30 days")
+  def period_label("90d"), do: gettext("90 days")
+  def period_label(_), do: gettext("Today")
 
   def period_active?(current, target), do: current == target
 
   def breakdown_tab_active?(current, target), do: current == target
 
-  def chart_title(period), do: series_title("Costo", period)
-  def requests_title(period), do: series_title("Requests", period)
-  def tokens_title(period), do: series_title("Tokens in/out", period)
+  def chart_title(period), do: series_title(gettext("Cost"), period)
+  def requests_title(period), do: series_title(gettext("Requests"), period)
+  def tokens_title(period), do: series_title(gettext("Tokens in/out"), period)
   def tps_title(period), do: series_title("TPS", period)
 
   defp series_title(label, period) do
     base =
       case period do
-        "today" -> "por hora"
-        "7d" -> "por hora (7d)"
-        "30d" -> "por día (30d)"
-        "90d" -> "por día (90d)"
-        _ -> "por hora"
+        "today" -> gettext("per hour")
+        "7d" -> gettext("per hour (7d)")
+        "30d" -> gettext("per day (30d)")
+        "90d" -> gettext("per day (90d)")
+        _ -> gettext("per hour")
       end
 
     "#{label} #{base}"
@@ -918,7 +918,7 @@ defmodule TokengateWeb.DashboardLive do
     "#{prefix}••••"
   end
 
-  def masked_key(_), do: "Sin clave"
+  def masked_key(_), do: gettext("No key")
 
   def key_status_badge(%{api_key: %{status: "active"}}), do: "badge-success"
   def key_status_badge(%{api_key: %{status: "revoked"}}), do: "badge-error"
@@ -926,7 +926,7 @@ defmodule TokengateWeb.DashboardLive do
 
   def key_status_label(%{api_key: %{status: "active"}}), do: "Activa"
   def key_status_label(%{api_key: %{status: "revoked"}}), do: "Revocada"
-  def key_status_label(_), do: "Sin clave"
+  def key_status_label(_), do: gettext("No key")
 
   ## Budget helpers -------------------------------------------------------
 
@@ -1019,7 +1019,7 @@ defmodule TokengateWeb.DashboardLive do
   attr :icon, :string, default: "hero-chart-bar"
   attr :series, :list, required: true
   attr :bar_class, :string, default: "fill-primary/70 hover:fill-primary"
-  attr :empty_label, :string, default: "Sin datos para este periodo."
+  attr :empty_label, :string, default: "No data for this period."
 
   def bar_chart(assigns) do
     max_value = chart_max_value(assigns.series)
@@ -1042,7 +1042,7 @@ defmodule TokengateWeb.DashboardLive do
 
         <%= if @series == [] or @max_value == 0.0 do %>
           <div class="h-40 flex items-center justify-center text-base-content/40 text-sm">
-            {@empty_label}
+            {TokengateWeb.Gettext.translate(@empty_label)}
           </div>
         <% else %>
           <div class="mt-4">
@@ -1105,7 +1105,7 @@ defmodule TokengateWeb.DashboardLive do
   attr :title, :string, required: true
   attr :icon, :string, default: "hero-cpu-chip"
   attr :series, :list, required: true
-  attr :empty_label, :string, default: "Sin datos para este periodo."
+  attr :empty_label, :string, default: "No data for this period."
 
   def stacked_bar_chart(assigns) do
     max_value =
@@ -1132,7 +1132,7 @@ defmodule TokengateWeb.DashboardLive do
 
         <%= if @series == [] or @max_value == 0.0 do %>
           <div class="h-40 flex items-center justify-center text-base-content/40 text-sm">
-            {@empty_label}
+            {TokengateWeb.Gettext.translate(@empty_label)}
           </div>
         <% else %>
           <div class="mt-4">
@@ -1210,7 +1210,7 @@ defmodule TokengateWeb.DashboardLive do
   attr :title, :string, required: true
   attr :icon, :string, default: "hero-chart-bar-square"
   attr :rows, :list, required: true
-  attr :empty_label, :string, default: "Sin datos para este periodo."
+  attr :empty_label, :string, default: "No data for this period."
 
   def hbars_chart(assigns) do
     assigns = assign(assigns, :max_value, chart_max_value(assigns.rows))
@@ -1225,7 +1225,7 @@ defmodule TokengateWeb.DashboardLive do
 
         <%= if @rows == [] or @max_value == 0.0 do %>
           <div class="h-40 flex items-center justify-center text-base-content/40 text-sm">
-            {@empty_label}
+            {TokengateWeb.Gettext.translate(@empty_label)}
           </div>
         <% else %>
           <div class="mt-4 space-y-3">

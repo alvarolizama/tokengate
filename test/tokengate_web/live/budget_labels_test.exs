@@ -37,6 +37,10 @@ defmodule TokengateWeb.BudgetLabelsTest do
         global_role: role
       })
 
+    # El idioma por defecto de la UI es inglés; este archivo afirma el
+    # vocabulario en español, así que el usuario arranca en español.
+    {:ok, user} = Accounts.update_user_locale(user, "es")
+
     %{user: user, password: "password-secret-#{u}1"}
   end
 

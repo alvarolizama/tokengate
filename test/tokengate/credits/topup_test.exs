@@ -41,7 +41,7 @@ defmodule Tokengate.Credits.TopupTest do
 
       refute changeset.valid?
 
-      assert "debe tener exactamente un dueño (usuario o servicio)" in errors_on(changeset).user_id
+      assert "must have exactly one owner (user or service)" in errors_on(changeset).user_id
     end
 
     test "con 2 dueños → inválido (error en :user_id)" do
@@ -57,7 +57,7 @@ defmodule Tokengate.Credits.TopupTest do
 
       refute changeset.valid?
 
-      assert "debe tener exactamente un dueño (usuario o servicio)" in errors_on(changeset).user_id
+      assert "must have exactly one owner (user or service)" in errors_on(changeset).user_id
     end
 
     test "expires_in_days: 7 ⇒ expires_at ≈ ahora + 7 días (±1 día)" do

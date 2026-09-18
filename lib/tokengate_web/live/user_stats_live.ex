@@ -36,7 +36,7 @@ defmodule TokengateWeb.UserStatsLive do
 
     socket =
       socket
-      |> assign(:page_title, "Stats · #{user.email} · Tokengate")
+      |> assign(:page_title, gettext("Stats") <> " · #{user.email} · Tokengate")
       |> assign(:user, user)
       |> assign(:memberships, memberships)
       |> assign(:group_member_ids, member_ids)
@@ -348,9 +348,9 @@ defmodule TokengateWeb.UserStatsLive do
         <header class="flex items-center justify-between gap-6 pb-4">
           <div>
             <div class="flex items-center gap-2 text-xs text-base-content/60">
-              <.link navigate={~p"/stats/users"} class="hover:underline">Usuarios</.link>
+              <.link navigate={~p"/stats/users"} class="hover:underline">{gettext("Users")}</.link>
               <span>›</span>
-              <span>Detalle</span>
+              <span>{gettext("Detail")}</span>
             </div>
             <h1 class="text-lg font-semibold leading-8 mt-1">
               {@user.email}
@@ -359,8 +359,8 @@ defmodule TokengateWeb.UserStatsLive do
               {@user.name || ""}
               <%= if @memberships != [] do %>
                 · {length(@memberships)} {if length(@memberships) == 1,
-                  do: "membresía",
-                  else: "membresías"}
+                  do: gettext("membership"),
+                  else: gettext("memberships")}
               <% end %>
             </p>
           </div>
@@ -370,19 +370,19 @@ defmodule TokengateWeb.UserStatsLive do
         <%!-- KPI cards (5d window) --%>
         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           <.stat_card
-            label="Requests (5d)"
+            label={gettext("Requests (5d)")}
             value={Integer.to_string(@summary_5d.request_count)}
             sub={safe_sub_count(@summary_5d.realtime_5min.request_count, " en 5 min")}
             icon="hero-squares-2x2"
           />
           <.stat_card
-            label="Costo (5d)"
+            label={gettext("Cost (5d)")}
             value={fmt_money(@summary_5d.total_cost_usd)}
             sub={safe_sub_count(@summary_5d.request_count, " reqs")}
             icon="hero-currency-dollar"
           />
           <.stat_card
-            label="Input tokens (5d)"
+            label={gettext("Input tokens (5d)")}
             value={format_number(@summary_5d.total_prompt_tokens)}
             sub={
               "cached " <>
@@ -398,13 +398,13 @@ defmodule TokengateWeb.UserStatsLive do
             icon="hero-arrow-down-on-square-stack"
           />
           <.stat_card
-            label="Output tokens (5d)"
+            label={gettext("Output tokens (5d)")}
             value={format_number(@summary_5d.total_completion_tokens)}
-            sub={"avg TPS: " <> fmt_tps(@summary_5d.avg_tps)}
+            sub={gettext("avg TPS:") <> " " <> fmt_tps(@summary_5d.avg_tps)}
             icon="hero-arrow-up-on-square-stack"
           />
           <.stat_card
-            label="Errores (5d)"
+            label={gettext("Errors (5d)")}
             value={
               Integer.to_string(
                 @summary_5d.status_breakdown["4xx"] + @summary_5d.status_breakdown["5xx"]
@@ -415,7 +415,7 @@ defmodule TokengateWeb.UserStatsLive do
             tone={error_tone(@summary_5d.status_breakdown)}
           />
           <.stat_card
-            label="Último request"
+            label={gettext("Last request")}
             value={last_request_label(@summary_5d.last_request_at, @timezone)}
             sub={"latency prom: " <> fmt_ms(@summary_5d.avg_latency_ms)}
             icon="hero-clock"
@@ -426,9 +426,11 @@ defmodule TokengateWeb.UserStatsLive do
         <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
           <div class="card bg-base-100 border border-base-300 shadow-sm">
             <div class="card-body p-4">
-              <h3 class="text-sm font-semibold mb-2">Membresías (consolidado)</h3>
+              <h3 class="text-sm font-semibold mb-2">{gettext("Memberships (consolidated)")}</h3>
               <%= if @memberships == [] do %>
-                <p class="text-xs text-base-content/40">Sin membresías — usuario sin acceso.</p>
+                <p class="text-xs text-base-content/40">
+                  {gettext("No memberships — user without access.")}
+                </p>
               <% else %>
                 <ul class="space-y-1 text-sm">
                   <li :for={m <- @memberships} class="flex items-center justify-between">
@@ -480,9 +482,11 @@ defmodule TokengateWeb.UserStatsLive do
           </div>
           <div class="card bg-base-100 border border-base-300 shadow-sm">
             <div class="card-body p-4">
-              <h3 class="text-sm font-semibold mb-2">Top models (5d)</h3>
+              <h3 class="text-sm font-semibold mb-2">{gettext("Top models (5d)")}</h3>
               <%= if @summary_5d.top_models == [] do %>
-                <p class="text-xs text-base-content/40">Sin requests en los últimos 5 días.</p>
+                <p class="text-xs text-base-content/40">
+                  {gettext("No requests in the last 5 days.")}
+                </p>
               <% else %>
                 <ol class="space-y-1">
                   <li
@@ -512,19 +516,19 @@ defmodule TokengateWeb.UserStatsLive do
             type="select"
             prompt="Todos"
             options={[{"2xx", "2xx"}, {"4xx", "4xx"}, {"5xx", "5xx"}]}
-            label="Estado"
+            label={gettext("Status")}
           />
           <.input
             field={@form[:streaming]}
             type="select"
             prompt="Todos"
-            options={[{"Sí", "true"}, {"No", "false"}]}
-            label="Streaming"
+            options={[{gettext("Yes"), "true"}, {gettext("No"), "false"}]}
+            label={gettext("Streaming")}
           />
           <.input
             field={@form[:model_search]}
             type="text"
-            label="Modelo"
+            label={gettext("Model")}
           />
           <.input
             field={@form[:from]}
@@ -560,7 +564,7 @@ defmodule TokengateWeb.UserStatsLive do
                   <%= if @memberships == [] do %>
                     Este usuario no tiene membresías — no hay logs que mostrar.
                   <% else %>
-                    No hay requests con los filtros actuales.
+                    {gettext("No requests with the current filters.")}
                   <% end %>
                 </td>
               </tr>
@@ -572,7 +576,7 @@ defmodule TokengateWeb.UserStatsLive do
                   {model_display(log.model_requested, log.model_responded)}
                 </td>
                 <td class="text-sm">{log.client_agent || "—"}</td>
-                <td>{if log.streaming, do: "Sí", else: "No"}</td>
+                <td>{if log.streaming, do: gettext("Yes"), else: gettext("No")}</td>
                 <td>
                   <span class={["badge badge-sm", status_badge(log.status_code)]}>
                     {Integer.to_string(log.status_code)}
@@ -590,7 +594,7 @@ defmodule TokengateWeb.UserStatsLive do
         <%= if @has_more do %>
           <div class="flex justify-center">
             <button phx-click="load_more" class="btn btn-ghost btn-sm" id="load-more-user-stats-logs">
-              Cargar más
+              {gettext("Load more")}
             </button>
           </div>
         <% end %>

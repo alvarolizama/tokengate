@@ -19,6 +19,10 @@ defmodule TokengateWeb.KpiHelpers do
 
   use Phoenix.Component
 
+  # Las etiquetas del KPI (`Cost (UTC)`, tooltips de ventana…) salen traducidas:
+  # el módulo no viene de `TokengateWeb, :html`, así que el backend se declara aquí.
+  use Gettext, backend: TokengateWeb.Gettext
+
   import TokengateWeb.CoreComponents, only: [icon: 1]
   alias Tokengate.Accounts
   alias Tokengate.Logs
@@ -198,16 +202,18 @@ defmodule TokengateWeb.KpiHelpers do
   # El label del KPI de costo declara la ventana cuando ésta es un límite de
   # tope (día/mes UTC). Los períodos rolling y la semana no tienen tope
   # asociado, así que se quedan con el nombre corto.
-  defp cost_label("today"), do: "Costo (UTC)"
-  defp cost_label("month"), do: "Costo (mes UTC)"
-  defp cost_label(_), do: "Costo"
+  defp cost_label("today"), do: gettext("Cost (UTC)")
+  defp cost_label("month"), do: gettext("Cost (UTC month)")
+  defp cost_label(_), do: gettext("Cost")
 
   defp cost_title("today"),
-    do: "Gasto del día UTC (00:00–24:00 UTC) — la ventana que reinicia el tope global"
+    do: gettext("UTC day spend (00:00–24:00 UTC) — the window that resets the global cap")
 
   defp cost_title("month"),
     do:
-      "Gasto del mes UTC (desde el día 1 a las 00:00 UTC) — la ventana que reinicia el tope mensual"
+      gettext(
+        "UTC month spend (from day 1 at 00:00 UTC) — the window that resets the monthly cap"
+      )
 
   defp cost_title(_), do: nil
 
@@ -251,7 +257,7 @@ defmodule TokengateWeb.KpiHelpers do
       >
         ${format_decimal(@metrics.cost_usd)}
         <:sub>
-          Reportado por el proveedor
+          {gettext("Reported by the provider")}
           <span
             :if={@deltas && @deltas[:cost_usd] != nil}
             class={["font-medium tabular-nums", delta_color(@deltas[:cost_usd])]}
@@ -279,7 +285,7 @@ defmodule TokengateWeb.KpiHelpers do
           >
             {delta_arrow(@deltas[:requests_total])} {abs_float(@deltas[:requests_total])}%
           </span>
-          <span :if={!@deltas || @deltas[:requests_total] == nil}>vs período anterior</span>
+          <span :if={!@deltas || @deltas[:requests_total] == nil}>{gettext("vs previous period")}</span>
         </:sub>
       </.kpi_card>
 
@@ -319,7 +325,7 @@ defmodule TokengateWeb.KpiHelpers do
         </:sub>
       </.kpi_card>
 
-      <.kpi_card id="kpi-tps" label="TPS promedio" icon="hero-bolt" accent="accent">
+      <.kpi_card id="kpi-tps" label={gettext("Avg TPS")} icon="hero-bolt" accent="accent">
         {format_tps(@metrics.avg_tps)}
       </.kpi_card>
     </div>

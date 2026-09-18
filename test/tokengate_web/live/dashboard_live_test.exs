@@ -18,6 +18,10 @@ defmodule TokengateWeb.DashboardLiveTest do
         global_role: role
       })
 
+    # Este archivo afirma los textos en español del LiveView; el idioma por
+    # defecto de la UI es inglés, así que el usuario arranca en español.
+    {:ok, user} = Accounts.update_user_locale(user, "es")
+
     %{user: user, password: "password-secret-#{u}1"}
   end
 
@@ -104,6 +108,10 @@ defmodule TokengateWeb.DashboardLiveTest do
         name: "Owner #{u}",
         password: "password-secret-#{u}1"
       })
+
+    # Igual que `register/1`: este archivo afirma textos en español y el idioma
+    # por defecto de la UI es inglés.
+    {:ok, owner} = Accounts.update_user_locale(owner, "es")
 
     {:ok, member} =
       Accounts.create_group_member(%{user_id: owner.id, group_id: group.id})

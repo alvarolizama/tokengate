@@ -38,7 +38,7 @@ defmodule TokengateWeb.TopupsLive do
     if user.global_role != "admin" do
       {:ok,
        socket
-       |> put_flash(:error, "No tienes permisos para acceder a esta sección.")
+       |> put_flash(:error, gettext("You do not have permission to access this section."))
        |> redirect(to: "/dashboard")}
     else
       socket =
@@ -248,7 +248,7 @@ defmodule TokengateWeb.TopupsLive do
          |> assign(:form, nil)
          |> assign(:editing_topup_id, nil)
          |> load_topups()
-         |> put_flash(:info, "Top-up guardado.")}
+         |> put_flash(:info, gettext("Top-up saved."))}
 
       {:error, changeset} ->
         {:noreply, assign(socket, :form, to_form(changeset, as: :topup))}
@@ -263,10 +263,11 @@ defmodule TokengateWeb.TopupsLive do
     {result, message} =
       case topup.status do
         "active" ->
-          {Topups.revoke(topup), "Top-up desactivado — el saldo restante deja de otorgarse."}
+          {Topups.revoke(topup),
+           gettext("Top-up deactivated — the remaining balance stops being granted.")}
 
         _ ->
-          {Topups.reactivate(topup), "Top-up reactivado."}
+          {Topups.reactivate(topup), gettext("Top-up reactivated.")}
       end
 
     case result do
@@ -278,7 +279,7 @@ defmodule TokengateWeb.TopupsLive do
         {:noreply, socket |> load_topups() |> put_flash(:info, message)}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo cambiar el estado.")}
+        {:noreply, put_flash(socket, :error, gettext("Could not change the status."))}
     end
   end
 
@@ -289,10 +290,10 @@ defmodule TokengateWeb.TopupsLive do
       {:ok, _} ->
         audit(socket, "topup.revoke", "topup", topup.id, %{"label" => topup.label})
 
-        {:noreply, socket |> load_topups() |> put_flash(:info, "Top-up revocado.")}
+        {:noreply, socket |> load_topups() |> put_flash(:info, gettext("Top-up revoked."))}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo revocar.")}
+        {:noreply, put_flash(socket, :error, gettext("Could not revoke."))}
     end
   end
 
@@ -362,8 +363,8 @@ defmodule TokengateWeb.TopupsLive do
   defp subject_secondary(_), do: nil
 
   # Etiqueta del dueño elegido en el form: usuario (email) o servicio (nombre).
-  defp owner_badge({"user", %{email: email}}), do: "Usuario: " <> email
-  defp owner_badge({"service", %{name: name}}), do: "Servicio: " <> name
+  defp owner_badge({"user", %{email: email}}), do: gettext("User:") <> " " <> email
+  defp owner_badge({"service", %{name: name}}), do: gettext("Service:") <> " " <> name
   defp owner_badge(_), do: "—"
 
   defp owner_name(%{email: email}), do: email

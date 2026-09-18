@@ -72,17 +72,17 @@ defmodule Tokengate.Budgets.Exemption do
 
     case field do
       nil ->
-        add_error(changeset, :subject_type, "inválido")
+        add_error(changeset, :subject_type, "invalid")
 
       field ->
         set_ids = Enum.count([:user_id, :group_id, :service_id], &get_field(changeset, &1))
 
         cond do
           is_nil(get_field(changeset, field)) ->
-            add_error(changeset, field, "es obligatorio para este tipo de sujeto")
+            add_error(changeset, field, "is required for this subject type")
 
           set_ids > 1 ->
-            add_error(changeset, :subject_type, "solo un sujeto por exención")
+            add_error(changeset, :subject_type, "only one subject per exemption")
 
           true ->
             changeset

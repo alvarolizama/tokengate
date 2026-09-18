@@ -19,6 +19,10 @@ defmodule TokengateWeb.UsersLiveTest do
         global_role: role
       })
 
+    # Este archivo afirma los mensajes en español del LiveView; el idioma por
+    # defecto de la UI es inglés, así que el usuario arranca en español.
+    {:ok, user} = Accounts.update_user_locale(user, "es")
+
     %{user: user, password: "password-secret-#{u}1"}
   end
 
@@ -524,11 +528,11 @@ defmodule TokengateWeb.UsersLiveTest do
     view |> element("#status-#{target.id}") |> render_click()
 
     # Now try to login as the suspended user. The flash is deliberately
-    # uniform ("Credenciales inválidas.") so the login endpoint can't be
+    # uniform ("Invalid credentials.") so the login endpoint can't be
     # used to enumerate suspended accounts — the user is still rejected.
     conn = build_conn()
     conn = post(conn, ~p"/login", %{email: target.email, password: target_password})
-    assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "Credenciales inválidas"
+    assert Phoenix.Flash.get(conn.assigns.flash, :error) =~ "Invalid credentials"
     refute get_session(conn, :user_id)
   end
 
@@ -553,7 +557,7 @@ defmodule TokengateWeb.UsersLiveTest do
     # Verify the new password works
     conn = build_conn()
     conn = post(conn, ~p"/login", %{email: target.email, password: "new-password-123"})
-    assert Phoenix.Flash.get(conn.assigns.flash, :info) =~ "Sesión iniciada"
+    assert Phoenix.Flash.get(conn.assigns.flash, :info) =~ "Signed in"
   end
 
   ## Impersonate --------------------------------------------------------------

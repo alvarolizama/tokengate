@@ -58,12 +58,12 @@ defmodule TokengateWeb.StatsHelpers do
   def format_tps(n) when is_float(n), do: Float.round(n, 1) |> Float.to_string()
   def format_tps(n) when is_integer(n), do: to_string(n)
 
-  def period_label("today"), do: "Hoy"
-  def period_label("week"), do: "Esta semana"
-  def period_label("month"), do: "Este mes"
-  def period_label("30d"), do: "30 días"
-  def period_label("90d"), do: "90 días"
-  def period_label(_), do: "Hoy"
+  def period_label("today"), do: gettext("Today")
+  def period_label("week"), do: gettext("This week")
+  def period_label("month"), do: gettext("This month")
+  def period_label("30d"), do: gettext("30 days")
+  def period_label("90d"), do: gettext("90 days")
+  def period_label(_), do: gettext("Today")
 
   def period_active?(current, target), do: current == target
 
@@ -307,6 +307,17 @@ defmodule TokengateWeb.StatsHelpers do
   def provider_color(index) do
     Enum.at(@provider_colors, rem(index, length(@provider_colors)))
   end
+
+  @doc """
+  Etiqueta de proveedor lista para pintar.
+
+  Los logs sin `provider_id` (fallo antes del routing, o provider borrado)
+  llegan con el centinela `"no provider"`, que es un valor de DATOS: `Logs` y
+  `Metrics.Rollup` lo devuelven sin traducir para que la tarjeta compartida no
+  cambie de nombre entre pestañas. Aquí, ya en la vista, sí se traduce.
+  """
+  def provider_label("no provider"), do: gettext("no provider")
+  def provider_label(provider_name), do: provider_name
 
   @doc """
   Color para un proveedor en la leyenda, buscando su índice por nombre.
@@ -862,7 +873,7 @@ defmodule TokengateWeb.StatsHelpers do
     ]}>
       <%= cond do %>
         <% @exhausted? or (@pct != nil and @pct >= 100) -> %>
-          Agotado
+          {gettext("Exhausted")}
         <% @pct != nil and @pct >= 80 -> %>
           ≥80%
         <% @pct == nil -> %>
@@ -933,9 +944,9 @@ defmodule TokengateWeb.StatsHelpers do
       <% %{unlimited?: true} -> %>
         <span
           class="badge badge-sm badge-success badge-outline"
-          title="Marcado ilimitado: solo topa el cap global diario"
+          title={gettext("Marked unlimited: only the global daily cap applies")}
         >
-          Ilimitado
+          {gettext("Unlimited")}
         </span>
       <% %{limit_usd: nil} = credit -> %>
         <%!-- Sin techo mensual sólo hay camino de gasto si trae top-ups
@@ -945,14 +956,20 @@ defmodule TokengateWeb.StatsHelpers do
         <%= if has_topup_credit?(credit) do %>
           <span
             class="badge badge-sm badge-info badge-outline"
-            title="Sin presupuesto mensual: gasta solo contra sus top-ups (crédito de un solo uso)"
+            title={
+              gettext("No monthly budget: it only spends against its top-ups (single-use credit)")
+            }
           >
             Top-up ${format_usd(credit.remaining_topup_usd)}
           </span>
         <% else %>
           <span
             class="badge badge-sm badge-warning badge-outline"
-            title="Sin presupuesto mensual ni top-ups: no puede gastar hasta que se le asigne un presupuesto o un top-up"
+            title={
+              gettext(
+                "No monthly budget and no top-ups: it cannot spend until a budget or a top-up is assigned"
+              )
+            }
           >
             {gettext("No budget")}
           </span>

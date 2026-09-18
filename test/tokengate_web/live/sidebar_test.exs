@@ -18,6 +18,11 @@ defmodule TokengateWeb.SidebarTest do
         global_role: role
       })
 
+    # El idioma por defecto de la UI es inglés; este archivo fija las etiquetas
+    # en español, así que el usuario arranca en español (`users.locale` es lo
+    # que el `on_mount` aplica al LiveView).
+    {:ok, user} = Accounts.update_user_locale(user, "es")
+
     %{user: user, password: "password-secret-#{u}1"}
   end
 

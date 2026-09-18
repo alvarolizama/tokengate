@@ -200,9 +200,9 @@ defmodule TokengateWeb.CalculatorLive do
 
   def period_label("today"), do: "Hoy"
   def period_label("week"), do: "Esta semana"
-  def period_label("7d"), do: "7 días"
-  def period_label("30d"), do: "30 días"
-  def period_label("90d"), do: "90 días"
+  def period_label("7d"), do: gettext("7 days")
+  def period_label("30d"), do: gettext("30 days")
+  def period_label("90d"), do: gettext("90 days")
   def period_label(_), do: "—"
 
   def format_cost(%Decimal{} = d) do

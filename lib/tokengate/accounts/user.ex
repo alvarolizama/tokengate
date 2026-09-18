@@ -12,6 +12,16 @@ defmodule Tokengate.Accounts.User do
 
   @email_regex ~r/^[^\s]+@[^\s]+$/
 
+  # Locales que la UI ofrece, según `:locales` de la config del backend Gettext.
+  # Se lee en compilación para que el schema no dependa del módulo web en
+  # runtime; cambiar la lista de idiomas exige recompilar, igual que el resto
+  # de la config.
+  @ui_locales Keyword.get(
+                Application.compile_env(:tokengate, TokengateWeb.Gettext, []),
+                :locales,
+                ["en"]
+              )
+
   # Virtual fields used during registration / password update.
   # Never persisted; consumed by the registration changeset.
   @derive {Jason.Encoder, only: [:id, :email, :name, :global_role, :status, :timezone]}
@@ -22,6 +32,7 @@ defmodule Tokengate.Accounts.User do
     field :global_role, :string, default: "user"
     field :status, :string, default: "active"
     field :timezone, :string, default: "Etc/UTC"
+    field :locale, :string, default: "en"
     field :google_id, :string
     field :avatar_url, :string
 
@@ -144,6 +155,17 @@ defmodule Tokengate.Accounts.User do
   end
 
   @doc """
+  Changeset for the user's UI language (`users.locale`), set from the sidebar
+  selector. Only locales in `@ui_locales` are accepted.
+  """
+  def locale_changeset(user, attrs) do
+    user
+    |> cast(attrs, [:locale])
+    |> validate_required([:locale])
+    |> validate_inclusion(:locale, @ui_locales)
+  end
+
+  @doc """
   Changeset for a user changing their OWN password. Re-authenticates with
   `current_password` and validates the complexity of the new one.
   """
@@ -202,7 +224,7 @@ defmodule Tokengate.Accounts.User do
 
     cond do
       not is_binary(current) ->
-        add_error(changeset, :current_password, "no puede estar vacío")
+        add_error(changeset, :current_password, "cannot be empty")
 
       is_binary(hash) and Bcrypt.verify_pass(current, hash) ->
         changeset

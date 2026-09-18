@@ -56,7 +56,7 @@ defmodule TokengateWeb.ModelsLive do
 
     socket =
       socket
-      |> assign(:page_title, "Modelos · Tokengate")
+      |> assign(:page_title, gettext("Models") <> " · Tokengate")
       |> assign(:is_admin, is_admin)
       |> assign(:form, nil)
       |> assign(:editing_model_id, nil)
@@ -201,7 +201,8 @@ defmodule TokengateWeb.ModelsLive do
 
       {:noreply, socket}
     else
-      {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("You do not have permission for this action."))}
     end
   end
 
@@ -235,7 +236,11 @@ defmodule TokengateWeb.ModelsLive do
       case Enum.find(socket.assigns.catalog_models || [], &(&1.key == key)) do
         nil ->
           {:noreply,
-           put_flash(socket, :error, "Ese modelo no está en el catálogo. Recarga la página.")}
+           put_flash(
+             socket,
+             :error,
+             gettext("That model is not in the catalog. Reload the page.")
+           )}
 
         entry ->
           changeset =
@@ -320,10 +325,11 @@ defmodule TokengateWeb.ModelsLive do
           {:noreply, load_models(socket)}
 
         {:error, _changeset} ->
-          {:noreply, put_flash(socket, :error, "No se pudo actualizar el modelo.")}
+          {:noreply, put_flash(socket, :error, gettext("Could not update the model."))}
       end
     else
-      {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("You do not have permission for this action."))}
     end
   end
 
@@ -337,7 +343,8 @@ defmodule TokengateWeb.ModelsLive do
        |> assign(:guard_rails_form, to_form(changeset, as: :model))
        |> assign(:guard_rails_model_id, model.id)}
     else
-      {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("You do not have permission for this action."))}
     end
   end
 
@@ -375,7 +382,8 @@ defmodule TokengateWeb.ModelsLive do
           {:noreply, assign(socket, :guard_rails_form, to_form(changeset, as: :model))}
       end
     else
-      {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("You do not have permission for this action."))}
     end
   end
 
@@ -397,7 +405,8 @@ defmodule TokengateWeb.ModelsLive do
        |> assign(:catalog_query, "")
        |> assign(:catalog_results, [])}
     else
-      {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("You do not have permission for this action."))}
     end
   end
 
@@ -405,7 +414,8 @@ defmodule TokengateWeb.ModelsLive do
     if socket.assigns.is_admin do
       save_model(socket, socket.assigns.editing_model_id, model_params)
     else
-      {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("You do not have permission for this action."))}
     end
   end
 
@@ -421,7 +431,7 @@ defmodule TokengateWeb.ModelsLive do
          put_flash(
            socket,
            :error,
-           "No se puede eliminar: el modelo tiene proveedores asignados. Elimínalos primero."
+           gettext("Cannot delete: the model has providers assigned. Remove them first.")
          )}
       else
         case Providers.delete_model(model_record) do
@@ -432,15 +442,16 @@ defmodule TokengateWeb.ModelsLive do
 
             {:noreply,
              socket
-             |> put_flash(:info, "Modelo eliminado.")
+             |> put_flash(:info, gettext("Model deleted."))
              |> load_models()}
 
           {:error, _} ->
-            {:noreply, put_flash(socket, :error, "No se pudo eliminar el modelo.")}
+            {:noreply, put_flash(socket, :error, gettext("Could not delete the model."))}
         end
       end
     else
-      {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("You do not have permission for this action."))}
     end
   end
 
@@ -475,7 +486,8 @@ defmodule TokengateWeb.ModelsLive do
        |> assign(:provider_credentials, nil)
        |> assign_credential_choices()}
     else
-      {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("You do not have permission for this action."))}
     end
   end
 
@@ -495,7 +507,7 @@ defmodule TokengateWeb.ModelsLive do
     if socket.assigns.is_admin and socket.assigns.provider_form do
       case Enum.find(socket.assigns.provider_choices, &(&1.provider.key == provider_key)) do
         nil ->
-          {:noreply, put_flash(socket, :error, "Proveedor desconocido.")}
+          {:noreply, put_flash(socket, :error, gettext("Unknown provider."))}
 
         %{provider: provider, offer: offer} ->
           credentials = credentials_of(socket, provider.id)
@@ -523,7 +535,7 @@ defmodule TokengateWeb.ModelsLive do
       {:noreply, assign(socket, :credential_form, to_form(changeset, as: :credential))}
     else
       {:noreply,
-       put_flash(socket, :error, "Elige primero el proveedor al que pertenece la API key.")}
+       put_flash(socket, :error, gettext("Pick the provider the API key belongs to first."))}
     end
   end
 
@@ -548,11 +560,12 @@ defmodule TokengateWeb.ModelsLive do
 
     cond do
       not socket.assigns.is_admin ->
-        {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+        {:noreply,
+         put_flash(socket, :error, gettext("You do not have permission for this action."))}
 
       is_nil(provider) ->
         {:noreply,
-         put_flash(socket, :error, "Elige primero el proveedor al que pertenece la API key.")}
+         put_flash(socket, :error, gettext("Pick the provider the API key belongs to first."))}
 
       true ->
         attrs = Map.put(params, "provider_id", provider.id)
@@ -704,7 +717,8 @@ defmodule TokengateWeb.ModelsLive do
        |> assign_credential_choices()
        |> fetch_provider_models(ap.credential_id)}
     else
-      {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("You do not have permission for this action."))}
     end
   end
 
@@ -731,7 +745,8 @@ defmodule TokengateWeb.ModelsLive do
       ap_params = inject_scope_params(ap_params, socket.assigns)
       save_model_provider(socket, socket.assigns.editing_ap_id, ap_params)
     else
-      {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("You do not have permission for this action."))}
     end
   end
 
@@ -918,15 +933,19 @@ defmodule TokengateWeb.ModelsLive do
            socket
            |> put_flash(
              :info,
-             "Proveedor #{if new_enabled, do: "activado", else: "desactivado"}."
+             if(new_enabled,
+               do: gettext("Provider activated."),
+               else: gettext("Provider deactivated.")
+             )
            )
            |> load_models()}
 
         {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudo actualizar el proveedor.")}
+          {:noreply, put_flash(socket, :error, gettext("Could not update the provider."))}
       end
     else
-      {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("You do not have permission for this action."))}
     end
   end
 
@@ -942,14 +961,15 @@ defmodule TokengateWeb.ModelsLive do
 
           {:noreply,
            socket
-           |> put_flash(:info, "Proveedor eliminado del modelo.")
+           |> put_flash(:info, gettext("Provider removed from the model."))
            |> load_models()}
 
         {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudo eliminar el proveedor.")}
+          {:noreply, put_flash(socket, :error, gettext("Could not delete the provider."))}
       end
     else
-      {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("You do not have permission for this action."))}
     end
   end
 
@@ -980,10 +1000,11 @@ defmodule TokengateWeb.ModelsLive do
 
         {:noreply, load_models(socket)}
       else
-        {:noreply, put_flash(socket, :error, "Orden inválido para este modelo.")}
+        {:noreply, put_flash(socket, :error, gettext("Invalid order for this model."))}
       end
     else
-      {:noreply, put_flash(socket, :error, "No tienes permisos para esta acción.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("You do not have permission for this action."))}
     end
   end
 
@@ -996,7 +1017,7 @@ defmodule TokengateWeb.ModelsLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Modelo creado.")
+         |> put_flash(:info, gettext("Model created."))
          |> assign(:form, nil)
          |> assign(:editing_model_id, nil)
          |> load_models()}
@@ -1026,7 +1047,7 @@ defmodule TokengateWeb.ModelsLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Modelo actualizado.")
+         |> put_flash(:info, gettext("Model updated."))
          |> assign(:form, nil)
          |> assign(:editing_model_id, nil)
          |> load_models()}
@@ -1142,7 +1163,7 @@ defmodule TokengateWeb.ModelsLive do
            |> assign(:provider_models, [])
            |> assign(:provider_models_loading, false)
            |> assign(:provider_model_search, "")
-           |> put_flash(:error, "No se pudieron cargar los models del proveedor.")}
+           |> put_flash(:error, gettext("Could not load the provider models."))}
       end
     else
       {:noreply, socket}
@@ -1219,7 +1240,7 @@ defmodule TokengateWeb.ModelsLive do
          put_flash(
            socket,
            :error,
-           "Selecciona al menos un perfil de límites o usuario para el scope exclusivo."
+           gettext("Select at least one limit profile or user for the exclusive scope.")
          )}
 
       true ->
@@ -1234,8 +1255,8 @@ defmodule TokengateWeb.ModelsLive do
           {:ok, count} ->
             msg =
               if count == 1,
-                do: "Proveedor asignado al modelo.",
-                else: "#{count} proveedores asignados al modelo."
+                do: gettext("Provider assigned to the model."),
+                else: gettext("%{count} providers assigned to the model.", count: count)
 
             audit(
               socket,
@@ -1260,7 +1281,9 @@ defmodule TokengateWeb.ModelsLive do
              socket
              |> put_flash(
                :error,
-               "No se pudo asignar: #{Enum.map_join(changeset.errors, ", ", fn {_f, {m, _}} -> m end)}"
+               gettext("Could not assign: %{errors}",
+                 errors: Enum.map_join(changeset.errors, ", ", fn {_f, {m, _}} -> m end)
+               )
              )
              |> assign(:provider_form, to_form(changeset, as: :model_provider))}
         end
@@ -1287,7 +1310,7 @@ defmodule TokengateWeb.ModelsLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Proveedor actualizado.")
+         |> put_flash(:info, gettext("Provider updated."))
          |> assign(:provider_form, nil)
          |> assign(:editing_ap_id, nil)
          |> load_models()}
@@ -1511,8 +1534,8 @@ defmodule TokengateWeb.ModelsLive do
 
       nil ->
         case form[:icon].value do
-          icon when is_binary(icon) and icon != "" -> "Icono propio del modelo."
-          _ -> "Icono genérico: vincula un lab o elige uno de la paleta."
+          icon when is_binary(icon) and icon != "" -> gettext("The model's own icon.")
+          _ -> gettext("Generic icon: link a lab or pick one from the palette.")
         end
     end
   end
@@ -1834,14 +1857,14 @@ defmodule TokengateWeb.ModelsLive do
 
   @doc "Scope badge label"
   def scope_label(%ModelProvider{exclusive_to_group_member_id: id}) when not is_nil(id),
-    do: "Exclusivo miembro"
+    do: gettext("Member exclusive")
 
   def scope_label(%ModelProvider{exclusive_to_group_id: id}) when not is_nil(id),
-    do: "Exclusivo perfil de límites"
+    do: gettext("Limit profile exclusive")
 
   def scope_label(%ModelProvider{}), do: "Global"
-  def scope_label("member"), do: "Exclusivo miembro"
-  def scope_label("group"), do: "Exclusivo perfil de límites"
+  def scope_label("member"), do: gettext("Member exclusive")
+  def scope_label("group"), do: gettext("Limit profile exclusive")
   def scope_label(_), do: "Global"
 
   @doc "Resolve scope to human-readable label with target name"
@@ -1851,11 +1874,11 @@ defmodule TokengateWeb.ModelsLive do
         member =
           Enum.find(assigns.members_for_select || [], &(&1.id == mp.exclusive_to_group_member_id))
 
-        if member && member.user, do: member.user.email, else: "Miembro"
+        if member && member.user, do: member.user.email, else: gettext("Member")
 
       mp.exclusive_to_group_id ->
         group = Enum.find(assigns.groups_for_select || [], &(&1.id == mp.exclusive_to_group_id))
-        if group, do: group.name, else: "Perfil de límites"
+        if group, do: group.name, else: gettext("Limit profile")
 
       true ->
         "Todos"
@@ -1885,8 +1908,8 @@ defmodule TokengateWeb.ModelsLive do
   def scope_group(%ModelProvider{}), do: 0
 
   @doc "Group header label (nil for the global group — no header needed)"
-  def scope_group_label(1), do: "Exclusivos por perfil de límites"
-  def scope_group_label(2), do: "Exclusivos por usuario"
+  def scope_group_label(1), do: gettext("Exclusive per limit profile")
+  def scope_group_label(2), do: gettext("Exclusive per user")
   def scope_group_label(_), do: nil
 
   def provider_name(%ModelProvider{credential: %{provider: provider}}) when not is_nil(provider),
@@ -1900,7 +1923,7 @@ defmodule TokengateWeb.ModelsLive do
   def billing_badge("subscription"), do: "badge-success"
   def billing_badge(_), do: "badge-ghost"
 
-  def billing_label("subscription"), do: "Suscripción"
+  def billing_label("subscription"), do: gettext("Subscription")
   def billing_label(_), do: "Pay per token"
 
   # Billing surface of the model_provider's provider — an organizational
@@ -1919,7 +1942,7 @@ defmodule TokengateWeb.ModelsLive do
   def enabled_badge(true), do: "badge-success"
   def enabled_badge(_), do: "badge-ghost"
 
-  def enabled_label(true), do: "Activo"
+  def enabled_label(true), do: gettext("Active")
   def enabled_label(false), do: "Inactivo"
 
   # A model_provider is effectively active only when ITS row is enabled AND
@@ -1940,17 +1963,17 @@ defmodule TokengateWeb.ModelsLive do
 
   def credential_status_label(%{credential: %{status: "active"}}), do: nil
   def credential_status_label(%{credential: %{status: "disabled"}}), do: "credential desactivada"
-  def credential_status_label(%{credential: nil}), do: "sin credential"
+  def credential_status_label(%{credential: nil}), do: gettext("no credential")
   def credential_status_label(_), do: nil
 
   # Toggle button title — what the click would do given the effective state.
   @doc false
-  def toggle_title(%{enabled: false}), do: "Activar"
+  def toggle_title(%{enabled: false}), do: gettext("Enable")
   def toggle_title(ap), do: toggle_title_effective(ap)
 
   defp toggle_title_effective(ap) do
     if provider_active?(ap),
-      do: "Desactivar",
+      do: gettext("Disable"),
       else: "Credential desactivada — activa en /catalog/providers"
   end
 
@@ -1988,8 +2011,8 @@ defmodule TokengateWeb.ModelsLive do
     >
       <div class="space-y-6">
         <.header>
-          Modelos
-          <:subtitle>Configura models y sus proveedores de routing</:subtitle>
+          {gettext("Models")}
+          <:subtitle>{gettext("Configure models and their routing providers")}</:subtitle>
           <:actions :if={@is_admin}>
             <.button phx-click="new_model" id="new-model-btn">
               <.icon name="hero-plus" class="w-4 h-4" /> Nuevo Modelo
@@ -2019,7 +2042,7 @@ defmodule TokengateWeb.ModelsLive do
                     class="flex-1 min-w-0 cursor-pointer"
                     id={"model-header-#{model.id}"}
                     phx-click={toggle_providers_js(model.id)}
-                    title="Expandir / colapsar proveedores"
+                    title={gettext("Expand / collapse providers")}
                   >
                     <div class="flex items-center gap-2 flex-wrap">
                       <span
@@ -2059,7 +2082,7 @@ defmodule TokengateWeb.ModelsLive do
                         phx-value-id={model.id}
                         class="btn btn-sm btn-ghost"
                         id={"pin-model-#{model.id}"}
-                        title={if model.pinned, do: "Quitar pin", else: "Pinear al inicio"}
+                        title={if model.pinned, do: gettext("Unpin"), else: gettext("Pin to top")}
                       >
                         <.icon
                           name={if model.pinned, do: "hero-star-solid", else: "hero-star"}
@@ -2085,7 +2108,7 @@ defmodule TokengateWeb.ModelsLive do
                       <button
                         phx-click="delete_model"
                         phx-value-id={model.id}
-                        data-confirm="¿Eliminar este modelo? Esta acción no se puede deshacer."
+                        data-confirm={gettext("Delete this model? This action cannot be undone.")}
                         class="btn btn-sm btn-ghost text-error"
                         id={"delete-model-#{model.id}"}
                       >
@@ -2103,7 +2126,7 @@ defmodule TokengateWeb.ModelsLive do
                 >
                   <div class="flex items-center justify-between mb-2">
                     <h4 class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                      Proveedores asignados
+                      {gettext("Assigned providers")}
                     </h4>
                     <%= if @is_admin do %>
                       <button
@@ -2121,23 +2144,23 @@ defmodule TokengateWeb.ModelsLive do
                     :if={model_providers_for(model) == []}
                     class="text-sm text-base-content/40 py-2"
                   >
-                    No hay proveedores asignados.
+                    {gettext("No providers assigned.")}
                   </div>
 
                   <div :if={model_providers_for(model) != []} class="overflow-x-auto">
                     <table class="table table-sm table-fixed w-full">
                       <thead>
                         <tr>
-                          <th :if={@is_admin} class="w-8" title="Arrastra para reordenar prioridad">
+                          <th :if={@is_admin} class="w-8" title={gettext("Drag to reorder priority")}>
                           </th>
-                          <th>Proveedor</th>
-                          <th>Modelo</th>
-                          <th>Facturación</th>
-                          <th>Prioridad</th>
-                          <th>Scope</th>
-                          <th>Estado</th>
+                          <th>{gettext("Provider")}</th>
+                          <th>{gettext("Model")}</th>
+                          <th>{gettext("Billing")}</th>
+                          <th>{gettext("Priority")}</th>
+                          <th>{gettext("Scope")}</th>
+                          <th>{gettext("Status")}</th>
                           <%= if @is_admin do %>
-                            <th>Acciones</th>
+                            <th>{gettext("Actions")}</th>
                           <% end %>
                         </tr>
                       </thead>
@@ -2254,7 +2277,7 @@ defmodule TokengateWeb.ModelsLive do
                                   <button
                                     phx-click="delete_model_provider"
                                     phx-value-id={ap.id}
-                                    data-confirm="¿Eliminar este proveedor del modelo?"
+                                    data-confirm={gettext("Remove this provider from the model?")}
                                     class="btn btn-xs btn-ghost text-error"
                                     id={"delete-ap-#{ap.id}"}
                                   >
@@ -2280,7 +2303,7 @@ defmodule TokengateWeb.ModelsLive do
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-4xl">
             <div class="card-body p-6 max-h-[88vh] overflow-y-auto">
               <h2 class="text-lg font-semibold mb-1">
-                {if @editing_model_id == :new, do: "Nuevo Modelo", else: "Editar Modelo"}
+                {if @editing_model_id == :new, do: gettext("New model"), else: gettext("Edit model")}
               </h2>
 
               <%!-- Catalog picker: the SAME control in both modes, so an existing
@@ -2295,7 +2318,7 @@ defmodule TokengateWeb.ModelsLive do
                   id="tab-catalog"
                   class={["btn btn-sm", @model_form_tab == "catalog" && "btn-primary"]}
                 >
-                  <.icon name="hero-sparkles" class="w-4 h-4" /> Desde catálogo
+                  <.icon name="hero-sparkles" class="w-4 h-4" /> {gettext("From catalog")}
                   <span class="badge badge-xs">{catalog_total(@catalog_models)}</span>
                 </button>
                 <button
@@ -2311,9 +2334,13 @@ defmodule TokengateWeb.ModelsLive do
 
               <div :if={@model_form_tab == "catalog"} id="catalog-picker" class="mb-4">
                 <p class="text-xs text-base-content/60 mb-2">
-                  Catálogo de models.dev: <b>metadata real</b> (contexto, precios, laboratorio).
-                  Elegir uno vincula el modelo a esa entrada y rellena el formulario — nada se
-                  guarda hasta <b>Guardar</b>, y todo queda editable.
+                  {gettext("models.dev catalog:")} <b>{gettext("real metadata")}</b>
+                  {gettext("(context, pricing, lab).")} {gettext(
+                    "Picking one links the model to that entry and fills the form — nothing is"
+                  )}
+                  {gettext("saved until")} <b>{gettext("Save")}</b>{gettext(
+                    ", and everything stays editable."
+                  )}
                 </p>
 
                 <%!-- El buscador va dentro de su PROPIO form: sin un form ancestro
@@ -2335,7 +2362,7 @@ defmodule TokengateWeb.ModelsLive do
                       name="q"
                       id="catalog-search"
                       value={@catalog_query}
-                      placeholder="Buscar por nombre, id o laboratorio… (ej. gpt-5, glm, anthropic)"
+                      placeholder={gettext("Search by name, id or lab… (e.g. gpt-5, glm, anthropic)")}
                       class="input input-sm w-full pl-9"
                       autocomplete="off"
                       phx-change="search_catalog_models"
@@ -2349,8 +2376,9 @@ defmodule TokengateWeb.ModelsLive do
                   id="catalog-empty"
                   class="text-sm text-base-content/50 py-4 text-center"
                 >
-                  Ningún modelo del catálogo coincide con «{@catalog_query}».
-                  Puedes crearlo a mano en la pestaña <b>Personalizado</b>.
+                  {gettext("No catalog model matches “%{query}”.", query: @catalog_query)}
+                  {gettext("You can create it by hand in the")}
+                  <b>{gettext("Custom")}</b> {gettext("tab.")}
                 </div>
 
                 <div
@@ -2358,7 +2386,9 @@ defmodule TokengateWeb.ModelsLive do
                   id="catalog-hint"
                   class="text-sm text-base-content/50 py-4 text-center"
                 >
-                  Escribe para buscar entre los {catalog_total(@catalog_models)} modelos del catálogo.
+                  {gettext("Type to search among the %{count} catalog models.",
+                    count: catalog_total(@catalog_models)
+                  )}
                 </div>
 
                 <div
@@ -2392,16 +2422,20 @@ defmodule TokengateWeb.ModelsLive do
                         <span
                           :if={catalog_taken?(@catalog_keys_taken, entry.key)}
                           class="badge badge-xs badge-warning"
-                          title="Ya existe un modelo creado desde esta entrada del catálogo"
+                          title={gettext("A model created from this catalog entry already exists")}
                         >
-                          ya existe
+                          {gettext("already exists")}
                         </span>
                         <span
                           :if={entry.provider_count == 0}
                           class="badge badge-xs badge-ghost"
-                          title="Ningún proveedor soportado lo sirve: se puede crear, pero no hay a quién enrutarlo"
+                          title={
+                            gettext(
+                              "No supported provider serves it: it can be created, but there is nothing to route it to"
+                            )
+                          }
                         >
-                          sin proveedores
+                          {gettext("no providers")}
                         </span>
                       </div>
                       <div class="text-xs text-base-content/50 font-mono truncate">{entry.key}</div>
@@ -2435,7 +2469,10 @@ defmodule TokengateWeb.ModelsLive do
                   class="text-[11px] text-base-content/40 mt-1"
                   id="catalog-count"
                 >
-                  Mostrando {length(@catalog_results)} de {catalog_total(@catalog_models)} modelos del catálogo.
+                  {gettext("Showing %{shown} of %{total} catalog models.",
+                    shown: length(@catalog_results),
+                    total: catalog_total(@catalog_models)
+                  )}
                 </p>
               </div>
 
@@ -2456,9 +2493,9 @@ defmodule TokengateWeb.ModelsLive do
                     phx-click="clear_catalog_pick"
                     class="btn btn-xs btn-ghost"
                     id="clear-catalog-pick"
-                    title="Quitar el vínculo con el catálogo"
+                    title={gettext("Remove the catalog link")}
                   >
-                    <.icon name="hero-x-mark" class="w-3 h-3" /> Quitar vínculo
+                    <.icon name="hero-x-mark" class="w-3 h-3" /> {gettext("Remove link")}
                   </button>
                 </div>
               <% end %>
@@ -2478,19 +2515,23 @@ defmodule TokengateWeb.ModelsLive do
                     <.input
                       field={@form[:name]}
                       type="text"
-                      label="Nombre (identificador)"
+                      label={gettext("Name (identifier)")}
                       required
-                      hint="Es lo que mandan los clientes en `model`. Debe ser único."
+                      hint={gettext("This is what clients send in `model`. It must be unique.")}
                     />
                     <.input
                       field={@form[:model_type]}
                       type="select"
-                      label="Tipo de modelo"
+                      label={gettext("Model type")}
                       options={[
-                        {"LLM (chat)", "llm"},
+                        {gettext("LLM (chat)"), "llm"},
                         {"Embedding", "embedding"}
                       ]}
-                      hint="Define qué endpoint lo sirve: /v1/chat/completions o /v1/embeddings."
+                      hint={
+                        gettext(
+                          "Defines which endpoint serves it: /v1/chat/completions or /v1/embeddings."
+                        )
+                      }
                     />
                   </div>
 
@@ -2498,13 +2539,13 @@ defmodule TokengateWeb.ModelsLive do
                     <.input
                       field={@form[:context_window]}
                       type="number"
-                      label="Ventana de contexto (tokens)"
+                      label={gettext("Context window (tokens)")}
                       required
-                      hint="Tamaño máximo de contexto del modelo en tokens."
+                      hint={gettext("Maximum context size of the model in tokens.")}
                     />
 
                     <div class="divider my-2 text-xs text-base-content/50">
-                      Marca (lab / icono)
+                      {gettext("Brand (lab / icon)")}
                     </div>
                     <%!--
                       La marca sale del lab vinculado cuando lo hay; sin lab, del
@@ -2515,14 +2556,18 @@ defmodule TokengateWeb.ModelsLive do
                     <.input
                       field={@form[:lab_key]}
                       type="select"
-                      label="Lab (quién construyó el modelo)"
+                      label={gettext("Lab (who built the model)")}
                       options={lab_options(@form, @lab_choices)}
-                      prompt="— Sin lab —"
-                      hint="Con un lab vinculado su marca manda; sin lab se usa el icono de abajo."
+                      prompt={gettext("— No lab —")}
+                      hint={
+                        gettext(
+                          "With a linked lab its brand wins; without one the icon below is used."
+                        )
+                      }
                     />
 
                     <div class="fieldset mb-2">
-                      <span class="label">Vista previa</span>
+                      <span class="label">{gettext("Preview")}</span>
                       <div
                         class="flex items-center gap-3 rounded-lg border border-base-300 bg-base-200/40 px-3 h-16"
                         id="model-mark-preview"
@@ -2540,7 +2585,7 @@ defmodule TokengateWeb.ModelsLive do
 
                     <%= if linked_lab(@form, @labs_by_key) do %>
                       <p class="text-xs text-base-content/50">
-                        El icono propio queda en espera: se usa si quitas el lab.
+                        {gettext("The model's own icon is queued: it is used if you unlink the lab.")}
                       </p>
                     <% else %>
                       <.input
@@ -2548,11 +2593,11 @@ defmodule TokengateWeb.ModelsLive do
                         type="text"
                         label="Icono"
                         placeholder={Model.default_icon()}
-                        hint="Nombre de hero icon, ej. hero-fire. Opcional."
+                        hint={gettext("Hero icon name, e.g. hero-fire. Optional.")}
                       />
 
                       <div class="fieldset">
-                        <span class="label">Elegir de la paleta</span>
+                        <span class="label">{gettext("Pick from the palette")}</span>
                         <div class="grid grid-cols-8 gap-1" id="model-icon-picker">
                           <button
                             :for={icon <- @icon_choices}
@@ -2579,10 +2624,10 @@ defmodule TokengateWeb.ModelsLive do
 
                 <div class="md:col-span-2 flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
-                    Cancelar
+                    {gettext("Cancel")}
                   </button>
                   <button type="submit" class="btn btn-primary btn-sm" id="save-model-btn">
-                    Guardar
+                    {gettext("Save")}
                   </button>
                 </div>
               </.form>
@@ -2599,26 +2644,32 @@ defmodule TokengateWeb.ModelsLive do
                 Guard Rails
               </h2>
               <p class="text-sm text-base-content/60 mb-4">
-                Texto que se inyecta al inicio de cada system prompt enviado al proveedor.
-                Úsalo para instrucciones de comportamiento, límites de contenido, o reglas de formato.
+                {gettext("Text injected at the start of every system prompt sent to the provider.")}
+                {gettext("Use it for behaviour instructions, content limits, or formatting rules.")}
               </p>
 
               <.form for={@guard_rails_form} id="guard-rails-form" phx-submit="save_guard_rails">
                 <.input
                   field={@guard_rails_form[:guard_rails]}
                   type="textarea"
-                  label="Instrucciones de sistema (guard rails)"
+                  label={gettext("System instructions (guard rails)")}
                   rows="8"
-                  placeholder="Ej: Responde siempre en español. No uses markdown. Sé conciso..."
-                  hint="Este texto se antepone al system prompt del usuario. Déjalo vacío para no inyectar nada."
+                  placeholder={
+                    gettext("E.g. Always answer in English. Do not use markdown. Be concise…")
+                  }
+                  hint={
+                    gettext(
+                      "This text is prepended to the user system prompt. Leave it empty to inject nothing."
+                    )
+                  }
                 />
 
                 <div class="flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_guard_rails" class="btn btn-ghost btn-sm">
-                    Cancelar
+                    {gettext("Cancel")}
                   </button>
                   <button type="submit" class="btn btn-primary btn-sm" id="save-guard-rails-btn">
-                    Guardar
+                    {gettext("Save")}
                   </button>
                 </div>
               </.form>
@@ -2632,7 +2683,9 @@ defmodule TokengateWeb.ModelsLive do
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-5xl">
             <div class="card-body p-6">
               <h2 class="text-lg font-semibold mb-4">
-                {if @editing_ap_id == :new, do: "Asignar Proveedor", else: "Editar Proveedor"}
+                {if @editing_ap_id == :new,
+                  do: gettext("Assign provider"),
+                  else: gettext("Edit provider")}
               </h2>
 
               <.form
@@ -2647,16 +2700,23 @@ defmodule TokengateWeb.ModelsLive do
                      this list is exactly the providers that serve it, cheapest
                      first; a custom model falls back to every active provider. --%>
                 <div class="mb-5">
-                  <label class="text-sm font-medium text-base-content">Proveedor</label>
+                  <label class="text-sm font-medium text-base-content">{gettext("Provider")}</label>
                   <p class="text-xs text-base-content/50 mb-2">
                     <%= if @editing_ap_id == :new do %>
-                      El proveedor de esta fila se <b>deriva de la API key</b> que elijas abajo: cada
-                      credencial pertenece a un proveedor. Si ese proveedor sirve este modelo según
-                      models.dev, se rellenan solos el modelo del proveedor y el precio de lista.
-                      También puedes filtrar aquí las API keys por proveedor.
+                      {gettext("The provider of this row is")}
+                      <b>{gettext("derived from the API key")}</b>
+                      {gettext(
+                        "you pick below: every credential belongs to a provider. If that provider serves this model according to"
+                      )}
+                      {gettext(
+                        "models.dev, the provider model and the list price are filled in automatically."
+                      )}
+                      {gettext("You can also filter the API keys by provider here.")}
                     <% else %>
-                      Proveedor de esta asignación, derivado de su API key. Cambia la key abajo para
-                      mover la fila a otro proveedor.
+                      {gettext(
+                        "Provider of this assignment, derived from its API key. Change the key below to"
+                      )}
+                      {gettext("move the row to another provider.")}
                     <% end %>
                   </p>
 
@@ -2681,9 +2741,9 @@ defmodule TokengateWeb.ModelsLive do
                         phx-click="clear_provider_choice"
                         class="btn btn-xs btn-ghost"
                         id="change-provider"
-                        title="Elegir otro proveedor"
+                        title={gettext("Choose another provider")}
                       >
-                        <.icon name="hero-arrow-path" class="w-3 h-3" /> Cambiar
+                        <.icon name="hero-arrow-path" class="w-3 h-3" /> {gettext("Change")}
                       </button>
                     </div>
                   <% else %>
@@ -2701,7 +2761,9 @@ defmodule TokengateWeb.ModelsLive do
                         name="q"
                         id="provider-search"
                         value={@provider_search}
-                        placeholder="Buscar proveedor por nombre o id… (ej. openrouter, fireworks)"
+                        placeholder={
+                          gettext("Search provider by name or id… (e.g. openrouter, fireworks)")
+                        }
                         class="input input-sm w-full pl-9"
                         autocomplete="off"
                         phx-change="search_providers"
@@ -2714,8 +2776,9 @@ defmodule TokengateWeb.ModelsLive do
                       id="provider-empty"
                       class="text-sm text-base-content/50 py-3 text-center"
                     >
-                      Ningún proveedor coincide. Crea el proveedor en <b>/catalog/providers</b>
-                      y vuelve aquí.
+                      {gettext("No provider matches. Create the provider in")}
+                      <b>/catalog/providers</b>
+                      {gettext("and come back here.")}
                     </div>
 
                     <div
@@ -2768,7 +2831,7 @@ defmodule TokengateWeb.ModelsLive do
                           :if={length(choice.provider.credentials) == 0}
                           class="badge badge-xs badge-ghost shrink-0"
                         >
-                          sin key
+                          {gettext("no key")}
                         </span>
                       </button>
                     </div>
@@ -2789,22 +2852,26 @@ defmodule TokengateWeb.ModelsLive do
                         <.input
                           field={@provider_form[:credential_id]}
                           type="select"
-                          label="Credencial (API Key)"
+                          label={gettext("Credential (API key)")}
                           options={credential_options(@credential_choices)}
                           prompt={
                             cond do
                               @credential_choices == [] ->
-                                "No hay API keys activas"
+                                gettext("No active API keys")
 
                               @provider_form_provider_key ->
-                                "Selecciona una API key de este proveedor"
+                                gettext("Pick an API key from this provider")
 
                               true ->
-                                "Selecciona la API key que servirá este modelo"
+                                gettext("Pick the API key that will serve this model")
                             end
                           }
                           required
-                          hint="La API key específica que servirá este modelo. Al elegirla se deriva su proveedor, y con él el modelo del proveedor y el precio de lista cuando models.dev los publica. Cada credencial tiene su propio circuit breaker y prioridad."
+                          hint={
+                            gettext(
+                              "The specific API key that will serve this model. Picking it derives its provider, and with it the provider model and the list price when models.dev publishes them. Every credential has its own circuit breaker and priority."
+                            )
+                          }
                         />
                       </div>
                       <button
@@ -2812,9 +2879,9 @@ defmodule TokengateWeb.ModelsLive do
                         phx-click="new_credential_inline"
                         class="btn btn-sm btn-outline mb-6"
                         id="new-credential-inline"
-                        title="Dar de alta otra API key para este proveedor"
+                        title={gettext("Add another API key for this provider")}
                       >
-                        <.icon name="hero-plus" class="w-4 h-4" /> Nueva API key
+                        <.icon name="hero-plus" class="w-4 h-4" /> {gettext("New API key")}
                       </button>
                     </div>
 
@@ -2823,23 +2890,29 @@ defmodule TokengateWeb.ModelsLive do
                       class="text-xs text-warning -mt-3 mb-2"
                       id="no-credentials-hint"
                     >
-                      Este proveedor no tiene API keys todavía. Usa «Nueva API key» para crear la primera.
+                      {gettext(
+                        "This provider has no API keys yet. Use “New API key” to create the first one."
+                      )}
                     </div>
 
                     <%= if @provider_models_loading do %>
                       <div class="flex items-center gap-2 text-sm text-base-content/50 py-2">
                         <span class="loading loading-spinner loading-xs"></span>
-                        Cargando models del proveedor…
+                        {gettext("Loading provider models…")}
                       </div>
                     <% end %>
 
                     <.input
                       field={@provider_form[:provider_model]}
                       type="text"
-                      label="Modelo del proveedor"
+                      label={gettext("Provider model")}
                       required
-                      placeholder="Escribe o selecciona el modelo (ej. glm-5.2:dedicated)"
-                      hint="Sugerencias del catálogo del proveedor. Puedes escribir cualquier valor para tiers dedicados o privados."
+                      placeholder={gettext("Type or pick the model (e.g. glm-5.2:dedicated)")}
+                      hint={
+                        gettext(
+                          "Suggestions from the provider catalog. You can type any value for dedicated or private tiers."
+                        )
+                      }
                     />
                     <%= if @provider_models != [] and !@provider_models_loading do %>
                       <% search = String.downcase(@provider_model_search || "") %>
@@ -2866,9 +2939,11 @@ defmodule TokengateWeb.ModelsLive do
                   <div class="space-y-1">
                     <%!-- Scope selector --%>
                     <div class="mb-2">
-                      <label class="text-sm font-medium text-base-content">Alcance (Scope)</label>
+                      <label class="text-sm font-medium text-base-content">{gettext("Scope")}</label>
                       <p class="text-xs text-base-content/50 mb-2">
-                        Global = todos los miembros con acceso. Exclusivo = solo el miembro o perfil de límites seleccionado.
+                        {gettext(
+                          "Global = every member with access. Exclusive = only the selected member or limit profile."
+                        )}
                       </p>
                       <div class="flex gap-2">
                         <button
@@ -2885,7 +2960,7 @@ defmodule TokengateWeb.ModelsLive do
                           phx-value-scope="group"
                           class={["btn btn-sm", @current_scope == "group" && "btn-info"]}
                         >
-                          <.icon name="hero-users" class="w-4 h-4" /> Perfil de límites
+                          <.icon name="hero-users" class="w-4 h-4" /> {gettext("Limit profile")}
                         </button>
                         <button
                           type="button"
@@ -2901,12 +2976,18 @@ defmodule TokengateWeb.ModelsLive do
                     <%= if @current_scope == "member" do %>
                       <% is_new? = @editing_ap_id == :new %>
                       <div class="relative" phx-click-away="close_scope_pickers">
-                        <label class="text-sm font-medium text-base-content">Usuario exclusivo</label>
+                        <label class="text-sm font-medium text-base-content">{gettext(
+                          "Exclusive user"
+                        )}</label>
                         <p class="text-xs text-base-content/50 mb-1">
                           <%= if is_new? do %>
-                            Puedes seleccionar múltiples usuarios. Se creará un proveedor exclusivo por cada uno.
+                            {gettext(
+                              "You can select multiple users. An exclusive provider will be created for each one."
+                            )}
                           <% else %>
-                            Solo este usuario podrá usar esta API key para este modelo.
+                            {gettext(
+                              "Only this user will be able to use this API key for this model."
+                            )}
                           <% end %>
                         </p>
                         <%= if is_new? do %>
@@ -2927,7 +3008,7 @@ defmodule TokengateWeb.ModelsLive do
                             type="text"
                             name="model_provider[scope_member_id_display]"
                             value={@scope_member_search}
-                            placeholder="Escribe para buscar usuario…"
+                            placeholder={gettext("Type to search a user…")}
                             phx-focus="open_scope_picker"
                             phx-value-picker="member"
                             phx-change="scope_member_search"
@@ -2980,7 +3061,7 @@ defmodule TokengateWeb.ModelsLive do
                             type="text"
                             name="model_provider[scope_member_id_display]"
                             value={@scope_member_search}
-                            placeholder="Escribe para buscar usuario…"
+                            placeholder={gettext("Type to search a user…")}
                             phx-focus="open_scope_picker"
                             phx-value-picker="member"
                             phx-change="scope_member_search"
@@ -3019,7 +3100,7 @@ defmodule TokengateWeb.ModelsLive do
                                   :if={m.id == @current_scope_member_id}
                                   class="text-xs text-primary ml-2"
                                 >
-                                  (actual)
+                                  {gettext("(current)")}
                                 </span>
                               </button>
                             </div>
@@ -3036,12 +3117,18 @@ defmodule TokengateWeb.ModelsLive do
                     <%= if @current_scope == "group" do %>
                       <% is_new? = @editing_ap_id == :new %>
                       <div class="relative" phx-click-away="close_scope_pickers">
-                        <label class="text-sm font-medium text-base-content">Perfil de límites exclusivo</label>
+                        <label class="text-sm font-medium text-base-content">{gettext(
+                          "Exclusive limit profile"
+                        )}</label>
                         <p class="text-xs text-base-content/50 mb-1">
                           <%= if is_new? do %>
-                            Puedes seleccionar múltiples perfiles de límites. Se creará un proveedor exclusivo por cada uno.
+                            {gettext(
+                              "You can select multiple limit profiles. An exclusive provider will be created for each one."
+                            )}
                           <% else %>
-                            Solo los miembros de este perfil de límites podrán usar esta API key para este modelo.
+                            {gettext(
+                              "Only the members of this limit profile will be able to use this API key for this model."
+                            )}
                           <% end %>
                         </p>
                         <%= if is_new? do %>
@@ -3057,7 +3144,7 @@ defmodule TokengateWeb.ModelsLive do
                             type="text"
                             name="model_provider[scope_group_id_display]"
                             value={@scope_group_search}
-                            placeholder="Escribe para buscar perfil de límites…"
+                            placeholder={gettext("Type to search a limit profile…")}
                             phx-focus="open_scope_picker"
                             phx-value-picker="group"
                             phx-change="scope_group_search"
@@ -3109,7 +3196,7 @@ defmodule TokengateWeb.ModelsLive do
                             type="text"
                             name="model_provider[scope_group_id_display]"
                             value={@scope_group_search}
-                            placeholder="Escribe para buscar perfil de límites…"
+                            placeholder={gettext("Type to search a limit profile…")}
                             phx-focus="open_scope_picker"
                             phx-value-picker="group"
                             phx-change="scope_group_search"
@@ -3142,7 +3229,7 @@ defmodule TokengateWeb.ModelsLive do
                                   :if={t.id == @current_scope_group_id}
                                   class="text-xs text-primary ml-2"
                                 >
-                                  (actual)
+                                  {gettext("(current)")}
                                 </span>
                               </button>
                             </div>
@@ -3169,7 +3256,11 @@ defmodule TokengateWeb.ModelsLive do
                         field={@provider_form[:sticky_ttl_seconds]}
                         type="number"
                         label="TTL sticky (segundos)"
-                        hint="Vacío usa el default de config (180 s / 3 min) para toda credencial, sin importar la facturación. Si pones un valor, siempre se usa ese. Mínimo 1 s, máximo 86 400 s (24 h). Se guarda en milisegundos."
+                        hint={
+                          gettext(
+                            "Empty uses the config default (180 s / 3 min) for every credential, regardless of billing. If you set a value, that one is always used. Minimum 1 s, maximum 86400 s (24 h). It is stored in milliseconds."
+                          )
+                        }
                       />
                     </div>
 
@@ -3179,24 +3270,32 @@ defmodule TokengateWeb.ModelsLive do
                         type="number"
                         step="0.000001"
                         min="0"
-                        label="Costo input (USD / 1M)"
-                        hint="Tokens de entrada no-caché. Fallback cuando el proveedor no reporta costo."
+                        label={gettext("Input cost (USD / 1M)")}
+                        hint={
+                          gettext(
+                            "Non-cached input tokens. Fallback when the provider does not report cost."
+                          )
+                        }
                       />
                       <.input
                         field={@provider_form[:cache_cost_per_million]}
                         type="number"
                         step="0.000001"
                         min="0"
-                        label="Costo cache (USD / 1M)"
-                        hint="Tokens de entrada con cache hit (más barato). Vacío = usa precio de input para todos."
+                        label={gettext("Cache cost (USD / 1M)")}
+                        hint={
+                          gettext(
+                            "Input tokens with a cache hit (cheaper). Empty = use the input price for all of them."
+                          )
+                        }
                       />
                       <.input
                         field={@provider_form[:output_cost_per_million]}
                         type="number"
                         step="0.000001"
                         min="0"
-                        label="Costo output (USD / 1M)"
-                        hint="Tokens de salida. Mismo fallback que input."
+                        label={gettext("Output cost (USD / 1M)")}
+                        hint={gettext("Output tokens. Same fallback as input.")}
                       />
                     </div>
 
@@ -3205,13 +3304,20 @@ defmodule TokengateWeb.ModelsLive do
                         field={@provider_form[:service_tier_priority]}
                         type="checkbox"
                         label="Fireworks Priority (service_tier)"
-                        hint="Manda service_tier: priority — mayor confiabilidad en horas pico, se cobra a premium según el modelo."
+                        hint={
+                          gettext(
+                            "Sends service_tier: priority — more reliability at peak hours, billed at a premium depending on the model."
+                          )
+                        }
                       />
                       <p class="text-xs text-base-content/50 -mt-2">
                         <.icon name="hero-bolt" class="w-3.5 h-3.5 inline text-success" />
-                        Caché de prompts: <b>activa por defecto</b>
-                        en Fireworks (coincidencia de prefijo, tokens cacheados a descuento). TokenGate ya manda
-                        prompt_cache_key + x-session-affinity por conversación y registra los tokens cacheados en los logs — no requiere configuración.
+                        {gettext("Prompt cache:")} <b>{gettext("on by default")}</b>
+                        {gettext(
+                          "on Fireworks (prefix matching, cached tokens at a discount). TokenGate already sends"
+                        )} prompt_cache_key + x-session-affinity {gettext(
+                          "per conversation and logs the cached tokens — no configuration required."
+                        )}
                       </p>
                     <% end %>
 
@@ -3219,17 +3325,17 @@ defmodule TokengateWeb.ModelsLive do
                       field={@provider_form[:enabled]}
                       type="checkbox"
                       label="Habilitado"
-                      hint="Si está apagado, este provider no recibe tráfico del modelo."
+                      hint={gettext("If it is off, this provider gets no traffic for the model.")}
                     />
                   </div>
                 </div>
 
                 <div class="md:col-span-2 flex gap-2 pt-4 mt-5 border-t border-base-200 justify-end">
                   <button type="button" phx-click="cancel_model_provider" class="btn btn-ghost btn-sm">
-                    Cancelar
+                    {gettext("Cancel")}
                   </button>
                   <button type="submit" class="btn btn-primary btn-sm" id="save-ap-btn">
-                    Guardar
+                    {gettext("Save")}
                   </button>
                 </div>
               </.form>
@@ -3263,15 +3369,15 @@ defmodule TokengateWeb.ModelsLive do
                         field={@credential_form[:name]}
                         type="text"
                         label="Alias"
-                        placeholder="Producción"
-                        hint="Nombre para identificar esta credencial."
+                        placeholder={gettext("Production")}
+                        hint={gettext("Name to identify this credential.")}
                       />
                       <.input
                         field={@credential_form[:api_key_encrypted]}
                         type="password"
                         label="API key"
                         placeholder="sk-..."
-                        hint="El token que entrega el proveedor."
+                        hint={gettext("The token the provider gives you.")}
                       />
                     </div>
                     <div class="flex gap-2 mt-3 justify-end">
@@ -3280,14 +3386,14 @@ defmodule TokengateWeb.ModelsLive do
                         phx-click="cancel_new_credential"
                         class="btn btn-ghost btn-xs"
                       >
-                        Cancelar
+                        {gettext("Cancel")}
                       </button>
                       <button
                         type="submit"
                         class="btn btn-primary btn-xs"
                         id="save-inline-credential-btn"
                       >
-                        Crear y usar
+                        {gettext("Create and use")}
                       </button>
                     </div>
                   </.form>

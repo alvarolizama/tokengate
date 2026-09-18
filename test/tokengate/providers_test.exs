@@ -250,8 +250,8 @@ defmodule Tokengate.ProvidersTest do
       {:error, changeset} =
         Providers.update_provider(provider, %{max_rpm: 0, max_concurrent: 0})
 
-      assert "debe ser mayor a 0" in errors_on(changeset).max_rpm
-      assert "debe ser mayor a 0" in errors_on(changeset).max_concurrent
+      assert "must be greater than 0" in errors_on(changeset).max_rpm
+      assert "must be greater than 0" in errors_on(changeset).max_concurrent
     end
 
     test "a builtin keeps its catalog identity while its limits stay editable" do
@@ -549,7 +549,7 @@ defmodule Tokengate.ProvidersTest do
 
       {:error, changeset} = Providers.update_model_provider(mp, %{extra_body_json: "[1,2]"})
 
-      assert %{extra_body_json: ["JSON inválido: se esperaba un objeto"]} = errors_on(changeset)
+      assert %{extra_body_json: ["invalid JSON: an object was expected"]} = errors_on(changeset)
     end
 
     test "protected gateway keys are rejected inside extra_body" do
@@ -558,7 +558,7 @@ defmodule Tokengate.ProvidersTest do
       {:error, changeset} =
         Providers.update_model_provider(mp, %{extra_body_json: ~s({"stream_options": {"x": 1}})})
 
-      assert %{extra_body_json: ["no se puede sobrescribir \"stream_options\""]} =
+      assert %{extra_body_json: ["cannot overwrite stream_options"]} =
                errors_on(changeset)
     end
 
@@ -581,7 +581,7 @@ defmodule Tokengate.ProvidersTest do
       {:error, changeset} =
         Providers.update_model_provider(mp, %{omit_body_fields_csv: "model, session_id"})
 
-      assert %{omit_body_fields_csv: ["no se puede omitir \"model\""]} = errors_on(changeset)
+      assert %{omit_body_fields_csv: ["cannot omit model"]} = errors_on(changeset)
     end
 
     test "authorization cannot be omitted" do
@@ -590,7 +590,7 @@ defmodule Tokengate.ProvidersTest do
       {:error, changeset} =
         Providers.update_model_provider(mp, %{omit_headers_csv: "authorization"})
 
-      assert %{omit_headers_csv: ["no se puede omitir \"authorization\""]} = errors_on(changeset)
+      assert %{omit_headers_csv: ["cannot omit authorization"]} = errors_on(changeset)
     end
 
     test "service_tier_priority checkbox sets extra_body[service_tier]" do
@@ -902,7 +902,7 @@ defmodule Tokengate.ProvidersTest do
         })
 
       assert %{exclusive_to_group_id: [msg]} = errors_on(changeset)
-      assert msg =~ "exclusivo"
+      assert msg =~ "exclusive"
     end
 
     test "un segundo exclusivo del mismo miembro y modelo es rechazado" do
@@ -931,7 +931,7 @@ defmodule Tokengate.ProvidersTest do
         })
 
       assert %{exclusive_to_group_member_id: [msg]} = errors_on(changeset)
-      assert msg =~ "exclusivo"
+      assert msg =~ "exclusive"
     end
 
     test "exclusivos de grupos DISTINTOS para el mismo modelo siguen permitidos" do

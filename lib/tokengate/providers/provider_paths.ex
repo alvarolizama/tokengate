@@ -27,25 +27,27 @@ defmodule Tokengate.Providers.ProviderPaths do
 
   alias Tokengate.Providers.Catalog
 
+  use Gettext, backend: TokengateWeb.Gettext
+
   # The service vocabulary. `key` is what `providers.path_overrides` stores and
   # what the Capacidades modal renders; `path_key` is the atom the code tier
   # (`Catalog.@customizations` `:paths`) uses; `default` is the generic
   # OpenAI-compatible suffix. Order is the order the modal displays them in.
   @services [
     %{key: "chat", path_key: :chat, label: "Chat / completions", default: "/chat/completions"},
-    %{key: "models", path_key: :models, label: "Catálogo de modelos", default: "/models"},
+    %{key: "models", path_key: :models, label: "Models catalog", default: "/models"},
     %{key: "embeddings", path_key: :embeddings, label: "Embeddings", default: "/embeddings"},
     %{key: "rerank", path_key: :rerank, label: "Rerank", default: "/rerank"},
     %{
       key: "stt",
       path_key: :stt,
-      label: "Transcripción (audio → texto)",
+      label: "Transcription (audio → text)",
       default: "/audio/transcriptions"
     },
-    %{key: "tts", path_key: :tts, label: "Voz (texto → audio)", default: "/audio/speech"},
-    %{key: "image", path_key: :image, label: "Imágenes", default: "/images/generations"},
+    %{key: "tts", path_key: :tts, label: "Speech (text → audio)", default: "/audio/speech"},
+    %{key: "image", path_key: :image, label: "Images", default: "/images/generations"},
     %{key: "video", path_key: :video, label: "Videos", default: "/videos"},
-    %{key: "music", path_key: :music, label: "Música", default: "/music/generations"}
+    %{key: "music", path_key: :music, label: "Music", default: "/music/generations"}
   ]
 
   @keys Enum.map(@services, & &1.key)
@@ -56,7 +58,16 @@ defmodule Tokengate.Providers.ProviderPaths do
   Used to render the Capacidades modal and to validate `path_overrides`.
   """
   @spec services() :: [%{key: String.t(), label: String.t(), default: String.t()}]
-  def services, do: Enum.map(@services, &Map.take(&1, [:key, :label, :default]))
+  # Las etiquetas de `@services` son msgid en inglés (data estática: `gettext/1`,
+  # que es un macro, no puede evaluarse en un atributo de módulo): se traducen
+  # aquí, al construir la lista que consume el selector.
+  def services do
+    Enum.map(@services, fn entry ->
+      entry
+      |> Map.take([:key, :label, :default])
+      |> Map.update!(:label, &TokengateWeb.Gettext.translate/1)
+    end)
+  end
 
   @doc "Valid `path_overrides` keys."
   @spec keys() :: [String.t()]
@@ -143,7 +154,10 @@ defmodule Tokengate.Providers.ProviderPaths do
             :error ->
               {:halt,
                {:error,
-                "El path de «#{entry.label}» debe empezar con / o ser una URL http(s) absoluta, o quedar vacío para heredar el default."}}
+                gettext(
+                  "The path of “%{label}” must start with / or be an absolute http(s) URL, or be empty to inherit the default.",
+                  label: entry.label
+                )}}
           end
       end
     end)

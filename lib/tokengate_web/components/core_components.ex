@@ -542,8 +542,8 @@ defmodule TokengateWeb.CoreComponents do
         disabled={model.id in @locked_ids}
         title={
           cond do
-            model.id in @locked_ids -> "Otorgado por tu perfil de límites"
-            model.id in @denied_ids -> "Quitado para este miembro (clic para restaurar)"
+            model.id in @locked_ids -> gettext("Granted by your limit profile")
+            model.id in @denied_ids -> gettext("Removed for this member (click to restore)")
             model.id in @extra_ids -> "Extra individual"
             true -> nil
           end

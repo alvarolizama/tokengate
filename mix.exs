@@ -99,6 +99,7 @@ defmodule Tokengate.MixProject do
         "deps.unlock --unused",
         "deps.audit",
         "format",
+        "gettext.extract --check-up-to-date",
         "test"
       ]
     ]

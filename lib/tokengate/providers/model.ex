@@ -66,7 +66,7 @@ defmodule Tokengate.Providers.Model do
     |> validate_required([:name, :context_window])
     |> validate_inclusion(:model_type, @model_types)
     |> validate_format(:icon, @icon_format,
-      message: "debe ser un nombre de hero icon, p. ej. hero-cpu-chip"
+      message: "must be a hero icon name, e.g. hero-cpu-chip"
     )
     |> normalize_icon()
     |> unique_constraint(:name)

@@ -60,7 +60,7 @@ defmodule Tokengate.Credits.Topup do
     |> validate_exactly_one_subject()
     |> check_constraint(:user_id,
       name: :credit_topups_exactly_one_subject,
-      message: "debe tener exactamente un dueño (usuario o servicio)"
+      message: "must have exactly one owner (user or service)"
     )
     |> assoc_constraint(:user)
     |> assoc_constraint(:service)
@@ -103,7 +103,7 @@ defmodule Tokengate.Credits.Topup do
     if owners == 1 do
       changeset
     else
-      add_error(changeset, :user_id, "debe tener exactamente un dueño (usuario o servicio)")
+      add_error(changeset, :user_id, "must have exactly one owner (user or service)")
     end
   end
 

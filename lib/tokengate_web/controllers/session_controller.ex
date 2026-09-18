@@ -32,7 +32,7 @@ defmodule TokengateWeb.SessionController do
       # Render the login template. `render/2` infers the `:new` template
       # from this controller's `SessionHTML` module.
       conn
-      |> assign(:page_title, "Iniciar sesión · Tokengate")
+      |> assign(:page_title, gettext("Sign in") <> " · Tokengate")
       |> assign(:google_oauth_configured, TokengateWeb.OAuth.Google.configured?())
       |> render(:new)
     end
@@ -56,7 +56,7 @@ defmodule TokengateWeb.SessionController do
         conn
         |> configure_session(renew: true)
         |> put_session(:user_id, user.id)
-        |> put_flash(:info, "Sesión iniciada.")
+        |> put_flash(:info, gettext("Signed in."))
         |> redirect(to: "/dashboard")
 
       {:error, reason} ->
@@ -71,10 +71,10 @@ defmodule TokengateWeb.SessionController do
         })
 
         conn
-        |> put_flash(:error, "Credenciales inválidas.")
+        |> put_flash(:error, gettext("Invalid credentials."))
         |> assign(:email, email)
         |> assign(:google_oauth_configured, TokengateWeb.OAuth.Google.configured?())
-        |> assign(:page_title, "Iniciar sesión · Tokengate")
+        |> assign(:page_title, gettext("Sign in") <> " · Tokengate")
         |> render(:new)
     end
   end
@@ -89,7 +89,7 @@ defmodule TokengateWeb.SessionController do
 
     conn
     |> clear_session()
-    |> put_flash(:info, "Sesión cerrada.")
+    |> put_flash(:info, gettext("Signed out."))
     |> redirect(to: "/login")
   end
 
@@ -113,17 +113,20 @@ defmodule TokengateWeb.SessionController do
     cond do
       is_nil(admin) ->
         conn
-        |> put_flash(:error, "Debes iniciar sesión para continuar.")
+        |> put_flash(:error, gettext("You must sign in to continue."))
         |> redirect(to: "/login")
 
       get_session(conn, :impersonator_id) ->
         conn
-        |> put_flash(:error, "Ya estás viendo como otro usuario. Vuelve a tu cuenta primero.")
+        |> put_flash(
+          :error,
+          gettext("You are already viewing as another user. Go back to your account first.")
+        )
         |> redirect(to: "/dashboard")
 
       admin.global_role != "admin" ->
         conn
-        |> put_flash(:error, "No tienes permisos para impersonar usuarios.")
+        |> put_flash(:error, gettext("You do not have permission to impersonate users."))
         |> redirect(to: "/dashboard")
 
       true ->
@@ -133,7 +136,7 @@ defmodule TokengateWeb.SessionController do
 
   defp do_impersonate(conn, _admin, nil) do
     conn
-    |> put_flash(:error, "Usuario no encontrado.")
+    |> put_flash(:error, gettext("User not found."))
     |> redirect(to: "/access/users")
   end
 
@@ -147,7 +150,7 @@ defmodule TokengateWeb.SessionController do
   defp do_impersonate(conn, admin, target) do
     if root_admin?(target) do
       conn
-      |> put_flash(:error, "No se puede impersonar al administrador principal.")
+      |> put_flash(:error, gettext("The root administrator cannot be impersonated."))
       |> redirect(to: "/access/users")
     else
       {:ok, _} =
@@ -159,7 +162,7 @@ defmodule TokengateWeb.SessionController do
       |> configure_session(renew: true)
       |> put_session(:impersonator_id, admin.id)
       |> put_session(:user_id, target.id)
-      |> put_flash(:info, "Ahora estás viendo como #{target.email}.")
+      |> put_flash(:info, gettext("You are now viewing as %{email}.", email: target.email))
       |> redirect(to: "/dashboard")
     end
   end
@@ -172,7 +175,7 @@ defmodule TokengateWeb.SessionController do
     case get_session(conn, :impersonator_id) do
       nil ->
         conn
-        |> put_flash(:error, "No estás impersonando a ningún usuario.")
+        |> put_flash(:error, gettext("You are not impersonating any user."))
         |> redirect(to: "/dashboard")
 
       impersonator_id ->

@@ -30,6 +30,10 @@ defmodule TokengateWeb.SettingsLiveTest do
         global_role: role
       })
 
+    # Este archivo afirma textos en español de la página; el idioma por defecto
+    # de la UI es inglés, así que el usuario arranca en español.
+    {:ok, user} = Accounts.update_user_locale(user, "es")
+
     %{user: user, password: "password-secret-#{u}1"}
   end
 

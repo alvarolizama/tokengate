@@ -89,8 +89,8 @@ defmodule TokengateWeb.ProfileModal do
         phx-click="open_profile"
         phx-target={@myself}
         class="avatar avatar-placeholder cursor-pointer rounded-full transition-shadow hover:ring-2 hover:ring-primary/40 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none"
-        aria-label="Abrir mi cuenta"
-        title="Mi cuenta"
+        aria-label={gettext("Open my account")}
+        title={gettext("My account")}
       >
         <span class="flex h-9 w-9 items-center justify-center bg-primary text-primary-content rounded-full">
           <span class="text-sm font-semibold">{@initials}</span>
@@ -122,7 +122,7 @@ defmodule TokengateWeb.ProfileModal do
             </div>
 
             <form method="dialog">
-              <button class="btn btn-ghost btn-sm btn-circle" aria-label="Cerrar">
+              <button class="btn btn-ghost btn-sm btn-circle" aria-label={gettext("Close")}>
                 <.icon name="hero-x-mark" class="w-4 h-4" />
               </button>
             </form>
@@ -131,24 +131,24 @@ defmodule TokengateWeb.ProfileModal do
           <div class="space-y-4 px-6 pt-5 pb-6">
             <div :if={@saved?} id="profile-password-saved" class="alert alert-success text-sm">
               <.icon name="hero-check-circle" class="w-4 h-4 shrink-0" />
-              <span>Contraseña actualizada.</span>
+              <span>{gettext("Password updated.")}</span>
             </div>
 
             <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
-              <dt class="text-xs tracking-wide text-base-content/50 uppercase">Nombre</dt>
+              <dt class="text-xs tracking-wide text-base-content/50 uppercase">{gettext("Name")}</dt>
               <dd class="text-right font-medium">{@user.name}</dd>
               <dt class="text-xs tracking-wide text-base-content/50 uppercase">Email</dt>
               <dd class="truncate text-right font-mono">{@user.email}</dd>
-              <dt class="text-xs tracking-wide text-base-content/50 uppercase">Rol</dt>
+              <dt class="text-xs tracking-wide text-base-content/50 uppercase">{gettext("Role")}</dt>
               <dd class="text-right">{role_label(@user.global_role)}</dd>
             </dl>
 
             <div class="divider my-0"></div>
 
             <div>
-              <h4 class="font-semibold">Cambiar contraseña</h4>
+              <h4 class="font-semibold">{gettext("Change password")}</h4>
               <p class="mt-1 text-xs text-base-content/50">
-                Mínimo 12 caracteres, con al menos una letra y un dígito.
+                {gettext("At least 12 characters, with a letter and a digit.")}
               </p>
             </div>
 
@@ -162,21 +162,21 @@ defmodule TokengateWeb.ProfileModal do
               <.input
                 field={@form[:current_password]}
                 type="password"
-                label="Contraseña actual"
+                label={gettext("Current password")}
                 required
                 autocomplete="current-password"
               />
               <.input
                 field={@form[:password]}
                 type="password"
-                label="Nueva contraseña"
+                label={gettext("New password")}
                 required
                 autocomplete="new-password"
               />
 
               <div class="flex justify-end">
                 <button type="submit" class="btn btn-primary btn-sm" id="save-password-btn">
-                  Guardar contraseña
+                  {gettext("Save password")}
                 </button>
               </div>
             </.form>
@@ -184,7 +184,7 @@ defmodule TokengateWeb.ProfileModal do
         </div>
 
         <form method="dialog" class="modal-backdrop">
-          <button>Cerrar</button>
+          <button>{gettext("Close")}</button>
         </form>
       </dialog>
 
@@ -221,7 +221,7 @@ defmodule TokengateWeb.ProfileModal do
   # comparten shell y por tanto comparten documento.
   defp password_form(user), do: to_form(Accounts.change_user_password(user), as: :profile)
 
-  defp role_label("admin"), do: "Administrador"
-  defp role_label("user"), do: "Usuario"
+  defp role_label("admin"), do: gettext("Administrator")
+  defp role_label("user"), do: gettext("User")
   defp role_label(other), do: String.capitalize(other || "")
 end

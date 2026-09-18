@@ -36,7 +36,7 @@ defmodule TokengateWeb.LabsLive do
 
     socket =
       socket
-      |> assign(:page_title, "Labs · Tokengate")
+      |> assign(:page_title, gettext("Labs") <> " · Tokengate")
       |> assign(:is_admin, user && user.global_role == "admin")
       |> assign(:form, nil)
       |> assign(:editing_key, nil)
@@ -135,14 +135,14 @@ defmodule TokengateWeb.LabsLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Lab «#{lab.name}» eliminado.")
+         |> put_flash(:info, gettext("Lab “%{name}” deleted.", name: lab.name))
          |> assign(:delete_target, nil)
          |> load_labs()}
 
       {:error, :builtin} ->
         {:noreply,
          socket
-         |> put_flash(:error, "Un lab de catálogo no se puede eliminar.")
+         |> put_flash(:error, gettext("A catalog lab cannot be deleted."))
          |> assign(:delete_target, nil)}
     end
   end
@@ -156,7 +156,7 @@ defmodule TokengateWeb.LabsLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Lab «#{lab.name}» creado.")
+         |> put_flash(:info, gettext("Lab “%{name}” created.", name: lab.name))
          |> assign(:form, nil)
          |> assign(:editing_key, nil)
          |> load_labs()}
@@ -175,7 +175,7 @@ defmodule TokengateWeb.LabsLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Lab «#{lab.name}» actualizado.")
+         |> put_flash(:info, gettext("Lab “%{name}” updated.", name: lab.name))
          |> assign(:form, nil)
          |> assign(:editing_key, nil)
          |> load_labs()}
@@ -198,8 +198,8 @@ defmodule TokengateWeb.LabsLive do
     >
       <div class="space-y-6">
         <.header>
-          Labs
-          <:subtitle>Quién construyó cada modelo. Los builtin vienen de models.dev.</:subtitle>
+          {gettext("Labs")}
+          <:subtitle>{gettext("Who built each model. Builtins come from models.dev.")}</:subtitle>
           <:actions>
             <.button phx-click="new_lab" id="new-lab-btn">
               <.icon name="hero-plus" class="w-4 h-4" /> Nuevo lab custom
@@ -213,7 +213,7 @@ defmodule TokengateWeb.LabsLive do
           :if={@labs_empty?}
           id="labs-empty"
           icon="hero-beaker"
-          message="No hay labs que mostrar."
+          message={gettext("No labs to show.")}
         />
 
         <div id="labs" phx-update="stream" class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -257,7 +257,9 @@ defmodule TokengateWeb.LabsLive do
                 <div class="mt-3 flex items-center gap-4 text-xs text-base-content/60">
                   <span class="flex items-center gap-1">
                     <.icon name="hero-cpu-chip" class="w-3.5 h-3.5" />
-                    {lab.model_count} {if lab.model_count == 1, do: "modelo", else: "modelos"}
+                    {lab.model_count} {if lab.model_count == 1,
+                      do: gettext("model"),
+                      else: gettext("models")}
                   </span>
                   <span :if={lab.last_updated} class="flex items-center gap-1">
                     <.icon name="hero-calendar-days" class="w-3.5 h-3.5" />
@@ -266,9 +268,9 @@ defmodule TokengateWeb.LabsLive do
                   <span
                     :if={lab.source != "custom"}
                     class="ml-auto text-[11px] uppercase tracking-wide text-base-content/30"
-                    title="La identidad de un lab de catálogo la escribe el refresh de models.dev"
+                    title={gettext("A catalog lab identity is written by the models.dev refresh")}
                   >
-                    De catálogo
+                    {gettext("From catalog")}
                   </span>
                 </div>
               </div>
@@ -285,10 +287,10 @@ defmodule TokengateWeb.LabsLive do
         width="max-w-2xl"
       >
         <h2 class="text-lg font-semibold mb-1">
-          {if @editing_key == :new, do: "Nuevo lab custom", else: "Editar lab"}
+          {if @editing_key == :new, do: gettext("New custom lab"), else: gettext("Edit lab")}
         </h2>
         <p class="text-xs text-base-content/60 mb-4">
-          El key es el identificador con el que los modelos se unen al lab: minúsculas, sin espacios.
+          {gettext("The key is the identifier models join the lab by: lowercase, no spaces.")}
         </p>
 
         <.form for={@form} id="lab-form" phx-submit="save_lab">
@@ -297,7 +299,7 @@ defmodule TokengateWeb.LabsLive do
               <.input
                 field={@form[:name]}
                 type="text"
-                label="Nombre"
+                label={gettext("Name")}
                 placeholder="Mi Laboratorio"
                 required
               />
@@ -305,12 +307,12 @@ defmodule TokengateWeb.LabsLive do
                 field={@form[:key]}
                 type="text"
                 label="Key"
-                placeholder="mi-lab"
+                placeholder={gettext("my-lab")}
                 disabled={@editing_key != :new}
                 hint={
                   if @editing_key == :new,
-                    do: "Slug único, ej. mi-lab",
-                    else: "El key no se puede cambiar: los modelos ya apuntan a él."
+                    do: gettext("Unique slug, e.g. my-lab"),
+                    else: gettext("The key cannot be changed: models already point to it.")
                 }
               />
               <.input
@@ -318,7 +320,7 @@ defmodule TokengateWeb.LabsLive do
                 type="url"
                 label="Logo (URL, opcional)"
                 placeholder="https://…/logo.svg"
-                hint="Si el lab no tiene logo remoto, se usa el icono de abajo."
+                hint={gettext("If the lab has no remote logo, the icon below is used.")}
               />
             </div>
 
@@ -326,13 +328,13 @@ defmodule TokengateWeb.LabsLive do
               <.input
                 field={@form[:icon]}
                 type="text"
-                label="Icono"
+                label={gettext("Icon")}
                 placeholder="hero-beaker"
-                hint="Nombre de hero icon, ej. hero-beaker. Se usa cuando no hay logo."
+                hint={gettext("Hero icon name, e.g. hero-beaker. Used when there is no logo.")}
               />
 
               <div class="fieldset mb-2">
-                <span class="label">Elegir de la paleta</span>
+                <span class="label">{gettext("Pick from the palette")}</span>
                 <div class="grid grid-cols-8 gap-1" id="lab-icon-picker">
                   <button
                     :for={icon <- @icon_choices}
@@ -353,12 +355,12 @@ defmodule TokengateWeb.LabsLive do
                   </button>
                 </div>
                 <p class="text-xs text-base-content/50 mt-1">
-                  Se usa cuando no hay logo. El logo, si lo hay, siempre gana.
+                  {gettext("Used when there is no logo. The logo, when present, always wins.")}
                 </p>
               </div>
 
               <div class="fieldset">
-                <span class="label">Vista previa</span>
+                <span class="label">{gettext("Preview")}</span>
                 <div
                   class="flex items-center justify-center rounded-lg border border-base-300 bg-base-200/40 h-16"
                   id="lab-mark-preview"
@@ -371,10 +373,10 @@ defmodule TokengateWeb.LabsLive do
 
           <div class="flex justify-end gap-2 mt-6">
             <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm" id="cancel-lab">
-              Cancelar
+              {gettext("Cancel")}
             </button>
             <button type="submit" class="btn btn-primary btn-sm" id="save-lab">
-              {if @editing_key == :new, do: "Crear lab", else: "Guardar cambios"}
+              {if @editing_key == :new, do: gettext("Create lab"), else: gettext("Save changes")}
             </button>
           </div>
         </.form>
@@ -382,15 +384,15 @@ defmodule TokengateWeb.LabsLive do
 
       <.admin_delete_modal
         id="delete-lab-modal"
-        title="Eliminar lab"
+        title={gettext("Delete lab")}
         target_label={@delete_target && @delete_target.name}
         target_span_id="delete-lab-target"
         confirm_event="delete_lab"
         confirm_value={@delete_target && @delete_target.key}
         confirm_button_id="confirm-delete-lab"
         cancel_button_id="cancel-delete-lab"
-        warning_title="Se elimina la marca del lab."
-        warning_intro="Los modelos no se tocan: sólo dejan de resolver a este lab."
+        warning_title={gettext("The lab mark is deleted.")}
+        warning_intro={gettext("Models are not touched: they just stop resolving to this lab.")}
       />
     </Layouts.dashboard>
     """
@@ -437,8 +439,8 @@ defmodule TokengateWeb.LabsLive do
       ]}
       title={
         if @lab.status == "stale",
-          do: "models.dev ya no publica este lab",
-          else: "Origen y estado del lab"
+          do: gettext("models.dev no longer publishes this lab"),
+          else: gettext("Lab source and status")
       }
     >
       {if @lab.status == "stale", do: "obsoleto", else: @lab.source}

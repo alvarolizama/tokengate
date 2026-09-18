@@ -88,7 +88,7 @@ defmodule Tokengate.Budgets.Exemptions do
 
   @doc "Label for an exemption's subject, for the admin UI."
   def subject_label(%Exemption{subject_type: "group", group: %{name: _}} = exemption),
-    do: "Perfil de límites: " <> subject_name(exemption)
+    do: TokengateWeb.Gettext.translate("Limit profile") <> ": " <> subject_name(exemption)
 
   def subject_label(%Exemption{subject_type: type} = exemption) when type in ["user", "service"],
     do: subject_name(exemption)
@@ -109,7 +109,10 @@ defmodule Tokengate.Budgets.Exemptions do
 
   @doc "Display label for an exemption's subject type."
   def subject_type_label(%Exemption{subject_type: "user"}), do: "Usuario"
-  def subject_type_label(%Exemption{subject_type: "group"}), do: "Perfil de límites"
+
+  def subject_type_label(%Exemption{subject_type: "group"}),
+    do: TokengateWeb.Gettext.translate("Limit profile")
+
   def subject_type_label(%Exemption{subject_type: "service"}), do: "Servicio"
   def subject_type_label(_), do: "—"
 end

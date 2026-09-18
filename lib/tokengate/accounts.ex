@@ -93,11 +93,11 @@ defmodule Tokengate.Accounts do
       |> Ecto.Changeset.change()
       |> Ecto.Changeset.foreign_key_constraint(:id,
         name: "services_group_id_fkey",
-        message: "el perfil de límites todavía tiene servicios asociados"
+        message: "the limit profile still has services associated"
       )
       |> Ecto.Changeset.foreign_key_constraint(:id,
         name: "observability_destinations_group_id_fkey",
-        message: "el perfil de límites todavía tiene destinos de observabilidad"
+        message: "the limit profile still has observability targets"
       )
       |> Repo.delete()
       |> case do
@@ -236,6 +236,16 @@ defmodule Tokengate.Accounts do
   def update_user_timezone(%User{} = user, timezone) when is_binary(timezone) do
     user
     |> User.timezone_changeset(%{timezone: timezone})
+    |> Repo.update()
+  end
+
+  @doc """
+  Updates a user's UI language preference (`users.locale`), set from the sidebar
+  selector. Returns `{:ok, user}` or `{:error, changeset}`.
+  """
+  def update_user_locale(%User{} = user, locale) when is_binary(locale) do
+    user
+    |> User.locale_changeset(%{locale: locale})
     |> Repo.update()
   end
 

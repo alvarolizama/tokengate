@@ -1035,7 +1035,7 @@ defmodule Tokengate.Metrics.RollupTest do
       at_16 = %{now | hour: 16, minute: 0, second: 0}
 
       # 2 a las 09 por OpenAI (una gratis y una de $1.50) + 1 por Azure; a las
-      # 16 una sin proveedor, que cae al label "sin proveedor".
+      # 16 una sin proveedor, que cae al centinela de datos "no provider".
       log_request(tm.id, at_09, %{provider_id: openai.id, provider_cost_usd: Decimal.new("0")})
 
       log_request(tm.id, at_09, %{
@@ -1068,7 +1068,7 @@ defmodule Tokengate.Metrics.RollupTest do
 
       h16 = Enum.find(rows, &(&1.hour == 16))
       assert h16.total_requests == 1
-      assert Enum.map(h16.providers, & &1.provider_name) == ["sin proveedor"]
+      assert Enum.map(h16.providers, & &1.provider_name) == ["no provider"]
 
       # Las horas sin tráfico van zero-filled y sin proveedores: el eje de la
       # gráfica se dibuja siempre.

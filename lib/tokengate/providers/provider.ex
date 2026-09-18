@@ -133,7 +133,7 @@ defmodule Tokengate.Providers.Provider do
   # block every single request instead of lifting the gate.
   defp validate_limits(changeset) do
     Enum.reduce(@limit_fields, changeset, fn field, acc ->
-      validate_number(acc, field, greater_than: 0, message: "debe ser mayor a 0")
+      validate_number(acc, field, greater_than: 0, message: "must be greater than 0")
     end)
   end
 

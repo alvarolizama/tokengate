@@ -36,9 +36,10 @@ defmodule Tokengate.Metrics.Rollup do
   # Etiqueta de los logs sin `provider_id` en el desglose horario por
   # proveedor. Tiene que ser la MISMA que la de En vivo
   # (`Logs.today_usage_by_hour_provider/0`): las dos pestañas dibujan la
-  # misma tarjeta y una barra "sin proveedor" no puede cambiar de nombre al
-  # cambiar de pestaña.
-  @no_provider "sin proveedor"
+  # misma tarjeta y una barra "no provider" (centinela de datos; se traduce al
+  # pintar con `TokengateWeb.StatsHelpers.provider_label/1`) no puede cambiar de
+  # nombre al cambiar de pestaña.
+  @no_provider "no provider"
 
   # -----------------------------------------------------------------------
   # hourly_series/2

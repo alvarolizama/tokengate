@@ -1,26 +1,121 @@
-## Traducciones del vocabulario de presupuesto (dominio `default`).
+## Traducciones al español del dominio `default`.
 ##
 ## Los `msgid` están en INGLÉS (idioma fuente, el que se escribe en el código) y
-## el `msgstr` en español, que es el idioma por defecto de la UI
-## (`config :tokengate, TokengateWeb.Gettext, default_locale: "es"`).
+## el `msgstr` en español. El idioma por defecto de la UI es inglés
+## (`config :tokengate, TokengateWeb.Gettext, default_locale: "en"`) y cada
+## usuario puede cambiarlo con el selector del sidebar (`users.locale`).
 ##
 ## Vocabulario: **budget** (presupuesto) es el techo mensual del sujeto; un
 ## «monthly budget» es el presupuesto mensual que un usuario hereda de su
-## contenedor; un **top-up** es crédito extra de un solo uso.
+## contenedor; un **top-up** es crédito extra de un solo uso; un **limit
+## profile** es el contenedor del techo mensual (antes «sub»/«grupo»).
+##
+## Las etiquetas de idioma del selector NO están aquí: se pintan como bandera +
+## código ISO ("🇬🇧 EN"), que se lee igual en cualquier idioma.
 msgid ""
 msgstr ""
 "Language: es\n"
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 
-## Sidebar y páginas de la sección
+## Preferencias del usuario (selector al pie del sidebar)
+msgid "Language"
+msgstr "Idioma"
+
+msgid "Timezone"
+msgstr "Zona horaria"
+
+## Chrome del dashboard: sidebar y topbar
+msgid "Dashboard"
+msgstr "Dashboard"
+
+msgid "Supervised services"
+msgstr "Servicios supervisados"
+
+msgid "Stats"
+msgstr "Estadísticas"
+
+msgid "Calculator"
+msgstr "Calculadora"
+
+msgid "Catalog"
+msgstr "Catálogo"
+
+msgid "Labs"
+msgstr "Labs"
+
+msgid "Providers"
+msgstr "Proveedores"
+
+msgid "Models"
+msgstr "Modelos"
+
+msgid "Access"
+msgstr "Acceso"
+
+msgid "Services"
+msgstr "Servicios"
+
+msgid "Users"
+msgstr "Usuarios"
+
+msgid "Operations"
+msgstr "Operaciones"
+
+msgid "Monitoring"
+msgstr "Monitoring"
+
+msgid "Audit"
+msgstr "Auditoría"
+
+msgid "Observability"
+msgstr "Observabilidad"
+
+msgid "Maintenance"
+msgstr "Mantenimiento"
+
+msgid "Open menu"
+msgstr "Abrir menú"
+
+msgid "Close menu"
+msgstr "Cerrar menú"
+
+msgid "Sign out"
+msgstr "Salir"
+
+msgid "Sign out?"
+msgstr "¿Cerrar sesión?"
+
+msgid "Administrator"
+msgstr "Administrador"
+
+msgid "User"
+msgstr "Usuario"
+
+## Banner de impersonación
+msgid "Viewing as"
+msgstr "Viendo como"
+
+msgid "session of"
+msgstr "sesión de"
+
+msgid "Back to my account"
+msgstr "Volver a mi cuenta"
+
+## Sidebar y páginas de la sección de presupuesto
 msgid "Budget"
 msgstr "Presupuesto"
 
-msgid "Monthly budgets"
-msgstr "Presupuestos mensuales"
+msgid "Limit profiles"
+msgstr "Perfiles de límites"
 
 msgid "Monthly budget"
 msgstr "Presupuesto mensual"
+
+msgid "Top-ups"
+msgstr "Top-ups"
+
+msgid "Global daily cap"
+msgstr "Tope diario global"
 
 ## Estado de un sujeto sin presupuesto mensual
 msgid "No budget"
@@ -28,3 +123,2830 @@ msgstr "Sin presupuesto"
 
 msgid "No monthly budget"
 msgstr "Sin presupuesto"
+
+## Acciones y navegación genéricas
+msgid "Actions"
+msgstr "Acciones"
+
+msgid "close"
+msgstr "cerrar"
+
+## Estados de conexión (flash de LiveView)
+msgid "We can't find the internet"
+msgstr "No encontramos conexión a internet"
+
+msgid "Attempting to reconnect"
+msgstr "Reintentando conectar"
+
+msgid "Something went wrong!"
+msgstr "¡Algo salió mal!"
+
+## Catálogo → Proveedores (providers_live.ex)
+
+msgid " (leave empty = unchanged)"
+msgstr " (dejar vacío = sin cambios)"
+
+msgid "%{count} credentials"
+msgstr "%{count} credenciales"
+
+msgid "%{name} is not materialized yet. Try again."
+msgstr "%{name} todavía no está materializado. Reintenta."
+
+msgid "%{shown} of %{total}"
+msgstr "%{shown} de %{total}"
+
+msgid "+ path; empty = adapter default."
+msgstr "+ path; vacío = default del adapter."
+
+msgid "API key"
+msgstr "API key"
+
+msgid "Active"
+msgstr "Activo"
+
+msgid "Adapter default"
+msgstr "Default del adapter"
+
+msgid "Add an API key to this provider"
+msgstr "Añadir una API key a este proveedor"
+
+msgid "Add provider"
+msgstr "Agregar proveedor"
+
+msgid "Alias"
+msgstr "Alias"
+
+msgid "Breaker"
+msgstr "Breaker"
+
+msgid "Cancel"
+msgstr "Cancelar"
+
+msgid "Cannot delete: the provider is in use by one or more models."
+msgstr "No se puede eliminar: el proveedor está en uso por uno o más modelos."
+
+msgid "Capabilities"
+msgstr "Capacidades"
+
+msgid "Catalog identity — not editable. Only the limits are edited here."
+msgstr "Identidad del catálogo — no editable. Aquí solo se editan los límites."
+
+msgid "Catalog path · default: %{default}"
+msgstr "Path del catálogo · default: %{default}"
+
+msgid "Catalog providers cannot be deleted — deactivate it to take it out of the routing (it is recreated on boot)."
+msgstr "Los proveedores del catálogo no se pueden eliminar — desactívalo para sacarlo del routing (vuelve a crearse en cada arranque)."
+
+msgid "Close"
+msgstr "Cerrar"
+
+msgid "Closed"
+msgstr "Cerrado"
+
+msgid "Concurrent cap per user. Empty = no limit."
+msgstr "Tope simultáneo por usuario. Vacío = sin límite."
+
+msgid "Concurrent requests across the provider. Empty = no limit."
+msgstr "Requests simultáneos en todo el proveedor. Vacío = sin límite."
+
+msgid "Configure the path of each capability (base_url + path)"
+msgstr "Configurar el path de cada capacidad (base_url + path)"
+
+msgid "Could not delete the credential."
+msgstr "No se pudo eliminar la credencial."
+
+msgid "Could not delete the provider."
+msgstr "No se pudo eliminar el proveedor."
+
+msgid "Could not reactivate the credential."
+msgstr "No se pudo reactivar la credencial."
+
+msgid "Could not save the paths — %{details}"
+msgstr "No se pudieron guardar los paths — %{details}"
+
+msgid "Could not update the credential."
+msgstr "No se pudo actualizar la credencial."
+
+msgid "Could not update the provider."
+msgstr "No se pudo actualizar el proveedor."
+
+msgid "Credentials"
+msgstr "Credenciales"
+
+msgid "Custom provider"
+msgstr "Proveedor custom"
+
+msgid "Delete"
+msgstr "Eliminar"
+
+msgid "Delete this credential?"
+msgstr "¿Eliminar esta credencial?"
+
+msgid "Delete this provider?"
+msgstr "¿Eliminar este proveedor?"
+
+msgid "Disable"
+msgstr "Desactivar"
+
+msgid "Disabled"
+msgstr "Desactivado"
+
+msgid "Docs"
+msgstr "Docs"
+
+msgid "Documentation for %{name}"
+msgstr "Documentación de %{name}"
+
+msgid "Edit"
+msgstr "Editar"
+
+msgid "Edit credential"
+msgstr "Editar credencial"
+
+msgid "Edit provider"
+msgstr "Editar proveedor"
+
+msgid "Enable"
+msgstr "Activar"
+
+msgid "In flight"
+msgstr "En vuelo"
+
+msgid "It resolves as"
+msgstr "Se resuelve como"
+
+msgid "Key"
+msgstr "Key"
+
+msgid "LLM providers and credentials"
+msgstr "Providers de LLM y credenciales"
+
+msgid "Limits"
+msgstr "Límites"
+
+msgid "Max concurrency"
+msgstr "Max concurrencia"
+
+msgid "Max concurrency per user"
+msgstr "Max concurrencia por usuario"
+
+msgid "Max wait per response. Empty = global default (%{ms} ms)."
+msgstr "Tiempo máximo de espera por respuesta. Vacío = default global (%{ms} ms)."
+
+msgid "Name"
+msgstr "Nombre"
+
+msgid "Name to identify this credential."
+msgstr "Nombre para identificar esta credencial."
+
+msgid "New credential"
+msgstr "Nueva credencial"
+
+msgid "New provider"
+msgstr "Nuevo proveedor"
+
+msgid "No provider matches the search."
+msgstr "Ningún proveedor coincide con la búsqueda."
+
+msgid "No providers yet."
+msgstr "No hay proveedores todavía."
+
+msgid "Only credentials in error can be reactivated."
+msgstr "Solo se pueden reactivar credenciales en error."
+
+msgid "Only if you want to change it."
+msgstr "Solo si quieres cambiarla."
+
+msgid "Open"
+msgstr "Abierto"
+
+msgid "Own override · default: %{default}"
+msgstr "Override propio · default: %{default}"
+
+msgid "Path of each service of"
+msgstr "Path de cada servicio de"
+
+msgid "Paths reset: every capability falls back to its default."
+msgstr "Paths restablecidos: cada capacidad usa su default."
+
+msgid "Production"
+msgstr "Producción"
+
+msgid "Provider activated."
+msgstr "Proveedor activado."
+
+msgid "Provider created."
+msgstr "Proveedor creado."
+
+msgid "Provider deactivated."
+msgstr "Proveedor desactivado."
+
+msgid "Provider deleted."
+msgstr "Proveedor eliminado."
+
+msgid "Provider limits"
+msgstr "Límites del proveedor"
+
+msgid "Provider max concurrency"
+msgstr "Concurrencia máxima del proveedor"
+
+msgid "Provider updated."
+msgstr "Proveedor actualizado."
+
+msgid "Reactivate"
+msgstr "Reactivar"
+
+msgid "Receive timeout"
+msgstr "Timeout de recepción"
+
+msgid "Requests per minute"
+msgstr "Requests por minuto"
+
+msgid "Requests per minute across the provider. Empty = no limit."
+msgstr "Requests por minuto en todo el proveedor. Vacío = sin límite."
+
+msgid "Save"
+msgstr "Guardar"
+
+msgid "Search provider or id (openrouter, fireworks, qwen…)"
+msgstr "Buscar proveedor o id (openrouter, fireworks, qwen…)"
+
+msgid "The delete failed in the database (timeout or lock). Try again; if it persists, contact an administrator."
+msgstr "La eliminación falló en la base de datos (timeout o bloqueo). Reintenta; si persiste, contacta al administrador."
+
+msgid "The token the provider gives you (sk-...)."
+msgstr "El token que entrega el proveedor (sk-...)."
+
+msgid "They apply to every API key of this provider, which inherits them. Empty = no limit."
+msgstr "Se aplican a todas las API keys de este proveedor, que los heredan. Vacío = sin límite."
+
+msgid "This credential is in error. Use Reactivate."
+msgstr "Esta credencial está en error. Usa Reactivar."
+
+msgid "Unique id of the custom provider."
+msgstr "Identificador único del proveedor custom."
+
+msgid "Unknown provider."
+msgstr "Proveedor desconocido."
+
+msgid "Update"
+msgstr "Actualizar"
+
+msgid "models.dev catalog (%{count} providers). Picking one opens its credential."
+msgstr "Catálogo de models.dev (%{count} proveedores). Elegir uno abre su credencial."
+
+msgid "sk-... (leave empty to keep)"
+msgstr "sk-... (dejar vacío para mantener)"
+
+## Panel de claves (keys_panel.ex) y etiquetas de zona horaria
+
+msgid "%{count} keys"
+msgstr "%{count} claves"
+
+msgid "Clear sticky"
+msgstr "Limpiar sticky"
+
+msgid "Clear the subject sticky routes (all its keys)"
+msgstr "Limpiar sticky routes del sujeto (todas sus keys)"
+
+msgid "Copy it now: it is not shown again."
+msgstr "Cópiala ahora: no se vuelve a mostrar."
+
+msgid "Done"
+msgstr "Listo"
+
+msgid "Forces its next request to re-evaluate providers instead of staying glued to a degraded one."
+msgstr "Fuerza que su próxima petición re-evalúe proveedores en vez de quedarse pegado a uno degradado."
+
+msgid "Manage API keys"
+msgstr "Gestionar claves API"
+
+msgid "Revoke"
+msgstr "Revocar"
+
+msgid "Revoke this key"
+msgstr "Revocar esta clave"
+
+msgid "Revoke this key? The token stops working."
+msgstr "¿Revocar esta clave? El token deja de funcionar."
+
+msgid "Revoked"
+msgstr "Revocada"
+
+msgid "Sticky routing"
+msgstr "Ruteo sticky"
+
+msgid "no label"
+msgstr "sin etiqueta"
+
+msgid "no usage"
+msgstr "sin consumo"
+
+## Etiquetas de la zona horaria y textos de attr (lookup en runtime)
+
+msgid "America"
+msgstr "América"
+
+msgid "Europe"
+msgstr "Europa"
+
+msgid "Other"
+msgstr "Otros"
+
+msgid "Mexico City (CDT)"
+msgstr "Ciudad de México (CDT)"
+
+msgid "Mexico City (CST)"
+msgstr "Ciudad de México (CST)"
+
+msgid "New York (EST)"
+msgstr "Nueva York (EST)"
+
+msgid "Los Angeles (PST)"
+msgstr "Los Ángeles (PST)"
+
+msgid "Chicago (CST)"
+msgstr "Chicago (CST)"
+
+msgid "Denver (MST)"
+msgstr "Denver (MST)"
+
+msgid "Bogota"
+msgstr "Bogotá"
+
+msgid "Lima"
+msgstr "Lima"
+
+msgid "Buenos Aires"
+msgstr "Buenos Aires"
+
+msgid "Santiago"
+msgstr "Santiago"
+
+msgid "Sao Paulo"
+msgstr "São Paulo"
+
+msgid "Caracas"
+msgstr "Caracas"
+
+msgid "Guadalajara"
+msgstr "Guadalajara"
+
+msgid "Madrid"
+msgstr "Madrid"
+
+msgid "Lisbon"
+msgstr "Lisboa"
+
+msgid "London"
+msgstr "Londres"
+
+msgid "Paris"
+msgstr "París"
+
+msgid "Berlin"
+msgstr "Berlín"
+
+msgid "Rome"
+msgstr "Roma"
+
+msgid "Amsterdam"
+msgstr "Ámsterdam"
+
+msgid "Portugal (Azores)"
+msgstr "Portugal (Azores)"
+
+msgid "UTC"
+msgstr "UTC"
+
+msgid "This subject has no active keys."
+msgstr "Este sujeto no tiene claves activas."
+
+msgid "Conc./user"
+msgstr "Conc./usuario"
+
+## ACCESO → Usuarios (users_live, admin_components, profile_modal)
+
+msgid "A user belongs to ONE monthly budget. Changing it replaces the previous one."
+msgstr "Un usuario pertenece a UN solo presupuesto mensual. Cambiarlo reemplaza el anterior."
+
+msgid "A user belongs to ONE monthly budget: the inherited spending cap comes from here."
+msgstr "Un usuario pertenece a UN solo presupuesto mensual: su techo de gasto heredado sale de aquí."
+
+msgid "A user can have several active keys, each with its own label."
+msgstr "Un usuario puede tener varias claves activas, cada una con su etiqueta."
+
+msgid "API keys"
+msgstr "Claves API"
+
+msgid "Absolute cap; empty = inherits from the limit profile."
+msgstr "Límite absoluto; vacío = hereda del perfil de límites."
+
+msgid "Activate user"
+msgstr "Activar usuario"
+
+msgid "Activate user?"
+msgstr "¿Activar usuario?"
+
+msgid "All consumption history (request_logs)"
+msgstr "Todo el historial de consumo (request_logs)"
+
+msgid "All their data will be permanently erased:"
+msgstr "Se borrará permanentemente toda su data:"
+
+msgid "Are you sure you want to delete"
+msgstr "¿Seguro que quieres eliminar a"
+
+msgid "At least 12 characters, with a letter and a digit."
+msgstr "Mínimo 12 caracteres, con al menos una letra y un dígito."
+
+msgid "At least 12 characters, with letters and digits."
+msgstr "Mínimo 12 caracteres, debe incluir letras y números."
+
+msgid "Audit logs will lose the user attribution"
+msgstr "Los logs de auditoría perderán la atribución al usuario"
+
+msgid "Change password"
+msgstr "Cambiar contraseña"
+
+msgid "Concurrency"
+msgstr "Concurrencia"
+
+msgid "Could not change the status."
+msgstr "No se pudo cambiar el estado."
+
+msgid "Could not create the key."
+msgstr "No se pudo crear la clave."
+
+msgid "Could not delete the user."
+msgstr "No se pudo eliminar el usuario."
+
+msgid "Could not revoke the key."
+msgstr "No se pudo revocar la clave."
+
+msgid "Create"
+msgstr "Crear"
+
+msgid "Current password"
+msgstr "Contraseña actual"
+
+msgid "Delete user"
+msgstr "Eliminar usuario"
+
+msgid "Edit user"
+msgstr "Editar usuario"
+
+msgid "Email"
+msgstr "Correo"
+
+msgid "Full name"
+msgstr "Nombre completo"
+
+msgid "Key created. Copy it now: it is not shown again."
+msgstr "Clave creada. Cópiala ahora: no se vuelve a mostrar."
+
+msgid "Key not found."
+msgstr "Clave no encontrada."
+
+msgid "Key revoked."
+msgstr "Clave revocada."
+
+msgid "Keys"
+msgstr "Claves"
+
+msgid "Limit profile memberships"
+msgstr "Membresías de perfiles de límites"
+
+msgid "Manage the limit profile memberships"
+msgstr "Gestionar membresías del perfil de límites"
+
+msgid "Members"
+msgstr "Miembros"
+
+msgid "Memberships are managed from"
+msgstr "Las membresías se gestionan desde"
+
+msgid "Monthly cap (UTC month)"
+msgstr "Límite mensual (mes UTC)"
+
+msgid "My account"
+msgstr "Mi cuenta"
+
+msgid "New password"
+msgstr "Nueva contraseña"
+
+msgid "New user"
+msgstr "Nuevo usuario"
+
+msgid "Next page"
+msgstr "Página siguiente"
+
+msgid "No limit profiles created yet."
+msgstr "No hay perfiles de límites creados."
+
+msgid "No users yet."
+msgstr "No hay usuarios todavía."
+
+msgid "Open my account"
+msgstr "Abrir mi cuenta"
+
+msgid "Password"
+msgstr "Contraseña"
+
+msgid "Password updated."
+msgstr "Contraseña actualizada."
+
+msgid "Pick a role"
+msgstr "Selecciona un rol"
+
+msgid "Previous page"
+msgstr "Página anterior"
+
+msgid "Reset"
+msgstr "Restablecer"
+
+msgid "Reset password"
+msgstr "Restablecer contraseña"
+
+msgid "Role"
+msgstr "Rol"
+
+msgid "Save password"
+msgstr "Guardar contraseña"
+
+msgid "Search by name or email…"
+msgstr "Buscar por nombre o correo…"
+
+msgid "Status"
+msgstr "Estado"
+
+msgid "Sticky routes cleared for %{who}. Their next request will be re-routed."
+msgstr "Sticky routes limpiadas para %{who}. Su próxima petición se re-ruteará."
+
+msgid "Suspend user"
+msgstr "Suspender usuario"
+
+msgid "Suspend user?"
+msgstr "¿Suspender usuario?"
+
+msgid "Suspended"
+msgstr "Suspendido"
+
+msgid "System user management"
+msgstr "Gestión de usuarios del sistema"
+
+msgid "The root administrator cannot be deleted."
+msgstr "No se puede eliminar al administrador principal."
+
+msgid "The root administrator cannot be suspended."
+msgstr "No se puede suspender al administrador principal."
+
+msgid "This user has no active keys."
+msgstr "Este usuario no tiene claves activas."
+
+msgid "Total spend"
+msgstr "Gasto total"
+
+msgid "User activated."
+msgstr "Usuario activado."
+
+msgid "User created but the budget could not be assigned: %{errors}"
+msgstr "Usuario creado pero el presupuesto no se pudo asignar: %{errors}"
+
+msgid "User created."
+msgstr "Usuario creado."
+
+msgid "User not found."
+msgstr "Usuario no encontrado."
+
+msgid "User permanently deleted. All their data was erased."
+msgstr "Usuario eliminado permanentemente. Toda su data fue borrada."
+
+msgid "User suspended."
+msgstr "Usuario suspendido."
+
+msgid "User updated, but the budget could not be moved: %{reason}"
+msgstr "Usuario actualizado, pero el presupuesto no se pudo mover: %{reason}"
+
+msgid "User updated."
+msgstr "Usuario actualizado."
+
+msgid "View as this user"
+msgstr "Ver como este usuario"
+
+msgid "View the dashboard as %{email}?"
+msgstr "¿Ver el dashboard como %{email}?"
+
+msgid "View the user's limit profiles"
+msgstr "Ver perfiles de límites del usuario"
+
+msgid "View the user's stats"
+msgstr "Ver stats del usuario"
+
+msgid "View this user's consolidated stats"
+msgstr "Ver stats consolidados de este usuario"
+
+msgid "You cannot delete your own account."
+msgstr "No puedes eliminar tu propia cuenta."
+
+msgid "of each profile."
+msgstr "de cada perfil."
+
+msgid "user@company.com"
+msgstr "usuario@empresa.com"
+
+msgid "Yes, delete permanently"
+msgstr "Sí, eliminar permanentemente"
+
+msgid "This action is irreversible."
+msgstr "Esta acción es irreversible."
+
+## ACCESO → Servicios (services_live)
+
+msgid "(read-only): a per-service summary and full per-service stats. Removing a supervisor"
+msgstr "(solo lectura): resumen por servicio y stats completos por servicio. Al quitar a un supervisor"
+
+msgid "0 = zero spend. Empty = no budget (top-ups only)."
+msgstr "0 = cero (no deja gastar). Vacío = sin presupuesto (solo top-ups)."
+
+msgid "30 days"
+msgstr "30 días"
+
+msgid "A service can have several active keys, each with its own label."
+msgstr "Un servicio puede tener varias claves activas, cada una con su etiqueta."
+
+msgid "API keys for services without an associated user"
+msgstr "API keys para servicios sin usuario asociado"
+
+msgid "Absolute cap (defaults to 5 when empty)."
+msgstr "Límite absoluto (default 5 si se deja vacío)."
+
+msgid "Absolute cap (defaults to 60 when empty)."
+msgstr "Límite absoluto (default 60 si se deja vacío)."
+
+msgid "Actual spend"
+msgstr "Gasto real"
+
+msgid "Add supervisor"
+msgstr "Agregar supervisor"
+
+msgid "Could not add the supervisor."
+msgstr "No se pudo agregar el supervisor."
+
+msgid "Could not delete the service."
+msgstr "No se pudo eliminar el servicio."
+
+msgid "Could not delete: %{reason}"
+msgstr "No se pudo eliminar: %{reason}"
+
+msgid "Could not remove the supervisor."
+msgstr "No se pudo remover el supervisor."
+
+msgid "Could not update the model."
+msgstr "No se pudo actualizar el modelo."
+
+msgid "Delete service"
+msgstr "Eliminar servicio"
+
+msgid "Edit service"
+msgstr "Editar servicio"
+
+msgid "Identifying name of the service, e.g. \"Telegram bot\" or \"Shopify webhook\"."
+msgstr "Nombre identificativo del servicio. Ej.: \"Bot de Telegram\", \"Webhook de Shopify\"."
+
+msgid "Manage the service models"
+msgstr "Gestionar modelos del servicio"
+
+msgid "Monthly cap (USD)"
+msgstr "Límite mensual (USD)"
+
+msgid "Monthly spend"
+msgstr "Gasto mensual"
+
+msgid "New service"
+msgstr "Nuevo servicio"
+
+msgid "No matches."
+msgstr "Sin coincidencias."
+
+msgid "No services yet."
+msgstr "No hay servicios todavía."
+
+msgid "No supervisors assigned."
+msgstr "Sin supervisores asignados."
+
+msgid "Remove supervisor"
+msgstr "Quitar supervisor"
+
+msgid "Search by email or name…"
+msgstr "Buscar por email o nombre…"
+
+msgid "Search by name or limit profile…"
+msgstr "Buscar por nombre o perfil de límites..."
+
+msgid "Service"
+msgstr "Servicio"
+
+msgid "Service created."
+msgstr "Servicio creado."
+
+msgid "Service deleted."
+msgstr "Servicio eliminado."
+
+msgid "Service models"
+msgstr "Modelos del servicio"
+
+msgid "Service not found."
+msgstr "Servicio no encontrado."
+
+msgid "Service updated."
+msgstr "Servicio actualizado."
+
+msgid "Supervisor added."
+msgstr "Supervisor agregado."
+
+msgid "Supervisor removed."
+msgstr "Supervisor removido."
+
+msgid "Supervisors"
+msgstr "Supervisores"
+
+msgid "The assigned supervisors"
+msgstr "Los supervisores asignados"
+
+msgid "The models granted to the service"
+msgstr "Los modelos otorgados al servicio"
+
+msgid "The only path to unlimited; it wins over the cap."
+msgstr "Único camino a ilimitado; gana sobre el límite."
+
+msgid "The service API key"
+msgstr "La clave API del servicio"
+
+msgid "They see their assigned services at"
+msgstr "Ven sus servicios asignados en"
+
+msgid "This service has no active keys."
+msgstr "Este servicio no tiene claves activas."
+
+msgid "View detail: stats and supervisors"
+msgstr "Ver detalle: stats y supervisores"
+
+msgid "View the service detail"
+msgstr "Ver detalle del servicio"
+
+msgid "View the service's stats"
+msgstr "Ver stats del servicio"
+
+msgid "View this service's consolidated stats"
+msgstr "Ver stats consolidadas de este servicio"
+
+msgid "Will be permanently erased:"
+msgstr "Se borrará permanentemente:"
+
+msgid "You do not have permission to access this section."
+msgstr "No tienes permisos para acceder a esta sección."
+
+msgid "revokes the access immediately."
+msgstr "pierde el acceso de inmediato."
+
+## ACCESO → Servicios supervisados y miembros
+
+msgid "(top-ups only)"
+msgstr "(solo top-ups)"
+
+msgid "7 days"
+msgstr "7 días"
+
+msgid "90 days"
+msgstr "90 días"
+
+msgid "Add"
+msgstr "Añadir"
+
+msgid "Add and remove limit profile members"
+msgstr "Añade y quita miembros del perfil de límites"
+
+msgid "Add member"
+msgstr "Añadir miembro"
+
+msgid "Allowed models"
+msgstr "Modelos permitidos"
+
+msgid "An administrator can assign you services from the"
+msgstr "Un administrador puede asignarte servicios desde la sección de"
+
+msgid "Cap $%{amount}/month"
+msgstr "Límite $%{amount}/mes"
+
+msgid "Configuration (read-only)"
+msgstr "Configuración (solo lectura)"
+
+msgid "Cost"
+msgstr "Costo"
+
+msgid "Could not remove the member."
+msgstr "No se pudo eliminar el miembro."
+
+msgid "Credit"
+msgstr "Crédito"
+
+msgid "Daily usage per model"
+msgstr "Uso diario por modelo"
+
+msgid "Date"
+msgstr "Fecha"
+
+msgid "Each user belongs to a single limit profile. If they already have another, remove them"
+msgstr "Cada usuario pertenece a un solo perfil de límites. Si ya tiene otro, quítalo"
+
+msgid "Full stats"
+msgstr "Stats completos"
+
+msgid "Last requests of the service, not filtered by period."
+msgstr "Últimos requests del servicio, sin filtrar por período."
+
+msgid "Latency"
+msgstr "Latencia"
+
+msgid "Load more"
+msgstr "Cargar más"
+
+msgid "Member"
+msgstr "Miembro"
+
+msgid "Member added."
+msgstr "Miembro añadido."
+
+msgid "Member models"
+msgstr "Modelos del miembro"
+
+msgid "Member removed."
+msgstr "Miembro eliminado."
+
+msgid "Model"
+msgstr "Modelo"
+
+msgid "My supervised services"
+msgstr "Mis servicios supervisados"
+
+msgid "No API key"
+msgstr "Sin API key"
+
+msgid "No access"
+msgstr "Sin acceso"
+
+msgid "No access to this service."
+msgstr "Sin acceso a este servicio."
+
+msgid "No activity in 30 days"
+msgstr "Sin actividad en 30 días"
+
+msgid "No data for this period."
+msgstr "Sin datos para este periodo."
+
+msgid "No key"
+msgstr "Sin clave"
+
+msgid "No requests in the period."
+msgstr "Sin requests en el período."
+
+msgid "No user with that email exists."
+msgstr "No existe un usuario con ese email."
+
+msgid "RPM"
+msgstr "RPM"
+
+msgid "Recent activity"
+msgstr "Actividad reciente"
+
+msgid "Remove member"
+msgstr "Eliminar miembro"
+
+msgid "Score: %{score} | Peak RPM: %{peak_rpm} | Active days: %{active_days} | Requests: %{requests}"
+msgstr "Score: %{score} | Peak RPM: %{peak_rpm} | Días activos: %{active_days} | Requests: %{requests}"
+
+msgid "Service supervisors"
+msgstr "Supervisores del servicio"
+
+msgid "Services where you have supervision permissions (read-only view)"
+msgstr "Servicios donde tienes permisos de supervisión (vista de solo lectura)"
+
+msgid "Spend/month"
+msgstr "Gasto/mes"
+
+msgid "States"
+msgstr "Estados"
+
+msgid "Summary of your services"
+msgstr "Resumen de tus servicios"
+
+msgid "That service does not exist."
+msgstr "Ese servicio no existe."
+
+msgid "That user already belongs to another limit profile. Remove them from it first."
+msgstr "Ese usuario ya pertenece a otro perfil de límites. Quítalo de él primero."
+
+msgid "The assignment is managed by an administrator from Services."
+msgstr "La asignación la gestiona un administrador desde Servicios."
+
+msgid "The limit profile models are granted to every member; the extras are"
+msgstr "Los modelos del perfil de límites están otorgados a todos los miembros; los extras son"
+
+msgid "The member does not belong to this limit profile."
+msgstr "El miembro no pertenece a este perfil de límites."
+
+msgid "The user's own override over the limit profile default"
+msgstr "Override propio del usuario sobre el default del perfil de límites"
+
+msgid "This limit profile has no members yet."
+msgstr "Este perfil de límites no tiene miembros todavía."
+
+msgid "This service has no models assigned."
+msgstr "Este servicio no tiene models asignados."
+
+msgid "This service has no requests yet."
+msgstr "Este servicio todavía no tiene requests."
+
+msgid "This view is read-only."
+msgstr "Esta vista es de solo lectura."
+
+msgid "Today"
+msgstr "Hoy"
+
+msgid "Type the user email."
+msgstr "Escribe el email del usuario."
+
+msgid "Unlimited credit"
+msgstr "Crédito ilimitado"
+
+msgid "Usage"
+msgstr "Uso"
+
+msgid "User email"
+msgstr "Email del usuario"
+
+msgid "You cannot change these services here. Contact an administrator for changes."
+msgstr "No puedes modificar estos servicios aquí. Contacta a un administrador para cambios."
+
+msgid "You do not have permission to manage this limit profile."
+msgstr "No tienes permisos para gestionar este perfil de límites."
+
+msgid "You do not supervise that service."
+msgstr "No supervisas ese servicio."
+
+msgid "You no longer supervise any service."
+msgstr "Ya no supervisas ningún servicio."
+
+msgid "You no longer supervise this service."
+msgstr "Ya no supervisas este servicio."
+
+msgid "You supervise no services."
+msgstr "No supervisas ningún servicio."
+
+msgid "actual"
+msgstr "real"
+
+msgid "from it first."
+msgstr "de él primero."
+
+msgid "last 30 days"
+msgstr "últimos 30 días"
+
+msgid "last request:"
+msgstr "último request:"
+
+msgid "no requests"
+msgstr "sin requests"
+
+msgid "per member."
+msgstr "individuales."
+
+msgid "per user"
+msgstr "por usuario"
+
+msgid "section."
+msgstr "sección."
+
+msgid "user@example.com"
+msgstr "usuario@ejemplo.com"
+
+## CATÁLOGO → Modelos (models_live, parte 1)
+
+msgid "%{count} providers assigned to the model."
+msgstr "%{count} proveedores asignados al modelo."
+
+msgid "Cannot delete: the model has providers assigned. Remove them first."
+msgstr "No se puede eliminar: el modelo tiene proveedores asignados. Elimínalos primero."
+
+msgid "Could not assign: %{errors}"
+msgstr "No se pudo asignar: %{errors}"
+
+msgid "Could not delete the model."
+msgstr "No se pudo eliminar el modelo."
+
+msgid "Could not load the provider models."
+msgstr "No se pudieron cargar los models del proveedor."
+
+msgid "Exclusive per limit profile"
+msgstr "Exclusivos por perfil de límites"
+
+msgid "Exclusive per user"
+msgstr "Exclusivos por usuario"
+
+msgid "Generic icon: link a lab or pick one from the palette."
+msgstr "Icono genérico: vincula un lab o elige uno de la paleta."
+
+msgid "Invalid order for this model."
+msgstr "Orden inválido para este modelo."
+
+msgid "Limit profile"
+msgstr "Perfil de límites"
+
+msgid "Limit profile exclusive"
+msgstr "Exclusivo perfil de límites"
+
+msgid "Model created."
+msgstr "Modelo creado."
+
+msgid "Model deleted."
+msgstr "Modelo eliminado."
+
+msgid "Model updated."
+msgstr "Modelo actualizado."
+
+msgid "Pick the provider the API key belongs to first."
+msgstr "Elige primero el proveedor al que pertenece la API key."
+
+msgid "Provider assigned to the model."
+msgstr "Proveedor asignado al modelo."
+
+msgid "Provider removed from the model."
+msgstr "Proveedor eliminado del modelo."
+
+msgid "Select at least one limit profile or user for the exclusive scope."
+msgstr "Selecciona al menos un perfil de límites o usuario para el scope exclusivo."
+
+msgid "Subscription"
+msgstr "Suscripción"
+
+msgid "That model is not in the catalog. Reload the page."
+msgstr "Ese modelo no está en el catálogo. Recarga la página."
+
+msgid "The model's own icon."
+msgstr "Icono propio del modelo."
+
+msgid "You do not have permission for this action."
+msgstr "No tienes permisos para esta acción."
+
+msgid "no credential"
+msgstr "sin credential"
+
+## CATÁLOGO → Modelos (models_live, plantilla)
+
+msgid "(context, pricing, lab)."
+msgstr "(contexto, precios, laboratorio)."
+
+msgid "(current)"
+msgstr "(actual)"
+
+msgid "A model created from this catalog entry already exists"
+msgstr "Ya existe un modelo creado desde esta entrada del catálogo"
+
+msgid "Add another API key for this provider"
+msgstr "Dar de alta otra API key para este proveedor"
+
+msgid "Assign provider"
+msgstr "Asignar Proveedor"
+
+msgid "Assigned providers"
+msgstr "Proveedores asignados"
+
+msgid "Billing"
+msgstr "Facturación"
+
+msgid "Brand (lab / icon)"
+msgstr "Marca (lab / icono)"
+
+msgid "Change"
+msgstr "Cambiar"
+
+msgid "Choose another provider"
+msgstr "Elegir otro proveedor"
+
+msgid "Configure models and their routing providers"
+msgstr "Configura models y sus proveedores de routing"
+
+msgid "Context window (tokens)"
+msgstr "Ventana de contexto (tokens)"
+
+msgid "Credential (API key)"
+msgstr "Credencial (API Key)"
+
+msgid "Defines which endpoint serves it: /v1/chat/completions or /v1/embeddings."
+msgstr "Define qué endpoint lo sirve: /v1/chat/completions o /v1/embeddings."
+
+msgid "Delete this model? This action cannot be undone."
+msgstr "¿Eliminar este modelo? Esta acción no se puede deshacer."
+
+msgid "Drag to reorder priority"
+msgstr "Arrastra para reordenar prioridad"
+
+msgid "Edit model"
+msgstr "Editar Modelo"
+
+msgid "Expand / collapse providers"
+msgstr "Expandir / colapsar proveedores"
+
+msgid "Hero icon name, e.g. hero-fire. Optional."
+msgstr "Nombre de hero icon, ej. hero-fire. Opcional."
+
+msgid "LLM (chat)"
+msgstr "LLM (chat)"
+
+msgid "Lab (who built the model)"
+msgstr "Lab (quién construyó el modelo)"
+
+msgid "Loading provider models…"
+msgstr "Cargando models del proveedor…"
+
+msgid "Maximum context size of the model in tokens."
+msgstr "Tamaño máximo de contexto del modelo en tokens."
+
+msgid "Model type"
+msgstr "Tipo de modelo"
+
+msgid "Name (identifier)"
+msgstr "Nombre (identificador)"
+
+msgid "New API key"
+msgstr "Nueva API key"
+
+msgid "New model"
+msgstr "Nuevo Modelo"
+
+msgid "No active API keys"
+msgstr "No hay API keys activas"
+
+msgid "No providers assigned."
+msgstr "No hay proveedores asignados."
+
+msgid "No supported provider serves it: it can be created, but there is nothing to route it to"
+msgstr "Ningún proveedor soportado lo sirve: se puede crear, pero no hay a quién enrutarlo"
+
+msgid "Pick an API key from this provider"
+msgstr "Selecciona una API key de este proveedor"
+
+msgid "Pick from the palette"
+msgstr "Elegir de la paleta"
+
+msgid "Pick the API key that will serve this model"
+msgstr "Selecciona la API key que servirá este modelo"
+
+msgid "Pin to top"
+msgstr "Pinear al inicio"
+
+msgid "Preview"
+msgstr "Vista previa"
+
+msgid "Priority"
+msgstr "Prioridad"
+
+msgid "Provider"
+msgstr "Proveedor"
+
+msgid "Provider model"
+msgstr "Modelo del proveedor"
+
+msgid "Remove this provider from the model?"
+msgstr "¿Eliminar este proveedor del modelo?"
+
+msgid "Scope"
+msgstr "Scope"
+
+msgid "Search by name, id or lab… (e.g. gpt-5, glm, anthropic)"
+msgstr "Buscar por nombre, id o laboratorio… (ej. gpt-5, glm, anthropic)"
+
+msgid "Suggestions from the provider catalog. You can type any value for dedicated or private tiers."
+msgstr "Sugerencias del catálogo del proveedor. Puedes escribir cualquier valor para tiers dedicados o privados."
+
+msgid "The model's own icon is queued: it is used if you unlink the lab."
+msgstr "El icono propio queda en espera: se usa si quitas el lab."
+
+msgid "This is what clients send in `model`. It must be unique."
+msgstr "Es lo que mandan los clientes en `model`. Debe ser único."
+
+msgid "This provider has no API keys yet. Use “New API key” to create the first one."
+msgstr "Este proveedor no tiene API keys todavía. Usa «Nueva API key» para crear la primera."
+
+msgid "Type or pick the model (e.g. glm-5.2:dedicated)"
+msgstr "Escribe o selecciona el modelo (ej. glm-5.2:dedicated)"
+
+msgid "Unpin"
+msgstr "Quitar pin"
+
+msgid "With a linked lab its brand wins; without one the icon below is used."
+msgstr "Con un lab vinculado su marca manda; sin lab se usa el icono de abajo."
+
+msgid "already exists"
+msgstr "ya existe"
+
+msgid "models.dev catalog:"
+msgstr "Catálogo de models.dev:"
+
+msgid "no key"
+msgstr "sin key"
+
+msgid "no providers"
+msgstr "sin proveedores"
+
+msgid "real metadata"
+msgstr "metadata real"
+
+msgid "— No lab —"
+msgstr "— Sin lab —"
+
+## CATÁLOGO → Modelos (models_live, modales largos)
+
+msgid ", and everything stays editable."
+msgstr ", y todo queda editable."
+
+msgid "Create and use"
+msgstr "Crear y usar"
+
+msgid "Custom"
+msgstr "Personalizado"
+
+msgid "E.g. Always answer in English. Do not use markdown. Be concise…"
+msgstr "Ej: Responde siempre en español. No uses markdown. Sé conciso..."
+
+msgid "Empty uses the config default (180 s / 3 min) for every credential, regardless of billing. If you set a value, that one is always used. Minimum 1 s, maximum 86400 s (24 h). It is stored in milliseconds."
+msgstr "Vacío usa el default de config (180 s / 3 min) para toda credencial, sin importar la facturación. Si pones un valor, siempre se usa ese. Mínimo 1 s, máximo 86 400 s (24 h). Se guarda en milisegundos."
+
+msgid "Exclusive limit profile"
+msgstr "Perfil de límites exclusivo"
+
+msgid "Exclusive user"
+msgstr "Usuario exclusivo"
+
+msgid "If it is off, this provider gets no traffic for the model."
+msgstr "Si está apagado, este provider no recibe tráfico del modelo."
+
+msgid "Input tokens with a cache hit (cheaper). Empty = use the input price for all of them."
+msgstr "Tokens de entrada con cache hit (más barato). Vacío = usa precio de input para todos."
+
+msgid "No catalog model matches “%{query}”."
+msgstr "Ningún modelo del catálogo coincide con «%{query}»."
+
+msgid "No provider matches. Create the provider in"
+msgstr "Ningún proveedor coincide. Crea el proveedor en"
+
+msgid "Non-cached input tokens. Fallback when the provider does not report cost."
+msgstr "Tokens de entrada no-caché. Fallback cuando el proveedor no reporta costo."
+
+msgid "Only the members of this limit profile will be able to use this API key for this model."
+msgstr "Solo los miembros de este perfil de límites podrán usar esta API key para este modelo."
+
+msgid "Only this user will be able to use this API key for this model."
+msgstr "Solo este usuario podrá usar esta API key para este modelo."
+
+msgid "Output tokens. Same fallback as input."
+msgstr "Tokens de salida. Mismo fallback que input."
+
+msgid "Picking one links the model to that entry and fills the form — nothing is"
+msgstr "Elegir uno vincula el modelo a esa entrada y rellena el formulario — nada se"
+
+msgid "Prompt cache:"
+msgstr "Caché de prompts:"
+
+msgid "Provider of this assignment, derived from its API key. Change the key below to"
+msgstr "Proveedor de esta asignación, derivado de su API key. Cambia la key abajo para"
+
+msgid "Remove the catalog link"
+msgstr "Quitar el vínculo con el catálogo"
+
+msgid "Search provider by name or id… (e.g. openrouter, fireworks)"
+msgstr "Buscar proveedor por nombre o id… (ej. openrouter, fireworks)"
+
+msgid "Sends service_tier: priority — more reliability at peak hours, billed at a premium depending on the model."
+msgstr "Manda service_tier: priority — mayor confiabilidad en horas pico, se cobra a premium según el modelo."
+
+msgid "System instructions (guard rails)"
+msgstr "Instrucciones de sistema (guard rails)"
+
+msgid "Text injected at the start of every system prompt sent to the provider."
+msgstr "Texto que se inyecta al inicio de cada system prompt enviado al proveedor."
+
+msgid "The provider of this row is"
+msgstr "El proveedor de esta fila se"
+
+msgid "The specific API key that will serve this model. Picking it derives its provider, and with it the provider model and the list price when models.dev publishes them. Every credential has its own circuit breaker and priority."
+msgstr "La API key específica que servirá este modelo. Al elegirla se deriva su proveedor, y con él el modelo del proveedor y el precio de lista cuando models.dev los publica. Cada credencial tiene su propio circuit breaker y prioridad."
+
+msgid "The token the provider gives you."
+msgstr "El token que entrega el proveedor."
+
+msgid "This text is prepended to the user system prompt. Leave it empty to inject nothing."
+msgstr "Este texto se antepone al system prompt del usuario. Déjalo vacío para no inyectar nada."
+
+msgid "Type to search a limit profile…"
+msgstr "Escribe para buscar perfil de límites…"
+
+msgid "Type to search a user…"
+msgstr "Escribe para buscar usuario…"
+
+msgid "Use it for behaviour instructions, content limits, or formatting rules."
+msgstr "Úsalo para instrucciones de comportamiento, límites de contenido, o reglas de formato."
+
+msgid "You can also filter the API keys by provider here."
+msgstr "También puedes filtrar aquí las API keys por proveedor."
+
+msgid "You can create it by hand in the"
+msgstr "Puedes crearlo a mano en la pestaña"
+
+msgid "You can select multiple limit profiles. An exclusive provider will be created for each one."
+msgstr "Puedes seleccionar múltiples perfiles de límites. Se creará un proveedor exclusivo por cada uno."
+
+msgid "You can select multiple users. An exclusive provider will be created for each one."
+msgstr "Puedes seleccionar múltiples usuarios. Se creará un proveedor exclusivo por cada uno."
+
+msgid "and come back here."
+msgstr "y vuelve aquí."
+
+msgid "derived from the API key"
+msgstr "deriva de la API key"
+
+msgid "models.dev, the provider model and the list price are filled in automatically."
+msgstr "models.dev, se rellenan solos el modelo del proveedor y el precio de lista."
+
+msgid "move the row to another provider."
+msgstr "mover la fila a otro proveedor."
+
+msgid "on Fireworks (prefix matching, cached tokens at a discount). TokenGate already sends"
+msgstr "en Fireworks (coincidencia de prefijo, tokens cacheados a descuento). TokenGate ya manda"
+
+msgid "on by default"
+msgstr "activa por defecto"
+
+msgid "per conversation and logs the cached tokens — no configuration required."
+msgstr "por conversación y registra los tokens cacheados en los logs — no requiere configuración."
+
+msgid "saved until"
+msgstr "guarda hasta"
+
+msgid "tab."
+msgstr "Personalizado."
+
+msgid "you pick below: every credential belongs to a provider. If that provider serves this model according to"
+msgstr "que elijas abajo: cada credencial pertenece a un proveedor. Si ese proveedor sirve este modelo según"
+
+## CATÁLOGO → Modelos (models_live, pestañas y contadores)
+
+msgid "From catalog"
+msgstr "Desde catálogo"
+
+msgid "Global = every member with access. Exclusive = only the selected member or limit profile."
+msgstr "Global = todos los miembros con acceso. Exclusivo = solo el miembro o perfil de límites seleccionado."
+
+msgid "Remove link"
+msgstr "Quitar vínculo"
+
+msgid "Showing %{shown} of %{total} catalog models."
+msgstr "Mostrando %{shown} de %{total} modelos del catálogo."
+
+msgid "Type to search among the %{count} catalog models."
+msgstr "Escribe para buscar entre los %{count} modelos del catálogo."
+
+## CATÁLOGO → Labs (labs_live)
+
+msgid "A catalog lab cannot be deleted."
+msgstr "Un lab de catálogo no se puede eliminar."
+
+msgid "A catalog lab identity is written by the models.dev refresh"
+msgstr "La identidad de un lab de catálogo la escribe el refresh de models.dev"
+
+msgid "Create lab"
+msgstr "Crear lab"
+
+msgid "Delete lab"
+msgstr "Eliminar lab"
+
+msgid "Edit lab"
+msgstr "Editar lab"
+
+msgid "Hero icon name, e.g. hero-beaker. Used when there is no logo."
+msgstr "Nombre de hero icon, ej. hero-beaker. Se usa cuando no hay logo."
+
+msgid "Icon"
+msgstr "Icono"
+
+msgid "If the lab has no remote logo, the icon below is used."
+msgstr "Si el lab no tiene logo remoto, se usa el icono de abajo."
+
+msgid "Lab source and status"
+msgstr "Origen y estado del lab"
+
+msgid "Lab “%{name}” created."
+msgstr "Lab «%{name}» creado."
+
+msgid "Lab “%{name}” deleted."
+msgstr "Lab «%{name}» eliminado."
+
+msgid "Lab “%{name}” updated."
+msgstr "Lab «%{name}» actualizado."
+
+msgid "Models are not touched: they just stop resolving to this lab."
+msgstr "Los modelos no se tocan: sólo dejan de resolver a este lab."
+
+msgid "New custom lab"
+msgstr "Nuevo lab custom"
+
+msgid "No labs to show."
+msgstr "No hay labs que mostrar."
+
+msgid "Save changes"
+msgstr "Guardar cambios"
+
+msgid "The key cannot be changed: models already point to it."
+msgstr "El key no se puede cambiar: los modelos ya apuntan a él."
+
+msgid "The key is the identifier models join the lab by: lowercase, no spaces."
+msgstr "El key es el identificador con el que los modelos se unen al lab: minúsculas, sin espacios."
+
+msgid "The lab mark is deleted."
+msgstr "Se elimina la marca del lab."
+
+msgid "Unique slug, e.g. my-lab"
+msgstr "Slug único, ej. mi-lab"
+
+msgid "Used when there is no logo. The logo, when present, always wins."
+msgstr "Se usa cuando no hay logo. El logo, si lo hay, siempre gana."
+
+msgid "Who built each model. Builtins come from models.dev."
+msgstr "Quién construyó cada modelo. Los builtin vienen de models.dev."
+
+msgid "model"
+msgstr "modelo"
+
+msgid "models"
+msgstr "modelos"
+
+msgid "models.dev no longer publishes this lab"
+msgstr "models.dev ya no publica este lab"
+
+msgid "my-lab"
+msgstr "mi-lab"
+
+## Notificaciones de Telegram (sección Operaciones)
+msgid "Notifications"
+msgstr "Notificaciones"
+
+msgid "Telegram alerts for important events across the gateway"
+msgstr "Avisos de Telegram para los eventos importantes del gateway"
+
+msgid "Bot"
+msgstr "Bot"
+
+msgid "Configured"
+msgstr "Configurado"
+
+msgid "Not configured"
+msgstr "Sin configurar"
+
+msgid "Token from environment"
+msgstr "Token desde el entorno"
+
+msgid "Stored token set"
+msgstr "Token guardado"
+
+msgid "The token comes from the TELEGRAM_BOT_TOKEN environment variable and takes precedence over the stored one."
+msgstr "El token viene de la variable de entorno TELEGRAM_BOT_TOKEN y tiene prioridad sobre el guardado."
+
+msgid "Bot token"
+msgstr "Token del bot"
+
+msgid "Stored encrypted. Leave empty to keep the current one."
+msgstr "Se guarda cifrado. Déjalo vacío para conservar el actual."
+
+msgid "Save token"
+msgstr "Guardar token"
+
+msgid "Send test"
+msgstr "Enviar prueba"
+
+msgid "Remove stored token"
+msgstr "Quitar token guardado"
+
+msgid "Bot token saved."
+msgstr "Token del bot guardado."
+
+msgid "Stored bot token removed."
+msgstr "Token guardado eliminado."
+
+msgid "No linked chats: add one before testing."
+msgstr "Sin chats vinculados: agrega uno antes de probar."
+
+msgid "Test message sent."
+msgstr "Mensaje de prueba enviado."
+
+msgid "Telegram rejected the test message."
+msgstr "Telegram rechazó el mensaje de prueba."
+
+msgid "Events"
+msgstr "Eventos"
+
+msgid "Choose which events are delivered to Telegram. Each has its own anti-repeat window."
+msgstr "Elige qué eventos se envían a Telegram. Cada uno tiene su propia ventana anti-repetición."
+
+msgid "Event"
+msgstr "Evento"
+
+msgid "Severity"
+msgstr "Severidad"
+
+msgid "Enabled"
+msgstr "Activo"
+
+msgid "On"
+msgstr "Activado"
+
+msgid "Off"
+msgstr "Desactivado"
+
+msgid "Critical"
+msgstr "Crítico"
+
+msgid "Warning"
+msgstr "Aviso"
+
+msgid "Security"
+msgstr "Seguridad"
+
+msgid "Info"
+msgstr "Info"
+
+msgid "Sent"
+msgstr "Enviado"
+
+msgid "Failed"
+msgstr "Fallido"
+
+msgid "Pending"
+msgstr "Pendiente"
+
+msgid "Kind"
+msgstr "Tipo"
+
+msgid "Chat"
+msgstr "Chat"
+
+msgid "Group"
+msgstr "Grupo"
+
+msgid "Channel"
+msgstr "Canal"
+
+msgid "Chat id"
+msgstr "Id del chat"
+
+msgid "Topic id"
+msgstr "Id del topic"
+
+msgid "Only for a channel/group with topics."
+msgstr "Solo para un canal/grupo con topics."
+
+msgid "Label"
+msgstr "Etiqueta"
+
+msgid "Link"
+msgstr "Vincular"
+
+msgid "For a channel, add the bot as an administrator; a negative chat id (-100…) is normal. The topic id is only needed for a channel/group with topics."
+msgstr "Para un canal, agrega el bot como administrador; un id negativo (-100…) es normal. El id del topic solo hace falta en un canal/grupo con topics."
+
+msgid "Showing the latest %{count} deliveries, newest first."
+msgstr "Mostrando los últimos %{count} envíos, más recientes primero."
+
+msgid "Remove"
+msgstr "Quitar"
+
+msgid "Quiet hours"
+msgstr "Horas de silencio"
+
+msgid "Within this UTC window only critical events are delivered. Leave both empty to disable."
+msgstr "Dentro de esta ventana UTC solo se envían los eventos críticos. Deja ambas vacías para desactivarlo."
+
+msgid "From"
+msgstr "Desde"
+
+msgid "To"
+msgstr "Hasta"
+
+msgid "Quiet hours updated."
+msgstr "Horas de silencio actualizadas."
+
+msgid "Set both bounds or leave both empty."
+msgstr "Define ambos límites o deja los dos vacíos."
+
+msgid "Linked chats"
+msgstr "Chats vinculados"
+
+msgid "Chats and channels that receive the notifications. The chat id is the number Telegram shows for the conversation."
+msgstr "Chats y canales que reciben las notificaciones. El id del chat es el número que Telegram muestra para la conversación."
+
+msgid "Chat linked."
+msgstr "Chat vinculado."
+
+msgid "Chat removed."
+msgstr "Chat quitado."
+
+msgid "No linked chats yet."
+msgstr "Aún no hay chats vinculados."
+
+msgid "Delivery log"
+msgstr "Registro de envíos"
+
+msgid "When"
+msgstr "Cuándo"
+
+msgid "Target"
+msgstr "Destino"
+
+msgid "Resend"
+msgstr "Reenviar"
+
+msgid "Resend queued."
+msgstr "Reenvío en cola."
+
+msgid "Refresh"
+msgstr "Actualizar"
+
+msgid "No notifications emitted yet."
+msgstr "Aún no se ha emitido ninguna notificación."
+
+msgid "Could not save the bot token."
+msgstr "No se pudo guardar el token del bot."
+
+msgid "Could not update the events."
+msgstr "No se pudieron actualizar los eventos."
+
+msgid "Not authorized."
+msgstr "No autorizado."
+
+msgid "Provider credential disabled"
+msgstr "Credencial de proveedor desactivada"
+
+msgid "Global daily cap reached"
+msgstr "Tope diario global alcanzado"
+
+msgid "Circuit breaker opened"
+msgstr "Circuit breaker abierto"
+
+msgid "Monthly limit reached"
+msgstr "Límite mensual alcanzado"
+
+msgid "No spending path"
+msgstr "Sin vía de gasto"
+
+msgid "Top-up changed"
+msgstr "Top-up modificado"
+
+msgid "Provider credential reactivated"
+msgstr "Credencial de proveedor reactivada"
+
+msgid "User created"
+msgstr "Usuario creado"
+
+msgid "Service created"
+msgstr "Servicio creado"
+
+msgid "API key changed"
+msgstr "API key modificada"
+
+msgid "Impersonation started"
+msgstr "Suplantación iniciada"
+
+msgid "A provider credential was disabled after a 401/402/403 (bad key, no credit, forbidden)."
+msgstr "Una credencial de proveedor se desactivó tras un 401/402/403 (key inválida, sin saldo o prohibida)."
+
+msgid "The global daily spend cap was reached; new requests are rejected until UTC midnight."
+msgstr "Se alcanzó el tope diario global de gasto; las nuevas requests se rechazan hasta la medianoche UTC."
+
+msgid "A provider circuit breaker tripped after consecutive failures."
+msgstr "El circuit breaker de un proveedor se abrió tras fallos consecutivos."
+
+msgid "A subject exhausted its monthly limit and has no usable top-up."
+msgstr "Un sujeto agotó su límite mensual y no tiene top-ups usables."
+
+msgid "A subject has no spending path at all: no limit, not unlimited, no top-ups."
+msgstr "Un sujeto no tiene ninguna vía de gasto: sin límite, no ilimitado y sin top-ups."
+
+msgid "An admin created, revoked or toggled a credit top-up."
+msgstr "Un admin creó, revocó o cambió el estado de un top-up."
+
+msgid "Tokengate test message — notifications are wired up."
+msgstr "Mensaje de prueba de Tokengate — las notificaciones están conectadas."
+
+## CATÁLOGO → Proveedores: vista de stats del proveedor
+
+msgid "%{percent} failures"
+msgstr "%{percent} fallos"
+
+msgid "Limit profiles that use it"
+msgstr "Perfiles de límites que lo usan"
+
+msgid "Models it serves"
+msgstr "Modelos que sirve"
+
+msgid "No data in this period."
+msgstr "Sin datos en este período."
+
+msgid "Provider not found."
+msgstr "Proveedor no encontrado."
+
+msgid "Requests"
+msgstr "Requests"
+
+msgid "Services that use it"
+msgstr "Servicios que lo usan"
+
+msgid "TPS"
+msgstr "TPS"
+
+msgid "Tokens"
+msgstr "Tokens"
+
+msgid "Tokens in"
+msgstr "Tokens in"
+
+msgid "Tokens out"
+msgstr "Tokens out"
+
+msgid "avg %{avg} · p95 %{p95} · TTFT %{ttft}"
+msgstr "media %{avg} · p95 %{p95} · TTFT %{ttft}"
+
+msgid "no traffic"
+msgstr "sin tráfico"
+
+msgid "no traffic in the period"
+msgstr "sin tráfico en el período"
+
+msgid "p95 %{p95}"
+msgstr "p95 %{p95}"
+
+## CATÁLOGO → cierre (worker de catálogo y paths)
+
+msgid "The path of “%{label}” must start with / or be an absolute http(s) URL, or be empty to inherit the default."
+msgstr "El path de «%{label}» debe empezar con / o ser una URL http(s) absoluta, o quedar vacío para heredar el default."
+
+msgid "could not download the catalog: %{reason}"
+msgstr "no se pudo descargar el catálogo: %{reason}"
+
+msgid "models.dev answered %{status}"
+msgstr "models.dev respondió %{status}"
+
+msgid "the catalog does not have the expected format"
+msgstr "el catálogo no tiene el formato esperado"
+
+msgid "the catalog is not valid JSON"
+msgstr "el catálogo no es JSON válido"
+
+msgid "the labs catalog came without labs; no row was touched"
+msgstr "el catálogo de labs vino sin labs; no se tocó ninguna fila"
+
+msgid "the models catalog came empty; no row was touched"
+msgstr "el catálogo de models vino vacío; no se tocó ninguna fila"
+
+msgid "Models catalog"
+msgstr "Catálogo de modelos"
+
+msgid "Transcription (audio → text)"
+msgstr "Transcripción (audio → texto)"
+
+msgid "Speech (text → audio)"
+msgstr "Voz (texto → audio)"
+
+msgid "Images"
+msgstr "Imágenes"
+
+msgid "Videos"
+msgstr "Videos"
+
+msgid "Music"
+msgstr "Música"
+
+## OPERACIONES → Dashboard
+
+msgid "%{count} requests"
+msgstr "%{count} requests"
+
+msgid "Ask an administrator to assign you a limit profile."
+msgstr "Contacta al administrador para que te asigne un perfil de límites."
+
+msgid "Available top-ups"
+msgstr "Top-ups disponibles"
+
+msgid "Breakdown"
+msgstr "Desglose"
+
+msgid "By API key"
+msgstr "Por API key"
+
+msgid "By limit profile"
+msgstr "Por perfil de límites"
+
+msgid "By model"
+msgstr "Por modelo"
+
+msgid "Copy"
+msgstr "Copiar"
+
+msgid "Copy API key"
+msgstr "Copiar clave API"
+
+msgid "Copy this key now. It will not be shown again."
+msgstr "Copia esta clave ahora. No se volverá a mostrar."
+
+msgid "Could not regenerate the key."
+msgstr "No se pudo regenerar la clave."
+
+msgid "Key regenerated successfully."
+msgstr "Clave regenerada correctamente."
+
+msgid "Loading metrics…"
+msgstr "Cargando métricas…"
+
+msgid "Monthly cap"
+msgstr "Límite mensual"
+
+msgid "My API keys"
+msgstr "Mis claves API"
+
+msgid "No data for %{period}."
+msgstr "Sin datos para %{period}."
+
+msgid "No key generated"
+msgstr "Sin clave generada"
+
+msgid "No requests yet"
+msgstr "Aún no hay requests"
+
+msgid "Refreshing metrics…"
+msgstr "Actualizando métricas…"
+
+msgid "Regenerate"
+msgstr "Regenerar"
+
+msgid "Regenerate key? The current key stops working immediately and a new one is issued."
+msgstr "¿Regenerar clave? La clave actual dejará de funcionar inmediatamente y se emitirá una nueva."
+
+msgid "Regenerate: issues a new key and voids the current one. The limit profile keeps working, now with the new key."
+msgstr "Regenerar: emite una clave nueva y anula la actual. El perfil de límites sigue funcionando, ahora con la clave nueva."
+
+msgid "Revoke key? The key is voided and NO other is issued."
+msgstr "¿Revocar clave? La clave queda anulada y NO se emite otra."
+
+msgid "Revoke: voids the key without issuing a new one. The limit profile loses access until you generate another."
+msgstr "Revocar: anula la clave sin emitir una nueva. El perfil de límites queda sin acceso hasta que generes otra."
+
+msgid "Send your first request to the proxy to see metrics here."
+msgstr "Manda tu primer request al proxy para ver métricas aquí."
+
+msgid "Sticky routes cleared. Your next request will be re-routed."
+msgstr "Sticky routes limpiadas. Tu próxima petición se re-ruteará."
+
+msgid "This membership has no key."
+msgstr "Esta membresía no tiene clave."
+
+msgid "Tokens in/out"
+msgstr "Tokens in/out"
+
+msgid "View, create and revoke your API keys"
+msgstr "Ver, crear y revocar tus claves API"
+
+msgid "You can have several active keys, each with its own label."
+msgstr "Puedes tener varias claves activas, cada una con su etiqueta."
+
+msgid "You have no active keys yet."
+msgstr "Aún no tienes claves activas."
+
+msgid "You have no limit profile assigned."
+msgstr "No tienes ningún perfil de límites asignado."
+
+msgid "it only voids it, without issuing another."
+msgstr "solo la anula, sin emitir otra."
+
+msgid "per day (30d)"
+msgstr "por día (30d)"
+
+msgid "per day (90d)"
+msgstr "por día (90d)"
+
+msgid "per hour"
+msgstr "por hora"
+
+msgid "per hour (7d)"
+msgstr "por hora (7d)"
+
+## OPERACIONES → Monitoring (log en vivo)
+
+msgid "Agent"
+msgstr "Agente"
+
+msgid "Avg latency"
+msgstr "Latencia prom"
+
+msgid "Cache R"
+msgstr "Cache R"
+
+msgid "Cache read"
+msgstr "Cache read"
+
+msgid "Client"
+msgstr "Cliente"
+
+msgid "Costs"
+msgstr "Costos"
+
+msgid "Effort"
+msgstr "Effort"
+
+msgid "Error"
+msgstr "Error"
+
+msgid "Errors"
+msgstr "Errores"
+
+msgid "HTTP status sent to the client"
+msgstr "Código HTTP enviado al cliente"
+
+msgid "Input"
+msgstr "Input"
+
+msgid "No"
+msgstr "No"
+
+msgid "No logs match the filters."
+msgstr "No hay logs que coincidan con los filtros."
+
+msgid "Output"
+msgstr "Output"
+
+msgid "Performance"
+msgstr "Rendimiento"
+
+msgid "Prov. key"
+msgstr "Prov. Key"
+
+msgid "Prov. status"
+msgstr "Prov. Status"
+
+msgid "Provider API key or model"
+msgstr "API key o model del proveedor"
+
+msgid "Provider HTTP status"
+msgstr "Código HTTP del proveedor"
+
+msgid "Provider error reason"
+msgstr "Razón del error del proveedor"
+
+msgid "Rate"
+msgstr "Tasa"
+
+msgid "Real-time API request log"
+msgstr "Registro de solicitudes a la API en tiempo real"
+
+msgid "Response"
+msgstr "Respuesta"
+
+msgid "Streaming"
+msgstr "Streaming"
+
+msgid "The provider failed and the request was recovered by falling back to another provider"
+msgstr "El proveedor falló y la request fue recuperada por fallback a otro proveedor"
+
+msgid "Think"
+msgstr "Think"
+
+msgid "Time to first token — streaming only"
+msgstr "Time to first token — solo streaming"
+
+msgid "Type"
+msgstr "Tipo"
+
+msgid "Yes"
+msgstr "Sí"
+
+## OPERACIONES → Mantenimiento
+
+msgid "API key to provider assignments."
+msgstr "asignaciones de API key a provider."
+
+msgid "Catalog refresh queued."
+msgstr "Actualización del catálogo encolada."
+
+msgid "Caution zone"
+msgstr "Zona de precaución"
+
+msgid "Could not queue the refresh."
+msgstr "No se pudo encolar la actualización."
+
+msgid "Danger zone"
+msgstr "Zona de peligro"
+
+msgid "Delete log history"
+msgstr "Eliminar historial de logs"
+
+msgid "Delete logs"
+msgstr "Eliminar logs"
+
+msgid "Delete the whole history?"
+msgstr "¿Eliminar todo el historial?"
+
+msgid "Deletes every row of"
+msgstr "Borra todas las filas de"
+
+msgid "Deletes every sticky API key → provider assignment."
+msgstr "Borra todas las asignaciones sticky de API key → provider."
+
+msgid "Downloads the catalog again (providers, labs and models) and updates name, base URL,"
+msgstr "Vuelve a bajar el catálogo (proveedores, labs y modelos) y actualiza nombre, base URL,"
+
+msgid "It does not affect users, limit profiles, models, providers or API keys."
+msgstr "No afecta usuarios, perfiles de límites, models, proveedores ni API keys."
+
+msgid "It does not touch models, providers or API keys."
+msgstr "No afecta models, proveedores, ni API keys."
+
+msgid "Last attempt failed:"
+msgstr "Último intento falló:"
+
+msgid "Last update:"
+msgstr "Última actualización:"
+
+msgid "Manage advanced settings and destructive actions."
+msgstr "Administra configuraciones avanzadas y acciones destructivas."
+
+msgid "Models, providers and API keys are not affected."
+msgstr "Modelos, proveedores y API keys no se ven afectados."
+
+msgid "Models:"
+msgstr "Modelos:"
+
+msgid "Provider catalog updated."
+msgstr "Catálogo de proveedores actualizado."
+
+msgid "Providers:"
+msgstr "Proveedores:"
+
+msgid "Refresh now"
+msgstr "Actualizar ahora"
+
+msgid "Refreshing…"
+msgstr "Actualizando…"
+
+msgid "Repeatable or reversible actions: they do not erase data permanently."
+msgstr "Acciones repetibles o reversibles: no borran datos de forma permanente."
+
+msgid "Reset stickies"
+msgstr "Reiniciar stickies"
+
+msgid "Reset sticky sessions"
+msgstr "Reiniciar sticky sessions"
+
+msgid "Reset sticky sessions?"
+msgstr "¿Reiniciar sticky sessions?"
+
+msgid "Review the scope of each one before running it."
+msgstr "Revisa el alcance de cada una antes de ejecutarla."
+
+msgid "The"
+msgstr "El"
+
+msgid "The actions in this section are irreversible. Use them with caution."
+msgstr "Las acciones en esta sección son irreversibles. Úsalas con precaución."
+
+msgid "The next requests will be re-routed from scratch,"
+msgstr "Las próximas requests serán re-ruteadas desde cero,"
+
+msgid "The next requests will be re-routed from scratch."
+msgstr "Las próximas requests serán re-ruteadas desde cero."
+
+msgid "There are currently"
+msgstr "Actualmente hay"
+
+msgid "They cannot be recovered."
+msgstr "No se pueden recuperar."
+
+msgid "This action deletes"
+msgstr "Esta acción borra"
+
+msgid "This deletes"
+msgstr "Esto borra"
+
+msgid "Users, limit profiles, models, providers and API keys are not affected."
+msgstr "Usuarios, perfiles de límites, models, proveedores y API keys no se ven afectados."
+
+msgid "Yes, delete everything"
+msgstr "Sí, eliminar todo"
+
+msgid "Yes, reset stickies"
+msgstr "Sí, reiniciar stickies"
+
+msgid "active entries."
+msgstr "entradas activas."
+
+msgid "active,"
+msgstr "activos,"
+
+msgid "all"
+msgstr "todas"
+
+msgid "and has"
+msgstr "y tiene"
+
+msgid "catalog was empty at boot (the vendored snapshot could not be read): an automatic refresh against models.dev was queued."
+msgstr "estaba vacío al arrancar (el snapshot vendorizado no se pudo leer): se encoló una actualización automática contra models.dev."
+
+msgid "changed its base URL"
+msgstr "cambió su base URL"
+
+msgid "credential(s) in use (nothing has been deleted)."
+msgstr "credencial(es) en uso (no se ha borrado nada)."
+
+msgid "credential(s) in use."
+msgstr "credencial(es) en uso."
+
+msgid "custom providers, and deletes nothing: what is no longer upstream is marked as stale."
+msgstr "proveedores custom, y no borra nada: lo que ya no está upstream se marca como obsoleto."
+
+msgid "docs and logo of the builtins. It does not touch credentials, own models, routing or"
+msgstr "docs y logo de los builtins. No toca credenciales, modelos propios, routing ni"
+
+msgid "every row of"
+msgstr "todos los registros de"
+
+msgid "models.dev catalog"
+msgstr "Catálogo de models.dev"
+
+msgid "no longer appears in models.dev and has"
+msgstr "ya no aparece en models.dev y tiene"
+
+msgid "offers."
+msgstr "ofertas."
+
+msgid "permanently"
+msgstr "permanentemente"
+
+msgid "rows."
+msgstr "registros."
+
+msgid "stale · Labs:"
+msgstr "obsoletos · Labs:"
+
+msgid "stale),"
+msgstr "obsoletos),"
+
+msgid "without preserving the cache affinity."
+msgstr "sin preservar la afinidad de cache."
+
+## OPERACIONES → Observabilidad y Auditoría
+
+msgid "Acting as"
+msgstr "Actuando como"
+
+msgid "Action"
+msgstr "Acción"
+
+msgid "Actor"
+msgstr "Actor"
+
+msgid "Actor (email)"
+msgstr "Actor (email)"
+
+msgid "Clear filters"
+msgstr "Limpiar filtros"
+
+msgid "Could not delete the webhook."
+msgstr "No se pudo eliminar el webhook."
+
+msgid "Delete webhook"
+msgstr "Eliminar webhook"
+
+msgid "Delete webhook? This action cannot be undone."
+msgstr "¿Eliminar webhook? Esta acción no se puede deshacer."
+
+msgid "Detail"
+msgstr "Detalle"
+
+msgid "Edit webhook"
+msgstr "Editar webhook"
+
+msgid "Entity"
+msgstr "Entidad"
+
+msgid "HTTPS endpoint where the telemetry data will be sent (OTLP format)."
+msgstr "Endpoint HTTPS donde se enviarán los datos de telemetría (formato OTLP)."
+
+msgid "IP"
+msgstr "IP"
+
+msgid "Identifying name of the webhook. E.g. “Datadog - Production”."
+msgstr "Nombre identificativo del webhook. Ej.: «Datadog - Producción»."
+
+msgid "New webhook"
+msgstr "Nuevo webhook"
+
+msgid "No events for the selected filters."
+msgstr "Sin eventos para los filtros seleccionados."
+
+msgid "No webhooks configured."
+msgstr "No hay webhooks configurados."
+
+msgid "Search name or URL…"
+msgstr "Buscar nombre o URL…"
+
+msgid "Telemetry webhooks (OTLP) of the whole installation, in one place"
+msgstr "Webhooks de telemetría (OTLP) de toda la instalación, en un solo lugar"
+
+msgid "Webhook"
+msgstr "Webhook"
+
+msgid "Webhook deleted."
+msgstr "Webhook eliminado."
+
+msgid "Webhook saved."
+msgstr "Webhook guardado."
+
+msgid "event"
+msgstr "evento"
+
+msgid "events"
+msgstr "eventos"
+
+msgid "page %{page} of %{total_pages}"
+msgstr "página %{page} de %{total_pages}"
+
+msgid "view"
+msgstr "ver"
+
+## Centinela de datos: logs sin proveedor (lookup en runtime)
+
+msgid "no provider"
+msgstr "sin proveedor"
+
+## ESTADÍSTICAS → KPIs, stats de usuario y de servicio
+
+msgid "Avg TPS"
+msgstr "TPS promedio"
+
+msgid "Cost (5d)"
+msgstr "Costo (5d)"
+
+msgid "Cost (UTC month)"
+msgstr "Costo (mes UTC)"
+
+msgid "Cost (UTC)"
+msgstr "Costo (UTC)"
+
+msgid "Errors (5d)"
+msgstr "Errores (5d)"
+
+msgid "Extra RPM"
+msgstr "RPM extra"
+
+msgid "Extra concurrency"
+msgstr "Concurrencia extra"
+
+msgid "Input tokens (5d)"
+msgstr "Input tokens (5d)"
+
+msgid "Last request"
+msgstr "Último request"
+
+msgid "Memberships (consolidated)"
+msgstr "Membresías (consolidado)"
+
+msgid "No memberships — user without access."
+msgstr "Sin membresías — usuario sin acceso."
+
+msgid "No requests in the last 5 days."
+msgstr "Sin requests en los últimos 5 días."
+
+msgid "No requests with the current filters."
+msgstr "No hay requests con los filtros actuales."
+
+msgid "Output tokens (5d)"
+msgstr "Output tokens (5d)"
+
+msgid "Reported by the provider"
+msgstr "Reportado por el proveedor"
+
+msgid "Requests (5d)"
+msgstr "Requests (5d)"
+
+msgid "Top models (5d)"
+msgstr "Top models (5d)"
+
+msgid "UTC day spend (00:00–24:00 UTC) — the window that resets the global cap"
+msgstr "Gasto del día UTC (00:00–24:00 UTC) — la ventana que reinicia el tope global"
+
+msgid "UTC month spend (from day 1 at 00:00 UTC) — the window that resets the monthly cap"
+msgstr "Gasto del mes UTC (desde el día 1 a las 00:00 UTC) — la ventana que reinicia el tope mensual"
+
+msgid "avg TPS:"
+msgstr "avg TPS:"
+
+msgid "membership"
+msgstr "membresía"
+
+msgid "memberships"
+msgstr "membresías"
+
+msgid "vs previous period"
+msgstr "vs período anterior"
+
+## ESTADÍSTICAS → panel En vivo
+
+msgid " (recovered by fallback)"
+msgstr " (recuperada por fallback)"
+
+msgid "%{count} req/min"
+msgstr "%{count} req/min"
+
+msgid "%{count} tok/min"
+msgstr "%{count} tok/min"
+
+msgid "%{dt} · $%{cost}"
+msgstr "%{dt} · $%{cost}"
+
+msgid "%{dt} · %{count} req"
+msgstr "%{dt} · %{count} req"
+
+msgid "%{dt} · %{input} in / %{output} out"
+msgstr "%{dt} · %{input} in / %{output} out"
+
+msgid "%{hours} hours and %{minutes} minutes left until the cap resets"
+msgstr "Faltan %{hours} horas y %{minutes} minutos para el reinicio del tope"
+
+msgid "%{input} in / %{output} out"
+msgstr "%{input} in / %{output} out"
+
+msgid "Cost per minute"
+msgstr "Costo por minuto"
+
+msgid "Hours and minutes left until the cap resets (00:00 UTC)"
+msgstr "Horas y minutos restantes hasta el reinicio del tope (00:00 UTC)"
+
+msgid "Latency of today's requests — average and p95"
+msgstr "Latencia de las requests de hoy — media y p95"
+
+msgid "Requests / min"
+msgstr "Requests / min"
+
+msgid "Rolling 5-minute window"
+msgstr "Ventana móvil de 5 minutos"
+
+msgid "The provider answered %{provider}; the client received %{client}"
+msgstr "El proveedor respondió %{provider}; el cliente recibió %{client}"
+
+msgid "Today by hour · by provider"
+msgstr "Hoy por hora · por proveedor"
+
+msgid "Today · cost (UTC)"
+msgstr "Hoy · costo (UTC)"
+
+msgid "Today · requests"
+msgstr "Hoy · requests"
+
+msgid "Today · tokens"
+msgstr "Hoy · tokens"
+
+msgid "Tokens per minute"
+msgstr "Tokens por minuto"
+
+msgid "Users, limit profiles or services exempt from the global daily cap"
+msgstr "Usuarios, perfiles de límites o servicios exentos del tope diario global"
+
+msgid "avg"
+msgstr "prom."
+
+msgid "avg: mean per minute of the whole window (minutes without traffic count as 0) · peak: busiest minute"
+msgstr "prom.: media por minuto de la ventana completa (los minutos sin tráfico cuentan como 0) · pico: minuto de mayor tráfico"
+
+msgid "no traffic in the UTC day yet"
+msgstr "sin tráfico en el día UTC todavía"
+
+msgid "no traffic in the last hour"
+msgstr "sin tráfico en la última hora"
+
+msgid "now"
+msgstr "ahora"
+
+msgid "peak"
+msgstr "pico"
+
+msgid "requests in flight right now"
+msgstr "requests en curso ahora"
+
+msgid "stacked bars · 1 bar = 1 hour of the UTC day · color = provider · current hour marked"
+msgstr "barras apiladas · 1 barra = 1 hora del día UTC · color = proveedor · hora en curso marcada"
+
+## ESTADÍSTICAS → Resumen y componentes stats/*
+
+msgid "%{count} req · $%{cost}"
+msgstr "%{count} req · $%{cost}"
+
+msgid "%{hour} %{suffix} · %{count} req · $"
+msgstr "%{hour} %{suffix} · %{count} req · $"
+
+msgid "%{hour} %{suffix} · no traffic"
+msgstr "%{hour} %{suffix} · sin tráfico"
+
+msgid "%{provider} %{count}"
+msgstr "%{provider} %{count}"
+
+msgid "Cache %"
+msgstr "Cache %"
+
+msgid "Calendar-month spend vs the aggregate cap of its members"
+msgstr "Gasto del mes calendario vs límite agregado de sus miembros"
+
+msgid "Calendar-month spend vs the service monthly cap"
+msgstr "Gasto del mes calendario vs límite mensual del servicio"
+
+msgid "Cost / req"
+msgstr "Costo / req"
+
+msgid "Cost reported by the provider for the period"
+msgstr "Costo reportado por el proveedor para el período"
+
+msgid "Daily usage by hour"
+msgstr "Uso por hora del día"
+
+msgid "Daily usage per provider"
+msgstr "Uso diario por proveedor"
+
+msgid "Estimated cost with the custom prices on the left"
+msgstr "Costo estimado con los precios custom de la izquierda"
+
+msgid "Exhausted"
+msgstr "Agotado"
+
+msgid "Filter by email or name…"
+msgstr "Filtrar por correo o nombre…"
+
+msgid "Filter by limit profile…"
+msgstr "Filtrar por perfil de límites…"
+
+msgid "Filter by model…"
+msgstr "Filtrar por modelo…"
+
+msgid "Filter by service…"
+msgstr "Filtrar por servicio…"
+
+msgid "Limit profile members"
+msgstr "Miembros del perfil de límites"
+
+msgid "Marked unlimited: only the global daily cap applies"
+msgstr "Marcado ilimitado: solo topa el cap global diario"
+
+msgid "Model not found."
+msgstr "Modelo no encontrado."
+
+msgid "Models used"
+msgstr "Modelos usados"
+
+msgid "No data"
+msgstr "Sin datos"
+
+msgid "No monthly budget and no top-ups: it cannot spend until a budget or a top-up is assigned"
+msgstr "Sin presupuesto mensual ni top-ups: no puede gastar hasta que se le asigne un presupuesto o un top-up"
+
+msgid "No monthly budget: it only spends against its top-ups (single-use credit)"
+msgstr "Sin presupuesto mensual: gasta solo contra sus top-ups (crédito de un solo uso)"
+
+msgid "Peak concurrency"
+msgstr "Pico de concurrencia"
+
+msgid "Peak hours"
+msgstr "Horas pico"
+
+msgid "Peak minutes"
+msgstr "Minutos pico"
+
+msgid "Percentage of prompt tokens with cache hit"
+msgstr "Porcentaje de prompt tokens con cache hit"
+
+msgid "Provider / Model"
+msgstr "Proveedor / Modelo"
+
+msgid "Providers serving it"
+msgstr "Proveedores que lo sirven"
+
+msgid "Rank"
+msgstr "Puesto"
+
+msgid "The user spend against their effective monthly cap (their own or inherited from their monthly budget) in the current cycle. With no applicable budget: top-ups only."
+msgstr "Gasto del usuario contra su techo mensual efectivo (el suyo o el heredado de su presupuesto mensual) en el ciclo vigente. Sin presupuesto aplicable: solo top-ups."
+
+msgid "This month"
+msgstr "Este mes"
+
+msgid "This week"
+msgstr "Esta semana"
+
+msgid "Unlimited"
+msgstr "Ilimitado"
+
+msgid "no data in the period"
+msgstr "sin datos en el período"
+
+msgid "stacked bars · 1 bar = 1 hour of the day · color = provider · hour in your local time · period aggregate"
+msgstr "barras apiladas · 1 barra = 1 hora del día · color = proveedor · hora en tu hora local · agregado del período"
+
+msgid "· some member without a budget"
+msgstr "· algún miembro sin presupuesto"
+
+## PRESUPUESTO + controladores de sesión/Google
+
+msgid ", UTC day"
+msgstr ", día UTC"
+
+msgid "1 day"
+msgstr "1 día"
+
+msgid "14 days"
+msgstr "14 días"
+
+msgid "3 days"
+msgstr "3 días"
+
+msgid "60 days"
+msgstr "60 días"
+
+msgid "Cap exclusions"
+msgstr "Exclusiones al tope"
+
+msgid "Concurrency per member. Each member can have an extra on top of this value."
+msgstr "Concurrencia por miembro. Cada miembro puede tener un extra que se suma a este valor."
+
+msgid "Could not add the exemption."
+msgstr "No se pudo agregar la exención."
+
+msgid "Could not add the exemption:"
+msgstr "No se pudo agregar la exención:"
+
+msgid "Could not complete the Google authentication."
+msgstr "No se pudo completar la autenticación con Google."
+
+msgid "Could not create the account."
+msgstr "No se pudo crear la cuenta."
+
+msgid "Could not delete the limit profile."
+msgstr "No se pudo eliminar el perfil de límites."
+
+msgid "Could not get your Google information."
+msgstr "No se pudo obtener tu información de Google."
+
+msgid "Could not revoke."
+msgstr "No se pudo revocar."
+
+msgid "Counted from its creation"
+msgstr "Contada desde su creación"
+
+msgid "Deactivate"
+msgstr "Desactivar"
+
+msgid "Delete limit profile? This action cannot be undone."
+msgstr "¿Eliminar perfil de límites? Esta acción no se puede deshacer."
+
+msgid "E.g. 50.00 — everything is cut off when the total spend of the day reaches this amount."
+msgstr "Ej: 50.00 — se corta todo cuando el gasto total del día llega a este monto."
+
+msgid "Edit limit profile"
+msgstr "Editar perfil de límites"
+
+msgid "Edit top-up"
+msgstr "Editar top-up"
+
+msgid "Enforcement counter:"
+msgstr "Contador de enforcement:"
+
+msgid "Exclude"
+msgstr "Excluir"
+
+msgid "Exemption added."
+msgstr "Exención agregada."
+
+msgid "Exemption removed."
+msgstr "Exención eliminada."
+
+msgid "Expiration"
+msgstr "Expiración"
+
+msgid "Expired"
+msgstr "Venció"
+
+msgid "Global daily cap updated."
+msgstr "Tope diario global actualizado."
+
+msgid "Google sign-in is not configured."
+msgstr "Inicio de sesión con Google no está configurado."
+
+msgid "Identifying name of the limit profile."
+msgstr "Nombre identificativo del perfil de límites."
+
+msgid "If it does not go down in a few minutes, it is drift: the"
+msgstr "Si no baja en unos minutos, es drift: el"
+
+msgid "Invalid credentials."
+msgstr "Credenciales inválidas."
+
+msgid "It syncs against the DB on the fly."
+msgstr "Se sincroniza contra la DB al vuelo."
+
+msgid "Limit profile created."
+msgstr "Perfil de límites creado."
+
+msgid "Limit profile deleted."
+msgstr "Perfil de límites eliminado."
+
+msgid "Limit profile models"
+msgstr "Modelos del perfil de límites"
+
+msgid "Limit profile updated."
+msgstr "Perfil de límites actualizado."
+
+msgid "Limit profile…"
+msgstr "Perfil de límites…"
+
+msgid "Manage the limit profile models"
+msgstr "Gestionar modelos del perfil de límites"
+
+msgid "Manage the limit profiles: cap, top-ups and models"
+msgstr "Gestiona los perfiles de límites: techo, top-ups y modelos"
+
+msgid "Maximum total spend cap per day (UTC), adding up all subjects."
+msgstr "Tope máximo de gasto total por día (UTC), sumando todos los sujetos."
+
+msgid "New limit profile"
+msgstr "Nuevo perfil de límites"
+
+msgid "New top-up"
+msgstr "Nuevo top-up"
+
+msgid "No exclusions — every subject counts toward the global cap."
+msgstr "Sin exclusiones — todos los sujetos cuentan para el tope global."
+
+msgid "No expiration"
+msgstr "Sin expiración"
+
+msgid "No limit profiles yet."
+msgstr "No hay perfiles de límites todavía."
+
+msgid "Owner"
+msgstr "Dueño"
+
+msgid "Pick a subject type."
+msgstr "Selecciona un tipo de sujeto."
+
+msgid "Pick who to exclude."
+msgstr "Selecciona a quién excluir."
+
+msgid "Real spend from"
+msgstr "Gasto real de"
+
+msgid "Remove exemption"
+msgstr "Quitar exención"
+
+msgid "Requests per minute per member."
+msgstr "Requests por minuto por miembro."
+
+msgid "Revoke this top-up? The remaining balance stops being granted."
+msgstr "¿Revocar este top-up? El saldo restante deja de otorgarse."
+
+msgid "Search by user or service…"
+msgstr "Buscar por usuario o servicio…"
+
+msgid "Search limit profile…"
+msgstr "Buscar perfil de límites…"
+
+msgid "Service:"
+msgstr "Servicio:"
+
+msgid "Service…"
+msgstr "Servicio…"
+
+msgid "Sign in"
+msgstr "Iniciar sesión"
+
+msgid "Signed in with Google."
+msgstr "Sesión iniciada con Google."
+
+msgid "Signed in."
+msgstr "Sesión iniciada."
+
+msgid "Signed out."
+msgstr "Sesión cerrada."
+
+msgid "Spend cap per UTC day for all subjects, and who is exempt"
+msgstr "Tope de gasto por día UTC para todos los sujetos, y quién queda exento"
+
+msgid "Spent today (total)"
+msgstr "Gastado hoy (total)"
+
+msgid "Subject"
+msgstr "Sujeto"
+
+msgid "The root administrator cannot be impersonated."
+msgstr "No se puede impersonar al administrador principal."
+
+msgid "The spend of these subjects does not count toward the global cap (it still"
+msgstr "El gasto de estos sujetos no cuenta para el tope global (sigue"
+
+msgid "Top-up deactivated — the remaining balance stops being granted."
+msgstr "Top-up desactivado — el saldo restante deja de otorgarse."
+
+msgid "Top-up reactivated."
+msgstr "Top-up reactivado."
+
+msgid "Top-up revoked."
+msgstr "Top-up revocado."
+
+msgid "Top-up saved."
+msgstr "Top-up guardado."
+
+msgid "USD per day"
+msgstr "USD por día"
+
+msgid "User:"
+msgstr "Usuario:"
+
+msgid "User…"
+msgstr "Usuario…"
+
+msgid "Validation error. Try again."
+msgstr "Error de validación. Intenta de nuevo."
+
+msgid "When it is reached, every new request is rejected with 402 until the next"
+msgstr "Cuando se alcanza, toda nueva request se rechaza con 402 hasta el día"
+
+msgid "You are already viewing as another user. Go back to your account first."
+msgstr "Ya estás viendo como otro usuario. Vuelve a tu cuenta primero."
+
+msgid "You are not impersonating any user."
+msgstr "No estás impersonando a ningún usuario."
+
+msgid "You are now viewing as %{email}."
+msgstr "Ahora estás viendo como %{email}."
+
+msgid "You do not have permission to impersonate users."
+msgstr "No tienes permisos para impersonar usuarios."
+
+msgid "You must sign in to continue."
+msgstr "Debes iniciar sesión para continuar."
+
+msgid "Your account is suspended. Contact an administrator."
+msgstr "Tu cuenta está suspendida. Contacta al administrador."
+
+msgid "Your domain is not authorized. Contact an administrator."
+msgstr "Tu dominio no está autorizado. Contacta al administrador."
+
+msgid "counts toward their own monthly budget or top-up)."
+msgstr "contando para su propio presupuesto mensual o top-up)."
+
+msgid "reconciles it against the DB."
+msgstr "lo reconcilia contra la DB."
+
+msgid "user"
+msgstr "usuario"
+
+## Restos: modelos, KPIs, auth y catálogo
+
+msgid "Cache cost (USD / 1M)"
+msgstr "Costo cache (USD / 1M)"
+
+msgid "Granted by your limit profile"
+msgstr "Otorgado por tu perfil de límites"
+
+msgid "Input cost (USD / 1M)"
+msgstr "Costo input (USD / 1M)"
+
+msgid "Member exclusive"
+msgstr "Exclusivo miembro"
+
+msgid "Output cost (USD / 1M)"
+msgstr "Costo output (USD / 1M)"
+
+msgid "Removed for this member (click to restore)"
+msgstr "Quitado para este miembro (clic para restaurar)"
+
+msgid "no dialect"
+msgstr "sin dialecto"
+
+msgid "no data"
+msgstr "sin datos"
+
+msgid "models.dev publishes its base URL as a template (needs your account or endpoint)"
+msgstr "models.dev publica su base URL como plantilla (necesita tu cuenta o endpoint)"

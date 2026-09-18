@@ -64,7 +64,7 @@ defmodule Tokengate.Budgets.ExemptionsTest do
         })
 
       refute changeset.valid?
-      assert "es obligatorio para este tipo de sujeto" in errors_on(changeset).user_id
+      assert "is required for this subject type" in errors_on(changeset).user_id
     end
 
     test "rejects multiple subjects" do
@@ -80,7 +80,7 @@ defmodule Tokengate.Budgets.ExemptionsTest do
         })
 
       refute changeset.valid?
-      assert "solo un sujeto por exención" in errors_on(changeset).subject_type
+      assert "only one subject per exemption" in errors_on(changeset).subject_type
     end
 
     test "rejects unknown scope and subject_type" do

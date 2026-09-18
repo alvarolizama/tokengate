@@ -1333,6 +1333,18 @@ defmodule TokengateWeb.ProxyController do
         "alerts",
         {:credential_error, credential.id, reason}
       )
+
+      # Aviso de Telegram: una credencial de proveedor fuera de juego (401/402/403
+      # — key inválida, sin saldo, prohibida) es exactamente el "se bloqueó una
+      # API key de proveedor" que un operador quiere saber al instante. Corre en
+      # esta Task para no tocar el camino caliente del proxy.
+      Tokengate.Notifications.emit(:credential_disabled, %{
+        entity_type: "credential",
+        entity_id: credential.id,
+        target_label: credential.name,
+        reason: reason,
+        payload: %{reason: reason}
+      })
     end)
   end
 

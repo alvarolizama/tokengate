@@ -28,8 +28,11 @@ defmodule Tokengate.Logs do
   @export_limit 50_000
 
   # Etiqueta de los logs sin proveedor en el desglose por hora del día
-  # (fallo antes del routing, o provider ya borrado).
-  @no_provider "sin proveedor"
+  # (fallo antes del routing, o provider ya borrado). Es un valor de DATOS:
+  # `Metrics.Rollup` tiene que devolver el MISMO string para que la tarjeta
+  # compartida no cambie de nombre entre pestañas. La traducción se hace al
+  # pintar (`TokengateWeb.StatsHelpers.provider_label/1`).
+  @no_provider "no provider"
 
   # ---------------------------------------------------------------------------
   # Insert

@@ -32,12 +32,12 @@ defmodule TokengateWeb.ServicesLive do
     if user.global_role != "admin" do
       {:ok,
        socket
-       |> put_flash(:error, "No tienes permisos para acceder a esta sección.")
+       |> put_flash(:error, gettext("You do not have permission to access this section."))
        |> redirect(to: "/dashboard")}
     else
       socket =
         socket
-        |> assign(:page_title, "Servicios · Tokengate")
+        |> assign(:page_title, gettext("Services") <> " · Tokengate")
         |> stream_configure(:services, dom_id: &"service-#{&1.id}")
         |> assign(:is_admin, true)
         |> require_admin_hook()
@@ -344,7 +344,7 @@ defmodule TokengateWeb.ServicesLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Servicio eliminado.")
+         |> put_flash(:info, gettext("Service deleted."))
          |> assign(:delete_target_id, nil)
          |> assign(:delete_target_name, nil)
          |> push_event("close_modal", %{id: "delete-service-modal"})
@@ -356,10 +356,10 @@ defmodule TokengateWeb.ServicesLive do
           |> Enum.map(fn {field, {message, _}} -> "#{field} #{message}" end)
           |> Enum.join(", ")
 
-        {:noreply, put_flash(socket, :error, "No se pudo eliminar: #{msg}")}
+        {:noreply, put_flash(socket, :error, gettext("Could not delete: %{reason}", reason: msg))}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo eliminar el servicio.")}
+        {:noreply, put_flash(socket, :error, gettext("Could not delete the service."))}
     end
   end
 
@@ -388,7 +388,7 @@ defmodule TokengateWeb.ServicesLive do
   def handle_event("manage_keys", %{"id" => service_id}, socket) do
     case Accounts.get_service(service_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, "Servicio no encontrado.")}
+        {:noreply, put_flash(socket, :error, gettext("Service not found."))}
 
       service ->
         {:noreply,
@@ -437,12 +437,12 @@ defmodule TokengateWeb.ServicesLive do
           {:noreply,
            socket
            |> assign(:new_token, token)
-           |> put_flash(:info, "Clave creada. Cópiala ahora: no se vuelve a mostrar.")
+           |> put_flash(:info, gettext("Key created. Copy it now: it is not shown again."))
            |> load_service_keys(service_id)
            |> load_services()}
 
         {:error, _changeset} ->
-          {:noreply, put_flash(socket, :error, "No se pudo crear la clave.")}
+          {:noreply, put_flash(socket, :error, gettext("Could not create the key."))}
       end
     else
       {:noreply, socket}
@@ -461,15 +461,15 @@ defmodule TokengateWeb.ServicesLive do
 
           {:noreply,
            socket
-           |> put_flash(:info, "Clave revocada.")
+           |> put_flash(:info, gettext("Key revoked."))
            |> load_service_keys(socket.assigns.keys_service_id)
            |> load_services()}
 
         {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudo revocar la clave.")}
+          {:noreply, put_flash(socket, :error, gettext("Could not revoke the key."))}
       end
     else
-      _ -> {:noreply, put_flash(socket, :error, "Clave no encontrada.")}
+      _ -> {:noreply, put_flash(socket, :error, gettext("Key not found."))}
     end
   end
 
@@ -482,7 +482,7 @@ defmodule TokengateWeb.ServicesLive do
   def handle_event("clear_service_sticky_routes", %{"id" => service_id}, socket) do
     case Accounts.get_service(service_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, "Servicio no encontrado.")}
+        {:noreply, put_flash(socket, :error, gettext("Service not found."))}
 
       service ->
         Accounts.clear_service_sticky_routes(service_id)
@@ -493,7 +493,9 @@ defmodule TokengateWeb.ServicesLive do
          socket
          |> put_flash(
            :info,
-           "Sticky routes limpiadas para #{service.name}. Su próxima petición se re-ruteará."
+           gettext("Sticky routes cleared for %{who}. Their next request will be re-routed.",
+             who: service.name
+           )
          )
          |> load_service_keys(service_id)}
     end
@@ -532,7 +534,7 @@ defmodule TokengateWeb.ServicesLive do
          |> assign(:granted_models, granted_models)}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo actualizar el modelo.")}
+        {:noreply, put_flash(socket, :error, gettext("Could not update the model."))}
     end
   end
 
@@ -577,13 +579,13 @@ defmodule TokengateWeb.ServicesLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Supervisor agregado.")
+         |> put_flash(:info, gettext("Supervisor added."))
          |> assign(:supervisor_search_results, [])
          |> assign(:supervisor_search_query, "")
          |> load_services()}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo agregar el supervisor.")}
+        {:noreply, put_flash(socket, :error, gettext("Could not add the supervisor."))}
     end
   end
 
@@ -598,11 +600,11 @@ defmodule TokengateWeb.ServicesLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Supervisor removido.")
+         |> put_flash(:info, gettext("Supervisor removed."))
          |> load_services()}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo remover el supervisor.")}
+        {:noreply, put_flash(socket, :error, gettext("Could not remove the supervisor."))}
     end
   end
 
@@ -632,7 +634,7 @@ defmodule TokengateWeb.ServicesLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Servicio creado.")
+         |> put_flash(:info, gettext("Service created."))
          |> assign(:form, nil)
          |> assign(:editing_service_id, nil)
          |> load_services()}
@@ -660,7 +662,7 @@ defmodule TokengateWeb.ServicesLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Servicio actualizado.")
+         |> put_flash(:info, gettext("Service updated."))
          |> assign(:form, nil)
          |> assign(:editing_service_id, nil)
          |> load_services()}
@@ -743,14 +745,14 @@ defmodule TokengateWeb.ServicesLive do
     >
       <div class="space-y-6">
         <.header>
-          Servicios
-          <:subtitle>API keys para servicios sin usuario asociado</:subtitle>
+          {gettext("Services")}
+          <:subtitle>{gettext("API keys for services without an associated user")}</:subtitle>
           <:actions>
             <div class="flex items-center gap-3">
               <.admin_search
                 event="search_services"
                 value={@search_query}
-                placeholder="Buscar por nombre o perfil de límites..."
+                placeholder={gettext("Search by name or limit profile…")}
                 input_id="service-search"
               />
               <.button phx-click="new_service" id="new-service-btn">
@@ -763,14 +765,18 @@ defmodule TokengateWeb.ServicesLive do
         <%!-- Service form (create / edit) — modal --%>
         <.admin_modal :if={@form} id="service-form-modal" on_close="cancel_form">
           <h2 class="text-lg font-semibold mb-4">
-            {if @editing_service_id == :new, do: "Nuevo servicio", else: "Editar servicio"}
+            {if @editing_service_id == :new, do: gettext("New service"), else: gettext("Edit service")}
           </h2>
           <.form for={@form} id="service-form" phx-submit="save_service">
             <.input
               field={@form[:name]}
               type="text"
-              label="Nombre"
-              hint={"Nombre identificativo del servicio. Ej.: \"Bot de Telegram\", \"Webhook de Shopify\"."}
+              label={gettext("Name")}
+              hint={
+                gettext(
+                  "Identifying name of the service, e.g. \"Telegram bot\" or \"Shopify webhook\"."
+                )
+              }
             />
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-3">
               <.input
@@ -778,33 +784,37 @@ defmodule TokengateWeb.ServicesLive do
                 type="number"
                 step="0.01"
                 min="0"
-                label="Límite mensual (USD)"
-                hint="0 = cero (no deja gastar). Vacío = sin presupuesto (solo top-ups)."
+                label={gettext("Monthly cap (USD)")}
+                hint={gettext("0 = zero spend. Empty = no budget (top-ups only).")}
               />
               <.input
                 field={@form[:unlimited_spend]}
                 type="checkbox"
                 label="Ilimitado"
-                hint="Único camino a ilimitado; gana sobre el límite."
+                hint={gettext("The only path to unlimited; it wins over the cap.")}
               />
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
               <.input
                 field={@form[:concurrency_limit]}
                 type="number"
-                label="Concurrencia"
-                hint="Límite absoluto (default 5 si se deja vacío)."
+                label={gettext("Concurrency")}
+                hint={gettext("Absolute cap (defaults to 5 when empty).")}
               />
               <.input
                 field={@form[:rpm_limit]}
                 type="number"
                 label="RPM"
-                hint="Límite absoluto (default 60 si se deja vacío)."
+                hint={gettext("Absolute cap (defaults to 60 when empty).")}
               />
             </div>
             <div class="flex gap-2 mt-4 justify-end">
-              <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
-              <button type="submit" class="btn btn-primary btn-sm" id="save-service-btn">Guardar</button>
+              <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">{gettext(
+                "Cancel"
+              )}</button>
+              <button type="submit" class="btn btn-primary btn-sm" id="save-service-btn">{gettext(
+                "Save"
+              )}</button>
             </div>
           </.form>
         </.admin_modal>
@@ -820,7 +830,7 @@ defmodule TokengateWeb.ServicesLive do
             Claves API de <span class="text-primary">{@keys_service_name}</span>
           </h2>
           <p class="text-xs text-base-content/50 mb-4">
-            Un servicio puede tener varias claves activas, cada una con su etiqueta.
+            {gettext("A service can have several active keys, each with its own label.")}
           </p>
 
           <.keys_panel
@@ -833,12 +843,12 @@ defmodule TokengateWeb.ServicesLive do
             revoke_event="revoke_service_key"
             dismiss_event="dismiss_new_key_token"
             sticky_event="clear_service_sticky_routes"
-            empty_text="Este servicio no tiene claves activas."
+            empty_text={gettext("This service has no active keys.")}
           />
 
           <div class="flex gap-2 mt-4 justify-end">
             <button type="button" phx-click="cancel_manage_keys" class="btn btn-ghost btn-sm">
-              Cerrar
+              {gettext("Close")}
             </button>
           </div>
         </.admin_modal>
@@ -849,7 +859,7 @@ defmodule TokengateWeb.ServicesLive do
           id={"models-modal-#{@models_service_id}"}
           on_close="close_models"
         >
-          <h2 class="text-lg font-semibold mb-4">Modelos del servicio</h2>
+          <h2 class="text-lg font-semibold mb-4">{gettext("Service models")}</h2>
           <.model_picker
             id={"model-picker-#{@models_service_id}"}
             models={@models}
@@ -865,7 +875,7 @@ defmodule TokengateWeb.ServicesLive do
               class="btn btn-primary btn-sm"
               id="close-models-btn"
             >
-              Listo
+              {gettext("Done")}
             </button>
           </div>
         </.admin_modal>
@@ -889,30 +899,32 @@ defmodule TokengateWeb.ServicesLive do
           <div class="grid grid-cols-2 sm:grid-cols-4 gap-3">
             <div class="card bg-base-100 border border-base-300 shadow-sm">
               <div class="card-body p-4">
-                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Gasto real</span>
+                <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">{gettext(
+                  "Actual spend"
+                )}</span>
                 <p class="text-lg font-bold">${format_decimal(stats.total_cost)}</p>
-                <p class="text-xs text-base-content/40">30 días</p>
+                <p class="text-xs text-base-content/40">{gettext("30 days")}</p>
               </div>
             </div>
             <div class="card bg-base-100 border border-base-300 shadow-sm">
               <div class="card-body p-4">
                 <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Requests</span>
                 <p class="text-lg font-bold">{format_number(stats.total_requests)}</p>
-                <p class="text-xs text-base-content/40">30 días</p>
+                <p class="text-xs text-base-content/40">{gettext("30 days")}</p>
               </div>
             </div>
             <div class="card bg-base-100 border border-base-300 shadow-sm">
               <div class="card-body p-4">
                 <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens In</span>
                 <p class="text-lg font-bold">{format_number(stats.total_input_tokens)}</p>
-                <p class="text-xs text-base-content/40">30 días</p>
+                <p class="text-xs text-base-content/40">{gettext("30 days")}</p>
               </div>
             </div>
             <div class="card bg-base-100 border border-base-300 shadow-sm">
               <div class="card-body p-4">
                 <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">Tokens Out</span>
                 <p class="text-lg font-bold">{format_number(stats.total_output_tokens)}</p>
-                <p class="text-xs text-base-content/40">30 días</p>
+                <p class="text-xs text-base-content/40">{gettext("30 days")}</p>
               </div>
             </div>
           </div>
@@ -922,11 +934,13 @@ defmodule TokengateWeb.ServicesLive do
           <div class="mt-4 p-3 bg-base-200 rounded-lg">
             <div class="flex items-center justify-between mb-2">
               <div>
-                <p class="text-sm font-medium">Supervisores</p>
+                <p class="text-sm font-medium">{gettext("Supervisors")}</p>
                 <p class="text-xs text-base-content/60">
-                  Ven sus servicios asignados en <code>/services/supervised</code> (solo lectura):
-                  resumen por servicio y stats completos por servicio. Al quitar a un supervisor
-                  pierde el acceso de inmediato.
+                  {gettext("They see their assigned services at")} <code>/services/supervised</code>
+                  {gettext(
+                    "(read-only): a per-service summary and full per-service stats. Removing a supervisor"
+                  )}
+                  {gettext("revokes the access immediately.")}
                 </p>
               </div>
               <button
@@ -935,13 +949,13 @@ defmodule TokengateWeb.ServicesLive do
                 class="btn btn-ghost btn-xs"
               >
                 {if @supervisor_search_service_id == @detail_service_id,
-                  do: "Cerrar",
-                  else: "Agregar supervisor"}
+                  do: gettext("Close"),
+                  else: gettext("Add supervisor")}
               </button>
             </div>
 
             <div :if={supervisors == []} class="text-xs text-base-content/40">
-              Sin supervisores asignados.
+              {gettext("No supervisors assigned.")}
             </div>
 
             <div :if={supervisors != []} class="flex flex-wrap gap-2">
@@ -960,8 +974,8 @@ defmodule TokengateWeb.ServicesLive do
                   phx-value-service-id={@detail_service_id}
                   phx-value-user-id={supervisor.user_id}
                   class="ml-1 leading-none opacity-70 hover:opacity-100"
-                  title="Quitar supervisor"
-                  aria-label="Quitar supervisor"
+                  title={gettext("Remove supervisor")}
+                  aria-label={gettext("Remove supervisor")}
                 >
                   ×
                 </button>
@@ -977,7 +991,7 @@ defmodule TokengateWeb.ServicesLive do
                 type="text"
                 name="supervisor_query"
                 value={@supervisor_search_query}
-                placeholder="Buscar por email o nombre…"
+                placeholder={gettext("Search by email or name…")}
                 phx-keyup="search_supervisor_users"
                 id="supervisor-search"
               />
@@ -985,7 +999,7 @@ defmodule TokengateWeb.ServicesLive do
                 :if={@supervisor_search_query != "" and @supervisor_search_results == []}
                 class="text-xs text-base-content/40 mt-2"
               >
-                Sin coincidencias.
+                {gettext("No matches.")}
               </div>
               <div
                 :if={@supervisor_search_results != []}
@@ -1013,7 +1027,7 @@ defmodule TokengateWeb.ServicesLive do
               class="btn btn-primary btn-sm"
               id="close-detail-btn"
             >
-              Cerrar
+              {gettext("Close")}
             </button>
           </div>
         </.admin_modal>
@@ -1021,18 +1035,18 @@ defmodule TokengateWeb.ServicesLive do
         <%!-- Delete confirmation modal --%>
         <.admin_delete_modal
           id="delete-service-modal"
-          title="Eliminar servicio"
+          title={gettext("Delete service")}
           target_label={@delete_target_name}
           target_span_id="delete-service-name"
           confirm_event="delete_service"
           confirm_value={@delete_target_id}
           confirm_button_id="confirm-delete-service"
           cancel_button_id="cancel-delete-service"
-          warning_intro="Se borrará permanentemente:"
+          warning_intro={gettext("Will be permanently erased:")}
           warning_items={[
-            "La clave API del servicio",
-            "Los modelos otorgados al servicio",
-            "Los supervisores asignados"
+            gettext("The service API key"),
+            gettext("The models granted to the service"),
+            gettext("The assigned supervisors")
           ]}
         />
 
@@ -1045,7 +1059,7 @@ defmodule TokengateWeb.ServicesLive do
                   <.sort_button
                     event="sort_services"
                     field={:name}
-                    label="Servicio"
+                    label={gettext("Service")}
                     current={@sort_field}
                     direction={@sort_direction}
                   />
@@ -1053,12 +1067,12 @@ defmodule TokengateWeb.ServicesLive do
                 <%!-- Orden: identidad → campos QUE COMPARTE con Usuarios (mismo
                      orden en ambas tablas) → resto de campos propios → Creado →
                      acciones. --%>
-                <th>Claves</th>
+                <th>{gettext("Keys")}</th>
                 <th class="text-right">
                   <.sort_button
                     event="sort_services"
                     field={:limit}
-                    label="Límite mensual (mes UTC)"
+                    label={gettext("Monthly cap (UTC month)")}
                     current={@sort_field}
                     direction={@sort_direction}
                     align="right"
@@ -1068,7 +1082,7 @@ defmodule TokengateWeb.ServicesLive do
                   <.sort_button
                     event="sort_services"
                     field={:monthly_spend}
-                    label="Gasto mensual"
+                    label={gettext("Monthly spend")}
                     current={@sort_field}
                     direction={@sort_direction}
                     align="right"
@@ -1078,13 +1092,13 @@ defmodule TokengateWeb.ServicesLive do
                   <.sort_button
                     event="sort_services"
                     field={:total_spend}
-                    label="Gasto total"
+                    label={gettext("Total spend")}
                     current={@sort_field}
                     direction={@sort_direction}
                     align="right"
                   />
                 </th>
-                <th>Modelos</th>
+                <th>{gettext("Models")}</th>
                 <th class="text-right">
                   <.sort_button
                     event="sort_services"
@@ -1127,7 +1141,7 @@ defmodule TokengateWeb.ServicesLive do
             :if={@services_empty?}
             id="services-empty"
             icon="hero-wrench-screwdriver"
-            message="No hay servicios todavía."
+            message={gettext("No services yet.")}
           />
         </div>
       </div>
@@ -1179,7 +1193,7 @@ defmodule TokengateWeb.ServicesLive do
         phx-value-id={@service.id}
         class="badge badge-sm badge-outline gap-1 hover:badge-primary transition-colors cursor-pointer"
         id={"edit-models-#{@service.id}"}
-        title="Gestionar modelos del servicio"
+        title={gettext("Manage the service models")}
       >
         <.icon name="hero-rectangle-stack" class="w-3 h-3" />
         {length(Map.get(@granted_models, @service.id, []))} modelos
@@ -1197,8 +1211,8 @@ defmodule TokengateWeb.ServicesLive do
           navigate={~p"/stats/services/#{@service.id}"}
           class="btn btn-xs btn-ghost"
           id={"stats-#{@service.id}"}
-          title="Ver stats consolidadas de este servicio"
-          aria-label="Ver stats del servicio"
+          title={gettext("View this service's consolidated stats")}
+          aria-label={gettext("View the service's stats")}
         >
           <.icon name="hero-chart-bar" class="w-3 h-3" />
         </.link>
@@ -1207,8 +1221,8 @@ defmodule TokengateWeb.ServicesLive do
           phx-value-id={@service.id}
           class="btn btn-xs btn-ghost"
           id={"edit-#{@service.id}"}
-          title="Editar servicio"
-          aria-label="Editar servicio"
+          title={gettext("Edit service")}
+          aria-label={gettext("Edit service")}
         >
           <.icon name="hero-pencil" class="w-3 h-3" />
         </button>
@@ -1217,8 +1231,8 @@ defmodule TokengateWeb.ServicesLive do
           phx-value-id={@service.id}
           class="btn btn-xs btn-ghost"
           id={"detail-#{@service.id}"}
-          title="Ver detalle: stats y supervisores"
-          aria-label="Ver detalle del servicio"
+          title={gettext("View detail: stats and supervisors")}
+          aria-label={gettext("View the service detail")}
         >
           <.icon name="hero-eye" class="w-3 h-3" />
         </button>
@@ -1228,8 +1242,8 @@ defmodule TokengateWeb.ServicesLive do
           phx-value-name={@service.name}
           class="btn btn-xs btn-ghost text-error"
           id={"delete-#{@service.id}"}
-          title="Eliminar servicio"
-          aria-label="Eliminar servicio"
+          title={gettext("Delete service")}
+          aria-label={gettext("Delete service")}
         >
           <.icon name="hero-trash" class="w-3 h-3" />
         </button>

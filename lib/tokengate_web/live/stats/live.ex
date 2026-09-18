@@ -55,7 +55,7 @@ defmodule TokengateWeb.StatsLive.LiveSection do
             <div class="flex items-center justify-between flex-wrap gap-2">
               <div class="flex items-center gap-2">
                 <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Tope diario global
+                  {gettext("Global daily cap")}
                 </span>
                 <Stats.budget_badge pct={@org_budget.daily_pct} />
               </div>
@@ -63,7 +63,7 @@ defmodule TokengateWeb.StatsLive.LiveSection do
                 :if={@org_budget.exempt_count > 0}
                 class="badge badge-sm badge-ghost"
                 id="live-org-budget-exempt"
-                title="Usuarios, perfiles de límites o servicios exentos del tope diario global"
+                title={gettext("Users, limit profiles or services exempt from the global daily cap")}
               >
                 {@org_budget.exempt_count} exentos
               </span>
@@ -80,9 +80,13 @@ defmodule TokengateWeb.StatsLive.LiveSection do
               <span
                 class="font-mono tabular-nums text-base-content/60 whitespace-nowrap"
                 id="live-budget-reset-countdown"
-                title="Horas y minutos restantes hasta el reinicio del tope (00:00 UTC)"
+                title={gettext("Hours and minutes left until the cap resets (00:00 UTC)")}
                 aria-label={
-                  "Faltan #{@budget_reset_hours} horas y #{@budget_reset_minutes} minutos para el reinicio del tope"
+                  gettext(
+                    "%{hours} hours and %{minutes} minutes left until the cap resets",
+                    hours: @budget_reset_hours,
+                    minutes: @budget_reset_minutes
+                  )
                 }
               >
                 <span aria-hidden="true">
@@ -106,10 +110,10 @@ defmodule TokengateWeb.StatsLive.LiveSection do
       <div class="grid grid-cols-2 lg:grid-cols-3 gap-4">
         <.kpi_card
           id="live-today-cost"
-          label="Hoy · costo (UTC)"
+          label={gettext("Today · cost (UTC)")}
           icon="hero-currency-dollar"
           accent="accent"
-          title="Gasto del día UTC (00:00–24:00 UTC) — la ventana que reinicia el tope global"
+          title={gettext("UTC day spend (00:00–24:00 UTC) — the window that resets the global cap")}
         >
           ${Stats.format_decimal(@today_metrics.cost_usd)}
           <:sub>
@@ -120,11 +124,14 @@ defmodule TokengateWeb.StatsLive.LiveSection do
 
         <.kpi_card
           id="live-today-tokens"
-          label="Hoy · tokens"
+          label={gettext("Today · tokens")}
           icon="hero-cpu-chip"
           accent="primary"
           title={
-            "#{Stats.format_number(@today_metrics.prompt_tokens)} in / #{Stats.format_number(@today_metrics.completion_tokens)} out"
+            gettext("%{input} in / %{output} out",
+              input: Stats.format_number(@today_metrics.prompt_tokens),
+              output: Stats.format_number(@today_metrics.completion_tokens)
+            )
           }
         >
           <span class="flex items-baseline gap-2">
@@ -151,10 +158,10 @@ defmodule TokengateWeb.StatsLive.LiveSection do
              fila: día UTC. --%>
         <.kpi_card
           id="live-today-requests"
-          label="Hoy · requests"
+          label={gettext("Today · requests")}
           icon="hero-arrow-trending-up"
           accent="primary"
-          title="Latencia de las requests de hoy — media y p95"
+          title={gettext("Latency of today's requests — average and p95")}
         >
           {Stats.format_number(@today_metrics.requests_total)}
           <:sub>
@@ -172,10 +179,10 @@ defmodule TokengateWeb.StatsLive.LiveSection do
       <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <.kpi_card
           id="live-rpm"
-          label="Requests / min"
+          label={gettext("Requests / min")}
           icon="hero-bolt"
           accent="primary"
-          title="Ventana móvil de 5 minutos"
+          title={gettext("Rolling 5-minute window")}
         >
           {@pulse.req_per_min}
           <:sub>ventana 5 min · {Stats.format_number(@pulse.request_count)} requests</:sub>
@@ -198,7 +205,7 @@ defmodule TokengateWeb.StatsLive.LiveSection do
           accent="accent"
         >
           {Stats.format_number(@inflight_count)}
-          <:sub>requests en curso ahora</:sub>
+          <:sub>{gettext("requests in flight right now")}</:sub>
         </.kpi_card>
       </div>
 
@@ -210,7 +217,7 @@ defmodule TokengateWeb.StatsLive.LiveSection do
           id="live-minute-chart"
           metric={:requests}
           icon="hero-chart-bar"
-          title="Requests por minuto"
+          title={gettext("Requests per minute")}
           bar_class="bg-primary/80 group-hover:bg-primary"
           series={@minute_series}
           max={@minute_series_max}
@@ -219,7 +226,7 @@ defmodule TokengateWeb.StatsLive.LiveSection do
           id="live-tokens-minute-chart"
           metric={:tokens}
           icon="hero-cpu-chip"
-          title="Tokens por minuto"
+          title={gettext("Tokens per minute")}
           bar_class="bg-accent/80 group-hover:bg-accent"
           series={@minute_series}
           max={@minute_tokens_max}
@@ -228,7 +235,7 @@ defmodule TokengateWeb.StatsLive.LiveSection do
           id="live-cost-minute-chart"
           metric={:cost}
           icon="hero-currency-dollar"
-          title="Costo por minuto"
+          title={gettext("Cost per minute")}
           bar_class="bg-success/80 group-hover:bg-success"
           series={@minute_series}
           max={@minute_cost_max}
@@ -249,10 +256,14 @@ defmodule TokengateWeb.StatsLive.LiveSection do
         <DayHourChart.day_hour_chart
           id="live-day-hour-chart"
           rows={@day_by_hour}
-          title="Hoy por hora · por proveedor"
-          hint="barras apiladas · 1 barra = 1 hora del día UTC · color = proveedor · hora en curso marcada"
+          title={gettext("Today by hour · by provider")}
+          hint={
+            gettext(
+              "stacked bars · 1 bar = 1 hour of the UTC day · color = provider · current hour marked"
+            )
+          }
           hour_suffix="UTC"
-          empty_note="sin tráfico en el día UTC todavía"
+          empty_note={gettext("no traffic in the UTC day yet")}
           now_hour={DateTime.utc_now().hour}
         />
 
@@ -382,9 +393,16 @@ defmodule TokengateWeb.StatsLive.LiveSection do
             :if={@has_data?}
             class="text-xs text-base-content/40 tabular-nums"
             id={"#{@id}-header-stats"}
-            title="prom.: media por minuto de la ventana completa (los minutos sin tráfico cuentan como 0) · pico: minuto de mayor tráfico"
+            title={
+              gettext(
+                "avg: mean per minute of the whole window (minutes without traffic count as 0) · peak: busiest minute"
+              )
+            }
           >
-            prom. {metric_avg(@metric, @avg)} · pico {metric_peak(@metric, @max)}
+            {gettext("avg")} {metric_avg(@metric, @avg)} · {gettext("peak")} {metric_peak(
+              @metric,
+              @max
+            )}
           </span>
         </div>
 
@@ -410,8 +428,10 @@ defmodule TokengateWeb.StatsLive.LiveSection do
 
         <div class="flex items-center justify-between text-[10px] text-base-content/40">
           <span>-60 min</span>
-          <span :if={not @has_data?} class="text-base-content/30">sin tráfico en la última hora</span>
-          <span>ahora</span>
+          <span :if={not @has_data?} class="text-base-content/30">{gettext(
+            "no traffic in the last hour"
+          )}</span>
+          <span>{gettext("now")}</span>
         </div>
       </div>
     </div>
@@ -423,20 +443,33 @@ defmodule TokengateWeb.StatsLive.LiveSection do
   defp metric_value(row, :cost), do: Decimal.to_float(row.cost_usd)
 
   defp bucket_title(row, :cost) do
-    "#{Stats.format_dt(row.bucket)} · $#{Stats.format_decimal(Decimal.round(row.cost_usd, 6))}"
+    gettext("%{dt} · $%{cost}",
+      dt: Stats.format_dt(row.bucket),
+      cost: Stats.format_decimal(Decimal.round(row.cost_usd, 6))
+    )
   end
 
   defp bucket_title(row, :tokens) do
-    "#{Stats.format_dt(row.bucket)} · #{Stats.format_number(row.prompt_tokens)} in / " <>
-      "#{Stats.format_number(row.completion_tokens)} out"
+    gettext("%{dt} · %{input} in / %{output} out",
+      dt: Stats.format_dt(row.bucket),
+      input: Stats.format_number(row.prompt_tokens),
+      output: Stats.format_number(row.completion_tokens)
+    )
   end
 
   defp bucket_title(row, :requests) do
-    "#{Stats.format_dt(row.bucket)} · #{Stats.format_number(row.request_count)} req"
+    gettext("%{dt} · %{count} req",
+      dt: Stats.format_dt(row.bucket),
+      count: Stats.format_number(row.request_count)
+    )
   end
 
-  defp metric_peak(:requests, max), do: "#{Stats.format_number(max)} req/min"
-  defp metric_peak(:tokens, max), do: "#{Stats.format_compact(max)} tok/min"
+  defp metric_peak(:requests, max),
+    do: gettext("%{count} req/min", count: Stats.format_number(max))
+
+  defp metric_peak(:tokens, max),
+    do: gettext("%{count} tok/min", count: Stats.format_compact(max))
+
   defp metric_peak(:cost, max), do: "$#{Float.round(max, 4)}/min"
 
   # Media por minuto de la ventana. El denominador es la ventana completa (los
@@ -458,7 +491,10 @@ defmodule TokengateWeb.StatsLive.LiveSection do
   # leen mejor compactos— y seis decimales para el coste, donde el pico —que va
   # a cuatro— redondearía a cero una hora con gasto real.
   defp metric_avg(:requests, avg), do: "#{format_avg(avg, 1)} req/min"
-  defp metric_avg(:tokens, avg), do: "#{Stats.format_compact(round(avg))} tok/min"
+
+  defp metric_avg(:tokens, avg),
+    do: gettext("%{count} tok/min", count: Stats.format_compact(round(avg)))
+
   defp metric_avg(:cost, avg), do: "$#{format_avg(avg, 6)}/min"
 
   defp format_avg(value, decimals) do
@@ -482,8 +518,11 @@ defmodule TokengateWeb.StatsLive.LiveSection do
   defp provider_cause(%{provider_status_code: provider}), do: "prov #{provider}"
 
   defp provider_mismatch_title(%{provider_status_code: provider, status_code: client}) do
-    "El proveedor respondió #{provider}; el cliente recibió #{client}" <>
-      if(client == 200, do: " (recuperada por fallback)", else: "")
+    gettext("The provider answered %{provider}; the client received %{client}",
+      provider: provider,
+      client: client
+    ) <>
+      if(client == 200, do: gettext(" (recovered by fallback)"), else: "")
   end
 
   defp feed_who(%{subject_type: "service", service: %{name: name}}), do: "svc · #{name}"

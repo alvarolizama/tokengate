@@ -407,7 +407,7 @@ defmodule Tokengate.Providers.Catalog do
   end
 
   def dialect(key) when is_binary(key), do: dialect(%{key: key, npm: nil})
-  def dialect(_), do: {:error, "sin dialecto"}
+  def dialect(_), do: {:error, "no dialect"}
 
   defp dialect_from_npm(npm) do
     case Map.get(@dialect_by_npm, npm) do
@@ -417,11 +417,12 @@ defmodule Tokengate.Providers.Catalog do
   end
 
   @doc """
-  Why a provider cannot be used yet (nil when it can), in Spanish — the
-  add-provider modal shows it on the disabled rows.
+  Why a provider cannot be used yet (nil when it can) — the add-provider modal
+  shows it on the disabled rows. Los textos son msgid en inglés y se traducen al
+  pintar (`TokengateWeb.Gettext.translate/1` en `providers_live`).
   """
   @spec unsupported_reason(map() | nil) :: String.t() | nil
-  def unsupported_reason(nil), do: "sin datos"
+  def unsupported_reason(nil), do: "no data"
 
   def unsupported_reason(entry) when is_map(entry) do
     # The EFFECTIVE URL, not the raw row: a provider models.dev publishes
@@ -439,7 +440,7 @@ defmodule Tokengate.Providers.Catalog do
       # substitution they are not an endpoint, so the row stays unmaterialized
       # instead of pointing at a URL that cannot resolve.
       String.contains?(base, "${") ->
-        "models.dev publica su base URL como plantilla (necesita tu cuenta o endpoint)"
+        "models.dev publishes its base URL as a template (needs your account or endpoint)"
 
       match?({:error, _}, dialect(entry)) ->
         {:error, reason} = dialect(entry)

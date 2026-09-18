@@ -27,6 +27,10 @@ defmodule TokengateWeb.ProvidersLiveTest do
         global_role: "admin"
       })
 
+    # Este archivo afirma los mensajes en español del LiveView; el idioma por
+    # defecto de la UI es inglés, así que el admin arranca en español.
+    {:ok, user} = Accounts.update_user_locale(user, "es")
+
     %{user: user, password: "password-secret-#{u}1"}
   end
 
@@ -40,6 +44,8 @@ defmodule TokengateWeb.ProvidersLiveTest do
         password: "password-secret-#{u}1",
         global_role: "user"
       })
+
+    {:ok, user} = Accounts.update_user_locale(user, "es")
 
     %{user: user, password: "password-secret-#{u}1"}
   end

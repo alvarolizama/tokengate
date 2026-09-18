@@ -9,6 +9,10 @@ defmodule TokengateWeb.TopupHelpers do
 
   use Phoenix.Component
 
+  # Las etiquetas de dueño/estado/expiración se traducen aquí (el módulo no viene
+  # de `TokengateWeb, :html`, así que el backend se declara explícitamente).
+  use Gettext, backend: TokengateWeb.Gettext
+
   alias Tokengate.Credits.Topups
 
   # ---------------------------------------------------------------------------
@@ -48,12 +52,12 @@ defmodule TokengateWeb.TopupHelpers do
   @doc "Nombre del dueño del top-up (usuario o servicio)."
   def owner_label(%{user: %{email: email}}) when is_binary(email), do: email
   def owner_label(%{service: %{name: name}}) when is_binary(name), do: name
-  def owner_label(%{user_id: id}) when is_binary(id), do: "usuario"
+  def owner_label(%{user_id: id}) when is_binary(id), do: gettext("user")
   def owner_label(_), do: "—"
 
   @doc "Tipo de dueño, para la columna."
-  def owner_type(%{user_id: id}) when is_binary(id), do: "Usuario"
-  def owner_type(_), do: "Servicio"
+  def owner_type(%{user_id: id}) when is_binary(id), do: gettext("User")
+  def owner_type(_), do: gettext("Service")
 
   @doc "Etiqueta legible de la expiración."
   def expires_label(nil), do: "Nunca"
@@ -75,7 +79,7 @@ defmodule TokengateWeb.TopupHelpers do
     end
   end
 
-  def state_label(:active), do: "Activo"
+  def state_label(:active), do: gettext("Active")
   def state_label(:revoked), do: "Revocado"
   def state_label(:expired), do: "Vencido"
   def state_label(:exhausted), do: "Agotado"
@@ -100,7 +104,7 @@ defmodule TokengateWeb.TopupHelpers do
   @doc "Motivo del archivo, para el badge."
   def archived_reason(topup) do
     case state(topup) do
-      :expired -> "Venció"
+      :expired -> gettext("Expired")
       :exhausted -> "Agotado"
       :revoked -> "Revocado"
       _ -> nil
@@ -110,14 +114,14 @@ defmodule TokengateWeb.TopupHelpers do
   @doc "Opciones del selector de expiración (nil = sin expiración)."
   def expiry_options do
     [
-      {"Sin expiración", ""},
-      {"1 día", "1"},
-      {"3 días", "3"},
-      {"7 días", "7"},
-      {"14 días", "14"},
-      {"30 días", "30"},
-      {"60 días", "60"},
-      {"90 días", "90"}
+      {gettext("No expiration"), ""},
+      {gettext("1 day"), "1"},
+      {gettext("3 days"), "3"},
+      {gettext("7 days"), "7"},
+      {gettext("14 days"), "14"},
+      {gettext("30 days"), "30"},
+      {gettext("60 days"), "60"},
+      {gettext("90 days"), "90"}
     ]
   end
 

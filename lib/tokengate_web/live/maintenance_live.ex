@@ -29,7 +29,7 @@ defmodule TokengateWeb.MaintenanceLive do
 
     socket =
       socket
-      |> assign(:page_title, "Mantenimiento · Tokengate")
+      |> assign(:page_title, gettext("Maintenance") <> " · Tokengate")
       |> assign(:is_admin, user && user.global_role == "admin")
       |> assign(:confirm_reset, false)
       |> assign(:confirm_sticky_reset, false)
@@ -146,10 +146,10 @@ defmodule TokengateWeb.MaintenanceLive do
         {:noreply,
          socket
          |> assign(:catalog_refreshing, true)
-         |> put_flash(:info, "Actualización del catálogo encolada.")}
+         |> put_flash(:info, gettext("Catalog refresh queued."))}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo encolar la actualización.")}
+        {:noreply, put_flash(socket, :error, gettext("Could not queue the refresh."))}
     end
   end
 
@@ -160,7 +160,7 @@ defmodule TokengateWeb.MaintenanceLive do
     {:noreply,
      socket
      |> assign_catalog()
-     |> put_flash(:info, "Catálogo de proveedores actualizado.")}
+     |> put_flash(:info, gettext("Provider catalog updated."))}
   end
 
   def handle_info(_msg, socket), do: {:noreply, socket}
@@ -178,9 +178,9 @@ defmodule TokengateWeb.MaintenanceLive do
     >
       <div class="max-w-3xl mx-auto space-y-8">
         <div>
-          <h1 class="text-2xl font-bold text-base-content">Mantenimiento</h1>
+          <h1 class="text-2xl font-bold text-base-content">{gettext("Maintenance")}</h1>
           <p class="text-sm text-base-content/60 mt-1">
-            Administra configuraciones avanzadas y acciones destructivas.
+            {gettext("Manage advanced settings and destructive actions.")}
           </p>
         </div>
 
@@ -188,24 +188,25 @@ defmodule TokengateWeb.MaintenanceLive do
         <div class="card bg-base-100 border border-warning/30" id="caution-zone-card">
           <div class="card-body">
             <h2 class="card-title text-warning flex items-center gap-2">
-              <.icon name="hero-shield-exclamation" class="w-5 h-5" /> Zona de precaución
+              <.icon name="hero-shield-exclamation" class="w-5 h-5" /> {gettext("Caution zone")}
             </h2>
             <p class="text-sm text-base-content/60">
-              Acciones repetibles o reversibles: no borran datos de forma permanente.
-              Revisa el alcance de cada una antes de ejecutarla.
+              {gettext("Repeatable or reversible actions: they do not erase data permanently.")}
+              {gettext("Review the scope of each one before running it.")}
             </p>
 
             <div class="divider my-2"></div>
 
             <div class="flex items-center justify-between">
               <div>
-                <h3 class="font-semibold text-base-content">Reiniciar sticky sessions</h3>
+                <h3 class="font-semibold text-base-content">{gettext("Reset sticky sessions")}</h3>
                 <p class="text-sm text-base-content/60">
-                  Borra todas las asignaciones sticky de API key → provider.
-                  Las próximas requests serán re-ruteadas desde cero.
-                  No afecta models, proveedores, ni API keys.
-                  Actualmente hay <span class="font-mono font-semibold">{@sticky_count}</span>
-                  entradas activas.
+                  {gettext("Deletes every sticky API key → provider assignment.")}
+                  {gettext("The next requests will be re-routed from scratch.")}
+                  {gettext("It does not touch models, providers or API keys.")}
+                  {gettext("There are currently")}
+                  <span class="font-mono font-semibold">{@sticky_count}</span>
+                  {gettext("active entries.")}
                 </p>
               </div>
               <button
@@ -214,7 +215,7 @@ defmodule TokengateWeb.MaintenanceLive do
                 class="btn btn-warning btn-outline btn-sm"
                 id="reset-sticky-btn"
               >
-                Reiniciar stickies
+                {gettext("Reset stickies")}
               </button>
             </div>
 
@@ -225,18 +226,24 @@ defmodule TokengateWeb.MaintenanceLive do
                  is deleted, so it belongs in the caution zone. --%>
             <div class="flex items-start justify-between gap-4" id="catalog-refresh-card">
               <div>
-                <h3 class="font-semibold text-base-content">Catálogo de models.dev</h3>
+                <h3 class="font-semibold text-base-content">{gettext("models.dev catalog")}</h3>
                 <p class="text-sm text-base-content/60">
-                  Vuelve a bajar el catálogo (proveedores, labs y modelos) y actualiza nombre, base URL,
-                  docs y logo de los builtins. No toca credenciales, modelos propios, routing ni
-                  proveedores custom, y no borra nada: lo que ya no está upstream se marca como obsoleto.
+                  {gettext(
+                    "Downloads the catalog again (providers, labs and models) and updates name, base URL,"
+                  )}
+                  {gettext(
+                    "docs and logo of the builtins. It does not touch credentials, own models, routing or"
+                  )}
+                  {gettext(
+                    "custom providers, and deletes nothing: what is no longer upstream is marked as stale."
+                  )}
                   <span :if={@catalog_state && @catalog_state.synced_at}>
-                    Última actualización:
+                    {gettext("Last update:")}
                     <span class="font-mono">{fmt_dt(@catalog_state.synced_at)}</span>
                     ({@catalog_state.source || "—"}).
                   </span>
                   <span :if={@catalog_state && @catalog_state.error} class="text-error">
-                    Último intento falló: {@catalog_state.error}
+                    {gettext("Last attempt failed:")} {@catalog_state.error}
                   </span>
                 </p>
 
@@ -248,33 +255,35 @@ defmodule TokengateWeb.MaintenanceLive do
                   <li :for={warning <- @catalog_warnings}>
                     <span :if={warning["reason"] == "base_url_changed"}>
                       <span class="font-mono">{warning["key"]}</span>
-                      cambió su base URL ({warning["from"]} → {warning["to"]}) y tiene
+                      {gettext("changed its base URL")} ({warning["from"]} → {warning["to"]}) {gettext(
+                        "and has"
+                      )}
                       <span class="font-mono">{warning["credentials"]}</span>
-                      credencial(es) en uso.
+                      {gettext("credential(s) in use.")}
                     </span>
                     <span :if={warning["reason"] == "already_stale"}>
                       <span class="font-mono">{warning["key"]}</span>
-                      ya no aparece en models.dev y tiene
+                      {gettext("no longer appears in models.dev and has")}
                       <span class="font-mono">{warning["credentials"]}</span>
-                      credencial(es) en uso (no se ha borrado nada).
+                      {gettext("credential(s) in use (nothing has been deleted).")}
                     </span>
                     <span :if={warning["reason"] == "empty_model_mirror"}>
-                      El catálogo de <span class="font-mono">modelos</span> estaba vacío al
-                      arrancar (el snapshot vendorizado no se pudo leer): se encoló una
-                      actualización automática contra models.dev.
+                      {gettext("The")} <span class="font-mono">{gettext("models")}</span>
+                      {gettext(
+                        "catalog was empty at boot (the vendored snapshot could not be read): an automatic refresh against models.dev was queued."
+                      )}
                     </span>
                   </li>
                 </ul>
 
                 <p class="text-xs text-base-content/40 mt-1">
-                  Proveedores: <span class="font-mono">{@catalog_active_count}</span>
-                  activos, <span class="font-mono">{@catalog_stale_count}</span>
-                  obsoletos · Labs: <span class="font-mono">{@lab_active_count}</span>
-                  ·
-                  Modelos: <span class="font-mono">{@model_active_count}</span>
+                  {gettext("Providers:")} <span class="font-mono">{@catalog_active_count}</span>
+                  {gettext("active,")} <span class="font-mono">{@catalog_stale_count}</span>
+                  {gettext("stale · Labs:")} <span class="font-mono">{@lab_active_count}</span>
+                  · {gettext("Models:")} <span class="font-mono">{@model_active_count}</span>
                   (<span class="font-mono">{@model_stale_count}</span>
-                  obsoletos), <span class="font-mono">{@offer_count}</span>
-                  ofertas.
+                  {gettext("stale),")} <span class="font-mono">{@offer_count}</span>
+                  {gettext("offers.")}
                 </p>
               </div>
 
@@ -285,7 +294,9 @@ defmodule TokengateWeb.MaintenanceLive do
                 id="refresh-catalog-btn"
                 disabled={@catalog_refreshing}
               >
-                {if @catalog_refreshing, do: "Actualizando…", else: "Actualizar ahora"}
+                {if @catalog_refreshing,
+                  do: gettext("Refreshing…"),
+                  else: gettext("Refresh now")}
               </button>
             </div>
           </div>
@@ -295,21 +306,24 @@ defmodule TokengateWeb.MaintenanceLive do
         <div class="card bg-base-100 border border-error/30" id="danger-zone-card">
           <div class="card-body">
             <h2 class="card-title text-error flex items-center gap-2">
-              <.icon name="hero-exclamation-triangle" class="w-5 h-5" /> Zona de peligro
+              <.icon name="hero-exclamation-triangle" class="w-5 h-5" /> {gettext("Danger zone")}
             </h2>
             <p class="text-sm text-base-content/60">
-              Las acciones en esta sección son irreversibles. Úsalas con precaución.
+              {gettext("The actions in this section are irreversible. Use them with caution.")}
             </p>
 
             <div class="divider my-2"></div>
 
             <div class="flex items-center justify-between">
               <div>
-                <h3 class="font-semibold text-base-content">Eliminar historial de logs</h3>
+                <h3 class="font-semibold text-base-content">{gettext("Delete log history")}</h3>
                 <p class="text-sm text-base-content/60">
-                  Borra todas las filas de <code>request_logs</code>.
-                  No afecta usuarios, perfiles de límites, models, proveedores ni API keys.
-                  Actualmente hay <span class="font-mono font-semibold">{@log_count}</span> registros.
+                  {gettext("Deletes every row of")} <code>request_logs</code>. {gettext(
+                    "It does not affect users, limit profiles, models, providers or API keys."
+                  )}
+                  {gettext("There are currently")}
+                  <span class="font-mono font-semibold">{@log_count}</span>
+                  {gettext("rows.")}
                 </p>
               </div>
               <button
@@ -318,7 +332,7 @@ defmodule TokengateWeb.MaintenanceLive do
                 class="btn btn-error btn-outline btn-sm"
                 id="reset-logs-btn"
               >
-                Eliminar logs
+                {gettext("Delete logs")}
               </button>
             </div>
           </div>
@@ -331,18 +345,22 @@ defmodule TokengateWeb.MaintenanceLive do
         <div class="relative card bg-base-100 border border-error/50 shadow-xl w-full max-w-md">
           <div class="card-body">
             <h3 class="card-title text-error flex items-center gap-2">
-              <.icon name="hero-exclamation-triangle" class="w-5 h-5" /> ¿Eliminar todo el historial?
+              <.icon name="hero-exclamation-triangle" class="w-5 h-5" /> {gettext(
+                "Delete the whole history?"
+              )}
             </h3>
             <p class="text-sm text-base-content/70 mt-2">
-              Esta acción borra <strong>permanentemente</strong>
-              todos los registros de <code>request_logs</code>. No se pueden recuperar.
+              {gettext("This action deletes")} <strong>{gettext("permanently")}</strong>
+              {gettext("every row of")} <code>request_logs</code>. {gettext(
+                "They cannot be recovered."
+              )}
             </p>
             <p class="text-sm text-base-content/70">
-              Usuarios, perfiles de límites, models, proveedores y API keys no se ven afectados.
+              {gettext("Users, limit profiles, models, providers and API keys are not affected.")}
             </p>
             <div class="flex gap-2 mt-4 justify-end">
               <button type="button" phx-click="cancel_reset" class="btn btn-ghost btn-sm">
-                Cancelar
+                {gettext("Cancel")}
               </button>
               <button
                 type="button"
@@ -350,7 +368,7 @@ defmodule TokengateWeb.MaintenanceLive do
                 class="btn btn-error btn-sm"
                 id="confirm-reset-logs-btn"
               >
-                Sí, eliminar todo
+                {gettext("Yes, delete everything")}
               </button>
             </div>
           </div>
@@ -363,19 +381,22 @@ defmodule TokengateWeb.MaintenanceLive do
         <div class="relative card bg-base-100 border border-warning/50 shadow-xl w-full max-w-md">
           <div class="card-body">
             <h3 class="card-title text-warning flex items-center gap-2">
-              <.icon name="hero-exclamation-triangle" class="w-5 h-5" /> ¿Reiniciar sticky sessions?
+              <.icon name="hero-exclamation-triangle" class="w-5 h-5" /> {gettext(
+                "Reset sticky sessions?"
+              )}
             </h3>
             <p class="text-sm text-base-content/70 mt-2">
-              Esto borra <strong>todas</strong> las asignaciones de API key a provider.
-              Las próximas requests serán re-ruteadas desde cero,
-              sin preservar la afinidad de cache.
+              {gettext("This deletes")}
+              <strong>{gettext("all")}</strong> {gettext("API key to provider assignments.")}
+              {gettext("The next requests will be re-routed from scratch,")}
+              {gettext("without preserving the cache affinity.")}
             </p>
             <p class="text-sm text-base-content/70">
-              Modelos, proveedores y API keys no se ven afectados.
+              {gettext("Models, providers and API keys are not affected.")}
             </p>
             <div class="flex gap-2 mt-4 justify-end">
               <button type="button" phx-click="cancel_sticky_reset" class="btn btn-ghost btn-sm">
-                Cancelar
+                {gettext("Cancel")}
               </button>
               <button
                 type="button"
@@ -383,7 +404,7 @@ defmodule TokengateWeb.MaintenanceLive do
                 class="btn btn-warning btn-sm"
                 id="confirm-reset-sticky-btn"
               >
-                Sí, reiniciar stickies
+                {gettext("Yes, reset stickies")}
               </button>
             </div>
           </div>

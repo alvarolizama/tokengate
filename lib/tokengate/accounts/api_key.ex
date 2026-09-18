@@ -61,10 +61,10 @@ defmodule Tokengate.Accounts.ApiKey do
         changeset
 
       subject_type == "member" ->
-        add_error(changeset, :user_id, "la key del miembro necesita un dueño (user_id)")
+        add_error(changeset, :user_id, "the member key needs an owner (user_id)")
 
       true ->
-        add_error(changeset, :subject_type, "debe coincidir con el subject asignado")
+        add_error(changeset, :subject_type, "must match the assigned subject")
     end
   end
 end

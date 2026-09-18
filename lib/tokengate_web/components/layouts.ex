@@ -120,8 +120,8 @@ defmodule TokengateWeb.Layouts do
         >
           <.icon name="hero-eye" class="w-4 h-4" />
           <span>
-            Viendo como <strong>{@current_scope && @current_scope.email}</strong>
-            — sesión de {@impersonator.email}
+            {gettext("Viewing as")} <strong>{@current_scope && @current_scope.email}</strong>
+            — {gettext("session of")} {@impersonator.email}
           </span>
           <.link
             href={~p"/impersonate"}
@@ -129,7 +129,7 @@ defmodule TokengateWeb.Layouts do
             class="btn btn-xs btn-neutral"
             id="stop-impersonating"
           >
-            Volver a mi cuenta
+            {gettext("Back to my account")}
           </.link>
         </div>
 
@@ -160,7 +160,7 @@ defmodule TokengateWeb.Layouts do
       <label
         for="dashboard-drawer"
         class="btn btn-ghost btn-square btn-sm lg:hidden"
-        aria-label="Abrir menú"
+        aria-label={gettext("Open menu")}
       >
         <.icon name="hero-bars-3" class="w-5 h-5" />
       </label>
@@ -195,11 +195,11 @@ defmodule TokengateWeb.Layouts do
           href={~p"/logout"}
           method="delete"
           class="btn btn-ghost btn-sm"
-          data-confirm="¿Cerrar sesión?"
+          data-confirm={gettext("Sign out?")}
           id="logout-button"
         >
           <.icon name="hero-arrow-right-on-rectangle" class="w-5 h-5" />
-          <span class="hidden sm:inline">Salir</span>
+          <span class="hidden sm:inline">{gettext("Sign out")}</span>
         </.link>
       </div>
     </header>
@@ -228,7 +228,7 @@ defmodule TokengateWeb.Layouts do
 
     ~H"""
     <aside class="drawer-side z-40">
-      <label for="dashboard-drawer" class="drawer-overlay" aria-label="Cerrar menú" />
+      <label for="dashboard-drawer" class="drawer-overlay" aria-label={gettext("Close menu")} />
 
       <div class="min-h-full w-64 bg-base-100 border-r border-base-300 flex flex-col">
         <div class="h-16 flex items-center gap-2 px-6 border-b border-base-300">
@@ -243,7 +243,7 @@ defmodule TokengateWeb.Layouts do
             <.sidebar_link
               current_path={@current_path}
               href={~p"/dashboard"}
-              label="Dashboard"
+              label={gettext("Dashboard")}
               icon="hero-chart-bar-square"
             />
 
@@ -253,7 +253,7 @@ defmodule TokengateWeb.Layouts do
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/services/supervised"}
-                label="Servicios supervisados"
+                label={gettext("Supervised services")}
                 icon="hero-eye"
               />
             <% end %>
@@ -262,56 +262,56 @@ defmodule TokengateWeb.Layouts do
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/stats"}
-                label="Estadísticas"
+                label={gettext("Stats")}
                 icon="hero-chart-pie"
               />
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/calculator"}
-                label="Calculadora"
+                label={gettext("Calculator")}
                 icon="hero-calculator"
               />
             <% end %>
           </div>
 
           <%= if admin?(@current_scope) do %>
-            <.sidebar_section id="sidebar-section-catalogo" label="Catálogo">
+            <.sidebar_section id="sidebar-section-catalogo" label={gettext("Catalog")}>
               <%!-- Labs (quién construyó cada modelo) va antes de Proveedores:
                    el lab es el nivel más alto y no depende del proveedor. --%>
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/catalog/labs"}
-                label="Labs"
+                label={gettext("Labs")}
                 icon="hero-beaker"
               />
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/catalog/providers"}
-                label="Proveedores"
+                label={gettext("Providers")}
                 icon="hero-server-stack"
                 badge={@alert_count}
               />
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/catalog/models"}
-                label="Modelos"
+                label={gettext("Models")}
                 icon="hero-rectangle-stack"
               />
             </.sidebar_section>
 
-            <.sidebar_section id="sidebar-section-acceso" label="Acceso">
+            <.sidebar_section id="sidebar-section-acceso" label={gettext("Access")}>
               <%!-- Servicios va antes de Usuarios: un servicio no depende de
                    una sub mensual, así que se lista primero. --%>
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/access/services"}
-                label="Servicios"
+                label={gettext("Services")}
                 icon="hero-wrench-screwdriver"
               />
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/access/users"}
-                label="Usuarios"
+                label={gettext("Users")}
                 icon="hero-users"
               />
             </.sidebar_section>
@@ -325,53 +325,64 @@ defmodule TokengateWeb.Layouts do
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/budget/profiles"}
-                label={gettext("Perfiles de límites")}
+                label={gettext("Limit profiles")}
                 icon="hero-user-group"
               />
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/budget/topups"}
-                label="Top-ups"
+                label={gettext("Top-ups")}
                 icon="hero-arrow-up-circle"
               />
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/budget/global"}
-                label="Tope diario global"
+                label={gettext("Global daily cap")}
                 icon="hero-globe-americas"
               />
             </.sidebar_section>
 
-            <.sidebar_section id="sidebar-section-operaciones" label="Operaciones">
+            <.sidebar_section id="sidebar-section-operaciones" label={gettext("Operations")}>
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/operations/monitoring"}
-                label="Monitoring"
+                label={gettext("Monitoring")}
                 icon="hero-signal"
               />
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/operations/audit"}
-                label="Auditoría"
+                label={gettext("Audit")}
                 icon="hero-clipboard-document-list"
               />
               <.sidebar_link
                 current_path={@current_path}
                 href={~p"/operations/observability"}
-                label="Observabilidad"
+                label={gettext("Observability")}
                 icon="hero-bell-alert"
               />
               <.sidebar_link
                 current_path={@current_path}
+                href={~p"/operations/notifications"}
+                label={gettext("Notifications")}
+                icon="hero-paper-airplane"
+              />
+              <.sidebar_link
+                current_path={@current_path}
                 href={~p"/operations/maintenance"}
-                label="Mantenimiento"
+                label={gettext("Maintenance")}
                 icon="hero-cog-6-tooth"
               />
             </.sidebar_section>
           <% end %>
         </nav>
 
-        <.timezone_selector current_scope={@current_scope} />
+        <%!-- Idioma y zona horaria: los dos selectores de preferencias del
+             usuario, uno al lado del otro al pie del sidebar. --%>
+        <div class="px-3 pb-3 border-t border-base-300 pt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-2">
+          <.locale_selector current_scope={@current_scope} />
+          <.timezone_selector current_scope={@current_scope} />
+        </div>
       </div>
     </aside>
     """
@@ -455,13 +466,13 @@ defmodule TokengateWeb.Layouts do
     assigns = Phoenix.Component.assign(assigns, :current_timezone, tz || "Etc/UTC")
 
     ~H"""
-    <div class="px-3 pb-3 border-t border-base-300 pt-3" id="timezone-selector">
+    <div id="timezone-selector">
       <.form for={%{}} phx-change="set-timezone" id="tz-form">
         <label
           for="tz-select"
           class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-base-content/40 mb-1.5"
         >
-          <.icon name="hero-clock" class="w-4 h-4" /> Zona horaria
+          <.icon name="hero-clock" class="w-4 h-4" /> {gettext("Timezone")}
         </label>
         <select
           id="tz-select"
@@ -483,8 +494,57 @@ defmodule TokengateWeb.Layouts do
     """
   end
 
-  defp role_label("admin"), do: "Administrador"
-  defp role_label("user"), do: "Usuario"
+  # Idioma de la UI. Cada opción sale de `TokengateWeb.Gettext.ui_locales/0`
+  # (la config), así que agregar un idioma no toca esta plantilla; el nombre
+  # visible sí es un msgid propio.
+  #
+  # El idioma activo se lee del usuario (`current_scope.locale`), igual que la
+  # zona horaria: es la verdad durable y sobrevive al evento porque el hook
+  # reasigna `:current_user`.
+  attr :current_scope, :map, default: nil
+
+  defp locale_selector(assigns) do
+    assigns =
+      Phoenix.Component.assign(
+        assigns,
+        :current_locale,
+        TokengateWeb.Gettext.locale_of(assigns.current_scope)
+      )
+
+    ~H"""
+    <div id="locale-selector">
+      <.form for={%{}} phx-change="set-locale" id="locale-form">
+        <label
+          for="locale-select"
+          class="flex items-center gap-2 text-xs font-semibold uppercase tracking-wide text-base-content/40 mb-1.5"
+        >
+          <.icon name="hero-language" class="w-4 h-4" /> {gettext("Language")}
+        </label>
+        <select
+          id="locale-select"
+          name="locale"
+          class="select select-bordered select-sm w-full text-xs"
+        >
+          <%= for locale <- TokengateWeb.Gettext.ui_locales() do %>
+            <option value={locale} selected={locale == @current_locale}>
+              {locale_label(locale)}
+            </option>
+          <% end %>
+        </select>
+      </.form>
+    </div>
+    """
+  end
+
+  # Banderas + código ISO: el `<select>` queda estrecho (el ancho lo marcaba el
+  # texto "English") y el texto no necesita traducción — el nombre de un idioma
+  # se escribe en su propio idioma, así que no es un msgid.
+  defp locale_label("en"), do: "🇬🇧 EN"
+  defp locale_label("es"), do: "🇪🇸 ES"
+  defp locale_label(other), do: String.upcase(other)
+
+  defp role_label("admin"), do: gettext("Administrator")
+  defp role_label("user"), do: gettext("User")
   defp role_label(other), do: String.capitalize(other || "")
 
   defp admin?(%{global_role: "admin"}), do: true

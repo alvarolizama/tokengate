@@ -50,7 +50,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
 
     socket =
       socket
-      |> assign(:page_title, "Mis servicios supervisados · Tokengate")
+      |> assign(:page_title, gettext("My supervised services") <> " · Tokengate")
       |> attach_read_only_hook()
       |> load_services()
 
@@ -71,7 +71,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
       if event in ["set-timezone"] do
         {:cont, socket}
       else
-        {:halt, put_flash(socket, :error, "Esta vista es de solo lectura.")}
+        {:halt, put_flash(socket, :error, gettext("This view is read-only."))}
       end
     end)
   end
@@ -94,7 +94,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
     if socket.assigns.services_empty? do
       {:noreply,
        socket
-       |> put_flash(:error, "Ya no supervisas ningún servicio.")
+       |> put_flash(:error, gettext("You no longer supervise any service."))
        |> push_navigate(to: ~p"/dashboard")}
     else
       {:noreply, socket}
@@ -196,7 +196,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
 
   defp error_rate_label(requests, errors) do
     case error_rate(requests, errors) do
-      nil -> "sin requests"
+      nil -> gettext("no requests")
       rate -> "#{Stats.format_percent(rate)} de error"
     end
   end
@@ -216,12 +216,12 @@ defmodule TokengateWeb.SupervisedServicesLive do
 
   defp format_cost(_), do: "$0.00"
 
-  defp limit_label(%{unlimited_spend: true}), do: "Crédito ilimitado"
+  defp limit_label(%{unlimited_spend: true}), do: gettext("Unlimited credit")
 
   defp limit_label(%{monthly_spend_limit_usd: %Decimal{} = limit}),
-    do: "Límite $#{Decimal.to_string(limit)}/mes"
+    do: gettext("Cap $%{amount}/month", amount: Decimal.to_string(limit))
 
-  defp limit_label(_service), do: gettext("No budget") <> " (solo top-ups)"
+  defp limit_label(_service), do: gettext("No budget") <> " " <> gettext("(top-ups only)")
 
   ## Render --------------------------------------------------------------
 
@@ -236,15 +236,19 @@ defmodule TokengateWeb.SupervisedServicesLive do
     >
       <div class="space-y-6">
         <.header>
-          Mis servicios supervisados
+          {gettext("My supervised services")}
           <:subtitle>
-            Servicios donde tienes permisos de supervisión (vista de solo lectura)
+            {gettext("Services where you have supervision permissions (read-only view)")}
           </:subtitle>
           <:actions>
             <span
               id="supervised-readonly-badge"
               class="badge badge-info badge-lg gap-1.5"
-              title="No puedes modificar estos servicios aquí. Contacta a un administrador para cambios."
+              title={
+                gettext(
+                  "You cannot change these services here. Contact an administrator for changes."
+                )
+              }
             >
               <.icon name="hero-eye" class="w-4 h-4" /> Vista de solo lectura
             </span>
@@ -258,9 +262,10 @@ defmodule TokengateWeb.SupervisedServicesLive do
         >
           <div class="card-body items-center text-center py-12">
             <.icon name="hero-wrench-screwdriver" class="w-12 h-12 text-base-content/30" />
-            <h3 class="text-lg font-semibold mt-2">No supervisas ningún servicio.</h3>
+            <h3 class="text-lg font-semibold mt-2">{gettext("You supervise no services.")}</h3>
             <p class="text-base-content/60 max-w-md">
-              Un administrador puede asignarte servicios desde la sección de <strong>Servicios</strong>.
+              {gettext("An administrator can assign you services from the")}
+              <strong>{gettext("Services")}</strong> {gettext("section.")}
             </p>
           </div>
         </div>
@@ -276,24 +281,24 @@ defmodule TokengateWeb.SupervisedServicesLive do
             <div class="flex items-center justify-between">
               <h2 class="card-title text-base">
                 <.icon name="hero-chart-pie" class="w-5 h-5 text-base-content/60" />
-                Resumen de tus servicios
+                {gettext("Summary of your services")}
               </h2>
               <span class="text-[10px] text-base-content/40 hidden sm:inline">
-                últimos 30 días
+                {gettext("last 30 days")}
               </span>
             </div>
 
             <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
               <.metric_tile
                 id="totals-services"
-                label="Servicios"
+                label={gettext("Services")}
                 value={Integer.to_string(@service_count)}
                 icon="hero-wrench-screwdriver"
                 accent="primary"
               />
               <.metric_tile
                 id="totals-cost"
-                label="Gasto real"
+                label={gettext("Actual spend")}
                 value={format_cost(@totals.cost_usd)}
                 icon="hero-currency-dollar"
                 accent="success"
@@ -310,7 +315,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
               />
               <.metric_tile
                 id="totals-errors"
-                label="Errores"
+                label={gettext("Errors")}
                 value={Stats.format_number(@totals.error_count)}
                 icon="hero-exclamation-triangle"
                 accent={if @totals.error_count > 0, do: "error", else: "neutral"}
@@ -362,7 +367,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
                         </span>
                       </span>
                     <% else %>
-                      <span class="badge badge-ghost badge-sm">Sin API key</span>
+                      <span class="badge badge-ghost badge-sm">{gettext("No API key")}</span>
                     <% end %>
                   </div>
                 </div>
@@ -379,11 +384,11 @@ defmodule TokengateWeb.SupervisedServicesLive do
               <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
                 <.metric_tile
                   id={"metric-cost-#{service.id}"}
-                  label="Gasto real"
+                  label={gettext("Actual spend")}
                   value={format_cost(stats.cost_usd)}
                   icon="hero-currency-dollar"
                   accent="success"
-                  sub="30 días"
+                  sub={gettext("30 days")}
                 />
                 <.metric_tile
                   id={"metric-requests-#{service.id}"}
@@ -391,11 +396,11 @@ defmodule TokengateWeb.SupervisedServicesLive do
                   value={Stats.format_number(stats.request_count)}
                   icon="hero-bolt"
                   accent="primary"
-                  sub="30 días"
+                  sub={gettext("30 days")}
                 />
                 <.metric_tile
                   id={"metric-input-#{service.id}"}
-                  label="Tokens in"
+                  label={gettext("Tokens in")}
                   value={Stats.format_compact(stats.prompt_tokens)}
                   icon="hero-arrow-down-tray"
                   accent="accent"
@@ -403,7 +408,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
                 />
                 <.metric_tile
                   id={"metric-output-#{service.id}"}
-                  label="Tokens out"
+                  label={gettext("Tokens out")}
                   value={Stats.format_compact(stats.completion_tokens)}
                   icon="hero-arrow-up-tray"
                   accent="warning"
@@ -411,7 +416,7 @@ defmodule TokengateWeb.SupervisedServicesLive do
                 />
                 <.metric_tile
                   id={"metric-errors-#{service.id}"}
-                  label="Errores"
+                  label={gettext("Errors")}
                   value={Stats.format_number(stats.error_count)}
                   icon="hero-exclamation-triangle"
                   accent={if stats.error_count > 0, do: "error", else: "neutral"}
@@ -423,18 +428,18 @@ defmodule TokengateWeb.SupervisedServicesLive do
                   value={Stats.format_ms(stats.avg_latency_ms)}
                   icon="hero-clock"
                   accent="neutral"
-                  sub="30 días"
+                  sub={gettext("30 days")}
                 />
               </div>
 
               <div class="flex flex-wrap items-center gap-2">
                 <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Modelos permitidos
+                  {gettext("Allowed models")}
                 </span>
                 <div class="flex flex-wrap gap-2" id={"models-#{service.id}"}>
                   <%= if model_names_for(@granted_models, service.id, @models) == [] do %>
                     <p class="text-xs text-base-content/40">
-                      Este servicio no tiene models asignados.
+                      {gettext("This service has no models assigned.")}
                     </p>
                   <% else %>
                     <span

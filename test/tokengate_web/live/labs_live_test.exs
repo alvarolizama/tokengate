@@ -20,6 +20,10 @@ defmodule TokengateWeb.LabsLiveTest do
         global_role: role
       })
 
+    # Este archivo afirma los mensajes en español del LiveView; el idioma por
+    # defecto de la UI es inglés, así que el usuario arranca en español.
+    {:ok, user} = Accounts.update_user_locale(user, "es")
+
     %{user: user, password: "password-secret-#{u}1"}
   end
 
@@ -101,7 +105,7 @@ defmodule TokengateWeb.LabsLiveTest do
       assert has_element?(view, "#lab-name-openai", "OpenAI")
       refute has_element?(view, "#edit-lab-openai")
       refute has_element?(view, "#delete-lab-openai")
-      assert render(view) =~ "De catálogo"
+      assert render(view) =~ "Desde catálogo"
     end
 
     test "la marca usa el logo cuando lo hay", %{conn: conn} do
@@ -169,7 +173,7 @@ defmodule TokengateWeb.LabsLiveTest do
         |> element("#lab-form")
         |> render_submit(%{"lab" => %{"name" => "Otro", "key" => "duplicado"}})
 
-      assert html =~ "has already been taken" or html =~ "ya existe"
+      assert html =~ "has already been taken" or html =~ "ya está en uso"
       # El form sigue abierto.
       assert has_element?(view, "#lab-form")
     end

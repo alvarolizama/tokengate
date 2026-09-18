@@ -18,6 +18,10 @@ defmodule TokengateWeb.Router do
     # Loads :current_user from the session so every browser request (including
     # LiveView mounts) has access to the signed-in user.
     plug TokengateWeb.Plugs.DashboardAuth, action: :fetch_current_user
+
+    # Sets the Gettext locale for the request process. Must come after
+    # :fetch_current_user (it reads `users.locale`).
+    plug TokengateWeb.Plugs.Locale
   end
 
   # Browser routes that require an authenticated user. The
@@ -204,6 +208,7 @@ defmodule TokengateWeb.Router do
       # Operaciones — logs en vivo, webhooks y danger zone.
       live "/operations/monitoring", MonitoringLive
       live "/operations/observability", ObservabilityLive
+      live "/operations/notifications", NotificationsLive
       live "/operations/audit", AuditLive
       live "/operations/maintenance", MaintenanceLive
     end

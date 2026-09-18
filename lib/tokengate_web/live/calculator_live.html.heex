@@ -144,10 +144,10 @@
           <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
             <.kpi_card
               id="calc-real"
-              label="Gasto Real"
+              label={gettext("Actual spend")}
               icon="hero-banknotes"
               accent="primary"
-              title="Costo reportado por el proveedor para el período"
+              title={gettext("Cost reported by the provider for the period")}
             >
               ${format_cost(@summary.total_real)}
               <:sub :if={
@@ -162,7 +162,7 @@
               label="Estimado (custom)"
               icon="hero-calculator"
               accent="primary"
-              title="Costo estimado con los precios custom de la izquierda"
+              title={gettext("Estimated cost with the custom prices on the left")}
             >
               ${format_cost(@summary.total_estimated)}
             </.kpi_card>
@@ -189,13 +189,18 @@
 
           <%!-- Volumen del período: requests + tokens --%>
           <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-            <.kpi_card id="calc-requests" label="Requests" icon="hero-bolt" accent="primary">
+            <.kpi_card
+              id="calc-requests"
+              label={gettext("Requests")}
+              icon="hero-bolt"
+              accent="primary"
+            >
               {format_number(@summary.total_requests)}
             </.kpi_card>
 
             <.kpi_card
               id="calc-tokens"
-              label="Tokens"
+              label={gettext("Tokens")}
               icon="hero-cpu-chip"
               accent="primary"
               title={

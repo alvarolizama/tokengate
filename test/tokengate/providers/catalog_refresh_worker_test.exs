@@ -312,10 +312,10 @@ defmodule Tokengate.Providers.CatalogRefreshWorkerTest do
 
       # No server was started on @port for this test.
       assert {:error, reason} = perform()
-      assert reason =~ "no se pudo descargar"
+      assert reason =~ "could not download"
 
       state = Providers.catalog_sync_state()
-      assert state.error =~ "no se pudo descargar"
+      assert state.error =~ "could not download"
       assert state.stale == 0
 
       # The catalog is intact: nothing flipped to stale on a network failure.
@@ -477,7 +477,7 @@ defmodule Tokengate.Providers.CatalogRefreshWorkerTest do
       assert state.error == nil
 
       assert [warning] = Enum.filter(state.warnings, &(&1["reason"] == "labs_fetch_failed"))
-      assert warning["message"] =~ "no se pudo descargar"
+      assert warning["message"] =~ "could not download"
 
       # No lab was marked stale by the network failure.
       assert Repo.aggregate(from(l in Lab, where: l.status == "stale"), :count) == 0
@@ -663,7 +663,7 @@ defmodule Tokengate.Providers.CatalogRefreshWorkerTest do
       assert state.error == nil
 
       assert [warning] = Enum.filter(state.warnings, &(&1["reason"] == "models_fetch_failed"))
-      assert warning["message"] =~ "no se pudo descargar"
+      assert warning["message"] =~ "could not download"
 
       assert Repo.aggregate(from(m in CatalogModel, where: m.status == "stale"), :count) == 0
     end

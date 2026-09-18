@@ -36,7 +36,7 @@ defmodule TokengateWeb.UsersLive do
 
     socket =
       socket
-      |> assign(:page_title, "Usuarios · Tokengate")
+      |> assign(:page_title, gettext("Users") <> " · Tokengate")
       |> stream_configure(:users, dom_id: &"user-#{&1.id}")
       |> assign(:form, nil)
       |> assign(:editing_user_id, nil)
@@ -470,7 +470,7 @@ defmodule TokengateWeb.UsersLive do
   def handle_event("manage_keys", %{"id" => user_id}, socket) do
     case Accounts.get_user(user_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, "Usuario no encontrado.")}
+        {:noreply, put_flash(socket, :error, gettext("User not found."))}
 
       user ->
         {:noreply,
@@ -519,11 +519,11 @@ defmodule TokengateWeb.UsersLive do
           {:noreply,
            socket
            |> assign(:new_key_token, token)
-           |> put_flash(:info, "Clave creada. Cópiala ahora: no se vuelve a mostrar.")
+           |> put_flash(:info, gettext("Key created. Copy it now: it is not shown again."))
            |> load_user_keys(user_id)}
 
         {:error, _changeset} ->
-          {:noreply, put_flash(socket, :error, "No se pudo crear la clave.")}
+          {:noreply, put_flash(socket, :error, gettext("Could not create the key."))}
       end
     else
       {:noreply, socket}
@@ -542,14 +542,14 @@ defmodule TokengateWeb.UsersLive do
 
           {:noreply,
            socket
-           |> put_flash(:info, "Clave revocada.")
+           |> put_flash(:info, gettext("Key revoked."))
            |> load_user_keys(socket.assigns.keys_user_id)}
 
         {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudo revocar la clave.")}
+          {:noreply, put_flash(socket, :error, gettext("Could not revoke the key."))}
       end
     else
-      _ -> {:noreply, put_flash(socket, :error, "Clave no encontrada.")}
+      _ -> {:noreply, put_flash(socket, :error, gettext("Key not found."))}
     end
   end
 
@@ -562,7 +562,7 @@ defmodule TokengateWeb.UsersLive do
   def handle_event("clear_user_sticky_routes", %{"id" => user_id}, socket) do
     case Accounts.get_user(user_id) do
       nil ->
-        {:noreply, put_flash(socket, :error, "Usuario no encontrado.")}
+        {:noreply, put_flash(socket, :error, gettext("User not found."))}
 
       user ->
         Accounts.clear_user_sticky_routes(user_id)
@@ -573,7 +573,9 @@ defmodule TokengateWeb.UsersLive do
          socket
          |> put_flash(
            :info,
-           "Sticky routes limpiadas para #{user.name || user.email}. Su próxima petición se re-ruteará."
+           gettext("Sticky routes cleared for %{who}. Their next request will be re-routed.",
+             who: user.name || user.email
+           )
          )
          |> load_user_keys(user_id)}
     end
@@ -642,7 +644,7 @@ defmodule TokengateWeb.UsersLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Contraseña actualizada.")
+         |> put_flash(:info, gettext("Password updated."))
          |> assign(:form, nil)
          |> assign(:reset_user_id, nil)
          |> assign(:form_mode, nil)}
@@ -658,7 +660,8 @@ defmodule TokengateWeb.UsersLive do
     user = Accounts.get_user!(user_id)
 
     if root_admin?(user) do
-      {:noreply, put_flash(socket, :error, "No se puede suspender al administrador principal.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("The root administrator cannot be suspended."))}
     else
       new_status = if user.status == "active", do: "suspended", else: "active"
 
@@ -669,11 +672,15 @@ defmodule TokengateWeb.UsersLive do
             "status" => new_status
           })
 
-          msg = if new_status == "active", do: "Usuario activado.", else: "Usuario suspendido."
+          msg =
+            if new_status == "active",
+              do: gettext("User activated."),
+              else: gettext("User suspended.")
+
           {:noreply, socket |> put_flash(:info, msg) |> load_users()}
 
         {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudo cambiar el estado.")}
+          {:noreply, put_flash(socket, :error, gettext("Could not change the status."))}
       end
     end
   end
@@ -696,7 +703,7 @@ defmodule TokengateWeb.UsersLive do
       root_admin?(user) ->
         {:noreply,
          socket
-         |> put_flash(:error, "No se puede eliminar al administrador principal.")
+         |> put_flash(:error, gettext("The root administrator cannot be deleted."))
          |> assign(:delete_target_id, nil)
          |> assign(:delete_target_email, nil)
          |> push_event("close_modal", %{id: "delete-user-modal"})}
@@ -704,7 +711,7 @@ defmodule TokengateWeb.UsersLive do
       user.id == current_user.id ->
         {:noreply,
          socket
-         |> put_flash(:error, "No puedes eliminar tu propia cuenta.")
+         |> put_flash(:error, gettext("You cannot delete your own account."))
          |> assign(:delete_target_id, nil)
          |> assign(:delete_target_email, nil)
          |> push_event("close_modal", %{id: "delete-user-modal"})}
@@ -716,14 +723,14 @@ defmodule TokengateWeb.UsersLive do
 
             {:noreply,
              socket
-             |> put_flash(:info, "Usuario eliminado permanentemente. Toda su data fue borrada.")
+             |> put_flash(:info, gettext("User permanently deleted. All their data was erased."))
              |> assign(:delete_target_id, nil)
              |> assign(:delete_target_email, nil)
              |> push_event("close_modal", %{id: "delete-user-modal"})
              |> load_users()}
 
           {:error, _} ->
-            {:noreply, put_flash(socket, :error, "No se pudo eliminar el usuario.")}
+            {:noreply, put_flash(socket, :error, gettext("Could not delete the user."))}
         end
     end
   end
@@ -819,7 +826,9 @@ defmodule TokengateWeb.UsersLive do
              socket
              |> put_flash(
                :warning,
-               "Usuario creado pero el presupuesto no se pudo asignar: #{format_errors(changeset)}"
+               gettext("User created but the budget could not be assigned: %{errors}",
+                 errors: format_errors(changeset)
+               )
              )
              |> assign(:form, nil)
              |> assign(:editing_user_id, nil)
@@ -829,7 +838,7 @@ defmodule TokengateWeb.UsersLive do
           _ ->
             {:noreply,
              socket
-             |> put_flash(:info, "Usuario creado.")
+             |> put_flash(:info, gettext("User created."))
              |> assign(:form, nil)
              |> assign(:editing_user_id, nil)
              |> assign(:form_mode, nil)
@@ -874,7 +883,7 @@ defmodule TokengateWeb.UsersLive do
           :ok ->
             {:noreply,
              socket
-             |> put_flash(:info, "Usuario actualizado.")
+             |> put_flash(:info, gettext("User updated."))
              |> assign(:form, nil)
              |> assign(:editing_user_id, nil)
              |> assign(:editing_user_sub_id, nil)
@@ -886,7 +895,9 @@ defmodule TokengateWeb.UsersLive do
              socket
              |> put_flash(
                :error,
-               "Usuario actualizado, pero el presupuesto no se pudo mover: #{reason}"
+               gettext("User updated, but the budget could not be moved: %{reason}",
+                 reason: reason
+               )
              )
              |> assign(:form, nil)
              |> assign(:editing_user_id, nil)
@@ -968,14 +979,14 @@ defmodule TokengateWeb.UsersLive do
     >
       <div class="space-y-6">
         <.header>
-          Usuarios
-          <:subtitle>Gestión de usuarios del sistema</:subtitle>
+          {gettext("Users")}
+          <:subtitle>{gettext("System user management")}</:subtitle>
           <:actions>
             <div class="flex items-center gap-3">
               <.admin_search
                 event="search_users"
                 value={@search_query}
-                placeholder="Buscar por nombre o correo..."
+                placeholder={gettext("Search by name or email…")}
                 input_id="user-search"
               />
               <button
@@ -1002,27 +1013,32 @@ defmodule TokengateWeb.UsersLive do
           id="user-create-modal"
           on_close="cancel_form"
         >
-          <h2 class="text-lg font-semibold mb-4">Nuevo usuario</h2>
+          <h2 class="text-lg font-semibold mb-4">{gettext("New user")}</h2>
           <.form for={@form} id="user-form" phx-submit="save_user">
             <.input
               field={@form[:email]}
               type="email"
-              label="Correo"
-              placeholder="usuario@empresa.com"
+              label={gettext("Email")}
+              placeholder={gettext("user@company.com")}
             />
-            <.input field={@form[:name]} type="text" label="Nombre" placeholder="Nombre completo" />
+            <.input
+              field={@form[:name]}
+              type="text"
+              label={gettext("Name")}
+              placeholder={gettext("Full name")}
+            />
             <.input
               field={@form[:password]}
               type="password"
-              label="Contraseña"
-              hint="Mínimo 12 caracteres, debe incluir letras y números."
+              label={gettext("Password")}
+              hint={gettext("At least 12 characters, with letters and digits.")}
             />
             <.input
               field={@form[:global_role]}
               type="select"
               label="Rol"
-              options={[{"Usuario", "user"}, {"Administrador", "admin"}]}
-              prompt="Selecciona un rol"
+              options={[{gettext("User"), "user"}, {gettext("Administrator"), "admin"}]}
+              prompt={gettext("Pick a role")}
             />
             <.input
               field={@form[:sub_id]}
@@ -1030,11 +1046,19 @@ defmodule TokengateWeb.UsersLive do
               label={gettext("Monthly budget")}
               options={Enum.map(@all_groups, fn t -> {t.name, t.id} end)}
               prompt={gettext("No monthly budget")}
-              hint="Un usuario pertenece a UN solo presupuesto mensual: su techo de gasto heredado sale de aquí."
+              hint={
+                gettext(
+                  "A user belongs to ONE monthly budget: the inherited spending cap comes from here."
+                )
+              }
             />
             <div class="flex gap-2 mt-4 justify-end">
-              <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
-              <button type="submit" class="btn btn-primary btn-sm" id="save-user-btn">Crear</button>
+              <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">{gettext(
+                "Cancel"
+              )}</button>
+              <button type="submit" class="btn btn-primary btn-sm" id="save-user-btn">{gettext(
+                "Create"
+              )}</button>
             </div>
           </.form>
         </.admin_modal>
@@ -1045,20 +1069,20 @@ defmodule TokengateWeb.UsersLive do
           id="user-edit-modal"
           on_close="cancel_form"
         >
-          <h2 class="text-lg font-semibold mb-4">Editar usuario</h2>
+          <h2 class="text-lg font-semibold mb-4">{gettext("Edit user")}</h2>
           <.form for={@form} id="user-edit-form" phx-submit="save_user">
-            <.input field={@form[:name]} type="text" label="Nombre" />
+            <.input field={@form[:name]} type="text" label={gettext("Name")} />
             <.input
               field={@form[:global_role]}
               type="select"
               label="Rol"
-              options={[{"Usuario", "user"}, {"Administrador", "admin"}]}
+              options={[{gettext("User"), "user"}, {gettext("Administrator"), "admin"}]}
             />
             <.input
               field={@form[:status]}
               type="select"
-              label="Estado"
-              options={[{"Activo", "active"}, {"Suspendido", "suspended"}]}
+              label={gettext("Status")}
+              options={[{gettext("Active"), "active"}, {gettext("Suspended"), "suspended"}]}
             />
             <%!-- Límites propios del usuario: primer eslabón de la regla
                  `propio || contenedor || default`. Vacío = hereda del perfil de límites. --%>
@@ -1066,14 +1090,14 @@ defmodule TokengateWeb.UsersLive do
               <.input
                 field={@form[:default_concurrency_limit]}
                 type="number"
-                label="Concurrencia"
-                hint="Límite absoluto; vacío = hereda del perfil de límites."
+                label={gettext("Concurrency")}
+                hint={gettext("Absolute cap; empty = inherits from the limit profile.")}
               />
               <.input
                 field={@form[:default_rpm_limit]}
                 type="number"
                 label="RPM"
-                hint="Límite absoluto; vacío = hereda del perfil de límites."
+                hint={gettext("Absolute cap; empty = inherits from the limit profile.")}
               />
             </div>
             <%!-- Select único: mover de presupuesto mensual reemplaza el anterior
@@ -1087,11 +1111,19 @@ defmodule TokengateWeb.UsersLive do
               options={Enum.map(@all_groups, fn t -> {t.name, t.id} end)}
               prompt={gettext("No monthly budget")}
               value={@editing_user_sub_id}
-              hint="Un usuario pertenece a UN solo presupuesto mensual. Cambiarlo reemplaza el anterior."
+              hint={
+                gettext(
+                  "A user belongs to ONE monthly budget. Changing it replaces the previous one."
+                )
+              }
             />
             <div class="flex gap-2 mt-4 justify-end">
-              <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
-              <button type="submit" class="btn btn-primary btn-sm" id="update-user-btn">Guardar</button>
+              <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">{gettext(
+                "Cancel"
+              )}</button>
+              <button type="submit" class="btn btn-primary btn-sm" id="update-user-btn">{gettext(
+                "Save"
+              )}</button>
             </div>
           </.form>
         </.admin_modal>
@@ -1102,17 +1134,21 @@ defmodule TokengateWeb.UsersLive do
           id="user-reset-modal"
           on_close="cancel_form"
         >
-          <h2 class="text-lg font-semibold mb-4">Restablecer contraseña</h2>
+          <h2 class="text-lg font-semibold mb-4">{gettext("Reset password")}</h2>
           <.form for={@form} id="user-reset-form" phx-submit="save_password">
             <.input
               field={@form[:password]}
               type="password"
-              label="Nueva contraseña"
-              hint="Mínimo 12 caracteres, debe incluir letras y números."
+              label={gettext("New password")}
+              hint={gettext("At least 12 characters, with letters and digits.")}
             />
             <div class="flex gap-2 mt-4 justify-end">
-              <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">Cancelar</button>
-              <button type="submit" class="btn btn-primary btn-sm" id="reset-pwd-btn">Restablecer</button>
+              <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">{gettext(
+                "Cancel"
+              )}</button>
+              <button type="submit" class="btn btn-primary btn-sm" id="reset-pwd-btn">{gettext(
+                "Reset"
+              )}</button>
             </div>
           </.form>
         </.admin_modal>
@@ -1128,17 +1164,17 @@ defmodule TokengateWeb.UsersLive do
                   <.sort_button
                     event="sort_users"
                     field={:name}
-                    label="Usuario"
+                    label={gettext("User")}
                     current={@sort_field}
                     direction={@sort_direction}
                   />
                 </th>
-                <th>Claves</th>
+                <th>{gettext("Keys")}</th>
                 <th>
                   <.sort_button
                     event="sort_users"
                     field={:credit}
-                    label="Límite mensual (mes UTC)"
+                    label={gettext("Monthly cap (UTC month)")}
                     current={@sort_field}
                     direction={@sort_direction}
                   />
@@ -1147,7 +1183,7 @@ defmodule TokengateWeb.UsersLive do
                   <.sort_button
                     event="sort_users"
                     field={:monthly_spend}
-                    label="Gasto mensual"
+                    label={gettext("Monthly spend")}
                     current={@sort_field}
                     direction={@sort_direction}
                     align="right"
@@ -1157,7 +1193,7 @@ defmodule TokengateWeb.UsersLive do
                   <.sort_button
                     event="sort_users"
                     field={:total_spend}
-                    label="Gasto total"
+                    label={gettext("Total spend")}
                     current={@sort_field}
                     direction={@sort_direction}
                     align="right"
@@ -1176,7 +1212,7 @@ defmodule TokengateWeb.UsersLive do
                   <.sort_button
                     event="sort_users"
                     field={:status}
-                    label="Estado"
+                    label={gettext("Status")}
                     current={@sort_field}
                     direction={@sort_direction}
                   />
@@ -1185,7 +1221,7 @@ defmodule TokengateWeb.UsersLive do
                   <.sort_button
                     event="sort_users"
                     field={:groups}
-                    label="Perfiles de límites"
+                    label={gettext("Limit profiles")}
                     current={@sort_field}
                     direction={@sort_direction}
                   />
@@ -1222,7 +1258,7 @@ defmodule TokengateWeb.UsersLive do
             :if={@users_empty?}
             id="users-empty"
             icon="hero-users"
-            message="No hay usuarios todavía."
+            message={gettext("No users yet.")}
           />
           <.admin_pagination
             id="users-pagination"
@@ -1246,7 +1282,7 @@ defmodule TokengateWeb.UsersLive do
           Claves API de <span class="text-primary">{@keys_user_name}</span>
         </h2>
         <p class="text-xs text-base-content/50 mb-4">
-          Un usuario puede tener varias claves activas, cada una con su etiqueta.
+          {gettext("A user can have several active keys, each with its own label.")}
         </p>
 
         <.keys_panel
@@ -1259,12 +1295,12 @@ defmodule TokengateWeb.UsersLive do
           revoke_event="revoke_user_key"
           dismiss_event="dismiss_new_key_token"
           sticky_event="clear_user_sticky_routes"
-          empty_text="Este usuario no tiene claves activas."
+          empty_text={gettext("This user has no active keys.")}
         />
 
         <div class="flex gap-2 mt-4 justify-end">
           <button type="button" phx-click="cancel_manage_keys" class="btn btn-ghost btn-sm">
-            Cerrar
+            {gettext("Close")}
           </button>
         </div>
       </.admin_modal>
@@ -1306,24 +1342,27 @@ defmodule TokengateWeb.UsersLive do
                 <.link
                   navigate={~p"/budget/profiles/#{group}/members"}
                   class="btn btn-xs btn-ghost"
-                  title="Gestionar membresías del perfil de límites"
+                  title={gettext("Manage the limit profile memberships")}
                 >
-                  Miembros
+                  {gettext("Members")}
                 </.link>
               <% end %>
             </div>
           <% end %>
           <%= if @all_groups == [] do %>
-            <p class="text-sm text-base-content/50 py-2">No hay perfiles de límites creados.</p>
+            <p class="text-sm text-base-content/50 py-2">
+              {gettext("No limit profiles created yet.")}
+            </p>
           <% end %>
         </div>
         <p class="text-xs text-base-content/40 mt-3">
-          Las membresías se gestionan desde <strong>Perfiles de límites → Miembros</strong>
-          de cada perfil.
+          {gettext("Memberships are managed from")}
+          <strong>{gettext("Limit profiles")} → {gettext("Members")}</strong>
+          {gettext("of each profile.")}
         </p>
         <div class="flex gap-2 mt-2 justify-end">
           <button type="button" phx-click="cancel_edit_groups" class="btn btn-primary btn-sm">
-            Cerrar
+            {gettext("Close")}
           </button>
         </div>
       </.admin_modal>
@@ -1331,19 +1370,19 @@ defmodule TokengateWeb.UsersLive do
       <%!-- Delete confirmation modal — warns about irreversible data loss --%>
       <.admin_delete_modal
         id="delete-user-modal"
-        title="Eliminar usuario"
+        title={gettext("Delete user")}
         target_label={@delete_target_email}
         target_span_id="delete-user-email"
         confirm_event="confirm_delete_user"
         confirm_value={@delete_target_id}
         confirm_button_id="confirm-delete-user"
         cancel_button_id="cancel-delete-user"
-        warning_intro="Se borrará permanentemente toda su data:"
+        warning_intro={gettext("All their data will be permanently erased:")}
         warning_items={[
-          "Membresías de perfiles de límites",
-          "Claves API",
-          "Todo el historial de consumo (request_logs)",
-          "Los logs de auditoría perderán la atribución al usuario"
+          gettext("Limit profile memberships"),
+          gettext("API keys"),
+          gettext("All consumption history (request_logs)"),
+          gettext("Audit logs will lose the user attribution")
         ]}
       />
     </Layouts.dashboard>
@@ -1406,7 +1445,7 @@ defmodule TokengateWeb.UsersLive do
     </td>
     <td>
       <span class={["badge", "badge-sm", status_badge(@user.status)]}>
-        {if @user.status == "active", do: "Activo", else: "Suspendido"}
+        {if @user.status == "active", do: gettext("Active"), else: gettext("Suspended")}
       </span>
     </td>
     <td>
@@ -1419,7 +1458,7 @@ defmodule TokengateWeb.UsersLive do
           phx-value-id={@user.id}
           class="btn btn-xs btn-ghost"
           id={"groups-#{@user.id}"}
-          title="Ver perfiles de límites del usuario"
+          title={gettext("View the user's limit profiles")}
         >
           <.icon name="hero-eye" class="w-3 h-3" />
         </button>
@@ -1442,8 +1481,8 @@ defmodule TokengateWeb.UsersLive do
           navigate={~p"/stats/users/#{@user.id}"}
           class="btn btn-xs btn-ghost"
           id={"stats-#{@user.id}"}
-          title="Ver stats consolidados de este usuario"
-          aria-label="Ver stats del usuario"
+          title={gettext("View this user's consolidated stats")}
+          aria-label={gettext("View the user's stats")}
         >
           <.icon name="hero-chart-bar" class="w-3 h-3" />
         </.link>
@@ -1452,8 +1491,8 @@ defmodule TokengateWeb.UsersLive do
           phx-value-id={@user.id}
           class="btn btn-xs btn-ghost"
           id={"edit-#{@user.id}"}
-          title="Editar usuario"
-          aria-label="Editar usuario"
+          title={gettext("Edit user")}
+          aria-label={gettext("Edit user")}
         >
           <.icon name="hero-pencil" class="w-3 h-3" />
         </button>
@@ -1462,8 +1501,8 @@ defmodule TokengateWeb.UsersLive do
           phx-value-id={@user.id}
           class="btn btn-xs btn-ghost"
           id={"pwd-#{@user.id}"}
-          title="Restablecer contraseña"
-          aria-label="Restablecer contraseña"
+          title={gettext("Reset password")}
+          aria-label={gettext("Reset password")}
         >
           <.icon name="hero-arrow-path" class="w-3 h-3" />
         </button>
@@ -1473,9 +1512,9 @@ defmodule TokengateWeb.UsersLive do
           method="post"
           class="btn btn-xs btn-ghost"
           id={"impersonate-#{@user.id}"}
-          data-confirm={"¿Ver el dashboard como #{@user.email}?"}
-          title="Ver como este usuario"
-          aria-label="Ver como este usuario"
+          data-confirm={gettext("View the dashboard as %{email}?", email: @user.email)}
+          title={gettext("View as this user")}
+          aria-label={gettext("View as this user")}
         >
           <.icon name="hero-identification" class="w-3 h-3" />
         </.link>
@@ -1484,12 +1523,16 @@ defmodule TokengateWeb.UsersLive do
           phx-value-id={@user.id}
           class="btn btn-xs btn-ghost"
           id={"status-#{@user.id}"}
-          title={if @user.status == "active", do: "Suspender usuario", else: "Activar usuario"}
-          aria-label={if @user.status == "active", do: "Suspender usuario", else: "Activar usuario"}
+          title={
+            if @user.status == "active", do: gettext("Suspend user"), else: gettext("Activate user")
+          }
+          aria-label={
+            if @user.status == "active", do: gettext("Suspend user"), else: gettext("Activate user")
+          }
           data-confirm={
             if @user.status == "active",
-              do: "¿Suspender usuario?",
-              else: "¿Activar usuario?"
+              do: gettext("Suspend user?"),
+              else: gettext("Activate user?")
           }
         >
           <.icon
@@ -1505,8 +1548,8 @@ defmodule TokengateWeb.UsersLive do
           phx-value-email={@user.email}
           class="btn btn-xs btn-ghost text-error"
           id={"delete-#{@user.id}"}
-          title="Eliminar usuario"
-          aria-label="Eliminar usuario"
+          title={gettext("Delete user")}
+          aria-label={gettext("Delete user")}
         >
           <.icon name="hero-trash" class="w-3 h-3" />
         </button>

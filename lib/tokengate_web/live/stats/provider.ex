@@ -50,7 +50,7 @@ defmodule TokengateWeb.StatsLive.Provider do
         <div class="card bg-base-100 border border-base-300 shadow-sm">
           <div class="card-body">
             <p class="text-sm text-base-content/40 py-6 text-center" id="provider-not-found">
-              Proveedor no encontrado.
+              {gettext("Provider not found.")}
             </p>
           </div>
         </div>
@@ -73,31 +73,38 @@ defmodule TokengateWeb.StatsLive.Provider do
           score {row.score}
         </span>
         <span :if={@provider && is_nil(row)} class="text-xs text-base-content/50">
-          sin tráfico en el período
+          {gettext("no traffic in the period")}
         </span>
       </div>
 
       <%= if @provider do %>
         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <.kpi_card id="provider-kpi-cost" label="Costo" icon="hero-currency-dollar" accent="accent">
+          <.kpi_card
+            id="provider-kpi-cost"
+            label={gettext("Cost")}
+            icon="hero-currency-dollar"
+            accent="accent"
+          >
             ${Stats.format_decimal(@provider_metrics.total_cost_usd)}
           </.kpi_card>
 
           <.kpi_card
             id="provider-kpi-requests"
-            label="Requests"
+            label={gettext("Requests")}
             icon="hero-arrow-trending-up"
             accent="primary"
           >
             <:sub>
-              {if row, do: "#{Stats.format_percent(row.error_rate)} fallos", else: "sin tráfico"}
+              {if row,
+                do: gettext("%{percent} failures", percent: Stats.format_percent(row.error_rate)),
+                else: gettext("no traffic")}
             </:sub>
             {Stats.format_number(@provider_metrics.request_count)}
           </.kpi_card>
 
           <.kpi_card
             id="provider-kpi-tokens"
-            label="Tokens"
+            label={gettext("Tokens")}
             icon="hero-cpu-chip"
             accent="primary"
             title={
@@ -115,16 +122,20 @@ defmodule TokengateWeb.StatsLive.Provider do
 
           <.kpi_card
             id="provider-kpi-latency"
-            label="Latencia"
+            label={gettext("Latency")}
             icon="hero-clock"
             accent="warning"
             title={
               if row,
                 do:
-                  "media #{Stats.format_ms(row.avg_latency_ms)} · p95 #{Stats.format_ms(row.p95_latency_ms)} · TTFT #{Stats.format_ms(row.avg_ttft_ms)}"
+                  gettext("avg %{avg} · p95 %{p95} · TTFT %{ttft}",
+                    avg: Stats.format_ms(row.avg_latency_ms),
+                    p95: Stats.format_ms(row.p95_latency_ms),
+                    ttft: Stats.format_ms(row.avg_ttft_ms)
+                  )
             }
           >
-            <:sub>{if row, do: "p95 #{Stats.format_ms(row.p95_latency_ms)}"}</:sub>
+            <:sub>{if row, do: gettext("p95 %{p95}", p95: Stats.format_ms(row.p95_latency_ms))}</:sub>
             {Stats.format_ms(@provider_metrics.avg_latency_ms)}
           </.kpi_card>
         </div>
@@ -134,7 +145,7 @@ defmodule TokengateWeb.StatsLive.Provider do
           <div class="card-body">
             <h3 class="card-title text-base">
               <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" />
-              Modelos que sirve
+              {gettext("Models it serves")}
             </h3>
             <%= if Stats.has_data?(@breakdown_model) do %>
               <% model_total = Stats.breakdown_total(@breakdown_model) %>
@@ -144,12 +155,12 @@ defmodule TokengateWeb.StatsLive.Provider do
                 <table class="table table-sm" id="provider-models">
                   <thead>
                     <tr>
-                      <th>Modelo</th>
-                      <th class="text-right">Requests</th>
-                      <th class="text-right">Tokens in</th>
-                      <th class="text-right">Tokens out</th>
-                      <th class="text-right">TPS</th>
-                      <th class="text-right">Costo</th>
+                      <th>{gettext("Model")}</th>
+                      <th class="text-right">{gettext("Requests")}</th>
+                      <th class="text-right">{gettext("Tokens in")}</th>
+                      <th class="text-right">{gettext("Tokens out")}</th>
+                      <th class="text-right">{gettext("TPS")}</th>
+                      <th class="text-right">{gettext("Cost")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -214,7 +225,7 @@ defmodule TokengateWeb.StatsLive.Provider do
               />
             <% else %>
               <p class="text-sm text-base-content/40 py-6 text-center">
-                Sin datos en este período.
+                {gettext("No data in this period.")}
               </p>
             <% end %>
           </div>
@@ -234,13 +245,13 @@ defmodule TokengateWeb.StatsLive.Provider do
                 <table class="table table-sm" id="provider-users">
                   <thead>
                     <tr>
-                      <th>Usuario</th>
-                      <th>Perfiles de límites</th>
-                      <th class="text-right">Requests</th>
-                      <th class="text-right">Tokens in</th>
-                      <th class="text-right">Tokens out</th>
-                      <th class="text-right">TPS</th>
-                      <th class="text-right">Costo</th>
+                      <th>{gettext("User")}</th>
+                      <th>{gettext("Limit profiles")}</th>
+                      <th class="text-right">{gettext("Requests")}</th>
+                      <th class="text-right">{gettext("Tokens in")}</th>
+                      <th class="text-right">{gettext("Tokens out")}</th>
+                      <th class="text-right">{gettext("TPS")}</th>
+                      <th class="text-right">{gettext("Cost")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -311,7 +322,7 @@ defmodule TokengateWeb.StatsLive.Provider do
               />
             <% else %>
               <p class="text-sm text-base-content/40 py-6 text-center">
-                Sin datos en este período.
+                {gettext("No data in this period.")}
               </p>
             <% end %>
           </div>
@@ -323,7 +334,7 @@ defmodule TokengateWeb.StatsLive.Provider do
             <div class="card-body">
               <h3 class="card-title text-base">
                 <.icon name="hero-wrench-screwdriver" class="w-5 h-5 text-base-content/60" />
-                Servicios que lo usan
+                {gettext("Services that use it")}
               </h3>
               <%= if Stats.has_data?(@breakdown_service) do %>
                 <% service_total = Stats.breakdown_total(@breakdown_service) %>
@@ -338,12 +349,12 @@ defmodule TokengateWeb.StatsLive.Provider do
                   <table class="table table-sm" id="provider-services">
                     <thead>
                       <tr>
-                        <th>Servicio</th>
-                        <th class="text-right">Requests</th>
-                        <th class="text-right">Tokens in</th>
-                        <th class="text-right">Tokens out</th>
-                        <th class="text-right">TPS</th>
-                        <th class="text-right">Costo</th>
+                        <th>{gettext("Service")}</th>
+                        <th class="text-right">{gettext("Requests")}</th>
+                        <th class="text-right">{gettext("Tokens in")}</th>
+                        <th class="text-right">{gettext("Tokens out")}</th>
+                        <th class="text-right">{gettext("TPS")}</th>
+                        <th class="text-right">{gettext("Cost")}</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -401,7 +412,7 @@ defmodule TokengateWeb.StatsLive.Provider do
                 />
               <% else %>
                 <p class="text-sm text-base-content/40 py-6 text-center">
-                  Sin datos en este período.
+                  {gettext("No data in this period.")}
                 </p>
               <% end %>
             </div>
@@ -413,7 +424,7 @@ defmodule TokengateWeb.StatsLive.Provider do
           <div class="card-body">
             <h3 class="card-title text-base">
               <.icon name="hero-user-group" class="w-5 h-5 text-base-content/60" />
-              Perfiles de límites que lo usan
+              {gettext("Limit profiles that use it")}
             </h3>
             <%= if Stats.has_data?(@breakdown_group) do %>
               <% group_total = Stats.breakdown_total(@breakdown_group) %>
@@ -423,12 +434,12 @@ defmodule TokengateWeb.StatsLive.Provider do
                 <table class="table table-sm" id="provider-groups">
                   <thead>
                     <tr>
-                      <th>Perfil de límites</th>
-                      <th class="text-right">Requests</th>
-                      <th class="text-right">Tokens in</th>
-                      <th class="text-right">Tokens out</th>
-                      <th class="text-right">TPS</th>
-                      <th class="text-right">Costo</th>
+                      <th>{gettext("Limit profile")}</th>
+                      <th class="text-right">{gettext("Requests")}</th>
+                      <th class="text-right">{gettext("Tokens in")}</th>
+                      <th class="text-right">{gettext("Tokens out")}</th>
+                      <th class="text-right">{gettext("TPS")}</th>
+                      <th class="text-right">{gettext("Cost")}</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -486,7 +497,7 @@ defmodule TokengateWeb.StatsLive.Provider do
               />
             <% else %>
               <p class="text-sm text-base-content/40 py-6 text-center">
-                Sin datos en este período.
+                {gettext("No data in this period.")}
               </p>
             <% end %>
           </div>

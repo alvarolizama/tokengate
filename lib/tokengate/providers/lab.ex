@@ -130,12 +130,10 @@ defmodule Tokengate.Providers.Lab do
     |> validate_required([:key, :name])
     |> normalize_key()
     |> validate_format(:key, @key_format,
-      message: "solo minúsculas, dígitos, punto, guion y guion bajo"
+      message: "lowercase, digits, dot, dash and underscore only"
     )
     |> validate_length(:key, max: 60)
-    |> validate_format(:icon, @icon_format,
-      message: "debe ser un nombre de hero icon, p. ej. hero-beaker"
-    )
+    |> validate_format(:icon, @icon_format, message: "must be a hero icon name, e.g. hero-beaker")
     |> validate_inclusion(:source, @sources)
     |> validate_inclusion(:status, @statuses)
     |> normalize_url()

@@ -106,7 +106,7 @@ defmodule TokengateWeb.StatsLive.Services do
                 <div class="flex items-center justify-between">
                   <h2 class="card-title text-base">
                     <.icon name="hero-chart-bar" class="w-5 h-5 text-base-content/60" />
-                    Uso diario por modelo
+                    {gettext("Daily usage per model")}
                   </h2>
                   <span class="text-[10px] text-base-content/40 hidden sm:inline">
                     {Stats.period_label(@period)}
@@ -165,7 +165,7 @@ defmodule TokengateWeb.StatsLive.Services do
                   <%!-- Legend --%>
                   <div class="w-40 shrink-0 border-l border-base-300 pl-3">
                     <div class="text-[10px] font-semibold text-base-content/60 uppercase tracking-wide mb-2">
-                      Modelos
+                      {gettext("Models")}
                     </div>
                     <div class="space-y-1.5">
                       <div
@@ -191,7 +191,7 @@ defmodule TokengateWeb.StatsLive.Services do
             <div class="card-body">
               <h2 class="card-title text-base">
                 <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" />
-                Modelos usados
+                {gettext("Models used")}
               </h2>
               <%= if Stats.has_data?(@breakdown_model) do %>
                 <% model_total = Stats.breakdown_total(@breakdown_model) %>
@@ -212,7 +212,7 @@ defmodule TokengateWeb.StatsLive.Services do
                             phx-value-field="model_name"
                             class="flex items-center gap-1 hover:text-primary"
                           >
-                            Modelo
+                            {gettext("Model")}
                             <.sort_icon
                               field={:model_name}
                               current={@sort_field}
@@ -226,7 +226,7 @@ defmodule TokengateWeb.StatsLive.Services do
                             phx-value-field="request_count"
                             class="flex items-center justify-end gap-1 w-full hover:text-primary"
                           >
-                            Requests
+                            {gettext("Requests")}
                             <.sort_icon
                               field={:request_count}
                               current={@sort_field}
@@ -240,7 +240,7 @@ defmodule TokengateWeb.StatsLive.Services do
                             phx-value-field="cost_usd"
                             class="flex items-center justify-end gap-1 w-full hover:text-primary"
                           >
-                            Costo
+                            {gettext("Cost")}
                             <.sort_icon
                               field={:cost_usd}
                               current={@sort_field}
@@ -254,7 +254,7 @@ defmodule TokengateWeb.StatsLive.Services do
                             phx-value-field="prompt_tokens"
                             class="flex items-center justify-end gap-1 w-full hover:text-primary"
                           >
-                            Tokens in
+                            {gettext("Tokens in")}
                             <.sort_icon
                               field={:prompt_tokens}
                               current={@sort_field}
@@ -268,7 +268,7 @@ defmodule TokengateWeb.StatsLive.Services do
                             phx-value-field="completion_tokens"
                             class="flex items-center justify-end gap-1 w-full hover:text-primary"
                           >
-                            Tokens out
+                            {gettext("Tokens out")}
                             <.sort_icon
                               field={:completion_tokens}
                               current={@sort_field}
@@ -278,9 +278,9 @@ defmodule TokengateWeb.StatsLive.Services do
                         </th>
                         <th
                           class="text-right"
-                          title="Porcentaje de prompt tokens con cache hit"
+                          title={gettext("Percentage of prompt tokens with cache hit")}
                         >
-                          Cache %
+                          {gettext("Cache %")}
                         </th>
                         <th class="text-right">
                           <button
@@ -288,7 +288,7 @@ defmodule TokengateWeb.StatsLive.Services do
                             phx-value-field="avg_tps"
                             class="flex items-center justify-end gap-1 w-full hover:text-primary"
                           >
-                            TPS
+                            {gettext("TPS")}
                             <.sort_icon
                               field={:avg_tps}
                               current={@sort_field}
@@ -368,7 +368,7 @@ defmodule TokengateWeb.StatsLive.Services do
                 />
               <% else %>
                 <p class="text-sm text-base-content/40 py-6 text-center">
-                  Sin datos para este periodo.
+                  {gettext("No data for this period.")}
                 </p>
               <% end %>
             </div>
@@ -403,12 +403,12 @@ defmodule TokengateWeb.StatsLive.Services do
                 <Stats.list_search
                   id="service-list-search"
                   value={@list_search}
-                  placeholder="Filtrar por servicio…"
+                  placeholder={gettext("Filter by service…")}
                 />
               </div>
               <%= if rows == [] do %>
                 <p class="text-sm text-base-content/40 py-6 text-center" id="service-list-empty">
-                  Sin coincidencias.
+                  {gettext("No matches.")}
                 </p>
               <% else %>
                 <div class="overflow-x-auto mt-3">
@@ -421,7 +421,7 @@ defmodule TokengateWeb.StatsLive.Services do
                             phx-value-field="service_name"
                             class="flex items-center gap-1 hover:text-primary"
                           >
-                            Servicio
+                            {gettext("Service")}
                             <.sort_icon
                               field={:service_name}
                               current={@sort_field}
@@ -435,7 +435,7 @@ defmodule TokengateWeb.StatsLive.Services do
                             phx-value-field="request_count"
                             class="flex items-center justify-end gap-1 w-full hover:text-primary"
                           >
-                            Requests
+                            {gettext("Requests")}
                             <.sort_icon
                               field={:request_count}
                               current={@sort_field}
@@ -449,7 +449,7 @@ defmodule TokengateWeb.StatsLive.Services do
                             phx-value-field="cost_usd"
                             class="flex items-center justify-end gap-1 w-full hover:text-primary"
                           >
-                            Costo
+                            {gettext("Cost")}
                             <.sort_icon
                               field={:cost_usd}
                               current={@sort_field}
@@ -463,7 +463,7 @@ defmodule TokengateWeb.StatsLive.Services do
                             phx-value-field="prompt_tokens"
                             class="flex items-center justify-end gap-1 w-full hover:text-primary"
                           >
-                            Tokens in
+                            {gettext("Tokens in")}
                             <.sort_icon
                               field={:prompt_tokens}
                               current={@sort_field}
@@ -477,7 +477,7 @@ defmodule TokengateWeb.StatsLive.Services do
                             phx-value-field="completion_tokens"
                             class="flex items-center justify-end gap-1 w-full hover:text-primary"
                           >
-                            Tokens out
+                            {gettext("Tokens out")}
                             <.sort_icon
                               field={:completion_tokens}
                               current={@sort_field}
@@ -487,9 +487,9 @@ defmodule TokengateWeb.StatsLive.Services do
                         </th>
                         <th
                           class="text-right"
-                          title="Porcentaje de prompt tokens con cache hit"
+                          title={gettext("Percentage of prompt tokens with cache hit")}
                         >
-                          Cache %
+                          {gettext("Cache %")}
                         </th>
                         <th class="text-right">
                           <button
@@ -497,7 +497,7 @@ defmodule TokengateWeb.StatsLive.Services do
                             phx-value-field="avg_tps"
                             class="flex items-center justify-end gap-1 w-full hover:text-primary"
                           >
-                            TPS
+                            {gettext("TPS")}
                             <.sort_icon
                               field={:avg_tps}
                               current={@sort_field}
@@ -505,7 +505,7 @@ defmodule TokengateWeb.StatsLive.Services do
                             />
                           </button>
                         </th>
-                        <th title="Gasto del mes calendario vs límite mensual del servicio">
+                        <th title={gettext("Calendar-month spend vs the service monthly cap")}>
                           Presupuesto · mes
                         </th>
                       </tr>
@@ -591,7 +591,7 @@ defmodule TokengateWeb.StatsLive.Services do
               />
             <% else %>
               <p class="text-sm text-base-content/40 py-6 text-center">
-                Sin datos para este periodo.
+                {gettext("No data for this period.")}
               </p>
             <% end %>
           </div>

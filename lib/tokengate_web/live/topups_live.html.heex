@@ -24,7 +24,7 @@
               <input
                 type="text"
                 name="q"
-                placeholder="Buscar por usuario o servicio…"
+                placeholder={gettext("Search by user or service…")}
                 value={@search_query}
                 phx-debounce="300"
                 class="input input-sm input-bordered pl-9 w-64"
@@ -58,7 +58,7 @@
       <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
         <div class="card-body p-6">
           <h2 class="text-lg font-semibold mb-4">
-            {if @editing_topup_id, do: "Editar top-up", else: "Nuevo top-up"}
+            {if @editing_topup_id, do: gettext("Edit top-up"), else: gettext("New top-up")}
           </h2>
           <.form for={@form} id="topup-form" phx-submit="save_topup">
             <div id="topup-owner">
@@ -150,9 +150,9 @@
               <.input
                 field={@form[:expires_in_days]}
                 type="select"
-                label="Expiración"
+                label={gettext("Expiration")}
                 options={expiry_options()}
-                hint="Contada desde su creación"
+                hint={gettext("Counted from its creation")}
               />
             </div>
 
@@ -181,7 +181,7 @@
             <th>
               <.sort_button
                 field={:target}
-                label="Dueño"
+                label={gettext("Owner")}
                 sort_field={@sort_field}
                 sort_direction={@sort_direction}
               />
@@ -206,7 +206,7 @@
             <th>
               <.sort_button
                 field={:status}
-                label="Estado"
+                label={gettext("Status")}
                 sort_field={@sort_field}
                 sort_direction={@sort_direction}
               />
@@ -263,12 +263,16 @@
                   class="btn btn-ghost btn-xs"
                   id={"toggle-topup-status-#{topup.id}"}
                 >
-                  {if topup.status == "active", do: "Desactivar", else: "Reactivar"}
+                  {if topup.status == "active",
+                    do: gettext("Deactivate"),
+                    else: gettext("Reactivate")}
                 </button>
                 <button
                   phx-click="revoke_topup"
                   phx-value-id={topup.id}
-                  data-confirm="¿Revocar este top-up? El saldo restante deja de otorgarse."
+                  data-confirm={
+                    gettext("Revoke this top-up? The remaining balance stops being granted.")
+                  }
                   class="btn btn-ghost btn-xs text-error"
                   id={"revoke-topup-#{topup.id}"}
                 >

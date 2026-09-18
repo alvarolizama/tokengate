@@ -11,6 +11,7 @@ defmodule TokengateWeb.AdminComponents do
   """
 
   use Phoenix.Component
+  use Gettext, backend: TokengateWeb.Gettext
 
   import TokengateWeb.CoreComponents
 
@@ -177,8 +178,8 @@ defmodule TokengateWeb.AdminComponents do
   attr :confirm_value, :string, default: nil
   attr :confirm_button_id, :string, required: true
   attr :cancel_button_id, :string, required: true
-  attr :confirm_label, :string, default: "Sí, eliminar permanentemente"
-  attr :warning_title, :string, default: "Esta acción es irreversible."
+  attr :confirm_label, :string, default: "Yes, delete permanently"
+  attr :warning_title, :string, default: "This action is irreversible."
   attr :warning_intro, :string, default: nil
   attr :warning_items, :list, default: []
 
@@ -191,25 +192,30 @@ defmodule TokengateWeb.AdminComponents do
         </h3>
         <div class="py-4 space-y-3">
           <p :if={@target_label} class="text-sm">
-            ¿Seguro que quieres eliminar a <span class="font-semibold" id={@target_span_id}>{@target_label}</span>?
+            {gettext("Are you sure you want to delete")} <span
+              class="font-semibold"
+              id={@target_span_id}
+            >{@target_label}</span>?
           </p>
           <div class="alert alert-warning text-sm">
             <.icon name="hero-exclamation-triangle" class="w-5 h-5 shrink-0" />
             <div>
-              <p class="font-semibold">{@warning_title}</p>
-              <p :if={@warning_intro} class="mt-1">{@warning_intro}</p>
+              <p class="font-semibold">{TokengateWeb.Gettext.translate(@warning_title)}</p>
+              <p :if={TokengateWeb.Gettext.translate(@warning_intro)} class="mt-1">
+                {@warning_intro}
+              </p>
               <ul
                 :if={@warning_items != []}
                 class="mt-1 list-disc list-inside space-y-0.5 text-xs"
               >
-                <li :for={item <- @warning_items}>{item}</li>
+                <li :for={item <- @warning_items}>{TokengateWeb.Gettext.translate(item)}</li>
               </ul>
             </div>
           </div>
         </div>
         <div class="modal-action">
           <form method="dialog">
-            <button class="btn btn-ghost btn-sm" id={@cancel_button_id}>Cancelar</button>
+            <button class="btn btn-ghost btn-sm" id={@cancel_button_id}>{gettext("Cancel")}</button>
           </form>
           <button
             phx-click={@confirm_event}
@@ -217,12 +223,14 @@ defmodule TokengateWeb.AdminComponents do
             class="btn btn-error btn-sm"
             id={@confirm_button_id}
           >
-            <.icon name="hero-trash" class="w-4 h-4" /> {@confirm_label}
+            <.icon name="hero-trash" class="w-4 h-4" /> {TokengateWeb.Gettext.translate(
+              @confirm_label
+            )}
           </button>
         </div>
       </div>
       <form method="dialog" class="modal-backdrop">
-        <button>close</button>
+        <button>{gettext("close")}</button>
       </form>
     </dialog>
     """
@@ -285,7 +293,7 @@ defmodule TokengateWeb.AdminComponents do
           disabled={@page <= 1}
           class="btn btn-ghost btn-xs"
           id={"#{@id}-prev"}
-          title="Página anterior"
+          title={gettext("Previous page")}
         >
           <.icon name="hero-chevron-left" class="w-4 h-4" />
         </button>
@@ -312,7 +320,7 @@ defmodule TokengateWeb.AdminComponents do
           disabled={@page >= @total_pages}
           class="btn btn-ghost btn-xs"
           id={"#{@id}-next"}
-          title="Página siguiente"
+          title={gettext("Next page")}
         >
           <.icon name="hero-chevron-right" class="w-4 h-4" />
         </button>

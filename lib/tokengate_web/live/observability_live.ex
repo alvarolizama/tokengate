@@ -19,7 +19,7 @@ defmodule TokengateWeb.ObservabilityLive do
     if user && user.global_role == "admin" do
       socket =
         socket
-        |> assign(:page_title, "Observabilidad · Tokengate")
+        |> assign(:page_title, gettext("Observability") <> " · Tokengate")
         |> assign(:is_admin, true)
         |> require_admin_hook()
         |> assign(:form, nil)
@@ -31,7 +31,7 @@ defmodule TokengateWeb.ObservabilityLive do
     else
       {:ok,
        socket
-       |> put_flash(:error, "No tienes permisos para acceder a esta sección.")
+       |> put_flash(:error, gettext("You do not have permission to access this section."))
        |> redirect(to: "/dashboard")}
     end
   end
@@ -149,7 +149,7 @@ defmodule TokengateWeb.ObservabilityLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Webhook guardado.")
+         |> put_flash(:info, gettext("Webhook saved."))
          |> assign(:form, nil)
          |> assign(:editing_destination_id, nil)
          |> load_data()}
@@ -170,11 +170,11 @@ defmodule TokengateWeb.ObservabilityLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Webhook eliminado.")
+         |> put_flash(:info, gettext("Webhook deleted."))
          |> load_data()}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo eliminar el webhook.")}
+        {:noreply, put_flash(socket, :error, gettext("Could not delete the webhook."))}
     end
   end
 
@@ -210,7 +210,7 @@ defmodule TokengateWeb.ObservabilityLive do
         <.header>
           Observabilidad
           <:subtitle>
-            Webhooks de telemetría (OTLP) de toda la instalación, en un solo lugar
+            {gettext("Telemetry webhooks (OTLP) of the whole installation, in one place")}
           </:subtitle>
           <:actions>
             <div class="flex items-center gap-2">
@@ -225,7 +225,7 @@ defmodule TokengateWeb.ObservabilityLive do
                   type="text"
                   name="search"
                   value={@search}
-                  placeholder="Buscar nombre o URL…"
+                  placeholder={gettext("Search name or URL…")}
                   class="input input-sm w-48"
                 />
               </form>
@@ -242,20 +242,24 @@ defmodule TokengateWeb.ObservabilityLive do
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
             <div class="card-body p-6">
               <h2 class="text-lg font-semibold mb-4">
-                {if @editing_destination_id == :new, do: "Nuevo webhook", else: "Editar webhook"}
+                {if @editing_destination_id == :new,
+                  do: gettext("New webhook"),
+                  else: gettext("Edit webhook")}
               </h2>
               <.form for={@form} id="destination-form" phx-submit="save_destination">
                 <.input
                   field={@form[:name]}
                   type="text"
-                  label="Nombre"
-                  hint="Nombre identificativo del webhook. Ej.: «Datadog - Producción»."
+                  label={gettext("Name")}
+                  hint={gettext("Identifying name of the webhook. E.g. “Datadog - Production”.")}
                 />
                 <.input
                   field={@form[:url]}
                   type="text"
                   label="URL"
-                  hint="Endpoint HTTPS donde se enviarán los datos de telemetría (formato OTLP)."
+                  hint={
+                    gettext("HTTPS endpoint where the telemetry data will be sent (OTLP format).")
+                  }
                 />
                 <.input
                   field={@form[:headers]}
@@ -282,10 +286,10 @@ defmodule TokengateWeb.ObservabilityLive do
           <table class="table table-sm">
             <thead>
               <tr>
-                <th>Webhook</th>
-                <th>Tipo</th>
+                <th>{gettext("Webhook")}</th>
+                <th>{gettext("Type")}</th>
                 <th>URL</th>
-                <th class="text-right">Acciones</th>
+                <th class="text-right">{gettext("Actions")}</th>
               </tr>
             </thead>
             <tbody id="destinations" phx-update="stream">
@@ -314,7 +318,7 @@ defmodule TokengateWeb.ObservabilityLive do
                       phx-value-id={destination.id}
                       class="btn btn-xs btn-ghost"
                       id={"edit-destination-#{destination.id}"}
-                      title="Editar webhook"
+                      title={gettext("Edit webhook")}
                     >
                       <.icon name="hero-pencil" class="w-3.5 h-3.5" />
                     </button>
@@ -323,8 +327,8 @@ defmodule TokengateWeb.ObservabilityLive do
                       phx-value-id={destination.id}
                       class="btn btn-xs btn-ghost text-error"
                       id={"delete-destination-#{destination.id}"}
-                      data-confirm="¿Eliminar webhook? Esta acción no se puede deshacer."
-                      title="Eliminar webhook"
+                      data-confirm={gettext("Delete webhook? This action cannot be undone.")}
+                      title={gettext("Delete webhook")}
                     >
                       <.icon name="hero-trash" class="w-3.5 h-3.5" />
                     </button>
@@ -336,7 +340,7 @@ defmodule TokengateWeb.ObservabilityLive do
 
           <div :if={@destinations_empty?} class="text-center py-12 text-base-content/40">
             <.icon name="hero-bell-slash" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-            <p>No hay webhooks configurados.</p>
+            <p>{gettext("No webhooks configured.")}</p>
           </div>
         </div>
       </div>

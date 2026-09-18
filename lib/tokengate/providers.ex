@@ -358,7 +358,7 @@ defmodule Tokengate.Providers do
     {:error,
      %Lab{}
      |> Ecto.Changeset.change()
-     |> Ecto.Changeset.add_error(:builtin, "es de catálogo: no se puede editar")}
+     |> Ecto.Changeset.add_error(:builtin, "it comes from the catalog: it cannot be edited")}
   end
 
   @doc "Deletes a custom lab (builtin rows: `{:error, :builtin}`)."

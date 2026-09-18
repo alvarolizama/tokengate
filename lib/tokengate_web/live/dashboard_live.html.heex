@@ -7,7 +7,7 @@
   <div class="space-y-6">
     <div class="flex items-center justify-between flex-wrap gap-4">
       <.header>
-        Dashboard
+        {gettext("Dashboard")}
         <:subtitle>
           <span class="inline-flex items-center gap-2">
             <.icon name="hero-funnel" class="w-4 h-4 text-base-content/50" />
@@ -22,7 +22,7 @@
           :if={@loading and @displayed_period != nil}
           class="loading loading-spinner loading-sm text-primary"
           id="dashboard-loading"
-          title="Actualizando métricas…"
+          title={gettext("Refreshing metrics…")}
         ></span>
         <div class="join" id="period-selector" role="tablist">
           <button
@@ -66,11 +66,11 @@
             data-target="new-token-value"
             class="absolute right-2 top-1/2 -translate-y-1/2 btn btn-xs btn-ghost"
           >
-            Copiar
+            {gettext("Copy")}
           </button>
         </div>
         <p class="text-xs mt-2 opacity-80">
-          Copia esta clave ahora. No se volverá a mostrar.
+          {gettext("Copy this key now. It will not be shown again.")}
         </p>
       </div>
       <button
@@ -88,9 +88,9 @@
       <%= if @groups == [] and not @has_access do %>
         <div class="text-center py-12 text-base-content/50" id="no-group-state">
           <.icon name="hero-user-group" class="w-10 h-10 mx-auto mb-3 opacity-40" />
-          <p class="font-medium">No tienes ningún perfil de límites asignado.</p>
+          <p class="font-medium">{gettext("You have no limit profile assigned.")}</p>
           <p class="text-sm mt-1 text-base-content/40">
-            Contacta al administrador para que te asigne un perfil de límites.
+            {gettext("Ask an administrator to assign you a limit profile.")}
           </p>
         </div>
       <% else %>
@@ -117,13 +117,15 @@
                 <%!-- API key section --%>
                 <div class="mt-3">
                   <div class="flex items-center justify-between gap-2">
-                    <p class="text-xs text-base-content/50 uppercase tracking-wide">Clave API</p>
+                    <p class="text-xs text-base-content/50 uppercase tracking-wide">
+                      {gettext("API key")}
+                    </p>
                     <button
                       type="button"
                       phx-click="manage_keys"
                       class="btn btn-ghost btn-xs"
                       id={"manage-keys-#{t.group.id}"}
-                      title="Ver, crear y revocar tus claves API"
+                      title={gettext("View, create and revoke your API keys")}
                     >
                       <.icon name="hero-key" class="w-3.5 h-3.5" /> Gestionar llaves
                     </button>
@@ -136,8 +138,8 @@
                       type="button"
                       phx-hook="CopyToClipboard"
                       data-target={"api-key-text-#{t.membership.id}"}
-                      aria-label="Copiar clave API"
-                      title="Copiar clave API"
+                      aria-label={gettext("Copy API key")}
+                      title={gettext("Copy API key")}
                       class="btn btn-ghost btn-xs btn-square"
                       id={"copy-key-#{t.membership.id}"}
                     >
@@ -155,10 +157,18 @@
                     <button
                       phx-click="replace_key"
                       phx-value-id={t.membership.id}
-                      data-confirm="¿Regenerar clave? La clave actual dejará de funcionar inmediatamente y se emitirá una nueva."
+                      data-confirm={
+                        gettext(
+                          "Regenerate key? The current key stops working immediately and a new one is issued."
+                        )
+                      }
                       class="btn btn-sm btn-primary"
                       id={"replace-#{t.membership.id}"}
-                      title="Regenerar: emite una clave nueva y anula la actual. El perfil de límites sigue funcionando, ahora con la clave nueva."
+                      title={
+                        gettext(
+                          "Regenerate: issues a new key and voids the current one. The limit profile keeps working, now with the new key."
+                        )
+                      }
                     >
                       <.icon name="hero-arrow-path" class="w-4 h-4" /> Regenerar clave
                     </button>
@@ -167,10 +177,16 @@
                       <button
                         phx-click="revoke_key"
                         phx-value-id={t.membership.id}
-                        data-confirm="¿Revocar clave? La clave queda anulada y NO se emite otra."
+                        data-confirm={
+                          gettext("Revoke key? The key is voided and NO other is issued.")
+                        }
                         class="btn btn-sm btn-ghost text-error"
                         id={"revoke-#{t.membership.id}"}
-                        title="Revocar: anula la clave sin emitir una nueva. El perfil de límites queda sin acceso hasta que generes otra."
+                        title={
+                          gettext(
+                            "Revoke: voids the key without issuing a new one. The limit profile loses access until you generate another."
+                          )
+                        }
                       >
                         <.icon name="hero-no-symbol" class="w-4 h-4" /> Revocar
                       </button>
@@ -182,14 +198,14 @@
                       class="text-xs text-base-content/40 mt-2"
                       id={"key-actions-help-#{t.membership.id}"}
                     >
-                      <span class="font-medium">Regenerar</span>
+                      <span class="font-medium">{gettext("Regenerate")}</span>
                       emite una clave nueva (la anterior deja de servir al instante) ·
-                      <span class="font-medium">Revocar</span>
-                      solo la anula, sin emitir otra.
+                      <span class="font-medium">{gettext("Revoke")}</span>
+                      {gettext("it only voids it, without issuing another.")}
                     </p>
                   <% end %>
                 <% else %>
-                  <p class="text-xs text-base-content/40 mt-1">Sin clave generada</p>
+                  <p class="text-xs text-base-content/40 mt-1">{gettext("No key generated")}</p>
                   <div class="mt-3">
                     <button
                       phx-click="replace_key"
@@ -202,12 +218,12 @@
                   </div>
                 <% end %>
 
-                <%!-- Límite mensual + top-ups — mt-auto pushes to bottom --%>
+                <%!-- {gettext("Monthly cap")} + top-ups — mt-auto pushes to bottom --%>
                 <div class="mt-auto pt-4 border-t border-base-200 space-y-3">
                   <div>
                     <%= if credit_visible?(t.credit) do %>
                       <div class="flex items-center justify-between text-xs">
-                        <span class="text-base-content/60">Límite mensual</span>
+                        <span class="text-base-content/60">{gettext("Monthly cap")}</span>
                         <span class="font-mono">
                           {format_decimal(t.credit.limit_spend_usd)}
                           <span class="text-base-content/40">/ {format_decimal(t.credit.limit_usd)}</span>
@@ -225,18 +241,18 @@
                         :if={Decimal.compare(t.credit.remaining_topup_usd, 0) == :gt}
                         class="flex items-center justify-between text-xs"
                       >
-                        <span class="text-base-content/60">Top-ups disponibles</span>
+                        <span class="text-base-content/60">{gettext("Available top-ups")}</span>
                         <span class="font-mono text-success">
                           {format_decimal(t.credit.remaining_topup_usd)}
                         </span>
                       </div>
                     <% else %>
                       <div class="flex items-center justify-between text-xs">
-                        <span class="text-base-content/60">Límite mensual</span>
+                        <span class="text-base-content/60">{gettext("Monthly cap")}</span>
                         <span class="text-base-content/40">{gettext("No budget")}</span>
                       </div>
                       <div class="flex items-center justify-between text-xs mt-1">
-                        <span class="text-base-content/60">Gasto mensual</span>
+                        <span class="text-base-content/60">{gettext("Monthly spend")}</span>
                         <span class="font-mono">${format_decimal(t.monthly_spend)}</span>
                       </div>
                     <% end %>
@@ -256,7 +272,9 @@
             <div class="card-body p-5 flex flex-col h-full">
               <div class="flex items-center justify-between">
                 <div>
-                  <h3 class="font-semibold text-base-content">Servicios supervisados</h3>
+                  <h3 class="font-semibold text-base-content">
+                    {gettext("Supervised services")}
+                  </h3>
                   <p class="text-xs text-base-content/50 mt-0.5">
                     {@supervised_services_count} servicio(s) asignado(s) · Vista de solo lectura
                   </p>
@@ -278,7 +296,7 @@
       <%= if @loading and @displayed_period == nil do %>
         <div class="flex items-center justify-center py-20">
           <span class="loading loading-spinner loading-lg text-primary"></span>
-          <span class="ml-3 text-base-content/60">Cargando métricas…</span>
+          <span class="ml-3 text-base-content/60">{gettext("Loading metrics…")}</span>
         </div>
       <% else %>
         <% title_period = @displayed_period || @period %>
@@ -291,9 +309,11 @@
               <div class="w-20 h-20 rounded-full bg-base-300 flex items-center justify-center mb-4">
                 <.icon name="hero-chart-bar" class="w-10 h-10 text-base-content/40" />
               </div>
-              <h3 class="text-lg font-semibold text-base-content">Aún no hay requests</h3>
+              <h3 class="text-lg font-semibold text-base-content">
+                {gettext("No requests yet")}
+              </h3>
               <p class="mt-2 text-sm text-base-content/60 max-w-md">
-                Manda tu primer request al proxy para ver métricas aquí.
+                {gettext("Send your first request to the proxy to see metrics here.")}
               </p>
             </div>
           <% else %>
@@ -315,7 +335,7 @@
                 <div class="flex items-center justify-between flex-wrap gap-2">
                   <h2 class="card-title text-base">
                     <.icon name="hero-chart-bar-square" class="w-5 h-5 text-base-content/60" />
-                    Desglose
+                    {gettext("Breakdown")}
                   </h2>
                   <div class="join" id="breakdown-tabs" role="tablist">
                     <button
@@ -330,7 +350,7 @@
                       ]}
                       id="tab-model"
                     >
-                      Por modelo
+                      {gettext("By model")}
                     </button>
                     <button
                       phx-click="set_breakdown"
@@ -344,7 +364,7 @@
                       ]}
                       id="tab-member"
                     >
-                      Por API key
+                      {gettext("By API key")}
                     </button>
                     <%= if has_breakdown_data?(@breakdown_group) do %>
                       <button
@@ -359,7 +379,7 @@
                         ]}
                         id="tab-group"
                       >
-                        Por perfil de límites
+                        {gettext("By limit profile")}
                       </button>
                     <% end %>
                   </div>
@@ -372,12 +392,12 @@
                       <table class="table table-sm">
                         <thead>
                           <tr>
-                            <th>Modelo</th>
-                            <th class="text-right">Requests</th>
-                            <th class="text-right">Costo</th>
-                            <th class="text-right">Tokens in</th>
-                            <th class="text-right">Tokens out</th>
-                            <th class="text-right">TPS</th>
+                            <th>{gettext("Model")}</th>
+                            <th class="text-right">{gettext("Requests")}</th>
+                            <th class="text-right">{gettext("Cost")}</th>
+                            <th class="text-right">{gettext("Tokens in")}</th>
+                            <th class="text-right">{gettext("Tokens out")}</th>
+                            <th class="text-right">{gettext("TPS")}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -413,7 +433,7 @@
                     </div>
                   <% else %>
                     <p class="text-sm text-base-content/40 py-6 text-center">
-                      Sin datos para este periodo.
+                      {gettext("No data for this period.")}
                     </p>
                   <% end %>
                 <% end %>
@@ -425,13 +445,13 @@
                       <table class="table table-sm">
                         <thead>
                           <tr>
-                            <th>Perfil de límites</th>
-                            <th>Usuario</th>
-                            <th class="text-right">Requests</th>
-                            <th class="text-right">Costo</th>
-                            <th class="text-right">Tokens in</th>
-                            <th class="text-right">Tokens out</th>
-                            <th class="text-right">TPS</th>
+                            <th>{gettext("Limit profile")}</th>
+                            <th>{gettext("User")}</th>
+                            <th class="text-right">{gettext("Requests")}</th>
+                            <th class="text-right">{gettext("Cost")}</th>
+                            <th class="text-right">{gettext("Tokens in")}</th>
+                            <th class="text-right">{gettext("Tokens out")}</th>
+                            <th class="text-right">{gettext("TPS")}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -460,7 +480,7 @@
                     </div>
                   <% else %>
                     <p class="text-sm text-base-content/40 py-6 text-center">
-                      Sin datos para este periodo.
+                      {gettext("No data for this period.")}
                     </p>
                   <% end %>
                 <% end %>
@@ -472,12 +492,12 @@
                       <table class="table table-sm">
                         <thead>
                           <tr>
-                            <th>Perfil de límites</th>
-                            <th class="text-right">Requests</th>
-                            <th class="text-right">Costo</th>
-                            <th class="text-right">Tokens in</th>
-                            <th class="text-right">Tokens out</th>
-                            <th class="text-right">TPS</th>
+                            <th>{gettext("Limit profile")}</th>
+                            <th class="text-right">{gettext("Requests")}</th>
+                            <th class="text-right">{gettext("Cost")}</th>
+                            <th class="text-right">{gettext("Tokens in")}</th>
+                            <th class="text-right">{gettext("Tokens out")}</th>
+                            <th class="text-right">{gettext("TPS")}</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -502,7 +522,7 @@
                     </div>
                   <% else %>
                     <p class="text-sm text-base-content/40 py-6 text-center">
-                      Sin datos para este periodo.
+                      {gettext("No data for this period.")}
                     </p>
                   <% end %>
                 <% end %>
@@ -517,7 +537,11 @@
                 icon="hero-currency-dollar"
                 series={@cost_series}
                 bar_class="fill-accent/70 hover:fill-accent"
-                empty_label={"Sin datos para #{String.downcase(period_label(title_period))}."}
+                empty_label={
+                  gettext("No data for %{period}.",
+                    period: String.downcase(period_label(title_period))
+                  )
+                }
               />
               <.bar_chart
                 id="requests-chart"
@@ -525,14 +549,22 @@
                 icon="hero-arrow-trending-up"
                 series={@requests_series}
                 bar_class="fill-primary/70 hover:fill-primary"
-                empty_label={"Sin datos para #{String.downcase(period_label(title_period))}."}
+                empty_label={
+                  gettext("No data for %{period}.",
+                    period: String.downcase(period_label(title_period))
+                  )
+                }
               />
               <.stacked_bar_chart
                 id="tokens-chart"
                 title={tokens_title(title_period)}
                 icon="hero-cpu-chip"
                 series={@tokens_series}
-                empty_label={"Sin datos para #{String.downcase(period_label(title_period))}."}
+                empty_label={
+                  gettext("No data for %{period}.",
+                    period: String.downcase(period_label(title_period))
+                  )
+                }
               />
               <.bar_chart
                 id="tps-chart"
@@ -540,7 +572,11 @@
                 icon="hero-bolt"
                 series={@tps_series}
                 bar_class="fill-success/70 hover:fill-success"
-                empty_label={"Sin datos para #{String.downcase(period_label(title_period))}."}
+                empty_label={
+                  gettext("No data for %{period}.",
+                    period: String.downcase(period_label(title_period))
+                  )
+                }
               />
             </div>
           <% end %>
@@ -557,9 +593,9 @@
     on_close="cancel_manage_keys"
     width="max-w-2xl"
   >
-    <h2 class="text-lg font-semibold mb-1">Mis claves API</h2>
+    <h2 class="text-lg font-semibold mb-1">{gettext("My API keys")}</h2>
     <p class="text-xs text-base-content/50 mb-4">
-      Puedes tener varias claves activas, cada una con su etiqueta.
+      {gettext("You can have several active keys, each with its own label.")}
     </p>
 
     <.keys_panel
@@ -572,12 +608,12 @@
       revoke_event="revoke_user_key"
       dismiss_event="dismiss_new_key_token"
       sticky_event="clear_user_sticky_routes"
-      empty_text="Aún no tienes claves activas."
+      empty_text={gettext("You have no active keys yet.")}
     />
 
     <div class="flex gap-2 mt-4 justify-end">
       <button type="button" phx-click="cancel_manage_keys" class="btn btn-ghost btn-sm">
-        Cerrar
+        {gettext("Close")}
       </button>
     </div>
   </.admin_modal>

@@ -133,7 +133,7 @@ defmodule Tokengate.Providers.CatalogTest do
       }
 
       refute Catalog.supported?(templated)
-      assert Catalog.unsupported_reason(templated) =~ "plantilla"
+      assert Catalog.unsupported_reason(templated) =~ "template"
     end
 
     test "a code base_url override makes a row models.dev publishes without one usable" do

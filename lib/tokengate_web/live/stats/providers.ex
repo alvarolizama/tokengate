@@ -98,7 +98,7 @@ defmodule TokengateWeb.StatsLive.Providers do
                           id={"provider-link-#{row.provider_id}"}
                         >
                           <Stats.provider_logo logo_url={row.provider_logo_url} />
-                          {row.provider_name}
+                          {Stats.provider_label(row.provider_name)}
                           <.icon name="hero-chevron-right" class="w-3.5 h-3.5 text-base-content/40" />
                         </.link>
                       </td>

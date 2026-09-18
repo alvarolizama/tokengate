@@ -14,6 +14,7 @@ defmodule TokengateWeb.KeysPanel do
   """
 
   use Phoenix.Component
+  use Gettext, backend: TokengateWeb.Gettext
 
   import TokengateWeb.CoreComponents
 
@@ -32,11 +33,11 @@ defmodule TokengateWeb.KeysPanel do
       phx-value-id={@subject_id}
       class="badge badge-sm badge-outline gap-1 hover:badge-primary transition-colors cursor-pointer"
       id={"keys-#{@subject_id}"}
-      title="Gestionar claves API"
-      aria-label="Gestionar claves API"
+      title={gettext("Manage API keys")}
+      aria-label={gettext("Manage API keys")}
     >
       <.icon name="hero-key" class="w-3 h-3" />
-      {@count} claves
+      {gettext("%{count} keys", count: @count)}
     </button>
     """
   end
@@ -60,7 +61,7 @@ defmodule TokengateWeb.KeysPanel do
   attr :revoke_event, :string, required: true
   attr :dismiss_event, :string, required: true
   attr :sticky_event, :string, default: nil
-  attr :empty_text, :string, default: "Este sujeto no tiene claves activas."
+  attr :empty_text, :string, default: "This subject has no active keys."
 
   def keys_panel(assigns) do
     ~H"""
@@ -69,10 +70,11 @@ defmodule TokengateWeb.KeysPanel do
       class="flex items-center justify-between gap-3 p-3 mb-4 rounded-lg bg-base-200/50"
     >
       <div class="min-w-0">
-        <p class="text-sm font-medium">Ruteo sticky</p>
+        <p class="text-sm font-medium">{gettext("Sticky routing")}</p>
         <p class="text-xs text-base-content/60">
-          Fuerza que su próxima petición re-evalúe proveedores en vez de quedarse
-          pegado a uno degradado.
+          {gettext(
+            "Forces its next request to re-evaluate providers instead of staying glued to a degraded one."
+          )}
         </p>
       </div>
       <button
@@ -81,16 +83,16 @@ defmodule TokengateWeb.KeysPanel do
         phx-value-id={@subject_id}
         class="btn btn-ghost btn-sm shrink-0"
         id={"clear-#{@subject_kind}-sticky-btn"}
-        title="Limpiar sticky routes del sujeto (todas sus keys)"
+        title={gettext("Clear the subject sticky routes (all its keys)")}
       >
-        <.icon name="hero-arrow-path" class="w-4 h-4" /> Limpiar sticky
+        <.icon name="hero-arrow-path" class="w-4 h-4" /> {gettext("Clear sticky")}
       </button>
     </div>
 
     <div :if={@new_token} class="alert alert-success mb-4 py-2" id="new-key-token">
       <div class="w-full">
         <p class="text-xs mb-1 font-semibold">
-          Cópiala ahora: no se vuelve a mostrar.
+          {gettext("Copy it now: it is not shown again.")}
         </p>
         <code class="text-xs font-mono break-all">{@new_token}</code>
         <div class="flex justify-end mt-2">
@@ -100,7 +102,7 @@ defmodule TokengateWeb.KeysPanel do
             class="btn btn-xs btn-ghost"
             id="dismiss-new-key-token"
           >
-            Listo
+            {gettext("Done")}
           </button>
         </div>
       </div>
@@ -114,12 +116,12 @@ defmodule TokengateWeb.KeysPanel do
       >
         <div class="min-w-0">
           <div class="flex items-center gap-2">
-            <span class="text-sm font-semibold truncate">{key.label || "sin etiqueta"}</span>
+            <span class="text-sm font-semibold truncate">{key.label || gettext("no label")}</span>
             <span class={[
               "badge badge-xs",
               if(key.status == "active", do: "badge-success", else: "badge-ghost")
             ]}>
-              {if key.status == "active", do: "Activa", else: "Revocada"}
+              {if key.status == "active", do: gettext("Active"), else: gettext("Revoked")}
             </span>
           </div>
           <div class="text-xs font-mono text-base-content/50">
@@ -127,7 +129,7 @@ defmodule TokengateWeb.KeysPanel do
             <span class="ml-2 text-base-content/40">
               {if spend,
                 do: "#{spend.requests} req · $#{fmt_money(spend.cost_usd)}",
-                else: "sin consumo"}
+                else: gettext("no usage")}
             </span>
           </div>
         </div>
@@ -138,15 +140,15 @@ defmodule TokengateWeb.KeysPanel do
           phx-value-key-id={key.id}
           class="btn btn-xs btn-ghost text-error shrink-0"
           id={"revoke-key-#{key.id}"}
-          title="Revocar esta clave"
-          aria-label="Revocar esta clave"
-          data-confirm="¿Revocar esta clave? El token deja de funcionar."
+          title={gettext("Revoke this key")}
+          aria-label={gettext("Revoke this key")}
+          data-confirm={gettext("Revoke this key? The token stops working.")}
         >
-          Revocar
+          {gettext("Revoke")}
         </button>
       </div>
       <p :if={@keys == []} class="text-sm text-base-content/50 py-2" id="no-keys">
-        {@empty_text}
+        {TokengateWeb.Gettext.translate(@empty_text)}
       </p>
     </div>
 

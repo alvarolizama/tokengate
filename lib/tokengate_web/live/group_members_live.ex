@@ -35,7 +35,7 @@ defmodule TokengateWeb.GroupMembersLive do
       :ok ->
         socket =
           socket
-          |> assign(:page_title, "Miembros · Tokengate")
+          |> assign(:page_title, gettext("Members") <> " · Tokengate")
           |> assign(:group, group)
           |> assign(:editing_details_member_id, nil)
           |> assign(:show_add_modal?, false)
@@ -60,7 +60,7 @@ defmodule TokengateWeb.GroupMembersLive do
   defp check_access(%{global_role: "admin"}, _group), do: :ok
 
   defp check_access(_user, _group) do
-    {:denied, "No tienes permisos para gestionar este perfil de límites."}
+    {:denied, gettext("You do not have permission to manage this limit profile.")}
   end
 
   ## Data loading ---------------------------------------------------------
@@ -236,7 +236,7 @@ defmodule TokengateWeb.GroupMembersLive do
 
           {:noreply,
            socket
-           |> put_flash(:info, "Miembro añadido.")
+           |> put_flash(:info, gettext("Member added."))
            |> assign(:show_add_modal?, false)
            |> assign(:add_form, add_member_form())
            |> assign(:add_member_error, nil)
@@ -252,13 +252,13 @@ defmodule TokengateWeb.GroupMembersLive do
       :error ->
         {:noreply,
          socket
-         |> assign(:add_member_error, "Escribe el email del usuario.")
+         |> assign(:add_member_error, gettext("Type the user email."))
          |> assign(:add_form, to_form(params, as: :add_member))}
 
       nil ->
         {:noreply,
          socket
-         |> assign(:add_member_error, "No existe un usuario con ese email.")
+         |> assign(:add_member_error, gettext("No user with that email exists."))
          |> assign(:add_form, to_form(params, as: :add_member))}
     end
   end
@@ -271,7 +271,8 @@ defmodule TokengateWeb.GroupMembersLive do
 
     # Verify the member belongs to this group
     if member.group_id != socket.assigns.group.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este perfil de límites.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("The member does not belong to this limit profile."))}
     else
       case Accounts.delete_group_member(member) do
         {:ok, _} ->
@@ -282,11 +283,11 @@ defmodule TokengateWeb.GroupMembersLive do
 
           {:noreply,
            socket
-           |> put_flash(:info, "Miembro eliminado.")
+           |> put_flash(:info, gettext("Member removed."))
            |> load_data()}
 
         {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudo eliminar el miembro.")}
+          {:noreply, put_flash(socket, :error, gettext("Could not remove the member."))}
       end
     end
   end
@@ -314,7 +315,8 @@ defmodule TokengateWeb.GroupMembersLive do
     member = Accounts.get_group_member!(member_id)
 
     if member.group_id != socket.assigns.group.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este perfil de límites.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("The member does not belong to this limit profile."))}
     else
       existing = Map.get(socket.assigns.extra_models, member_id, [])
       denied = Map.get(socket.assigns.denied_models, member_id, [])
@@ -350,7 +352,7 @@ defmodule TokengateWeb.GroupMembersLive do
            |> load_data()}
 
         {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudo actualizar el modelo.")}
+          {:noreply, put_flash(socket, :error, gettext("Could not update the model."))}
       end
     end
   end
@@ -367,7 +369,8 @@ defmodule TokengateWeb.GroupMembersLive do
     member = Accounts.get_group_member!(member_id)
 
     if member.group_id != socket.assigns.group.id do
-      {:noreply, put_flash(socket, :error, "El miembro no pertenece a este perfil de límites.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("The member does not belong to this limit profile."))}
     else
       case Providers.set_extra_model(member_id, model_id) do
         {:ok, _} ->
@@ -381,7 +384,7 @@ defmodule TokengateWeb.GroupMembersLive do
            |> load_data()}
 
         {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudo actualizar el modelo.")}
+          {:noreply, put_flash(socket, :error, gettext("Could not update the model."))}
       end
     end
   end
@@ -397,7 +400,7 @@ defmodule TokengateWeb.GroupMembersLive do
   # been taken".
   defp format_add_member_error(changeset) do
     if Keyword.has_key?(changeset.errors, :user_id) do
-      "Ese usuario ya pertenece a otro perfil de límites. Quítalo de él primero."
+      gettext("That user already belongs to another limit profile. Remove them from it first.")
     else
       format_changeset_errors(changeset)
     end
@@ -455,7 +458,7 @@ defmodule TokengateWeb.GroupMembersLive do
       <div class="space-y-6">
         <.header>
           Miembros de {@group.name}
-          <:subtitle>Añade y quita miembros del perfil de límites</:subtitle>
+          <:subtitle>{gettext("Add and remove limit profile members")}</:subtitle>
           <:actions>
             <.link navigate={~p"/budget/profiles"} class="btn btn-ghost" id="back-to-groups">
               <.icon name="hero-arrow-left" class="w-4 h-4" /> Volver
@@ -478,7 +481,7 @@ defmodule TokengateWeb.GroupMembersLive do
           <div class="absolute inset-0 bg-black/50" phx-click="cancel_add_member" />
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-2xl">
             <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">Añadir miembro</h2>
+              <h2 class="text-lg font-semibold mb-4">{gettext("Add member")}</h2>
               <.form for={@add_form} id="add-member-form" phx-submit="add_member">
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <%!-- Email input with live autocomplete --%>
@@ -486,8 +489,8 @@ defmodule TokengateWeb.GroupMembersLive do
                     <.input
                       field={@add_form[:email]}
                       type="email"
-                      label="Email del usuario"
-                      placeholder="usuario@ejemplo.com"
+                      label={gettext("User email")}
+                      placeholder={gettext("user@example.com")}
                       phx-change="search_email"
                       phx-debounce="300"
                     />
@@ -516,8 +519,10 @@ defmodule TokengateWeb.GroupMembersLive do
                 <%!-- Un usuario pertenece a UN solo presupuesto mensual, así que sólo
                      puede estar en una: si ya tiene otra, el alta falla. --%>
                 <p class="text-xs text-base-content/50 mt-3">
-                  Cada usuario pertenece a un solo perfil de límites. Si ya tiene otro, quítalo
-                  de él primero.
+                  {gettext(
+                    "Each user belongs to a single limit profile. If they already have another, remove them"
+                  )}
+                  {gettext("from it first.")}
                 </p>
                 <p :if={@add_member_error} class="text-sm text-error mt-4" id="add-member-error">
                   <.icon name="hero-exclamation-circle" class="w-4 h-4 inline mr-1" />
@@ -530,10 +535,10 @@ defmodule TokengateWeb.GroupMembersLive do
                     class="btn btn-ghost btn-sm"
                     id="cancel-add-member"
                   >
-                    Cancelar
+                    {gettext("Cancel")}
                   </button>
                   <button type="submit" class="btn btn-primary btn-sm" id="add-member-btn-submit">
-                    Añadir
+                    {gettext("Add")}
                   </button>
                 </div>
               </.form>
@@ -546,19 +551,23 @@ defmodule TokengateWeb.GroupMembersLive do
           <div class="card-body p-4">
             <div class="flex flex-wrap items-center gap-x-8 gap-y-3">
               <div>
-                <p class="text-[10px] uppercase tracking-wide text-base-content/40">Concurrencia</p>
+                <p class="text-[10px] uppercase tracking-wide text-base-content/40">
+                  {gettext("Concurrency")}
+                </p>
                 <p class="text-lg font-bold">{@group.default_concurrency_limit}</p>
-                <p class="text-xs text-base-content/40">por usuario</p>
+                <p class="text-xs text-base-content/40">{gettext("per user")}</p>
               </div>
               <div>
                 <p class="text-[10px] uppercase tracking-wide text-base-content/40">RPM</p>
                 <p class="text-lg font-bold">{@group.default_rpm_limit}</p>
-                <p class="text-xs text-base-content/40">por usuario</p>
+                <p class="text-xs text-base-content/40">{gettext("per user")}</p>
               </div>
               <div>
-                <p class="text-[10px] uppercase tracking-wide text-base-content/40">Gasto/mes</p>
+                <p class="text-[10px] uppercase tracking-wide text-base-content/40">
+                  {gettext("Spend/month")}
+                </p>
                 <p class="text-lg font-bold text-success">${format_decimal(@group_monthly_spend)}</p>
-                <p class="text-xs text-base-content/40">real</p>
+                <p class="text-xs text-base-content/40">{gettext("actual")}</p>
               </div>
             </div>
           </div>
@@ -572,12 +581,12 @@ defmodule TokengateWeb.GroupMembersLive do
             <table class="table table-sm">
               <thead>
                 <tr>
-                  <th>Miembro</th>
-                  <th>Límites</th>
-                  <th>Modelos</th>
-                  <th>Gasto/mes</th>
-                  <th>Uso</th>
-                  <th class="text-right">Acciones</th>
+                  <th>{gettext("Member")}</th>
+                  <th>{gettext("Limits")}</th>
+                  <th>{gettext("Models")}</th>
+                  <th>{gettext("Spend/month")}</th>
+                  <th>{gettext("Usage")}</th>
+                  <th class="text-right">{gettext("Actions")}</th>
                 </tr>
               </thead>
               <tbody>
@@ -600,7 +609,7 @@ defmodule TokengateWeb.GroupMembersLive do
                       <span
                         :if={own_conc?}
                         class="badge badge-xs badge-accent"
-                        title="Override propio del usuario sobre el default del perfil de límites"
+                        title={gettext("The user's own override over the limit profile default")}
                       >
                         propio
                       </span>
@@ -611,7 +620,7 @@ defmodule TokengateWeb.GroupMembersLive do
                       <span
                         :if={own_rpm?}
                         class="badge badge-xs badge-accent"
-                        title="Override propio del usuario sobre el default del perfil de límites"
+                        title={gettext("The user's own override over the limit profile default")}
                       >
                         propio
                       </span>
@@ -624,7 +633,7 @@ defmodule TokengateWeb.GroupMembersLive do
                         phx-value-id={member.id}
                         class="badge badge-sm badge-outline gap-1 hover:badge-primary cursor-pointer transition-colors"
                         id={"details-#{member.id}"}
-                        title="Modelos del miembro"
+                        title={gettext("Member models")}
                       >
                         <.icon name="hero-rectangle-stack" class="w-3 h-3" />
                         {length(MapSet.to_list(@group_alias_ids))} del perfil de límites
@@ -643,12 +652,23 @@ defmodule TokengateWeb.GroupMembersLive do
                     <%= if tier do %>
                       <span
                         class={["badge badge-sm", tier_badge_class(tier.tier)]}
-                        title={"Score: #{tier.score} | Peak RPM: #{tier.peak_rpm} | Días activos: #{tier.active_days} | Requests: #{tier.request_count}"}
+                        title={
+                          gettext(
+                            "Score: %{score} | Peak RPM: %{peak_rpm} | Active days: %{active_days} | Requests: %{requests}",
+                            score: tier.score,
+                            peak_rpm: tier.peak_rpm,
+                            active_days: tier.active_days,
+                            requests: tier.request_count
+                          )
+                        }
                       >
                         {String.capitalize(tier.tier)}
                       </span>
                     <% else %>
-                      <span class="badge badge-sm badge-ghost" title="Sin actividad en 30 días">—</span>
+                      <span
+                        class="badge badge-sm badge-ghost"
+                        title={gettext("No activity in 30 days")}
+                      >—</span>
                     <% end %>
                   </td>
                   <td class="text-right">
@@ -657,7 +677,7 @@ defmodule TokengateWeb.GroupMembersLive do
                         navigate={~p"/stats/users/#{member.user_id}"}
                         class="btn btn-xs btn-ghost"
                         id={"stats-#{member.id}"}
-                        title="Ver stats consolidados de este usuario"
+                        title={gettext("View this user's consolidated stats")}
                       >
                         <.icon name="hero-chart-bar" class="w-3.5 h-3.5" />
                       </.link>
@@ -666,7 +686,7 @@ defmodule TokengateWeb.GroupMembersLive do
                         phx-value-id={member.id}
                         class="btn btn-xs btn-ghost text-error"
                         id={"remove-#{member.id}"}
-                        title="Eliminar miembro"
+                        title={gettext("Remove member")}
                       >
                         <.icon name="hero-trash" class="w-3.5 h-3.5" />
                       </button>
@@ -683,7 +703,7 @@ defmodule TokengateWeb.GroupMembersLive do
             id="members-empty"
           >
             <.icon name="hero-users" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-            <p>Este perfil de límites no tiene miembros todavía.</p>
+            <p>{gettext("This limit profile has no members yet.")}</p>
           </div>
         </div>
 
@@ -702,10 +722,12 @@ defmodule TokengateWeb.GroupMembersLive do
                 <p class="text-xs text-base-content/50 mb-4">{member.user.name}</p>
 
                 <div>
-                  <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">Modelos</p>
+                  <p class="text-xs text-base-content/50 uppercase tracking-wide mb-2">
+                    {gettext("Models")}
+                  </p>
                   <p class="text-xs text-base-content/40 mb-2">
-                    Los modelos del perfil de límites están otorgados a todos los miembros; los extras son
-                    individuales.
+                    {gettext("The limit profile models are granted to every member; the extras are")}
+                    {gettext("per member.")}
                   </p>
                   <.model_picker
                     id={"model-picker-member-#{member.id}"}
@@ -726,7 +748,7 @@ defmodule TokengateWeb.GroupMembersLive do
                     class="btn btn-primary btn-sm"
                     id="close-details-btn"
                   >
-                    Cerrar
+                    {gettext("Close")}
                   </button>
                 </div>
               </div>

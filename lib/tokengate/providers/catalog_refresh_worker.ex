@@ -56,6 +56,7 @@ defmodule Tokengate.Providers.CatalogRefreshWorker do
     unique: [period: 300, states: :incomplete]
 
   require Logger
+  use Gettext, backend: TokengateWeb.Gettext
 
   import Ecto.Query, only: [from: 2]
 
@@ -162,10 +163,13 @@ defmodule Tokengate.Providers.CatalogRefreshWorker do
         decode(body)
 
       {:ok, %{status: status}} ->
-        {:error, "models.dev respondió #{status}"}
+        {:error, gettext("models.dev answered %{status}", status: status)}
 
       {:error, exception} ->
-        {:error, "no se pudo descargar el catálogo: #{Exception.message(exception)}"}
+        {:error,
+         gettext("could not download the catalog: %{reason}",
+           reason: Exception.message(exception)
+         )}
     end
   end
 
@@ -178,12 +182,12 @@ defmodule Tokengate.Providers.CatalogRefreshWorker do
   defp decode(body) when is_binary(body) do
     case Jason.decode(body) do
       {:ok, decoded} when is_map(decoded) -> {:ok, decoded}
-      {:ok, _} -> {:error, "el catálogo no tiene el formato esperado"}
-      {:error, _} -> {:error, "el catálogo no es JSON válido"}
+      {:ok, _} -> {:error, gettext("the catalog does not have the expected format")}
+      {:error, _} -> {:error, gettext("the catalog is not valid JSON")}
     end
   end
 
-  defp decode(_), do: {:error, "el catálogo no tiene el formato esperado"}
+  defp decode(_), do: {:error, gettext("the catalog does not have the expected format")}
 
   # `https://models.dev/api.json` → `https://models.dev/models.json`, for any
   # origin (a mirror, or the test server). nil when the URL carries no origin.
@@ -368,7 +372,7 @@ defmodule Tokengate.Providers.CatalogRefreshWorker do
              [
                labs_warning(
                  "labs_payload_empty",
-                 "el catálogo de labs vino sin labs; no se tocó ninguna fila"
+                 gettext("the labs catalog came without labs; no row was touched")
                )
                | warnings
              ]}
@@ -480,7 +484,7 @@ defmodule Tokengate.Providers.CatalogRefreshWorker do
            [
              models_warning(
                "models_payload_empty",
-               "el catálogo de models vino vacío; no se tocó ninguna fila"
+               gettext("the models catalog came empty; no row was touched")
              )
              | warnings
            ]}

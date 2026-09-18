@@ -11,6 +11,7 @@ defmodule TokengateWeb.TimezoneHelper do
   """
 
   @default_timezone "Etc/UTC"
+  use Gettext, backend: TokengateWeb.Gettext
 
   # Curated list of common timezones for the selector.
   # Grouped by region for easier navigation.
@@ -19,40 +20,56 @@ defmodule TokengateWeb.TimezoneHelper do
      [
        {"UTC", "Etc/UTC"}
      ]},
-    {"América",
+    {"America",
      [
-       {"Ciudad de México (CDT)", "America/Mexico_City"},
-       {"Ciudad de México (CST)", "America/Merida"},
-       {"Nueva York (EST)", "America/New_York"},
-       {"Los Ángeles (PST)", "America/Los_Angeles"},
+       {"Mexico City (CDT)", "America/Mexico_City"},
+       {"Mexico City (CST)", "America/Merida"},
+       {"New York (EST)", "America/New_York"},
+       {"Los Angeles (PST)", "America/Los_Angeles"},
        {"Chicago (CST)", "America/Chicago"},
        {"Denver (MST)", "America/Denver"},
-       {"Bogotá", "America/Bogota"},
+       {"Bogota", "America/Bogota"},
        {"Lima", "America/Lima"},
        {"Buenos Aires", "America/Argentina/Buenos_Aires"},
        {"Santiago", "America/Santiago"},
-       {"São Paulo", "America/Sao_Paulo"},
+       {"Sao Paulo", "America/Sao_Paulo"},
        {"Caracas", "America/Caracas"},
        {"Guadalajara", "America/Mexico_City"}
      ]},
-    {"Europa",
+    {"Europe",
      [
        {"Madrid", "Europe/Madrid"},
-       {"Lisboa", "Europe/Lisbon"},
-       {"Londres", "Europe/London"},
-       {"París", "Europe/Paris"},
-       {"Berlín", "Europe/Berlin"},
-       {"Roma", "Europe/Rome"},
-       {"Ámsterdam", "Europe/Amsterdam"}
+       {"Lisbon", "Europe/Lisbon"},
+       {"London", "Europe/London"},
+       {"Paris", "Europe/Paris"},
+       {"Berlin", "Europe/Berlin"},
+       {"Rome", "Europe/Rome"},
+       {"Amsterdam", "Europe/Amsterdam"}
      ]},
-    {"Otros",
+    {"Other",
      [
        {"Portugal (Azores)", "Atlantic/Azores"}
      ]}
   ]
 
-  @doc "Returns the curated timezone list for the selector."
-  def timezone_options, do: @timezones
+  @doc """
+  Returns the curated timezone list for the selector.
+
+  Las etiquetas (región y ciudad) son msgid en inglés y se traducen al
+  vuelo: `@timezones` es data estática y `gettext/1` no puede evaluarse en
+  un atributo de módulo. El valor IANA (`Etc/UTC`, `Europe/Madrid`…) nunca
+  cambia.
+  """
+  def timezone_options do
+    Enum.map(@timezones, fn {region, zones} ->
+      {TokengateWeb.Gettext.translate(region),
+       Enum.map(zones, fn {label, tz} -> {TokengateWeb.Gettext.translate(label), tz} end)}
+    end)
+  end
+
+  # Lookup en runtime: las etiquetas salen de `@timezones`, así que no pueden ir
+  # por el macro `gettext/1` (que exige un literal para poder extraerlo). Las
+  # entradas correspondientes del `.po` se mantienen a mano.
 
   @doc "Returns the effective timezone from socket assigns, or UTC default."
   def timezone_from_assigns(assigns) do

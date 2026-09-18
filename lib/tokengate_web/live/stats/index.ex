@@ -55,7 +55,7 @@ defmodule TokengateWeb.StatsLive.Index do
             <div class="card-body p-5">
               <div class="flex items-center justify-between">
                 <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                  Pico de concurrencia
+                  {gettext("Peak concurrency")}
                 </span>
                 <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-primary/10">
                   <.icon name="hero-arrow-trending-up" class="w-5 h-5 text-primary" />
@@ -73,7 +73,7 @@ defmodule TokengateWeb.StatsLive.Index do
                 </p>
               <% else %>
                 <p class="text-sm text-base-content/40 mt-2">
-                  Sin datos
+                  {gettext("No data")}
                 </p>
               <% end %>
             </div>
@@ -84,7 +84,7 @@ defmodule TokengateWeb.StatsLive.Index do
           <div class="card-body p-5">
             <div class="flex items-center justify-between">
               <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                Horas pico
+                {gettext("Peak hours")}
               </span>
               <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-warning/10">
                 <.icon name="hero-fire" class="w-5 h-5 text-warning" />
@@ -105,7 +105,7 @@ defmodule TokengateWeb.StatsLive.Index do
               </ul>
             <% else %>
               <p class="text-sm text-base-content/40 mt-2">
-                Sin datos
+                {gettext("No data")}
               </p>
             <% end %>
           </div>
@@ -115,7 +115,7 @@ defmodule TokengateWeb.StatsLive.Index do
           <div class="card-body p-5">
             <div class="flex items-center justify-between">
               <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                Minutos pico
+                {gettext("Peak minutes")}
               </span>
               <span class="flex items-center justify-center w-9 h-9 rounded-lg bg-accent/10">
                 <.icon name="hero-bolt" class="w-5 h-5 text-accent" />
@@ -136,7 +136,7 @@ defmodule TokengateWeb.StatsLive.Index do
               </ul>
             <% else %>
               <p class="text-sm text-base-content/40 mt-2">
-                Sin datos
+                {gettext("No data")}
               </p>
             <% end %>
           </div>
@@ -173,7 +173,7 @@ defmodule TokengateWeb.StatsLive.Index do
                 <Stats.ranked_row
                   :for={{row, rank} <- Enum.with_index(provider_rows, 1)}
                   rank={rank}
-                  title={row.provider_name}
+                  title={Stats.provider_label(row.provider_name)}
                   id={"provider-breakdown-row-#{rank}"}
                 >
                   <:leading>
@@ -200,7 +200,7 @@ defmodule TokengateWeb.StatsLive.Index do
               </ul>
             <% else %>
               <p class="text-sm text-base-content/40 py-6 text-center">
-                Sin datos en este período.
+                {gettext("No data in this period.")}
               </p>
             <% end %>
           </div>
@@ -255,7 +255,7 @@ defmodule TokengateWeb.StatsLive.Index do
               </ul>
             <% else %>
               <p class="text-sm text-base-content/40 py-6 text-center">
-                Sin datos en este período.
+                {gettext("No data in this period.")}
               </p>
             <% end %>
           </div>
@@ -277,17 +277,23 @@ defmodule TokengateWeb.StatsLive.Index do
           id="hour-distribution"
           class="lg:col-span-2"
           rows={@hour_usage_by_provider}
-          title="Uso por hora del día"
+          title={gettext("Daily usage by hour")}
           hint={
             if today?,
               do:
-                "barras apiladas · 1 barra = 1 hora del día UTC · color = proveedor · hora en curso marcada",
+                gettext(
+                  "stacked bars · 1 bar = 1 hour of the UTC day · color = provider · current hour marked"
+                ),
               else:
-                "barras apiladas · 1 barra = 1 hora del día · color = proveedor · hora en tu hora local · agregado del período"
+                gettext(
+                  "stacked bars · 1 bar = 1 hour of the day · color = provider · hour in your local time · period aggregate"
+                )
           }
           hour_suffix={if today?, do: "UTC", else: "hora local"}
           empty_note={
-            if today?, do: "sin tráfico en el día UTC todavía", else: "sin datos en el período"
+            if today?,
+              do: gettext("no traffic in the UTC day yet"),
+              else: gettext("no data in the period")
           }
           now_hour={if today?, do: DateTime.utc_now().hour, else: nil}
         />

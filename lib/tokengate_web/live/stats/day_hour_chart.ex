@@ -187,9 +187,9 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
             <Stats.provider_logo logo_url={entry.provider_logo_url} />
             <span
               class="text-[10px] text-base-content/60 truncate max-w-[110px]"
-              title={entry.provider_name}
+              title={Stats.provider_label(entry.provider_name)}
             >
-              {entry.provider_name}
+              {Stats.provider_label(entry.provider_name)}
             </span>
             <span class="text-[10px] text-base-content/40 tabular-nums">
               {Stats.format_number(entry.requests)}
@@ -209,7 +209,10 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
   # se interpola en varias líneas, y así el número y su unidad se leen (y se
   # asertan) como un valor único.
   defp total_label(requests, cost) do
-    "#{Stats.format_number(requests)} req · $#{Stats.format_decimal(Decimal.round(cost, 4))}"
+    gettext("%{count} req · $%{cost}",
+      count: Stats.format_number(requests),
+      cost: Stats.format_decimal(Decimal.round(cost, 4))
+    )
   end
 
   # Extremos del eje X. En En vivo el derecho es la hora en curso; en el
@@ -251,12 +254,16 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
   defp bar_segments(_row, _legend), do: []
 
   defp bar_title(%{hour: hour, total_requests: 0}, suffix) do
-    "#{Stats.hour_label(hour)} #{suffix} · sin tráfico"
+    gettext("%{hour} %{suffix} · no traffic", hour: Stats.hour_label(hour), suffix: suffix)
   end
 
   defp bar_title(%{hour: hour, total_requests: total} = row, suffix) do
     base =
-      "#{Stats.hour_label(hour)} #{suffix} · #{Stats.format_number(total)} req · $" <>
+      gettext("%{hour} %{suffix} · %{count} req · $",
+        hour: Stats.hour_label(hour),
+        suffix: suffix,
+        count: Stats.format_number(total)
+      ) <>
         Stats.format_decimal(Decimal.round(row.total_cost_usd, 4))
 
     shown = Enum.take(row.providers, 4)
@@ -264,7 +271,10 @@ defmodule TokengateWeb.StatsLive.DayHourChart do
 
     providers =
       Enum.map_join(shown, " · ", fn p ->
-        "#{p.provider_name} #{Stats.format_number(p.requests)}"
+        gettext("%{provider} %{count}",
+          provider: Stats.provider_label(p.provider_name),
+          count: Stats.format_number(p.requests)
+        )
       end)
 
     providers = if extra > 0, do: providers <> " · +#{extra}", else: providers

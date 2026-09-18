@@ -38,7 +38,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
   alias Tokengate.Repo
   alias TokengateWeb.StatsHelpers, as: Stats
 
-  @periods [{"today", "Hoy"}, {"7d", "7 días"}, {"30d", "30 días"}, {"90d", "90 días"}]
+  @periods [{"today", "Today"}, {"7d", "7 days"}, {"30d", "30 days"}, {"90d", "90 days"}]
   @default_period "30d"
   @page_size 25
   # Events that do not touch service state and stay allowed on a read-only page.
@@ -50,7 +50,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
 
     case Accounts.get_service(service_id) do
       nil ->
-        {:ok, deny(socket, "Ese servicio no existe.")}
+        {:ok, deny(socket, gettext("That service does not exist."))}
 
       service ->
         if Accounts.supervises_service?(user.id, service.id) do
@@ -74,7 +74,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
              granted_models |> Map.values() |> List.flatten() |> Providers.models_by_ids()
            )
            |> assign(:supervisors, Accounts.service_supervisors(service.id))
-           |> assign(:periods, @periods)
+           |> assign(:periods, periods())
            |> assign(:period, @default_period)
            |> assign(:summary, empty_summary())
            |> assign(:model_rows, [])
@@ -84,7 +84,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
            |> assign(:has_more, false)
            |> attach_read_only_hook()}
         else
-          {:ok, deny(socket, "No supervisas ese servicio.")}
+          {:ok, deny(socket, gettext("You do not supervise that service."))}
         end
     end
   end
@@ -96,7 +96,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
   defp deny(socket, message) do
     socket
     |> assign(:denied?, true)
-    |> assign(:page_title, "Sin acceso · Tokengate")
+    |> assign(:page_title, gettext("No access") <> " · Tokengate")
     |> put_flash(:error, message)
     |> push_navigate(to: ~p"/services/supervised")
   end
@@ -106,7 +106,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
       if event in @allowed_events do
         {:cont, socket}
       else
-        {:halt, put_flash(socket, :error, "Esta vista es de solo lectura.")}
+        {:halt, put_flash(socket, :error, gettext("This view is read-only."))}
       end
     end)
   end
@@ -138,7 +138,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
     if socket.assigns.service.id == service_id do
       {:noreply,
        socket
-       |> put_flash(:error, "Ya no supervisas este servicio.")
+       |> put_flash(:error, gettext("You no longer supervise this service."))
        |> push_navigate(to: ~p"/services/supervised")}
     else
       {:noreply, socket}
@@ -264,7 +264,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
 
   defp error_rate_label(requests, errors) do
     case error_rate(requests, errors) do
-      nil -> "sin requests"
+      nil -> gettext("no requests")
       rate -> "#{Stats.format_percent(rate)} de error"
     end
   end
@@ -274,12 +274,12 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
   defp status_share(_count, 0), do: "0%"
   defp status_share(count, total), do: Stats.format_percent(count / total)
 
-  defp limit_label(%{unlimited_spend: true}), do: "Crédito ilimitado"
+  defp limit_label(%{unlimited_spend: true}), do: gettext("Unlimited credit")
 
   defp limit_label(%{monthly_spend_limit_usd: %Decimal{} = limit}),
-    do: "Límite $#{Decimal.to_string(limit)}/mes"
+    do: gettext("Cap $%{amount}/month", amount: Decimal.to_string(limit))
 
-  defp limit_label(_service), do: gettext("No budget") <> " (solo top-ups)"
+  defp limit_label(_service), do: gettext("No budget") <> " " <> gettext("(top-ups only)")
 
   defp supervisor_label(%{user: %{name: name, email: email}}) when is_binary(name),
     do: "#{name} · #{email}"
@@ -321,7 +321,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
       >
         <div class="card-body items-center text-center py-12">
           <.icon name="hero-lock-closed" class="w-12 h-12 text-base-content/30" />
-          <h3 class="text-lg font-semibold mt-2">Sin acceso a este servicio.</h3>
+          <h3 class="text-lg font-semibold mt-2">{gettext("No access to this service.")}</h3>
         </div>
       </div>
 
@@ -330,10 +330,10 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
           <div>
             <div class="flex items-center gap-2 text-xs text-base-content/60">
               <.link navigate={~p"/services/supervised"} class="hover:underline">
-                Servicios supervisados
+                {gettext("Supervised services")}
               </.link>
               <span>›</span>
-              <span>Stats completos</span>
+              <span>{gettext("Full stats")}</span>
             </div>
             <h1 class="text-lg font-semibold leading-8 mt-1 flex items-center gap-2">
               {@service.name}
@@ -365,7 +365,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
         <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
           <.metric_tile
             id="kpi-cost"
-            label="Gasto real"
+            label={gettext("Actual spend")}
             value={format_cost(@summary.total_cost_usd)}
             icon="hero-currency-dollar"
             accent="success"
@@ -381,7 +381,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
           />
           <.metric_tile
             id="kpi-input"
-            label="Tokens in"
+            label={gettext("Tokens in")}
             value={Stats.format_compact(@summary.total_prompt_tokens)}
             icon="hero-arrow-down-tray"
             accent="accent"
@@ -389,7 +389,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
           />
           <.metric_tile
             id="kpi-output"
-            label="Tokens out"
+            label={gettext("Tokens out")}
             value={Stats.format_compact(@summary.total_completion_tokens)}
             icon="hero-arrow-up-tray"
             accent="warning"
@@ -397,7 +397,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
           />
           <.metric_tile
             id="kpi-errors"
-            label="Errores"
+            label={gettext("Errors")}
             value={
               Stats.format_number(@summary.status_breakdown["4xx"] + @summary.status_breakdown["5xx"])
             }
@@ -422,7 +422,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
             icon="hero-clock"
             accent="neutral"
             sub={
-              "último request: " <>
+              gettext("last request:") <> " " <>
                 Stats.format_dt(@summary.last_request_at, @timezone)
             }
           />
@@ -434,7 +434,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
             <div class="flex items-center justify-between">
               <h2 class="card-title text-base">
                 <.icon name="hero-chart-bar" class="w-5 h-5 text-base-content/60" />
-                Uso diario por modelo
+                {gettext("Daily usage per model")}
               </h2>
               <span class="text-[10px] text-base-content/40 hidden sm:inline">
                 {period_label(@period)}
@@ -486,7 +486,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
 
               <div class="w-40 shrink-0 border-l border-base-300 pl-3">
                 <div class="text-[10px] font-semibold text-base-content/60 uppercase tracking-wide mb-2">
-                  Modelos
+                  {gettext("Models")}
                 </div>
                 <div class="space-y-1.5">
                   <div
@@ -510,7 +510,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
           <div class="card bg-base-100 border border-base-300 shadow-sm" id="status-breakdown">
             <div class="card-body p-4 gap-2">
               <h3 class="card-title text-sm">
-                <strong>Estados</strong> · {period_label(@period)}
+                <strong>{gettext("States")}</strong> · {period_label(@period)}
               </h3>
               <%= for {class, badge} <- [{"2xx", "badge-success"}, {"4xx", "badge-warning"}, {"5xx", "badge-error"}] do %>
                 <div class="flex items-center justify-between text-sm">
@@ -536,7 +536,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
             <div class="card-body p-4 gap-2">
               <h3 class="card-title text-sm">Top modelos · {period_label(@period)}</h3>
               <%= if @summary.top_models == [] do %>
-                <p class="text-xs text-base-content/40">Sin requests en el período.</p>
+                <p class="text-xs text-base-content/40">{gettext("No requests in the period.")}</p>
               <% else %>
                 <ol class="space-y-1">
                   <li
@@ -556,7 +556,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
           <%!-- Who else supervises it --%>
           <div class="card bg-base-100 border border-base-300 shadow-sm" id="service-supervisors">
             <div class="card-body p-4 gap-2">
-              <h3 class="card-title text-sm">Supervisores del servicio</h3>
+              <h3 class="card-title text-sm">{gettext("Service supervisors")}</h3>
               <ul class="space-y-1">
                 <li
                   :for={supervisor <- @supervisors}
@@ -568,7 +568,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
                 </li>
               </ul>
               <p class="text-xs text-base-content/40">
-                La asignación la gestiona un administrador desde Servicios.
+                {gettext("The assignment is managed by an administrator from Services.")}
               </p>
             </div>
           </div>
@@ -583,16 +583,16 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
             </h2>
             <%= if @model_rows == [] do %>
               <p class="text-sm text-base-content/40 py-6 text-center" id="model-rows-empty">
-                Sin datos para este periodo.
+                {gettext("No data for this period.")}
               </p>
             <% else %>
               <div class="overflow-x-auto mt-3">
                 <table class="table table-sm" id="model-rows">
                   <thead>
                     <tr>
-                      <th>Modelo</th>
+                      <th>{gettext("Model")}</th>
                       <th class="text-right">Requests</th>
-                      <th class="text-right">Costo</th>
+                      <th class="text-right">{gettext("Cost")}</th>
                       <th class="text-right">Tokens in</th>
                       <th class="text-right">Tokens out</th>
                       <th class="text-right">Cache %</th>
@@ -625,7 +625,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
           <div class="card-body p-4 gap-3">
             <h2 class="card-title text-base">
               <.icon name="hero-wrench-screwdriver" class="w-5 h-5 text-base-content/60" />
-              Configuración (solo lectura)
+              {gettext("Configuration (read-only)")}
             </h2>
 
             <dl class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
@@ -644,35 +644,41 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
                       {@service.api_key.status}
                     </span>
                   <% else %>
-                    <span class="text-base-content/40">Sin clave</span>
+                    <span class="text-base-content/40">{gettext("No key")}</span>
                   <% end %>
                 </dd>
               </div>
 
               <div class="rounded-xl border border-base-300 px-3 py-2">
-                <dt class="text-[10px] uppercase tracking-wide text-base-content/60">Concurrencia</dt>
+                <dt class="text-[10px] uppercase tracking-wide text-base-content/60">
+                  {gettext("Concurrency")}
+                </dt>
                 <dd class="mt-1 font-mono">{@service.concurrency_limit || 5}</dd>
               </div>
 
               <div class="rounded-xl border border-base-300 px-3 py-2">
-                <dt class="text-[10px] uppercase tracking-wide text-base-content/60">RPM</dt>
+                <dt class="text-[10px] uppercase tracking-wide text-base-content/60">
+                  {gettext("RPM")}
+                </dt>
                 <dd class="mt-1 font-mono">{@service.rpm_limit || 60}</dd>
               </div>
 
               <div class="rounded-xl border border-base-300 px-3 py-2">
-                <dt class="text-[10px] uppercase tracking-wide text-base-content/60">Crédito</dt>
+                <dt class="text-[10px] uppercase tracking-wide text-base-content/60">
+                  {gettext("Credit")}
+                </dt>
                 <dd class="mt-1">{limit_label(@service)}</dd>
               </div>
             </dl>
 
             <div class="flex flex-wrap items-center gap-2">
               <span class="text-xs font-medium text-base-content/60 uppercase tracking-wide">
-                Modelos permitidos
+                {gettext("Allowed models")}
               </span>
               <div class="flex flex-wrap gap-2" id={"models-#{@service.id}"}>
                 <%= if model_names_for(@granted_models, @service.id, @models) == [] do %>
                   <span class="text-xs text-base-content/40">
-                    Este servicio no tiene models asignados.
+                    {gettext("This service has no models assigned.")}
                   </span>
                 <% else %>
                   <span
@@ -693,29 +699,29 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
           <div class="card-body">
             <h2 class="card-title text-base">
               <.icon name="hero-bars-3-bottom-left" class="w-5 h-5 text-base-content/60" />
-              Actividad reciente
+              {gettext("Recent activity")}
             </h2>
             <p class="text-xs text-base-content/60">
-              Últimos requests del servicio, sin filtrar por período.
+              {gettext("Last requests of the service, not filtered by period.")}
             </p>
 
             <div class="overflow-x-auto mt-3">
               <table class="table table-sm">
                 <thead>
                   <tr>
-                    <th>Fecha</th>
-                    <th>Modelo</th>
-                    <th>Estado</th>
+                    <th>{gettext("Date")}</th>
+                    <th>{gettext("Model")}</th>
+                    <th>{gettext("Status")}</th>
                     <th class="text-right">Input</th>
                     <th class="text-right">Output</th>
-                    <th class="text-right">Costo</th>
-                    <th class="text-right">Latencia</th>
+                    <th class="text-right">{gettext("Cost")}</th>
+                    <th class="text-right">{gettext("Latency")}</th>
                   </tr>
                 </thead>
                 <tbody id="supervised-service-logs" phx-update="stream">
                   <tr id="supervised-service-logs-empty" class="hidden only:table-row">
                     <td colspan="7" class="text-center py-8 text-base-content/40">
-                      Este servicio todavía no tiene requests.
+                      {gettext("This service has no requests yet.")}
                     </td>
                   </tr>
                   <tr :for={{id, log} <- @streams.logs} id={id}>
@@ -751,7 +757,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
                 class="btn btn-ghost btn-sm"
                 id="load-more-supervised-logs"
               >
-                Cargar más
+                {gettext("Load more")}
               </button>
             </div>
           </div>
@@ -761,11 +767,15 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
     """
   end
 
-  defp period_label("today"), do: "Hoy"
-  defp period_label("7d"), do: "7 días"
-  defp period_label("30d"), do: "30 días"
-  defp period_label("90d"), do: "90 días"
-  defp period_label(_), do: "30 días"
+  defp periods do
+    Enum.map(@periods, fn {value, label} -> {value, TokengateWeb.Gettext.translate(label)} end)
+  end
+
+  defp period_label("today"), do: gettext("Today")
+  defp period_label("7d"), do: gettext("7 days")
+  defp period_label("30d"), do: gettext("30 days")
+  defp period_label("90d"), do: gettext("90 days")
+  defp period_label(_), do: gettext("30 days")
 
   defp model_names_for(granted_models, service_id, all_models) do
     Map.get(granted_models, service_id, [])

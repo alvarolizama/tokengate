@@ -159,21 +159,20 @@ defmodule Tokengate.Providers.ModelProvider do
     |> unique_constraint(:exclusive_to_group_id,
       name: :model_providers_group_exclusive_target_unique_index,
       message:
-        "este modelo ya tiene un proveedor exclusivo para este perfil de límites (solo se permite uno)"
+        "this model already has an exclusive provider for this limit profile (only one is allowed)"
     )
     |> unique_constraint(:exclusive_to_group_member_id,
       name: :model_providers_member_exclusive_target_unique_index,
-      message:
-        "este modelo ya tiene un proveedor exclusivo para este usuario (solo se permite uno)"
+      message: "this model already has an exclusive provider for this user (only one is allowed)"
     )
     |> unique_constraint(:exclusive_to_service_id,
       name: :model_providers_service_exclusive_target_unique_index,
       message:
-        "este modelo ya tiene un proveedor exclusivo para este servicio (solo se permite uno)"
+        "this model already has an exclusive provider for this service (only one is allowed)"
     )
     |> unique_constraint(:credential_id,
       name: :model_providers_global_credential_unique_index,
-      message: "esta credencial ya es global para este modelo"
+      message: "this credential is already global for this model"
     )
     |> sync_scope_field()
   end
@@ -240,11 +239,11 @@ defmodule Tokengate.Providers.ModelProvider do
           {:ok, map} ->
             case Enum.find(Map.keys(map), &(&1 in @protected_body_keys)) do
               nil -> put_change(changeset, :extra_body, map)
-              key -> add_error(changeset, :extra_body_json, "no se puede sobrescribir \"#{key}\"")
+              key -> add_error(changeset, :extra_body_json, "cannot overwrite %{key}", key: key)
             end
 
           {:error, reason} ->
-            add_error(changeset, :extra_body_json, "JSON inválido: #{reason}")
+            add_error(changeset, :extra_body_json, "invalid JSON: %{reason}", reason: reason)
         end
     end
   end
@@ -280,7 +279,7 @@ defmodule Tokengate.Providers.ModelProvider do
     if is_map(other) and not Map.has_key?(other, :__struct__) do
       {:ok, other}
     else
-      {:error, "se esperaba un objeto"}
+      {:error, "an object was expected"}
     end
   end
 
@@ -292,7 +291,7 @@ defmodule Tokengate.Providers.ModelProvider do
         {:ok, map}
 
       {:ok, _other} ->
-        {:error, "se esperaba un objeto"}
+        {:error, "an object was expected"}
 
       {:error, %Jason.DecodeError{} = e} ->
         {:error, Exception.message(e)}
@@ -319,7 +318,7 @@ defmodule Tokengate.Providers.ModelProvider do
           stored_field == :omit_body_fields and Enum.any?(items, &(&1 in @protected_body_keys)) ->
             blocked = Enum.find(items, &(&1 in @protected_body_keys))
 
-            add_error(changeset, csv_field, "no se puede omitir \"#{blocked}\"")
+            add_error(changeset, csv_field, "cannot omit %{field}", field: blocked)
 
           true ->
             case Enum.find(items, &(&1 in @reserved_headers)) do
@@ -327,7 +326,7 @@ defmodule Tokengate.Providers.ModelProvider do
                 put_change(changeset, stored_field, items)
 
               reserved ->
-                add_error(changeset, csv_field, "no se puede omitir \"#{reserved}\"")
+                add_error(changeset, csv_field, "cannot omit %{field}", field: reserved)
             end
         end
 
@@ -349,7 +348,7 @@ defmodule Tokengate.Providers.ModelProvider do
       add_error(
         changeset,
         :exclusive_to_group_member_id,
-        "solo se puede asignar un scope exclusivo a la vez"
+        "only one exclusive scope can be assigned at a time"
       )
     else
       changeset

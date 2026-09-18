@@ -19,7 +19,7 @@ defmodule TokengateWeb.SessionControllerTest do
     conn = get(conn, ~p"/login")
     html = html_response(conn, 200)
     assert html =~ ~s(id="login-form")
-    assert html =~ "Iniciar sesión"
+    assert html =~ "Sign in"
   end
 
   test "POST /login with valid credentials sets session and redirects", %{conn: conn} do
@@ -31,20 +31,20 @@ defmodule TokengateWeb.SessionControllerTest do
     assert get_session(conn, :user_id) == user.id
   end
 
-  test "POST /login with bad password re-renders with Spanish error", %{conn: conn} do
+  test "POST /login with bad password re-renders with an error", %{conn: conn} do
     %{user: user} = user_fixture()
 
     conn = post(conn, ~p"/login", %{email: user.email, password: "wrong-password-1"})
 
     html = html_response(conn, 200)
-    assert html =~ "Credenciales inválidas."
+    assert html =~ "Invalid credentials."
     assert get_session(conn, :user_id) == nil
   end
 
   test "POST /login with unknown email also fails safely", %{conn: conn} do
     conn = post(conn, ~p"/login", %{email: "nadie@example.com", password: "whatever-12345"})
 
-    assert html_response(conn, 200) =~ "Credenciales inválidas."
+    assert html_response(conn, 200) =~ "Invalid credentials."
   end
 
   test "GET /login redirects authenticated users to /dashboard", %{conn: conn} do
@@ -119,7 +119,8 @@ defmodule TokengateWeb.SessionControllerTest do
       html = html_response(conn, 200)
       assert html =~ ~s(id="impersonation-banner")
       assert html =~ target.email
-      assert html =~ "Volver a mi cuenta"
+      # La UI sale en inglés por defecto (`default_locale: "en"`).
+      assert html =~ "Back to my account"
     end
 
     test "non-admin cannot impersonate", %{conn: conn} do

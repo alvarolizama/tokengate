@@ -42,7 +42,7 @@ defmodule TokengateWeb.ProvidersLive do
 
     socket =
       socket
-      |> assign(:page_title, "Proveedores · Tokengate")
+      |> assign(:page_title, gettext("Providers") <> " · Tokengate")
       |> assign(:form, nil)
       |> assign(:editing_provider_id, nil)
       |> assign(:credential_form, nil)
@@ -76,6 +76,12 @@ defmodule TokengateWeb.ProvidersLive do
   end
 
   ## Data loading ---------------------------------------------------------
+
+  # El motivo de "no soportado" es un msgid de datos que sale del contexto
+  # (`Catalog`): `nil` cuando el proveedor sí se puede usar, así que no puede
+  # pasar directo a `translate/1`.
+  defp translate_reason(nil), do: nil
+  defp translate_reason(reason), do: TokengateWeb.Gettext.translate(reason)
 
   defp load_providers(socket) do
     providers =
@@ -173,7 +179,7 @@ defmodule TokengateWeb.ProvidersLive do
           doc_url: row.doc_url,
           logo_url: row.logo_url,
           status: row.status,
-          reason: Catalog.unsupported_reason(row),
+          reason: translate_reason(Catalog.unsupported_reason(row)),
           activated?: MapSet.member?(activated_keys, row.key)
         }
       end)
@@ -255,13 +261,17 @@ defmodule TokengateWeb.ProvidersLive do
 
     cond do
       is_nil(entry) ->
-        {:noreply, put_flash(socket, :error, "Proveedor desconocido.")}
+        {:noreply, put_flash(socket, :error, gettext("Unknown provider."))}
 
       true ->
         case Repo.get_by(Provider, key: key) do
           nil ->
             {:noreply,
-             put_flash(socket, :error, "#{entry.name} todavía no está materializado. Reintenta.")}
+             put_flash(
+               socket,
+               :error,
+               gettext("%{name} is not materialized yet. Try again.", name: entry.name)
+             )}
 
           provider ->
             changeset =
@@ -365,7 +375,9 @@ defmodule TokengateWeb.ProvidersLive do
          put_flash(
            socket,
            :error,
-           "Los proveedores del catálogo no se pueden eliminar — desactívalo para sacarlo del routing (vuelve a crearse en cada arranque)."
+           gettext(
+             "Catalog providers cannot be deleted — deactivate it to take it out of the routing (it is recreated on boot)."
+           )
          )}
 
       true ->
@@ -388,12 +400,15 @@ defmodule TokengateWeb.ProvidersLive do
          socket
          |> put_flash(
            :info,
-           "Proveedor #{if(new_status == "active", do: "activado", else: "desactivado")}."
+           if(new_status == "active",
+             do: gettext("Provider activated."),
+             else: gettext("Provider deactivated.")
+           )
          )
          |> load_providers()}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo actualizar el proveedor.")}
+        {:noreply, put_flash(socket, :error, gettext("Could not update the provider."))}
     end
   end
 
@@ -484,7 +499,8 @@ defmodule TokengateWeb.ProvidersLive do
 
     # Credentials in "error" state cannot be toggled — they must be reactivated.
     if cred.status == "error" do
-      {:noreply, put_flash(socket, :error, "Esta credencial está en error. Usa Reactivar.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("This credential is in error. Use Reactivate."))}
     else
       new_status = if cred.status == "active", do: "disabled", else: "active"
 
@@ -505,7 +521,7 @@ defmodule TokengateWeb.ProvidersLive do
            |> load_providers()}
 
         {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudo actualizar la credencial.")}
+          {:noreply, put_flash(socket, :error, gettext("Could not update the credential."))}
       end
     end
   end
@@ -527,10 +543,11 @@ defmodule TokengateWeb.ProvidersLive do
            |> load_providers()}
 
         {:error, _} ->
-          {:noreply, put_flash(socket, :error, "No se pudo reactivar la credencial.")}
+          {:noreply, put_flash(socket, :error, gettext("Could not reactivate the credential."))}
       end
     else
-      {:noreply, put_flash(socket, :error, "Solo se pueden reactivar credenciales en error.")}
+      {:noreply,
+       put_flash(socket, :error, gettext("Only credentials in error can be reactivated."))}
     end
   end
 
@@ -566,7 +583,7 @@ defmodule TokengateWeb.ProvidersLive do
          |> load_providers()}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo eliminar la credencial.")}
+        {:noreply, put_flash(socket, :error, gettext("Could not delete the credential."))}
     end
   end
 
@@ -586,7 +603,7 @@ defmodule TokengateWeb.ProvidersLive do
        put_flash(
          socket,
          :error,
-         "No se puede eliminar: el proveedor está en uso por uno o más modelos."
+         gettext("Cannot delete: the provider is in use by one or more models.")
        )}
     else
       # Slow deletes surface as exceptions, not {:error, _}: a client-side
@@ -600,11 +617,11 @@ defmodule TokengateWeb.ProvidersLive do
 
             {:noreply,
              socket
-             |> put_flash(:info, "Proveedor eliminado.")
+             |> put_flash(:info, gettext("Provider deleted."))
              |> load_providers()}
 
           {:error, _} ->
-            {:noreply, put_flash(socket, :error, "No se pudo eliminar el proveedor.")}
+            {:noreply, put_flash(socket, :error, gettext("Could not delete the provider."))}
         end
       rescue
         e in [DBConnection.ConnectionError, Postgrex.Error] ->
@@ -614,7 +631,9 @@ defmodule TokengateWeb.ProvidersLive do
            put_flash(
              socket,
              :error,
-             "La eliminación falló en la base de datos (timeout o bloqueo). Reintenta; si persiste, contacta al administrador."
+             gettext(
+               "The delete failed in the database (timeout or lock). Try again; if it persists, contact an administrator."
+             )
            )}
       end
     end
@@ -632,7 +651,7 @@ defmodule TokengateWeb.ProvidersLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Proveedor creado.")
+         |> put_flash(:info, gettext("Provider created."))
          |> assign(:form, nil)
          |> assign(:editing_provider_id, nil)
          |> load_providers()}
@@ -666,7 +685,7 @@ defmodule TokengateWeb.ProvidersLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Proveedor actualizado.")
+         |> put_flash(:info, gettext("Provider updated."))
          |> assign(:form, nil)
          |> assign(:editing_provider_id, nil)
          |> load_providers()}
@@ -751,16 +770,16 @@ defmodule TokengateWeb.ProvidersLive do
   # Says where the path in effect comes from, so an override that is not the
   # one being edited is still visible from inside the modal.
   defp path_hint(%{source: :provider, catalog: catalog, default: default}),
-    do: "Override propio · default: #{catalog || default}"
+    do: gettext("Own override · default: %{default}", default: catalog || default)
 
   defp path_hint(%{source: :catalog, default: default}),
-    do: "Path del catálogo · default: #{default}"
+    do: gettext("Catalog path · default: %{default}", default: default)
 
-  defp path_hint(_description), do: "Default del adapter"
+  defp path_hint(_description), do: gettext("Adapter default")
 
   defp paths_flash(overrides) do
     case map_size(overrides) do
-      0 -> "Paths restablecidos: cada capacidad usa su default."
+      0 -> gettext("Paths reset: every capability falls back to its default.")
       n -> "Paths actualizados (#{n} #{if n == 1, do: "override", else: "overrides"})."
     end
   end
@@ -773,7 +792,7 @@ defmodule TokengateWeb.ProvidersLive do
         "#{field}: #{Enum.join(messages, ", ")}"
       end)
 
-    "No se pudieron guardar los paths — #{details}"
+    gettext("Could not save the paths — %{details}", details: details)
   end
 
   ## Helpers ---------------------------------------------------------------
@@ -823,8 +842,8 @@ defmodule TokengateWeb.ProvidersLive do
   end
 
   @doc "Human-readable label for circuit breaker state."
-  def breaker_label(:closed), do: "Cerrado"
-  def breaker_label(:open), do: "Abierto"
+  def breaker_label(:closed), do: gettext("Closed")
+  def breaker_label(:open), do: gettext("Open")
   def breaker_label(:half_open), do: "Half-Open"
   def breaker_label(_), do: "—"
 
@@ -856,11 +875,11 @@ defmodule TokengateWeb.ProvidersLive do
     >
       <div class="space-y-6">
         <.header>
-          Proveedores
-          <:subtitle>Providers de LLM y credenciales</:subtitle>
+          {gettext("Providers")}
+          <:subtitle>{gettext("LLM providers and credentials")}</:subtitle>
           <:actions>
             <.button phx-click="open_catalog_modal" id="add-provider-btn">
-              <.icon name="hero-plus" class="w-4 h-4" /> Agregar proveedor
+              <.icon name="hero-plus" class="w-4 h-4" /> {gettext("Add provider")}
             </.button>
           </:actions>
         </.header>
@@ -880,10 +899,12 @@ defmodule TokengateWeb.ProvidersLive do
             <div class="card-body p-5 max-h-[85vh] flex flex-col">
               <div class="flex items-start justify-between gap-4">
                 <div>
-                  <h2 class="text-lg font-semibold">Agregar proveedor</h2>
+                  <h2 class="text-lg font-semibold">{gettext("Add provider")}</h2>
                   <p class="text-xs text-base-content/60 mt-1">
-                    Catálogo de models.dev ({@catalog_total} proveedores). Elegir uno abre su
-                    credencial.
+                    {gettext(
+                      "models.dev catalog (%{count} providers). Picking one opens its credential.",
+                      count: @catalog_total
+                    )}
                   </p>
                 </div>
                 <button
@@ -891,7 +912,7 @@ defmodule TokengateWeb.ProvidersLive do
                   phx-click="close_catalog_modal"
                   class="btn btn-ghost btn-sm btn-circle"
                   id="close-catalog-modal"
-                  aria-label="Cerrar"
+                  aria-label={gettext("Close")}
                 >
                   <.icon name="hero-x-mark" class="w-4 h-4" />
                 </button>
@@ -908,7 +929,7 @@ defmodule TokengateWeb.ProvidersLive do
                   name="query"
                   id="catalog-search"
                   value={@catalog_query}
-                  placeholder="Buscar proveedor o id (openrouter, fireworks, qwen…)"
+                  placeholder={gettext("Search provider or id (openrouter, fireworks, qwen…)")}
                   class="input input-sm w-full"
                   autocomplete="off"
                 />
@@ -922,7 +943,7 @@ defmodule TokengateWeb.ProvidersLive do
               >
                 <span class="flex items-center gap-2">
                   <.icon name="hero-wrench-screwdriver" class="w-4 h-4" />
-                  <span class="font-medium">Custom provider</span>
+                  <span class="font-medium">{gettext("Custom provider")}</span>
                 </span>
                 <span class="text-xs opacity-50">OPENAI-COMPATIBLE</span>
               </button>
@@ -1005,7 +1026,7 @@ defmodule TokengateWeb.ProvidersLive do
                       rel="noopener noreferrer"
                       class="btn btn-ghost btn-xs shrink-0"
                       id={"docs-#{entry.key}"}
-                      title={"Documentación de #{entry.name}"}
+                      title={gettext("Documentation for %{name}", name: entry.name)}
                     >
                       <.icon name="hero-arrow-top-right-on-square" class="w-3 h-3" />
                     </a>
@@ -1017,12 +1038,15 @@ defmodule TokengateWeb.ProvidersLive do
                   class="text-center py-8 text-base-content/40 text-sm"
                   id="catalog-empty"
                 >
-                  Ningún proveedor coincide con la búsqueda.
+                  {gettext("No provider matches the search.")}
                 </div>
               </div>
 
               <p class="text-[11px] text-base-content/40 mt-2 shrink-0" id="catalog-count">
-                {@catalog_results |> length()} de {@catalog_total}
+                {gettext("%{shown} of %{total}",
+                  shown: length(@catalog_results),
+                  total: @catalog_total
+                )}
               </p>
             </div>
           </div>
@@ -1035,20 +1059,23 @@ defmodule TokengateWeb.ProvidersLive do
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-3xl">
             <div class="card-body p-6">
               <h2 class="text-lg font-semibold mb-4">
-                {if @editing_provider_id == :new, do: "Nuevo proveedor", else: "Editar proveedor"}
+                {if @editing_provider_id == :new,
+                  do: gettext("New provider"),
+                  else: gettext("Edit provider")}
               </h2>
               <.form for={@form} id="provider-form" phx-submit="save_provider">
                 <div class="space-y-3">
                   <.input
                     field={@form[:name]}
                     type="text"
-                    label="Nombre"
+                    label={gettext("Name")}
                     placeholder="mi-relay"
                     disabled={@editing_provider_builtin?}
                     hint={
                       if @editing_provider_builtin?,
-                        do: "Identidad del catálogo — no editable. Aquí solo se editan los límites.",
-                        else: "Identificador único del proveedor custom."
+                        do:
+                          gettext("Catalog identity — not editable. Only the limits are edited here."),
+                        else: gettext("Unique id of the custom provider.")
                     }
                   />
                   <.input
@@ -1064,45 +1091,49 @@ defmodule TokengateWeb.ProvidersLive do
                 <%!-- Limits live on the provider: every API key of this provider
                      inherits them (a credential is just an alias + secret). --%>
                 <div class="pt-4 mt-4 border-t border-base-200">
-                  <h3 class="text-sm font-semibold mb-1">Límites del proveedor</h3>
+                  <h3 class="text-sm font-semibold mb-1">{gettext("Provider limits")}</h3>
                   <p class="text-xs text-base-content/50 mb-3">
-                    Se aplican a todas las API keys de este proveedor, que los heredan. Vacío = sin límite.
+                    {gettext(
+                      "They apply to every API key of this provider, which inherits them. Empty = no limit."
+                    )}
                   </p>
                   <div class="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-5">
                     <.input
                       field={@form[:max_rpm]}
                       type="number"
                       label="Max RPM"
-                      hint="Requests por minuto en todo el proveedor. Vacío = sin límite."
+                      hint={gettext("Requests per minute across the provider. Empty = no limit.")}
                     />
                     <.input
                       field={@form[:max_concurrent]}
                       type="number"
-                      label="Max concurrencia"
-                      hint="Requests simultáneos en todo el proveedor. Vacío = sin límite."
+                      label={gettext("Max concurrency")}
+                      hint={gettext("Concurrent requests across the provider. Empty = no limit.")}
                     />
                     <.input
                       field={@form[:max_concurrent_per_user]}
                       type="number"
-                      label="Max concurrencia por usuario"
-                      hint="Tope simultáneo por usuario. Vacío = sin límite."
+                      label={gettext("Max concurrency per user")}
+                      hint={gettext("Concurrent cap per user. Empty = no limit.")}
                     />
                     <.input
                       field={@form[:receive_timeout_ms]}
                       type="number"
                       label="Timeout (ms)"
                       hint={
-                        "Tiempo máximo de espera por respuesta. Vacío = default global (#{ProviderLimits.default_receive_timeout_ms()} ms)."
+                        gettext("Max wait per response. Empty = global default (%{ms} ms).",
+                          ms: ProviderLimits.default_receive_timeout_ms()
+                        )
                       }
                     />
                   </div>
                 </div>
                 <div class="flex gap-2 mt-4 justify-end">
                   <button type="button" phx-click="cancel_form" class="btn btn-ghost btn-sm">
-                    Cancelar
+                    {gettext("Cancel")}
                   </button>
                   <button type="submit" class="btn btn-primary btn-sm" id="save-provider-btn">
-                    Guardar
+                    {gettext("Save")}
                   </button>
                 </div>
               </.form>
@@ -1116,7 +1147,9 @@ defmodule TokengateWeb.ProvidersLive do
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-2xl">
             <div class="card-body p-6">
               <h2 class="text-lg font-semibold mb-4">
-                {if @editing_credential_id, do: "Editar credencial", else: "Nueva credencial"}
+                {if @editing_credential_id,
+                  do: gettext("Edit credential"),
+                  else: gettext("New credential")}
               </h2>
               <.form for={@credential_form} id="credential-form" phx-submit="save_credential">
                 <.input field={@credential_form[:provider_id]} type="hidden" />
@@ -1125,31 +1158,31 @@ defmodule TokengateWeb.ProvidersLive do
                     field={@credential_form[:name]}
                     type="text"
                     label="Alias"
-                    placeholder="Producción"
-                    hint="Nombre para identificar esta credencial."
+                    placeholder={gettext("Production")}
+                    hint={gettext("Name to identify this credential.")}
                   />
                   <.input
                     field={@credential_form[:api_key_encrypted]}
                     type="password"
-                    label={"API key#{if @editing_credential_id, do: " (dejar vacío = misma)", else: ""}"}
+                    label={"#{gettext("API key")}#{if @editing_credential_id, do: gettext(" (leave empty = unchanged)"), else: ""}"}
                     placeholder={
                       if @editing_credential_id,
-                        do: "sk-... (dejar vacío para mantener)",
+                        do: gettext("sk-... (leave empty to keep)"),
                         else: "sk-..."
                     }
                     hint={
                       if @editing_credential_id,
-                        do: "Solo si quieres cambiarla.",
-                        else: "El token que entrega el proveedor (sk-...)."
+                        do: gettext("Only if you want to change it."),
+                        else: gettext("The token the provider gives you (sk-...).")
                     }
                   />
                 </div>
                 <div class="flex gap-2 pt-4 mt-5 border-t border-base-200 justify-end">
                   <button type="button" phx-click="cancel_credential" class="btn btn-ghost btn-sm">
-                    Cancelar
+                    {gettext("Cancel")}
                   </button>
                   <button type="submit" class="btn btn-primary btn-sm" id="save-credential-btn">
-                    {(@editing_credential_id && "Actualizar") || "Guardar"}
+                    {(@editing_credential_id && gettext("Update")) || gettext("Save")}
                   </button>
                 </div>
               </.form>
@@ -1170,10 +1203,12 @@ defmodule TokengateWeb.ProvidersLive do
             <div class="card-body p-6 max-h-[85vh] overflow-y-auto">
               <div class="flex items-start justify-between gap-4">
                 <div>
-                  <h2 class="text-lg font-semibold">Capacidades</h2>
+                  <h2 class="text-lg font-semibold">{gettext("Capabilities")}</h2>
                   <p class="text-xs text-base-content/60 mt-1">
-                    Path de cada servicio de <span class="font-medium">{@paths_provider_name}</span>. Se
-                    resuelve como <code>base_url</code> + path; vacío = default del adapter.
+                    {gettext("Path of each service of")} <span class="font-medium">{@paths_provider_name}</span>. {gettext(
+                      "It resolves as"
+                    )}
+                    <code>base_url</code> {gettext("+ path; empty = adapter default.")}
                   </p>
                 </div>
                 <button
@@ -1181,7 +1216,7 @@ defmodule TokengateWeb.ProvidersLive do
                   phx-click="cancel_paths"
                   class="btn btn-ghost btn-sm btn-circle"
                   id="close-paths-modal"
-                  aria-label="Cerrar"
+                  aria-label={gettext("Close")}
                 >
                   <.icon name="hero-x-mark" class="w-4 h-4" />
                 </button>
@@ -1201,10 +1236,10 @@ defmodule TokengateWeb.ProvidersLive do
                 </div>
                 <div class="flex gap-2 pt-4 mt-5 border-t border-base-200 justify-end">
                   <button type="button" phx-click="cancel_paths" class="btn btn-ghost btn-sm">
-                    Cancelar
+                    {gettext("Cancel")}
                   </button>
                   <button type="submit" class="btn btn-primary btn-sm" id="save-paths-btn">
-                    Guardar
+                    {gettext("Save")}
                   </button>
                 </div>
               </.form>
@@ -1218,7 +1253,7 @@ defmodule TokengateWeb.ProvidersLive do
           id="providers-empty"
         >
           <.icon name="hero-server-stack" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-          <p>No hay proveedores todavía.</p>
+          <p>{gettext("No providers yet.")}</p>
         </div>
 
         <%!-- Una sola lista, sin tabs: builtin primero y custom al final
@@ -1259,7 +1294,9 @@ defmodule TokengateWeb.ProvidersLive do
                       "badge badge-sm",
                       if(provider.status == "active", do: "badge-success", else: "badge-ghost")
                     ]}>
-                      {if provider.status == "active", do: "Activo", else: "Desactivado"}
+                      {if provider.status == "active",
+                        do: gettext("Active"),
+                        else: gettext("Disabled")}
                     </span>
 
                     <a
@@ -1270,12 +1307,12 @@ defmodule TokengateWeb.ProvidersLive do
                       class="link link-hover text-xs text-base-content/50"
                       id={"provider-docs-#{provider.id}"}
                     >
-                      <.icon name="hero-arrow-top-right-on-square" class="w-3 h-3" /> Docs
+                      <.icon name="hero-arrow-top-right-on-square" class="w-3 h-3" /> {gettext("Docs")}
                     </a>
                   </div>
                   <p class="text-xs text-base-content/50 mt-1 font-mono">{provider.base_url}</p>
                   <p class="text-xs text-base-content/50 mt-0.5">
-                    {length(credentials_for(provider))} credenciales
+                    {gettext("%{count} credentials", count: length(credentials_for(provider)))}
                   </p>
 
                   <%!-- Provider-level limits: everything below this line (every
@@ -1284,20 +1321,28 @@ defmodule TokengateWeb.ProvidersLive do
                     class="mt-2 flex flex-wrap items-center gap-1.5"
                     id={"provider-limits-#{provider.id}"}
                   >
-                    <span class="text-[10px] uppercase tracking-wide text-base-content/40">Límites</span>
-                    <span class="badge badge-ghost badge-sm" title="Requests por minuto">
+                    <span class="text-[10px] uppercase tracking-wide text-base-content/40">{gettext(
+                      "Limits"
+                    )}</span>
+                    <span class="badge badge-ghost badge-sm" title={gettext("Requests per minute")}>
                       RPM {provider.max_rpm || "∞"}
                     </span>
                     <span
                       class="badge badge-ghost badge-sm"
-                      title="Concurrencia máxima del proveedor"
+                      title={gettext("Provider max concurrency")}
                     >
                       Conc. {provider.max_concurrent || "∞"}
                     </span>
-                    <span class="badge badge-ghost badge-sm" title="Concurrencia máxima por usuario">
-                      Conc./usuario {provider.max_concurrent_per_user || "∞"}
+                    <span
+                      class="badge badge-ghost badge-sm"
+                      title={gettext("Max concurrency per user")}
+                    >
+                      {gettext("Conc./user")} {provider.max_concurrent_per_user || "∞"}
                     </span>
-                    <span class="badge badge-ghost badge-sm font-mono" title="Timeout de recepción">
+                    <span
+                      class="badge badge-ghost badge-sm font-mono"
+                      title={gettext("Receive timeout")}
+                    >
                       {timeout_label(provider)}
                     </span>
                   </div>
@@ -1309,7 +1354,7 @@ defmodule TokengateWeb.ProvidersLive do
                     class="btn btn-sm btn-ghost"
                     id={"toggle-provider-#{provider.id}"}
                   >
-                    {if provider.status == "active", do: "Desactivar", else: "Activar"}
+                    {if provider.status == "active", do: gettext("Disable"), else: gettext("Enable")}
                   </button>
                   <%!-- Capacidades: the per-service path overrides (base_url +
                        path). Available on builtins too — paths are operational,
@@ -1320,9 +1365,11 @@ defmodule TokengateWeb.ProvidersLive do
                     phx-value-id={provider.id}
                     class="btn btn-sm btn-ghost"
                     id={"paths-#{provider.id}"}
-                    title="Configurar el path de cada capacidad (base_url + path)"
+                    title={gettext("Configure the path of each capability (base_url + path)")}
                   >
-                    <.icon name="hero-adjustments-horizontal" class="w-4 h-4" /> Capacidades
+                    <.icon name="hero-adjustments-horizontal" class="w-4 h-4" /> {gettext(
+                      "Capabilities"
+                    )}
                     <span
                       :if={path_override_count(provider) > 0}
                       class="badge badge-xs badge-primary"
@@ -1339,16 +1386,16 @@ defmodule TokengateWeb.ProvidersLive do
                     class="btn btn-sm btn-ghost"
                     id={"edit-#{provider.id}"}
                   >
-                    <.icon name="hero-pencil-square" class="w-4 h-4" /> Editar
+                    <.icon name="hero-pencil-square" class="w-4 h-4" /> {gettext("Edit")}
                   </button>
                   <button
                     phx-click="delete_provider"
                     phx-value-id={provider.id}
-                    data-confirm="¿Eliminar este proveedor?"
+                    data-confirm={gettext("Delete this provider?")}
                     class="btn btn-sm btn-ghost text-error"
                     id={"delete-#{provider.id}"}
                   >
-                    <.icon name="hero-trash" class="w-4 h-4" /> Eliminar
+                    <.icon name="hero-trash" class="w-4 h-4" /> {gettext("Delete")}
                   </button>
                 </div>
               </div>
@@ -1359,15 +1406,15 @@ defmodule TokengateWeb.ProvidersLive do
                 id={"credentials-panel-#{provider.id}"}
               >
                 <div class="flex items-center justify-between mb-2">
-                  <h4 class="text-sm font-semibold">Credenciales</h4>
+                  <h4 class="text-sm font-semibold">{gettext("Credentials")}</h4>
                   <button
                     phx-click="new_credential"
                     phx-value-provider_id={provider.id}
                     class="btn btn-xs btn-ghost"
                     id={"new-credential-#{provider.id}"}
-                    title="Añadir una API key a este proveedor"
+                    title={gettext("Add an API key to this provider")}
                   >
-                    <.icon name="hero-plus" class="w-3 h-3" /> API key
+                    <.icon name="hero-plus" class="w-3 h-3" /> {gettext("API key")}
                   </button>
                 </div>
 
@@ -1375,10 +1422,10 @@ defmodule TokengateWeb.ProvidersLive do
                   <table class="table table-sm">
                     <thead>
                       <tr>
-                        <th>Alias</th>
-                        <th>Key</th>
-                        <th>En vuelo</th>
-                        <th>Breaker</th>
+                        <th>{gettext("Alias")}</th>
+                        <th>{gettext("Key")}</th>
+                        <th>{gettext("In flight")}</th>
+                        <th>{gettext("Breaker")}</th>
                         <th></th>
                       </tr>
                     </thead>
@@ -1435,7 +1482,7 @@ defmodule TokengateWeb.ProvidersLive do
                               class="btn btn-xs btn-ghost btn-warning"
                               id={"reactivate-credential-#{cred.id}"}
                             >
-                              <.icon name="hero-arrow-path" class="w-3 h-3" /> Reactivar
+                              <.icon name="hero-arrow-path" class="w-3 h-3" /> {gettext("Reactivate")}
                             </button>
                           <% else %>
                             <button
@@ -1443,7 +1490,11 @@ defmodule TokengateWeb.ProvidersLive do
                               phx-value-id={cred.id}
                               class="btn btn-xs btn-ghost"
                               id={"toggle-credential-btn-#{cred.id}"}
-                              title={if cred.status == "active", do: "Desactivar", else: "Activar"}
+                              title={
+                                if cred.status == "active",
+                                  do: gettext("Disable"),
+                                  else: gettext("Enable")
+                              }
                             >
                               <.icon
                                 name={if cred.status == "active", do: "hero-pause", else: "hero-play"}
@@ -1457,16 +1508,16 @@ defmodule TokengateWeb.ProvidersLive do
                             class="btn btn-xs btn-ghost"
                             id={"edit-credential-#{cred.id}"}
                           >
-                            <.icon name="hero-pencil-square" class="w-3 h-3" /> Editar
+                            <.icon name="hero-pencil-square" class="w-3 h-3" /> {gettext("Edit")}
                           </button>
                           <button
                             phx-click="delete_credential"
                             phx-value-id={cred.id}
-                            data-confirm="¿Eliminar esta credencial?"
+                            data-confirm={gettext("Delete this credential?")}
                             class="btn btn-xs btn-ghost text-error"
                             id={"delete-credential-#{cred.id}"}
                           >
-                            Eliminar
+                            {gettext("Delete")}
                           </button>
                         </td>
                       </tr>

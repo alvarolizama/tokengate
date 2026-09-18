@@ -31,12 +31,12 @@ defmodule TokengateWeb.GroupsLive do
     if user.global_role != "admin" do
       {:ok,
        socket
-       |> put_flash(:error, "No tienes permisos para acceder a esta sección.")
+       |> put_flash(:error, gettext("You do not have permission to access this section."))
        |> redirect(to: "/dashboard")}
     else
       socket =
         socket
-        |> assign(:page_title, gettext("Perfiles de límites") <> " · Tokengate")
+        |> assign(:page_title, gettext("Limit profiles") <> " · Tokengate")
         |> assign(:is_admin, true)
         |> require_admin_hook()
         |> assign(:form, nil)
@@ -178,7 +178,7 @@ defmodule TokengateWeb.GroupsLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Perfil de límites eliminado.")
+         |> put_flash(:info, gettext("Limit profile deleted."))
          |> load_groups()}
 
       {:error, %Ecto.Changeset{} = changeset} ->
@@ -187,10 +187,10 @@ defmodule TokengateWeb.GroupsLive do
           |> Enum.map(fn {field, {message, _}} -> "#{field} #{message}" end)
           |> Enum.join(", ")
 
-        {:noreply, put_flash(socket, :error, "No se pudo eliminar: #{msg}")}
+        {:noreply, put_flash(socket, :error, gettext("Could not delete: %{reason}", reason: msg))}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo eliminar el perfil de límites.")}
+        {:noreply, put_flash(socket, :error, gettext("Could not delete the limit profile."))}
     end
   end
 
@@ -221,7 +221,7 @@ defmodule TokengateWeb.GroupsLive do
          |> refresh_granted_models()}
 
       {:error, _} ->
-        {:noreply, put_flash(socket, :error, "No se pudo actualizar el modelo.")}
+        {:noreply, put_flash(socket, :error, gettext("Could not update the model."))}
     end
   end
 
@@ -246,7 +246,7 @@ defmodule TokengateWeb.GroupsLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Perfil de límites creado.")
+         |> put_flash(:info, gettext("Limit profile created."))
          |> assign(:form, nil)
          |> assign(:editing_group_id, nil)
          |> load_groups()}
@@ -275,7 +275,7 @@ defmodule TokengateWeb.GroupsLive do
 
         {:noreply,
          socket
-         |> put_flash(:info, "Perfil de límites actualizado.")
+         |> put_flash(:info, gettext("Limit profile updated."))
          |> assign(:form, nil)
          |> assign(:editing_group_id, nil)
          |> load_groups()}
@@ -304,8 +304,8 @@ defmodule TokengateWeb.GroupsLive do
     >
       <div class="space-y-6">
         <.header>
-          {gettext("Perfiles de límites")}
-          <:subtitle>Gestiona los perfiles de límites: techo, top-ups y modelos</:subtitle>
+          {gettext("Limit profiles")}
+          <:subtitle>{gettext("Manage the limit profiles: cap, top-ups and models")}</:subtitle>
           <:actions>
             <div class="flex items-center gap-2">
               <%!-- Un `phx-change` exige que el input viva dentro de un <form>:
@@ -321,7 +321,7 @@ defmodule TokengateWeb.GroupsLive do
                   type="text"
                   name="group_search"
                   value={@group_search}
-                  placeholder="Buscar perfil de límites…"
+                  placeholder={gettext("Search limit profile…")}
                   class="input input-sm w-48"
                 />
               </form>
@@ -339,28 +339,32 @@ defmodule TokengateWeb.GroupsLive do
             <div class="card-body p-6">
               <h2 class="text-lg font-semibold mb-4">
                 {if @editing_group_id == :new,
-                  do: "Nuevo perfil de límites",
-                  else: "Editar perfil de límites"}
+                  do: gettext("New limit profile"),
+                  else: gettext("Edit limit profile")}
               </h2>
               <.form for={@form} id="group-form" phx-submit="save_group">
                 <.input
                   field={@form[:name]}
                   type="text"
-                  label="Nombre"
-                  hint="Nombre identificativo del perfil de límites."
+                  label={gettext("Name")}
+                  hint={gettext("Identifying name of the limit profile.")}
                 />
                 <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <.input
                     field={@form[:default_concurrency_limit]}
                     type="number"
                     label="Concurrencia"
-                    hint="Concurrencia por miembro. Cada miembro puede tener un extra que se suma a este valor."
+                    hint={
+                      gettext(
+                        "Concurrency per member. Each member can have an extra on top of this value."
+                      )
+                    }
                   />
                   <.input
                     field={@form[:default_rpm_limit]}
                     type="number"
                     label="RPM"
-                    hint="Requests por minuto por miembro."
+                    hint={gettext("Requests per minute per member.")}
                   />
                 </div>
                 <%!-- El techo mensual del presupuesto es el que heredan sus
@@ -401,7 +405,7 @@ defmodule TokengateWeb.GroupsLive do
           <div class="absolute inset-0 bg-black/50" phx-click="close_models" />
           <div class="relative card bg-base-100 border border-base-300 shadow-xl w-full max-w-lg">
             <div class="card-body p-6">
-              <h2 class="text-lg font-semibold mb-4">Modelos del perfil de límites</h2>
+              <h2 class="text-lg font-semibold mb-4">{gettext("Limit profile models")}</h2>
               <.model_picker
                 id={"model-picker-#{@editing_models_group_id}"}
                 models={Map.get(@models_by_org, "all", [])}
@@ -427,7 +431,7 @@ defmodule TokengateWeb.GroupsLive do
         <div id="groups" phx-update="stream">
           <div :if={@groups_empty?} class="text-center py-12 text-base-content/40" id="groups-empty">
             <.icon name="hero-user-group" class="w-10 h-10 mx-auto mb-2 opacity-40" />
-            <p>No hay perfiles de límites todavía.</p>
+            <p>{gettext("No limit profiles yet.")}</p>
           </div>
           <div
             :for={{id, group} <- @streams.groups}
@@ -448,7 +452,9 @@ defmodule TokengateWeb.GroupsLive do
                 <% credit = group_credit(group, @group_budgets) %>
                 <div class="flex items-center gap-4 text-sm">
                   <div class="text-center">
-                    <p class="text-[10px] uppercase tracking-wide text-base-content/40">Gasto/mes</p>
+                    <p class="text-[10px] uppercase tracking-wide text-base-content/40">
+                      {gettext("Spend/month")}
+                    </p>
                     <p class="font-bold">${format_decimal(get_spend(group, @group_budgets))}</p>
                   </div>
                   <div class="text-center" id={"group-credit-#{group.id}"}>
@@ -463,7 +469,7 @@ defmodule TokengateWeb.GroupsLive do
                     phx-value-id={group.id}
                     class="badge badge-sm badge-outline gap-1 hover:badge-primary transition-colors cursor-pointer"
                     id={"edit-models-#{group.id}"}
-                    title="Gestionar modelos del perfil de límites"
+                    title={gettext("Manage the limit profile models")}
                   >
                     <.icon name="hero-rectangle-stack" class="w-3 h-3" />
                     {length(Map.get(@granted_models, group.id, []))} modelos
@@ -492,7 +498,7 @@ defmodule TokengateWeb.GroupsLive do
                     phx-value-id={group.id}
                     class="btn btn-sm btn-ghost text-error"
                     id={"delete-#{group.id}"}
-                    data-confirm="¿Eliminar perfil de límites? Esta acción no se puede deshacer."
+                    data-confirm={gettext("Delete limit profile? This action cannot be undone.")}
                   >
                     Eliminar
                   </button>

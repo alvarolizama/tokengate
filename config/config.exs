@@ -29,10 +29,11 @@ config :phoenix_live_view,
 
 # Configure Gettext. Los mensajes se escriben en **inglés** (msgid, la fuente) y
 # el español vive en priv/gettext/es/LC_MESSAGES/*.po; el idioma por defecto de
-# la UI es español. Un msgid sin traducción sale tal cual (en inglés), así que
+# la UI es inglés y cada usuario puede cambiarlo con el selector del sidebar
+# (`users.locale`). Un msgid sin traducción sale tal cual (en inglés), así que
 # todo string visible que se agregue debe traer su entrada en el .po.
 config :tokengate, TokengateWeb.Gettext,
-  default_locale: "es",
+  default_locale: "en",
   locales: ~w(en es)
 
 # Configure the mailer
@@ -95,7 +96,7 @@ config :tokengate, Oban,
        {"30 4 * * 1", Tokengate.Providers.CatalogRefreshWorker}
      ]}
   ],
-  queues: [default: 10, logs: 20, webhooks: 10, budgets: 5]
+  queues: [default: 10, logs: 20, webhooks: 10, budgets: 5, notifications: 5]
 
 # At-boot partition ensure (Tokengate.Logs.PartitionWorker.ensure_on_boot/0).
 # Disabled in test.exs — fixtures insert arbitrary historical dates that must

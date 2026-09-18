@@ -39,7 +39,7 @@ defmodule Tokengate.Providers.ModelTest do
 
       refute changeset.valid?
 
-      assert {"debe ser un nombre de hero icon, p. ej. hero-cpu-chip", _} =
+      assert {"must be a hero icon name, e.g. hero-cpu-chip", _} =
                changeset.errors[:icon]
     end
   end

@@ -1,0 +1,188 @@
+## Traducciones al español del dominio `errors`.
+##
+## Este dominio lo traduce la app **en runtime** con
+## `Gettext.dgettext(TokengateWeb.Gettext, "errors", msg)`
+## (`TokengateWeb.CoreComponents.translate_error/1`): los `msgid` son los
+## mensajes que arma Ecto (validaciones de changeset) y los que agregan los
+## propios changesets con `add_error/3` / `message:`.
+##
+## Sin este archivo, con la UI en español los errores de formulario salían en
+## inglés (el msgid), porque sólo existía `en/LC_MESSAGES/errors.po`.
+msgid ""
+msgstr ""
+"Language: es\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+
+## From Ecto.Changeset.cast/4
+msgid "can't be blank"
+msgstr "no puede estar vacío"
+
+## From Ecto.Changeset.unique_constraint/3
+msgid "has already been taken"
+msgstr "ya está en uso"
+
+## From Ecto.Changeset.put_change/3
+msgid "is invalid"
+msgstr "no es válido"
+
+## From Ecto.Changeset.validate_acceptance/3
+msgid "must be accepted"
+msgstr "debe ser aceptado"
+
+## From Ecto.Changeset.validate_format/3
+msgid "has invalid format"
+msgstr "tiene un formato inválido"
+
+## From Ecto.Changeset.validate_subset/3
+msgid "has an invalid entry"
+msgstr "tiene una entrada inválida"
+
+## From Ecto.Changeset.validate_exclusion/3
+msgid "is reserved"
+msgstr "está reservado"
+
+## From Ecto.Changeset.validate_confirmation/3
+msgid "does not match confirmation"
+msgstr "no coincide con la confirmación"
+
+## From Ecto.Changeset.no_assoc_constraint/3
+msgid "is still associated with this entry"
+msgstr "sigue asociado a este registro"
+
+msgid "are still associated with this entry"
+msgstr "siguen asociados a este registro"
+
+## From Ecto.Changeset.validate_length/3
+msgid "should have %{count} item(s)"
+msgid_plural "should have %{count} item(s)"
+msgstr[0] "debe tener %{count} elemento(s)"
+msgstr[1] "debe tener %{count} elemento(s)"
+
+msgid "should be %{count} character(s)"
+msgid_plural "should be %{count} character(s)"
+msgstr[0] "debe tener %{count} caracter(es)"
+msgstr[1] "debe tener %{count} caracteres"
+
+msgid "should be %{count} byte(s)"
+msgid_plural "should be %{count} byte(s)"
+msgstr[0] "debe tener %{count} byte(s)"
+msgstr[1] "debe tener %{count} bytes"
+
+msgid "should have at least %{count} item(s)"
+msgid_plural "should have at least %{count} item(s)"
+msgstr[0] "debe tener al menos %{count} elemento(s)"
+msgstr[1] "debe tener al menos %{count} elementos"
+
+msgid "should be at least %{count} character(s)"
+msgid_plural "should be at least %{count} character(s)"
+msgstr[0] "debe tener al menos %{count} caracter(es)"
+msgstr[1] "debe tener al menos %{count} caracteres"
+
+msgid "should be at least %{count} byte(s)"
+msgid_plural "should be at least %{count} byte(s)"
+msgstr[0] "debe tener al menos %{count} byte(s)"
+msgstr[1] "debe tener al menos %{count} bytes"
+
+msgid "should have at most %{count} item(s)"
+msgid_plural "should have at most %{count} item(s)"
+msgstr[0] "debe tener como máximo %{count} elemento(s)"
+msgstr[1] "debe tener como máximo %{count} elementos"
+
+msgid "should be at most %{count} character(s)"
+msgid_plural "should be at most %{count} character(s)"
+msgstr[0] "debe tener como máximo %{count} caracter(es)"
+msgstr[1] "debe tener como máximo %{count} caracteres"
+
+msgid "should be at most %{count} byte(s)"
+msgid_plural "should be at most %{count} byte(s)"
+msgstr[0] "debe tener como máximo %{count} byte(s)"
+msgstr[1] "debe tener como máximo %{count} bytes"
+
+## From Ecto.Changeset.validate_number/3
+msgid "must be less than %{number}"
+msgstr "debe ser menor que %{number}"
+
+msgid "must be greater than %{number}"
+msgstr "debe ser mayor que %{number}"
+
+msgid "must be less than or equal to %{number}"
+msgstr "debe ser menor o igual que %{number}"
+
+msgid "must be greater than or equal to %{number}"
+msgstr "debe ser mayor o igual que %{number}"
+
+msgid "must be equal to %{number}"
+msgstr "debe ser igual a %{number}"
+
+## Mensajes propios de los changesets (a mano: gettext no los extrae)
+
+msgid "this model already has an exclusive provider for this limit profile (only one is allowed)"
+msgstr "este modelo ya tiene un proveedor exclusivo para este perfil de límites (solo se permite uno)"
+
+msgid "this model already has an exclusive provider for this user (only one is allowed)"
+msgstr "este modelo ya tiene un proveedor exclusivo para este usuario (solo se permite uno)"
+
+msgid "this model already has an exclusive provider for this service (only one is allowed)"
+msgstr "este modelo ya tiene un proveedor exclusivo para este servicio (solo se permite uno)"
+
+msgid "this credential is already global for this model"
+msgstr "esta credencial ya es global para este modelo"
+
+msgid "cannot overwrite %{key}"
+msgstr "no se puede sobrescribir %{key}"
+
+msgid "invalid JSON: %{reason}"
+msgstr "JSON inválido: %{reason}"
+
+msgid "an object was expected"
+msgstr "se esperaba un objeto"
+
+msgid "cannot omit %{field}"
+msgstr "no se puede omitir %{field}"
+
+msgid "only one exclusive scope can be assigned at a time"
+msgstr "solo se puede asignar un scope exclusivo a la vez"
+
+## Mensajes propios de los changesets (a mano: gettext no los extrae)
+
+msgid "the limit profile still has services associated"
+msgstr "el perfil de límites todavía tiene servicios asociados"
+
+msgid "the limit profile still has observability targets"
+msgstr "el perfil de límites todavía tiene destinos de observabilidad"
+
+msgid "cannot be empty"
+msgstr "no puede estar vacío"
+
+msgid "the member key needs an owner (user_id)"
+msgstr "la key del miembro necesita un dueño (user_id)"
+
+msgid "must match the assigned subject"
+msgstr "debe coincidir con el subject asignado"
+
+msgid "must have exactly one owner (user or service)"
+msgstr "debe tener exactamente un dueño (usuario o servicio)"
+
+msgid "invalid"
+msgstr "inválido"
+
+msgid "is required for this subject type"
+msgstr "es obligatorio para este tipo de sujeto"
+
+msgid "only one subject per exemption"
+msgstr "solo un sujeto por exención"
+
+msgid "must be greater than 0"
+msgstr "debe ser mayor a 0"
+
+msgid "it comes from the catalog: it cannot be edited"
+msgstr "es de catálogo: no se puede editar"
+
+msgid "lowercase, digits, dot, dash and underscore only"
+msgstr "solo minúsculas, dígitos, punto, guion y guion bajo"
+
+msgid "must be a hero icon name, e.g. hero-beaker"
+msgstr "debe ser un nombre de hero icon, p. ej. hero-beaker"
+
+msgid "must be a hero icon name, e.g. hero-cpu-chip"
+msgstr "debe ser un nombre de hero icon, p. ej. hero-cpu-chip"

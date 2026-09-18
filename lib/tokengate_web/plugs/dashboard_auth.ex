@@ -23,6 +23,10 @@ defmodule TokengateWeb.Plugs.DashboardAuth do
 
   import Plug.Conn
   import Phoenix.Controller, only: [redirect: 2, put_flash: 3]
+
+  # Los flashes de auth salen traducidos en el idioma del request (el plug de
+  # locale ya corrió en el pipeline `:browser`).
+  use Gettext, backend: TokengateWeb.Gettext
   alias Tokengate.Accounts
 
   @session_key :user_id
@@ -76,7 +80,7 @@ defmodule TokengateWeb.Plugs.DashboardAuth do
       conn
     else
       conn
-      |> put_flash(:error, "Debes iniciar sesión para continuar.")
+      |> put_flash(:error, gettext("You must sign in to continue."))
       |> redirect(to: "/login")
       |> halt()
     end
@@ -96,13 +100,13 @@ defmodule TokengateWeb.Plugs.DashboardAuth do
 
       nil ->
         conn
-        |> put_flash(:error, "Debes iniciar sesión para continuar.")
+        |> put_flash(:error, gettext("You must sign in to continue."))
         |> redirect(to: "/login")
         |> halt()
 
       _non_admin ->
         conn
-        |> put_flash(:error, "No tienes permisos para acceder a esta sección.")
+        |> put_flash(:error, gettext("You do not have permission to access this section."))
         |> redirect(to: "/dashboard")
         |> halt()
     end

@@ -31,6 +31,7 @@ defmodule TokengateWeb.UserAuth do
 
   import Phoenix.Component, only: [assign_new: 3]
   alias Tokengate.Accounts
+  alias TokengateWeb.Gettext
 
   @session_key :user_id
 
@@ -60,6 +61,8 @@ defmodule TokengateWeb.UserAuth do
       |> assign_new(:impersonator, fn -> fetch_impersonator(session) end)
       |> assign_timezone(user)
       |> attach_timezone_handler()
+      |> assign_locale(user)
+      |> attach_locale_handler()
       |> attach_path_handler()
 
     if user do
@@ -79,6 +82,8 @@ defmodule TokengateWeb.UserAuth do
       |> assign_new(:impersonator, fn -> fetch_impersonator(session) end)
       |> assign_timezone(user)
       |> attach_timezone_handler()
+      |> assign_locale(user)
+      |> attach_locale_handler()
       |> attach_path_handler()
 
     case user do
@@ -110,6 +115,8 @@ defmodule TokengateWeb.UserAuth do
       |> assign_new(:impersonator, fn -> fetch_impersonator(session) end)
       |> assign_timezone(user)
       |> attach_timezone_handler()
+      |> assign_locale(user)
+      |> attach_locale_handler()
       |> attach_path_handler()
 
     case user do
@@ -170,6 +177,58 @@ defmodule TokengateWeb.UserAuth do
   end
 
   defp handle_timezone_event(_event, _params, socket), do: {:cont, socket}
+
+  # Idioma de la UI: mismo patrón que el timezone (assign + hook del evento),
+  # porque el proceso del LiveView no comparte el locale que fijó el plug.
+  # `Gettext.put_locale/2` se aplica aquí para que el propio render de este
+  # evento (sidebar incluido) ya salga en el idioma nuevo.
+  defp assign_locale(socket, user) do
+    locale = Gettext.put_locale(Gettext.locale_of(user))
+    Phoenix.Component.assign(socket, :locale, locale)
+  end
+
+  defp attach_locale_handler(socket) do
+    Phoenix.LiveView.attach_hook(
+      socket,
+      :locale_handler,
+      :handle_event,
+      &handle_locale_event/3
+    )
+  end
+
+  defp handle_locale_event("set-locale", %{"locale" => locale}, socket) do
+    locale = Gettext.put_locale(locale)
+    user = socket.assigns[:current_user]
+
+    if user && locale != user.locale do
+      case Accounts.update_user_locale(user, locale) do
+        {:ok, updated_user} ->
+          {:halt,
+           socket
+           |> Phoenix.Component.assign(:locale, locale)
+           |> Phoenix.Component.assign(:current_user, updated_user)
+           |> reload_locale()}
+
+        {:error, _changeset} ->
+          {:halt, Phoenix.Component.assign(socket, :locale, locale)}
+      end
+    else
+      {:halt, socket |> Phoenix.Component.assign(:locale, locale) |> reload_locale()}
+    end
+  end
+
+  defp handle_locale_event(_event, _params, socket), do: {:cont, socket}
+
+  # El idioma decide **todo** el texto de la página, y el diff de LiveView no
+  # vuelve a enviar el texto ya renderizado de los componentes: se remonta el
+  # LiveView en su misma ruta para que todo se pinte en el idioma nuevo (es un
+  # navigate, no una recarga HTTP).
+  defp reload_locale(socket) do
+    case socket.assigns[:current_path] do
+      path when is_binary(path) -> Phoenix.LiveView.push_navigate(socket, to: path)
+      _ -> socket
+    end
+  end
 
   # Tracks the URL the user is currently on in the `:current_path` assign.
   # `handle_params` is the only LiveView callback that receives the URI, and
