@@ -248,5 +248,17 @@ defmodule Tokengate.Providers.ModelCatalogTest do
       assert Enum.all?(models, &is_binary(&1.key))
       assert Enum.all?(offers, &is_binary(&1.provider_key))
     end
+
+    test "the snapshot is read from where the app is INSTALLED, not where it was compiled" do
+      # The Docker runtime image holds only the release: no source tree and no
+      # `<build>/priv`, so a path baked at compile time (`__DIR__`) resolves to
+      # nothing there, the seed inserts zero rows and production gets an empty
+      # model picker. `Application.app_dir/2` follows the app into a release; this
+      # assertion is what makes a revert to `__DIR__` fail loudly.
+      assert ModelCatalog.snapshot_path() ==
+               Application.app_dir(:tokengate, "priv/models_dev/models_catalog.json.gz")
+
+      assert File.exists?(ModelCatalog.snapshot_path())
+    end
   end
 end

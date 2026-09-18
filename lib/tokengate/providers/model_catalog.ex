@@ -59,8 +59,11 @@ defmodule Tokengate.Providers.ModelCatalog do
   # account or a namespace, not a lab.
   @lab_id_format ~r/^[a-z0-9][a-z0-9._-]*$/
 
-  @snapshot_path Path.expand("../../../priv/models_dev/models_catalog.json.gz", __DIR__)
-  @external_resource @snapshot_path
+  # `priv` as mix/releases install it. The path is resolved at RUNTIME (see
+  # `snapshot/0`); the compile-time expand below only feeds `@external_resource`.
+  @snapshot_rel "priv/models_dev/models_catalog.json.gz"
+  @compiled_snapshot_path Path.expand("../../../#{@snapshot_rel}", __DIR__)
+  @external_resource @compiled_snapshot_path
 
   @type derived :: %{models: [map()], offers: [map()]}
 
@@ -79,9 +82,34 @@ defmodule Tokengate.Providers.ModelCatalog do
   enters the beam) and tolerant of a missing or unreadable file: an instance
   without the snapshot still runs, it just seeds nothing and waits for the first
   refresh.
+
+  The path is resolved at RUNTIME through `Application.app_dir/2`, which follows
+  the app wherever it was installed: `_build/<env>/lib/tokengate/priv` in dev
+  (mix symlinks `priv` into the build) and `lib/tokengate-<vsn>/priv` inside a
+  release. Resolving it at COMPILE time (`__DIR__`) instead bakes the path of the
+  machine that compiled the beam — in the Docker image that is `/app/priv/...`,
+  which the runtime stage does NOT contain (it copies only the release, whose
+  root has no `priv/`), so the read failed and the model seed silently inserted
+  nothing: an empty model catalog in production while the provider and lab halves
+  — embedded in the beam at compile time — loaded fine.
   """
   @spec snapshot() :: derived()
-  def snapshot, do: snapshot_from(@snapshot_path)
+  def snapshot, do: snapshot_from(snapshot_path())
+
+  @doc """
+  Where the vendored snapshot is read from — release-safe by construction.
+
+  Public so the release layout is assertable in tests: a revert to a
+  compile-time path resolves somewhere else and fails them.
+  """
+  @spec snapshot_path() :: Path.t()
+  def snapshot_path do
+    Application.app_dir(:tokengate, @snapshot_rel)
+  rescue
+    # `Application.app_dir/2` raises when the app is not loaded; the compile-time
+    # path is then the only candidate left.
+    _ -> @compiled_snapshot_path
+  end
 
   @doc """
   Reads a snapshot file (gzipped or plain JSON) into `derive/3`'s shape.
