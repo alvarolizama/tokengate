@@ -235,6 +235,12 @@ defmodule TokengateWeb.KpiHelpers do
   attr :metrics, :map, required: true
   attr :deltas, :map, default: nil
   attr :period, :string, default: nil, doc: "período activo; \"today\"/\"month\" = ventana UTC"
+
+  attr :cost_window, :string,
+    default: "cap",
+    doc:
+      "\"cap\" declara la ventana UTC del tope (label + contador de reinicio) en el KPI de costo; \"period\" muestra solo el gasto del período, uniforme con el resto de la fila"
+
   attr :reset_hours, :any, default: nil, doc: "horas restantes hasta el reinicio del tope"
   attr :reset_minutes, :any, default: nil
   attr :reset_at, :any, default: nil, doc: "instante del reinicio (00:00 UTC)"
@@ -243,17 +249,18 @@ defmodule TokengateWeb.KpiHelpers do
   def kpi_cards(assigns) do
     ~H"""
     <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
-      <%!-- Con "Hoy" y "Este mes" el número mide la ventana UTC en que
-           resetean los topes (día/mes, ver Periods.period_bounds), la MISMA
-           que el kill-switch y Mantenimiento: se declara en el label. El
-           countdown solo tiene sentido para el tope diario. Los períodos
-           rolling (7d/30d/90d) no tienen tope que los respalde. --%>
+      <%!-- El KPI de costo sigue el contrato del contenedor (`cost_window`):
+           con "cap" declara la ventana UTC en que resetean los topes
+           (día/mes, ver Periods.period_bounds) — la MISMA que el kill-switch
+           y Mantenimiento — y anuncia el reinicio; con "period" muestra solo
+           el gasto del período seleccionado, uniforme con el resto de la
+           fila. Los períodos rolling (7d/30d/90d) no tienen tope. --%>
       <.kpi_card
         id="kpi-cost"
-        label={cost_label(@period)}
+        label={if(@cost_window == "cap", do: cost_label(@period), else: gettext("Cost"))}
         icon="hero-currency-dollar"
         accent="accent"
-        title={cost_title(@period)}
+        title={if @cost_window == "cap", do: cost_title(@period)}
       >
         ${format_decimal(@metrics.cost_usd)}
         <:sub>
@@ -265,7 +272,7 @@ defmodule TokengateWeb.KpiHelpers do
             {delta_arrow(@deltas[:cost_usd])} {abs_float(@deltas[:cost_usd])}%
           </span>
         </:sub>
-        <:sub :if={@period == "today"}>
+        <:sub :if={@cost_window == "cap" and @period == "today"}>
           Reinicia en {@reset_hours}h {@reset_minutes}m
           ({Stats.format_time(@reset_at, @timezone)} en tu hora local)
         </:sub>
