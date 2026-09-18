@@ -10,7 +10,7 @@
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Version](https://img.shields.io/badge/version-1.0.0-9FE88D.svg)](./mix.exs)
-[![Elixir](https://img.shields.io/badge/Elixir-1.18+-4B275F?logo=elixir&logoColor=white)](https://elixir-lang.org)
+[![Elixir](https://img.shields.io/badge/Elixir-1.15+-4B275F?logo=elixir&logoColor=white)](https://elixir-lang.org)
 [![Phoenix](https://img.shields.io/badge/Phoenix-1.8_LiveView-FD4F00?logo=phoenixframework&logoColor=white)](https://www.phoenixframework.org)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-partitioned-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org)
 
@@ -20,105 +20,128 @@
 
 TokenGate sits between your agents/apps and the model providers. Clients call TokenGate
 with a TokenGate API key using the **OpenAI SDK unchanged** (just base URL + key);
-TokenGate routes each request to the best provider credential — with credit
-subscriptions, rate limits, circuit breakers, prompt-cache intelligence and full cost
+TokenGate routes each request to the best provider credential — with per-subject
+budgets, rate limits, circuit breakers, prompt-cache intelligence and cost
 accounting in between.
 
 Think "LiteLLM, but as an Elixir app with a real admin UI".
 
-## Routing
+The UI ships in **English by default** with an in-app **EN/ES** selector
+(`users.locale`); some strings are still Spanish-only.
 
-- **OpenAI-compatible proxy API** — `POST /v1/chat/completions` (streaming SSE +
-  non-streaming), `POST /v1/embeddings`, `GET /v1/models`.
-- **Model aliases + type routing** — clients ask for an alias (`gpt-4o`); the alias maps
-  to one or more provider credentials with `model_type` (`llm`/`embedding`) routing to
+## Screenshots
+
+<div align="center">
+
+| Login | Dashboard |
+|:---:|:---:|
+| <img src="docs/screenshots/login.png" width="420" alt="Sign-in" /> | <img src="docs/screenshots/dashboard.png" width="420" alt="Personal dashboard" /> |
+| **Stats** | **Provider ranking** |
+| <img src="docs/screenshots/stats.png" width="420" alt="Analytics hub" /> | <img src="docs/screenshots/providers.png" width="420" alt="Provider ranking with tiers" /> |
+| **Monitoring** | **Top-ups** |
+| <img src="docs/screenshots/monitoring.png" width="420" alt="Live request log" /> | <img src="docs/screenshots/topups.png" width="420" alt="One-shot credit top-ups" /> |
+
+</div>
+
+## Routing (proxy API)
+
+- **OpenAI-compatible proxy** — `GET /v1/models`, `POST /v1/chat/completions`
+  (streaming SSE + non-streaming) and `POST /v1/embeddings`, plus the rest of a
+  provider's services as transparent passthroughs on the same `base_url`:
+  `POST /v1/rerank`, `/v1/audio/transcriptions`, `/v1/audio/speech`,
+  `/v1/images/generations`, `/v1/videos`, `/v1/music/generations`.
+- **Model aliases + type routing** — clients ask for an alias (`gpt-4o`); it maps
+  to one or more provider routes with `model_type` (`llm`/`embedding`) selecting
   the right endpoint. Switching backends is an admin operation, not a client deploy.
-- **Health + priority routing** — credentials ordered by configured priority, with slow
-  ones sinking below healthy ones until they recover. Billing surface (subscription vs
-  pay-per-token) does not rank candidates: order is priority alone.
-- **Fallback matrix + circuit breaker** — auth errors (401/402/403) disable the
-  credential and fall back; timeouts and first-token timeouts fall back immediately;
-  fast errors (5xx/429) retry before moving on. Per-credential breaker with configurable
-  threshold/cooldown; included credentials tolerate 429s with a soft degrade. Every
-  upstream attempt of one client request carries the same generated `Idempotency-Key`.
-- **FIFO queue** for saturated included credentials — requests queue (tiered timeouts)
-  instead of immediately falling back to pay-per-token, maximizing subscription use.
-- **Two-gate throttling** — per-member limits (RPM, concurrency) protect TokenGate;
-  per-provider limits (`max_rpm`, `max_concurrent`, `max_concurrent_per_user`)
-  protect the upstream keys — every credential of a provider inherits them.
+- **Health + priority routing** — candidates sort by `{health, priority}`: healthy
+  credentials first, slow ones sinking below until they recover; within a level,
+  `priority` ASC decides. Billing surface (subscription vs pay-per-token) does
+  **not** rank candidates — order is priority alone.
+- **Fallback + circuit breaker** — auth errors (401/402/403) permanently disable
+  the credential and fall back; timeouts (and first-token timeouts) fall back
+  immediately; other errors retry the provider before moving on. Per-credential
+  breaker with configurable threshold/cooldown. Every upstream attempt of one
+  client request carries the same generated `Idempotency-Key`.
+- **Two-gate throttling** — per-subject limits (RPM, concurrency) protect
+  TokenGate; per-provider limits (`max_rpm`, `max_concurrent`,
+  `max_concurrent_per_user`) protect the upstream key — every credential of a
+  provider inherits them, and the per-user gate is keyed by
+  `{credential, api_key}` so one heavy user can't swallow a shared subscription.
 
 ## Cache intelligence
 
-- **Sticky sessions** — an API key sticks to the same credential to preserve prompt
-  caches, with per-provider TTL overrides. Every outbound request also carries an
-  `x-session-affinity` header so providers with automatic prefix caching group a
-  session's requests onto the replica holding the cached prefix.
+- **Sticky routing** — an API key sticks to the same credential to preserve prompt
+  caches, with per-route TTL overrides (default 3 min). Every outbound request also
+  carries an `x-session-affinity` header so providers with automatic prefix caching
+  group a session's requests onto the replica holding the cached prefix.
 - **Conversation session key** — the gateway derives a per-conversation key
-  (client-provided `session_id` / `prompt_cache_key`, or hashed from the conversation
-  opening) for cache-affinity routing and per-conversation cache-hit observability.
-  It travels upstream as `prompt_cache_key` (body) and `x-session-id` /
-  `x-session-affinity` (headers); the OpenRouter-style `session_id` body field is
-  never sent, so no upstream is handed a field it may reject.
-- **Local response cache** — identical requests (same model + normalized payload) are
-  served from a local cache without touching the upstream: faster answers, $0 cost.
-- **Prompt optimizer** — every chat completion gets system messages hoisted and deduped
-  (`stable_prefix`) and long/repeated tool-output messages trimmed (`lazy_cleanup`).
-  Pure, deterministic, always on for LLMs. Multi-turn histories get reasoning blocks
-  stripped before replay.
+  (client `x-session-id` header or `prompt_cache_key` body field, or hashed from
+  the conversation opening) for cache-affinity routing and per-conversation
+  cache-hit observability. It travels upstream as `prompt_cache_key`; the
+  OpenRouter-style `session_id` body field is never sent.
+- **Local response cache** — identical non-streaming requests (same key + model +
+  canonical payload) are served from an in-process ETS cache without touching the
+  upstream: faster answers, $0 cost.
+- **Prompt optimizer** — every chat completion gets system messages hoisted and
+  deduped and long/repeated tool-output messages trimmed. Pure, deterministic,
+  always on for LLMs. Multi-turn histories get reasoning blocks stripped before
+  replay.
 - **Usage normalization** — OpenAI-compatible usage is normalized into
-  `prompt_tokens` / `completion_tokens` / `cache_read_tokens` / `cache_creation_tokens`
-  (OpenRouter cache-write normalization included), priced separately at cache rates.
+  `prompt_tokens` / `completion_tokens` / `cache_read_tokens` /
+  `cache_creation_tokens`, priced separately at cache rates.
 
-## Credits & budgets
+## Budgets & credit
 
-- **Credit subscriptions** — a subscription grants `units` of credit per cycle
-  (1 credit = $1): monthly with a cut-off day (with optional rollover % and cap) or a
-  one-shot **top-up**. Group defaults (one sub shared by every member of the group) and
-  direct user subs/top-ups, drained group-default first then direct credit, earliest
-  expiry first. Recurring subs and top-ups have **separate admin pages** (`/credit/subscriptions`
-  and `/credit/topups`); a subscription can be deactivated (stops granting until
-  reactivated), and a top-up can also be **revoked** (deleted) or deactivated — the table
-  shows how much of the top-up was consumed and, once the remaining balance hits 0 (drained)
-  or it expires, it auto-archives (toggle to reveal).
-- **Subjects without any applicable subscription are unlimited** (tier 3) — shown as
-  "Ilimitado", not "no credit".
-- **Daily spending cap per credential** — once reached, the router skips it until the
-  next UTC day.
-- **Global daily kill-switch** — instance-wide USD cap in Maintenance; once total spend
-  reaches it, all proxy requests are rejected until 00:00 UTC. Per-user daily cap with
-  exclusion lists evaluated before the global one.
-- **Cost tracking** — the provider-reported usage cost is recorded per request and
-  returned in the `X-Tokengate-Cost` header (LiteLLM upstreams via
-  `x-litellm-response-cost`; Surplus Intelligence via `usage.buyer_cost_micro` or
-  `x-si-buyer-cost-micro`, both micro-USD). No upstream cost → $0 recorded, no phantom estimates.
+- **Limit profiles** (formerly "groups"/"subs") — the subject each member inherits
+  a monthly spend cap from (`monthly_spend_limit_usd`), plus **service** caps of
+  their own. `unlimited_spend` is the only path to unlimited.
+- **Top-ups** — one-shot credit per **user or service**, with optional expiry.
+  Consumed-vs-granted is measured against the request logs; a top-up can be
+  deactivated/reactivated or revoked, and it's archived (not deleted) once drained
+  or expired. Live in `/budget/topups`.
+- **Draining order** — the monthly limit is spent first; once exhausted (or on a
+  zero/absent limit) the top-up that **expires soonest** is drained.
+- **Global daily kill-switch** — instance-wide per-UTC-day USD cap
+  (`/budget/global`); once total spend reaches it, all proxy requests are rejected
+  until 00:00 UTC. Users, limit profiles and services can be exempted.
+- **Cost tracking** — the provider-reported usage cost is the single cost dimension,
+  recorded per request and returned in the `X-Tokengate-Cost` header
+  (LiteLLM upstreams via `x-litellm-response-cost`; Surplus Intelligence via
+  `x-si-buyer-cost-micro`, both micro-USD). No upstream cost → manual per-route
+  pricing → `$0`; no phantom estimates.
 
-## Admin & dashboards (LiveView)
+## Admin console (LiveView)
 
 | Page | What it does |
 |---|---|
-| `/dashboard` | Personal live consumption, period selector, API key with rotate/revoke |
-| `/stats` | Analytics hub — live pulse + tabs: overview, models, services, groups, users, credits. Role-scoped, prev-period deltas, CSV export. Hourly rollup (`request_metrics_hourly`) keeps period switching fast |
-| `/logs` | Live request log, filters, in-flight requests, CSV export |
-| `/calculator` | Real provider spend vs estimated cost with custom pricing |
-| `/access/services` | Machine-to-machine API keys with their own budget/limits/grants, plus supervisor assignment |
-| `/services/supervised` (+ `/:service_id`) | Read-only view for service supervisors: summary per supervised service (30d spend, requests, tokens, errors, latency, key status, granted models) and full per-service stats (period selector, daily usage per model, per-model breakdown, status classes, recent requests, roster). Access comes from a live `service_supervisors` row — no role grants it, and removing the row revokes it immediately |
-| `/catalog/providers` | Provider CRUD, multiple credentials each, per-provider sticky TTL |
-| `/catalog/models` | Alias CRUD — providers by priority, `billing_mode`, exclusive scope |
-| `/access/groups` (+ members) | Group defaults, per-member extras and grants, observability webhooks |
-| `/access/users` | User CRUD, suspend, impersonation, per-user stats, credit column |
-| `/credit/subscriptions` | Recurring (monthly) credit subscriptions — group defaults + direct user subs; deactivate/reactivate |
-| `/credit/topups` | One-shot top-ups per user: consumed vs granted, deactivate (revokes remaining balance) / revoke, auto-archived when drained or expired |
+| `/dashboard` | Personal live consumption, period selector, the user's API key with rotate/revoke, supervised-services shortcut |
+| `/stats` | Analytics hub — Live pulse + tabs: Overview, Providers (tier/score ranking), Models, Limit profiles, Users, Services. Role-scoped, prev-period deltas, CSV export (`/stats/export`) |
+| `/calculator` | Real provider spend vs an estimated cost from custom pricing (input/cache/output per M + cache hit-rate) |
+| `/catalog/labs` | Labs catalog — read-only models.dev labs + operator **custom** labs (name, key, icon/logo) |
+| `/catalog/providers` | Provider CRUD with multiple credentials each; per-provider operational limits; billing surface label |
+| `/catalog/models` | Model alias CRUD — provider routes by priority, exclusive scope, manual per-route pricing |
+| `/access/services` | Machine services: own API keys, monthly cap + top-ups, supervisors, granted models |
+| `/access/users` | User CRUD, suspend/activate, impersonation, per-user stats and spend limits |
+| `/budget/profiles` (+ `/:id/members`) | Limit profiles — monthly cap, unlimited flag, membership, per-member RPM/concurrency extras and model grants |
+| `/budget/topups` | One-shot top-ups per user/service: consumed vs granted, deactivate/reactivate, revoke, archived when drained/expired |
+| `/budget/global` | Global daily cap kill-switch + exemptions |
+| `/services/supervised` (+ `/:service_id`) | Read-only view for service supervisors — access comes from a live `service_supervisors` row (no role grants it; removing the row revokes it) |
+| `/operations/monitoring` | Live request log, filters, in-flight requests, CSV export |
+| `/operations/audit` | Admin audit log — actor (+ impersonator), action, entity, IP, redacted change set; filters, pagination, CSV export (`/operations/audit/export`) |
 | `/operations/observability` | OTLP/JSON webhook destinations (HMAC-signed, delivered via Oban) |
-| `/operations/maintenance` | Config overview, danger zone, global daily cap kill-switch |
+| `/operations/notifications` | Telegram notifications — bot token (encrypted or env), events + severity/cooldown, quiet hours, linked chats, delivery log with manual resend |
+| `/operations/maintenance` | Config overview + danger zone (reset logs, reset sticky sessions) |
 
 ## Platform
 
-- **Hot path on ETS** — auth, limits, budgets, routing and metrics read from ETS only;
-  Postgres is written asynchronously. Named tables degrade gracefully when absent.
+- **Hot path on ETS** — auth, limits, budgets, routing and metrics read from ETS/atomics
+  only; Postgres is written asynchronously. Named tables degrade gracefully when absent.
 - **Postgres** — daily RANGE-partitioned `request_logs` (append-heavy by design),
-  hourly metrics rollup with worker + backfill, audit logs, Oban jobs.
+  monthly-partitioned **append-only** `audit_logs` (trigger rejects UPDATE/DELETE),
+  hourly metrics rollup with worker + backfill, Oban jobs.
 - **Auth** — email/password (Bcrypt) + optional Google OAuth with domain-restricted
-  auto-registration; sliding-expiration sessions; per-user timezone bucketing.
+  auto-registration; sliding-expiration sessions; per-user timezone bucketing;
+  admin impersonation.
 
 ## Quick start
 
@@ -136,8 +159,8 @@ Visit [localhost:4000](http://localhost:4000) and sign in with the seeded admin:
 | Password | `tokengate-admin-secret-1` | `TOKENGATE_ADMIN_PASSWORD` |
 
 Then: create a **provider** with a credential → create a **model** alias and assign the
-provider → grant the alias to a **group** → your member API key is already on your
-dashboard. You can proxy a request in ~5 minutes.
+provider → give a **limit profile** a monthly cap → your member API key is already on
+your dashboard. You can proxy a request in ~5 minutes.
 
 ### Demo dataset (a month of usage)
 
@@ -147,19 +170,19 @@ To exercise every screen with real data instead of an empty instance:
 mix ecto.demo    # priv/repo/demo_seeds.exs — idempotent, safe to re-run
 ```
 
-Seeds 31 days of synthetic traffic (~7.5k request logs) plus the full surface
-around it: 12 demo users and 4 groups (active subscription, one with rollover,
-one paused, one deliberately over-budget), 3 machine services (own subscription,
-one-shot, unlimited) with supervisors, 2 custom providers + credentials in
-`error`/`disabled` states, 11 models with market + manual pricing,
-`prompt_cache_enabled`, exclusive routes (member / group / service), credit
-subscriptions and top-ups (active, drained, expired), observability webhooks,
-a custom lab, and a month of audit entries. The hourly metrics rollup is
-rebuilt for the whole range.
+Seeds 31 days of synthetic traffic (~7.7k request logs) plus the full surface
+around it: 12 demo users and 4 limit profiles (one unlimited, one deliberately
+over-budget), 3 machine services (own cap / one-shot top-up / unlimited) with
+supervisors, 2 custom providers + credentials in `error`/`disabled` states,
+11 models with manual pricing and exclusive routes (member / profile / service),
+credit top-ups (active, drained, expired), observability webhooks, a custom lab,
+and a month of audit entries. The hourly metrics rollup is rebuilt for the whole
+range, and the top-ups are calibrated to the generated spend.
 
-Everything it creates is marked (users at `@demo.tokengate`, fixed group/lab
+Everything it creates is marked (users at `@demo.tokengate`, fixed profile/service/lab
 names, `sk-demo-` credential keys) and wiped on the next run — operator data is
-never touched. Re-running produces identical row counts. The script prints the
+never touched. `audit_logs` is append-only, so its demo entries are seeded once
+and preserved. Re-running produces identical row counts. The script prints the
 demo API keys at the end:
 
 | | Value |
@@ -178,7 +201,7 @@ from openai import OpenAI
 
 client = OpenAI(
     base_url="http://localhost:4000/v1",
-    api_key="tg-…",   # TokenGate API key (group member or service)
+    api_key="tg-…",   # TokenGate API key (member or service)
 )
 
 resp = client.chat.completions.create(
@@ -206,22 +229,30 @@ resp = client.chat.completions.create(
 | `PORT` | `4000` | HTTP port |
 | `POOL_SIZE` | `10` | DB connection pool |
 | `SESSION_MAX_AGE_SECONDS` | `31536000` | Idle session lifetime (sliding) |
-| `PROXY_RECEIVE_TIMEOUT_MS` | `60000` | Upstream read timeout (per-credential override) |
+| `SESSION_COOKIE_SECURE` | auto | Force/clear the cookie `Secure` flag; unset = Plug default (secure only on HTTPS) |
+| `PROXY_RECEIVE_TIMEOUT_MS` | `120000` | Upstream read timeout (per-provider override) |
 | `FIRST_TOKEN_TIMEOUT_MS` | `30000` | Streaming: max wait for first chunk |
 | `CIRCUIT_BREAKER_THRESHOLD` | `3` | Failures before a breaker opens |
 | `CIRCUIT_BREAKER_COOLDOWN_MS` | `30000` | Breaker open duration |
+| `CIRCUIT_BREAKER_RATE_LIMIT_COOLDOWN_MS` | `20000` | Breaker cooldown after a 429 |
 | `ROUTING_SLOW_THRESHOLD_MS` | `30000` | Latency that marks a credential degraded |
+| `ROUTING_SLOW_PENALTY_MS` | `120000` | How long a slow credential sinks below healthy ones |
 | `ECTO_SSL` / `ECTO_SSL_VERIFY` | on / off | DB SSL and cert verification |
+| `ECTO_IPV6` | off | Connect to the DB over IPv6 |
 | `PHX_SCHEME` / `PHX_PORT` | `https` / `443` | URL generation (set `http` behind a VPN proxy) |
+| `CHECK_ORIGINS` | unset | Comma-separated allowed origins for CSRF/WS checks |
+| `TELEGRAM_BOT_TOKEN` | unset | Telegram bot token (else read encrypted from the UI) |
 | `GOOGLE_OAUTH_CLIENT_ID` / `SECRET` | unset | Enable Google sign-in |
 | `GOOGLE_OAUTH_ALLOWED_DOMAINS` | unset | Domains allowed to auto-register |
+| `GOOGLE_OAUTH_REDIRECT_URI` | derived | Override the OAuth callback URL |
 | `DNS_CLUSTER_QUERY` | unset | Node clustering DNS query |
 
 ## Production (Docker)
 
 Multi-stage **Dockerfile** included: prebuilt hexpm Elixir image → slim Debian runtime,
 non-root `app` user, port `4000`. The entrypoint applies migrations and seeds the admin
-before boot; `SKIP_MIGRATIONS=1` bypasses.
+before boot; `SKIP_MIGRATIONS=1` bypasses. `DISABLE_FORCE_SSL=1` (default) ships a
+plain-HTTP build for VPN/behind-proxy deploys.
 
 ```bash
 docker build -t tokengate .
@@ -248,7 +279,7 @@ bcrypt_elixir
 ## Development
 
 ```bash
-mix precommit   # compile --warnings-as-errors → deps.unlock --unused → deps.audit → format → test
+mix precommit   # compile --warnings-as-errors → deps.unlock --unused → deps.audit → format → gettext check → test
 ```
 
 ## License
