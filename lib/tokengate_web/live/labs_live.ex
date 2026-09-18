@@ -419,7 +419,7 @@ defmodule TokengateWeb.LabsLive do
         <% {:logo, url} -> %>
           <img src={url} alt="" class="object-contain w-5 h-5" loading="lazy" />
         <% {:icon, icon} -> %>
-          <.icon name={icon} class="w-5 h-5 text-base-content/70" />
+          <.icon name={icon} class="w-5 h-5 text-neutral-600" />
       <% end %>
     </span>
     """

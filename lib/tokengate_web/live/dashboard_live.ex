@@ -976,7 +976,7 @@ defmodule TokengateWeb.DashboardLive do
         <% {:logo, url} -> %>
           <img src={url} alt="" class="w-4 h-4 object-contain" loading="lazy" />
         <% {:icon, icon} -> %>
-          <.icon name={icon} class="w-4 h-4 text-base-content/70" />
+          <.icon name={icon} class="w-4 h-4 text-neutral-600" />
       <% end %>
     </span>
     """

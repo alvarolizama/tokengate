@@ -1495,7 +1495,7 @@ defmodule TokengateWeb.ModelsLive do
       <.icon
         :if={elem(@mark, 0) == :icon}
         name={elem(@mark, 1)}
-        class={["text-base-content/70", if(@size == "md", do: "w-6 h-6", else: "w-4 h-4")]}
+        class={["text-neutral-600", if(@size == "md", do: "w-6 h-6", else: "w-4 h-4")]}
       />
     </span>
     """
