@@ -138,20 +138,38 @@ defmodule Tokengate.Providers.CatalogSeed do
   end
 
   @doc """
-  Inserts the whole model snapshot (models + offers) when `catalog_models` is
-  empty.
+  Seeds both halves of the model mirror (models AND offers) when either is
+  missing, so a mirror that only got half-way through is completed.
 
-  Returns the number of rows inserted; 0 when the model mirror already had data
-  or when the vendored snapshot is absent (an instance can still boot, it just
-  waits for the first refresh).
+  Counting only `catalog_models` made a HALF-seeded mirror permanent: a boot cut
+  short (container killed by a healthcheck timeout, or a redeploy during the
+  seed) left models inserted and offers not, the table looked non-empty, the seed
+  refused to run again and the picker listed every model with ZERO providers
+  serving it. The two halves are derived from ONE snapshot and must land
+  together — see the moduledoc.
+
+  Returns the number of rows inserted; 0 when both halves are already there or
+  when the vendored snapshot is absent (an instance can still boot, it just waits
+  for the first refresh).
   """
   @spec seed_models_if_empty() :: non_neg_integer()
   def seed_models_if_empty do
-    if Repo.aggregate(CatalogModel, :count) == 0 do
-      seed_models()
-    else
+    if model_mirror_complete?() do
       0
+    else
+      seed_models()
     end
+  end
+
+  @doc """
+  True when both halves of the model mirror have rows.
+
+  Public so the "half a catalog is repaired, not treated as done" rule is
+  assertable without inserting the whole snapshot in a test.
+  """
+  @spec model_mirror_complete?() :: boolean()
+  def model_mirror_complete? do
+    Repo.aggregate(CatalogModel, :count) > 0 and Repo.aggregate(CatalogModelOffer, :count) > 0
   end
 
   @doc "Forces a model seed from the snapshot (skips rows that already exist)."
@@ -181,8 +199,14 @@ defmodule Tokengate.Providers.CatalogSeed do
         |> Map.put(:fingerprint, CatalogModelOffer.fingerprint(attrs))
       end)
 
-    model_count = insert_chunks(CatalogModel, model_rows)
-    offer_count = insert_chunks(CatalogModelOffer, offer_rows)
+    # ONE transaction for both halves: the chunking below exists to dodge
+    # Postgres' 65535 bind-parameter ceiling, not to make the seed resumable. A
+    # container killed mid-seed must roll back to an EMPTY mirror (which the next
+    # boot re-seeds) instead of leaving half a catalog behind.
+    {:ok, {model_count, offer_count}} =
+      Repo.transaction(fn ->
+        {insert_chunks(CatalogModel, model_rows), insert_chunks(CatalogModelOffer, offer_rows)}
+      end)
 
     CatalogSyncState.record(%{models_inserted: model_count, offers_inserted: offer_count})
 

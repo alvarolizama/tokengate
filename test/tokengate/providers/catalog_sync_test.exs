@@ -11,7 +11,14 @@ defmodule Tokengate.Providers.CatalogSyncTest do
 
   use Tokengate.DataCase, async: true
 
-  alias Tokengate.Providers.{CatalogModel, CatalogRefreshWorker, CatalogSync, CatalogSyncState}
+  alias Tokengate.Providers.{
+    CatalogModel,
+    CatalogModelOffer,
+    CatalogRefreshWorker,
+    CatalogSync,
+    CatalogSyncState
+  }
+
   alias Tokengate.Repo
 
   setup do
@@ -34,8 +41,23 @@ defmodule Tokengate.Providers.CatalogSyncTest do
   test "a populated model mirror is left alone" do
     Repo.insert!(%CatalogModel{key: "openai/gpt-5", name: "gpt-5"})
 
+    Repo.insert!(%CatalogModelOffer{
+      provider_key: "openai",
+      model_key: "openai/gpt-5",
+      provider_model: "gpt-5"
+    })
+
     assert :ok = CatalogSync.request_refresh_if_model_mirror_empty()
 
     refute Repo.exists?(from j in Oban.Job, where: j.worker == ^inspect(CatalogRefreshWorker))
+  end
+
+  test "a HALF-seeded mirror (models but no offers) also enqueues a refresh" do
+    # A boot killed mid-seed (healthcheck timeout, redeploy) can leave exactly
+    # this: models inserted, offers not. Counting only `catalog_models` treated
+    # it as done and the picker then showed every model with zero providers.
+    Repo.insert!(%CatalogModel{key: "openai/gpt-5", name: "gpt-5"})
+
+    assert {:enqueued, {:ok, _job}} = CatalogSync.request_refresh_if_model_mirror_empty()
   end
 end
