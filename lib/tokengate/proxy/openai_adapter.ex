@@ -127,6 +127,29 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
     end
   end
 
+  @doc """
+  Authenticated JSON GET against an absolute URL or a `{base_url}`-relative
+  path — the polling half of an async upstream (OpenRouter video jobs live at
+  `GET /videos/{id}`). Returns `{:ok, decoded_map}` or `{:error, reason}`.
+  """
+  def get_json(provider, credential, url_or_path, opts \\ []) do
+    url = build_url(provider, url_or_path)
+    api_key = Map.get(credential, :api_key_encrypted) || Map.get(credential, "api_key_encrypted")
+    receive_timeout = Keyword.get(opts, :receive_timeout, @default_receive_timeout)
+    request = Finch.build(:get, url, headers(api_key))
+
+    case checked_request(request, receive_timeout) do
+      {:ok, %Finch.Response{status: status, body: resp_body}} when status in 200..299 ->
+        {:ok, decode!(resp_body)}
+
+      {:ok, %Finch.Response{status: status}} ->
+        {:error, ProviderAdapter.classify_status(status)}
+
+      {:error, error} ->
+        {:error, ProviderAdapter.classify_error(error)}
+    end
+  end
+
   # Shared non-streaming POST transport: identical headers, timeout and
   # error classification regardless of the endpoint segment. The URL is
   # base_url + the service path (see service_path/3).

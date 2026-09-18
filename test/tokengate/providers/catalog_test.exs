@@ -73,9 +73,32 @@ defmodule Tokengate.Providers.CatalogTest do
 
   describe "code customizations" do
     test "capabilities are declared per provider, in code" do
-      assert Catalog.capabilities("fireworks-ai") == ["llm", "embedding"]
+      assert Catalog.capabilities("fireworks-ai") == ~w(llm embedding rerank)
+      # Alibaba (DashScope): rerank vive en compatible-api (path absoluto) e
+      # image ya es OpenAI-compatible en compatible-mode — ambos, intl y cn.
+      assert Catalog.capabilities("alibaba") == ~w(llm embedding rerank image)
+      assert Catalog.capabilities("alibaba-cn") == ~w(llm embedding rerank image)
       assert Catalog.capabilities("anthropic") == []
       assert Catalog.capabilities(nil) == []
+    end
+
+    test "rerank paths resolve per provider: Fireworks default, Alibaba absolute" do
+      # Fireworks sirve rerank en el default genérico: ningún override.
+      assert Catalog.path_suffix("fireworks-ai", service: :rerank, default: "/rerank") ==
+               "/rerank"
+
+      # DashScope lo sirve en compatible-api (otro segmento del host), y la
+      # respuesta ya viene en shape OpenAI, así que solo el path cambia.
+      assert Catalog.path_suffix("alibaba", service: :rerank, default: "/rerank") ==
+               "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks"
+
+      assert Catalog.path_suffix("alibaba-cn", service: :rerank, default: "/rerank") ==
+               "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"
+
+      # Image calza con el default genérico (compatible-mode lo expone
+      # OpenAI-compatible desde qwen-image).
+      assert Catalog.path_suffix("alibaba", service: :image, default: "/images/generations") ==
+               "/images/generations"
     end
 
     test "the vocabulary covers the modalities the catalog publishes" do
@@ -194,7 +217,11 @@ defmodule Tokengate.Providers.CatalogTest do
     end
 
     test "code_providers/0 carries the fields the mirror stores" do
-      assert [%{key: "surplus-intelligence"} = entry] = Catalog.code_providers()
+      providers = Catalog.code_providers()
+      assert length(providers) == 2
+
+      assert %{key: "surplus-intelligence"} =
+               entry = find_code_provider(providers, "surplus-intelligence")
 
       assert entry.name == "Surplus Intelligence"
       assert entry.base_url == "https://api.surplusintelligence.ai/v1"
@@ -202,9 +229,20 @@ defmodule Tokengate.Providers.CatalogTest do
       assert is_binary(entry.logo_url) and entry.logo_url != ""
       assert entry.status == "active"
 
+      # Qwen Cloud: la plataforma API de Qwen (qwen.ai), misma superficie
+      # DashScope intl que alibaba pero con keys/billing propios.
+      assert %{key: "qwen-cloud"} = qwen = find_code_provider(providers, "qwen-cloud")
+
+      assert qwen.name == "Qwen Cloud"
+      assert qwen.base_url == "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+      assert qwen.status == "active"
+
       # Y las keys son consultables para que el refresh no las barra a stale.
       assert "surplus-intelligence" in Catalog.code_provider_keys()
+      assert "qwen-cloud" in Catalog.code_provider_keys()
     end
+
+    defp find_code_provider(providers, key), do: Enum.find(providers, &(&1.key == key))
 
     test "path_suffix/2 defaults to the dialect path when no override exists" do
       assert Catalog.path_suffix("openrouter", service: :chat, default: "/chat/completions") ==

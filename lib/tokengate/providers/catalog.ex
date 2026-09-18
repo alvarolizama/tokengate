@@ -116,13 +116,52 @@ defmodule Tokengate.Providers.Catalog do
   #   * :omit_body_fields     — fields the gateway must STRIP from the body
   # ---------------------------------------------------------------------------
   @customizations %{
+    # OpenRouter expone TODO en su superficie OpenAI-compatible bajo /api/v1:
+    #   * chat/models/embeddings — defaults genéricos (embeddings models se
+    #     listan en /embeddings/models, ver el adaptador).
+    #   * stt `/audio/transcriptions` y tts `/audio/speech` — defaults exactos.
+    #   * image en `/images` (NO /images/generations) y video en `/videos`
+    #     (async: POST devuelve job + polling_url; el adaptador hace el poll).
+    #   * rerank NO existe como endpoint; music va por chat con
+    #     `modalities: ["text","audio"]` (el adaptador traduce).
     "openrouter" => %{
-      capabilities: ~w(llm embedding),
-      dialect: "openrouter"
+      capabilities: ~w(llm embedding stt tts image video music),
+      dialect: "openrouter",
+      paths: %{image: "/images", video: "/videos"}
     },
-    "fireworks-ai" => %{capabilities: ~w(llm embedding)},
-    "alibaba-cn" => %{capabilities: ~w(llm embedding)},
+    # Fireworks también sirve rerank en su superficie OpenAI-compatible:
+    # `{base}/rerank` es exactamente el default genérico (verificado en
+    # docs.fireworks.ai/api-reference/rerank-documents), así que solo se
+    # declara la capability — ningún override de path.
+    "fireworks-ai" => %{capabilities: ~w(llm embedding rerank)},
+    # DashScope (Model Studio) expone tres superficies distintas:
+    #   * compatible-mode/v1 — chat, models, embeddings y, desde qwen-image,
+    #     /images/generations YA OpenAI-compatible (response con data[].url);
+    #     todo calza con los defaults genéricos.
+    #   * compatible-api/v1/reranks — rerank en OTRO segmento del host (no
+    #     compatible-mode): path absoluto. Su respuesta ya es shape OpenAI
+    #     (`{object: "list", results: [...]}`, igual que Fireworks), así que
+    #     no necesita adaptador — solo el path. intl y cn difieren en el host.
+    # gte-rerank fue discontinuado; los modelos vigentes son qwen3-rerank y
+    # qwen3.7-text-rerank.
+    "alibaba" => %{
+      capabilities: ~w(llm embedding rerank image),
+      paths: %{rerank: "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks"}
+    },
+    "alibaba-cn" => %{
+      capabilities: ~w(llm embedding rerank image),
+      paths: %{rerank: "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"}
+    },
     "alibaba-token-plan" => %{capabilities: ~w(llm), billing: "subscription"},
+    "alibaba-token-plan-cn" => %{capabilities: ~w(llm), billing: "subscription"},
+    # Qwen Cloud: misma superficie DashScope intl que "alibaba" (chat,
+    # embeddings, rerank en compatible-api e image en compatible-mode), keys y
+    # billing propios. La fila entera vive en @code_providers.
+    "qwen-cloud" => %{
+      capabilities: ~w(llm embedding rerank image),
+      dialect: "openai",
+      paths: %{rerank: "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks"}
+    },
     "opencode" => %{capabilities: ~w(llm)},
     "opencode-go" => %{capabilities: ~w(llm), billing: "subscription"},
     "moonshotai" => %{capabilities: ~w(llm)},
@@ -186,6 +225,20 @@ defmodule Tokengate.Providers.Catalog do
       doc_url: "https://www.surplusintelligence.ai/docs",
       logo_url: "https://www.surplusintelligence.ai/surplus-logo.png",
       env: ["SURPLUS_API_KEY"],
+      npm: nil
+    },
+    # Qwen Cloud (qwen.ai): la plataforma API de Qwen. Es la misma
+    # infraestructura DashScope que Alibaba Cloud Model Studio — su superficie
+    # OpenAI-compatible internacional vive en el mismo host dashscope-intl —
+    # pero con API keys y billing propios (QwenCloud-Token Plan), así que es
+    # una fila de proveedor SEPARADA. models.dev no la publica.
+    "qwen-cloud" => %{
+      name: "Qwen Cloud",
+      base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+      doc_url: "https://qwen.ai/apiplatform",
+      logo_url:
+        "https://img.alicdn.com/imgextra/i2/O1CN016944pl1pyNhNJ40bg_!!6000000005439-2-tps-360.png",
+      env: ["QWEN_API_KEY"],
       npm: nil
     }
   }
