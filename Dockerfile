@@ -104,4 +104,13 @@ ENV HOME=/app MIX_ENV=prod PHX_SERVER=true PORT=4000
 ARG DISABLE_FORCE_SSL="1"
 ENV DISABLE_FORCE_SSL=${DISABLE_FORCE_SSL}
 
+# Liveness probe. `curl` is already installed above for Coolify's check and it
+# fails only on status >= 400, so `/health` — a bare 200 that touches no
+# database — is an honest probe while the boot tasks warm the connection pool.
+# Do NOT point a healthcheck at `/`: it redirects to /login (302) and a proxy
+# configured to expect 200 reads a healthy container as down (502 Bad Gateway).
+# start-period covers entrypoint.sh applying migrations, when nothing listens yet.
+HEALTHCHECK --interval=15s --timeout=3s --start-period=60s --retries=5 \
+  CMD curl -fsS "http://127.0.0.1:${PORT:-4000}/health" || exit 1
+
 ENTRYPOINT ["/app/entrypoint.sh"]

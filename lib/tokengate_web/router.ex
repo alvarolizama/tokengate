@@ -40,6 +40,16 @@ defmodule TokengateWeb.Router do
     plug TokengateWeb.Plugs.ApiAuth
   end
 
+  # Liveness probe for the container/proxy. Deliberately OUTSIDE :browser (no
+  # session, no CSRF, no cookie decrypt) and with NO database access: it runs
+  # while the app is still warming up, which is when the pool is busiest. Use
+  # this path as the healthcheck target, NOT `/` — `/` redirects to /login (302)
+  # and a proxy configured to expect 200 reads that as "down" (502 Bad Gateway
+  # with a perfectly healthy container).
+  scope "/", TokengateWeb do
+    get "/health", HealthController, :show
+  end
+
   scope "/", TokengateWeb do
     pipe_through :browser
 

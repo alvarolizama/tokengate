@@ -228,6 +228,13 @@ docker build -t tokengate .
 docker run -p 4000:4000 --env-file .env tokengate
 ```
 
+> 🩺 **Healthcheck:** the image ships a `HEALTHCHECK` on **`GET /health`** — a bare `200`
+> that touches no database, so it passes while the boot tasks warm the connection pool.
+> Point the proxy's health check at `/health` expecting `200`, **not** at `/`: `/`
+> redirects to `/login` (302) and a proxy configured for 200 reports a healthy container
+> as down → 502 Bad Gateway. Note the window before the listener exists: the entrypoint
+> runs migrations first, so a proxy that gives up sooner will 502 during a deploy.
+
 > ⚠️ **Migrations on partitioned tables:** `CREATE INDEX` on `request_logs` cannot use
 > `CONCURRENTLY` (Postgres limitation). On a large existing table, run migrations in a
 > maintenance window.
