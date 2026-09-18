@@ -947,7 +947,7 @@ msgstr ""
 msgid "Could not change the status."
 msgstr ""
 
-#: lib/tokengate_web/live/dashboard_live.ex:272
+#: lib/tokengate_web/live/dashboard_live.ex:273
 #: lib/tokengate_web/live/services_live.ex:459
 #: lib/tokengate_web/live/users_live.ex:510
 #, elixir-autogen, elixir-format
@@ -959,8 +959,8 @@ msgstr ""
 msgid "Could not delete the user."
 msgstr ""
 
-#: lib/tokengate_web/live/dashboard_live.ex:208
-#: lib/tokengate_web/live/dashboard_live.ex:296
+#: lib/tokengate_web/live/dashboard_live.ex:209
+#: lib/tokengate_web/live/dashboard_live.ex:297
 #: lib/tokengate_web/live/services_live.ex:483
 #: lib/tokengate_web/live/users_live.ex:533
 #, elixir-autogen, elixir-format
@@ -1001,22 +1001,22 @@ msgstr ""
 msgid "Full name"
 msgstr ""
 
-#: lib/tokengate_web/live/dashboard_live.ex:268
+#: lib/tokengate_web/live/dashboard_live.ex:269
 #: lib/tokengate_web/live/services_live.ex:454
 #: lib/tokengate_web/live/users_live.ex:506
 #, elixir-autogen, elixir-format
 msgid "Key created. Copy it now: it is not shown again."
 msgstr ""
 
-#: lib/tokengate_web/live/dashboard_live.ex:299
+#: lib/tokengate_web/live/dashboard_live.ex:300
 #: lib/tokengate_web/live/services_live.ex:486
 #: lib/tokengate_web/live/users_live.ex:536
 #, elixir-autogen, elixir-format
 msgid "Key not found."
 msgstr ""
 
-#: lib/tokengate_web/live/dashboard_live.ex:205
-#: lib/tokengate_web/live/dashboard_live.ex:292
+#: lib/tokengate_web/live/dashboard_live.ex:206
+#: lib/tokengate_web/live/dashboard_live.ex:293
 #: lib/tokengate_web/live/services_live.ex:478
 #: lib/tokengate_web/live/users_live.ex:529
 #, elixir-autogen, elixir-format
@@ -1299,7 +1299,7 @@ msgid "0 = zero spend. Empty = no budget (top-ups only)."
 msgstr ""
 
 #: lib/tokengate_web/live/calculator_live.ex:204
-#: lib/tokengate_web/live/dashboard_live.ex:839
+#: lib/tokengate_web/live/dashboard_live.ex:847
 #: lib/tokengate_web/live/services_live.ex:920
 #: lib/tokengate_web/live/services_live.ex:927
 #: lib/tokengate_web/live/services_live.ex:934
@@ -1586,7 +1586,7 @@ msgid "(top-ups only)"
 msgstr ""
 
 #: lib/tokengate_web/live/calculator_live.ex:203
-#: lib/tokengate_web/live/dashboard_live.ex:838
+#: lib/tokengate_web/live/dashboard_live.ex:846
 #: lib/tokengate_web/live/supervised_service_stats_live.ex:775
 #: lib/tokengate_web/topup_helpers.ex:120
 #, elixir-autogen, elixir-format
@@ -1594,7 +1594,7 @@ msgid "7 days"
 msgstr ""
 
 #: lib/tokengate_web/live/calculator_live.ex:205
-#: lib/tokengate_web/live/dashboard_live.ex:840
+#: lib/tokengate_web/live/dashboard_live.ex:848
 #: lib/tokengate_web/live/supervised_service_stats_live.ex:777
 #: lib/tokengate_web/stats_helpers.ex:65
 #: lib/tokengate_web/topup_helpers.ex:124
@@ -1642,7 +1642,7 @@ msgstr ""
 
 #: lib/tokengate_web/kpi_helpers.ex:207
 #: lib/tokengate_web/kpi_helpers.ex:260
-#: lib/tokengate_web/live/dashboard_live.ex:847
+#: lib/tokengate_web/live/dashboard_live.ex:855
 #: lib/tokengate_web/live/dashboard_live.html.heex:397
 #: lib/tokengate_web/live/dashboard_live.html.heex:451
 #: lib/tokengate_web/live/dashboard_live.html.heex:497
@@ -1802,8 +1802,8 @@ msgstr ""
 msgid "No data for this period."
 msgstr ""
 
-#: lib/tokengate_web/live/dashboard_live.ex:884
 #: lib/tokengate_web/live/dashboard_live.ex:892
+#: lib/tokengate_web/live/dashboard_live.ex:900
 #: lib/tokengate_web/live/supervised_service_stats_live.ex:647
 #, elixir-autogen, elixir-format
 msgid "No key"
@@ -1921,8 +1921,8 @@ msgstr ""
 msgid "This view is read-only."
 msgstr ""
 
-#: lib/tokengate_web/live/dashboard_live.ex:837
-#: lib/tokengate_web/live/dashboard_live.ex:841
+#: lib/tokengate_web/live/dashboard_live.ex:845
+#: lib/tokengate_web/live/dashboard_live.ex:849
 #: lib/tokengate_web/live/supervised_service_stats_live.ex:774
 #: lib/tokengate_web/stats_helpers.ex:61
 #: lib/tokengate_web/stats_helpers.ex:66
@@ -3261,7 +3261,7 @@ msgid "Provider not found."
 msgstr ""
 
 #: lib/tokengate_web/live/calculator_live.html.heex:194
-#: lib/tokengate_web/live/dashboard_live.ex:848
+#: lib/tokengate_web/live/dashboard_live.ex:856
 #: lib/tokengate_web/live/dashboard_live.html.heex:396
 #: lib/tokengate_web/live/dashboard_live.html.heex:450
 #: lib/tokengate_web/live/dashboard_live.html.heex:496
@@ -3426,7 +3426,7 @@ msgstr ""
 msgid "Showing the latest %{count} deliveries, newest first."
 msgstr ""
 
-#: lib/tokengate_web/live/dashboard_live.ex:706
+#: lib/tokengate_web/live/dashboard_live.ex:714
 #, elixir-autogen, elixir-format
 msgid "%{count} requests"
 msgstr ""
@@ -3477,12 +3477,12 @@ msgstr ""
 msgid "Copy this key now. It will not be shown again."
 msgstr ""
 
-#: lib/tokengate_web/live/dashboard_live.ex:182
+#: lib/tokengate_web/live/dashboard_live.ex:183
 #, elixir-autogen, elixir-format
 msgid "Could not regenerate the key."
 msgstr ""
 
-#: lib/tokengate_web/live/dashboard_live.ex:179
+#: lib/tokengate_web/live/dashboard_live.ex:180
 #, elixir-autogen, elixir-format
 msgid "Key regenerated successfully."
 msgstr ""
@@ -3557,17 +3557,17 @@ msgstr ""
 msgid "Send your first request to the proxy to see metrics here."
 msgstr ""
 
-#: lib/tokengate_web/live/dashboard_live.ex:315
+#: lib/tokengate_web/live/dashboard_live.ex:316
 #, elixir-autogen, elixir-format
 msgid "Sticky routes cleared. Your next request will be re-routed."
 msgstr ""
 
-#: lib/tokengate_web/live/dashboard_live.ex:197
+#: lib/tokengate_web/live/dashboard_live.ex:198
 #, elixir-autogen, elixir-format
 msgid "This membership has no key."
 msgstr ""
 
-#: lib/tokengate_web/live/dashboard_live.ex:849
+#: lib/tokengate_web/live/dashboard_live.ex:857
 #, elixir-autogen, elixir-format
 msgid "Tokens in/out"
 msgstr ""
@@ -3597,23 +3597,23 @@ msgstr ""
 msgid "it only voids it, without issuing another."
 msgstr ""
 
-#: lib/tokengate_web/live/dashboard_live.ex:857
+#: lib/tokengate_web/live/dashboard_live.ex:865
 #, elixir-autogen, elixir-format
 msgid "per day (30d)"
 msgstr ""
 
-#: lib/tokengate_web/live/dashboard_live.ex:858
+#: lib/tokengate_web/live/dashboard_live.ex:866
 #, elixir-autogen, elixir-format
 msgid "per day (90d)"
 msgstr ""
 
-#: lib/tokengate_web/live/dashboard_live.ex:855
-#: lib/tokengate_web/live/dashboard_live.ex:859
+#: lib/tokengate_web/live/dashboard_live.ex:863
+#: lib/tokengate_web/live/dashboard_live.ex:867
 #, elixir-autogen, elixir-format
 msgid "per hour"
 msgstr ""
 
-#: lib/tokengate_web/live/dashboard_live.ex:856
+#: lib/tokengate_web/live/dashboard_live.ex:864
 #, elixir-autogen, elixir-format
 msgid "per hour (7d)"
 msgstr ""
