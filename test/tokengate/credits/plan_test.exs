@@ -484,4 +484,86 @@ defmodule Tokengate.Credits.PlanTest do
       assert [_] = :ets.lookup(:tokengate_credits, {:topup, "t1"})
     end
   end
+
+  describe "hold → settle/release: el contador no colapsa" do
+    setup do
+      group = group_fixture(%{"monthly_spend_limit_usd" => "10.00"})
+      member = member_fixture(group, user_fixture())
+      %{plan: Credits.plan(member)}
+    end
+
+    # Regresión del 402 espurio: el hold guardaba el TOTAL nuevo del contador
+    # como `subject_micro`, así que settle restaba de más (colapsaba el mes al
+    # costo de la última request) y release/rollback lo mandaban a 0 o a un
+    # valor sin sentido. En producción: 402 "budget_exceeded" con crédito
+    # restante visible en la UI (que lee de la DB).
+    test "settle con costo menor al hold conserva el gasto acumulado del mes", %{plan: plan} do
+      key = {:limit, plan.subject}
+      today = Date.utc_today()
+      # Mes en curso con $9.50 ya gastados.
+      :ets.insert(
+        :tokengate_credits,
+        {key, 9_500_000, nil, {today.year, today.month}, true, nil, true}
+      )
+
+      {:ok, hold} = Manager.reserve_plan(plan, nil, Decimal.new("1.00"), false)
+      assert hold.subject_micro == 1_000_000
+
+      :ok = Manager.settle_credits(hold, Decimal.new("0.30"))
+
+      # 9.50 + 0.30 = 9.80 — no colapsa a 0.30.
+      assert :ets.lookup_element(:tokengate_credits, key, 2) == 9_800_000
+    end
+
+    test "release tras un hold devuelve el contador a su valor previo", %{plan: plan} do
+      key = {:limit, plan.subject}
+      today = Date.utc_today()
+
+      :ets.insert(
+        :tokengate_credits,
+        {key, 9_500_000, nil, {today.year, today.month}, true, nil, true}
+      )
+
+      {:ok, hold} = Manager.reserve_plan(plan, nil, Decimal.new("1.00"), false)
+      :ok = Manager.release_credits(hold)
+
+      assert :ets.lookup_element(:tokengate_credits, key, 2) == 9_500_000
+    end
+
+    test "rollback cuando el cap global rechaza no toca el gasto acumulado", %{plan: plan} do
+      key = {:limit, plan.subject}
+      today = Date.utc_today()
+
+      :ets.insert(
+        :tokengate_credits,
+        {key, 9_500_000, nil, {today.year, today.month}, true, nil, true}
+      )
+
+      # Cap global en $0.01 con contador global ya agotado ⇒ rechazo tras el
+      # bump del sujeto (camino del rollback).
+      :ets.insert(:tokengate_budgets, {{:global, :daily}, 1_000_000, true, Date.utc_today()})
+
+      assert {:error, {:budget_exceeded, %{layer: :global}}} =
+               Manager.reserve_plan(plan, Decimal.new("0.01"), Decimal.new("1.00"), false)
+
+      assert :ets.lookup_element(:tokengate_credits, key, 2) == 9_500_000
+    end
+
+    test "reseed_limit_counter re-siembra desde la verdad durable (drift correction)", %{
+      plan: plan
+    } do
+      key = {:limit, plan.subject}
+      today = Date.utc_today()
+      # Contador inflado por drift: $9.50 fantasma.
+      :ets.insert(
+        :tokengate_credits,
+        {key, 9_500_000, nil, {today.year, today.month}, true, nil, true}
+      )
+
+      # La DB no tiene logs de este sujeto ⇒ el contador debe volver a 0.
+      :ok = Manager.reseed_limit_counter(plan.subject)
+
+      assert :ets.lookup_element(:tokengate_credits, key, 2) == 0
+    end
+  end
 end

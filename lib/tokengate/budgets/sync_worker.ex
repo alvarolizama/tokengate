@@ -26,7 +26,7 @@ defmodule Tokengate.Budgets.SyncWorker do
     unique: [period: 60, keys: [:subject_id]]
 
   @impl true
-  def perform(%Oban.Job{args: %{"subject_id" => subject_id}}) do
+  def perform(%Oban.Job{args: %{"subject_id" => subject_id} = args}) do
     # Clear the debounce mark BEFORE recomputing: any spend recorded after this
     # point will re-enqueue a fresh job. If we cleared it after set_from_db, a
     # concurrent settle could set the mark between our clear and our write, then
@@ -36,6 +36,19 @@ defmodule Tokengate.Budgets.SyncWorker do
     monthly_micro = compute_monthly_spend(subject_id)
 
     Tokengate.Budgets.Manager.set_from_db(subject_id, monthly_micro)
+
+    # También reconcilia el contador del LÍMITE (tabla de créditos) cuando el
+    # settle vino del plan de créditos (`credit_subject`): `set_from_db` solo
+    # corrige la tabla legacy. Sin esto, un contador inflado por drift del
+    # hold/settle seguía rechazando con 402 aunque la DB mostrara remanente
+    # (la semilla de `ensure_limit_loaded` es una vez por ciclo mensual).
+    case Map.fetch(args, "credit_subject") do
+      {:ok, [type, id]} when type in ["user", "service"] ->
+        Tokengate.Budgets.Manager.reseed_limit_counter({String.to_atom(type), id})
+
+      _ ->
+        :ok
+    end
 
     :ok
   end

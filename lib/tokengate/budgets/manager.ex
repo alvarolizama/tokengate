@@ -241,7 +241,65 @@ defmodule Tokengate.Budgets.Manager do
       maybe_enqueue_global_sync()
     end
 
+    # Reconciliación del contador del límite/top-up: sin esto, un drift del
+    # ETS (crash entre hold y settle, doble release, hold fantasma) quedaba
+    # vivo hasta reiniciar el nodo — y como la semilla es una sola vez por
+    # ciclo mensual, un contador inflado rechazaba con 402 el resto del mes
+    # aunque la DB mostrara crédito restante.
+    case hold_subject(hold) do
+      nil -> :ok
+      subject -> maybe_enqueue_credit_sync(subject)
+    end
+
     :ok
+  end
+
+  # Los holds de top-up no cargan `subject` (solo `topup`): la reconciliación
+  # de esos bolsines la cubre `ensure_topup_loaded/1` con su semilla por uso.
+  defp hold_subject(%{subject: %{} = subject}), do: subject
+  defp hold_subject(%{subject: {_type, _id} = subject}), do: subject
+  defp hold_subject(_), do: nil
+
+  # El SyncWorker pide un `subject_id` binario (miembro o servicio). Los plans
+  # traen `{:user, id} | {:service, id}`; `credit_subject` preserva el tipo
+  # para que el worker re-siembre el contador correcto de la tabla de créditos.
+  defp subject_key_id({:user, id}), do: id
+  defp subject_key_id({:service, id}), do: id
+
+  # Debounced enqueue del reconciliador, variante del plan de créditos: lleva
+  # el sujeto TIPADO para que el SyncWorker además re-siembre
+  # `{:limit, {:user, id}}` / `{:limit, {:service, id}}` desde la verdad
+  # durable. El marcador dedup es el mismo `subject_id` binario.
+  defp maybe_enqueue_credit_sync(subject) do
+    id = subject_key_id(subject)
+    key = {:sync_pending, id}
+
+    if :ets.insert_new(@table, {key, true}) do
+      _ =
+        %{subject_id: id, credit_subject: [to_string(elem(subject, 0)), id]}
+        |> Tokengate.Budgets.SyncWorker.new()
+        |> Oban.insert()
+    end
+
+    :ok
+  end
+
+  @doc """
+  Re-siembra el contador mensual del límite de un sujeto (tabla de créditos,
+  clave `{:limit, subject}`) desde el log durable: lo gastado **debitado al
+  límite** este mes (logs sin top-up).
+
+  Es la corrección de drift que faltaba: `ensure_limit_loaded/1` solo siembra
+  una vez por ciclo, así que un contador inflado (crash entre hold y settle,
+  rollback duplicado) bloqueaba con 402 el resto del mes aunque la DB
+  mostrara remanente. La llama el `SyncWorker` después de cada settle del
+  plan de créditos (debounced).
+  """
+  @spec reseed_limit_counter(Tokengate.Credits.subject()) :: :ok
+  def reseed_limit_counter(subject) do
+    key = limit_key(subject)
+    consumed = Tokengate.Credits.spend_debited_to_limit(subject)
+    seed_credit(key, to_micro(consumed), nil, current_period_stamp(:monthly), nil, true)
   end
 
   @doc """
@@ -310,15 +368,22 @@ defmodule Tokengate.Budgets.Manager do
 
   # Limit hold: the subject's own monthly counter (daily/monthly counters live
   # in the other table and are unrelated).
+  #
+  # `subject_micro` del hold es el DELTA retenido (`requested`), no el total
+  # del contador tras el bump: settle/release restan exactamente eso. Cuando
+  # guardábamos el total nuevo, el settle (`actual − total`) colapsaba el
+  # contador al costo de la última request y el release (`−total`) lo mandaba
+  # a 0 — se perdía el gasto acumulado del mes y el contador quedaba basura
+  # en ambas direcciones (402 con crédito restante, o gasto de más).
   defp hold_limit(subject, limit_usd, global_cap_usd, requested, exempt_global?) do
     key = limit_key(subject)
     ensure_limit_loaded(subject)
 
-    held = bump_credit(key, requested)
+    _ = bump_credit(key, requested)
 
     hold_global_after_credit(
       %{kind: :limit, grant_key: key, subject: subject, limit_usd: limit_usd},
-      held,
+      requested,
       global_cap_usd,
       requested,
       exempt_global?
@@ -329,27 +394,30 @@ defmodule Tokengate.Budgets.Manager do
     key = topup_key(topup)
     ensure_topup_loaded(topup)
 
-    held = bump_credit(key, requested)
+    _ = bump_credit(key, requested)
 
     hold_global_after_credit(
       %{kind: :topup, grant_key: key, topup: topup},
-      held,
+      requested,
       global_cap_usd,
       requested,
       exempt_global?
     )
   end
 
-  defp hold_global_after_credit(partial, held, global_cap_usd, requested, exempt_global?) do
+  # `held_micro` = delta retenido del sujeto (lo que hay que devolver si el
+  # cap global rechaza). El rollback resta SOLO ese delta; antes restaba el
+  # total nuevo del contador y lo vaciaba a 0.
+  defp hold_global_after_credit(partial, held_micro, global_cap_usd, requested, exempt_global?) do
     if exempt_global? do
-      {:ok, credit_hold(partial, held, 0, true)}
+      {:ok, credit_hold(partial, held_micro, 0, true)}
     else
       case hold_counter(@global_key, requested, global_cap_usd) do
         {:ok, held_global} ->
-          {:ok, credit_hold(partial, held, held_global, false)}
+          {:ok, credit_hold(partial, held_micro, held_global, false)}
 
         {:error, :exhausted} ->
-          bump_credit(partial.grant_key, -held)
+          bump_credit(partial.grant_key, -held_micro)
           {:error, {:budget_exceeded, %{layer: :global}}}
       end
     end
