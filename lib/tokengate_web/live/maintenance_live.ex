@@ -258,6 +258,11 @@ defmodule TokengateWeb.MaintenanceLive do
                       <span class="font-mono">{warning["credentials"]}</span>
                       credencial(es) en uso (no se ha borrado nada).
                     </span>
+                    <span :if={warning["reason"] == "empty_model_mirror"}>
+                      El catálogo de <span class="font-mono">modelos</span> estaba vacío al
+                      arrancar (el snapshot vendorizado no se pudo leer): se encoló una
+                      actualización automática contra models.dev.
+                    </span>
                   </li>
                 </ul>
 
