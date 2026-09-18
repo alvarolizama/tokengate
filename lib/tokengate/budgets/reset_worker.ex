@@ -15,9 +15,12 @@ defmodule Tokengate.Budgets.ResetWorker do
   ## What it does
 
   Calls `Tokengate.Budgets.Manager.reset_monthly_counters/0`, which deletes
-  every `{subject_id, :monthly}` entry from the `:tokengate_budgets` ETS
-  table. On the next `reserve/5` or `spend/1` call for each subject, the
-  Manager lazy-loads from DB (which will be ~0 for the new month).
+  every spend counter derived from the logs: monthly AND daily, per subject
+  and global, plus the monthly limit counters (`{:limit, subject}`). Top-up
+  pockets (`{:topup, id}`) are deliberately NOT cleared here — a top-up's
+  consumption is not monthly. On the next `reserve/5` or `spend/1` call for
+  each subject, the Manager lazy-loads from DB (which will be ~0 for the new
+  month).
   """
 
   use Oban.Worker,

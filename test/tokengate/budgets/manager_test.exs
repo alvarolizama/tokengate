@@ -610,14 +610,18 @@ defmodule Tokengate.Budgets.ManagerTest do
       assert Decimal.equal?(Manager.spend(tm2.id).monthly_usd, Decimal.new("0"))
     end
 
-    test "daily counters are unaffected" do
+    test "daily and global counters are wiped too (maintenance reset contract)" do
       {tm, _} = group_member_fixture()
 
       assert :ok = record(tm.id, Decimal.new("15.00"))
 
       Manager.reset_monthly_counters()
 
-      assert Decimal.equal?(Manager.spend(tm.id).daily_usd, Decimal.new("15.00"))
+      # El reset de Mantenimiento borra TODO el gasto derivado de los logs:
+      # tras truncar el histórico, el enforcement no puede seguir viendo el
+      # gasto diario (o rechazaría 402 contra datos inexistentes). El
+      # siguiente acceso lazy-recarga desde la DB (vacía tras el truncate).
+      assert Decimal.equal?(Manager.spend(tm.id).daily_usd, Decimal.new("0"))
     end
 
     test "reset then settle accumulates from 0" do
@@ -634,6 +638,32 @@ defmodule Tokengate.Budgets.ManagerTest do
 
       assert :ok = record(tm.id, Decimal.new("2.00"))
       assert Decimal.equal?(Manager.spend(tm.id).monthly_usd, Decimal.new("2.00"))
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # clear_topup_counters/0 — SOLO reset de Mantenimiento (truncate de logs)
+  # ---------------------------------------------------------------------------
+
+  describe "clear_topup_counters/0" do
+    test "borra los bolsines de top-up pero no los contadores de límite" do
+      :ets.insert(
+        :tokengate_credits,
+        {{:limit, {:user, "tu1"}}, 5, nil, nil, true, nil, true}
+      )
+
+      :ets.insert(:tokengate_credits, {{:topup, "tt1"}, 5, 10, nil, true, nil, false})
+
+      deleted = Manager.clear_topup_counters()
+
+      assert deleted == 1
+      assert [] == :ets.lookup(:tokengate_credits, {:topup, "tt1"})
+      # El límite NO se toca: clear_topup_counters es complemento del truncate,
+      # no un sustituto del reset mensual (que sí borra los límites).
+      assert [_] = :ets.lookup(:tokengate_credits, {:limit, {:user, "tu1"}})
+    after
+      :ets.delete(:tokengate_credits, {:limit, {:user, "tu1"}})
+      :ets.delete(:tokengate_credits, {:topup, "tt1"})
     end
   end
 

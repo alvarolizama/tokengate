@@ -895,11 +895,53 @@ defmodule Tokengate.Logs do
   removes every row from `request_logs` while preserving the table
   structure and partitions.
 
-  Returns `{0, nil}` as a sentinel (TRUNCATE does not return a row count).
+  Un reset de verdad tiene que limpiar TODO lo que deriva de los logs, no
+  sólo la tabla cruda — si no, el Resumen híbrido de /stats sigue sirviendo
+  las sumas viejas del rollup mientras En vivo (crudo) da 0, y los KPIs
+  quedan descuadrados justo después de "reiniciar":
+
+    * `request_metrics_hourly` — el rollup acumula por hora y el
+      RollupWorker sólo re-agrega las últimas 3h: sin truncate, las horas
+      viejas conservan datos fantasma para siempre.
+    * jobs Oban pendientes de la cola `:logs` — re-insertarían logs ya
+      "borrados" segundos después del truncate.
+    * `Collector` (counters en ETS) y `DashboardCache` — para que las
+      métricas en pantalla reflejen el estado vacío sin esperar el TTL.
+    * counters mensuales de presupuesto (`Budgets.Manager`) — el enforcement
+      seguiría viendo el gasto borrado y rechazando con 402 a usuarios con
+      saldo limpio.
+
+  Returns `{rows_truncated, nil}` as a sentinel (TRUNCATE does not return a
+  row count).
   """
   @spec truncate_request_logs() :: {integer(), nil}
   def truncate_request_logs do
-    Repo.query!("TRUNCATE TABLE request_logs RESTART IDENTITY CASCADE")
+    Repo.transaction(fn ->
+      Repo.query!("TRUNCATE TABLE request_logs RESTART IDENTITY CASCADE")
+
+      # Truncate en la MISMA transacción: si algo falla, no queda el rollup
+      # limpio con logs crudos (o al revés).
+      Repo.query!("TRUNCATE TABLE request_metrics_hourly")
+    end)
+
+    # Jobs pendientes de la cola :logs cancelados (ejecutarlos re-insertaría
+    # los logs recién truncados): available/retryable/scheduled/executing.
+    {:ok, _cancelled} =
+      Oban.cancel_all_jobs(
+        from(j in Oban.Job,
+          where: j.queue == "logs" and j.state in ~w(available retryable scheduled executing)
+        )
+      )
+
+    # Derived state in ETS.
+    :ok = Tokengate.Metrics.Collector.reset()
+    :ok = Tokengate.Metrics.DashboardCache.invalidate_all()
+    _counters = Tokengate.Budgets.Manager.reset_monthly_counters()
+    # Los bolsines de top-up miden su consumo contra request_logs: con la tabla
+    # truncada hay que borrarlos también o quedan congelados con gasto fantasma
+    # (402 contra top-ups con saldo limpio). El ciclo mensual NO hace esto.
+    _topups = Tokengate.Budgets.Manager.clear_topup_counters()
+
     {0, nil}
   end
 

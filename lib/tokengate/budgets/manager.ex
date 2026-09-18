@@ -725,22 +725,33 @@ defmodule Tokengate.Budgets.Manager do
   end
 
   @doc """
-  Deletes every `{subject_id, :monthly}` entry from the ETS table.
-
-  Called by `Budgets.ResetWorker` on the 1st of each month. The next
-  `reserve/5` or `spend/1` for each subject will lazy-load from DB, which
-  effectively starts the monthly counter at 0.
+  Deletes every spend counter from the ETS table: monthly AND daily, per
+  subject and global. Used by the maintenance reset (`Logs.truncate_request_logs/0`)
+  and by `Budgets.ResetWorker` on cycle boundaries. The next
+  `reserve/5` or `spend/1` for each subject lazy-loads from DB, which
+  effectively starts each counter at 0.
   """
   @spec reset_monthly_counters() :: integer()
   def reset_monthly_counters do
-    # Match pattern: delete every entry whose key ends in `:monthly`.
-    monthly = :ets.select_delete(@table, [{{{:_, :monthly}, :_, :_, :_}, [], [true]}])
+    # Every entry of the spend table: {subject, :monthly}, {subject, :daily}
+    # and the global {:global, :daily} kill-switch counter.
+    spend =
+      :ets.select_delete(@table, [
+        {{{:_, :monthly}, :_, :_, :_}, [], [true]},
+        {{{:_, :daily}, :_, :_, :_}, [], [true]}
+      ])
 
     # El contador del límite mensual vive en **otra** tabla (`@credits_table`,
     # clave `{:limit, subject}`) y no se borraba aquí: quedaba con el consumo del
     # mes anterior hasta reiniciar el nodo. El `cycle_start` ya lo invalida de
     # forma perezosa (ver `ensure_limit_loaded/1`); este borrado además deja el
     # display correcto sin esperar a la primera request del mes.
+    #
+    # OJO: los bolsines `{:topup, id}` NO se borran aquí a propósito — el consumo
+    # de un top-up no es mensual (es de un solo uso con expiración propia), así
+    # que el ciclo mensual debe conservarlos. El reset de Mantenimiento
+    # (`clear_topup_counters/0` desde `Logs.truncate_request_logs/0`) sí los
+    # borra: con los logs truncados, ese consumo ya no existe.
     credits =
       if :ets.whereis(@credits_table) == :undefined do
         0
@@ -750,7 +761,29 @@ defmodule Tokengate.Budgets.Manager do
         ])
       end
 
-    monthly + credits
+    spend + credits
+  end
+
+  @doc """
+  Deletes every top-up pocket (`{:topup, id}`) from the credits ETS table.
+
+  Sólo para el reset de Mantenimiento (`Logs.truncate_request_logs/0`): el
+  consumo de un top-up se mide contra `request_logs`, así que con la tabla
+  truncada un bolsín con consumo pre-reset quedaría congelado hasta reiniciar
+  el nodo — y como `ensure_topup_loaded/1` sólo siembra cuando la clave no
+  existe, el enforcement seguiría viendo gasto inexistente (402 contra un
+  top-up con saldo limpio). Tras el borrado, el siguiente uso re-siembra desde
+  la DB (ya vacía) en 0. El ciclo mensual del `ResetWorker` NO llama esto.
+  """
+  @spec clear_topup_counters() :: integer()
+  def clear_topup_counters do
+    if :ets.whereis(@credits_table) == :undefined do
+      0
+    else
+      :ets.select_delete(@credits_table, [
+        {{{:topup, :_}, :_, :_, :_, :_, :_, :_}, [], [true]}
+      ])
+    end
   end
 
   @doc false

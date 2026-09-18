@@ -32,6 +32,7 @@ defmodule TokengateWeb.MaintenanceLive do
       |> assign(:page_title, gettext("Maintenance") <> " · Tokengate")
       |> assign(:is_admin, user && user.global_role == "admin")
       |> assign(:confirm_reset, false)
+      |> assign(:confirm_full_reset, false)
       |> assign(:confirm_sticky_reset, false)
       |> assign(:log_count, count_logs())
       |> assign(:sticky_count, sticky_count())
@@ -100,9 +101,48 @@ defmodule TokengateWeb.MaintenanceLive do
      |> put_flash(:info, "Historial de logs eliminado.")}
   end
 
+  # "Dejar todo en cero": reset de uso + purga de registros del catálogo sin
+  # despliegue/credencial. Conserva usuarios, servicios, API keys, modelos
+  # con despliegue y proveedores con credencial.
+  @impl true
+  def handle_event("reset_all_usage", _params, socket) do
+    Logs.truncate_request_logs()
+    purged = Providers.purge_unused_catalog()
+    StickyTracker.clear_all()
+
+    Tokengate.Auditing.audit(
+      socket.assigns.current_user,
+      "settings.reset_all_usage",
+      "usage",
+      nil,
+      %{"models_purged" => purged.models, "providers_purged" => purged.providers}
+    )
+
+    {:noreply,
+     socket
+     |> assign(:confirm_full_reset, false)
+     |> assign(:log_count, 0)
+     |> assign(:sticky_count, 0)
+     |> put_flash(
+       :info,
+       "Uso reseteado: logs y métricas a cero, #{purged.models} modelo(s) y " <>
+         "#{purged.providers} proveedor(es) sin uso eliminados, rutas sticky liberadas."
+     )}
+  end
+
   @impl true
   def handle_event("show_sticky_reset_confirm", _params, socket) do
     {:noreply, assign(socket, :confirm_sticky_reset, true)}
+  end
+
+  @impl true
+  def handle_event("show_full_reset_confirm", _params, socket) do
+    {:noreply, assign(socket, :confirm_full_reset, true)}
+  end
+
+  @impl true
+  def handle_event("cancel_full_reset", _params, socket) do
+    {:noreply, assign(socket, :confirm_full_reset, false)}
   end
 
   @impl true
@@ -318,9 +358,13 @@ defmodule TokengateWeb.MaintenanceLive do
               <div>
                 <h3 class="font-semibold text-base-content">{gettext("Delete log history")}</h3>
                 <p class="text-sm text-base-content/60">
-                  {gettext("Deletes every row of")} <code>request_logs</code>. {gettext(
-                    "It does not affect users, limit profiles, models, providers or API keys."
+                  {gettext("Deletes every row of")} <code>request_logs</code>
+                  {gettext("and the hourly metrics rollup")}
+                  <code>request_metrics_hourly</code>
+                  {gettext(
+                    "(aggregates that feed the stats dashboards), plus any pending log writes and the in-memory metric/budget counters."
                   )}
+                  {gettext("It does not affect users, limit profiles, models, providers or API keys.")}
                   {gettext("There are currently")}
                   <span class="font-mono font-semibold">{@log_count}</span>
                   {gettext("rows.")}
@@ -333,6 +377,33 @@ defmodule TokengateWeb.MaintenanceLive do
                 id="reset-logs-btn"
               >
                 {gettext("Delete logs")}
+              </button>
+            </div>
+
+            <div class="divider my-2"></div>
+
+            <%!-- Reset total: uso + registros de catálogo sin uso --%>
+            <div class="flex items-center justify-between gap-4">
+              <div>
+                <h3 class="font-semibold text-base-content">
+                  {gettext("Leave everything at zero")}
+                </h3>
+                <p class="text-sm text-base-content/60">
+                  {gettext(
+                    "Everything of the above, plus: catalog models without any deployment and providers without credentials or deployments, and sticky routes."
+                  )}
+                  {gettext(
+                    "Keeps users, services, API keys, limit profiles, models with deployments and providers with credentials."
+                  )}
+                </p>
+              </div>
+              <button
+                type="button"
+                phx-click="show_full_reset_confirm"
+                class="btn btn-error btn-outline btn-sm"
+                id="reset-all-usage-btn"
+              >
+                {gettext("Full reset")}
               </button>
             </div>
           </div>
@@ -369,6 +440,44 @@ defmodule TokengateWeb.MaintenanceLive do
                 id="confirm-reset-logs-btn"
               >
                 {gettext("Yes, delete everything")}
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <%!-- Confirmation modal: full reset (usage + unused catalog) --%>
+      <div :if={@confirm_full_reset} class="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div class="absolute inset-0 bg-black/50" phx-click="cancel_full_reset" />
+        <div class="relative card bg-base-100 border border-error/50 shadow-xl w-full max-w-md">
+          <div class="card-body">
+            <h3 class="card-title text-error flex items-center gap-2">
+              <.icon name="hero-exclamation-triangle" class="w-5 h-5" />
+              {gettext("Leave everything at zero?")}
+            </h3>
+            <p class="text-sm text-base-content/70 mt-2">
+              {gettext("Deletes")} <strong>{gettext("permanently")}</strong>
+              {gettext(
+                "all usage history (logs, hourly metrics, budget counters, sticky routes) AND catalog records with no deployment: models without deployments and providers without credentials."
+              )}
+              {gettext("They cannot be recovered.")}
+            </p>
+            <p class="text-sm text-base-content/70">
+              {gettext(
+                "Users, services, API keys, limit profiles, models with deployments and providers with credentials are kept."
+              )}
+            </p>
+            <div class="flex gap-2 mt-4 justify-end">
+              <button type="button" phx-click="cancel_full_reset" class="btn btn-ghost btn-sm">
+                {gettext("Cancel")}
+              </button>
+              <button
+                type="button"
+                phx-click="reset_all_usage"
+                class="btn btn-error btn-sm"
+                id="confirm-reset-all-usage-btn"
+              >
+                {gettext("Yes, leave everything at zero")}
               </button>
             </div>
           </div>

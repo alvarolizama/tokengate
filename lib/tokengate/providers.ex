@@ -43,6 +43,49 @@ defmodule Tokengate.Providers do
 
   def list_providers, do: Repo.all(Provider)
 
+  @doc """
+  Purga del catálogo **sin uso**: borra modelos sin despliegues
+  (`model_providers`) y proveedores sin credenciales ni despliegues — es
+  decir, registros que no sirven tráfico y de los que no queda nada que
+  conservar. Para el reset de Mantenimiento ("dejar todo en cero manteniendo
+  lo activo"): tras truncar los logs, estos registros son puro ruido de
+  catálogo.
+
+  Conserva siempre: proveedores con credencial (aunque esté inactiva —
+  la clave existe y es configuración), modelos con despliegue, y cualquier
+  fila `source: \"custom\"` (creación manual deliberada).
+
+  Devuelve `%{models: n, providers: m}` con las filas borradas.
+  """
+  def purge_unused_catalog do
+    # Postgres no soporta left_join en delete_all: se usan subqueries NOT IN
+    # (ids acotados — tablas de catálogo, no de uso).
+    models_deleted =
+      Repo.delete_all(
+        from(m in Model,
+          where:
+            m.id not in subquery(
+              from(mp in Tokengate.Providers.ModelProvider, select: mp.model_id)
+            )
+        )
+      )
+
+    providers_deleted =
+      Repo.delete_all(
+        from(p in Provider,
+          where:
+            p.source != "custom" and
+              p.id not in subquery(
+                from(c in Tokengate.Providers.Credential, select: c.provider_id)
+              )
+        )
+      )
+
+    Tokengate.Routing.Cache.invalidate_all()
+
+    %{models: elem(models_deleted, 0), providers: elem(providers_deleted, 0)}
+  end
+
   def get_provider!(id), do: Repo.get!(Provider, id)
   def get_provider(id), do: Repo.get(Provider, id)
 
