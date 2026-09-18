@@ -29,16 +29,24 @@ defmodule Tokengate.Repo.Migrations.DropRequestLogsSetNullFks do
     would block ALL request_logs inserts (write_worker) while waiting —
     the 3s lock_timeout fails fast instead, and the migration can simply
     be re-run in a quieter moment (`IF EXISTS`, idempotent).
-  - `down/0` re-adds both FKs as `NOT VALID`: once this migration ran,
-    deletes leave dangling ids behind, so a full revalidation would fail
-    with 23503. NOT VALID skips validating existing rows (new rows are
-    still checked) — good enough for a rollback path.
+  - `down/0` re-adds both FKs as **validated** (`ON DELETE SET NULL`), not
+    `NOT VALID`: `ADD CONSTRAINT ... NOT VALID` on a partitioned table is
+    rejected by Postgres < 18 (`42809 wrong_object_type`) — which is what
+    AlloyDB (the production server, PG 15/16 lineage) runs on. A validated
+    add cannot tolerate the dangling ids this migration deliberately leaves
+    behind, so the rollback nulls them out first (see the `down/0` block);
+    after this migration ran, new rows are still checked on the way in.
   """
 
   use Ecto.Migration
 
   @disable_ddl_transaction true
   @disable_migration_lock true
+
+  @fk_specs [
+    {"request_logs_provider_id_fkey", "provider_id", "providers"},
+    {"request_logs_model_alias_id_fkey", "model_alias_id", "model_aliases"}
+  ]
 
   def up do
     execute """
@@ -53,14 +61,35 @@ defmodule Tokengate.Repo.Migrations.DropRequestLogsSetNullFks do
   end
 
   def down do
-    execute """
+    Enum.each(@fk_specs, fn {name, column, referenced} ->
+      execute add_fk(name, column, referenced)
+    end)
+  end
+
+  # Validated add (no NOT VALID — unsupported on partitioned tables before
+  # PG 18). Nulls out the ids that no longer resolve before re-adding, so the
+  # validation pass cannot fail with 23503.
+  defp add_fk(name, column, referenced) do
+    """
     DO $$
     BEGIN
       SET LOCAL lock_timeout = '3s';
-      ALTER TABLE request_logs ADD CONSTRAINT request_logs_provider_id_fkey
-        FOREIGN KEY (provider_id) REFERENCES providers(id) ON DELETE SET NULL NOT VALID;
-      ALTER TABLE request_logs ADD CONSTRAINT request_logs_model_alias_id_fkey
-        FOREIGN KEY (model_alias_id) REFERENCES model_aliases(id) ON DELETE SET NULL NOT VALID;
+      ALTER TABLE request_logs DROP CONSTRAINT IF EXISTS #{name};
+
+      BEGIN
+        ALTER TABLE request_logs ADD CONSTRAINT #{name}
+          FOREIGN KEY (#{column}) REFERENCES #{referenced}(id) ON DELETE SET NULL;
+      EXCEPTION WHEN foreign_key_violation THEN
+        RAISE NOTICE 'request_logs: #{column} with no #{referenced} row, nulling them out to re-add the FK';
+        UPDATE request_logs SET #{column} = NULL
+         WHERE #{column} IS NOT NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM #{referenced} r WHERE r.id = request_logs.#{column}
+           );
+
+        ALTER TABLE request_logs ADD CONSTRAINT #{name}
+          FOREIGN KEY (#{column}) REFERENCES #{referenced}(id) ON DELETE SET NULL;
+      END;
     END
     $$;
     """
