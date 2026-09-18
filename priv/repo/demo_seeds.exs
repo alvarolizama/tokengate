@@ -11,9 +11,9 @@
 # Alcance del dataset (31 días):
 #
 #   * 12 usuarios demo + membresía demo del admin real (dashboard personal).
-#   * 4 grupos: sub activa, sub con rollover, sub pausada y sub por debajo del
-#     consumo real (para ver el estado agotado / 402).
-#   * 3 servicios máquina (con sub propia, one-shot y sin sub) + supervisores.
+#   * 4 perfiles de límites (grupos) con techo mensual: uno ilimitado (Data Lab)
+#     y uno por debajo del consumo real (Contractors → agotado / 402).
+#   * 3 servicios máquina con techo propio + supervisores.
 #   * 2 proveedores custom + credenciales nuevas sobre builtins, una de ellas
 #     en `error` y otra `disabled` (para probar reactivación).
 #   * 11 modelos nuevos (9 llm + 2 embedding) con precio manual,
@@ -22,8 +22,8 @@
 #   * ~11k `request_logs` repartidos por hora local de cada sujeto, con
 #     streaming, thinking, caché, fallbacks, errores de gate y de proveedor.
 #   * Rollup horario (`request_metrics_hourly`) reconstruido para el rango.
-#   * Crédito: subs de grupo/servicio, rollover, pausada, top-ups (activo,
-#     agotado, vencido), sub directa y exenciones del tope global.
+#   * Presupuesto: techo mensual por perfil/servicio, límite propio de Sofía,
+#     top-ups (activo, agotado, vencido) y exenciones del tope global.
 #   * Webhooks de observabilidad, lab custom, audit logs del mes y cap global.
 #
 # Al terminar imprime un resumen y las API keys demo para pegarle al proxy.
@@ -37,8 +37,7 @@ defmodule Tokengate.DemoSeeds do
   alias Tokengate.Accounts.{ApiKey, Group, GroupMember, Service, User}
   alias Tokengate.Auditing.AuditLog
   alias Tokengate.Budgets.{Exemption, Exemptions}
-  alias Tokengate.Credits
-  alias Tokengate.Credits.Subscription
+  alias Tokengate.Credits.{Topup, Topups}
   alias Tokengate.GlobalSettings
   alias Tokengate.Logs
   alias Tokengate.Logs.{PartitionWorker, RequestLog}
@@ -74,17 +73,11 @@ defmodule Tokengate.DemoSeeds do
   @custom_lab_key "acme"
   @custom_lab_name "Acme Research"
 
-  @sub_names [
-    "Platform Crew · mensual",
-    "Growth Squad · mensual (rollover)",
-    "Data Lab · mensual (pausada)",
-    "Contractors · mensual",
-    "docs-rag · mensual",
-    "ci-eval-bot · one-shot",
+  @topup_labels [
     "Top-up · Ana",
     "Top-up · Luis (agotado)",
     "Top-up · Iván (vencido)",
-    "Sub directa · Sofía"
+    "Top-up · docs-rag"
   ]
 
   @demo_models [
@@ -233,7 +226,14 @@ defmodule Tokengate.DemoSeeds do
     demo_provider_ids =
       Repo.all(from p in Provider, where: p.name in ^@custom_providers, select: p.id)
 
-    demo_sub_ids = Repo.all(from s in Subscription, where: s.name in ^@sub_names, select: s.id)
+    demo_topup_ids =
+      Repo.all(
+        from t in Topup,
+          where:
+            t.label in ^@topup_labels or t.user_id in ^demo_user_ids or
+              t.service_id in ^demo_service_ids,
+          select: t.id
+      )
 
     demo_credential_ids = demo_credential_ids()
 
@@ -249,12 +249,14 @@ defmodule Tokengate.DemoSeeds do
     {rollup, _} =
       from(m in RequestMetricsHourly, where: m.hour_utc >= ^from) |> Repo.delete_all()
 
-    # La auditoría demo se marca en `changes` (`"demo" => true`): su `user_id`
-    # es el admin real (la demo no crea admins), así que filtrar por usuario
-    # dejaría las filas acumulándose en cada corrida.
-    {audit, _} =
-      from(a in AuditLog, where: fragment("? ->> 'demo' = 'true'", a.changes))
-      |> Repo.delete_all()
+    # La auditoría es **append-only** (trigger que rechaza UPDATE/DELETE), así
+    # que el wipe no puede borrar sus filas: se cuentan y `seed_audit/1` las
+    # siembra una sola vez (idempotente), marcadas con `"demo" => true`.
+    audit =
+      Repo.aggregate(
+        from(a in AuditLog, where: fragment("? ->> 'demo' = 'true'", a.changes)),
+        :count
+      )
 
     {exemptions, _} =
       from(e in Exemption,
@@ -289,7 +291,9 @@ defmodule Tokengate.DemoSeeds do
       )
       |> Repo.delete_all()
 
-    {subs, _} = from(s in Subscription, where: s.id in ^demo_sub_ids) |> Repo.delete_all()
+    {topups, _} =
+      from(t in Topup, where: t.id in ^demo_topup_ids) |> Repo.delete_all()
+
     {models, _} = from(m in Model, where: m.id in ^demo_model_ids) |> Repo.delete_all()
 
     {credentials, _} =
@@ -320,7 +324,7 @@ defmodule Tokengate.DemoSeeds do
     IO.puts(
       "· wipe: #{logs} logs · #{rollup} buckets · #{audit} audit · #{exemptions} exenciones · " <>
         "#{destinations} webhooks · #{users} usuarios · #{groups} grupos · #{services} servicios · " <>
-        "#{memberships} membresías · #{subs} subs · #{models} modelos · #{credentials} credenciales · " <>
+        "#{memberships} membresías · #{topups} top-ups · #{models} modelos · #{credentials} credenciales · " <>
         "#{model_providers + extras + group_models + service_models} enlaces"
     )
   end
@@ -653,6 +657,16 @@ defmodule Tokengate.DemoSeeds do
     end
   end
 
+  # El precio por millón de tokens viaja como Decimal (money). Acepta las
+  # formas que usan los specs: float, entero, o `nil` (sin precio manual).
+  defp price(nil), do: nil
+  defp price(float) when is_float(float), do: Decimal.from_float(float) |> Decimal.round(6)
+  defp price(int) when is_integer(int), do: Decimal.new(int)
+
+  defp max_decimal(a, b), do: if(Decimal.compare(a, b) == :lt, do: b, else: a)
+
+  defp usd(%Decimal{} = d), do: "$#{d |> Decimal.round(2) |> Decimal.to_string(:normal)}"
+
   defp model_by_name(name), do: Repo.get_by(Model, name: name)
 
   # ---------------------------------------------------------------------------
@@ -828,100 +842,41 @@ defmodule Tokengate.DemoSeeds do
   end
 
   # ---------------------------------------------------------------------------
-  # Crédito
+  # Presupuesto (perfiles de límites + techo mensual + top-ups)
   # ---------------------------------------------------------------------------
 
+  # El vocabulario del modelo actual: cada **perfil de límites** (grupo) aporta
+  # el techo mensual que heredan sus miembros, y cada **servicio** el suyo. El
+  # único camino a ilimitado es `unlimited_spend`. Los top-ups son crédito extra
+  # de un solo uso, por usuario o servicio. Las suscripciones desaparecieron.
   defp seed_credits(org) do
     groups = org.groups
 
-    platform_sub =
-      create_subscription(%{
-        name: "Platform Crew · mensual",
-        units: 500,
-        recurrence: "monthly",
-        reset_day: 1,
-        rollover_mode: "reset",
-        status: "active"
-      })
+    # Techos mensuales (USD) de cada perfil de límites.
+    {:ok, _} = Accounts.update_group(groups.platform, %{monthly_spend_limit_usd: price(500)})
+    {:ok, _} = Accounts.update_group(groups.growth, %{monthly_spend_limit_usd: price(200)})
 
-    {:ok, _} = Credits.set_group_default(groups.platform, platform_sub)
-
-    growth_sub =
-      create_subscription(%{
-        name: "Growth Squad · mensual (rollover)",
-        units: 200,
-        recurrence: "monthly",
-        reset_day: 1,
-        rollover_mode: "rollover",
-        rollover_pct: 25,
-        rollover_cap_units: 40,
-        status: "active"
-      })
-
-    {:ok, _} = Credits.set_group_default(groups.growth, growth_sub)
-
-    data_lab_sub =
-      create_subscription(%{
-        name: "Data Lab · mensual (pausada)",
-        units: 120,
-        recurrence: "monthly",
-        reset_day: 1,
-        rollover_mode: "reset",
-        status: "paused"
-      })
-
-    {:ok, _} = Credits.set_group_default(groups.data_lab, data_lab_sub)
+    # Data Lab es el perfil ilimitado (el único camino a ilimitado).
+    {:ok, _} = Accounts.update_group(groups.data_lab, %{unlimited_spend: true})
 
     # Contractors queda por debajo del consumo real a propósito: así la UI de
     # presupuestos muestra el estado agotado / 402.
-    contractors_sub =
-      create_subscription(%{
-        name: "Contractors · mensual",
-        units: 10,
-        recurrence: "monthly",
-        reset_day: 1,
-        rollover_mode: "reset",
-        status: "active"
-      })
+    {:ok, _} = Accounts.update_group(groups.contractors, %{monthly_spend_limit_usd: price(2)})
 
-    {:ok, _} = Credits.set_group_default(groups.contractors, contractors_sub)
-
-    docs_sub =
-      create_subscription(%{
-        name: "docs-rag · mensual",
-        units: 80,
-        recurrence: "monthly",
-        reset_day: 1,
-        rollover_mode: "reset",
-        status: "active"
-      })
-
-    ci_sub =
-      create_subscription(%{
-        name: "ci-eval-bot · one-shot",
-        units: 40,
-        recurrence: "none",
-        starts_at: DateTime.new!(Date.add(Date.utc_today(), -20), ~T[00:00:00], "Etc/UTC"),
-        expires_at: DateTime.new!(Date.add(Date.utc_today(), 45), ~T[00:00:00], "Etc/UTC"),
-        status: "active"
-      })
-
+    # Servicios: techo mensual propio (docs-rag y ci-eval-bot limitados,
+    # batch-reports ilimitado). El segundo camino de gasto de un servicio es su
+    # top-up.
     services =
       Enum.map(org.services, fn entry ->
-        case entry.service.name do
-          "docs-rag" ->
-            {:ok, service} =
-              Accounts.update_service(entry.service, %{subscription_id: docs_sub.id})
+        attrs =
+          case entry.service.name do
+            "docs-rag" -> %{monthly_spend_limit_usd: price(80)}
+            "ci-eval-bot" -> %{monthly_spend_limit_usd: price(40)}
+            "batch-reports" -> %{unlimited_spend: true}
+          end
 
-            entry |> Map.put(:service, service) |> Map.put(:subscription, docs_sub)
-
-          "ci-eval-bot" ->
-            {:ok, service} = Accounts.update_service(entry.service, %{subscription_id: ci_sub.id})
-            entry |> Map.put(:service, service) |> Map.put(:subscription, ci_sub)
-
-          _ ->
-            entry
-        end
+        {:ok, service} = Accounts.update_service(entry.service, attrs)
+        Map.put(entry, :service, service)
       end)
 
     ana = find_member(org, "ana")
@@ -929,102 +884,90 @@ defmodule Tokengate.DemoSeeds do
     ivan = find_member(org, "ivan")
     sofia = find_member(org, "sofia")
 
+    # Sofía define su PROPIO techo mensual: su límite gana sobre el del perfil
+    # de límites del que es miembro.
+    {:ok, _sofia_user} = Accounts.update_user(sofia.user, %{monthly_spend_limit_usd: price(30)})
+
+    docs_service = Enum.find(services, &(&1.service.name == "docs-rag"))
+
     ana_topup =
-      create_subscription(%{
+      create_topup(%{
         user_id: ana.user.id,
-        name: "Top-up · Ana",
-        units: 25,
-        recurrence: "none",
-        starts_at: DateTime.new!(Date.add(Date.utc_today(), -12), ~T[00:00:00], "Etc/UTC"),
-        expires_at: DateTime.new!(Date.add(Date.utc_today(), 20), ~T[00:00:00], "Etc/UTC"),
-        status: "active"
+        label: "Top-up · Ana",
+        amount_usd: price(25),
+        expires_in_days: 14
       })
 
     luis_topup =
-      create_subscription(%{
+      create_topup(%{
         user_id: luis.user.id,
-        name: "Top-up · Luis (agotado)",
-        units: 20,
-        recurrence: "none",
-        starts_at: DateTime.new!(Date.add(Date.utc_today(), -9), ~T[00:00:00], "Etc/UTC"),
-        expires_at: DateTime.new!(Date.add(Date.utc_today(), 30), ~T[00:00:00], "Etc/UTC"),
-        status: "active"
+        label: "Top-up · Luis (agotado)",
+        amount_usd: price(20),
+        expires_in_days: 30
       })
 
+    # Iván: vencido (expires_at en el pasado) — la página de top-ups lo archiva.
     ivan_topup =
-      create_subscription(%{
+      create_topup(%{
         user_id: ivan.user.id,
-        name: "Top-up · Iván (vencido)",
-        units: 15,
-        recurrence: "none",
-        starts_at: DateTime.new!(Date.add(Date.utc_today(), -25), ~T[00:00:00], "Etc/UTC"),
-        expires_at: DateTime.new!(Date.add(Date.utc_today(), -4), ~T[00:00:00], "Etc/UTC"),
-        status: "active"
+        label: "Top-up · Iván (vencido)",
+        amount_usd: price(15),
+        expires_at: DateTime.new!(Date.add(Date.utc_today(), -4), ~T[00:00:00], "Etc/UTC")
       })
 
-    sofia_direct =
-      create_subscription(%{
-        user_id: sofia.user.id,
-        name: "Sub directa · Sofía",
-        units: 30,
-        recurrence: "monthly",
-        reset_day: 15,
-        rollover_mode: "reset",
-        status: "active"
+    docs_topup =
+      create_topup(%{
+        service_id: docs_service.service.id,
+        label: "Top-up · docs-rag",
+        amount_usd: price(20),
+        expires_in_days: 60
       })
 
     IO.puts(
-      "· crédito: 6 subs de grupo/servicio + 4 directas (2 top-ups activos, 1 agotado, 1 vencido)"
+      "· presupuesto: 4 perfiles (Data Lab ilimitado, Contractors agotado) · " <>
+        "techo propio por servicio · 4 top-ups (Ana activo, Luis agotado, Iván vencido, docs-rag activo)"
     )
 
     %{
-      group_subs: %{
-        groups.platform.id => platform_sub.id,
-        groups.growth.id => growth_sub.id,
-        groups.data_lab.id => data_lab_sub.id,
-        groups.contractors.id => contractors_sub.id
-      },
-      service_subs: %{"docs-rag" => docs_sub.id, "ci-eval-bot" => ci_sub.id},
-      direct_subs: %{
+      services: services,
+      topups: %{ana: ana_topup, luis: luis_topup, ivan: ivan_topup, docs: docs_topup},
+      user_topups: %{
         ana.user.id => ana_topup.id,
         luis.user.id => luis_topup.id,
-        ivan.user.id => ivan_topup.id,
-        sofia.user.id => sofia_direct.id
+        ivan.user.id => ivan_topup.id
       },
-      topups: %{ana: ana_topup, luis: luis_topup, ivan: ivan_topup, sofia_direct: sofia_direct},
-      services: services
+      service_topups: %{docs_service.service.id => docs_topup.id}
     }
   end
 
-  defp create_subscription(attrs) do
-    {:ok, subscription} = Credits.create_subscription(attrs)
-    subscription
+  defp create_topup(attrs) do
+    {:ok, topup} = Topups.create(attrs)
+    topup
   end
 
-  # Los `units` de los top-ups se fijan **después** de generar los logs, con el
+  # Los montos de los top-ups se fijan **después** de generar los logs, con el
   # consumo real ya en la tabla: así el top-up de Luis queda agotado (consumido
-  # ≥ otorgado ⇒ se auto-archiva) y el de Ana parcialmente consumido, sin
-  # depender de que el costo por request coincida con una cifra inventada.
+  # ≥ otorgado ⇒ se archiva) y el de Ana parcialmente consumido, sin depender de
+  # que el costo por request coincida con una cifra inventada.
   defp calibrate_topups(credits) do
     ana = credits.topups.ana
     luis = credits.topups.luis
 
-    ana_consumed = Credits.subscription_usage(ana).consumed_micro
-    luis_consumed = Credits.subscription_usage(luis).consumed_micro
+    ana_consumed = Topups.consumed_usd(ana)
+    luis_consumed = Topups.consumed_usd(luis)
 
-    # Ana: ~1/3 consumido del ciclo (unidades = 3× lo gastado, mínimo 1).
-    ana_units = max(1, round(ana_consumed / 1_000_000 * 3))
+    # Ana: ~1/3 consumido del otorgado (monto = 3× lo gastado, mínimo $1).
+    ana_amount = max_decimal(Decimal.mult(ana_consumed, Decimal.new(3)), price(1))
 
     # Luis: agotado — el otorgado es exactamente lo gastado (remanente 0).
-    luis_units = max(1, div(luis_consumed, 1_000_000))
+    luis_amount = max_decimal(luis_consumed, price(1))
 
-    {:ok, _} = Credits.update_subscription(ana, %{units: ana_units})
-    {:ok, _} = Credits.update_subscription(luis, %{units: luis_units})
+    {:ok, _} = Topups.edit_topup(ana, %{amount_usd: ana_amount})
+    {:ok, _} = Topups.edit_topup(luis, %{amount_usd: luis_amount})
 
     IO.puts(
-      "· top-ups calibrados: Ana #{ana_units} u " <>
-        "(#{Decimal.round(Decimal.div(Decimal.new(ana_consumed), Decimal.new(1_000_000)), 2)} gastadas) · " <>
-        "Luis #{luis_units} u (agotado)"
+      "· top-ups calibrados: Ana #{usd(ana_amount)} otorgado (#{usd(ana_consumed)} gastado) · " <>
+        "Luis #{usd(luis_amount)} otorgado (agotado)"
     )
   end
 
@@ -1218,6 +1161,14 @@ defmodule Tokengate.DemoSeeds do
   defp seed_audit(org) do
     admin_id = org.admin && org.admin.user.id
 
+    if Repo.exists?(from(a in AuditLog, where: fragment("? ->> 'demo' = 'true'", a.changes))) do
+      IO.puts("· auditoría: entradas demo ya presentes (append-only) — se conservan")
+    else
+      insert_audit(admin_id, org)
+    end
+  end
+
+  defp insert_audit(admin_id, org) do
     actions = [
       {"user.create", "user", "Alta de miembro", 29},
       {"credential.create", "credential", "Credencial de Z.AI (prod)", 28},
@@ -1289,7 +1240,7 @@ defmodule Tokengate.DemoSeeds do
     subjects = subjects(ctx)
 
     rows =
-      for offset <- @days..0, reduce: [] do
+      for offset <- @days..0//-1, reduce: [] do
         acc ->
           date = Date.add(today, -offset)
           acc ++ Enum.flat_map(subjects, &day_requests(&1, date, ctx))
@@ -1338,26 +1289,23 @@ defmodule Tokengate.DemoSeeds do
           streaming_ratio: profile.streaming,
           prompt: profile.prompt,
           completion: profile.completion,
-          credit_sub_id: Map.get(ctx.org.credits.group_subs, entry.group.id),
-          extra_sub_id: Map.get(ctx.org.credits.direct_subs, entry.user.id),
+          topup_id: Map.get(ctx.org.credits.user_topups, entry.user.id),
           slug: entry.user.email |> String.split("@") |> hd()
         }
       end)
 
     services =
       Enum.map(ctx.org.credits.services, fn entry ->
-        {models, prompt, completion, daily, sub} =
+        {models, prompt, completion, daily} =
           case entry.service.name do
             "docs-rag" ->
-              {[{"bge-m3", 6}, {"text-embedding-3-large", 4}, {"gpt-5-mini", 1}], 2_600, 40, 34,
-               Map.get(ctx.org.credits.service_subs, "docs-rag")}
+              {[{"bge-m3", 6}, {"text-embedding-3-large", 4}, {"gpt-5-mini", 1}], 2_600, 40, 34}
 
             "ci-eval-bot" ->
-              {[{"gpt-5-mini", 5}, {"deepseek-4-flash", 3}, {"gpt-5", 1}], 1_800, 400, 40,
-               Map.get(ctx.org.credits.service_subs, "ci-eval-bot")}
+              {[{"gpt-5-mini", 5}, {"deepseek-4-flash", 3}, {"gpt-5", 1}], 1_800, 400, 40}
 
             "batch-reports" ->
-              {[{"glm-5.2", 4}, {"qwen3-coder", 3}, {"gpt-5-mini", 2}], 6_500, 1_400, 8, nil}
+              {[{"glm-5.2", 4}, {"qwen3-coder", 3}, {"gpt-5-mini", 2}], 6_500, 1_400, 8}
           end
 
         %{
@@ -1371,8 +1319,7 @@ defmodule Tokengate.DemoSeeds do
           streaming_ratio: 0.2,
           prompt: prompt,
           completion: completion,
-          credit_sub_id: sub,
-          extra_sub_id: nil,
+          topup_id: Map.get(ctx.org.credits.service_topups, entry.service.id),
           slug: entry.service.name
         }
       end)
@@ -1609,7 +1556,7 @@ defmodule Tokengate.DemoSeeds do
   # Construcción de la fila
   # ---------------------------------------------------------------------------
 
-  defp build_log(subject, model_name, route, agent_type, client_agent, inserted_at, outcome, ctx) do
+  defp build_log(subject, model_name, route, agent_type, client_agent, inserted_at, outcome, _ctx) do
     model = route && route.model
     mp = route && route.mp
     credential = mp && Repo.preload(mp, :credential).credential
@@ -1650,7 +1597,7 @@ defmodule Tokengate.DemoSeeds do
       session_id: session_id(subject, inserted_at, is_embedding),
       credential_name: credential_name(credential),
       provider_key_prefix: provider_key_prefix(credential),
-      credit_subscription_id: credit_sub_for(subject, inserted_at, ctx)
+      credit_topup_id: credit_topup_for(subject, inserted_at)
     }
 
     {think, effort} = think_flags(model_name, is_embedding)
@@ -1908,32 +1855,29 @@ defmodule Tokengate.DemoSeeds do
     end
   end
 
-  # Débito de crédito: primero el grant del ciclo vigente; el top-up directo
-  # cubre el resto (así "Top-up · Luis" queda agotado y el de Ana parcialmente
-  # consumido, que es lo que la página de top-ups pinta).
-  defp credit_sub_for(subject, inserted_at, ctx) do
+  # Débito de crédito: el top-up del sujeto cubre parte del gasto (el límite
+  # mensual agotado se drena primero contra él). Se atribuye a los logs para que
+  # la página de top-ups muestre consumo real: Luis agotado, Ana parcial.
+  defp credit_topup_for(subject, inserted_at) do
     today = Date.utc_today()
     in_current_month? = DateTime.compare(inserted_at, month_start()) != :lt
 
     cond do
-      is_nil(subject.credit_sub_id) and is_nil(subject.extra_sub_id) ->
+      is_nil(subject.topup_id) ->
         nil
 
       subject.slug == "luis" ->
         if Date.diff(today, DateTime.to_date(inserted_at)) <= 9 do
-          subject.extra_sub_id || subject.credit_sub_id
+          subject.topup_id
         else
-          subject.credit_sub_id
+          nil
         end
 
       subject.slug == "ana" and in_current_month? and :rand.uniform() < 0.35 ->
-        subject.extra_sub_id
-
-      in_current_month? ->
-        subject.credit_sub_id || subject.extra_sub_id
+        subject.topup_id
 
       true ->
-        subject.credit_sub_id
+        nil
     end
   end
 
@@ -2026,13 +1970,14 @@ defmodule Tokengate.DemoSeeds do
 
     --- Puntos de prueba ---
     · /dashboard                 → consumo personal del mes (la membresía demo del admin)
-    · /stats/*                   → overview, modelos, grupos (rollover), servicios, usuarios, proveedores
+    · /stats/*                   → overview, modelos, perfiles, servicios, usuarios, proveedores
     · /operations/monitoring     → #{summary.request_count} logs con filtros de agente / estado / streaming / error
-    · /credit/subscriptions      → subs de grupo, rollover de Growth, sub pausada de Data Lab
-    · /credit/topups             → top-up activo (Ana), agotado (Luis) y vencido (Iván, archivado)
+    · /budget/profiles           → perfiles de límites: techos, un ilimitado (Data Lab) y uno agotado (Contractors)
+    · /budget/topups             → top-up activo (Ana, docs-rag), agotado (Luis) y vencido (Iván, archivado)
+    · /budget/global             → tope diario global + exenciones
     · /calculator                → real vs estimado por modelo (hay logs con costo $0 para el backfill)
     · /catalog/providers         → 2 proveedores custom, credencial en error y credencial deshabilitada
-    · /access/groups             → membresías, extras, suspensión de Bruno y servicios supervisados
+    · /budget/profiles/:id       → membresías, extras, suspensión de Bruno y servicios supervisados
     · /operations/observability  → 2 webhooks OTLP (Datadog / Grafana)
     · /catalog/labs              → lab custom "Acme Research" sobre el catálogo de models.dev
 

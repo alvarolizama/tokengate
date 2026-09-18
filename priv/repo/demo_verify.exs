@@ -3,7 +3,9 @@
 #   mix run priv/repo/demo_verify.exs
 
 alias Tokengate.{Accounts, Budgets, Credits, Logs, Periods, Providers}
+alias Tokengate.Credits.Topups
 alias Tokengate.Metrics.Rollup
+alias TokengateWeb.TopupHelpers
 
 ok = fn label, value -> IO.puts("  ✓ #{label}: #{value}") end
 
@@ -164,7 +166,7 @@ ok.(
 service_stats = Logs.service_stats(Enum.at(services, 0).id)
 ok.("service stats · service_stats", "#{service_stats.request_count} req")
 
-# --- /access + /credit ----------------------------------------------------------
+# --- /budget (perfiles de límites + top-ups) ------------------------------------
 member_budgets = Budgets.list_member_budgets("America/Merida")
 ok.("access · presupuestos por miembro", "#{length(member_budgets)} filas")
 
@@ -175,40 +177,47 @@ service_budgets = Budgets.list_service_budgets()
 ok.("access · presupuestos por servicio", "#{length(service_budgets)} filas")
 
 group_budgets = Budgets.list_group_budgets("America/Merida")
-ok.("credit · presupuestos por grupo", "#{length(group_budgets)} filas")
+ok.("budget · presupuestos por perfil", "#{length(group_budgets)} filas")
 
 global = Budgets.global_daily_budget_summary()
 
 ok.(
-  "maintenance · tope global",
+  "budget · tope global",
   "$#{Decimal.round(global.daily_spend_usd, 2)} de $#{global.daily_cap_usd} " <>
     "(#{global.exempt_count} exenciones)"
 )
 
-credits = Budgets.list_member_budgets() |> Enum.map(& &1.member) |> Credits.member_credits()
-with_credit = Enum.filter(credits, fn {_id, c} -> c.has_credit? end)
-drained = Enum.count(with_credit, fn {_id, c} -> c.remaining_micro <= 0 end)
-ok.("credit · miembros con crédito", "#{length(with_credit)} (#{drained} agotados)")
-
-subs = Credits.list_subscriptions()
+# Crédito: límite efectivo + top-ups del sujeto (lo que resuelve el proxy).
+credits = Enum.map(members, &Credits.summary({:user, &1.user_id}, Credits.user_limit(&1)))
+with_path = Enum.count(credits, & &1.has_path?)
+unlimited = Enum.count(credits, & &1.unlimited?)
+with_topup = Enum.count(credits, &(Decimal.compare(&1.remaining_topup_usd, 0) == :gt))
 
 ok.(
-  "credit · suscripciones",
-  "#{length(subs)} (#{Enum.count(subs, &(&1.recurrence == "none"))} top-ups)"
+  "crédito · miembros con camino de gasto",
+  "#{with_path}/#{length(credits)} (#{unlimited} ilimitados, #{with_topup} con top-up)"
 )
 
-topups =
-  for sub <- subs, sub.recurrence == "none" do
-    usage = Credits.subscription_usage(sub)
+topups = Topups.list_all()
 
-    "#{sub.name} = #{div(usage.consumed_micro, 1_000_000)}/#{div(usage.credited_micro, 1_000_000)} u"
+ok.(
+  "crédito · top-ups",
+  "#{length(topups)} (#{Enum.count(topups, &(&1.status == "active"))} activos)"
+)
+
+topup_usage =
+  for topup <- topups do
+    "#{topup.label} = #{TopupHelpers.usd(Topups.remaining_usd(topup))} de #{TopupHelpers.usd(topup.amount_usd)}"
   end
 
-ok.("credit · uso de top-ups", Enum.join(topups, " · "))
+ok.("crédito · remanente por top-up", Enum.join(topup_usage, " · "))
 
-progress = Credits.expired?(Enum.find(subs, &(&1.name == "Top-up · Iván (vencido)")))
+expired_topup = Enum.find(topups, &(&1.label == "Top-up · Iván (vencido)"))
 
-ok.("credit · top-up vencido detectado", progress)
+ok.(
+  "crédito · top-up vencido detectado",
+  expired_topup != nil and TopupHelpers.archived?(expired_topup)
+)
 
 # --- Catálogo -------------------------------------------------------------------
 providers = Providers.list_providers()
