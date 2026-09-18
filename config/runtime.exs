@@ -150,6 +150,12 @@ if config_env() == :prod do
          :webhook_secret,
          System.get_env("WEBHOOK_SECRET") || raise("WEBHOOK_SECRET is missing")
 
+  # Optional Telegram bot token. When unset the token is read (decrypted) from
+  # `notification_settings`, so both an env-based and a UI-based setup work.
+  if token = System.get_env("TELEGRAM_BOT_TOKEN") do
+    config :tokengate, :telegram_bot_token, token
+  end
+
   # Session cookie salts. endpoint.ex has dev-friendly fallbacks, but in prod
   # they MUST come from env vars — otherwise every deployment shares the
   # hardcoded salts committed to the repo and session cookies become

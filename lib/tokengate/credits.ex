@@ -293,9 +293,16 @@ defmodule Tokengate.Credits do
   def has_path?(unlimited?, remaining_limit, remaining_topup)
   def has_path?(true, _limit, _topup), do: true
 
-  def has_path?(false, %Decimal{} = limit, _topup), do: Decimal.compare(limit, 0) == :gt
+  # Con límite (aunque esté agotado o en 0) un top-up vigente con remanente
+  # sigue siendo camino: el motor lo drena (`reserve_plan/4` → `:topup`). Antes
+  # esta cláusula lo ignoraba y marcaba «agotado» a quien sí podía gastar.
+  def has_path?(false, %Decimal{} = remaining_limit, remaining_topup),
+    do: Decimal.compare(remaining_limit, 0) == :gt or topup_positive?(remaining_topup)
 
-  def has_path?(false, nil, %Decimal{} = topup), do: Decimal.compare(topup, 0) == :gt
+  def has_path?(false, _limit, remaining_topup), do: topup_positive?(remaining_topup)
+
+  defp topup_positive?(%Decimal{} = topup), do: Decimal.compare(topup, 0) == :gt
+  defp topup_positive?(_), do: false
 
   @doc """
   Resúmenes de varias membresías en lote (para los tableros): 3 queries fijas,

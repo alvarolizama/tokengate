@@ -56,6 +56,9 @@ defmodule Tokengate.Application do
       Tokengate.Metrics.Supervisor,
       Tokengate.Logs.Inflight,
       Tokengate.Accounts.ApiKeyCache,
+      # Telegram notifications: owner of the settings cache and the
+      # anti-repetition table, plus the single emit funnel (`Notifications.emit/2`).
+      Tokengate.Notifications,
       # Gateway-local response cache for identical non-streaming requests
       # (embeddings re-indexing, retries, dashboard refreshes). Zero-cost
       # hits on a short TTL; see Tokengate.Proxy.ResponseCache.

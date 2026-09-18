@@ -357,6 +357,16 @@ defmodule Tokengate.Routing.CircuitBreaker do
           {:breaker_opened, data.credential_id, reason}
         )
 
+        # Notificación de Telegram. Se emite en línea (no en una Task) para que
+        # el gen_statem no deje procesos sueltos escribiendo en la base: un
+        # breaker que abre es raro y el emit está throttleado, así que el coste
+        # es despreciable.
+        Tokengate.Notifications.emit(:breaker_opened, %{
+          entity_type: "credential",
+          entity_id: data.credential_id,
+          reason: to_string(reason)
+        })
+
         {:next_state, :open,
          %{
            data

@@ -12,6 +12,7 @@ defmodule Tokengate.Metrics.StatsQueriesTest do
   alias Tokengate.Logs
   alias Tokengate.Metrics.Rollup.HourlyAggregate
   alias Tokengate.Metrics.StatsQueries
+  alias Tokengate.Providers
 
   @base_attrs %{
     model_requested: "gpt-4",
@@ -45,6 +46,36 @@ defmodule Tokengate.Metrics.StatsQueriesTest do
       @base_attrs
       |> Map.merge(Map.new(overrides))
       |> Map.put(:group_member_id, member_id)
+      |> Map.put(:inserted_at, inserted_at)
+
+    {:ok, _} = Logs.log_request(attrs)
+    :ok
+  end
+
+  defp service_fixture do
+    {:ok, service} =
+      Accounts.create_service(%{name: "SQ Service #{System.unique_integer([:positive])}"})
+
+    service
+  end
+
+  defp model_fixture do
+    {:ok, model} =
+      Providers.create_model(%{
+        "name" => "sq-#{System.unique_integer([:positive])}",
+        "context_window" => 128_000
+      })
+
+    model
+  end
+
+  defp log_service_request(service_id, inserted_at, overrides) do
+    attrs =
+      @base_attrs
+      |> Map.merge(Map.new(overrides))
+      |> Map.put(:service_id, service_id)
+      |> Map.put(:group_member_id, nil)
+      |> Map.put(:subject_type, "service")
       |> Map.put(:inserted_at, inserted_at)
 
     {:ok, _} = Logs.log_request(attrs)
@@ -90,11 +121,13 @@ defmodule Tokengate.Metrics.StatsQueriesTest do
 
     test "breakdown_by_model merges rollup and tail rows" do
       {member, _group} = group_member_fixture()
+      gpt = model_fixture()
+      claude = model_fixture()
 
-      log_request(member.id, hours_ago(48), model_requested: "gpt-4")
-      log_request(member.id, hours_ago(48), model_requested: "gpt-4")
-      log_request(member.id, hours_ago(1), model_requested: "gpt-4")
-      log_request(member.id, hours_ago(1), model_requested: "claude-3")
+      log_request(member.id, hours_ago(48), model_id: gpt.id, model_requested: gpt.name)
+      log_request(member.id, hours_ago(48), model_id: gpt.id, model_requested: gpt.name)
+      log_request(member.id, hours_ago(1), model_id: gpt.id, model_requested: gpt.name)
+      log_request(member.id, hours_ago(1), model_id: claude.id, model_requested: claude.name)
 
       {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
 
@@ -115,6 +148,43 @@ defmodule Tokengate.Metrics.StatsQueriesTest do
         assert h[name].request_count == r[name].request_count
         assert Decimal.compare(h[name].cost_usd, r[name].cost_usd) == :eq
       end
+    end
+
+    test "summary honours a service filter (the rollup has no service dimension)" do
+      {member, _group} = group_member_fixture()
+      service = service_fixture()
+
+      # One user request and one service request, both in the rollup window.
+      # The rollup buckets by group_member_id (services have a null one), so a
+      # service-filtered summary must NOT pick up the user's row.
+      log_request(member.id, hours_ago(48), cost_usd: Decimal.new("5.000000"))
+      log_service_request(service.id, hours_ago(48), cost_usd: Decimal.new("1.000000"))
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      hybrid = StatsQueries.summary(%{service_id: service.id, from: from, to: to})
+      raw = Logs.cost_summary(%{service_id: service.id, from: from, to: to})
+
+      assert hybrid.request_count == raw.request_count
+      assert Decimal.compare(hybrid.total_cost_usd, raw.total_cost_usd) == :eq
+    end
+
+    test "summary over a recent-only window does not pull in pre-window rows" do
+      {member, _group} = group_member_fixture()
+
+      # One log 2h ago — inside the rollup tail band, but OUTSIDE a 1h window.
+      log_request(member.id, hours_ago(2), cost_usd: Decimal.new("9.000000"))
+
+      from = hours_ago(1)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      hybrid = StatsQueries.summary(%{from: from, to: to})
+      raw = Logs.cost_summary(%{from: from, to: to})
+
+      assert hybrid.request_count == raw.request_count
     end
   end
 

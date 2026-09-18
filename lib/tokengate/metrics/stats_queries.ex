@@ -64,7 +64,7 @@ defmodule Tokengate.Metrics.StatsQueries do
     if hybrid?(filters) do
       merge_summaries(
         Rollup.summary_from_rollup(
-          member_ids: filters[:member_ids],
+          member_ids: filters[:member_ids] || filters[:group_member_ids],
           from: Map.get(filters, :from),
           to: tail_from()
         ),
@@ -316,12 +316,33 @@ defmodule Tokengate.Metrics.StatsQueries do
 
   # Hybrid only when: flag on, the window has a `:from`, and the window
   # reaches beyond the fresh tail (recent-only windows answer raw anyway).
+  #
+  # `from` must be EARLIER than the tail cutoff, so the rollup half covers
+  # `[from, tail_from)` and the raw half covers `[tail_from, to]` — disjoint,
+  # together the requested window. The comparison was inverted (it read
+  # `tail_from < from`), which (a) answered every multi-hour window fully raw
+  # and (b) for windows starting inside the last 3h made the raw half start at
+  # `tail_from`, folding up to 3h of pre-window rows into the KPI.
+  #
+  # The rollup only carries `(hour, group_member_id, model_id, provider_id)`
+  # dimensions, so any filter it cannot express (`service_id`, `model_id`,
+  # `group_id`, `provider_id`, …) forces the raw path — otherwise the rollup
+  # half would silently ignore the filter and answer org-wide.
   defp hybrid?(filters_or_opts) do
     from = get_from(filters_or_opts)
 
     hybrid_enabled?() and is_struct(from, DateTime) and
-      DateTime.compare(tail_from(), from) == :lt
+      DateTime.compare(from, tail_from()) == :lt and
+      rollup_scope?(filters_or_opts)
   end
+
+  @rollup_keys [:from, :to, :timezone, :member_ids, :group_member_ids]
+
+  defp rollup_scope?(filters) when is_map(filters),
+    do: filters |> Map.keys() |> Enum.all?(&(&1 in @rollup_keys))
+
+  defp rollup_scope?(opts) when is_list(opts),
+    do: opts |> Keyword.keys() |> Enum.all?(&(&1 in @rollup_keys))
 
   defp get_from(filters) when is_map(filters), do: Map.get(filters, :from)
   defp get_from(opts) when is_list(opts), do: Keyword.get(opts, :from)

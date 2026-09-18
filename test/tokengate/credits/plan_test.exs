@@ -413,5 +413,75 @@ defmodule Tokengate.Credits.PlanTest do
       assert summary.has_path?
       assert Decimal.equal?(summary.remaining_topup_usd, Decimal.new("5.000000"))
     end
+
+    test "un top-up le da camino a un sujeto con el límite agotado" do
+      group = group_fixture(%{"monthly_spend_limit_usd" => "5.00"})
+      user = user_fixture()
+      member = member_fixture(group, user)
+
+      # Límite agotado por un request asentado; el top-up es el único camino.
+      log_spend(member, "5.00")
+      :ets.delete_all_objects(:tokengate_credits)
+      topup_fixture(%{"user_id" => user.id, "amount_usd" => "10.00"})
+
+      summary = Credits.summary({:user, user.id}, Credits.user_limit(member))
+
+      assert Decimal.equal?(summary.remaining_limit_usd, Decimal.new(0))
+      assert Decimal.equal?(summary.remaining_topup_usd, Decimal.new("10.000000"))
+      assert summary.has_path?
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # Ciclo mensual del contador del límite
+  # ---------------------------------------------------------------------------
+
+  describe "contador del límite — ciclo mensual" do
+    test "contador agotado con ciclo de un mes anterior se re-siembra y deja pasar" do
+      group = group_fixture(%{"monthly_spend_limit_usd" => "10.00"})
+      member = member_fixture(group, user_fixture())
+      plan = Credits.plan(member)
+
+      # El contador quedó cargado el mes pasado, agotado ($10 = 10_000_000 micro).
+      :ets.insert(
+        :tokengate_credits,
+        {{:limit, plan.subject}, 10_000_000, nil, {2000, 1}, true, nil, true}
+      )
+
+      assert {:ok, hold} = Manager.reserve_plan(plan, nil, Decimal.new("1"), false)
+      assert hold.kind == :limit
+      assert Manager.limit_spend(plan.subject).consumed_micro < 10_000_000
+
+      :ok = Manager.release_credits(hold)
+    end
+
+    test "contador agotado con el ciclo en curso sigue bloqueando (:subject)" do
+      group = group_fixture(%{"monthly_spend_limit_usd" => "10.00"})
+      member = member_fixture(group, user_fixture())
+      plan = Credits.plan(member)
+      today = Date.utc_today()
+
+      :ets.insert(
+        :tokengate_credits,
+        {{:limit, plan.subject}, 10_000_000, nil, {today.year, today.month}, true, nil, true}
+      )
+
+      assert {:error, {:budget_exceeded, %{layer: :subject}}} =
+               Manager.reserve_plan(plan, nil, Decimal.new("1"), false)
+    end
+
+    test "reset_monthly_counters borra el contador del límite pero no los bolsines de top-up" do
+      :ets.insert(
+        :tokengate_credits,
+        {{:limit, {:user, "u1"}}, 5, nil, {2026, 1}, true, nil, true}
+      )
+
+      :ets.insert(:tokengate_credits, {{:topup, "t1"}, 5, 10, nil, true, nil, false})
+
+      _ = Manager.reset_monthly_counters()
+
+      assert :ets.lookup(:tokengate_credits, {:limit, {:user, "u1"}}) == []
+      assert [_] = :ets.lookup(:tokengate_credits, {:topup, "t1"})
+    end
   end
 end

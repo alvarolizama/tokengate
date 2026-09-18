@@ -57,24 +57,34 @@ defmodule Tokengate.Auditing do
     {user_id, actor_email, actor_role} = actor_attrs(actor_or_nil)
     acting_as = Map.get(ctx, :acting_as) || Map.get(ctx, "acting_as")
 
-    %AuditLog{}
-    |> AuditLog.changeset(%{
-      user_id: user_id,
-      actor_email: actor_email,
-      actor_role: actor_role,
-      acting_as_id: acting_as && acting_as.id,
-      acting_as_email: acting_as && acting_as.email,
-      action: action,
-      entity_type: entity_type,
-      entity_id: entity_id && to_string(entity_id),
-      target_label: Map.get(ctx, :target_label),
-      origin: Map.get(ctx, :origin) || "web",
-      ip: Map.get(ctx, :ip),
-      user_agent: Map.get(ctx, :user_agent),
-      changes: changes,
-      inserted_at: DateTime.utc_now()
-    })
-    |> Repo.insert()
+    result =
+      %AuditLog{}
+      |> AuditLog.changeset(%{
+        user_id: user_id,
+        actor_email: actor_email,
+        actor_role: actor_role,
+        acting_as_id: acting_as && acting_as.id,
+        acting_as_email: acting_as && acting_as.email,
+        action: action,
+        entity_type: entity_type,
+        entity_id: entity_id && to_string(entity_id),
+        target_label: Map.get(ctx, :target_label),
+        origin: Map.get(ctx, :origin) || "web",
+        ip: Map.get(ctx, :ip),
+        user_agent: Map.get(ctx, :user_agent),
+        changes: changes,
+        inserted_at: DateTime.utc_now()
+      })
+      |> Repo.insert()
+
+    # Un solo funnel notifica: al grabar la acción se emite su evento (si el
+    # mapa de `Events` lo declara). Fire-and-forget y fuera de la transacción:
+    # una notificación rota jamás debe tumbar el registro de auditoría.
+    with {:ok, _audit_log} <- result do
+      Tokengate.Notifications.from_audit(action, entity_type, entity_id, changes)
+    end
+
+    result
   end
 
   defp actor_attrs(%User{id: id, email: email, global_role: role}), do: {id, email, role}

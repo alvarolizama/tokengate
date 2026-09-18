@@ -196,22 +196,29 @@ defmodule Tokengate.Budgets.Manager do
 
     requested = to_micro(requested_cost_usd)
 
-    case pick_layer(plan) do
-      :unlimited ->
-        hold_global_only(global_cap_usd, requested, exempt_global?)
+    result =
+      case pick_layer(plan) do
+        :unlimited ->
+          hold_global_only(global_cap_usd, requested, exempt_global?)
 
-      {:limit, subject} ->
-        hold_limit(subject, plan.limit_usd, global_cap_usd, requested, exempt_global?)
+        {:limit, subject} ->
+          hold_limit(subject, plan.limit_usd, global_cap_usd, requested, exempt_global?)
 
-      {:topup, topup} ->
-        hold_topup(topup, global_cap_usd, requested, exempt_global?)
+        {:topup, topup} ->
+          hold_topup(topup, global_cap_usd, requested, exempt_global?)
 
-      :no_credit ->
-        {:error, {:budget_exceeded, %{layer: :no_credit}}}
+        :no_credit ->
+          {:error, {:budget_exceeded, %{layer: :no_credit}}}
 
-      :subject ->
-        {:error, {:budget_exceeded, %{layer: :subject}}}
-    end
+        :subject ->
+          {:error, {:budget_exceeded, %{layer: :subject}}}
+      end
+
+    # Aviso de Telegram en la TRANSICIÓN (un rechazo es raro; el cooldown del
+    # evento se encarga de que un tope reventado no mande cientos de mensajes).
+    notify_rejection(plan, result)
+
+    result
   end
 
   @doc """
@@ -356,6 +363,37 @@ defmodule Tokengate.Budgets.Manager do
     })
   end
 
+  # ---------------------------------------------------------------------------
+  # Internal — Telegram aviso en el rechazo
+  # ---------------------------------------------------------------------------
+
+  defp notify_rejection(plan, result) do
+    case result do
+      {:error, {:budget_exceeded, %{layer: :global}}} ->
+        Tokengate.Notifications.emit(:global_daily_cap_reached, %{
+          entity_type: "global_settings",
+          entity_id: "global",
+          target_label: "global"
+        })
+
+      {:error, {:budget_exceeded, %{layer: layer}}} when layer in [:subject, :no_credit] ->
+        event = if layer == :no_credit, do: :no_credit, else: :subject_limit_reached
+
+        Tokengate.Notifications.emit(event, %{
+          entity_type: "subject",
+          entity_id: subject_key(plan),
+          target_label: subject_key(plan)
+        })
+
+      _ ->
+        :ok
+    end
+  end
+
+  defp subject_key(%{subject: {:user, id}}), do: "user:" <> to_string(id)
+  defp subject_key(%{subject: {:service, id}}), do: "service:" <> to_string(id)
+  defp subject_key(_), do: "subject"
+
   # ETS keys: the subject's limit counter and each top-up's own pocket.
   defp limit_key({:user, user_id}), do: {:limit, {:user, user_id}}
   defp limit_key({:service, service_id}), do: {:limit, {:service, service_id}}
@@ -367,12 +405,29 @@ defmodule Tokengate.Budgets.Manager do
 
   # The limit counter seeds from the durable log: what the subject already spent
   # against its limit this month (top-up debits don't count against the limit).
+  #
+  # Es **mensual**: se re-siembra cuando el ciclo guardado no es el mes en curso.
+  # Antes solo se sembraba si la clave no existía, y `cycle_start` se guardaba
+  # `nil` y no se leía en ningún sitio — así que un sujeto que agotó su límite
+  # un mes quedaba bloqueado (402 `:subject`) todo el mes siguiente, con gasto 0,
+  # hasta reiniciar el nodo (que es lo único que vaciaba la tabla ETS).
   defp ensure_limit_loaded(subject) do
     key = limit_key(subject)
+    cycle = current_period_stamp(:monthly)
 
-    if :ets.lookup(@credits_table, key) == [] do
+    if limit_stale?(key, cycle) do
       consumed = Tokengate.Credits.spend_debited_to_limit(subject)
-      seed_credit(key, to_micro(consumed), nil, nil, nil, true)
+      seed_credit(key, to_micro(consumed), nil, cycle, nil, true)
+    end
+  end
+
+  defp limit_stale?(key, cycle) do
+    case :ets.lookup(@credits_table, key) do
+      [] ->
+        true
+
+      [{^key, _consumed, _credited, stored_cycle, _loaded?, _units, _granting?}] ->
+        stored_cycle != cycle
     end
   end
 
@@ -611,7 +666,23 @@ defmodule Tokengate.Budgets.Manager do
   @spec reset_monthly_counters() :: integer()
   def reset_monthly_counters do
     # Match pattern: delete every entry whose key ends in `:monthly`.
-    :ets.select_delete(@table, [{{{:_, :monthly}, :_, :_, :_}, [], [true]}])
+    monthly = :ets.select_delete(@table, [{{{:_, :monthly}, :_, :_, :_}, [], [true]}])
+
+    # El contador del límite mensual vive en **otra** tabla (`@credits_table`,
+    # clave `{:limit, subject}`) y no se borraba aquí: quedaba con el consumo del
+    # mes anterior hasta reiniciar el nodo. El `cycle_start` ya lo invalida de
+    # forma perezosa (ver `ensure_limit_loaded/1`); este borrado además deja el
+    # display correcto sin esperar a la primera request del mes.
+    credits =
+      if :ets.whereis(@credits_table) == :undefined do
+        0
+      else
+        :ets.select_delete(@credits_table, [
+          {{{:limit, :_}, :_, :_, :_, :_, :_, :_}, [], [true]}
+        ])
+      end
+
+    monthly + credits
   end
 
   @doc false
