@@ -29,6 +29,7 @@ defmodule TokengateWeb.DashboardLive do
   alias Tokengate.Accounts
   alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Metrics.Rollup
+  alias Tokengate.Metrics.StatsQueries
   alias Tokengate.Periods
   alias Tokengate.Providers
   alias Tokengate.Providers.Model
@@ -577,12 +578,19 @@ defmodule TokengateWeb.DashboardLive do
   # User-wide: every user (admin included) sees only their own consumption.
   # `member_ids` arrive pre-resolved from the socket assigns (computed once
   # at mount), so no extra membership query is needed inside the bundle.
-  # Rollup-first (`request_metrics_hourly`), request_logs fallback built in.
+  #
+  # Lee por el MISMO camino que /stats (`StatsQueries.summary/1`: rollup para
+  # la parte antigua + cola raw de las últimas 3h), acotado a las membresías
+  # del usuario y a la ventana del período. No usa
+  # `Rollup.summary_for_members/1` (rollup-only): ese confía en que la tabla
+  # `request_metrics_hourly` esté completa — si el RollupWorker va atrasado o
+  # el backfill no cubre la ventana, subcuenta en silencio y el KPI deja de
+  # cuadrar con En vivo / Resumen de stats, que sí leen la cola fresca.
   defp fetch_summary(member_ids, opts) do
-    Rollup.summary_for_members(
+    StatsQueries.summary(
       from: Keyword.fetch!(opts, :from),
       to: Keyword.get(opts, :to),
-      member_ids: member_ids
+      group_member_ids: member_ids
     )
   end
 
@@ -591,7 +599,7 @@ defmodule TokengateWeb.DashboardLive do
   defp fetch_prev_summary(member_ids, period, timezone) do
     %{from: from, to: to} = Periods.previous_period_bounds(period, timezone)
 
-    Rollup.summary_for_members(from: from, to: to, member_ids: member_ids)
+    StatsQueries.summary(from: from, to: to, group_member_ids: member_ids)
   end
 
   # Delta percentages vs the previous period; nil when the previous value is

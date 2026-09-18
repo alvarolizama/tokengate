@@ -186,6 +186,30 @@ defmodule Tokengate.Metrics.StatsQueriesTest do
 
       assert hybrid.request_count == raw.request_count
     end
+
+    test "summary over a window that ENDS before the tail cutoff ignores newer rows" do
+      {member, _group} = group_member_fixture()
+
+      # The window of interest: 30h–27h ago (fully inside the rollup band).
+      log_request(member.id, hours_ago(30), cost_usd: Decimal.new("1.000000"))
+      log_request(member.id, hours_ago(28), cost_usd: Decimal.new("2.000000"))
+      # Newer rows that start after the window ends — the previous-period KPI
+      # must NOT fold these in just because the rollup holds them.
+      log_request(member.id, hours_ago(10), cost_usd: Decimal.new("50.000000"))
+      log_request(member.id, hours_ago(1), cost_usd: Decimal.new("50.000000"))
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(31), hours_ago(3))
+
+      from = hours_ago(31)
+      to = hours_ago(27)
+
+      hybrid = StatsQueries.summary(%{from: from, to: to})
+      raw = Logs.cost_summary(%{from: from, to: to})
+
+      assert hybrid.request_count == raw.request_count
+      assert Decimal.compare(hybrid.total_cost_usd, raw.total_cost_usd) == :eq
+      assert Decimal.compare(hybrid.total_cost_usd, Decimal.new("3.000000")) == :eq
+    end
   end
 
   describe "hybrid off (test env default)" do

@@ -62,16 +62,43 @@ defmodule Tokengate.Metrics.StatsQueries do
     filters = normalize_filters(filters)
 
     if hybrid?(filters) do
+      from = Map.get(filters, :from)
+      to = Map.get(filters, :to)
+
       merge_summaries(
         Rollup.summary_from_rollup(
           member_ids: filters[:member_ids] || filters[:group_member_ids],
-          from: Map.get(filters, :from),
-          to: tail_from()
+          from: from,
+          to: rollup_upper_bound(to)
         ),
-        raw_summary(Map.put(filters, :from, tail_from()))
+        raw_summary(Map.put(filters, :from, raw_tail_start(from)))
       )
     else
       raw_summary(filters)
+    end
+  end
+
+  # The rollup half never reads past the window end. The rollup is only fresh
+  # up to `now - @tail_hours`, but a window that ENDS before that cutoff (the
+  # previous-period summaries behind the KPI deltas) must not pick up newer
+  # rows just because the rollup happens to hold them — that inflated every
+  # past-window delta on /stats and /dashboard.
+  defp rollup_upper_bound(nil), do: tail_from()
+
+  defp rollup_upper_bound(%DateTime{} = to) do
+    cutoff = tail_from()
+
+    if DateTime.compare(to, cutoff) == :lt, do: to, else: cutoff
+  end
+
+  # The raw tail starts where the rollup stops. For a window that ends before
+  # the cutoff the range is empty (the rollup already answered it whole).
+  defp raw_tail_start(from) do
+    cutoff = tail_from()
+
+    case DateTime.compare(from, cutoff) do
+      :lt -> cutoff
+      _ -> from
     end
   end
 
