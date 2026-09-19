@@ -1,23 +1,22 @@
 # DESIGN.md — sistema de UI
 
 Estándar de interfaz de la familia de apps que comparten un **mismo lenguaje
-visual**.
+visual**. El documento tiene dos partes:
 
-El documento tiene dos partes:
+- **Commons** — la base compartida por todas las apps: tema y tokens, elementos
+  básicos, composición, estados y convenciones. Es idéntica en todos los repos:
+  si cambias algo aquí, cámbialo en los tres `DESIGN.md`.
+- **Custom** — lo específico de **esta** app (TokenGate), que además es la
+  referencia del Commons: ante la duda de cómo se ve un control, mira un LiveView
+  de TokenGate antes de inventar.
 
-- **Commons** — la base compartida por todas las apps (tema, tokens, componentes,
-  tarjetas, tablas, modales, pickers, gráficas, estados y convenciones). Es
-  idéntica en todos los repos: si cambias algo aquí, cámbialo en los tres
-  `DESIGN.md`.
-- **Custom** — lo específico de **esta** app. Cada repo declara de qué proyecto es
-  su `DESIGN.md` al inicio de la sección **Custom**.
+> **Regla de oro de este doc: refleja el código.** Todo lo que se afirma aquí debe
+> poder señalarse en `lib/tokengate_web/…` o `assets/css/app.css`. Si el código
+> cambia, este archivo cambia con él.
 
 ---
 
 ## Commons — base compartida de la familia
-
-Contrato visual común a todas las apps de la familia. Todo lo de esta sección es
-idéntico entre apps; lo específico de cada una vive en **Custom**.
 
 ### C1. Principios
 
@@ -25,11 +24,11 @@ idéntico entre apps; lo específico de cada una vive en **Custom**.
    (`btn`, `card`, `table`, `badge`, `input`, `select`, `alert`, `modal`,
    `dropdown`, `tabs`). CSS propio sólo para convenciones **globales**.
 2. **Un solo tema por app, elegido en `app.css`.** La convención familiar es
-   daisyUI `dark --default`. **TokenGate corre `dim --default`** (excepción
-   consciente, ver §Custom — Dran y Gorim siguen en `dark`).
-   Nada de hex/oklch hardcodeado en plantillas: siempre las vars del tema.
+   daisyUI `dark --default`; **TokenGate corre `dim --default`** (excepción
+   consciente, §Custom). Dran y Gorim siguen en `dark`. Nada de hex/oklch
+   hardcodeado en plantillas: siempre las vars del tema.
 3. **Reusar antes de crear.** Mira `*Web.CoreComponents` antes de escribir markup
-   a mano (inputs, tablas, headers, iconos ya están).
+   a mano: inputs, tablas, headers, iconos ya están.
 4. **Verificable.** Todo control interactivo lleva `id` estable para tests
    (`has_element?/2`).
 
@@ -62,41 +61,50 @@ Colores semánticos (usar SIEMPRE las vars, nunca hex/oklch a mano):
 | Superficie 3 | `bg-base-300` | `--color-base-300` | bordes, chips |
 | Texto | `text-base-content` | `--color-base-content` | + `/50` `/40` para secundario |
 | Primario | `btn-primary`, `text-primary` | `--color-primary` | acción principal, links |
+| Secundario | `btn-secondary` | `--color-secondary` | acento de marca |
+| Acento | `btn-accent` | `--color-accent` | "extra" / activo no primario |
+| Neutro | `badge-ghost` | `--color-neutral` | global / sin estado |
 | Éxito | `badge-success` | `--color-success` | ok, activo |
 | Aviso | `badge-warning` | `--color-warning` | warning / aviso |
 | Error | `badge-error`, `text-error` | `--color-error` | destructivo |
-| Info | `badge-info` | `--color-info` | entradas / exclusivo-grupo |
-| Neutro | `badge-ghost` | `--color-neutral` | global / sin estado |
+| Info | `badge-info` | `--color-info` | informativo |
 
 Radios y bordes salen del tema (`--radius-box`, `--radius-field`, `--border`).
 No los hardcodees.
 
 ### C3. Layout base
 
-- El contenido principal va en un `<main>`; el **shell** (sidebar/topbar) es de
-  cada app → ver **Custom**.
-- **Header de página:** `<.header>` — título + `:subtitle` + `:actions`.
-- **Filtros y acciones, alineados a la DERECHA** (slot `:actions` o `justify-end`).
-  Nunca a la izquierda.
+- El contenido principal va en un `<main>`; el **shell** (navbar/sidebar/topbar)
+  es de cada app → ver **Custom**.
+- **Header de página:** `<.header>` — título (`:inner_block`) + `:subtitle` +
+  `:actions`.
+- **Filtros y acciones, alineados a la DERECHA** (slot `:actions` o
+  `justify-end`). Nunca a la izquierda.
 - **Contenedores anchos** (tablas/paneles) envueltos en `overflow-x-auto`.
 
-### C4. Componentes base
+### C4. Elementos básicos
+
+Los controles primitivos. Todo lo demás (cards, tablas, modales, pickers) se
+compone de esto.
 
 | Elemento | Clase estándar |
 |---|---|
 | Botón primario | `btn btn-primary` (o `<.button variant="primary">`) |
-| Botón secundario | `btn btn-primary btn-soft` |
+| Botón secundario | `btn btn-primary btn-soft` (default de `<.button>`) |
 | Botón neutro / cancelar | `btn btn-ghost` |
 | Acción de fila | `btn btn-xs btn-ghost` (+ `title=`) |
 | Destructivo | `btn ... text-error` + `data-confirm="…"` |
 | Badge | `badge badge-sm` + semántico (`badge-primary/success/warning/error/info/ghost/outline/accent`) |
 | Chip removible | `badge badge-sm` con `<button>` interno |
-| Card | `card bg-base-100 border border-base-300 shadow-sm` (ver C5) |
-| Toast (flash) | `toast toast-top toast-end z-50` + `alert alert-info/alert-error` |
+| Input de texto | `<.input field={@form[:x]} />` (nunca `<input>` a mano) |
 | Icono | `<.icon name="hero-…" class="size-4" />` (heroicons, NO SVG suelto) |
+| Toast (flash) | `toast toast-top toast-end z-50` + `alert alert-info/alert-error` |
 
-Componentes en `CoreComponents`: `flash`, `button`, `input`, `header`, `table`,
-`list`, `icon`, `show/hide`. **Usa `<.input>`**, no armes el `<input>` a mano.
+**Todo pasa por `CoreComponents`** — no armes el `<input>` ni el flash a mano:
+
+- `flash` · `button` · `input` (tipos: `text/select/datalist/textarea/checkbox/…`,
+  con `hint` y `placeholder`) · `header` · `table` · `list` · `icon` ·
+  `model_picker` · `show`/`hide` · `translate_error`/`translate_errors`.
 
 ### C5. Tarjetas (cards)
 
@@ -115,8 +123,8 @@ Una sola forma de "caja" en toda la familia.
 ```
 
 - **Base:** `card bg-base-100 border border-base-300 shadow-sm` + `card-body`.
-- **Densidad del `card-body`** (elegir según el contenido, no al azar):
-  `p-4` (denso: listas, KPIs) · `p-5` (medio) · `p-6` (forms) · `p-8` (hero).
+- **Densidad del `card-body`** (elegir según el contenido): `p-4` (denso: listas,
+  KPIs) · `p-5` (medio) · `p-6` (forms) · `p-8` (hero).
 - **Título:** `card-title text-base` + icono `size-5 text-base-content/60`.
 - **Card interactiva (clicable):** `hover:shadow-md transition-shadow`.
 - **Card de sección con header** (badge de icono + título + caption): cada app la
@@ -153,8 +161,9 @@ Estructura canónica (una sola forma en toda la familia):
 
 Reglas:
 
-- **`table table-sm` siempre.** Envuelta en `overflow-x-auto` + card.
-- **Hover de fila, sin zebra** — regla global (una vez por app):
+- **`table table-sm` siempre.** Envuelta en `overflow-x-auto` + card. Columnas de
+  ancho fijo: `table table-sm table-fixed w-full`.
+- **Hover de fila, sin zebra** — regla global, una vez por app:
   ```css
   .table tbody tr { transition: background-color 150ms ease; }
   .table tbody tr:hover { background-color: color-mix(in oklab, var(--color-base-200) 60%, transparent); }
@@ -430,17 +439,27 @@ Reglas:
 
 ## Custom — TokenGate
 
-Este `DESIGN.md` es de **TokenGate**, la referencia del Commons: si dudas del look de un control, mira cómo lo resuelve un LiveView de TokenGate antes de inventar.
+Este `DESIGN.md` es de **TokenGate**. Tema **`dim` (único)**:
 
-Tema **`dim` (único)** · `<html lang="en" data-theme="dim">`.
-> Excepción consciente a la convención familiar (`dark`): TokenGate corre
-> `dim`. Dran y Gorim siguen en `dark --default`.
-> Historial: `night --default, light` → `dark` (alinear con la familia) →
-> `fantasy` → `garden` → `dim` (decisión actual: es `light` atenuado —
-> daisyUI lo genera de la paleta de `light`, theme genérico y luminoso).
+```heex
+<%!-- lib/tokengate_web/components/layouts/root.html.heex --%>
+<html lang={TokengateWeb.Gettext.current_locale()} data-theme="dim">
+```
 
-**Paleta real de `dim`.** Fuente de verdad: los `oklch()` que el plugin emite
-en `priv/static/assets/css/app.css`. Los hex son conversión aproximada (sin
+```css
+/* assets/css/app.css */
+@plugin "../vendor/daisyui" { themes: dim --default; }
+```
+
+> Excepción consciente a la convención familiar (`dark`): TokenGate corre `dim`.
+> Historial: `night --default, light` → `dark` → `fantasy` → `garden` → `dim`
+> (decisión actual: es `light` atenuado — daisyUI lo genera de la paleta de
+> `light`, theme genérico y luminoso).
+
+### Paleta real de `dim`
+
+Fuente de verdad: los `oklch()` que el plugin emite en
+`priv/static/assets/css/app.css`. Los hex son conversión aproximada (sin
 gamut-mapping), sólo para leer la tabla. Contraste = WCAG del par con su
 `*-content`.
 
@@ -459,17 +478,21 @@ gamut-mapping), sólo para leer la tabla. Contraste = WCAG del par con su
 | `--color-error` | `oklch(82.418% 0.099 33.756)` | `#ffae9b` | destructivo · 10.9:1 ✅ |
 | `--color-info` | `oklch(86.078% 0.142 206.182)` | `#28ebff` | informativo · 13.0:1 ✅ |
 
-`color-scheme: dark` · radios `box 1rem` / `field 0.5rem` / `selector 1rem` ·
-`--border 1px` · `--depth 0` · `--noise 0`.
+Pares `*-content` (texto sobre cada token): `primary-content`
+`oklch(17.226% 0.028 139.549)` · `secondary-content`
+`oklch(14.675% 0.033 35.353)` · `accent-content` `oklch(14.845% 0.026 311.379)` ·
+`neutral-content` = `base-content` · y el resto en la misma banda (~17%).
+
+Forma del tema: `color-scheme: dark` · radios `box 1rem` / `field 0.5rem` /
+`selector 1rem` · `--border 1px` · `--depth 0` · `--noise 0`.
 
 > **El primary pinta todos los botones por defecto.** `CoreComponents.button/1`
 > sin `variant` emite `btn-primary btn-soft`, así que el verde `#9fe88d` es el
 > color esperado, no un bug de CSS. Para otro color usá la utilidad explícita
 > (`btn-secondary` coral, `btn-accent` lila) — **no** redefinas el primary del
-> tema. En `dim` TODOS los pares `color/content` pasan AA (≥7.9:1): no hay la
-> advertencia de contraste que traía garden (primary 3.84:1).
+> tema. En `dim` TODOS los pares `color/content` pasan AA (≥7.9:1).
 
-### T1. `app.css` (mínimo: ~40 líneas)
+### T1. `app.css` (67 líneas)
 
 Sólo tema + heroicons + `@custom-variant` de LiveView + `[data-phx-session]` y
 **la regla global de tablas** (que es exactamente la de §C6):
@@ -485,10 +508,6 @@ para subtítulos, `text-xs text-base-content/50` para metadata, eyebrow
 `text-xs font-semibold uppercase tracking-wide text-base-content/40`).
 
 #### ¿Qué hay de CSS propio? (inventario)
-
-El snippet de la doc de daisyUI (`@import "tailwindcss"; @plugin "daisyui";`) es
-el mínimo para un Tailwind pelado. Este archivo agrega lo que Phoenix y el
-producto necesitan — y nada más:
 
 | Bloque | Para qué |
 |---|---|
@@ -508,40 +527,65 @@ usa el token/utility del tema — nunca hex, oklch ni la paleta cruda de Tailwin
 **Excepciones documentadas** (las dos únicas):
 
 - **Paleta categórica del proveedor.** `StatsHelpers.provider_legend_color/2`
-  usa 16 `bg-*-500` de Tailwind crudo. Es intencional: hacen falta 16 colores
-  distinguibles y el tema trae 11 tokens; no son "colores de UI" sino series.
+  usa 16 `bg-*-500` de Tailwind crudo (`@provider_colors`). Es intencional:
+  hacen falta 16 colores distinguibles y el tema trae 11 tokens; no son "colores
+  de UI" sino series.
 - **Podio de rankings** (`rank_badge/1`, `medal/1`) tokenizado: 1º
   `bg-warning text-warning-content` (12.5:1 en dim), 2º `bg-base-300
   text-base-content` (9.2:1), 3º `bg-secondary text-secondary-content`
   (7.9:1). Antes eran `amber-200` / `slate-200` / `orange-300`, elegidos para
-  fondo oscuro: sobre el `base-100` de garden (claro) daban **1.0–1.4:1**,
-  es decir invisibles. Los tokens actuales funcionan en cualquier tema.
+  fondo oscuro: sobre el `base-100` de garden (claro) daban **1.0–1.4:1**, es
+  decir invisibles. Los tokens actuales funcionan en cualquier tema.
 
 ### T2. Dos shells
 
-- **Público (`Layouts.app/1`):** navbar (`navbar px-4`) + `<main mx-auto max-w-2xl space-y-4>`;
-  `hide_navbar` para login/registro (páginas self-contained y centradas).
-- **Consola (`Layouts.dashboard/1`):** el shell de la ops console —
-  - `drawer lg:drawer-open min-h-screen bg-base-200` con sidebar
-    `w-64 bg-base-100 border-r border-base-300`.
-  - **Topbar sticky** `h-16 bg-base-100/80 backdrop-blur border-b`: botón de menú
-    (móvil), email + rol, avatar (`bg-primary`), botón Salir (`data-confirm`).
-  - **Banner de impersonación** (`bg-warning text-warning-content`,
-    `id="impersonation-banner"`).
-  - `sidebar_link` agrupados (`Dashboard`, `Administración`), activo/inactivo por
-    clase, con `badge badge-error` opcional para alertas.
-  - `timezone_selector` al pie (`id="timezone-selector"`, `select ... select-sm`,
-    form `phx-change="set-timezone"`).
+#### T2.1 Público — `Layouts.app/1`
+
+Navbar `navbar px-4 sm:px-6 lg:px-8` con logo + "Iniciar sesión"; `<main
+class="px-4 py-20 sm:px-6 lg:px-8">` con contenido en `mx-auto max-w-2xl
+space-y-4`. `hide_navbar` para login/registro (páginas self-contained y
+centradas). Cierra con `<.flash_group>`.
+
+#### T2.2 Consola — `Layouts.dashboard/1`
+
+El shell de la ops console (LiveViews autenticadas del `live_session :admin`):
+
+- `drawer lg:drawer-open min-h-screen bg-base-200` con sidebar
+  `w-64 bg-base-100 border-r border-base-300` (logo + `nav` + pie).
+- **Topbar sticky** `h-16 bg-base-100/80 backdrop-blur border-b border-base-300`:
+  botón de menú (móvil), email + rol, avatar (`bg-primary`), botón Salir
+  (`data-confirm`).
+- **Banner de impersonación** (`id="impersonation-banner"`,
+  `bg-warning text-warning-content`, con botón `#stop-impersonating`).
+- `<main class="flex-1 p-4 sm:p-6 lg:p-8">`.
+- Pie del sidebar: `<.locale_selector>` + `<.timezone_selector>`
+  (`id="timezone-selector"`, `select … select-sm`, form `phx-change="set-timezone"`).
+
+**Navegación** (`sidebar_section` agrupa; `sidebar_link` por link, activo por
+`current_path`, con `badge badge-error` opcional para alertas):
+
+| Grupo (`sidebar_section`) | Links |
+|---|---|
+| *(sin grupo, tope)* | Dashboard · Supervised services *(no-admin con supervisados)* · Stats · Calculator *(admin)* |
+| **Catalog** | Labs · Providers *(badge de alertas)* · Models |
+| **Access** | Services · Users |
+| **Budget** | Limit profiles · Top-ups · Global daily cap |
+| **Operations** | Monitoring · Audit · Observability · Notifications · Maintenance |
 
 ### T3. Componentes extra
 
 | Componente | Qué es |
 |---|---|
-| `<.model_picker>` | badges toggleables para grants de modelos (`cond` → `badge-primary` granted · `badge-accent` extra · `badge-outline hover:badge-primary/50` libre · `badge-primary opacity-60` locked) |
+| `<.model_picker>` | badges toggleables para grants de modelos. Firma: `id`, `models`, `granted_ids`, `toggle_event`, `target_value`, `locked_ids`, `extra_ids`, `denied_ids`, `empty_text`. Estados: granted `badge-primary` · extra `badge-accent` · locked `badge-primary opacity-60` (disabled) · denied `badge-error badge-outline line-through opacity-70` · libre `badge-outline hover:badge-primary/50`. Emite `phx-value-target-id` + `phx-value-model-id`. |
 | `<.input type="datalist">` | texto libre + sugerencias (`<datalist>`) para catálogos largos |
 | `<.input ... hint=…>` | texto de ayuda bajo el campo |
 | `<.button variant="primary" \| nil>` | `btn-primary` / `btn-primary btn-soft` |
-| `<.table id rows row_id row_click>` con `:col`/`:action` | tabla con soporte de `stream` |
+| `<.table id rows row_id row_click row_item>` con `:col`/`:action` | tabla con soporte de `stream` (`table-sm`) |
+
+**Badges semánticos por dominio** (`StatsHelpers`): tiers
+`tier_badge_class/1` (S → `badge-success`, A → `badge-info`, B → `badge-warning`,
+C → `badge-warning badge-outline`, D → `badge-error`, default `badge-ghost`).
+Error HTTP: `error_class_badge/1` (4xx → `badge-warning`, 5xx → `badge-error`).
 
 ### T4. Pickers: implementación de referencia
 
@@ -559,7 +603,7 @@ Implementación real del patrón **Commons C8**:
 ### T5. Tabla canónica
 
 `observability_live.ex`: `overflow-x-auto card bg-base-100 border border-base-300 shadow-sm`
-+ `table table-sm` (31 usos de `table-sm` en el repo, **0** de `table-zebra`).
++ `table table-sm` (36 usos de `table-sm` en `lib/`, **0** de `table-zebra`).
 Para columnas de ancho fijo: `table table-sm table-fixed w-full` (`models_live`).
 
 ### T6. Gráficas (implementación TokenGate)
@@ -571,26 +615,28 @@ Sin librería (ver **Commons C9**). Dos formas reales:
   preserveAspectRatio="none">` con `<rect rx="2">` + `<title>` (tooltip),
   baseline `<line class="stroke-base-300">` y grid `stroke-dasharray="2,2"`;
   eje Y en columna `text-[10px] text-base-content/50 w-8`, eje X `text-[10px]`.
-- **Sparklines de barras:** `stats/{models,groups,services}.ex` con
+- **Sparklines de barras:** `lib/tokengate_web/live/stats/{models,groups,services}.ex`
+  y `supervised_service_stats_live.ex` con
   `style="height: #{Stats.sparkline_bar_height(count, max)}%"`; escalas y color
-  en `stats_helpers.ex` (`sqrt` con mínimo 4%, `sparkline_color/1` = paleta de
-  providers, `pivot_daily_series/1`).
+  en `stats_helpers.ex` (`sqrt` con mínimo 4%, `sparkline_color/1`,
+  `provider_legend_color/2`, `pivot_daily_series/1`).
 
----
+### T7. Referencias (código real)
 
-## T7. Referencias (código real)
-
-- `lib/tokengate_web/components/core_components.ex` — `flash`, `button`, `input`
-  (select/datalist/hint), `header`, `table` (stream + `table-sm`), `list`, `icon`,
-  `model_picker`, `show/hide`.
+- `lib/tokengate_web/components/core_components.ex` — `flash`, `button`
+  (`variant` primary/nil), `input` (select/datalist/textarea/checkbox/hint),
+  `header`, `table` (stream + `table-sm`), `list`, `icon`, `model_picker`,
+  `show`/`hide`, `translate_error(s)`.
 - `lib/tokengate_web/components/layouts.ex` — `app/1` (público), `dashboard/1`
-  (consola), `dashboard_topbar`, `dashboard_sidebar`, `sidebar_link`,
-  `timezone_selector`, `flash_group`.
+  (consola), `dashboard_topbar`, `dashboard_sidebar`, `sidebar_section`,
+  `sidebar_link`, `locale_selector`, `timezone_selector`, `flash_group`.
 - `lib/tokengate_web/live/models_live.ex` — combobox single/multi,
   `resolve_scope_search/1`, `close_scope_pickers`.
 - `lib/tokengate_web/live/group_members_live.ex` — modal overlay, autocomplete de
   email, tabla, empty state.
 - `lib/tokengate_web/live/observability_live.ex` — tabla canónica card + `table-sm`.
+- `lib/tokengate_web/stats_helpers.ex` — formatters, badges semánticos, paleta de
+  proveedores y escalas de charts.
 - `assets/css/app.css` — tema `dim --default`, regla global de tablas
   (`var(--color-base-200)`: en daisyUI 5 los alias `--b1/--b2/--b3` ya no existen)
   y el latido `.reset-colon`. Inventario de CSS propio en §T1.
