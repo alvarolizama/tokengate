@@ -469,7 +469,7 @@ defmodule TokengateWeb.Layouts do
     <div
       :if={@current_scope}
       id="user-footer"
-      class="shell-user-footer flex items-center gap-2.5 rounded-lg p-2 transition-colors duration-150 hover:bg-base-200"
+      class="shell-user-footer relative flex items-center gap-2.5 rounded-lg p-2 transition-colors duration-150 hover:bg-base-200"
     >
       <%!-- El avatar es el disparador del modal de cuenta (ProfileModal): abrir
            limpio el diálogo es su evento `open_profile`, y el item "Profile"
@@ -491,14 +491,18 @@ defmodule TokengateWeb.Layouts do
         </span>
       </span>
 
-      <details class="relative shrink-0" id="user-menu">
+      <%!-- El panel se ancla al FOOTER (relative), no al chevron: anclado al
+           chevron un w-64 sobresalía del sidebar de 240px y el `drawer-side`
+           de daisyUI (overflow hidden) lo recortaba por la izquierda. Con
+           `left-0 w-full` mide exactamente el ancho del sidebar. --%>
+      <details class="shrink-0" id="user-menu">
         <summary
           class="btn btn-ghost btn-xs btn-circle list-none"
           aria-label={gettext("Account menu")}
         >
           <.icon name="hero-chevron-up" class="size-3" />
         </summary>
-        <div class="absolute bottom-full right-0 z-50 mb-1 w-64 rounded-lg border border-base-300 bg-base-100 py-1 shadow-lg">
+        <div class="absolute bottom-full left-0 z-50 mb-1 w-full rounded-lg border border-base-300 bg-base-100 py-1 shadow-lg">
           <.menu_item
             label={gettext("Profile")}
             icon="hero-user"
