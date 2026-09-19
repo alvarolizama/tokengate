@@ -75,9 +75,14 @@ defmodule TokengateWeb.Layouts do
   end
 
   @doc """
-  Renders the dashboard (ops console) layout — a premium, theme-driven sidebar +
-  topbar shell used by authenticated LiveViews (DashboardLive and the
-  admin LiveViews under the `:admin` live_session).
+  Renders the dashboard (ops console) layout — the family shell (Commons §C12):
+  sidebar + barra de contenido, sin topbar de identidad. Lo usan las LiveViews
+  autenticadas (DashboardLive y las admin bajo el `live_session :admin`).
+
+  - Raíz `h-screen` + `drawer lg:drawer-open`; barra de contenido `h-14` con el
+    **único** toggle de navegación (gaveta en móvil, rail en desktop).
+  - Sidebar colapsable a rail de iconos (`#sidebar-collapse` + `.shell-hide`).
+  - Pie del sidebar: identidad + menú de usuario (`#user-menu`).
 
   ## Examples
 
@@ -109,100 +114,95 @@ defmodule TokengateWeb.Layouts do
 
   def dashboard(assigns) do
     ~H"""
-    <div class="drawer lg:drawer-open min-h-screen bg-base-200">
-      <input id="dashboard-drawer" type="checkbox" class="drawer-toggle" />
+    <div class="h-screen bg-base-100 text-base-content">
+      <%!-- Shell colapsable (desktop): el checkbox ES el estado y el CSS de
+           app.css lo aplica sobre .shell-sidebar / .shell-hide. Vive acá
+           —fuera del drawer— para que las reglas funcionen por hermandad. --%>
+      <input id="sidebar-collapse" type="checkbox" class="hidden" phx-hook=".SidebarRail" />
 
-      <div class="drawer-content flex flex-col">
-        <div
-          :if={@impersonator}
-          id="impersonation-banner"
-          class="bg-warning text-warning-content px-4 py-2 flex items-center justify-center gap-3 text-sm"
-        >
-          <.icon name="hero-eye" class="w-4 h-4" />
-          <span>
-            {gettext("Viewing as")} <strong>{@current_scope && @current_scope.email}</strong>
-            — {gettext("session of")} {@impersonator.email}
-          </span>
-          <.link
-            href={~p"/impersonate"}
-            method="delete"
-            class="btn btn-xs btn-neutral"
-            id="stop-impersonating"
+      <div class="drawer lg:drawer-open h-full">
+        <%!-- Móvil: el drawer-toggle abre/cierra la gaveta con overlay --%>
+        <input id="app-drawer" type="checkbox" class="drawer-toggle" />
+
+        <div class="drawer-content flex flex-col min-w-0 h-full">
+          <div
+            :if={@impersonator}
+            id="impersonation-banner"
+            class="bg-warning text-warning-content px-4 py-2 flex items-center justify-center gap-3 text-sm"
           >
-            {gettext("Back to my account")}
-          </.link>
-        </div>
-
-        <.dashboard_topbar
-          current_scope={@current_scope}
-          timezone={(@current_scope && @current_scope.timezone) || assigns[:timezone] || "Etc/UTC"}
-        />
-
-        <main class="flex-1 p-4 sm:p-6 lg:p-8">
-          {render_slot(@inner_block)}
-        </main>
-      </div>
-
-      <.dashboard_sidebar
-        current_scope={@current_scope}
-        alert_count={@alert_count}
-        current_path={@current_path}
-      />
-
-      <.flash_group flash={@flash} />
-    </div>
-    """
-  end
-
-  defp dashboard_topbar(assigns) do
-    ~H"""
-    <header class="sticky top-0 z-30 flex items-center gap-3 px-4 sm:px-6 lg:px-8 h-16 bg-base-100/80 backdrop-blur border-b border-base-300">
-      <label
-        for="dashboard-drawer"
-        class="btn btn-ghost btn-square btn-sm lg:hidden"
-        aria-label={gettext("Open menu")}
-      >
-        <.icon name="hero-bars-3" class="w-5 h-5" />
-      </label>
-
-      <div class="flex-1" />
-
-      <div class="flex items-center gap-3">
-        <div class="hidden sm:flex flex-col items-end leading-tight">
-          <span class="text-sm font-medium text-base-content">{@current_scope && @current_scope.email}</span>
-          <span :if={@current_scope} class="text-xs text-base-content/50 uppercase tracking-wide">
-            {role_label(@current_scope.global_role)}
-          </span>
-        </div>
-
-        <%!-- El avatar abre en un modal la cuenta y el cambio de contraseña
-             (la página /profile se retiró). --%>
-        <.live_component
-          :if={@current_scope}
-          module={TokengateWeb.ProfileModal}
-          id="profile-modal"
-          user={@current_scope}
-          initials={initials(@current_scope)}
-        />
-
-        <div :if={is_nil(@current_scope)} class="avatar avatar-placeholder">
-          <div class="bg-primary text-primary-content w-9 rounded-full">
-            <span class="text-sm font-semibold">{initials(@current_scope)}</span>
+            <.icon name="hero-eye" class="size-4" />
+            <span>
+              {gettext("Viewing as")} <strong>{@current_scope && @current_scope.email}</strong>
+              — {gettext("session of")} {@impersonator.email}
+            </span>
+            <.link
+              href={~p"/impersonate"}
+              method="delete"
+              class="btn btn-xs btn-neutral"
+              id="stop-impersonating"
+            >
+              {gettext("Back to my account")}
+            </.link>
           </div>
+
+          <%!-- Barra del contenido: SIEMPRE visible y con el ÚNICO toggle de la
+               navegación, en el mismo sitio en todos los anchos. En móvil abre
+               la gaveta; en desktop colapsa la sidebar a rail. --%>
+          <header class="flex h-14 shrink-0 items-center gap-2 border-b border-base-300 bg-base-100/80 px-3 backdrop-blur">
+            <label
+              for="app-drawer"
+              class="btn btn-ghost btn-sm btn-square lg:hidden"
+              title={gettext("Menu")}
+            >
+              <.icon name="hero-bars-3" class="size-5" />
+            </label>
+            <label
+              for="sidebar-collapse"
+              class="hidden btn btn-ghost btn-sm btn-square lg:inline-flex"
+              title={gettext("Collapse or expand the sidebar")}
+            >
+              <.icon name="hero-bars-3" class="size-5" />
+            </label>
+            <a
+              href={~p"/"}
+              class="flex shrink-0 items-center gap-2 rounded transition-colors duration-150 hover:opacity-80 lg:hidden"
+            >
+              <img src={~p"/images/logo.svg"} class="size-6 shrink-0" alt="TokenGate" />
+              <span class="text-lg font-bold tracking-tight">TokenGate</span>
+            </a>
+          </header>
+
+          <main class="flex min-h-0 flex-1 flex-col overflow-y-auto">
+            <div class="w-full p-4 pb-16 sm:p-6">
+              {render_slot(@inner_block)}
+            </div>
+          </main>
         </div>
 
-        <.link
-          href={~p"/logout"}
-          method="delete"
-          class="btn btn-ghost btn-sm"
-          data-confirm={gettext("Sign out?")}
-          id="logout-button"
-        >
-          <.icon name="hero-arrow-right-on-rectangle" class="w-5 h-5" />
-          <span class="hidden sm:inline">{gettext("Sign out")}</span>
-        </.link>
+        <.dashboard_sidebar
+          current_scope={@current_scope}
+          alert_count={@alert_count}
+          current_path={@current_path}
+        />
+
+        <.flash_group flash={@flash} />
       </div>
-    </header>
+
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".SidebarRail">
+        // El checkbox del rail vive en el DOM del shell, que se re-monta en cada
+        // navegación: sin persistir, el rail se expandiría solo en cada clic.
+        // Guarda el estado en el navegador y lo repone al montar.
+        export default {
+          mounted() {
+            const key = "tokengate:sidebar-collapsed"
+            if (localStorage.getItem(key) === "true") this.el.checked = true
+            this.el.addEventListener("change", () => {
+              localStorage.setItem(key, this.el.checked ? "true" : "false")
+            })
+          }
+        }
+      </script>
+    </div>
     """
   end
 
@@ -227,217 +227,310 @@ defmodule TokengateWeb.Layouts do
       end
 
     ~H"""
-    <aside class="drawer-side z-40">
-      <label for="dashboard-drawer" class="drawer-overlay" aria-label={gettext("Close menu")} />
+    <div class="drawer-side z-40">
+      <label for="app-drawer" class="drawer-overlay" aria-label={gettext("Close menu")} />
 
-      <div class="min-h-full w-64 bg-base-100 border-r border-base-300 flex flex-col">
-        <div class="h-16 flex items-center gap-2 px-6 border-b border-base-300">
-          <a href={~p"/"} class="flex items-center gap-2">
-            <img src={~p"/images/logo.svg"} width="32" />
-            <span class="text-lg font-bold">Tokengate</span>
-          </a>
+      <aside class="shell-sidebar flex h-full w-60 shrink-0 flex-col border-r border-base-300 bg-base-200/50">
+        <div class="border-b border-base-300 p-3">
+          <div class="shell-sidebar-header flex items-center gap-2">
+            <a
+              href={~p"/"}
+              class="flex shrink-0 items-center gap-2 rounded transition-colors duration-150 hover:opacity-80"
+            >
+              <img src={~p"/images/logo.svg"} class="size-6 shrink-0" alt="TokenGate" />
+              <span class="shell-hide text-lg font-bold tracking-tight">TokenGate</span>
+            </a>
+          </div>
         </div>
 
-        <nav class="flex-1 p-3 space-y-4">
-          <div class="space-y-1">
-            <.sidebar_link
-              current_path={@current_path}
-              href={~p"/dashboard"}
+        <%!-- Filtro del nav. TokenGate no tiene buscador global: el campo filtra
+             en el cliente los enlaces del sidebar (y ⌘K / Ctrl+K lo enfoca). --%>
+        <div class="shell-hide border-b border-base-300 p-3">
+          <div class="relative">
+            <.icon
+              name="hero-magnifying-glass"
+              class="absolute left-2.5 top-2.5 size-4 text-base-content/50"
+            />
+            <input
+              type="text"
+              id="sidebar-search"
+              phx-hook=".NavFilter"
+              placeholder={gettext("Filter navigation…")}
+              autocomplete="off"
+              class="w-full rounded-lg border border-base-300 bg-base-100 py-1.5 pl-8 pr-12 text-sm transition-colors duration-150 focus:ring-1 focus:ring-primary focus:outline-none"
+            />
+            <kbd class="absolute right-2.5 top-2 rounded border border-base-300 px-1 font-mono text-[10px] text-base-content/40">
+              ⌘K
+            </kbd>
+          </div>
+        </div>
+
+        <nav id="sidebar-nav" class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto p-2">
+          <div class="flex flex-col gap-1">
+            <.nav_link
               label={gettext("Dashboard")}
               icon="hero-chart-bar-square"
+              path={~p"/dashboard"}
+              active={active_path?(@current_path, ~p"/dashboard")}
             />
 
             <%!-- Los no-admins que supervisan servicios entran a su vista de
                  solo lectura desde aquí (para admins el enlace es /access/services). --%>
             <%= if not admin?(@current_scope) and @supervised_count > 0 do %>
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/services/supervised"}
+              <.nav_link
                 label={gettext("Supervised services")}
                 icon="hero-eye"
+                path={~p"/services/supervised"}
+                active={active_path?(@current_path, ~p"/services/supervised")}
               />
             <% end %>
 
             <%= if admin?(@current_scope) do %>
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/stats"}
+              <.nav_link
                 label={gettext("Stats")}
                 icon="hero-chart-pie"
+                path={~p"/stats"}
+                active={active_path?(@current_path, ~p"/stats")}
               />
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/calculator"}
+              <.nav_link
                 label={gettext("Calculator")}
                 icon="hero-calculator"
+                path={~p"/calculator"}
+                active={active_path?(@current_path, ~p"/calculator")}
               />
             <% end %>
           </div>
 
           <%= if admin?(@current_scope) do %>
-            <.sidebar_section id="sidebar-section-catalogo" label={gettext("Catalog")}>
+            <.nav_group label={gettext("Catalog")} id="sidebar-section-catalogo">
               <%!-- Labs (quién construyó cada modelo) va antes de Proveedores:
                    el lab es el nivel más alto y no depende del proveedor. --%>
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/catalog/labs"}
+              <.nav_link
                 label={gettext("Labs")}
                 icon="hero-beaker"
+                path={~p"/catalog/labs"}
+                active={active_path?(@current_path, ~p"/catalog/labs")}
               />
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/catalog/providers"}
+              <.nav_link
                 label={gettext("Providers")}
                 icon="hero-server-stack"
+                path={~p"/catalog/providers"}
+                active={active_path?(@current_path, ~p"/catalog/providers")}
                 badge={@alert_count}
+                badge_kind="badge-error"
               />
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/catalog/models"}
+              <.nav_link
                 label={gettext("Models")}
                 icon="hero-rectangle-stack"
+                path={~p"/catalog/models"}
+                active={active_path?(@current_path, ~p"/catalog/models")}
               />
-            </.sidebar_section>
+            </.nav_group>
 
-            <.sidebar_section id="sidebar-section-acceso" label={gettext("Access")}>
+            <.nav_group label={gettext("Access")} id="sidebar-section-acceso">
               <%!-- Servicios va antes de Usuarios: un servicio no depende de
                    una sub mensual, así que se lista primero. --%>
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/access/services"}
+              <.nav_link
                 label={gettext("Services")}
                 icon="hero-wrench-screwdriver"
+                path={~p"/access/services"}
+                active={active_path?(@current_path, ~p"/access/services")}
               />
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/access/users"}
+              <.nav_link
                 label={gettext("Users")}
                 icon="hero-users"
+                path={~p"/access/users"}
+                active={active_path?(@current_path, ~p"/access/users")}
               />
-            </.sidebar_section>
+            </.nav_group>
 
-            <.sidebar_section id="sidebar-section-budget" label={gettext("Budget")}>
+            <.nav_group label={gettext("Budget")} id="sidebar-section-budget">
               <%!-- Los perfiles de límites son el sujeto del que cada usuario
                    hereda su techo de gasto; los top-ups son crédito extra de un
                    solo uso, y el tope diario global es el kill-switch que corta
                    TODO el gateway (con sus exclusiones). Por eso la sección es
                    Presupuesto, no Acceso ni Operaciones. --%>
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/budget/profiles"}
+              <.nav_link
                 label={gettext("Limit profiles")}
                 icon="hero-user-group"
+                path={~p"/budget/profiles"}
+                active={active_path?(@current_path, ~p"/budget/profiles")}
               />
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/budget/topups"}
+              <.nav_link
                 label={gettext("Top-ups")}
                 icon="hero-arrow-up-circle"
+                path={~p"/budget/topups"}
+                active={active_path?(@current_path, ~p"/budget/topups")}
               />
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/budget/global"}
+              <.nav_link
                 label={gettext("Global daily cap")}
                 icon="hero-globe-americas"
+                path={~p"/budget/global"}
+                active={active_path?(@current_path, ~p"/budget/global")}
               />
-            </.sidebar_section>
+            </.nav_group>
 
-            <.sidebar_section id="sidebar-section-operaciones" label={gettext("Operations")}>
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/operations/monitoring"}
+            <.nav_group label={gettext("Operations")} id="sidebar-section-operaciones">
+              <.nav_link
                 label={gettext("Monitoring")}
                 icon="hero-signal"
+                path={~p"/operations/monitoring"}
+                active={active_path?(@current_path, ~p"/operations/monitoring")}
               />
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/operations/audit"}
+              <.nav_link
                 label={gettext("Audit")}
                 icon="hero-clipboard-document-list"
+                path={~p"/operations/audit"}
+                active={active_path?(@current_path, ~p"/operations/audit")}
               />
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/operations/observability"}
+              <.nav_link
                 label={gettext("Observability")}
                 icon="hero-bell-alert"
+                path={~p"/operations/observability"}
+                active={active_path?(@current_path, ~p"/operations/observability")}
               />
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/operations/notifications"}
+              <.nav_link
                 label={gettext("Notifications")}
                 icon="hero-paper-airplane"
+                path={~p"/operations/notifications"}
+                active={active_path?(@current_path, ~p"/operations/notifications")}
               />
-              <.sidebar_link
-                current_path={@current_path}
-                href={~p"/operations/maintenance"}
+              <.nav_link
                 label={gettext("Maintenance")}
                 icon="hero-cog-6-tooth"
+                path={~p"/operations/maintenance"}
+                active={active_path?(@current_path, ~p"/operations/maintenance")}
               />
-            </.sidebar_section>
+            </.nav_group>
           <% end %>
         </nav>
 
-        <%!-- Idioma y zona horaria: los dos selectores de preferencias del
-             usuario, uno al lado del otro al pie del sidebar. --%>
-        <div class="px-3 pb-3 border-t border-base-300 pt-3 grid grid-cols-[auto_minmax(0,1fr)] gap-2">
-          <.locale_selector current_scope={@current_scope} />
-          <.timezone_selector current_scope={@current_scope} />
+        <div class="border-t border-base-300 p-3">
+          <.user_footer current_scope={@current_scope} />
         </div>
-      </div>
-    </aside>
-    """
-  end
+      </aside>
 
-  attr :id, :string, required: true
-  attr :label, :string, required: true
-  slot :inner_block, required: true
+      <script :type={Phoenix.LiveView.ColocatedHook} name=".NavFilter">
+        // Filtro client-side del nav: lo escrito esconde los enlaces que no
+        // coinciden (y los grupos que se quedan sin ninguno); ⌘K / Ctrl+K
+        // enfoca el campo y Escape lo limpia. Sin round-trip: el nav del
+        // sidebar es estático por página.
+        export default {
+          mounted() {
+            this.links = [...this.el.closest("aside").querySelectorAll("#sidebar-nav .nav-link")]
+            this.groups = [...this.el.closest("aside").querySelectorAll("[id^='sidebar-section-']")]
 
-  defp sidebar_section(assigns) do
-    ~H"""
-    <div class="space-y-1" id={@id}>
-      <p class="px-3 text-xs font-semibold uppercase tracking-wide text-base-content/40">
-        {@label}
-      </p>
-      {render_slot(@inner_block)}
+            this.el.addEventListener("input", () => this.filter())
+            this.el.addEventListener("keydown", (e) => {
+              if (e.key === "Escape") {
+                this.el.value = ""
+                this.filter()
+              }
+            })
+
+            this.onKey = (e) => {
+              if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+                e.preventDefault()
+                this.el.focus()
+                this.el.select()
+              }
+            }
+
+            window.addEventListener("keydown", this.onKey)
+          },
+          destroyed() {
+            window.removeEventListener("keydown", this.onKey)
+          },
+          filter() {
+            const q = this.el.value.trim().toLowerCase()
+
+            this.links.forEach((el) => {
+              el.classList.toggle("hidden", q !== "" && !el.textContent.toLowerCase().includes(q))
+            })
+
+            this.groups.forEach((group) => {
+              const any = group.querySelector(".nav-link:not(.hidden)")
+              group.classList.toggle("hidden", !any)
+            })
+          }
+        }
+      </script>
     </div>
     """
   end
 
-  attr :href, :string, required: true
-  attr :label, :string, required: true
-  attr :icon, :string, required: true
-  attr :disabled, :boolean, default: false
-  attr :badge, :integer, default: 0
-  attr :current_path, :string, default: nil
+  # Pie del sidebar (Commons §C12.2): identidad + menú de usuario. El menú es
+  # la vuelta desde cualquier URL: cuenta (Profile · API keys) + preferencias
+  # (idioma y zona horaria) + salida.
+  attr :current_scope, :map, default: nil
 
-  defp sidebar_link(assigns) do
-    assigns =
-      assigns
-      |> assign(:active, active_path?(assigns.current_path, assigns.href))
-      |> assign(:dom_id, "sidebar-link-" <> sidebar_link_id(assigns.href))
-
+  defp user_footer(assigns) do
     ~H"""
-    <.link
-      href={@href}
-      id={@dom_id}
-      aria-current={if @active, do: "page", else: nil}
-      class={[
-        "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-colors",
-        @disabled && "text-base-content/30 cursor-not-allowed pointer-events-none",
-        not @disabled && @active && "bg-primary/10 text-primary",
-        not @disabled && not @active &&
-          "text-base-content/70 hover:bg-base-200 hover:text-base-content"
-      ]}
+    <div
+      :if={@current_scope}
+      id="user-footer"
+      class="shell-user-footer flex items-center gap-2.5 rounded-lg p-2 transition-colors duration-150 hover:bg-base-200"
     >
-      <.icon name={@icon} class="w-5 h-5 shrink-0" />
-      {@label}
-      <span
-        :if={@badge > 0}
-        class="ml-auto badge badge-sm badge-error"
-      >
-        {@badge}
+      <%!-- El avatar es el disparador del modal de cuenta (ProfileModal): abrir
+           limpio el diálogo es su evento `open_profile`, y el item "Profile"
+           del menú lo dispara con un click sintético sobre el mismo botón. --%>
+      <.live_component
+        module={TokengateWeb.ProfileModal}
+        id="profile-modal"
+        user={@current_scope}
+        initials={initials(@current_scope)}
+      />
+
+      <span class="shell-hide min-w-0 flex-1 leading-tight">
+        <span class="block truncate text-sm font-medium">{@current_scope.name}</span>
+        <span
+          class="block truncate text-xs text-base-content/50 mt-0.5"
+          title={@current_scope.email}
+        >
+          {@current_scope.email}
+        </span>
       </span>
-    </.link>
+
+      <details class="relative shrink-0" id="user-menu">
+        <summary
+          class="btn btn-ghost btn-xs btn-circle list-none"
+          aria-label={gettext("Account menu")}
+        >
+          <.icon name="hero-chevron-up" class="size-3" />
+        </summary>
+        <div class="absolute bottom-full right-0 z-50 mb-1 w-64 rounded-lg border border-base-300 bg-base-100 py-1 shadow-lg">
+          <.menu_item
+            label={gettext("Profile")}
+            icon="hero-user"
+            on_click={
+              JS.dispatch("click", to: "#profile-avatar-button")
+              |> JS.dispatch("click", to: "#user-menu > summary")
+            }
+          />
+          <.menu_item label={gettext("API keys")} icon="hero-key" href={~p"/dashboard"} />
+
+          <div class="my-1 border-t border-base-300"></div>
+          <div class="px-3 py-1.5">
+            <.locale_selector current_scope={@current_scope} />
+          </div>
+          <div class="px-3 py-1.5">
+            <.timezone_selector current_scope={@current_scope} />
+          </div>
+
+          <div class="my-1 border-t border-base-300"></div>
+          <.link
+            href={~p"/logout"}
+            method="delete"
+            id="logout-button"
+            data-confirm={gettext("Sign out?")}
+            class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-error transition-colors hover:bg-base-200"
+          >
+            <.icon name="hero-arrow-right-on-rectangle" class="size-4" />
+            {gettext("Log out")}
+          </.link>
+        </div>
+      </details>
+    </div>
     """
   end
 
@@ -451,12 +544,6 @@ defmodule TokengateWeb.Layouts do
   end
 
   defp active_path?(_path, _href), do: false
-
-  defp sidebar_link_id(href) do
-    href
-    |> String.trim_leading("/")
-    |> String.replace("/", "-")
-  end
 
   attr :current_scope, :map, default: nil
 
@@ -543,10 +630,6 @@ defmodule TokengateWeb.Layouts do
   defp locale_label("es"), do: "🇪🇸 ES"
   defp locale_label(other), do: String.upcase(other)
 
-  defp role_label("admin"), do: gettext("Administrator")
-  defp role_label("user"), do: gettext("User")
-  defp role_label(other), do: String.capitalize(other || "")
-
   defp admin?(%{global_role: "admin"}), do: true
   defp admin?(_), do: false
 
@@ -556,8 +639,6 @@ defmodule TokengateWeb.Layouts do
     do: Tokengate.Accounts.count_services_for_supervisor(id)
 
   defp supervised_services_count(_), do: 0
-
-  defp initials(nil), do: "—"
 
   defp initials(%{email: email}) when is_binary(email) do
     case String.split(email, "@") do
