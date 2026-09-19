@@ -70,6 +70,25 @@ defmodule Tokengate.Logs do
   # ---------------------------------------------------------------------------
 
   @doc """
+  Fetches one request log by id, with the same preloads as `list_logs/1`
+  (member + user + group, service + api_key, provider) so the error-detail
+  modal in MonitoringLive can render the row's full context. Returns `nil`
+  when no row matches.
+  """
+  def get_log(id) do
+    with {:ok, uuid} <- Ecto.UUID.cast(id) do
+      RequestLog
+      |> where([rl], rl.id == ^uuid)
+      |> preload(group_member: [:user, :group])
+      |> preload(service: [:api_key])
+      |> preload(:provider)
+      |> Repo.one()
+    else
+      _ -> nil
+    end
+  end
+
+  @doc """
   Lists request logs with optional filters.
 
   ## Filters (all optional)

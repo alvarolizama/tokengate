@@ -274,6 +274,47 @@ defmodule TokengateWeb.MonitoringLiveTest do
 
   ## Alerts --------------------------------------------------------------------
 
+  # El badge de error de una fila abre un modal con el mensaje completo del
+  # upstream (en la tabla va truncado a 220px) y el contexto de la petición.
+  test "clicking the error badge opens a modal with the full upstream message", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    %{member: member, model: model} = member_with_log()
+
+    {:ok, _} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        model_requested: model.name,
+        model_responded: model.name,
+        status_code: 404,
+        provider_status_code: 404,
+        error_reason: "client_error",
+        error_message: "No available sellers for model 'deepseek-v3'",
+        latency_ms: 120,
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, html} = live(conn, ~p"/operations/monitoring")
+
+    # El mensaje truncado está en la tabla, el modal aún no existe.
+    assert html =~ "client_error"
+    refute html =~ "error-detail-modal"
+
+    html =
+      view
+      |> element("td button.badge-error", "client_error")
+      |> render_click()
+
+    assert has_element?(view, "#error-detail-modal")
+    assert html =~ "No available sellers for model &#39;deepseek-v3&#39;"
+    assert html =~ "client 404"
+    assert html =~ "provider 404"
+
+    # Cierre: el modal desaparece.
+    view |> element("#error-detail-modal .btn-circle") |> render_click()
+    refute has_element?(view, "#error-detail-modal")
+  end
+
   test "error_reason filter filters logs", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     %{member: member} = member_with_log()

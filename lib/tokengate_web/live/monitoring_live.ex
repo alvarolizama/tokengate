@@ -42,6 +42,7 @@ defmodule TokengateWeb.MonitoringLive do
       |> assign(:group_options, group_options())
       |> assign(:api_key_options, api_key_options())
       |> assign(:is_admin, user.global_role == "admin")
+      |> assign(:error_detail, nil)
       |> require_admin_hook()
 
     socket = load_logs(socket, :reset)
@@ -671,6 +672,18 @@ defmodule TokengateWeb.MonitoringLive do
     end
   end
 
+  # Detail del error de una fila: abre el modal con el mensaje completo del
+  # upstream (en la tabla va truncado a 220px) y el contexto de la petición.
+  # Lectura por PK con los mismos preloads que la tabla — es un click, no
+  # hot path, y así el modal no depende de que la fila siga en el stream.
+  def handle_event("show_error", %{"log-id" => log_id}, socket) do
+    {:noreply, assign(socket, :error_detail, Logs.get_log(log_id))}
+  end
+
+  def handle_event("close_error", _params, socket) do
+    {:noreply, assign(socket, :error_detail, nil)}
+  end
+
   ## Template helpers ------------------------------------------------------
 
   defp format_cost(%Decimal{} = d) do
@@ -1179,15 +1192,27 @@ defmodule TokengateWeb.MonitoringLive do
                     <span :if={!log.provider_status_code} class="text-base-content/40">—</span>
                   </td>
                   <td colspan="2" class="text-sm border-r border-base-200">
-                    <div :if={log.error_reason} class="flex flex-col gap-0.5">
-                      <span class="badge badge-sm badge-error">{log.error_reason}</span>
-                      <span
+                    <div :if={log.error_reason} class="flex flex-col gap-0.5 items-start">
+                      <button
+                        type="button"
+                        class="badge badge-sm badge-error cursor-pointer hover:badge-error/80 transition-colors"
+                        phx-click="show_error"
+                        phx-value-log-id={log.id}
+                        title={gettext("View full error detail")}
+                        aria-label={gettext("View full error detail")}
+                      >
+                        {log.error_reason}
+                      </button>
+                      <button
                         :if={log.error_message}
-                        class="text-xs text-base-content/60 max-w-[220px] truncate"
+                        type="button"
+                        class="text-left text-xs text-base-content/60 max-w-[220px] truncate cursor-pointer hover:text-base-content transition-colors"
+                        phx-click="show_error"
+                        phx-value-log-id={log.id}
                         title={log.error_message}
                       >
                         {log.error_message}
-                      </span>
+                      </button>
                     </div>
                     <span :if={!log.error_reason} class="text-base-content/40">—</span>
                   </td>
@@ -1243,6 +1268,99 @@ defmodule TokengateWeb.MonitoringLive do
           >
             <.icon name="hero-chevron-down" class="w-4 h-4" /> Cargar más
           </button>
+        </div>
+      </div>
+
+      <%!-- Error detail modal: el mensaje del upstream llega truncado a 255
+           bytes por la columna; aquí se ve entero con su contexto. --%>
+      <div
+        :if={@error_detail}
+        id="error-detail-modal"
+        class="modal modal-open"
+        phx-click-away="close_error"
+      >
+        <div class="modal-box max-w-2xl">
+          <div class="flex items-start justify-between gap-4">
+            <div class="min-w-0">
+              <h3 class="text-lg font-bold flex items-center gap-2 flex-wrap">
+                <span class="badge badge-error">{@error_detail.error_reason}</span>
+                <span class="text-base-content/70 font-mono text-sm">
+                  {gettext("client")} {@error_detail.status_code}
+                </span>
+                <span
+                  :if={@error_detail.provider_status_code}
+                  class="text-base-content/50 font-mono text-sm"
+                >
+                  · {gettext("provider")} {@error_detail.provider_status_code}
+                </span>
+              </h3>
+              <p class="text-sm text-base-content/50 mt-1 truncate">
+                {format_datetime(@error_detail.inserted_at, @timezone)} · {model_display(
+                  @error_detail.model_requested,
+                  @error_detail.model_responded
+                )} · {provider_name(@error_detail)}
+              </p>
+            </div>
+            <button
+              type="button"
+              class="btn btn-ghost btn-sm btn-circle"
+              phx-click="close_error"
+              aria-label={gettext("Close")}
+            >
+              <.icon name="hero-x-mark" class="w-4 h-4" />
+            </button>
+          </div>
+
+          <div class="mt-4">
+            <p class="text-xs font-medium text-base-content/50 uppercase tracking-wide mb-1.5">
+              {gettext("Upstream message")}
+            </p>
+            <pre
+              id="error-detail-message"
+              phx-no-curly-interpolation
+              class="text-sm bg-base-200/60 rounded-lg p-3 whitespace-pre-wrap break-words font-mono"
+            >{@error_detail.error_message || gettext("No error message recorded")}</pre>
+          </div>
+
+          <div class="mt-4 grid grid-cols-2 gap-x-6 gap-y-1.5 text-sm">
+            <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
+              <span class="text-base-content/50">{gettext("User")}</span>
+              <span class="font-medium truncate">{member_display(@error_detail)}</span>
+            </div>
+            <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
+              <span class="text-base-content/50">{gettext("Group")}</span>
+              <span class="font-medium truncate">{member_group(@error_detail)}</span>
+            </div>
+            <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
+              <span class="text-base-content/50">{gettext("API Key")}</span>
+              <span class="font-medium truncate font-mono">
+                {api_key_display(@error_detail, @api_key_options)}
+              </span>
+            </div>
+            <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
+              <span class="text-base-content/50">{gettext("Provider key")}</span>
+              <span
+                class="font-medium truncate font-mono"
+                title={@error_detail.credential_name}
+              >
+                {prov_key_display(@error_detail)}
+              </span>
+            </div>
+            <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
+              <span class="text-base-content/50">{gettext("Streaming")}</span>
+              <span class="font-medium">
+                {if(@error_detail.streaming, do: gettext("Yes"), else: gettext("No"))}
+              </span>
+            </div>
+            <div class="flex justify-between gap-2 border-b border-base-200/60 py-0.5">
+              <span class="text-base-content/50">{gettext("Latency")}</span>
+              <span class="font-medium">{@error_detail.latency_ms}ms</span>
+            </div>
+          </div>
+        </div>
+
+        <div phx-click="close_error" class="modal-backdrop cursor-pointer">
+          <button class="cursor-pointer">{gettext("Close")}</button>
         </div>
       </div>
     </Layouts.dashboard>
