@@ -621,6 +621,34 @@ defmodule Tokengate.ProvidersTest do
       assert mp.priority == 5
     end
 
+    test "aggregator_provider_pin select sets extra_body[provider]" do
+      mp = model_provider_fixture()
+
+      {:ok, mp} = Providers.update_model_provider(mp, %{aggregator_provider_pin: "zai"})
+
+      assert mp.extra_body == %{"provider" => "zai"}
+    end
+
+    test "clearing the pin drops the key but keeps other extra_body entries" do
+      mp =
+        model_provider_fixture(nil, nil, %{
+          extra_body: %{"provider" => "zai", "service_tier" => "priority"}
+        })
+
+      {:ok, mp} = Providers.update_model_provider(mp, %{aggregator_provider_pin: ""})
+
+      assert mp.extra_body == %{"service_tier" => "priority"}
+    end
+
+    test "a programmatic update without the pin param leaves extra_body untouched" do
+      mp = model_provider_fixture(nil, nil, %{extra_body: %{"provider" => "fireworks"}})
+
+      {:ok, mp} = Providers.update_model_provider(mp, %{priority: 5})
+
+      assert mp.extra_body == %{"provider" => "fireworks"}
+      assert mp.priority == 5
+    end
+
     test "clearing the form fields resets overrides to defaults" do
       mp =
         model_provider_fixture(nil, nil, %{

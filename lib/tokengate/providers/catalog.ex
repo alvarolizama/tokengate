@@ -256,7 +256,13 @@ defmodule Tokengate.Providers.Catalog do
       # de sus servicios sí coinciden con el default (`/chat/completions`,
       # `/models`, `/embeddings`, `/audio/speech`, `/audio/transcriptions`,
       # `/images/generations`, `/music/generations`).
-      paths: %{video: "/video/generations"}
+      paths: %{video: "/video/generations"},
+      # AGREGADOR: rutea a otros proveedores (venice, bankr, openrouter,
+      # fireworks, deepseek, zai, ...) y el dialecto real lo fija el destino.
+      # El body acepta hints de pin (`provider` single/array, `provider_url`,
+      # `provider_base_url`) que el marketplace CONSUME (no reenvía). Cuando
+      # la fila pinea, el normalizador resuelve el dialecto del pineado.
+      aggregator_pin_fields: ~w(provider provider_url provider_base_url)
     },
     # TypeSafe (typesafe.ai): Jev, el primer modelo System One — decisiones
     # tipadas con probabilidades calibradas en vez de texto generado. Su API
@@ -682,6 +688,119 @@ defmodule Tokengate.Providers.Catalog do
       dialect when dialect in @reasoning_dialects -> dialect
       _ -> :passthrough
     end
+  end
+
+  # Provider spellings an AGGREGATOR's pin hint accepts (Surplus: provider
+  # id/name, host or URL) mapped to the catalog key whose dialect we speak.
+  # Unknown spellings resolve to :passthrough (the aggregator routes on; its
+  # own deny-list forwarding means an unreshaped knob still often works).
+  @aggregator_pin_aliases %{
+    "fireworks" => "fireworks-ai",
+    "fireworks-ai" => "fireworks-ai",
+    "api.fireworks.ai" => "fireworks-ai",
+    "https://api.fireworks.ai/inference/v1" => "fireworks-ai",
+    "openrouter" => "openrouter",
+    "openrouter.ai" => "openrouter",
+    "api.openrouter.ai" => "openrouter",
+    "https://openrouter.ai/api/v1" => "openrouter",
+    "deepseek" => "deepseek",
+    "api.deepseek.com" => "deepseek",
+    "https://api.deepseek.com/v1" => "deepseek",
+    "zai" => "zai",
+    "z.ai" => "zai",
+    "api.z.ai" => "zai",
+    "https://api.z.ai/api/paas/v4" => "zai",
+    "venice" => "venice",
+    "venice.ai" => "venice",
+    "api.venice.ai" => "venice"
+  }
+
+  @doc """
+  The body fields an aggregator's provider-pin hint lives in, by catalog key
+  (`~w(provider provider_url provider_base_url)` for Surplus; empty for a
+  direct provider — the pin is the marketplace's own routing contract, never
+  forwarded upstream).
+
+      iex> Tokengate.Providers.Catalog.aggregator_pin_fields("surplus-intelligence")
+      ["provider", "provider_url", "provider_base_url"]
+
+      iex> Tokengate.Providers.Catalog.aggregator_pin_fields("fireworks-ai")
+      []
+  """
+  @spec aggregator_pin_fields(String.t() | nil) :: [String.t()]
+  def aggregator_pin_fields(key \\ nil) do
+    case option(key, :aggregator_pin_fields, []) do
+      fields when is_list(fields) -> fields
+      _ -> []
+    end
+  end
+
+  @doc """
+  Resolves the reasoning dialect an AGGREGATOR pin points at, from the pin
+  payload value(s) found in the request body.
+
+  Accepts every spelling the marketplace documents (id/name, host, URL —
+  case-insensitive, single string or list). The FIRST spelling that resolves
+  to a catalog key with a dialect wins; an empty/unknown pin (or no pin at
+  all) leaves the aggregator's own dialect — `:passthrough` for Surplus,
+  whose deny-list forwarding passes the knobs untouched.
+
+      iex> Tokengate.Providers.Catalog.pinned_reasoning_dialect("surplus-intelligence", ["fireworks"])
+      :scalar
+
+      iex> Tokengate.Providers.Catalog.pinned_reasoning_dialect("surplus-intelligence", "zai")
+      :toggle_and_effort
+
+      iex> Tokengate.Providers.Catalog.pinned_reasoning_dialect("surplus-intelligence", ["api.deepseek.com"])
+      :deepseek_native
+
+      iex> Tokengate.Providers.Catalog.pinned_reasoning_dialect("surplus-intelligence", ["venice"])
+      :passthrough
+
+      iex> Tokengate.Providers.Catalog.pinned_reasoning_dialect("surplus-intelligence", nil)
+      :passthrough
+
+      iex> Tokengate.Providers.Catalog.pinned_reasoning_dialect("fireworks-ai", ["zai"])
+      :scalar
+  """
+  @spec pinned_reasoning_dialect(String.t() | nil, String.t() | [String.t()] | nil) :: atom()
+  def pinned_reasoning_dialect(provider_key, pin_value) do
+    pin_fields = aggregator_pin_fields(provider_key)
+
+    if pin_fields == [] do
+      reasoning_dialect(provider_key)
+    else
+      pin_value
+      |> List.wrap()
+      |> Enum.map(&normalize_pin/1)
+      |> Enum.find_value(&Map.get(@aggregator_pin_aliases, &1))
+      |> case do
+        nil -> reasoning_dialect(provider_key)
+        pinned_key -> reasoning_dialect(pinned_key)
+      end
+    end
+  end
+
+  defp normalize_pin(value) when is_binary(value), do: value |> String.trim() |> String.downcase()
+  defp normalize_pin(_), do: ""
+
+  @doc """
+  The provider spellings an aggregator's pin accepts, as select options
+  (sorted spellings, deduped by the catalog key they resolve to). Powers the
+  operator's pin select on an aggregator-backed model_provider row.
+
+      iex> opts = Tokengate.Providers.Catalog.aggregator_pin_options()
+      iex> {"fireworks", "fireworks"} in opts
+      true
+      iex> {"zai", "zai"} in opts
+      true
+  """
+  @spec aggregator_pin_options() :: [{String.t(), String.t()}]
+  def aggregator_pin_options do
+    @aggregator_pin_aliases
+    |> Enum.uniq_by(fn {_spelling, key} -> key end)
+    |> Enum.map(fn {spelling, _key} -> {spelling, spelling} end)
+    |> Enum.sort()
   end
 
   @doc """

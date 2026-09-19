@@ -80,6 +80,7 @@ defmodule TokengateWeb.ModelsLive do
       |> assign(:provider_model_search, "")
       |> assign(:provider_form_credential_id, nil)
       |> assign(:provider_form_is_fireworks, false)
+      |> assign(:provider_form_is_aggregator, false)
       |> assign(:provider_form_pricing_unit, nil)
       |> assign(:current_scope, "global")
       |> assign(:current_scope_group_ids, [])
@@ -762,6 +763,7 @@ defmodule TokengateWeb.ModelsLive do
        |> assign(:provider_form_provider_key, nil)
        |> assign(:provider_form_credential_id, nil)
        |> assign(:provider_form_is_fireworks, false)
+       |> assign(:provider_form_is_aggregator, false)
        |> assign(:provider_form_pricing_unit, unit)
        |> assign(:credential_form, nil)
        |> assign(:provider_models, [])
@@ -898,6 +900,7 @@ defmodule TokengateWeb.ModelsLive do
      |> assign(:provider_model_search, "")
      |> assign(:provider_form_credential_id, nil)
      |> assign(:provider_form_is_fireworks, false)
+     |> assign(:provider_form_is_aggregator, false)
      |> assign(:provider_form_pricing_unit, nil)
      |> assign(:provider_form_provider_key, nil)
      |> assign(:provider_credentials, nil)
@@ -968,6 +971,10 @@ defmodule TokengateWeb.ModelsLive do
           :service_tier_priority,
           Map.get(ap.extra_body || %{}, "service_tier") == "priority"
         )
+        |> Ecto.Changeset.put_change(
+          :aggregator_provider_pin,
+          Map.get(ap.extra_body || %{}, "provider", "")
+        )
         |> put_offer_defaults(offer_for_provider(ap.model_id, provider_key))
 
       # The credential list is narrowed to the row's own provider, so editing an
@@ -988,6 +995,10 @@ defmodule TokengateWeb.ModelsLive do
        |> assign(:provider_form_model_id, ap.model_id)
        |> assign(:provider_form_credential_id, ap.credential_id)
        |> assign(:provider_form_is_fireworks, credential_is_fireworks?(ap.credential_id, socket))
+       |> assign(
+         :provider_form_is_aggregator,
+         credential_is_aggregator?(ap.credential_id, socket)
+       )
        |> assign(:provider_form_pricing_unit, ap.pricing_unit || Pricing.default_unit())
        |> assign(:provider_form_provider_key, provider_key)
        |> assign(:provider_credentials, provider_credentials)
@@ -2364,6 +2375,7 @@ defmodule TokengateWeb.ModelsLive do
       |> assign(:provider_form_provider_key, provider.key)
       |> assign(:provider_form_credential_id, credential_id)
       |> assign(:provider_form_is_fireworks, provider.key == "fireworks-ai")
+      |> assign(:provider_form_is_aggregator, aggregator?(provider.key))
       |> assign(:provider_credentials, credentials)
       |> assign_credential_choices()
 
@@ -2411,6 +2423,7 @@ defmodule TokengateWeb.ModelsLive do
         |> assign(:provider_form_provider_key, provider.key)
         |> assign(:provider_form_credential_id, credential_id)
         |> assign(:provider_form_is_fireworks, provider.key == "fireworks-ai")
+        |> assign(:provider_form_is_aggregator, aggregator?(provider.key))
         |> assign(:provider_credentials, credentials)
         |> assign_credential_choices()
 
@@ -2481,6 +2494,24 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   defp credential_is_fireworks?(_, _socket), do: false
+
+  # True when the credential's provider is an AGGREGATOR (the catalog declares
+  # pin fields for it). Gates the provider-pin select — a direct provider IS
+  # the upstream, so pinning has no meaning there.
+  defp credential_is_aggregator?(credential_id, socket) when is_binary(credential_id) do
+    case Enum.find(socket.assigns.credentials_for_select, &(&1.id == credential_id)) do
+      %{provider: %{key: key}} when is_binary(key) -> aggregator?(key)
+      _ -> false
+    end
+  end
+
+  defp credential_is_aggregator?(_, _socket), do: false
+
+  defp aggregator?(provider_key) when is_binary(provider_key) do
+    Tokengate.Providers.Catalog.aggregator_pin_fields(provider_key) != []
+  end
+
+  defp aggregator?(_), do: false
 
   @doc "Credential options for the select (id -> display)"
   def credential_options(credentials) do
@@ -4348,6 +4379,26 @@ defmodule TokengateWeb.ModelsLive do
                           hint={gettext("Output tokens. Same fallback as input.")}
                         />
                       </div>
+                    <% end %>
+
+                    <%= if @provider_form_is_aggregator do %>
+                      <.input
+                        field={@provider_form[:aggregator_provider_pin]}
+                        type="select"
+                        options={
+                          [{gettext("No pin — let the marketplace route (cheapest)"), ""}] ++
+                            Enum.map(Tokengate.Providers.Catalog.aggregator_pin_options(), fn {label,
+                                                                                               value} ->
+                              {label, value}
+                            end)
+                        }
+                        label={gettext("Pin to provider")}
+                        hint={
+                          gettext(
+                            "Routes every request of this key to the selected upstream. The client never knows: TokenGate also reshapes its reasoning knobs to that provider's wire dialect."
+                          )
+                        }
+                      />
                     <% end %>
 
                     <%= if @provider_form_is_fireworks do %>

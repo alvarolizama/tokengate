@@ -1412,6 +1412,97 @@ defmodule TokengateWeb.ProxyControllerTest do
       end
     end
 
+    test "aggregator pin (surplus) resolves the pinned provider dialect — client body pin", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      make_provider_keyed(model, "surplus-intelligence")
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "provider" => "fireworks",
+          "reasoning" => %{"effort" => "high"},
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          # The pin field travels on (the marketplace consumes it), but the
+          # knobs are reshaped to the PINNED provider's dialect.
+          assert payload["reasoning_effort"] == "high"
+          refute Map.has_key?(payload, "reasoning")
+      after
+        0 -> flunk("expected an upstream request")
+      end
+    end
+
+    test "aggregator pin (surplus) — operator extra_body pin wins over the client's", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      make_provider_keyed(model, "surplus-intelligence")
+      [mp] = Providers.list_model_providers(model.id)
+      {:ok, _} = Providers.update_model_provider(mp, %{extra_body: %{"provider" => "zai"}})
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "provider" => "fireworks",
+          "reasoning" => %{"effort" => "high"},
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          # zai dialect: thinking + effort coexist; the operator's pin (zai)
+          # wins over the client's (fireworks).
+          assert payload["reasoning_effort"] == "high"
+          assert payload["thinking"] == %{"type" => "enabled"}
+          assert payload["provider"] == "zai"
+      after
+        0 -> flunk("expected an upstream request")
+      end
+    end
+
+    test "aggregator without a pin leaves the knobs untouched (surplus passthrough)", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      make_provider_keyed(model, "surplus-intelligence")
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "reasoning" => %{"effort" => "high"},
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          # No pin: Surplus's own dialect applies — its deny-list forwarding
+          # passes the knobs through to whichever seller wins.
+          assert payload["reasoning"] == %{"effort" => "high"}
+      after
+        0 -> flunk("expected an upstream request")
+      end
+    end
+
     test ":passthrough (alibaba/qwen) leaves the body untouched", %{
       conn: conn,
       token: token,

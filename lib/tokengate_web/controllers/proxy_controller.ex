@@ -1674,7 +1674,7 @@ defmodule TokengateWeb.ProxyController do
     |> Map.update!("messages", &PromptOptimizer.lazy_cleanup/1)
     |> Map.update!("messages", &PromptOptimizer.strip_reasoning/1)
     |> drop_strict_fields(provider_key(route_ctx))
-    |> normalize_reasoning(provider_key(route_ctx))
+    |> normalize_reasoning(route_ctx)
     # Operator overrides run LAST so they can strip/replace anything the
     # gateway or the client put in the body (a per-row `omit_body_fields`
     # can pull a client field back out, and `extra_body` can add/replace).
@@ -1691,17 +1691,41 @@ defmodule TokengateWeb.ProxyController do
   @reasoning_knob_keys ~w(reasoning reasoning_effort thinking)
 
   # Reshapes the client's reasoning knobs into the ONE wire dialect the
-  # serving upstream documents (`Catalog.reasoning_dialect/1`). The client
-  # cannot know which provider a request lands on (fallback, priority,
-  # sticky), so the translation is the gateway's job, per attempt. Intent is
-  # read from whatever form arrived — nested `reasoning` object, scalar
-  # `reasoning_effort`, Moonshot-style `thinking` toggle — and re-emitted
-  # exclusively in the target dialect. `:passthrough` (and undeclared keys)
-  # leaves the body untouched.
-  defp normalize_reasoning(payload, provider_key) do
-    case Tokengate.Providers.Catalog.reasoning_dialect(provider_key) do
+  # serving upstream documents. For a DIRECT provider that is
+  # `Catalog.reasoning_dialect/1` of its catalog key. For an AGGREGATOR
+  # (Surplus) the dialect is fixed by whichever provider the request is
+  # PINNED to: the pin is read from the operator's `extra_body` first (the
+  # operator's routing contract wins) and the client's body second — the
+  # pin field itself travels on untouched, because the marketplace consumes
+  # it (it is never forwarded upstream). An unpinned or unknown pin keeps
+  # the aggregator's own dialect (:passthrough — Surplus forwards knobs by
+  # deny-list, so they often still work).
+  defp normalize_reasoning(payload, route_ctx) do
+    provider_key = provider_key(route_ctx)
+    pin = effective_aggregator_pin(payload, route_ctx, provider_key)
+
+    case Tokengate.Providers.Catalog.pinned_reasoning_dialect(provider_key, pin) do
       :passthrough -> payload
       dialect -> reshape_reasoning(payload, read_reasoning_intent(payload), dialect)
+    end
+  end
+
+  # The aggregator pin the request will actually carry: the operator's
+  # `extra_body` pin wins over the client's (apply_request_overrides merges
+  # it later, so read it here directly from the row). Any of the pin fields
+  # counts; first field with a value, client or operator, wins within its
+  # source. `nil` = no pin anywhere.
+  defp effective_aggregator_pin(payload, route_ctx, provider_key) do
+    pin_fields = Tokengate.Providers.Catalog.aggregator_pin_fields(provider_key)
+
+    if pin_fields == [] do
+      nil
+    else
+      operator_extra = model_provider_setting(route_ctx, :extra_body) || %{}
+
+      Enum.find_value(pin_fields, fn field ->
+        operator_extra[field] || payload[field]
+      end)
     end
   end
 
