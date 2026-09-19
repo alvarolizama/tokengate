@@ -162,6 +162,18 @@ defmodule TokengateWeb.ProxyControllerTest do
           Process.sleep(300)
           stream(conn)
 
+        # A chat answer with NO reported cost: forces the manual-pricing
+        # fallback path (usage tokens, but no `cost` anywhere).
+        "nocost" in conn.path_info ->
+          json(conn, 200, %{
+            "id" => "chatcmpl-nocost",
+            "object" => "chat.completion",
+            "choices" => [
+              %{"index" => 0, "message" => %{"role" => "assistant", "content" => "qué onda"}}
+            ],
+            "usage" => %{"prompt_tokens" => 20, "completion_tokens" => 10, "total_tokens" => 30}
+          })
+
         # Surplus Intelligence (marketplace) shape: the cost it charged the
         # buyer is micro-USD on the body's usage AND on a response header.
         "surplus-market" in conn.path_info ->
@@ -341,8 +353,14 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     provider_url =
       case Map.get(opts, :down) do
-        true -> "http://localhost:#{@port}/down"
-        _ -> "http://localhost:#{@port}"
+        true ->
+          "http://localhost:#{@port}/down"
+
+        _ ->
+          case Map.get(opts, :provider_path) do
+            nil -> "http://localhost:#{@port}"
+            segment -> "http://localhost:#{@port}/#{segment}"
+          end
       end
 
     {:ok, provider} =
@@ -2411,6 +2429,36 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert log.request_type == "video"
     assert log.prompt_tokens > 0
     assert log.completion_tokens == 0
+  end
+
+  # Regresión del lane de CHAT cobrado por llamada: el formulario ofrece
+  # `per_request` para lanes llm (Pricing.units_for_type/1), pero el camino de
+  # chat pasaba `quantities: %{}` — la cantidad de "per_request" (la llamada
+  # misma, 1) nunca llegaba al calculator y el lane facturaba $0 siempre.
+  # El stub responde SIN coste reportado para forzar el pricing manual.
+  test "chat: un lane cobrado por llamada (per_request) factura unit_cost", %{conn: conn} do
+    %{token: token, model: model, member: member, model_provider: model_provider} =
+      proxy_fixture(%{credit_units: 100, provider_path: "nocost"})
+
+    {:ok, _} =
+      Providers.update_model_provider(model_provider, %{
+        pricing_unit: "per_request",
+        unit_cost: "0.2500"
+      })
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+    assert json_response(conn, 200)
+    assert get_resp_header(conn, "x-tokengate-cost") == ["0.250000"]
+    assert %{consumed_micro: 250_000} = Budgets.limit_spend({:user, member.user_id})
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.250000"))
   end
 
   ## Media passthrough (multipart in, binary out) ##############################

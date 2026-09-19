@@ -67,10 +67,9 @@ defmodule Tokengate.Providers.Pricing do
   @doc """
   Las unidades que se cobran por tokens.
 
-  Público porque hay un consumidor que necesita distinguirlas fuera de aquí: el
-  backfill de coste sólo puede recalcular filas de token — la cantidad de una
-  unidad de media (nº de imágenes, segundos) no está en el log, así que no es
-  reconstruible a posteriori.
+  Público como vocabulario de consulta (tests y futuros consumidores que
+  necesiten distinguir las unidades de token de las de media); no tiene
+  callers en runtime hoy — `token_unit?/1` es la puerta de entrada.
   """
   @spec token_units() :: [String.t()]
   def token_units, do: @token_units

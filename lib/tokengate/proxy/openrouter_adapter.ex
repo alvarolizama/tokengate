@@ -136,22 +136,27 @@ defmodule Tokengate.Proxy.OpenRouterAdapter do
   defp poll_video(provider, credential, job, opts) do
     url = polling_url(provider, job)
     deadline = System.monotonic_time(:millisecond) + poll_budget(opts)
+    interval = Keyword.get(opts, :poll_interval_ms, @video_poll_interval_ms)
 
-    do_poll(provider, credential, url, deadline, job)
+    do_poll(provider, credential, url, deadline, job, interval)
   end
 
-  defp do_poll(provider, credential, url, deadline, _job) do
+  defp do_poll(provider, credential, url, deadline, _job, interval) do
     if System.monotonic_time(:millisecond) >= deadline do
-      {:error, :video_poll_timeout, nil, nil}
+      {:error, :timeout, nil, "video job did not reach a terminal status before the deadline"}
     else
-      Process.sleep(@video_poll_interval_ms)
+      Process.sleep(interval)
 
       case OpenAIAdapter.get_json(provider, credential, url, receive_timeout: 30_000) do
         {:ok, %{"status" => status} = doc} when status in @video_terminal ->
-          if status == "completed", do: {:ok, doc}, else: {:error, {:video, status}, nil, nil}
+          # failure_reason es un vocabulario cerrado de átomos: el detalle del
+          # job viaja en error_message, no en la razón (ver DashScopeAdapter).
+          if status == "completed",
+            do: {:ok, doc},
+            else: {:error, :server_error, nil, "video job ended with status #{status}"}
 
         {:ok, doc} ->
-          do_poll(provider, credential, url, deadline, doc)
+          do_poll(provider, credential, url, deadline, doc, interval)
 
         {:error, reason} ->
           {:error, reason, nil, nil}

@@ -496,7 +496,7 @@ defmodule TokengateWeb.ProxyController do
             )
           else
             log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
-              error_reason: to_string(reason),
+              error_reason: safe_reason(reason),
               error_message: error_message
             )
           end
@@ -1315,7 +1315,7 @@ defmodule TokengateWeb.ProxyController do
             )
           else
             log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
-              error_reason: to_string(reason),
+              error_reason: safe_reason(reason),
               error_message: error_message
             )
           end
@@ -1520,7 +1520,7 @@ defmodule TokengateWeb.ProxyController do
                   route,
                   member,
                   {:upstream_client_error, status},
-                  error_reason: to_string(reason),
+                  error_reason: safe_reason(reason),
                   error_message: error_message
                 )
 
@@ -1542,7 +1542,7 @@ defmodule TokengateWeb.ProxyController do
 
               true ->
                 log_and_render_proxy_error(conn, route, member, {:upstream_error, reason, status},
-                  error_reason: to_string(reason),
+                  error_reason: safe_reason(reason),
                   error_message: error_message
                 )
             end
@@ -2004,9 +2004,11 @@ defmodule TokengateWeb.ProxyController do
   end
 
   # Computes cost from manual pricing alone. Used by stream_cost when neither
-  # body nor headers reported a cost.
+  # body nor headers reported a cost. The quantities are the chat's own: only
+  # `per_request` (a lane can be priced per call), token units are read from
+  # the usage by token_pricing, not from this map.
   defp manual_cost(route, usage) do
-    cost_with_fallback(route, nil, usage, %{})
+    cost_with_fallback(route, nil, usage, ServiceUsage.quantities("llm", %{}, %{}))
   end
 
   # El tipo con el que se factura la llamada: el del modelo registrado, y si
@@ -2028,8 +2030,18 @@ defmodule TokengateWeb.ProxyController do
 
     provider_reported = UsageNormalizer.extract_reported_cost(:openai, body, resp_headers)
 
-    # El chat no tiene cantidad por unidad: su lane siempre cobra por tokens.
-    cost = cost_with_fallback(route, provider_reported, usage, %{})
+    # El chat cobra por tokens casi siempre, pero `Pricing` también ofrece
+    # `per_request` para lanes llm: sin quantities un lane así facturaba $0
+    # (la cantidad de "per_request" es la llamada misma, 1). El mapa que
+    # devuelve ya trae `"per_request" => 1` SIEMPRE, así que el camino de
+    # tokens no cambia.
+    cost =
+      cost_with_fallback(
+        route,
+        provider_reported,
+        usage,
+        ServiceUsage.quantities("llm", conn.body_params, reportable_body(body))
+      )
 
     # Hot-path state updates (ETS only)
     # Budget is settled in the caller's `after` (it owns the hold); stash the
@@ -2351,7 +2363,9 @@ defmodule TokengateWeb.ProxyController do
 
   defp error_reason_string(error) do
     {_status, _type, code, _msg} = error_details(error)
-    to_string(code)
+    # Un adapter que devuelva una razón fuera del vocabulario (una tupla, un
+    # mapa) no debe tumbar la request: se serializa, no se crashea.
+    if is_atom(code), do: to_string(code), else: inspect(code)
   end
 
   defp elapsed(start_ms), do: System.monotonic_time(:millisecond) - start_ms
@@ -2486,10 +2500,20 @@ defmodule TokengateWeb.ProxyController do
        "Provider rejected the request (#{status})"}
 
   defp error_details({:upstream_error, reason, status}),
-    do: {upstream_status(status), "api_error", to_string(reason), "Upstream provider error"}
+    do: {upstream_status(status), "api_error", safe_reason(reason), "Upstream provider error"}
 
   defp error_details(other), do: {500, "api_error", "internal_error", inspect(other)}
 
   defp upstream_status(status) when is_integer(status) and status in 400..599, do: status
   defp upstream_status(_), do: 502
+
+  # Las cuatro llamadas de error que serializan la razón (`error_reason:`,
+  # `error_details/1`) deben tolerar un adapter que se salga del vocabulario
+  # de `failure_reason` — históricamente una tupla `{:task, "FAILED"}` del
+  # polling de vídeo crasheaba aquí con Protocol.UndefinedError y la request
+  # moría en un 500 interno. Los átomos se serializan igual que siempre; lo
+  # demás se inspecciona.
+  defp safe_reason(reason) when is_atom(reason), do: to_string(reason)
+  defp safe_reason(reason) when is_binary(reason), do: reason
+  defp safe_reason(reason), do: inspect(reason)
 end

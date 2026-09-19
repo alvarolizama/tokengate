@@ -1451,11 +1451,18 @@ defmodule TokengateWeb.ModelsLive do
 
             Task.start(fn ->
               result =
-                ProviderAdapter.dispatch(provider).list_service_models(
-                  provider,
-                  credential,
-                  endpoint
-                )
+                try do
+                  ProviderAdapter.dispatch(provider).list_service_models(
+                    provider,
+                    credential,
+                    endpoint
+                  )
+                rescue
+                  # Un adapter que raise (credencial indescifrable, Finch sin
+                  # clasificar) no puede dejar el spinner colgado: el mensaje
+                  # de error limpia el estado como cualquier {:error, _}.
+                  e -> {:error, Exception.message(e)}
+                end
 
               send(lv_pid, {:wizard_service_models, provider_key, type, result})
             end)
@@ -1693,10 +1700,16 @@ defmodule TokengateWeb.ModelsLive do
         adapter = Tokengate.Proxy.ProviderAdapter.dispatch(provider)
 
         result =
-          if model_type == "embedding" do
-            adapter.list_embedding_models(provider, credential)
-          else
-            Tokengate.Proxy.OpenAIAdapter.list_models(provider, credential)
+          try do
+            if model_type == "embedding" do
+              adapter.list_embedding_models(provider, credential)
+            else
+              Tokengate.Proxy.OpenAIAdapter.list_models(provider, credential)
+            end
+          rescue
+            # Igual que el wizard: un raise del adapter no puede dejar
+            # `provider_models_loading` colgado en true para siempre.
+            e -> {:error, Exception.message(e)}
           end
 
         send(lv_pid, {:provider_models_result, credential_id, result})

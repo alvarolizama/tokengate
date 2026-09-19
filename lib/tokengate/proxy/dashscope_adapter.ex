@@ -277,28 +277,36 @@ defmodule Tokengate.Proxy.DashScopeAdapter do
     end
   end
 
+  # El failure_reason del behaviour es un vocabulario CERRADO de átomos (ver
+  # ProviderAdapter.failure_reason): una tupla aquí rompe el `to_string(reason)`
+  # del controller (Protocol.UndefinedError) y la request muere en un 500
+  # interno en vez de surficiar el fallo upstream. El detalle específico del
+  # task viaja en error_message.
   defp fetch_task_id(%{"output" => %{"task_id" => id}}) when is_binary(id), do: {:ok, id}
-  defp fetch_task_id(_), do: {:error, :no_task_id, nil, nil}
+  defp fetch_task_id(_), do: {:error, :server_error, nil, "no task id in submission response"}
 
   defp poll_task(provider, credential, task_id, opts) do
     url = native_url(provider, @tasks_path) <> "/#{task_id}"
     deadline = System.monotonic_time(:millisecond) + poll_budget(opts)
-    do_poll(provider, credential, url, deadline)
+    interval = Keyword.get(opts, :poll_interval_ms, @poll_interval_ms)
+    do_poll(provider, credential, url, deadline, interval)
   end
 
-  defp do_poll(provider, credential, url, deadline) do
+  defp do_poll(provider, credential, url, deadline, interval) do
     if System.monotonic_time(:millisecond) >= deadline do
-      {:error, :task_poll_timeout, nil, nil}
+      {:error, :timeout, nil, "video task did not reach a terminal status before the deadline"}
     else
-      Process.sleep(@poll_interval_ms)
+      Process.sleep(interval)
 
       case OpenAIAdapter.get_json(provider, credential, url, receive_timeout: 30_000) do
         {:ok, %{"output" => %{"task_status" => status}} = doc}
         when status in @task_terminal ->
-          if status == "SUCCEEDED", do: {:ok, doc}, else: {:error, {:task, status}, nil, nil}
+          if status == "SUCCEEDED",
+            do: {:ok, doc},
+            else: {:error, :server_error, nil, "video task ended with status #{status}"}
 
         {:ok, _doc} ->
-          do_poll(provider, credential, url, deadline)
+          do_poll(provider, credential, url, deadline, interval)
 
         {:error, reason} ->
           {:error, reason, nil, nil}

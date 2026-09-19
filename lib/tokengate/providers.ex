@@ -107,30 +107,45 @@ defmodule Tokengate.Providers do
   def purge_unused_catalog do
     # Postgres no soporta left_join en delete_all: se usan subqueries NOT IN
     # (ids acotados — tablas de catálogo, no de uso).
-    models_deleted =
-      Repo.delete_all(
-        from(m in Model,
-          where:
-            m.id not in subquery(
-              from(mp in Tokengate.Providers.ModelProvider, select: mp.model_id)
+    #
+    # Ambos deletes van en UNA transacción: contra un CatalogSync concurrente
+    # (lockea models y providers en otro orden) un delete suelto puede
+    # deadlockar — y sin transacción el primero quedaba commitado y el segundo
+    # no, dejando el catálogo a medias. Con transacción el deadlock se revierte
+    # entero y el caller puede reintentar.
+    {models_deleted, providers_deleted} =
+      Repo.transaction(fn ->
+        models =
+          Repo.delete_all(
+            from(m in Model,
+              where:
+                m.id not in subquery(
+                  from(mp in Tokengate.Providers.ModelProvider, select: mp.model_id)
+                )
             )
-        )
-      )
+          )
 
-    providers_deleted =
-      Repo.delete_all(
-        from(p in Provider,
-          where:
-            p.source != "custom" and
-              p.id not in subquery(
-                from(c in Tokengate.Providers.Credential, select: c.provider_id)
-              )
-        )
-      )
+        providers =
+          Repo.delete_all(
+            from(p in Provider,
+              where:
+                p.source != "custom" and
+                  p.id not in subquery(
+                    from(c in Tokengate.Providers.Credential, select: c.provider_id)
+                  )
+            )
+          )
+
+        {elem(models, 0), elem(providers, 0)}
+      end)
+      |> case do
+        {:ok, counts} -> counts
+        {:error, reason} -> raise "purge_unused_catalog failed: #{inspect(reason)}"
+      end
 
     Tokengate.Routing.Cache.invalidate_all()
 
-    %{models: elem(models_deleted, 0), providers: elem(providers_deleted, 0)}
+    %{models: models_deleted, providers: providers_deleted}
   end
 
   def get_provider!(id), do: Repo.get!(Provider, id)

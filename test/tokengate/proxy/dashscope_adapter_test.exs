@@ -163,4 +163,72 @@ defmodule Tokengate.Proxy.DashScopeAdapterTest do
       assert DashScopeAdapter.translate_video_response(task)["status"] == "failed"
     end
   end
+
+  describe "service_post(:video) polling" do
+    # Regresión del crash `Protocol.UndefinedError`: el polling de un task
+    # FAILED devolvía `{:error, {:task, "FAILED"}, nil, nil}` — una razón
+    # FUERA del vocabulario de failure_reason — y el controller crasheaba en
+    # `to_string(reason)` al serializar el error. El contrato ahora es átomo
+    # + detalle en error_message.
+    @describetag :capture_log
+
+    @port 31_997
+
+    defmodule VideoPlug do
+      @moduledoc false
+      import Plug.Conn
+
+      def init(opts), do: opts
+
+      def call(conn, _opts) do
+        case conn.request_path do
+          "/api/v1/services/aigc/video-generation/video-synthesis" ->
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(
+              200,
+              Jason.encode!(%{"output" => %{"task_id" => "t-1", "task_status" => "PENDING"}})
+            )
+
+          "/api/v1/tasks/t-1" ->
+            conn
+            |> put_resp_content_type("application/json")
+            |> send_resp(
+              200,
+              Jason.encode!(%{
+                "output" => %{
+                  "task_id" => "t-1",
+                  "task_status" => "FAILED",
+                  "code" => "InternalError"
+                }
+              })
+            )
+
+          _ ->
+            send_resp(conn, 404, "not found")
+        end
+      end
+    end
+
+    setup do
+      start_supervised!({Bandit, plug: VideoPlug, scheme: :http, ip: :loopback, port: @port})
+      :ok
+    end
+
+    test "a FAILED task surfaces as a 4-tuple with an atom reason, not a tuple" do
+      provider = %{base_url: "http://localhost:#{@port}/compatible-mode/v1"}
+      credential = %{api_key_encrypted: "sk-test"}
+
+      result =
+        DashScopeAdapter.service_post(provider, credential, :video, %{"prompt" => "un gato"},
+          poll_interval_ms: 1,
+          receive_timeout: 5_000
+        )
+
+      assert {:error, :server_error, nil, message} = result
+      assert message =~ "FAILED"
+      # La razón debe ser serializable — esto es lo que crasheaba antes.
+      assert is_atom(:server_error)
+    end
+  end
 end

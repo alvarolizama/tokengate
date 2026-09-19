@@ -24,7 +24,6 @@ defmodule Tokengate.Accounts.User do
 
   # Virtual fields used during registration / password update.
   # Never persisted; consumed by the registration changeset.
-  @derive {Jason.Encoder, only: [:id, :email, :name, :global_role, :status, :timezone]}
   schema "users" do
     field :email, :string
     field :name, :string
