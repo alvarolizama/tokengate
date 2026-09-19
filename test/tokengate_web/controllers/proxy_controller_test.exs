@@ -1204,6 +1204,103 @@ defmodule TokengateWeb.ProxyControllerTest do
     end
   end
 
+  # The CATALOG rename is what remaps a client field the upstream rejects
+  # under that name to the knob it documents — no operator action needed, and
+  # unlike the per-row omission the VALUE is not lost: it travels under the
+  # renamed key, adapted to the scalar shape the target knob expects.
+  describe "catalog rename_body_fields (fireworks)" do
+    setup %{conn: conn} do
+      %{token: token, model: model} = proxy_fixture(%{})
+      # The rename is keyed by the provider's catalog key: stamp the fireworks
+      # key onto the fixture's local provider (see make_provider_fireworks/1).
+      make_provider_fireworks(model)
+      {:ok, conn: conn, token: token, model: model}
+    end
+
+    test "a nested OpenRouter-style reasoning object becomes top-level reasoning_effort", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "reasoning" => %{"effort" => "high"},
+          "messages" => [
+            %{"role" => "user", "content" => "hola, ¿cómo vas?"}
+          ]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          refute Map.has_key?(payload, "reasoning")
+          assert payload["reasoning_effort"] == "high"
+      after
+        0 -> flunk("expected an upstream request")
+      end
+    end
+
+    test "an explicit reasoning_effort from the client wins over the rename", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "reasoning" => %{"effort" => "low"},
+          "reasoning_effort" => "max",
+          "messages" => [
+            %{"role" => "user", "content" => "hola, ¿cómo vas?"}
+          ]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          # The explicit field wins; the source key is still consumed.
+          assert payload["reasoning_effort"] == "max"
+          refute Map.has_key?(payload, "reasoning")
+      after
+        0 -> flunk("expected an upstream request")
+      end
+    end
+
+    test "a disabled reasoning object flattens to reasoning_effort none", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "reasoning" => %{"enabled" => false},
+          "messages" => [
+            %{"role" => "user", "content" => "hola, ¿cómo vas?"}
+          ]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          assert payload["reasoning_effort"] == "none"
+          refute Map.has_key?(payload, "reasoning")
+      after
+        0 -> flunk("expected an upstream request")
+      end
+    end
+  end
+
   test "a 400 that every candidate rejects is surfaced to the client", %{
     conn: conn
   } do

@@ -599,6 +599,22 @@ defmodule Tokengate.Providers.CatalogTest do
     end
   end
 
+  describe "rename_body_fields/1" do
+    test "fireworks remaps the nested reasoning key to its top-level knob" do
+      # Fireworks documents `reasoning_effort` (top-level string) and rejects
+      # the OpenRouter-style nested `reasoning` object some clients send
+      # ("Extra inputs are not permitted"): the rename moves the client's key
+      # to the shape the upstream expects.
+      assert Catalog.rename_body_fields("fireworks-ai") == %{"reasoning" => "reasoning_effort"}
+    end
+
+    test "providers without a rename and unknown keys declare none" do
+      assert Catalog.rename_body_fields("openrouter") == %{}
+      assert Catalog.rename_body_fields("totally-unknown") == %{}
+      assert Catalog.rename_body_fields(nil) == %{}
+    end
+  end
+
   describe "logo de un proveedor code-owned" do
     # El logo es IDENTIDAD de un builtin: vive en el espejo y `materialize/0` es
     # lo que lo lleva a `providers` — incluso en una instancia VIVA, porque el

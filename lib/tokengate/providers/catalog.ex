@@ -108,6 +108,12 @@ defmodule Tokengate.Providers.Catalog do
   #                             vocabulary in `ProviderPaths` and only apply
   #                             when the provider has no operator override
   #   * :omit_body_fields     — fields the gateway must STRIP from the body
+  #   * :rename_body_fields   — %{from => to} renames applied to the body the
+  #                             CLIENT sent: the value travels under the key
+  #                             the upstream expects instead of being passed
+  #                             through as-is or dropped. Applied AFTER
+  #                             omit_body_fields and BEFORE the per-row
+  #                             operator overrides (the operator still wins).
   # ---------------------------------------------------------------------------
   @customizations %{
     # OpenRouter expone TODO en su superficie OpenAI-compatible bajo /api/v1:
@@ -129,7 +135,14 @@ defmodule Tokengate.Providers.Catalog do
     # `{base}/rerank` es exactamente el default genérico (verificado en
     # docs.fireworks.ai/api-reference/rerank-documents), así que solo se
     # declara la capability — ningún override de path.
-    "fireworks-ai" => %{capabilities: ~w(llm embedding rerank)},
+    "fireworks-ai" => %{
+      capabilities: ~w(llm embedding rerank),
+      # Fireworks documenta `reasoning_effort` top-level (string) y RECHAZA el
+      # `reasoning` anidado estilo OpenRouter que algunos clientes mandan
+      # ("Extra inputs are not permitted"). El rename remapea la key del
+      # cliente a la forma que el upstream espera — el valor viaja tal cual.
+      rename_body_fields: %{"reasoning" => "reasoning_effort"}
+    },
     # DashScope (Model Studio) expone tres superficies distintas:
     #   * compatible-mode/v1 — chat, models, embeddings y, desde qwen-image,
     #     /images/generations YA OpenAI-compatible (response con data[].url);
@@ -585,6 +598,32 @@ defmodule Tokengate.Providers.Catalog do
     case option(key, :omit_body_fields, []) do
       fields when is_list(fields) -> fields
       _ -> []
+    end
+  end
+
+  @doc """
+  Body field renames (%{from => to}) a provider's upstream expects instead of
+  the client's key, by catalog key.
+
+  Empty for every provider that declares none and for unknown/custom keys: the
+  value only moves to another key, it is never rewritten, merged or dropped —
+  a rename whose target key already exists in the body is skipped (the
+  explicit field wins over the remapped one).
+
+      iex> Tokengate.Providers.Catalog.rename_body_fields("fireworks-ai")
+      %{"reasoning" => "reasoning_effort"}
+
+      iex> Tokengate.Providers.Catalog.rename_body_fields("openrouter")
+      %{}
+
+      iex> Tokengate.Providers.Catalog.rename_body_fields(nil)
+      %{}
+  """
+  @spec rename_body_fields(String.t() | nil) :: %{String.t() => String.t()}
+  def rename_body_fields(key \\ nil) do
+    case option(key, :rename_body_fields, %{}) do
+      %{} = renames -> renames
+      _ -> %{}
     end
   end
 

@@ -1674,6 +1674,7 @@ defmodule TokengateWeb.ProxyController do
     |> Map.update!("messages", &PromptOptimizer.lazy_cleanup/1)
     |> Map.update!("messages", &PromptOptimizer.strip_reasoning/1)
     |> drop_strict_fields(provider_key(route_ctx))
+    |> rename_body_fields(provider_key(route_ctx))
     # Operator overrides run LAST so they can strip/replace anything the
     # gateway or the client put in the body (a per-row `omit_body_fields`
     # can pull a client field back out, and `extra_body` can add/replace).
@@ -1682,14 +1683,59 @@ defmodule TokengateWeb.ProxyController do
 
   defp maybe_optimize(payload, _model_model), do: payload
 
+  # Body keys the gateway owns (model mapping, passthrough body, usage
+  # accounting): never a valid rename target nor an override target — an
+  # override there would break routing or cost tracking.
+  @protected_body_keys ~w(model messages stream_options)
+
+  # Remaps client-supplied body keys to the name the upstream expects
+  # (`Catalog.rename_body_fields/1`). The VALUE is adapted, not just moved:
+  # an OpenRouter-style nested reasoning object (`%{"effort" => "high"}` or
+  # `%{"enabled" => false}`) flattens to the scalar Fireworks-style knobs
+  # expect. A rename whose target key already exists is skipped — the field
+  # the client sent explicitly wins over a remapped one. Protected keys are
+  # never a valid rename target (the gateway owns them).
+  defp rename_body_fields(payload, provider_key) do
+    renames = Tokengate.Providers.Catalog.rename_body_fields(provider_key)
+
+    Enum.reduce(renames, payload, fn {from, to}, acc ->
+      cond do
+        to in @protected_body_keys or not Map.has_key?(acc, from) -> acc
+        # The explicit target field wins, but the source key is still
+        # consumed: leaving it in the body would recreate the strict-upstream
+        # 400 the rename exists to prevent.
+        Map.has_key?(acc, to) -> Map.delete(acc, from)
+        true -> move_renamed_field(acc, from, to)
+      end
+    end)
+  end
+
+  defp move_renamed_field(payload, from, to) do
+    case rename_value(Map.get(payload, from)) do
+      # nil = "adapt away": the source field is dropped and nothing replaces
+      # it, so the upstream applies its own default (e.g. reasoning enabled
+      # without an explicit effort level).
+      nil -> Map.delete(payload, from)
+      value -> payload |> Map.put(to, value) |> Map.delete(from)
+    end
+  end
+
+  # OpenRouter-style nested objects flatten to the scalar the target knob
+  # expects; a scalar travels untouched. A nested object that matches NO
+  # known shape is dropped (nil): the target knob expects a scalar, and
+  # forwarding the object would recreate the 400 the rename exists to fix.
+  defp rename_value(%{"effort" => effort}) when is_binary(effort) and effort != "", do: effort
+  defp rename_value(%{"enabled" => false}), do: "none"
+  defp rename_value(%{"enabled" => true}), do: nil
+  defp rename_value(other) when is_map(other), do: nil
+  defp rename_value(other), do: other
+
   # Per model_provider upstream overrides, applied last in the payload
   # pipeline so they win over every gateway injection (session hints).
   # Defaults are no-ops. `model`, `messages` and
   # `stream_options` are protected: the gateway owns them (model mapping,
   # passthrough body, usage accounting) and an override there would break
   # routing or cost tracking.
-  @protected_body_keys ~w(model messages stream_options)
-
   defp apply_request_overrides(payload, route_ctx) do
     extra = model_provider_setting(route_ctx, :extra_body) || %{}
     omit = model_provider_setting(route_ctx, :omit_body_fields) || []
