@@ -151,6 +151,21 @@ defmodule Tokengate.Proxy.ProviderAdapter do
               {:ok, [String.t()]} | {:error, failure_reason()}
 
   @doc """
+  Lists the model ids a provider publishes for ONE service, at the endpoint
+  `Tokengate.Providers.ServiceModels.discovery/2` names for it (a path, possibly
+  with a query string — OpenRouter's is `/models?output_modalities=image`).
+
+  A provider that publishes no per-service catalogue has no such endpoint, so
+  this is only ever called when one exists. Returns `{:ok, [model_id]}` or
+  `{:error, reason}`, like `list_embedding_models/2`.
+  """
+  @callback list_service_models(
+              provider :: map(),
+              credential :: map(),
+              endpoint :: String.t()
+            ) :: {:ok, [String.t()]} | {:error, failure_reason()}
+
+  @doc """
   Classifies an HTTP status code into a failure reason.
 
     * `400` -> `:bad_request` (the provider rejected *this* body for its own
@@ -251,9 +266,11 @@ defmodule Tokengate.Proxy.ProviderAdapter do
 
   def dispatch(%{dialect: "openrouter"}), do: Tokengate.Proxy.OpenRouterAdapter
   def dispatch(%{dialect: "dashscope"}), do: Tokengate.Proxy.DashScopeAdapter
+  def dispatch(%{dialect: "typesafe"}), do: Tokengate.Proxy.TypeSafeAdapter
   def dispatch(%{dialect: "openai"}), do: Tokengate.Proxy.OpenAIAdapter
   def dispatch(%{"dialect" => "openrouter"}), do: Tokengate.Proxy.OpenRouterAdapter
   def dispatch(%{"dialect" => "dashscope"}), do: Tokengate.Proxy.DashScopeAdapter
+  def dispatch(%{"dialect" => "typesafe"}), do: Tokengate.Proxy.TypeSafeAdapter
   def dispatch(%{"dialect" => "openai"}), do: Tokengate.Proxy.OpenAIAdapter
 
   def dispatch(%{adapter: adapter}) when is_binary(adapter), do: resolve(adapter)

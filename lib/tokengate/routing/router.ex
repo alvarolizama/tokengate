@@ -99,7 +99,12 @@ defmodule Tokengate.Routing.Router do
   def route(model_requested, group_member, request_context \\ %{}, opts \\ []) do
     breaker = Keyword.get(opts, :breaker, Map.get(request_context, :breaker, @default_breaker))
     exclude = exclude_ids(request_context, opts)
-    capability = Map.get(request_context, :capability, "llm")
+
+    capability =
+      request_context
+      |> Map.get(:capability, "llm")
+      |> List.wrap()
+      |> Enum.map(&to_string/1)
 
     # Ensure group is preloaded (callers may not have preloaded it).
     group_member = maybe_preload_group(group_member)
@@ -110,11 +115,12 @@ defmodule Tokengate.Routing.Router do
       nil ->
         {:error, :model_not_found}
 
-      %{model_type: type} when type != capability ->
-        {:error, :model_type_mismatch}
-
-      model ->
-        route_model(model, group_member, accessible, request_context, breaker, exclude)
+      %{model_type: type} = model ->
+        if is_binary(type) and type in capability do
+          route_model(model, group_member, accessible, request_context, breaker, exclude)
+        else
+          {:error, :model_type_mismatch}
+        end
     end
   end
 

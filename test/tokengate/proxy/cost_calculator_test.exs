@@ -172,4 +172,158 @@ defmodule Tokengate.Proxy.CostCalculatorTest do
       assert Decimal.equal?(CostCalculator.provider_cost([1, 2], []), Decimal.new(0))
     end
   end
+
+  describe "provider_cost/2 — precio por unidad (image/video/tts/stt/music)" do
+    # `pricing_unit` no es token: la cantidad facturable la produce
+    # `ServiceUsage` (imágenes, segundos, caracteres…) y el precio es
+    # `unit_cost`. Sin esta ruta esos tipos sólo se cobraban si el upstream
+    # reportaba el coste.
+
+    test "per_image: cantidad × precio, sin divisor" do
+      opts = [
+        pricing_unit: "per_image",
+        unit_cost: Decimal.new("0.04"),
+        quantities: %{"per_image" => 3, "per_request" => 1}
+      ]
+
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new("0.12"))
+    end
+
+    test "per_megapixel: cantidad fraccionaria × precio" do
+      opts = [
+        pricing_unit: "per_megapixel",
+        unit_cost: Decimal.new("0.02"),
+        quantities: %{"per_megapixel" => 2.0}
+      ]
+
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new("0.04"))
+    end
+
+    test "per_second: cantidad fraccionaria × precio" do
+      opts = [
+        pricing_unit: "per_second",
+        unit_cost: Decimal.new("0.09"),
+        quantities: %{"per_second" => 12.5}
+      ]
+
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new("1.125"))
+    end
+
+    test "per_minute" do
+      opts = [
+        pricing_unit: "per_minute",
+        unit_cost: Decimal.new("0.006"),
+        quantities: %{"per_minute" => 2}
+      ]
+
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new("0.012"))
+    end
+
+    test "per_1k_characters: el divisor de 1000 entra en la fórmula" do
+      opts = [
+        pricing_unit: "per_1k_characters",
+        unit_cost: Decimal.new("0.015"),
+        quantities: %{"per_1k_characters" => 4000}
+      ]
+
+      # 4000 × 0.015 / 1000 = 0.06
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new("0.06"))
+    end
+
+    test "per_request: la cantidad es la llamada misma (1)" do
+      opts = [
+        pricing_unit: "per_request",
+        unit_cost: Decimal.new("0.25"),
+        quantities: %{"per_request" => 1}
+      ]
+
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new("0.25"))
+    end
+
+    test "sin precio unitario: $0 (nunca se inventa)" do
+      opts = [pricing_unit: "per_image", quantities: %{"per_image" => 3}]
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new(0))
+    end
+
+    test "cantidad 0: $0" do
+      opts = [
+        pricing_unit: "per_second",
+        unit_cost: Decimal.new("0.09"),
+        quantities: %{"per_second" => 0}
+      ]
+
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new(0))
+    end
+
+    test "unidad que no está en las cantidades de la llamada: $0" do
+      opts = [
+        pricing_unit: "per_minute",
+        unit_cost: Decimal.new("0.006"),
+        quantities: %{"per_image" => 3}
+      ]
+
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new(0))
+    end
+
+    test "el coste reportado por el upstream SIGUE ganando a la unidad" do
+      opts = [
+        pricing_unit: "per_image",
+        unit_cost: Decimal.new("0.04"),
+        quantities: %{"per_image" => 3}
+      ]
+
+      assert Decimal.equal?(
+               CostCalculator.provider_cost(Decimal.new("0.99"), opts),
+               Decimal.new("0.99")
+             )
+    end
+  end
+
+  describe "provider_cost/2 — la ruta por tokens no cambia" do
+    test "sin pricing_unit explícito se asume la unidad de siempre (tokens)" do
+      opts = [
+        manual_pricing: %{
+          input_cost_per_million: Decimal.new("2.50"),
+          output_cost_per_million: Decimal.new("10.00"),
+          cache_cost_per_million: Decimal.new("0.50")
+        },
+        usage: %{prompt_tokens: 1000, completion_tokens: 500}
+      ]
+
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new("0.0075"))
+    end
+
+    test "pricing_unit token explícito usa los tres campos de token, no unit_cost" do
+      opts = [
+        pricing_unit: "per_1m_tokens",
+        unit_cost: Decimal.new("999"),
+        quantities: %{"per_1m_tokens" => 100},
+        manual_pricing: %{
+          input_cost_per_million: Decimal.new("2.50"),
+          output_cost_per_million: Decimal.new("10.00"),
+          cache_cost_per_million: Decimal.new("0.50")
+        },
+        usage: %{prompt_tokens: 1000, completion_tokens: 500}
+      ]
+
+      # gana la fórmula de tokens: unit_cost no participa.
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new("0.0075"))
+    end
+
+    test "per_1k_tokens es token: sigue leyendo manual_pricing" do
+      opts = [
+        pricing_unit: "per_1k_tokens",
+        unit_cost: Decimal.new("999"),
+        manual_pricing: %{
+          input_cost_per_million: Decimal.new("2.50"),
+          output_cost_per_million: Decimal.new("10.00"),
+          cache_cost_per_million: nil
+        },
+        usage: %{prompt_tokens: 1000, completion_tokens: 500}
+      ]
+
+      # 2-term: (1000×2.50 + 500×10.00)/1M = 0.0075
+      assert Decimal.equal?(CostCalculator.provider_cost(nil, opts), Decimal.new("0.0075"))
+    end
+  end
 end

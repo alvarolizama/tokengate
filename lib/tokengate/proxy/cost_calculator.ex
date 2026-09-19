@@ -9,11 +9,19 @@ defmodule Tokengate.Proxy.CostCalculator do
 
       1. Upstream-reported cost — `usage.cost` in the body or
          `x-litellm-response-cost` header. The upstream is the source of truth.
-      2. Manual pricing fallback — `input_cost_per_million`,
-         `cache_cost_per_million`, and `output_cost_per_million` on the
-         model_provider row, multiplied by the actual token counts from the
-         response usage. Only applies when the upstream is silent AND all three
-         fields are set (or both input+output if cache is nil).
+      2. Manual pricing fallback, in the unit the LANE declared
+         (`model_providers.pricing_unit`):
+           * **token units** (`per_1m_tokens`, `per_1k_tokens`) —
+             `input_cost_per_million`, `cache_cost_per_million` and
+             `output_cost_per_million` multiplied by the token counts. Only
+             applies when the upstream is silent AND the rates are set (input
+             + output at least).
+           * **any other unit** (`per_image`, `per_second`, `per_minute`,
+             `per_1k_characters`, `per_megapixel`, `per_request`) —
+             `unit_cost` multiplied by the billable quantity of the call
+             (`ServiceUsage.quantities/3`). This is what lets image, video,
+             music, tts and stt be priced at all, since their unit is not a
+             token.
       3. $0 — honest fallback. We don't invent costs.
 
   Billing surface plays no part: a subscription provider is priced by the
@@ -38,6 +46,8 @@ defmodule Tokengate.Proxy.CostCalculator do
   the result to the `request_logs.provider_cost_usd` column (`numeric(12,6)`).
   """
 
+  alias Tokengate.Providers.Pricing
+
   @zero Decimal.new(0)
   @million Decimal.new(1_000_000)
 
@@ -61,20 +71,12 @@ defmodule Tokengate.Proxy.CostCalculator do
   def provider_cost(reported, opts \\ [])
 
   def provider_cost(nil, opts) do
-    case Keyword.get(opts, :manual_pricing) do
-      %{input_cost_per_million: %Decimal{} = inp, output_cost_per_million: %Decimal{} = out} ->
-        usage = Keyword.get(opts, :usage, %{})
+    unit = Keyword.get(opts, :pricing_unit) || Pricing.default_unit()
 
-        case Map.get(opts[:manual_pricing], :cache_cost_per_million) do
-          %Decimal{} = cache_cost ->
-            manual_cost_3term(usage, inp, cache_cost, out)
-
-          _ ->
-            manual_cost_2term(usage, inp, out)
-        end
-
-      _ ->
-        @zero
+    if Pricing.token_unit?(unit) do
+      token_pricing(Keyword.get(opts, :manual_pricing), Keyword.get(opts, :usage, %{}))
+    else
+      unit_pricing(unit, Keyword.get(opts, :unit_cost), Keyword.get(opts, :quantities, %{}))
     end
   end
 
@@ -98,6 +100,43 @@ defmodule Tokengate.Proxy.CostCalculator do
 
   # Anything else (a map, a list, a bad atom) → $0.
   def provider_cost(_reported, _opts), do: @zero
+
+  # Token pricing: the three columns are the PARAMETERS of the token unit, so
+  # this is exactly the historical formula, untouched.
+  defp token_pricing(
+         %{input_cost_per_million: %Decimal{} = inp, output_cost_per_million: %Decimal{} = out} =
+           pricing,
+         usage
+       ) do
+    case Map.get(pricing, :cache_cost_per_million) do
+      %Decimal{} = cache_cost -> manual_cost_3term(usage, inp, cache_cost, out)
+      _ -> manual_cost_2term(usage, inp, out)
+    end
+  end
+
+  defp token_pricing(_pricing, _usage), do: @zero
+
+  # Unit pricing: the lane is priced per image/second/character/…, so the cost
+  # is `quantity × rate / divisor`. The quantity comes from the call itself
+  # (`ServiceUsage.quantities/3`) and the unit from the lane's `pricing_unit`;
+  # `per_1k_characters` is the same formula with a divisor of 1000.
+  #
+  # A missing rate is `$0` — we never invent a price.
+  defp unit_pricing(unit, %Decimal{} = rate, quantities) do
+    quantity = Map.get(quantities, unit, 0)
+
+    if quantity == 0 do
+      @zero
+    else
+      "#{quantity}"
+      |> Decimal.new()
+      |> Decimal.mult(rate)
+      |> Decimal.div(Decimal.new(Pricing.divisor(unit)))
+      |> Decimal.round(6)
+    end
+  end
+
+  defp unit_pricing(_unit, _rate, _quantities), do: @zero
 
   # 3-term formula: non_cached × input + cached × cache + completion × output
   defp manual_cost_3term(usage, input_rate, cache_rate, output_rate) do

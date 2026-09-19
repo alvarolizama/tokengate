@@ -349,7 +349,6 @@ defmodule TokengateWeb.ProxyControllerTest do
       Providers.create_provider(%{
         name: "Provider #{u}",
         base_url: provider_url,
-        billing_type: Map.get(opts, :billing_type, "pay_per_token"),
         path_overrides: Map.get(opts, :path_overrides, %{})
       })
 
@@ -362,7 +361,8 @@ defmodule TokengateWeb.ProxyControllerTest do
     {:ok, model} =
       Providers.create_model(%{
         name: "gpt-4o-#{u}",
-        context_window: 128_000
+        context_window: 128_000,
+        model_type: Map.get(opts, :model_type, "llm")
       })
 
     {:ok, _grant} = Providers.grant_model_to_group(group.id, model.id)
@@ -563,6 +563,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     %{token: token, model: model, member: member} =
       proxy_fixture(%{
         credit_units: 100,
+        model_type: "tts",
         path_overrides: %{"tts" => "/surplus-binary-speech"}
       })
 
@@ -679,20 +680,6 @@ defmodule TokengateWeb.ProxyControllerTest do
     |> authed_conn(token)
     |> post(~p"/v1/chat/completions", chat_body(model.name))
     |> json_response(200)
-  end
-
-  test "a subscription provider is not exempt from an exhausted credit", %{conn: conn} do
-    %{token: token, model: model} =
-      proxy_fixture(%{credit_units: 0, billing_type: "subscription"})
-
-    # Exhausted credit + no billing-surface exemption: the gate rejects it,
-    # exactly as it would for a pay_per_token provider.
-    conn =
-      conn
-      |> authed_conn(token)
-      |> post(~p"/v1/chat/completions", chat_body(model.name))
-
-    assert json_response(conn, 402)
   end
 
   test "402 when estimated cost exceeds the daily budget (nil group budget is unlimited)", %{
@@ -2144,6 +2131,31 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert %{"error" => %{"code" => "model_type_mismatch"}} = json_response(conn, 400)
   end
 
+  # The service endpoints now gate by their OWN type: an llm model is not
+  # reachable from a service route (and, symmetrically, a service model is
+  # only reachable from its endpoint).
+  test "service route 400 model_type_mismatch against an llm model", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture()
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/audio/transcriptions", %{"model" => model.name, "input" => "audio"})
+
+    assert %{"error" => %{"code" => "model_type_mismatch"}} = json_response(conn, 400)
+  end
+
+  test "a stt model is reachable from transcriptions and rejected by chat", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture(%{model_type: "stt"})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+    assert %{"error" => %{"code" => "model_type_mismatch"}} = json_response(conn, 400)
+  end
+
   test "GET /v1/models includes model_type", %{conn: conn} do
     %{token: token, model: model} = proxy_fixture()
     update_alias_type(model, "embedding")
@@ -2207,7 +2219,7 @@ defmodule TokengateWeb.ProxyControllerTest do
   end
 
   test "POST /v1/images/generations lands on base_url + /images/generations", %{conn: conn} do
-    %{token: token, model: model} = proxy_fixture()
+    %{token: token, model: model} = proxy_fixture(%{model_type: "image"})
 
     conn =
       conn
@@ -2222,7 +2234,7 @@ defmodule TokengateWeb.ProxyControllerTest do
   # upstream path: it wins over the generic default of the service.
   test "an operator override on the provider row beats the generic default", %{conn: conn} do
     %{token: token, model: model} =
-      proxy_fixture(%{path_overrides: %{"video" => "/custom/videos"}})
+      proxy_fixture(%{model_type: "video", path_overrides: %{"video" => "/custom/videos"}})
 
     conn =
       conn
@@ -2241,7 +2253,7 @@ defmodule TokengateWeb.ProxyControllerTest do
       model: model,
       member: member,
       model_provider: model_provider
-    } = proxy_fixture(%{credit_units: 100})
+    } = proxy_fixture(%{credit_units: 100, model_type: "image"})
 
     {:ok, _} =
       Providers.update_model_provider(model_provider, %{
@@ -2269,11 +2281,121 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000500"))
   end
 
+  # Y con la unidad en la que el lane REALMENTE cobra: un lane de imágenes no se
+  # factura por tokens, sino por imagen. `pricing_unit` + `unit_cost` es lo que
+  # lo hace cobrable cuando el upstream no reporta coste (que es el caso normal
+  # en imagen, vídeo, tts y stt).
+  test "image: un lane cobrado por imagen usa unit_cost, no los tokens", %{conn: conn} do
+    %{
+      token: token,
+      model: model,
+      member: member,
+      model_provider: model_provider
+    } = proxy_fixture(%{credit_units: 100, model_type: "image"})
+
+    # Los precios de token TAMBIÉN están puestos: el resultado demuestra cuál
+    # de las dos rutas manda cuando la unidad no es de token.
+    {:ok, _} =
+      Providers.update_model_provider(model_provider, %{
+        input_cost_per_million: "1.00",
+        output_cost_per_million: "2.00",
+        pricing_unit: "per_image",
+        unit_cost: "0.0400"
+      })
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/images/generations", %{"model" => model.name, "prompt" => "un gato"})
+
+    assert json_response(conn, 200)
+
+    # 1 imagen en la respuesta × $0.04 = 0.04  (NO los 100/200 tokens)
+    assert get_resp_header(conn, "x-tokengate-cost") == ["0.040000"]
+    assert %{consumed_micro: 40_000} = Budgets.limit_spend({:user, member.user_id})
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert log.request_type == "image"
+    assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.040000"))
+  end
+
+  test "image: un lane cobrado por megapíxel usa el tamaño de la request", %{conn: conn} do
+    %{token: token, model: model, model_provider: model_provider} =
+      proxy_fixture(%{credit_units: 100, model_type: "image"})
+
+    {:ok, _} =
+      Providers.update_model_provider(model_provider, %{
+        pricing_unit: "per_megapixel",
+        unit_cost: "0.0200"
+      })
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/images/generations", %{
+        "model" => model.name,
+        "prompt" => "un gato",
+        "size" => "1024x1024"
+      })
+
+    assert json_response(conn, 200)
+
+    # 1 imagen × 1024×1024 px = 1.048576 MP × $0.02 = 0.02097152 → 0.020972
+    assert get_resp_header(conn, "x-tokengate-cost") == ["0.020972"]
+  end
+
+  test "tts: un lane cobrado por 1k caracteres usa el texto de entrada", %{conn: conn} do
+    %{token: token, model: model, member: member, model_provider: model_provider} =
+      proxy_fixture(%{credit_units: 100, model_type: "tts"})
+
+    {:ok, _} =
+      Providers.update_model_provider(model_provider, %{
+        pricing_unit: "per_1k_characters",
+        unit_cost: "0.0150"
+      })
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/audio/speech", %{"model" => model.name, "input" => "hola mundo"})
+
+    assert json_response(conn, 200)
+
+    # 10 caracteres × $0.015 / 1000 = 0.00015
+    assert get_resp_header(conn, "x-tokengate-cost") == ["0.000150"]
+
+    assert %{success: 1} = Oban.drain_queue(queue: :logs)
+
+    log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+    assert log.request_type == "tts"
+    assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000150"))
+  end
+
+  # Un lane de media SIN precio unitario sigue siendo el $0 honesto: no se
+  # inventa un precio por el hecho de tener unidad.
+  test "image: sin unit_cost el coste es $0 (no se inventa)", %{conn: conn} do
+    %{token: token, model: model, model_provider: model_provider} =
+      proxy_fixture(%{credit_units: 100, model_type: "image"})
+
+    {:ok, _} =
+      Providers.update_model_provider(model_provider, %{pricing_unit: "per_image"})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/images/generations", %{"model" => model.name, "prompt" => "un gato"})
+
+    assert json_response(conn, 200)
+    assert get_resp_header(conn, "x-tokengate-cost") == ["0"]
+  end
+
   # A service whose upstream reports no usage at all (video answers with a job
   # id): the request's own text is estimated, so manual pricing still books
   # something — and with no manual pricing the cost is the honest $0.
   test "video: no upstream usage falls back to the estimate over the request", %{conn: conn} do
-    %{token: token, model: model, member: member} = proxy_fixture()
+    %{token: token, model: model, member: member} = proxy_fixture(%{model_type: "video"})
 
     conn =
       conn
@@ -2298,7 +2420,7 @@ defmodule TokengateWeb.ProxyControllerTest do
   # cross the gateway untouched. See `TokengateWeb.Plugs.MediaBodyParser`.
 
   test "multipart /v1/audio/transcriptions reaches the upstream byte-for-byte", %{conn: conn} do
-    %{token: token, model: model, member: member} = proxy_fixture()
+    %{token: token, model: model, member: member} = proxy_fixture(%{model_type: "stt"})
     body = multipart_body(model.name)
 
     conn =
@@ -2322,7 +2444,7 @@ defmodule TokengateWeb.ProxyControllerTest do
   end
 
   test "two different multipart uploads are not one cache entry", %{conn: conn} do
-    %{token: token, model: model} = proxy_fixture()
+    %{token: token, model: model} = proxy_fixture(%{model_type: "stt"})
 
     # Same model, same form field names, different FILE BYTES: the response
     # cache hashes the parsed payload (which cannot carry the file), so a
@@ -2353,7 +2475,7 @@ defmodule TokengateWeb.ProxyControllerTest do
 
   test "a binary upstream response reaches the client with its content-type", %{conn: conn} do
     %{token: token, model: model, member: member} =
-      proxy_fixture(%{path_overrides: %{"tts" => "/binary-speech"}})
+      proxy_fixture(%{model_type: "tts", path_overrides: %{"tts" => "/binary-speech"}})
 
     conn =
       conn
@@ -2383,7 +2505,12 @@ defmodule TokengateWeb.ProxyControllerTest do
       token: token,
       model: model,
       member: member
-    } = proxy_fixture(%{credit_units: 100, path_overrides: %{"tts" => "/costly-binary-speech"}})
+    } =
+      proxy_fixture(%{
+        credit_units: 100,
+        model_type: "tts",
+        path_overrides: %{"tts" => "/costly-binary-speech"}
+      })
 
     conn =
       conn
@@ -2407,7 +2534,7 @@ defmodule TokengateWeb.ProxyControllerTest do
   # The proxy mirrors the upstream's answer, so no negotiation happens here.
   test "an audio Accept header is not refused with 406", %{conn: conn} do
     %{token: token, model: model} =
-      proxy_fixture(%{path_overrides: %{"tts" => "/binary-speech"}})
+      proxy_fixture(%{model_type: "tts", path_overrides: %{"tts" => "/binary-speech"}})
 
     conn =
       conn
@@ -2423,7 +2550,7 @@ defmodule TokengateWeb.ProxyControllerTest do
   # the capture is transport, the path is routing — both have to line up.
   test "multipart passthrough honours the operator's path override", %{conn: conn} do
     %{token: token, model: model} =
-      proxy_fixture(%{path_overrides: %{"stt" => "/custom/transcriptions"}})
+      proxy_fixture(%{model_type: "stt", path_overrides: %{"stt" => "/custom/transcriptions"}})
 
     body = multipart_body(model.name)
 
@@ -2442,7 +2569,10 @@ defmodule TokengateWeb.ProxyControllerTest do
   # fixture's provider points at the test server, so the path the wire saw is
   # what `ProviderPaths` resolved for the service.
   defp assert_service_route(conn, gateway, upstream_path, request_type, body) do
-    %{token: token, model: model, member: member} = proxy_fixture()
+    # The routing capability IS the model's type now: each service test
+    # registers its model with the endpoint's own type.
+    %{token: token, model: model, member: member} =
+      proxy_fixture(%{model_type: request_type})
 
     conn =
       conn

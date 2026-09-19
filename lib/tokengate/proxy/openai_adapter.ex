@@ -80,6 +80,19 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   end
 
   @doc """
+  Lists the model ids this provider publishes for ONE service.
+
+  `endpoint` is the one `Tokengate.Providers.ServiceModels.discovery/2` names
+  (OpenRouter's services live behind `/models?output_modalities=…`); a dialect
+  with no such endpoint never reaches here. Same engine as `list_models_at/3`,
+  which already tolerates a query string in the path.
+  """
+  @impl true
+  def list_service_models(provider, credential, endpoint) do
+    list_models_at(provider, credential, endpoint)
+  end
+
+  @doc """
   Posts a passthrough request to one of the provider's non-chat services:
   `:rerank`, `:stt` (`/audio/transcriptions`), `:tts` (`/audio/speech`),
   `:image`, `:video` or `:music`.

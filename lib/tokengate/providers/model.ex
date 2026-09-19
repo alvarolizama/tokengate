@@ -12,7 +12,14 @@ defmodule Tokengate.Providers.Model do
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
-  @model_types ~w(llm embedding)
+  # The full service surface of the gateway. Chat and embeddings route by
+  # model_type; the six media services (rerank, stt, tts, image, video, music)
+  # persist their real type too — `service_passthrough` passes it as the
+  # routing capability, so a model registered as `stt` is only reachable from
+  # the /audio/transcriptions endpoint (and vice versa). `decision` is
+  # TypeSafe's System One surface: served by chat through the typesafe
+  # dialect, kept as its own type so pickers and grants distinguish it.
+  @model_types ~w(llm embedding decision rerank stt tts image video music)
 
   # Hero icon names, e.g. "hero-beaker" — same shape and same validation as a
   # lab's fallback icon.

@@ -66,6 +66,7 @@ defmodule TokengateWeb.ProxyController do
     PromptOptimizer,
     RawResponse,
     ResponseCache,
+    ServiceUsage,
     SessionId,
     TokenEstimator,
     UsageNormalizer
@@ -231,11 +232,11 @@ defmodule TokengateWeb.ProxyController do
   # fallback matrix, budget hold and accounting as embeddings — the only
   # difference is the path the adapter resolves for `service`.
   #
-  # They route as `llm`: the model catalogue's `model_type` vocabulary is
-  # still `llm | embedding` (DB CHECK, see `Catalog`), so the capability
-  # here is what selects the UPSTREAM PATH, not the model row — a service
-  # model is registered like any other model and a group grant is what
-  # decides who reaches it.
+  # The routing capability IS the model's type: a model registered as `stt` is
+  # only reachable from /audio/transcriptions, and that endpoint only serves
+  # `stt` models (anything else 400s with model_type_mismatch). Media models
+  # created before the vocabulary extension may still say `llm` — the operator
+  # re-types them from the admin form.
   defp service_passthrough(conn, service) do
     payload = conn.body_params
 
@@ -248,7 +249,7 @@ defmodule TokengateWeb.ProxyController do
     simple_proxy(
       conn,
       payload,
-      "llm",
+      Atom.to_string(service),
       &adapter_service(&1, &2, &3, &4, service, raw_body, raw_content_type),
       service
     )
@@ -527,7 +528,7 @@ defmodule TokengateWeb.ProxyController do
     case Router.route(route.model.name, member, %{
            :api_key_hash => conn.assigns.api_key_hash,
            :exclude_credential_ids => exclude,
-           :capability => Keyword.get(route_opts, :capability, "llm")
+           :capability => Keyword.get(route_opts, :capability, ["llm", "decision"])
          }) do
       {:ok, new_route} ->
         execute_simple(
@@ -573,7 +574,12 @@ defmodule TokengateWeb.ProxyController do
     {usage, _} = simple_usage(conn.body_params, reportable, kind)
     provider_reported = UsageNormalizer.extract_reported_cost(:openai, reportable, resp_headers)
 
-    cost = cost_with_fallback(route, provider_reported, usage)
+    # Las cantidades facturables del TIPO de esta llamada: es lo que el lane
+    # necesita cuando cobra por unidad (imágenes, segundos, caracteres…) en vez
+    # de por tokens. Barato y sin efectos: sólo lee request y respuesta.
+    quantities = ServiceUsage.quantities(billable_type(route, kind), conn.body_params, reportable)
+
+    cost = cost_with_fallback(route, provider_reported, usage, quantities)
 
     # Budget is settled in the caller's `after` (it owns the hold); stash the
     # real cost for it here.
@@ -917,7 +923,7 @@ defmodule TokengateWeb.ProxyController do
       "messages" => payload["messages"] || [],
       :api_key_hash => api_key_hash,
       :exclude_credential_ids => exclude,
-      :capability => Keyword.get(route_opts, :capability, "llm")
+      :capability => Keyword.get(route_opts, :capability, ["llm", "decision"])
     }
 
     with {:ok, route} <- Router.route(model_requested, member, request_context) do
@@ -1971,9 +1977,17 @@ defmodule TokengateWeb.ProxyController do
   end
 
   # Computes cost using the full fallback chain: reported cost first, then
-  # manual pricing (input + cache + output × token counts), then $0.
+  # manual pricing, then $0.
+  #
+  # Manual pricing has TWO shapes and the lane declares which one it uses
+  # (`model_providers.pricing_unit`): token units read the three
+  # `*_cost_per_million` columns against the token counts, and every other unit
+  # (per image/second/minute/character/request) reads `unit_cost` against the
+  # billable `quantities` of the call — which is what makes the media services
+  # priceable at all.
+  #
   # Used by finalize_simple_success and finalize_success (non-streaming).
-  defp cost_with_fallback(route, provider_reported, usage) do
+  defp cost_with_fallback(route, provider_reported, usage, quantities) do
     mp = route.model_provider
 
     CostCalculator.provider_cost(provider_reported,
@@ -1982,23 +1996,27 @@ defmodule TokengateWeb.ProxyController do
         output_cost_per_million: mp.output_cost_per_million,
         cache_cost_per_million: mp.cache_cost_per_million
       },
-      usage: usage
+      usage: usage,
+      pricing_unit: mp.pricing_unit,
+      unit_cost: mp.unit_cost,
+      quantities: quantities
     )
   end
 
   # Computes cost from manual pricing alone. Used by stream_cost when neither
   # body nor headers reported a cost.
   defp manual_cost(route, usage) do
-    mp = route.model_provider
+    cost_with_fallback(route, nil, usage, %{})
+  end
 
-    CostCalculator.provider_cost(nil,
-      manual_pricing: %{
-        input_cost_per_million: mp.input_cost_per_million,
-        output_cost_per_million: mp.output_cost_per_million,
-        cache_cost_per_million: mp.cache_cost_per_million
-      },
-      usage: usage
-    )
+  # El tipo con el que se factura la llamada: el del modelo registrado, y si
+  # ese quedó en `"llm"` (rows creados antes de que existieran los tipos de
+  # servicio) el del propio endpoint, que sí sabe qué servicio se llamó.
+  defp billable_type(route, kind) do
+    case route.model.model_type do
+      type when is_binary(type) and type != "llm" -> type
+      _ -> to_string(kind)
+    end
   end
 
   ## Success finalization #######################################################
@@ -2010,7 +2028,8 @@ defmodule TokengateWeb.ProxyController do
 
     provider_reported = UsageNormalizer.extract_reported_cost(:openai, body, resp_headers)
 
-    cost = cost_with_fallback(route, provider_reported, usage)
+    # El chat no tiene cantidad por unidad: su lane siempre cobra por tokens.
+    cost = cost_with_fallback(route, provider_reported, usage, %{})
 
     # Hot-path state updates (ETS only)
     # Budget is settled in the caller's `after` (it owns the hold); stash the

@@ -104,19 +104,7 @@ defmodule Tokengate.Providers.CatalogTest do
 
     test "the vocabulary covers the modalities the catalog publishes" do
       assert Catalog.capabilities() ==
-               ~w(llm embedding rerank stt tts image video)
-    end
-
-    test "billing is a code label (models.dev publishes none)" do
-      assert Catalog.billing("zai-coding-plan") == "subscription"
-      assert Catalog.billing("kimi-for-coding") == "subscription"
-      assert Catalog.billing("alibaba-token-plan") == "subscription"
-      assert Catalog.billing("opencode-go") == "subscription"
-
-      # Pay-per-token is the absence of a label, not a stored string.
-      assert Catalog.billing("openrouter") == nil
-      assert Catalog.billing("nope") == nil
-      assert Catalog.billing_modes() == ~w(subscription pay_per_token)
+               ~w(llm embedding decision rerank stt tts image video music)
     end
 
     test "dialect resolves from npm, and a code customization wins over it" do
@@ -219,7 +207,7 @@ defmodule Tokengate.Providers.CatalogTest do
 
     test "code_providers/0 carries the fields the mirror stores" do
       providers = Catalog.code_providers()
-      assert length(providers) == 2
+      assert length(providers) == 3
 
       assert %{key: "surplus-intelligence"} =
                entry = find_code_provider(providers, "surplus-intelligence")
@@ -237,6 +225,13 @@ defmodule Tokengate.Providers.CatalogTest do
       assert qwen.name == "Qwen Cloud"
       assert qwen.base_url == "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
       assert qwen.status == "active"
+
+      # TypeSafe: Jev / System One. models.dev no lo publica; fila de código.
+      assert %{key: "typesafe"} = ts = find_code_provider(providers, "typesafe")
+
+      assert ts.name == "TypeSafe"
+      assert ts.base_url == "https://api.typesafe.ai/v1"
+      assert ts.status == "active"
 
       # Y las keys son consultables para que el refresh no las barra a stale.
       assert "surplus-intelligence" in Catalog.code_provider_keys()
@@ -367,11 +362,6 @@ defmodule Tokengate.Providers.CatalogTest do
       assert fireworks.doc_url == mirror.doc_url
       assert fireworks.logo_url == mirror.logo_url
       assert fireworks.capabilities == Catalog.capabilities("fireworks-ai")
-
-      # The billing label is code, and a plan keeps it on a fresh database.
-      assert fireworks.billing_type == "pay_per_token"
-      plan = Tokengate.Repo.get_by!(Provider, key: "zai-coding-plan")
-      assert plan.billing_type == "subscription"
 
       # Idempotent, and the custom row is untouched.
       builtin_count = Repo.aggregate(from(p in Provider, where: p.source == "builtin"), :count)
@@ -606,6 +596,34 @@ defmodule Tokengate.Providers.CatalogTest do
       assert Catalog.omit_body_fields("fireworks-ai") == []
       assert Catalog.omit_body_fields("openrouter") == []
       assert Catalog.omit_body_fields(nil) == []
+    end
+  end
+
+  describe "logo de un proveedor code-owned" do
+    # El logo es IDENTIDAD de un builtin: vive en el espejo y `materialize/0` es
+    # lo que lo lleva a `providers` — incluso en una instancia VIVA, porque el
+    # refresh lo llama justo después de escribir el espejo. Sin esa propagación
+    # un logo muerto seguiría muerto para siempre: es lo que pasó con qwen-cloud
+    # (un PNG de alicdn que respondía 404) y con typesafe (favicon inexistente),
+    # que se veían como un HUECO en la lista en vez del icono genérico.
+    test "un cambio de logo en el espejo llega a providers al materializar" do
+      Repo.get(CatalogProvider, "qwen-cloud")
+      |> Ecto.Changeset.change(logo_url: "https://example.test/qwen.svg")
+      |> Repo.update!()
+
+      :ok = CatalogSync.materialize()
+
+      assert Repo.get_by(Provider, key: "qwen-cloud").logo_url == "https://example.test/qwen.svg"
+    end
+
+    test "los logos code-owned son nil o una URL https" do
+      # El render sólo cae al icono genérico (`hero-server-stack`) cuando la URL
+      # es nil: un path relativo o basura no carga y deja un hueco vacío. Un
+      # proveedor sin asset usable se declara con `logo_url: nil` a propósito.
+      for provider <- Catalog.code_providers() do
+        assert provider.logo_url == nil or String.starts_with?(provider.logo_url, "https://"),
+               "#{provider.key}: logo_url debe ser nil o https://, no #{inspect(provider.logo_url)}"
+      end
     end
   end
 end

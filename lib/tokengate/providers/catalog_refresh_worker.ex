@@ -569,10 +569,15 @@ defmodule Tokengate.Providers.CatalogRefreshWorker do
   defp mark_models_stale(models, now) do
     upstream = MapSet.new(models, & &1.key)
 
+    # Code-owned models are not data that vanished: models.dev never had
+    # them. Sweeping them stale would freeze them out of the picker.
+    code_owned = MapSet.new(ModelCatalog.code_model_keys())
+
     gone =
       from(m in CatalogModel, where: m.status == "active")
       |> Repo.all()
       |> Enum.reject(&MapSet.member?(upstream, &1.key))
+      |> Enum.reject(&MapSet.member?(code_owned, &1.key))
 
     Enum.each(gone, fn row ->
       row
@@ -618,10 +623,14 @@ defmodule Tokengate.Providers.CatalogRefreshWorker do
   defp mark_offers_stale(offers, now) do
     upstream = MapSet.new(offers, &{&1.provider_key, &1.model_key})
 
+    # Code-owned offers (Jev at TypeSafe): same rule as code-owned models.
+    code_models = MapSet.new(ModelCatalog.code_model_keys())
+
     gone =
       from(o in CatalogModelOffer, where: o.status == "active")
       |> Repo.all()
       |> Enum.reject(&MapSet.member?(upstream, {&1.provider_key, &1.model_key}))
+      |> Enum.reject(&MapSet.member?(code_models, &1.model_key))
 
     Enum.each(gone, fn row ->
       row

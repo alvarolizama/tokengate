@@ -44,6 +44,7 @@ defmodule Tokengate.Providers.CatalogSync do
     CatalogProvider,
     CatalogSeed,
     CatalogSyncState,
+    ModelCatalog,
     Provider
   }
 
@@ -55,6 +56,7 @@ defmodule Tokengate.Providers.CatalogSync do
     CatalogSeed.seed_labs_if_empty()
     CatalogSeed.seed_models_if_empty()
     ensure_code_providers()
+    ModelCatalog.ensure_code_models()
     materialize()
     request_refresh_if_model_mirror_empty()
   end
@@ -218,9 +220,7 @@ defmodule Tokengate.Providers.CatalogSync do
       doc_url: entry.doc_url,
       logo_url: entry.logo_url,
       dialect: dialect,
-      capabilities: Catalog.capabilities(entry.key),
-      # Billing is a code label; a provider without one is pay-per-token.
-      billing_type: Catalog.billing(entry.key) || "pay_per_token"
+      capabilities: Catalog.capabilities(entry.key)
     }
 
     case Repo.get_by(Provider, key: entry.key) do

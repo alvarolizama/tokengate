@@ -47,6 +47,11 @@ defmodule Tokengate.Proxy.OpenRouterAdapter do
     OpenAIAdapter.list_models_at(provider, credential, "/embeddings/models")
   end
 
+  # Su catálogo por servicio es la MISMA consulta sobre /models con la modalidad
+  # de salida como filtro (`?output_modalities=image`), así que comparte motor.
+  @impl true
+  defdelegate list_service_models(provider, credential, endpoint), to: OpenAIAdapter
+
   @impl true
   def service_post(provider, credential, :video, payload, opts) do
     with {:ok, job, latency, headers} <-

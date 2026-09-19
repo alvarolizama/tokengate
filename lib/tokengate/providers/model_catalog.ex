@@ -41,7 +41,7 @@ defmodule Tokengate.Providers.ModelCatalog do
   and `features/0` is the closed vocabulary of what an entry may declare.
   """
 
-  alias Tokengate.Providers.{Catalog, CatalogModel}
+  alias Tokengate.Providers.{Catalog, CatalogModel, CatalogModelOffer}
 
   @base_url "https://models.dev"
 
@@ -314,7 +314,8 @@ defmodule Tokengate.Providers.ModelCatalog do
   defp plausible_lab?(lab), do: Regex.match?(@lab_id_format, lab)
 
   @doc """
-  HINT for `models.model_type` based on the id: `"embedding"` or `"llm"`.
+  HINT for `models.model_type` based on the id: `"embedding"`, `"decision"`
+  or `"llm"`.
 
   Upstream publishes no such field, so this is only what the form is prefilled
   with — the operator confirms it.
@@ -322,12 +323,19 @@ defmodule Tokengate.Providers.ModelCatalog do
       iex> Tokengate.Providers.ModelCatalog.model_type_hint("google/gemini-embedding-001")
       "embedding"
 
+      iex> Tokengate.Providers.ModelCatalog.model_type_hint("typesafe/jev")
+      "decision"
+
       iex> Tokengate.Providers.ModelCatalog.model_type_hint("openai/gpt-5-nano")
       "llm"
   """
   @spec model_type_hint(String.t()) :: String.t()
   def model_type_hint(id) when is_binary(id) do
-    if Regex.match?(@embedding_hint, id), do: "embedding", else: "llm"
+    cond do
+      Regex.match?(@embedding_hint, id) -> "embedding"
+      String.starts_with?(id, "typesafe/") -> "decision"
+      true -> "llm"
+    end
   end
 
   def model_type_hint(_), do: "llm"
@@ -700,4 +708,123 @@ defmodule Tokengate.Providers.ModelCatalog do
   end
 
   defp pair(_), do: [nil, nil]
+
+  ## Code-owned models #########################################################
+
+  # Models whose ENTIRE row lives in code because models.dev does not publish
+  # them. Same rationale as `Catalog.@code_providers`: the seed only fills an
+  # empty table and the snapshot is baked into the release image, so a running
+  # instance would never see a hand-added row. `ensure_code_models/0` upserts
+  # them (called from `CatalogSync.sync/0`) and `mark_models_stale` /
+  # `mark_offers_stale` skip these keys — models.dev never had them, so their
+  # absence upstream is not "gone".
+  #
+  # Fields mirror `derive/3`'s model shape plus the one offer that makes the
+  # model reachable in the picker (offers are what `catalog_picker_models`
+  # counts; a model with no offer is a dead end).
+  @code_models %{
+    # Jev, el primer modelo System One de TypeSafe: decisiones tipadas con
+    # probabilidades calibradas. Precio de lista: $42/Btok input ($0.042/Mtok),
+    # output gratis. Contexto 64k. El alias jev-latest es el default de sus
+    # SDKs; jev-1.13.0 es la versión pinnable.
+    "typesafe/jev" => %{
+      name: "Jev",
+      lab_key: "typesafe",
+      description:
+        "TypeSafe's flagship System One model: typed decisions with calibrated probabilities.",
+      context_limit: 64_000,
+      cost_input: Decimal.new("0.042"),
+      cost_output: Decimal.new("0"),
+      features: [],
+      modalities: %{input: ["text"], output: ["text"]},
+      offers: [
+        %{
+          provider_key: "typesafe",
+          provider_model: "jev-latest",
+          cost_input: Decimal.new("0.042"),
+          cost_output: Decimal.new("0")
+        }
+      ]
+    }
+  }
+
+  @doc "Keys of the code-owned catalog models (never swept stale)."
+  @spec code_model_keys() :: [String.t()]
+  def code_model_keys, do: @code_models |> Map.keys() |> Enum.sort()
+
+  @doc """
+  Upserts the code-owned models and their offers into the mirror tables.
+
+  Idempotent on the same rule as the refresh: a row whose fingerprint already
+  matches is not written. Called from `CatalogSync.sync/0` on boot — never
+  raises, the app must boot.
+  """
+  @spec ensure_code_models() :: :ok
+  def ensure_code_models do
+    now = DateTime.utc_now() |> DateTime.truncate(:second)
+
+    Enum.each(@code_models, fn {key, model} ->
+      attrs =
+        %{
+          key: key,
+          name: model.name,
+          lab_key: model.lab_key,
+          description: model.description,
+          canonical: true,
+          context_limit: model.context_limit,
+          cost_input: model.cost_input,
+          cost_output: model.cost_output,
+          features: model.features,
+          modalities: model.modalities,
+          status: "active",
+          fingerprint: CatalogModel.fingerprint(%{key: key, name: model.name}),
+          fetched_at: now
+        }
+
+      case Tokengate.Repo.get(CatalogModel, key) do
+        nil ->
+          %CatalogModel{}
+          |> Ecto.Changeset.change(key: key)
+          |> CatalogModel.changeset(attrs)
+          |> Tokengate.Repo.insert()
+
+        %CatalogModel{} = row ->
+          row |> CatalogModel.changeset(attrs) |> Tokengate.Repo.update()
+      end
+
+      Enum.each(model.offers, fn offer ->
+        offer_attrs = %{
+          provider_key: offer.provider_key,
+          model_key: key,
+          provider_model: offer.provider_model,
+          cost_input: offer.cost_input,
+          cost_output: offer.cost_output,
+          lifecycle: "stable",
+          status: "active",
+          fingerprint: CatalogModelOffer.fingerprint(offer),
+          fetched_at: now
+        }
+
+        case Tokengate.Repo.get_by(CatalogModelOffer,
+               provider_key: offer.provider_key,
+               model_key: key
+             ) do
+          nil ->
+            %CatalogModelOffer{}
+            |> CatalogModelOffer.remote_changeset(offer_attrs)
+            |> Tokengate.Repo.insert()
+
+          %CatalogModelOffer{} = row ->
+            row |> CatalogModelOffer.remote_changeset(offer_attrs) |> Tokengate.Repo.update()
+        end
+      end)
+    end)
+
+    :ok
+  rescue
+    e ->
+      require Logger
+      Logger.error("[catalog sync] code-owned models failed: #{Exception.message(e)}")
+      :ok
+  end
 end

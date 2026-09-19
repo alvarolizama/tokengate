@@ -8,12 +8,6 @@ defmodule Tokengate.Providers.ModelProvider do
   from the same provider to serve the same model with different
   priorities for fallback.
 
-  Billing lives on the provider (`providers.billing_type`, synced from the
-  catalog for builtins, chosen at creation for customs), but it is an
-  **organizational label only** — it groups the "add provider" menu and
-  labels the admin tables. Routing, cost, budget and the circuit breaker
-  treat every provider the same.
-
   ## Exclusive scope
 
   A model_provider can be scoped to serve only specific consumers:
@@ -52,6 +46,8 @@ defmodule Tokengate.Providers.ModelProvider do
   use Ecto.Schema
   import Ecto.Changeset
 
+  alias Tokengate.Providers.Pricing
+
   @primary_key {:id, :binary_id, autogenerate: true}
   @foreign_key_type :binary_id
 
@@ -64,9 +60,20 @@ defmodule Tokengate.Providers.ModelProvider do
     field :sticky_ttl_ms, :integer
     # Manual pricing fallback (USD per 1M tokens). Used when the upstream
     # doesn't report a cost (e.g. LiteLLM streaming). NULL = not set.
+    #
+    # These three are the PARAMETERS OF THE TOKEN UNIT: they only mean anything
+    # when `pricing_unit` is `per_1m_tokens` (or `per_1k_tokens`). A lane priced
+    # per image/second/character uses `unit_cost` instead — see
+    # `Tokengate.Providers.Pricing`.
     field :input_cost_per_million, :decimal
     field :output_cost_per_million, :decimal
     field :cache_cost_per_million, :decimal
+    # La unidad en la que ESTE lane cobra, y su precio por unidad. La unidad por
+    # defecto es la de siempre (tokens por millón), así que un row que no la
+    # toque se comporta exactamente como antes. El vocabulario es cerrado y vive
+    # en `Pricing.units/0`.
+    field :pricing_unit, :string, default: "per_1m_tokens"
+    field :unit_cost, :decimal
     # Virtual mirror of `sticky_ttl_ms` in seconds — exposed to the LiveView
     # form so operators can type `900` instead of `900_000`. Synced by
     # `sync_sticky_ttl_fields/1` before saving.
@@ -128,6 +135,8 @@ defmodule Tokengate.Providers.ModelProvider do
       :input_cost_per_million,
       :output_cost_per_million,
       :cache_cost_per_million,
+      :pricing_unit,
+      :unit_cost,
       :exclusive_to_group_member_id,
       :exclusive_to_group_id,
       :exclusive_to_service_id
@@ -145,6 +154,7 @@ defmodule Tokengate.Providers.ModelProvider do
       greater_than_or_equal_to: 1,
       less_than_or_equal_to: 24 * 60 * 60
     )
+    |> validate_inclusion(:pricing_unit, Pricing.units())
     |> sync_sticky_ttl_fields()
     |> sync_override_fields()
     |> validate_exclusive_scope()

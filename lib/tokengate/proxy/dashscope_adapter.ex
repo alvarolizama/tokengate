@@ -55,6 +55,12 @@ defmodule Tokengate.Proxy.DashScopeAdapter do
   @impl true
   defdelegate list_embedding_models(provider, credential), to: OpenAIAdapter
 
+  # DashScope no publica catálogo por servicio: `ServiceModels.discovery/2` no
+  # tiene entrada suya, así que en la práctica no se le llama — se delega para
+  # cumplir el behaviour sin inventar un camino nuevo.
+  @impl true
+  defdelegate list_service_models(provider, credential, endpoint), to: OpenAIAdapter
+
   # STT — chat with input_audio: the audio (base64 data URL or public URL)
   # becomes a content block on /chat/completions, and the transcription comes
   # back as the assistant message.

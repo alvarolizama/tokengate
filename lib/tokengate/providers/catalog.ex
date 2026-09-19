@@ -74,17 +74,11 @@ defmodule Tokengate.Providers.Catalog do
   OpenAI-compatible default — see `Tokengate.Providers.ProviderPaths`.
   """
 
-  @dialects ~w(openai openrouter)
+  @dialects ~w(openai openrouter dashscope typesafe)
   @sources ~w(builtin custom)
 
   # What a provider can serve. Declared in code, per provider (@customizations).
-  @capabilities ~w(llm embedding rerank stt tts image video)
-
-  # Billing surfaces. models.dev has no such field: a plan is a commercial fact
-  # about an endpoint (a coding plan lives on its own base URL), so it is a
-  # CODE label here and syncs into `providers.billing_type`, which the Models
-  # table renders. It decides nothing else.
-  @billing_modes ~w(subscription pay_per_token)
+  @capabilities ~w(llm embedding decision rerank stt tts image video music)
 
   # models.dev npm package -> dialect. Anything absent is unsupported until a
   # dialect (a thin adapter) exists for it.
@@ -119,13 +113,15 @@ defmodule Tokengate.Providers.Catalog do
     # OpenRouter expone TODO en su superficie OpenAI-compatible bajo /api/v1:
     #   * chat/models/embeddings — defaults genéricos (embeddings models se
     #     listan en /embeddings/models, ver el adaptador).
+    #   * rerank — `POST /rerank` es exactamente el default genérico, y su
+    #     catálogo se descubre con `?output_modalities=rerank` (7 ids hoy).
     #   * stt `/audio/transcriptions` y tts `/audio/speech` — defaults exactos.
     #   * image en `/images` (NO /images/generations) y video en `/videos`
     #     (async: POST devuelve job + polling_url; el adaptador hace el poll).
-    #   * rerank NO existe como endpoint; music va por chat con
-    #     `modalities: ["text","audio"]` (el adaptador traduce).
+    #   * music va por chat con `modalities: ["text","audio"]` (el adaptador
+    #     traduce).
     "openrouter" => %{
-      capabilities: ~w(llm embedding stt tts image video music),
+      capabilities: ~w(llm embedding rerank stt tts image video music),
       dialect: "openrouter",
       paths: %{image: "/images", video: "/videos"}
     },
@@ -154,8 +150,8 @@ defmodule Tokengate.Providers.Catalog do
       dialect: "dashscope",
       paths: %{rerank: "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"}
     },
-    "alibaba-token-plan" => %{capabilities: ~w(llm), billing: "subscription"},
-    "alibaba-token-plan-cn" => %{capabilities: ~w(llm), billing: "subscription"},
+    "alibaba-token-plan" => %{capabilities: ~w(llm)},
+    "alibaba-token-plan-cn" => %{capabilities: ~w(llm)},
     # Qwen Cloud: misma superficie DashScope que "alibaba" — chat, embeddings,
     # rerank en compatible-api, image en compatible-mode, stt/tts/video nativos
     # (adaptador dashscope). Keys y billing propios. La fila entera vive en
@@ -166,18 +162,17 @@ defmodule Tokengate.Providers.Catalog do
       paths: %{rerank: "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks"}
     },
     "opencode" => %{capabilities: ~w(llm)},
-    "opencode-go" => %{capabilities: ~w(llm), billing: "subscription"},
+    "opencode-go" => %{capabilities: ~w(llm)},
     "moonshotai" => %{capabilities: ~w(llm)},
     # models.dev reaches the Kimi coding plan with the Anthropic SDK, but the
     # same base URL serves an OpenAI-compatible surface and that is what this
     # gateway speaks to it today: keep the working dialect explicit.
     "kimi-for-coding" => %{
       capabilities: ~w(llm),
-      dialect: "openai",
-      billing: "subscription"
+      dialect: "openai"
     },
     "zai" => %{capabilities: ~w(llm)},
-    "zai-coding-plan" => %{capabilities: ~w(llm), billing: "subscription"},
+    "zai-coding-plan" => %{capabilities: ~w(llm)},
     # models.dev no publica base URL para Cerebras y resuelve su dialecto por
     # el SDK (`@ai-sdk/cerebras`), que no está en la tabla npm→dialecto. El
     # endpoint sí es OpenAI-compatible, así que ambos datos van en código.
@@ -205,6 +200,17 @@ defmodule Tokengate.Providers.Catalog do
       # `/models`, `/embeddings`, `/audio/speech`, `/audio/transcriptions`,
       # `/images/generations`, `/music/generations`).
       paths: %{video: "/video/generations"}
+    },
+    # TypeSafe (typesafe.ai): Jev, el primer modelo System One — decisiones
+    # tipadas con probabilidades calibradas en vez de texto generado. Su API
+    # NO es OpenAI-compatible: `POST /v1/systemone` con {state, model,
+    # questions} → {answers, usage}; el dialecto propio traduce. Cobro por
+    # input token ($0.042/Mtok, output gratis); no reporta costo — el precio
+    # manual del model_provider es el fallback. models.dev no lo publica.
+    "typesafe" => %{
+      capabilities: ~w(decision),
+      dialect: "typesafe",
+      paths: %{chat: "/systemone"}
     }
   }
 
@@ -235,13 +241,36 @@ defmodule Tokengate.Providers.Catalog do
     # OpenAI-compatible internacional vive en el mismo host dashscope-intl —
     # pero con API keys y billing propios (QwenCloud-Token Plan), así que es
     # una fila de proveedor SEPARADA. models.dev no la publica.
+    #
+    # `logo_url` verificado contra la fuente (2026-09-18): el PNG de alicdn que
+    # había antes respondía **404** y, como el render sólo cae al icono genérico
+    # cuando la URL es nil, el proveedor salía con el hueco VACÍO en la lista.
+    # El favicon de qwen.ai es la marca real de esta superficie y responde 200.
     "qwen-cloud" => %{
       name: "Qwen Cloud",
       base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
       doc_url: "https://qwen.ai/apiplatform",
-      logo_url:
-        "https://img.alicdn.com/imgextra/i2/O1CN016944pl1pyNhNJ40bg_!!6000000005439-2-tps-360.png",
+      logo_url: "https://qwen.ai/favicon.ico",
       env: ["QWEN_API_KEY"],
+      npm: nil
+    },
+    # TypeSafe (typesafe.ai): docs.typesafe.ai. La superficie es
+    # api.typesafe.ai/v1 con Bearer; el endpoint de evaluación es
+    # /v1/systemone (path override del dialecto) y /v1/models lista aliases.
+    #
+    # `logo_url` es nil A PROPÓSITO (verificado 2026-09-18): el sitio es Framer y
+    # no expone favicon ni marca usable — `typesafe.ai/favicon.ico`,
+    # `www.typesafe.ai/favicon.ico`, `typesafe.ai/favicon.svg` y
+    # `api.typesafe.ai/favicon.ico` responden los cuatro **404**. Un URL muerto
+    # deja el hueco vacío (el icono genérico sólo entra con nil), así que aquí la
+    # decisión correcta es NO declarar logo y dejar que se pinte
+    # `hero-server-stack`.
+    "typesafe" => %{
+      name: "TypeSafe",
+      base_url: "https://api.typesafe.ai/v1",
+      doc_url: "https://docs.typesafe.ai",
+      logo_url: nil,
+      env: ["TYPESAFE_API_KEY"],
       npm: nil
     }
   }
@@ -394,27 +423,30 @@ defmodule Tokengate.Providers.Catalog do
   end
 
   @doc """
-  Billing label declared in code for a provider (`nil` when it is a plain
-  pay-per-token endpoint, which is the default).
+  True cuando un proveedor del catálogo declara la capability `type`.
 
-  models.dev publishes no billing information, so the plans live here:
+  La regla de "sin dato" es la del propio catálogo: un proveedor sin entrada (o
+  con la lista vacía) se trata como **chat**, así que sólo declara `"llm"`. Es
+  la que aplica el modal de modelo al elegir proveedor por tipo, y la que evita
+  que un tipo de servicio muestre como candidatos a proveedores que no pueden
+  servirlo.
 
-      iex> Tokengate.Providers.Catalog.billing("zai-coding-plan")
-      "subscription"
+      iex> Tokengate.Providers.Catalog.declares?("openrouter", "image")
+      true
 
-      iex> Tokengate.Providers.Catalog.billing("openrouter")
-      nil
+      iex> Tokengate.Providers.Catalog.declares?("fireworks-ai", "image")
+      false
+
+      iex> Tokengate.Providers.Catalog.declares?("anthropic", "llm")
+      true
   """
-  @spec billing(String.t() | nil) :: String.t() | nil
-  def billing(key) do
-    case option(key, :billing, nil) do
-      mode when mode in @billing_modes -> mode
-      _ -> nil
+  @spec declares?(String.t() | nil, String.t()) :: boolean()
+  def declares?(key, type) when is_binary(type) do
+    case capabilities(key) do
+      [] -> type == "llm"
+      caps -> type in caps
     end
   end
-
-  @doc "Valid billing labels."
-  def billing_modes, do: @billing_modes
 
   @doc "Valid dialects."
   def dialects, do: @dialects
