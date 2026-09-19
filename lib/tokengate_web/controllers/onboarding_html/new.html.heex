@@ -1,0 +1,66 @@
+<Layouts.app flash={@flash} hide_navbar>
+  <div class="min-h-screen flex items-center justify-center -my-20 px-4">
+    <div class="w-full max-w-md animate-in fade-in slide-in-from-bottom-4 duration-500">
+      <%!-- Logo + heading --%>
+      <div class="text-center mb-8">
+        <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-primary/10 mb-6">
+          <img src={~p"/images/logo.svg"} width="40" alt="TokenGate" />
+        </div>
+        <h1 class="text-3xl font-bold tracking-tight text-base-content">
+          Primer arranque
+        </h1>
+        <p class="mt-2 text-sm text-base-content/50">
+          Esta instancia todavía no tiene usuarios. Crea la cuenta de administrador y entra.
+        </p>
+      </div>
+
+      <%!-- First admin form --%>
+      <div class="card bg-base-100 shadow-xl shadow-base-content/5 border border-base-300/50">
+        <div class="card-body p-8">
+          <.form for={@form} action={~p"/onboarding"} id="onboarding-form" class="space-y-5">
+            <.input
+              field={@form[:name]}
+              type="text"
+              label="Nombre"
+              placeholder="Tu nombre"
+              required="true"
+              autofocus="true"
+            />
+
+            <.input
+              field={@form[:email]}
+              type="email"
+              label="Correo electrónico"
+              placeholder="tu@empresa.com"
+              required="true"
+            />
+
+            <.input
+              field={@form[:password]}
+              type="password"
+              label="Contraseña"
+              placeholder="••••••••"
+              required="true"
+            />
+
+            <p class="text-xs text-base-content/50">
+              Mínimo 12 caracteres, con al menos una letra y un dígito.
+            </p>
+
+            <button
+              type="submit"
+              class="btn btn-primary w-full mt-2 shadow-lg shadow-primary/25 hover:shadow-primary/40 transition-shadow"
+              id="onboarding-submit"
+            >
+              <.icon name="hero-check-circle" class="w-5 h-5" /> Crear administrador
+            </button>
+          </.form>
+        </div>
+      </div>
+
+      <p class="text-center text-xs text-base-content/40 mt-8">
+        La primera cuenta de esta pantalla es el administrador de la instancia.
+      </p>
+    </div>
+  </div>
+</Layouts.app>

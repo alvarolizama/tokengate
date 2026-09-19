@@ -1211,7 +1211,7 @@ msgstr ""
 msgid "User created."
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:139
+#: lib/tokengate_web/controllers/session_controller.ex:146
 #: lib/tokengate_web/live/users_live.ex:457
 #: lib/tokengate_web/live/users_live.ex:549
 #, elixir-autogen, elixir-format
@@ -4820,7 +4820,7 @@ msgstr ""
 msgid "If it does not go down in a few minutes, it is drift: the"
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:74
+#: lib/tokengate_web/controllers/session_controller.ex:81
 #, elixir-autogen, elixir-format
 msgid "Invalid credentials."
 msgstr ""
@@ -4950,8 +4950,8 @@ msgstr ""
 msgid "Service…"
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:35
-#: lib/tokengate_web/controllers/session_controller.ex:77
+#: lib/tokengate_web/controllers/session_controller.ex:42
+#: lib/tokengate_web/controllers/session_controller.ex:84
 #, elixir-autogen, elixir-format
 msgid "Sign in"
 msgstr ""
@@ -4961,12 +4961,12 @@ msgstr ""
 msgid "Signed in with Google."
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:59
+#: lib/tokengate_web/controllers/session_controller.ex:66
 #, elixir-autogen, elixir-format
 msgid "Signed in."
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:92
+#: lib/tokengate_web/controllers/session_controller.ex:99
 #, elixir-autogen, elixir-format
 msgid "Signed out."
 msgstr ""
@@ -4987,7 +4987,7 @@ msgstr ""
 msgid "Subject"
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:153
+#: lib/tokengate_web/controllers/session_controller.ex:160
 #, elixir-autogen, elixir-format
 msgid "The root administrator cannot be impersonated."
 msgstr ""
@@ -5042,27 +5042,27 @@ msgstr ""
 msgid "When it is reached, every new request is rejected with 402 until the next"
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:123
+#: lib/tokengate_web/controllers/session_controller.ex:130
 #, elixir-autogen, elixir-format
 msgid "You are already viewing as another user. Go back to your account first."
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:178
+#: lib/tokengate_web/controllers/session_controller.ex:185
 #, elixir-autogen, elixir-format
 msgid "You are not impersonating any user."
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:165
+#: lib/tokengate_web/controllers/session_controller.ex:172
 #, elixir-autogen, elixir-format
 msgid "You are now viewing as %{email}."
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:129
+#: lib/tokengate_web/controllers/session_controller.ex:136
 #, elixir-autogen, elixir-format
 msgid "You do not have permission to impersonate users."
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:116
+#: lib/tokengate_web/controllers/session_controller.ex:123
 #: lib/tokengate_web/plugs/dashboard_auth.ex:83
 #: lib/tokengate_web/plugs/dashboard_auth.ex:103
 #, elixir-autogen, elixir-format
@@ -5365,4 +5365,20 @@ msgstr ""
 #: lib/tokengate_web/components/layouts.ex:507
 #, elixir-autogen, elixir-format
 msgid "Profile"
+msgstr ""
+
+#: lib/tokengate_web/controllers/onboarding_controller.ex:39
+#: lib/tokengate_web/controllers/onboarding_controller.ex:70
+#, elixir-autogen, elixir-format
+msgid "First run"
+msgstr ""
+
+#: lib/tokengate_web/controllers/onboarding_controller.ex:65
+#, elixir-autogen, elixir-format
+msgid "This instance is already set up."
+msgstr ""
+
+#: lib/tokengate_web/controllers/onboarding_controller.ex:60
+#, elixir-autogen, elixir-format
+msgid "Welcome. Your admin account is ready."
 msgstr ""

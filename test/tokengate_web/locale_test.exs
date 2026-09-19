@@ -175,6 +175,10 @@ defmodule TokengateWeb.LocaleTest do
     end
 
     test "un controlador plano renderiza con el locale de la sesión", %{conn: conn} do
+      # La instancia necesita un usuario: con cero, /login redirige al
+      # onboarding del primer arranque en vez de renderizar el formulario.
+      register()
+
       conn = init_test_session(conn, %{locale: "es"})
       assert get(conn, ~p"/login") |> html_response(200) =~ ~s(lang="es")
 
@@ -201,7 +205,10 @@ defmodule TokengateWeb.LocaleTest do
       assert TokengateWeb.CoreComponents.translate_error({"can't be blank", []}) ==
                "can't be blank"
 
-      # La página plana respeta el idioma de la sesión.
+      # La página plana respeta el idioma de la sesión. La instancia necesita un
+      # usuario: con cero, /login redirige al onboarding y no renderiza nada.
+      register()
+
       conn = init_test_session(conn, %{locale: "es"})
       assert get(conn, ~p"/login") |> html_response(200) =~ ~s(lang="es")
     end

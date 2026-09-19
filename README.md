@@ -147,7 +147,7 @@ The UI ships in **English by default** with an in-app **EN/ES** selector
 
 ```bash
 git clone git@github.com:alvarolizama/tokengate.git && cd tokengate
-mix setup        # deps → create DB → migrate → assets → seed admin
+mix setup        # deps → create DB → migrate → assets → seed admin + dev dataset
 mix phx.server
 ```
 
@@ -241,6 +241,8 @@ resp = client.chat.completions.create(
 | `ECTO_IPV6` | off | Connect to the DB over IPv6 |
 | `PHX_SCHEME` / `PHX_PORT` | `https` / `443` | URL generation (set `http` behind a VPN proxy) |
 | `CHECK_ORIGINS` | unset | Comma-separated allowed origins for CSRF/WS checks |
+| `TOKENGATE_ADMIN_PASSWORD` | unset | Set it to bootstrap the admin at boot; unset = first admin created from `/onboarding` |
+| `TOKENGATE_ADMIN_EMAIL` | `admin@tokengate.local` | Email of the bootstrapped admin (only used with the password) |
 | `TELEGRAM_BOT_TOKEN` | unset | Telegram bot token (else read encrypted from the UI) |
 | `GOOGLE_OAUTH_CLIENT_ID` / `SECRET` | unset | Enable Google sign-in |
 | `GOOGLE_OAUTH_ALLOWED_DOMAINS` | unset | Domains allowed to auto-register |
@@ -253,6 +255,25 @@ Multi-stage **Dockerfile** included: prebuilt hexpm Elixir image → slim Debian
 non-root `app` user, port `4000`. The entrypoint applies migrations and seeds the admin
 before boot; `SKIP_MIGRATIONS=1` bypasses. `DISABLE_FORCE_SSL=1` (default) ships a
 plain-HTTP build for VPN/behind-proxy deploys.
+
+Boot runs `priv/repo/seeds_prod.exs`: it creates **only** the admin user, and only when
+`TOKENGATE_ADMIN_PASSWORD` is set (`TOKENGATE_ADMIN_EMAIL` optional, defaults to
+`admin@tokengate.local`). The demo datasets (`priv/repo/seeds.exs`,
+`priv/repo/demo_seeds.exs`) are development-only and refuse to run inside a release.
+
+### First run
+
+A fresh instance has no users, and without one there is nothing to log in with: `/` (and
+`/login`) redirect to **`/onboarding`**, where the first account you create becomes the
+global admin. The page disables itself — both actions bounce to `/login` as soon as a
+user exists, and `Accounts.create_first_admin/1` re-checks inside a transaction under an
+advisory lock, so it cannot be used to mint a second admin (a double-click or two
+replicas racing the form can't either).
+
+That leaves a window: whoever reaches the instance first can claim it. Close it by
+deploying behind your network boundary, or by setting `TOKENGATE_ADMIN_PASSWORD` so the
+boot creates the admin before the app is ever exposed. Without that variable the boot
+creates **nothing** — never a fallback password from this repository.
 
 ```bash
 docker build -t tokengate .

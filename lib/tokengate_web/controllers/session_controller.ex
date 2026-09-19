@@ -23,18 +23,25 @@ defmodule TokengateWeb.SessionController do
   @doc """
   GET /login — renders the login form.
 
-  Already-authenticated visitors are redirected to `/dashboard`.
+  Already-authenticated visitors are redirected to `/dashboard`. On a fresh
+  instance (zero users) there is no password that could log anybody in yet, so
+  the visitor is sent to the first-run onboarding instead of a dead form.
   """
   def new(conn, _params) do
-    if conn.assigns[:current_user] do
-      redirect(conn, to: "/dashboard")
-    else
-      # Render the login template. `render/2` infers the `:new` template
-      # from this controller's `SessionHTML` module.
-      conn
-      |> assign(:page_title, gettext("Sign in") <> " · Tokengate")
-      |> assign(:google_oauth_configured, TokengateWeb.OAuth.Google.configured?())
-      |> render(:new)
+    cond do
+      conn.assigns[:current_user] ->
+        redirect(conn, to: "/dashboard")
+
+      not Accounts.any_user?() ->
+        redirect(conn, to: "/onboarding")
+
+      true ->
+        # Render the login template. `render/2` infers the `:new` template
+        # from this controller's `SessionHTML` module.
+        conn
+        |> assign(:page_title, gettext("Sign in") <> " · Tokengate")
+        |> assign(:google_oauth_configured, TokengateWeb.OAuth.Google.configured?())
+        |> render(:new)
     end
   end
 

@@ -16,6 +16,10 @@ defmodule TokengateWeb.SessionControllerTest do
   end
 
   test "GET /login renders the form", %{conn: conn} do
+    # La instancia necesita un usuario: con cero, /login redirige al onboarding
+    # del primer arranque en vez de renderizar el formulario.
+    user_fixture()
+
     conn = get(conn, ~p"/login")
     html = html_response(conn, 200)
     assert html =~ ~s(id="login-form")

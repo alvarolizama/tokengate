@@ -17,6 +17,11 @@ defmodule Tokengate.Accounts do
     User
   }
 
+  # Arbitrary constant for the first-run onboarding lock (see
+  # `create_first_admin/1`). Only the meaning of "this number" matters: as long
+  # as everyone uses the same one, submits serialize.
+  @first_admin_lock_key 4_242_424_242
+
   # ---------------------------------------------------------------------------
   # Groups
   # ---------------------------------------------------------------------------
@@ -216,6 +221,57 @@ defmodule Tokengate.Accounts do
     %User{}
     |> User.admin_create_changeset(attrs)
     |> Repo.insert()
+  end
+
+  @doc """
+  True when the instance has no user at all — the first-run onboarding state.
+
+  Cheap enough to call on `/` and on every login page render: `EXISTS` on the
+  users primary key index.
+  """
+  def any_user?, do: Repo.exists?(User)
+
+  @doc """
+  Creates the instance's FIRST user as a global admin. This is the first-run
+  onboarding path (`/onboarding`), the only place a user is created without an
+  authenticated admin behind it.
+
+  Refuses with `{:error, :already_initialized}` as soon as ANY user exists, so
+  the page can't be used to grant admin later. The check happens inside the
+  transaction under a Postgres advisory lock: two submits racing the form (a
+  double-click, or two replicas behind a load balancer) would otherwise both
+  read an empty table and both become admin.
+
+  Returns `{:ok, user}`, `{:error, :already_initialized}` or
+  `{:error, changeset}`.
+  """
+  def create_first_admin(attrs) do
+    Repo.transaction(fn ->
+      Repo.query!("SELECT pg_advisory_xact_lock($1)", [@first_admin_lock_key])
+
+      if any_user?() do
+        Repo.rollback(:already_initialized)
+      else
+        %User{}
+        |> User.admin_create_changeset(
+          attrs
+          |> stringify_keys()
+          |> Map.put("global_role", "admin")
+        )
+        |> Repo.insert()
+        |> case do
+          {:ok, user} -> user
+          {:error, changeset} -> Repo.rollback(changeset)
+        end
+      end
+    end)
+  end
+
+  # Ecto rejects a params map mixing atom and string keys, and this struct has to
+  # inject "global_role" into whatever the caller sent (form params arrive with
+  # string keys, callers of the context often use atoms).
+  defp stringify_keys(attrs) when is_map(attrs) do
+    Map.new(attrs, fn {key, value} -> {to_string(key), value} end)
   end
 
   @doc """

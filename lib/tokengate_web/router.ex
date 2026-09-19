@@ -78,6 +78,13 @@ defmodule TokengateWeb.Router do
 
     delete "/logout", SessionController, :delete
 
+    # First-run onboarding: while the instance has NO user at all, `/` and
+    # `/login` redirect here and the first account created IS the global admin
+    # — no seed needed. Self-disabling: both actions bounce to /login once a
+    # user exists (see TokengateWeb.OnboardingController).
+    get "/onboarding", OnboardingController, :new
+    post "/onboarding", OnboardingController, :create
+
     # Impersonation — guards live inside the controller actions (the start
     # route requires a real admin; the stop route runs while the session
     # points at the impersonated user, so no admin plug can guard it).
