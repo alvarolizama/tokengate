@@ -178,8 +178,10 @@ defmodule Tokengate.Proxy.ProviderAdapter do
       permanently and fall back to the next provider).
     * `429`, `529` -> `:rate_limited` (selects the short rate-limit cooldown
       of the circuit breaker, then falls back).
-    * other `4xx` -> `:client_error` (caller's fault and, unlike `400`, not
-      provider-specific: `404`/`422`/… are surfaced, not retried elsewhere).
+    * other `4xx` -> `:client_error` (the rejection is not credential-agnostic
+      like a caller's `422`: a marketplace's `404` "no available sellers" is
+      route-specific, so the cascade tries the next key — but the failure
+      never counts against the breaker).
     * `5xx` -> `:server_error` (selects the standard circuit-breaker cooldown,
       then falls back).
 

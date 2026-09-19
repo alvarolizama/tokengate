@@ -2230,11 +2230,11 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert %{"error" => %{"type" => "service_unavailable"}} = json_response(conn, 503)
   end
 
-  # A non-400 4xx on the streaming path is the caller's payload at fault, so it
-  # is neither retried nor fallen back — and, like every 4xx, it must cost the
-  # credential nothing. It used to be recorded through `breaker_reason/1`, whose
-  # catch-all mapped it to `:server_error`, so a 404 burned the breaker of a
-  # healthy credential on the streaming path only.
+  # A non-400 4xx (a marketplace/aggregator "no available sellers" 404) is
+  # ROUTE-specific: the credential is excluded and the cascade tries the next
+  # key. With a single credential the cascade is exhausted at once, so the
+  # client sees the upstream 404 — and, like every 4xx, the credential pays
+  # nothing (no breaker count, no deactivation).
   test "stream: an upstream 404 is surfaced and does not count against the breaker", %{
     conn: conn
   } do
@@ -2255,14 +2255,99 @@ defmodule TokengateWeb.ProxyControllerTest do
       |> authed_conn(token)
       |> post(~p"/v1/chat/completions", Map.put(chat_body(model.name), "stream", true))
 
-    assert %{"error" => %{"code" => "upstream_client_error"}} = json_response(conn, 404)
+    assert %{"error" => %{"code" => "upstream_client_error", "message" => message}} =
+             json_response(conn, 404)
 
-    # Terminal: a single attempt, no fallback.
+    assert message =~ "model not found upstream"
+
+    # Terminal: a single attempt — the only credential was excluded, so there
+    # is no next key to try.
     assert length(collect_provider_hits()) == 1
 
     assert Providers.get_credential!(credential_id).status == "active"
     assert CircuitBreakerManager.status(credential_id) == :closed
     assert CircuitBreakerManager.details(credential_id).failures == 0
+  end
+
+  # Surplus como upstream: un 404 "No available sellers for this model" es un
+  # estado de ESA key (ese vendedor no está ahora), no del payload. La
+  # credencial se excluye y la siguiente de la lista intenta: el usuario no
+  # debe ver el 404 mientras queden keys vivas.
+  test "chat: a marketplace 404 falls back to the next credential and succeeds", %{conn: conn} do
+    u = unique()
+    %{token: token, model: model} = proxy_fixture()
+    add_healthy_fallback(model, u)
+
+    [first | _] = Providers.list_model_providers(model.id) |> Enum.sort_by(& &1.priority)
+    credential_id = first.credential_id
+
+    {:ok, _provider} =
+      Providers.update_provider(first.credential.provider, %{
+        base_url: "http://localhost:#{@port}/notfound"
+      })
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+    assert json_response(conn, 200)
+
+    # Dos intentos: la key sin sellers y la siguiente de la lista.
+    assert length(collect_provider_hits()) == 2
+
+    # La key que dio 404 sigue activa y sin breaker: el 404 no es su culpa.
+    assert Providers.get_credential!(credential_id).status == "active"
+    assert CircuitBreakerManager.status(credential_id) == :closed
+    assert CircuitBreakerManager.details(credential_id).failures == 0
+  end
+
+  # Agotada la lista de keys, el 404 del upstream se entrega — nunca un 503
+  # "all providers down": el cliente puede actuar sobre un 4xx real.
+  test "chat: a 404 from every candidate is surfaced as the upstream 4xx", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture()
+
+    Providers.list_model_providers(model.id)
+    |> Enum.each(fn mp ->
+      Providers.update_provider(mp.credential.provider, %{
+        base_url: "http://localhost:#{@port}/notfound"
+      })
+    end)
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+    assert %{"error" => %{"code" => "upstream_client_error", "message" => message}} =
+             json_response(conn, 404)
+
+    assert message =~ "model not found upstream"
+    assert length(collect_provider_hits()) == 1
+  end
+
+  # Mismo contrato en streaming: nada se envía al cliente hasta el primer
+  # chunk, así que el fallback ocurre antes de comprometer el 200.
+  test "stream: a marketplace 404 falls back to the next credential and streams", %{conn: conn} do
+    u = unique()
+    %{token: token, model: model} = proxy_fixture()
+    add_healthy_fallback(model, u)
+
+    [first | _] = Providers.list_model_providers(model.id) |> Enum.sort_by(& &1.priority)
+
+    {:ok, _provider} =
+      Providers.update_provider(first.credential.provider, %{
+        base_url: "http://localhost:#{@port}/notfound"
+      })
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", Map.put(chat_body(model.name), "stream", true))
+
+    assert conn.state == :chunked
+    assert response(conn, 200) =~ "[DONE]"
+    assert length(collect_provider_hits()) == 2
   end
 
   # Regression: a 400 on the STREAMING path used to be treated like a
