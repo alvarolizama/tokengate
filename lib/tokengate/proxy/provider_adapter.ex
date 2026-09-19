@@ -250,8 +250,10 @@ defmodule Tokengate.Proxy.ProviderAdapter do
   end
 
   def dispatch(%{dialect: "openrouter"}), do: Tokengate.Proxy.OpenRouterAdapter
+  def dispatch(%{dialect: "dashscope"}), do: Tokengate.Proxy.DashScopeAdapter
   def dispatch(%{dialect: "openai"}), do: Tokengate.Proxy.OpenAIAdapter
   def dispatch(%{"dialect" => "openrouter"}), do: Tokengate.Proxy.OpenRouterAdapter
+  def dispatch(%{"dialect" => "dashscope"}), do: Tokengate.Proxy.DashScopeAdapter
   def dispatch(%{"dialect" => "openai"}), do: Tokengate.Proxy.OpenAIAdapter
 
   def dispatch(%{adapter: adapter}) when is_binary(adapter), do: resolve(adapter)

@@ -74,10 +74,11 @@ defmodule Tokengate.Providers.CatalogTest do
   describe "code customizations" do
     test "capabilities are declared per provider, in code" do
       assert Catalog.capabilities("fireworks-ai") == ~w(llm embedding rerank)
-      # Alibaba (DashScope): rerank vive en compatible-api (path absoluto) e
-      # image ya es OpenAI-compatible en compatible-mode — ambos, intl y cn.
-      assert Catalog.capabilities("alibaba") == ~w(llm embedding rerank image)
-      assert Catalog.capabilities("alibaba-cn") == ~w(llm embedding rerank image)
+      # Alibaba (DashScope): rerank en compatible-api, image en compatible-mode
+      # y stt/tts/video nativos traducidos por el adaptador dashscope —
+      # ambos, intl y cn.
+      assert Catalog.capabilities("alibaba") == ~w(llm embedding rerank image stt tts video)
+      assert Catalog.capabilities("alibaba-cn") == ~w(llm embedding rerank image stt tts video)
       assert Catalog.capabilities("anthropic") == []
       assert Catalog.capabilities(nil) == []
     end

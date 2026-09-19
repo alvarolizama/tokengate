@@ -145,21 +145,24 @@ defmodule Tokengate.Providers.Catalog do
     # gte-rerank fue discontinuado; los modelos vigentes son qwen3-rerank y
     # qwen3.7-text-rerank.
     "alibaba" => %{
-      capabilities: ~w(llm embedding rerank image),
+      capabilities: ~w(llm embedding rerank image stt tts video),
+      dialect: "dashscope",
       paths: %{rerank: "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks"}
     },
     "alibaba-cn" => %{
-      capabilities: ~w(llm embedding rerank image),
+      capabilities: ~w(llm embedding rerank image stt tts video),
+      dialect: "dashscope",
       paths: %{rerank: "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"}
     },
     "alibaba-token-plan" => %{capabilities: ~w(llm), billing: "subscription"},
     "alibaba-token-plan-cn" => %{capabilities: ~w(llm), billing: "subscription"},
-    # Qwen Cloud: misma superficie DashScope intl que "alibaba" (chat,
-    # embeddings, rerank en compatible-api e image en compatible-mode), keys y
-    # billing propios. La fila entera vive en @code_providers.
+    # Qwen Cloud: misma superficie DashScope que "alibaba" — chat, embeddings,
+    # rerank en compatible-api, image en compatible-mode, stt/tts/video nativos
+    # (adaptador dashscope). Keys y billing propios. La fila entera vive en
+    # @code_providers.
     "qwen-cloud" => %{
-      capabilities: ~w(llm embedding rerank image),
-      dialect: "openai",
+      capabilities: ~w(llm embedding rerank image stt tts video),
+      dialect: "dashscope",
       paths: %{rerank: "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks"}
     },
     "opencode" => %{capabilities: ~w(llm)},

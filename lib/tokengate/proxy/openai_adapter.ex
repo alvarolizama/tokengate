@@ -224,6 +224,40 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
     end
   end
 
+  @doc """
+  Authenticated JSON POST with EXTRA request headers — for upstreams whose
+  native services need protocol headers (DashScope async: `X-DashScope-Async`).
+  Same 4-tuple contract as `service_post/5`.
+  """
+  def post_json_with_headers(provider, credential, path, payload, extra_headers, opts \\ []) do
+    url = build_url(provider, path)
+
+    api_key = Map.get(credential, :api_key_encrypted) || Map.get(credential, "api_key_encrypted")
+    receive_timeout = Keyword.get(opts, :receive_timeout, @default_receive_timeout)
+    forwarded_headers = Keyword.get(opts, :forwarded_headers, %{})
+    body = encode(payload)
+
+    base = headers(api_key, forwarded_headers, "application/json")
+
+    request = Finch.build(:post, url, base ++ extra_headers, body)
+
+    start = System.monotonic_time(:millisecond)
+
+    case checked_request(request, receive_timeout) do
+      {:ok, %Finch.Response{status: status, body: resp_body, headers: resp_headers}}
+      when status in 200..299 ->
+        latency = System.monotonic_time(:millisecond) - start
+        {:ok, decode!(resp_body), latency, normalize_headers(resp_headers)}
+
+      {:ok, %Finch.Response{status: status, body: resp_body}} ->
+        {:error, ProviderAdapter.classify_status(status), status,
+         extract_error_message(resp_body)}
+
+      {:error, error} ->
+        {:error, ProviderAdapter.classify_error(error), nil, nil}
+    end
+  end
+
   # A raw body wins: those bytes and that content-type are the client's own,
   # forwarded as received. Without one the payload is JSON as always.
   defp request_body(payload, opts) do
