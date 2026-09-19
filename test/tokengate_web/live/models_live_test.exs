@@ -94,6 +94,17 @@ defmodule TokengateWeb.ModelsLiveTest do
     lab
   end
 
+  # El mirror de models.dev se siembra en el ARRANQUE de la app, fuera del
+  # sandbox del test: en este proceso está vacío. Sembrarlo aquí (idempotente,
+  # mismo camino que `catalog_test.exs`) es lo que hace determinista lo que el
+  # picker ve — sin esto, el dropdown de proveedores y la lista del catálogo
+  # salen vacíos y los tests no probarían nada.
+  defp seed_mirror! do
+    Tokengate.Providers.CatalogSeed.seed_if_empty()
+    :ok = Tokengate.Providers.CatalogSync.sync()
+    :ok
+  end
+
   defp create_model_provider(model, provider, attrs \\ %{}) do
     u = unique()
 
@@ -153,6 +164,8 @@ defmodule TokengateWeb.ModelsLiveTest do
     {:ok, view, _html} = live(conn, ~p"/catalog/models")
 
     view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-llm") |> render_click()
+    view |> element("#wizard-all-models") |> render_click()
 
     assert has_element?(view, "#model-form")
 
@@ -177,6 +190,324 @@ defmodule TokengateWeb.ModelsLiveTest do
     # mandatory for chat models, so the schema defaults simply hold.
     assert model_record.prompt_cache_enabled == false
     assert model_record.lazy_cleanup_enabled == false
+  end
+
+  # The type picked at step 0 IS the persisted model_type now: a service
+  # model (stt) saves with its real type, not collapsed to "llm".
+  test "admin creates a service model with its real type", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    # Step 0: the type picker, not the form
+    assert has_element?(view, "#model-type-picker")
+    refute has_element?(view, "#model-form")
+    view |> element("#pick-type-stt") |> render_click()
+    view |> element("#wizard-all-models") |> render_click()
+
+    assert has_element?(view, "#model-form")
+
+    view
+    |> form("#model-form", %{
+      model: %{
+        name: "whisper-test",
+        context_window: 128_000
+      }
+    })
+    |> render_submit()
+
+    model_record = Tokengate.Providers.get_model_by_name("whisper-test")
+    assert model_record.model_type == "stt"
+  end
+
+  # A decision model (Jev / System One) has its OWN type in the picker — not
+  # "llm (chat)" — and picking it filters the catalog down to decision models.
+  test "decision type is offered and filters the catalog to Jev", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    # Jev is a CODE-owned model (models.dev does not publish it): the test DB
+    # only has it after the code-model sync runs.
+    Tokengate.Providers.ModelCatalog.ensure_code_models()
+
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    assert has_element?(view, "#pick-type-decision")
+
+    view |> element("#pick-type-decision") |> render_click()
+    view |> element("#wizard-all-models") |> render_click()
+    assert has_element?(view, "#model-form")
+
+    # The catalog list behind the picker only carries decision models: search
+    # for jev and it is there.
+    view |> element("#catalog-search") |> render_change(%{"q" => "jev"})
+    assert has_element?(view, "#catalog-row-#{ModelsLive.dom_key("typesafe/jev")}")
+  end
+
+  # El paso 1 del wizard es lo que acota el catálogo: elegido el proveedor, la
+  # lista del paso 2 sólo trae sus modelos (combinado con el tipo del paso 0).
+  test "el wizard acota el catálogo al proveedor elegido", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    Tokengate.Providers.ModelCatalog.ensure_code_models()
+    Tokengate.Providers.CatalogSeed.seed_if_empty()
+    :ok = Tokengate.Providers.CatalogSync.sync()
+
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-decision") |> render_click()
+
+    # Paso 1: TypeSafe es el único que declara `decision`.
+    view |> element("#wizard-provider-typesafe") |> render_click()
+
+    # Paso 2: el catálogo queda acotado a ese proveedor — sólo Jev.
+    html = render(view)
+    assert html =~ "typesafe/jev"
+    assert html =~ "TypeSafe"
+  end
+
+  # El dropdown de proveedores del picker se acota por el tipo elegido: un
+  # proveedor que no declara la capability no puede servir el modelo, así que
+  # ofrecerlo es un callejón sin salida.
+  test "el dropdown de proveedores del picker se acota por tipo (image)", %{conn: conn} do
+    seed_mirror!()
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    # image: OpenRouter y Alibaba la declaran; Fireworks NO.
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-image") |> render_click()
+
+    assert has_element?(view, "#wizard-provider-openrouter")
+    refute has_element?(view, "#wizard-provider-fireworks-ai")
+  end
+
+  test "el dropdown de proveedores del picker se acota por tipo (llm)", %{conn: conn} do
+    seed_mirror!()
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    # llm: Fireworks sí la declara.
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-llm") |> render_click()
+
+    assert has_element?(view, "#wizard-provider-fireworks-ai")
+  end
+
+  # El render del logo era `img si logo_url / icono si nil`, así que una URL que
+  # responde 404 NO caía al icono: dejaba el chip VACÍO, y desde fuera se leía
+  # como «a este proveedor le falta el logo». Es justo lo que pasaba con
+  # qwen-cloud (PNG de alicdn muerto) y typesafe (favicon inexistente).
+  # Ahora el icono va SIEMPRE en el markup (oculto sólo si hay logo) y el <img>
+  # lleva `data-logo` para que el listener global de `error` (app.js) sepa cuál
+  # falló y lo sustituya por el icono.
+  test "con logo, la fila del wizard marca el img y deja el icono oculto de reserva", %{
+    conn: conn
+  } do
+    seed_mirror!()
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-llm") |> render_click()
+
+    # openrouter sí trae logo del catálogo: img marcado + icono presente y oculto.
+    assert has_element?(view, "#wizard-provider-openrouter img[data-logo]")
+    assert has_element?(view, "#wizard-provider-openrouter .hero-server-stack.hidden")
+  end
+
+  test "sin logo, la fila del wizard pinta el icono visible y ningún img", %{conn: conn} do
+    seed_mirror!()
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-decision") |> render_click()
+
+    # typesafe se queda SIN logo a propósito (su web no expone ningún asset
+    # usable): icono visible, sin img y sin la clase `hidden`.
+    refute has_element?(view, "#wizard-provider-typesafe img[data-logo]")
+    assert has_element?(view, "#wizard-provider-typesafe .hero-server-stack")
+    refute has_element?(view, "#wizard-provider-typesafe .hero-server-stack.hidden")
+  end
+
+  # Regresión del bug reportado: elegir un tipo de SERVICIO mostraba el catálogo
+  # entero de models.dev (~3000 modelos de chat) en vez de nada, porque la
+  # cláusula del filtro por tipo era `do: models` para todo lo que no fuera
+  # llm/embedding/decision.
+  test "un tipo de servicio NO lista el catálogo de chat (regresión)", %{conn: conn} do
+    seed_mirror!()
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-stt") |> render_click()
+    view |> element("#wizard-all-models") |> render_click()
+
+    # Un modelo de chat real del mirror: bajo "Transcription" no debe aparecer.
+    view |> element("#catalog-search") |> render_change(%{"q" => "gpt-5"})
+
+    refute has_element?(view, "#catalog-results")
+    assert has_element?(view, "#catalog-empty")
+
+    # El badge del tab dice la verdad: 0 modelos de este tipo en models.dev.
+    assert view |> element("#tab-catalog") |> render() =~ ">0<"
+  end
+
+  # Y el mismo buscador SÍ trae el catálogo cuando el tipo lo tiene.
+  test "un tipo de catálogo (llm) sí lista sus modelos", %{conn: conn} do
+    seed_mirror!()
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-llm") |> render_click()
+    view |> element("#wizard-all-models") |> render_click()
+    view |> element("#catalog-search") |> render_change(%{"q" => "gpt-5"})
+
+    assert has_element?(view, "#catalog-results")
+    refute has_element?(view, "#catalog-empty")
+  end
+
+  # El paso 2 combina DOS fuentes: la semilla (instantánea) y el listado EN VIVO
+  # del proveedor. El resultado llega por mensaje porque es una llamada HTTP.
+  test "el paso 2 une el listado en vivo con la semilla", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    seed_mirror!()
+
+    # El proveedor real apuntando a un puerto muerto: el listado en vivo falla
+    # rápido y sin red, que es justo lo que este test quiere (la semilla manda).
+    provider =
+      Tokengate.Providers.Provider
+      |> Repo.get_by(key: "openrouter")
+      |> Ecto.Changeset.change(base_url: "http://localhost:1")
+      |> Repo.update!()
+
+    {:ok, _credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        name: "live",
+        api_key_encrypted: "sk-live",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-image") |> render_click()
+    view |> element("#wizard-provider-openrouter") |> render_click()
+
+    # La semilla está desde el primer render (no se espera a la red).
+    assert has_element?(view, "#wizard-model-#{ModelsLive.dom_key("openai/gpt-image-2")}")
+
+    # Y cuando llega el catálogo del proveedor, se UNE a la semilla.
+    send(
+      view.pid,
+      {:wizard_service_models, "openrouter", "image",
+       {:ok, ["nuevo/proveedor-modelo-1", "otro/proveedor-modelo-2"]}}
+    )
+
+    html = render(view)
+
+    assert html =~ "nuevo/proveedor-modelo-1"
+    assert html =~ "otro/proveedor-modelo-2"
+    # La semilla NO se pierde: es unión, no reemplazo.
+    assert html =~ "black-forest-labs/flux.2-pro"
+  end
+
+  # Una respuesta tardía del proveedor anterior no debe pisar la lista del
+  # proveedor que el operador acaba de elegir.
+  test "el listado en vivo obsoleto se descarta", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-image") |> render_click()
+    view |> element("#wizard-all-models") |> render_click()
+
+    send(
+      view.pid,
+      {:wizard_service_models, "openrouter", "image", {:ok, ["no/deberia-aparecer"]}}
+    )
+
+    html = render(view)
+    refute html =~ "no/deberia-aparecer"
+  end
+
+  # Jev (TypeSafe) es el caso donde el precio de LISTA del catálogo es lo ÚNICO
+  # que cobra: la API de TypeSafe NO reporta `usage.cost`, así que si el wizard no
+  # volcara ese precio al lane, el modelo quedaría en $0 para siempre.
+  test "el wizard copia el precio de lista al lane (caso Jev)", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    # Jev es un modelo CODE-OWNED (models.dev no lo publica): existe tras el sync.
+    Tokengate.Providers.ModelCatalog.ensure_code_models()
+    Tokengate.Providers.CatalogSeed.seed_if_empty()
+    :ok = Tokengate.Providers.CatalogSync.sync()
+
+    provider = Repo.get_by(Tokengate.Providers.Provider, key: "typesafe")
+    assert provider, "el sync debía materializar typesafe"
+
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        name: "jev",
+        api_key_encrypted: "sk-jev",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-decision") |> render_click()
+    view |> element("#wizard-provider-typesafe") |> render_click()
+
+    jev = ModelsLive.dom_key("typesafe/jev")
+    assert has_element?(view, "#catalog-row-#{jev}")
+    view |> element("#catalog-row-#{jev}") |> render_click()
+
+    view
+    |> element("#wizard-credential")
+    |> render_change(%{"credential_id" => credential.id})
+
+    name = "jev-wizard-#{unique()}"
+
+    view
+    |> form("#model-form", %{model: %{name: name, context_window: 64_000}})
+    |> render_submit()
+
+    model = Providers.get_model_by_name(name)
+    assert model.model_type == "decision"
+
+    ap =
+      Repo.one(from mp in Tokengate.Providers.ModelProvider, where: mp.model_id == ^model.id)
+
+    assert ap != nil, "el wizard debía crear el lane de Jev"
+    assert ap.provider_model == "jev-latest"
+    # El precio de lista del catálogo: $0.042 por millón de input, output gratis.
+    assert Decimal.equal?(ap.input_cost_per_million, Decimal.new("0.042"))
+    assert Decimal.equal?(ap.output_cost_per_million, Decimal.new("0"))
   end
 
   test "admin can edit an existing model", %{conn: conn} do
@@ -274,6 +605,182 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     assert html =~ "Proveedor asignado"
     assert html =~ "claude-3-opus"
+  end
+
+  # La unidad de precio la decide el TIPO del modelo: un lane de imagen no se
+  # cobra por tokens, así que el modal abre en «por imagen» y ofrece `unit_cost`
+  # en vez de los tres campos por millón — que sin unidad quedaban en $0 salvo
+  # que el upstream reportara el coste.
+  test "el modal de proveedor abre con la unidad del tipo del modelo (image)", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    image_model = create_model(%{model_type: "image"})
+
+    {:ok, _credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        api_key_encrypted: "sk-test",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-ap-#{image_model.id}") |> render_click()
+
+    assert has_element?(view, "#ap-pricing-unit option[value=\"per_image\"]")
+    assert view |> element("#ap-pricing-unit") |> render() =~ "selected"
+
+    assert has_element?(view, "#model_provider_unit_cost")
+    refute has_element?(view, "#model_provider_input_cost_per_million")
+  end
+
+  test "el modal de proveedor ofrece tokens cuando el modelo es de chat", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    chat_model = create_model(%{model_type: "llm"})
+
+    {:ok, _credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        api_key_encrypted: "sk-test",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-ap-#{chat_model.id}") |> render_click()
+
+    assert has_element?(view, "#ap-pricing-unit option[value=\"per_1m_tokens\"]")
+    assert has_element?(view, "#model_provider_input_cost_per_million")
+    assert has_element?(view, "#model_provider_output_cost_per_million")
+    refute has_element?(view, "#model_provider_unit_cost")
+  end
+
+  test "cambiar la unidad conmuta los campos de precio", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    chat_model = create_model(%{model_type: "llm"})
+
+    {:ok, _credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        api_key_encrypted: "sk-test",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-ap-#{chat_model.id}") |> render_click()
+
+    # Por defecto: tokens.
+    assert has_element?(view, "#model_provider_input_cost_per_million")
+
+    view
+    |> element("#ap-pricing-unit")
+    |> render_change(%{"model_provider" => %{"pricing_unit" => "per_request"}})
+
+    assert has_element?(view, "#model_provider_unit_cost")
+    refute has_element?(view, "#model_provider_input_cost_per_million")
+    refute has_element?(view, "#model_provider_output_cost_per_million")
+  end
+
+  test "el lane guarda su unidad y su precio por unidad", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    image_model = create_model(%{model_type: "image"})
+
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        api_key_encrypted: "sk-test",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-ap-#{image_model.id}") |> render_click()
+
+    view
+    |> form("#model-provider-form", %{
+      model_provider: %{
+        credential_id: credential.id,
+        provider_model: "gpt-image-2",
+        priority: 1,
+        enabled: true,
+        pricing_unit: "per_image",
+        unit_cost: "0.0400"
+      }
+    })
+    |> render_submit()
+
+    ap =
+      Repo.one(
+        from mp in Tokengate.Providers.ModelProvider, where: mp.model_id == ^image_model.id
+      )
+
+    assert ap.pricing_unit == "per_image"
+    assert Decimal.equal?(ap.unit_cost, Decimal.new("0.0400"))
+  end
+
+  # El wizard crea el modelo Y su primer lane en una sola pasada: elegido el
+  # proveedor (paso 1) y el modelo de servicio (paso 2), la credencial (paso 3)
+  # es lo único que falta. Sin esto el operador tendría que volver a la fila
+  # recién creada y abrir el modal de asignar proveedor acto seguido.
+  test "el wizard crea el modelo Y su primer lane de una vez", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    # OpenRouter sale de la materialización del catálogo (declara `image` en
+    # código), así que se siembra el mirror en vez de inventar un custom.
+    seed_mirror!()
+    provider = Repo.get_by(Tokengate.Providers.Provider, key: "openrouter")
+    assert provider, "el sync debía materializar openrouter"
+
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        name: "img",
+        api_key_encrypted: "sk-wizard",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-image") |> render_click()
+
+    # Paso 1: el proveedor que declara el tipo.
+    view |> element("#wizard-provider-openrouter") |> render_click()
+
+    # Paso 2: los modelos de servicio curados de ese proveedor.
+    nano = ModelsLive.dom_key("openai/gpt-image-2")
+    assert has_element?(view, "#wizard-model-#{nano}")
+    view |> element("#wizard-model-#{nano}") |> render_click()
+
+    # Paso 3: la credencial, que es el input necesario para que el modelo rutee.
+    view |> element("#wizard-credential") |> render_change(%{"credential_id" => credential.id})
+
+    name = "gpt-image-wizard-#{unique()}"
+
+    view
+    |> form("#model-form", %{model: %{name: name, context_window: 32_768}})
+    |> render_submit()
+
+    model = Providers.get_model_by_name(name)
+    assert model.model_type == "image"
+
+    ap =
+      Repo.one(from mp in Tokengate.Providers.ModelProvider, where: mp.model_id == ^model.id)
+
+    assert ap != nil, "el wizard debía crear el lane junto con el modelo"
+    assert ap.credential_id == credential.id
+    assert ap.provider_model == "openai/gpt-image-2"
+    # El lane nace con la unidad del TIPO del modelo, no en tokens.
+    assert ap.pricing_unit == "per_image"
   end
 
   test "admin can set sticky_ttl_ms when creating a model provider", %{conn: conn} do
@@ -1165,6 +1672,8 @@ defmodule TokengateWeb.ModelsLiveTest do
       {:ok, view, _html} = live(conn, ~p"/catalog/models")
 
       view |> element("#new-model-btn") |> render_click()
+      view |> element("#pick-type-llm") |> render_click()
+      view |> element("#wizard-all-models") |> render_click()
 
       assert has_element?(view, "#model-form")
       assert has_element?(view, "#tab-catalog")
@@ -1191,6 +1700,8 @@ defmodule TokengateWeb.ModelsLiveTest do
       {:ok, view, _html} = live(conn, ~p"/catalog/models")
 
       view |> element("#new-model-btn") |> render_click()
+      view |> element("#pick-type-llm") |> render_click()
+      view |> element("#wizard-all-models") |> render_click()
       view |> element("#tab-custom") |> render_click()
 
       html =
@@ -1218,6 +1729,8 @@ defmodule TokengateWeb.ModelsLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/catalog/models")
       view |> element("#new-model-btn") |> render_click()
+      view |> element("#pick-type-llm") |> render_click()
+      view |> element("#wizard-all-models") |> render_click()
 
       # Every catalog row is filterable in memory. The DOM id is derived from
       # the key with `dom_key/1` (keys carrying `/` get a hash suffix), so the
@@ -1254,6 +1767,8 @@ defmodule TokengateWeb.ModelsLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/catalog/models")
       view |> element("#new-model-btn") |> render_click()
+      view |> element("#pick-type-llm") |> render_click()
+      view |> element("#wizard-all-models") |> render_click()
 
       view
       |> element("#catalog-row-#{ModelsLive.dom_key("openai/gpt-5-nano")}")
@@ -1273,6 +1788,8 @@ defmodule TokengateWeb.ModelsLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/catalog/models")
       view |> element("#new-model-btn") |> render_click()
+      view |> element("#pick-type-llm") |> render_click()
+      view |> element("#wizard-all-models") |> render_click()
 
       view |> element("#catalog-search") |> render_change(%{"q" => "no-existe-xyz"})
 
@@ -1295,6 +1812,8 @@ defmodule TokengateWeb.ModelsLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/catalog/models")
       view |> element("#new-model-btn") |> render_click()
+      view |> element("#pick-type-llm") |> render_click()
+      view |> element("#wizard-all-models") |> render_click()
       view |> element("#catalog-row-#{ModelsLive.dom_key("openai/gpt-5-nano")}") |> render_click()
 
       view
@@ -1319,6 +1838,8 @@ defmodule TokengateWeb.ModelsLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/catalog/models")
       view |> element("#new-model-btn") |> render_click()
+      view |> element("#pick-type-llm") |> render_click()
+      view |> element("#wizard-all-models") |> render_click()
 
       html =
         view |> element("#catalog-row-#{ModelsLive.dom_key("openai/gpt-5-nano")}") |> render()
@@ -1406,6 +1927,8 @@ defmodule TokengateWeb.ModelsLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/catalog/models")
       view |> element("#new-model-btn") |> render_click()
+      view |> element("#pick-type-llm") |> render_click()
+      view |> element("#wizard-all-models") |> render_click()
 
       assert has_element?(view, "#model-icon-picker")
       assert has_element?(view, "#model-mark-preview-inner .hero-cpu-chip")
@@ -1467,6 +1990,8 @@ defmodule TokengateWeb.ModelsLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/catalog/models")
       view |> element("#new-model-btn") |> render_click()
+      view |> element("#pick-type-llm") |> render_click()
+      view |> element("#wizard-all-models") |> render_click()
 
       # The modal opens with the whole catalog loaded in memory.
       assert has_element?(view, "#catalog-picker")
