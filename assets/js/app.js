@@ -200,6 +200,29 @@ const CopyToClipboard = {
   }
 }
 
+// Provider logos: reveal the generic icon when the logo URL fails to load.
+// The server renders the icon ALWAYS (hidden while a logo exists), because a
+// 404 never triggers a server-side fallback — before this, a dead logo URL left
+// the chip EMPTY instead of showing the icon (qwen-cloud and typesafe both
+// shipped URLs that 404'd, and the hole read as "this provider has no logo").
+//
+// `error` on an <img> does NOT bubble, but it DOES propagate in the CAPTURE
+// phase — so a single delegated listener on the document covers every logo on
+// every page. Deliberately not a per-element hook: a hook would need a unique
+// DOM id per logo (these lists are rendered in :for loops) plus
+// phx-update="ignore" everywhere, for a 3-line job.
+document.addEventListener(
+  "error",
+  (e) => {
+    const img = e.target
+    if (!(img instanceof HTMLImageElement) || !img.hasAttribute("data-logo")) return
+    img.hidden = true
+    const icon = img.parentElement?.querySelector(".hero-server-stack")
+    if (icon) icon.classList.remove("hidden")
+  },
+  true
+)
+
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},

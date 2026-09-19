@@ -530,20 +530,25 @@ defmodule TokengateWeb.StatsHelpers do
       ]}
       {@rest}
     >
+      <%!-- El icono va SIEMPRE en el markup (oculto cuando hay logo): una URL
+           de logo que responde 404 no dispara ningún fallback del servidor, y
+           antes dejaba el chip VACÍO. Lo revela el listener global de `error`
+           en app.js, que también se encarga de ocultar el <img> roto. --%>
+      <.icon
+        name="hero-server-stack"
+        class={[
+          "text-neutral-600",
+          @logo_url && "hidden",
+          if(@size == "md", do: "w-4 h-4", else: "w-3.5 h-3.5")
+        ]}
+      />
       <img
         :if={@logo_url}
         src={@logo_url}
         alt=""
+        data-logo
         class={["object-contain", if(@size == "md", do: "w-5 h-5", else: "w-4 h-4")]}
         loading="lazy"
-      />
-      <.icon
-        :if={!@logo_url}
-        name="hero-server-stack"
-        class={[
-          "text-neutral-600",
-          if(@size == "md", do: "w-4 h-4", else: "w-3.5 h-3.5")
-        ]}
       />
     </span>
     """

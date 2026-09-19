@@ -192,4 +192,33 @@ defmodule TokengateWeb.StatsHelpersTest do
       refute rest =~ "hero-trophy"
     end
   end
+
+  # El chip de logo lo comparten todos los listados de stats (Resumen, Por
+  # proveedor, detalle de modelo, hub en vivo). El icono genérico tiene que ir
+  # SIEMPRE en el markup, oculto sólo cuando hay logo: una URL que responde 404
+  # no dispara ningún fallback del servidor, así que el render viejo
+  # (`img si logo_url / icono si nil`) dejaba el chip VACÍO y se leía como «a
+  # este proveedor le falta el logo». Lo destapa el listener global de `error`
+  # de app.js, que busca el `<img data-logo>` roto y libera el
+  # `.hero-server-stack` que tiene al lado.
+  describe "provider_logo/1" do
+    # Ojo: el chip lleva `overflow-hidden`, así que `=~ "hidden"` a secas NO
+    # prueba nada — hay que mirar la clase del icono, que empieza por
+    # `hero-server-stack`.
+    test "con logo pinta el img marcado y deja el icono oculto de reserva" do
+      html =
+        render_component(&Stats.provider_logo/1, %{logo_url: "https://x.test/logo.svg"})
+
+      assert html =~ "data-logo"
+      assert html =~ ~r/class="hero-server-stack[^"]*\bhidden\b/
+    end
+
+    test "sin logo pinta el icono visible y ningún img" do
+      html = render_component(&Stats.provider_logo/1, %{logo_url: nil})
+
+      refute html =~ "data-logo"
+      assert html =~ ~r/class="hero-server-stack[^"]*"/
+      refute html =~ ~r/class="hero-server-stack[^"]*\bhidden\b/
+    end
+  end
 end

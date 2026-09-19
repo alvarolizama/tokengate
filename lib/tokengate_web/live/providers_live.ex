@@ -673,7 +673,6 @@ defmodule TokengateWeb.ProvidersLive do
               "name",
               "status",
               "base_url",
-              "billing_type",
               "dialect",
               "capabilities",
               "max_rpm",
@@ -987,13 +986,13 @@ defmodule TokengateWeb.ProvidersLive do
                           :if={entry.logo_url}
                           src={entry.logo_url}
                           alt=""
+                          data-logo
                           class="w-5 h-5 object-contain"
                           loading="lazy"
                         />
                         <.icon
-                          :if={!entry.logo_url}
                           name="hero-server-stack"
-                          class="w-4 h-4 text-neutral-600"
+                          class={["w-4 h-4 text-neutral-600", entry.logo_url && "hidden"]}
                         />
                       </span>
 
@@ -1279,13 +1278,13 @@ defmodule TokengateWeb.ProvidersLive do
                         :if={provider.logo_url}
                         src={provider.logo_url}
                         alt=""
+                        data-logo
                         class="w-4 h-4 object-contain"
                         loading="lazy"
                       />
                       <.icon
-                        :if={!provider.logo_url}
                         name="hero-server-stack"
-                        class="w-4 h-4 text-neutral-600"
+                        class={["w-4 h-4 text-neutral-600", provider.logo_url && "hidden"]}
                       />
                     </span>
                     <h3 class="font-semibold text-base-content">{provider.name}</h3>
