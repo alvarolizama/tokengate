@@ -296,7 +296,7 @@ seed_api_key = fn label, attrs ->
     nil ->
       {token, key_hash, key_prefix} = Accounts.generate_api_key_material()
 
-      {:ok, api_key} =
+      {:ok, _api_key} =
         Accounts.create_api_key(
           Map.merge(
             %{

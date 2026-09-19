@@ -115,7 +115,9 @@ defmodule Tokengate.Routing.Cache do
   """
   @spec invalidate(tuple() | :disabled_credentials) :: :ok
   def invalidate(key) do
-    :ets.delete(@table, key)
+    # El dueño puede no estar vivo (seed/release corren con with_repo, sin el
+    # árbol de supervisión): sin tabla no hay nada que invalidar.
+    if :ets.whereis(@table) != :undefined, do: :ets.delete(@table, key)
     :ok
   end
 
@@ -125,7 +127,9 @@ defmodule Tokengate.Routing.Cache do
   """
   @spec invalidate_all() :: :ok
   def invalidate_all do
-    :ets.delete_all_objects(@table)
+    # Misma tolerancia que invalidate/1: sin GenServer dueño no hay tabla ETS
+    # y por tanto no hay entradas que limpiar — no-op, no crash.
+    if :ets.whereis(@table) != :undefined, do: :ets.delete_all_objects(@table)
     :ok
   end
 
