@@ -3,7 +3,8 @@ defmodule TokengateWeb.MaintenanceLive do
   Admin maintenance page — read-only config overview plus Danger Zone actions.
 
   Currently supports:
-    * Reset all request logs (truncate `request_logs` table)
+    * Leave everything at zero (usage: logs, metrics and counters, plus unused
+      catalog records and sticky routes)
     * Reset sticky sessions
 
   El **tope diario global** y sus exclusiones NO viven aquí: son una palanca de
@@ -12,11 +13,9 @@ defmodule TokengateWeb.MaintenanceLive do
 
   use TokengateWeb, :live_view
 
-  import Ecto.Query, only: [from: 2]
   alias Tokengate.Logs
   alias Tokengate.Providers
   alias Tokengate.Providers.CatalogRefreshWorker
-  alias Tokengate.Repo
   alias Tokengate.Routing.StickyTracker
 
   @impl true
@@ -31,10 +30,8 @@ defmodule TokengateWeb.MaintenanceLive do
       socket
       |> assign(:page_title, gettext("Maintenance") <> " · Tokengate")
       |> assign(:is_admin, user && user.global_role == "admin")
-      |> assign(:confirm_reset, false)
       |> assign(:confirm_full_reset, false)
       |> assign(:confirm_sticky_reset, false)
-      |> assign(:log_count, count_logs())
       |> assign(:sticky_count, sticky_count())
       |> assign_catalog()
       |> require_admin_hook()
@@ -73,34 +70,6 @@ defmodule TokengateWeb.MaintenanceLive do
 
   ## Events -----------------------------------------------------------------
 
-  @impl true
-  def handle_event("show_reset_confirm", _params, socket) do
-    {:noreply, assign(socket, :confirm_reset, true)}
-  end
-
-  @impl true
-  def handle_event("cancel_reset", _params, socket) do
-    {:noreply, assign(socket, :confirm_reset, false)}
-  end
-
-  @impl true
-  def handle_event("reset_logs", _params, socket) do
-    Logs.truncate_request_logs()
-
-    Tokengate.Auditing.audit(
-      socket.assigns.current_user,
-      "settings.reset_logs",
-      "request_logs",
-      nil
-    )
-
-    {:noreply,
-     socket
-     |> assign(:confirm_reset, false)
-     |> assign(:log_count, 0)
-     |> put_flash(:info, "Historial de logs eliminado.")}
-  end
-
   # "Dejar todo en cero": reset de uso + purga de registros del catálogo sin
   # despliegue/credencial. Conserva usuarios, servicios, API keys, modelos
   # con despliegue y proveedores con credencial.
@@ -121,7 +90,6 @@ defmodule TokengateWeb.MaintenanceLive do
     {:noreply,
      socket
      |> assign(:confirm_full_reset, false)
-     |> assign(:log_count, 0)
      |> assign(:sticky_count, 0)
      |> put_flash(
        :info,
@@ -354,34 +322,6 @@ defmodule TokengateWeb.MaintenanceLive do
 
             <div class="divider my-2"></div>
 
-            <div class="flex items-center justify-between">
-              <div>
-                <h3 class="font-semibold text-base-content">{gettext("Delete log history")}</h3>
-                <p class="text-sm text-base-content/60">
-                  {gettext("Deletes every row of")} <code>request_logs</code>
-                  {gettext("and the hourly metrics rollup")}
-                  <code>request_metrics_hourly</code>
-                  {gettext(
-                    "(aggregates that feed the stats dashboards), plus any pending log writes and the in-memory metric/budget counters."
-                  )}
-                  {gettext("It does not affect users, limit profiles, models, providers or API keys.")}
-                  {gettext("There are currently")}
-                  <span class="font-mono font-semibold">{@log_count}</span>
-                  {gettext("rows.")}
-                </p>
-              </div>
-              <button
-                type="button"
-                phx-click="show_reset_confirm"
-                class="btn btn-error btn-outline btn-sm"
-                id="reset-logs-btn"
-              >
-                {gettext("Delete logs")}
-              </button>
-            </div>
-
-            <div class="divider my-2"></div>
-
             <%!-- Reset total: uso + registros de catálogo sin uso --%>
             <div class="flex items-center justify-between gap-4">
               <div>
@@ -390,7 +330,7 @@ defmodule TokengateWeb.MaintenanceLive do
                 </h3>
                 <p class="text-sm text-base-content/60">
                   {gettext(
-                    "Everything of the above, plus: catalog models without any deployment and providers without credentials or deployments, and sticky routes."
+                    "Deletes all usage history (logs, hourly metrics, budget counters and sticky routes), plus catalog records with no deployment: models without deployments and providers without credentials or deployments."
                   )}
                   {gettext(
                     "Keeps users, services, API keys, limit profiles, models with deployments and providers with credentials."
@@ -404,42 +344,6 @@ defmodule TokengateWeb.MaintenanceLive do
                 id="reset-all-usage-btn"
               >
                 {gettext("Full reset")}
-              </button>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <%!-- Confirmation modal: reset logs --%>
-      <div :if={@confirm_reset} class="fixed inset-0 z-50 flex items-center justify-center p-4">
-        <div class="absolute inset-0 bg-black/50" phx-click="cancel_reset" />
-        <div class="relative card bg-base-100 border border-error/50 shadow-xl w-full max-w-md">
-          <div class="card-body">
-            <h3 class="card-title text-error flex items-center gap-2">
-              <.icon name="hero-exclamation-triangle" class="w-5 h-5" /> {gettext(
-                "Delete the whole history?"
-              )}
-            </h3>
-            <p class="text-sm text-base-content/70 mt-2">
-              {gettext("This action deletes")} <strong>{gettext("permanently")}</strong>
-              {gettext("every row of")} <code>request_logs</code>. {gettext(
-                "They cannot be recovered."
-              )}
-            </p>
-            <p class="text-sm text-base-content/70">
-              {gettext("Users, limit profiles, models, providers and API keys are not affected.")}
-            </p>
-            <div class="flex gap-2 mt-4 justify-end">
-              <button type="button" phx-click="cancel_reset" class="btn btn-ghost btn-sm">
-                {gettext("Cancel")}
-              </button>
-              <button
-                type="button"
-                phx-click="reset_logs"
-                class="btn btn-error btn-sm"
-                id="confirm-reset-logs-btn"
-              >
-                {gettext("Yes, delete everything")}
               </button>
             </div>
           </div>
@@ -524,11 +428,6 @@ defmodule TokengateWeb.MaintenanceLive do
   end
 
   ## Helpers ----------------------------------------------------------------
-
-  defp count_logs do
-    import Ecto.Query
-    Repo.one(from(rl in Tokengate.Logs.RequestLog, select: count(rl.id)))
-  end
 
   defp sticky_count do
     try do

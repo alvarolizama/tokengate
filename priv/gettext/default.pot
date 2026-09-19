@@ -152,8 +152,8 @@ msgid "Language"
 msgstr ""
 
 #: lib/tokengate_web/components/layouts.ex:399
-#: lib/tokengate_web/live/maintenance_live.ex:32
-#: lib/tokengate_web/live/maintenance_live.ex:221
+#: lib/tokengate_web/live/maintenance_live.ex:31
+#: lib/tokengate_web/live/maintenance_live.ex:189
 #, elixir-autogen, elixir-format
 msgid "Maintenance"
 msgstr ""
@@ -344,9 +344,8 @@ msgstr ""
 #: lib/tokengate_web/components/admin_components.ex:179
 #: lib/tokengate_web/live/group_members_live.ex:538
 #: lib/tokengate_web/live/labs_live.ex:376
-#: lib/tokengate_web/live/maintenance_live.ex:434
-#: lib/tokengate_web/live/maintenance_live.ex:472
-#: lib/tokengate_web/live/maintenance_live.ex:508
+#: lib/tokengate_web/live/maintenance_live.ex:376
+#: lib/tokengate_web/live/maintenance_live.ex:412
 #: lib/tokengate_web/live/models_live.ex:3007
 #: lib/tokengate_web/live/models_live.ex:3622
 #: lib/tokengate_web/live/models_live.ex:3665
@@ -2787,7 +2786,7 @@ msgid "model"
 msgstr ""
 
 #: lib/tokengate_web/live/labs_live.ex:264
-#: lib/tokengate_web/live/maintenance_live.ex:311
+#: lib/tokengate_web/live/maintenance_live.ex:279
 #, elixir-autogen, elixir-format
 msgid "models"
 msgstr ""
@@ -3768,290 +3767,237 @@ msgstr ""
 msgid "Yes"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:499
+#: lib/tokengate_web/live/maintenance_live.ex:403
 #, elixir-autogen, elixir-format
 msgid "API key to provider assignments."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:189
+#: lib/tokengate_web/live/maintenance_live.ex:157
 #, elixir-autogen, elixir-format
 msgid "Catalog refresh queued."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:231
+#: lib/tokengate_web/live/maintenance_live.ex:199
 #, elixir-autogen, elixir-format
 msgid "Caution zone"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:192
+#: lib/tokengate_web/live/maintenance_live.ex:160
 #, elixir-autogen, elixir-format
 msgid "Could not queue the refresh."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:349
+#: lib/tokengate_web/live/maintenance_live.ex:317
 #, elixir-autogen, elixir-format
 msgid "Danger zone"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:359
-#, elixir-autogen, elixir-format
-msgid "Delete log history"
-msgstr ""
-
-#: lib/tokengate_web/live/maintenance_live.ex:379
-#, elixir-autogen, elixir-format
-msgid "Delete logs"
-msgstr ""
-
-#: lib/tokengate_web/live/maintenance_live.ex:419
-#, elixir-autogen, elixir-format
-msgid "Delete the whole history?"
-msgstr ""
-
-#: lib/tokengate_web/live/maintenance_live.ex:361
-#, elixir-autogen, elixir-format
-msgid "Deletes every row of"
-msgstr ""
-
-#: lib/tokengate_web/live/maintenance_live.ex:244
+#: lib/tokengate_web/live/maintenance_live.ex:212
 #, elixir-autogen, elixir-format
 msgid "Deletes every sticky API key → provider assignment."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:271
+#: lib/tokengate_web/live/maintenance_live.ex:239
 #, elixir-autogen, elixir-format
 msgid "Downloads the catalog again (providers, labs and models) and updates name, base URL,"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:367
-#, elixir-autogen, elixir-format
-msgid "It does not affect users, limit profiles, models, providers or API keys."
-msgstr ""
-
-#: lib/tokengate_web/live/maintenance_live.ex:246
+#: lib/tokengate_web/live/maintenance_live.ex:214
 #, elixir-autogen, elixir-format
 msgid "It does not touch models, providers or API keys."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:286
+#: lib/tokengate_web/live/maintenance_live.ex:254
 #, elixir-autogen, elixir-format
 msgid "Last attempt failed:"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:281
+#: lib/tokengate_web/live/maintenance_live.ex:249
 #, elixir-autogen, elixir-format
 msgid "Last update:"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:223
+#: lib/tokengate_web/live/maintenance_live.ex:191
 #, elixir-autogen, elixir-format
 msgid "Manage advanced settings and destructive actions."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:504
+#: lib/tokengate_web/live/maintenance_live.ex:408
 #, elixir-autogen, elixir-format
 msgid "Models, providers and API keys are not affected."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:323
+#: lib/tokengate_web/live/maintenance_live.ex:291
 #, elixir-autogen, elixir-format
 msgid "Models:"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:203
+#: lib/tokengate_web/live/maintenance_live.ex:171
 #, elixir-autogen, elixir-format
 msgid "Provider catalog updated."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:320
+#: lib/tokengate_web/live/maintenance_live.ex:288
 #, elixir-autogen, elixir-format
 msgid "Providers:"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:339
+#: lib/tokengate_web/live/maintenance_live.ex:307
 #, elixir-autogen, elixir-format
 msgid "Refresh now"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:338
+#: lib/tokengate_web/live/maintenance_live.ex:306
 #, elixir-autogen, elixir-format
 msgid "Refreshing…"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:234
+#: lib/tokengate_web/live/maintenance_live.ex:202
 #, elixir-autogen, elixir-format
 msgid "Repeatable or reversible actions: they do not erase data permanently."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:258
+#: lib/tokengate_web/live/maintenance_live.ex:226
 #, elixir-autogen, elixir-format
 msgid "Reset stickies"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:242
+#: lib/tokengate_web/live/maintenance_live.ex:210
 #, elixir-autogen, elixir-format
 msgid "Reset sticky sessions"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:493
+#: lib/tokengate_web/live/maintenance_live.ex:397
 #, elixir-autogen, elixir-format
 msgid "Reset sticky sessions?"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:235
+#: lib/tokengate_web/live/maintenance_live.ex:203
 #, elixir-autogen, elixir-format
 msgid "Review the scope of each one before running it."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:311
+#: lib/tokengate_web/live/maintenance_live.ex:279
 #, elixir-autogen, elixir-format
 msgid "The"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:352
+#: lib/tokengate_web/live/maintenance_live.ex:320
 #, elixir-autogen, elixir-format
 msgid "The actions in this section are irreversible. Use them with caution."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:500
+#: lib/tokengate_web/live/maintenance_live.ex:404
 #, elixir-autogen, elixir-format
 msgid "The next requests will be re-routed from scratch,"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:245
+#: lib/tokengate_web/live/maintenance_live.ex:213
 #, elixir-autogen, elixir-format
 msgid "The next requests will be re-routed from scratch."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:247
-#: lib/tokengate_web/live/maintenance_live.ex:368
+#: lib/tokengate_web/live/maintenance_live.ex:215
 #, elixir-autogen, elixir-format
 msgid "There are currently"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:425
-#: lib/tokengate_web/live/maintenance_live.ex:463
+#: lib/tokengate_web/live/maintenance_live.ex:367
 #, elixir-autogen, elixir-format
 msgid "They cannot be recovered."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:424
-#, elixir-autogen, elixir-format
-msgid "This action deletes"
-msgstr ""
-
-#: lib/tokengate_web/live/maintenance_live.ex:498
+#: lib/tokengate_web/live/maintenance_live.ex:402
 #, elixir-autogen, elixir-format
 msgid "This deletes"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:430
-#, elixir-autogen, elixir-format
-msgid "Users, limit profiles, models, providers and API keys are not affected."
-msgstr ""
-
-#: lib/tokengate_web/live/maintenance_live.ex:442
-#, elixir-autogen, elixir-format
-msgid "Yes, delete everything"
-msgstr ""
-
-#: lib/tokengate_web/live/maintenance_live.ex:516
+#: lib/tokengate_web/live/maintenance_live.ex:420
 #, elixir-autogen, elixir-format
 msgid "Yes, reset stickies"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:249
+#: lib/tokengate_web/live/maintenance_live.ex:217
 #, elixir-autogen, elixir-format
 msgid "active entries."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:321
+#: lib/tokengate_web/live/maintenance_live.ex:289
 #, elixir-autogen, elixir-format
 msgid "active,"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:499
+#: lib/tokengate_web/live/maintenance_live.ex:403
 #, elixir-autogen, elixir-format
 msgid "all"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:298
+#: lib/tokengate_web/live/maintenance_live.ex:266
 #, elixir-autogen, elixir-format
 msgid "and has"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:312
+#: lib/tokengate_web/live/maintenance_live.ex:280
 #, elixir-autogen, elixir-format
 msgid "catalog was empty at boot (the vendored snapshot could not be read): an automatic refresh against models.dev was queued."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:298
+#: lib/tokengate_web/live/maintenance_live.ex:266
 #, elixir-autogen, elixir-format
 msgid "changed its base URL"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:308
+#: lib/tokengate_web/live/maintenance_live.ex:276
 #, elixir-autogen, elixir-format
 msgid "credential(s) in use (nothing has been deleted)."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:302
+#: lib/tokengate_web/live/maintenance_live.ex:270
 #, elixir-autogen, elixir-format
 msgid "credential(s) in use."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:277
+#: lib/tokengate_web/live/maintenance_live.ex:245
 #, elixir-autogen, elixir-format
 msgid "custom providers, and deletes nothing: what is no longer upstream is marked as stale."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:274
+#: lib/tokengate_web/live/maintenance_live.ex:242
 #, elixir-autogen, elixir-format
 msgid "docs and logo of the builtins. It does not touch credentials, own models, routing or"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:425
-#, elixir-autogen, elixir-format
-msgid "every row of"
-msgstr ""
-
-#: lib/tokengate_web/live/maintenance_live.ex:269
+#: lib/tokengate_web/live/maintenance_live.ex:237
 #, elixir-autogen, elixir-format
 msgid "models.dev catalog"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:306
+#: lib/tokengate_web/live/maintenance_live.ex:274
 #, elixir-autogen, elixir-format
 msgid "no longer appears in models.dev and has"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:326
+#: lib/tokengate_web/live/maintenance_live.ex:294
 #, elixir-autogen, elixir-format
 msgid "offers."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:424
-#: lib/tokengate_web/live/maintenance_live.ex:459
+#: lib/tokengate_web/live/maintenance_live.ex:363
 #, elixir-autogen, elixir-format
 msgid "permanently"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:370
-#, elixir-autogen, elixir-format
-msgid "rows."
-msgstr ""
-
-#: lib/tokengate_web/live/maintenance_live.ex:322
+#: lib/tokengate_web/live/maintenance_live.ex:290
 #, elixir-autogen, elixir-format
 msgid "stale · Labs:"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:325
+#: lib/tokengate_web/live/maintenance_live.ex:293
 #, elixir-autogen, elixir-format
 msgid "stale),"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:501
+#: lib/tokengate_web/live/maintenance_live.ex:405
 #, elixir-autogen, elixir-format
 msgid "without preserving the cache affinity."
 msgstr ""
@@ -5130,57 +5076,42 @@ msgstr ""
 msgid "on Fireworks (prefix matching, cached tokens at a discount). TokenGate keeps conversations sticky via the x-session-affinity header and logs the cached tokens — no configuration required."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:364
-#, elixir-autogen, elixir-format
-msgid "(aggregates that feed the stats dashboards), plus any pending log writes and the in-memory metric/budget counters."
-msgstr ""
-
-#: lib/tokengate_web/live/maintenance_live.ex:362
-#, elixir-autogen, elixir-format
-msgid "and the hourly metrics rollup"
-msgstr ""
-
-#: lib/tokengate_web/live/maintenance_live.ex:459
+#: lib/tokengate_web/live/maintenance_live.ex:363
 #, elixir-autogen, elixir-format
 msgid "Deletes"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:392
-#, elixir-autogen, elixir-format
-msgid "Everything of the above, plus: catalog models without any deployment and providers without credentials or deployments, and sticky routes."
-msgstr ""
-
-#: lib/tokengate_web/live/maintenance_live.ex:406
+#: lib/tokengate_web/live/maintenance_live.ex:346
 #, elixir-autogen, elixir-format
 msgid "Full reset"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:395
+#: lib/tokengate_web/live/maintenance_live.ex:335
 #, elixir-autogen, elixir-format
 msgid "Keeps users, services, API keys, limit profiles, models with deployments and providers with credentials."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:389
+#: lib/tokengate_web/live/maintenance_live.ex:329
 #, elixir-autogen, elixir-format
 msgid "Leave everything at zero"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:456
+#: lib/tokengate_web/live/maintenance_live.ex:360
 #, elixir-autogen, elixir-format
 msgid "Leave everything at zero?"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:466
+#: lib/tokengate_web/live/maintenance_live.ex:370
 #, elixir-autogen, elixir-format
 msgid "Users, services, API keys, limit profiles, models with deployments and providers with credentials are kept."
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:480
+#: lib/tokengate_web/live/maintenance_live.ex:384
 #, elixir-autogen, elixir-format
 msgid "Yes, leave everything at zero"
 msgstr ""
 
-#: lib/tokengate_web/live/maintenance_live.ex:460
+#: lib/tokengate_web/live/maintenance_live.ex:364
 #, elixir-autogen, elixir-format
 msgid "all usage history (logs, hourly metrics, budget counters, sticky routes) AND catalog records with no deployment: models without deployments and providers without credentials."
 msgstr ""
@@ -5381,4 +5312,9 @@ msgstr ""
 #: lib/tokengate_web/controllers/onboarding_controller.ex:60
 #, elixir-autogen, elixir-format
 msgid "Welcome. Your admin account is ready."
+msgstr ""
+
+#: lib/tokengate_web/live/maintenance_live.ex:332
+#, elixir-autogen, elixir-format
+msgid "Deletes all usage history (logs, hourly metrics, budget counters and sticky routes), plus catalog records with no deployment: models without deployments and providers without credentials or deployments."
 msgstr ""

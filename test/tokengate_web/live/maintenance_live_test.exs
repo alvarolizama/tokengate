@@ -94,8 +94,12 @@ defmodule TokengateWeb.SettingsLiveTest do
 
       # Lo reversible vive en precaución; solo el borrado irreversible está en peligro.
       assert has_element?(view, "#caution-zone-card #reset-sticky-btn")
-      refute has_element?(view, "#caution-zone-card #reset-logs-btn")
-      assert has_element?(view, "#danger-zone-card #reset-logs-btn")
+
+      # El borrado directo de logs se retiró: la única purga que queda es el
+      # reset total, que ya los incluye.
+      refute has_element?(view, "#reset-logs-btn")
+      refute has_element?(view, "#confirm-reset-logs-btn")
+      assert has_element?(view, "#danger-zone-card #reset-all-usage-btn")
 
       # El recálculo de costos históricos ya no se ofrece desde esta página.
       refute has_element?(view, "#backfill-costs-btn")
@@ -204,7 +208,7 @@ defmodule TokengateWeb.SettingsLiveTest do
       assert render(view) =~ "Sticky sessions reiniciadas"
     end
 
-    test "reset logs removes all request_logs", %{conn: conn} do
+    test "la purga de logs vive solo en el reset total", %{conn: conn} do
       %{user: admin, password: pass} = register("admin")
       insert_log()
       assert Logs.list_logs(%{limit: 1000}) |> length() > 0
@@ -212,14 +216,17 @@ defmodule TokengateWeb.SettingsLiveTest do
       conn = login(conn, admin, pass)
       {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
 
-      # Click reset → confirmation modal appears
-      view |> element("#reset-logs-btn") |> render_click()
-      assert has_element?(view, "#confirm-reset-logs-btn")
+      # La acción "Delete log history" ya no existe, ni su botón ni su modal.
+      refute has_element?(view, "#reset-logs-btn")
+      refute has_element?(view, "#confirm-reset-logs-btn")
 
-      # Confirm reset
-      view |> element("#confirm-reset-logs-btn") |> render_click()
+      # El borrado sigue ocurriendo dentro del reset total, que es lo que queda.
+      view |> element("#reset-all-usage-btn") |> render_click()
+      assert has_element?(view, "#confirm-reset-all-usage-btn")
 
-      assert render(view) =~ "Historial de logs eliminado"
+      view |> element("#confirm-reset-all-usage-btn") |> render_click()
+
+      assert render(view) =~ "Uso reseteado"
       assert Logs.list_logs(%{limit: 1000}) == []
     end
   end

@@ -181,7 +181,7 @@ modal, paginar, elegir en un picker, cambiar de tab) **no se auditan**.
 ### Operaciones → Mantenimiento (`maintenance_live.ex`)
 | Handler | Acción audit |
 |---|---|
-| `reset_logs` | `settings.reset_logs` ✅ |
+| `reset_all_usage` | `settings.reset_all_usage` ✅ |
 | `reset_sticky_sessions` | `settings.reset_sticky_sessions` ✅ |
 | `refresh_catalog` | `settings.catalog_refresh` ✅ |
 
