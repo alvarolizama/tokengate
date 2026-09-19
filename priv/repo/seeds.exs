@@ -102,7 +102,11 @@ dev_group = seed_group.("devs", "Equipo de desarrollo — acceso a todos los mod
 qa_group = seed_group.("qa", "QA — solo modelos de embedding para pruebas")
 
 seed_member = fn group, user ->
-  case Repo.get_by(Tokengate.Accounts.GroupMember, group_id: group.id, user_id: user.id) do
+  # Una membresía por usuario (`group_members_user_id_unique_index`,
+  # 20260917011526): la búsqueda es por `user_id` solo. Si el usuario ya
+  # pertenece a OTRO grupo (p. ej. el admin real de producción), reusar esa
+  # membresía — reinsertar violaría el índice y abortaría el boot del deploy.
+  case Repo.get_by(Tokengate.Accounts.GroupMember, user_id: user.id) do
     nil ->
       {:ok, member} = Accounts.create_group_member(%{group_id: group.id, user_id: user.id})
       member
