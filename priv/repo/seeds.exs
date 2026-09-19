@@ -2,6 +2,9 @@
 # users, groups, a service, topups, models of every type, provider
 # credentials (DUMMY keys), model grants and proxy API keys.
 #
+# DEV ONLY — never runs in production (see the guard below). Production boots
+# evaluate priv/repo/seeds_prod.exs instead (admin user only).
+#
 # Run with: mix run priv/repo/seeds.exs (also part of `mix ecto.setup`)
 #
 # The admin credentials can be overridden with TOKENGATE_ADMIN_EMAIL /
@@ -10,6 +13,35 @@
 #
 # DANGER: the provider API keys here are PLACEHOLDERS (sk-seed-...). Requests
 # through them will fail upstream auth. Replace them from the Providers page.
+
+# ---------------------------------------------------------------------------
+# GUARD — this file is DEVELOPMENT ONLY and must never run in production.
+# ---------------------------------------------------------------------------
+# `Tokengate.Release.seed/0` evals a seed file on EVERY prod container boot
+# (docker/entrypoint.sh → Tokengate.Release.setup/0). It used to point at THIS
+# file, which silently created the demo users below — including
+# dev@tokengate.local / tester@tokengate.local with the password hardcoded a
+# few lines down — in production. It now evals priv/repo/seeds_prod.exs.
+#
+# This guard makes a regression abort the boot loudly instead of seeding demo
+# data into prod. The discriminator is `:code.is_loaded(Mix)`: the Mix CLI is
+# running in `mix run` / `mix ecto.setup`, and nothing in the release ever
+# loads Mix (it ships no mix.beam). Do NOT use `Code.ensure_loaded?/1` here —
+# it answers "is Mix reachable in the code path", which is true in a plain
+# `elixir` shell on a normal install, so the guard would never fire.
+if :code.is_loaded(Mix) == false and System.get_env("TOKENGATE_ALLOW_DEMO_SEEDS") != "1" do
+  raise """
+  priv/repo/seeds.exs is the DEVELOPMENT demo dataset and refuses to run
+  without Mix (i.e. inside a release).
+
+  It creates demo users whose password is public in this repository. For a
+  production boot use priv/repo/seeds_prod.exs, which
+  Tokengate.Release.seed/0 already evaluates.
+
+  Override deliberately (only on a throwaway database):
+    TOKENGATE_ALLOW_DEMO_SEEDS=1 bin/tokengate eval "Code.eval_file(\\"priv/repo/seeds.exs\\")"
+  """
+end
 
 alias Tokengate.Accounts
 alias Tokengate.Credits.Topups

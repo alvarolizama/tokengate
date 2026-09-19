@@ -86,8 +86,9 @@ WORKDIR /app
 RUN useradd --create-home app
 COPY --from=build --chown=app:app /app/_build/prod/rel/tokengate ./
 
-# Entrypoint applies pending migrations (and seeds the admin user on first
-# boot) before starting the release, so the app never serves against an
+# Entrypoint applies pending migrations (and bootstraps the admin when
+# TOKENGATE_ADMIN_PASSWORD is set; otherwise the first admin comes from
+# /onboarding) before starting the release, so the app never serves against an
 # un-migrated schema. A failed migration aborts boot (Coolify rolls back)
 # instead of shipping broken code. Set SKIP_MIGRATIONS=1 to bypass.
 COPY --chown=app:app docker/entrypoint.sh /app/entrypoint.sh

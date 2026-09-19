@@ -6,8 +6,9 @@ defmodule Tokengate.Release do
     * `migrate/0` — run pending Ecto migrations.
     * `setup/0`   — idempotent first-run setup: create DB if missing →
       migrate → seed the admin user. Safe to invoke on every deploy.
-    * `seed/0`    — run `priv/repo/seeds.exs` (creates the admin user;
-      idempotent).
+    * `seed/0`    — run `priv/repo/seeds_prod.exs` (admin bootstrap; requires
+      TOKENGATE_ADMIN_PASSWORD, see below). NEVER point this at
+      `priv/repo/seeds.exs`: that one is the development demo dataset.
 
   All migration/seed/rollback work is wrapped in `Ecto.Migrator.with_repo/2`
   — during `bin/tokengate eval` the full supervision tree (including the
@@ -22,8 +23,9 @@ defmodule Tokengate.Release do
 
   @doc """
   Idempotent first-run setup: create DB if missing → migrate → seed admin.
-  Safe for prod: the seed only ensures the admin user exists
-  (TOKENGATE_ADMIN_EMAIL / TOKENGATE_ADMIN_PASSWORD env vars).
+  Safe for prod: the seed only ever ensures the admin user exists, and only
+  when TOKENGATE_ADMIN_PASSWORD is set (otherwise nothing is created and the
+  first admin comes from `/onboarding`).
 
   Single-instance only — with 2+ replicas racing on `storage_up`, switch
   the entrypoint to `bin/migrate` and create the DB once out-of-band.
@@ -63,13 +65,18 @@ defmodule Tokengate.Release do
   end
 
   @doc """
-  Run priv/repo/seeds.exs. Idempotent: only creates the admin user when
-  it doesn't exist. Override credentials via TOKENGATE_ADMIN_EMAIL /
-  TOKENGATE_ADMIN_PASSWORD.
+  Run priv/repo/seeds_prod.exs — the production seed. Idempotent, admin-only,
+  and opt-in: the admin is created only when TOKENGATE_ADMIN_PASSWORD is set.
+  Without it the instance keeps its users as they are and the first admin comes
+  from the `/onboarding` page (see `TokengateWeb.OnboardingController`).
+
+  The demo dataset lives in priv/repo/seeds.exs (dev) / demo_seeds.exs
+  (mix ecto.demo) and must never run here: both create users with a password
+  that is public in the repository.
   """
   def seed do
     load_config()
-    seeds_file = Application.app_dir(@app, "priv/repo/seeds.exs")
+    seeds_file = seeds_file()
 
     for repo <- repos() do
       {:ok, _, _} =
@@ -80,6 +87,16 @@ defmodule Tokengate.Release do
         )
     end
   end
+
+  @doc """
+  Absolute path of the seed file `seed/0` evaluates.
+
+  Public so a test can assert it resolves to the production seed and not the
+  development one — that mix-up is what silently seeded demo users, groups,
+  services, credentials and API keys into production.
+  """
+  @spec seeds_file() :: String.t()
+  def seeds_file, do: Application.app_dir(@app, "priv/repo/seeds_prod.exs")
 
   defp ensure_db_created(repo) do
     case repo.__adapter__().storage_up(repo.config()) do
