@@ -163,13 +163,20 @@ defmodule Tokengate.Metrics.RollupTest do
     test "aggregates cost_usd per bucket" do
       {tm, _group} = group_member_fixture()
 
-      # Both inserts land in the same (now-1h) bucket regardless of when the
-      # test runs because the offsets differ by only 60 seconds.
-      log_request(tm.id, DateTime.add(DateTime.utc_now(), -3600, :second), %{
+      # Ambos inserts caen en el MISMO bucket, corra cuando corra el test: se
+      # anclan a la hora ya cerrada (minuto 59 y 58 de la hora anterior). Un
+      # par `now-3600` / `now-3660` NO lo garantiza: con 60s de separación caen
+      # en horas distintas durante los primeros 60s de cada hora (minuto 0), y
+      # el assert comparaba un solo row (1.5 en vez de 4.0).
+      # `DateTime.truncate/2` no acepta `:hour`, de ahí el struct update.
+      anchor = DateTime.utc_now() |> Map.replace!(:minute, 0) |> Map.replace!(:second, 0)
+      anchor = %{anchor | microsecond: {0, 0}}
+
+      log_request(tm.id, DateTime.add(anchor, -60, :second), %{
         cost_usd: Decimal.new("1.500000")
       })
 
-      log_request(tm.id, DateTime.add(DateTime.utc_now(), -3660, :second), %{
+      log_request(tm.id, DateTime.add(anchor, -120, :second), %{
         cost_usd: Decimal.new("2.500000")
       })
 
