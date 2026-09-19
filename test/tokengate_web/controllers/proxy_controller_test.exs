@@ -1204,89 +1204,69 @@ defmodule TokengateWeb.ProxyControllerTest do
     end
   end
 
-  # The CATALOG rename is what remaps a client field the upstream rejects
-  # under that name to the knob it documents — no operator action needed, and
-  # unlike the per-row omission the VALUE is not lost: it travels under the
-  # renamed key, adapted to the scalar shape the target knob expects.
-  describe "catalog rename_body_fields (fireworks)" do
+  # The reasoning DIALECT normalizer: the client sends reasoning knobs in
+  # whatever form its SDK produces (nested `reasoning`, scalar
+  # `reasoning_effort`, `thinking` toggle) and the gateway reshapes them into
+  # the ONE wire form the serving upstream documents — the client cannot know
+  # which provider a request lands on. Mirrors the Hermes provider profiles.
+  describe "reasoning dialect normalization" do
     setup %{conn: conn} do
       %{token: token, model: model} = proxy_fixture(%{})
-      # The rename is keyed by the provider's catalog key: stamp the fireworks
-      # key onto the fixture's local provider (see make_provider_fireworks/1).
-      make_provider_fireworks(model)
       {:ok, conn: conn, token: token, model: model}
     end
 
-    test "a nested OpenRouter-style reasoning object becomes top-level reasoning_effort", %{
+    test ":scalar flattens every form to reasoning_effort (fireworks)", %{
       conn: conn,
       token: token,
       model: model
     } do
-      conn =
-        conn
-        |> authed_conn(token)
-        |> post(~p"/v1/chat/completions", %{
-          "model" => model.name,
-          "reasoning" => %{"effort" => "high"},
-          "messages" => [
-            %{"role" => "user", "content" => "hola, ¿cómo vas?"}
-          ]
-        })
+      make_provider_keyed(model, "fireworks-ai")
 
-      assert json_response(conn, 200)
+      # Distinct messages per iteration: identical canonical bodies would hit
+      # the response cache and never reach the upstream.
+      forms = [
+        {%{"reasoning" => %{"effort" => "high"}}, "uno"},
+        {%{"reasoning_effort" => "high"}, "dos"},
+        {%{"thinking" => %{"type" => "enabled"}, "reasoning" => %{"effort" => "high"}}, "tres"}
+      ]
 
-      receive do
-        {:provider_request, payload} ->
-          refute Map.has_key?(payload, "reasoning")
-          assert payload["reasoning_effort"] == "high"
-      after
-        0 -> flunk("expected an upstream request")
+      for {body_extra, n} <- forms do
+        conn =
+          conn
+          |> Phoenix.ConnTest.recycle()
+          |> authed_conn(token)
+          |> post(
+            ~p"/v1/chat/completions",
+            %{
+              "model" => model.name,
+              "messages" => [%{"role" => "user", "content" => "hola #{n}"}]
+            }
+            |> Map.merge(body_extra)
+          )
+
+        assert json_response(conn, 200)
+
+        receive do
+          {:provider_request, payload} ->
+            assert payload["reasoning_effort"] == "high"
+            refute Map.has_key?(payload, "reasoning")
+            refute Map.has_key?(payload, "thinking")
+        after
+          0 -> flunk("expected an upstream request")
+        end
       end
     end
 
-    test "an explicit reasoning_effort from the client wins over the rename", %{
-      conn: conn,
-      token: token,
-      model: model
-    } do
-      conn =
-        conn
-        |> authed_conn(token)
-        |> post(~p"/v1/chat/completions", %{
-          "model" => model.name,
-          "reasoning" => %{"effort" => "low"},
-          "reasoning_effort" => "max",
-          "messages" => [
-            %{"role" => "user", "content" => "hola, ¿cómo vas?"}
-          ]
-        })
+    test ":scalar disabled flattens to none", %{conn: conn, token: token, model: model} do
+      make_provider_keyed(model, "fireworks-ai")
 
-      assert json_response(conn, 200)
-
-      receive do
-        {:provider_request, payload} ->
-          # The explicit field wins; the source key is still consumed.
-          assert payload["reasoning_effort"] == "max"
-          refute Map.has_key?(payload, "reasoning")
-      after
-        0 -> flunk("expected an upstream request")
-      end
-    end
-
-    test "a disabled reasoning object flattens to reasoning_effort none", %{
-      conn: conn,
-      token: token,
-      model: model
-    } do
       conn =
         conn
         |> authed_conn(token)
         |> post(~p"/v1/chat/completions", %{
           "model" => model.name,
           "reasoning" => %{"enabled" => false},
-          "messages" => [
-            %{"role" => "user", "content" => "hola, ¿cómo vas?"}
-          ]
+          "messages" => [%{"role" => "user", "content" => "hola"}]
         })
 
       assert json_response(conn, 200)
@@ -1295,6 +1275,164 @@ defmodule TokengateWeb.ProxyControllerTest do
         {:provider_request, payload} ->
           assert payload["reasoning_effort"] == "none"
           refute Map.has_key?(payload, "reasoning")
+      after
+        0 -> flunk("expected an upstream request")
+      end
+    end
+
+    test ":openrouter_nested converts scalar to the nested object", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      make_provider_keyed(model, "openrouter")
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "reasoning_effort" => "high",
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          assert payload["reasoning"] == %{"effort" => "high"}
+          refute Map.has_key?(payload, "reasoning_effort")
+      after
+        0 -> flunk("expected an upstream request")
+      end
+    end
+
+    test ":toggle_xor_effort never sends both (moonshotai)", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      make_provider_keyed(model, "moonshotai")
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "reasoning" => %{"effort" => "high"},
+          "thinking" => %{"type" => "enabled"},
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          # Effort wins; the toggle is dropped: both at once is a Moonshot 400.
+          assert payload["reasoning_effort"] == "high"
+          refute Map.has_key?(payload, "thinking")
+          refute Map.has_key?(payload, "reasoning")
+      after
+        0 -> flunk("expected an upstream request")
+      end
+    end
+
+    test ":toggle_xor_effort with only a toggle keeps the toggle", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      make_provider_keyed(model, "moonshotai")
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "thinking" => %{"type" => "enabled"},
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          assert payload["thinking"] == %{"type" => "enabled"}
+          refute Map.has_key?(payload, "reasoning_effort")
+      after
+        0 -> flunk("expected an upstream request")
+      end
+    end
+
+    test ":toggle_and_effort keeps both (zai)", %{conn: conn, token: token, model: model} do
+      make_provider_keyed(model, "zai")
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "reasoning" => %{"effort" => "high", "enabled" => true},
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          assert payload["reasoning_effort"] == "high"
+          assert payload["thinking"] == %{"type" => "enabled"}
+          refute Map.has_key?(payload, "reasoning")
+      after
+        0 -> flunk("expected an upstream request")
+      end
+    end
+
+    test ":deepseek_native always emits the toggle", %{conn: conn, token: token, model: model} do
+      make_provider_keyed(model, "deepseek")
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          # No client knobs at all: the toggle is still emitted explicitly —
+          # omitted, DeepSeek defaults thinking on and demands echoes.
+          assert payload["thinking"] == %{"type" => "enabled"}
+          refute Map.has_key?(payload, "reasoning_effort")
+      after
+        0 -> flunk("expected an upstream request")
+      end
+    end
+
+    test ":passthrough (alibaba/qwen) leaves the body untouched", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      make_provider_keyed(model, "alibaba")
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "reasoning_effort" => "high",
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          assert payload["reasoning_effort"] == "high"
       after
         0 -> flunk("expected an upstream request")
       end
@@ -1433,22 +1571,24 @@ defmodule TokengateWeb.ProxyControllerTest do
   end
 
   # Points the model's only model_provider at a provider whose catalog key is
-  # "fireworks-ai", keeping the fixture's local test URL. Builtin rows are
-  # identity-locked (they point at the real Fireworks endpoint), so the
+  # the given one, keeping the fixture's local test URL. Builtin rows are
+  # identity-locked (they point at the real upstream endpoint), so the
   # builtin is dropped and the local provider row gets stamped with the key.
-  defp make_provider_fireworks(model) do
+  defp make_provider_keyed(model, catalog_key) do
     [mp] = Providers.list_model_providers(model.id)
     credential = Repo.get!(Tokengate.Providers.Credential, mp.credential_id)
     provider = Repo.get!(Tokengate.Providers.Provider, credential.provider_id)
 
-    case Repo.get_by(Tokengate.Providers.Provider, key: "fireworks-ai") do
+    case Repo.get_by(Tokengate.Providers.Provider, key: catalog_key) do
       nil -> :ok
       builtin -> {:ok, _} = Repo.delete(builtin)
     end
 
-    {:ok, _} = Providers.update_provider(provider, %{key: "fireworks-ai"})
+    {:ok, _} = Providers.update_provider(provider, %{key: catalog_key})
     Tokengate.Routing.Cache.invalidate_all()
   end
+
+  defp make_provider_fireworks(model), do: make_provider_keyed(model, "fireworks-ai")
 
   # Passthrough, and a deliberate behaviour change: the gateway no longer
   # strips a `session_id` the CLIENT put in its body. It used to, for

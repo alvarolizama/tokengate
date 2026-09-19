@@ -108,13 +108,45 @@ defmodule Tokengate.Providers.Catalog do
   #                             vocabulary in `ProviderPaths` and only apply
   #                             when the provider has no operator override
   #   * :omit_body_fields     — fields the gateway must STRIP from the body
-  #   * :rename_body_fields   — %{from => to} renames applied to the body the
-  #                             CLIENT sent: the value travels under the key
-  #                             the upstream expects instead of being passed
-  #                             through as-is or dropped. Applied AFTER
-  #                             omit_body_fields and BEFORE the per-row
-  #                             operator overrides (the operator still wins).
+  #   * :reasoning_dialect    — how the upstream wants its reasoning knobs on
+  #                             the wire, one of @reasoning_dialects: the
+  #                             pre-flight pipeline reshapes whatever form the
+  #                             CLIENT sent into the dialect of the upstream
+  #                             that serves the request (the client cannot
+  #                             know which provider a request lands on)
   # ---------------------------------------------------------------------------
+  # The reasoning wire dialects an upstream can speak. The pre-flight
+  # pipeline reads the client's reasoning knobs (nested `reasoning` object,
+  # scalar `reasoning_effort`, Moonshot-style `thinking` toggle — in any
+  # combination) and reshapes them into the ONE form the serving upstream
+  # documents. Mirrors the Hermes provider profiles (plugins/
+  # model-providers/*), so the mapping is battle-tested against each vendor's
+  # live API quirks:
+  #
+  #   * :scalar             — top-level `reasoning_effort` string only
+  #                           (Fireworks, DeepInfra: rejects the nested form)
+  #   * :toggle_xor_effort  — `thinking` toggle XOR `reasoning_effort`: both
+  #                           at once is a 400 (Moonshot/Kimi)
+  #   * :toggle_and_effort  — `thinking` toggle + `reasoning_effort`
+  #                           coexisting (Z.AI/GLM 5.2)
+  #   * :openrouter_nested  — nested `reasoning: {effort, enabled}` object
+  #                           (OpenRouter; DeepSeek v4 native shares the
+  #                           toggle habit but speaks the object form too)
+  #   * :deepseek_native    — `thinking: {type}` toggle always emitted +
+  #                           scalar effort (DeepSeek v4+: omitted toggle
+  #                           defaults thinking ON and then demands
+  #                           reasoning_content echoes)
+  #   * :passthrough        — the upstream documents no reasoning knobs we
+  #                           reshape (Qwen/Alibaba DashScope)
+  @reasoning_dialects [
+    :scalar,
+    :toggle_xor_effort,
+    :toggle_and_effort,
+    :openrouter_nested,
+    :deepseek_native,
+    :passthrough
+  ]
+
   @customizations %{
     # OpenRouter expone TODO en su superficie OpenAI-compatible bajo /api/v1:
     #   * chat/models/embeddings — defaults genéricos (embeddings models se
@@ -129,7 +161,8 @@ defmodule Tokengate.Providers.Catalog do
     "openrouter" => %{
       capabilities: ~w(llm embedding rerank stt tts image video music),
       dialect: "openrouter",
-      paths: %{image: "/images", video: "/videos"}
+      paths: %{image: "/images", video: "/videos"},
+      reasoning_dialect: :openrouter_nested
     },
     # Fireworks también sirve rerank en su superficie OpenAI-compatible:
     # `{base}/rerank` es exactamente el default genérico (verificado en
@@ -139,9 +172,9 @@ defmodule Tokengate.Providers.Catalog do
       capabilities: ~w(llm embedding rerank),
       # Fireworks documenta `reasoning_effort` top-level (string) y RECHAZA el
       # `reasoning` anidado estilo OpenRouter que algunos clientes mandan
-      # ("Extra inputs are not permitted"). El rename remapea la key del
-      # cliente a la forma que el upstream espera — el valor viaja tal cual.
-      rename_body_fields: %{"reasoning" => "reasoning_effort"}
+      # ("Extra inputs are not permitted"): el normalizador aplana lo que
+      # llegue a la forma escalar.
+      reasoning_dialect: :scalar
     },
     # DashScope (Model Studio) expone tres superficies distintas:
     #   * compatible-mode/v1 — chat, models, embeddings y, desde qwen-image,
@@ -176,16 +209,27 @@ defmodule Tokengate.Providers.Catalog do
     },
     "opencode" => %{capabilities: ~w(llm)},
     "opencode-go" => %{capabilities: ~w(llm)},
-    "moonshotai" => %{capabilities: ~w(llm)},
+    # Moonshot/Kimi: `thinking` y `reasoning_effort` son MUTUAMENTE
+    # EXCLUSIVOS en su wire (400 con ambos, ver profile kimi-coding de
+    # Hermes): effort gana cuando viene, si no el toggle.
+    "moonshotai" => %{capabilities: ~w(llm), reasoning_dialect: :toggle_xor_effort},
     # models.dev reaches the Kimi coding plan with the Anthropic SDK, but the
     # same base URL serves an OpenAI-compatible surface and that is what this
     # gateway speaks to it today: keep the working dialect explicit.
     "kimi-for-coding" => %{
       capabilities: ~w(llm),
-      dialect: "openai"
+      dialect: "openai",
+      reasoning_dialect: :toggle_xor_effort
     },
-    "zai" => %{capabilities: ~w(llm)},
-    "zai-coding-plan" => %{capabilities: ~w(llm)},
+    # Z.AI/GLM 5.2: el toggle `thinking` y el escalar `reasoning_effort`
+    # COEXISTEN en su wire (profile zai de Hermes).
+    "zai" => %{capabilities: ~w(llm), reasoning_dialect: :toggle_and_effort},
+    "zai-coding-plan" => %{capabilities: ~w(llm), reasoning_dialect: :toggle_and_effort},
+    # DeepSeek v4+ nativo: el toggle `thinking` debe ir SIEMPRE explícito —
+    # omitido, el server prende thinking por default y después EXIGE el echo
+    # de `reasoning_content` en los turnos de tool-call (profile deepseek de
+    # Hermes). Entry solo de dialecto: el resto de la fila es de models.dev.
+    "deepseek" => %{reasoning_dialect: :deepseek_native},
     # models.dev no publica base URL para Cerebras y resuelve su dialecto por
     # el SDK (`@ai-sdk/cerebras`), que no está en la tabla npm→dialecto. El
     # endpoint sí es OpenAI-compatible, así que ambos datos van en código.
@@ -602,28 +646,41 @@ defmodule Tokengate.Providers.Catalog do
   end
 
   @doc """
-  Body field renames (%{from => to}) a provider's upstream expects instead of
-  the client's key, by catalog key.
+  How the provider's upstream wants its reasoning knobs on the wire, by
+  catalog key — one of `@reasoning_dialects`, or `:passthrough` for every
+  key that declares none (unknown/custom included).
 
-  Empty for every provider that declares none and for unknown/custom keys: the
-  value only moves to another key, it is never rewritten, merged or dropped —
-  a rename whose target key already exists in the body is skipped (the
-  explicit field wins over the remapped one).
+  The pre-flight pipeline uses this to reshape whatever form the CLIENT
+  sent (nested `reasoning`, scalar `reasoning_effort`, `thinking` toggle)
+  into the one dialect the serving upstream documents, mirroring the
+  Hermes provider profiles.
 
-      iex> Tokengate.Providers.Catalog.rename_body_fields("fireworks-ai")
-      %{"reasoning" => "reasoning_effort"}
+      iex> Tokengate.Providers.Catalog.reasoning_dialect("fireworks-ai")
+      :scalar
 
-      iex> Tokengate.Providers.Catalog.rename_body_fields("openrouter")
-      %{}
+      iex> Tokengate.Providers.Catalog.reasoning_dialect("moonshotai")
+      :toggle_xor_effort
 
-      iex> Tokengate.Providers.Catalog.rename_body_fields(nil)
-      %{}
+      iex> Tokengate.Providers.Catalog.reasoning_dialect("zai")
+      :toggle_and_effort
+
+      iex> Tokengate.Providers.Catalog.reasoning_dialect("openrouter")
+      :openrouter_nested
+
+      iex> Tokengate.Providers.Catalog.reasoning_dialect("deepseek")
+      :deepseek_native
+
+      iex> Tokengate.Providers.Catalog.reasoning_dialect("alibaba")
+      :passthrough
+
+      iex> Tokengate.Providers.Catalog.reasoning_dialect(nil)
+      :passthrough
   """
-  @spec rename_body_fields(String.t() | nil) :: %{String.t() => String.t()}
-  def rename_body_fields(key \\ nil) do
-    case option(key, :rename_body_fields, %{}) do
-      %{} = renames -> renames
-      _ -> %{}
+  @spec reasoning_dialect(String.t() | nil) :: atom()
+  def reasoning_dialect(key \\ nil) do
+    case option(key, :reasoning_dialect, :passthrough) do
+      dialect when dialect in @reasoning_dialects -> dialect
+      _ -> :passthrough
     end
   end
 

@@ -1674,7 +1674,7 @@ defmodule TokengateWeb.ProxyController do
     |> Map.update!("messages", &PromptOptimizer.lazy_cleanup/1)
     |> Map.update!("messages", &PromptOptimizer.strip_reasoning/1)
     |> drop_strict_fields(provider_key(route_ctx))
-    |> rename_body_fields(provider_key(route_ctx))
+    |> normalize_reasoning(provider_key(route_ctx))
     # Operator overrides run LAST so they can strip/replace anything the
     # gateway or the client put in the body (a per-row `omit_body_fields`
     # can pull a client field back out, and `extra_body` can add/replace).
@@ -1688,47 +1688,119 @@ defmodule TokengateWeb.ProxyController do
   # override there would break routing or cost tracking.
   @protected_body_keys ~w(model messages stream_options)
 
-  # Remaps client-supplied body keys to the name the upstream expects
-  # (`Catalog.rename_body_fields/1`). The VALUE is adapted, not just moved:
-  # an OpenRouter-style nested reasoning object (`%{"effort" => "high"}` or
-  # `%{"enabled" => false}`) flattens to the scalar Fireworks-style knobs
-  # expect. A rename whose target key already exists is skipped — the field
-  # the client sent explicitly wins over a remapped one. Protected keys are
-  # never a valid rename target (the gateway owns them).
-  defp rename_body_fields(payload, provider_key) do
-    renames = Tokengate.Providers.Catalog.rename_body_fields(provider_key)
+  @reasoning_knob_keys ~w(reasoning reasoning_effort thinking)
 
-    Enum.reduce(renames, payload, fn {from, to}, acc ->
-      cond do
-        to in @protected_body_keys or not Map.has_key?(acc, from) -> acc
-        # The explicit target field wins, but the source key is still
-        # consumed: leaving it in the body would recreate the strict-upstream
-        # 400 the rename exists to prevent.
-        Map.has_key?(acc, to) -> Map.delete(acc, from)
-        true -> move_renamed_field(acc, from, to)
-      end
-    end)
-  end
-
-  defp move_renamed_field(payload, from, to) do
-    case rename_value(Map.get(payload, from)) do
-      # nil = "adapt away": the source field is dropped and nothing replaces
-      # it, so the upstream applies its own default (e.g. reasoning enabled
-      # without an explicit effort level).
-      nil -> Map.delete(payload, from)
-      value -> payload |> Map.put(to, value) |> Map.delete(from)
+  # Reshapes the client's reasoning knobs into the ONE wire dialect the
+  # serving upstream documents (`Catalog.reasoning_dialect/1`). The client
+  # cannot know which provider a request lands on (fallback, priority,
+  # sticky), so the translation is the gateway's job, per attempt. Intent is
+  # read from whatever form arrived — nested `reasoning` object, scalar
+  # `reasoning_effort`, Moonshot-style `thinking` toggle — and re-emitted
+  # exclusively in the target dialect. `:passthrough` (and undeclared keys)
+  # leaves the body untouched.
+  defp normalize_reasoning(payload, provider_key) do
+    case Tokengate.Providers.Catalog.reasoning_dialect(provider_key) do
+      :passthrough -> payload
+      dialect -> reshape_reasoning(payload, read_reasoning_intent(payload), dialect)
     end
   end
 
-  # OpenRouter-style nested objects flatten to the scalar the target knob
-  # expects; a scalar travels untouched. A nested object that matches NO
-  # known shape is dropped (nil): the target knob expects a scalar, and
-  # forwarding the object would recreate the 400 the rename exists to fix.
-  defp rename_value(%{"effort" => effort}) when is_binary(effort) and effort != "", do: effort
-  defp rename_value(%{"enabled" => false}), do: "none"
-  defp rename_value(%{"enabled" => true}), do: nil
-  defp rename_value(other) when is_map(other), do: nil
-  defp rename_value(other), do: other
+  # The client's reasoning intent, read from any of the three wire forms.
+  # Precedence: an explicit scalar beats the nested object's effort; a nested
+  # `enabled: false` is a hard off. Returns {effort_or_nil, enabled_boolean}.
+  defp read_reasoning_intent(payload) do
+    nested = payload["reasoning"]
+    scalar = payload["reasoning_effort"]
+    toggle = payload["thinking"]
+
+    nested_effort = if is_map(nested), do: nested["effort"], else: nil
+    nested_enabled = if is_map(nested), do: nested["enabled"], else: nil
+
+    toggle_enabled =
+      cond do
+        is_map(toggle) -> toggle["type"] != "disabled"
+        is_boolean(toggle) -> toggle
+        true -> nil
+      end
+
+    effort =
+      cond do
+        is_binary(scalar) and scalar != "" -> scalar
+        is_binary(nested_effort) and nested_effort != "" -> nested_effort
+        true -> nil
+      end
+
+    enabled =
+      cond do
+        is_boolean(nested_enabled) -> nested_enabled
+        is_boolean(toggle_enabled) -> toggle_enabled
+        effort -> true
+        true -> nil
+      end
+
+    {effort, enabled}
+  end
+
+  defp reshape_reasoning(payload, {effort, enabled}, dialect) do
+    base = Map.drop(payload, @reasoning_knob_keys)
+
+    fields =
+      case dialect do
+        :scalar ->
+          # Fireworks/DeepInfra: scalar only; disabled flattens to "none".
+          if enabled == false, do: %{"reasoning_effort" => "none"}, else: maybe_effort(effort)
+
+        :openrouter_nested ->
+          # OpenRouter: the nested object form; absence of knobs means the
+          # upstream default (we never invent an effort the client didn't send).
+          cond do
+            enabled == false -> %{"reasoning" => %{"enabled" => false}}
+            effort -> %{"reasoning" => %{"effort" => effort}}
+            true -> %{}
+          end
+
+        :toggle_xor_effort ->
+          # Moonshot/Kimi: mutually exclusive (400 with both) — effort wins
+          # when present, else the toggle (an explicit toggle survives; no
+          # knobs at all means no fields, matching thinking_toggle_extras).
+          cond do
+            enabled == false -> %{"thinking" => %{"type" => "disabled"}}
+            effort -> %{"reasoning_effort" => effort}
+            enabled == true -> %{"thinking" => %{"type" => "enabled"}}
+            true -> %{}
+          end
+
+        :toggle_and_effort ->
+          # Z.AI/GLM: both coexist; only emit what the client expressed
+          # (server default is thinking on).
+          cond do
+            enabled == false ->
+              %{"thinking" => %{"type" => "disabled"}}
+
+            true ->
+              fields = maybe_effort(effort)
+
+              if enabled == true,
+                do: Map.put(fields, "thinking", %{"type" => "enabled"}),
+                else: fields
+          end
+
+        :deepseek_native ->
+          # DeepSeek v4+: the toggle is ALWAYS emitted explicitly (omitted
+          # defaults thinking on and then demands reasoning_content echoes).
+          toggle_type = if enabled == false, do: "disabled", else: "enabled"
+          Map.put(maybe_effort(effort), "thinking", %{"type" => toggle_type})
+      end
+
+    Map.merge(base, fields)
+  end
+
+  defp maybe_effort(nil), do: %{}
+
+  defp maybe_effort(effort) when is_binary(effort) and effort != "",
+    do: %{"reasoning_effort" => effort}
+
+  defp maybe_effort(_), do: %{}
 
   # Per model_provider upstream overrides, applied last in the payload
   # pipeline so they win over every gateway injection (session hints).

@@ -599,19 +599,30 @@ defmodule Tokengate.Providers.CatalogTest do
     end
   end
 
-  describe "rename_body_fields/1" do
-    test "fireworks remaps the nested reasoning key to its top-level knob" do
-      # Fireworks documents `reasoning_effort` (top-level string) and rejects
-      # the OpenRouter-style nested `reasoning` object some clients send
-      # ("Extra inputs are not permitted"): the rename moves the client's key
-      # to the shape the upstream expects.
-      assert Catalog.rename_body_fields("fireworks-ai") == %{"reasoning" => "reasoning_effort"}
+  describe "reasoning_dialect/1" do
+    test "each Hermes-matched provider declares its wire dialect" do
+      # Mirrors the Hermes provider profiles (plugins/model-providers/*):
+      # how each upstream wants its reasoning knobs on the wire.
+      assert Catalog.reasoning_dialect("fireworks-ai") == :scalar
+      assert Catalog.reasoning_dialect("openrouter") == :openrouter_nested
+      assert Catalog.reasoning_dialect("moonshotai") == :toggle_xor_effort
+      assert Catalog.reasoning_dialect("kimi-for-coding") == :toggle_xor_effort
+      assert Catalog.reasoning_dialect("zai") == :toggle_and_effort
+      assert Catalog.reasoning_dialect("zai-coding-plan") == :toggle_and_effort
+      assert Catalog.reasoning_dialect("deepseek") == :deepseek_native
     end
 
-    test "providers without a rename and unknown keys declare none" do
-      assert Catalog.rename_body_fields("openrouter") == %{}
-      assert Catalog.rename_body_fields("totally-unknown") == %{}
-      assert Catalog.rename_body_fields(nil) == %{}
+    test "qwen/alibaba are the same upstream and declare passthrough" do
+      # DashScope documents no reasoning knobs we reshape: the client's body
+      # travels untouched (qwen-cloud is the same DashScope entry).
+      assert Catalog.reasoning_dialect("alibaba") == :passthrough
+      assert Catalog.reasoning_dialect("alibaba-cn") == :passthrough
+      assert Catalog.reasoning_dialect("qwen-cloud") == :passthrough
+    end
+
+    test "providers without a dialect and unknown keys declare passthrough" do
+      assert Catalog.reasoning_dialect("totally-unknown") == :passthrough
+      assert Catalog.reasoning_dialect(nil) == :passthrough
     end
   end
 
