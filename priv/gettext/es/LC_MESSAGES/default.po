@@ -24,7 +24,7 @@ msgstr "Idioma"
 msgid "Timezone"
 msgstr "Zona horaria"
 
-## Chrome del dashboard: sidebar y topbar
+## Chrome del dashboard: sidebar, barra de contenido y menú de usuario
 msgid "Dashboard"
 msgstr "Dashboard"
 
@@ -73,14 +73,26 @@ msgstr "Observabilidad"
 msgid "Maintenance"
 msgstr "Mantenimiento"
 
-msgid "Open menu"
-msgstr "Abrir menú"
+msgid "Menu"
+msgstr "Menú"
+
+msgid "Collapse or expand the sidebar"
+msgstr "Contraer o expandir la barra lateral"
+
+msgid "Filter navigation…"
+msgstr "Filtrar navegación…"
 
 msgid "Close menu"
 msgstr "Cerrar menú"
 
-msgid "Sign out"
-msgstr "Salir"
+msgid "Account menu"
+msgstr "Menú de la cuenta"
+
+msgid "Profile"
+msgstr "Perfil"
+
+msgid "Log out"
+msgstr "Cerrar sesión"
 
 msgid "Sign out?"
 msgstr "¿Cerrar sesión?"
@@ -107,6 +119,9 @@ msgstr "Presupuesto"
 
 msgid "Limit profiles"
 msgstr "Perfiles de límites"
+
+msgid "Limit profiles of %{name}"
+msgstr "Perfiles de límites de %{name}"
 
 msgid "Monthly budget"
 msgstr "Presupuesto mensual"
@@ -538,6 +553,9 @@ msgstr "Un usuario puede tener varias claves activas, cada una con su etiqueta."
 
 msgid "API keys"
 msgstr "Claves API"
+
+msgid "API keys of %{name}"
+msgstr "Claves API de %{name}"
 
 msgid "Absolute cap; empty = inherits from the limit profile."
 msgstr "Límite absoluto; vacío = hereda del perfil de límites."

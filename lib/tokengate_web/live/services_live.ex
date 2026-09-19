@@ -341,12 +341,21 @@ defmodule TokengateWeb.ServicesLive do
     save_service(socket, socket.assigns.editing_service_id, service_params)
   end
 
+  # La confirmación la dibuja el assign (la primitiva <.modal> se gatea con
+  # `:if`): no hay diálogo escondido en el DOM esperando un push del cliente.
   def handle_event("open_delete_modal", %{"id" => service_id, "name" => name}, socket) do
     {:noreply,
      socket
      |> assign(:delete_target_id, service_id)
-     |> assign(:delete_target_name, name)
-     |> push_event("open_modal", %{id: "delete-service-modal"})}
+     |> assign(:delete_target_name, name)}
+  end
+
+  # Cerrar la confirmación (✕, Escape o click-away) olvida el objetivo.
+  def handle_event("cancel_delete", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:delete_target_id, nil)
+     |> assign(:delete_target_name, nil)}
   end
 
   def handle_event("delete_service", %{"id" => service_id}, socket) do
@@ -361,7 +370,6 @@ defmodule TokengateWeb.ServicesLive do
          |> put_flash(:info, gettext("Service deleted."))
          |> assign(:delete_target_id, nil)
          |> assign(:delete_target_name, nil)
-         |> push_event("close_modal", %{id: "delete-service-modal"})
          |> load_services()}
 
       {:error, %Ecto.Changeset{} = changeset} ->
@@ -777,10 +785,14 @@ defmodule TokengateWeb.ServicesLive do
         </.header>
 
         <%!-- Service form (create / edit) — modal --%>
-        <.admin_modal :if={@form} id="service-form-modal" on_close="cancel_form">
-          <h2 class="text-lg font-semibold mb-4">
-            {if @editing_service_id == :new, do: gettext("New service"), else: gettext("Edit service")}
-          </h2>
+        <.modal
+          :if={@form}
+          id="service-form-modal"
+          title={
+            if @editing_service_id == :new, do: gettext("New service"), else: gettext("Edit service")
+          }
+          on_close="cancel_form"
+        >
           <.form for={@form} id="service-form" phx-submit="save_service">
             <.input
               field={@form[:name]}
@@ -831,18 +843,16 @@ defmodule TokengateWeb.ServicesLive do
               )}</button>
             </div>
           </.form>
-        </.admin_modal>
+        </.modal>
 
         <%!-- Keys modal — N claves con etiqueta (mismo panel que Usuarios) --%>
-        <.admin_modal
+        <.modal
           :if={@keys_service_id}
           id="service-keys-modal"
+          title={gettext("API keys of %{name}", name: @keys_service_name)}
           on_close="cancel_manage_keys"
-          width="max-w-2xl"
+          max_w="max-w-2xl"
         >
-          <h2 class="text-lg font-semibold mb-1">
-            Claves API de <span class="text-primary">{@keys_service_name}</span>
-          </h2>
           <p class="text-xs text-base-content/50 mb-4">
             {gettext("A service can have several active keys, each with its own label.")}
           </p>
@@ -865,15 +875,15 @@ defmodule TokengateWeb.ServicesLive do
               {gettext("Close")}
             </button>
           </div>
-        </.admin_modal>
+        </.modal>
 
         <%!-- Models modal — manage model grants per service --%>
-        <.admin_modal
+        <.modal
           :if={@models_service_id}
-          id={"models-modal-#{@models_service_id}"}
+          id="models-modal-#{@models_service_id}"
+          title={gettext("Service models")}
           on_close="close_models"
         >
-          <h2 class="text-lg font-semibold mb-4">{gettext("Service models")}</h2>
           <.model_picker
             id={"model-picker-#{@models_service_id}"}
             models={@models}
@@ -892,21 +902,21 @@ defmodule TokengateWeb.ServicesLive do
               {gettext("Done")}
             </button>
           </div>
-        </.admin_modal>
+        </.modal>
 
         <%!-- Detail modal — stats + supervisores (las claves viven en su propio modal) --%>
-        <.admin_modal
+        <.modal
           :if={@detail_service_id && detail_service(assigns)}
           id="service-detail-modal"
+          title={detail_service(assigns).name}
           on_close="close_detail"
-          width="max-w-2xl"
+          max_w="max-w-2xl"
         >
-          <h2 class="text-lg font-semibold mb-4">
-            {detail_service(assigns).name}
-            <span class="text-sm text-base-content/50 font-normal">
-              · Límite: {limit_label(detail_service(assigns))}
-            </span>
-          </h2>
+          <%!-- El límite del servicio viajaba en el título del modal; con el
+               título de la primitiva <.modal> va como caption del cuerpo. --%>
+          <p class="text-xs text-base-content/50 mb-4">
+            · Límite: {limit_label(detail_service(assigns))}
+          </p>
 
           <%!-- Stats 30d --%>
           <% stats = stats_for(assigns, @detail_service_id) %>
@@ -1044,11 +1054,13 @@ defmodule TokengateWeb.ServicesLive do
               {gettext("Close")}
             </button>
           </div>
-        </.admin_modal>
+        </.modal>
 
         <%!-- Delete confirmation modal --%>
         <.admin_delete_modal
+          :if={@delete_target_id}
           id="delete-service-modal"
+          on_close="cancel_delete"
           title={gettext("Delete service")}
           target_label={@delete_target_name}
           target_span_id="delete-service-name"
@@ -1151,11 +1163,11 @@ defmodule TokengateWeb.ServicesLive do
               </tr>
             </tbody>
           </table>
-          <.admin_empty_state
+          <.empty_state
             :if={@services_empty?}
             id="services-empty"
             icon="hero-wrench-screwdriver"
-            message={gettext("No services yet.")}
+            title={gettext("No services yet.")}
           />
         </div>
       </div>

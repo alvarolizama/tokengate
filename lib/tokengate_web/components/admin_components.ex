@@ -118,59 +118,19 @@ defmodule TokengateWeb.AdminComponents do
   end
 
   # ---------------------------------------------------------------------------
-  # Estado vacío
-  # ---------------------------------------------------------------------------
-
-  @doc "Estado vacío centrado (icono + mensaje)."
-  attr :icon, :string, required: true
-  attr :message, :string, required: true
-  attr :id, :string, required: true
-
-  def admin_empty_state(assigns) do
-    ~H"""
-    <div class="text-center py-12 text-base-content/40" id={@id}>
-      <.icon name={@icon} class="w-10 h-10 mx-auto mb-2 opacity-40" />
-      <p>{@message}</p>
-    </div>
-    """
-  end
-
-  # ---------------------------------------------------------------------------
-  # Modal (shell)
+  # Confirmación de borrado destructivo (compone la primitiva <.modal>)
   # ---------------------------------------------------------------------------
 
   @doc """
-  Shell de modal: overlay + card + card-body. El título y el contenido van
-  en el bloque interno. `@on_close` es el evento phx-click del backdrop.
+  Confirmación de borrado destructivo: la primitiva `<.modal>` (Commons C7.1)
+  con el detalle de lo que se borra. El caller la gatea con `:if` sobre el
+  assign del objetivo, y `on_close` lo limpia.
+
+  Es a propósito más explícita que el `data-confirm` de una confirmación simple:
+  nombra el objetivo y lo que se pierde (Custom — TokenGate).
   """
-  attr :id, :string, default: nil
+  attr :id, :string, required: true
   attr :on_close, :string, required: true
-  attr :width, :string, default: "max-w-lg"
-  slot :inner_block, required: true
-
-  def admin_modal(assigns) do
-    ~H"""
-    <div class="fixed inset-0 z-50 flex items-center justify-center p-4" id={@id}>
-      <div class="absolute inset-0 bg-black/50" phx-click={@on_close} />
-      <div class={["relative card bg-base-100 border border-base-300 shadow-xl w-full", @width]}>
-        <div class="card-body p-6">
-          {render_slot(@inner_block)}
-        </div>
-      </div>
-    </div>
-    """
-  end
-
-  # ---------------------------------------------------------------------------
-  # Modal de confirmación de borrado (dialog + hook Modal)
-  # ---------------------------------------------------------------------------
-
-  @doc """
-  Modal de confirmación de borrado destructivo. Es un `<dialog>` con el hook
-  `Modal` (se abre con `push_event(socket, "open_modal", %{id: @id})` y se
-  cierra con `close_modal`). Debe renderizarse siempre en el DOM.
-  """
-  attr :id, :string, required: true
   attr :title, :string, required: true
   attr :target_label, :string, default: nil
   attr :target_span_id, :string, default: nil
@@ -185,54 +145,49 @@ defmodule TokengateWeb.AdminComponents do
 
   def admin_delete_modal(assigns) do
     ~H"""
-    <dialog id={@id} class="modal" phx-hook="Modal">
-      <div class="modal-box max-w-md">
-        <h3 class="text-lg font-bold text-error flex items-center gap-2">
-          <.icon name="hero-exclamation-triangle" class="w-5 h-5" /> {@title}
-        </h3>
-        <div class="py-4 space-y-3">
-          <p :if={@target_label} class="text-sm">
-            {gettext("Are you sure you want to delete")} <span
-              class="font-semibold"
-              id={@target_span_id}
-            >{@target_label}</span>?
-          </p>
-          <div class="alert alert-warning text-sm">
-            <.icon name="hero-exclamation-triangle" class="w-5 h-5 shrink-0" />
-            <div>
-              <p class="font-semibold">{TokengateWeb.Gettext.translate(@warning_title)}</p>
-              <p :if={TokengateWeb.Gettext.translate(@warning_intro)} class="mt-1">
-                {@warning_intro}
-              </p>
-              <ul
-                :if={@warning_items != []}
-                class="mt-1 list-disc list-inside space-y-0.5 text-xs"
-              >
-                <li :for={item <- @warning_items}>{TokengateWeb.Gettext.translate(item)}</li>
-              </ul>
-            </div>
+    <.modal id={@id} title={@title} on_close={@on_close} max_w="max-w-md">
+      <div class="space-y-3">
+        <p :if={@target_label} class="text-sm">
+          {gettext("Are you sure you want to delete")} <span
+            class="font-semibold"
+            id={@target_span_id}
+          >{@target_label}</span>?
+        </p>
+        <div class="alert alert-warning text-sm">
+          <.icon name="hero-exclamation-triangle" class="w-5 h-5 shrink-0" />
+          <div>
+            <p class="font-semibold">{TokengateWeb.Gettext.translate(@warning_title)}</p>
+            <p :if={TokengateWeb.Gettext.translate(@warning_intro)} class="mt-1">
+              {@warning_intro}
+            </p>
+            <ul
+              :if={@warning_items != []}
+              class="mt-1 list-disc list-inside space-y-0.5 text-xs"
+            >
+              <li :for={item <- @warning_items}>{TokengateWeb.Gettext.translate(item)}</li>
+            </ul>
           </div>
         </div>
-        <div class="modal-action">
-          <form method="dialog">
-            <button class="btn btn-ghost btn-sm" id={@cancel_button_id}>{gettext("Cancel")}</button>
-          </form>
-          <button
-            phx-click={@confirm_event}
-            phx-value-id={@confirm_value}
-            class="btn btn-error btn-sm"
-            id={@confirm_button_id}
-          >
-            <.icon name="hero-trash" class="w-4 h-4" /> {TokengateWeb.Gettext.translate(
-              @confirm_label
-            )}
-          </button>
-        </div>
       </div>
-      <form method="dialog" class="modal-backdrop">
-        <button>{gettext("close")}</button>
-      </form>
-    </dialog>
+      <div class="flex items-center justify-end gap-2 pt-2">
+        <button
+          type="button"
+          phx-click={@on_close}
+          class="btn btn-ghost btn-sm"
+          id={@cancel_button_id}
+        >
+          {gettext("Cancel")}
+        </button>
+        <button
+          phx-click={@confirm_event}
+          phx-value-id={@confirm_value}
+          class="btn btn-ghost btn-sm text-error"
+          id={@confirm_button_id}
+        >
+          <.icon name="hero-trash" class="w-4 h-4" /> {TokengateWeb.Gettext.translate(@confirm_label)}
+        </button>
+      </div>
+    </.modal>
     """
   end
 

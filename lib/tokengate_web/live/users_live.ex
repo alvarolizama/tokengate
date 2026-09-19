@@ -671,12 +671,21 @@ defmodule TokengateWeb.UsersLive do
 
   ## Events — delete user -------------------------------------------------
 
+  # La confirmación la dibuja el assign (la primitiva <.modal> se gatea con
+  # `:if`): no hay diálogo escondido en el DOM esperando un push del cliente.
   def handle_event("open_delete_modal", %{"id" => user_id, "email" => email}, socket) do
     {:noreply,
      socket
      |> assign(:delete_target_id, user_id)
-     |> assign(:delete_target_email, email)
-     |> push_event("open_modal", %{id: "delete-user-modal"})}
+     |> assign(:delete_target_email, email)}
+  end
+
+  # Cerrar la confirmación (✕, Escape o click-away) olvida el objetivo.
+  def handle_event("cancel_delete", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:delete_target_id, nil)
+     |> assign(:delete_target_email, nil)}
   end
 
   def handle_event("confirm_delete_user", %{"id" => user_id}, socket) do
@@ -689,16 +698,14 @@ defmodule TokengateWeb.UsersLive do
          socket
          |> put_flash(:error, gettext("The root administrator cannot be deleted."))
          |> assign(:delete_target_id, nil)
-         |> assign(:delete_target_email, nil)
-         |> push_event("close_modal", %{id: "delete-user-modal"})}
+         |> assign(:delete_target_email, nil)}
 
       user.id == current_user.id ->
         {:noreply,
          socket
          |> put_flash(:error, gettext("You cannot delete your own account."))
          |> assign(:delete_target_id, nil)
-         |> assign(:delete_target_email, nil)
-         |> push_event("close_modal", %{id: "delete-user-modal"})}
+         |> assign(:delete_target_email, nil)}
 
       true ->
         case Accounts.delete_user(user) do
@@ -710,7 +717,6 @@ defmodule TokengateWeb.UsersLive do
              |> put_flash(:info, gettext("User permanently deleted. All their data was erased."))
              |> assign(:delete_target_id, nil)
              |> assign(:delete_target_email, nil)
-             |> push_event("close_modal", %{id: "delete-user-modal"})
              |> load_users()}
 
           {:error, _} ->
@@ -983,12 +989,12 @@ defmodule TokengateWeb.UsersLive do
         </.header>
 
         <%!-- User form — create (modal) --%>
-        <.admin_modal
+        <.modal
           :if={@form && @form_mode == :create}
           id="user-create-modal"
+          title={gettext("New user")}
           on_close="cancel_form"
         >
-          <h2 class="text-lg font-semibold mb-4">{gettext("New user")}</h2>
           <.form for={@form} id="user-form" phx-submit="save_user">
             <.input
               field={@form[:email]}
@@ -1036,15 +1042,15 @@ defmodule TokengateWeb.UsersLive do
               )}</button>
             </div>
           </.form>
-        </.admin_modal>
+        </.modal>
 
         <%!-- User form — edit (modal) --%>
-        <.admin_modal
+        <.modal
           :if={@form && @form_mode == :edit}
           id="user-edit-modal"
+          title={gettext("Edit user")}
           on_close="cancel_form"
         >
-          <h2 class="text-lg font-semibold mb-4">{gettext("Edit user")}</h2>
           <.form for={@form} id="user-edit-form" phx-submit="save_user">
             <.input field={@form[:name]} type="text" label={gettext("Name")} />
             <.input
@@ -1101,15 +1107,15 @@ defmodule TokengateWeb.UsersLive do
               )}</button>
             </div>
           </.form>
-        </.admin_modal>
+        </.modal>
 
         <%!-- User form — reset password (modal) --%>
-        <.admin_modal
+        <.modal
           :if={@form && @form_mode == :reset_password}
           id="user-reset-modal"
+          title={gettext("Reset password")}
           on_close="cancel_form"
         >
-          <h2 class="text-lg font-semibold mb-4">{gettext("Reset password")}</h2>
           <.form for={@form} id="user-reset-form" phx-submit="save_password">
             <.input
               field={@form[:password]}
@@ -1126,7 +1132,7 @@ defmodule TokengateWeb.UsersLive do
               )}</button>
             </div>
           </.form>
-        </.admin_modal>
+        </.modal>
 
         <div class="overflow-x-auto card bg-base-100 border border-base-300 shadow-sm">
           <table class="table table-sm">
@@ -1229,11 +1235,11 @@ defmodule TokengateWeb.UsersLive do
               </tr>
             </tbody>
           </table>
-          <.admin_empty_state
+          <.empty_state
             :if={@users_empty?}
             id="users-empty"
             icon="hero-users"
-            message={gettext("No users yet.")}
+            title={gettext("No users yet.")}
           />
           <.admin_pagination
             id="users-pagination"
@@ -1246,15 +1252,13 @@ defmodule TokengateWeb.UsersLive do
       </div>
 
       <%!-- Keys modal — N claves con etiqueta (mismo panel que Servicios) --%>
-      <.admin_modal
+      <.modal
         :if={@keys_user_id}
         id="user-keys-modal"
+        title={gettext("API keys of %{name}", name: @keys_user_name)}
         on_close="cancel_manage_keys"
-        width="max-w-2xl"
+        max_w="max-w-2xl"
       >
-        <h2 class="text-lg font-semibold mb-1">
-          Claves API de <span class="text-primary">{@keys_user_name}</span>
-        </h2>
         <p class="text-xs text-base-content/50 mb-4">
           {gettext("A user can have several active keys, each with its own label.")}
         </p>
@@ -1277,18 +1281,16 @@ defmodule TokengateWeb.UsersLive do
             {gettext("Close")}
           </button>
         </div>
-      </.admin_modal>
+      </.modal>
 
       <%!-- Groups view modal — read-only; memberships are managed in Perfiles de límites → Miembros --%>
-      <.admin_modal
+      <.modal
         :if={@editing_groups_user_id}
         id="user-groups-modal"
+        title={gettext("Limit profiles of %{name}", name: @editing_groups_user_name)}
         on_close="cancel_edit_groups"
-        width="max-w-md"
+        max_w="max-w-md"
       >
-        <h2 class="text-lg font-semibold mb-4">
-          Perfiles de límites de <span class="text-primary">{@editing_groups_user_name}</span>
-        </h2>
         <div class="space-y-2">
           <%= for group <- @all_groups do %>
             <div class="flex items-center justify-between p-2 rounded-lg bg-base-200/50">
@@ -1339,11 +1341,13 @@ defmodule TokengateWeb.UsersLive do
             {gettext("Close")}
           </button>
         </div>
-      </.admin_modal>
+      </.modal>
 
       <%!-- Delete confirmation modal — warns about irreversible data loss --%>
       <.admin_delete_modal
+        :if={@delete_target_id}
         id="delete-user-modal"
+        on_close="cancel_delete"
         title={gettext("Delete user")}
         target_label={@delete_target_email}
         target_span_id="delete-user-email"

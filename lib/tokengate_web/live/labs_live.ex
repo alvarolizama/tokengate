@@ -118,10 +118,12 @@ defmodule TokengateWeb.LabsLive do
   def handle_event("confirm_delete", %{"key" => key}, socket) do
     lab = Providers.get_lab!(key)
 
-    {:noreply,
-     socket
-     |> assign(:delete_target, lab)
-     |> push_event("open_modal", %{id: "delete-lab-modal"})}
+    {:noreply, assign(socket, :delete_target, lab)}
+  end
+
+  # Cerrar la confirmación (✕, Escape o click-away) olvida el objetivo.
+  def handle_event("cancel_delete", _params, socket) do
+    {:noreply, assign(socket, :delete_target, nil)}
   end
 
   # `admin_delete_modal` emite el valor por `phx-value-id`, así que el evento
@@ -209,11 +211,11 @@ defmodule TokengateWeb.LabsLive do
 
         <%!-- El estado vacío va FUERA del contenedor del stream: phx-update
              solo administra los hijos con id de stream. --%>
-        <.admin_empty_state
+        <.empty_state
           :if={@labs_empty?}
           id="labs-empty"
           icon="hero-beaker"
-          message={gettext("No labs to show.")}
+          title={gettext("No labs to show.")}
         />
 
         <div id="labs" phx-update="stream" class="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
@@ -280,15 +282,13 @@ defmodule TokengateWeb.LabsLive do
       </div>
 
       <%!-- Form modal --%>
-      <.admin_modal
+      <.modal
         :if={@form}
         id="lab-form-modal"
+        title={if @editing_key == :new, do: gettext("New custom lab"), else: gettext("Edit lab")}
         on_close="cancel_form"
-        width="max-w-2xl"
+        max_w="max-w-2xl"
       >
-        <h2 class="text-lg font-semibold mb-1">
-          {if @editing_key == :new, do: gettext("New custom lab"), else: gettext("Edit lab")}
-        </h2>
         <p class="text-xs text-base-content/60 mb-4">
           {gettext("The key is the identifier models join the lab by: lowercase, no spaces.")}
         </p>
@@ -380,15 +380,17 @@ defmodule TokengateWeb.LabsLive do
             </button>
           </div>
         </.form>
-      </.admin_modal>
+      </.modal>
 
       <.admin_delete_modal
+        :if={@delete_target}
         id="delete-lab-modal"
+        on_close="cancel_delete"
         title={gettext("Delete lab")}
-        target_label={@delete_target && @delete_target.name}
+        target_label={@delete_target.name}
         target_span_id="delete-lab-target"
         confirm_event="delete_lab"
-        confirm_value={@delete_target && @delete_target.key}
+        confirm_value={@delete_target.key}
         confirm_button_id="confirm-delete-lab"
         cancel_button_id="cancel-delete-lab"
         warning_title={gettext("The lab mark is deleted.")}

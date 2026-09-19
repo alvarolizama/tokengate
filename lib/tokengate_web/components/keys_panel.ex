@@ -43,7 +43,7 @@ defmodule TokengateWeb.KeysPanel do
   end
 
   @doc """
-  Cuerpo del panel de claves. Se renderiza dentro de un `admin_modal`.
+  Cuerpo del panel de claves. Se renderiza dentro de un `<.modal>`.
 
   Eventos esperados en el LiveView:
     * `@create_event` — `phx-submit` del form con `%{"key" => %{"label" => _}}`.

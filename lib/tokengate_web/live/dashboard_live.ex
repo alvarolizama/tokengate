@@ -22,7 +22,6 @@ defmodule TokengateWeb.DashboardLive do
 
   use TokengateWeb, :live_view
 
-  import TokengateWeb.AdminComponents
   import TokengateWeb.KpiHelpers, only: [kpi_cards: 1]
   import TokengateWeb.KeysPanel
 

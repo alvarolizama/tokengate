@@ -587,13 +587,13 @@
 
   <%!-- Mis claves API — el usuario logueado gestiona sus N claves con etiqueta
        desde el mismo panel que la página admin de usuarios. --%>
-  <.admin_modal
+  <.modal
     :if={@keys_modal_open}
     id="user-keys-modal"
+    title={gettext("My API keys")}
     on_close="cancel_manage_keys"
-    width="max-w-2xl"
+    max_w="max-w-2xl"
   >
-    <h2 class="text-lg font-semibold mb-1">{gettext("My API keys")}</h2>
     <p class="text-xs text-base-content/50 mb-4">
       {gettext("You can have several active keys, each with its own label.")}
     </p>
@@ -616,5 +616,5 @@
         {gettext("Close")}
       </button>
     </div>
-  </.admin_modal>
+  </.modal>
 </Layouts.dashboard>

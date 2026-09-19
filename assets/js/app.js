@@ -80,109 +80,6 @@ const SortableProviders = {
   }
 }
 
-// Open/close DaisyUI <dialog> modals via push_event from LiveView.
-// Usage: push_event("open_modal", %{id: "my-modal"})
-//        push_event("close_modal", %{id: "my-modal"})
-//
-// Design notes:
-// - The native <dialog> fires a "close" event on Escape, backdrop click,
-//   or <form method="dialog"> submit. We listen for it and sync the server
-//   so a later repaint doesn't reopen a dialog the user already dismissed.
-// - The server renders the <dialog> WITHOUT `open` (it is set client-side
-//   by showModal()). LiveView patches (e.g. a new prompt arriving via
-//   PubSub) make morphdom strip `open` — which closes the dialog natively
-//   WITHOUT firing `close` — so beforeUpdate()/updated() re-open it when
-//   the patch itself closed it (data-open="true", see below).
-// - The backdrop is a sibling <div class="modal-backdrop"> (NOT a
-//   <form method="dialog">) so scrolling inside the modal-box can never
-//   accidentally submit a form and close the dialog.
-// - Backdrop click-to-close is opt-in via mousedown+mouseup guard: only
-//   closes if BOTH mousedown and mouseup land directly on the backdrop.
-//   This prevents a scroll-drag that ends on the backdrop from closing the
-//   modal — the most common cause of "modal se desbindea al hacer scroll".
-const Modal = {
-  mounted() {
-    this.handleEvent("open_modal", ({id}) => {
-      const el = document.getElementById(id)
-      if (el && typeof el.showModal === "function" && !el.open) el.showModal()
-    })
-    this.handleEvent("close_modal", ({id}) => {
-      const el = document.getElementById(id)
-      if (el && typeof el.close === "function") el.close()
-    })
-
-    // Re-open after a LiveView repaint if the server says it should be open.
-    if (this.el.dataset.open === "true" && typeof this.el.showModal === "function" && !this.el.open) {
-      this.el.showModal()
-    }
-
-    // Sync native closes (Escape key) back to the server so a later repaint
-    // doesn't reopen a dialog the user already dismissed.
-    this.el.addEventListener("close", () => {
-      if (this.el.dataset.open === "true") {
-        this.el.dataset.open = "false"
-        this.pushEvent("close_modal", {})
-      }
-    })
-
-    // Backdrop click-to-close with mousedown+mouseup guard.
-    // A click only counts if BOTH mousedown and mouseup land directly on the
-    // backdrop element — a scroll-drag that ends on the backdrop won't close.
-    const backdrop = this.el.querySelector(".modal-backdrop")
-    if (backdrop) {
-      let mouseDownOnBackdrop = false
-
-      backdrop.addEventListener("mousedown", (e) => {
-        mouseDownOnBackdrop = (e.target === backdrop)
-      })
-
-      backdrop.addEventListener("mouseup", (e) => {
-        if (mouseDownOnBackdrop && e.target === backdrop) {
-          this.el.close()
-        }
-        mouseDownOnBackdrop = false
-      })
-    }
-  },
-
-  // beforeUpdate runs synchronously before morphdom touches this element, so
-  // it records whether the dialog was open pre-patch. updated() then re-opens
-  // ONLY when the patch itself removed `open` (modal was open pre-patch). If
-  // the user closed the dialog and a stream patch lands while close_modal is
-  // still in flight, __wasOpen is false and the stale data-open="true" from
-  // the server does not pop the modal back open.
-  beforeUpdate() {
-    this.__wasOpen = this.el.open
-  },
-
-  // The server always renders the <dialog> WITHOUT the `open` attribute
-  // (dialogs are opened client-side via showModal()). LiveView patches make
-  // morphdom sync attributes and REMOVE `open`, which closes the dialog
-  // natively but does NOT fire a `close` event, so neither the close-sync in
-  // mounted() nor the mounted() re-open (the node is morphed in place, never
-  // re-mounted) can react. updated() fires synchronously right after the
-  // patch that morphed this element — re-opening there keeps the modal open
-  // through stream_insert patches with no flicker. A user-initiated close
-  // via Escape or backdrop closes the dialog natively (fires `close`), and
-  // the close-sync in mounted() flips data-open to "false" synchronously, so
-  // __wasOpen is false and updated() is a no-op (stale server data-open
-  // does not pop the modal back open). The botón "Cerrar" (phx-click
-  // close_modal) is NOT optimistic: between the click and the round-trip
-  // (~<100ms) __wasOpen is still true, so a stream patch could re-open the
-  // modal transiently — the close_modal patch with data-open="false" then
-  // lands and closes it again, self-correcting.
-  updated() {
-    if (
-      this.__wasOpen &&
-      this.el.dataset.open === "true" &&
-      !this.el.open &&
-      typeof this.el.showModal === "function"
-    ) {
-      this.el.showModal()
-    }
-  }
-}
-
 // Copy text from a target element to the clipboard.
 // Usage: <button phx-hook="CopyToClipboard" data-target="element-id">Copiar</button>
 const CopyToClipboard = {
@@ -226,7 +123,7 @@ document.addEventListener(
 const liveSocket = new LiveSocket("/live", Socket, {
   longPollFallbackMs: 2500,
   params: {_csrf_token: csrfToken},
-  hooks: {...colocatedHooks, SortableProviders, Modal, CopyToClipboard},
+  hooks: {...colocatedHooks, SortableProviders, CopyToClipboard},
 })
 
 // Show progress bar on live navigation and form submits
