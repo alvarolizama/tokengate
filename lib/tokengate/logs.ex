@@ -3,10 +3,9 @@ defmodule Tokengate.Logs do
   The Logs context: append-only request log entries.
 
   In normal operation this context only **inserts** and **queries** request
-  logs — never updates or deletes. The deliberate exceptions are the admin
-  utilities `truncate_request_logs/0` (destructive maintenance TRUNCATE) and
-  `Tokengate.Logs.CostBackfill` (recomputes `provider_cost_usd` from manual
-  pricing). The `request_logs` table is a native Postgres RANGE-partitioned
+  logs — never updates or deletes. The single deliberate exception is the
+  admin utility `truncate_request_logs/0` (destructive maintenance TRUNCATE).
+  The `request_logs` table is a native Postgres RANGE-partitioned
   table on `inserted_at` (daily granularity).
 
   ## Privacy

@@ -4,9 +4,9 @@ defmodule Tokengate.Logs.RequestLog do
 
   This table is a native Postgres RANGE-partitioned table on `inserted_at`
   (daily granularity). It is **append-only** in normal operation: the
-  context only inserts and queries — the deliberate exceptions are the
-  manual-pricing backfill in `Tokengate.Logs.CostBackfill` (rewrites
-  `provider_cost_usd`) and `Tokengate.Logs.truncate_request_logs/0`.
+  context only inserts and queries — the single deliberate exception is
+  `Tokengate.Logs.truncate_request_logs/0` (destructive maintenance
+  TRUNCATE).
 
   ## Cost
 
@@ -14,8 +14,7 @@ defmodule Tokengate.Logs.RequestLog do
   reported it charged for the request (typically `usage.cost` from
   OpenAI-compatible gateways). When the upstream doesn't report a cost and
   no manual pricing is configured, the value is `0` — honest fallback, no
-  phantom costs derived from stale manual pricing tables. The billing
-  surface of the provider does not change this.
+  phantom costs derived from stale manual pricing tables.
 
   ## Privacy
 

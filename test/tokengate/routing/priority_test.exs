@@ -162,11 +162,11 @@ defmodule Tokengate.Routing.PriorityTest do
       assert ttl_ms == 60_000
     end
 
-    test "nil sticky_ttl_ms falls back to the single config default (3 min) on any billing surface" do
-      # Billing surface no longer changes the default: both a subscription and
-      # a pay_per_token credential keep the same affinity window.
-      sub = ap_with_cred("sub", priority: 1, billing_type: "subscription")
-      pay = ap_with_cred("pay", priority: 1, billing_type: "pay_per_token")
+    test "nil sticky_ttl_ms falls back to the single config default (3 min)" do
+      # The default does not depend on the provider: both candidates below
+      # keep the same affinity window.
+      sub = ap_with_cred("sub", priority: 1)
+      pay = ap_with_cred("pay", priority: 1)
 
       opts_sub = %{api_key_hash: "key-sub-ttl", model_id: "model-1"}
       opts_pay = %{api_key_hash: "key-pay-ttl", model_id: "model-1"}
@@ -249,15 +249,13 @@ defmodule Tokengate.Routing.PriorityTest do
     end
   end
 
-  describe "health levels + priority (billing surface does not rank)" do
-    # Candidates here carry a loaded credential + provider billing so a
-    # billing-based sort WOULD engage if it existed. `mark_slow` degrades a
-    # credential's soft health. The tests below pin that billing no longer
-    # influences the order — only health and priority do.
+  describe "health levels + priority" do
+    # Candidates here carry a loaded credential. `mark_slow` degrades a
+    # credential's soft health. The tests below pin that only health and
+    # priority influence the order.
 
     defp ap_with_cred(id, opts) do
       cred_id = Keyword.get(opts, :credential_id, "cred-#{id}")
-      billing_type = Keyword.get(opts, :billing_type, "pay_per_token")
 
       %ModelProvider{
         id: id,
@@ -268,7 +266,7 @@ defmodule Tokengate.Routing.PriorityTest do
         sticky_ttl_ms: nil,
         credential: %Tokengate.Providers.Credential{
           id: cred_id,
-          provider: %Tokengate.Providers.Provider{id: "prov-#{id}", billing_type: billing_type}
+          provider: %Tokengate.Providers.Provider{id: "prov-#{id}"}
         }
       }
     end
@@ -281,31 +279,31 @@ defmodule Tokengate.Routing.PriorityTest do
       :ok
     end
 
-    test "priority alone decides — a subscription does NOT outrank a pay_per_token" do
+    test "priority alone decides — the lower priority number wins" do
       candidates = [
-        ap_with_cred("pay", priority: 1, billing_type: "pay_per_token"),
-        ap_with_cred("sub", priority: 9, billing_type: "subscription")
+        ap_with_cred("pay", priority: 1),
+        ap_with_cred("sub", priority: 9)
       ]
 
       assert {:ok, selected} = Priority.select(candidates, %{})
       assert selected.id == "pay"
     end
 
-    test "a subscription still wins when it has the better priority" do
+    test "the candidate with the better priority wins" do
       candidates = [
-        ap_with_cred("pay", priority: 9, billing_type: "pay_per_token"),
-        ap_with_cred("sub", priority: 1, billing_type: "subscription")
+        ap_with_cred("pay", priority: 9),
+        ap_with_cred("sub", priority: 1)
       ]
 
       assert {:ok, selected} = Priority.select(candidates, %{})
       assert selected.id == "sub"
     end
 
-    test "degraded credential sinks below healthy regardless of billing surface" do
+    test "degraded credential sinks below healthy" do
       sub =
-        ap_with_cred("sub", priority: 1, billing_type: "subscription", credential_id: "cred-sub")
+        ap_with_cred("sub", priority: 1, credential_id: "cred-sub")
 
-      pay = ap_with_cred("pay", priority: 5, billing_type: "pay_per_token")
+      pay = ap_with_cred("pay", priority: 5)
 
       # Priority says sub first, but slowing it down hands the slot to pay.
       :ok = Tokengate.Routing.CredentialHealth.mark_slow("cred-sub")
@@ -315,12 +313,12 @@ defmodule Tokengate.Routing.PriorityTest do
       assert selected.id == "pay"
     end
 
-    test "degraded pay_per_token sinks below a healthy subscription" do
+    test "a degraded high-priority candidate sinks below a healthy low-priority one" do
       sub =
-        ap_with_cred("sub", priority: 9, billing_type: "subscription", credential_id: "cred-s2")
+        ap_with_cred("sub", priority: 9, credential_id: "cred-s2")
 
       pay =
-        ap_with_cred("pay", priority: 1, billing_type: "pay_per_token", credential_id: "cred-p2")
+        ap_with_cred("pay", priority: 1, credential_id: "cred-p2")
 
       :ok = Tokengate.Routing.CredentialHealth.mark_slow("cred-p2")
       _ = :sys.get_state(GenServer.whereis(Tokengate.Routing.CredentialHealth))
@@ -331,8 +329,8 @@ defmodule Tokengate.Routing.PriorityTest do
 
     test "priority decides within the same health level" do
       candidates = [
-        ap_with_cred("sub-b", priority: 5, billing_type: "subscription"),
-        ap_with_cred("sub-a", priority: 1, billing_type: "subscription")
+        ap_with_cred("sub-b", priority: 5),
+        ap_with_cred("sub-a", priority: 1)
       ]
 
       assert {:ok, selected} = Priority.select(candidates, %{})
@@ -341,9 +339,9 @@ defmodule Tokengate.Routing.PriorityTest do
 
     test "degraded stuck provider releases the stick and re-sticks to a healthy one" do
       sub =
-        ap_with_cred("sub", priority: 1, billing_type: "subscription", credential_id: "cred-sub2")
+        ap_with_cred("sub", priority: 1, credential_id: "cred-sub2")
 
-      pay = ap_with_cred("pay", priority: 5, billing_type: "pay_per_token")
+      pay = ap_with_cred("pay", priority: 5)
       candidates = [sub, pay]
       opts = %{api_key_hash: "key-tier", model_id: "model-1"}
 
@@ -372,7 +370,7 @@ defmodule Tokengate.Routing.PriorityTest do
         model_id: "model-1"
       }
 
-      pay = ap_with_cred("pay", priority: 5, billing_type: "pay_per_token")
+      pay = ap_with_cred("pay", priority: 5)
 
       assert {:ok, selected} = Priority.select([pay, no_cred], %{})
       assert selected.id == "bare"

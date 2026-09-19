@@ -141,8 +141,7 @@ defmodule Tokengate.Routing.RouterTest do
     attrs =
       Enum.into(attrs, %{
         name: "Provider-#{unique}",
-        base_url: "https://api.example.com",
-        billing_type: "pay_per_token"
+        base_url: "https://api.example.com"
       })
 
     {:ok, provider} = Providers.create_provider(attrs)
@@ -225,6 +224,32 @@ defmodule Tokengate.Routing.RouterTest do
   # ---------------------------------------------------------------------------
   # route/3 happy path
   # ---------------------------------------------------------------------------
+
+  describe "route/3 capability sets" do
+    test "chat capability [llm, decision] accepts a decision model" do
+      setup = full_setup(model_name: "jev-#{System.unique_integer([:positive])}")
+
+      setup.model
+      |> Ecto.Changeset.change(model_type: "decision")
+      |> Repo.update!()
+
+      assert {:ok, route} =
+               Router.route(setup.model.name, setup.member, %{capability: ["llm", "decision"]})
+
+      assert route.model.name == setup.model.name
+    end
+
+    test "embedding capability still rejects a decision model" do
+      setup = full_setup(model_name: "jev-#{System.unique_integer([:positive])}")
+
+      setup.model
+      |> Ecto.Changeset.change(model_type: "decision")
+      |> Repo.update!()
+
+      assert {:error, :model_type_mismatch} =
+               Router.route(setup.model.name, setup.member, %{capability: "embedding"})
+    end
+  end
 
   describe "route/3 happy path" do
     test "resolves model, picks priority provider, attaches credential" do
@@ -449,11 +474,8 @@ defmodule Tokengate.Routing.RouterTest do
       assert CircuitBreakerManager.allow?(cred_id) == false
     end
 
-    test "rate_limited failures on a pay_per_token provider still trip the breaker" do
+    test "rate_limited failures trip the breaker" do
       f = full_setup()
-
-      # Fresh fixture provider defaults to pay_per_token billing.
-      assert f.provider.billing_type == "pay_per_token"
 
       assert {:ok, route} = Router.route(f.model.name, f.member)
       cred_id = route.credential.id
@@ -468,11 +490,8 @@ defmodule Tokengate.Routing.RouterTest do
       assert CircuitBreakerManager.allow?(cred_id) == false
     end
 
-    test "rate_limited failures trip the breaker on every billing surface" do
+    test "a 429 storm trips the breaker from a healthy credential" do
       f = full_setup()
-
-      # A subscription provider is no longer special: a 429 feeds the breaker.
-      {:ok, _p} = Providers.update_provider(f.provider, %{billing_type: "subscription"})
 
       assert {:ok, route} = Router.route(f.model.name, f.member)
       cred_id = route.credential.id
@@ -488,10 +507,8 @@ defmodule Tokengate.Routing.RouterTest do
       assert CircuitBreakerManager.allow?(cred_id) == false
     end
 
-    test "server_error trips the breaker regardless of billing surface" do
+    test "server_error trips the breaker" do
       f = full_setup()
-
-      {:ok, _p} = Providers.update_provider(f.provider, %{billing_type: "subscription"})
 
       assert {:ok, route} = Router.route(f.model.name, f.member)
       cred_id = route.credential.id
@@ -502,7 +519,7 @@ defmodule Tokengate.Routing.RouterTest do
         assert :ok = Router.record_outcome(route, {:failure, :server_error})
       end
 
-      # A dead credential is a dead credential — on any surface.
+      # A dead credential is a dead credential.
       assert CircuitBreakerManager.status(cred_id) == :open
       assert CircuitBreakerManager.allow?(cred_id) == false
     end

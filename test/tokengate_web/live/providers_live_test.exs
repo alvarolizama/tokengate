@@ -155,7 +155,6 @@ defmodule TokengateWeb.ProvidersLiveTest do
         base_url: "https://catalog-#{u}.example.com/v1",
         source: "builtin",
         dialect: "openai",
-        billing_type: "pay_per_token",
         capabilities: ["llm"],
         status: "active"
       )
@@ -497,7 +496,6 @@ defmodule TokengateWeb.ProvidersLiveTest do
         base_url: "https://catalog-#{unique()}.example.com/v1",
         source: "builtin",
         dialect: "openai",
-        billing_type: "pay_per_token",
         capabilities: ["llm"],
         status: "active"
       )
@@ -704,7 +702,6 @@ defmodule TokengateWeb.ProvidersLiveTest do
         base_url: "https://catalog-#{unique()}.example.com/v1",
         source: "builtin",
         dialect: "openai",
-        billing_type: "pay_per_token",
         capabilities: ["llm"],
         status: "active"
       )

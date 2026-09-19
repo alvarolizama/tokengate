@@ -10,8 +10,6 @@ defmodule Tokengate.Providers do
   Per-provider pricing rows (`model_pricing`) and per-model market prices
   have been removed. `provider_cost_usd` is whatever the upstream reports
   in its response body (`usage.cost` for OpenAI-compatible gateways).
-  `providers.billing_type` is an organizational label for the admin UI
-  only; it does not affect routing, cost or budget.
 
   All `belongs_to` references to `Tokengate.Accounts.*` modules resolve at
   runtime — the Accounts context may not be compiled when this module is.
@@ -42,6 +40,55 @@ defmodule Tokengate.Providers do
   # ---------------------------------------------------------------------------
 
   def list_providers, do: Repo.all(Provider)
+
+  @doc """
+  Capacidades EFECTIVAS de un proveedor: lo que realmente puede servir.
+
+    * **builtin** — las declaradas en código (`Catalog.capabilities/1`), que es
+      lo que `CatalogSync` copia a la fila. Un builtin sin entrada se trata como
+      chat, igual que en el catálogo.
+    * **custom** — las de su propia fila (`providers.capabilities`), que el
+      operador elige al crearlo.
+
+  Nunca devuelve `[]`: sin dato, el proveedor es chat. Eso mantiene un único
+  significado para "no declara nada" en todo el sistema.
+  """
+  @spec effective_capabilities(Provider.t() | map()) :: [String.t()]
+  def effective_capabilities(%Provider{source: "builtin", key: key}) when is_binary(key) do
+    case Tokengate.Providers.Catalog.capabilities(key) do
+      [] -> ["llm"]
+      caps -> caps
+    end
+  end
+
+  def effective_capabilities(%Provider{capabilities: caps}) when is_list(caps) and caps != [] do
+    caps
+  end
+
+  def effective_capabilities(_provider), do: ["llm"]
+
+  @doc "True cuando el proveedor declara la capability `type`."
+  @spec declares?(Provider.t() | map(), String.t()) :: boolean()
+  def declares?(provider, type), do: type in effective_capabilities(provider)
+
+  @doc """
+  Los proveedores activos que declaran `type`.
+
+  Es el paso "proveedor" del modal de modelo: elegido el TIPO, sólo tiene
+  sentido ofrecer quien puede servir ese servicio — un `fireworks-ai` no sirve
+  `image`, y ofrecerlo produce un callejón sin salida. Las credenciales viajan
+  preloadeadas porque la fila del selector muestra cuántas keys tiene.
+  """
+  @spec providers_declaring(String.t()) :: [Provider.t()]
+  def providers_declaring(type) when is_binary(type) do
+    from(p in Provider,
+      where: p.status == "active",
+      order_by: [asc: p.name],
+      preload: [:credentials]
+    )
+    |> Repo.all()
+    |> Enum.filter(&declares?(&1, type))
+  end
 
   @doc """
   Purga del catálogo **sin uso**: borra modelos sin despliegues
@@ -215,14 +262,16 @@ defmodule Tokengate.Providers do
   the offers table, not on the model row.
   """
   def catalog_picker_models do
-    counts =
+    offers_by_model =
       from(o in CatalogModelOffer,
         where: o.status == "active",
-        group_by: o.model_key,
-        select: {o.model_key, count(o.id)}
+        order_by: o.provider_key,
+        select: {o.model_key, o.provider_key}
       )
       |> Repo.all()
-      |> Map.new()
+      |> Enum.group_by(fn {model_key, _} -> model_key end, fn {_, provider_key} ->
+        provider_key
+      end)
 
     from(m in CatalogModel,
       where: m.status == "active",
@@ -242,7 +291,42 @@ defmodule Tokengate.Providers do
       }
     )
     |> Repo.all()
-    |> Enum.map(&Map.put(&1, :provider_count, Map.get(counts, &1.key, 0)))
+    |> Enum.map(fn entry ->
+      providers = Map.get(offers_by_model, entry.key, [])
+      entry |> Map.put(:provider_count, length(providers)) |> Map.put(:provider_keys, providers)
+    end)
+  end
+
+  @doc """
+  The providers serving catalog models, for the picker's provider filter:
+  `[%{key, name}]` sorted by name. Only providers with at least one active
+  offer — a provider nobody can route to is noise in the dropdown.
+
+  `catalog_picker_providers/1` narrows further to the providers that DECLARE a
+  capability: given the type the operator picked, a provider that cannot serve
+  it has no business in the dropdown. The rule for "declares" lives in
+  `Catalog.declares?/2` (no entry = chat).
+  """
+  @spec catalog_picker_providers(String.t() | nil) :: [%{key: String.t(), name: String.t()}]
+  def catalog_picker_providers(type \\ nil)
+
+  def catalog_picker_providers(nil), do: fetch_catalog_picker_providers()
+
+  def catalog_picker_providers(type) when is_binary(type) do
+    fetch_catalog_picker_providers()
+    |> Enum.filter(&Tokengate.Providers.Catalog.declares?(&1.key, type))
+  end
+
+  defp fetch_catalog_picker_providers do
+    from(o in CatalogModelOffer,
+      join: p in CatalogProvider,
+      on: p.key == o.provider_key,
+      where: o.status == "active" and p.status == "active",
+      distinct: true,
+      order_by: p.name,
+      select: %{key: p.key, name: p.name}
+    )
+    |> Repo.all()
   end
 
   @doc "Number of model mirror rows in the given status (\"active\" | \"stale\")."
