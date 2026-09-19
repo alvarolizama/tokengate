@@ -558,6 +558,254 @@ defmodule TokengateWeb.CoreComponents do
     """
   end
 
+  ## ── Navegación y superficies compartidas ─────────────────────────────────
+  #
+  # Primitivas que comparten el shell (sidebar, rail y menú de usuario) con las
+  # páginas. Viven acá —no en Layouts— para que cualquier LiveView las tenga por
+  # el `use TokengateWeb, :html`, sin imports (Commons C4).
+
+  @doc """
+  Enlace de navegación para sidebars y rails: icono + label + badge opcional.
+
+  Estados: activo = `bg-primary/15 text-primary font-medium` + `aria-current`;
+  libre = `btn-ghost`. **No** se usa `btn-primary btn-soft` para el activo:
+  mezcla sólo 8% del color con `base-100` y el pill se lee gris (Commons C12.3).
+
+  El `title` lleva el label: es el tooltip del rail colapsado. El `id` se deriva
+  del path (`sidebar-link-catalog-models`) salvo que se pase uno explícito — es
+  la convención de tests de TokenGate.
+
+  ## Ejemplo
+
+      <.nav_link label={gettext("Models")} icon="hero-rectangle-stack" path={~p"/catalog/models"} active={@active} />
+  """
+  attr :label, :string, required: true
+  attr :icon, :string, required: true, doc: ~s(hero icon name, e.g. "hero-home")
+  attr :path, :any, required: true, doc: "href of the destination"
+  attr :active, :boolean, default: false, doc: "marks the current page (aria-current)"
+  attr :badge, :any, default: nil, doc: "optional count; renders only when > 0"
+  attr :badge_kind, :string, default: nil, doc: ~s(semantic badge class, e.g. "badge-error")
+  attr :id, :string, default: nil, doc: "DOM id; derived from the path when omitted"
+
+  def nav_link(assigns) do
+    assigns = assign(assigns, :dom_id, assigns[:id] || "sidebar-link-" <> path_id(assigns.path))
+
+    ~H"""
+    <a
+      href={@path}
+      id={@dom_id}
+      title={@label}
+      aria-current={@active && "page"}
+      class={[
+        "nav-link btn btn-sm w-full justify-between gap-2 font-normal transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
+        @active && "bg-primary/15 text-primary font-medium hover:bg-primary/20",
+        !@active && "btn-ghost text-base-content/80 hover:text-base-content"
+      ]}
+    >
+      <span class="flex items-center gap-2 min-w-0">
+        <.icon name={@icon} class="size-4 shrink-0" />
+        <span class="truncate shell-hide">{@label}</span>
+      </span>
+      <span
+        :if={@badge && @badge > 0}
+        class={[
+          "badge badge-sm shell-hide",
+          @badge_kind || if(@active, do: "badge-primary", else: "badge-ghost")
+        ]}
+      >
+        {@badge}
+      </span>
+    </a>
+    """
+  end
+
+  @doc """
+  Rótulo de grupo de navegación + sus enlaces.
+
+  ## Ejemplo
+
+      <.nav_group label={gettext("Catalog")} id="sidebar-section-catalogo">
+        <.nav_link label={gettext("Labs")} icon="hero-beaker" path={~p"/catalog/labs"} />
+      </.nav_group>
+  """
+  attr :label, :string, required: true
+  attr :id, :string, default: nil
+  slot :inner_block, required: true
+
+  def nav_group(assigns) do
+    ~H"""
+    <div class="flex flex-col gap-1" id={@id}>
+      <div class="shell-hide px-3 pt-1 pb-1 text-xs font-semibold uppercase tracking-wider text-base-content/70">
+        {@label}
+      </div>
+      {render_slot(@inner_block)}
+    </div>
+    """
+  end
+
+  @doc """
+  Entrada de un menú (menú de usuario del shell). Con `href` es un enlace;
+  sin él, un botón que dispara `on_click`.
+
+  El activo se marca con `aria-current="page"` + `text-primary`.
+
+  ## Ejemplo
+
+      <.menu_item href={~p"/"} icon="hero-squares-2x2" label={gettext("Workspaces")} />
+  """
+  attr :label, :string, required: true
+  attr :icon, :string, default: nil, doc: "hero icon name"
+  attr :href, :string, default: nil
+  attr :on_click, :any, default: nil, doc: "phx-click del item cuando no hay href"
+  attr :active, :boolean, default: false
+
+  def menu_item(assigns) do
+    ~H"""
+    <a
+      :if={@href}
+      href={@href}
+      aria-current={@active && "page"}
+      class={[
+        "flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-base-200 transition-colors",
+        @active && "text-primary"
+      ]}
+    >
+      <.icon :if={@icon} name={@icon} class="size-4 opacity-70" />
+      {@label}
+    </a>
+    <button
+      :if={!@href}
+      type="button"
+      phx-click={@on_click}
+      aria-current={@active && "page"}
+      class={[
+        "flex items-center gap-2 px-3 py-1.5 text-sm w-full text-left hover:bg-base-200 transition-colors",
+        @active && "text-primary"
+      ]}
+    >
+      <.icon :if={@icon} name={@icon} class="size-4 opacity-70" />
+      {@label}
+    </button>
+    """
+  end
+
+  @doc """
+  Sección: la caja canónica de TokenGate (Commons C5) con header de badge +
+  título + caption opcional. Es la forma de agrupar contenido en una página.
+
+  ## Ejemplo
+
+      <.section title={gettext("Providers")} icon="hero-server-stack" caption={…}>
+        <table class="table table-sm">…</table>
+      </.section>
+  """
+  attr :title, :string, required: true
+  attr :icon, :string, required: true, doc: "hero icon name del badge del header"
+  attr :caption, :string, default: nil
+  attr :id, :string, default: nil
+  slot :inner_block, required: true
+
+  def section(assigns) do
+    ~H"""
+    <section class="card bg-base-100 border border-base-300 shadow-sm overflow-hidden" id={@id}>
+      <header class="flex items-start gap-3 px-4 py-3 border-b border-base-300">
+        <div class="shrink-0 size-8 rounded-lg flex items-center justify-center bg-primary/10">
+          <.icon name={@icon} class="size-4 text-primary" />
+        </div>
+        <div class="min-w-0 flex-1">
+          <h2 class="card-title text-base">{@title}</h2>
+          <p :if={@caption} class="text-xs text-base-content/50 mt-0.5">{@caption}</p>
+        </div>
+      </header>
+      <div class="p-4">
+        {render_slot(@inner_block)}
+      </div>
+    </section>
+    """
+  end
+
+  @doc """
+  Modal compacto (Commons C7.1): overlay + card, cierre por ✕, Escape y
+  click-away. El caller lo gatea con `:if` (no hay estado interno).
+
+  El cuerpo (form + footer de cancelar/guardar) va en el slot por defecto.
+
+  ## Ejemplo
+
+      <.modal :if={@form} id="thing-modal" title={gettext("New thing")} on_close="cancel_form">
+        <.form for={@form} id="thing-form" phx-submit="save">…</.form>
+      </.modal>
+  """
+  attr :id, :string, required: true
+  attr :title, :string, required: true
+  attr :on_close, :string, required: true, doc: "evento LiveView del ✕, Escape y click-away"
+  attr :max_w, :string, default: "max-w-lg", doc: "ancho máximo del card (max-w-md|lg|2xl…)"
+  slot :inner_block, required: true
+
+  def modal(assigns) do
+    ~H"""
+    <div
+      id={@id}
+      class="fixed inset-0 z-50 flex items-center justify-center p-4"
+      phx-window-keydown={@on_close}
+      phx-key="Escape"
+    >
+      <div class="absolute inset-0 bg-black/50" phx-click={@on_close} />
+      <div class={["relative card bg-base-100 border border-base-300 shadow-xl w-full", @max_w]}>
+        <div class="card-body p-6">
+          <div class="flex items-center justify-between gap-4 mb-2">
+            <h2 class="text-lg font-semibold">{@title}</h2>
+            <button
+              type="button"
+              phx-click={@on_close}
+              class="btn btn-ghost btn-xs btn-circle shrink-0"
+              aria-label={gettext("Close")}
+            >
+              <.icon name="hero-x-mark" class="size-4" />
+            </button>
+          </div>
+          {render_slot(@inner_block)}
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  @doc """
+  Estado vacío canónico (Commons C6/C10): icono + título + caption centrados y
+  un slot para el CTA. Va **fuera** de la tabla/colección, nunca dentro.
+
+  ## Ejemplo
+
+      <.empty_state id="labs-empty" icon="hero-beaker" title={gettext("No labs yet")} caption={…} />
+  """
+  attr :icon, :string, required: true
+  attr :title, :string, required: true
+  attr :caption, :string, default: nil
+  attr :id, :string, default: nil
+  attr :class, :string, default: nil, doc: "classes extra del contenedor"
+  slot :inner_block, doc: "CTA / acción opcional bajo el caption"
+
+  def empty_state(assigns) do
+    ~H"""
+    <div class={["flex flex-col items-center justify-center text-center py-12", @class]} id={@id}>
+      <.icon name={@icon} class="size-10 mb-2 opacity-40 text-base-content/40" />
+      <p class="text-sm font-medium text-base-content/60">{@title}</p>
+      <p :if={@caption} class="text-xs text-base-content/40 mt-1 max-w-sm">{@caption}</p>
+      <div :if={@inner_block != []} class="mt-4">{render_slot(@inner_block)}</div>
+    </div>
+    """
+  end
+
+  # El id de un enlace de navegación sale del path: `/catalog/models` →
+  # `catalog-models`. Es la convención de ids del sidebar (los tests la leen).
+  defp path_id(path) do
+    path
+    |> to_string()
+    |> String.trim_leading("/")
+    |> String.replace("/", "-")
+  end
+
   ## JS Commands
 
   def show(js \\ %JS{}, selector) do
