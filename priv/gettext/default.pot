@@ -21,8 +21,8 @@ msgstr ""
 msgid "Actions"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:684
-#: lib/tokengate_web/components/layouts.ex:699
+#: lib/tokengate_web/components/layouts.ex:688
+#: lib/tokengate_web/components/layouts.ex:703
 #, elixir-autogen, elixir-format
 msgid "Attempting to reconnect"
 msgstr ""
@@ -61,12 +61,12 @@ msgstr ""
 msgid "No monthly budget"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:691
+#: lib/tokengate_web/components/layouts.ex:695
 #, elixir-autogen, elixir-format
 msgid "Something went wrong!"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:676
+#: lib/tokengate_web/components/layouts.ex:680
 #, elixir-autogen, elixir-format
 msgid "We can't find the internet"
 msgstr ""
@@ -146,7 +146,7 @@ msgstr ""
 msgid "Labs"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:608
+#: lib/tokengate_web/components/layouts.ex:612
 #, elixir-autogen, elixir-format
 msgid "Language"
 msgstr ""
@@ -205,7 +205,7 @@ msgstr ""
 msgid "Services"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:525
+#: lib/tokengate_web/components/layouts.ex:529
 #, elixir-autogen, elixir-format
 msgid "Sign out?"
 msgstr ""
@@ -224,7 +224,7 @@ msgstr ""
 msgid "Supervised services"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:562
+#: lib/tokengate_web/components/layouts.ex:566
 #, elixir-autogen, elixir-format
 msgid "Timezone"
 msgstr ""
@@ -866,7 +866,7 @@ msgstr ""
 msgid "A user can have several active keys, each with its own label."
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:510
+#: lib/tokengate_web/components/layouts.ex:514
 #: lib/tokengate_web/live/users_live.ex:1361
 #, elixir-autogen, elixir-format
 msgid "API keys"
@@ -5332,7 +5332,7 @@ msgstr ""
 msgid "API keys of %{name}"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:497
+#: lib/tokengate_web/components/layouts.ex:501
 #, elixir-autogen, elixir-format
 msgid "Account menu"
 msgstr ""
@@ -5352,7 +5352,7 @@ msgstr ""
 msgid "Limit profiles of %{name}"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:529
+#: lib/tokengate_web/components/layouts.ex:533
 #, elixir-autogen, elixir-format
 msgid "Log out"
 msgstr ""
@@ -5362,7 +5362,7 @@ msgstr ""
 msgid "Menu"
 msgstr ""
 
-#: lib/tokengate_web/components/layouts.ex:503
+#: lib/tokengate_web/components/layouts.ex:507
 #, elixir-autogen, elixir-format
 msgid "Profile"
 msgstr ""
