@@ -550,6 +550,33 @@ defmodule TokengateWeb.ModelsLiveTest do
     refute html =~ model_record.name
   end
 
+  test "key rows show Priority and pin badges from extra_body", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_provider()
+    model_record = create_model()
+
+    # One row with the premium serving path, one with an aggregator pin.
+    create_model_provider(model_record, provider, %{
+      extra_body: %{"service_tier" => "priority"}
+    })
+
+    create_model_provider(model_record, provider, %{
+      extra_body: %{"provider" => "zai"}
+    })
+
+    conn = login(conn, admin, password)
+
+    {:ok, _view, html} = live(conn, ~p"/catalog/models")
+
+    # The provider table lives inside the model's collapsible card, but the
+    # rows are in the rendered DOM regardless (the collapse is client-side).
+    # The UI locale is es, so badge labels render translated — assert on
+    # non-translatable markers: the raw pin value and the badge icons.
+    assert html =~ "hero-map-pin"
+    assert html =~ "zai"
+    assert html =~ "hero-bolt"
+  end
+
   test "admin cannot delete an model with providers assigned", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()

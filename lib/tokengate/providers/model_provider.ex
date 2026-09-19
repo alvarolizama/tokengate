@@ -96,7 +96,11 @@ defmodule Tokengate.Providers.ModelProvider do
     field :extra_body_json, :string, virtual: true
     # Fireworks' serving-path opt-in checkbox; mirrors extra_body["service_tier"].
     # Only rendered for fireworks-backed model_providers in the admin form.
-    field :service_tier_priority, :boolean, virtual: true, default: false
+    # Defaults to CHECKED: priority is the recommended serving path (higher
+    # reliability; the premium is per-model and usually small vs. a failed
+    # request). The stored value is extra_body — this default only shapes the
+    # unchecked form, and an explicit param always wins.
+    field :service_tier_priority, :boolean, virtual: true, default: true
     # Aggregator (Surplus) provider pin; mirrors extra_body["provider"]. Only
     # rendered for aggregator-backed model_providers — a direct provider IS
     # the upstream, so pinning has no meaning there.

@@ -2660,6 +2660,25 @@ defmodule TokengateWeb.ModelsLive do
   def enabled_badge(true), do: "badge-success"
   def enabled_badge(_), do: "badge-ghost"
 
+  @doc """
+  True when the model_provider row sends Fireworks' premium serving path
+  (`extra_body["service_tier"] == "priority"`) — powers the Priority badge.
+  """
+  def service_tier_priority?(%ModelProvider{extra_body: %{"service_tier" => "priority"}}),
+    do: true
+
+  def service_tier_priority?(_), do: false
+
+  @doc """
+  The aggregator provider pin of the row (`extra_body["provider"]`), or nil —
+  powers the pin badge on the model's key table.
+  """
+  def pinned_provider(%ModelProvider{extra_body: %{"provider" => pin}})
+      when is_binary(pin) and pin != "",
+      do: pin
+
+  def pinned_provider(_), do: nil
+
   def enabled_label(true), do: gettext("Active")
   def enabled_label(false), do: "Inactivo"
 
@@ -2930,6 +2949,30 @@ defmodule TokengateWeb.ModelsLive do
                                 class="text-xs text-base-content/40 ml-1"
                               >
                                 {mask_key(ap.credential.api_key_encrypted)}
+                              </span>
+
+                              <span
+                                :if={service_tier_priority?(ap)}
+                                class="badge badge-xs badge-outline font-normal ml-1 badge-warning"
+                                title={
+                                  gettext("Sends service_tier: priority — premium serving path.")
+                                }
+                              >
+                                <.icon name="hero-bolt" class="w-3 h-3" />
+                                {gettext("Priority")}
+                              </span>
+
+                              <span
+                                :if={pinned_provider(ap)}
+                                class="badge badge-xs badge-outline font-normal ml-1 badge-info"
+                                title={
+                                  gettext(
+                                    "Aggregator pin: every request of this key routes to this upstream."
+                                  )
+                                }
+                              >
+                                <.icon name="hero-map-pin" class="w-3 h-3" />
+                                {pinned_provider(ap)}
                               </span>
                             </td>
                             <td><code class="text-sm">{ap.provider_model}</code></td>
@@ -4430,7 +4473,7 @@ defmodule TokengateWeb.ModelsLive do
                   </div>
                 </div>
 
-                <div class="md:col-span-2 flex gap-2 pt-4 mt-5 border-t border-base-200 justify-end">
+                <div class="md:col-span-2 flex gap-2 pt-6 mt-8 border-t border-base-200 justify-end">
                   <button type="button" phx-click="cancel_model_provider" class="btn btn-ghost btn-sm">
                     {gettext("Cancel")}
                   </button>
