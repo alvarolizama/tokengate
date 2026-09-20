@@ -195,4 +195,19 @@ defmodule TokengateWeb.SidebarTest do
     refute has_element?(view, "#sidebar-section-operaciones")
     refute has_element?(view, "#sidebar-section-budget")
   end
+
+  # El shell scrollea por dentro, no la página. La fila del grid del drawer
+  # (`lg:grid-rows-1`) la acota a la altura del shell para que el `h-full` de la
+  # barra de contenido y el `flex-1 overflow-y-auto` del `main` tengan techo.
+  # Sin esa clase la fila crecía con el contenido: con tablas largas scrolleaba
+  # el documento entero y la sidebar (100vh) se iba con el scroll, dejando su
+  # pie flotando a media página sobre una columna vacía.
+  test "el shell acota la fila del drawer desde lg y el scroll vive en el main", %{conn: conn} do
+    {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/providers")
+
+    assert has_element?(view, ~s(.drawer[class~="lg:grid-rows-1"]))
+    assert has_element?(view, ".drawer-content.h-full")
+    assert has_element?(view, "main.overflow-y-auto")
+    assert has_element?(view, ".shell-sidebar.h-full")
+  end
 end

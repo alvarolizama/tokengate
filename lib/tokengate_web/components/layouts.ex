@@ -120,7 +120,15 @@ defmodule TokengateWeb.Layouts do
            —fuera del drawer— para que las reglas funcionen por hermandad. --%>
       <input id="sidebar-collapse" type="checkbox" class="hidden" phx-hook=".SidebarRail" />
 
-      <div class="drawer lg:drawer-open h-full">
+      <%!-- `lg:grid-rows-1` declara la fila del grid del drawer acotada a la altura
+           del shell (`h-full` → 100vh). Sin ella la fila es implícita y `auto`, así
+           que crecía con el contenido: el `h-full` del `drawer-content` se resolvía
+           contra una fila indefinida y el `flex-1 overflow-y-auto` del `main` no
+           acotaba nada — con contenido largo scrolleaba el DOCUMENTO y la sidebar
+           (100vh) se iba con el scroll, dejando su pie flotando a media página.
+           Solo desde `lg`: en móvil el drawer es un overlay `position: fixed` y el
+           scroll de página es el comportamiento deseado. --%>
+      <div class="drawer lg:drawer-open h-full lg:grid-rows-1">
         <%!-- Móvil: el drawer-toggle abre/cierra la gaveta con overlay --%>
         <input id="app-drawer" type="checkbox" class="drawer-toggle" />
 
