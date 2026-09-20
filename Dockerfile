@@ -26,15 +26,11 @@ RUN mix local.hex --force && mix local.rebar --force
 
 ENV MIX_ENV=prod
 
-# force_ssl is compile-time (see config/prod.exs): what counts is this build
-# ARG. **Tokengate ships "1" on purpose** — its documented deploy is plain
-# HTTP behind a VPN, with no TLS terminator — which the standard allows as a
-# per-app decision, never as an inherited default: the family skeleton ships
-# HTTPS on (SPEC-docker.md §Hard rules, rule 6). For the TLS variant build
-# with --build-arg DISABLE_FORCE_SSL="" and set PHX_SCHEME=https at runtime.
-# Declared as ENV too so the deploy platform *shows* the choice; it does NOT
-# toggle Plug.SSL at runtime — that is decided here, at build time.
-ARG DISABLE_FORCE_SSL="1"
+# force_ssl is compile-time (config/prod.exs). The image ships with HTTPS on,
+# like the rest of the family. To deploy over plain HTTP (VPN/LAN with no TLS
+# terminator), build with --build-arg DISABLE_FORCE_SSL=1 and set PHX_SCHEME=http
+# at runtime.
+ARG DISABLE_FORCE_SSL=""
 ENV DISABLE_FORCE_SSL=${DISABLE_FORCE_SSL}
 
 # --- Dependencies (cached until mix.exs/mix.lock change) -------------------
@@ -101,11 +97,10 @@ USER app
 
 ENV HOME=/app MIX_ENV=prod PHX_SERVER=true PORT=4000
 
-# Propagate DISABLE_FORCE_SSL to runtime. NOTE: force_ssl is compile-time,
-# so this runtime value does NOT toggle Plug.SSL — it documents the build
-# choice for operators inspecting the container env (Coolify shows it in the
-# UI). To actually toggle force_ssl, rebuild with the build ARG.
-ARG DISABLE_FORCE_SSL="1"
+# Note: DISABLE_FORCE_SSL at runtime is only documentation for the operator
+# (the deploy platform shows it). What really turns Plug.SSL off is the value
+# at BUILD time.
+ARG DISABLE_FORCE_SSL=""
 ENV DISABLE_FORCE_SSL=${DISABLE_FORCE_SSL}
 
 # Liveness probe. `curl` is already installed above for Coolify's check and it

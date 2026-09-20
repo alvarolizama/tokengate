@@ -279,11 +279,15 @@ before boot; `SKIP_MIGRATIONS=1` bypasses.
 (the external ones: `443` / `https`, or `4000` / `http` behind a VPN). The image sets no
 `EXPOSE`: it would not change the listen.
 
-**HTTPS:** `force_ssl` is compile-time, and tokengate ships `DISABLE_FORCE_SSL=1`
-**on purpose** — its deploy is plain HTTP behind a VPN, with no TLS terminator. The
-family skeleton's default is HTTPS on and the standard allows `1` only as a decision
-per app, never as an inherited default. For the TLS variant, build with
-`--build-arg DISABLE_FORCE_SSL=""` and set `PHX_SCHEME=https`.
+**HTTPS:** `force_ssl` is compile-time and the image ships **HTTPS on**, like the rest
+of the family. This instance is deployed over plain HTTP behind a VPN, so the build
+passes `--build-arg DISABLE_FORCE_SSL=1` (in the platform's **build** variables, not
+the runtime ones) and the runtime sets `PHX_SCHEME=http`. The two always move together:
+with `force_ssl` on and `PHX_SCHEME=http`, Plug.SSL redirects every request to HTTPS —
+and the port in that redirect cannot be configured (`Plug.SSL` fixes it at 443 for HSTS)
+— where nothing is listening. The healthcheck would not catch it: it hits `127.0.0.1`,
+which `config/prod.exs` excludes from the redirect, so the container keeps reporting
+healthy while users hang.
 
 Boot runs `priv/repo/seeds_prod.exs`: it creates **only** the admin user, and only when
 `TOKENGATE_ADMIN_PASSWORD` is set (`TOKENGATE_ADMIN_EMAIL` optional, defaults to
