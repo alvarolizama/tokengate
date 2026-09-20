@@ -47,6 +47,7 @@ defmodule Tokengate.Routing.Router do
   the same (now failed) credential.
   """
   alias Tokengate.Providers
+  alias Tokengate.Providers.Provider
   alias Tokengate.Routing.CircuitBreakerManager
   alias Tokengate.Routing.CredentialHealth
   alias Tokengate.Routing.Priority
@@ -299,7 +300,8 @@ defmodule Tokengate.Routing.Router do
            model: model,
            model_provider: model_provider,
            credential: credential,
-           model_responded: model_provider.provider_model
+           model_responded:
+             normalize_model_responded(model_provider.provider_model, credential.provider)
          }}
 
       {:error, :no_available_provider} = error ->
@@ -323,6 +325,29 @@ defmodule Tokengate.Routing.Router do
   # ---------------------------------------------------------------------------
   # Helpers
   # ---------------------------------------------------------------------------
+
+  # El id que viaja en el body del upstream, tal como el proveedor lo publica.
+  #
+  # Un proveedor de ids PELADOS (Surplus: su `/v1/models` no tiene ni un id
+  # con `/`) no resuelve el prefijo `lab/` de models.dev — un lane guardado
+  # como `zai/glm-5.3` responde 404 `no_sellers_for_model` aunque `glm-5.3`
+  # exista. Para esos proveedores se desprefija (un id de DOS segmentos cuyo
+  # primer segmento parece un lab); el resto viaja tal cual, porque ahí el
+  # prefijo ES el id (OpenRouter: `z-ai/glm-5.2` es su forma canónica).
+  defp normalize_model_responded(provider_model, %Provider{} = provider)
+       when is_binary(provider_model) do
+    if Tokengate.Providers.Catalog.bare_model_ids?(provider.key) do
+      Tokengate.Providers.ModelCatalog.short_name(provider_model)
+    else
+      provider_model
+    end
+  end
+
+  # Sin struct de proveedor o sin id (no debería ocurrir — el route siempre
+  # carga credential: :provider y el lane exige provider_model) el id viaja
+  # tal cual: desprefijar a ciegas rompería a los proveedores cuyo prefijo ES
+  # parte del id.
+  defp normalize_model_responded(provider_model, _provider), do: provider_model
 
   defp find_alias_by_name(accessible, name) do
     Enum.find(accessible, fn model_ -> model_.name == name end)

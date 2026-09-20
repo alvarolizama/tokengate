@@ -184,6 +184,17 @@ defmodule Tokengate.Providers.CatalogTest do
       assert Catalog.capabilities("surplus-intelligence") == ["llm", "embedding"]
     end
 
+    test "bare_model_ids?/1 marca a Surplus y sólo a Surplus" do
+      # Verificado contra la API viva (2026-09-21): el `/v1/models` de Surplus
+      # no publica ni un solo id con `/`, y un id prefijado (`zai/glm-5.3`)
+      # responde 404 `no_sellers_for_model` aunque el modelo exista. OpenRouter
+      # es el contraejemplo: su forma canónica ES `z-ai/glm-5.2`.
+      assert Catalog.bare_model_ids?("surplus-intelligence") == true
+      assert Catalog.bare_model_ids?("openrouter") == false
+      assert Catalog.bare_model_ids?("zai") == false
+      assert Catalog.bare_model_ids?(nil) == false
+    end
+
     test "the video path of a code-owned provider overrides the generic default" do
       # El default genérico de video es `/videos`, que en Surplus responde 404:
       # su generación vive en `/video/generations`. Es exactamente el caso que
@@ -614,6 +625,76 @@ defmodule Tokengate.Providers.CatalogTest do
     test "providers without a dialect and unknown keys declare passthrough" do
       assert Catalog.reasoning_dialect("totally-unknown") == :passthrough
       assert Catalog.reasoning_dialect(nil) == :passthrough
+    end
+  end
+
+  describe "aggregator pin vocabulary (Surplus)" do
+    test "el menú solo ofrece ids de FAMILIA que el marketplace resuelve" do
+      opts = Catalog.aggregator_pin_options()
+      values = Enum.map(opts, &elem(&1, 1))
+
+      # Un id/name de familia es la forma estable; el label del select es el
+      # propio spelling (lo que el operador reconoce del marketplace).
+      assert Enum.all?(opts, fn {label, value} -> label == value end)
+      assert "zai" in values
+      assert "zai-coding" in values
+      assert "openrouter" in values
+      assert "fireworks" in values
+
+      # Estos ofrecían hosts/URLs y claves de models.dev: el marketplace no los
+      # resuelve, y con `provider` (allow-list) eso deja la petición SIN
+      # ofertas o en un 400 unsupported_provider.
+      refute {"fireworks-ai", "fireworks-ai"} in opts
+      refute {"api.openrouter.ai", "api.openrouter.ai"} in opts
+      refute {"https://api.openrouter.ai/api/v1", "https://api.openrouter.ai/api/v1"} in opts
+      refute {"venice.ai", "venice.ai"} in opts
+    end
+
+    test "canonical_pin/1 corrige los spellings que el marketplace no resuelve" do
+      assert Catalog.canonical_pin("api.openrouter.ai") == "openrouter"
+      assert Catalog.canonical_pin("https://api.openrouter.ai/api/v1") == "openrouter"
+      assert Catalog.canonical_pin("fireworks-ai") == "fireworks"
+      assert Catalog.canonical_pin("venice.ai") == "venice"
+      # Case/espacios del operador: se comparan normalizados y se devuelve el
+      # canónico. Un spelling que sí resuelve vuelve intacto.
+      assert Catalog.canonical_pin("  API.OpenRouter.AI ") == "openrouter"
+      assert Catalog.canonical_pin("zai") == "zai"
+      assert Catalog.canonical_pin("api.deepseek.com") == "api.deepseek.com"
+      assert Catalog.canonical_pin(nil) == nil
+      assert Catalog.canonical_pin(123) == 123
+    end
+
+    test "canonicalize_aggregator_pins/2 solo toca filas de un agregador" do
+      extra = %{"provider" => "api.openrouter.ai", "service_tier" => "priority"}
+
+      assert Catalog.canonicalize_aggregator_pins(extra, "surplus-intelligence") ==
+               %{"provider" => "openrouter", "service_tier" => "priority"}
+
+      # Un directo no tiene vocabulario de pin: `provider` ahí es del cliente.
+      assert Catalog.canonicalize_aggregator_pins(extra, "fireworks-ai") == extra
+      assert Catalog.canonicalize_aggregator_pins(extra, nil) == extra
+
+      # Sin pin, nada que corregir (y ninguna clave se inventa).
+      assert Catalog.canonicalize_aggregator_pins(%{"top_k" => 7}, "surplus-intelligence") ==
+               %{"top_k" => 7}
+
+      # El pin en `provider_url`/`provider_base_url` también se corrige.
+      assert Catalog.canonicalize_aggregator_pins(
+               %{"provider_url" => "https://api.openrouter.ai/api/v1"},
+               "surplus-intelligence"
+             ) == %{"provider_url" => "openrouter"}
+    end
+
+    test "un pin válido conserva su dialecto; uno corregido resuelve el mismo" do
+      # La tabla de resolución conserva los spellings heredados: el dialecto del
+      # proveedor pineado no cambia porque el valor que sale esté corregido.
+      assert Catalog.pinned_reasoning_dialect("surplus-intelligence", "api.openrouter.ai") ==
+               Catalog.pinned_reasoning_dialect("surplus-intelligence", "openrouter")
+
+      assert Catalog.pinned_reasoning_dialect("surplus-intelligence", "fireworks-ai") == :scalar
+
+      assert Catalog.pinned_reasoning_dialect("surplus-intelligence", "zai-coding") ==
+               :toggle_and_effort
     end
   end
 

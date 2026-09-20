@@ -253,7 +253,15 @@ defmodule Tokengate.Providers.Catalog do
       # El body acepta hints de pin (`provider` single/array, `provider_url`,
       # `provider_base_url`) que el marketplace CONSUME (no reenvía). Cuando
       # la fila pinea, el normalizador resuelve el dialecto del pineado.
-      aggregator_pin_fields: ~w(provider provider_url provider_base_url)
+      aggregator_pin_fields: ~w(provider provider_url provider_base_url),
+      # Sus model ids son PELADOS: `/v1/models` no publica ni un solo id con
+      # `/` (verificado 2026-09-21, 400+ filas). Un id de models.dev con
+      # prefijo de lab (`zai/glm-5.3` — el fallback que usaba el wizard al no
+      # haber ofertas de Surplus en el catálogo) responde 404
+      # `no_sellers_for_model` aunque el modelo exista: el marketplace no
+      # desprefija. Con esta marca el router normaliza el `model_responded`
+      # (quita el segmento de lab) y el wizard prellena el nombre corto.
+      bare_model_ids: true
     },
     # TypeSafe (typesafe.ai): Jev, el primer modelo System One — decisiones
     # tipadas con probabilidades calibradas en vez de texto generado. Su API
@@ -675,6 +683,12 @@ defmodule Tokengate.Providers.Catalog do
   # id/name, host or URL) mapped to the catalog key whose dialect we speak.
   # Unknown spellings resolve to :passthrough (the aggregator routes on; its
   # own deny-list forwarding means an unreshaped knob still often works).
+  #
+  # Es la tabla de RESOLUCIÓN, no el menú del operador
+  # (`aggregator_pin_options/0`): conserva los spellings de host/URL y los
+  # heredados —también los que el marketplace NO resuelve, ver
+  # `@aggregator_pin_canonical`— para que una fila ya pineada o un `extra_body`
+  # escrito a mano sigan resolviendo el dialecto del proveedor pineado.
   @aggregator_pin_aliases %{
     "fireworks" => "fireworks-ai",
     "fireworks-ai" => "fireworks-ai",
@@ -684,6 +698,7 @@ defmodule Tokengate.Providers.Catalog do
     "openrouter.ai" => "openrouter",
     "api.openrouter.ai" => "openrouter",
     "https://openrouter.ai/api/v1" => "openrouter",
+    "https://api.openrouter.ai/api/v1" => "openrouter",
     "deepseek" => "deepseek",
     "api.deepseek.com" => "deepseek",
     "https://api.deepseek.com/v1" => "deepseek",
@@ -691,10 +706,43 @@ defmodule Tokengate.Providers.Catalog do
     "z.ai" => "zai",
     "api.z.ai" => "zai",
     "https://api.z.ai/api/paas/v4" => "zai",
+    "zai-coding" => "zai-coding-plan",
     "venice" => "venice",
     "venice.ai" => "venice",
-    "api.venice.ai" => "venice"
+    "api.venice.ai" => "venice",
+    "inferhub" => "inferhub"
   }
+
+  # Spellings que TokenGate llegó a MANDAR y el marketplace no resuelve, con el
+  # spelling con el que sí lo hace. Verificado contra la API viva
+  # (2026-09-21, `/v1/chat/completions` con la misma key del marketplace):
+  #
+  #   * `api.openrouter.ai` — host que no existe (no resuelve en DNS; el host
+  #     real de la API es `openrouter.ai`). El marketplace lo toma como el
+  #     host de un seller que no tiene y responde 404 `no_sellers_for_model`
+  #     AUNQUE OpenRouter tenga ofertas activas del modelo pedido: es el
+  #     síntoma exacto de "no encuentra el modelo pineado".
+  #   * `fireworks-ai` — 400 `unsupported_provider` (es la clave de models.dev,
+  #     no un id del marketplace: el suyo es `fireworks`).
+  #   * `venice.ai` — 400 `unsupported_provider` (acepta `venice` o el host
+  #     `api.venice.ai`).
+  #
+  # Un pin que el marketplace no resuelve no es inocuo: `provider` es una
+  # allow-list, así que no resuelto = sin ofertas = la petición NO se sirve.
+  @aggregator_pin_canonical %{
+    "api.openrouter.ai" => "openrouter",
+    "https://api.openrouter.ai/api/v1" => "openrouter",
+    "fireworks-ai" => "fireworks",
+    "venice.ai" => "venice"
+  }
+
+  # Los spellings que el menú del operador OFRECE: ids de FAMILIA del
+  # marketplace, que son la forma estable (un host depende de qué seller esté
+  # activo hoy). Cada uno está verificado como aceptado por la API viva y, o
+  # bien TokenGate conoce el dialecto de reasoning de esa familia
+  # (`@aggregator_pin_aliases`), o el marketplace rutea y el dialecto cae a
+  # :passthrough.
+  @aggregator_pin_spellings ~w(deepseek fireworks inferhub openrouter venice zai zai-coding)
 
   @doc """
   The body fields an aggregator's provider-pin hint lives in, by catalog key
@@ -714,6 +762,30 @@ defmodule Tokengate.Providers.Catalog do
       fields when is_list(fields) -> fields
       _ -> []
     end
+  end
+
+  @doc """
+  True cuando el proveedor publica sus model ids PELADOS (sin el prefijo
+  `lab/` de models.dev).
+
+  Surplus Intelligence es el caso: su `/v1/models` no tiene ni un id con `/`,
+  y un `provider_model` guardado con prefijo (`zai/glm-5.3`) responde 404
+  `no_sellers_for_model` aunque el modelo exista — el marketplace no
+  desprefija. Con esta marca el router normaliza el id que viaja en el body
+  (arregla filas ya guardadas) y el wizard prellena el nombre corto.
+
+      iex> Tokengate.Providers.Catalog.bare_model_ids?("surplus-intelligence")
+      true
+
+      iex> Tokengate.Providers.Catalog.bare_model_ids?("openrouter")
+      false
+
+      iex> Tokengate.Providers.Catalog.bare_model_ids?(nil)
+      false
+  """
+  @spec bare_model_ids?(String.t() | nil) :: boolean()
+  def bare_model_ids?(key \\ nil) do
+    option(key, :bare_model_ids, false) == true
   end
 
   @doc """
@@ -766,21 +838,91 @@ defmodule Tokengate.Providers.Catalog do
   defp normalize_pin(_), do: ""
 
   @doc """
-  The provider spellings an aggregator's pin accepts, as select options
-  (sorted spellings, deduped by the catalog key they resolve to). Powers the
-  operator's pin select on an aggregator-backed model_provider row.
+  The spelling the marketplace actually resolves for a pin value TokenGate sent
+  wrong, or the value untouched (non-strings included).
+
+  Se aplica al pin del OPERADOR (la fila del model_provider) antes de serializar
+  el body: una fila ya guardada con un spelling que el marketplace no resuelve
+  no se arregla sola, y `provider` sin resolver = petición sin ofertas.
+
+      iex> Tokengate.Providers.Catalog.canonical_pin("api.openrouter.ai")
+      "openrouter"
+
+      iex> Tokengate.Providers.Catalog.canonical_pin("fireworks-ai")
+      "fireworks"
+
+      iex> Tokengate.Providers.Catalog.canonical_pin("zai")
+      "zai"
+
+      iex> Tokengate.Providers.Catalog.canonical_pin(nil)
+      nil
+  """
+  @spec canonical_pin(term()) :: term()
+  def canonical_pin(value) when is_binary(value) do
+    Map.get(@aggregator_pin_canonical, normalize_pin(value), value)
+  end
+
+  def canonical_pin(value), do: value
+
+  @doc """
+  An operator `extra_body` with its aggregator pin field(s) canonicalized, or
+  the map untouched when the provider is not an aggregator or carries no pin.
+
+  Es lo que se serializa al upstream: la fila guardada puede tener un spelling
+  que el marketplace no resuelve (el menú lo ofreció antes de esta corrección),
+  y `provider` sin resolver = petición sin ofertas. El campo del CLIENTE no se
+  toca — es suyo, y el gateway es passthrough para lo que no administra.
+
+      iex> Tokengate.Providers.Catalog.canonicalize_aggregator_pins(
+      ...>   %{"provider" => "api.openrouter.ai", "service_tier" => "priority"},
+      ...>   "surplus-intelligence"
+      ...> )
+      %{"provider" => "openrouter", "service_tier" => "priority"}
+
+      iex> Tokengate.Providers.Catalog.canonicalize_aggregator_pins(%{"provider" => "zai"}, "fireworks-ai")
+      %{"provider" => "zai"}
+  """
+  @spec canonicalize_aggregator_pins(map(), String.t() | nil) :: map()
+  def canonicalize_aggregator_pins(extra, provider_key) when is_map(extra) do
+    case aggregator_pin_fields(provider_key) do
+      [] ->
+        extra
+
+      fields ->
+        Enum.reduce(fields, extra, fn field, acc ->
+          case Map.get(acc, field) do
+            nil -> acc
+            value -> Map.put(acc, field, canonical_pin(value))
+          end
+        end)
+    end
+  end
+
+  def canonicalize_aggregator_pins(extra, _provider_key), do: extra
+
+  @doc """
+  The provider spellings an aggregator's pin accepts, as select options — the
+  FAMILY ids the marketplace resolves. Powers the operator's pin select on an
+  aggregator-backed model_provider row.
+
+  Sólo spellings que el marketplace RESUELVE: `provider` es una allow-list, así
+  que un valor sin resolver no "rutea igual" — deja la petición sin ofertas
+  (404 `no_sellers_for_model`) o contesta 400 `unsupported_provider`. Los
+  hosts/URL y los spellings heredados se siguen aceptando en un `extra_body`
+  escrito a mano, y `canonical_pin/1` corrige al salir los que no resuelven.
 
       iex> opts = Tokengate.Providers.Catalog.aggregator_pin_options()
-      iex> {"fireworks", "fireworks"} in opts
-      true
       iex> {"zai", "zai"} in opts
       true
+      iex> {"fireworks-ai", "fireworks-ai"} in opts
+      false
+      iex> {"api.openrouter.ai", "api.openrouter.ai"} in opts
+      false
   """
   @spec aggregator_pin_options() :: [{String.t(), String.t()}]
   def aggregator_pin_options do
-    @aggregator_pin_aliases
-    |> Enum.uniq_by(fn {_spelling, key} -> key end)
-    |> Enum.map(fn {spelling, _key} -> {spelling, spelling} end)
+    @aggregator_pin_spellings
+    |> Enum.map(&{&1, &1})
     |> Enum.sort()
   end
 

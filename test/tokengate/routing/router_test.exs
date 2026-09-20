@@ -273,6 +273,45 @@ defmodule Tokengate.Routing.RouterTest do
     end
   end
 
+  describe "route/3 model_responded normalization (bare-id upstreams)" do
+    # Surplus Intelligence publica sus ids PELADOS: `/v1/models` no tiene ni
+    # un id con `/` (verificado 2026-09-21). Un lane guardado con el prefijo
+    # de models.dev (`zai/glm-5.3` — el fallback del wizard cuando no había
+    # ofertas del agregador en el catálogo) hacía que el body viajara con el
+    # prefijo y el marketplace respondiera 404 `no_sellers_for_model`. El
+    # router desprefija para los proveedores marcados `bare_model_ids`.
+    test "a bare-id upstream gets the lab prefix stripped from model_responded" do
+      f = full_setup(provider_model: "zai/glm-5.3")
+
+      # El proveedor del fixture NO es bare-id: el id viaja tal cual...
+      assert {:ok, route} = Router.route(f.model.name, f.member)
+      assert route.model_responded == "zai/glm-5.3"
+
+      # ...hasta que su proveedor es uno de ids pelados (Surplus).
+      f.provider
+      |> Ecto.Changeset.change(key: "surplus-intelligence")
+      |> Repo.update!()
+
+      Tokengate.Routing.Cache.invalidate_all()
+
+      assert {:ok, route} = Router.route(f.model.name, f.member)
+      assert route.model_responded == "glm-5.3"
+    end
+
+    test "an id without a lab prefix is left alone for a bare-id upstream" do
+      f = full_setup(provider_model: "glm-5.3")
+
+      f.provider
+      |> Ecto.Changeset.change(key: "surplus-intelligence")
+      |> Repo.update!()
+
+      Tokengate.Routing.Cache.invalidate_all()
+
+      assert {:ok, route} = Router.route(f.model.name, f.member)
+      assert route.model_responded == "glm-5.3"
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # model_not_found / access control
   # ---------------------------------------------------------------------------

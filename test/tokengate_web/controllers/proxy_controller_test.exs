@@ -75,6 +75,22 @@ defmodule TokengateWeb.ProxyControllerTest do
 
     defp route(conn, body, payload) do
       cond do
+        # El upstream "estricto" (/strict): solo documenta su propio schema y
+        # 400ea nombrando el campo Y el valor que le sobra — el formato real
+        # de Fireworks. Va scopeado al PATH para que un upstream permisivo (un
+        # aggregator) y uno estricto (el directo del fallback) convivan en el
+        # mismo test; el `:reject_body_fields` de arriba rechaza en TODOS.
+        strict_reject(conn, payload) != [] ->
+          [field | _] = strict_reject(conn, payload)
+
+          json(conn, 400, %{
+            "error" => %{
+              "message" =>
+                "Extra inputs are not permitted, field: '#{field}', value: '#{payload[field]}'",
+              "code" => 400
+            }
+          })
+
         # Simulates a strictly-validating upstream (Fireworks): any of the
         # configured fields present in the body is a hard 400.
         rejected = rejected_fields(payload) ->
@@ -292,11 +308,24 @@ defmodule TokengateWeb.ProxyControllerTest do
 
       Enum.find(reject, &Map.has_key?(payload, &1))
     end
+
+    # Strictness scoped to ONE upstream path segment (/strict), so a single
+    # test can run a permissive upstream and a strict one in the same cascade
+    # (aggregator → direct fallback).
+    defp strict_reject(conn, payload) do
+      if "strict" in conn.path_info do
+        :persistent_term.get({__MODULE__, :strict_body_fields}, [])
+        |> Enum.filter(&Map.has_key?(payload, &1))
+      else
+        []
+      end
+    end
   end
 
   setup do
     :persistent_term.put({ProviderPlug, :test_pid}, self())
     :persistent_term.put({ProviderPlug, :reject_body_fields}, [])
+    :persistent_term.put({ProviderPlug, :strict_body_fields}, [])
     start_supervised!({Bandit, plug: ProviderPlug, scheme: :http, ip: :loopback, port: @port})
     :ok
   end
@@ -1010,6 +1039,52 @@ defmodule TokengateWeb.ProxyControllerTest do
     |> Enum.reject(&is_nil/1)
   end
 
+  # Every upstream attempt as {path, payload}: the plug emits, per attempt,
+  # raw_body → payload → headers → path, so payloads and paths are matched up
+  # in arrival order.
+  defp provider_calls do
+    messages =
+      Stream.repeatedly(fn ->
+        receive do
+          msg -> msg
+        after
+          0 -> :done
+        end
+      end)
+      |> Enum.take_while(&(&1 != :done))
+
+    payloads = for {:provider_request, payload} <- messages, do: payload
+    paths = for {:provider_request_path, path} <- messages, do: path
+
+    Enum.zip(payloads, paths)
+  end
+
+  # Points a credential's provider at a DIRECT catalog provider (no
+  # `aggregator_pin_fields`) — an upstream that documents nothing beyond its
+  # own schema. `path_suffix` targets a specific upstream of the test plug.
+  defp make_credential_provider_direct(credential, catalog_key, path_suffix \\ nil) do
+    provider = Repo.get!(Tokengate.Providers.Provider, credential.provider_id)
+
+    case Repo.get_by(Tokengate.Providers.Provider, key: catalog_key) do
+      nil -> :ok
+      builtin -> {:ok, _} = Repo.delete(builtin)
+    end
+
+    attrs =
+      %{key: catalog_key}
+      |> then(fn
+        attrs when is_binary(path_suffix) ->
+          Map.put(attrs, :base_url, "http://localhost:#{@port}#{path_suffix}")
+
+        attrs ->
+          attrs
+      end)
+
+    {:ok, _} = Providers.update_provider(provider, attrs)
+    Tokengate.Routing.Cache.invalidate_all()
+    :ok
+  end
+
   test "timeout falls back immediately to the second provider (no same-provider retries)", %{
     conn: conn
   } do
@@ -1470,6 +1545,73 @@ defmodule TokengateWeb.ProxyControllerTest do
           assert payload["reasoning_effort"] == "high"
           assert payload["thinking"] == %{"type" => "enabled"}
           assert payload["provider"] == "zai"
+      after
+        0 -> flunk("expected an upstream request")
+      end
+    end
+
+    test "aggregator pin (surplus) — un spelling que el marketplace no resuelve sale corregido",
+         %{
+           conn: conn,
+           token: token,
+           model: model
+         } do
+      make_provider_keyed(model, "surplus-intelligence")
+      [mp] = Providers.list_model_providers(model.id)
+
+      # Lo que el menú llegó a ofrecer y el marketplace NO resuelve: es un host
+      # que no existe (no resuelve en DNS), así que `provider` —que es una
+      # allow-list— deja la petición en 404 no_sellers_for_model aunque
+      # OpenRouter tenga ofertas del modelo.
+      {:ok, _} =
+        Providers.update_model_provider(mp, %{extra_body: %{"provider" => "api.openrouter.ai"}})
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "reasoning" => %{"effort" => "high"},
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          # El valor guardado no es el que viaja, y el dialecto sigue siendo el
+          # del proveedor pineado (OpenRouter: el objeto anidado).
+          assert payload["provider"] == "openrouter"
+          assert payload["reasoning"] == %{"effort" => "high"}
+      after
+        0 -> flunk("expected an upstream request")
+      end
+    end
+
+    test "aggregator pin (surplus) — el pin del CLIENTE viaja tal cual", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      make_provider_keyed(model, "surplus-intelligence")
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "provider" => "api.openrouter.ai",
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          # El campo es del CLIENTE: el gateway es passthrough para lo que no
+          # administra (mismo criterio que `session_id`). La corrección de
+          # spellings aplica al pin del OPERADOR, que es vocabulario nuestro.
+          assert payload["provider"] == "api.openrouter.ai"
       after
         0 -> flunk("expected an upstream request")
       end
@@ -3131,6 +3273,141 @@ defmodule TokengateWeb.ProxyControllerTest do
       body = json_response(conn, 402)
       assert body["error"]["message"] =~ "Global"
       refute body["error"]["message"] =~ "No spending path"
+    end
+  end
+
+  ## El body no se contamina entre intentos ####################################
+  #
+  # El pipeline por-intento REESCRIBE el body para el upstream que lo va a
+  # servir (extra_body del model_provider, dialecto de reasoning, guard rails)
+  # y el body YA reescrito es el que hereda el fallback: lo que pintó el intento
+  # anterior viaja al siguiente upstream. Un agregador que inyecta su hint de
+  # pin (`provider`) y un directo que no lo documenta (Fireworks) acaban en un
+  # 400 "Extra inputs are not permitted" DESPUÉS del fallback.
+  describe "el body no se contamina entre intentos" do
+    test "el pin del aggregator NO viaja al upstream directo del fallback", %{conn: conn} do
+      u = unique()
+      # Intento 1: Surplus (agregador) pinneado a OpenRouter, upstream caído.
+      %{token: token, model: model} = proxy_fixture(%{down: true})
+      make_provider_keyed(model, "surplus-intelligence")
+      [mp1] = Providers.list_model_providers(model.id)
+
+      {:ok, _} =
+        Providers.update_model_provider(mp1, %{extra_body: %{"provider" => "api.openrouter.ai"}})
+
+      # Intento 2: el fallback, un DIRECTO (no tiene pin que documentar).
+      cred2 = add_healthy_fallback(model, u)
+      :ok = make_credential_provider_direct(cred2, "fireworks-ai")
+
+      conn = conn |> authed_conn(token) |> post(~p"/v1/chat/completions", chat_body(model.name))
+      assert json_response(conn, 200)
+
+      calls = provider_calls()
+      agg = for {payload, path} <- calls, String.contains?(path, "/down"), do: payload
+      direct = for {payload, path} <- calls, not String.contains?(path, "/down"), do: payload
+
+      assert agg != [], "el intento del aggregator no llegó al upstream"
+
+      # La fila está pineada con el spelling que el menú ofrecía antes
+      # (`api.openrouter.ai`, host inexistente): lo que VIAJA es el canónico.
+      assert Enum.any?(agg, &(&1["provider"] == "openrouter")),
+             "el pin del aggregator no se inyectó: #{inspect(Enum.map(agg, & &1["provider"]))}"
+
+      assert direct != [], "el fallback no llegó al upstream directo"
+
+      for payload <- direct do
+        refute Map.has_key?(payload, "provider"),
+               "el pin del aggregator viajó al directo: #{inspect(payload["provider"])}"
+      end
+    end
+
+    test "las guard rails se aplican UNA vez, no una por intento", %{conn: conn} do
+      u = unique()
+      %{token: token, model: model} = proxy_fixture(%{down: true})
+      {:ok, _} = Providers.update_model(model, %{guard_rails: "REGLA"})
+      add_healthy_fallback(model, u)
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "messages" => [
+            %{"role" => "system", "content" => "SYS"},
+            %{"role" => "user", "content" => "hola"}
+          ]
+        })
+
+      assert json_response(conn, 200)
+
+      direct =
+        for {payload, path} <- provider_calls(), not String.contains?(path, "/down"), do: payload
+
+      assert direct != [], "el fallback no llegó al upstream"
+
+      for payload <- direct do
+        assert [%{"role" => "system", "content" => content} | _] = payload["messages"]
+        assert content == "REGLA\n\nSYS", "guard rails duplicadas: #{inspect(content)}"
+      end
+    end
+
+    test "un directo ESTRICTO del fallback rechaza el pin que dejó el intento anterior", %{
+      conn: conn
+    } do
+      u = unique()
+      %{token: token, model: model} = proxy_fixture(%{down: true})
+
+      make_provider_keyed(model, "surplus-intelligence")
+      [mp1] = Providers.list_model_providers(model.id)
+
+      {:ok, _} =
+        Providers.update_model_provider(mp1, %{extra_body: %{"provider" => "api.openrouter.ai"}})
+
+      cred2 = add_healthy_fallback(model, u)
+      :ok = make_credential_provider_direct(cred2, "fireworks-ai", "/strict")
+
+      # El directo solo documenta su propio schema (Fireworks): cualquier campo
+      # de más es un 400 que nombra el campo y el valor.
+      :persistent_term.put({ProviderPlug, :strict_body_fields}, ["provider"])
+
+      conn = conn |> authed_conn(token) |> post(~p"/v1/chat/completions", chat_body(model.name))
+
+      assert conn.status == 200,
+             "el fallback devolvió #{conn.status}: #{inspect(conn.resp_body)}"
+
+      for {payload, path} <- provider_calls(), String.contains?(path, "/strict") do
+        refute Map.has_key?(payload, "provider")
+      end
+    end
+
+    test "streaming: el fallback tampoco hereda el body del intento anterior", %{conn: conn} do
+      u = unique()
+      %{token: token, model: model} = proxy_fixture(%{down: true})
+
+      make_provider_keyed(model, "surplus-intelligence")
+      [mp1] = Providers.list_model_providers(model.id)
+
+      {:ok, _} =
+        Providers.update_model_provider(mp1, %{extra_body: %{"provider" => "api.openrouter.ai"}})
+
+      cred2 = add_healthy_fallback(model, u)
+      :ok = make_credential_provider_direct(cred2, "fireworks-ai", "/strict")
+      :persistent_term.put({ProviderPlug, :strict_body_fields}, ["provider"])
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(
+          ~p"/v1/chat/completions",
+          Map.put(chat_body(model.name), "stream", true)
+        )
+
+      assert conn.status == 200,
+             "el fallback devolvió #{conn.status}: #{inspect(conn.resp_body)}"
+
+      for {payload, path} <- provider_calls(), String.contains?(path, "/strict") do
+        refute Map.has_key?(payload, "provider")
+      end
     end
   end
 end

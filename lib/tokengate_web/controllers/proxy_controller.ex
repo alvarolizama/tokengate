@@ -1233,22 +1233,34 @@ defmodule TokengateWeb.ProxyController do
 
   defp execute(conn, route, payload, member, attempts_left, exclude, provider_retries) do
     provider = route.model_provider.credential.provider
-    # The client sends the model name; the provider expects its own model id.
-    payload =
+
+    # El body que viaja a ESTE upstream se construye SIEMPRE desde el body
+    # original del cliente: las guard rails del modelo, el dialecto de
+    # reasoning que habla el upstream y los overrides del model_provider
+    # (`extra_body`, `omit_body_fields`) son POR-UPSTREAM. El body ya reescrito
+    # NO se hereda a los reintentos ni al fallback; heredarlo (a) manda el pin
+    # del agregador (`provider`) al proveedor DIRECTO que le toca el fallback
+    # —que 400ea en un campo que no documenta— y (b) apila las guard rails una
+    # vez por intento. `payload` sigue siendo el del cliente para la cascada:
+    # cada intento se reescribe desde cero con las reglas de SU upstream.
+    attempt_payload =
       payload
       |> Map.put("model", route.model_responded)
       |> inject_guard_rails(route.model)
       |> maybe_optimize(optimize_ctx(conn, route))
 
     # Gateway-local response cache (non-streaming chat only): identical
-    # requests served from ETS. The cache key uses the PRE-transform payload
-    # so retried/fallback attempts hash consistently.
-    cache_key = ResponseCache.cache_key(conn.assigns.api_key_hash, route.model_responded, payload)
+    # requests served from ETS. The key is the body THIS upstream receives, so
+    # it stays stable across the retries/fallbacks of one request (they all
+    # rebuild the same body for the same route) and never picks up another
+    # route's overrides.
+    cache_key =
+      ResponseCache.cache_key(conn.assigns.api_key_hash, route.model_responded, attempt_payload)
 
     with :miss <- cache_lookup(conn, cache_key) do
       receive_timeout = receive_timeout(route.credential)
 
-      case OpenAIAdapter.chat_completion(provider, route.credential, payload,
+      case OpenAIAdapter.chat_completion(provider, route.credential, attempt_payload,
              receive_timeout: receive_timeout,
              forwarded_headers: extract_forwarded_headers(conn, route)
            ) do
@@ -1473,8 +1485,10 @@ defmodule TokengateWeb.ProxyController do
 
   defp execute_stream(conn, route, payload, member, attempts_left, exclude, provider_retries) do
     provider = route.model_provider.credential.provider
-    # The client sends the model name; the provider expects its own model id.
-    payload =
+
+    # Mismo contrato que `execute/7`: el body por-intento se construye desde el
+    # body ORIGINAL del cliente (nunca desde el del intento anterior).
+    attempt_payload =
       payload
       |> Map.put("model", route.model_responded)
       |> ensure_stream_options()
@@ -1486,7 +1500,7 @@ defmodule TokengateWeb.ProxyController do
     request_start = System.monotonic_time(:millisecond)
     receive_timeout = receive_timeout(route.credential)
 
-    case OpenAIAdapter.stream_chat_completion(provider, route.credential, payload,
+    case OpenAIAdapter.stream_chat_completion(provider, route.credential, attempt_payload,
            receive_timeout: receive_timeout,
            forwarded_headers: extract_forwarded_headers(conn, route)
          ) do
@@ -1504,14 +1518,15 @@ defmodule TokengateWeb.ProxyController do
               |> put_resp_header("cache-control", "no-cache")
               |> send_chunked(200)
 
-            stream_loop(conn, pid, ref, first_chunk, route, member, payload, %{
+            stream_loop(conn, pid, ref, first_chunk, route, member, attempt_payload, %{
               usage: nil,
               # Completion deltas accumulate as iodata (a reversed list of
               # binaries) — O(1) per chunk instead of O(n) binary append.
               # Materialized once in finish_stream when the provider omits
               # usage (token-estimator fallback).
               completion: [],
-              prompt_estimate: TokenEstimator.estimate_messages(payload["messages"] || []),
+              prompt_estimate:
+                TokenEstimator.estimate_messages(attempt_payload["messages"] || []),
               ttft_ms: ttft_ms,
               latency_start: System.monotonic_time(:millisecond),
               resp_headers: resp_headers
@@ -1901,6 +1916,9 @@ defmodule TokengateWeb.ProxyController do
   defp apply_request_overrides(payload, route_ctx) do
     extra = model_provider_setting(route_ctx, :extra_body) || %{}
     omit = model_provider_setting(route_ctx, :omit_body_fields) || []
+
+    extra =
+      Tokengate.Providers.Catalog.canonicalize_aggregator_pins(extra, provider_key(route_ctx))
 
     payload
     |> Map.merge(Map.drop(extra, @protected_body_keys))

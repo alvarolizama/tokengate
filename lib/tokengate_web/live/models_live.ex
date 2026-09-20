@@ -503,6 +503,19 @@ defmodule TokengateWeb.ModelsLive do
                     _ -> key
                   end
 
+                # Un proveedor de ids PELADOS (Surplus) no resuelve el prefijo
+                # `lab/` de models.dev: el fallback `key` (`zai/glm-5.3`)
+                # viajaría tal cual y el upstream respondería 404
+                # `no_sellers_for_model`. Se prellena el nombre corto — el
+                # operador sigue viendo el valor y puede editarlo antes de
+                # guardar.
+                provider_model =
+                  if Tokengate.Providers.Catalog.bare_model_ids?(provider_key) do
+                    ModelCatalog.short_name(provider_model)
+                  else
+                    provider_model
+                  end
+
                 {assign(socket, :wizard_provider_model, provider_model), "details"}
             end
 
@@ -2447,11 +2460,24 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   # La oferta de models.dev de UN proveedor para el modelo del modal: nil si el
-  # modelo no viene del catálogo o si ese proveedor no lo sirve.
+  # modelo no viene del catálogo o si ese proveedor no lo sirve. Para un
+  # proveedor de ids PELADOS (Surplus) el `provider_model` de la oferta se
+  # desprefija: el catálogo lo publica como `z-ai/glm-5.3` y el upstream sólo
+  # resuelve `glm-5.3` (404 `no_sellers_for_model` con el prefijo).
   defp offer_for_provider(model_id, provider_key) when is_binary(provider_key) do
     case Providers.get_model(model_id) do
-      %Model{catalog_model_key: key} when is_binary(key) -> Providers.offer_for(key, provider_key)
-      _ -> nil
+      %Model{catalog_model_key: key} when is_binary(key) ->
+        offer = Providers.offer_for(key, provider_key)
+
+        with %{provider_model: pm} = offer when is_binary(pm) <- offer,
+             true <- Tokengate.Providers.Catalog.bare_model_ids?(provider_key) do
+          %{offer | provider_model: Tokengate.Providers.ModelCatalog.short_name(pm)}
+        else
+          _ -> offer
+        end
+
+      _ ->
+        nil
     end
   end
 
