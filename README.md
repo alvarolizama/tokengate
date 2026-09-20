@@ -271,8 +271,10 @@ bash path/to/boilerplate/skeleton/check-commons.sh .   # exit 0 = Commons intact
 ## Production (Docker)
 
 Multi-stage **Dockerfile** included: prebuilt hexpm Elixir image → slim Debian runtime,
-non-root `app` user, port `4000`. The entrypoint applies migrations and seeds the admin
-before boot; `SKIP_MIGRATIONS=1` bypasses.
+non-root `app` user, port `4000`. The entrypoint runs **`Tokengate.Release.setup/0`**
+(create the database → migrate → seed the admin) before boot, so the app never serves
+against an un-migrated schema and a failed migration aborts the boot — the deploy rolls
+back instead of shipping broken code. `SKIP_MIGRATIONS=1` bypasses it.
 
 **Ports:** `PORT` (container, default `4000`) **must equal the platform's _Ports Exposes_**
 — that is the real listen port. `PHX_PORT` / `PHX_SCHEME` only feed the generated URLs

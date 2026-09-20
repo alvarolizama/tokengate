@@ -43,12 +43,9 @@ COPY config config
 
 RUN mix deps.get --only prod
 
-# Compile Erlang/rebar3 deps first with a memory-constrained Erlang VM.
-# Coolify build containers often have tight memory limits (512 MB-1 GB);
-# the default Erlang VM (one scheduler per CPU core) can OOM during
-# parallel rebar3 compilation. +S 1:1 limits to 1 scheduler.
-RUN ERL_AFLAGS="+S 1:1" mix deps.compile idna telemetry telemetry_poller
-RUN mix deps.compile
+# OOM guard: build containers (Coolify and friends) usually have 512 MB–1 GB
+# and the Erlang VM starts one scheduler per core. +S 1:1 limits it to one.
+RUN ERL_AFLAGS="+S 1:1" mix deps.compile
 
 # --- Application + assets --------------------------------------------------
 COPY lib lib
