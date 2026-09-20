@@ -1291,8 +1291,8 @@ msgstr "Cambiar"
 msgid "Choose another provider"
 msgstr "Elegir otro proveedor"
 
-msgid "Configure models and their routing providers"
-msgstr "Configura models y sus proveedores de routing"
+msgid "Configure models and the API keys that serve them"
+msgstr "Configura models y las API keys que los sirven"
 
 msgid "Context window (tokens)"
 msgstr "Ventana de contexto (tokens)"
@@ -1312,8 +1312,8 @@ msgstr "Arrastra para reordenar prioridad"
 msgid "Edit model"
 msgstr "Editar Modelo"
 
-msgid "Expand / collapse providers"
-msgstr "Expandir / colapsar proveedores"
+msgid "Expand / collapse its API keys"
+msgstr "Expandir / colapsar sus API keys"
 
 msgid "Hero icon name, e.g. hero-fire. Optional."
 msgstr "Nombre de hero icon, ej. hero-fire. Opcional."

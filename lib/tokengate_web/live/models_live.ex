@@ -2525,7 +2525,7 @@ defmodule TokengateWeb.ModelsLive do
       <div class="space-y-6">
         <.header>
           {gettext("Models")}
-          <:subtitle>{gettext("Configure models and their routing providers")}</:subtitle>
+          <:subtitle>{gettext("Configure models and the API keys that serve them")}</:subtitle>
           <:actions :if={@is_admin}>
             <.button phx-click="new_model" id="new-model-btn">
               <.icon name="hero-plus" class="w-4 h-4" /> Nuevo Modelo
@@ -2555,7 +2555,7 @@ defmodule TokengateWeb.ModelsLive do
                     class="flex-1 min-w-0 cursor-pointer"
                     id={"model-header-#{model.id}"}
                     phx-click={toggle_providers_js(model.id)}
-                    title={gettext("Expand / collapse providers")}
+                    title={gettext("Expand / collapse its API keys")}
                   >
                     <div class="flex items-center gap-2 flex-wrap">
                       <span
@@ -2722,9 +2722,6 @@ defmodule TokengateWeb.ModelsLive do
                                 </span>
                                 <span class="text-xs text-base-content/40 ml-1">
                                   {mask_key(ap.credential.api_key_encrypted)}
-                                </span>
-                                <span class="text-xs text-base-content/50 ml-1">
-                                  · {provider_name(ap)}
                                 </span>
                               <% else %>
                                 {provider_name(ap)}
@@ -3225,16 +3222,14 @@ defmodule TokengateWeb.ModelsLive do
                     class="flex items-center gap-2 py-1.5 border-b border-base-200 last:border-0"
                   >
                     <span class="flex-1 min-w-0 truncate text-sm">
-                      <%!-- La key manda: es lo que sirve al modelo. El proveedor va
-                           detrás porque es SU dueño, no una relación del modelo. --%>
+                      <%!-- La key, y nada más: el modelo se relaciona con ELLA. El
+                           proveedor que la posee no se pinta aquí — vive en su
+                           página, y se elige al crear la key. --%>
                       <span class="font-mono text-xs">
                         {lane.credential.name || gettext("unnamed key")}
                       </span>
                       <span class="text-xs text-base-content/40 ml-1">
                         {mask_key(lane.credential.api_key_encrypted)}
-                      </span>
-                      <span class="text-xs text-base-content/50 ml-1">
-                        · {lane.credential.provider.name}
                       </span>
                       <span :if={!lane.enabled} class="badge badge-xs badge-ghost ml-1">
                         {gettext("disabled")}

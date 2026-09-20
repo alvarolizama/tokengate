@@ -2047,13 +2047,13 @@ defmodule TokengateWeb.ModelsLiveTest do
     view |> element("#edit-model-#{model_record.id}") |> render_click()
 
     assert has_element?(view, "#model-serving-lanes")
-    html = render(view)
+    lane = element(view, "#model-serving-lanes") |> render()
 
-    # La fila se identifica por la KEY (lo que sirve al modelo); el proveedor va
-    # detrás, como dueño de la key — no como una relación del modelo.
-    assert html =~ "Prod"
-    assert html =~ "Acme Cloud"
-    assert html =~ "accounts/acme/tier-1"
+    # La fila se identifica por la KEY, y nada más: el proveedor que la posee no
+    # se pinta en el modelo — no es una relación suya.
+    assert lane =~ "Prod"
+    assert lane =~ "accounts/acme/tier-1"
+    refute lane =~ "Acme Cloud"
 
     # Y no hay ningún enlace que "vincule el modelo a un proveedor".
     refute has_element?(view, "#model-lanes-providers-link")
