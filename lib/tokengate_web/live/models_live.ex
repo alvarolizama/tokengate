@@ -2633,7 +2633,7 @@ defmodule TokengateWeb.ModelsLive do
                 >
                   <div class="flex items-center justify-between mb-2">
                     <h4 class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                      {gettext("Assigned providers")}
+                      {gettext("Served by (API keys)")}
                     </h4>
                     <%= if @is_admin do %>
                       <button
@@ -2642,7 +2642,7 @@ defmodule TokengateWeb.ModelsLive do
                         class="btn btn-xs btn-primary"
                         id={"new-ap-#{model.id}"}
                       >
-                        <.icon name="hero-plus" class="w-3 h-3" /> Asignar Proveedor
+                        <.icon name="hero-plus" class="w-3 h-3" /> {gettext("Assign API key")}
                       </button>
                     <% end %>
                   </div>
@@ -2651,7 +2651,7 @@ defmodule TokengateWeb.ModelsLive do
                     :if={model_providers_for(model) == []}
                     class="text-sm text-base-content/40 py-2"
                   >
-                    {gettext("No providers assigned.")}
+                    {gettext("No API key assigned: nothing can route to it.")}
                   </div>
 
                   <div :if={model_providers_for(model) != []} class="overflow-x-auto">
@@ -2660,7 +2660,12 @@ defmodule TokengateWeb.ModelsLive do
                         <tr>
                           <th :if={@is_admin} class="w-8" title={gettext("Drag to reorder priority")}>
                           </th>
-                          <th>{gettext("Provider")}</th>
+                          <%!-- Para un admin la fila se identifica por su KEY (lo que
+                               sirve al modelo); sin permiso para ver keys, por el
+                               proveedor que las posee. --%>
+                          <th>
+                            {if @is_admin, do: gettext("API key"), else: gettext("Provider")}
+                          </th>
                           <th>{gettext("Model")}</th>
                           <th>{gettext("Priority")}</th>
                           <th>{gettext("Scope")}</th>
@@ -2702,24 +2707,22 @@ defmodule TokengateWeb.ModelsLive do
                               <.icon name="hero-bars-3" class="w-4 h-4" />
                             </td>
                             <td class="font-medium">
-                              {provider_name(ap)}
                               <%!-- Credential name and key suffix expose internal
                                    topology — admins only. Non-admins see just the
                                    provider name. --%>
-                              <span
-                                :if={@is_admin && ap.credential && credential_named?(ap.credential)}
-                                class="badge badge-xs badge-outline font-normal ml-1"
-                                title={ap.credential.name}
-                              >
-                                <.icon name="hero-key" class="w-3 h-3" />
-                                {ap.credential.name}
-                              </span>
-                              <span
-                                :if={@is_admin && ap.credential}
-                                class="text-xs text-base-content/40 ml-1"
-                              >
-                                {mask_key(ap.credential.api_key_encrypted)}
-                              </span>
+                              <%= if @is_admin && ap.credential do %>
+                                <span class="font-mono text-xs">
+                                  {ap.credential.name || gettext("unnamed key")}
+                                </span>
+                                <span class="text-xs text-base-content/40 ml-1">
+                                  {mask_key(ap.credential.api_key_encrypted)}
+                                </span>
+                                <span class="text-xs text-base-content/50 ml-1">
+                                  · {provider_name(ap)}
+                                </span>
+                              <% else %>
+                                {provider_name(ap)}
+                              <% end %>
 
                               <span
                                 :if={service_tier_priority?(ap)}
@@ -3196,20 +3199,9 @@ defmodule TokengateWeb.ModelsLive do
                    modelo; el "proveedor" no es una relación suya. --%>
               <%= if @editing_model_id not in [nil, :new] do %>
                 <div class="rounded-lg border border-base-300 p-3 mb-4" id="model-serving-lanes">
-                  <div class="flex items-center justify-between mb-2">
-                    <h4 class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
-                      {gettext("Served by (API keys)")}
-                    </h4>
-                    <a
-                      href={~p"/catalog/providers"}
-                      class="btn btn-xs btn-ghost"
-                      id="model-lanes-providers-link"
-                      title={gettext("Open the providers page")}
-                    >
-                      <.icon name="hero-server-stack" class="w-3.5 h-3.5" />
-                      {gettext("Providers")}
-                    </a>
-                  </div>
+                  <h4 class="text-xs font-semibold uppercase tracking-wide text-base-content/50 mb-2">
+                    {gettext("Served by (API keys)")}
+                  </h4>
 
                   <p
                     :if={@wizard_lanes == []}
@@ -3227,12 +3219,16 @@ defmodule TokengateWeb.ModelsLive do
                     class="flex items-center gap-2 py-1.5 border-b border-base-200 last:border-0"
                   >
                     <span class="flex-1 min-w-0 truncate text-sm">
-                      <span class="font-medium">{lane.credential.provider.name}</span>
-                      <span class="text-base-content/40"> · </span>
-                      <span class="font-mono text-xs text-base-content/70">
-                        {lane.credential.name || gettext("Key")} ({mask_key(
-                          lane.credential.api_key_encrypted
-                        )})
+                      <%!-- La key manda: es lo que sirve al modelo. El proveedor va
+                           detrás porque es SU dueño, no una relación del modelo. --%>
+                      <span class="font-mono text-xs">
+                        {lane.credential.name || gettext("unnamed key")}
+                      </span>
+                      <span class="text-xs text-base-content/40 ml-1">
+                        {mask_key(lane.credential.api_key_encrypted)}
+                      </span>
+                      <span class="text-xs text-base-content/50 ml-1">
+                        · {lane.credential.provider.name}
                       </span>
                       <span :if={!lane.enabled} class="badge badge-xs badge-ghost ml-1">
                         {gettext("disabled")}

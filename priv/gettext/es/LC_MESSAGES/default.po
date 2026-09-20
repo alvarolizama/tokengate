@@ -176,6 +176,15 @@ msgstr "+ path; vacío = default del adapter."
 msgid "API key"
 msgstr "API key"
 
+msgid "Assign API key"
+msgstr "Asignar API key"
+
+msgid "No API key assigned: nothing can route to it."
+msgstr "Sin API key asignada: nada puede rutear a él."
+
+msgid "unnamed key"
+msgstr "key sin nombre"
+
 msgid "No API key assigned yet: the model is registered but nothing can route to it."
 msgstr "Todavía no tiene API key asignada: el modelo existe pero nada puede rutear a él."
 

@@ -2022,19 +2022,41 @@ defmodule TokengateWeb.ModelsLiveTest do
   } do
     %{user: admin, password: password} = register("admin")
     provider = create_keyed_provider("acme-lane", %{name: "Acme Cloud"})
+
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        name: "Prod",
+        api_key_encrypted: "prueba-prod-1234",
+        status: "active"
+      })
+
     model_record = create_model(%{name: "con-lane"})
 
-    _lane =
-      create_model_provider(model_record, provider, %{provider_model: "accounts/acme/tier-1"})
+    {:ok, _lane} =
+      Providers.create_model_provider(%{
+        model_id: model_record.id,
+        credential_id: credential.id,
+        provider_model: "accounts/acme/tier-1",
+        priority: 1,
+        enabled: true
+      })
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/catalog/models")
     view |> element("#edit-model-#{model_record.id}") |> render_click()
 
     assert has_element?(view, "#model-serving-lanes")
-    assert render(view) =~ "Acme Cloud"
-    assert render(view) =~ "accounts/acme/tier-1"
-    assert has_element?(view, "#model-lanes-providers-link")
+    html = render(view)
+
+    # La fila se identifica por la KEY (lo que sirve al modelo); el proveedor va
+    # detrás, como dueño de la key — no como una relación del modelo.
+    assert html =~ "Prod"
+    assert html =~ "Acme Cloud"
+    assert html =~ "accounts/acme/tier-1"
+
+    # Y no hay ningún enlace que "vincule el modelo a un proveedor".
+    refute has_element?(view, "#model-lanes-providers-link")
 
     # La edición no tiene pasos de proveedor/key/modelo: ni migas ni chip.
     refute has_element?(view, "#model-wizard-steps")
