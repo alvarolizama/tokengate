@@ -104,6 +104,7 @@ defmodule TokengateWeb.ModelsLive do
       |> assign(:wizard_credentials, [])
       |> assign(:wizard_credential_label, nil)
       |> assign(:wizard_models_loading, false)
+      |> assign(:wizard_models_error, nil)
       |> assign(:provider_choices, [])
       |> assign(:provider_search, "")
       |> assign(:provider_choices_results, [])
@@ -256,6 +257,10 @@ defmodule TokengateWeb.ModelsLive do
     if socket.assigns.is_admin do
       {:noreply,
        socket
+       # Las credenciales se releen aquí: una API key creada en la página de
+       # proveedores DESPUÉS del mount no está en la lista del mount, y el paso
+       # 2 se quedaría sin ella (y sin key no hay listado).
+       |> assign_form_data()
        |> assign(:form, nil)
        |> assign(:editing_model_id, nil)
        |> assign(:model_form_picked_type, nil)
@@ -537,6 +542,7 @@ defmodule TokengateWeb.ModelsLive do
 
       {:noreply,
        socket
+       |> assign_form_data()
        |> assign(:form, to_form(changeset, as: :model))
        |> assign(:editing_model_id, model.id)
        # La edición entra al mismo wizard que el alta: el tipo del row queda
@@ -1341,7 +1347,9 @@ defmodule TokengateWeb.ModelsLive do
         send(lv_pid, {:wizard_models_result, provider_key, type, credential_id, result})
       end)
 
-      assign(socket, :wizard_models_loading, true)
+      socket
+      |> assign(:wizard_models_loading, true)
+      |> assign(:wizard_models_error, nil)
     else
       assign(socket, :wizard_models_loading, false)
     end
@@ -1408,6 +1416,14 @@ defmodule TokengateWeb.ModelsLive do
 
   defp merge_wizard_models(seed, _error), do: seed
 
+  # El motivo del fallo se muestra tal cual (un átomo del vocabulario de
+  # `ProviderAdapter.classify_error/1` o el mensaje de una excepción): un
+  # "no publica nada" cuando la verdad es "no me contestó" es peor que no decir
+  # nada, porque manda al operador a escribir a mano un id que sí existía.
+  defp wizard_models_error({:ok, _ids}), do: nil
+  defp wizard_models_error({:error, reason}) when is_atom(reason), do: Atom.to_string(reason)
+  defp wizard_models_error({:error, reason}), do: to_string(reason)
+
   ## Private helpers — model save ------------------------------------------
 
   # El wizard crea el modelo Y su primer lane de una vez: el operador ya eligió
@@ -1465,6 +1481,7 @@ defmodule TokengateWeb.ModelsLive do
     |> assign(:wizard_credential_label, nil)
     |> assign(:wizard_models, [])
     |> assign(:wizard_models_loading, false)
+    |> assign(:wizard_models_error, nil)
   end
 
   defp save_model(socket, :new, model_params) do
@@ -1656,6 +1673,7 @@ defmodule TokengateWeb.ModelsLive do
       {:noreply,
        socket
        |> assign(:wizard_models_loading, false)
+       |> assign(:wizard_models_error, wizard_models_error(result))
        |> assign(
          :wizard_models,
          merge_wizard_models(assigns[:wizard_models] || [], result)
@@ -3012,6 +3030,25 @@ defmodule TokengateWeb.ModelsLive do
                      (DashScope para los seis servicios) queda la semilla curada
                      en código. --%>
                 <%= if @wizard_step == "model" do %>
+                  <div
+                    class="flex items-center gap-2 mb-3 text-xs text-base-content/70"
+                    id="wizard-models-key"
+                  >
+                    <.icon name="hero-key" class="w-3.5 h-3.5 text-primary shrink-0" />
+                    <span class="font-mono flex-1">
+                      {@wizard_credential_label || gettext("no key")}
+                    </span>
+                    <button
+                      type="button"
+                      phx-click="wizard_back"
+                      phx-value-step="credential"
+                      class="btn btn-xs btn-ghost"
+                      id="wizard-change-key-from-models"
+                    >
+                      <.icon name="hero-arrow-path" class="w-3 h-3" /> {gettext("Change")}
+                    </button>
+                  </div>
+
                   <div id="wizard-models" class="mb-4">
                     <p class="text-xs text-base-content/60 mb-2 flex items-center gap-2">
                       <span>
@@ -3044,8 +3081,35 @@ defmodule TokengateWeb.ModelsLive do
                       </button>
                     </div>
 
+                    <%!-- Tres estados distintos, TRES mensajes: "no hay key"
+                         (no se preguntó), "no contestó" (se preguntó y falló) y
+                         "no publica" (contestó y no trae nada de este tipo). El
+                         primero manda al operador al paso 2; el segundo le dice
+                         POR QUÉ; el tercero es el único que invita a teclear. --%>
                     <p
-                      :if={@wizard_models == [] and !@wizard_models_loading}
+                      :if={is_nil(@wizard_credential_id) and @wizard_models == []}
+                      class="text-sm text-base-content/60 py-3"
+                      id="wizard-models-need-key"
+                    >
+                      {gettext(
+                        "Pick an API key in the previous step: the list comes from the provider itself."
+                      )}
+                    </p>
+
+                    <p
+                      :if={@wizard_models_error}
+                      class="text-sm text-error py-3"
+                      id="wizard-models-error"
+                    >
+                      {gettext("The provider did not answer the listing:")}
+                      <span class="font-mono">{@wizard_models_error}</span>
+                    </p>
+
+                    <p
+                      :if={
+                        @wizard_models == [] and !@wizard_models_loading and
+                          @wizard_models_error == nil and @wizard_credential_id
+                      }
                       class="text-sm text-base-content/50 py-3"
                       id="wizard-models-empty"
                     >

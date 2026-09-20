@@ -1938,4 +1938,75 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert has_element?(view, "input#wizard-provider-model[value='jev-latest']")
     assert has_element?(view, "#wizard-chosen-key")
   end
+
+  # El paso 3 tiene TRES estados y cada uno manda al operador a un sitio
+  # distinto: sin key (no se preguntó), error (se preguntó y no contestó) y
+  # "no publica" (contestó y no trae nada del tipo). Un solo mensaje para los
+  # tres manda a teclear a mano un id que sí existía.
+  test "sin key elegida el paso 3 lo dice: no se preguntó al proveedor", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    # Un proveedor SIN semilla curada para el tipo (un custom): con la lista
+    # vacía, el paso tiene que decir que falta la key — no que el proveedor no
+    # publica nada.
+    provider =
+      create_keyed_provider("acme-sin-key", %{name: "Acme", base_url: "http://localhost:1"})
+
+    {:ok, _credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        name: "sin-elegir",
+        api_key_encrypted: "sk-sin-elegir",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-llm") |> render_click()
+    view |> element("#wizard-provider-acme-sin-key") |> render_click()
+
+    # Continuar SIN elegir la key: no hay a quién preguntar.
+    view |> element("#wizard-continue") |> render_click()
+
+    assert has_element?(view, "#wizard-models-need-key")
+    refute has_element?(view, "#wizard-models-empty")
+    assert has_element?(view, "#wizard-models-key")
+  end
+
+  test "un upstream que no contesta se muestra como error, no como 'no publica'", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    seed_mirror!()
+
+    provider =
+      Tokengate.Providers.Provider
+      |> Repo.get_by(key: "openrouter")
+      |> Ecto.Changeset.change(base_url: "http://localhost:1")
+      |> Repo.update!()
+
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        name: "muerta",
+        api_key_encrypted: "sk-muerta",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-image") |> render_click()
+    view |> element("#wizard-provider-openrouter") |> render_click()
+    view |> element("#wizard-credential") |> render_change(%{"credential_id" => credential.id})
+    view |> element("#wizard-continue") |> render_click()
+
+    # El listado falla: el motivo se ve, y NO se dice que el proveedor no
+    # publica nada (manda a teclear un id que sí existe).
+    assert has_element?(view, "#wizard-models-error")
+    refute has_element?(view, "#wizard-models-empty")
+    # La semilla curada del tipo sigue ofreciéndose mientras tanto.
+    assert has_element?(view, "#wizard-model-#{ModelsLive.dom_key("openai/gpt-image-2")}")
+  end
 end
