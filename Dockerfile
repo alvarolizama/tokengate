@@ -26,11 +26,14 @@ RUN mix local.hex --force && mix local.rebar --force
 
 ENV MIX_ENV=prod
 
-# force_ssl is compile-time (see config/prod.exs). For plain-HTTP deploys
-# (VPN tunnel, no TLS terminator) we disable it here permanently.
-# To re-enable TLS, set this to "" and rebuild.
-# Declared as ENV (not only ARG) so Coolify can override it per-deployment
-# via runtime env vars without rebuilding the image.
+# force_ssl is compile-time (see config/prod.exs): what counts is this build
+# ARG. **Tokengate ships "1" on purpose** — its documented deploy is plain
+# HTTP behind a VPN, with no TLS terminator — which the standard allows as a
+# per-app decision, never as an inherited default: the family skeleton ships
+# HTTPS on (SPEC-docker.md §Hard rules, rule 6). For the TLS variant build
+# with --build-arg DISABLE_FORCE_SSL="" and set PHX_SCHEME=https at runtime.
+# Declared as ENV too so the deploy platform *shows* the choice; it does NOT
+# toggle Plug.SSL at runtime — that is decided here, at build time.
 ARG DISABLE_FORCE_SSL="1"
 ENV DISABLE_FORCE_SSL=${DISABLE_FORCE_SSL}
 

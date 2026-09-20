@@ -249,12 +249,41 @@ resp = client.chat.completions.create(
 | `GOOGLE_OAUTH_REDIRECT_URI` | derived | Override the OAuth callback URL |
 | `DNS_CLUSTER_QUERY` | unset | Node clustering DNS query |
 
+`.env.example` is the **complete template** — core, session and this app's own
+variables, each with its comment and a safe default:
+`cp .env.example .env && $EDITOR .env`.
+
+## The UI standard
+
+The UI follows the family's **Commons** — theme and tokens, layout and responsive,
+elements and **buttons by context**, cards, tables, modals, search pickers, charts,
+states, shell — copied **byte-exact** from the `boilerplate` repo's `DESIGN.md`,
+plus the section this app owns at the end of that same file: `## Custom — TokenGate`.
+
+The Commons is edited **in the boilerplate repo and only there**, and propagates by
+copying; an app never edits it in place. To see whether this app is still carrying
+it byte-exact:
+
+```bash
+bash path/to/boilerplate/skeleton/check-commons.sh .   # exit 0 = Commons intact
+```
+
 ## Production (Docker)
 
 Multi-stage **Dockerfile** included: prebuilt hexpm Elixir image → slim Debian runtime,
 non-root `app` user, port `4000`. The entrypoint applies migrations and seeds the admin
-before boot; `SKIP_MIGRATIONS=1` bypasses. `DISABLE_FORCE_SSL=1` (default) ships a
-plain-HTTP build for VPN/behind-proxy deploys.
+before boot; `SKIP_MIGRATIONS=1` bypasses.
+
+**Ports:** `PORT` (container, default `4000`) **must equal the platform's _Ports Exposes_**
+— that is the real listen port. `PHX_PORT` / `PHX_SCHEME` only feed the generated URLs
+(the external ones: `443` / `https`, or `4000` / `http` behind a VPN). The image sets no
+`EXPOSE`: it would not change the listen.
+
+**HTTPS:** `force_ssl` is compile-time, and tokengate ships `DISABLE_FORCE_SSL=1`
+**on purpose** — its deploy is plain HTTP behind a VPN, with no TLS terminator. The
+family skeleton's default is HTTPS on and the standard allows `1` only as a decision
+per app, never as an inherited default. For the TLS variant, build with
+`--build-arg DISABLE_FORCE_SSL=""` and set `PHX_SCHEME=https`.
 
 Boot runs `priv/repo/seeds_prod.exs`: it creates **only** the admin user, and only when
 `TOKENGATE_ADMIN_PASSWORD` is set (`TOKENGATE_ADMIN_EMAIL` optional, defaults to
@@ -290,6 +319,18 @@ docker run -p 4000:4000 --env-file .env tokengate
 > ⚠️ **Migrations on partitioned tables:** `CREATE INDEX` on `request_logs` cannot use
 > `CONCURRENTLY` (Postgres limitation). On a large existing table, run migrations in a
 > maintenance window.
+
+## Tests and gates
+
+```bash
+mix precommit   # the gate that closes the loop
+```
+
+The `/health` probe carries its own test that runs **without** a sandbox owner
+(`test/tokengate_web/controllers/health_controller_test.exs`): a `/health` that queried
+the database would answer 503 there and turn the suite red. That is the regression the
+container's `HEALTHCHECK` depends on not happening, so the test pins it structurally
+rather than by convention.
 
 ## Tech stack
 
