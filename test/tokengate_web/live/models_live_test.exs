@@ -323,7 +323,10 @@ defmodule TokengateWeb.ModelsLiveTest do
     view |> element("#wizard-provider-openrouter") |> render_click()
 
     # Paso 2: la key. Elegirla es lo que dispara el listado del proveedor.
-    view |> element("#wizard-credential") |> render_change(%{"credential_id" => credential.id})
+    view
+    |> element("#wizard-credential-form")
+    |> render_change(%{"credential_id" => credential.id})
+
     view |> element("#wizard-continue") |> render_click()
 
     # La semilla curada ya está en la lista (no se espera a la red).
@@ -654,7 +657,10 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     # Paso 2: la API key — es el input NECESARIO del alta y lo que dispara el
     # listado del proveedor.
-    view |> element("#wizard-credential") |> render_change(%{"credential_id" => credential.id})
+    view
+    |> element("#wizard-credential-form")
+    |> render_change(%{"credential_id" => credential.id})
+
     view |> element("#wizard-continue") |> render_click()
 
     # Paso 3: los modelos que ese proveedor publica para `image`.
@@ -1922,7 +1928,10 @@ defmodule TokengateWeb.ModelsLiveTest do
     view |> element("#wizard-provider-typesafe") |> render_click()
 
     # Paso 2: la key (TypeSafe tiene una sola).
-    view |> element("#wizard-credential") |> render_change(%{"credential_id" => credential.id})
+    view
+    |> element("#wizard-credential-form")
+    |> render_change(%{"credential_id" => credential.id})
+
     view |> element("#wizard-continue") |> render_click()
 
     # Paso 3: los dos aliases de Jev, de la semilla.
@@ -2003,7 +2012,11 @@ defmodule TokengateWeb.ModelsLiveTest do
     view |> element("#new-model-btn") |> render_click()
     view |> element("#pick-type-image") |> render_click()
     view |> element("#wizard-provider-openrouter") |> render_click()
-    view |> element("#wizard-credential") |> render_change(%{"credential_id" => credential.id})
+
+    view
+    |> element("#wizard-credential-form")
+    |> render_change(%{"credential_id" => credential.id})
+
     view |> element("#wizard-continue") |> render_click()
 
     # El listado falla: el motivo se ve, y NO se dice que el proveedor no
@@ -2202,5 +2215,30 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert lane =~ "Prod"
     refute lane =~ "Acme Data"
     assert has_element?(view, "input#wizard-provider-model")
+  end
+
+  # Un `phx-change` en un input SIN form ancestro no sale del navegador:
+  # LiveView levanta "form events require the input to be inside a form"
+  # (`view.ts`, `pushInput/6`) y el evento muere ahí. Los tests no lo ven porque
+  # `render_change/3` despacha directo al servidor, así que la clase se pina por
+  # ESTRUCTURA (el input dentro de su form) y por comportamiento a través del
+  # form.
+  test "el buscador de proveedores del paso 1 filtra desde su form", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    seed_mirror!()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-llm") |> render_click()
+
+    # El input vive dentro de un form (sin él, el navegador no manda el evento).
+    assert has_element?(view, "form#wizard-provider-search-form input#wizard-provider-search")
+
+    view |> element("#wizard-provider-search-form") |> render_change(%{"q" => "surplus"})
+
+    assert has_element?(view, "#wizard-provider-surplus-intelligence")
+    refute has_element?(view, "#wizard-provider-302ai")
   end
 end

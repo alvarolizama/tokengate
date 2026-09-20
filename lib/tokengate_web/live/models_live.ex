@@ -2907,17 +2907,22 @@ defmodule TokengateWeb.ModelsLive do
                   )}
                 </p>
 
-                <input
-                  type="text"
-                  name="q"
-                  id="wizard-provider-search"
-                  value={@wizard_provider_search}
-                  placeholder={gettext("Search provider… (e.g. openrouter, alibaba)")}
-                  class="input input-sm w-full mb-2"
-                  autocomplete="off"
+                <form
+                  id="wizard-provider-search-form"
                   phx-change="wizard_search_providers"
-                  phx-debounce="150"
-                />
+                  phx-submit="wizard_search_providers"
+                >
+                  <input
+                    type="text"
+                    name="q"
+                    id="wizard-provider-search"
+                    value={@wizard_provider_search}
+                    placeholder={gettext("Search provider… (e.g. openrouter, alibaba)")}
+                    class="input input-sm w-full mb-2"
+                    autocomplete="off"
+                    phx-debounce="150"
+                  />
+                </form>
 
                 <div
                   :if={wizard_provider_results(@wizard_providers, @wizard_provider_search) == []}
@@ -3024,21 +3029,22 @@ defmodule TokengateWeb.ModelsLive do
                       <label class="label" for="wizard-credential">
                         {gettext("Credential (API key)")}
                       </label>
-                      <select
-                        id="wizard-credential"
-                        name="credential_id"
-                        class="select select-sm w-full"
-                        phx-change="wizard_pick_credential"
-                      >
-                        <option value="">{gettext("Pick an API key from this provider")}</option>
-                        <option
-                          :for={c <- @wizard_credentials}
-                          value={c.id}
-                          selected={@wizard_credential_id == c.id}
+                      <form id="wizard-credential-form" phx-change="wizard_pick_credential">
+                        <select
+                          id="wizard-credential"
+                          name="credential_id"
+                          class="select select-sm w-full"
                         >
-                          {credential_label(c)}
-                        </option>
-                      </select>
+                          <option value="">{gettext("Pick an API key from this provider")}</option>
+                          <option
+                            :for={c <- @wizard_credentials}
+                            value={c.id}
+                            selected={@wizard_credential_id == c.id}
+                          >
+                            {credential_label(c)}
+                          </option>
+                        </select>
+                      </form>
                     </div>
 
                     <p
@@ -3283,15 +3289,16 @@ defmodule TokengateWeb.ModelsLive do
                       <label class="label" for="wizard-provider-model">
                         {gettext("Model id at the provider")}
                       </label>
-                      <input
-                        type="text"
-                        id="wizard-provider-model"
-                        name="wizard_provider_model"
-                        value={@wizard_provider_model || ""}
-                        class="input input-sm w-full"
-                        phx-change="wizard_pick_provider_model"
-                        phx-debounce="300"
-                      />
+                      <form id="wizard-provider-model-form" phx-change="wizard_pick_provider_model">
+                        <input
+                          type="text"
+                          id="wizard-provider-model"
+                          name="wizard_provider_model"
+                          value={@wizard_provider_model || ""}
+                          class="input input-sm w-full"
+                          phx-debounce="300"
+                        />
+                      </form>
                     </div>
 
                     <p
@@ -3559,6 +3566,7 @@ defmodule TokengateWeb.ModelsLive do
                       <input
                         type="text"
                         name="q"
+                        phx-change="search_providers"
                         id="provider-search"
                         value={@provider_search}
                         placeholder={
@@ -3566,7 +3574,6 @@ defmodule TokengateWeb.ModelsLive do
                         }
                         class="input input-sm w-full pl-9"
                         autocomplete="off"
-                        phx-change="search_providers"
                         phx-debounce="150"
                       />
                     </div>
@@ -3805,11 +3812,11 @@ defmodule TokengateWeb.ModelsLive do
                           <input
                             type="text"
                             name="model_provider[scope_member_id_display]"
+                            phx-change="scope_member_search"
                             value={@scope_member_search}
                             placeholder={gettext("Type to search a user…")}
                             phx-focus="open_scope_picker"
                             phx-value-picker="member"
-                            phx-change="scope_member_search"
                             phx-debounce="200"
                             class="input input-sm w-full"
                             autocomplete="off"
@@ -3858,11 +3865,11 @@ defmodule TokengateWeb.ModelsLive do
                           <input
                             type="text"
                             name="model_provider[scope_member_id_display]"
+                            phx-change="scope_member_search"
                             value={@scope_member_search}
                             placeholder={gettext("Type to search a user…")}
                             phx-focus="open_scope_picker"
                             phx-value-picker="member"
-                            phx-change="scope_member_search"
                             phx-debounce="200"
                             class="input input-sm w-full"
                             autocomplete="off"
@@ -3941,11 +3948,11 @@ defmodule TokengateWeb.ModelsLive do
                           <input
                             type="text"
                             name="model_provider[scope_group_id_display]"
+                            phx-change="scope_group_search"
                             value={@scope_group_search}
                             placeholder={gettext("Type to search a limit profile…")}
                             phx-focus="open_scope_picker"
                             phx-value-picker="group"
-                            phx-change="scope_group_search"
                             phx-debounce="200"
                             class="input input-sm w-full"
                             autocomplete="off"
@@ -3993,11 +4000,11 @@ defmodule TokengateWeb.ModelsLive do
                           <input
                             type="text"
                             name="model_provider[scope_group_id_display]"
+                            phx-change="scope_group_search"
                             value={@scope_group_search}
                             placeholder={gettext("Type to search a limit profile…")}
                             phx-focus="open_scope_picker"
                             phx-value-picker="group"
-                            phx-change="scope_group_search"
                             phx-debounce="200"
                             class="input input-sm w-full"
                             autocomplete="off"
@@ -4076,8 +4083,8 @@ defmodule TokengateWeb.ModelsLive do
                         <select
                           id="ap-pricing-unit"
                           name="model_provider[pricing_unit]"
-                          class="select w-full"
                           phx-change="pick_pricing_unit"
+                          class="select w-full"
                         >
                           <option
                             :for={{label, key} <- pricing_unit_options(@provider_form_model_id)}

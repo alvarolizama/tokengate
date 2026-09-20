@@ -78,13 +78,18 @@ defmodule Tokengate.Release do
     load_config()
     seeds_file = seeds_file()
 
-    for repo <- repos() do
-      {:ok, _, _} =
-        Ecto.Migrator.with_repo(
-          repo,
-          fn _repo -> Code.eval_file(seeds_file) end,
-          timeout: @start_timeout
-        )
+    if File.exists?(seeds_file) do
+      for repo <- repos() do
+        {:ok, _, _} =
+          Ecto.Migrator.with_repo(
+            repo,
+            fn _repo -> Code.eval_file(seeds_file) end,
+            timeout: @start_timeout
+          )
+      end
+    else
+      Logger.info("[release] no seed file at #{seeds_file}, nothing to seed")
+      :ok
     end
   end
 
