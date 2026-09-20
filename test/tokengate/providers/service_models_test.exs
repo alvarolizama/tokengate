@@ -119,8 +119,8 @@ defmodule Tokengate.Providers.ServiceModelsTest do
   end
 
   describe "superficies compartidas" do
-    test "alibaba-cn y qwen-cloud resuelven a la tabla de alibaba" do
-      for key <- ~w(alibaba alibaba-cn qwen-cloud) do
+    test "alibaba-cn resuelve a la tabla de alibaba" do
+      for key <- ~w(alibaba alibaba-cn) do
         assert ServiceModels.classify(key, "qwen3-rerank") == "rerank"
         assert ServiceModels.classify(key, "wan2.7-t2v") == "video"
         assert ServiceModels.known_ids(key, "stt") == ServiceModels.known_ids("alibaba", "stt")
@@ -181,7 +181,7 @@ defmodule Tokengate.Providers.ServiceModelsTest do
     # nativo — ninguna fila de la semilla puede apuntarlo hoy. CLASIFICAR sí se
     # clasifica si alguien lo escribe, que es una decisión distinta de ofrecerlo.
     test "fun-music no se ofrece en DashScope pero sí se clasifica" do
-      for key <- ~w(alibaba alibaba-cn qwen-cloud) do
+      for key <- ~w(alibaba alibaba-cn) do
         assert ServiceModels.known_ids(key, "music") == []
         assert ServiceModels.classify(key, "fun-music-v1") == "music"
       end

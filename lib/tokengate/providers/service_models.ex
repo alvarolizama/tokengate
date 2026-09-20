@@ -44,10 +44,9 @@ defmodule Tokengate.Providers.ServiceModels do
   ## Superficies compartidas
 
   Varios `provider_key` hablan la MISMA superficie y sirven los MISMOS ids,
-  cambiando sólo host y API keys: `alibaba` y `alibaba-cn` (DashScope intl/cn) y
-  `qwen-cloud` (la plataforma de Qwen, misma infraestructura DashScope
-  internacional). Se declaran una vez bajo `alibaba` y se resuelven por alias
-  (`@shared_surfaces`), en vez de triplicar la tabla.
+  cambiando sólo host y API keys: `alibaba` y `alibaba-cn` (DashScope intl/cn).
+  Se declaran una vez bajo `alibaba` y se resuelven por alias
+  (`@shared_surfaces`), en vez de duplicar la tabla.
   """
 
   alias Tokengate.Providers.ModelCatalog
@@ -55,8 +54,7 @@ defmodule Tokengate.Providers.ServiceModels do
   @media_types ~w(rerank stt tts image video music)
 
   @shared_surfaces %{
-    "alibaba-cn" => "alibaba",
-    "qwen-cloud" => "alibaba"
+    "alibaba-cn" => "alibaba"
   }
 
   # Patrones ordenados por proveedor: el PRIMERO que casa gana. El orden importa
@@ -280,8 +278,8 @@ defmodule Tokengate.Providers.ServiceModels do
 
   Seeds the picker when there is no live catalogue; never a closed vocabulary.
   Un `provider_key` de `@shared_surfaces` resuelve a la tabla que comparte:
-  `alibaba-cn` y `qwen-cloud` leen la de `alibaba` (misma superficie DashScope,
-  distinto host y claves).
+  `alibaba-cn` lee la de `alibaba` (misma superficie DashScope, distinto host y
+  claves).
   """
   @spec known_ids(String.t() | nil, String.t()) :: [String.t()]
   def known_ids(provider_key, type) when is_binary(type) do

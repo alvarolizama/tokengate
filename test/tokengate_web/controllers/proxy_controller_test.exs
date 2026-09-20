@@ -1503,7 +1503,7 @@ defmodule TokengateWeb.ProxyControllerTest do
       end
     end
 
-    test ":passthrough (alibaba/qwen) leaves the body untouched", %{
+    test ":passthrough (alibaba) leaves the body untouched", %{
       conn: conn,
       token: token,
       model: model

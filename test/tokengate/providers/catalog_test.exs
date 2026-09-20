@@ -207,7 +207,7 @@ defmodule Tokengate.Providers.CatalogTest do
 
     test "code_providers/0 carries the fields the mirror stores" do
       providers = Catalog.code_providers()
-      assert length(providers) == 3
+      assert length(providers) == 2
 
       assert %{key: "surplus-intelligence"} =
                entry = find_code_provider(providers, "surplus-intelligence")
@@ -218,14 +218,6 @@ defmodule Tokengate.Providers.CatalogTest do
       assert is_binary(entry.logo_url) and entry.logo_url != ""
       assert entry.status == "active"
 
-      # Qwen Cloud: la plataforma API de Qwen (qwen.ai), misma superficie
-      # DashScope intl que alibaba pero con keys/billing propios.
-      assert %{key: "qwen-cloud"} = qwen = find_code_provider(providers, "qwen-cloud")
-
-      assert qwen.name == "Qwen Cloud"
-      assert qwen.base_url == "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
-      assert qwen.status == "active"
-
       # TypeSafe: Jev / System One. models.dev no lo publica; fila de código.
       assert %{key: "typesafe"} = ts = find_code_provider(providers, "typesafe")
 
@@ -235,7 +227,7 @@ defmodule Tokengate.Providers.CatalogTest do
 
       # Y las keys son consultables para que el refresh no las barra a stale.
       assert "surplus-intelligence" in Catalog.code_provider_keys()
-      assert "qwen-cloud" in Catalog.code_provider_keys()
+      assert "typesafe" in Catalog.code_provider_keys()
     end
 
     defp find_code_provider(providers, key), do: Enum.find(providers, &(&1.key == key))
@@ -612,12 +604,11 @@ defmodule Tokengate.Providers.CatalogTest do
       assert Catalog.reasoning_dialect("deepseek") == :deepseek_native
     end
 
-    test "qwen/alibaba are the same upstream and declare passthrough" do
+    test "alibaba declares passthrough on both surfaces" do
       # DashScope documents no reasoning knobs we reshape: the client's body
-      # travels untouched (qwen-cloud is the same DashScope entry).
+      # travels untouched.
       assert Catalog.reasoning_dialect("alibaba") == :passthrough
       assert Catalog.reasoning_dialect("alibaba-cn") == :passthrough
-      assert Catalog.reasoning_dialect("qwen-cloud") == :passthrough
     end
 
     test "providers without a dialect and unknown keys declare passthrough" do
@@ -630,17 +621,19 @@ defmodule Tokengate.Providers.CatalogTest do
     # El logo es IDENTIDAD de un builtin: vive en el espejo y `materialize/0` es
     # lo que lo lleva a `providers` — incluso en una instancia VIVA, porque el
     # refresh lo llama justo después de escribir el espejo. Sin esa propagación
-    # un logo muerto seguiría muerto para siempre: es lo que pasó con qwen-cloud
-    # (un PNG de alicdn que respondía 404) y con typesafe (favicon inexistente),
-    # que se veían como un HUECO en la lista en vez del icono genérico.
+    # un logo muerto seguiría muerto para siempre: es lo que pasaba con el PNG
+    # de alicdn de la ya retirada fila `qwen-cloud` y con typesafe (favicon
+    # inexistente), que se veían como un HUECO en la lista en vez del icono
+    # genérico.
     test "un cambio de logo en el espejo llega a providers al materializar" do
-      Repo.get(CatalogProvider, "qwen-cloud")
-      |> Ecto.Changeset.change(logo_url: "https://example.test/qwen.svg")
+      Repo.get(CatalogProvider, "surplus-intelligence")
+      |> Ecto.Changeset.change(logo_url: "https://example.test/surplus.svg")
       |> Repo.update!()
 
       :ok = CatalogSync.materialize()
 
-      assert Repo.get_by(Provider, key: "qwen-cloud").logo_url == "https://example.test/qwen.svg"
+      assert Repo.get_by(Provider, key: "surplus-intelligence").logo_url ==
+               "https://example.test/surplus.svg"
     end
 
     test "los logos code-owned son nil o una URL https" do

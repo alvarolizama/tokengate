@@ -305,8 +305,9 @@ defmodule TokengateWeb.ModelsLiveTest do
 
   # El render del logo era `img si logo_url / icono si nil`, así que una URL que
   # responde 404 NO caía al icono: dejaba el chip VACÍO, y desde fuera se leía
-  # como «a este proveedor le falta el logo». Es justo lo que pasaba con
-  # qwen-cloud (PNG de alicdn muerto) y typesafe (favicon inexistente).
+  # como «a este proveedor le falta el logo». Es justo lo que pasaba con el PNG
+  # de alicdn de la ya retirada fila `qwen-cloud` y con typesafe (favicon
+  # inexistente).
   # Ahora el icono va SIEMPRE en el markup (oculto sólo si hay logo) y el <img>
   # lleva `data-logo` para que el listener global de `error` (app.js) sepa cuál
   # falló y lo sustituya por el icono.

@@ -198,15 +198,6 @@ defmodule Tokengate.Providers.Catalog do
     },
     "alibaba-token-plan" => %{capabilities: ~w(llm)},
     "alibaba-token-plan-cn" => %{capabilities: ~w(llm)},
-    # Qwen Cloud: misma superficie DashScope que "alibaba" — chat, embeddings,
-    # rerank en compatible-api, image en compatible-mode, stt/tts/video nativos
-    # (adaptador dashscope). Keys y billing propios. La fila entera vive en
-    # @code_providers.
-    "qwen-cloud" => %{
-      capabilities: ~w(llm embedding rerank image stt tts video),
-      dialect: "dashscope",
-      paths: %{rerank: "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks"}
-    },
     "opencode" => %{capabilities: ~w(llm)},
     "opencode-go" => %{capabilities: ~w(llm)},
     # Moonshot/Kimi: `thinking` y `reasoning_effort` son MUTUAMENTE
@@ -290,6 +281,14 @@ defmodule Tokengate.Providers.Catalog do
   #
   # Campos: los mismos que `normalize_providers/1` emite, en el shape que
   # `CatalogProvider` almacena. `env` y `npm` son informativos.
+  #
+  # Por qué Qwen Cloud NO está aquí: es la marca y el portal de la MISMA
+  # infraestructura DashScope internacional que `alibaba` — los ejemplos del
+  # propio Qwen usan `DASHSCOPE_API_KEY` contra el mismo host `dashscope-intl`, y
+  # una key sacada de su consola es una key DashScope de ese host. Declararla
+  # aparte duplicaba los siete servicios sin servir nada distinto, así que una
+  # key de Qwen Cloud se agrega como credencial de `alibaba`. La fila que ya
+  # existía en instancias vivas la retira la migración `RemoveQwenCloudProvider`.
   @code_providers %{
     "surplus-intelligence" => %{
       name: "Surplus Intelligence",
@@ -297,24 +296,6 @@ defmodule Tokengate.Providers.Catalog do
       doc_url: "https://www.surplusintelligence.ai/docs",
       logo_url: "https://www.surplusintelligence.ai/surplus-logo.png",
       env: ["SURPLUS_API_KEY"],
-      npm: nil
-    },
-    # Qwen Cloud (qwen.ai): la plataforma API de Qwen. Es la misma
-    # infraestructura DashScope que Alibaba Cloud Model Studio — su superficie
-    # OpenAI-compatible internacional vive en el mismo host dashscope-intl —
-    # pero con API keys y billing propios (QwenCloud-Token Plan), así que es
-    # una fila de proveedor SEPARADA. models.dev no la publica.
-    #
-    # `logo_url` verificado contra la fuente (2026-09-18): el PNG de alicdn que
-    # había antes respondía **404** y, como el render sólo cae al icono genérico
-    # cuando la URL es nil, el proveedor salía con el hueco VACÍO en la lista.
-    # El favicon de qwen.ai es la marca real de esta superficie y responde 200.
-    "qwen-cloud" => %{
-      name: "Qwen Cloud",
-      base_url: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-      doc_url: "https://qwen.ai/apiplatform",
-      logo_url: "https://qwen.ai/favicon.ico",
-      env: ["QWEN_API_KEY"],
       npm: nil
     },
     # TypeSafe (typesafe.ai): docs.typesafe.ai. La superficie es
