@@ -20,3 +20,6 @@ test/
 docs/
 tmp/
 erl_crash.dump
+
+# Riel local state (ledger/contract/briefs) — no entra al contexto de build
+.riel/
