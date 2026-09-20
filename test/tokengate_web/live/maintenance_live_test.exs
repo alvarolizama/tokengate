@@ -175,23 +175,6 @@ defmodule TokengateWeb.SettingsLiveTest do
       assert html =~ "cambió su base URL"
     end
 
-    test "muestra el aviso de catálogo de modelos vacío al arrancar", %{conn: conn} do
-      %{user: admin, password: pass} = register("admin")
-
-      {:ok, _} =
-        Tokengate.Providers.catalog_sync_state()
-        |> Ecto.Changeset.change(
-          warnings: [%{"reason" => "empty_model_mirror", "key" => "catalog_models"}]
-        )
-        |> Tokengate.Repo.update()
-
-      conn = login(conn, admin, pass)
-      {:ok, view, _html} = live(conn, ~p"/operations/maintenance")
-
-      assert has_element?(view, "#catalog-drift-warnings")
-      assert render(view) =~ "se encoló una"
-    end
-
     test "reset sticky sessions clears all sticky entries", %{conn: conn} do
       %{user: admin, password: pass} = register("admin")
 

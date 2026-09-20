@@ -16,14 +16,12 @@ defmodule Tokengate.Providers.CatalogSync do
       (a materialized provider may be serving traffic).
 
   Also seeds the mirrors from the vendored snapshots when they are empty
-  (providers, labs and models), so `sync/0` is the single entry point that makes
-  a fresh instance usable. A model mirror STILL empty after that seed (see
-  `request_refresh_if_model_mirror_empty/0`) enqueues a models.dev refresh on the
-  spot instead of leaving the picker empty until the weekly cron.
+  (providers and labs), so `sync/0` is the single entry point that makes a fresh
+  instance usable.
 
   ## Two entry points, on purpose
 
-  `sync/0` is the BOOT path: it seeds the three mirrors and then materializes.
+  `sync/0` is the BOOT path: it seeds the two mirrors and then materializes.
   `materialize/0` is the REFRESH path (called by `CatalogRefreshWorker` after it
   wrote the mirror): it materializes only, and seeds nothing.
 
@@ -43,8 +41,6 @@ defmodule Tokengate.Providers.CatalogSync do
     Catalog,
     CatalogProvider,
     CatalogSeed,
-    CatalogSyncState,
-    ModelCatalog,
     Provider
   }
 
@@ -54,58 +50,8 @@ defmodule Tokengate.Providers.CatalogSync do
   def sync do
     CatalogSeed.seed_if_empty()
     CatalogSeed.seed_labs_if_empty()
-    CatalogSeed.seed_models_if_empty()
     ensure_code_providers()
-    ModelCatalog.ensure_code_models()
     materialize()
-    request_refresh_if_model_mirror_empty()
-  end
-
-  @doc """
-  Self-heal for an instance that booted with an EMPTY (or half-seeded) model
-  mirror.
-
-  The model half is the only mirror whose snapshot is read at RUNTIME, so it is
-  the one that can come up empty while providers and labs — embedded in the beam
-  at compile time — are always there: an instance without a reachable snapshot
-  seeds nothing. Waiting is not an option: the refresh cron is weekly
-  (`30 4 * * 1`) and Oban's Cron plugin does NOT replay a missed run, so a
-  container that boots after that minute leaves the model picker empty for up to
-  seven days.
-
-  So enqueue the refresh on the spot (same path as the maintenance button) and
-  leave the reason in the log AND in `catalog_sync_state.warnings`, which the
-  maintenance page renders: a silent empty catalog is what this exists to
-  prevent.
-
-  Returns `{:enqueued, result}` when the mirror was empty, `:ok` otherwise.
-  Never raises — the app must boot.
-  """
-  @spec request_refresh_if_model_mirror_empty() :: :ok | {:enqueued, term()}
-  def request_refresh_if_model_mirror_empty do
-    # Both halves, not only `catalog_models`: an offer-less mirror is useless to
-    # the picker (every model would offer ZERO providers) and it is a reachable
-    # state, so it counts as needing a refresh. `seed_models_if_empty/0` gets the
-    # chance to repair it from the snapshot first; if it is STILL incomplete the
-    # snapshot is unreachable and a network refresh is the only path back.
-    if not CatalogSeed.model_mirror_complete?() do
-      Logger.warning(
-        "[catalog sync] the model mirror is EMPTY after the seed (no reachable vendored " <>
-          "snapshot): enqueuing a models.dev refresh now instead of waiting for the weekly cron"
-      )
-
-      CatalogSyncState.record(%{
-        warnings: [%{"reason" => "empty_model_mirror", "key" => "catalog_models"}]
-      })
-
-      {:enqueued, Tokengate.Providers.request_catalog_refresh()}
-    else
-      :ok
-    end
-  rescue
-    e ->
-      Logger.error("[catalog sync] model mirror self-heal failed: #{Exception.message(e)}")
-      :ok
   end
 
   @doc """

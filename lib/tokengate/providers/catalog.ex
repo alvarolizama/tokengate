@@ -372,9 +372,9 @@ defmodule Tokengate.Providers.Catalog do
   Normalizes the raw models.dev `/api.json` payload into PROVIDER-level entries.
 
   Provider-level fields only: the payload is ~4.5 MB and the bulk of it is
-  per-model data, which `ModelCatalog.derive/3` consumes separately from the same
-  payload. `api` is models.dev's base URL key; `base_url` is accepted too so a
-  future schema rename does not blank the catalog.
+  per-model data, que el gateway ya NO espeja — el alta lista los modelos del
+  proveedor en vivo. `api` is models.dev's base URL key; `base_url` is accepted
+  too so a future schema rename does not blank the catalog.
 
   The provider LOGO is always built on the models.dev origin, whoever served the
   payload: it is an asset id, not a mirror-relative path.

@@ -7,12 +7,12 @@ defmodule Tokengate.Providers.ServiceModels do
   `models.dev` sólo publica la mitad de la superficie del gateway: sus ids son
   de chat, embeddings o, en el caso de TypeSafe, decisiones. Los **seis
   servicios de media** (`rerank`, `stt`, `tts`, `image`, `video`, `music`) no
-  existen ahí, así que el único marcado que había —`ModelCatalog.model_type_hint/1`,
+  existen ahí, así que el único marcado que había —`ModelIds.model_type_hint/1`,
   un regex sobre el id— no puede clasificarlos: un `wan2.7-t2v` o un
   `google/lyria-3-pro-preview` caen todos a `"llm"`.
 
   Este módulo es la mitad que falta. Es DATA code-owned, como
-  `Catalog.@code_providers` o `ModelCatalog.@code_models`: viaja con el release,
+  `Catalog.@code_providers` o `ModelIds.@code_models`: viaja con el release,
   no es una fila que el operador edite.
 
   ## Por qué PATRONES y no una lista exhaustiva
@@ -25,13 +25,13 @@ defmodule Tokengate.Providers.ServiceModels do
   Lo que sí es estable es la **familia** del id, y las familias están
   verificadas contra la documentación de cada proveedor (ver `@patterns`). Por
   eso el marcado es un patrón ordenado por proveedor —mismo criterio que
-  `ModelCatalog.model_type_hint/1`, que ya clasifica por regex— y el operador
+  `ModelIds.model_type_hint/1`, que ya clasifica por regex— y el operador
   confirma el tipo en el formulario, igual que hace hoy con llm/embedding.
 
   ## Tres fuentes, en este orden
 
     1. `@patterns` — la familia del id (los seis servicios).
-    2. `ModelCatalog.model_type_hint/1` — el hint de models.dev
+    2. `ModelIds.model_type_hint/1` — el hint de models.dev
        (`embedding`, `decision`, `llm`).
     3. `@discovery` — un proveedor que publica un catálogo POR SERVICIO
        (`{base}/images/models`) se lista en vivo desde ahí; es la fuente más
@@ -49,7 +49,7 @@ defmodule Tokengate.Providers.ServiceModels do
   (`@shared_surfaces`), en vez de duplicar la tabla.
   """
 
-  alias Tokengate.Providers.ModelCatalog
+  alias Tokengate.Providers.ModelIds
 
   @media_types ~w(rerank stt tts image video music)
 
@@ -231,7 +231,7 @@ defmodule Tokengate.Providers.ServiceModels do
   @spec type_of(String.t() | nil, String.t() | nil) :: String.t()
   def type_of(provider_key, model_id) do
     case classify(provider_key, model_id) do
-      nil -> ModelCatalog.model_type_hint(model_id)
+      nil -> ModelIds.model_type_hint(model_id)
       type -> type
     end
   end

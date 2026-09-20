@@ -2187,8 +2187,11 @@ msgstr "Borra todas las filas de"
 msgid "Deletes every sticky API key → provider assignment."
 msgstr "Borra todas las asignaciones sticky de API key → provider."
 
-msgid "Downloads the catalog again (providers, labs and models) and updates name, base URL,"
-msgstr "Vuelve a bajar el catálogo (proveedores, labs y modelos) y actualiza nombre, base URL,"
+msgid "Downloads the catalog again (providers and labs) and updates name, base URL,"
+msgstr "Vuelve a bajar el catálogo (proveedores y labs) y actualiza nombre, base URL,"
+
+msgid "First choose the type — it decides which providers are offered and the endpoint that will serve the model."
+msgstr "Primero elige el tipo: decide qué proveedores se ofrecen y el endpoint que servirá el modelo."
 
 msgid "It does not affect users, limit profiles, models, providers or API keys."
 msgstr "No afecta usuarios, perfiles de límites, models, proveedores ni API keys."

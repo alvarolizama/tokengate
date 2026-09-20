@@ -337,7 +337,7 @@ defmodule Tokengate.Routing.Router do
   defp normalize_model_responded(provider_model, %Provider{} = provider)
        when is_binary(provider_model) do
     if Tokengate.Providers.Catalog.bare_model_ids?(provider.key) do
-      Tokengate.Providers.ModelCatalog.short_name(provider_model)
+      Tokengate.Providers.ModelIds.short_name(provider_model)
     else
       provider_model
     end

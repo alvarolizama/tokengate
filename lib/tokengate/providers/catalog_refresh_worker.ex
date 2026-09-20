@@ -5,14 +5,12 @@ defmodule Tokengate.Providers.CatalogRefreshWorker do
   Scheduled weekly (`Oban.Plugins.Cron`) and enqueueable on demand from the
   maintenance page. Steps:
 
-    1. `GET https://models.dev/api.json` (providers AND their per-provider models)
-       and `GET https://models.dev/models.json` (canonical models) with a 60s
+    1. `GET https://models.dev/api.json` (providers) and
+       `GET https://models.dev/models.json` (canonical models) with a 60s
        receive timeout and no Req-internal retries (Oban is the retry layer).
-       The canonical payload is downloaded ONCE and feeds both the lab and the
-       model half.
+       The canonical payload is downloaded ONCE, for the lab half.
     2. Normalize PROVIDER-level fields for the mirror
-       (`Catalog.normalize_providers/1`); the per-model half of the same payload
-       goes to `ModelCatalog.derive/3` untouched.
+       (`Catalog.normalize_providers/1`).
     3. Upsert by `key` into `catalog_providers`, comparing fingerprints:
        unchanged rows are not written at all.
     4. Sweep rows upstream no longer publishes to `status: "stale"`. Never
@@ -25,13 +23,12 @@ defmodule Tokengate.Providers.CatalogRefreshWorker do
        the labs models.dev dropped to `stale`, and never touch a
        `source: "custom"` row. A lab fetch that fails is recorded as a warning
        and changes nothing (no lab is marked stale on a network error).
-    7. Upsert the MODEL catalog — `catalog_models` (the model dimension) and
-       `catalog_model_offers` (provider × model, with that provider's price) —
-       from the same two payloads (`ModelCatalog.derive/3`). Only providers the
-       gateway can serve contribute offers. An empty derivation is REFUSED, so a
-       truncated payload can never sweep the whole model catalog stale.
-    8. Record the outcome in `catalog_sync_state` (providers, labs and models)
-       for the maintenance page.
+    7. Record the outcome in `catalog_sync_state` (providers and labs) for the
+       maintenance page.
+
+  Los MODELOS no están aquí: el espejo de model de models.dev se retiró (sólo
+  servía a cuatro lectores de admin) y el alta lista los modelos del proveedor
+  en vivo, con su API key.
 
   ## What it deliberately does NOT touch
 
@@ -62,14 +59,11 @@ defmodule Tokengate.Providers.CatalogRefreshWorker do
 
   alias Tokengate.Providers.{
     Catalog,
-    CatalogModel,
-    CatalogModelOffer,
     CatalogProvider,
     CatalogSync,
     CatalogSyncState,
     Lab,
     LabCatalog,
-    ModelCatalog,
     Provider
   }
 
@@ -93,12 +87,8 @@ defmodule Tokengate.Providers.CatalogRefreshWorker do
         {provider_counts, warnings} = apply_entries(entries)
         {lab_counts, warnings} = refresh_labs(models_payload, entries, warnings)
 
-        {model_counts, warnings} =
-          refresh_models(models_payload, providers_payload, entries, warnings)
-
         provider_counts
         |> Map.merge(lab_counts)
-        |> Map.merge(model_counts)
         |> Map.put(:warnings, Enum.reverse(warnings))
         |> record()
 
@@ -456,185 +446,6 @@ defmodule Tokengate.Providers.CatalogRefreshWorker do
     Enum.each(gone, fn lab ->
       lab
       |> Lab.remote_changeset(%{status: "stale", fetched_at: now})
-      |> Repo.update!()
-    end)
-
-    length(gone)
-  end
-
-  ## Models -----------------------------------------------------------------
-
-  # The model mirror: the model dimension (`catalog_models`) plus the fact that
-  # a provider serves it (`catalog_model_offers`), both derived from the same two
-  # payloads the run already downloaded. Nothing here is materialized into the
-  # operator's tables — the picker reads these rows and the operator decides.
-  defp refresh_models(models_payload, providers_payload, provider_entries, warnings) do
-    case models_payload do
-      {:error, reason} ->
-        {empty_model_counts(), [models_warning("models_fetch_failed", reason) | warnings]}
-
-      {:ok, payload} ->
-        %{models: models, offers: offers} =
-          ModelCatalog.derive(provider_entries, providers_payload, payload)
-
-        # An empty derivation is not a model list: refuse it instead of sweeping
-        # ~3000 models (and every offer) stale on a truncated or partial payload.
-        if models == [] and offers == [] do
-          {empty_model_counts(),
-           [
-             models_warning(
-               "models_payload_empty",
-               gettext("the models catalog came empty; no row was touched")
-             )
-             | warnings
-           ]}
-        else
-          apply_models(models, offers, warnings)
-        end
-    end
-  end
-
-  defp models_warning(reason, message) do
-    %{"reason" => reason, "message" => message}
-  end
-
-  # Zeroed counters for a run that wrote nothing (a failed or refused payload).
-  defp empty_model_counts do
-    %{
-      models_inserted: 0,
-      models_updated: 0,
-      models_stale: 0,
-      offers_inserted: 0,
-      offers_updated: 0,
-      offers_stale: 0
-    }
-  end
-
-  defp apply_models(models, offers, warnings) do
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
-
-    {model_inserted, model_updated} = upsert_models(models, now)
-    model_stale = mark_models_stale(models, now)
-
-    {offer_inserted, offer_updated} = upsert_offers(offers, now)
-    offer_stale = mark_offers_stale(offers, now)
-
-    Logger.debug(
-      "[catalog refresh] models: #{length(models)} model(s), #{length(offers)} offer(s)"
-    )
-
-    counts = %{
-      models_inserted: model_inserted,
-      models_updated: model_updated,
-      models_stale: model_stale,
-      offers_inserted: offer_inserted,
-      offers_updated: offer_updated,
-      offers_stale: offer_stale
-    }
-
-    {counts, warnings}
-  end
-
-  defp upsert_models(models, now) do
-    existing = Repo.all(CatalogModel) |> Map.new(&{&1.key, &1})
-
-    Enum.reduce(models, {0, 0}, fn attrs, {inserted, updated} ->
-      fingerprint = CatalogModel.fingerprint(attrs)
-      full = Map.merge(attrs, %{fingerprint: fingerprint, fetched_at: now, status: "active"})
-
-      case Map.get(existing, attrs.key) do
-        nil ->
-          %CatalogModel{}
-          |> Ecto.Changeset.change(key: attrs.key)
-          |> CatalogModel.remote_changeset(full)
-          |> Repo.insert!()
-
-          {inserted + 1, updated}
-
-        %CatalogModel{fingerprint: ^fingerprint, status: "active"} ->
-          {inserted, updated}
-
-        %CatalogModel{} = row ->
-          row
-          |> CatalogModel.remote_changeset(full)
-          |> Repo.update!()
-
-          {inserted, updated + 1}
-      end
-    end)
-  end
-
-  # A model upstream no longer publishes is marked, never deleted: an operator's
-  # `model_providers` row may be routing through it right now.
-  defp mark_models_stale(models, now) do
-    upstream = MapSet.new(models, & &1.key)
-
-    # Code-owned models are not data that vanished: models.dev never had
-    # them. Sweeping them stale would freeze them out of the picker.
-    code_owned = MapSet.new(ModelCatalog.code_model_keys())
-
-    gone =
-      from(m in CatalogModel, where: m.status == "active")
-      |> Repo.all()
-      |> Enum.reject(&MapSet.member?(upstream, &1.key))
-      |> Enum.reject(&MapSet.member?(code_owned, &1.key))
-
-    Enum.each(gone, fn row ->
-      row
-      |> CatalogModel.remote_changeset(%{status: "stale", fetched_at: now})
-      |> Repo.update!()
-    end)
-
-    length(gone)
-  end
-
-  defp upsert_offers(offers, now) do
-    existing =
-      Repo.all(CatalogModelOffer)
-      |> Map.new(&{{&1.provider_key, &1.model_key}, &1})
-
-    Enum.reduce(offers, {0, 0}, fn attrs, {inserted, updated} ->
-      fingerprint = CatalogModelOffer.fingerprint(attrs)
-
-      full =
-        Map.merge(attrs, %{fingerprint: fingerprint, fetched_at: now, status: "active"})
-
-      case Map.get(existing, {attrs.provider_key, attrs.model_key}) do
-        nil ->
-          %CatalogModelOffer{}
-          |> CatalogModelOffer.remote_changeset(full)
-          |> Repo.insert!()
-
-          {inserted + 1, updated}
-
-        %CatalogModelOffer{fingerprint: ^fingerprint, status: "active"} ->
-          {inserted, updated}
-
-        %CatalogModelOffer{} = row ->
-          row
-          |> CatalogModelOffer.remote_changeset(full)
-          |> Repo.update!()
-
-          {inserted, updated + 1}
-      end
-    end)
-  end
-
-  defp mark_offers_stale(offers, now) do
-    upstream = MapSet.new(offers, &{&1.provider_key, &1.model_key})
-
-    # Code-owned offers (Jev at TypeSafe): same rule as code-owned models.
-    code_models = MapSet.new(ModelCatalog.code_model_keys())
-
-    gone =
-      from(o in CatalogModelOffer, where: o.status == "active")
-      |> Repo.all()
-      |> Enum.reject(&MapSet.member?(upstream, {&1.provider_key, &1.model_key}))
-      |> Enum.reject(&MapSet.member?(code_models, &1.model_key))
-
-    Enum.each(gone, fn row ->
-      row
-      |> CatalogModelOffer.remote_changeset(%{status: "stale", fetched_at: now})
       |> Repo.update!()
     end)
 

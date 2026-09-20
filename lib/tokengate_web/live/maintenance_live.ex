@@ -51,9 +51,6 @@ defmodule TokengateWeb.MaintenanceLive do
     |> assign(:catalog_active_count, Providers.count_catalog_providers("active"))
     |> assign(:catalog_stale_count, Providers.count_catalog_providers("stale"))
     |> assign(:lab_active_count, Providers.count_labs("active"))
-    |> assign(:model_active_count, Providers.count_catalog_models("active"))
-    |> assign(:model_stale_count, Providers.count_catalog_models("stale"))
-    |> assign(:offer_count, Providers.count_catalog_offers())
   end
 
   defp fmt_dt(%DateTime{} = dt), do: Calendar.strftime(dt, "%Y-%m-%d %H:%M UTC")
@@ -237,7 +234,7 @@ defmodule TokengateWeb.MaintenanceLive do
                 <h3 class="font-semibold text-base-content">{gettext("models.dev catalog")}</h3>
                 <p class="text-sm text-base-content/60">
                   {gettext(
-                    "Downloads the catalog again (providers, labs and models) and updates name, base URL,"
+                    "Downloads the catalog again (providers and labs) and updates name, base URL,"
                   )}
                   {gettext(
                     "docs and logo of the builtins. It does not touch credentials, own models, routing or"
@@ -275,12 +272,6 @@ defmodule TokengateWeb.MaintenanceLive do
                       <span class="font-mono">{warning["credentials"]}</span>
                       {gettext("credential(s) in use (nothing has been deleted).")}
                     </span>
-                    <span :if={warning["reason"] == "empty_model_mirror"}>
-                      {gettext("The")} <span class="font-mono">{gettext("models")}</span>
-                      {gettext(
-                        "catalog was empty at boot (the vendored snapshot could not be read): an automatic refresh against models.dev was queued."
-                      )}
-                    </span>
                   </li>
                 </ul>
 
@@ -288,10 +279,6 @@ defmodule TokengateWeb.MaintenanceLive do
                   {gettext("Providers:")} <span class="font-mono">{@catalog_active_count}</span>
                   {gettext("active,")} <span class="font-mono">{@catalog_stale_count}</span>
                   {gettext("stale · Labs:")} <span class="font-mono">{@lab_active_count}</span>
-                  · {gettext("Models:")} <span class="font-mono">{@model_active_count}</span>
-                  (<span class="font-mono">{@model_stale_count}</span>
-                  {gettext("stale),")} <span class="font-mono">{@offer_count}</span>
-                  {gettext("offers.")}
                 </p>
               </div>
 

@@ -32,15 +32,6 @@ defmodule Tokengate.Providers.CatalogSyncState do
     field :labs_inserted, :integer, default: 0
     field :labs_updated, :integer, default: 0
     field :labs_stale, :integer, default: 0
-    # The model half: the model dimension (`catalog_models`) and the provider ×
-    # model offers (`catalog_model_offers`), counted apart so a new model is
-    # distinguishable from a new lane to a model that already existed.
-    field :models_inserted, :integer, default: 0
-    field :models_updated, :integer, default: 0
-    field :models_stale, :integer, default: 0
-    field :offers_inserted, :integer, default: 0
-    field :offers_updated, :integer, default: 0
-    field :offers_stale, :integer, default: 0
     field :error, :string
     field :warnings, {:array, :map}, default: []
 
@@ -60,12 +51,6 @@ defmodule Tokengate.Providers.CatalogSyncState do
       :labs_inserted,
       :labs_updated,
       :labs_stale,
-      :models_inserted,
-      :models_updated,
-      :models_stale,
-      :offers_inserted,
-      :offers_updated,
-      :offers_stale,
       :error,
       :warnings
     ])

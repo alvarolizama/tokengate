@@ -32,7 +32,7 @@ defmodule TokengateWeb.ModelsLive do
   alias Tokengate.Providers.{
     Lab,
     Model,
-    ModelCatalog,
+    ModelIds,
     ModelProvider,
     Pricing,
     Provider,
@@ -42,10 +42,6 @@ defmodule TokengateWeb.ModelsLive do
   alias Tokengate.Proxy.ProviderAdapter
   alias Tokengate.Repo
 
-  # The picker hands at most this many catalog rows to the modal: the list is
-  # filtered in memory on every keystroke, and no operator scrolls past the first
-  # handful of matches.
-  @catalog_results_limit 40
   @provider_results_limit 8
 
   # Paleta del picker de icono: la misma lista curada que el modal de labs
@@ -89,18 +85,9 @@ defmodule TokengateWeb.ModelsLive do
       |> assign(:scope_member_search, "")
       |> assign(:scope_group_open, false)
       |> assign(:scope_member_open, false)
-      |> assign(:catalog_models, nil)
-      |> assign(:catalog_query, "")
-      |> assign(:catalog_results, [])
-      |> assign(:catalog_type_count, 0)
-      |> assign(:catalog_picker_providers, [])
-      |> assign(:catalog_provider_filter, nil)
-      |> assign(:catalog_keys_taken, MapSet.new())
-      |> assign(:lab_logos, %{})
       |> assign(:labs_by_key, %{})
       |> assign(:lab_choices, [])
       |> assign(:icon_choices, @icon_choices)
-      |> assign(:model_form_tab, "catalog")
       |> assign(:model_form_picked_type, nil)
       |> assign(:type_picker_open, false)
       # Wizard del alta/edición: 1) proveedor (acotado por el tipo), 2) modelo,
@@ -268,7 +255,6 @@ defmodule TokengateWeb.ModelsLive do
     if socket.assigns.is_admin do
       {:noreply,
        socket
-       |> ensure_catalog_models()
        |> assign(:form, nil)
        |> assign(:editing_model_id, nil)
        |> assign(:model_form_picked_type, nil)
@@ -296,10 +282,6 @@ defmodule TokengateWeb.ModelsLive do
         |> assign(:type_picker_open, false)
         |> assign(:form, to_form(changeset, as: :model))
         |> assign(:editing_model_id, :new)
-        |> assign(:model_form_tab, "catalog")
-        |> assign(:catalog_picker_providers, Providers.catalog_picker_providers(type))
-        |> assign(:catalog_provider_filter, nil)
-        |> filter_catalog_models("")
         # Paso 1 del wizard: el proveedor. Se elige DESPUÉS del tipo y ANTES del
         # modelo, porque es el tipo el que decide qué proveedores pueden servir
         # el modelo y el proveedor el que decide qué modelos se ofrecen.
@@ -343,12 +325,10 @@ defmodule TokengateWeb.ModelsLive do
        socket
        |> assign(:wizard_provider_key, key)
        |> assign(:wizard_provider_label, provider_label_for(socket, key))
-       |> assign(:catalog_provider_filter, key)
        |> assign(:wizard_media_models, media_models_for(key, type))
        |> assign(:wizard_credentials, wizard_credentials_for(socket, key))
        |> assign(:wizard_credential_id, nil)
        |> assign(:wizard_provider_model, nil)
-       |> filter_catalog_models("")
        |> fetch_wizard_service_models(key, type)
        |> assign(:wizard_step, "model")}
     else
@@ -369,7 +349,7 @@ defmodule TokengateWeb.ModelsLive do
       params =
         socket.assigns.form.source.changes
         |> Map.new(fn {key, value} -> {to_string(key), value} end)
-        |> Map.put("name", ModelCatalog.short_name(model))
+        |> Map.put("name", ModelIds.short_name(model))
 
       changeset = Providers.change_model(socket.assigns.form.source.data, params)
 
@@ -392,18 +372,15 @@ defmodule TokengateWeb.ModelsLive do
      |> assign_form_picked_type()}
   end
 
-  # Salto del paso 1 al 2 sin proveedor: el operador quiere ver el catálogo
-  # entero (o el modelo no está en el catálogo de un proveedor concreto). No
-  # crea lane, así que el modelo queda sin proveedor asignado — igual que el
+  # Salto del paso 1 al 2 sin proveedor: el operador escribe el modelo a mano.
+  # No crea lane, así que el modelo queda sin proveedor asignado — igual que el
   # camino de "crear a mano".
   def handle_event("wizard_skip_provider", _params, socket) do
     {:noreply,
      socket
      |> assign(:wizard_step, "model")
-     |> assign(:catalog_provider_filter, nil)
      |> assign(:wizard_media_models, [])
-     |> assign(:wizard_media_models_loading, false)
-     |> filter_catalog_models("")}
+     |> assign(:wizard_media_models_loading, false)}
   end
 
   def handle_event("wizard_back", %{"step" => step}, socket)
@@ -431,121 +408,6 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   def handle_event("wizard_pick_provider_model", _params, socket), do: {:noreply, socket}
-
-  ## Events — model catalog picker -------------------------------------------
-
-  # The picker is the default tab when CREATING: a catalog entry fills the form
-  # with models.dev metadata. "Personalizado" is the same form with nothing
-  # prefilled, which is how a model nobody publishes gets built.
-  def handle_event("set_model_tab", %{"tab" => tab}, socket) when tab in ~w(catalog custom) do
-    {:noreply, assign(socket, :model_form_tab, tab)}
-  end
-
-  # Search over name, models.dev id and lab. In memory: the mirror is ~3000 rows,
-  # so every keystroke is instant and costs no query (same trade-off as the
-  # provider picker).
-  def handle_event("search_catalog_models", params, socket) do
-    {:noreply, filter_catalog_models(socket, query_param(params))}
-  end
-
-  # Picking a catalog row PRE-FILLS the form the operator already has open: name
-  # (the id without its lab prefix), context window, model type
-  # and the link back to the catalog entry. Nothing is locked — every field stays
-  # editable and nothing is written until the form is submitted.
-  #
-  # It applies over the form's own data, so the SAME event links a new model and
-  # RE-links an existing one (`source.data` is the row being edited there, not a
-  # blank struct): re-filling must never drop the row's identity and turn an
-  # update into a second insert.
-  def handle_event("pick_catalog_model", %{"key" => key}, socket) do
-    if socket.assigns.is_admin and socket.assigns.form do
-      case Enum.find(socket.assigns.catalog_models || [], &(&1.key == key)) do
-        nil ->
-          {:noreply,
-           put_flash(
-             socket,
-             :error,
-             gettext("That model is not in the catalog. Reload the page.")
-           )}
-
-        entry ->
-          params = ModelCatalog.to_model_params(entry)
-
-          # Un modelo de servicio o decisión (stt, tts, decision…) elegido en
-          # el paso 0 conserva SU tipo: el hint del catálogo solo conoce
-          # llm/embedding/decision por prefijo y pisaría el tipo elegido. El
-          # tipo elegido gana; name/context/lab/link se rellenan igual.
-          params =
-            case socket.assigns[:model_form_picked_type] do
-              type when type in ["llm", "embedding", nil] -> params
-              picked -> %{params | model_type: picked}
-            end
-
-          changeset =
-            Providers.change_model(
-              socket.assigns.form.source.data,
-              params
-            )
-
-          # Con un proveedor ya elegido (wizard), el `provider_model` del lane
-          # sale de SU oferta para este modelo, y el wizard avanza a los datos:
-          # el operador ya eligió proveedor y modelo, no hay nada más que
-          # escoger antes de guardar.
-          {socket, step} =
-            case socket.assigns[:wizard_provider_key] do
-              nil ->
-                {socket, socket.assigns[:wizard_step]}
-
-              provider_key ->
-                provider_model =
-                  case Providers.offer_for(key, provider_key) do
-                    %{provider_model: pm} when is_binary(pm) -> pm
-                    _ -> key
-                  end
-
-                # Un proveedor de ids PELADOS (Surplus) no resuelve el prefijo
-                # `lab/` de models.dev: el fallback `key` (`zai/glm-5.3`)
-                # viajaría tal cual y el upstream respondería 404
-                # `no_sellers_for_model`. Se prellena el nombre corto — el
-                # operador sigue viendo el valor y puede editarlo antes de
-                # guardar.
-                provider_model =
-                  if Tokengate.Providers.Catalog.bare_model_ids?(provider_key) do
-                    ModelCatalog.short_name(provider_model)
-                  else
-                    provider_model
-                  end
-
-                {assign(socket, :wizard_provider_model, provider_model), "details"}
-            end
-
-          {:noreply,
-           socket
-           |> assign(:form, to_form(changeset, as: :model))
-           # The list collapses: the form is filled, and typing in the search box
-           # brings the results straight back.
-           |> assign(:catalog_results, [])
-           |> assign(:wizard_step, step)}
-      end
-    else
-      {:noreply, socket}
-    end
-  end
-
-  # Drops the catalog link (and what it prefilled for the model type), so the row
-  # is created as a plain custom model.
-  def handle_event("clear_catalog_pick", _params, socket) do
-    if socket.assigns.is_admin and socket.assigns.form do
-      changeset =
-        socket.assigns.form.source
-        |> Ecto.Changeset.put_change(:catalog_model_key, nil)
-        |> Ecto.Changeset.put_change(:lab_key, nil)
-
-      {:noreply, assign(socket, :form, to_form(changeset, as: :model))}
-    else
-      {:noreply, socket}
-    end
-  end
 
   # Elegir lab o icono reescribe el changeset del formulario abierto (nada se
   # guarda hasta el submit): la vista previa y el propio campo reflejan la
@@ -576,10 +438,6 @@ defmodule TokengateWeb.ModelsLive do
      socket
      |> assign(:form, nil)
      |> assign(:editing_model_id, nil)
-     |> assign(:model_form_tab, "catalog")
-     |> assign(:catalog_query, "")
-     |> assign(:catalog_results, [])
-     |> assign(:catalog_provider_filter, nil)
      |> assign(:model_form_picked_type, nil)
      |> assign(:type_picker_open, false)
      |> reset_wizard()}
@@ -672,28 +530,18 @@ defmodule TokengateWeb.ModelsLive do
       changeset = Providers.change_model(model)
 
       type = model.model_type || "llm"
-      socket = ensure_catalog_models(socket)
 
       {:noreply,
        socket
        |> assign(:form, to_form(changeset, as: :model))
        |> assign(:editing_model_id, model.id)
        # La edición entra al mismo wizard que el alta: el tipo del row queda
-       # fijado desde el primer paso, así el catálogo y los proveedores se acotan
-       # al tipo real del modelo en vez de mostrar todos.
+       # fijado desde el primer paso, así los proveedores se acotan al tipo real
+       # del modelo en vez de mostrar todos.
        |> assign(:model_form_picked_type, type)
-       |> assign(:catalog_picker_providers, Providers.catalog_picker_providers(type))
-       |> assign(:model_form_tab, "catalog")
        # La edición entra directo a los DATOS: el tipo y el proveedor del row ya
-       # están decididos, y el paso de modelo sigue disponible para re-vincular
-       # el catálogo desde el buscador.
-       |> assign(:wizard_step, "details")
-       |> assign(:catalog_query, "")
-       # La edición NO lista resultados de entrada — sería ruido encima de un row
-       # ya configurado, y el buscador los trae al primer tecleo. El contador del
-       # tipo sí se calcula, para que el badge diga la verdad.
-       |> assign(:catalog_results, [])
-       |> assign(:catalog_type_count, catalog_type_count(socket.assigns[:catalog_models], type))}
+       # están decididos, y el paso de modelo sigue disponible para elegir otro.
+       |> assign(:wizard_step, "details")}
     else
       {:noreply,
        put_flash(socket, :error, gettext("You do not have permission for this action."))}
@@ -807,7 +655,7 @@ defmodule TokengateWeb.ModelsLive do
         nil ->
           {:noreply, put_flash(socket, :error, gettext("Unknown provider."))}
 
-        %{provider: provider, offer: offer} ->
+        %{provider: provider} ->
           credentials = credentials_of(socket, provider.id)
           credential_id = keep_or_default_credential(socket, credentials)
 
@@ -815,7 +663,7 @@ defmodule TokengateWeb.ModelsLive do
             socket.assigns.provider_form.source
             |> Ecto.Changeset.put_change(:credential_id, credential_id)
 
-          {:noreply, apply_offer(socket, provider, offer, credentials, changeset, credential_id)}
+          {:noreply, apply_offer(socket, provider, credentials, changeset, credential_id)}
       end
     else
       {:noreply, socket}
@@ -890,7 +738,6 @@ defmodule TokengateWeb.ModelsLive do
              socket
              |> apply_offer(
                provider,
-               selected_offer(socket, provider.key),
                credentials,
                changeset,
                credential.id
@@ -975,9 +822,9 @@ defmodule TokengateWeb.ModelsLive do
 
       # Prefill the service_tier checkbox from the stored extra_body (the
       # raw override virtuals are no longer part of the form). The provider is
-      # already identified by the row's credential, so models.dev's offer for
-      # this model fills the provider_model and the manual prices that are
-      # still empty — the operator sees them and can clear them.
+      # already identified by the row's credential; el `provider_model` y los
+      # precios manuales los escribe el operador (la lista viva del proveedor
+      # es la que sugiere el id).
       changeset =
         changeset
         |> Ecto.Changeset.put_change(
@@ -988,7 +835,6 @@ defmodule TokengateWeb.ModelsLive do
           :aggregator_provider_pin,
           Map.get(ap.extra_body || %{}, "provider", "")
         )
-        |> put_offer_defaults(offer_for_provider(ap.model_id, provider_key))
 
       # The credential list is narrowed to the row's own provider, so editing an
       # assignment shows the keys that can actually serve it.
@@ -1529,7 +1375,6 @@ defmodule TokengateWeb.ModelsLive do
           enabled: true,
           pricing_unit: unit
         }
-        |> put_offer_prices(offer_for_wizard(socket), unit)
 
       case Providers.create_model_provider(attrs) do
         {:ok, ap} ->
@@ -1546,41 +1391,6 @@ defmodule TokengateWeb.ModelsLive do
       end
     else
       _ -> :error
-    end
-  end
-
-  # El precio de LISTA del catálogo entra como fallback manual del lane. No es un
-  # detalle: hay proveedores que NO reportan coste — Jev (TypeSafe) es el caso
-  # canónico, su API no devuelve `usage.cost` — y sin este precio el lane nace
-  # cobrando $0 aunque el catálogo sí sepa cuánto cuesta.
-  #
-  # Sólo aplica a las unidades de TOKEN, que son las que leen los tres campos
-  # `*_cost_per_million`; un lane de servicio se cobra con `unit_cost`, y para
-  # eso el catálogo no tiene dato.
-  defp put_offer_prices(attrs, %{} = offer, unit) do
-    if Pricing.token_unit?(unit) do
-      attrs
-      |> Map.put(:input_cost_per_million, Map.get(offer, :cost_input))
-      |> Map.put(:output_cost_per_million, Map.get(offer, :cost_output))
-      |> Map.put(:cache_cost_per_million, Map.get(offer, :cost_cache_read))
-    else
-      attrs
-    end
-  end
-
-  defp put_offer_prices(attrs, _offer, _unit), do: attrs
-
-  # La oferta del proveedor elegido para el modelo elegido: de ahí sale el precio
-  # de lista que `put_offer_prices/3` copia. Sólo existe cuando el modelo vino
-  # del catálogo (models.dev) — un modelo de servicio no está ahí.
-  defp offer_for_wizard(socket) do
-    with key when is_binary(key) <- socket.assigns[:wizard_provider_key],
-         form when form != nil <- socket.assigns[:form],
-         catalog_key when is_binary(catalog_key) <-
-           Ecto.Changeset.get_field(form.source, :catalog_model_key) do
-      Providers.offer_for(catalog_key, key)
-    else
-      _ -> nil
     end
   end
 
@@ -1639,7 +1449,6 @@ defmodule TokengateWeb.ModelsLive do
               "name",
               "context_window",
               "model_type",
-              "catalog_model_key",
               "lab_key",
               "icon"
             ])
@@ -1969,136 +1778,23 @@ defmodule TokengateWeb.ModelsLive do
 
   defp query_param(_), do: ""
 
-  ## Private helpers — model catalog picker ----------------------------------
-
-  # The catalog list is loaded the first time a picker opens (~3000 compact rows,
-  # filtered in memory: that is what makes every keystroke instant) and cached
-  # for the life of the LiveView, so opening the modal twice costs one query.
-  defp ensure_catalog_models(%{assigns: %{catalog_models: models}} = socket)
-       when is_list(models),
-       do: socket
-
-  defp ensure_catalog_models(socket) do
-    # El dropdown de proveedores nace YA acotado por el tipo elegido: el tipo
-    # decide qué proveedores pueden servir el modelo (l. del paso 0), y ofrecer
-    # un proveedor que no declara la capability es un callejón sin salida.
-    type = socket.assigns[:model_form_picked_type]
-
-    socket
-    |> assign(:catalog_models, Providers.catalog_picker_models())
-    |> assign(:catalog_picker_providers, Providers.catalog_picker_providers(type))
-    |> assign(:catalog_provider_filter, nil)
-    |> assign(:catalog_keys_taken, Providers.registered_catalog_model_keys())
-    |> assign(:lab_logos, lab_logos())
-  end
-
-  defp lab_logos do
-    Providers.list_labs(source: "builtin")
-    |> Map.new(fn lab -> {lab.key, lab.logo_url} end)
-  end
-
-  defp filter_catalog_models(socket, query) do
-    needle = query |> to_string() |> String.trim() |> String.downcase()
-    models = socket.assigns[:catalog_models] || []
-
-    # El tipo elegido en el paso 0 acota el catálogo: llm/embedding/decision por
-    # el hint del id; los seis servicios de media NO existen en models.dev (no
-    # publica esos modelos), así que su lista del mirror es vacía a propósito —
-    # sus modelos salen del catálogo del proveedor, no de aquí.
-    type = socket.assigns[:model_form_picked_type]
-    models = filter_catalog_by_type(models, type)
-
-    # Cuántos modelos hay del tipo elegido (antes del filtro de proveedor): es
-    # el número que el badge y el pie del picker deben mostrar, no el total del
-    # mirror entero — que para un servicio de media era puro ruido.
-    type_count = length(models)
-
-    # El filtro de proveedor (dropdown del picker) acota además por quién
-    # sirve el modelo: los offers activos del mirror.
-    models = filter_catalog_by_provider(models, socket.assigns[:catalog_provider_filter])
-
-    results =
-      if needle == "" do
-        Enum.take(models, @catalog_results_limit)
-      else
-        models
-        |> Enum.filter(fn model ->
-          String.contains?(String.downcase(model.name || ""), needle) or
-            String.contains?(String.downcase(model.key), needle) or
-            String.contains?(model.lab_key || "", needle)
-        end)
-        |> Enum.take(@catalog_results_limit)
-      end
-
-    socket
-    |> assign(:catalog_query, query)
-    |> assign(:catalog_results, results)
-    |> assign(:catalog_type_count, type_count)
-  end
-
-  # nil = todos los proveedores (default del dropdown).
-  defp filter_catalog_by_provider(models, nil), do: models
-
-  defp filter_catalog_by_provider(models, provider_key) when is_binary(provider_key) do
-    Enum.filter(models, &(provider_key in (model_providers(&1) || [])))
-  end
-
-  defp filter_catalog_by_provider(models, _), do: models
-
-  # `provider_keys` viene en los entries del picker (catalog_picker_models);
-  # tolerar su ausencia mantiene el helper utilizable con cualquier mapa.
-  defp model_providers(%{provider_keys: keys}), do: keys
-  defp model_providers(_), do: []
-
-  # El tipo elegido acota el mirror con UNA regla: el hint del id tiene que ser
-  # exactamente el tipo pedido.
-  #
-  # Los tres tipos que models.dev sí conoce (llm, embedding, decision) se
-  # resuelven con el hint; los SEIS servicios de media (rerank, stt, tts, image,
-  # video, music) no existen en models.dev, así que el mirror no tiene filas de
-  # ese tipo y el resultado es la lista VACÍA.
-  #
-  # Antes la cláusula de servicio era `do: models`, que devolvía TODO el catálogo
-  # (~3000 modelos de chat) al elegir "Transcription" — el bug reportado.
-  # Sin tipo elegido (edición de un row anterior al paso 0, o cualquier camino
-  # que no pase por el picker) no se acota nada: el catálogo se ofrece entero,
-  # que es el comportamiento histórico.
-  defp filter_catalog_by_type(models, nil), do: models
-
-  defp filter_catalog_by_type(models, type) when type in ~w(llm embedding decision) do
-    hint = &Tokengate.Providers.ModelCatalog.model_type_hint(&1.key)
-    Enum.filter(models, &(hint.(&1) == type))
-  end
-
-  defp filter_catalog_by_type(_models, _media_type), do: []
-
-  # Cuántos modelos del mirror son del tipo pedido: el número honesto del badge
-  # y del pie del picker (el total del mirror entero no dice nada útil).
-  defp catalog_type_count(nil, _type), do: 0
-
-  defp catalog_type_count(models, type) when is_list(models) do
-    models |> filter_catalog_by_type(type) |> length()
-  end
-
   @doc """
-  A DOM-id-safe, INJECTIVE rendering of a catalog/provider key.
+  A DOM-id-safe, INJECTIVE rendering of a provider/model id.
 
-  models.dev ids carry `/`, `@`, `:`, `~` and `.` (`openai/gpt-5-nano`,
+  Ids carry `/`, `@`, `:`, `~` and `.` (`openai/gpt-5-nano`,
   `@cf/meta/llama-3.1-8b-instruct`, `glm-5.2`), none of which are valid in a CSS
   selector: a raw id would break every `element/2` lookup and any client-side
   selector.
 
   A plain substitution is NOT enough: `/` and `-` both collapse to `-` (and `.`
-  to `_`), so `openai/gpt-5-nano` and `openai-gpt-5-nano` — two DISTINCT rows the
-  mirror really holds — rendered the same DOM id and LiveView raised
-  `Duplicate id found` on the modal. The snapshot has 57 such pairs.
+  to `_`), so `openai/gpt-5-nano` and `openai-gpt-5-nano` — two DISTINCT ids —
+  render the same DOM id and LiveView raises `Duplicate id found`.
 
   So the sanitized form is kept for readability and, whenever the key was
   rewritten at all, a short hash of the ORIGINAL key is appended: the transform
-  stays injective (`dom_key/1` of two different keys never collides — verified
-  against every id in the vendored catalog) while a human can still read the
-  prefix. A key already made of `[A-Za-z0-9_-]` is returned untouched, so
-  provider keys like `fireworks-ai` keep their plain id.
+  stays injective while a human can still read the prefix. A key already made of
+  `[A-Za-z0-9_-]` is returned untouched, so provider keys like `fireworks-ai`
+  keep their plain id.
   """
   def dom_key(key) when is_binary(key) do
     sanitized = sanitize_dom_key(key)
@@ -2124,12 +1820,6 @@ defmodule TokengateWeb.ModelsLive do
     |> Base.encode16(case: :lower)
     |> binary_part(0, 8)
   end
-
-  @doc "True when a `models` row was already created from this catalog entry."
-  def catalog_taken?(taken, key), do: MapSet.member?(taken || MapSet.new(), key)
-
-  @doc "models.dev logo URL for a lab key (nil when the lab has none)."
-  def lab_logo(logos, lab_key), do: Map.get(logos || %{}, lab_key)
 
   @doc "Display name of a provider in the modal's choice list (id as fallback)."
   def provider_label(choices, provider_key) do
@@ -2246,15 +1936,11 @@ defmodule TokengateWeb.ModelsLive do
 
   ## Private helpers — provider + credentials --------------------------------
 
-  # Which providers the modal offers: the ones that serve the model according to
-  # models.dev when the model came from the catalog, else every active provider —
-  # a hand-made model has no offer to narrow by.
-  defp build_provider_choices(socket, model_id) do
-    choices =
-      case Providers.get_model(model_id) do
-        %Model{catalog_model_key: key} when is_binary(key) -> Providers.providers_serving(key)
-        _ -> all_active_providers()
-      end
+  # Which providers the modal offers: every active one. El espejo de modelos de
+  # models.dev se retiró, así que no hay ofertas que acoten la lista; el tipo
+  # elegido filtra por capability (ver `filter_choices_by_capability/2`).
+  defp build_provider_choices(socket, _model_id) do
+    choices = all_active_providers()
 
     # El tipo elegido en el paso 0 acota además por capability declarada: solo
     # proveedores que sirven ese servicio aparecen. Un tipo no elegido (edición
@@ -2294,7 +1980,7 @@ defmodule TokengateWeb.ModelsLive do
       preload: [:credentials]
     )
     |> Repo.all()
-    |> Enum.map(&%{provider: &1, offer: nil})
+    |> Enum.map(&%{provider: &1})
   end
 
   defp filter_provider_choices(socket, query) do
@@ -2334,16 +2020,6 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
-  defp selected_offer(socket, provider_key) do
-    socket.assigns[:provider_choices]
-    |> List.wrap()
-    |> Enum.find(&(&1.provider.key == provider_key))
-    |> case do
-      %{offer: offer} -> offer
-      _ -> nil
-    end
-  end
-
   defp credentials_of(socket, provider_id) do
     (socket.assigns[:credentials_for_select] || [])
     |> Enum.filter(&(&1.provider_id == provider_id))
@@ -2375,16 +2051,13 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   # One place where picking a provider (or creating its key) turns into modal
-  # state: the form's credential, the provider's own model id and the models.dev
-  # prices as the manual fallback, the credential list narrowed to that provider,
-  # and the provider's live catalogue loaded for the suggestion list.
-  defp apply_offer(socket, provider, offer, credentials, changeset, credential_id) do
+  # state: the form's credential, the provider key, the credential list narrowed
+  # to that provider, and the provider's live catalogue loaded for the suggestion
+  # list (which is also where the operator picks the `provider_model`).
+  defp apply_offer(socket, provider, credentials, changeset, credential_id) do
     socket =
       socket
-      |> assign(
-        :provider_form,
-        to_form(put_offer_defaults(changeset, offer), as: :model_provider)
-      )
+      |> assign(:provider_form, to_form(changeset, as: :model_provider))
       |> assign(:provider_form_provider_key, provider.key)
       |> assign(:provider_form_credential_id, credential_id)
       |> assign(:provider_form_is_fireworks, provider.key == "fireworks-ai")
@@ -2403,21 +2076,10 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
-  defp put_offer_defaults(changeset, nil), do: changeset
-
-  defp put_offer_defaults(changeset, offer) do
-    changeset
-    |> put_new_change(:provider_model, offer.provider_model)
-    |> put_new_change(:input_cost_per_million, offer.cost_input)
-    |> put_new_change(:output_cost_per_million, offer.cost_output)
-    |> put_new_change(:cache_cost_per_million, offer.cost_cache_read)
-  end
-
-  # Elegir la API key es lo que fija la relación modelo↔proveedor: cada
+  # Elegir la API key es lo que fija la relación modeloproveedor: cada
   # credencial pertenece a un solo proveedor, así que la key resuelve por sí
-  # sola el proveedor del modal. Si ese proveedor publica una oferta para este
-  # modelo (models.dev), su `provider_model` y su precio de lista entran como
-  # defaults de los campos vacíos.
+  # sola el proveedor del modal. El `provider_model` no se prellena: sale de la
+  # lista viva del proveedor (`provider_models`), que el operador ve y elige.
   defp apply_credential_provider(socket, credential_id, ap_params) do
     case Enum.find(socket.assigns[:credentials_for_select] || [], &(&1.id == credential_id)) do
       %{provider: provider} ->
@@ -2427,9 +2089,6 @@ defmodule TokengateWeb.ModelsLive do
           socket.assigns.provider_form.source
           |> carry_submitted_params(ap_params)
           |> Ecto.Changeset.put_change(:credential_id, credential_id)
-          |> put_offer_defaults(
-            offer_for_provider(socket.assigns[:provider_form_model_id], provider.key)
-          )
 
         socket
         |> assign(:provider_form, to_form(changeset, as: :model_provider))
@@ -2457,42 +2116,6 @@ defmodule TokengateWeb.ModelsLive do
       |> Enum.filter(&Map.has_key?(params, Atom.to_string(&1)))
 
     Ecto.Changeset.cast(changeset, params, fields)
-  end
-
-  # La oferta de models.dev de UN proveedor para el modelo del modal: nil si el
-  # modelo no viene del catálogo o si ese proveedor no lo sirve. Para un
-  # proveedor de ids PELADOS (Surplus) el `provider_model` de la oferta se
-  # desprefija: el catálogo lo publica como `z-ai/glm-5.3` y el upstream sólo
-  # resuelve `glm-5.3` (404 `no_sellers_for_model` con el prefijo).
-  defp offer_for_provider(model_id, provider_key) when is_binary(provider_key) do
-    case Providers.get_model(model_id) do
-      %Model{catalog_model_key: key} when is_binary(key) ->
-        offer = Providers.offer_for(key, provider_key)
-
-        with %{provider_model: pm} = offer when is_binary(pm) <- offer,
-             true <- Tokengate.Providers.Catalog.bare_model_ids?(provider_key) do
-          %{offer | provider_model: Tokengate.Providers.ModelCatalog.short_name(pm)}
-        else
-          _ -> offer
-        end
-
-      _ ->
-        nil
-    end
-  end
-
-  defp offer_for_provider(_model_id, _provider_key), do: nil
-
-  # An offer fills a field only while it is empty: what the operator typed (or an
-  # existing row being edited) always wins.
-  defp put_new_change(changeset, _field, nil), do: changeset
-
-  defp put_new_change(changeset, field, value) do
-    if Ecto.Changeset.get_field(changeset, field) == nil do
-      Ecto.Changeset.put_change(changeset, field, value)
-    else
-      changeset
-    end
   end
 
   # The credentials the modal's select lists: just the selected provider's keys
@@ -3086,7 +2709,7 @@ defmodule TokengateWeb.ModelsLive do
               <h2 class="text-lg font-semibold mb-1">{gettext("New model")}</h2>
               <p class="text-sm text-base-content/60 mb-4">
                 {gettext(
-                  "First choose the type — it decides the catalog filter, the providers offered, and the endpoint that will serve the model."
+                  "First choose the type — it decides which providers are offered and the endpoint that will serve the model."
                 )}
               </p>
               <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -3305,178 +2928,6 @@ defmodule TokengateWeb.ModelsLive do
                   </div>
                 </div>
 
-                <%!-- Catalog picker: the SAME control in both modes, so an existing
-                   model can be (re)linked exactly like a new one. Re-picking
-                   overwrites name, context and prices — visible before Guardar,
-                   which is what keeps it safe on a row already serving traffic. --%>
-                <div class="flex gap-2 mb-4" id="model-form-tabs">
-                  <button
-                    type="button"
-                    phx-click="set_model_tab"
-                    phx-value-tab="catalog"
-                    id="tab-catalog"
-                    class={["btn btn-sm", @model_form_tab == "catalog" && "btn-primary"]}
-                  >
-                    <.icon name="hero-sparkles" class="w-4 h-4" /> {gettext("From catalog")}
-                    <span class="badge badge-xs">{@catalog_type_count}</span>
-                  </button>
-                  <button
-                    type="button"
-                    phx-click="set_model_tab"
-                    phx-value-tab="custom"
-                    id="tab-custom"
-                    class={["btn btn-sm", @model_form_tab == "custom" && "btn-primary"]}
-                  >
-                    <.icon name="hero-pencil" class="w-4 h-4" /> Personalizado
-                  </button>
-                </div>
-
-                <div :if={@model_form_tab == "catalog"} id="catalog-picker" class="mb-4">
-                  <p class="text-xs text-base-content/60 mb-2">
-                    {gettext("models.dev catalog:")} <b>{gettext("real metadata")}</b>
-                    {gettext("(context, pricing, lab).")} {gettext(
-                      "Picking one links the model to that entry and fills the form — nothing is"
-                    )}
-                    {gettext("saved until")} <b>{gettext("Save")}</b>{gettext(
-                      ", and everything stays editable."
-                    )}
-                  </p>
-
-                  <%!-- El buscador va dentro de su PROPIO form: sin un form ancestro
-                     LiveView lanza «form events require the input to be inside a
-                     form» y el phx-change nunca sale del navegador (los tests no
-                     lo ven: despachan el evento directo al servidor). --%>
-                  <form
-                    id="catalog-search-form"
-                    phx-change="search_catalog_models"
-                    phx-submit="search_catalog_models"
-                  >
-                    <div class="relative">
-                      <.icon
-                        name="hero-magnifying-glass"
-                        class="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-base-content/40"
-                      />
-                      <input
-                        type="text"
-                        name="q"
-                        id="catalog-search"
-                        value={@catalog_query}
-                        placeholder={
-                          gettext("Search by name, id or lab… (e.g. gpt-5, glm, anthropic)")
-                        }
-                        class="input input-sm w-full pl-9"
-                        autocomplete="off"
-                        phx-change="search_catalog_models"
-                        phx-debounce="150"
-                      />
-                    </div>
-                  </form>
-
-                  <div
-                    :if={@catalog_results == [] and @catalog_query != ""}
-                    id="catalog-empty"
-                    class="text-sm text-base-content/50 py-4 text-center"
-                  >
-                    {gettext("No catalog model matches “%{query}”.", query: @catalog_query)}
-                    {gettext("You can create it by hand in the")}
-                    <b>{gettext("Custom")}</b> {gettext("tab.")}
-                  </div>
-
-                  <div
-                    :if={@catalog_results == [] and @catalog_query == ""}
-                    id="catalog-hint"
-                    class="text-sm text-base-content/50 py-4 text-center"
-                  >
-                    {gettext("Type to search among the %{count} catalog models.",
-                      count: @catalog_type_count
-                    )}
-                  </div>
-
-                  <div
-                    :if={@catalog_results != []}
-                    id="catalog-results"
-                    class="mt-2 max-h-72 overflow-y-auto rounded-lg border border-base-300"
-                  >
-                    <button
-                      :for={entry <- @catalog_results}
-                      type="button"
-                      phx-click="pick_catalog_model"
-                      phx-value-key={entry.key}
-                      id={"catalog-row-#{dom_key(entry.key)}"}
-                      class="w-full text-left px-3 py-2 hover:bg-primary/10 transition-colors border-b border-base-300/60 last:border-0 flex items-center gap-3"
-                    >
-                      <img
-                        :if={lab_logo(@lab_logos, entry.lab_key)}
-                        src={lab_logo(@lab_logos, entry.lab_key)}
-                        alt=""
-                        class="w-5 h-5 shrink-0 rounded"
-                        loading="lazy"
-                      />
-                      <.icon
-                        :if={!lab_logo(@lab_logos, entry.lab_key)}
-                        name="hero-cpu-chip"
-                        class="w-5 h-5 shrink-0 text-base-content/30"
-                      />
-                      <div class="min-w-0 flex-1">
-                        <div class="flex items-center gap-2 flex-wrap">
-                          <span class="font-medium text-sm truncate">{entry.name}</span>
-                          <span
-                            :if={catalog_taken?(@catalog_keys_taken, entry.key)}
-                            class="badge badge-xs badge-warning"
-                            title={gettext("A model created from this catalog entry already exists")}
-                          >
-                            {gettext("already exists")}
-                          </span>
-                          <span
-                            :if={entry.provider_count == 0}
-                            class="badge badge-xs badge-ghost"
-                            title={
-                              gettext(
-                                "No supported provider serves it: it can be created, but there is nothing to route it to"
-                              )
-                            }
-                          >
-                            {gettext("no providers")}
-                          </span>
-                        </div>
-                        <div class="text-xs text-base-content/50 font-mono truncate">{entry.key}</div>
-                      </div>
-                      <div class="text-right shrink-0">
-                        <div class="text-xs tabular-nums text-base-content/70">
-                          <%= if entry.context_limit do %>
-                            {format_compact(entry.context_limit)} ctx
-                          <% end %>
-                        </div>
-                        <div
-                          :if={entry.cost_input || entry.cost_output}
-                          class="text-xs tabular-nums text-base-content/50"
-                        >
-                          ${fmt_price(entry.cost_input)} / ${fmt_price(entry.cost_output)} per 1M
-                        </div>
-                        <div
-                          :if={!entry.cost_input && !entry.cost_output}
-                          class="text-xs text-base-content/40"
-                        >
-                          <span :if={entry.provider_count > 0}>
-                            {entry.provider_count} proveedor(es)
-                          </span>
-                        </div>
-                      </div>
-                    </button>
-                  </div>
-
-                  <p
-                    :if={@catalog_results != []}
-                    class="text-[11px] text-base-content/40 mt-1"
-                    id="catalog-count"
-                  >
-                    {gettext("Showing %{shown} of %{total} catalog models.",
-                      shown: length(@catalog_results),
-                      total: @catalog_type_count
-                    )}
-                  </p>
-                </div>
-
                 <div class="flex justify-between mt-3">
                   <button
                     type="button"
@@ -3494,30 +2945,6 @@ defmodule TokengateWeb.ModelsLive do
                     id="wizard-write-by-hand"
                   >
                     <.icon name="hero-pencil" class="w-4 h-4" /> {gettext("Write it by hand")}
-                  </button>
-                </div>
-              <% end %>
-
-              <%!-- Catalog link: what the row was created from. Shown on edit too
-                   (a model keeps its link), with the way out next to it. --%>
-              <%= if Ecto.Changeset.get_field(@form.source, :catalog_model_key) do %>
-                <% linked_key = Ecto.Changeset.get_field(@form.source, :catalog_model_key) %>
-                <div
-                  class="flex items-center gap-2 mb-3 px-3 py-2 rounded-lg bg-info/10 border border-info/30"
-                  id="catalog-linked"
-                >
-                  <.icon name="hero-check-badge" class="w-4 h-4 text-info shrink-0" />
-                  <span class="text-sm flex-1">
-                    Vinculado a <code class="font-mono">{linked_key}</code>
-                  </span>
-                  <button
-                    type="button"
-                    phx-click="clear_catalog_pick"
-                    class="btn btn-xs btn-ghost"
-                    id="clear-catalog-pick"
-                    title={gettext("Remove the catalog link")}
-                  >
-                    <.icon name="hero-x-mark" class="w-3 h-3" /> {gettext("Remove link")}
                   </button>
                 </div>
               <% end %>
@@ -3594,15 +3021,6 @@ defmodule TokengateWeb.ModelsLive do
                 <% end %>
 
                 <.form for={@form} id="model-form" phx-change="validate_model" phx-submit="save_model">
-                  <%!-- The catalog link travels with the form on submit: it is not
-                     something the operator types, but it must reach the insert
-                     or the row would be saved as a plain custom model. `lab_key`
-                     needs no hidden twin: the lab select below owns it. --%>
-                  <input
-                    type="hidden"
-                    name="model[catalog_model_key]"
-                    value={Ecto.Changeset.get_field(@form.source, :catalog_model_key) || ""}
-                  />
                   <div class="grid md:grid-cols-2 gap-x-8 gap-y-1">
                     <div>
                       <.input
@@ -3913,14 +3331,6 @@ defmodule TokengateWeb.ModelsLive do
                           <span class="text-xs text-base-content/50 font-mono ml-1">
                             {choice.provider.key}
                           </span>
-                        </span>
-                        <span
-                          :if={choice.offer && (choice.offer.cost_input || choice.offer.cost_output)}
-                          class="text-xs tabular-nums text-base-content/60 shrink-0"
-                        >
-                          ${fmt_price(choice.offer.cost_input)} / ${fmt_price(
-                            choice.offer.cost_output
-                          )}
                         </span>
                         <span
                           :if={length(choice.provider.credentials) > 0}

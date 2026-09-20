@@ -37,12 +37,7 @@ defmodule Tokengate.Providers.Model do
     field :prompt_cache_enabled, :boolean, default: false
     field :lazy_cleanup_enabled, :boolean, default: false
     field :pinned, :boolean, default: false
-    # The models.dev id this row was created from (nil = built by hand in the
-    # admin form). Kept independently of `name`, which the operator may shorten:
-    # the link is what lets the picker say "ya existe" and what a future
-    # re-sync of the catalog metadata hangs off.
-    field :catalog_model_key, :string
-    # The lab that built the model, from the catalog id's prefix (soft link to
+    # The lab that built the model, from the id's prefix (soft link to
     # `labs.key`: a lab row is not required for the model to exist).
     field :lab_key, :string
     # Fallback hero icon (`hero-cpu-chip`) for a model with no lab — or with a
@@ -66,7 +61,6 @@ defmodule Tokengate.Providers.Model do
       :prompt_cache_enabled,
       :lazy_cleanup_enabled,
       :pinned,
-      :catalog_model_key,
       :lab_key,
       :icon
     ])
