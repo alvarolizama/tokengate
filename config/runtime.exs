@@ -63,16 +63,22 @@ if config_env() == :prod do
   # the system CA bundle breaks the connection. Set ECTO_SSL=false to disable
   # SSL entirely for local dev or non-SSL databases, or ECTO_SSL_VERIFY=true
   # to opt back into strict verification against the system CA bundle.
+  #
+  # The TLS options go INSIDE `ssl:` (a keyword list). Postgrex >= 0.22
+  # deprecated the old pair `ssl: true, ssl_opts: [...]` and logs
+  # ":ssl_opts is deprecated, pass opts to :ssl instead" once per pool
+  # connection, so the deprecated form fills the boot log of every deploy
+  # (postgrex 0.22.3, deps/postgrex/lib/postgrex/protocol.ex).
   maybe_ssl =
     cond do
       System.get_env("ECTO_SSL") in ~w(false 0) ->
         []
 
       System.get_env("ECTO_SSL_VERIFY") in ~w(true 1) ->
-        [ssl: true, ssl_opts: [verify: :verify_peer, cacerts: :public_key.cacerts_get()]]
+        [ssl: [verify: :verify_peer, cacerts: :public_key.cacerts_get()]]
 
       true ->
-        [ssl: true, ssl_opts: [verify: :verify_none]]
+        [ssl: [verify: :verify_none]]
     end
 
   config :tokengate,
