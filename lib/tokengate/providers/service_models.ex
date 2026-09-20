@@ -104,14 +104,24 @@ defmodule Tokengate.Providers.ServiceModels do
     #
     # ORDEN: video ANTES que image, porque `flux-video-edit`/`flux-3-video`
     # llevan "flux" y caerían en image si image fuera primero.
+    #
+    # `kling` va con límite por la izquierda: sin él casaba DENTRO de
+    # `thinkingmachines/inkling` (un chat), y la lista del proveedor mostraba
+    # cinco modelos de conversación como generación de vídeo.
     "openrouter" => [
       {~r{^google/lyria}i, "music"},
       {~r/rerank/i, "rerank"},
       {~r/whisper|transcribe|deepgram\/nova|chirp/i, "stt"},
       {~r/kokoro|tts|speech|voice/i, "tts"},
-      {~r{veo|sora|kling|seedance|hailuo|runway|aleph|grok-imagine-video|happyhorse|heygen|wan-|flux-.*video}i,
+      {~r{veo|sora|(?<![a-z])kling|seedance|hailuo|runway|aleph|grok-imagine-video|happyhorse|heygen|wan-|flux-.*video}i,
        "video"},
       {~r/image|flux|seedream|recraft|krea|mai-image|muse-image/i, "image"}
+    ],
+    # TypeSafe publica SÓLO el endpoint de decisiones (`/v1/systemone`); sus ids
+    # son aliases de Jev (`jev-latest`, `jev-1.13.0`), que sin este patrón
+    # caerían a `llm` y el paso 2 no los ofrecería para el tipo `decision`.
+    "typesafe" => [
+      {~r/jev/i, "decision"}
     ]
   }
 
@@ -199,6 +209,13 @@ defmodule Tokengate.Providers.ServiceModels do
       "image" => ~w(openai/gpt-image-2 black-forest-labs/flux.2-pro),
       "video" => ~w(google/veo-3.1 openai/sora-2-pro),
       "rerank" => ~w(cohere/rerank-v3.5)
+    },
+    # TypeSafe: el alias `jev-latest` es el default de sus SDKs y `jev-1.13.0`
+    # la versión pinnable. `decision` es el ÚNICO tipo que sirve, así que su
+    # proveedor necesita esta semilla cuando `/v1/models` no está disponible
+    # (sin key todavía).
+    "typesafe" => %{
+      "decision" => ~w(jev-latest jev-1.13.0)
     }
   }
 

@@ -98,11 +98,12 @@ defmodule TokengateWeb.ModelsLive do
       |> assign(:wizard_provider_search, "")
       |> assign(:wizard_provider_key, nil)
       |> assign(:wizard_provider_label, nil)
-      |> assign(:wizard_media_models, [])
+      |> assign(:wizard_models, [])
       |> assign(:wizard_provider_model, nil)
       |> assign(:wizard_credential_id, nil)
       |> assign(:wizard_credentials, [])
-      |> assign(:wizard_media_models_loading, false)
+      |> assign(:wizard_credential_label, nil)
+      |> assign(:wizard_models_loading, false)
       |> assign(:provider_choices, [])
       |> assign(:provider_search, "")
       |> assign(:provider_choices_results, [])
@@ -289,7 +290,8 @@ defmodule TokengateWeb.ModelsLive do
         |> assign(:wizard_provider_key, nil)
         |> assign(:wizard_provider_model, nil)
         |> assign(:wizard_credential_id, nil)
-        |> assign(:wizard_media_models, [])
+        |> assign(:wizard_credential_label, nil)
+        |> assign(:wizard_models, [])
         |> load_wizard_providers(type)
 
       {:noreply, socket}
@@ -325,12 +327,12 @@ defmodule TokengateWeb.ModelsLive do
        socket
        |> assign(:wizard_provider_key, key)
        |> assign(:wizard_provider_label, provider_label_for(socket, key))
-       |> assign(:wizard_media_models, media_models_for(key, type))
+       |> assign(:wizard_models, wizard_seed_models(key, type))
        |> assign(:wizard_credentials, wizard_credentials_for(socket, key))
        |> assign(:wizard_credential_id, nil)
+       |> assign(:wizard_credential_label, nil)
        |> assign(:wizard_provider_model, nil)
-       |> fetch_wizard_service_models(key, type)
-       |> assign(:wizard_step, "model")}
+       |> assign(:wizard_step, "credential")}
     else
       {:noreply,
        put_flash(socket, :error, gettext("You do not have permission for this action."))}
@@ -340,7 +342,7 @@ defmodule TokengateWeb.ModelsLive do
   # Paso 2 (servicios): el id elegido de la lista curada pasa a ser el
   # `provider_model` del lane y, como nombre del modelo, su forma corta — que
   # sigue siendo editable en el paso 3.
-  def handle_event("wizard_pick_media_model", %{"model" => model}, socket)
+  def handle_event("wizard_pick_model", %{"model" => model}, socket)
       when is_binary(model) do
     if socket.assigns.is_admin and socket.assigns.form do
       # `source.data` es el struct VACÍO: lo que el operador ya eligió (el TIPO,
@@ -372,17 +374,6 @@ defmodule TokengateWeb.ModelsLive do
      |> assign_form_picked_type()}
   end
 
-  # Salto del paso 1 al 2 sin proveedor: el operador escribe el modelo a mano.
-  # No crea lane, así que el modelo queda sin proveedor asignado — igual que el
-  # camino de "crear a mano".
-  def handle_event("wizard_skip_provider", _params, socket) do
-    {:noreply,
-     socket
-     |> assign(:wizard_step, "model")
-     |> assign(:wizard_media_models, [])
-     |> assign(:wizard_media_models_loading, false)}
-  end
-
   def handle_event("wizard_back", %{"step" => step}, socket)
       when step in ~w(provider model) do
     {:noreply, assign(socket, :wizard_step, step)}
@@ -394,7 +385,20 @@ defmodule TokengateWeb.ModelsLive do
 
   def handle_event("wizard_pick_credential", %{"credential_id" => id}, socket)
       when is_binary(id) do
-    {:noreply, assign(socket, :wizard_credential_id, if(id == "", do: nil, else: id))}
+    credential_id = if id == "", do: nil, else: id
+
+    {:noreply,
+     socket
+     |> assign(:wizard_credential_id, credential_id)
+     |> assign(:wizard_credential_label, wizard_credential_label_for(socket, credential_id))
+     |> fetch_wizard_models(credential_id)}
+  end
+
+  # Del paso 2 al 3: el listado ya se pidió al elegir la key (en paralelo), así
+  # que continuar es sólo mover el paso.
+  def handle_event("wizard_continue", %{"step" => step}, socket)
+      when step in ~w(credential model) do
+    {:noreply, assign(socket, :wizard_step, step)}
   end
 
   def handle_event("wizard_pick_credential", _params, socket), do: {:noreply, socket}
@@ -1247,13 +1251,14 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
-  @doc "Los modelos de servicio que un proveedor publica para el tipo elegido."
-  def media_models_for(provider_key, type) do
-    if ServiceModels.media_type?(type) do
-      ServiceModels.known_ids(provider_key, type)
-    else
-      []
-    end
+  @doc """
+  Los ids que un proveedor publica para un tipo, según la semilla curada EN
+  CÓDIGO (`ServiceModels.known_ids/2`): el suelo del paso 3 cuando el proveedor
+  no publica catálogo por servicio (DashScope para los seis servicios de media)
+  o cuando todavía no hay key con la que listarlo.
+  """
+  def wizard_seed_models(provider_key, type) do
+    ServiceModels.known_ids(provider_key, type)
   end
 
   @doc """
@@ -1280,6 +1285,15 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
+  defp wizard_credential_label_for(_socket, nil), do: nil
+
+  defp wizard_credential_label_for(socket, credential_id) do
+    case Enum.find(socket.assigns[:wizard_credentials] || [], &(&1.id == credential_id)) do
+      nil -> nil
+      credential -> credential_label(credential)
+    end
+  end
+
   defp wizard_credentials_for(socket, provider_ref) do
     (socket.assigns[:credentials_for_select] || [])
     |> Enum.filter(fn credential ->
@@ -1298,47 +1312,89 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
-  # El catálogo del paso 2 tiene DOS fuentes y se combinan: la semilla
-  # (instantánea, verificada, funciona sin red) y el listado EN VIVO del
-  # proveedor cuando publica catálogo por servicio (`ServiceModels.discovery/2`).
-  # El resultado se empuja por mensaje: `list_models_at/3` es una llamada HTTP y
-  # bloquear el `handle_event` del modal dejaría la UI congelada.
-  defp fetch_wizard_service_models(socket, provider_key, type) do
-    case ServiceModels.discovery(provider_key, type) do
+  # El listado del paso 3 se pide al elegir la API key: es una llamada HTTP y
+  # bloquear el `handle_event` del modal dejaría la UI congelada, así que el
+  # resultado llega por mensaje y se descarta si el operador ya cambió de
+  # proveedor, de tipo o de key.
+  defp fetch_wizard_models(socket, credential_id) do
+    provider_key = socket.assigns[:wizard_provider_key]
+    type = socket.assigns[:model_form_picked_type]
+
+    credential =
+      Enum.find(socket.assigns[:wizard_credentials] || [], &(&1.id == credential_id))
+
+    if credential && is_binary(type) do
+      provider = credential.provider
+      lv_pid = self()
+
+      Task.start(fn ->
+        result =
+          try do
+            list_provider_models(provider, credential, type)
+          rescue
+            # Un adapter que raise (credencial indescifrable, Finch sin
+            # clasificar) no puede dejar el spinner colgado: el mensaje de error
+            # limpia el estado como cualquier {:error, _}.
+            e -> {:error, Exception.message(e)}
+          end
+
+        send(lv_pid, {:wizard_models_result, provider_key, type, credential_id, result})
+      end)
+
+      assign(socket, :wizard_models_loading, true)
+    else
+      assign(socket, :wizard_models_loading, false)
+    end
+  end
+
+  @doc """
+  Los modelos que ESTE proveedor publica para ESTE tipo — la fuente del paso 3:
+
+    * si publica un catálogo POR SERVICIO (`?output_modalities=…`, hoy sólo
+      OpenRouter), se lista ese endpoint, que es la fuente autoritativa;
+    * si no, se lista su catálogo GENERAL — `/embeddings/models` para
+      embeddings, `/models` para el resto — y se filtra por la familia del id
+      (`ServiceModels.type_of/2`), que es lo que hace que la lista sea del TIPO
+      elegido y no de todo lo que sirve el proveedor;
+    * un proveedor que no publica NADA de ese tipo devuelve lista vacía y el paso
+      se queda con la semilla curada (`wizard_seed_models/2`).
+
+  Público porque es el contrato que el alta ofrece y lo que los tests ejercitan
+  contra un upstream de mentira: `wizard_pick_model` no depende de su forma.
+  """
+  @spec list_provider_models(map(), map(), String.t()) ::
+          {:ok, [String.t()]} | {:error, term()}
+  #
+  #   * si publica un catálogo POR SERVICIO (`?output_modalities=…`, hoy sólo
+  #     OpenRouter), se lista ese endpoint, que es la fuente autoritativa;
+  #   * si no, se lista su catálogo GENERAL — `/embeddings/models` para
+  #     embeddings, `/models` para el resto — y se filtra por la familia del id
+  #     (`ServiceModels.type_of/2`), que es lo que hace que la lista sea del
+  #     TIPO elegido y no de todo lo que sirve el proveedor;
+  #   * un proveedor que no publica NADA de ese tipo devuelve lista vacía y el
+  #     paso se queda con la semilla curada (`wizard_seed_models/2`).
+  def list_provider_models(provider, credential, type) do
+    adapter = ProviderAdapter.dispatch(provider)
+
+    case ServiceModels.discovery(provider.key, type) do
       nil ->
-        socket
+        listing =
+          if type == "embedding" do
+            adapter.list_embedding_models(provider, credential)
+          else
+            Tokengate.Proxy.OpenAIAdapter.list_models(provider, credential)
+          end
+
+        case listing do
+          {:ok, ids} ->
+            {:ok, Enum.filter(ids, &(ServiceModels.type_of(provider.key, &1) == type))}
+
+          {:error, reason} ->
+            {:error, reason}
+        end
 
       endpoint ->
-        case socket.assigns[:wizard_credentials] || [] do
-          [] ->
-            # Sin API key no se puede autenticar el listado: la semilla se queda
-            # como catálogo y el "New API key" queda a la vista en el paso 3.
-            assign(socket, :wizard_media_models_loading, false)
-
-          [credential | _] ->
-            provider = credential.provider
-            lv_pid = self()
-
-            Task.start(fn ->
-              result =
-                try do
-                  ProviderAdapter.dispatch(provider).list_service_models(
-                    provider,
-                    credential,
-                    endpoint
-                  )
-                rescue
-                  # Un adapter que raise (credencial indescifrable, Finch sin
-                  # clasificar) no puede dejar el spinner colgado: el mensaje
-                  # de error limpia el estado como cualquier {:error, _}.
-                  e -> {:error, Exception.message(e)}
-                end
-
-              send(lv_pid, {:wizard_service_models, provider_key, type, result})
-            end)
-
-            assign(socket, :wizard_media_models_loading, true)
-        end
+        adapter.list_service_models(provider, credential, endpoint)
     end
   end
 
@@ -1406,8 +1462,9 @@ defmodule TokengateWeb.ModelsLive do
     |> assign(:wizard_provider_model, nil)
     |> assign(:wizard_credentials, [])
     |> assign(:wizard_credential_id, nil)
-    |> assign(:wizard_media_models, [])
-    |> assign(:wizard_media_models_loading, false)
+    |> assign(:wizard_credential_label, nil)
+    |> assign(:wizard_models, [])
+    |> assign(:wizard_models_loading, false)
   end
 
   defp save_model(socket, :new, model_params) do
@@ -1590,17 +1647,18 @@ defmodule TokengateWeb.ModelsLive do
   # respuesta llegaría tarde y pisaría una lista que ya no es la suya.
   @impl true
   def handle_info(
-        {:wizard_service_models, provider_key, type, result},
+        {:wizard_models_result, provider_key, type, credential_id, result},
         %{assigns: assigns} = socket
       ) do
     if assigns[:wizard_provider_key] == provider_key and
-         assigns[:model_form_picked_type] == type do
+         assigns[:model_form_picked_type] == type and
+         assigns[:wizard_credential_id] == credential_id do
       {:noreply,
        socket
-       |> assign(:wizard_media_models_loading, false)
+       |> assign(:wizard_models_loading, false)
        |> assign(
-         :wizard_media_models,
-         merge_wizard_models(assigns[:wizard_media_models] || [], result)
+         :wizard_models,
+         merge_wizard_models(assigns[:wizard_models] || [], result)
        )}
     else
       {:noreply, socket}
@@ -2748,7 +2806,12 @@ defmodule TokengateWeb.ModelsLive do
                    assign porque el modal es el mismo; en edición se entra
                    directo a los datos (todo está ya decidido). --%>
               <div class="flex items-center gap-2 mb-4 text-xs" id="model-wizard-steps">
-                <%= for {step, label} <- [{"provider", gettext("Provider")}, {"model", gettext("Model")}, {"details", gettext("Data")}] do %>
+                <%= for {step, label} <- [
+                    {"provider", gettext("Provider")},
+                    {"credential", gettext("API key")},
+                    {"model", gettext("Model")},
+                    {"details", gettext("Data")}
+                  ] do %>
                   <span
                     id={"wizard-crumb-#{step}"}
                     class={[
@@ -2852,14 +2915,6 @@ defmodule TokengateWeb.ModelsLive do
                   <div class="flex gap-2">
                     <button
                       type="button"
-                      phx-click="wizard_skip_provider"
-                      class="btn btn-outline btn-sm"
-                      id="wizard-all-models"
-                    >
-                      {gettext("See every model")}
-                    </button>
-                    <button
-                      type="button"
                       phx-click="wizard_skip_model"
                       class="btn btn-outline btn-sm"
                       id="wizard-custom"
@@ -2888,71 +2943,145 @@ defmodule TokengateWeb.ModelsLive do
                   </button>
                 </div>
 
-                <%!-- Servicios de media: models.dev no los publica. La lista sale
-                     del catálogo del proveedor — EN VIVO si publica catálogo por
-                     servicio (`?output_modalities=…`), más la semilla verificada
-                     como suelo. --%>
-                <div
-                  :if={@wizard_media_models != [] or @wizard_media_models_loading}
-                  id="wizard-media-models"
-                  class="mb-4"
-                >
-                  <p class="text-xs text-base-content/60 mb-2 flex items-center gap-2">
-                    <span>
-                      {gettext("Models this provider serves for this type:")}
-                      <b id="wizard-media-count">{length(@wizard_media_models)}</b>
-                    </span>
-                    <span
-                      :if={@wizard_media_models_loading}
-                      class="flex items-center gap-1 text-base-content/50"
-                      id="wizard-media-loading"
+                <%!-- Paso 2: la API key. No es una formalidad — es lo que permite
+                     preguntarle al proveedor qué modelos sirve para este tipo. --%>
+                <%= if @wizard_step == "credential" do %>
+                  <div class="rounded-lg border border-base-300 p-3 mb-4" id="wizard-key-step">
+                    <div class="fieldset mb-2">
+                      <label class="label" for="wizard-credential">
+                        {gettext("Credential (API key)")}
+                      </label>
+                      <select
+                        id="wizard-credential"
+                        name="credential_id"
+                        class="select select-sm w-full"
+                        phx-change="wizard_pick_credential"
+                      >
+                        <option value="">{gettext("Pick an API key from this provider")}</option>
+                        <option
+                          :for={c <- @wizard_credentials}
+                          value={c.id}
+                          selected={@wizard_credential_id == c.id}
+                        >
+                          {credential_label(c)}
+                        </option>
+                      </select>
+                    </div>
+
+                    <p
+                      :if={@wizard_credentials == []}
+                      class="text-xs text-warning mt-1"
+                      id="wizard-no-credentials"
                     >
-                      <span class="loading loading-spinner loading-xs"></span>
-                      {gettext("loading the provider catalogue…")}
-                    </span>
-                  </p>
-                  <div
-                    :if={@wizard_media_models != []}
-                    class="max-h-56 overflow-y-auto rounded-lg border border-base-300"
-                  >
+                      {gettext(
+                        "This provider has no API keys yet: the model is created without a provider assignment. Add the key on the Providers page and assign it afterwards."
+                      )}
+                    </p>
+
+                    <p :if={@wizard_credentials != []} class="text-xs text-base-content/50 mt-1">
+                      {gettext(
+                        "With this key the gateway asks the provider which models it serves for this type."
+                      )}
+                    </p>
+                  </div>
+
+                  <div class="flex justify-between mt-3">
                     <button
-                      :for={m <- @wizard_media_models}
                       type="button"
-                      phx-click="wizard_pick_media_model"
-                      phx-value-model={m}
-                      id={"wizard-model-#{dom_key(m)}"}
-                      class="block w-full text-left px-3 py-2 text-sm font-mono hover:bg-primary/10 transition-colors border-b border-base-300/60 last:border-0"
+                      phx-click="wizard_back"
+                      phx-value-step="provider"
+                      class="btn btn-ghost btn-sm"
+                      id="wizard-back-to-provider"
                     >
-                      {m}
+                      {gettext("Back")}
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="wizard_continue"
+                      phx-value-step="model"
+                      class="btn btn-primary btn-sm"
+                      id="wizard-continue"
+                    >
+                      {gettext("See its models")}
                     </button>
                   </div>
-                </div>
+                <% end %>
 
-                <div class="flex justify-between mt-3">
-                  <button
-                    type="button"
-                    phx-click="wizard_back"
-                    phx-value-step="provider"
-                    class="btn btn-ghost btn-sm"
-                    id="wizard-back-to-provider"
-                  >
-                    {gettext("Back")}
-                  </button>
-                  <button
-                    type="button"
-                    phx-click="wizard_skip_model"
-                    class="btn btn-outline btn-sm"
-                    id="wizard-write-by-hand"
-                  >
-                    <.icon name="hero-pencil" class="w-4 h-4" /> {gettext("Write it by hand")}
-                  </button>
-                </div>
+                <%!-- Paso 3: los modelos que publica ESE proveedor para ESE tipo,
+                     en vivo con la key. Donde el proveedor no publica catálogo
+                     (DashScope para los seis servicios) queda la semilla curada
+                     en código. --%>
+                <%= if @wizard_step == "model" do %>
+                  <div id="wizard-models" class="mb-4">
+                    <p class="text-xs text-base-content/60 mb-2 flex items-center gap-2">
+                      <span>
+                        {gettext("Models this provider serves for this type:")}
+                        <b id="wizard-models-count">{length(@wizard_models)}</b>
+                      </span>
+                      <span
+                        :if={@wizard_models_loading}
+                        class="flex items-center gap-1 text-base-content/50"
+                        id="wizard-models-loading"
+                      >
+                        <span class="loading loading-spinner loading-xs"></span>
+                        {gettext("asking the provider…")}
+                      </span>
+                    </p>
+
+                    <div
+                      :if={@wizard_models != []}
+                      class="max-h-56 overflow-y-auto rounded-lg border border-base-300"
+                    >
+                      <button
+                        :for={m <- @wizard_models}
+                        type="button"
+                        phx-click="wizard_pick_model"
+                        phx-value-model={m}
+                        id={"wizard-model-#{dom_key(m)}"}
+                        class="block w-full text-left px-3 py-2 text-sm font-mono hover:bg-primary/10 transition-colors border-b border-base-300/60 last:border-0"
+                      >
+                        {m}
+                      </button>
+                    </div>
+
+                    <p
+                      :if={@wizard_models == [] and !@wizard_models_loading}
+                      class="text-sm text-base-content/50 py-3"
+                      id="wizard-models-empty"
+                    >
+                      {gettext(
+                        "This provider does not publish a list for this type: write the id by hand in the next step."
+                      )}
+                    </p>
+                  </div>
+
+                  <div class="flex justify-between mt-3">
+                    <button
+                      type="button"
+                      phx-click="wizard_back"
+                      phx-value-step="credential"
+                      class="btn btn-ghost btn-sm"
+                      id="wizard-back-to-credential"
+                    >
+                      {gettext("Back")}
+                    </button>
+                    <button
+                      type="button"
+                      phx-click="wizard_skip_model"
+                      class="btn btn-outline btn-sm"
+                      id="wizard-write-by-hand"
+                    >
+                      <.icon name="hero-pencil" class="w-4 h-4" /> {gettext("Write it by hand")}
+                    </button>
+                  </div>
+                <% end %>
               <% end %>
 
-              <%= if @wizard_step != "provider" do %>
-                <%!-- Lo que el wizard ya decidió, y la API key que servirá el
-                     modelo: es el input NECESARIO del alta — sin credencial no
-                     hay lane, y sin lane el modelo no rutea. --%>
+              <%!-- Paso 4: los datos del modelo y lo que el wizard ya decidió —
+                   el proveedor, su API key y el id que viaja al upstream. La key
+                   es el input NECESARIO del alta: sin credencial no hay lane, y
+                   sin lane el modelo no rutea. --%>
+              <%= if @wizard_step == "details" do %>
                 <%= if @wizard_provider_key do %>
                   <div class="rounded-lg border border-base-300 p-3 mb-4" id="wizard-lane">
                     <div class="flex items-center gap-2 mb-2">
@@ -2971,41 +3100,38 @@ defmodule TokengateWeb.ModelsLive do
                       </button>
                     </div>
 
-                    <div class="grid md:grid-cols-2 gap-3">
-                      <div class="fieldset mb-2">
-                        <label class="label" for="wizard-credential">
-                          {gettext("Credential (API key)")}
-                        </label>
-                        <select
-                          id="wizard-credential"
-                          name="credential_id"
-                          class="select select-sm w-full"
-                          phx-change="wizard_pick_credential"
-                        >
-                          <option value="">{gettext("Pick an API key from this provider")}</option>
-                          <option
-                            :for={c <- @wizard_credentials}
-                            value={c.id}
-                            selected={@wizard_credential_id == c.id}
-                          >
-                            {credential_label(c)}
-                          </option>
-                        </select>
-                      </div>
-                      <div class="fieldset mb-2">
-                        <label class="label" for="wizard-provider-model">
-                          {gettext("Provider model")}
-                        </label>
-                        <input
-                          type="text"
-                          id="wizard-provider-model"
-                          name="wizard_provider_model"
-                          value={@wizard_provider_model || ""}
-                          class="input input-sm w-full"
-                          phx-change="wizard_pick_provider_model"
-                          phx-debounce="300"
-                        />
-                      </div>
+                    <div
+                      class="flex items-center gap-2 mb-3 text-xs text-base-content/70"
+                      id="wizard-chosen-key"
+                    >
+                      <.icon name="hero-key" class="w-3.5 h-3.5 text-primary shrink-0" />
+                      <span class="font-mono flex-1">
+                        {@wizard_credential_label || gettext("no key")}
+                      </span>
+                      <button
+                        type="button"
+                        phx-click="wizard_back"
+                        phx-value-step="credential"
+                        class="btn btn-xs btn-ghost"
+                        id="wizard-change-key"
+                      >
+                        <.icon name="hero-arrow-path" class="w-3 h-3" /> {gettext("Change")}
+                      </button>
+                    </div>
+
+                    <div class="fieldset mb-2">
+                      <label class="label" for="wizard-provider-model">
+                        {gettext("Provider model")}
+                      </label>
+                      <input
+                        type="text"
+                        id="wizard-provider-model"
+                        name="wizard_provider_model"
+                        value={@wizard_provider_model || ""}
+                        class="input input-sm w-full"
+                        phx-change="wizard_pick_provider_model"
+                        phx-debounce="300"
+                      />
                     </div>
 
                     <p

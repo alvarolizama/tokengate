@@ -9,11 +9,12 @@ defmodule TokengateWeb.ModelsLiveTest do
 
   defp unique, do: System.unique_integer([:positive])
 
-  # A provider carrying a models.dev `key`, which is what an offer joins to.
-  # Created as a custom on purpose: a builtin's identity (name, base_url) is
-  # catalog-owned and the changeset locks it, so a test must not build one by
-  # hand — `key` is all `providers_serving/1` needs.
-  defp create_keyed_provider(key, attrs \\ %{}) do
+  # A provider carrying a models.dev `key`, which is what the catalog
+  # customizations (capabilities, dialect, pins) resolve by. Created as a custom
+  # on purpose: a builtin's identity (name, base_url) is catalog-owned and the
+  # changeset locks it, so a test must not build one by hand — `key` is all
+  # `ServiceModels.classify/2` (y `Catalog.declares?/2` en el paso 1) necesitan.
+  defp create_keyed_provider(key, attrs) do
     {:ok, provider} =
       Providers.create_provider(
         Map.merge(
@@ -164,7 +165,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     view |> element("#new-model-btn") |> render_click()
     view |> element("#pick-type-llm") |> render_click()
-    view |> element("#wizard-all-models") |> render_click()
+    view |> element("#wizard-custom") |> render_click()
 
     assert has_element?(view, "#model-form")
 
@@ -204,7 +205,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert has_element?(view, "#model-type-picker")
     refute has_element?(view, "#model-form")
     view |> element("#pick-type-stt") |> render_click()
-    view |> element("#wizard-all-models") |> render_click()
+    view |> element("#wizard-custom") |> render_click()
 
     assert has_element?(view, "#model-form")
 
@@ -294,7 +295,7 @@ defmodule TokengateWeb.ModelsLiveTest do
 
   # El paso 2 combina DOS fuentes: la semilla (instantánea) y el listado EN VIVO
   # del proveedor. El resultado llega por mensaje porque es una llamada HTTP.
-  test "el paso 2 une el listado en vivo con la semilla", %{conn: conn} do
+  test "el paso 3 une el listado en vivo del proveedor con la semilla curada", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     seed_mirror!()
 
@@ -306,7 +307,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       |> Ecto.Changeset.change(base_url: "http://localhost:1")
       |> Repo.update!()
 
-    {:ok, _credential} =
+    {:ok, credential} =
       Providers.create_credential(%{
         provider_id: provider.id,
         name: "live",
@@ -321,13 +322,17 @@ defmodule TokengateWeb.ModelsLiveTest do
     view |> element("#pick-type-image") |> render_click()
     view |> element("#wizard-provider-openrouter") |> render_click()
 
-    # La semilla está desde el primer render (no se espera a la red).
+    # Paso 2: la key. Elegirla es lo que dispara el listado del proveedor.
+    view |> element("#wizard-credential") |> render_change(%{"credential_id" => credential.id})
+    view |> element("#wizard-continue") |> render_click()
+
+    # La semilla curada ya está en la lista (no se espera a la red).
     assert has_element?(view, "#wizard-model-#{ModelsLive.dom_key("openai/gpt-image-2")}")
 
     # Y cuando llega el catálogo del proveedor, se UNE a la semilla.
     send(
       view.pid,
-      {:wizard_service_models, "openrouter", "image",
+      {:wizard_models_result, "openrouter", "image", credential.id,
        {:ok, ["nuevo/proveedor-modelo-1", "otro/proveedor-modelo-2"]}}
     )
 
@@ -349,11 +354,13 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     view |> element("#new-model-btn") |> render_click()
     view |> element("#pick-type-image") |> render_click()
-    view |> element("#wizard-all-models") |> render_click()
+    view |> element("#wizard-custom") |> render_click()
 
+    # El resultado llega con un proveedor/tipo/key que NO son los del modal (el
+    # operador ya cambió de paso): no puede pintar nada.
     send(
       view.pid,
-      {:wizard_service_models, "openrouter", "image", {:ok, ["no/deberia-aparecer"]}}
+      {:wizard_models_result, "openrouter", "image", "cred-vieja", {:ok, ["no/deberia-aparecer"]}}
     )
 
     html = render(view)
@@ -617,7 +624,15 @@ defmodule TokengateWeb.ModelsLiveTest do
     # OpenRouter sale de la materialización del catálogo (declara `image` en
     # código), así que se siembra el mirror en vez de inventar un custom.
     seed_mirror!()
-    provider = Repo.get_by(Tokengate.Providers.Provider, key: "openrouter")
+
+    # El listado del paso 3 va contra un upstream muerto a propósito: falla
+    # rápido, sin red, y el paso se queda con la semilla curada.
+    provider =
+      Tokengate.Providers.Provider
+      |> Repo.get_by(key: "openrouter")
+      |> Ecto.Changeset.change(base_url: "http://localhost:1")
+      |> Repo.update!()
+
     assert provider, "el sync debía materializar openrouter"
 
     {:ok, credential} =
@@ -637,13 +652,17 @@ defmodule TokengateWeb.ModelsLiveTest do
     # Paso 1: el proveedor que declara el tipo.
     view |> element("#wizard-provider-openrouter") |> render_click()
 
-    # Paso 2: los modelos de servicio curados de ese proveedor.
+    # Paso 2: la API key — es el input NECESARIO del alta y lo que dispara el
+    # listado del proveedor.
+    view |> element("#wizard-credential") |> render_change(%{"credential_id" => credential.id})
+    view |> element("#wizard-continue") |> render_click()
+
+    # Paso 3: los modelos que ese proveedor publica para `image`.
     nano = ModelsLive.dom_key("openai/gpt-image-2")
     assert has_element?(view, "#wizard-model-#{nano}")
     view |> element("#wizard-model-#{nano}") |> render_click()
 
-    # Paso 3: la credencial, que es el input necesario para que el modelo rutee.
-    view |> element("#wizard-credential") |> render_change(%{"credential_id" => credential.id})
+    # Paso 4: los datos, con el lane ya decidido.
 
     name = "gpt-image-wizard-#{unique()}"
 
@@ -1516,7 +1535,7 @@ defmodule TokengateWeb.ModelsLiveTest do
       {:ok, view, _html} = live(conn, ~p"/catalog/models")
       view |> element("#new-model-btn") |> render_click()
       view |> element("#pick-type-llm") |> render_click()
-      view |> element("#wizard-all-models") |> render_click()
+      view |> element("#wizard-custom") |> render_click()
 
       assert has_element?(view, "#model-icon-picker")
       assert has_element?(view, "#model-mark-preview-inner .hero-cpu-chip")
@@ -1781,5 +1800,142 @@ defmodule TokengateWeb.ModelsLiveTest do
       view |> element("#provider-search") |> render_change(%{"q" => "Beta"})
       assert has_element?(view, "#provider-row-beta")
     end
+  end
+
+  # -- El paso 3: lo que el proveedor publica para el tipo elegido -------------
+
+  describe "el listado del proveedor por tipo" do
+    @port 42399
+
+    setup do
+      %{url: serve_listing!()}
+    end
+
+    # El upstream de mentira: el catálogo GENERAL (`/models`) trae un chat y un
+    # embedding; el POR SERVICIO (`?output_modalities=…`) trae un id que ningún
+    # patrón clasificaría, así que sólo puede llegar por esa puerta.
+    defp serve_listing! do
+      start_supervised!(
+        {Bandit, plug: &listing_plug/2, scheme: :http, ip: :loopback, port: @port}
+      )
+
+      "http://127.0.0.1:#{@port}/v1"
+    end
+
+    defp listing_plug(conn, _opts) do
+      body =
+        if conn.query_string == "" do
+          %{"data" => [%{"id" => "gpt-5-nano"}, %{"id" => "google/gemini-embedding-001"}]}
+        else
+          %{"data" => [%{"id" => "voz-de-mentira"}]}
+        end
+
+      conn
+      |> Plug.Conn.put_resp_content_type("application/json")
+      |> Plug.Conn.send_resp(200, Jason.encode!(body))
+    end
+
+    defp keyed!(provider, name) do
+      {:ok, credential} =
+        Providers.create_credential(%{
+          provider_id: provider.id,
+          name: name,
+          api_key_encrypted: "sk-#{name}",
+          status: "active"
+        })
+
+      credential
+    end
+
+    test "el catálogo general se acota al TIPO elegido", %{url: url} do
+      provider = create_keyed_provider("acme", %{name: "Acme", base_url: url})
+      credential = keyed!(provider, "acme")
+
+      # El proveedor publica las dos cosas; el paso 3 ofrece la del tipo.
+      assert {:ok, ids} = ModelsLive.list_provider_models(provider, credential, "llm")
+      assert ids == ["gpt-5-nano"]
+
+      assert {:ok, ids} = ModelsLive.list_provider_models(provider, credential, "embedding")
+      assert ids == ["google/gemini-embedding-001"]
+    end
+
+    test "un catálogo POR SERVICIO se usa tal cual, sin filtrar por familia", %{url: url} do
+      seed_mirror!()
+
+      provider =
+        Tokengate.Providers.Provider
+        |> Repo.get_by(key: "openrouter")
+        |> Ecto.Changeset.change(base_url: url)
+        |> Repo.update!()
+
+      credential = keyed!(provider, "openrouter")
+
+      assert {:ok, ["voz-de-mentira"]} =
+               ModelsLive.list_provider_models(provider, credential, "stt")
+    end
+
+    test "un proveedor que no publica ese tipo devuelve lista vacía", %{url: url} do
+      provider = create_keyed_provider("acme-sin-image", %{name: "Acme 2", base_url: url})
+      credential = keyed!(provider, "acme-sin-image")
+
+      assert {:ok, []} = ModelsLive.list_provider_models(provider, credential, "image")
+    end
+
+    test "un upstream que no responde es un ERROR, no una lista vacía" do
+      provider =
+        create_keyed_provider("dead-upstream", %{name: "Dead", base_url: "http://localhost:1"})
+
+      credential = keyed!(provider, "dead-upstream")
+
+      assert {:error, _reason} = ModelsLive.list_provider_models(provider, credential, "llm")
+    end
+  end
+
+  # TypeSafe publica sólo el endpoint de decisiones y su catálogo no está en
+  # models.dev: la semilla curada ES la lista cuando todavía no hay con qué
+  # listarlo en vivo.
+  test "decision: el paso 3 ofrece la semilla curada de TypeSafe", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    seed_mirror!()
+
+    # TypeSafe es code-owned (el sync lo materializa); su base URL apunta a un
+    # upstream muerto para que el listado en vivo no salga a la red.
+    provider =
+      Tokengate.Providers.Provider
+      |> Repo.get_by(key: "typesafe")
+      |> Ecto.Changeset.change(base_url: "http://localhost:1")
+      |> Repo.update!()
+
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        name: "jev",
+        api_key_encrypted: "sk-jev",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-decision") |> render_click()
+    view |> element("#wizard-provider-typesafe") |> render_click()
+
+    # Paso 2: la key (TypeSafe tiene una sola).
+    view |> element("#wizard-credential") |> render_change(%{"credential_id" => credential.id})
+    view |> element("#wizard-continue") |> render_click()
+
+    # Paso 3: los dos aliases de Jev, de la semilla.
+    assert has_element?(view, "#wizard-model-#{ModelsLive.dom_key("jev-latest")}")
+    assert has_element?(view, "#wizard-model-#{ModelsLive.dom_key("jev-1.13.0")}")
+
+    # Y elegir uno lleva al paso 4 con el id que viajará al upstream.
+    view
+    |> element("#wizard-model-#{ModelsLive.dom_key("jev-latest")}")
+    |> render_click()
+
+    assert has_element?(view, "#model-form")
+    assert has_element?(view, "input#wizard-provider-model[value='jev-latest']")
+    assert has_element?(view, "#wizard-chosen-key")
   end
 end

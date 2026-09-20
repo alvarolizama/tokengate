@@ -112,6 +112,24 @@ defmodule Tokengate.Providers.ServiceModelsTest do
       assert ServiceModels.type_of("openrouter", "openai/gpt-audio") == "llm"
     end
 
+    # `inkling` contiene `kling` (un generador de vídeo): sin límite por la
+    # izquierda, cinco modelos de CHAT de OpenRouter aparecían en la lista de
+    # vídeo del paso 3.
+    test "`kling` casa como familia, no como subcadena de otro id" do
+      assert ServiceModels.classify("openrouter", "kling/kling-v3") == "video"
+      assert ServiceModels.classify("openrouter", "thinkingmachines/inkling") == nil
+      assert ServiceModels.type_of("openrouter", "thinkingmachines/inkling") == "llm"
+      assert ServiceModels.type_of("openrouter", "thinkingmachines/inkling-small:free") == "llm"
+    end
+
+    # TypeSafe sólo sirve decisiones y sus ids son aliases de Jev: sin patrón,
+    # el paso 3 no podría ofrecer nada para el tipo `decision`.
+    test "los aliases de Jev son `decision`" do
+      assert ServiceModels.classify("typesafe", "jev-latest") == "decision"
+      assert ServiceModels.classify("typesafe", "jev-1.13.0") == "decision"
+      assert ServiceModels.type_of("typesafe", "jev-latest") == "decision"
+    end
+
     test "un chat cualquiera no se clasifica como servicio" do
       assert ServiceModels.classify("openrouter", "anthropic/claude-opus-4.7") == nil
       assert ServiceModels.type_of("openrouter", "anthropic/claude-opus-4.7") == "llm"
@@ -201,6 +219,11 @@ defmodule Tokengate.Providers.ServiceModelsTest do
         end
 
       assert inalcanzables == []
+    end
+
+    test "la semilla de TypeSafe cubre `decision`, que su proveedor declara" do
+      assert ServiceModels.known_ids("typesafe", "decision") == ~w(jev-latest jev-1.13.0)
+      assert Tokengate.Providers.Catalog.declares?("typesafe", "decision")
     end
 
     test "known_ids/2 vacío para un tipo o proveedor sin semilla" do

@@ -176,6 +176,18 @@ msgstr "+ path; vacío = default del adapter."
 msgid "API key"
 msgstr "API key"
 
+msgid "See its models"
+msgstr "Ver sus modelos"
+
+msgid "This provider does not publish a list for this type: write the id by hand in the next step."
+msgstr "Este proveedor no publica una lista para este tipo: escribe el id a mano en el paso siguiente."
+
+msgid "With this key the gateway asks the provider which models it serves for this type."
+msgstr "Con esta key el gateway le pregunta al proveedor qué modelos sirve para este tipo."
+
+msgid "asking the provider…"
+msgstr "preguntándole al proveedor…"
+
 msgid "Active"
 msgstr "Activo"
 
