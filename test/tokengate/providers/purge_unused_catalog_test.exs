@@ -4,7 +4,11 @@ defmodule Tokengate.Providers.PurgeUnusedCatalogTest do
   SOLO lo que no sirve tráfico y conserva lo activo.
   """
 
-  use Tokengate.DataCase, async: true
+  # `purge_unused_catalog/0` BORRA filas de models / providers / credentials a
+  # nivel global, así que no puede correr en paralelo con el resto de la suite:
+  # bajo la suite completa la purga y otro test se bloquean entre sí y Postgres
+  # responde `40P01 deadlock_detected` (pasaba aislado, fallaba en el gate).
+  use Tokengate.DataCase, async: false
 
   alias Tokengate.Providers
   alias Tokengate.Repo
