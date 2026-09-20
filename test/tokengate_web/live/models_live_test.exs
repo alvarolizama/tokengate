@@ -1952,13 +1952,17 @@ defmodule TokengateWeb.ModelsLiveTest do
     provider =
       create_keyed_provider("acme-sin-key", %{name: "Acme", base_url: "http://localhost:1"})
 
-    {:ok, _credential} =
-      Providers.create_credential(%{
-        provider_id: provider.id,
-        name: "sin-elegir",
-        api_key_encrypted: "sk-sin-elegir",
-        status: "active"
-      })
+    # DOS keys: con una sola se preselecciona (no hay nada que elegir), así que
+    # este estado necesita una elección real.
+    for name <- ["prod", "dev"] do
+      {:ok, _} =
+        Providers.create_credential(%{
+          provider_id: provider.id,
+          name: name,
+          api_key_encrypted: "prueba-" <> name,
+          status: "active"
+        })
+    end
 
     conn = login(conn, admin, password)
     {:ok, view, _html} = live(conn, ~p"/catalog/models")
@@ -2058,5 +2062,49 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     refute has_element?(view, "#model-form")
     assert has_element?(view, "#model-provider-form")
+  end
+
+  # Un proveedor con UNA sola API key no deja nada que elegir: se preselecciona
+  # (misma regla que el modal de lane) y el listado arranca al ENTRAR al paso 3.
+  # Antes sólo se pedía al cambiar la key, así que una key ya elegida dejaba el
+  # paso 3 vacío sin decir nada.
+  test "una sola key se preselecciona y el listado se pide al entrar al paso 3", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    seed_mirror!()
+
+    provider =
+      Tokengate.Providers.Provider
+      |> Repo.get_by(key: "openrouter")
+      |> Ecto.Changeset.change(base_url: "http://localhost:1")
+      |> Repo.update!()
+
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        name: "unica",
+        api_key_encrypted: "prueba-unica",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-image") |> render_click()
+    view |> element("#wizard-provider-openrouter") |> render_click()
+
+    # Paso 2: la key ya viene elegida.
+    assert has_element?(
+             view,
+             "select#wizard-credential option[value='#{credential.id}'][selected]"
+           )
+
+    view |> element("#wizard-continue") |> render_click()
+
+    # Paso 3: hay key, así que el mensaje de "falta la key" no aplica y la lista
+    # está (la semilla del tipo, mientras el listado en vivo va y vuelve).
+    refute has_element?(view, "#wizard-models-need-key")
+    assert has_element?(view, "#wizard-models")
+    assert has_element?(view, "#wizard-model-#{ModelsLive.dom_key("openai/gpt-image-2")}")
   end
 end

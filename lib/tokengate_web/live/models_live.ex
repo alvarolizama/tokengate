@@ -321,22 +321,25 @@ defmodule TokengateWeb.ModelsLive do
 
   ## Events — wizard (proveedor → modelo → datos) -----------------------------
 
-  # Paso 1 → elegido el proveedor, se acota TODO a él: el catálogo (qué modelos
-  # sirve) y la lista curada de servicios (qué ids de ese servicio publica). Es
-  # lo que hace que el paso 2 no sea una lista de 3000 filas con la mitad
-  # irrelevantes.
+  # Paso 1 → elegido el proveedor, se acota TODO a él: su semilla curada para
+  # el tipo y sus API keys. Y si tiene UNA sola key, se preselecciona: con una
+  # sola no hay nada que elegir, y continuar sin key dejaba el paso 3 vacío sin
+  # que el operador supiera por qué (misma regla que el modal de lane:
+  # `default_credential_id/1`).
   def handle_event("wizard_pick_provider", %{"key" => key}, socket) do
     if socket.assigns.is_admin do
       type = socket.assigns[:model_form_picked_type]
+      credentials = wizard_credentials_for(socket, key)
+      credential_id = default_credential_id(credentials)
 
       {:noreply,
        socket
        |> assign(:wizard_provider_key, key)
        |> assign(:wizard_provider_label, provider_label_for(socket, key))
        |> assign(:wizard_models, wizard_seed_models(key, type))
-       |> assign(:wizard_credentials, wizard_credentials_for(socket, key))
-       |> assign(:wizard_credential_id, nil)
-       |> assign(:wizard_credential_label, nil)
+       |> assign(:wizard_credentials, credentials)
+       |> assign(:wizard_credential_id, credential_id)
+       |> assign(:wizard_credential_label, wizard_credential_label_for(socket, credential_id))
        |> assign(:wizard_provider_model, nil)
        |> assign(:wizard_step, "credential")}
     else
@@ -400,12 +403,21 @@ defmodule TokengateWeb.ModelsLive do
      |> fetch_wizard_models(credential_id)}
   end
 
-  # Del paso 2 al 3: el listado ya se pidió al elegir la key (en paralelo), así
-  # que continuar es sólo mover el paso.
-  def handle_event("wizard_continue", %{"step" => step}, socket)
-      when step in ~w(credential model) do
-    {:noreply, assign(socket, :wizard_step, step)}
+  # Del paso 2 al 3: se entra al listado Y se pide. Pedirlo sólo al CAMBIAR la
+  # key dejaba el paso 3 vacío cuando la key llegaba ya elegida (un proveedor
+  # con una sola key, o una vuelta atrás desde otro paso).
+  def handle_event("wizard_continue", %{"step" => "model"}, socket) do
+    {:noreply,
+     socket
+     |> fetch_wizard_models(socket.assigns[:wizard_credential_id])
+     |> assign(:wizard_step, "model")}
   end
+
+  def handle_event("wizard_continue", %{"step" => "credential"}, socket) do
+    {:noreply, assign(socket, :wizard_step, "credential")}
+  end
+
+  def handle_event("wizard_continue", _params, socket), do: {:noreply, socket}
 
   def handle_event("wizard_pick_credential", _params, socket), do: {:noreply, socket}
 
