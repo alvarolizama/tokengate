@@ -339,7 +339,10 @@ defmodule TokengateWeb.ModelsLive do
        |> assign(:wizard_models, wizard_seed_models(key, type))
        |> assign(:wizard_credentials, credentials)
        |> assign(:wizard_credential_id, credential_id)
-       |> assign(:wizard_credential_label, wizard_credential_label_for(socket, credential_id))
+       # El label sale de la LISTA, no del socket: en un pipe `socket` es el de
+       # antes de estos assigns, así que leerlo aquí devolvía nil y el chip decía
+       # "no key" con la key ya elegida.
+       |> assign(:wizard_credential_label, credential_label_for(credentials, credential_id))
        |> assign(:wizard_provider_model, nil)
        |> assign(:wizard_step, "credential")}
     else
@@ -1303,14 +1306,6 @@ defmodule TokengateWeb.ModelsLive do
   """
   def wizard_provider_ref(provider), do: provider.key || provider.id
 
-  @doc "Resumen del lane que el wizard va a crear: proveedor · id del modelo."
-  def wizard_lane_summary(provider_label, provider_model) do
-    case provider_model do
-      pm when is_binary(pm) and pm != "" -> "#{provider_label} · #{pm}"
-      _ -> provider_label
-    end
-  end
-
   @doc "Etiqueta de una credencial en el select del wizard: alias (sufijo de la key)."
   def credential_label(credential) do
     name = credential.name || gettext("Key")
@@ -1334,6 +1329,17 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   defp model_lanes(_), do: []
+
+  # Label de una credencial DENTRO de una lista ya cargada (puro, sin socket:
+  # ver el pitfall del pipe en `wizard_pick_provider`).
+  defp credential_label_for(_credentials, nil), do: nil
+
+  defp credential_label_for(credentials, credential_id) do
+    case Enum.find(credentials || [], &(&1.id == credential_id)) do
+      nil -> nil
+      credential -> credential_label(credential)
+    end
+  end
 
   defp wizard_credential_label_for(_socket, nil), do: nil
 
@@ -2995,7 +3001,7 @@ defmodule TokengateWeb.ModelsLive do
                 </div>
               <% end %>
 
-              <%= if @wizard_step != "provider" and @wizard_provider_key do %>
+              <%= if @wizard_step in ~w(credential model) and @wizard_provider_key do %>
                 <div
                   class="flex items-center gap-2 px-3 py-2 mb-3 rounded-lg bg-primary/10 border border-primary/30"
                   id="wizard-chosen-provider"
@@ -3253,34 +3259,18 @@ defmodule TokengateWeb.ModelsLive do
               <% end %>
 
               <%!-- Paso 4: los datos del modelo y lo que el wizard ya decidió —
-                   el proveedor, su API key y el id que viaja al upstream. La key
-                   es el input NECESARIO del alta: sin credencial no hay lane, y
-                   sin lane el modelo no rutea. --%>
+                   la API key que lo sirve y el id que viaja al upstream. La key
+                   viene PRIMERO: es la relación del modelo. El proveedor no se
+                   repite aquí — el dueño de la key, no un vínculo del modelo. --%>
               <%= if @wizard_step == "details" do %>
                 <%= if @wizard_provider_key do %>
                   <div class="rounded-lg border border-base-300 p-3 mb-4" id="wizard-lane">
-                    <div class="flex items-center gap-2 mb-2">
-                      <.icon name="hero-server-stack" class="w-4 h-4 text-primary shrink-0" />
-                      <span class="text-sm font-medium flex-1">
-                        {wizard_lane_summary(@wizard_provider_label, @wizard_provider_model)}
-                      </span>
-                      <button
-                        type="button"
-                        phx-click="wizard_back"
-                        phx-value-step="model"
-                        class="btn btn-xs btn-ghost"
-                        id="wizard-change-model"
-                      >
-                        <.icon name="hero-arrow-path" class="w-3 h-3" /> {gettext("Change")}
-                      </button>
-                    </div>
-
                     <div
-                      class="flex items-center gap-2 mb-3 text-xs text-base-content/70"
+                      class="flex items-center gap-2 mb-3"
                       id="wizard-chosen-key"
                     >
-                      <.icon name="hero-key" class="w-3.5 h-3.5 text-primary shrink-0" />
-                      <span class="font-mono flex-1">
+                      <.icon name="hero-key" class="w-4 h-4 text-primary shrink-0" />
+                      <span class="text-sm font-mono font-medium flex-1">
                         {@wizard_credential_label || gettext("no key")}
                       </span>
                       <button
@@ -3296,7 +3286,7 @@ defmodule TokengateWeb.ModelsLive do
 
                     <div class="fieldset mb-2">
                       <label class="label" for="wizard-provider-model">
-                        {gettext("Provider model")}
+                        {gettext("Model id at the provider")}
                       </label>
                       <input
                         type="text"

@@ -2129,4 +2129,78 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert has_element?(view, "#wizard-models")
     assert has_element?(view, "#wizard-model-#{ModelsLive.dom_key("openai/gpt-image-2")}")
   end
+
+  # El chip de la key decía "no key" con la key ya elegida: el label se calculaba
+  # con el socket de ANTES de los assigns del pipe (en un pipe, `socket` es el de
+  # fuera). La lista de credenciales es la fuente, no el socket.
+  test "el paso 3 muestra la key elegida, no 'no key'", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    provider =
+      create_keyed_provider("acme-label", %{name: "Acme Label", base_url: "http://localhost:1"})
+
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        name: "Produccion",
+        api_key_encrypted: "prueba-label-9999",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-llm") |> render_click()
+    view |> element("#wizard-provider-acme-label") |> render_click()
+
+    # Paso 2: la única key viene elegida.
+    assert has_element?(
+             view,
+             "select#wizard-credential option[value='#{credential.id}'][selected]"
+           )
+
+    view |> element("#wizard-continue") |> render_click()
+
+    # Paso 3: el chip de la key lo dice, con su alias.
+    assert has_element?(view, "#wizard-models-key")
+    chip = element(view, "#wizard-models-key") |> render()
+    assert chip =~ "Produccion"
+    refute chip =~ "no key"
+  end
+
+  # El paso Data mostraba "Proveedor · modelo" + "no key": el proveedor repetido
+  # y el modelo presentado como si estuviera vinculado a él. La relación es la
+  # key; el proveedor es su dueño y no se repite.
+  test "el paso Data no repite el proveedor: la key es la relación", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    provider =
+      create_keyed_provider("acme-data", %{name: "Acme Data", base_url: "http://localhost:1"})
+
+    {:ok, _credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        name: "Prod",
+        api_key_encrypted: "prueba-data-1234",
+        status: "active"
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-llm") |> render_click()
+    view |> element("#wizard-provider-acme-data") |> render_click()
+    view |> element("#wizard-continue") |> render_click()
+    view |> element("#wizard-write-by-hand") |> render_click()
+
+    # El bloque de la relación lleva la KEY, y el proveedor no se repite.
+    assert has_element?(view, "#wizard-lane")
+    lane = element(view, "#wizard-lane") |> render()
+
+    assert lane =~ "Prod"
+    refute lane =~ "Acme Data"
+    assert has_element?(view, "input#wizard-provider-model")
+  end
 end
