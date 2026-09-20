@@ -544,7 +544,9 @@ mecánica es esta.
 
 ### C12.1 Estructura
 
-- Raíz `h-screen` + **daisyUI `drawer lg:drawer-open h-full`**.
+- Raíz `h-screen` + **daisyUI `drawer lg:drawer-open lg:grid-rows-1 h-full`**. Las
+  **dos** clases `lg:` son estructurales: la de la fila tiene su propia regla
+  dura en **§C12.5** (sin ella el shell scrollea entero).
 - **Barra del contenido (`h-14`), siempre visible: es el ÚNICO sitio del toggle
   de navegación.** En `< lg` es la hamburguesa (`label for="app-drawer"`) que
   abre la gaveta; en `≥ lg`, el mismo botón en la misma posición
@@ -597,6 +599,45 @@ Lo pone el layout: `p-4 pb-16 sm:p-6`. El `pb-16` es el aire final del scroll
 (la última card nunca queda pegada al borde). Nunca dejar el contenido sin
 padding.
 
+### C12.5 Reglas duras del shell (vienen de bugs reales)
+
+1. **La fila del `.drawer` va acotada: `lg:grid-rows-1`.** El `drawer` de daisyUI
+   es un grid y declara **sólo `grid-auto-columns`**: la fila queda **implícita**
+   y su alto lo decide `grid-auto-rows` (default `auto`), así que **se infla con
+   el contenido de la página**. Con contenido largo scrollea el shell ENTERO — la
+   barra del contenido y la sidebar se van con la rueda, y `main` se queda sin
+   scroll propio — en lugar de scrollear el contenido por dentro con la sidebar
+   fija. Hay **dos palancas equivalentes** y la familia usa las dos: la utilidad
+   en el markup (`lg:grid-rows-1`, que funciona porque daisyUI ya trae
+   `grid-row-start: 1` en los dos hijos) o la regla en `app.css`
+   (`grid-auto-rows: minmax(0, 1fr)` sobre `.drawer`, que es la general — vale
+   también si la fila fuera de verdad implícita, con items auto-colocados).
+   **Una de las dos, nunca ninguna.** `repeat(1, minmax(0, 1fr))` acota la fila al
+   viewport: el `minmax(0, …)` es lo que permite bajar por debajo del contenido.
+   **Scope `lg`**, no negociable: en `< lg` el `.drawer-side` es overlay
+   `position: fixed` y no hay columna que acotar (móvil se comporta igual con y
+   sin la clase).
+2. **No lo tapes con `overflow: hidden` en `.drawer`.** La fila seguiría
+   creciendo (recortar no acota el tamaño) y mataría el menú de usuario del rail,
+   que abre hacia la derecha y necesita `overflow: visible` en `.drawer-side`
+   (§C12.1).
+3. **El que scrollea es `main`** (`flex-1 min-h-0 overflow-y-auto`), no el
+   documento. La barra del contenido (`h-14 shrink-0`) y la sidebar quedan fijos.
+
+Cómo se verifica (se mide, no se mira) — con el CSS **compilado** y contenido
+largo, a 1440×900 y 1280×800, expandido y en rail:
+
+- `documentElement.scrollHeight == innerHeight` (el documento no scrollea);
+- `main.scrollHeight > main.clientHeight` (el scroll vive dentro de `main`);
+- con la **ventana** scrolleada 400px, el `getBoundingClientRect().top` de la
+  sidebar sigue en `0` y el de la barra del contenido también.
+
+Medición del caso real (contenido 2968px, ventana 900px): **sin** la clase, fila
+del drawer `3024px`, documento `3024`, `main` `2968/2968` (sin scroll interno) y
+sidebar `top: -400` con la ventana scrolleada; **con** la clase, fila `900`,
+documento `900`, `main` `844/2968` con scroll interno y sidebar `top: 0` / bottom
+`900`. Igual en rail (sidebar 240 → 64px) y sin diferencias en móvil 500×800.
+
 ---
 
 ## Apéndice A — Tema `dim` (valores de referencia)
@@ -644,6 +685,8 @@ grep -rn '@apply' assets/css/                                           # 0
 grep -rn 'table-zebra' lib/                                             # 0 (sin zebra, §C6)
 grep -rn 'overflow-x-auto' lib/                                         # tablas/paneles anchos envueltos (§C3)
 grep -c 'for="sidebar-collapse"' lib/<app>_web/components/layouts.ex    # 1 (toggle único, §C12.1)
+grep -c 'class="drawer lg:drawer-open[^"]*lg:grid-rows-1' lib/<app>_web/components/layouts.ex  # 1 (fila del drawer acotada, §C12.5)
+grep -c 'grid-auto-rows: minmax(0, 1fr)' assets/css/app.css             # 1 si la palanca es el CSS (§C12.5)
 grep -c 'aside[^>]*label for="sidebar' lib/<app>_web/components/layouts.ex  # 0 (el sidebar no lleva toggle propio)
 grep -rn 'p-4 sm:p-6\|p-4 pb-16 sm:p-6' lib/                            # padding mobile-first (§C3.1)
 grep -rnE '#[0-9a-fA-F]{3,6}\b' lib/ assets/css/app.css                 # 0 fuera de marca (§C2.1) y paletas nombradas (§C9)
@@ -707,10 +750,11 @@ centradas). Es el único sitio de la app sin el shell de §C12.
 
 #### T2.2 Consola — `Layouts.dashboard/1`
 
-Implementa §C12 tal cual: raíz `h-screen bg-base-100` + `drawer lg:drawer-open`,
-barra de contenido `h-14` con el **único** toggle (gaveta en móvil, rail en
-desktop), sidebar `w-60 bg-base-200/50`, nav con `<.nav_link>` / `<.nav_group>`
-y pie con `<.user_footer>`. Lo que TokenGate resuelve distinto:
+Implementa §C12 tal cual: raíz `h-screen bg-base-100` + `drawer lg:drawer-open
+h-full lg:grid-rows-1` (en TokenGate la fila del drawer se acota con la utilidad
+del markup; §C12.5), barra de contenido `h-14` con el **único** toggle (gaveta en
+móvil, rail en desktop), sidebar `w-60 bg-base-200/50`, nav con `<.nav_link>` /
+`<.nav_group>` y pie con `<.user_footer>`. Lo que TokenGate resuelve distinto:
 
 1. **Sin selector de contexto.** TokenGate es mono-tenant: no hay workspaces
    que cambiar. En el header del sidebar sólo van logo + wordmark.
