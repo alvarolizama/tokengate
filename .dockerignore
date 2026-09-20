@@ -5,8 +5,18 @@ assets/node_modules/
 priv/static/assets/
 priv/static/cache_manifest.json
 
+# Local uploads — NEVER inside the image (COPY priv priv would bake them in).
+# Being in .gitignore is not enough: the build context is a different thing.
+# An audit found 93 files / 72 MB of uploads in a build context for missing
+# this line. (Tokengate forwards uploads upstream without persisting them, so
+# the rule is here as a fence, not because there is anything to ignore today.)
+priv/static/uploads/
+
 # VCS / local env
 .git/
+.gitignore
+.dockerignore
+Dockerfile
 .env
 .env.*
 

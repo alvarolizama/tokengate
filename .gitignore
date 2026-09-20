@@ -39,6 +39,9 @@ npm-debug.log
 # Riel ledger (local state)
 .riel/
 
+# Family (boilerplate): local uploads must never reach the repo either.
+/priv/static/uploads/
+
 # Entorno: los secretos no se commitean (la plantilla sí).
 /.env
 /.env.*
