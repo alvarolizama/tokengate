@@ -105,6 +105,7 @@ defmodule TokengateWeb.ModelsLive do
       |> assign(:wizard_credential_label, nil)
       |> assign(:wizard_models_loading, false)
       |> assign(:wizard_models_error, nil)
+      |> assign(:wizard_lanes, [])
       |> assign(:provider_choices, [])
       |> assign(:provider_search, "")
       |> assign(:provider_choices_results, [])
@@ -549,8 +550,11 @@ defmodule TokengateWeb.ModelsLive do
        # fijado desde el primer paso, así los proveedores se acotan al tipo real
        # del modelo en vez de mostrar todos.
        |> assign(:model_form_picked_type, type)
-       # La edición entra directo a los DATOS: el tipo y el proveedor del row ya
-       # están decididos, y el paso de modelo sigue disponible para elegir otro.
+       # La edición entra directo a los DATOS: el tipo del row ya está decidido.
+       # Y trae la relación REAL del modelo — sus lanes (API key + el id que
+       # viaja al upstream), no un "proveedor" que el modelo no tiene: el
+       # proveedor es una propiedad de la key.
+       |> assign(:wizard_lanes, model_lanes(model.id))
        |> assign(:wizard_step, "details")}
     else
       {:noreply,
@@ -786,6 +790,20 @@ defmodule TokengateWeb.ModelsLive do
      |> assign(:scope_member_search, "")
      |> assign(:scope_group_open, false)
      |> assign(:scope_member_open, false)}
+  end
+
+  # "Change" sobre un lane DENTRO del modal de edición: primero se cierra el
+  # modal del modelo (dos modales apilados se pisan) y después se abre el del
+  # lane, que es donde vive el proveedor, la key y el id del upstream.
+  def handle_event("edit_model_provider_from_modal", %{"id" => ap_id}, socket) do
+    socket =
+      socket
+      |> assign(:form, nil)
+      |> assign(:editing_model_id, nil)
+      |> assign(:wizard_lanes, [])
+      |> reset_wizard()
+
+    handle_event("edit_model_provider", %{"id" => ap_id}, socket)
   end
 
   def handle_event("edit_model_provider", %{"id" => ap_id}, socket) do
@@ -1291,6 +1309,20 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
+  # Los lanes de un modelo con su credencial (y el proveedor de ésta): es la
+  # relación que el modelo SÍ tiene. Incluye los deshabilitados a propósito —
+  # "existe pero no sirve" es información, no ruido.
+  defp model_lanes(model_id) when is_binary(model_id) do
+    from(mp in Tokengate.Providers.ModelProvider,
+      where: mp.model_id == ^model_id,
+      order_by: [asc_nulls_last: mp.priority, asc: mp.credential_id],
+      preload: [credential: :provider]
+    )
+    |> Repo.all()
+  end
+
+  defp model_lanes(_), do: []
+
   defp wizard_credential_label_for(_socket, nil), do: nil
 
   defp wizard_credential_label_for(socket, credential_id) do
@@ -1482,6 +1514,7 @@ defmodule TokengateWeb.ModelsLive do
     |> assign(:wizard_models, [])
     |> assign(:wizard_models_loading, false)
     |> assign(:wizard_models_error, nil)
+    |> assign(:wizard_lanes, [])
   end
 
   defp save_model(socket, :new, model_params) do
@@ -2823,7 +2856,11 @@ defmodule TokengateWeb.ModelsLive do
                    proveedor (acotado por el tipo) → modelo → datos. El paso es un
                    assign porque el modal es el mismo; en edición se entra
                    directo a los datos (todo está ya decidido). --%>
-              <div class="flex items-center gap-2 mb-4 text-xs" id="model-wizard-steps">
+              <div
+                :if={@editing_model_id == :new}
+                class="flex items-center gap-2 mb-4 text-xs"
+                id="model-wizard-steps"
+              >
                 <%= for {step, label} <- [
                     {"provider", gettext("Provider")},
                     {"credential", gettext("API key")},
@@ -2943,7 +2980,7 @@ defmodule TokengateWeb.ModelsLive do
                 </div>
               <% end %>
 
-              <%= if @wizard_step != "provider" do %>
+              <%= if @wizard_step != "provider" and @wizard_provider_key do %>
                 <div
                   class="flex items-center gap-2 px-3 py-2 mb-3 rounded-lg bg-primary/10 border border-primary/30"
                   id="wizard-chosen-provider"
@@ -3139,6 +3176,72 @@ defmodule TokengateWeb.ModelsLive do
                     </button>
                   </div>
                 <% end %>
+              <% end %>
+
+              <%!-- La relación que el modelo SÍ tiene: sus lanes, cada uno con su
+                   API key (y el proveedor de esa key) y el id que viaja al
+                   upstream. Es de donde se lee —y se cambia— cómo se sirve el
+                   modelo; el "proveedor" no es una relación suya. --%>
+              <%= if @editing_model_id not in [nil, :new] do %>
+                <div class="rounded-lg border border-base-300 p-3 mb-4" id="model-serving-lanes">
+                  <div class="flex items-center justify-between mb-2">
+                    <h4 class="text-xs font-semibold uppercase tracking-wide text-base-content/50">
+                      {gettext("Served by (API keys)")}
+                    </h4>
+                    <a
+                      href={~p"/catalog/providers"}
+                      class="btn btn-xs btn-ghost"
+                      id="model-lanes-providers-link"
+                      title={gettext("Open the providers page")}
+                    >
+                      <.icon name="hero-server-stack" class="w-3.5 h-3.5" />
+                      {gettext("Providers")}
+                    </a>
+                  </div>
+
+                  <p
+                    :if={@wizard_lanes == []}
+                    class="text-sm text-base-content/40 py-1"
+                    id="model-lanes-empty"
+                  >
+                    {gettext(
+                      "No API key assigned yet: the model is registered but nothing can route to it."
+                    )}
+                  </p>
+
+                  <div
+                    :for={lane <- @wizard_lanes}
+                    id={"model-lane-#{lane.id}"}
+                    class="flex items-center gap-2 py-1.5 border-b border-base-200 last:border-0"
+                  >
+                    <span class="flex-1 min-w-0 truncate text-sm">
+                      <span class="font-medium">{lane.credential.provider.name}</span>
+                      <span class="text-base-content/40"> · </span>
+                      <span class="font-mono text-xs text-base-content/70">
+                        {lane.credential.name || gettext("Key")} ({mask_key(
+                          lane.credential.api_key_encrypted
+                        )})
+                      </span>
+                      <span :if={!lane.enabled} class="badge badge-xs badge-ghost ml-1">
+                        {gettext("disabled")}
+                      </span>
+                    </span>
+                    <span class="font-mono text-xs text-base-content/60 truncate max-w-[14rem]">
+                      {lane.provider_model}
+                    </span>
+                    <%= if @is_admin do %>
+                      <button
+                        type="button"
+                        phx-click="edit_model_provider_from_modal"
+                        phx-value-id={lane.id}
+                        class="btn btn-xs btn-ghost"
+                        id={"model-lane-change-#{lane.id}"}
+                      >
+                        <.icon name="hero-pencil" class="w-3 h-3" /> {gettext("Change")}
+                      </button>
+                    <% end %>
+                  </div>
+                </div>
               <% end %>
 
               <%!-- Paso 4: los datos del modelo y lo que el wizard ya decidió —

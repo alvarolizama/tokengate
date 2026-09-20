@@ -2009,4 +2009,54 @@ defmodule TokengateWeb.ModelsLiveTest do
     # La semilla curada del tipo sigue ofreciéndose mientras tanto.
     assert has_element?(view, "#wizard-model-#{ModelsLive.dom_key("openai/gpt-image-2")}")
   end
+
+  # La relación que un modelo TIENE es con sus API keys (cada una de un
+  # proveedor), no con un "proveedor" suelto. El modal de edición la muestra, y
+  # no inventa un paso de proveedor que en edición no existe.
+  test "el modal de edición muestra las keys del modelo y ningún proveedor fantasma", %{
+    conn: conn
+  } do
+    %{user: admin, password: password} = register("admin")
+    provider = create_keyed_provider("acme-lane", %{name: "Acme Cloud"})
+    model_record = create_model(%{name: "con-lane"})
+
+    _lane =
+      create_model_provider(model_record, provider, %{provider_model: "accounts/acme/tier-1"})
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    view |> element("#edit-model-#{model_record.id}") |> render_click()
+
+    assert has_element?(view, "#model-serving-lanes")
+    assert render(view) =~ "Acme Cloud"
+    assert render(view) =~ "accounts/acme/tier-1"
+    assert has_element?(view, "#model-lanes-providers-link")
+
+    # La edición no tiene pasos de proveedor/key/modelo: ni migas ni chip.
+    refute has_element?(view, "#model-wizard-steps")
+    refute has_element?(view, "#wizard-chosen-provider")
+    refute has_element?(view, "#wizard-lane")
+  end
+
+  test "cambiar un lane desde el modal de edición abre el modal del lane", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_keyed_provider("acme-lane2", %{name: "Acme Cloud 2"})
+    model_record = create_model(%{name: "con-lane-2"})
+
+    _lane =
+      create_model_provider(model_record, provider, %{provider_model: "accounts/acme/tier-2"})
+
+    [lane] = Providers.list_model_providers(model_record.id)
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+    view |> element("#edit-model-#{model_record.id}") |> render_click()
+
+    # El "Change" del lane cierra el modal del modelo y abre el del lane, que es
+    # donde viven el proveedor, la key y el id del upstream.
+    view |> element("#model-lane-change-#{lane.id}") |> render_click()
+
+    refute has_element?(view, "#model-form")
+    assert has_element?(view, "#model-provider-form")
+  end
 end

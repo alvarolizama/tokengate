@@ -176,6 +176,18 @@ msgstr "+ path; vacío = default del adapter."
 msgid "API key"
 msgstr "API key"
 
+msgid "No API key assigned yet: the model is registered but nothing can route to it."
+msgstr "Todavía no tiene API key asignada: el modelo existe pero nada puede rutear a él."
+
+msgid "Open the providers page"
+msgstr "Abrir la página de proveedores"
+
+msgid "Served by (API keys)"
+msgstr "Servido por (API keys)"
+
+msgid "disabled"
+msgstr "deshabilitado"
+
 msgid "Pick an API key in the previous step: the list comes from the provider itself."
 msgstr "Elige una API key en el paso anterior: la lista la publica el propio proveedor."
 
