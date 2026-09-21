@@ -25,6 +25,8 @@ defmodule Tokengate.Metrics.Rollup.HourlyAggregate do
   import Ecto.Query, warn: false
   alias Tokengate.Repo
 
+  require Logger
+
   @doc """
   Re-aggregates the UTC hours covered by `[from, to)` into
   `request_metrics_hourly`.
@@ -45,7 +47,17 @@ defmodule Tokengate.Metrics.Rollup.HourlyAggregate do
   """
   @spec aggregate_hours(DateTime.t(), DateTime.t()) :: {:ok, non_neg_integer()}
   def aggregate_hours(from, to) when is_struct(from, DateTime) and is_struct(to, DateTime) do
-    from = DateTime.truncate(from, :second)
+    # `from` SIEMPRE al piso de la hora. El DELETE borra por `hour_utc >= from`
+    # y el INSERT re-agrega por `inserted_at >= from`: con un `from` a media
+    # hora (el worker pasa `now - 3h`, que casi nunca cae en borde) el bucket
+    # que CONTIENE `from` quedaba fuera del DELETE pero dentro del INSERT, así
+    # que el ON CONFLICT lo sobreescribía con el agregado parcial
+    # `[from, fin del bucket]`. Cuando la ventana de 3h se deslizaba y dejaba
+    # atrás ese bucket, el parcial quedaba congelado: cada hora del rollup
+    # terminaba con ~1 minuto de tráfico en lugar de la hora entera, y todas
+    # las lecturas híbridas (Resumen, dashboard, desgloses) caían contra el
+    # crudo (En vivo, tope diario global).
+    from = from |> DateTime.truncate(:second) |> floor_hour()
     to = DateTime.truncate(to, :second)
 
     delete_sql = """
@@ -167,6 +179,9 @@ defmodule Tokengate.Metrics.Rollup.HourlyAggregate do
           |> min_dt(to)
 
         {:ok, rows} = aggregate_hours(day_from, day_to)
+        # Un día por transacción: en un backfill de 90 días esto es la única
+        # señal de avance que ve quien lo corre (y de dónde reanudar si corta).
+        Logger.info("[rollup backfill] #{day} → #{rows} buckets")
         rows
       end)
       |> Enum.reduce({0, 0}, fn rows, {d, r} -> {d + 1, r + rows} end)
@@ -175,4 +190,6 @@ defmodule Tokengate.Metrics.Rollup.HourlyAggregate do
   end
 
   defp min_dt(a, b), do: if(DateTime.compare(a, b) == :gt, do: b, else: a)
+
+  defp floor_hour(%DateTime{} = dt), do: %{dt | minute: 0, second: 0, microsecond: {0, 0}}
 end
