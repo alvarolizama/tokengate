@@ -9,6 +9,9 @@ defmodule Tokengate.Release do
     * `seed/0`    — run `priv/repo/seeds_prod.exs` (admin bootstrap; requires
       TOKENGATE_ADMIN_PASSWORD, see below). NEVER point this at
       `priv/repo/seeds.exs`: that one is the development demo dataset.
+    * `rollup_backfill/1` — rebuild the hourly metrics rollup from
+      `request_logs` over a window (repair path, NOT part of the boot; see
+      the function doc for the env vars and the container invocation).
 
   All migration/seed/rollback work is wrapped in `Ecto.Migrator.with_repo/2`
   — during `bin/tokengate eval` the full supervision tree (including the
@@ -18,8 +21,13 @@ defmodule Tokengate.Release do
 
   require Logger
 
+  alias Tokengate.Metrics.Rollup.HourlyAggregate
+
   @app :tokengate
   @start_timeout 30_000
+  # Same 90 days the RollupWorker prunes at: a rollup older than that is
+  # dropped anyway, so there is nothing beyond it to rebuild.
+  @default_rollup_backfill_days 90
 
   @doc """
   Idempotent first-run setup: create DB if missing → migrate → seed admin.
@@ -102,6 +110,120 @@ defmodule Tokengate.Release do
   """
   @spec seeds_file() :: String.t()
   def seeds_file, do: Application.app_dir(@app, "priv/repo/seeds_prod.exs")
+
+  @doc """
+  Rebuilds the hourly metrics rollup (`request_metrics_hourly`) from
+  `request_logs` over a window: the repair path after a rollup written by a
+  buggy version, a manual rewrite of `request_logs`, or a fresh instance.
+
+  Deliberately NOT part of `setup/0`: the worker keeps the last 3 hours fresh
+  and every day of history is its own transaction, so this can run for a long
+  time and belongs to a one-off invocation, not to the boot.
+
+      bin/rollup-backfill                                  # últimos 90 días
+      ROLLUP_BACKFILL_DAYS=7 bin/rollup-backfill           # últimos 7 días
+      ROLLUP_BACKFILL_FROM=2026-09-01 bin/rollup-backfill  # desde una fecha
+
+  In a container: `docker exec <container> bin/rollup-backfill`, or as a
+  one-off run with the entrypoint overridden —
+  `docker run --rm --entrypoint /app/bin/rollup-backfill <image>` (same DB env
+  vars as the app). `bin/tokengate eval Tokengate.Release.rollup_backfill`
+  works too: that is what the wrapper calls.
+
+  Env vars: `ROLLUP_BACKFILL_FROM` (`YYYY-MM-DD` = 00:00 UTC, or ISO8601 with
+  offset), `ROLLUP_BACKFILL_TO` (default: now), `ROLLUP_BACKFILL_DAYS`
+  (default: #{@default_rollup_backfill_days} — the rollup retention) used when
+  `ROLLUP_BACKFILL_FROM` is absent. Explicit `opts` (`:from` / `:to` / `:days`)
+  win over the environment; that is what `mix tokengate.rollup.backfill`
+  passes.
+
+  Safe to re-run: each UTC day is deleted and re-aggregated inside its own
+  transaction, so a crash resumes where it stopped. Returns
+  `%{days: n, rows: buckets}`.
+  """
+  @spec rollup_backfill(keyword()) :: %{days: non_neg_integer(), rows: non_neg_integer()}
+  def rollup_backfill(opts \\ []) do
+    load_config()
+
+    from =
+      Keyword.get(opts, :from) || env_datetime("ROLLUP_BACKFILL_FROM") ||
+        default_backfill_from(opts)
+
+    to =
+      Keyword.get(opts, :to) || env_datetime("ROLLUP_BACKFILL_TO") ||
+        DateTime.truncate(DateTime.utc_now(), :second)
+
+    Logger.info(
+      "[release] rollup backfill #{DateTime.to_iso8601(from)} → #{DateTime.to_iso8601(to)}"
+    )
+
+    results =
+      for repo <- repos() do
+        # `with_repo/3` devuelve `{:ok, resultado_de_la_fun, apps}` y
+        # `HourlyAggregate.backfill/2` devuelve `{:ok, %{days:, rows:}}`.
+        {:ok, {:ok, result}, _apps} =
+          Ecto.Migrator.with_repo(repo, fn _repo -> HourlyAggregate.backfill(from, to) end)
+
+        Logger.info("[release] rollup backfill: #{result.days} días, #{result.rows} buckets")
+
+        result
+      end
+
+    List.last(results)
+  end
+
+  defp default_backfill_from(opts) do
+    days =
+      Keyword.get(opts, :days) || env_int("ROLLUP_BACKFILL_DAYS") || @default_rollup_backfill_days
+
+    Date.utc_today()
+    |> Date.add(-days)
+    |> DateTime.new!(~T[00:00:00], "Etc/UTC")
+  end
+
+  defp env_datetime(name) do
+    case System.get_env(name) do
+      nil -> nil
+      "" -> nil
+      value -> parse_datetime!(name, value)
+    end
+  end
+
+  @doc """
+  Accepts a `YYYY-MM-DD` date (read as 00:00 UTC) or an ISO8601 datetime, or
+  raises. Public so the `mix tokengate.rollup.backfill` task parses `--from` /
+  `--to` exactly like the release env vars do.
+  """
+  @spec parse_datetime!(String.t(), String.t()) :: DateTime.t()
+  def parse_datetime!(name, value) do
+    with {:error, _} <- DateTime.from_iso8601(value) do
+      case Date.from_iso8601(value) do
+        {:ok, date} ->
+          DateTime.new!(date, ~T[00:00:00], "Etc/UTC")
+
+        {:error, _} ->
+          raise ArgumentError, "#{name}=#{inspect(value)} no es una fecha ISO8601 válida"
+      end
+    else
+      {:ok, dt, _offset} -> DateTime.shift_zone!(dt, "Etc/UTC")
+    end
+  end
+
+  defp env_int(name) do
+    case System.get_env(name) do
+      nil ->
+        nil
+
+      "" ->
+        nil
+
+      value ->
+        case Integer.parse(value) do
+          {days, ""} -> days
+          _ -> raise ArgumentError, "#{name}=#{inspect(value)} no es un entero"
+        end
+    end
+  end
 
   defp ensure_db_created(repo) do
     case repo.__adapter__().storage_up(repo.config()) do

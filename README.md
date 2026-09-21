@@ -326,6 +326,30 @@ docker run -p 4000:4000 --env-file .env tokengate
 > `CONCURRENTLY` (Postgres limitation). On a large existing table, run migrations in a
 > maintenance window.
 
+### Repairing the metrics rollup
+
+The period KPIs of **Resumen** (`/stats/overview`) and the **dashboard** answer from the
+hourly rollup (`request_metrics_hourly`) for everything older than the fresh 3-hour tail,
+which is read from `request_logs` crudo. `/stats` (En vivo) and `/budget/global` read
+`request_logs` only — so if the two groups ever disagree, the rollup is the one that is
+wrong. The `RollupWorker` only re-aggregates the last 3 hours, so a rollup written by a
+buggy version stays wrong until it is rebuilt:
+
+```bash
+bin/rollup-backfill                                  # últimos 90 días (retención)
+ROLLUP_BACKFILL_DAYS=7 bin/rollup-backfill           # últimos 7 días
+ROLLUP_BACKFILL_FROM=2026-09-01 bin/rollup-backfill  # desde una fecha (YYYY-MM-DD = 00:00 UTC)
+mix tokengate.rollup.backfill --days 7               # same job outside a release
+```
+
+In a container that is already running it is `docker exec <container> bin/rollup-backfill`;
+as a one-off (no app boot) override the entrypoint:
+`docker run --rm --entrypoint /app/bin/rollup-backfill <image>` with the app's DB env vars.
+
+One transaction per UTC day, delete + re-aggregate from `request_logs`: idempotent, safe
+to re-run, resumable if it is interrupted (it logs a line per day). It is deliberately
+**not** part of the boot — `Tokengate.Release.setup/0` never touches the rollup.
+
 ## Tests and gates
 
 ```bash
