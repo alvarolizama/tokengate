@@ -30,6 +30,7 @@ defmodule TokengateWeb.ModelsLive do
   alias Tokengate.Providers
 
   alias Tokengate.Providers.{
+    Credential,
     Lab,
     Model,
     ModelIds,
@@ -2425,8 +2426,10 @@ defmodule TokengateWeb.ModelsLive do
   def scope_group_label(2), do: gettext("Exclusive per user")
   def scope_group_label(_), do: nil
 
-  def provider_name(%ModelProvider{credential: %{provider: provider}}) when not is_nil(provider),
+  def provider_name(%ModelProvider{credential: %{provider: %Provider{} = provider}}),
     do: provider.name
+
+  def provider_name(%Credential{provider: %Provider{} = provider}), do: provider.name
 
   def provider_name(_), do: "—"
 
@@ -2722,6 +2725,16 @@ defmodule TokengateWeb.ModelsLive do
                                 </span>
                                 <span class="text-xs text-base-content/40 ml-1">
                                   {mask_key(ap.credential.api_key_encrypted)}
+                                </span>
+                                <%!-- Dueño de la key: la columna «API key» sola no
+                                     dice a qué proveedor pertenece la key que
+                                     sirve a este modelo. --%>
+                                <span
+                                  class="badge badge-xs badge-outline font-normal ml-1"
+                                  id={"ap-provider-#{ap.id}"}
+                                  title={gettext("Provider that owns this API key")}
+                                >
+                                  {provider_name(ap)}
                                 </span>
                               <% else %>
                                 {provider_name(ap)}

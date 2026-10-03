@@ -194,6 +194,9 @@ msgstr "Abrir la página de proveedores"
 msgid "Served by (API keys)"
 msgstr "Servido por (API keys)"
 
+msgid "Provider that owns this API key"
+msgstr "Proveedor dueño de esta API key"
+
 msgid "disabled"
 msgstr "deshabilitado"
 

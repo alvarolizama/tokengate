@@ -2077,6 +2077,42 @@ defmodule TokengateWeb.ModelsLiveTest do
     refute has_element?(view, "#wizard-lane")
   end
 
+  # La columna «API key» del listado dice QUÉ key sirve al modelo, pero no de
+  # quién es: el proveedor dueño viaja como etiqueta dentro de la misma celda.
+  test "el listado de API keys etiqueta el proveedor dueño de cada key", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    provider = create_keyed_provider("acme-owner", %{name: "Acme Cloud Owner"})
+    model_record = create_model(%{name: "con-dueno"})
+
+    {:ok, credential} =
+      Providers.create_credential(%{
+        provider_id: provider.id,
+        name: "Prod",
+        api_key_encrypted: "prueba-owner-1234",
+        status: "active"
+      })
+
+    {:ok, lane} =
+      Providers.create_model_provider(%{
+        model_id: model_record.id,
+        credential_id: credential.id,
+        provider_model: "accounts/acme/tier-3",
+        priority: 1,
+        enabled: true
+      })
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    # La etiqueta lleva el proveedor que posee la key…
+    assert has_element?(view, "#ap-provider-#{lane.id}", "Acme Cloud Owner")
+
+    # …y la fila sigue identificándose por la key (alias + sufijo).
+    row = element(view, "#model-provider-#{lane.id}") |> render()
+    assert row =~ "Prod"
+    assert row =~ "1234"
+  end
+
   test "cambiar un lane desde el modal de edición abre el modal del lane", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_keyed_provider("acme-lane2", %{name: "Acme Cloud 2"})
