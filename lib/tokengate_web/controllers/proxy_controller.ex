@@ -7,7 +7,11 @@ defmodule TokengateWeb.ProxyController do
     * `POST /v1/chat/completions` — transparent passthrough to the routed
       provider with full cost tracking. The response `usage` object gains
       `cost_usd` (the provider's own cost, USD) and the `X-Tokengate-Cost`
-      header carries the same amount. There is a single cost dimension: the
+      header carries the same amount. A stream commits its 200 before the cost
+      is known, so there are no headers to set: the cost rides the SSE instead
+      — the upstream's own usage frame when it sends one, and a closing usage
+      frame TokenGate emits right before `data: [DONE]` when it doesn't.
+      There is a single cost dimension: the
       market-price fields (`estimated_cost_usd`) and the savings header were
       removed with `market_*`.
     * `POST /v1/embeddings` — embeddings passthrough. Non-streaming only.
@@ -43,6 +47,14 @@ defmodule TokengateWeb.ProxyController do
   Hot path discipline: auth, limits, budgets and routing read from
   ETS/atomics only. Postgres is touched asynchronously via Oban
   (`Tokengate.Logs.WriteWorker`).
+
+  ## Gateway-local response cache
+
+  An identical non-streaming request is served from ETS (`ResponseCache`) for
+  $0: the upstream was already paid by the request that filled the entry, and
+  this one never reaches it. The hit keeps the cost contract of the live answer
+  — `X-Tokengate-Cost: 0` on every endpoint, plus `usage.cost_usd = 0` on chat,
+  where service bodies stay untouched as always.
   """
 
   use TokengateWeb, :controller
@@ -77,6 +89,10 @@ defmodule TokengateWeb.ProxyController do
 
   @max_attempts 9
   @max_retries_per_provider 3
+
+  # $0 as a Decimal: the cost a cache hit reports (the upstream was paid when
+  # the entry was filled, this request never reached it).
+  @zero_cost Decimal.new(0)
 
   # Política de 400 (ver `next_candidate/4`): antes de descartar la credencial
   # se reemite el MISMO body a la MISMA key — un reintento inmediato y, si
@@ -521,6 +537,12 @@ defmodule TokengateWeb.ProxyController do
             )
           end
       end
+    else
+      # Acierto de caché: la respuesta (y sus headers) YA salió — `with` sólo
+      # tiene que devolver el conn ya enviado. Devolver el centinela `:handled`
+      # rompía la acción (Plug.Builder la rechaza: "expected action/2 to return
+      # a Plug.Conn … got: :handled") en cada hit.
+      {:hit, sent_conn} -> sent_conn
     end
   end
 
@@ -1195,26 +1217,63 @@ defmodule TokengateWeb.ProxyController do
   end
 
   # ── Gateway-local response cache hooks ──────────────────────────────────
-  # lookup returns :miss to fall through to the upstream call; a hit renders
-  # the cached body with cache headers and short-circuits execution.
-  defp cache_lookup(_conn, nil), do: :miss
+  # lookup returns :miss to fall through to the upstream call; a hit sends the
+  # cached body (headers included) and returns {:hit, conn} for the caller to
+  # return — the conn is what the action must hand back to Plug.
+  #
+  # `body_shape` decides what the hit adds to the cached bytes so a hit is
+  # indistinguishable from a fresh 200 of the same endpoint:
+  #
+  #   * `:chat_usage` — the chat body gains `usage.cost_usd` ($0), exactly the
+  #     field a live chat completion carries.
+  #   * `:passthrough` (default) — service bodies (embeddings, rerank, media)
+  #     travel untouched, same as the live passthrough contract.
+  #
+  # A hit costs $0: the upstream was already paid by the request that filled
+  # the entry, and this one never reached it.
+  defp cache_lookup(conn, key, body_shape \\ :passthrough)
 
-  defp cache_lookup(conn, key) do
+  defp cache_lookup(_conn, nil, _body_shape), do: :miss
+
+  defp cache_lookup(conn, key, body_shape) do
     case ResponseCache.lookup(key) do
       {:ok, body_json, _age} ->
-        conn
-        |> put_resp_header("content-type", "application/json")
-        |> put_resp_header("x-tokengate-cache", "hit")
-        |> send_resp(200, body_json)
+        conn =
+          conn
+          |> put_resp_header("content-type", "application/json")
+          |> put_resp_header("x-tokengate-cache", "hit")
+          |> put_resp_header("x-tokengate-cost", Decimal.to_string(@zero_cost, :normal))
+          |> send_resp(200, cached_body(body_json, body_shape))
 
-        # send_resp halts the conn — the with-chain treats any non-:miss as
-        # "already handled".
-        :handled
+        {:hit, conn}
 
       :miss ->
         :miss
     end
   end
+
+  # Chat: `usage.cost_usd` is part of the response contract, so the hit carries
+  # it too (at $0). An upstream body without a `usage` object (some providers
+  # omit it) still gets the cost field rather than losing the contract.
+  defp cached_body(body_json, :chat_usage) do
+    case Jason.decode(body_json) do
+      {:ok, body} when is_map(body) ->
+        usage =
+          case Map.get(body, "usage") do
+            %{} = usage -> usage
+            _ -> %{}
+          end
+
+        body
+        |> Map.put("usage", Map.put(usage, "cost_usd", 0.0))
+        |> Jason.encode!()
+
+      _ ->
+        body_json
+    end
+  end
+
+  defp cached_body(body_json, :passthrough), do: body_json
 
   defp cache_store(nil, _body), do: :ok
 
@@ -1257,7 +1316,7 @@ defmodule TokengateWeb.ProxyController do
     cache_key =
       ResponseCache.cache_key(conn.assigns.api_key_hash, route.model_responded, attempt_payload)
 
-    with :miss <- cache_lookup(conn, cache_key) do
+    with :miss <- cache_lookup(conn, cache_key, :chat_usage) do
       receive_timeout = receive_timeout(route.credential)
 
       case OpenAIAdapter.chat_completion(provider, route.credential, attempt_payload,
@@ -1381,6 +1440,12 @@ defmodule TokengateWeb.ProxyController do
             )
           end
       end
+    else
+      # Acierto de caché: la respuesta (y sus headers) YA salió — `with` sólo
+      # tiene que devolver el conn ya enviado. Devolver el centinela `:handled`
+      # rompía la acción (Plug.Builder la rechaza: "expected action/2 to return
+      # a Plug.Conn … got: :handled") en cada hit.
+      {:hit, sent_conn} -> sent_conn
     end
   end
 
@@ -2125,12 +2190,8 @@ defmodule TokengateWeb.ProxyController do
   end
 
   defp finish_stream(conn, route, member, acc) do
-    conn =
-      case Plug.Conn.chunk(conn, "data: [DONE]\n\n") do
-        {:ok, conn} -> conn
-        {:error, _closed} -> conn
-      end
-
+    # Latency se mide ANTES de nuestros frames de cierre: describe el stream
+    # del upstream, no lo que escribimos después de que terminó.
     latency_ms = System.monotonic_time(:millisecond) - acc.latency_start
 
     {usage, cost} =
@@ -2153,6 +2214,17 @@ defmodule TokengateWeb.ProxyController do
           cost = stream_cost(route, usage, nil, acc.resp_headers)
           {usage, cost}
       end
+
+    # El costo SIEMPRE llega al cliente en un stream, igual que en el
+    # no-streaming. Cuando el upstream emitió su frame de usage, ese frame ya
+    # viajó con `cost_usd` inyectado (ver `decode_usage_chunk/3`) y no se
+    # duplica; cuando no lo emitió —ignoró `include_usage`, o su dialecto no
+    # reporta usage— lo emitimos nosotros antes del `[DONE]` con el mismo shape
+    # de OpenAI y el costo del request (`stream_cost/4`: lo reportado por el
+    # upstream, luego pricing manual, luego $0). Sin esto el cliente se quedaba
+    # sin costo justo cuando el upstream callaba.
+    conn = maybe_send_usage_frame(conn, acc.usage != nil, route, usage, cost)
+    conn = send_stream_frame(conn, "data: [DONE]\n\n")
 
     # Budget is settled in the caller's `after` (it owns the hold); stash the
     # real cost for it here.
@@ -2180,6 +2252,42 @@ defmodule TokengateWeb.ProxyController do
     )
 
     conn
+  end
+
+  # El upstream ya mandó su frame de usage (con `cost_usd` inyectado): no se
+  # agrega otro.
+  defp maybe_send_usage_frame(conn, true, _route, _usage, _cost), do: conn
+
+  # El upstream no reportó usage: se emite el frame de cierre con el costo del
+  # request, mismo shape que OpenAI (`choices: []` + `usage`), para que un
+  # cliente que sólo lee el stream reciba igual el costo. Las cuentas de tokens
+  # son las MISMAS con las que se contabiliza el request (el estimador, ver
+  # `finish_stream/4`), igual que el camino no-streaming inyecta su estimación
+  # cuando el proveedor no manda `usage`.
+  defp maybe_send_usage_frame(conn, false, route, usage, cost) do
+    frame =
+      Jason.encode!(%{
+        "object" => "chat.completion.chunk",
+        "model" => route.model_responded,
+        "choices" => [],
+        "usage" => %{
+          "prompt_tokens" => usage.prompt_tokens,
+          "completion_tokens" => usage.completion_tokens,
+          "total_tokens" => usage.prompt_tokens + usage.completion_tokens,
+          "cost_usd" => Decimal.to_float(cost)
+        }
+      })
+
+    send_stream_frame(conn, "data: #{frame}\n\n")
+  end
+
+  # Un frame SSE al cliente. Un socket cerrado no es un error del request: el
+  # cliente se fue y el resto del stream ya no le importa.
+  defp send_stream_frame(conn, frame) do
+    case Plug.Conn.chunk(conn, frame) do
+      {:ok, conn} -> conn
+      {:error, _closed} -> conn
+    end
   end
 
   defp stream_cost(route, usage, body, resp_headers) do

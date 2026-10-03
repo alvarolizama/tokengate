@@ -15,6 +15,7 @@ defmodule TokengateWeb.ProxyControllerTest do
   alias Tokengate.Limits.Manager, as: Limits
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Logs.WriteWorker
+  alias Tokengate.Proxy.ResponseCache
   alias Tokengate.Routing.CircuitBreakerManager
 
   @port 41236
@@ -174,6 +175,18 @@ defmodule TokengateWeb.ProxyControllerTest do
         "music" in conn.path_info ->
           json(conn, 200, %{"id" => "music-1", "status" => "succeeded"})
 
+        # Un upstream que IGNORA `stream_options.include_usage`: manda su
+        # contenido y cierra, sin ningún frame de usage. El costo tiene que
+        # llegar igual al cliente (lo emite TokenGate antes del [DONE]).
+        "nousagestream" in conn.path_info ->
+          usage_less_stream(conn, [])
+
+        # Lo mismo, pero con el costo reportado por el upstream SOLO en header
+        # (así lo hace LiteLLM en un stream): el frame de cierre tiene que
+        # llevar ese costo, no un $0.
+        "headercoststream" in conn.path_info ->
+          usage_less_stream(conn, [{"x-litellm-response-cost", "0.000420"}])
+
         "slowstream" in conn.path_info ->
           Process.sleep(300)
           stream(conn)
@@ -266,6 +279,31 @@ defmodule TokengateWeb.ProxyControllerTest do
           {:ok, conn} -> {:cont, conn}
           # Client closed the connection after the terminal frame — nothing
           # more to write, don't raise a MatchError.
+          {:error, :closed} -> {:halt, conn}
+        end
+      end)
+    end
+
+    # SSE con contenido y NINGÚN frame de usage — así contesta un upstream que
+    # ignora `stream_options.include_usage`. `headers` permite que la ruta
+    # reporte su costo sólo en headers, como hacen los proxies LiteLLM.
+    defp usage_less_stream(conn, headers) do
+      conn =
+        Enum.reduce(headers, conn, fn {key, value}, conn ->
+          put_resp_header(conn, key, value)
+        end)
+        |> put_resp_content_type("text/event-stream")
+        |> send_chunked(200)
+
+      frames = [
+        ~s(data: {"choices":[{"delta":{"content":"qué"}}]}\n\n),
+        ~s(data: {"choices":[{"delta":{"content":" onda"}}]}\n\n),
+        "data: [DONE]\n\n"
+      ]
+
+      Enum.reduce_while(frames, conn, fn frame, conn ->
+        case chunk(conn, frame) do
+          {:ok, conn} -> {:cont, conn}
           {:error, :closed} -> {:halt, conn}
         end
       end)
@@ -2325,6 +2363,9 @@ defmodule TokengateWeb.ProxyControllerTest do
     usage_json = usage_frame |> String.trim_leading("data: ") |> Jason.decode!()
     assert_in_delta usage_json["usage"]["cost_usd"], 0.00007, 0.0000001
 
+    # El frame del upstream ya lleva el costo: no se agrega un cierre propio.
+    assert Enum.count(frames, &(&1 =~ "\"usage\"")) == 1
+
     # stream_options.include_usage was requested from the provider
     assert_receive {:provider_request, provider_payload}
     assert provider_payload["stream_options"]["include_usage"] == true
@@ -3408,6 +3449,141 @@ defmodule TokengateWeb.ProxyControllerTest do
       for {payload, path} <- provider_calls(), String.contains?(path, "/strict") do
         refute Map.has_key?(payload, "provider")
       end
+    end
+  end
+
+  ## Costo del request en la respuesta (incluye el acierto de caché) ###########
+
+  # El contrato de costo vale para TODO 2xx, no sólo para el primer request de
+  # un payload: un acierto de caché local responde con `x-tokengate-cache: hit`
+  # y el costo del request que SÍ llegó al upstream ($0 para este, que no lo
+  # tocó), y un stream entrega el costo aunque el upstream no emita su frame de
+  # usage.
+  describe "cost contract on cached hits and silent streams" do
+    test "chat: a cache hit answers 200 at $0 with the cost contract intact", %{conn: conn} do
+      %{token: token, model: model, member: member} = proxy_fixture(%{credit_units: 100})
+      body = chat_body(model.name)
+
+      first = conn |> authed_conn(token) |> post(~p"/v1/chat/completions", body)
+      assert json_response(first, 200)["usage"]["cost_usd"] > 0
+      assert get_resp_header(first, "x-tokengate-cost") == ["0.000150"]
+      assert_receive {:provider_request, _}
+
+      # El store del cache es un cast: se sincroniza con el GenServer para que
+      # el segundo request no pueda adelantársele.
+      _ = :sys.get_state(ResponseCache)
+
+      second = conn |> recycle() |> authed_conn(token) |> post(~p"/v1/chat/completions", body)
+
+      # Sin segunda llamada al upstream: la respuesta salió del cache.
+      refute_receive {:provider_request, _}, 300
+
+      hit = json_response(second, 200)
+
+      assert get_resp_header(second, "x-tokengate-cache") == ["hit"]
+      assert get_resp_header(second, "x-tokengate-cost") == ["0"]
+      assert hit["usage"]["cost_usd"] == 0.0
+      # El contenido servido es el del upstream, intacto.
+      assert get_in(hit, ["choices", Access.at(0), "message", "content"]) == "qué onda"
+
+      # El hit no debita nada: sigue el gasto del primer request (150 micro-USD
+      # = el costo real que reportó el upstream).
+      assert %{consumed_micro: 150} = Budgets.limit_spend({:user, member.user_id})
+    end
+
+    test "embeddings: a cache hit keeps the passthrough body and reports $0", %{conn: conn} do
+      %{token: token, model: model} = proxy_fixture(%{credit_units: 100})
+      update_alias_type(model, "embedding")
+      body = %{"model" => model.name, "input" => ["hola", "wey"]}
+
+      first = conn |> authed_conn(token) |> post(~p"/v1/embeddings", body)
+      first_body = json_response(first, 200)
+
+      # Un servicio viaja intacto: el costo NO se le inyecta al body.
+      assert_in_delta first_body["usage"]["cost"], 0.000011, 1.0e-9
+      refute Map.has_key?(first_body, "cost_usd")
+      assert get_resp_header(first, "x-tokengate-cost") == ["0.000011"]
+      assert_receive {:provider_request, _}
+
+      _ = :sys.get_state(ResponseCache)
+
+      second = conn |> recycle() |> authed_conn(token) |> post(~p"/v1/embeddings", body)
+      refute_receive {:provider_request, _}, 300
+
+      hit = json_response(second, 200)
+
+      assert get_resp_header(second, "x-tokengate-cache") == ["hit"]
+      assert get_resp_header(second, "x-tokengate-cost") == ["0"]
+      # Byte por byte el mismo body que sirvió el upstream: el hit no le agrega
+      # el `cost_usd` que un servicio nunca lleva.
+      assert hit == first_body
+    end
+
+    test "stream: a silent upstream still gets a closing usage frame with the cost", %{
+      conn: conn
+    } do
+      %{token: token, model: model, member: member, model_provider: model_provider} =
+        proxy_fixture(%{credit_units: 100, path_overrides: %{"chat" => "/nousagestream"}})
+
+      # Precio manual: el upstream no reporta NADA, así que el costo del
+      # request sale de la cadena de fallback y debe ser > 0.
+      {:ok, _} =
+        Providers.update_model_provider(model_provider, %{
+          input_cost_per_million: "2.50",
+          output_cost_per_million: "10.00"
+        })
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", Map.put(chat_body(model.name), "stream", true))
+
+      frames = conn |> response(200) |> String.split("\n\n", trim: true)
+
+      # El contenido del upstream pasó intacto y el [DONE] sigue cerrando.
+      assert Enum.at(frames, 0) =~ ~s("content":"qué")
+      assert List.last(frames) == "data: [DONE]"
+
+      # TokenGate emite el frame de cierre: un solo frame con usage, con el
+      # costo del request.
+      assert [usage_frame] = Enum.filter(frames, &(&1 =~ "\"usage\""))
+      closing = usage_frame |> String.trim_leading("data: ") |> Jason.decode!()
+
+      assert closing["choices"] == []
+      # El modelo es el que sirvió el upstream (el mismo que ecoan sus propios
+      # frames), no el alias que pidió el cliente.
+      assert closing["model"] == model_provider.provider_model
+      assert closing["usage"]["cost_usd"] > 0
+
+      # Y el costo que ve el cliente es el mismo que se contabilizó.
+      assert %{success: 1} = Oban.drain_queue(queue: :logs)
+      log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+
+      assert_in_delta closing["usage"]["cost_usd"],
+                      Decimal.to_float(log.provider_cost_usd),
+                      1.0e-9
+    end
+
+    test "stream: a header-only cost from the upstream rides the closing frame", %{conn: conn} do
+      %{token: token, model: model, member: member} =
+        proxy_fixture(%{credit_units: 100, path_overrides: %{"chat" => "/headercoststream"}})
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", Map.put(chat_body(model.name), "stream", true))
+
+      frames = conn |> response(200) |> String.split("\n\n", trim: true)
+
+      assert [usage_frame] = Enum.filter(frames, &(&1 =~ "\"usage\""))
+      closing = usage_frame |> String.trim_leading("data: ") |> Jason.decode!()
+
+      # El costo es el que reportó el upstream en su header, no un $0.
+      assert_in_delta closing["usage"]["cost_usd"], 0.00042, 1.0e-9
+
+      assert %{success: 1} = Oban.drain_queue(queue: :logs)
+      log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
+      assert Decimal.equal?(log.provider_cost_usd, Decimal.new("0.000420"))
     end
   end
 end

@@ -186,7 +186,14 @@ Reglas transversales del camino de fallback:
 - **Backoff de rate limit en la cascada**: `min(retry_ms, 2_000)` para que un proveedor con
   ventana larga no estanque la request.
 - **Cache de respuesta local** (solo chat no-streaming y embeddings): peticiones idénticas
-  se sirven de ETS con `x-tokengate-cache: hit` y costo $0.
+  se sirven de ETS con `x-tokengate-cache: hit` y costo $0, conservando el contrato de
+  costo de la respuesta viva (`X-Tokengate-Cost: 0` en todo endpoint y `usage.cost_usd = 0`
+  en chat; el body de los servicios viaja intacto).
+- **Costo en streaming**: el 200 se compromete antes de conocer el costo, así que no hay
+  headers donde ponerlo y viaja en el SSE — en el frame de usage del upstream si lo emite,
+  o en un frame de cierre que TokenGate emite justo antes del `data: [DONE]` cuando el
+  upstream calla, con el costo del request (lo reportado por el upstream, header incluido,
+  y si no el pricing manual).
 
 ---
 
@@ -283,13 +290,15 @@ En 429 solo se emite `Retry-After` (segundos, redondeado hacia arriba) para
 `rate_limited` y `provider_rate_limited`; los códigos de saturación
 (`concurrency_exceeded`, `provider_concurrency_exceeded`) y `cascade_exhausted` **no** lo
 llevan (`proxy_controller.ex:2066`). En éxito se emite `X-Tokengate-Cost` y, en aciertos
-de caché local, `X-Tokengate-Cache: hit`. El objeto `usage` de la respuesta gana
-`cost_usd` (costo real del proveedor).
+de caché local, `X-Tokengate-Cache: hit` (con `X-Tokengate-Cost: 0`). El objeto `usage` de
+la respuesta gana `cost_usd` (costo real del proveedor). En un stream el 200 ya se
+comprometió (`send_chunked`) cuando el costo se conoce, así que el costo viaja en el SSE: en
+el frame de usage del upstream si lo emite, o en el frame de cierre que TokenGate agrega
+antes del `data: [DONE]` cuando el upstream no manda ninguno.
 
-> **Documentación desactualizada en el código**: el `@moduledoc` de
-> `ProxyController` (líneas 5-13) afirma que el `usage` gana también
-> `estimated_cost_usd` y que se emite `X-Tokengate-Savings`. Ninguna de las dos existe
-> en el código actual: solo se inyecta `cost_usd` (`proxy_controller.ex:1771`) y solo se
-> emiten `x-tokengate-cost` y `x-tokengate-cache`. El `README.md` también menciona cosas
-> que ya no están: la "FIFO queue" (hoy hay fallback inmediato, `proxy_controller.ex:678`)
-> y el "daily spending cap per credential" (hoy no existe; solo el cap global diario).
+> **Alcance del costo**: hay una sola dimensión (`provider_cost_usd`), sin markup ni campos
+> de mercado, y el valor que ve el cliente es el mismo que se contabiliza. Un 2xx de chat
+> lleva `usage.cost_usd`; un servicio (embeddings, rerank, media) lleva sólo
+> `X-Tokengate-Cost` porque su body viaja intacto; un acierto de caché lleva
+> `X-Tokengate-Cost: 0`; un stream lleva el frame de usage del upstream o, si el upstream no
+> emite ninguno, el frame de cierre que agrega TokenGate; y un error no lleva costo.

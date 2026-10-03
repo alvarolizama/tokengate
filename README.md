@@ -81,7 +81,9 @@ The UI ships in **English by default** with an in-app **EN/ES** selector
   OpenRouter-style `session_id` body field is never sent.
 - **Local response cache** — identical non-streaming requests (same key + model +
   canonical payload) are served from an in-process ETS cache without touching the
-  upstream: faster answers, $0 cost.
+  upstream: faster answers, $0 cost — and the hit still answers with
+  `X-Tokengate-Cost: 0` (`usage.cost_usd = 0` on chat), so the cost contract of a
+  live answer never disappears.
 - **Prompt optimizer** — every chat completion gets system messages hoisted and
   deduped and long/repeated tool-output messages trimmed. Pure, deterministic,
   always on for LLMs. Multi-turn histories get reasoning blocks stripped before
@@ -105,10 +107,13 @@ The UI ships in **English by default** with an in-app **EN/ES** selector
   (`/budget/global`); once total spend reaches it, all proxy requests are rejected
   until 00:00 UTC. Users, limit profiles and services can be exempted.
 - **Cost tracking** — the provider-reported usage cost is the single cost dimension,
-  recorded per request and returned in the `X-Tokengate-Cost` header
+  recorded per request and returned to the client: in the `X-Tokengate-Cost` header
   (LiteLLM upstreams via `x-litellm-response-cost`; Surplus Intelligence via
-  `x-si-buyer-cost-micro`, both micro-USD). No upstream cost → manual per-route
-  pricing → `$0`; no phantom estimates.
+  `x-si-buyer-cost-micro`, both micro-USD) and, on chat, in the response's
+  `usage.cost_usd`. A stream commits its 200 before the cost is known, so the cost
+  travels in the SSE — the upstream's own usage frame, or a closing usage frame
+  TokenGate emits before `data: [DONE]` when the upstream sends none. No upstream
+  cost → manual per-route pricing → `$0`; no phantom estimates.
 
 ## Admin console (LiveView)
 
