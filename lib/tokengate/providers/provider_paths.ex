@@ -17,7 +17,7 @@ defmodule Tokengate.Providers.ProviderPaths do
        dialect provider speak.
 
   A path is a suffix (`/chat/completions`). **An absolute URL is allowed in
-  any tier** (`https://other-host/v1/rerank`): the adapter returns it as-is
+  any tier** (`https://other-host/v1/audio/speech`): the adapter returns it as-is
   instead of prefixing the base URL, which is how a service living on another
   host is declared.
 
@@ -37,7 +37,12 @@ defmodule Tokengate.Providers.ProviderPaths do
     %{key: "chat", path_key: :chat, label: "Chat / completions", default: "/chat/completions"},
     %{key: "models", path_key: :models, label: "Models catalog", default: "/models"},
     %{key: "embeddings", path_key: :embeddings, label: "Embeddings", default: "/embeddings"},
-    %{key: "rerank", path_key: :rerank, label: "Rerank", default: "/rerank"},
+    %{
+      key: "decisions",
+      path_key: :decisions,
+      label: "Decisions",
+      default: "/decisions"
+    },
     %{
       key: "stt",
       path_key: :stt,
@@ -45,9 +50,7 @@ defmodule Tokengate.Providers.ProviderPaths do
       default: "/audio/transcriptions"
     },
     %{key: "tts", path_key: :tts, label: "Speech (text → audio)", default: "/audio/speech"},
-    %{key: "image", path_key: :image, label: "Images", default: "/images/generations"},
-    %{key: "video", path_key: :video, label: "Videos", default: "/videos"},
-    %{key: "music", path_key: :music, label: "Music", default: "/music/generations"}
+    %{key: "image", path_key: :image, label: "Images", default: "/images/generations"}
   ]
 
   @keys Enum.map(@services, & &1.key)

@@ -173,7 +173,7 @@ defmodule Tokengate.Proxy.CostCalculatorTest do
     end
   end
 
-  describe "provider_cost/2 — precio por unidad (image/video/tts/stt/music)" do
+  describe "provider_cost/2 — precio por unidad (image/tts/stt)" do
     # `pricing_unit` no es token: la cantidad facturable la produce
     # `ServiceUsage` (imágenes, segundos, caracteres…) y el precio es
     # `unit_cost`. Sin esta ruta esos tipos sólo se cobraban si el upstream

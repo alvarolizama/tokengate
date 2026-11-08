@@ -3,10 +3,10 @@ defmodule Tokengate.Proxy.ServiceUsage do
   La CANTIDAD facturable de una llamada, por tipo de modelo.
 
   `CostCalculator` multiplica una cantidad por un precio unitario. Para los
-  tipos de token esa cantidad son los contadores de `usage`; para los seis
+  tipos de token esa cantidad son los contadores de `usage`; para los tres
   servicios de media hay que sacarla de OTRO sitio, porque su respuesta no trae
-  tokens: un número de imágenes, unos segundos de vídeo o de audio, unos
-  caracteres sintetizados.
+  tokens: un número de imágenes, unos segundos de audio, unos caracteres
+  sintetizados.
 
   Este módulo es ese extractor. Devuelve un MAPA de cantidades por unidad —
   no una sola — porque la unidad es una decisión del LANE
@@ -22,7 +22,7 @@ defmodule Tokengate.Proxy.ServiceUsage do
   cualquier precio da `$0`. Nunca se inventa un número.
 
   La única estimación que no sale de la request es la **duración de audio**
-  (`stt`/`video` emitidos como bytes o como data URL): se deriva del tamaño a
+  (`stt` emitido como bytes o como data URL): se deriva del tamaño a
   128 kbps, que es el bitrate nominal de los formatos que estos endpoints
   aceptan. Está documentada en `audio_seconds_from_bytes/1` y es una
   aproximación — por eso el coste reportado por el upstream, cuando existe,
@@ -59,10 +59,10 @@ defmodule Tokengate.Proxy.ServiceUsage do
 
   ## Por tipo ##################################################################
 
-  # Chat, embeddings, decisiones y rerank se facturan por tokens: lo que
+  # Chat, embeddings y decisiones se facturan por tokens: lo que
   # reported el upstream, o el estimado de la request (mismo criterio que ya
   # usaba el proxy para estos caminos).
-  defp per_type(type, payload, body) when type in ["llm", "embedding", "decision", "rerank"] do
+  defp per_type(type, payload, body) when type in ["llm", "embedding", "decision"] do
     tokens = reported_tokens(body) || estimated_tokens(payload)
     %{"per_1m_tokens" => tokens, "per_1k_tokens" => tokens}
   end
@@ -74,11 +74,6 @@ defmodule Tokengate.Proxy.ServiceUsage do
       "per_image" => count,
       "per_megapixel" => megapixels(payload, count)
     }
-  end
-
-  # Vídeo y música se cobran por segundo de material generado.
-  defp per_type(type, payload, body) when type in ["video", "music"] do
-    %{"per_second" => duration_seconds(payload, body) || 0}
   end
 
   # TTS: el precio de lista es por carácter de ENTRADA (el texto que se
@@ -166,19 +161,6 @@ defmodule Tokengate.Proxy.ServiceUsage do
 
   defp size_dimensions(_size), do: nil
 
-  ## Segundos ##################################################################
-
-  defp duration_seconds(payload, body) do
-    first_number([
-      body["duration"],
-      body["seconds"],
-      get_in(body, ["usage", "duration"]),
-      get_in(body, ["usage", "seconds"]),
-      payload["duration"],
-      payload["seconds"]
-    ])
-  end
-
   ## Caracteres y audio ########################################################
 
   defp input_characters(payload) do
@@ -259,8 +241,8 @@ defmodule Tokengate.Proxy.ServiceUsage do
   ## Helpers ###################################################################
 
   # Los campos que llevan texto en una request de estos servicios: `input`
-  # (tts, y el JSON de stt), `prompt` (image/video/music), `query` (rerank).
-  @text_fields ~w(input prompt query)
+  # (tts, y el JSON de stt) y `prompt` (image).
+  @text_fields ~w(input prompt)
 
   defp text_fields(payload) do
     Enum.flat_map(@text_fields, fn field -> List.wrap(payload[field]) end)

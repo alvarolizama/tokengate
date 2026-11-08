@@ -115,7 +115,7 @@ defmodule Tokengate.Proxy.ProviderAdapter do
 
   @doc """
   Posts a passthrough request to one of the provider's non-chat services —
-  `:rerank`, `:stt`, `:tts`, `:image`, `:video`, `:music`.
+  `:stt`, `:tts`, `:image`.
 
   The URL is `base_url` + the path the service resolves to (the
   `ProviderPaths` vocabulary: operator override, then catalog hardcode,

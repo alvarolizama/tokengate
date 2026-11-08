@@ -1,6 +1,6 @@
 defmodule Tokengate.Proxy.ServiceUsageTest do
   @moduledoc """
-  La cantidad facturable por tipo: lo que hace posible cobrar image/video/tts/stt
+  La cantidad facturable por tipo: lo que hace posible cobrar image/tts/stt
   sin que el upstream reporte nada.
   """
   use ExUnit.Case, async: true
@@ -13,7 +13,7 @@ defmodule Tokengate.Proxy.ServiceUsageTest do
   # 4 bytes de audio en base64 ("AAAA" decodifica a 3 bytes).
   @audio_data_url "data:audio/mpeg;base64,AAAA"
 
-  describe "quantities/3 — tokens (llm/embedding/decision/rerank)" do
+  describe "quantities/3 — tokens (llm/embedding/decision)" do
     test "lo reportado por el upstream gana" do
       q =
         ServiceUsage.quantities(
@@ -28,13 +28,13 @@ defmodule Tokengate.Proxy.ServiceUsageTest do
     end
 
     test "sin usage, estima del texto de la request" do
-      q = ServiceUsage.quantities("rerank", %{"query" => "abcdefghij"}, %{})
+      q = ServiceUsage.quantities("llm", %{"input" => "abcdefghij"}, %{})
       assert q["per_1m_tokens"] == 10
     end
 
     test "acepta la nomenclatura de la API de imágenes (input/output_tokens)" do
       q =
-        ServiceUsage.quantities("rerank", %{}, %{
+        ServiceUsage.quantities("llm", %{}, %{
           "usage" => %{"input_tokens" => 7, "output_tokens" => 3}
         })
 
@@ -69,21 +69,6 @@ defmodule Tokengate.Proxy.ServiceUsageTest do
     test "un tamaño con basura no rompe" do
       assert ServiceUsage.quantities("image", %{"size" => "auto"}, %{})["per_megapixel"] == 0
       assert ServiceUsage.quantities("image", %{"size" => "0x0"}, %{})["per_megapixel"] == 0
-    end
-  end
-
-  describe "quantities/3 — video y music" do
-    test "segundos reportados por el upstream" do
-      assert ServiceUsage.quantities("video", %{}, %{"duration" => 8})["per_second"] == 8
-      assert ServiceUsage.quantities("music", %{}, %{"seconds" => 12})["per_second"] == 12
-    end
-
-    test "segundos pedidos en la request, como string" do
-      assert ServiceUsage.quantities("video", %{"seconds" => "5"}, %{})["per_second"] == 5.0
-    end
-
-    test "sin señal: 0 segundos" do
-      assert ServiceUsage.quantities("video", %{}, %{})["per_second"] == 0
     end
   end
 
@@ -170,10 +155,7 @@ defmodule Tokengate.Proxy.ServiceUsageTest do
         {%{"messages" => [%{"content" => "hola"}]}, %{"usage" => %{"prompt_tokens" => 10}}},
       "embedding" => {%{"input" => "hola"}, %{"usage" => %{"prompt_tokens" => 5}}},
       "decision" => {%{"questions" => ["a"]}, %{"usage" => %{"prompt_tokens" => 5}}},
-      "rerank" => {%{"query" => "hola", "documents" => ["a"]}, %{}},
       "image" => {%{"n" => 1, "size" => "1024x1024"}, %{"data" => [%{}]}},
-      "video" => {%{"seconds" => 5}, %{"duration" => 5}},
-      "music" => {%{"seconds" => 5}, %{"duration" => 5}},
       "tts" => {%{"input" => "hola"}, %{}},
       "stt" =>
         {%{"input_audio" => %{"data" => "data:audio/mpeg;base64," <> @ten_second_audio}},

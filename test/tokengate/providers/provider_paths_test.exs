@@ -12,8 +12,9 @@ defmodule Tokengate.Providers.ProviderPathsTest do
       assert ProviderPaths.resolve(%{key: "mi-relay"}, :chat) == "/chat/completions"
       assert ProviderPaths.resolve(%{key: "mi-relay"}, :models) == "/models"
       assert ProviderPaths.resolve(%{key: "openrouter"}, :embeddings) == "/embeddings"
-      assert ProviderPaths.resolve(%{key: "openrouter"}, "rerank") == "/rerank"
-      assert ProviderPaths.resolve(%{key: "openrouter"}, :music) == "/music/generations"
+      assert ProviderPaths.resolve(%{key: "openrouter"}, :image) == "/images"
+      assert ProviderPaths.resolve(%{key: "openrouter"}, :stt) == "/audio/transcriptions"
+      assert ProviderPaths.resolve(%{key: "openrouter"}, :tts) == "/audio/speech"
     end
 
     test "the provider's own override wins, by storage key or by code atom" do
@@ -26,10 +27,10 @@ defmodule Tokengate.Providers.ProviderPathsTest do
     test "an absolute URL override is kept as-is (service on another host)" do
       provider = %{
         key: "mi-relay",
-        path_overrides: %{"rerank" => "https://ranker.example.com/v1/rerank"}
+        path_overrides: %{"tts" => "https://voice.example.com/v1/audio/speech"}
       }
 
-      assert ProviderPaths.resolve(provider, :rerank) == "https://ranker.example.com/v1/rerank"
+      assert ProviderPaths.resolve(provider, :tts) == "https://voice.example.com/v1/audio/speech"
     end
 
     test "a blank override inherits instead of pointing at the bare base URL" do
@@ -69,7 +70,7 @@ defmodule Tokengate.Providers.ProviderPathsTest do
                  "chat" => "  /v1/chat  ",
                  "tts" => "/audio/speech/",
                  "stt" => "",
-                 "video" => nil
+                 "image" => nil
                })
     end
 
@@ -108,8 +109,8 @@ defmodule Tokengate.Providers.ProviderPathsTest do
       assert %{source: :provider, effective: "/v1/chat", default: "/chat/completions"} =
                Enum.find(rows, &(&1.key == "chat"))
 
-      assert %{source: :default, effective: "/videos", override: nil, catalog: nil} =
-               Enum.find(rows, &(&1.key == "video"))
+      assert %{source: :default, effective: "/images/generations", override: nil, catalog: nil} =
+               Enum.find(rows, &(&1.key == "image"))
     end
 
     test "describe/2 returns nil for a service outside the vocabulary" do

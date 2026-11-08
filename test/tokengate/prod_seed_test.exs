@@ -25,7 +25,7 @@ defmodule Tokengate.ProdSeedTest do
   @demo_emails ~w(dev@tokengate.local tester@tokengate.local)
   @demo_groups ~w(devs qa)
   @demo_services ~w(ci-bot)
-  @demo_models ~w(gpt-5-nano glm-5.2 text-embedding qwen3-rerank qwen3-tts wan-t2v)
+  @demo_models ~w(gpt-5-nano glm-5.2 text-embedding qwen3-tts)
 
   setup do
     previous = %{

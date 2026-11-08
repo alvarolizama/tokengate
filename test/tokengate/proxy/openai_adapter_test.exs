@@ -44,7 +44,7 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
     # (the `ProviderPaths` vocabulary). The test server answers 200 on any of
     # them — and on the same path behind a `/custom` prefix, which is what the
     # path-override tests point at — so callers assert which path the wire saw.
-    @service_paths ~w(/rerank /audio/transcriptions /audio/speech /images/generations /videos /music/generations)
+    @service_paths ~w(/audio/transcriptions /audio/speech /images/generations)
 
     def init(opts), do: opts
 
@@ -375,10 +375,6 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
     # One test per capability: the default path from the `ProviderPaths`
     # table, then the operator's override for the same service — the wire
     # must see `base_url` + each one, never the other.
-    test "rerank: /rerank, and the operator's override wins", ctx do
-      assert_service_path(:rerank, "/rerank", ctx)
-    end
-
     test "stt: /audio/transcriptions, and the operator's override wins", ctx do
       assert_service_path(:stt, "/audio/transcriptions", ctx)
     end
@@ -391,22 +387,14 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
       assert_service_path(:image, "/images/generations", ctx)
     end
 
-    test "video: /videos, and the operator's override wins", ctx do
-      assert_service_path(:video, "/videos", ctx)
-    end
-
-    test "music: /music/generations, and the operator's override wins", ctx do
-      assert_service_path(:music, "/music/generations", ctx)
-    end
-
     test "the body travels untouched and the key is the credential's", %{
       provider: provider,
       credential: credential
     } do
-      payload = %{"model" => "rerank-v1", "query" => "hola", "top_n" => 3, "documents" => ["a"]}
+      payload = %{"model" => "tts-1", "input" => "hola", "voice" => "alloy"}
 
       assert {:ok, body, _latency, _headers} =
-               OpenAIAdapter.service_post(provider, credential, :rerank, payload)
+               OpenAIAdapter.service_post(provider, credential, :tts, payload)
 
       assert body["object"] == "service"
       assert_receive {:captured, %{body: raw, auth: ["Bearer sk-test-key"]}}
@@ -486,7 +474,7 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
       provider = provider_to("/emptybody")
 
       assert {:ok, body, _latency, _headers} =
-               OpenAIAdapter.service_post(provider, credential, :video, %{"model" => "v"})
+               OpenAIAdapter.service_post(provider, credential, :image, %{"model" => "v"})
 
       assert body == %{}
     end

@@ -17,8 +17,8 @@ defmodule TokengateWeb.ProxyController do
     * `POST /v1/embeddings` — embeddings passthrough. Non-streaming only.
       The request is forwarded as received and the upstream response is
       returned untouched; TokenGate only adds auth and cost tracking.
-    * `POST /v1/rerank`, `/v1/audio/transcriptions`, `/v1/audio/speech`,
-      `/v1/images/generations`, `/v1/videos`, `/v1/music/generations` — the
+    * `POST /v1/audio/transcriptions`, `/v1/audio/speech`,
+      `/v1/images/generations` — the
       rest of a provider's services, same passthrough contract as
       embeddings. Each URL is `base_url` + the path `ProviderPaths` resolves
       for that service (operator override → catalog hardcode → generic
@@ -73,6 +73,7 @@ defmodule TokengateWeb.ProxyController do
 
   alias Tokengate.Proxy.{
     CostCalculator,
+    DecisionsTranslator,
     OpenAIAdapter,
     ProviderAdapter,
     PromptOptimizer,
@@ -220,14 +221,11 @@ defmodule TokengateWeb.ProxyController do
 
   ## The rest of a provider's services #########################################
   #
-  # Six capabilities that only differ in the upstream path, so they all run
+  # Three capabilities that only differ in the upstream path, so they all run
   # through `service_passthrough/2` — the embeddings pipeline with the
   # service (not the endpoint) as the argument. The service key is the
   # `ProviderPaths` vocabulary and is the SAME one the Capacidades modal
   # writes, so an operator override lands on the wire without a redeploy.
-
-  @doc "Reranks documents against a query at the provider's rerank service."
-  def rerank(conn, _params), do: service_passthrough(conn, :rerank)
 
   @doc "Audio → text (transcription) at the provider's speech-to-text service."
   def transcriptions(conn, _params), do: service_passthrough(conn, :stt)
@@ -238,13 +236,7 @@ defmodule TokengateWeb.ProxyController do
   @doc "Image generation at the provider's images service."
   def image_generations(conn, _params), do: service_passthrough(conn, :image)
 
-  @doc "Video generation at the provider's videos service."
-  def video_generations(conn, _params), do: service_passthrough(conn, :video)
-
-  @doc "Music generation at the provider's music service."
-  def music_generations(conn, _params), do: service_passthrough(conn, :music)
-
-  # Shared entry point for the six non-chat services: same gates, routing,
+  # Shared entry point for the three non-chat services: same gates, routing,
   # fallback matrix, budget hold and accounting as embeddings — the only
   # difference is the path the adapter resolves for `service`.
   #
@@ -271,6 +263,36 @@ defmodule TokengateWeb.ProxyController do
     )
   end
 
+  # POST /v1/decisions — the public decisions surface, in the OpenAI
+  # Decisions shape (`input` + ordered questions with predicate/choice/
+  # score). Routing capability is the model's type: only `decision` models
+  # are reachable here (the alias resolves like chat; the model rewrite to
+  # the upstream id happens in execute_simple, same as every simple proxy).
+  #
+  # The shape is validated BEFORE the gates: a malformed body is the
+  # caller's fault — it must not pick credentials, retry the fallback
+  # matrix or pollute the error logs with a per-attempt 400.
+  #
+  # kind is :decision so cost accounting bills per token
+  # (ServiceUsage "decision"), and the adapter_fun resolves the upstream per
+  # provider: verbatim for OpenAI-shape speakers, translated through
+  # DecisionsTranslator for System One speakers.
+  def decisions(conn, _params) do
+    payload = conn.body_params
+
+    with :ok <- DecisionsTranslator.validate(payload) do
+      simple_proxy(
+        conn,
+        payload,
+        "decision",
+        &Tokengate.Proxy.Decisions.post(&1, &2, &3, &4),
+        :decision
+      )
+    else
+      {:error, message} -> render_proxy_error(conn, {:invalid_request, message})
+    end
+  end
+
   # The service through the dialect adapter of the routed provider: the
   # adapter owns the URL (base_url + the path `ProviderPaths` resolves). A
   # captured raw body is forwarded byte-for-byte with the client's own
@@ -289,7 +311,7 @@ defmodule TokengateWeb.ProxyController do
   end
 
   # Shared gate pipeline for non-streaming, non-chat endpoints (embeddings
-  # and the six path-routed services): same two-gate throttle, routing,
+  # and the three path-routed services): same two-gate throttle, routing,
   # budget check, inflight registry, fallback matrix and cost accounting as
   # chat — minus the chat-only payload transforms (guard rails, prompt
   # optimizer, reasoning).
@@ -684,10 +706,10 @@ defmodule TokengateWeb.ProxyController do
     {usage, body}
   end
 
-  # The six path-routed services. Their response shapes have almost nothing
-  # in common — rerank reports tokens, image generation reports the same
-  # counters under other names, and tts/stt/video/music report none at all
-  # (audio bytes, a transcript, a job id) — so the rule is:
+  # The three path-routed services. Their response shapes have almost nothing
+  # in common — image generation reports the chat counters under other
+  # names, and tts/stt report none at all
+  # (audio bytes, a transcript) — so the rule is:
   #
   #   1. what the upstream reported wins (chat names, then the image API's);
   #   2. otherwise the request's own text is estimated, so manual pricing
@@ -696,7 +718,7 @@ defmodule TokengateWeb.ProxyController do
   #   3. no text at all estimates to zero, and zero is `CostCalculator`'s
   #      explicit $0 — we never invent a cost.
   defp simple_usage(payload, body, kind)
-       when kind in [:rerank, :stt, :tts, :image, :video, :music] do
+       when kind in [:stt, :tts, :image, :decision] do
     {reported_or_estimated_usage(payload, body), body}
   end
 
@@ -762,8 +784,8 @@ defmodule TokengateWeb.ProxyController do
   end
 
   # The request fields that carry the service's own text: `input` (tts, and
-  # stt's JSON variant), `prompt` (image/video/music) and `query` (rerank).
-  @estimated_text_fields ~w(input prompt query)
+  # stt's JSON variant) and `prompt` (image).
+  @estimated_text_fields ~w(input prompt)
 
   defp estimated_prompt_tokens(payload) do
     Enum.reduce(@estimated_text_fields, 0, fn field, acc ->
@@ -771,8 +793,8 @@ defmodule TokengateWeb.ProxyController do
     end)
   end
 
-  # A field may be a bare string or a list of strings (embeddings inputs,
-  # rerank documents); anything else — multimodal blocks, objects — is not
+  # A field may be a bare string or a list of strings (embeddings inputs);
+  # anything else — multimodal blocks, objects — is not
   # guessed at.
   defp estimate_strings(value) do
     value
@@ -1217,7 +1239,7 @@ defmodule TokengateWeb.ProxyController do
   #
   #   * `:chat_usage` — the chat body gains `usage.cost_usd` ($0), exactly the
   #     field a live chat completion carries.
-  #   * `:passthrough` (default) — service bodies (embeddings, rerank, media)
+  #   * `:passthrough` (default) — service bodies (embeddings, media)
   #     travel untouched, same as the live passthrough contract.
   #
   # A hit costs $0: the upstream was already paid by the request that filled

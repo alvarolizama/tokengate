@@ -4,17 +4,14 @@ defmodule Tokengate.Providers.Pricing do
 
   El coste manual de un `model_provider` nació midiendo tokens
   (`input/output/cache_cost_per_million`), y eso describe bien la mitad de la
-  superficie del gateway: chat, embeddings, decisiones y rerank se facturan por
-  tokens. Los otros seis servicios no:
+  superficie del gateway: chat, embeddings y decisiones se facturan por
+  tokens. Los otros tres servicios no:
 
       tipo      unidad real facturable                unidad por defecto
       --------  ------------------------------------  -----------------------
       image     por imagen, o por megapíxel           per_image
-      video     por segundo de vídeo                  per_second
-      music     por segundo (o por generación)        per_second
       tts       por mil caracteres de entrada, o seg  per_1k_characters
       stt       por minuto de audio transcrito        per_minute
-      rerank    por tokens de búsqueda                per_1m_tokens
 
   Este módulo es el VOCABULARIO (cerrado) y el puente tipo → unidad: qué
   unidades TIENEN sentido para cada tipo, cuál es la de por defecto, y el
@@ -79,8 +76,6 @@ defmodule Tokengate.Providers.Pricing do
   def units_for_type(type) do
     case type do
       "image" -> ~w(per_image per_megapixel per_request)
-      "video" -> ~w(per_second per_request)
-      "music" -> ~w(per_second per_request)
       # TTS: la duración del audio generado NO es reconstruible desde la
       # respuesta de un endpoint de síntesis, así que no se ofrece `per_second`
       # — ofrecerlo daría una unidad que siempre cobra $0.
@@ -101,8 +96,6 @@ defmodule Tokengate.Providers.Pricing do
   def default_unit_for_type(type) do
     case type do
       "image" -> "per_image"
-      "video" -> "per_second"
-      "music" -> "per_second"
       "tts" -> "per_1k_characters"
       "stt" -> "per_minute"
       _ -> @default_unit

@@ -43,7 +43,7 @@ defmodule Tokengate.Proxy.ResponseCacheTest do
     refute ResponseCache.cache_key("k", "m", base) == ResponseCache.cache_key("k", "m", temp)
   end
 
-  # A service payload (embeddings, rerank, stt, …) has no output-shaping
+  # A service payload (embeddings, stt, …) has no output-shaping
   # subset: its input fields ARE the request. Two different inputs must not
   # share a cache entry, or the second request gets the first one's answer.
   test "cache_key distinguishes different service inputs" do

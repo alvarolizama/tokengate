@@ -245,12 +245,10 @@ defmodule TokengateWeb.Router do
     # public name for the capability, NOT the upstream path: the URL is
     # `base_url` + what `ProviderPaths` resolves (operator override in the
     # Capacidades modal → catalog hardcode → generic default).
-    post "/rerank", ProxyController, :rerank
     post "/audio/transcriptions", ProxyController, :transcriptions
     post "/audio/speech", ProxyController, :speech
     post "/images/generations", ProxyController, :image_generations
-    post "/videos", ProxyController, :video_generations
-    post "/music/generations", ProxyController, :music_generations
+    post "/decisions", ProxyController, :decisions
   end
 
   # Other scopes may use custom stacks.

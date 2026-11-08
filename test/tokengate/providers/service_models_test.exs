@@ -14,11 +14,11 @@ defmodule Tokengate.Providers.ServiceModelsTest do
   doctest Tokengate.Providers.ServiceModels
 
   describe "vocabulary" do
-    test "the six media types are exactly the ones models.dev cannot classify" do
-      assert ServiceModels.media_types() == ~w(rerank stt tts image video music)
+    test "the three media types are exactly the ones models.dev cannot classify" do
+      assert ServiceModels.media_types() == ~w(stt tts image)
     end
 
-    test "media_type?/1 accepts the six and rejects the three catalog-known ones" do
+    test "media_type?/1 accepts the three and rejects the catalog-known ones" do
       for type <- ServiceModels.media_types() do
         assert ServiceModels.media_type?(type)
       end
@@ -31,11 +31,6 @@ defmodule Tokengate.Providers.ServiceModelsTest do
   end
 
   describe "classify/2 — Alibaba / DashScope families" do
-    test "rerank" do
-      assert ServiceModels.classify("alibaba", "qwen3-rerank") == "rerank"
-      assert ServiceModels.classify("alibaba", "qwen3-vl-rerank") == "rerank"
-    end
-
     test "stt" do
       assert ServiceModels.classify("alibaba", "qwen3-asr-flash") == "stt"
       assert ServiceModels.classify("alibaba", "qwen3-asr-flash-2026-02-10") == "stt"
@@ -59,21 +54,6 @@ defmodule Tokengate.Providers.ServiceModelsTest do
       assert ServiceModels.classify("alibaba", "wanx2.1-imageedit") == "image"
     end
 
-    test "video (y que NO caiga en image pese a compartir familia wan*)" do
-      assert ServiceModels.classify("alibaba", "wan2.7-t2v") == "video"
-      assert ServiceModels.classify("alibaba", "wan2.7-t2v-2026-04-25") == "video"
-      assert ServiceModels.classify("alibaba", "wan2.2-i2v-flash") == "video"
-      assert ServiceModels.classify("alibaba", "wan2.2-kf2v-flash") == "video"
-      assert ServiceModels.classify("alibaba", "wan2.6-r2v") == "video"
-      assert ServiceModels.classify("alibaba", "wan2.2-s2v") == "video"
-      assert ServiceModels.classify("alibaba", "animate-anyone-gen2") == "video"
-      assert ServiceModels.classify("alibaba", "liveportrait") == "video"
-    end
-
-    test "music (Fun-Music, sólo región CN)" do
-      assert ServiceModels.classify("alibaba", "fun-music-v1") == "music"
-    end
-
     test "an llm id is NOT classified as a service" do
       assert ServiceModels.classify("alibaba", "qwen3-max") == nil
       assert ServiceModels.classify("alibaba", "qwen3-235b-a22b") == nil
@@ -81,45 +61,23 @@ defmodule Tokengate.Providers.ServiceModelsTest do
   end
 
   describe "classify/2 — OpenRouter families" do
-    test "stt / tts / rerank / music (los que no tienen endpoint de listado)" do
+    test "stt / tts (sin endpoint de listado)" do
       assert ServiceModels.classify("openrouter", "openai/whisper-1") == "stt"
       assert ServiceModels.classify("openrouter", "openai/gpt-4o-transcribe") == "stt"
       assert ServiceModels.classify("openrouter", "microsoft/mai-transcribe-2") == "stt"
       assert ServiceModels.classify("openrouter", "openai/gpt-4o-mini-tts-2025-12-15") == "tts"
       assert ServiceModels.classify("openrouter", "microsoft/mai-voice-2") == "tts"
-      assert ServiceModels.classify("openrouter", "cohere/rerank-v3.5") == "rerank"
-      assert ServiceModels.classify("openrouter", "google/lyria-3-pro-preview") == "music"
     end
 
-    test "image y video (verificados contra /images/models y /videos/models)" do
+    test "image (verificado contra /images/models)" do
       assert ServiceModels.classify("openrouter", "qwen/qwen-image-3") == "image"
       assert ServiceModels.classify("openrouter", "black-forest-labs/flux.2-pro") == "image"
       assert ServiceModels.classify("openrouter", "openai/gpt-image-2") == "image"
-
-      assert ServiceModels.classify("openrouter", "google/veo-3.1") == "video"
-      assert ServiceModels.classify("openrouter", "openai/sora-2-pro") == "video"
-      assert ServiceModels.classify("openrouter", "kwaivgi/kling-v3.0-pro") == "video"
-      assert ServiceModels.classify("openrouter", "alibaba/wan-2.7") == "video"
-    end
-
-    test "flux-video-* cae en video, no en image (el orden de los patrones importa)" do
-      assert ServiceModels.classify("openrouter", "black-forest-labs/flux-video-edit") == "video"
-      assert ServiceModels.classify("openrouter", "black-forest-labs/flux-3-video") == "video"
     end
 
     test "un modelo de chat con salida de audio NO es tts (es llm)" do
       assert ServiceModels.classify("openrouter", "openai/gpt-audio") == nil
       assert ServiceModels.type_of("openrouter", "openai/gpt-audio") == "llm"
-    end
-
-    # `inkling` contiene `kling` (un generador de vídeo): sin límite por la
-    # izquierda, cinco modelos de CHAT de OpenRouter aparecían en la lista de
-    # vídeo del paso 3.
-    test "`kling` casa como familia, no como subcadena de otro id" do
-      assert ServiceModels.classify("openrouter", "kling/kling-v3") == "video"
-      assert ServiceModels.classify("openrouter", "thinkingmachines/inkling") == nil
-      assert ServiceModels.type_of("openrouter", "thinkingmachines/inkling") == "llm"
-      assert ServiceModels.type_of("openrouter", "thinkingmachines/inkling-small:free") == "llm"
     end
 
     # TypeSafe sólo sirve decisiones y sus ids son aliases de Jev: sin patrón,
@@ -139,8 +97,7 @@ defmodule Tokengate.Providers.ServiceModelsTest do
   describe "superficies compartidas" do
     test "alibaba-cn resuelve a la tabla de alibaba" do
       for key <- ~w(alibaba alibaba-cn) do
-        assert ServiceModels.classify(key, "qwen3-rerank") == "rerank"
-        assert ServiceModels.classify(key, "wan2.7-t2v") == "video"
+        assert ServiceModels.classify(key, "qwen3-asr-flash") == "stt"
         assert ServiceModels.known_ids(key, "stt") == ServiceModels.known_ids("alibaba", "stt")
       end
     end
@@ -148,8 +105,8 @@ defmodule Tokengate.Providers.ServiceModelsTest do
 
   describe "type_of/2" do
     test "el patrón del proveedor gana sobre el hint del id" do
-      # "wan2.7-t2v" no lleva señal en el id — sólo la familia lo clasifica.
-      assert ServiceModels.type_of("alibaba", "wan2.7-t2v") == "video"
+      # "qwen3-tts-flash" no lleva señal en el id — sólo la familia lo clasifica.
+      assert ServiceModels.type_of("alibaba", "qwen3-tts-flash") == "tts"
     end
 
     test "cae al hint de models.dev cuando ningún patrón casa" do
@@ -183,33 +140,15 @@ defmodule Tokengate.Providers.ServiceModelsTest do
     end
 
     test "seed_models_of_type/1 cruza proveedores" do
-      assert {"alibaba", "qwen3-rerank"} in ServiceModels.seed_models_of_type("rerank")
+      assert {"alibaba", "qwen3-asr-flash"} in ServiceModels.seed_models_of_type("stt")
 
-      assert {"fireworks-ai", "accounts/fireworks/models/qwen3-reranker-8b"} in ServiceModels.seed_models_of_type(
-               "rerank"
-             )
-
-      assert {"openrouter", "google/lyria-3-pro-preview"} in ServiceModels.seed_models_of_type(
-               "music"
-             )
-    end
-
-    # Fun-Music NO se siembra para DashScope: su host es POR WORKSPACE
-    # (`{WorkspaceId}.cn-beijing.maas.aliyuncs.com`), sólo región CN, y su body es
-    # nativo — ninguna fila de la semilla puede apuntarlo hoy. CLASIFICAR sí se
-    # clasifica si alguien lo escribe, que es una decisión distinta de ofrecerlo.
-    test "fun-music no se ofrece en DashScope pero sí se clasifica" do
-      for key <- ~w(alibaba alibaba-cn) do
-        assert ServiceModels.known_ids(key, "music") == []
-        assert ServiceModels.classify(key, "fun-music-v1") == "music"
-      end
+      assert {"openrouter", "openai/gpt-image-2"} in ServiceModels.seed_models_of_type("image")
     end
 
     # Invariante que ata la semilla con el paso 1 del wizard: cada fila tiene que
     # estar en un proveedor que DECLARE ese tipo. Si no, es INALCANZABLE — el paso
     # 1 filtra por capability, así que el proveedor no aparece para ese tipo y el
-    # id sembrado jamás se ofrece. Este invariante cazó dos filas muertas:
-    # `cohere/rerank-v3.5` (openrouter no declaraba `rerank`) y `fun-music-v1`.
+    # id sembrado jamás se ofrece.
     test "toda fila de la semilla está en un proveedor que DECLARA su tipo" do
       inalcanzables =
         for type <- ServiceModels.media_types(),
@@ -227,7 +166,7 @@ defmodule Tokengate.Providers.ServiceModelsTest do
     end
 
     test "known_ids/2 vacío para un tipo o proveedor sin semilla" do
-      assert ServiceModels.known_ids("alibaba", "music") == []
+      assert ServiceModels.known_ids("alibaba", "decision") == []
       assert ServiceModels.known_ids("openai", "stt") == []
       assert ServiceModels.known_ids(nil, "stt") == []
     end
@@ -235,33 +174,27 @@ defmodule Tokengate.Providers.ServiceModelsTest do
     test "provider_keys/0 lista los proveedores con semilla" do
       keys = ServiceModels.provider_keys()
       assert "alibaba" in keys
-      assert "fireworks-ai" in keys
       assert "openrouter" in keys
+      refute "fireworks-ai" in keys
       refute "alibaba-cn" in keys
     end
   end
 
   describe "descubrimiento por servicio (@discovery)" do
-    test "OpenRouter publica catálogo por servicio para todo menos music" do
+    test "OpenRouter publica catálogo por servicio para sus media types" do
       assert ServiceModels.discovery("openrouter", "stt") ==
                "/models?output_modalities=transcription"
 
       assert ServiceModels.discovery("openrouter", "tts") == "/models?output_modalities=speech"
-      assert ServiceModels.discovery("openrouter", "rerank") == "/models?output_modalities=rerank"
       assert ServiceModels.discovery("openrouter", "image") == "/models?output_modalities=image"
-      assert ServiceModels.discovery("openrouter", "video") == "/models?output_modalities=video"
 
       assert ServiceModels.discovery("openrouter", "embedding") ==
                "/models?output_modalities=embeddings"
-
-      # `music` no tiene valor propio: `output_modalities=audio` mezcla los Lyria
-      # con `gpt-audio`, que es un chat con salida de audio. Va sólo por semilla.
-      assert ServiceModels.discovery("openrouter", "music") == nil
     end
 
     test "un proveedor sin catálogo por servicio no tiene discovery" do
       assert ServiceModels.discovery("alibaba", "image") == nil
-      assert ServiceModels.discovery("fireworks-ai", "rerank") == nil
+      assert ServiceModels.discovery("fireworks-ai", "image") == nil
       assert ServiceModels.discovery(nil, "image") == nil
     end
 

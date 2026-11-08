@@ -222,9 +222,7 @@ end
 gpt = seed_model.("gpt-5-nano", %{"context_window" => 400_000, "model_type" => "llm"})
 glm = seed_model.("glm-5.2", %{"context_window" => 1_000_000, "model_type" => "llm"})
 embed = seed_model.("text-embedding", %{"context_window" => 8_192, "model_type" => "embedding"})
-rerank = seed_model.("qwen3-rerank", %{"context_window" => 120_000, "model_type" => "llm"})
-tts = seed_model.("qwen3-tts", %{"context_window" => 512, "model_type" => "llm"})
-video = seed_model.("wan-t2v", %{"context_window" => 2_048, "model_type" => "llm"})
+tts = seed_model.("qwen3-tts", %{"context_window" => 512, "model_type" => "tts"})
 
 # ---------------------------------------------------------------------------
 # Provider credentials — DUMMY keys, replace from the Providers page
@@ -292,10 +290,7 @@ end
 seed_mp.(gpt, "openrouter", openrouter_cred, "openai/gpt-5-nano", 1)
 seed_mp.(glm, "openrouter", openrouter_cred, "z-ai/glm-5.2", 1)
 seed_mp.(embed, "fireworks-ai", fireworks_cred, "fireworks/nomic-embed", 1)
-seed_mp.(rerank, "alibaba", alibaba_cred, "qwen3-rerank", 1)
-seed_mp.(rerank, "fireworks-ai", fireworks_cred, "accounts/fireworks/models/qwen3-reranker-8b", 2)
 seed_mp.(tts, "alibaba", alibaba_cred, "qwen3-tts-flash", 1)
-seed_mp.(video, "alibaba", alibaba_cred, "wan2.7-t2v", 1)
 
 # ---------------------------------------------------------------------------
 # Grants — who can route to what
@@ -315,7 +310,6 @@ end
 seed_grant.(dev_group, gpt)
 seed_grant.(dev_group, glm)
 seed_grant.(dev_group, embed)
-seed_grant.(dev_group, rerank)
 seed_grant.(qa_group, embed)
 seed_grant.(qa_group, tts)
 

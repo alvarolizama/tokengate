@@ -124,12 +124,81 @@ defmodule TokengateWeb.ModelsLive do
   ## Data loading ---------------------------------------------------------
 
   defp load_models(socket) do
-    models = aliases_with_providers_query() |> Repo.all()
+    models =
+      aliases_with_providers_query()
+      |> Repo.all()
+      # El SQL deja el orden de los LANES precargados por modelo (scope →
+      # priority); el orden de la LISTA es visual y va aquí: Fijados primero,
+      # luego cada tipo en orden canónico, alfabético dentro del grupo.
+      |> Enum.sort_by(&{not &1.pinned, type_rank(&1.model_type), String.downcase(&1.name)})
 
     socket
     |> stream(:models, models, reset: true)
     |> assign(:models_empty?, models == [])
+    |> assign(:model_groups, model_group_headers(models))
   end
+
+  # -- Agrupación del listado por tipo ---------------------------------------
+  #
+  # El stream es UNA lista plana (phx-update="stream" sólo gestiona children
+  # con stream id), así que la agrupación visual viaja DENTRO del primer item
+  # de cada sección: `model_group_headers/1` marca qué modelo abre sección y
+  # qué etiqueta lleva el separador. No hay filtro: el listado sigue completo.
+
+  # Orden canónico de tipos = el del picker de alta (`model_type_choices/0`),
+  # crudo porque un atributo de módulo no puede evaluar gettext.
+  @type_order ~w(llm embedding decision stt tts image)
+
+  defp type_rank(type), do: Enum.find_index(@type_order, &(&1 == type)) || length(@type_order)
+
+  # 1er pase: conteo por sección (pinned es sección propia; el resto su tipo).
+  # 2o pase: el PRIMER modelo de cada sección abre el separador — la marca es
+  # por KEY DE SECCIÓN, no por model id (dos filas nunca comparten id, pero
+  # todas las de un grupo sí comparten sección: el check equivocado duplicaría
+  # el separador —y su DOM id— en cada fila del grupo).
+  defp model_group_headers(models) do
+    counts = Enum.frequencies_by(models, &section_key/1)
+
+    {meta_list, _seen} =
+      Enum.map_reduce(models, %{}, fn model, seen ->
+        key = section_key(model)
+
+        if Map.has_key?(seen, key) do
+          {nil, seen}
+        else
+          {section_meta(key, Map.fetch!(counts, key)), Map.put(seen, key, true)}
+        end
+      end)
+
+    models
+    |> Enum.zip(meta_list)
+    |> Map.new(fn {model, meta} -> {model.id, meta} end)
+  end
+
+  defp section_key(%{pinned: true}), do: :pinned
+  defp section_key(%{model_type: type}), do: type
+
+  defp section_meta(:pinned, count) do
+    %{type: "pinned", label: gettext("Pinned"), icon: "hero-star-solid", count: count}
+  end
+
+  defp section_meta(type, count) do
+    case Enum.find(model_type_choices(), fn {_, t, _} -> t == type end) do
+      {label, _, icon} ->
+        %{type: type, label: label, icon: icon, count: count}
+
+      # La columna tiene CHECK en DB, así que esto sólo dispararía un nil
+      # pre-vocabulario: sección genérica al final en vez de reventar el render.
+      nil ->
+        %{type: "other", label: gettext("Other"), icon: "hero-cpu-chip", count: count}
+    end
+  end
+
+  # El template pregunta por cada fila: meta sólo cuando la fila abre sección.
+  def model_group_header(groups, model_id) when is_map(groups) and is_binary(model_id),
+    do: Map.get(groups, model_id)
+
+  def model_group_header(_, _), do: nil
 
   # El vínculo modelo→lab es blando (`lab_key`), así que la marca se resuelve
   # contra un índice cargado una vez: los labs se editan en otra página, no
@@ -177,8 +246,33 @@ defmodule TokengateWeb.ModelsLive do
   """
   def token_priced?(unit), do: Pricing.token_unit?(unit)
 
+  # El path del endpoint /v1 que sirve cada tipo de modelo — el mismo contrato
+  # que lib/tokengate_web/router.ex expone y que Routing.Router hace cumplir
+  # (capability = model_type). `nil` para un tipo fuera del vocabulario: la
+  # fila no muestra endpoint en vez de mostrar uno mentiroso.
+  @type_endpoints %{
+    "llm" => "POST /v1/chat/completions",
+    # La superficie pública canónica de decisiones: el shape OpenAI
+    # (`/v1/decisions`), con traducción a System One para los proveedores que
+    # hablan ese wire. El camino de chat de TypeSafe queda por compatibilidad.
+    "decision" => "POST /v1/decisions",
+    "embedding" => "POST /v1/embeddings",
+    "stt" => "POST /v1/audio/transcriptions",
+    "tts" => "POST /v1/audio/speech",
+    "image" => "POST /v1/images/generations"
+  }
+
+  @doc "The /v1 endpoint that serves a model type (nil when unknown)."
+  @spec type_endpoint(String.t() | nil) :: String.t() | nil
+  def type_endpoint(type) when is_binary(type), do: Map.get(@type_endpoints, type)
+  def type_endpoint(_), do: nil
+
+  @doc "The full type → endpoint map, as pairs (testable surface)."
+  @spec type_endpoint_pairs() :: [{String.t(), String.t()}]
+  def type_endpoint_pairs, do: Enum.to_list(@type_endpoints)
+
   @doc """
-  The 8 model types offered at creation, in picker order: `{label, type,
+  The 6 model types offered at creation, in picker order: `{label, type,
   hero-icon}`. The type IS the routing capability — it decides which endpoint
   serves the model — so the labels name the endpoint's job, not the modality.
   """
@@ -187,12 +281,9 @@ defmodule TokengateWeb.ModelsLive do
       {gettext("LLM (chat)"), "llm", "hero-chat-bubble-left-right"},
       {gettext("Embedding"), "embedding", "hero-squares-2x2"},
       {gettext("Decisions"), "decision", "hero-scale"},
-      {gettext("Rerank"), "rerank", "hero-arrow-up-circle"},
       {gettext("Transcription"), "stt", "hero-microphone"},
       {gettext("Speech"), "tts", "hero-speaker-wave"},
-      {gettext("Images"), "image", "hero-photo"},
-      {gettext("Videos"), "video", "hero-film"},
-      {gettext("Music"), "music", "hero-musical-note"}
+      {gettext("Images"), "image", "hero-photo"}
     ]
   end
 
@@ -273,9 +364,9 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   # Elegido el tipo: se abre el form de creación con ese tipo prellenado. Los
-  # seis servicios de media rutean por su endpoint propio (capability =
+  # tres servicios de media rutean por su endpoint propio (capability =
   # model_type), así que el tipo elegido ES el valor de la columna.
-  @service_types ~w(decision rerank stt tts image video music)
+  @service_types ~w(decision stt tts image)
 
   def handle_event("pick_model_type", %{"type" => type}, socket)
       when type in ["llm", "embedding" | @service_types] do
@@ -1290,7 +1381,7 @@ defmodule TokengateWeb.ModelsLive do
   @doc """
   Los ids que un proveedor publica para un tipo, según la semilla curada EN
   CÓDIGO (`ServiceModels.known_ids/2`): el suelo del paso 3 cuando el proveedor
-  no publica catálogo por servicio (DashScope para los seis servicios de media)
+  no publica catálogo por servicio (DashScope para los tres servicios de media)
   o cuando todavía no hay key con la que listarlo.
   """
   def wizard_seed_models(provider_key, type) do
@@ -2019,6 +2110,35 @@ defmodule TokengateWeb.ModelsLive do
 
   ## Componentes — marca del modelo -------------------------------------------
 
+  # Separador de sección del listado: se renderiza SÓLO cuando la fila abre
+  # grupo (Fijados o un tipo); para el resto devuelve HEEx vacío. Vive dentro
+  # del wrapper del item del stream porque phx-update="stream" sólo gestiona
+  # children con stream id — un separador suelto entre wrappers nunca llega
+  # al cliente.
+  defp model_section_header(assigns) do
+    case model_group_header(assigns[:groups], assigns[:model] && assigns[:model].id) do
+      nil ->
+        ~H""
+
+      meta ->
+        assigns = assign(assigns, :meta, meta)
+
+        ~H"""
+        <div
+          id={"model-section-#{@meta.type}"}
+          class="flex items-center gap-2 pt-2 pb-1"
+        >
+          <.icon name={@meta.icon} class="w-4 h-4 text-base-content/40" />
+          <span class="text-xs font-semibold uppercase tracking-wider text-base-content/40">
+            {@meta.label}
+          </span>
+          <span class="badge badge-xs badge-ghost">{@meta.count}</span>
+          <div class="h-px flex-1 bg-base-200"></div>
+        </div>
+        """
+    end
+  end
+
   # La marca: logo remoto si es el del lab, si no un hero icon. El chip claro es
   # fijo porque los logos del catálogo son oscuros y el tema también lo es
   # (mismo criterio que las cards de labs/proveedores).
@@ -2122,7 +2242,7 @@ defmodule TokengateWeb.ModelsLive do
     |> filter_provider_choices("")
   end
 
-  # llm/embedding son capabilities declaradas; los seis servicios también lo
+  # llm/embedding son capabilities declaradas; los tres servicios también lo
   # son en el vocabulario de `Catalog`. Un proveedor custom (sin catalog key)
   # no declara nada: se mantiene visible para no bloquear el alta manual.
   defp filter_choices_by_capability(choices, capability) do
@@ -2559,6 +2679,7 @@ defmodule TokengateWeb.ModelsLive do
 
         <div id="models" phx-update="stream" class="space-y-3">
           <div :for={{id, model} <- @streams.models} id={id}>
+            <.model_section_header groups={@model_groups} model={model} />
             <div class="card bg-base-100 border border-base-300 shadow-sm">
               <div class="card-body p-5">
                 <div class="flex items-start justify-between gap-4">
@@ -2590,11 +2711,22 @@ defmodule TokengateWeb.ModelsLive do
                       >
                         · {format_compact(model.context_window)} ctx
                       </span>
+                      <%!-- El badge de tipo va en TODAS las filas (llm incluido):
+                           el listado se lee agrupado, pero una card copiada
+                           sola —o filtrada mentalmente— pierde su tipo. --%>
                       <span
-                        :if={model.model_type != "llm"}
+                        id={"model-badge-#{model.id}"}
                         class="badge badge-sm badge-outline badge-info"
                       >
                         {model.model_type}
+                      </span>
+                      <span
+                        :if={endpoint = type_endpoint(model.model_type)}
+                        id={"model-endpoint-#{model.id}"}
+                        class="font-mono text-xs text-base-content/40"
+                        title={gettext("Endpoint that serves this model type")}
+                      >
+                        {endpoint}
                       </span>
                     </div>
                   </div>
@@ -3096,7 +3228,7 @@ defmodule TokengateWeb.ModelsLive do
 
                 <%!-- Paso 3: los modelos que publica ESE proveedor para ESE tipo,
                      en vivo con la key. Donde el proveedor no publica catálogo
-                     (DashScope para los seis servicios) queda la semilla curada
+                     (DashScope para los tres servicios de media) queda la semilla curada
                      en código. --%>
                 <%= if @wizard_step == "model" do %>
                   <div
@@ -3341,7 +3473,7 @@ defmodule TokengateWeb.ModelsLive do
                         }
                         hint={
                           gettext(
-                            "Defines which endpoint serves it (chat, embeddings, rerank, audio, image, video, music)."
+                            "Defines which endpoint serves it (chat, embeddings, audio, image)."
                           )
                         }
                       />

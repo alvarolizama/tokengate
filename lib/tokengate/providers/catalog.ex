@@ -46,7 +46,7 @@ defmodule Tokengate.Providers.Catalog do
 
   ## Capabilities
 
-  `#{inspect(~w(llm embedding rerank stt tts image video))}` — what a provider
+  `#{inspect(~w(llm embedding stt tts image))}` — what a provider
   can serve, declared per provider IN CODE. models.dev has no field for it: an
   embedding model and a chat model both report
   `modalities: %{input: ["text"], output: ["text"]}` and only `family` or the
@@ -54,11 +54,9 @@ defmodule Tokengate.Providers.Catalog do
   as chat — add the capabilities the day a real case needs them.
 
   The vocabulary here is what a provider may DECLARE. What the proxy routes is
-  `/v1/chat/completions`, `/v1/models`, `/v1/embeddings` and the six
-  path-routed services (`rerank`, `stt`, `tts`, `image`, `video`, `music` —
-  see `ProviderPaths`), so `music` is routable without being declarable here.
-  `Model.model_type` is still `llm | embedding` (DB CHECK): those six route by
-  credential, and the capability only selects the upstream path.
+  `/v1/chat/completions`, `/v1/models`, `/v1/embeddings` and the three
+  path-routed services (`stt`, `tts`, `image` — see `ProviderPaths`); a
+  model's `model_type` IS the routing capability for those.
 
   ## Custom provider capabilities
 
@@ -78,7 +76,7 @@ defmodule Tokengate.Providers.Catalog do
   @sources ~w(builtin custom)
 
   # What a provider can serve. Declared in code, per provider (@customizations).
-  @capabilities ~w(llm embedding decision rerank stt tts image video music)
+  @capabilities ~w(llm embedding decision stt tts image)
 
   # models.dev npm package -> dialect. Anything absent is unsupported until a
   # dialect (a thin adapter) exists for it.
@@ -107,6 +105,10 @@ defmodule Tokengate.Providers.Catalog do
   #                             %{embeddings: "/embed"}; the atom keys are the
   #                             vocabulary in `ProviderPaths` and only apply
   #                             when the provider has no operator override
+  #   * :decisions_shape      — the wire of the decisions surface:
+  #                             :openai (passthrough, default) | :systemone
+  #                             (the request translates) — see
+  #                             `decisions_shape/1` and `Proxy.Decisions`
   #   * :omit_body_fields     — fields the gateway must STRIP from the body
   #   * :reasoning_dialect    — how the upstream wants its reasoning knobs on
   #                             the wire, one of @reasoning_dialects: the
@@ -151,50 +153,40 @@ defmodule Tokengate.Providers.Catalog do
     # OpenRouter expone TODO en su superficie OpenAI-compatible bajo /api/v1:
     #   * chat/models/embeddings — defaults genéricos (embeddings models se
     #     listan en /embeddings/models, ver el adaptador).
-    #   * rerank — `POST /rerank` es exactamente el default genérico, y su
-    #     catálogo se descubre con `?output_modalities=rerank` (7 ids hoy).
     #   * stt `/audio/transcriptions` y tts `/audio/speech` — defaults exactos.
-    #   * image en `/images` (NO /images/generations) y video en `/videos`
-    #     (async: POST devuelve job + polling_url; el adaptador hace el poll).
-    #   * music va por chat con `modalities: ["text","audio"]` (el adaptador
-    #     traduce).
+    #   * image en `/images` (NO /images/generations).
+    #   * decisiones: su endpoint alpha NO vive bajo /api/v1 → URL absoluta.
+    #     Habla el envelope System One (sirve Jev/Clef), así que la superficie
+    #     pública /v1/decisions del gateway pasa por el traductor.
     "openrouter" => %{
-      capabilities: ~w(llm embedding rerank stt tts image video music),
+      capabilities: ~w(llm embedding stt tts image decision),
       dialect: "openrouter",
-      paths: %{image: "/images", video: "/videos"},
+      paths: %{image: "/images", decisions: "https://openrouter.ai/api/alpha/decisions"},
+      decisions_shape: :systemone,
       reasoning_dialect: :openrouter_nested
     },
-    # Fireworks también sirve rerank en su superficie OpenAI-compatible:
-    # `{base}/rerank` es exactamente el default genérico (verificado en
-    # docs.fireworks.ai/api-reference/rerank-documents), así que solo se
-    # declara la capability — ningún override de path.
+    # Fireworks: decisions en shape OpenAI nativo (`POST
+    # /inference/v1/decisions`, y el mismo contenido en /systemone) — la
+    # superficie pública pasa verbatim. Su modelo público `rune` sólo sirve
+    # esta API: chat contra él responde 400.
     "fireworks-ai" => %{
-      capabilities: ~w(llm embedding rerank),
-      # Fireworks documenta `reasoning_effort` top-level (string) y RECHAZA el
-      # `reasoning` anidado estilo OpenRouter que algunos clientes mandan
-      # ("Extra inputs are not permitted"): el normalizador aplana lo que
-      # llegue a la forma escalar.
+      capabilities: ~w(llm embedding decision),
+      decisions_shape: :openai,
       reasoning_dialect: :scalar
     },
-    # DashScope (Model Studio) expone tres superficies distintas:
+    # DashScope (Model Studio) expone dos superficies:
     #   * compatible-mode/v1 — chat, models, embeddings y, desde qwen-image,
     #     /images/generations YA OpenAI-compatible (response con data[].url);
     #     todo calza con los defaults genéricos.
-    #   * compatible-api/v1/reranks — rerank en OTRO segmento del host (no
-    #     compatible-mode): path absoluto. Su respuesta ya es shape OpenAI
-    #     (`{object: "list", results: [...]}`, igual que Fireworks), así que
-    #     no necesita adaptador — solo el path. intl y cn difieren en el host.
-    # gte-rerank fue discontinuado; los modelos vigentes son qwen3-rerank y
-    # qwen3.7-text-rerank.
+    #   * servicios NATIVOS (stt, tts) bajo /api/v1 — los traduce el adapter
+    #     dashscope (ver DashScopeAdapter). intl y cn difieren en el host.
     "alibaba" => %{
-      capabilities: ~w(llm embedding rerank image stt tts video),
-      dialect: "dashscope",
-      paths: %{rerank: "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks"}
+      capabilities: ~w(llm embedding image stt tts),
+      dialect: "dashscope"
     },
     "alibaba-cn" => %{
-      capabilities: ~w(llm embedding rerank image stt tts video),
-      dialect: "dashscope",
-      paths: %{rerank: "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"}
+      capabilities: ~w(llm embedding image stt tts),
+      dialect: "dashscope"
     },
     "alibaba-token-plan" => %{capabilities: ~w(llm)},
     "alibaba-token-plan-cn" => %{capabilities: ~w(llm)},
@@ -204,13 +196,41 @@ defmodule Tokengate.Providers.Catalog do
     # EXCLUSIVOS en su wire (400 con ambos, ver profile kimi-coding de
     # Hermes): effort gana cuando viene, si no el toggle.
     "moonshotai" => %{capabilities: ~w(llm), reasoning_dialect: :toggle_xor_effort},
-    # models.dev reaches the Kimi coding plan with the Anthropic SDK, but the
-    # same base URL serves an OpenAI-compatible surface and that is what this
-    # gateway speaks to it today: keep the working dialect explicit.
-    "kimi-for-coding" => %{
-      capabilities: ~w(llm),
+    # Kimi coding plan: models.dev partió la fila `kimi-for-coding` en dos
+    # regiones (cn/global, misma base y mismo wire). Llega con npm
+    # @ai-sdk/openai-compatible (dialecto openai ya resuelto); lo que la
+    # customización aporta es el dialecto de reasoning: el toggle y el
+    # escalar son MUTUAMENTE EXCLUSIVOS (400 con ambos, profile kimi-coding
+    # de Hermes). La key retirada ya no se declara: el refresh la marca
+    # stale y una instancia nueva no puede añadirla.
+    "kimi-code-plan-cn" => %{capabilities: ~w(llm), reasoning_dialect: :toggle_xor_effort},
+    "kimi-code-plan-global" => %{capabilities: ~w(llm), reasoning_dialect: :toggle_xor_effort},
+    # OpenAI: models.dev no publica su base URL (como Cerebras, va en código).
+    # Capabilities de la auditoría 2026-11-08: los tipos que models.dev publica
+    # (embedding, image) más stt/tts — sus endpoints /audio/* SON los defaults
+    # genéricos del gateway — y decisions (shape propio, GA con gpt-6-luna).
+    "openai" => %{
+      capabilities: ~w(llm embedding image stt tts decision),
+      base_url: "https://api.openai.com/v1"
+    },
+    # Los demás grandes sin base_url en models.dev: igual que Cerebras, el
+    # endpoint es OpenAI-compatible y ambos datos van en código. Mistral sirve
+    # embeddings y transcripción (Voxtral); xAI imágenes (grok-image); el AI
+    # Gateway de Vercel todo — incluido decisions en shape OpenAI.
+    "mistral" => %{
+      capabilities: ~w(llm embedding stt),
       dialect: "openai",
-      reasoning_dialect: :toggle_xor_effort
+      base_url: "https://api.mistral.ai/v1"
+    },
+    "xai" => %{
+      capabilities: ~w(llm image),
+      dialect: "openai",
+      base_url: "https://api.x.ai/v1"
+    },
+    "vercel" => %{
+      capabilities: ~w(llm embedding image stt tts decision),
+      dialect: "openai",
+      base_url: "https://ai-gateway.vercel.sh/v1"
     },
     # Z.AI/GLM 5.2: el toggle `thinking` y el escalar `reasoning_effort`
     # COEXISTEN en su wire (profile zai de Hermes).
@@ -229,16 +249,58 @@ defmodule Tokengate.Providers.Catalog do
       dialect: "openai",
       base_url: "https://api.cerebras.ai/v1"
     },
+    # Proveedores soportados cuyo espejo publica modelos tipados (auditoría
+    # 2026-11-08 sobre models.dev: `type` por modelo → embedding/image/stt/
+    # tts). El chat es el default de todo proveedor y va declarado siempre;
+    # los quirks de path que tenga cada uno se resuelven desde el modal
+    # Capacidades (override del operador), no aquí.
+    "302ai" => %{capabilities: ~w(llm image)},
+    "abacus" => %{capabilities: ~w(llm image)},
+    "aimlapi" => %{capabilities: ~w(llm image)},
+    "digitalocean" => %{capabilities: ~w(llm embedding image tts)},
+    "edenai" => %{capabilities: ~w(llm image)},
+    "evroc" => %{capabilities: ~w(llm embedding stt)},
+    "fastrouter" => %{capabilities: ~w(llm image)},
+    "greenpt" => %{capabilities: ~w(llm stt)},
+    "huggingface" => %{capabilities: ~w(llm embedding)},
+    "inference" => %{capabilities: ~w(llm embedding)},
+    "inferx" => %{capabilities: ~w(llm embedding)},
+    "infomaniak" => %{capabilities: ~w(llm embedding)},
+    "kenari" => %{capabilities: ~w(llm image stt tts)},
+    "kilo" => %{capabilities: ~w(llm image)},
+    "llmgateway" => %{capabilities: ~w(llm stt)},
+    "llmgateway-providers" => %{capabilities: ~w(llm stt)},
+    "nan" => %{capabilities: ~w(llm image)},
+    "nearai" => %{capabilities: ~w(llm embedding image stt)},
+    "nebius" => %{capabilities: ~w(llm embedding)},
+    "novita-ai" => %{capabilities: ~w(llm embedding)},
+    "nvidia" => %{capabilities: ~w(llm embedding image stt tts)},
+    "poe" => %{capabilities: ~w(llm image tts)},
+    "privatemode-ai" => %{capabilities: ~w(llm embedding stt)},
+    "qiniu-ai" => %{capabilities: ~w(llm image)},
+    "regolo-ai" => %{capabilities: ~w(llm embedding image stt)},
+    "requesty" => %{capabilities: ~w(llm image)},
+    "scaleway" => %{capabilities: ~w(llm embedding stt)},
+    "stackit" => %{capabilities: ~w(llm embedding)},
+    "stepfun" => %{capabilities: ~w(llm stt tts)},
+    "stepfun-ai" => %{capabilities: ~w(llm stt tts)},
+    "tempr" => %{capabilities: ~w(llm embedding)},
+    "xiaomi-token-plan-ams" => %{capabilities: ~w(llm tts)},
+    "xiaomi-token-plan-cn" => %{capabilities: ~w(llm tts)},
+    "xiaomi-token-plan-sgp" => %{capabilities: ~w(llm tts)},
+    "zenmux" => %{capabilities: ~w(llm image stt tts)},
     # TypeSafe (typesafe.ai): Jev, el primer modelo System One — decisiones
     # tipadas con probabilidades calibradas en vez de texto generado. Su API
     # NO es OpenAI-compatible: `POST /v1/systemone` con {state, model,
-    # questions} → {answers, usage}; el dialecto propio traduce. Cobro por
+    # questions} → {answers, usage}; la superficie pública /v1/decisions pasa
+    # por el traductor (DecisionsTranslator) hacia este envelope. Cobro por
     # input token ($0.042/Mtok, output gratis); no reporta costo — el precio
     # manual del model_provider es el fallback. models.dev no lo publica.
     "typesafe" => %{
       capabilities: ~w(decision),
       dialect: "typesafe",
-      paths: %{chat: "/systemone"}
+      paths: %{chat: "/systemone", decisions: "/systemone"},
+      decisions_shape: :systemone
     }
   }
 
@@ -419,7 +481,7 @@ defmodule Tokengate.Providers.Catalog do
   Capabilities declared for a provider in code (possibly empty).
 
       iex> Tokengate.Providers.Catalog.capabilities("fireworks-ai")
-      ["llm", "embedding"]
+      ["llm", "embedding", "decision"]
 
       iex> Tokengate.Providers.Catalog.capabilities("anthropic")
       []
@@ -455,6 +517,29 @@ defmodule Tokengate.Providers.Catalog do
     case capabilities(key) do
       [] -> type == "llm"
       caps -> type in caps
+    end
+  end
+
+  @doc """
+  The wire shape a provider speaks on the decisions surface:
+
+    * `:openai` — the OpenAI Decisions shape (`POST /v1/decisions`,
+      `input` + ordered questions with `predicate`/`choice`/`score`):
+      the gateway's `/v1/decisions` request passes through verbatim
+      (OpenAI, Fireworks, oMLX…).
+    * `:systemone` — the TypeSafe System One shape (`{model, state,
+      questions}` map): the gateway translates through
+      `Tokengate.Proxy.DecisionsTranslator` (TypeSafe, OpenRouter and
+      every Jev reseller).
+
+  Defaults to `:openai`: an operator-added provider with a decisions
+  endpoint (an oMLX host, say) speaks the OpenAI shape by construction.
+  """
+  @spec decisions_shape(String.t() | nil) :: :openai | :systemone
+  def decisions_shape(key) do
+    case option(key, :decisions_shape, :openai) do
+      :systemone -> :systemone
+      _ -> :openai
     end
   end
 

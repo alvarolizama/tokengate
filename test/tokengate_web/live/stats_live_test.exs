@@ -1126,8 +1126,9 @@ defmodule TokengateWeb.StatsLiveTest do
     # UTC → el reinicio cae a las 00:00 locales.
     assert has_element?(view, "#live-budget-reset-at", "00:00 en tu hora local")
 
-    # +1h (Madrid en verano) → 02:00 locales.
-    render_change(view, "set-timezone", %{"timezone" => "Europe/Madrid"})
+    # +2 fijo (sin DST — Madrid cambia de offset con la temporada y el test
+    # mentiría cada invierno): África/Johannesburgo es UTC+2 todo el año.
+    render_change(view, "set-timezone", %{"timezone" => "Africa/Johannesburg"})
     assert has_element?(view, "#live-budget-reset-at", "02:00 en tu hora local")
   end
 

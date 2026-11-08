@@ -5,11 +5,11 @@ defmodule Tokengate.Providers.ServiceModels do
   ## Por qué existe
 
   `models.dev` sólo publica la mitad de la superficie del gateway: sus ids son
-  de chat, embeddings o, en el caso de TypeSafe, decisiones. Los **seis
-  servicios de media** (`rerank`, `stt`, `tts`, `image`, `video`, `music`) no
-  existen ahí, así que el único marcado que había —`ModelIds.model_type_hint/1`,
-  un regex sobre el id— no puede clasificarlos: un `wan2.7-t2v` o un
-  `google/lyria-3-pro-preview` caen todos a `"llm"`.
+  de chat, embeddings o, en el caso de TypeSafe, decisiones. Los **tres
+  servicios de media** (`stt`, `tts`, `image`) no existen ahí, así que el único
+  marcado que había —`ModelIds.model_type_hint/1`, un regex sobre el id— no
+  puede clasificarlos: un `qwen3-tts-flash` o un `gpt-image-2` caen todos a
+  `"llm"`.
 
   Este módulo es la mitad que falta. Es DATA code-owned, como
   `Catalog.@code_providers` o `ModelIds.@code_models`: viaja con el release,
@@ -30,7 +30,7 @@ defmodule Tokengate.Providers.ServiceModels do
 
   ## Tres fuentes, en este orden
 
-    1. `@patterns` — la familia del id (los seis servicios).
+    1. `@patterns` — la familia del id (los tres servicios).
     2. `ModelIds.model_type_hint/1` — el hint de models.dev
        (`embedding`, `decision`, `llm`).
     3. `@discovery` — un proveedor que publica un catálogo POR SERVICIO
@@ -51,7 +51,7 @@ defmodule Tokengate.Providers.ServiceModels do
 
   alias Tokengate.Providers.ModelIds
 
-  @media_types ~w(rerank stt tts image video music)
+  @media_types ~w(stt tts image)
 
   @shared_surfaces %{
     "alibaba-cn" => "alibaba"
@@ -62,59 +62,31 @@ defmodule Tokengate.Providers.ServiceModels do
   #
   # Familia                  Fuente verificada
   # -----------------------  -----------------------------------------------
-  # qwen3-rerank             help/en/model-studio/text-rerank-api
   # qwen3-asr-*, fun-asr*,   help/en/model-studio/asr-model
   #   qwen-audio-*-asr-*,
   #   paraformer-*
   # qwen3-tts-*, qwen-tts*,  help/en/model-studio/tts-model
-  #   qwen-audio-*-tts-*,
+  #   qwen-audio-*-tts-*, 
   #   cosyvoice-*
   # qwen-image-*, wan*-t2i/  help/en/model-studio/image-model
   #   i2i, *-imageedit
-  # wan*-t2v/i2v/kf2v/r2v/   help/en/model-studio/use-video-generation
-  #   s2v, animate-anyone-*,
-  #   liveportrait, videoretalk,
-  #   emo-*, emoji-*
-  # fun-music-*              help/en/model-studio/fun-music (sólo región CN)
   @patterns %{
     "alibaba" => [
-      {~r/rerank/i, "rerank"},
       {~r/asr|paraformer/i, "stt"},
       {~r/tts|cosyvoice/i, "tts"},
-      {~r/image|t2i|i2i/i, "image"},
-      {~r/t2v|i2v|kf2v|r2v|s2v|vace|videoedit|animate-anyone|liveportrait|videoretalk|emo-|emoji/i,
-       "video"},
-      {~r/music/i, "music"}
-    ],
-    # Fireworks sirve rerank en su superficie OpenAI-compatible (`{base}/rerank`).
-    "fireworks-ai" => [
-      {~r/rerank/i, "rerank"}
+      {~r/image|t2i|i2i/i, "image"}
     ],
     # OpenRouter expone cada servicio de media con su propia superficie:
     #   * image  → POST /api/v1/images/generations   (descubrible: /images/models)
-    #   * video  → POST /api/v1/videos               (descubrible: /videos/models)
     #   * stt    → POST /api/v1/audio/transcriptions (SIN endpoint de listado)
     #   * tts    → POST /api/v1/audio/speech         (SIN endpoint de listado)
-    #   * music  → por chat con output audio         (2 modelos: google/lyria-*)
-    #   * rerank → POST /api/v1/rerank               (SIN endpoint de listado)
     # Verificado contra /api/v1/models (446 filas): NINGÚN modelo de chat lleva
     # "image" en el id fuera del set de generación, así que ese patrón es seguro;
     # y `gpt-audio` (chat con salida de audio) NO casa con `tts|speech|voice|
     # kokoro` a propósito — es un llm, no el endpoint de voz.
-    #
-    # ORDEN: video ANTES que image, porque `flux-video-edit`/`flux-3-video`
-    # llevan "flux" y caerían en image si image fuera primero.
-    #
-    # `kling` va con límite por la izquierda: sin él casaba DENTRO de
-    # `thinkingmachines/inkling` (un chat), y la lista del proveedor mostraba
-    # cinco modelos de conversación como generación de vídeo.
     "openrouter" => [
-      {~r{^google/lyria}i, "music"},
-      {~r/rerank/i, "rerank"},
       {~r/whisper|transcribe|deepgram\/nova|chirp/i, "stt"},
       {~r/kokoro|tts|speech|voice/i, "tts"},
-      {~r{veo|sora|(?<![a-z])kling|seedance|hailuo|runway|aleph|grok-imagine-video|happyhorse|heygen|wan-|flux-.*video}i,
-       "video"},
       {~r/image|flux|seedream|recraft|krea|mai-image|muse-image/i, "image"}
     ],
     # TypeSafe publica SÓLO el endpoint de decisiones (`/v1/systemone`); sus ids
@@ -130,10 +102,8 @@ defmodule Tokengate.Providers.ServiceModels do
   # existe (mejor que cualquier semilla).
   #
   # OpenRouter expone cada servicio con SU propia consulta sobre `/models`
-  # (`?output_modalities=`), verificado: transcription 21, speech 18, rerank 7,
-  # image 54, video 29, embeddings 37. `music` es la excepción: no tiene valor
-  # propio (`output_modalities=audio` mezcla los Lyria con `gpt-audio`, que es un
-  # chat) y `/music/models` responde 404 — así que music va sólo por semilla.
+  # (`?output_modalities=`), verificado: transcription 21, speech 18, image 54,
+  # embeddings 37.
   #
   # Un proveedor sin entrada aquí (Alibaba/DashScope, que no publica catálogo por
   # servicio) se apoya en la semilla + el texto libre del paso 2.
@@ -141,9 +111,7 @@ defmodule Tokengate.Providers.ServiceModels do
     "openrouter" => %{
       "stt" => "/models?output_modalities=transcription",
       "tts" => "/models?output_modalities=speech",
-      "rerank" => "/models?output_modalities=rerank",
       "image" => "/models?output_modalities=image",
-      "video" => "/models?output_modalities=video",
       "embedding" => "/models?output_modalities=embeddings"
     }
   }
@@ -153,17 +121,14 @@ defmodule Tokengate.Providers.ServiceModels do
   # no publica catálogo en vivo.
   #
   # Fuentes, por bloque:
-  #   * alibaba  → help/en/model-studio/{text-rerank-api, asr-model, tts-model,
-  #                image-model, use-video-generation, fun-music}. Sólo las formas
-  #                CANÓNICAS: las variantes con fecha (`…-2025-11-27`) se omiten
-  #                a propósito, son ruido en un selector.
-  #   * openrouter → docs/guides/overview/multimodal/{stt,tts} y la referencia de
-  #                `/rerank`. Es un FALLBACK: stt/tts/image/video/rerank/embedding
-  #                se descubren en vivo (`@discovery`); sólo `music` depende de
-  #                la semilla.
+  #   * alibaba  → help/en/model-studio/{asr-model, tts-model, image-model}. Sólo
+  #                las formas CANÓNICAS: las variantes con fecha
+  #                (`…-2025-11-27`) se omiten a propósito, son ruido en un
+  #                selector.
+  #   * openrouter → docs/guides/overview/multimodal/{stt,tts}. Es un FALLBACK:
+  #                stt/tts/image/embedding se descubren en vivo (`@discovery`).
   @known_ids %{
     "alibaba" => %{
-      "rerank" => ~w(qwen3-rerank qwen3-vl-rerank),
       "stt" => ~w(qwen3-asr-flash qwen3-asr-flash-realtime qwen3-asr-flash-filetrans
            qwen-audio-3.0-asr-flash qwen-audio-3.0-asr-flash-filetrans
            qwen-audio-3.0-asr-flash-streaming
@@ -180,35 +145,12 @@ defmodule Tokengate.Providers.ServiceModels do
            qwen-image-edit-plus
            wan2.7-image wan2.7-image-pro wan2.6-image wan2.6-t2i
            wan2.5-t2i-preview wan2.5-i2i-preview wan2.2-t2i-plus wan2.2-t2i-flash
-           wan2.1-t2i-plus wan2.1-t2i-turbo wanx2.1-imageedit z-image-turbo),
-      "video" => ~w(wan2.7-t2v wan2.7-i2v wan2.7-r2v wan2.7-videoedit
-           wan2.6-t2v wan2.6-i2v wan2.6-i2v-flash wan2.6-r2v wan2.6-r2v-flash
-           wan2.5-t2v-preview wan2.5-i2v-preview
-           wan2.2-t2v-plus wan2.2-i2v-plus wan2.2-i2v-flash wan2.2-kf2v-flash wan2.2-s2v
-           wan2.1-t2v-plus wan2.1-t2v-turbo wan2.1-i2v-plus wan2.1-i2v-turbo
-           wan2.1-kf2v-plus wan2.1-vace-plus
-           wanx2.1-t2v-plus wanx2.1-t2v-turbo wanx2.1-i2v-plus wanx2.1-i2v-turbo
-           wanx2.1-kf2v-plus wanx2.1-vace-plus
-           animate-anyone-gen2 liveportrait videoretalk emo-v1 emoji-v1)
-      # NO hay entrada de `music`: Fun-Music (`fun-music-v1`) existe en DashScope
-      # pero NO es enrutable por este camino — vive en un host POR WORKSPACE
-      # (`{WorkspaceId}.cn-beijing.maas.aliyuncs.com`), sólo región CN, y su body
-      # es nativo (`{"model", "input": {"prompt"|"lyrics", "gender"}}`), no
-      # OpenAI. Sembrarlo ofrecería un id que ningún proveedor declarado puede
-      # servir. Para habilitarlo hacen falta las TRES piezas: la capability
-      # `music` en `alibaba-cn`, el path del operador (su workspace) en
-      # `path_overrides`, y la traducción request/response en el adapter.
-    },
-    "fireworks-ai" => %{
-      "rerank" => ~w(accounts/fireworks/models/qwen3-reranker-8b)
+           wan2.1-t2i-plus wan2.1-t2i-turbo wanx2.1-imageedit z-image-turbo)
     },
     "openrouter" => %{
-      "music" => ~w(google/lyria-3-pro-preview google/lyria-3-clip-preview),
       "stt" => ~w(openai/whisper-1 openai/gpt-4o-transcribe),
       "tts" => ~w(openai/gpt-4o-mini-tts-2025-12-15 microsoft/mai-voice-2),
-      "image" => ~w(openai/gpt-image-2 black-forest-labs/flux.2-pro),
-      "video" => ~w(google/veo-3.1 openai/sora-2-pro),
-      "rerank" => ~w(cohere/rerank-v3.5)
+      "image" => ~w(openai/gpt-image-2 black-forest-labs/flux.2-pro)
     },
     # TypeSafe: el alias `jev-latest` es el default de sus SDKs y `jev-1.13.0`
     # la versión pinnable. `decision` es el ÚNICO tipo que sirve, así que su
@@ -219,25 +161,22 @@ defmodule Tokengate.Providers.ServiceModels do
     }
   }
 
-  @doc "Los seis tipos de servicio que models.dev no publica."
+  @doc "Los tres tipos de servicio que models.dev no publica."
   @spec media_types() :: [String.t()]
   def media_types, do: @media_types
 
-  @doc "True when `type` is one of the six media services."
+  @doc "True when `type` is one of the three media services."
   @spec media_type?(String.t() | nil) :: boolean()
   def media_type?(type), do: type in @media_types
 
   @doc """
   El tipo de un modelo de un proveedor.
 
-  Patrón del proveedor primero (los seis servicios), luego el hint de models.dev
+  Patrón del proveedor primero (los tres servicios), luego el hint de models.dev
   (`embedding`, `decision`, `llm`).
 
-      iex> Tokengate.Providers.ServiceModels.type_of("alibaba", "wan2.7-t2v")
-      "video"
-
-      iex> Tokengate.Providers.ServiceModels.type_of("openrouter", "google/lyria-3-pro-preview")
-      "music"
+      iex> Tokengate.Providers.ServiceModels.type_of("alibaba", "qwen-image-2.0")
+      "image"
 
       iex> Tokengate.Providers.ServiceModels.type_of("openai", "google/gemini-embedding-001")
       "embedding"

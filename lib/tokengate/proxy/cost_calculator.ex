@@ -19,8 +19,8 @@ defmodule Tokengate.Proxy.CostCalculator do
            * **any other unit** (`per_image`, `per_second`, `per_minute`,
              `per_1k_characters`, `per_megapixel`, `per_request`) —
              `unit_cost` multiplied by the billable quantity of the call
-             (`ServiceUsage.quantities/3`). This is what lets image, video,
-             music, tts and stt be priced at all, since their unit is not a
+             (`ServiceUsage.quantities/3`). This is what lets image,
+             tts and stt be priced at all, since their unit is not a
              token.
       3. $0 — honest fallback. We don't invent costs.
 

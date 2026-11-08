@@ -7,9 +7,6 @@ defmodule Tokengate.Proxy.DashScopeAdapter do
     * **compatible-mode/v1** — OpenAI-compatible chat, models, embeddings
       and image (`/images/generations`, qwen-image). Delegated to
       `OpenAIAdapter` untouched (default paths).
-    * **compatible-api/v1** — rerank at `/reranks`; already OpenAI-shaped
-      (`{object: "list", results: [...]}`), delegated too (path override
-      lives in `Catalog.@customizations`).
     * **NATIVE services** this adapter translates:
         * **stt** (qwen3-asr-flash): OpenAI-compatible but rides
           `/chat/completions` with an `input_audio` content block; the
@@ -17,10 +14,6 @@ defmodule Tokengate.Proxy.DashScopeAdapter do
         * **tts** (qwen3-tts / cosyvoice): native
           `/api/v1/services/aigc/multimodal-generation/generation`, sync,
           answers `output.audio.url`.
-        * **video** (wan2.x): native async
-          `/api/v1/services/aigc/video-generation/video-synthesis` with the
-          `X-DashScope-Async: enable` header, then poll `GET /api/v1/tasks/{id}`
-          until `SUCCEEDED` and return the final document with `video_url`.
 
   The native services live under the `/api/v1` segment of the same host as
   base_url, which is why the paths here are ABSOLUTE URLs derived from the
@@ -32,11 +25,6 @@ defmodule Tokengate.Proxy.DashScopeAdapter do
 
   @native_base_path "/api/v1"
   @tts_path @native_base_path <> "/services/aigc/multimodal-generation/generation"
-  @video_path @native_base_path <> "/services/aigc/video-generation/video-synthesis"
-  @tasks_path @native_base_path <> "/tasks"
-
-  @poll_interval_ms 10_000
-  @task_terminal ~w(SUCCEEDED FAILED CANCELED UNKNOWN)
 
   @impl true
   defdelegate chat_completion(provider, credential, payload, opts \\ []),
@@ -90,26 +78,7 @@ defmodule Tokengate.Proxy.DashScopeAdapter do
     end
   end
 
-  # Video — native async: submit with X-DashScope-Async, poll the task until
-  # SUCCEEDED, return the final document with video_url lifted to the top.
-  @impl true
-  def service_post(provider, credential, :video, payload, opts) do
-    with {:ok, submitted, latency, headers} <-
-           OpenAIAdapter.post_json_with_headers(
-             provider,
-             credential,
-             native_url(provider, @video_path),
-             video_native_payload(payload),
-             [{"x-dashscope-async", "enable"}],
-             opts
-           ),
-         {:ok, task_id} <- fetch_task_id(submitted),
-         {:ok, final} <- poll_task(provider, credential, task_id, opts) do
-      {:ok, translate_video_response(final), latency, headers}
-    end
-  end
-
-  # Everything else (chat-routed media like image, rerank at compatible-api):
+  # Everything else (chat-routed media like image):
   # OpenAI-compatible defaults, delegated.
   @impl true
   def service_post(provider, credential, service, payload, opts) do
@@ -212,53 +181,6 @@ defmodule Tokengate.Proxy.DashScopeAdapter do
 
   def translate_tts_response(body), do: body
 
-  ## Video translation #########################################################
-
-  @doc """
-  The native body a video request maps to: `input.prompt` plus the knobs
-  DashScope accepts (resolution, ratio, duration…). Public: unit-testable.
-  """
-  def video_native_payload(payload) do
-    input =
-      payload
-      |> Map.take(["prompt", "audio_url", "negative_prompt", "first_frame_url", "last_frame_url"])
-      |> Map.new(fn {k, v} -> {k, v} end)
-      |> Map.put_new("prompt", "")
-
-    parameters =
-      payload
-      |> Map.take([
-        "resolution",
-        "ratio",
-        "duration",
-        "size",
-        "prompt_extend",
-        "watermark",
-        "seed"
-      ])
-
-    %{"model" => Map.get(payload, "model"), "input" => input, "parameters" => parameters}
-  end
-
-  @doc """
-  Normalizes the final task document into the gateway's video envelope,
-  lifting `output.video_url`/status to the top so clients read one shape
-  across upstreams. Public: unit-testable.
-  """
-  def translate_video_response(%{"output" => output} = body) when is_map(output) do
-    body
-    |> Map.put("video_url", Map.get(output, "video_url"))
-    |> Map.put("status", task_status_to_gateway(Map.get(output, "task_status")))
-    |> Map.put("task_id", Map.get(output, "task_id"))
-  end
-
-  def translate_video_response(body), do: body
-
-  defp task_status_to_gateway("SUCCEEDED"), do: "completed"
-  defp task_status_to_gateway("FAILED"), do: "failed"
-  defp task_status_to_gateway("CANCELED"), do: "cancelled"
-  defp task_status_to_gateway(other), do: other
-
   ## Internals ##################################################################
 
   # The native services live under /api/v1 of the SAME HOST as base_url:
@@ -276,43 +198,4 @@ defmodule Tokengate.Proxy.DashScopeAdapter do
         path
     end
   end
-
-  # El failure_reason del behaviour es un vocabulario CERRADO de átomos (ver
-  # ProviderAdapter.failure_reason): una tupla aquí rompe el `to_string(reason)`
-  # del controller (Protocol.UndefinedError) y la request muere en un 500
-  # interno en vez de surficiar el fallo upstream. El detalle específico del
-  # task viaja en error_message.
-  defp fetch_task_id(%{"output" => %{"task_id" => id}}) when is_binary(id), do: {:ok, id}
-  defp fetch_task_id(_), do: {:error, :server_error, nil, "no task id in submission response"}
-
-  defp poll_task(provider, credential, task_id, opts) do
-    url = native_url(provider, @tasks_path) <> "/#{task_id}"
-    deadline = System.monotonic_time(:millisecond) + poll_budget(opts)
-    interval = Keyword.get(opts, :poll_interval_ms, @poll_interval_ms)
-    do_poll(provider, credential, url, deadline, interval)
-  end
-
-  defp do_poll(provider, credential, url, deadline, interval) do
-    if System.monotonic_time(:millisecond) >= deadline do
-      {:error, :timeout, nil, "video task did not reach a terminal status before the deadline"}
-    else
-      Process.sleep(interval)
-
-      case OpenAIAdapter.get_json(provider, credential, url, receive_timeout: 30_000) do
-        {:ok, %{"output" => %{"task_status" => status}} = doc}
-        when status in @task_terminal ->
-          if status == "SUCCEEDED",
-            do: {:ok, doc},
-            else: {:error, :server_error, nil, "video task ended with status #{status}"}
-
-        {:ok, _doc} ->
-          do_poll(provider, credential, url, deadline, interval)
-
-        {:error, reason} ->
-          {:error, reason, nil, nil}
-      end
-    end
-  end
-
-  defp poll_budget(opts), do: Keyword.get(opts, :receive_timeout, 180_000)
 end

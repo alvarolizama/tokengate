@@ -307,8 +307,9 @@ defmodule TokengateWeb.MonitoringLiveTest do
 
     assert has_element?(view, "#error-detail-modal")
     assert html =~ "No available sellers for model &#39;deepseek-v3&#39;"
-    assert html =~ "client 404"
-    assert html =~ "provider 404"
+    # Las etiquetas "client/provider" van por gettext y la UI vive en español.
+    assert html =~ "cliente 404"
+    assert html =~ "proveedor 404"
 
     # Cierre: el modal desaparece.
     view |> element("#error-detail-modal .btn-circle") |> render_click()

@@ -90,7 +90,7 @@ defmodule Tokengate.Providers.ModelIds do
   HINT for `models.model_type` based on the id: `"embedding"`, `"decision"`
   or `"llm"`.
 
-  Es el ÚLTIMO recurso de la clasificación: los seis servicios de media salen de
+  Es el ÚLTIMO recurso de la clasificación: los tres servicios de media salen de
   los patrones de `ServiceModels`, y aquí sólo se distingue lo que un id
   delata — un embedding, un modelo de decisiones de TypeSafe, o chat.
 

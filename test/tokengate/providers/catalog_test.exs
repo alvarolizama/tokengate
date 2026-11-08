@@ -73,29 +73,30 @@ defmodule Tokengate.Providers.CatalogTest do
 
   describe "code customizations" do
     test "capabilities are declared per provider, in code" do
-      assert Catalog.capabilities("fireworks-ai") == ~w(llm embedding rerank)
-      # Alibaba (DashScope): rerank en compatible-api, image en compatible-mode
-      # y stt/tts/video nativos traducidos por el adaptador dashscope —
-      # ambos, intl y cn.
-      assert Catalog.capabilities("alibaba") == ~w(llm embedding rerank image stt tts video)
-      assert Catalog.capabilities("alibaba-cn") == ~w(llm embedding rerank image stt tts video)
+      # Fireworks: decisions en shape OpenAI nativo (rune sólo sirve esa API).
+      assert Catalog.capabilities("fireworks-ai") == ~w(llm embedding decision)
+
+      # Alibaba (DashScope): image en compatible-mode y stt/tts nativos
+      # traducidos por el adaptador dashscope — ambos, intl y cn.
+      assert Catalog.capabilities("alibaba") == ~w(llm embedding image stt tts)
+      assert Catalog.capabilities("alibaba-cn") == ~w(llm embedding image stt tts)
       assert Catalog.capabilities("anthropic") == []
       assert Catalog.capabilities(nil) == []
     end
 
-    test "rerank paths resolve per provider: Fireworks default, Alibaba absolute" do
-      # Fireworks sirve rerank en el default genérico: ningún override.
-      assert Catalog.path_suffix("fireworks-ai", service: :rerank, default: "/rerank") ==
-               "/rerank"
+    test "decisions: el shape del wire se declara por proveedor" do
+      # Los OpenAI-shape pasan verbatim (openai, fireworks y cualquier custom
+      # como un host oMLX); los System One van por el traductor.
+      assert Catalog.decisions_shape("openai") == :openai
+      assert Catalog.decisions_shape("fireworks-ai") == :openai
+      assert Catalog.decisions_shape("proveedor-custom") == :openai
+      assert Catalog.decisions_shape(nil) == :openai
 
-      # DashScope lo sirve en compatible-api (otro segmento del host), y la
-      # respuesta ya viene en shape OpenAI, así que solo el path cambia.
-      assert Catalog.path_suffix("alibaba", service: :rerank, default: "/rerank") ==
-               "https://dashscope-intl.aliyuncs.com/compatible-api/v1/reranks"
+      assert Catalog.decisions_shape("typesafe") == :systemone
+      assert Catalog.decisions_shape("openrouter") == :systemone
+    end
 
-      assert Catalog.path_suffix("alibaba-cn", service: :rerank, default: "/rerank") ==
-               "https://dashscope.aliyuncs.com/compatible-api/v1/reranks"
-
+    test "image paths resolve per provider" do
       # Image calza con el default genérico (compatible-mode lo expone
       # OpenAI-compatible desde qwen-image).
       assert Catalog.path_suffix("alibaba", service: :image, default: "/images/generations") ==
@@ -104,13 +105,22 @@ defmodule Tokengate.Providers.CatalogTest do
 
     test "the vocabulary covers the modalities the catalog publishes" do
       assert Catalog.capabilities() ==
-               ~w(llm embedding decision rerank stt tts image video music)
+               ~w(llm embedding decision stt tts image)
     end
 
     test "dialect resolves from npm, and a code customization wins over it" do
-      # npm says Anthropic SDK; the gateway speaks the OpenAI-compatible
-      # surface of that same base URL, so the customization pins it.
-      assert Catalog.dialect("kimi-for-coding") == {:ok, "openai"}
+      # Las filas nuevas del coding plan llegan del espejo con su npm: el
+      # materializador pasa la fila completa, no la key suelta.
+      assert Catalog.dialect(%{key: "kimi-code-plan-cn", npm: "@ai-sdk/openai-compatible"}) ==
+               {:ok, "openai"}
+
+      assert Catalog.dialect(%{key: "kimi-code-plan-global", npm: "@ai-sdk/openai-compatible"}) ==
+               {:ok, "openai"}
+
+      # Con la key suelta (npm nil) la resolución cae a la customización: si
+      # ésta no fija :dialect, no hay de dónde sacarlo.
+      assert Catalog.dialect("kimi-code-plan-cn") ==
+               {:error, "dialecto no soportado (sin paquete npm)"}
 
       assert Catalog.dialect(%{key: "x", npm: "@ai-sdk/openai-compatible"}) == {:ok, "openai"}
 
@@ -197,9 +207,9 @@ defmodule Tokengate.Providers.CatalogTest do
              ) == "/systemone"
 
       # Un servicio sin override conserva el default: TypeSafe no declara
-      # video (ni `paths` para él).
-      assert Catalog.path_suffix("typesafe", service: :video, default: "/videos") ==
-               "/videos"
+      # image (ni `paths` para él).
+      assert Catalog.path_suffix("typesafe", service: :image, default: "/images/generations") ==
+               "/images/generations"
     end
 
     test "code_providers/0 carries the fields the mirror stores" do
@@ -589,7 +599,8 @@ defmodule Tokengate.Providers.CatalogTest do
       assert Catalog.reasoning_dialect("fireworks-ai") == :scalar
       assert Catalog.reasoning_dialect("openrouter") == :openrouter_nested
       assert Catalog.reasoning_dialect("moonshotai") == :toggle_xor_effort
-      assert Catalog.reasoning_dialect("kimi-for-coding") == :toggle_xor_effort
+      assert Catalog.reasoning_dialect("kimi-code-plan-cn") == :toggle_xor_effort
+      assert Catalog.reasoning_dialect("kimi-code-plan-global") == :toggle_xor_effort
       assert Catalog.reasoning_dialect("zai") == :toggle_and_effort
       assert Catalog.reasoning_dialect("zai-coding-plan") == :toggle_and_effort
       assert Catalog.reasoning_dialect("deepseek") == :deepseek_native

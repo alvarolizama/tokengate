@@ -227,8 +227,10 @@ defmodule TokengateWeb.ModelsLiveTest do
   # ofrecerlo es un callejón sin salida.
 
   # Un modelo de decisión (Jev / System One) tiene SU PROPIO tipo en el paso 0,
-  # y sólo el proveedor que lo declara entra al paso 1.
-  test "decision type is offered and only TypeSafe declares it", %{conn: conn} do
+  # y sólo los proveedores que lo declaran entran al paso 1: TypeSafe (el
+  # origen), Fireworks (rune), OpenAI (gpt-6-luna), Vercel y OpenRouter
+  # (reseller de Jev). Los que no lo declaran (alibaba, cerebras…) quedan fuera.
+  test "decision type is offered and only declaring providers are listed", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     seed_mirror!()
     conn = login(conn, admin, password)
@@ -240,8 +242,12 @@ defmodule TokengateWeb.ModelsLiveTest do
 
     view |> element("#pick-type-decision") |> render_click()
 
-    assert has_element?(view, "#wizard-provider-typesafe")
-    refute has_element?(view, "#wizard-provider-openrouter")
+    for key <- ["typesafe", "fireworks-ai", "openai", "vercel", "openrouter"] do
+      assert has_element?(view, "#wizard-provider-#{key}")
+    end
+
+    refute has_element?(view, "#wizard-provider-alibaba")
+    refute has_element?(view, "#wizard-provider-cerebras")
   end
 
   # El render del logo era `img si logo_url / icono si nil`, así que una URL que
@@ -1443,6 +1449,107 @@ defmodule TokengateWeb.ModelsLiveTest do
     view |> element("#pin-model-#{model_record.id}") |> render_click()
 
     assert Tokengate.Providers.get_model!(model_record.id).pinned == false
+  end
+
+  # -- Agrupación del listado por tipo ---------------------------------------
+
+  test "every card carries its type badge and the /v1 endpoint of that type", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    u = unique()
+
+    Repo.delete_all(Tokengate.Providers.ModelProvider)
+    Repo.delete_all(Providers.Model)
+
+    llm = create_model(%{name: "#{u}-llm-model", pinned: false})
+    stt = create_model(%{name: "#{u}-stt-model", pinned: false, model_type: "stt"})
+    decision = create_model(%{name: "#{u}-decision-model", pinned: false, model_type: "decision"})
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    # El badge va en TODAS las filas — llm incluido (antes se omitía).
+    assert has_element?(view, "#model-badge-#{llm.id}", "llm")
+    assert has_element?(view, "#model-badge-#{stt.id}", "stt")
+    assert has_element?(view, "#model-badge-#{decision.id}", "decision")
+
+    # El endpoint mostrado es el que de verdad sirve el tipo en /v1:
+    # decision tiene superficie propia (/v1/decisions, shape OpenAI con
+    # traducción a System One), stt en su propio path.
+    assert has_element?(view, "#model-endpoint-#{llm.id}", "POST /v1/chat/completions")
+    assert has_element?(view, "#model-endpoint-#{stt.id}", "POST /v1/audio/transcriptions")
+    assert has_element?(view, "#model-endpoint-#{decision.id}", "POST /v1/decisions")
+
+    # El mapa no puede apuntar a un endpoint que el router no expone.
+    for {type, endpoint} <- ModelsLive.type_endpoint_pairs() do
+      path = endpoint |> String.split(" ") |> List.last()
+
+      assert String.starts_with?(path, "/v1/"),
+             "endpoint de #{type} fuera de /v1: #{endpoint}"
+    end
+
+    assert ModelsLive.type_endpoint(nil) == nil
+  end
+
+  test "groups the list by type with pinned models first", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    u = unique()
+
+    # La suite corre sobre una DB compartida (async: false): se barre para que
+    # las secciones y sus conteos sean deterministas.
+    Repo.delete_all(Tokengate.Providers.ModelProvider)
+    Repo.delete_all(Providers.Model)
+
+    # El orden canónico pone llm (rank 0) antes que embedding e image, aunque
+    # los nombres digan lo contrario: el grupo manda sobre el alfabético.
+    create_model(%{name: "#{u}-zz-llm", pinned: false})
+    create_model(%{name: "#{u}-aa-emb", pinned: false, model_type: "embedding"})
+    create_model(%{name: "#{u}-bb-img", pinned: false, model_type: "image"})
+    create_model(%{name: "#{u}-cc-pinned", pinned: true})
+    conn = login(conn, admin, password)
+
+    {:ok, view, html} = live(conn, ~p"/catalog/models")
+
+    # Sección por cada tipo con modelos (los ids son estables por tipo).
+    assert has_element?(view, "#model-section-pinned")
+    assert has_element?(view, "#model-section-llm")
+    assert has_element?(view, "#model-section-embedding")
+    assert has_element?(view, "#model-section-image")
+    # Tipos sin modelos no abren sección; los retirados ya no existen.
+    refute has_element?(view, "#model-section-stt")
+    refute has_element?(view, "#model-section-rerank")
+    refute has_element?(view, "#model-section-video")
+    refute has_element?(view, "#model-section-other")
+
+    # Orden: Fijados, luego los tipos en orden canónico.
+    assert order_before?(html, "#{u}-cc-pinned", "#{u}-zz-llm")
+    assert order_before?(html, "#{u}-zz-llm", "#{u}-aa-emb")
+    assert order_before?(html, "#{u}-aa-emb", "#{u}-bb-img")
+  end
+
+  test "pinning a model moves it to the pinned section and updates its count", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    u = unique()
+
+    Repo.delete_all(Tokengate.Providers.ModelProvider)
+    Repo.delete_all(Providers.Model)
+
+    _already = create_model(%{name: "#{u}-aa-already-pinned", pinned: true})
+    model = create_model(%{name: "#{u}-mm-fresh-llm", pinned: false})
+    _tail = create_model(%{name: "#{u}-zz-tail-llm", pinned: false})
+    conn = login(conn, admin, password)
+
+    {:ok, view, html} = live(conn, ~p"/catalog/models")
+
+    # Antes del pin: fresh vive en la sección llm general, después de Fijados.
+    assert order_before?(html, "#{u}-aa-already-pinned", "#{u}-mm-fresh-llm")
+
+    view |> element("#pin-model-#{model.id}") |> render_click()
+    html = render(view)
+
+    # Tras el pin: fresh entra a Fijados — queda antes de cualquier no
+    # pinneado (dentro de la sección manda el alfabético, aa < mm).
+    assert order_before?(html, "#{u}-mm-fresh-llm", "#{u}-zz-tail-llm")
+    assert has_element?(view, "#model-section-pinned", "2")
   end
 
   # -- Collapsed providers section ------------------------------------------

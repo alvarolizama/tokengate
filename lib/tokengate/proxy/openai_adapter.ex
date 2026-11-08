@@ -94,8 +94,8 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
 
   @doc """
   Posts a passthrough request to one of the provider's non-chat services:
-  `:rerank`, `:stt` (`/audio/transcriptions`), `:tts` (`/audio/speech`),
-  `:image`, `:video` or `:music`.
+  `:stt` (`/audio/transcriptions`), `:tts` (`/audio/speech`) or
+  `:image` (`/images/generations`).
 
   Same rule as embeddings: the payload is forwarded exactly as received and
   the upstream response is returned untouched. The only thing this adapter
@@ -142,8 +142,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
 
   @doc """
   Authenticated JSON GET against an absolute URL or a `{base_url}`-relative
-  path — the polling half of an async upstream (OpenRouter video jobs live at
-  `GET /videos/{id}`). Returns `{:ok, decoded_map}` or `{:error, reason}`.
+  path. Returns `{:ok, decoded_map}` or `{:error, reason}`.
   """
   def get_json(provider, credential, url_or_path, opts \\ []) do
     url = build_url(provider, url_or_path)
@@ -318,7 +317,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
   end
 
   # 2xx response of a service: JSON decodes to a map as always; anything else
-  # (audio bytes, an image/video asset) is kept byte-for-byte together with
+  # (audio bytes, an image asset) is kept byte-for-byte together with
   # the upstream's content-type so the controller can hand it to the client.
   # An empty body keeps the historical `%{}`.
   defp decode_service_body("", _resp_headers), do: %{}

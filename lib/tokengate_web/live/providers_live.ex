@@ -32,6 +32,11 @@ defmodule TokengateWeb.ProvidersLive do
 
   alias Tokengate.Repo
 
+  # Providers pinned to the TOP of the add-provider picker, in this order.
+  # Pure UI curation — routing, pricing and capabilities don't read this.
+  # Everything else stays alphabetical by name.
+  @recommended_provider_keys ~w(openrouter runinfra fireworks-ai)
+
   @impl true
   def mount(_params, _session, socket) do
     user = socket.assigns[:current_user]
@@ -180,14 +185,27 @@ defmodule TokengateWeb.ProvidersLive do
           logo_url: row.logo_url,
           status: row.status,
           reason: translate_reason(Catalog.unsupported_reason(row)),
-          activated?: MapSet.member?(activated_keys, row.key)
+          activated?: MapSet.member?(activated_keys, row.key),
+          recommended?: row.key in @recommended_provider_keys
         }
+      end)
+      |> Enum.sort_by(fn entry ->
+        {recommended_rank(entry.key), entry.name || entry.key}
       end)
 
     socket
     |> assign(:catalog_entries, entries)
     |> assign(:catalog_total, length(entries))
     |> assign(:catalog_results, entries)
+  end
+
+  # Sort rank: recommended keys keep their pinned order (0, 1, 2…); everything
+  # else ranks after them and falls back to the name ordering.
+  defp recommended_rank(key) do
+    case Enum.find_index(@recommended_provider_keys, &(&1 == key)) do
+      nil -> length(@recommended_provider_keys)
+      index -> index
+    end
   end
 
   # Live in-flight counts per credential (open upstream connections), recomputed
@@ -1013,6 +1031,16 @@ defmodule TokengateWeb.ProvidersLive do
                       </span>
 
                       <span class="flex gap-1 shrink-0 items-center">
+                        <%!-- Mismo lenguaje de marcador que "activo": texto chico +
+                             icono, no un badge — la fila del picker no lleva
+                             badges (las capabilities no son chrome del picker). --%>
+                        <span
+                          :if={entry.recommended?}
+                          class="text-[10px] text-primary inline-flex items-center gap-0.5"
+                        >
+                          <.icon name="hero-star" class="w-3 h-3" /> {gettext("recommended")}
+                        </span>
+
                         <span
                           :if={entry.activated?}
                           class="text-[10px] text-success inline-flex items-center gap-0.5"

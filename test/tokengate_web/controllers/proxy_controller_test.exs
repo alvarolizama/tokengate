@@ -114,6 +114,49 @@ defmodule TokengateWeb.ProxyControllerTest do
           |> put_resp_content_type("audio/mpeg")
           |> send_resp(200, <<0xFF, 0xFB, 0x90, 0x00>>)
 
+        # Decisiones: el mock responde en el shape que RECIBIÓ — System One
+        # (state + questions map) para los proveedores traducidos, OpenAI
+        # Decisions (input + questions list) para los verbatim.
+        is_map_key(payload, "state") and is_map(payload["questions"]) ->
+          json(conn, 200, %{
+            "model" => payload["model"],
+            "answers" => %{
+              "angry" => %{"type" => "noul", "noul" => 0.6328},
+              "route" => %{
+                "type" => "choice",
+                "choice" => "billing",
+                "probabilities" => %{"billing" => 0.9, "technical" => 0.1},
+                "confidence" => 0.8
+              },
+              "urgency" => %{
+                "type" => "score",
+                "score" => 1.2,
+                "legend" => %{"0" => "low", "1" => "high"},
+                "probabilities" => %{"0" => 0.8, "1" => 0.2},
+                "confidence" => 0.6
+              }
+            },
+            "usage" => %{"input_tokens" => 239, "output_tokens" => 0}
+          })
+
+        is_map_key(payload, "input") and is_list(payload["questions"]) ->
+          json(conn, 200, %{
+            "answers" => [
+              %{"type" => "predicate", "name" => "angry", "probability" => 0.99},
+              %{
+                "type" => "choice",
+                "name" => "route",
+                "choice" => "billing",
+                "probabilities" => [%{"value" => "billing", "probability" => 0.9}],
+                "confidence" => 0.8
+              }
+            ],
+            "usage" => %{
+              "input_tokens" => 120,
+              "input_tokens_details" => %{"cached_tokens" => 0, "cache_write_tokens" => 0}
+            }
+          })
+
         "embeddings" in conn.path_info ->
           payload = Jason.decode!(body)
           count = payload["input"] |> List.wrap() |> length()
@@ -130,16 +173,9 @@ defmodule TokengateWeb.ProxyControllerTest do
             "usage" => %{"prompt_tokens" => 11, "total_tokens" => 11, "cost" => 0.000011}
           })
 
-        # The six non-chat services, each answered with a shape of its own.
-        # `images` and `music` share the `/generations` segment, so every one
-        # of them is matched by its own marker — an operator override that
+        # The three non-chat services, each answered with a shape of its own.
+        # Each one is matched by its own marker — an operator override that
         # keeps the segment (as in the override test) still lands here.
-        "rerank" in conn.path_info ->
-          json(conn, 200, %{
-            "results" => [%{"index" => 0, "relevance_score" => 0.91}],
-            "usage" => %{"prompt_tokens" => 12, "total_tokens" => 12}
-          })
-
         "transcriptions" in conn.path_info ->
           json(conn, 200, %{"text" => "hola mundo"})
 
@@ -152,12 +188,6 @@ defmodule TokengateWeb.ProxyControllerTest do
             "data" => [%{"b64_json" => "aW1n"}],
             "usage" => %{"input_tokens" => 100, "output_tokens" => 200, "total_tokens" => 300}
           })
-
-        "videos" in conn.path_info ->
-          json(conn, 200, %{"id" => "video-job-1", "status" => "queued"})
-
-        "music" in conn.path_info ->
-          json(conn, 200, %{"id" => "music-1", "status" => "succeeded"})
 
         # Un upstream que IGNORA `stream_options.include_usage`: manda su
         # contenido y cierra, sin ningún frame de usage. El costo tiene que
@@ -2527,22 +2557,12 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert entry["model_type"] == "embedding"
   end
 
-  ## Las seis capacidades ruteadas por path #####################################
+  ## Las tres capacidades ruteadas por path #####################################
   #
   # One test per route: the gateway's public segment must land upstream as
   # base_url + the path `ProviderPaths` resolves for that service, the body
   # travels untouched, and the log row is labelled with the service key the
   # Capacidades modal uses (not with the route's name).
-
-  test "POST /v1/rerank lands on base_url + /rerank", %{conn: conn} do
-    conn =
-      assert_service_route(conn, "/v1/rerank", "/rerank", "rerank", %{
-        "query" => "hola",
-        "documents" => ["uno", "dos"]
-      })
-
-    assert [%{"relevance_score" => 0.91}] = json_body(conn)["results"]
-  end
 
   test "POST /v1/audio/transcriptions lands on base_url + /audio/transcriptions", %{conn: conn} do
     conn =
@@ -2558,21 +2578,6 @@ defmodule TokengateWeb.ProxyControllerTest do
       assert_service_route(conn, "/v1/audio/speech", "/audio/speech", "tts", %{"input" => "hola"})
 
     assert json_body(conn)["audio"] == "SUQzBAAAAAA"
-  end
-
-  test "POST /v1/videos lands on base_url + /videos", %{conn: conn} do
-    conn = assert_service_route(conn, "/v1/videos", "/videos", "video", %{"prompt" => "un gato"})
-
-    assert json_body(conn)["id"] == "video-job-1"
-  end
-
-  test "POST /v1/music/generations lands on base_url + /music/generations", %{conn: conn} do
-    conn =
-      assert_service_route(conn, "/v1/music/generations", "/music/generations", "music", %{
-        "prompt" => "cumbia"
-      })
-
-    assert json_body(conn)["id"] == "music-1"
   end
 
   test "POST /v1/images/generations lands on base_url + /images/generations", %{conn: conn} do
@@ -2591,15 +2596,136 @@ defmodule TokengateWeb.ProxyControllerTest do
   # upstream path: it wins over the generic default of the service.
   test "an operator override on the provider row beats the generic default", %{conn: conn} do
     %{token: token, model: model} =
-      proxy_fixture(%{model_type: "video", path_overrides: %{"video" => "/custom/videos"}})
+      proxy_fixture(%{model_type: "image", path_overrides: %{"image" => "/custom/images"}})
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/videos", %{"model" => model.name, "prompt" => "un perro"})
+      |> post(~p"/v1/images/generations", %{"model" => model.name, "prompt" => "un perro"})
 
     assert json_response(conn, 200)
-    assert_receive {:provider_request_path, "/custom/videos"}
+    assert_receive {:provider_request_path, "/custom/images"}
+  end
+
+  ## Decisiones ###############################################################
+  #
+  # La superficie pública es `POST /v1/decisions` (shape OpenAI). Un proveedor
+  # que habla ese shape lo recibe verbatim; uno que habla System One (la key
+  # del catálogo lo declara) recibe el request traducido y su respuesta
+  # traducida de vuelta — un solo traductor para todos los resellers de Jev.
+
+  defp decisions_body(model) do
+    %{
+      "model" => model,
+      "input" => "Customer message: I was charged twice for my order.",
+      "questions" => [
+        %{"type" => "predicate", "name" => "angry", "instructions" => "Is the customer angry?"},
+        %{
+          "type" => "choice",
+          "name" => "route",
+          "instructions" => "Which team?",
+          "choices" => [%{"value" => "billing"}, %{"value" => "technical"}]
+        },
+        %{
+          "type" => "score",
+          "name" => "urgency",
+          "instructions" => "How urgent?",
+          "levels" => [%{"label" => "low"}, %{"label" => "high"}]
+        }
+      ]
+    }
+  end
+
+  test "POST /v1/decisions pasa verbatim a un proveedor OpenAI-shape", %{conn: conn} do
+    %{token: token, model: model, model_provider: model_provider} =
+      proxy_fixture(%{model_type: "decision"})
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/decisions", decisions_body(model.name))
+
+    assert %{
+             "answers" => [%{"type" => "predicate", "name" => "angry", "probability" => 0.99} | _]
+           } =
+             json_response(conn, 200)
+
+    assert_receive {:provider_request_path, "/decisions"}
+
+    assert_receive {:provider_request, upstream}
+    assert upstream["model"] == model_provider.provider_model
+    assert upstream["input"] =~ "charged twice"
+    assert is_list(upstream["questions"])
+  end
+
+  test "POST /v1/decisions traduce a System One para un proveedor systemone-shape", %{conn: conn} do
+    %{token: token, model: model, provider: provider} = proxy_fixture(%{model_type: "decision"})
+
+    provider
+    |> Ecto.Changeset.change(key: "typesafe")
+    |> Repo.update!()
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/decisions", decisions_body(model.name))
+
+    assert %{"answers" => answers} = json_response(conn, 200)
+
+    # La respuesta System One del mock volvió al shape OpenAI: noul →
+    # predicate, y las probabilidades del score restauradas con sus labels.
+    assert %{"type" => "predicate", "name" => "angry", "probability" => 0.6328} =
+             Enum.find(answers, &(&1["name"] == "angry"))
+
+    score = Enum.find(answers, &(&1["name"] == "urgency"))
+    assert score["score"] == 1.2
+    assert %{"value" => "low", "probability" => 0.8} in score["probabilities"]
+    assert %{"value" => "high", "probability" => 0.2} in score["probabilities"]
+
+    assert_receive {:provider_request_path, "/systemone"}
+
+    assert_receive {:provider_request, upstream}
+    assert upstream["state"] =~ "charged twice"
+    assert upstream["questions"]["angry"]["type"] == "noul"
+    assert upstream["questions"]["route"]["criteria"] == %{"billing" => nil, "technical" => nil}
+    assert upstream["questions"]["urgency"]["criteria"] == ["low", "high"]
+  end
+
+  test "POST /v1/decisions 400 model_type_mismatch contra un llm", %{conn: conn} do
+    %{token: token, model: model} = proxy_fixture()
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/decisions", decisions_body(model.name))
+
+    assert %{"error" => %{"code" => "model_type_mismatch"}} = json_response(conn, 400)
+  end
+
+  test "POST /v1/decisions 400 con el mensaje real ante un body malformado, sin tocar upstream",
+       %{
+         conn: conn
+       } do
+    %{token: token, model: model} = proxy_fixture(%{model_type: "decision"})
+
+    malformed =
+      decisions_body(model.name)
+      |> Map.put("questions", [
+        %{"type" => "choice", "name" => "route", "choices" => ["billing"]}
+      ])
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/decisions", malformed)
+
+    # El 400 del validador es del CALLER: mensaje útil, y ninguna credencial
+    # elegida, reintentada ni loggeada como fallback.
+    assert %{"error" => %{"code" => "invalid_request", "message" => message}} =
+             json_response(conn, 400)
+
+    assert message =~ "choices"
+    refute_received {:provider_request_path, _}
   end
 
   # The image API reports its tokens as `input_tokens`/`output_tokens`: they
@@ -2748,16 +2874,16 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert get_resp_header(conn, "x-tokengate-cost") == ["0"]
   end
 
-  # A service whose upstream reports no usage at all (video answers with a job
-  # id): the request's own text is estimated, so manual pricing still books
-  # something — and with no manual pricing the cost is the honest $0.
-  test "video: no upstream usage falls back to the estimate over the request", %{conn: conn} do
-    %{token: token, model: model, member: member} = proxy_fixture(%{model_type: "video"})
+  # A service whose upstream reports no usage at all (stt answers with the
+  # transcript only): the request's own text is estimated, so manual pricing
+  # still books something — and with no manual pricing the cost is the honest $0.
+  test "stt: no upstream usage falls back to the estimate over the request", %{conn: conn} do
+    %{token: token, model: model, member: member} = proxy_fixture(%{model_type: "stt"})
 
     conn =
       conn
       |> authed_conn(token)
-      |> post(~p"/v1/videos", %{"model" => model.name, "prompt" => "un gato que baila"})
+      |> post(~p"/v1/audio/transcriptions", %{"model" => model.name, "input" => "un audio largo"})
 
     assert json_response(conn, 200)
     assert get_resp_header(conn, "x-tokengate-cost") == ["0"]
@@ -2765,7 +2891,7 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert %{success: 1} = Oban.drain_queue(queue: :logs)
 
     log = Repo.one(from l in RequestLog, where: l.group_member_id == ^member.id)
-    assert log.request_type == "video"
+    assert log.request_type == "stt"
     assert log.prompt_tokens > 0
     assert log.completion_tokens == 0
   end

@@ -448,6 +448,36 @@ defmodule TokengateWeb.ProvidersLiveTest do
            )
   end
 
+  test "catálogo: los recomendados encabezan el listado", %{conn: conn} do
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/catalog/providers")
+
+    view |> element("#add-provider-btn") |> render_click()
+
+    # El orden de las filas es el orden de documento: los ids aparecen en el
+    # HTML renderizado en ese orden.
+    keys =
+      Regex.scan(~r/id="catalog-row-([a-z0-9-]+)"/, render(view))
+      |> Enum.map(&List.last/1)
+
+    # OpenRouter, RunInfra y Fireworks encabezan en el orden fijado; después
+    # sigue el espejo alfabético (302.AI es el primero por nombre).
+    assert Enum.take(keys, 3) == ["openrouter", "runinfra", "fireworks-ai"]
+    assert Enum.at(keys, 3) == "302ai"
+
+    # Marcador de recomendado en los tres, y en ningún otro.
+    for key <- ["openrouter", "runinfra", "fireworks-ai"] do
+      assert has_element?(view, "#catalog-row-#{key}", "recomendado")
+    end
+
+    refute has_element?(view, "#catalog-row-302ai", "recomendado")
+
+    # La búsqueda conserva el marcador en las filas que siguen visibles.
+    render_change(view, "search_catalog", %{"query" => "fireworks"})
+    assert has_element?(view, "#catalog-row-fireworks-ai", "recomendado")
+  end
+
   test "catálogo: el buscador no lista lo que el gateway no puede servir", %{conn: conn} do
     %{user: admin, password: password} = register_admin()
     conn = login(conn, admin, password)
@@ -642,14 +672,14 @@ defmodule TokengateWeb.ProvidersLiveTest do
 
     html =
       view
-      |> form("#paths-form", paths: %{chat: "/v1/chat", video: "/v1/videos"})
+      |> form("#paths-form", paths: %{chat: "/v1/chat", image: "/v1/images"})
       |> render_submit()
 
     assert html =~ "Paths actualizados (2 overrides)."
     refute has_element?(view, "#paths-modal")
 
     reloaded = Providers.get_provider!(provider.id)
-    assert reloaded.path_overrides == %{"chat" => "/v1/chat", "video" => "/v1/videos"}
+    assert reloaded.path_overrides == %{"chat" => "/v1/chat", "image" => "/v1/images"}
 
     # The card badge counts them, and reopening shows what was stored.
     assert has_element?(view, "#paths-#{provider.id}", "2")

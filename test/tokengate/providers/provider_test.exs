@@ -74,7 +74,7 @@ defmodule Tokengate.Providers.ProviderTest do
         Provider.changeset(%Provider{}, %{
           name: "multimodal-relay",
           base_url: "https://api.example.com/v1",
-          capabilities: ["llm", "stt", "tts", "image", "video", "rerank", "embedding"]
+          capabilities: ["llm", "stt", "tts", "image", "embedding"]
         })
 
       assert changeset.valid?
@@ -85,13 +85,13 @@ defmodule Tokengate.Providers.ProviderTest do
         Provider.changeset(%Provider{}, %{
           name: "mi-relay",
           base_url: "https://relay.example.com/v1",
-          path_overrides: %{"chat" => "/v1/chat", "stt" => "", "music" => "/music/generations/"}
+          path_overrides: %{"chat" => "/v1/chat", "stt" => "", "image" => "/images/generations/"}
         })
 
       assert changeset.valid?
 
       assert Ecto.Changeset.get_change(changeset, :path_overrides) ==
-               %{"chat" => "/v1/chat", "music" => "/music/generations"}
+               %{"chat" => "/v1/chat", "image" => "/images/generations"}
     end
 
     test "rejects an unknown capability and an unrooted path" do

@@ -9,7 +9,7 @@ defmodule Tokengate.Providers.PricingTest do
   alias Tokengate.Providers.Pricing
   alias Tokengate.Providers.ModelProvider
 
-  @all_types ~w(llm embedding decision rerank stt tts image video music)
+  @all_types ~w(llm embedding decision stt tts image)
 
   describe "vocabulario" do
     test "las unidades son las ocho del CHECK de la migración" do
@@ -47,14 +47,12 @@ defmodule Tokengate.Providers.PricingTest do
   describe "default_unit_for_type/1" do
     test "cada tipo de media arranca en su unidad real, no en tokens" do
       assert Pricing.default_unit_for_type("image") == "per_image"
-      assert Pricing.default_unit_for_type("video") == "per_second"
-      assert Pricing.default_unit_for_type("music") == "per_second"
       assert Pricing.default_unit_for_type("tts") == "per_1k_characters"
       assert Pricing.default_unit_for_type("stt") == "per_minute"
     end
 
     test "los tipos que sí se facturan por tokens se quedan en tokens" do
-      for type <- ~w(llm embedding decision rerank) do
+      for type <- ~w(llm embedding decision) do
         assert Pricing.default_unit_for_type(type) == "per_1m_tokens"
       end
     end
@@ -68,14 +66,12 @@ defmodule Tokengate.Providers.PricingTest do
   describe "units_for_type/1" do
     test "las unidades de cada tipo" do
       assert Pricing.units_for_type("image") == ~w(per_image per_megapixel per_request)
-      assert Pricing.units_for_type("video") == ~w(per_second per_request)
-      assert Pricing.units_for_type("music") == ~w(per_second per_request)
       assert Pricing.units_for_type("tts") == ~w(per_1k_characters per_request)
       assert Pricing.units_for_type("stt") == ~w(per_minute per_second per_request)
     end
 
     test "los tipos de token ofrecen las dos variantes de token" do
-      for type <- ~w(llm embedding decision rerank) do
+      for type <- ~w(llm embedding decision) do
         assert Pricing.units_for_type(type) == ~w(per_1m_tokens per_1k_tokens per_request)
       end
     end

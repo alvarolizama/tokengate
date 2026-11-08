@@ -66,8 +66,8 @@ defmodule Tokengate.Providers.Provider do
     field :receive_timeout_ms, :integer
 
     # Per-service path suffixes, keyed by the closed vocabulary in
-    # `ProviderPaths.keys/0` (chat, models, embeddings, rerank, stt, tts,
-    # image, video, music). An absent key inherits — the catalog code
+    # `ProviderPaths.keys/0` (chat, models, embeddings, stt, tts,
+    # image). An absent key inherits — the catalog code
     # override first, then the generic adapter default. Not identity: a
     # builtin keeps its catalog name/base_url/dialect while the operator
     # tunes where each service lives.
