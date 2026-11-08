@@ -156,7 +156,7 @@ defmodule TokengateWeb.Layouts do
           <%!-- Barra del contenido: SIEMPRE visible y con el ÚNICO toggle de la
                navegación, en el mismo sitio en todos los anchos. En móvil abre
                la gaveta; en desktop colapsa la sidebar a rail. --%>
-          <header class="flex h-14 shrink-0 items-center gap-2 border-b border-base-300 bg-base-100/80 px-3 backdrop-blur">
+          <header class="sticky top-0 z-30 lg:static flex h-14 shrink-0 items-center gap-2 border-b border-base-300 bg-base-100/80 px-3 backdrop-blur">
             <label
               for="app-drawer"
               class="btn btn-ghost btn-sm btn-square lg:hidden"
@@ -238,7 +238,7 @@ defmodule TokengateWeb.Layouts do
     <div class="drawer-side z-40">
       <label for="app-drawer" class="drawer-overlay" aria-label={gettext("Close menu")} />
 
-      <aside class="shell-sidebar flex h-full w-60 shrink-0 flex-col border-r border-base-300 bg-base-200/50">
+      <aside class="shell-sidebar flex h-full w-60 shrink-0 flex-col border-r border-base-300 bg-base-200 lg:bg-base-200/50">
         <div class="border-b border-base-300 p-3">
           <div class="shell-sidebar-header flex items-center gap-2">
             <a
@@ -413,7 +413,7 @@ defmodule TokengateWeb.Layouts do
           <% end %>
         </nav>
 
-        <div class="border-t border-base-300 p-3">
+        <div class="max-lg:pb-[calc(0.75rem+env(safe-area-inset-bottom))] border-t border-base-300 p-3">
           <.user_footer current_scope={@current_scope} />
         </div>
       </aside>

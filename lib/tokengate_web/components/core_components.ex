@@ -597,7 +597,7 @@ defmodule TokengateWeb.CoreComponents do
       title={@label}
       aria-current={@active && "page"}
       class={[
-        "nav-link btn btn-sm w-full justify-between gap-2 font-normal transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
+        "nav-link btn lg:btn-sm w-full justify-between gap-2 font-normal transition-colors duration-150 focus-visible:ring-2 focus-visible:ring-primary focus-visible:outline-none",
         @active && "bg-primary/15 text-primary font-medium hover:bg-primary/20",
         !@active && "btn-ghost text-base-content/80 hover:text-base-content"
       ]}

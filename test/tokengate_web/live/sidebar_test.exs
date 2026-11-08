@@ -210,4 +210,15 @@ defmodule TokengateWeb.SidebarTest do
     assert has_element?(view, "main.overflow-y-auto")
     assert has_element?(view, ".shell-sidebar.h-full")
   end
+
+  # El panel móvil flota fixed sobre el contenido: un fondo translúcido ahí
+  # deja leer el texto de atrás (regresión de 5f2802d). Opaco bajo `lg` —
+  # el MISMO breakpoint donde el drawer deja de flotar — y el tinte `…/50`
+  # sobrevive solo en desktop, donde el aside es sticky sobre base-100.
+  test "el sidebar móvil no depende de un fondo translúcido", %{conn: conn} do
+    {:ok, view, _html} = live(admin_conn(conn), ~p"/catalog/providers")
+
+    assert has_element?(view, ~s(.shell-sidebar[class~="bg-base-200"]))
+    refute has_element?(view, ~s(.shell-sidebar[class~="bg-base-200/50"]))
+  end
 end
