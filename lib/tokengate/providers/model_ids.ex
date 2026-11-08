@@ -8,8 +8,9 @@ defmodule Tokengate.Providers.ModelIds do
   API key), pero tres hechos sobre el ID siguen usándose y no dependen de
   ninguna tabla:
 
-    * `short_name/1` — el nombre por defecto de un modelo y el id que viaja al
-      upstream para un proveedor de ids PELADOS (`zai/glm-5.3` → `glm-5.3`).
+    * `short_name/1` — el nombre por defecto con el que se prellena el alta de
+      un modelo (`zai/glm-5.3` → `glm-5.3`). El id que viaja al upstream es el
+      guardado en la lane, sin transformación.
     * `lab_key/1` — el lab al que pertenece un id (`lab/modelo`), que es el
       vínculo blando con `labs` y de donde sale la marca del modelo.
     * `model_type_hint/1` — el tipo que el id sugiere cuando ningún patrón de

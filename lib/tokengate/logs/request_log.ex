@@ -111,8 +111,8 @@ defmodule Tokengate.Logs.RequestLog do
   @required ~w(model_requested inserted_at subject_type)a
 
   # `request_logs.error_message` es `varchar(255)` pero el adapter recorta el
-  # mensaje del vendor a 500: cuando el vendor devuelve un texto largo (Surplus
-  # envuelve SU envelope de error en `message`, ~380 chars), el INSERT fallaba
+  # mensaje del vendor a 500: cuando el vendor devuelve un texto largo (un
+  # envelope de error propio puede rebasar los 380 chars), el INSERT fallaba
   # entero con Postgrex 22001 (`string_data_right_truncation`) y la fila se
   # perdía entre reintentos de Oban — el rechazo desaparecía del dashboard y de
   # la página de Logs. Se recorta en el borde de datos (no en la respuesta al

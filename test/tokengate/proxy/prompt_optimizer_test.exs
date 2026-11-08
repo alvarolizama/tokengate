@@ -514,9 +514,9 @@ defmodule Tokengate.Proxy.PromptOptimizerTest do
       assert PromptOptimizer.strip_reasoning(messages) == messages
     end
 
-    # Regression: a thinking-mode upstream (Surplus Intelligence serving
-    # `deepseek-v4.1-flash`) demands the tool-call turn's reasoning back and
-    # rejects the whole request with 400 when it is gone:
+    # Regression: a thinking-mode upstream serving `deepseek-v4.1-flash`
+    # demands the tool-call turn's reasoning back and rejects the whole request
+    # with 400 when it is gone:
     #   "The `reasoning_content` in the thinking mode must be passed back to
     #    the API."
     # Verified against the live upstream: the same body is 200 with the

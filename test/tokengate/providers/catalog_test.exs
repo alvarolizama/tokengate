@@ -171,74 +171,54 @@ defmodule Tokengate.Providers.CatalogTest do
     end
 
     test "a code-owned provider models.dev never publishes is usable from code alone" do
-      # Surplus es el caso MÁS extremo que Cerebras: models.dev no publica su
-      # fila en absoluto, así que no hay nada remoto que completar — ni base
-      # URL, ni npm del que derivar el dialecto. Toda su identidad está en
-      # código, y el gate de supported?/1 tiene que aceptarla.
-      row = %{key: "surplus-intelligence", base_url: nil, npm: nil}
+      # TypeSafe es el caso MÁS extremo que Cerebras: models.dev no publica su
+      # fila en absoluto, así que no hay nada remoto que completar. Toda su
+      # identidad está en código: la fila del espejo en `@code_providers` y el
+      # comportamiento de serving en la customización.
+      ts = find_code_provider(Catalog.code_providers(), "typesafe")
 
-      assert Catalog.base_url(row) == "https://api.surplusintelligence.ai/v1"
-      assert Catalog.dialect(row) == {:ok, "openai"}
-      assert Catalog.unsupported_reason(row) == nil
-      assert Catalog.supported?(row)
-      assert Catalog.capabilities("surplus-intelligence") == ["llm", "embedding"]
+      assert Catalog.base_url(ts) == "https://api.typesafe.ai/v1"
+      assert Catalog.dialect(ts) == {:ok, "typesafe"}
+      assert Catalog.unsupported_reason(ts) == nil
+      assert Catalog.supported?(ts)
+      assert Catalog.capabilities("typesafe") == ["decision"]
+
+      # La customización sola (sin la fila del espejo) ya resuelve el dialecto.
+      assert Catalog.dialect(%{key: "typesafe", npm: nil}) == {:ok, "typesafe"}
     end
 
-    test "bare_model_ids?/1 marca a Surplus y sólo a Surplus" do
-      # Verificado contra la API viva (2026-09-21): el `/v1/models` de Surplus
-      # no publica ni un solo id con `/`, y un id prefijado (`zai/glm-5.3`)
-      # responde 404 `no_sellers_for_model` aunque el modelo exista. OpenRouter
-      # es el contraejemplo: su forma canónica ES `z-ai/glm-5.2`.
-      assert Catalog.bare_model_ids?("surplus-intelligence") == true
-      assert Catalog.bare_model_ids?("openrouter") == false
-      assert Catalog.bare_model_ids?("zai") == false
-      assert Catalog.bare_model_ids?(nil) == false
-    end
-
-    test "the video path of a code-owned provider overrides the generic default" do
-      # El default genérico de video es `/videos`, que en Surplus responde 404:
-      # su generación vive en `/video/generations`. Es exactamente el caso que
-      # existe para `:paths` en la customización.
-      assert Catalog.path_suffix("surplus-intelligence",
-               service: :video,
-               default: "/videos"
-             ) == "/video/generations"
-
-      # Los servicios que SÍ coinciden con el default no llevan override.
-      assert Catalog.path_suffix("surplus-intelligence",
+    test "the chat path of a code-owned provider overrides the generic default" do
+      # El default genérico de chat es `/chat/completions`, que en TypeSafe no
+      # existe: su superficie de evaluación vive en `/systemone`. Es el caso
+      # que existe para `:paths` en la customización.
+      assert Catalog.path_suffix("typesafe",
                service: :chat,
                default: "/chat/completions"
-             ) == "/chat/completions"
+             ) == "/systemone"
 
-      assert Catalog.path_suffix("surplus-intelligence",
-               service: :embeddings,
-               default: "/embeddings"
-             ) == "/embeddings"
+      # Un servicio sin override conserva el default: TypeSafe no declara
+      # video (ni `paths` para él).
+      assert Catalog.path_suffix("typesafe", service: :video, default: "/videos") ==
+               "/videos"
     end
 
     test "code_providers/0 carries the fields the mirror stores" do
       providers = Catalog.code_providers()
-      assert length(providers) == 2
-
-      assert %{key: "surplus-intelligence"} =
-               entry = find_code_provider(providers, "surplus-intelligence")
-
-      assert entry.name == "Surplus Intelligence"
-      assert entry.base_url == "https://api.surplusintelligence.ai/v1"
-      assert is_binary(entry.doc_url) and entry.doc_url != ""
-      assert is_binary(entry.logo_url) and entry.logo_url != ""
-      assert entry.status == "active"
+      assert length(providers) == 1
 
       # TypeSafe: Jev / System One. models.dev no lo publica; fila de código.
+      # `logo_url` es nil a PROPÓSITO: sin favicon usable, el render cae al
+      # icono genérico del hero.
       assert %{key: "typesafe"} = ts = find_code_provider(providers, "typesafe")
 
       assert ts.name == "TypeSafe"
       assert ts.base_url == "https://api.typesafe.ai/v1"
+      assert is_binary(ts.doc_url) and ts.doc_url != ""
+      assert ts.logo_url == nil
       assert ts.status == "active"
 
-      # Y las keys son consultables para que el refresh no las barra a stale.
-      assert "surplus-intelligence" in Catalog.code_provider_keys()
-      assert "typesafe" in Catalog.code_provider_keys()
+      # Y la key es consultable para que el refresh no la barra a stale.
+      assert Catalog.code_provider_keys() == ["typesafe"]
     end
 
     defp find_code_provider(providers, key), do: Enum.find(providers, &(&1.key == key))
@@ -628,76 +608,6 @@ defmodule Tokengate.Providers.CatalogTest do
     end
   end
 
-  describe "aggregator pin vocabulary (Surplus)" do
-    test "el menú solo ofrece ids de FAMILIA que el marketplace resuelve" do
-      opts = Catalog.aggregator_pin_options()
-      values = Enum.map(opts, &elem(&1, 1))
-
-      # Un id/name de familia es la forma estable; el label del select es el
-      # propio spelling (lo que el operador reconoce del marketplace).
-      assert Enum.all?(opts, fn {label, value} -> label == value end)
-      assert "zai" in values
-      assert "zai-coding" in values
-      assert "openrouter" in values
-      assert "fireworks" in values
-
-      # Estos ofrecían hosts/URLs y claves de models.dev: el marketplace no los
-      # resuelve, y con `provider` (allow-list) eso deja la petición SIN
-      # ofertas o en un 400 unsupported_provider.
-      refute {"fireworks-ai", "fireworks-ai"} in opts
-      refute {"api.openrouter.ai", "api.openrouter.ai"} in opts
-      refute {"https://api.openrouter.ai/api/v1", "https://api.openrouter.ai/api/v1"} in opts
-      refute {"venice.ai", "venice.ai"} in opts
-    end
-
-    test "canonical_pin/1 corrige los spellings que el marketplace no resuelve" do
-      assert Catalog.canonical_pin("api.openrouter.ai") == "openrouter"
-      assert Catalog.canonical_pin("https://api.openrouter.ai/api/v1") == "openrouter"
-      assert Catalog.canonical_pin("fireworks-ai") == "fireworks"
-      assert Catalog.canonical_pin("venice.ai") == "venice"
-      # Case/espacios del operador: se comparan normalizados y se devuelve el
-      # canónico. Un spelling que sí resuelve vuelve intacto.
-      assert Catalog.canonical_pin("  API.OpenRouter.AI ") == "openrouter"
-      assert Catalog.canonical_pin("zai") == "zai"
-      assert Catalog.canonical_pin("api.deepseek.com") == "api.deepseek.com"
-      assert Catalog.canonical_pin(nil) == nil
-      assert Catalog.canonical_pin(123) == 123
-    end
-
-    test "canonicalize_aggregator_pins/2 solo toca filas de un agregador" do
-      extra = %{"provider" => "api.openrouter.ai", "service_tier" => "priority"}
-
-      assert Catalog.canonicalize_aggregator_pins(extra, "surplus-intelligence") ==
-               %{"provider" => "openrouter", "service_tier" => "priority"}
-
-      # Un directo no tiene vocabulario de pin: `provider` ahí es del cliente.
-      assert Catalog.canonicalize_aggregator_pins(extra, "fireworks-ai") == extra
-      assert Catalog.canonicalize_aggregator_pins(extra, nil) == extra
-
-      # Sin pin, nada que corregir (y ninguna clave se inventa).
-      assert Catalog.canonicalize_aggregator_pins(%{"top_k" => 7}, "surplus-intelligence") ==
-               %{"top_k" => 7}
-
-      # El pin en `provider_url`/`provider_base_url` también se corrige.
-      assert Catalog.canonicalize_aggregator_pins(
-               %{"provider_url" => "https://api.openrouter.ai/api/v1"},
-               "surplus-intelligence"
-             ) == %{"provider_url" => "openrouter"}
-    end
-
-    test "un pin válido conserva su dialecto; uno corregido resuelve el mismo" do
-      # La tabla de resolución conserva los spellings heredados: el dialecto del
-      # proveedor pineado no cambia porque el valor que sale esté corregido.
-      assert Catalog.pinned_reasoning_dialect("surplus-intelligence", "api.openrouter.ai") ==
-               Catalog.pinned_reasoning_dialect("surplus-intelligence", "openrouter")
-
-      assert Catalog.pinned_reasoning_dialect("surplus-intelligence", "fireworks-ai") == :scalar
-
-      assert Catalog.pinned_reasoning_dialect("surplus-intelligence", "zai-coding") ==
-               :toggle_and_effort
-    end
-  end
-
   describe "logo de un proveedor code-owned" do
     # El logo es IDENTIDAD de un builtin: vive en el espejo y `materialize/0` es
     # lo que lo lleva a `providers` — incluso en una instancia VIVA, porque el
@@ -707,14 +617,14 @@ defmodule Tokengate.Providers.CatalogTest do
     # inexistente), que se veían como un HUECO en la lista en vez del icono
     # genérico.
     test "un cambio de logo en el espejo llega a providers al materializar" do
-      Repo.get(CatalogProvider, "surplus-intelligence")
-      |> Ecto.Changeset.change(logo_url: "https://example.test/surplus.svg")
+      Repo.get(CatalogProvider, "typesafe")
+      |> Ecto.Changeset.change(logo_url: "https://example.test/typesafe.svg")
       |> Repo.update!()
 
       :ok = CatalogSync.materialize()
 
-      assert Repo.get_by(Provider, key: "surplus-intelligence").logo_url ==
-               "https://example.test/surplus.svg"
+      assert Repo.get_by(Provider, key: "typesafe").logo_url ==
+               "https://example.test/typesafe.svg"
     end
 
     test "los logos code-owned son nil o una URL https" do

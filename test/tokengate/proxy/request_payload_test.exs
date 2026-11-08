@@ -5,7 +5,7 @@ defmodule Tokengate.Proxy.RequestPayloadTest do
   describe "strip_nulls/1" do
     test "drops top-level keys whose value is nil" do
       # La forma que manda un SDK: los knobs que no usa van en null explícito.
-      # Surplus Intelligence responde 400 por cualquiera de ellos.
+      # Un upstream estricto responde 400 por cualquiera de ellos.
       payload = %{
         "model" => "deepseek-v4.1-flash",
         "messages" => [%{"role" => "user", "content" => "hi"}],

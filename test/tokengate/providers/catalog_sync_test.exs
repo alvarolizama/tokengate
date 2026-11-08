@@ -24,10 +24,10 @@ defmodule Tokengate.Providers.CatalogSyncTest do
 
       assert :ok = CatalogSync.ensure_code_providers()
 
-      row = Repo.get!(CatalogProvider, "surplus-intelligence")
+      row = Repo.get!(CatalogProvider, "typesafe")
       assert row.status == "active"
-      assert row.name == "Surplus Intelligence"
-      assert row.base_url == "https://api.surplusintelligence.ai/v1"
+      assert row.name == "TypeSafe"
+      assert row.base_url == "https://api.typesafe.ai/v1"
       assert row.fetched_at != nil
     end
 
@@ -35,22 +35,22 @@ defmodule Tokengate.Providers.CatalogSyncTest do
       assert :ok = CatalogSync.ensure_code_providers()
       assert :ok = CatalogSync.materialize()
 
-      provider = Repo.get_by(Provider, key: "surplus-intelligence")
+      provider = Repo.get_by(Provider, key: "typesafe")
 
       assert provider
       assert provider.source == "builtin"
-      assert provider.dialect == "openai"
-      assert provider.base_url == "https://api.surplusintelligence.ai/v1"
+      assert provider.dialect == "typesafe"
+      assert provider.base_url == "https://api.typesafe.ai/v1"
       assert provider.status == "active"
-      assert "llm" in provider.capabilities
+      assert "decision" in provider.capabilities
     end
 
     test "it is idempotent: a second run writes nothing" do
       assert :ok = CatalogSync.ensure_code_providers()
-      first = Repo.get!(CatalogProvider, "surplus-intelligence")
+      first = Repo.get!(CatalogProvider, "typesafe")
 
       assert :ok = CatalogSync.ensure_code_providers()
-      second = Repo.get!(CatalogProvider, "surplus-intelligence")
+      second = Repo.get!(CatalogProvider, "typesafe")
 
       assert second.fingerprint == first.fingerprint
       assert second.updated_at == first.updated_at

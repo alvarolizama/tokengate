@@ -201,12 +201,12 @@ defmodule Tokengate.Providers.CatalogRefreshWorkerTest do
     end
 
     test "a code-owned provider models.dev never publishes is NOT swept stale" do
-      # El refresh solo es dueño de las filas que models.dev publica. Surplus no
-      # está en su payload —ni estará nunca—, así que un barrido ingenuo lo
+      # El refresh solo es dueño de las filas que models.dev publica. TypeSafe
+      # no está en su payload —ni estará nunca—, así que un barrido ingenuo lo
       # dejaría `stale`; y como `materialize/1` salta las filas stale, quedaría
       # congelado con un warning `already_stale` en cada corrida semanal.
       assert :ok = Tokengate.Providers.CatalogSync.ensure_code_providers()
-      assert mirror("surplus-intelligence").status == "active"
+      assert mirror("typesafe").status == "active"
 
       serve!(%{
         "/api.json" => %{
@@ -222,17 +222,17 @@ defmodule Tokengate.Providers.CatalogRefreshWorkerTest do
 
       assert :ok = perform()
 
-      row = mirror("surplus-intelligence")
+      row = mirror("typesafe")
       assert row.status == "active"
-      assert row.base_url == "https://api.surplusintelligence.ai/v1"
+      assert row.base_url == "https://api.typesafe.ai/v1"
 
       # Y sigue materializado sin reiniciar: el refresh lo vuelve a materializar
       # en la misma corrida.
-      assert provider("surplus-intelligence")
+      assert provider("typesafe")
 
       # Ningún warning lo nombra: no se reporta como algo que "desapareció".
       state = Providers.catalog_sync_state()
-      refute Enum.any?(state.warnings || [], &(&1["key"] == "surplus-intelligence"))
+      refute Enum.any?(state.warnings || [], &(&1["key"] == "typesafe"))
     end
   end
 

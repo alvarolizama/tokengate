@@ -17,7 +17,7 @@ defmodule Tokengate.Proxy.OpenAIAdapter do
       a stream rather than a buffered body;
     * `Tokengate.Proxy.RequestPayload.strip_nulls/1`, which drops top-level
       keys whose value is an explicit `null`: SDKs serialise unused knobs as
-      null and a strict upstream (Surplus Intelligence) answers 400 for them.
+      null and a strict upstream answers 400 for them.
       Nested nulls are left alone — `messages` uses them meaningfully.
 
   Embeddings follow the passthrough rule: the payload is

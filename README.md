@@ -108,9 +108,8 @@ The UI ships in **English by default** with an in-app **EN/ES** selector
   until 00:00 UTC. Users, limit profiles and services can be exempted.
 - **Cost tracking** — the provider-reported usage cost is the single cost dimension,
   recorded per request and returned to the client: in the `X-Tokengate-Cost` header
-  (LiteLLM upstreams via `x-litellm-response-cost`; Surplus Intelligence via
-  `x-si-buyer-cost-micro`, both micro-USD) and, on chat, in the response's
-  `usage.cost_usd`. A stream commits its 200 before the cost is known, so the cost
+  (LiteLLM upstreams via `x-litellm-response-cost`) and, on chat, in the
+  response's `usage.cost_usd`. A stream commits its 200 before the cost is known, so the cost
   travels in the SSE — the upstream's own usage frame, or a closing usage frame
   TokenGate emits before `data: [DONE]` when the upstream sends none. No upstream
   cost → manual per-route pricing → `$0`; no phantom estimates.

@@ -101,10 +101,6 @@ defmodule Tokengate.Providers.ModelProvider do
     # request). The stored value is extra_body — this default only shapes the
     # unchecked form, and an explicit param always wins.
     field :service_tier_priority, :boolean, virtual: true, default: true
-    # Aggregator (Surplus) provider pin; mirrors extra_body["provider"]. Only
-    # rendered for aggregator-backed model_providers — a direct provider IS
-    # the upstream, so pinning has no meaning there.
-    field :aggregator_provider_pin, :string, virtual: true, default: ""
     field :omit_body_fields_csv, :string, virtual: true
     field :omit_headers_csv, :string, virtual: true
     field :scope, :string, virtual: true, default: "global"
@@ -138,7 +134,6 @@ defmodule Tokengate.Providers.ModelProvider do
       :omit_headers,
       :extra_body_json,
       :service_tier_priority,
-      :aggregator_provider_pin,
       :omit_body_fields_csv,
       :omit_headers_csv,
       :input_cost_per_million,
@@ -214,35 +209,6 @@ defmodule Tokengate.Providers.ModelProvider do
     |> sync_omit_list(:omit_body_fields_csv, :omit_body_fields, false)
     |> sync_omit_list(:omit_headers_csv, :omit_headers, true)
     |> sync_service_tier_priority()
-    |> sync_aggregator_provider_pin()
-  end
-
-  # An aggregator (Surplus) routes each request to one of ITS providers; the
-  # operator pins which one per model_provider row via a select that mirrors
-  # `extra_body["provider"]`. Empty = no pin (the marketplace's own routing
-  # applies). Like service_tier_priority, the pass only touches the key when
-  # the param is present.
-  defp sync_aggregator_provider_pin(changeset) do
-    case param_submitted?(changeset, :aggregator_provider_pin) do
-      :not_submitted ->
-        changeset
-
-      pin when is_binary(pin) and pin != "" ->
-        put_change(changeset, :extra_body, pin_merge(changeset, pin))
-
-      _no_pin ->
-        put_change(changeset, :extra_body, pin_drop(changeset))
-    end
-  end
-
-  defp pin_merge(changeset, pin) do
-    (get_field(changeset, :extra_body) || %{})
-    |> Map.put("provider", pin)
-  end
-
-  defp pin_drop(changeset) do
-    (get_field(changeset, :extra_body) || %{})
-    |> Map.delete("provider")
   end
 
   # `service_tier: "priority"` is Fireworks' serving-path opt-in (higher

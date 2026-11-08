@@ -8,8 +8,8 @@ defmodule Tokengate.Proxy.RequestPayload do
   como llegó. Pero los SDK y los agentes de CLI suelen serializar como `null`
   explícito los knobs que no usan (`"max_tokens": null`, `"temperature":
   null`, `"stream": null`, `"tools": null`, …). Omitir el campo es válido en
-  cualquier upstream OpenAI-compatible; mandarlo en `null` no lo es: Surplus
-  Intelligence lo rechaza con un 400 que nombra los knobs ofensores
+  cualquier upstream OpenAI-compatible; mandarlo en `null` no lo es: un
+  upstream estricto lo rechaza con un 400 que nombra los knobs ofensores
   (`max_tokens must be a number conforming to the specified constraints`,
   `tools must be an array`, `stop should not be null or undefined`), y el
   cliente ve un 400 que parece culpa del gateway por un body que no escribió.

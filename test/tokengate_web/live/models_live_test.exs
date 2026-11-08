@@ -414,18 +414,14 @@ defmodule TokengateWeb.ModelsLiveTest do
     refute html =~ model_record.name
   end
 
-  test "key rows show Priority and pin badges from extra_body", %{conn: conn} do
+  test "key rows show the Priority badge from extra_body", %{conn: conn} do
     %{user: admin, password: password} = register("admin")
     provider = create_provider()
     model_record = create_model()
 
-    # One row with the premium serving path, one with an aggregator pin.
+    # The premium serving path is an extra_body key the UI surfaces as a badge.
     create_model_provider(model_record, provider, %{
       extra_body: %{"service_tier" => "priority"}
-    })
-
-    create_model_provider(model_record, provider, %{
-      extra_body: %{"provider" => "zai"}
     })
 
     conn = login(conn, admin, password)
@@ -435,9 +431,7 @@ defmodule TokengateWeb.ModelsLiveTest do
     # The provider table lives inside the model's collapsible card, but the
     # rows are in the rendered DOM regardless (the collapse is client-side).
     # The UI locale is es, so badge labels render translated — assert on
-    # non-translatable markers: the raw pin value and the badge icons.
-    assert html =~ "hero-map-pin"
-    assert html =~ "zai"
+    # non-translatable markers: the badge icon.
     assert html =~ "hero-bolt"
   end
 
@@ -2272,9 +2266,9 @@ defmodule TokengateWeb.ModelsLiveTest do
     # El input vive dentro de un form (sin él, el navegador no manda el evento).
     assert has_element?(view, "form#wizard-provider-search-form input#wizard-provider-search")
 
-    view |> element("#wizard-provider-search-form") |> render_change(%{"q" => "surplus"})
+    view |> element("#wizard-provider-search-form") |> render_change(%{"q" => "fireworks"})
 
-    assert has_element?(view, "#wizard-provider-surplus-intelligence")
+    assert has_element?(view, "#wizard-provider-fireworks-ai")
     refute has_element?(view, "#wizard-provider-302ai")
   end
 end

@@ -224,8 +224,8 @@ defmodule Tokengate.Proxy.OpenAIAdapterTest do
     end
 
     # Los SDK serializan como null explícito los knobs que no usan. Omitir el
-    # campo es válido; mandarlo en null es un 400 en un upstream estricto
-    # (Surplus Intelligence), así que el adapter los quita al codificar.
+    # campo es válido; mandarlo en null es un 400 en un upstream estricto,
+    # así que el adapter los quita al codificar.
     test "top-level nulls never reach the wire", %{provider: provider, credential: credential} do
       payload = %{
         "model" => "gpt-4o",
