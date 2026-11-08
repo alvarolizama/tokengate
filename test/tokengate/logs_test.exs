@@ -2,6 +2,7 @@ defmodule Tokengate.LogsTest do
   use Tokengate.DataCase, async: true
   alias Tokengate.Logs
   alias Tokengate.Accounts
+  alias Tokengate.Observability
 
   # ---------------------------------------------------------------------------
   # Fixtures — create FK parents via the REAL Accounts/Providers contexts.
@@ -237,6 +238,55 @@ defmodule Tokengate.LogsTest do
       [log] = Logs.list_logs(%{group_member_id: group_member.id})
       assert log.cache_read_tokens == 2304
       assert log.cache_creation_tokens == 0
+    end
+
+    test "dedupes a retried job: the same job id performed twice inserts exactly one row and skips webhook/broadcast" do
+      {group_member, _group} = group_member_fixture()
+
+      {:ok, _destination} =
+        Observability.create_destination(%{
+          "name" => "Dedupe Probe",
+          "type" => "otlp_webhook",
+          "url" => "https://example.test/otlp"
+        })
+
+      # `inserted_at` pinned in args (as the enqueue sites now do) so every
+      # attempt carries the same (oban_job_id, inserted_at) pair.
+      args = %{
+        "group_member_id" => group_member.id,
+        "model_requested" => "deepseek-chat",
+        "prompt_tokens" => 10,
+        "completion_tokens" => 5,
+        "inserted_at" => "2026-11-08T12:00:00Z"
+      }
+
+      # Performed directly, NOT via perform_job/3: Oban.Testing.build_job
+      # discards the :id option and would mint a different id per attempt,
+      # making the dedupe untestable.
+      job = %Oban.Job{id: 4242, args: args}
+
+      Phoenix.PubSub.subscribe(Tokengate.PubSub, "logs:new")
+
+      assert :ok = Tokengate.Logs.WriteWorker.perform(job)
+      assert_receive {:new_log, _log}
+
+      webhook_jobs = fn ->
+        Repo.one(from(j in Oban.Job, where: j.queue == "webhooks", select: count(j.id)))
+      end
+
+      assert webhook_jobs.() == 1
+
+      # Second attempt of the SAME job: row already seen → :ok with NO
+      # re-broadcast and NO extra webhook job (exactly-once delivery).
+      assert :ok = Tokengate.Logs.WriteWorker.perform(job)
+      refute_receive {:new_log, _}
+      assert webhook_jobs.() == 1
+
+      assert [log] = Logs.list_logs(%{group_member_id: group_member.id})
+      assert log.oban_job_id == 4242
+      # The pinned inserted_at survived the round-trip — same partition, same
+      # dedupe pair across attempts.
+      assert log.inserted_at == ~U[2026-11-08 12:00:00Z]
     end
   end
 

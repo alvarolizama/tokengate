@@ -666,6 +666,10 @@ defmodule TokengateWeb.ServicesLive do
     end
   end
 
+  # L38 — doble submit o submit encolado detrás de Cancelar: el id de edición
+  # ya es nil. No-op en vez de FunctionClauseError.
+  defp save_service(socket, nil, _service_params), do: {:noreply, socket}
+
   defp save_service(socket, service_id, service_params) when is_binary(service_id) do
     service = Accounts.get_service!(service_id)
 

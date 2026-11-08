@@ -6,7 +6,6 @@ defmodule TokengateWeb.MonitoringLive do
   alias Tokengate.{Accounts, Logs, Repo}
   alias Tokengate.Accounts.ApiKey
   alias Tokengate.Logs.Inflight
-  alias Tokengate.Logs.RequestLog
   alias Tokengate.Providers
 
   @page_size 50
@@ -388,28 +387,19 @@ defmodule TokengateWeb.MonitoringLive do
     |> Enum.sort_by(&elem(&1, 0))
   end
 
-  # Solo las keys vivas que ya aparecen en los logs: el selector no lista keys
-  # sin actividad y no paga un scan de toda la tabla api_keys.
+  # Options del selector desde la tabla `api_keys` (chica, indexada): el
+  # `DISTINCT api_key_id` sobre toda `request_logs` se corría en CADA
+  # phx-change de los filtros — un Parallel Seq Scan de ~10k buffers por
+  # tecla. El selector ahora lista las keys activas (no solo las con
+  # tráfico); una key revocada con logs viejos resuelve su label por el
+  # prefijo histórico en `api_key_display/2`. Se carga una vez en mount.
   defp api_key_options do
-    used_ids =
-      Repo.all(
-        from rl in RequestLog,
-          where: not is_nil(rl.api_key_id),
-          distinct: true,
-          select: rl.api_key_id
-      )
-
-    labels =
-      Repo.all(
-        from ak in ApiKey,
-          where: ak.id in ^used_ids,
-          select: {ak.id, ak.label, ak.key_prefix}
-      )
-
-    display_by_id = Map.new(labels, fn {id, label, prefix} -> {id, label || prefix} end)
-
-    used_ids
-    |> Enum.map(fn id -> {Map.get(display_by_id, id) || id, id} end)
+    Repo.all(
+      from ak in ApiKey,
+        where: ak.status == "active",
+        select: {ak.id, ak.label, ak.key_prefix}
+    )
+    |> Enum.map(fn {id, label, prefix} -> {label || prefix || id, id} end)
     |> Enum.sort_by(&elem(&1, 0))
   end
 
@@ -635,7 +625,6 @@ defmodule TokengateWeb.MonitoringLive do
       socket
       |> assign(:filters, filter_params)
       |> assign(:form, to_form(filter_params, as: :filter))
-      |> assign(:api_key_options, api_key_options())
       |> assign(:cursor, nil)
       |> assign(:top_models_cache, nil)
       |> assign(:top_users_cache, nil)

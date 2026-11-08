@@ -109,7 +109,7 @@ defmodule Tokengate.Routing.Router do
     # Ensure group is preloaded (callers may not have preloaded it).
     group_member = maybe_preload_group(group_member)
 
-    accessible = Providers.list_accessible_models(group_member)
+    accessible = accessible_models(group_member)
 
     case find_alias_by_name(accessible, model_requested) do
       nil ->
@@ -198,7 +198,7 @@ defmodule Tokengate.Routing.Router do
     group_member = maybe_preload_group(group_member)
 
     group_member
-    |> Providers.list_accessible_models()
+    |> accessible_models()
     |> Enum.map(fn model_ ->
       %{
         id: model_.name,
@@ -207,6 +207,28 @@ defmodule Tokengate.Routing.Router do
         model_type: model_.model_type,
         owned_by: "tokengate"
       }
+    end)
+  end
+
+  # La consulta de accesibles es un UNION de tres tablas + EXCEPT y se
+  # ejecutaba en CADA request (y en cada reintento de la cascada). El cache ETS
+  # existe para esto y sus invalidaciones ya están cableadas en
+  # `Tokengate.Providers` (grants/revokes de grupo, extras, denies, service y
+  # cambios de modelo/proveedor). La clave es (group_id, member_id); un
+  # service virtual member no tiene grupo, así que usa `:global` — el mismo
+  # contrato con el que el cache invalida por `(nil, service_id)`.
+  defp accessible_models(group_member) do
+    member_id = group_member && group_member.id
+
+    group_id =
+      case group_member do
+        %{service_name: name} when is_binary(name) -> nil
+        %{group: %{id: id}} -> id
+        _ -> nil
+      end
+
+    Tokengate.Routing.Cache.fetch_accessible_models(group_id, member_id, fn ->
+      Providers.list_accessible_models(group_member)
     end)
   end
 

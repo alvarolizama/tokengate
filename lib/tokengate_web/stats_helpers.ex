@@ -189,14 +189,6 @@ defmodule TokengateWeb.StatsHelpers do
 
   def hour_label(hour) when hour in 0..23, do: "#{pad2(hour)}:00"
 
-  def error_class_label(status) when status >= 400 and status < 500, do: "4xx cliente"
-  def error_class_label(status) when status >= 500, do: "5xx servidor"
-  def error_class_label(_), do: "—"
-
-  def error_class_badge(status) when status >= 400 and status < 500, do: "badge-warning"
-  def error_class_badge(status) when status >= 500, do: "badge-error"
-  def error_class_badge(_), do: "badge-ghost"
-
   def hour_usage_stacked_max(rows) do
     rows |> Enum.map(& &1.total_requests) |> Enum.max(fn -> 0 end)
   end
@@ -245,9 +237,6 @@ defmodule TokengateWeb.StatsHelpers do
     |> Enum.map(fn i -> round(ceiling * i / count) end)
     |> Enum.uniq()
   end
-
-  def hour_bar_height(count, max) when max > 0, do: max(round(count / max * 100), 4)
-  def hour_bar_height(_count, _max), do: 0
 
   # ── Reparto del período: por modelo / por proveedor ───────────────────────
 

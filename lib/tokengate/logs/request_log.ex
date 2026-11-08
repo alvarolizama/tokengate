@@ -32,6 +32,12 @@ defmodule Tokengate.Logs.RequestLog do
     field :id, :binary_id, primary_key: true, autogenerate: true
     field :inserted_at, :utc_datetime, primary_key: true
 
+    # Idempotencia de reintentos Oban (C2): el id del job que insertó la fila.
+    # Junto con `inserted_at` (fijado en enqueue) forma la pareja única del
+    # índice — NULL en filas históricas, y Postgres trata NULLs como
+    # distintos, así que el índice no las toca.
+    field :oban_job_id, :integer
+
     field :model_provider_id, :binary_id
     field :credential_id, :binary_id
     field :model_id, :binary_id
@@ -106,7 +112,7 @@ defmodule Tokengate.Logs.RequestLog do
     error_reason error_message prompt_tokens completion_tokens cache_read_tokens
     cache_creation_tokens provider_cost_usd credit_subscription_id credit_topup_id
     latency_ms ttft_ms streaming request_type think effort api_key_prefix
-    credential_name client_agent provider_key_prefix api_key_id inserted_at)a
+    credential_name client_agent provider_key_prefix api_key_id inserted_at oban_job_id)a
 
   @required ~w(model_requested inserted_at subject_type)a
 

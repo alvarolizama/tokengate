@@ -127,14 +127,23 @@ defmodule TokengateWeb.ObservabilityLive do
       end)
 
     result =
-      if socket.assigns.editing_destination_id == :new do
-        Observability.create_destination(destination_params)
-      else
-        destination = Observability.get_destination!(socket.assigns.editing_destination_id)
-        Observability.update_destination(destination, destination_params)
+      cond do
+        socket.assigns.editing_destination_id == :new ->
+          Observability.create_destination(destination_params)
+
+        # A submit already in flight lands right after Cancel cleared the id.
+        is_nil(socket.assigns.editing_destination_id) ->
+          :skip
+
+        true ->
+          destination = Observability.get_destination!(socket.assigns.editing_destination_id)
+          Observability.update_destination(destination, destination_params)
       end
 
     case result do
+      :skip ->
+        {:noreply, socket}
+
       {:ok, destination} ->
         audit(
           socket,

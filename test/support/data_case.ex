@@ -63,6 +63,11 @@ defmodule Tokengate.DataCase do
   """
   def setup_sandbox(tags) do
     Tokengate.Metrics.DashboardCache.invalidate_all()
+    # `GlobalSettings` caches the daily cap in `:persistent_term` (hot path).
+    # That term is VM-global and survives the sandbox rollback, so a test that
+    # arms the kill-switch would leak the cap into the next test. Flush it with
+    # the sandbox lifecycle, same as the dashboard cache above.
+    Tokengate.GlobalSettings.reset_cache()
     pid = Ecto.Adapters.SQL.Sandbox.start_owner!(Tokengate.Repo, shared: not tags[:async])
     on_exit(fn -> Ecto.Adapters.SQL.Sandbox.stop_owner(pid) end)
   end

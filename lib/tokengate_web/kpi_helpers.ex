@@ -217,21 +217,6 @@ defmodule TokengateWeb.KpiHelpers do
 
   defp cost_title(_), do: nil
 
-  @doc """
-  Sub-línea estándar bajo el valor de un KPI (misma tipografía en todo el
-  hub): texto pequeño gris, sin tabular.
-  """
-  attr :id, :string, default: nil
-  attr :rest, :global
-
-  def kpi_sub(assigns) do
-    ~H"""
-    <p class="text-xs text-base-content/40 mt-1" id={@id} {@rest}>
-      {render_slot(@inner_block)}
-    </p>
-    """
-  end
-
   attr :metrics, :map, required: true
   attr :deltas, :map, default: nil
   attr :period, :string, default: nil, doc: "período activo; \"today\"/\"month\" = ventana UTC"

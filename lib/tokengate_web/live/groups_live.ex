@@ -239,6 +239,10 @@ defmodule TokengateWeb.GroupsLive do
 
   ## Private helpers — save ----------------------------------------------
 
+  # A submit already in flight lands right after Cancel cleared the editing
+  # id: no-op instead of a FunctionClauseError that would lose the form.
+  defp save_group(socket, nil, _group_params), do: {:noreply, socket}
+
   defp save_group(socket, :new, group_params) do
     case Accounts.create_group(group_params) do
       {:ok, group} ->

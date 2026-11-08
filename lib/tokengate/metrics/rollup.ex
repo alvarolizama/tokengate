@@ -1808,53 +1808,48 @@ defmodule Tokengate.Metrics.Rollup do
 
   defp rpm_stats_per_member([], _from, _to), do: %{}
 
+  # Buckets (member × minute) stay in Postgres: the outer aggregate turns
+  # them into one row per member with max/avg/p95 — the BEAM no longer
+  # materializes 50k-200k bucket rows for a 30-day window just to sort
+  # them per member. `percentile_disc(0.95)` over the per-minute counts is
+  # the same nearest-rank p95 the old `Enum.sort` + `ceil(0.95 * count)`
+  # computed.
   defp rpm_stats_per_member(member_ids, from, to) do
-    # Bucket requests by minute per member
     minute_buckets =
       RequestLog
       |> where([rl], rl.group_member_id in ^member_ids)
       |> maybe_from(from)
       |> maybe_to(to)
+      |> group_by([rl], [rl.group_member_id, fragment("date_trunc('minute', ?)", rl.inserted_at)])
       |> select([rl], %{
         group_member_id: rl.group_member_id,
-        minute: fragment("date_trunc('minute', ?)", rl.inserted_at)
+        rpm: count(rl.id)
       })
       |> subquery()
 
-    query =
-      from(m in minute_buckets,
-        group_by: [m.group_member_id, m.minute],
+    stats =
+      from(b in minute_buckets,
+        group_by: b.group_member_id,
         select: %{
-          group_member_id: m.group_member_id,
-          minute: m.minute,
-          rpm: count()
+          group_member_id: b.group_member_id,
+          bucket_count: count(b.rpm),
+          peak_rpm: max(b.rpm),
+          avg_rpm: fragment("AVG(?)", b.rpm),
+          p95_rpm: fragment("percentile_disc(0.95) WITHIN GROUP (ORDER BY ?)", b.rpm)
         }
       )
+      |> Repo.all()
 
-    rows = Repo.all(query)
+    stats
+    |> Map.new(fn row ->
+      avg_rpm =
+        row.avg_rpm && row.avg_rpm |> Decimal.to_float() |> Float.round(1)
 
-    rows
-    |> Enum.group_by(& &1.group_member_id)
-    |> Map.new(fn {member_id, member_rows} ->
-      rpms = Enum.map(member_rows, & &1.rpm)
-      count = length(rpms)
+      # Same thin-sample rule as before: with <20 buckets the sample is too
+      # sparse for a percentile — the peak is the honest figure.
+      p95_rpm = if row.bucket_count < 20, do: row.peak_rpm, else: row.p95_rpm
 
-      peak = Enum.max(rpms, fn -> 0 end)
-      avg = if count > 0, do: Float.round(Enum.sum(rpms) / count, 1), else: 0.0
-
-      # Nearest-rank p95
-      sorted = Enum.sort(rpms)
-
-      p95 =
-        if count < 20 do
-          peak
-        else
-          rank = ceil(0.95 * count)
-          index = max(rank - 1, 0)
-          Enum.at(sorted, index)
-        end
-
-      {member_id, %{peak_rpm: peak, avg_rpm: avg, p95_rpm: p95}}
+      {row.group_member_id, %{peak_rpm: row.peak_rpm, avg_rpm: avg_rpm || 0.0, p95_rpm: p95_rpm}}
     end)
   end
 

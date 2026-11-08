@@ -15,6 +15,7 @@ defmodule Tokengate.Budgets.ManagerTest do
   alias Tokengate.Budgets.Manager
   alias Tokengate.Accounts
   alias Tokengate.Budgets.Exemptions
+  alias Tokengate.Credits
   alias Tokengate.Logs
 
   @table :tokengate_budgets
@@ -92,13 +93,41 @@ defmodule Tokengate.Budgets.ManagerTest do
   # to the given cost. Equivalent to the old `record_spend/2` accumulation
   # (minus the transient hold), used where tests just need spend on the books.
   defp record(subject_id, cost_usd, opts \\ []) do
+    today = Date.utc_today()
+
     hold = %{
       monthly_micro: 0,
       global_micro: 0,
-      exempt_global?: Keyword.get(opts, :exempt_global?, false)
+      exempt_global?: Keyword.get(opts, :exempt_global?, false),
+      # Stamps de período, iguales a los de los holds reales: el guard de
+      # settle/release compara contra el ESTADO del contador, no el reloj.
+      period: {today.year, today.month},
+      global_period: today
     }
 
     Manager.settle(subject_id, hold, cost_usd)
+  end
+
+  # Sujeto con límite mensual propio (en el grupo) para los probes de créditos.
+  defp limited_member_fixture(limit_usd) do
+    group = group_fixture(%{"monthly_spend_limit_usd" => limit_usd})
+    user = user_fixture()
+
+    {:ok, member} =
+      Accounts.create_group_member(%{"user_id" => user.id, "group_id" => group.id})
+
+    {member, user}
+  end
+
+  # Dispara 10 reserve_plan concurrentes y regresa los resultados en orden de
+  # lanzamiento (la aserción es sobre resultados, no sobre tiempos).
+  defp run_concurrent_reserve(plan, requested_usd) do
+    1..10
+    |> Task.async_stream(
+      fn _i -> Manager.reserve_plan(plan, nil, requested_usd, false) end,
+      max_concurrency: 10
+    )
+    |> Enum.map(fn {:ok, result} -> result end)
   end
 
   # ---------------------------------------------------------------------------
@@ -589,6 +618,63 @@ defmodule Tokengate.Budgets.ManagerTest do
   end
 
   # ---------------------------------------------------------------------------
+  # reserve_plan/4 — gate atómico de créditos (probes de concurrencia)
+  # ---------------------------------------------------------------------------
+
+  describe "reserve_plan/4 — gate atómico" do
+    setup do
+      pid = Process.whereis(Manager) || start_supervised!(Manager)
+      _ = :sys.get_state(pid)
+      # La tabla de créditos es un singleton compartido entre tests: arrancar
+      # limpia para que ningún contador heredado contamine el probe.
+      :ets.delete_all_objects(:tokengate_credits)
+      :ok
+    end
+
+    test "10 reserve_plan concurrentes de 1.00 contra límite 1.00 conceden exactamente 1" do
+      {member, _user} = limited_member_fixture("1.00")
+      plan = Credits.plan(member)
+
+      results = run_concurrent_reserve(plan, Decimal.new("1.00"))
+
+      granted = Enum.count(results, &match?({:ok, _}, &1))
+
+      rejected =
+        Enum.count(results, &match?({:error, {:budget_exceeded, %{layer: :subject}}}, &1))
+
+      assert granted == 1, "esperaba 1 concedido, hubo #{granted}: #{inspect(results)}"
+      assert rejected == 9
+
+      :ets.delete(:tokengate_credits, {:limit, plan.subject})
+    end
+
+    test "10 reserve_plan concurrentes de 1.00 contra bolsín de 1.00 conceden exactamente 1" do
+      {member, user} = limited_member_fixture("0")
+
+      {:ok, topup} =
+        Credits.Topups.create(%{"user_id" => user.id, "amount_usd" => "1.00", "label" => "probe"})
+
+      plan = Credits.plan(member)
+
+      # Bolsín FRÍO a propósito: la carga perezosa desde DB es la que da ancho
+      # de carrera al probe pre-fix (calentarlo colapsa la ventana y el probe
+      # pasa de suerte); post-fix el guard de seed hace el desenlace determinista.
+      results = run_concurrent_reserve(plan, Decimal.new("1.00"))
+
+      granted = Enum.count(results, &match?({:ok, %{kind: :topup}}, &1))
+
+      rejected =
+        Enum.count(results, &match?({:error, {:budget_exceeded, %{layer: :subject}}}, &1))
+
+      assert granted == 1, "esperaba 1 concedido, hubo #{granted}: #{inspect(results)}"
+      assert rejected == 9
+
+      :ets.delete(:tokengate_credits, {:topup, topup.id})
+      :ets.delete(:tokengate_credits, {:limit, plan.subject})
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # reset_monthly_counters/0 — monthly reset on 1st of month
   # ---------------------------------------------------------------------------
 
@@ -624,20 +710,65 @@ defmodule Tokengate.Budgets.ManagerTest do
       assert Decimal.equal?(Manager.spend(tm.id).daily_usd, Decimal.new("0"))
     end
 
-    test "reset then settle accumulates from 0" do
-      {tm, _} = group_member_fixture()
+    test "settle cruzando el reset no absorbe actual − held en el contador fresco" do
+      {member, _user} = limited_member_fixture("10.00")
+      subject = {:user, member.user_id}
+      key = {:limit, subject}
 
-      # Log en el mes pasado para que el reset mensual lo ignore.
-      last_month = Date.add(Date.utc_today(), -31)
-      log_spend(tm.id, "5.00", inserted_at: DateTime.new!(last_month, ~T[00:00:00], "Etc/UTC"))
+      # Verdad durable: 5.00 debitados al límite este mes (logs sin top-up).
+      log_spend(member.id, "5.00")
 
-      assert :ok = record(tm.id, Decimal.new("3.00"))
+      plan = Credits.plan(member)
 
+      # Hold en vuelo: 1.00 retenidos contra el contador del límite.
+      assert {:ok, hold} = Manager.reserve_plan(plan, nil, Decimal.new("1.00"), false)
+      assert hold.kind == :limit
+
+      # El reset mensual borra {:limit, subject} EN PLENO VUELO.
+      assert Manager.reset_monthly_counters() >= 1
+
+      # El settle del hold viejo aterriza tarde: 0.30 reales vs 1.00 retenidos.
+      # Con la entrada ausente, el guard por ESTADO del contador lo salta: ni
+      # absorbe −0.70 ni resucita la clave — la recuperación es el re-seed
+      # desde logs, no el settle.
+      assert :ok = Manager.settle_credits(hold, Decimal.new("0.30"))
+      assert [] = :ets.lookup(:tokengate_credits, key)
+
+      # El re-seed (verdad durable) reconstruye EXACTAMENTE el gasto de logs:
+      # sin el hold fantasma (nunca llegó a logs) ni la absorción negativa.
+      assert :ok = Manager.reseed_limit_counter(subject)
+      assert %{consumed_micro: 5_000_000} = Manager.limit_spend(subject)
+
+      :ets.delete(:tokengate_credits, key)
+    end
+
+    test "el settle de un top-up SIEMPRE aterriza en su bolsín (no es mensual)" do
+      group = group_fixture(%{"monthly_spend_limit_usd" => "0"})
+      user = user_fixture()
+
+      {:ok, member} =
+        Accounts.create_group_member(%{"user_id" => user.id, "group_id" => group.id})
+
+      {:ok, topup} =
+        Credits.Topups.create(%{
+          "user_id" => user.id,
+          "amount_usd" => "1.00",
+          "label" => "rescate"
+        })
+
+      plan = Credits.plan(member)
+
+      assert {:ok, hold} = Manager.reserve_plan(plan, nil, Decimal.new("1.00"), false)
+      assert hold.kind == :topup
+
+      # El reset mensual NO toca los bolsines; el settle tardío del top-up
+      # aterriza igual: 0.30 reales vs 1.00 retenidos → 0.30 consumidos.
       Manager.reset_monthly_counters()
-      assert Decimal.equal?(Manager.spend(tm.id).monthly_usd, Decimal.new("0"))
 
-      assert :ok = record(tm.id, Decimal.new("2.00"))
-      assert Decimal.equal?(Manager.spend(tm.id).monthly_usd, Decimal.new("2.00"))
+      assert :ok = Manager.settle_credits(hold, Decimal.new("0.30"))
+      assert %{consumed_micro: 300_000} = Manager.topup_spend(topup.id)
+
+      :ets.delete(:tokengate_credits, {:topup, topup.id})
     end
   end
 

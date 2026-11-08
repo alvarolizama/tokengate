@@ -545,6 +545,7 @@ defmodule Tokengate.Accounts do
     |> GroupMember.changeset(attrs)
     |> Repo.update()
     |> invalidate_member_auth_cache(group_member.id)
+    |> invalidate_member_routing_cache(group_member.id)
   end
 
   def delete_group_member(%GroupMember{} = group_member) do
@@ -1444,6 +1445,19 @@ defmodule Tokengate.Accounts do
   end
 
   defp invalidate_member_auth_cache(result, _member_id), do: result
+
+  # A member can move between groups (group_id is a permitted attr): the
+  # accessible-models routing cache is keyed by (group_id, member_id), so the
+  # entry for the old group would survive until node restart without this.
+  defp invalidate_member_routing_cache({:ok, _} = result, member_id) do
+    safe_invalidate(fn ->
+      Tokengate.Routing.Cache.invalidate_accessible_models(nil, member_id)
+    end)
+
+    result
+  end
+
+  defp invalidate_member_routing_cache(result, _member_id), do: result
 
   defp invalidate_group_auth_cache({:ok, _} = result, group_id) do
     safe_invalidate(fn -> ApiKeyCache.invalidate_group(group_id) end)

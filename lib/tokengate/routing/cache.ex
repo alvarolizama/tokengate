@@ -26,8 +26,9 @@ defmodule Tokengate.Routing.Cache do
   ## Concurrency
 
   All reads/writes are lock-free `public` ETS ops running in the caller
-  process. The owning GenServer only creates the table and handles TTL
-  sweeps. A `:timer` entry per key expires the cache after `@ttl_ms`.
+  process. The owning GenServer only creates the table. Entries carry a
+  monotonic `expires_at`; a read treats an expired entry as a miss (and
+  deletes it), so the effective TTL is `@ttl_ms` even without a sweep.
   """
 
   use GenServer
@@ -53,12 +54,7 @@ defmodule Tokengate.Routing.Cache do
   """
   @spec fetch_model_providers(binary(), binary() | nil, (-> [term()])) :: [term()]
   def fetch_model_providers(model_id, group_id, fun) when is_function(fun, 0) do
-    key = {:model_providers, model_id, group_id || :global}
-
-    case :ets.lookup(@table, key) do
-      [{^key, providers, _expires_at}] -> providers
-      [] -> put_new(key, fun.())
-    end
+    fetch_fresh({:model_providers, model_id, group_id || :global}, fun)
   end
 
   @doc """
@@ -70,12 +66,7 @@ defmodule Tokengate.Routing.Cache do
   """
   @spec fetch_accessible_models(term(), term() | nil, (-> [term()])) :: [term()]
   def fetch_accessible_models(group_id, member_id, fun) when is_function(fun, 0) do
-    key = {:accessible_models, group_id || :global, member_id || :global}
-
-    case :ets.lookup(@table, key) do
-      [{^key, models, _expires_at}] -> models
-      [] -> put_new(key, fun.())
-    end
+    fetch_fresh({:accessible_models, group_id || :global, member_id || :global}, fun)
   end
 
   @doc """
@@ -101,12 +92,7 @@ defmodule Tokengate.Routing.Cache do
   """
   @spec disabled_credential_ids() :: MapSet.t()
   def disabled_credential_ids do
-    key = :disabled_credentials
-
-    case :ets.lookup(@table, key) do
-      [{^key, %MapSet{} = set, _expires_at}] -> set
-      [] -> put_new(key, query_disabled_credentials())
-    end
+    fetch_fresh(:disabled_credentials, &query_disabled_credentials/0)
   end
 
   @doc """
@@ -159,6 +145,25 @@ defmodule Tokengate.Routing.Cache do
         read_concurrency: true,
         write_concurrency: true
       ])
+    end
+  end
+
+  # TTL on read: `expires_at` is an absolute monotonic deadline stored with the
+  # entry. Without this check the written deadline was dead weight — a missed
+  # invalidation (or an unsupported write path) would keep a stale entry alive
+  # forever, and the router now serves every request from this cache.
+  defp fetch_fresh(key, fun) do
+    case :ets.lookup(@table, key) do
+      [{^key, value, expires_at}] ->
+        if System.monotonic_time(:millisecond) < expires_at do
+          value
+        else
+          :ets.delete(@table, key)
+          put_new(key, fun.())
+        end
+
+      [] ->
+        put_new(key, fun.())
     end
   end
 

@@ -108,20 +108,24 @@ defmodule TokengateWeb.UsersLive do
       end
 
     # Both spend maps are whole-table aggregates over request_logs (the
-    # lifetime one joins every partition) and `load_users/1` re-runs on
+    # lifetime one groups every partition) and `load_users/1` re-runs on
     # every search keystroke, sort click and filter toggle. Cache them in
-    # DashboardCache (5s TTL) so interactive events reuse one shared entry
+    # DashboardCache so interactive events reuse one shared entry
     # per timezone instead of re-scanning the log table per event — same
-    # pattern as DashboardLive.
+    # pattern as DashboardLive. The lifetime total gets its own 60s TTL:
+    # it is the most expensive scan of the page and lifetime spend barely
+    # moves in 5 seconds.
     spend_by_user =
       DashboardCache.fetch_or_compute({:users_spend_by_user, timezone}, fn ->
         Tokengate.Budgets.spend_by_user(timezone)
       end)
 
     total_spend_by_user =
-      DashboardCache.fetch_or_compute({:users_total_spend_by_user}, fn ->
-        Tokengate.Logs.total_spend_by_user()
-      end)
+      DashboardCache.fetch_or_compute(
+        {:users_total_spend_by_user},
+        fn -> Tokengate.Logs.total_spend_by_user() end,
+        ttl: 60_000
+      )
 
     user_groups = load_user_groups(filtered)
 
@@ -601,6 +605,8 @@ defmodule TokengateWeb.UsersLive do
     case socket.assigns.form_mode do
       :create -> save_new_user(socket, user_params)
       :edit -> save_edit_user(socket, user_params)
+      # A submit already in flight lands right after Cancel cleared the mode.
+      nil -> {:noreply, socket}
     end
   end
 

@@ -30,6 +30,17 @@ config :tokengate, :proxy,
   receive_timeout_ms: String.to_integer(System.get_env("PROXY_RECEIVE_TIMEOUT_MS", "120000"))
 
 # ---------------------------------------------------------------------------
+# Idle timeout of a proxied SSE stream: the maximum gap between two chunks
+# from the upstream before the request is cut off (the upstream process is
+# killed and the client gets a terminal error frame). Unlike the provider's
+# `receive_timeout_ms` — which is per socket read — this bounds a stream that
+# stalls forever while holding the request's concurrency slot.
+# ---------------------------------------------------------------------------
+config :tokengate,
+       :stream_idle_timeout_ms,
+       String.to_integer(System.get_env("STREAM_IDLE_TIMEOUT_MS", "60000"))
+
+# ---------------------------------------------------------------------------
 # Routing health: a provider that answers but takes longer than
 # slow_threshold_ms is "degraded" and sinks to the bottom of its tier for
 # slow_penalty_ms. It recovers on its own on the next fast success.

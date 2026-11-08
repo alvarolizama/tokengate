@@ -36,6 +36,15 @@ defmodule Tokengate.Metrics.DashboardCache do
   With a 5s TTL and 2s debounce, a single dashboard hits Postgres every
   ~5-6s instead of every ~2s — a ~60% reduction. Multiple dashboards for
   the same user share one cache entry.
+
+  ## Per-entry TTL
+
+  Lifetime/whole-table aggregates (users spend, day p95, filter options)
+  don't need 5s freshness — re-running them every refresh re-scans the log
+  table for data that barely moves. `fetch_or_compute/3` and `put/3` accept
+  a per-entry `:ttl` in milliseconds; the expiry is baked into the entry at
+  write time, so a 60s entry coexists with the 5s default in the same table
+  and the sweep honors each entry's own deadline.
   """
 
   use GenServer
@@ -75,24 +84,38 @@ defmodule Tokengate.Metrics.DashboardCache do
   Reads a cached entry for `key`. On hit (within TTL), returns the
   cached data. On miss, calls `compute_fn.()`, stores the result, and
   returns it. Runs entirely in the caller's process.
+
+  Accepts a per-entry `:ttl` in milliseconds (default: the global TTL).
   """
   @spec fetch_or_compute(term(), (-> map())) :: map()
   def fetch_or_compute(key, compute_fn) do
+    fetch_or_compute(key, compute_fn, [])
+  end
+
+  @spec fetch_or_compute(term(), (-> map()), keyword()) :: map()
+  def fetch_or_compute(key, compute_fn, opts) do
+    ttl = Keyword.get(opts, :ttl, ttl_ms())
+
     case read(key) do
       {:ok, data} ->
         data
 
       :miss ->
         data = compute_fn.()
-        put(key, data)
+        put(key, data, ttl)
         data
     end
   end
 
-  @doc "Stores `data` under `key` with the current monotonic timestamp."
+  @doc "Stores `data` under `key` with the global TTL."
   @spec put(term(), map()) :: :ok
-  def put(key, data) do
-    :ets.insert(@table, {key, data, System.monotonic_time(:millisecond)})
+  def put(key, data), do: put(key, data, ttl_ms())
+
+  @doc "Stores `data` under `key` with a custom TTL in milliseconds."
+  @spec put(term(), map(), non_neg_integer()) :: :ok
+  def put(key, data, ttl_ms) do
+    expires_at = System.monotonic_time(:millisecond) + ttl_ms
+    :ets.insert(@table, {key, data, expires_at})
     :ok
   end
 
@@ -124,8 +147,8 @@ defmodule Tokengate.Metrics.DashboardCache do
     if :ets.whereis(@table) == :undefined do
       0
     else
-      cutoff = System.monotonic_time(:millisecond) - ttl_ms()
-      :ets.select_delete(@table, [{{:_, :_, :"$1"}, [{:<, :"$1", cutoff}], [true]}])
+      now = System.monotonic_time(:millisecond)
+      :ets.select_delete(@table, [{{:_, :_, :"$1"}, [{:<, :"$1", now}], [true]}])
     end
   end
 
@@ -161,8 +184,11 @@ defmodule Tokengate.Metrics.DashboardCache do
 
   defp read(key) do
     case :ets.lookup(@table, key) do
-      [{^key, data, ts}] ->
-        if System.monotonic_time(:millisecond) - ts < ttl_ms() do
+      [{^key, data, expires_at}] ->
+        # The deadline is baked into the entry at write time, so a 60s
+        # entry survives next to the 5s default regardless of what the
+        # global TTL is when it is read.
+        if System.monotonic_time(:millisecond) < expires_at do
           {:ok, data}
         else
           :miss

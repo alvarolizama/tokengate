@@ -514,34 +514,41 @@ defmodule TokengateWeb.ModelsLive do
   end
 
   def handle_event("save_guard_rails", %{"model" => model_params}, socket) do
-    if socket.assigns.is_admin do
-      model = Providers.get_model!(socket.assigns.guard_rails_model_id)
+    cond do
+      # L38 — `cancel_guard_rails` limpia el id; un submit encolado detrás de
+      # Cancelar llega con nil y no puede reventar en get_model!/1.
+      is_nil(socket.assigns.guard_rails_model_id) ->
+        {:noreply, socket}
 
-      case Providers.update_model(model, model_params) do
-        {:ok, _updated} ->
-          audit(socket, "model.guard_rails_update", "model", model.id, %{
-            "name" => model.name,
-            "changes" =>
-              Map.take(model_params, [
-                "guard_rails",
-                "prompt_cache_enabled",
-                "lazy_cleanup_enabled"
-              ])
-          })
+      not socket.assigns.is_admin ->
+        {:noreply,
+         put_flash(socket, :error, gettext("You do not have permission for this action."))}
 
-          {:noreply,
-           socket
-           |> put_flash(:info, "Guard rails actualizados.")
-           |> assign(:guard_rails_form, nil)
-           |> assign(:guard_rails_model_id, nil)
-           |> load_models()}
+      true ->
+        model = Providers.get_model!(socket.assigns.guard_rails_model_id)
 
-        {:error, changeset} ->
-          {:noreply, assign(socket, :guard_rails_form, to_form(changeset, as: :model))}
-      end
-    else
-      {:noreply,
-       put_flash(socket, :error, gettext("You do not have permission for this action."))}
+        case Providers.update_model(model, model_params) do
+          {:ok, _updated} ->
+            audit(socket, "model.guard_rails_update", "model", model.id, %{
+              "name" => model.name,
+              "changes" =>
+                Map.take(model_params, [
+                  "guard_rails",
+                  "prompt_cache_enabled",
+                  "lazy_cleanup_enabled"
+                ])
+            })
+
+            {:noreply,
+             socket
+             |> put_flash(:info, "Guard rails actualizados.")
+             |> assign(:guard_rails_form, nil)
+             |> assign(:guard_rails_model_id, nil)
+             |> load_models()}
+
+          {:error, changeset} ->
+            {:noreply, assign(socket, :guard_rails_form, to_form(changeset, as: :model))}
+        end
     end
   end
 
@@ -1552,6 +1559,10 @@ defmodule TokengateWeb.ModelsLive do
     end
   end
 
+  # L38 — ver save_model_provider/3: un submit con id stale no debe tirar el
+  # LiveView con un FunctionClauseError.
+  defp save_model(socket, nil, _model_params), do: {:noreply, socket}
+
   defp save_model(socket, model_id, model_params) when is_binary(model_id) do
     model_record = Providers.get_model!(model_id)
 
@@ -1736,6 +1747,23 @@ defmodule TokengateWeb.ModelsLive do
     Map.drop(ap_params, ["extra_body_json", "omit_body_fields_csv", "omit_headers_csv"])
   end
 
+  ## Private helpers — exclusive scope (L37) ---------------------------------
+
+  # "group"/"member" son un límite de acceso: exigen un destino concreto. Un
+  # scope exclusivo sin selección no puede degradarse a global en silencio.
+  defp exclusive_scope?(scope), do: scope in ["group", "member"]
+
+  defp selection_empty?("group", group_ids, _member_ids), do: group_ids == []
+  defp selection_empty?("member", _group_ids, member_ids), do: member_ids == []
+  defp selection_empty?(_scope, _group_ids, _member_ids), do: false
+
+  defp exclusive_scope_key("group"), do: "exclusive_to_group_id"
+  defp exclusive_scope_key("member"), do: "exclusive_to_group_member_id"
+
+  defp blank_id?(nil), do: true
+  defp blank_id?(""), do: true
+  defp blank_id?(_id), do: false
+
   defp save_model_provider(socket, :new, ap_params) do
     ap_params = Map.put(ap_params, "model_id", socket.assigns.provider_form_model_id)
 
@@ -1754,9 +1782,49 @@ defmodule TokengateWeb.ModelsLive do
       |> Map.delete("exclusive_to_group_ids")
       |> Map.delete("exclusive_to_group_member_ids")
 
+    scope = socket.assigns[:current_scope] || "global"
+
+    # L37 — el scope es una frontera de permisos, no un modo de presentación.
+    # Sin esta validación el constructor de targets siempre devuelve al menos
+    # [ap_params], así que un lane exclusivo sin selección caía al insert
+    # global y dejaba el modelo abierto a todos.
+    if exclusive_scope?(scope) and selection_empty?(scope, group_ids, member_ids) do
+      {:noreply,
+       put_flash(
+         socket,
+         :error,
+         gettext("Select at least one limit profile or user for the exclusive scope.")
+       )}
+    else
+      insert_model_provider_targets(socket, scope, ap_params, group_ids, member_ids)
+    end
+  end
+
+  # L38 — un id de edición stale (doble submit, submit encolado detrás de
+  # Cancelar) es un no-op: sin esta cláusula revienta con FunctionClauseError y
+  # se lleva el LiveView y el formulario por delante.
+  defp save_model_provider(socket, nil, _ap_params), do: {:noreply, socket}
+
+  defp save_model_provider(socket, ap_id, ap_params) when is_binary(ap_id) do
+    scope = socket.assigns[:current_scope] || "global"
+
+    # L37 en edición: cambiar el scope a group/member sin elegir destino
+    # guardaría el lane como global (ambos FKs nil). Mismo rechazo que en alta.
+    if exclusive_scope?(scope) and blank_id?(Map.get(ap_params, exclusive_scope_key(scope))) do
+      {:noreply,
+       put_flash(
+         socket,
+         :error,
+         gettext("Select at least one limit profile or user for the exclusive scope.")
+       )}
+    else
+      update_model_provider(socket, ap_id, ap_params)
+    end
+  end
+
+  defp insert_model_provider_targets(socket, scope, ap_params, group_ids, member_ids) do
     # Build the list of insert targets: one set of params per group/member.
-    # Global scope = single insert with no exclusive FK. Group/member scope
-    # with empty selection = error (must pick at least one).
+    # Global scope = single insert with no exclusive FK.
     targets =
       cond do
         group_ids != [] ->
@@ -1775,76 +1843,57 @@ defmodule TokengateWeb.ModelsLive do
             })
           end)
 
-        Map.get(ap_params, "exclusive_to_group_id") != nil or
-            Map.get(ap_params, "exclusive_to_group_member_id") != nil ->
-          # Single target from edit mode — already in singular keys
-          [ap_params]
-
         true ->
           # Global scope
           [ap_params]
       end
 
-    # Validate: group/member scope must have at least one target selected
-    scope = socket.assigns[:current_scope] || "global"
+    # Los inserts van en una sola transacción: si un target choca con el
+    # índice de exclusividad única (mismo modelo+target ya tiene dueño),
+    # no debe quedar un estado parcial con la mitad de los targets
+    # asignados. O entran todos, o ninguno.
+    results =
+      Providers.create_model_providers_transactional(targets)
 
-    cond do
-      (scope == "group" or scope == "member") and targets == [] ->
+    case results do
+      {:ok, count} ->
+        msg =
+          if count == 1,
+            do: gettext("Provider assigned to the model."),
+            else: gettext("%{count} providers assigned to the model.", count: count)
+
+        audit(
+          socket,
+          "model_provider.create",
+          "model",
+          socket.assigns.provider_form_model_id,
+          %{
+            "count" => count,
+            "scope" => scope
+          }
+        )
+
         {:noreply,
-         put_flash(
-           socket,
+         socket
+         |> put_flash(:info, msg)
+         |> assign(:provider_form, nil)
+         |> assign(:editing_ap_id, nil)
+         |> load_models()}
+
+      {:error, changeset} ->
+        {:noreply,
+         socket
+         |> put_flash(
            :error,
-           gettext("Select at least one limit profile or user for the exclusive scope.")
-         )}
-
-      true ->
-        # Los inserts van en una sola transacción: si un target choca con el
-        # índice de exclusividad única (mismo modelo+target ya tiene dueño),
-        # no debe quedar un estado parcial con la mitad de los targets
-        # asignados. O entran todos, o ninguno.
-        results =
-          Providers.create_model_providers_transactional(targets)
-
-        case results do
-          {:ok, count} ->
-            msg =
-              if count == 1,
-                do: gettext("Provider assigned to the model."),
-                else: gettext("%{count} providers assigned to the model.", count: count)
-
-            audit(
-              socket,
-              "model_provider.create",
-              "model",
-              socket.assigns.provider_form_model_id,
-              %{
-                "count" => count,
-                "scope" => scope
-              }
-            )
-
-            {:noreply,
-             socket
-             |> put_flash(:info, msg)
-             |> assign(:provider_form, nil)
-             |> assign(:editing_ap_id, nil)
-             |> load_models()}
-
-          {:error, changeset} ->
-            {:noreply,
-             socket
-             |> put_flash(
-               :error,
-               gettext("Could not assign: %{errors}",
-                 errors: Enum.map_join(changeset.errors, ", ", fn {_f, {m, _}} -> m end)
-               )
-             )
-             |> assign(:provider_form, to_form(changeset, as: :model_provider))}
-        end
+           gettext("Could not assign: %{errors}",
+             errors: Enum.map_join(changeset.errors, ", ", fn {_f, {m, _}} -> m end)
+           )
+         )
+         |> assign(:provider_form, to_form(changeset, as: :model_provider))}
     end
   end
 
-  defp save_model_provider(socket, ap_id, ap_params) when is_binary(ap_id) do
+  defp update_model_provider(socket, ap_id, ap_params) do
     ap = Providers.get_model_provider!(ap_id)
     ap_params = apply_provider_defaults(ap_params, socket)
 

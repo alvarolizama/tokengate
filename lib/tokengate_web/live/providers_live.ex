@@ -641,6 +641,10 @@ defmodule TokengateWeb.ProvidersLive do
 
   # Capabilities for a custom come straight from the form (there is no catalog
   # entry to derive them from); builtins get them from `Catalog`.
+  # A submit already in flight lands right after Cancel cleared the editing
+  # id: no-op instead of a FunctionClauseError that would lose the form.
+  defp save_provider(socket, nil, _provider_params), do: {:noreply, socket}
+
   defp save_provider(socket, :new, provider_params) do
     case Providers.create_provider(provider_params) do
       {:ok, provider} ->

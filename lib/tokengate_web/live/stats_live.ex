@@ -29,6 +29,8 @@ defmodule TokengateWeb.StatsLive do
 
   alias Tokengate.Accounts
   alias Tokengate.Budgets
+  alias Tokengate.Budgets.Exemptions
+  alias Tokengate.GlobalSettings
   alias Tokengate.Logs
   alias Tokengate.Logs.Inflight
   alias Tokengate.Metrics.DashboardCache
@@ -939,41 +941,80 @@ defmodule TokengateWeb.StatsLive do
     Process.send_after(self(), :clock_tick, ms)
   end
 
-  # One bundled realtime refresh. All queries are cheap (index range scans
-  # over the last hour/day) and shared across connected live tabs via the
-  # DashboardCache TTL so a busy proxy doesn't multiply Postgres load.
+  # One bundled realtime refresh. The day partition is scanned ONCE per
+  # cache cycle (flat KPI totals + hour × provider profile + budget spend
+  # all come out of `Logs.today_live_bundle/0`; it used to be three scans)
+  # and shared across connected live tabs via the DashboardCache TTL so a
+  # busy proxy doesn't multiply Postgres load.
   defp load_live_data(socket) do
     timezone = socket.assigns[:timezone] || "Etc/UTC"
+
+    # El p95 del día ordena TODA la partición del día (y crece con ella):
+    # fuera del camino de 5s, con TTL propio de 60s.
+    p95_latency_ms =
+      DashboardCache.fetch_or_compute(
+        {:stats_live_p95, timezone},
+        fn -> Logs.today_p95_latency_ms("Etc/UTC") end,
+        ttl: 60_000
+      )
 
     bundle =
       DashboardCache.fetch_or_compute({:stats_live, timezone}, fn ->
         # KPIs "Hoy" = día UTC (misma ventana que el kill-switch y que el
-        # card de tope de arriba) — no el día local del usuario.
-        today_metrics = Logs.today_summary("Etc/UTC")
+        # card de tope de arriba) — no el día local del usuario. UN solo
+        # scan del día alimenta los totales planos, el perfil hora ×
+        # proveedor y el gasto del tope.
+        live = Logs.today_live_bundle()
+
+        # Gasto real del día UTC — el mismo número que muestra Mantenimiento
+        # — más cap y exentos del kill-switch. Día UTC y no local: el cap
+        # resetea a las 00:00 UTC, así que barra, % y countdown tienen que
+        # medir la misma ventana. Nada de contador ETS (holds). El spend ya
+        # salió del scan del día (cost_usd del bundle): antes este card
+        # re-escaneaba la misma partición vía
+        # Budgets.global_daily_budget_summary/0.
+        spend = live.today.cost_usd
+        cap = GlobalSettings.get_daily_cap()
+
+        org_budget = %{
+          daily_spend_usd: spend,
+          daily_cap_usd: cap,
+          daily_pct: daily_pct(spend, cap),
+          exempt_count: Exemptions.count_for_scope("global_daily")
+        }
 
         %{
           pulse: Logs.realtime_summary(%{}),
-          today_metrics: today_metrics,
+          today_metrics: live.today,
           minute_series: Logs.requests_per_minute(60),
-          # "Hoy por hora · por proveedor": un solo agregado (hora ×
-          # proveedor) sobre la partición del día UTC, sin joins.
-          day_by_hour: Logs.today_usage_by_hour_provider(),
-          # Gasto real del día UTC — el mismo número que muestra Mantenimiento
-          # — más cap y exentos del kill-switch. Día UTC y no local: el cap
-          # resetea a las 00:00 UTC, así que barra, % y countdown tienen que
-          # medir la misma ventana. Nada de contador ETS (holds).
-          org_budget: Budgets.global_daily_budget_summary()
+          day_by_hour: live.day_by_hour,
+          org_budget: org_budget
         }
       end)
 
-    feed_logs = Logs.list_logs(%{limit: @live_feed_size})
+    # El feed inicial se monta UNA vez por proceso: los refrescos
+    # (:reload_live, :live_tick) ya no re-traen list_logs — el broadcast
+    # {:new_log, log} inserta cada request nueva en el stream en tiempo
+    # real, y refrescar los KPIs no cambia el contenido del feed.
+    socket =
+      if socket.assigns[:live_feed_loaded] do
+        socket
+      else
+        feed_logs = Logs.list_logs(%{limit: @live_feed_size})
+
+        socket
+        |> stream(:live_feed, feed_logs, reset: true)
+        |> assign(:live_feed_loaded, true)
+      end
 
     minute_series = bundle.minute_series
 
     socket
     |> assign(:stats_loading, false)
     |> assign(:pulse, bundle.pulse)
-    |> assign(:today_metrics, bundle.today_metrics)
+    # El p95 va aparte del bundle: vive en su propio cache de 60s y no se
+    # congela dentro del bundle de 5s.
+    |> assign(:today_metrics, Map.put(bundle.today_metrics, :p95_latency_ms, p95_latency_ms))
     |> assign(:minute_series, minute_series)
     |> assign(:minute_series_max, minute_requests_max(minute_series))
     |> assign(:minute_tokens_max, minute_tokens_max(minute_series))
@@ -982,7 +1023,20 @@ defmodule TokengateWeb.StatsLive do
     |> assign(:inflight_count, Inflight.count())
     |> assign(:day_by_hour, bundle.day_by_hour)
     |> assign(:last_sync_at, DateTime.utc_now())
-    |> stream(:live_feed, feed_logs, reset: true)
+  end
+
+  # Misma fórmula que el `pct/2` privado de Budgets: % del cap redondeado a
+  # 1 decimal; nil sin cap o con cap 0.
+  defp daily_pct(_spend, nil), do: nil
+
+  defp daily_pct(spend, cap) do
+    if Decimal.compare(cap, Decimal.new(0)) == :gt do
+      spend
+      |> Decimal.div(cap)
+      |> Decimal.mult(Decimal.new(100))
+      |> Decimal.to_float()
+      |> Float.round(1)
+    end
   end
 
   # Per-series maxima for the three "En vivo" bar charts. All three read the

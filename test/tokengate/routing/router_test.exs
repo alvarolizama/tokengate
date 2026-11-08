@@ -334,6 +334,39 @@ defmodule Tokengate.Routing.RouterTest do
 
       assert {:error, :model_not_found} = Router.route("nonexistent-model", f.member)
     end
+
+    # C6: la lista de accesibles se consultaba en CADA request (y en cada
+    # reintento). `route/3` debe poblarla en el cache ETS con la clave
+    # (group_id, member_id) — la misma con la que Providers invalida.
+    test "route/3 caches the accessible models per (group, member)" do
+      f = full_setup()
+
+      assert {:ok, _route} = Router.route(f.model.name, f.member)
+
+      key = {:accessible_models, f.group.id, f.member.id}
+
+      assert [{^key, models, _expires_at}] =
+               :ets.lookup(Tokengate.Routing.Cache.table(), key)
+
+      assert Enum.any?(models, &(&1.id == f.model.id))
+    end
+
+    test "an expired entry is treated as a miss (TTL on read)" do
+      table = Tokengate.Routing.Cache.table()
+      stale_deadline = System.monotonic_time(:millisecond) - 1
+
+      :ets.insert(
+        table,
+        {{:accessible_models, "group-expired", "member-expired"}, [:stale], stale_deadline}
+      )
+
+      computed =
+        Tokengate.Routing.Cache.fetch_accessible_models("group-expired", "member-expired", fn ->
+          [:fresh]
+        end)
+
+      assert computed == [:fresh]
+    end
   end
 
   # ---------------------------------------------------------------------------

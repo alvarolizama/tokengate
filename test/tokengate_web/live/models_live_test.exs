@@ -2271,4 +2271,174 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert has_element?(view, "#wizard-provider-fireworks-ai")
     refute has_element?(view, "#wizard-provider-302ai")
   end
+
+  # L37 — el scope "group"/"member" es una frontera de permisos: sin una
+  # selección real el lane debe rechazarse. Antes el builder de targets devolvía
+  # siempre al menos [ap_params], así que el guard `targets == []` era
+  # inalcanzable y un lane "exclusivo" vacío se guardaba GLOBAL (visible para
+  # todos).
+  describe "lane exclusivo sin selección (L37)" do
+    setup %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      provider = create_provider()
+      model_record = create_model()
+
+      {:ok, credential} =
+        Providers.create_credential(%{
+          provider_id: provider.id,
+          api_key_encrypted: "sk-test",
+          status: "active"
+        })
+
+      %{conn: login(conn, admin, password), model_record: model_record, credential: credential}
+    end
+
+    test "alta con scope group/member sin selección: flash de error y cero filas", ctx do
+      {:ok, view, _html} = live(ctx.conn, ~p"/catalog/models")
+      view |> element("#new-ap-#{ctx.model_record.id}") |> render_click()
+
+      submit = fn ->
+        view
+        |> form("#model-provider-form", %{
+          model_provider: %{
+            credential_id: ctx.credential.id,
+            provider_model: "gpt-4o-no-target",
+            priority: 1,
+            enabled: true
+          }
+        })
+        |> render_submit()
+      end
+
+      view |> render_click("change_scope", %{"scope" => "group"})
+      assert submit.() =~ "Selecciona al menos un perfil de límites o usuario"
+
+      view |> render_click("change_scope", %{"scope" => "member"})
+      assert submit.() =~ "Selecciona al menos un perfil de límites o usuario"
+
+      # El formulario sigue abierto para corregir la selección.
+      assert has_element?(view, "#model-provider-form")
+
+      rows =
+        Repo.all(
+          from mp in Tokengate.Providers.ModelProvider,
+            where: mp.model_id == ^ctx.model_record.id
+        )
+
+      assert rows == []
+    end
+
+    test "edición: cambiar a member sin elegir usuario no degrada el lane a global", ctx do
+      {:ok, ap} =
+        Providers.create_model_provider(%{
+          model_id: ctx.model_record.id,
+          credential_id: ctx.credential.id,
+          provider_model: "gpt-4o-original",
+          priority: 1,
+          enabled: true
+        })
+
+      {:ok, view, _html} = live(ctx.conn, ~p"/catalog/models")
+      view |> element("#edit-ap-#{ap.id}") |> render_click()
+      view |> render_click("change_scope", %{"scope" => "member"})
+
+      html =
+        view
+        |> form("#model-provider-form", %{
+          model_provider: %{
+            credential_id: ctx.credential.id,
+            provider_model: "gpt-4o-edit",
+            priority: 1
+          }
+        })
+        |> render_submit()
+
+      assert html =~ "Selecciona al menos un perfil de límites o usuario"
+
+      ap = Providers.get_model_provider!(ap.id)
+      assert ap.exclusive_to_group_id == nil
+      assert ap.exclusive_to_group_member_id == nil
+      assert ap.provider_model == "gpt-4o-original"
+    end
+
+    # El guard no puede dar falsos positivos: editar un lane que YA es
+    # exclusivo (el picker viene prellenado desde el row) debe guardar normal.
+    test "edición de un lane ya exclusivo conserva su grupo al guardar", ctx do
+      {:ok, group} = Accounts.create_group(%{name: "Scope #{unique()}"})
+
+      {:ok, ap} =
+        Providers.create_model_provider(%{
+          model_id: ctx.model_record.id,
+          credential_id: ctx.credential.id,
+          provider_model: "gpt-4o-group",
+          priority: 1,
+          enabled: true,
+          exclusive_to_group_id: group.id
+        })
+
+      {:ok, view, _html} = live(ctx.conn, ~p"/catalog/models")
+      view |> element("#edit-ap-#{ap.id}") |> render_click()
+
+      view
+      |> form("#model-provider-form", %{
+        model_provider: %{
+          credential_id: ctx.credential.id,
+          provider_model: "gpt-4o-group-renamed",
+          priority: 2
+        }
+      })
+      |> render_submit()
+
+      ap = Providers.get_model_provider!(ap.id)
+      assert ap.provider_model == "gpt-4o-group-renamed"
+      assert ap.priority == 2
+      assert ap.exclusive_to_group_id == group.id
+    end
+
+    # L38 — doble click en Guardar o submit encolado justo detrás de Cancelar
+    # llegan con `editing_ap_id` nil. Sin catch-all eso era un
+    # FunctionClauseError y el LiveView se perdía.
+    test "submit con id de edición stale tras Cancelar: no-op, sin crash", ctx do
+      {:ok, view, _html} = live(ctx.conn, ~p"/catalog/models")
+      view |> element("#new-ap-#{ctx.model_record.id}") |> render_click()
+      view |> render_click("cancel_model_provider")
+
+      html =
+        render_click(view, "save_model_provider", %{
+          "model_provider" => %{
+            "credential_id" => ctx.credential.id,
+            "provider_model" => "gpt-4o-late",
+            "priority" => 1,
+            "enabled" => true
+          }
+        })
+
+      refute html =~ "Something went wrong"
+      assert has_element?(view, "#new-ap-#{ctx.model_record.id}")
+
+      rows =
+        Repo.all(
+          from mp in Tokengate.Providers.ModelProvider,
+            where: mp.model_id == ^ctx.model_record.id
+        )
+
+      assert rows == []
+    end
+
+    test "save_guard_rails con id stale tras Cancelar: no-op, sin crash", ctx do
+      {:ok, view, _html} = live(ctx.conn, ~p"/catalog/models")
+
+      view |> render_click("edit_guard_rails", %{"id" => ctx.model_record.id})
+      view |> render_click("cancel_guard_rails")
+
+      html =
+        render_click(view, "save_guard_rails", %{
+          "model" => %{"guard_rails" => "late-edit", "prompt_cache_enabled" => "true"}
+        })
+
+      refute html =~ "Something went wrong"
+      assert has_element?(view, "#guard-rails-#{ctx.model_record.id}")
+      refute Providers.get_model!(ctx.model_record.id).guard_rails == "late-edit"
+    end
+  end
 end

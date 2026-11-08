@@ -98,12 +98,25 @@ defmodule Tokengate.Budgets.Manager do
 
       {:ok, held_monthly} ->
         if exempt_global? do
-          {:ok, %{monthly_micro: held_monthly, global_micro: 0, exempt_global?: true}}
+          {:ok,
+           %{
+             monthly_micro: held_monthly,
+             global_micro: 0,
+             exempt_global?: true,
+             period: current_period_stamp(:monthly),
+             global_period: Date.utc_today()
+           }}
         else
           case hold_counter(@global_key, requested, global_cap_usd) do
             {:ok, held_global} ->
               {:ok,
-               %{monthly_micro: held_monthly, global_micro: held_global, exempt_global?: false}}
+               %{
+                 monthly_micro: held_monthly,
+                 global_micro: held_global,
+                 exempt_global?: false,
+                 period: current_period_stamp(:monthly),
+                 global_period: Date.utc_today()
+               }}
 
             {:error, :exhausted} ->
               # Roll layer 1 back so the two layers stay consistent.
@@ -132,6 +145,12 @@ defmodule Tokengate.Budgets.Manager do
 
     actual = to_micro(actual_cost_usd)
 
+    # Legado de dos capas, SIN guard por estado: el `ensure_loaded/2` de arriba
+    # re-siembra una entrada evictada por un reset ANTES de que un guard pueda
+    # verla (el `{:seed, ...}` del GenServer inserta incondicionalmente), así
+    # que un guard aquí sería inerte — vería "viva y del mismo ciclo" lo que
+    # acaba de renacer. El proxy no pasa por este path (los holds llevan `:kind`
+    # y van a `settle_credits/2`); se conserva el comportamiento de siempre.
     bump_counter({subject_id, :monthly}, actual - held_monthly)
     bump_counter({subject_id, :daily}, actual)
 
@@ -152,10 +171,22 @@ defmodule Tokengate.Budgets.Manager do
   """
   @spec release(subject_id :: term(), hold :: map()) :: :ok
   def release(subject_id, %{monthly_micro: held_monthly, global_micro: held_global} = hold) do
-    bump_counter({subject_id, :monthly}, -held_monthly)
+    period = Map.get(hold, :period, current_period_stamp(:monthly))
+    global_period = Map.get(hold, :global_period, Date.utc_today())
+
+    # El refund no resucita una entrada evictada por un reset (quedaría
+    # negativa y bloquearía el re-seed): solo devuelve el delta a la entrada
+    # viva de su ciclo.
+    if monthly_counter_live?(subject_id, period) do
+      bump_counter({subject_id, :monthly}, -held_monthly)
+    end
 
     unless hold.exempt_global? do
-      bump_counter(@global_key, -held_global)
+      # Estricto (a diferencia del settle): un refund sobre entrada ausente
+      # crearía el contador en negativo y envenenaría el día completo.
+      if global_counter_live?(global_period, true) do
+        bump_counter(@global_key, -held_global)
+      end
     end
 
     :ok
@@ -201,11 +232,11 @@ defmodule Tokengate.Budgets.Manager do
         :unlimited ->
           hold_global_only(global_cap_usd, requested, exempt_global?)
 
-        {:limit, subject} ->
-          hold_limit(subject, plan.limit_usd, global_cap_usd, requested, exempt_global?)
+        {:limit, _subject} ->
+          hold_limit(plan, global_cap_usd, requested, exempt_global?)
 
         {:topup, topup} ->
-          hold_topup(topup, global_cap_usd, requested, exempt_global?)
+          hold_topup(plan, topup, global_cap_usd, requested, exempt_global?)
 
         :no_credit ->
           {:error, {:budget_exceeded, %{layer: :no_credit}}}
@@ -229,15 +260,34 @@ defmodule Tokengate.Budgets.Manager do
   @spec settle_credits(map(), Decimal.t() | nil) :: :ok
   def settle_credits(%{kind: kind} = hold, actual_cost_usd) do
     actual = to_micro(actual_cost_usd)
+    period = Map.get(hold, :period, current_period_stamp(:monthly))
+    global_period = Map.get(hold, :global_period, Date.utc_today())
 
     case kind do
-      :limit -> bump_credit(hold.grant_key, actual - hold.subject_micro)
-      :topup -> bump_credit(hold.grant_key, actual - hold.subject_micro)
-      :no_credit -> :ok
+      # Guard por ESTADO del contador (no reloj): la absorción (`actual −
+      # held`) solo aplica si la entrada que vio el hold sigue viva y en SU
+      # ciclo. Un reset (o un rollover) la evictó ⇒ el settle tardío no toca
+      # al contador sobreviviente: el re-seed del SyncWorker desde los logs
+      # es el dueño de la verdad. Ni regala crédito ni va a negativos.
+      :limit ->
+        if credit_counter_live?(hold.grant_key, period) do
+          bump_credit(hold.grant_key, actual - hold.subject_micro)
+        end
+
+      # Los bolsines de top-up NO son mensuales (el reset no los borra y su
+      # `cycle_start` es nil): el settle SIEMPRE aterriza en el bolsín.
+      :topup ->
+        bump_credit(hold.grant_key, actual - hold.subject_micro)
+
+      :no_credit ->
+        :ok
     end
 
     unless hold.exempt_global? do
-      bump_counter(@global_key, actual - hold.global_micro)
+      if global_counter_live?(global_period, true) do
+        bump_counter(@global_key, actual - hold.global_micro)
+      end
+
       maybe_enqueue_global_sync()
     end
 
@@ -299,7 +349,8 @@ defmodule Tokengate.Budgets.Manager do
   def reseed_limit_counter(subject) do
     key = limit_key(subject)
     consumed = Tokengate.Credits.spend_debited_to_limit(subject)
-    seed_credit(key, to_micro(consumed), nil, current_period_stamp(:monthly), nil, true)
+
+    seed_credit_force(key, to_micro(consumed), nil, current_period_stamp(:monthly), nil, true)
   end
 
   @doc """
@@ -307,12 +358,24 @@ defmodule Tokengate.Budgets.Manager do
   """
   @spec release_credits(map()) :: :ok
   def release_credits(%{kind: kind} = hold) do
+    period = Map.get(hold, :period, current_period_stamp(:monthly))
+    global_period = Map.get(hold, :global_period, Date.utc_today())
+
     if kind in [:limit, :topup] do
-      bump_credit(hold.grant_key, -hold.subject_micro)
+      # Mismo guard que el settle: el refund de un `:limit` no resucita una
+      # entrada evictada por un reset (quedaría negativa); los bolsines
+      # `:topup` siempre aterrizan (no son mensuales).
+      refund? = kind == :topup or credit_counter_live?(hold.grant_key, period)
+
+      if refund? do
+        bump_credit(hold.grant_key, -hold.subject_micro)
+      end
     end
 
     unless hold.exempt_global? do
-      bump_counter(@global_key, -hold.global_micro)
+      if global_counter_live?(global_period, true) do
+        bump_counter(@global_key, -hold.global_micro)
+      end
     end
 
     :ok
@@ -375,34 +438,73 @@ defmodule Tokengate.Budgets.Manager do
   # contador al costo de la última request y el release (`−total`) lo mandaba
   # a 0 — se perdía el gasto acumulado del mes y el contador quedaba basura
   # en ambas direcciones (402 con crédito restante, o gasto de más).
-  defp hold_limit(subject, limit_usd, global_cap_usd, requested, exempt_global?) do
+  #
+  # Gate atómico, espejo de `hold_counter/3`: bump primero y decisión contra
+  # el valor ANTES de este bump (`new − requested >= tope` ⇒ el contador ya
+  # estaba en/sobre el techo). El read de `pick_layer` solo ELIGE la capa;
+  # aquí se re-valida sin ventana de carrera. Un pedido mayor al remanente
+  # sigue pasando (es un hold; el settle lo corrige) pero bloquea al
+  # siguiente concurrente. En rechazo: rollback del delta y caída a top-ups
+  # con la misma capa de rechazo que dicta `limit_exhausted/1`.
+  defp hold_limit(plan, global_cap_usd, requested, exempt_global?) do
+    subject = plan.subject
     key = limit_key(subject)
     ensure_limit_loaded(subject)
 
-    _ = bump_credit(key, requested)
+    new = bump_credit(key, requested)
 
-    hold_global_after_credit(
-      %{kind: :limit, grant_key: key, subject: subject, limit_usd: limit_usd},
-      requested,
-      global_cap_usd,
-      requested,
-      exempt_global?
-    )
+    if new - requested >= to_micro(plan.limit_usd) do
+      bump_credit(key, -requested)
+
+      case topups_only(plan, :subject) do
+        {:topup, topup} ->
+          hold_topup(plan, topup, global_cap_usd, requested, exempt_global?)
+
+        :subject ->
+          {:error, {:budget_exceeded, %{layer: :subject}}}
+      end
+    else
+      hold_global_after_credit(
+        %{kind: :limit, grant_key: key, subject: subject, limit_usd: plan.limit_usd},
+        requested,
+        global_cap_usd,
+        requested,
+        exempt_global?
+      )
+    end
   end
 
-  defp hold_topup(topup, global_cap_usd, requested, exempt_global?) do
+  # Top-up hold: mismo gate atómico contra el techo del bolsín. En rechazo:
+  # rollback del delta y re-elección entre los bolsines restantes (`fallback`
+  # = `:subject` si el plan tenía límite, `:no_credit` si no). Sin loop: tras
+  # el rollback el bolsín queda en/sobre su amount, así que
+  # `topup_has_room?/1` lo excluye naturalmente de la re-elección.
+  defp hold_topup(plan, topup, global_cap_usd, requested, exempt_global?) do
     key = topup_key(topup)
     ensure_topup_loaded(topup)
 
-    _ = bump_credit(key, requested)
+    new = bump_credit(key, requested)
 
-    hold_global_after_credit(
-      %{kind: :topup, grant_key: key, topup: topup},
-      requested,
-      global_cap_usd,
-      requested,
-      exempt_global?
-    )
+    if new - requested >= to_micro(topup.amount_usd) do
+      bump_credit(key, -requested)
+      fallback = if plan.limit_usd != nil, do: :subject, else: :no_credit
+
+      case topups_only(plan, fallback) do
+        {:topup, next} ->
+          hold_topup(plan, next, global_cap_usd, requested, exempt_global?)
+
+        layer when layer in [:subject, :no_credit] ->
+          {:error, {:budget_exceeded, %{layer: layer}}}
+      end
+    else
+      hold_global_after_credit(
+        %{kind: :topup, grant_key: key, topup: topup},
+        requested,
+        global_cap_usd,
+        requested,
+        exempt_global?
+      )
+    end
   end
 
   # `held_micro` = delta retenido del sujeto (lo que hay que devolver si el
@@ -427,7 +529,12 @@ defmodule Tokengate.Budgets.Manager do
     Map.merge(partial, %{
       subject_micro: held,
       global_micro: held_global,
-      exempt_global?: exempt_global?
+      exempt_global?: exempt_global?,
+      # Stamps de período capturados AL RESERVAR: el guard de settle/release
+      # compara contra el ESTADO del contador (entrada viva + mismo ciclo),
+      # no contra el reloj (que no se mueve en un reset).
+      period: current_period_stamp(:monthly),
+      global_period: Date.utc_today()
     })
   end
 
@@ -509,10 +616,26 @@ defmodule Tokengate.Budgets.Manager do
     end
   end
 
+  # Semilla perezosa (ensure_*): NUNCA pisa un contador vivo del ciclo en
+  # curso. La decisión "stale" se tomó antes de que bumps concurrentes
+  # aterrizaran y el `:ets.insert` incondicional los borraba (cold-start
+  # race: N procesos ven la clave ausente, todos leen la DB, todos insertan
+  # el valor de DB encima del gasto ya cargado). El guard del handle_call
+  # decide; un contador vivo del ciclo gana sobre la semilla perezosa.
   defp seed_credit(key, consumed_micro, credited_micro, cycle_start, units, granting?) do
     GenServer.call(
       __MODULE__,
-      {:seed_credit, key, consumed_micro, credited_micro, cycle_start, units, granting?}
+      {:seed_credit, key, consumed_micro, credited_micro, cycle_start, units, granting?, false}
+    )
+  end
+
+  # Variante forzada (re-seed del SyncWorker desde la verdad durable de los
+  # logs): SÍ puede sobrescribir un contador vivo del mismo ciclo — es LA
+  # corrección de drift (crash entre hold y settle, rollback duplicado).
+  defp seed_credit_force(key, consumed_micro, credited_micro, cycle_start, units, granting?) do
+    GenServer.call(
+      __MODULE__,
+      {:seed_credit, key, consumed_micro, credited_micro, cycle_start, units, granting?, true}
     )
   end
 
@@ -573,7 +696,9 @@ defmodule Tokengate.Budgets.Manager do
       topup: nil,
       subject_micro: 0,
       global_micro: held_global,
-      exempt_global?: exempt_global?
+      exempt_global?: exempt_global?,
+      period: current_period_stamp(:monthly),
+      global_period: Date.utc_today()
     }
   end
 
@@ -593,6 +718,40 @@ defmodule Tokengate.Budgets.Manager do
   defp bump_credit(key, inc) when is_integer(inc) do
     default = {key, 0, 0, nil, false, 0, false}
     :ets.update_counter(@credits_table, key, {2, inc}, default)
+  end
+
+  # ---------------------------------------------------------------------------
+  # Internal — guards de settle/release por ESTADO del contador
+  # ---------------------------------------------------------------------------
+
+  # Guard del contador de créditos (pos 4 = `cycle_start` en ambas formas de
+  # la entrada): la entrada existe y su ciclo coincide con el del hold.
+  # Ausente ⇒ un reset la evictó; distinto ⇒ hubo rollover. En ambos casos el
+  # contador sobreviviente (o el re-seed desde logs) es la verdad y el
+  # settle/release tardío no lo toca.
+  defp credit_counter_live?(key, period) do
+    :ets.lookup_element(@credits_table, key, 4, :missing) == period
+  end
+
+  # Guard mensual del camino de dos capas (@table, pos 4 = {y, m} guardado).
+  defp monthly_counter_live?(subject_id, period) do
+    :ets.lookup_element(@table, {subject_id, :monthly}, 4, :missing) == period
+  end
+
+  # Guard del contador global (@table, pos 4 = día guardado). `skip_on_missing?`
+  # distingue caminos: el de créditos (settle_credits/release_credits/release/2)
+  # salta si la entrada falta — el re-seed global es el dueño de la verdad y un
+  # refund sobre entrada ausente crearía el contador en negativo; el settle/3
+  # legacy conserva el comportamiento de siempre con holds legacy (entrada
+  # ausente ⇒ el bump la crea en 0).
+  defp global_counter_live?(global_period, skip_on_missing?) do
+    case :ets.lookup(@table, @global_key) do
+      [] ->
+        not skip_on_missing?
+
+      [{@global_key, _micro, _loaded?, stored_day}] ->
+        stored_day == global_period
+    end
   end
 
   @doc """
@@ -834,14 +993,31 @@ defmodule Tokengate.Budgets.Manager do
 
   @impl true
   def handle_call(
-        {:seed_credit, key, consumed_micro, credited_micro, cycle_start, units, granting?},
+        {:seed_credit, key, consumed_micro, credited_micro, cycle_start, units, granting?,
+         force?},
         _from,
         state
       ) do
-    :ets.insert(
-      @credits_table,
-      {key, consumed_micro, credited_micro, cycle_start, true, units, granting?}
-    )
+    # Guard anti-clobber: escribe solo si la clave falta (primera siembra),
+    # su ciclo guardado difiere del entrante (re-siembra legítima de
+    # rollover) o la semilla es forzada (re-seed del SyncWorker). Un contador
+    # VIVO del ciclo en curso gana sobre la semilla perezosa.
+    write? =
+      force? or
+        case :ets.lookup(@credits_table, key) do
+          [] ->
+            true
+
+          [{^key, _consumed, _credited, stored_cycle, _loaded?, _units, _granting?}] ->
+            stored_cycle != cycle_start
+        end
+
+    if write? do
+      :ets.insert(
+        @credits_table,
+        {key, consumed_micro, credited_micro, cycle_start, true, units, granting?}
+      )
+    end
 
     {:reply, :ok, state}
   end

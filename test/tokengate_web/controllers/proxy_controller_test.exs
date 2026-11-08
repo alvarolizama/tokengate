@@ -175,6 +175,12 @@ defmodule TokengateWeb.ProxyControllerTest do
           Process.sleep(300)
           stream(conn)
 
+        # Un upstream que manda el primer chunk y después se queda mudo con la
+        # conexión abierta: sin `after` en `stream_loop` el cliente quedaría
+        # colgado para siempre. El gateway debe cortarlo por inactividad.
+        "stallstream" in conn.path_info ->
+          stall_stream(conn)
+
         # A chat answer with NO reported cost: forces the manual-pricing
         # fallback path (usage tokens, but no `cost` anywhere).
         "nocost" in conn.path_info ->
@@ -236,6 +242,19 @@ defmodule TokengateWeb.ProxyControllerTest do
           {:error, :closed} -> {:halt, conn}
         end
       end)
+    end
+
+    # Manda UN frame y deja la conexión abierta pero muda: el caso que el
+    # timeout de inactividad de `stream_loop` tiene que cortar.
+    defp stall_stream(conn) do
+      conn =
+        conn
+        |> put_resp_content_type("text/event-stream")
+        |> send_chunked(200)
+
+      {:ok, conn} = chunk(conn, ~s(data: {"choices":[{"delta":{"content":"qué"}}]}\n\n))
+      Process.sleep(30_000)
+      conn
     end
 
     # SSE con contenido y NINGÚN frame de usage — así contesta un upstream que
@@ -556,6 +575,12 @@ defmodule TokengateWeb.ProxyControllerTest do
 
   test "402 when the global daily kill-switch is reached", %{conn: conn} do
     %{token: token, model: model, member: member} = proxy_fixture()
+
+    # Calienta el cache de `:persistent_term` con un tope benigno: si el
+    # `update/2` de abajo no invalidara, `get_daily_cap/0` seguiría sirviendo
+    # 100 y este request pasaría en vez de 402.
+    {:ok, _} = Tokengate.GlobalSettings.update(%{"daily_max_spend_usd" => "100.00"})
+    assert Decimal.equal?(Tokengate.GlobalSettings.get_daily_cap(), Decimal.new("100.00"))
 
     # Arm the org-wide kill-switch and put spend on the books for today so the
     # global counter is at the cap.
@@ -1419,10 +1444,11 @@ defmodule TokengateWeb.ProxyControllerTest do
     assert %{"error" => %{"code" => "upstream_client_error"}} = json_response(conn, 400)
 
     # Solo hay una credencial: la política de 400 reemite el body dos veces en
-    # ESA misma key (la segunda tras @bad_request_retry_delay_ms) y recién
-    # entonces el cascade se queda sin candidatos y surfacea el 4xx al cliente.
+    # ESA misma key, back to back, y recién entonces el cascade se queda sin
+    # candidatos y surfacea el 4xx al cliente. Sin pausas: los tres intentos
+    # deben costar milisegundos, no los 3s que dormía el proceso del request.
     assert length(collect_provider_hits()) == 3
-    assert elapsed >= 3_000, "expected the 2nd 400 retry to wait 3s, took #{elapsed}ms"
+    assert elapsed < 1_000, "expected immediate 400 retries, took #{elapsed}ms"
 
     assert Providers.get_credential!(credential_id).status == "active"
     assert CircuitBreakerManager.status(credential_id) == :closed
@@ -2088,6 +2114,46 @@ defmodule TokengateWeb.ProxyControllerTest do
       |> post(~p"/v1/chat/completions", Map.put(chat_body(model.name), "stream", true))
 
     assert %{"error" => %{"type" => "service_unavailable"}} = json_response(conn, 503)
+  end
+
+  # C4: un upstream que manda el primer chunk y después se queda mudo mantiene
+  # la conexión (y el proceso del request, el slot de concurrencia y la
+  # conexión Finch) tomados para siempre. El timeout de inactividad debe matar
+  # el upstream, cerrar el stream con un frame de error + [DONE] y registrar el
+  # outcome como timeout en el breaker.
+  test "stream: an upstream that stalls mid-stream is cut off by the idle timeout", %{
+    conn: conn
+  } do
+    previous = Application.get_env(:tokengate, :stream_idle_timeout_ms)
+    Application.put_env(:tokengate, :stream_idle_timeout_ms, 100)
+
+    on_exit(fn ->
+      if previous,
+        do: Application.put_env(:tokengate, :stream_idle_timeout_ms, previous),
+        else: Application.delete_env(:tokengate, :stream_idle_timeout_ms)
+    end)
+
+    %{token: token, model: model} =
+      proxy_fixture(%{path_overrides: %{"chat" => "/stallstream"}})
+
+    [model_provider] = Providers.list_model_providers(model.id)
+    credential_id = model_provider.credential_id
+
+    conn =
+      conn
+      |> authed_conn(token)
+      |> post(~p"/v1/chat/completions", Map.put(chat_body(model.name), "stream", true))
+
+    assert conn.state == :chunked
+    body = response(conn, 200)
+
+    # El primer chunk pasó y el silencio posterior cerró el stream: error
+    # terminal explícito, no un cliente colgado.
+    assert body =~ ~s({"error":{"message":"upstream stream stalled"}})
+    assert body =~ "[DONE]"
+
+    # El corte quedó registrado como fallo de timeout contra la credencial.
+    assert CircuitBreakerManager.details(credential_id).failures == 1
   end
 
   # A non-400 4xx (a marketplace/aggregator "no available sellers" 404) is
@@ -2983,8 +3049,14 @@ defmodule TokengateWeb.ProxyControllerTest do
     end
 
     test "el 402 del cap global NO comparte copy con el del sujeto", %{conn: conn} do
-      %{token: token, model: model} = proxy_fixture(%{unlimited: true})
+      %{token: token, model: model, member: member} = proxy_fixture(%{unlimited: true})
       {:ok, _} = Tokengate.GlobalSettings.update(%{"daily_max_spend_usd" => "0.000001"})
+
+      # The cap does NOT reject the first request off a clean counter: the hold
+      # covers one request over the remaining headroom (hold_counter). Put
+      # spend on the books BEFORE the request, like the kill-switch test does —
+      # without this the test only passed on ETS leakage from it (seed order).
+      record(member.id, Decimal.new("0.01"))
 
       conn = conn |> authed_conn(token) |> post(~p"/v1/chat/completions", chat_body(model.name))
 

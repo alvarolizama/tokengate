@@ -101,16 +101,6 @@ defmodule TokengateWeb.TopupHelpers do
   @doc "¿Se archiva (vencido o agotado)?"
   def archived?(topup), do: state(topup) in [:expired, :exhausted]
 
-  @doc "Motivo del archivo, para el badge."
-  def archived_reason(topup) do
-    case state(topup) do
-      :expired -> gettext("Expired")
-      :exhausted -> "Agotado"
-      :revoked -> "Revocado"
-      _ -> nil
-    end
-  end
-
   @doc "Opciones del selector de expiración (nil = sin expiración)."
   def expiry_options do
     [

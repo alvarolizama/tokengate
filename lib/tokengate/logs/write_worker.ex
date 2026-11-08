@@ -20,7 +20,20 @@ defmodule Tokengate.Logs.WriteWorker do
   @logs_topic "logs:new"
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: args}) do
+  def perform(%Oban.Job{id: job_id, args: args}) do
+    # Idempotencia (C2): los reintentos de Oban re-ejecutan perform con el
+    # MISMO job id. El pre-check es seguro porque Oban nunca ejecuta el mismo
+    # job concurrentemente (los intentos son secuenciales): si ya hay fila,
+    # el primer intento ya entregó webhook y broadcast — no repetirlos. El
+    # índice único (oban_job_id, inserted_at) queda de respaldo durable.
+    if job_id && Logs.request_log_seen?(job_id) do
+      :ok
+    else
+      insert_and_deliver(job_id, args)
+    end
+  end
+
+  defp insert_and_deliver(job_id, args) do
     attrs = %{
       group_member_id: args["group_member_id"],
       # El sujeto del gasto viaja en la fila: sin la columna, agregar por
@@ -60,7 +73,11 @@ defmodule Tokengate.Logs.WriteWorker do
       credential_id: args["credential_id"],
       client_agent: args["client_agent"],
       provider_key_prefix: args["provider_key_prefix"],
-      inserted_at: parse_inserted_at(args["inserted_at"])
+      inserted_at: parse_inserted_at(args["inserted_at"]),
+      # Idempotencia (C2): la pareja única con `inserted_at`. NULL cuando el
+      # job no tiene id (perform directo en tests) — Postgres trata NULLs
+      # como distintos y el índice no los toca.
+      oban_job_id: job_id
     }
 
     case Logs.log_request(attrs) do

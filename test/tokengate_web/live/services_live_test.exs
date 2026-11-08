@@ -397,4 +397,24 @@ defmodule TokengateWeb.ServicesLiveTest do
       assert Accounts.get_api_key(k2.id) == nil
     end
   end
+
+  # L38 — doble click en Guardar o submit encolado justo detrás de Cancelar
+  # llegan con `editing_service_id` nil: no-op, no un crash del LiveView.
+  test "un submit con id de edición stale no revienta el LiveView", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/access/services")
+
+    view |> element("#new-service-btn") |> render_click()
+    view |> render_click("cancel_form")
+
+    # El submit estaba en vuelo cuando Cancelar limpió el id de edición.
+    html =
+      render_click(view, "save_service", %{"service" => %{"name" => "Late #{unique()}"}})
+
+    refute html =~ "Something went wrong"
+    assert has_element?(view, "#new-service-btn")
+    refute Enum.any?(Accounts.list_services(), &String.starts_with?(&1.name, "Late "))
+  end
 end

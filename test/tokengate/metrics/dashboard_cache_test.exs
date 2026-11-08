@@ -114,10 +114,11 @@ defmodule Tokengate.Metrics.DashboardCacheTest do
 
       _ = DashboardCache.fetch_or_compute(fresh_key, fn -> %{fresh: true} end)
 
-      # Age one entry past the TTL (same trick as the TTL-expiry test:
-      # monotonic timestamp relative to now, epoch-agnostic).
-      expired_ts = System.monotonic_time(:millisecond) - DashboardCache.ttl_ms() - 1
-      :ets.insert(:tokengate_dashboard_cache, {stale_key, %{stale: true}, expired_ts})
+      # Age one entry past its deadline. Entries store an absolute
+      # `expires_at` (monotonic ms) baked in at write time, so an already
+      # expired deadline is just `now - 1`.
+      expired_deadline = System.monotonic_time(:millisecond) - 1
+      :ets.insert(:tokengate_dashboard_cache, {stale_key, %{stale: true}, expired_deadline})
 
       # Note: the owning GenServer also sweeps on its own timer, so we can't
       # assert on the returned count (it may have reaped the stale entry
@@ -152,11 +153,12 @@ defmodule Tokengate.Metrics.DashboardCacheTest do
       _ = DashboardCache.fetch_or_compute(key, compute)
       assert :counters.get(call_count, 1) == 1
 
-      # Manually age the entry past TTL. We compute an expired timestamp
-      # relative to the current monotonic time so it works regardless of
-      # what epoch the BEAM uses for monotonic_time.
-      expired_ts = System.monotonic_time(:millisecond) - DashboardCache.ttl_ms() - 1
-      :ets.insert(:tokengate_dashboard_cache, {key, %{v: :stale}, expired_ts})
+      # Manually age the entry past its deadline. Entries store an absolute
+      # `expires_at` (monotonic ms) baked in at write time; an already
+      # expired deadline is just `now - 1`, relative to the current
+      # monotonic time so it works regardless of what epoch the BEAM uses.
+      expired_deadline = System.monotonic_time(:millisecond) - 1
+      :ets.insert(:tokengate_dashboard_cache, {key, %{v: :stale}, expired_deadline})
 
       # Second call: should be a miss (expired) → recompute
       result = DashboardCache.fetch_or_compute(key, compute)

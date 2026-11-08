@@ -44,6 +44,7 @@ defmodule TokengateWeb.GroupMembersLive do
           |> assign(:email_suggestions, [])
           |> assign(:member_search, "")
           |> load_data()
+          |> load_usage_tiers()
 
         {:ok, socket}
 
@@ -141,9 +142,6 @@ defmodule TokengateWeb.GroupMembersLive do
         Decimal.add(acc, spend)
       end)
 
-    # Usage tiers for this group (last 30 days)
-    usage_tiers = Rollup.member_usage_tiers(group.id, from: days_ago(30))
-
     # Límites EFECTIVOS por miembro — la misma regla única que el proxy usa
     # (`propio del usuario || default del perfil de límites || default del módulo`).
     # `@group` ya está en memoria y `:user` viene preloadeado por
@@ -161,7 +159,19 @@ defmodule TokengateWeb.GroupMembersLive do
     |> assign(:extra_models, extra_aliases_simple)
     |> assign(:denied_models, denied_models)
     |> assign(:group_monthly_spend, group_monthly_spend)
-    |> assign(:usage_tiers, usage_tiers)
+  end
+
+  # Usage tiers for this group (last 30 days). The heaviest aggregate of
+  # the page (member × minute buckets over 30 days) — NOT on the search
+  # path: `search_members` re-filters the member list but cannot change
+  # the tiers, so this runs on mount and when the membership set actually
+  # changes (add/remove member).
+  defp load_usage_tiers(socket) do
+    group = socket.assigns.group
+
+    usage_tiers = Rollup.member_usage_tiers(group.id, from: days_ago(30))
+
+    assign(socket, :usage_tiers, usage_tiers)
   end
 
   defp days_ago(n) do
@@ -240,7 +250,8 @@ defmodule TokengateWeb.GroupMembersLive do
            |> assign(:show_add_modal?, false)
            |> assign(:add_form, add_member_form())
            |> assign(:add_member_error, nil)
-           |> load_data()}
+           |> load_data()
+           |> load_usage_tiers()}
 
         {:error, changeset} ->
           {:noreply,
@@ -284,7 +295,8 @@ defmodule TokengateWeb.GroupMembersLive do
           {:noreply,
            socket
            |> put_flash(:info, gettext("Member removed."))
-           |> load_data()}
+           |> load_data()
+           |> load_usage_tiers()}
 
         {:error, _} ->
           {:noreply, put_flash(socket, :error, gettext("Could not remove the member."))}
