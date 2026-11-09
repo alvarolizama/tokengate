@@ -24,6 +24,13 @@ defmodule TokengateWeb.ServiceStatsLive do
   @page_size 50
   @summary_refresh_interval_ms 2_000
 
+  # Selector global de periodo: maneja los KPIs, el desglose, los top models
+  # y la tabla de keys — una sola ventana por consulta, como la página
+  # supervisada. "Este mes" empieza el día 1 en la zona del usuario, por eso
+  # el timezone entra a la llave del DashboardCache.
+  @periods ~w(24h 7d 30d month)
+  @default_period "7d"
+
   @impl true
   def mount(%{"service_id" => service_id}, _session, socket) do
     service = Accounts.get_service!(service_id)
@@ -39,6 +46,8 @@ defmodule TokengateWeb.ServiceStatsLive do
       # Todas las keys del servicio (activas y revocadas, más recientes
       # primero) — la fuente de las filas de la tabla de API keys.
       |> assign(:service_api_keys, Accounts.list_api_keys_for_service_all(service_id))
+      |> assign(:period, @default_period)
+      |> assign(:period_form, to_form(%{"period" => @default_period}, as: :period))
       |> assign(:timezone, socket.assigns[:timezone] || "Etc/UTC")
       |> assign(:is_admin, socket.assigns[:current_user].global_role == "admin")
       |> assign(:filters, default_filters())
@@ -46,8 +55,7 @@ defmodule TokengateWeb.ServiceStatsLive do
       |> assign(:cursor, nil)
       |> assign(:has_more, false)
       |> assign(:page_size, @page_size)
-      |> assign(:summary_5d, default_summary())
-      |> assign(:summary_30d, default_summary())
+      |> assign(:summary, default_summary())
       |> assign(:key_rows, [])
       |> assign(:summary_refresh_scheduled, false)
       |> require_admin_hook()
@@ -133,40 +141,51 @@ defmodule TokengateWeb.ServiceStatsLive do
     end
   end
 
+  # El selector global de periodo re-consulta summary y desglose por key con
+  # el MISMO `from` (load_summary), así que la suma de la tabla sigue cuadrando
+  # con el KPI en cualquier ventana.
+  def handle_event("set_period", %{"period" => period}, socket) when period in @periods do
+    {:noreply,
+     socket
+     |> assign(:period, period)
+     |> assign(:period_form, to_form(%{"period" => period}, as: :period))
+     |> load_summary()}
+  end
+
+  # Payload manual por el socket con un periodo desconocido: se ignora y la
+  # página queda en el periodo vigente.
+  def handle_event("set_period", _params, socket), do: {:noreply, socket}
+
   ## Data loading ---------------------------------------------------------
 
   defp load_summary(socket) do
     service_id = socket.assigns.service.id
+    period = socket.assigns.period
+    timezone = socket.assigns.timezone
 
-    # The two service_stats calls are the expensive part of every PubSub
-    # refresh here. Wrap them in the shared DashboardCache ETS (5s TTL, keyed
-    # per service + window) so N admins watching this page share one recompute
-    # every ~5s instead of each running both windows on every coalesced refresh.
+    # The service_stats call is the expensive part of every PubSub refresh
+    # here. Wrap it in the shared DashboardCache ETS (5s TTL, keyed per
+    # service + period + timezone) so N admins watching this page share one
+    # recompute every ~5s instead of each running it on every coalesced
+    # refresh.
     #
-    # El desglose por key tiene llave propia, pero lee el MISMO `from_5d` que
-    # el KPI: dos `days_ago(5)` independientes mueven el borde de la ventana
-    # entre cómputos (y un hit/miss del cache a distinto segundo) y la suma de
-    # la tabla se desfaza del KPI por las filas de ese borde.
-    from_5d = days_ago(5)
+    # Summary y desglose por key leen el MISMO `from`: dos cómputos con froms
+    # independientes mueven el borde de la ventana entre sí y la suma de la
+    # tabla se desfaza del KPI por las filas de ese borde.
+    from = period_from(period, timezone)
 
     key_stats =
-      DashboardCache.fetch_or_compute({:service_key_stats, service_id, "5d"}, fn ->
-        Logs.service_key_stats(service_id, from: from_5d)
+      DashboardCache.fetch_or_compute({:service_key_stats, service_id, period, timezone}, fn ->
+        Logs.service_key_stats(service_id, from: from)
       end)
 
     key_rows = build_key_rows(socket.assigns.service_api_keys, key_stats)
 
     socket
     |> assign(
-      :summary_5d,
-      DashboardCache.fetch_or_compute({:service_stats, service_id, "5d"}, fn ->
-        Logs.service_stats(service_id, from: from_5d)
-      end)
-    )
-    |> assign(
-      :summary_30d,
-      DashboardCache.fetch_or_compute({:service_stats, service_id, "30d"}, fn ->
-        Logs.service_stats(service_id, from: days_ago(30))
+      :summary,
+      DashboardCache.fetch_or_compute({:service_stats, service_id, period, timezone}, fn ->
+        Logs.service_stats(service_id, from: from)
       end)
     )
     |> assign(:key_rows, key_rows)
@@ -407,6 +426,28 @@ defmodule TokengateWeb.ServiceStatsLive do
     |> DateTime.truncate(:second)
   end
 
+  # ... y las ventanas que sirven los helpers:
+  defp period_from("24h", _timezone),
+    do: DateTime.utc_now() |> DateTime.add(-86_400, :second) |> DateTime.truncate(:second)
+
+  defp period_from("7d", _timezone), do: days_ago(7)
+  defp period_from("30d", _timezone), do: days_ago(30)
+
+  defp period_from("month", timezone) do
+    timezone
+    |> DateTime.now!()
+    |> DateTime.to_date()
+    |> Date.beginning_of_month()
+    |> DateTime.new!(~T[00:00:00], timezone)
+    |> DateTime.shift_zone!("Etc/UTC")
+    |> DateTime.truncate(:second)
+  end
+
+  defp period_label("24h"), do: gettext("Last 24 hours")
+  defp period_label("7d"), do: gettext("Last 7 days")
+  defp period_label("30d"), do: gettext("Last 30 days")
+  defp period_label("month"), do: gettext("This month")
+
   ## Render ----------------------------------------------------------------
 
   @impl true
@@ -435,60 +476,71 @@ defmodule TokengateWeb.ServiceStatsLive do
             </p>
           </div>
           <div class="flex-1"></div>
+          <.form for={@period_form} id="period-form" phx-change="set_period" class="w-48">
+            <.input
+              field={@period_form[:period]}
+              type="select"
+              label={gettext("Period")}
+              options={[
+                {period_label("24h"), "24h"},
+                {period_label("7d"), "7d"},
+                {period_label("30d"), "30d"},
+                {period_label("month"), "month"}
+              ]}
+            />
+          </.form>
         </header>
 
-        <%!-- KPI cards (5d window) --%>
+        <%!-- KPI cards (selected period) --%>
         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           <.stat_card
             id="kpi-requests"
-            label={gettext("Requests (5d)")}
-            value={Integer.to_string(@summary_5d.request_count)}
-            sub={safe_sub_count(@summary_5d.realtime_5min.request_count, " en 5 min")}
+            label={gettext("Requests")}
+            value={Integer.to_string(@summary.request_count)}
+            sub={safe_sub_count(@summary.realtime_5min.request_count, " en 5 min")}
             icon="hero-squares-2x2"
           />
           <.stat_card
-            label={gettext("Cost (5d)")}
-            value={fmt_money(@summary_5d.total_cost_usd)}
-            sub={safe_sub_count(@summary_5d.request_count, " reqs")}
+            label={gettext("Cost")}
+            value={fmt_money(@summary.total_cost_usd)}
+            sub={safe_sub_count(@summary.request_count, " reqs")}
             icon="hero-currency-dollar"
           />
           <.stat_card
-            label={gettext("Input tokens (5d)")}
-            value={format_number(@summary_5d.total_prompt_tokens)}
+            label={gettext("Input tokens")}
+            value={format_number(@summary.total_prompt_tokens)}
             sub={
               "cached " <>
-                format_number(@summary_5d.total_cache_read_tokens) <>
+                format_number(@summary.total_cache_read_tokens) <>
                 " · hit " <>
                 KpiHelpers.format_hit_rate(
                   KpiHelpers.cache_hit_rate(
-                    @summary_5d.total_cache_read_tokens,
-                    @summary_5d.total_prompt_tokens
+                    @summary.total_cache_read_tokens,
+                    @summary.total_prompt_tokens
                   )
                 )
             }
             icon="hero-arrow-down-on-square-stack"
           />
           <.stat_card
-            label={gettext("Output tokens (5d)")}
-            value={format_number(@summary_5d.total_completion_tokens)}
-            sub={gettext("avg TPS:") <> " " <> fmt_tps(@summary_5d.avg_tps)}
+            label={gettext("Output tokens")}
+            value={format_number(@summary.total_completion_tokens)}
+            sub={gettext("avg TPS:") <> " " <> fmt_tps(@summary.avg_tps)}
             icon="hero-arrow-up-on-square-stack"
           />
           <.stat_card
-            label={gettext("Errors (5d)")}
+            label={gettext("Errors")}
             value={
-              Integer.to_string(
-                @summary_5d.status_breakdown["4xx"] + @summary_5d.status_breakdown["5xx"]
-              )
+              Integer.to_string(@summary.status_breakdown["4xx"] + @summary.status_breakdown["5xx"])
             }
-            sub={safe_sub_count(@summary_5d.realtime_5min.error_rate, "% (5 min)")}
+            sub={safe_sub_count(@summary.realtime_5min.error_rate, "% (5 min)")}
             icon="hero-exclamation-triangle"
-            tone={error_tone(@summary_5d.status_breakdown)}
+            tone={error_tone(@summary.status_breakdown)}
           />
           <.stat_card
             label={gettext("Last request")}
-            value={last_request_label(@summary_5d.last_request_at, @timezone)}
-            sub={"latency prom: " <> fmt_ms(@summary_5d.avg_latency_ms)}
+            value={last_request_label(@summary.last_request_at, @timezone)}
+            sub={"latency prom: " <> fmt_ms(@summary.avg_latency_ms)}
             icon="hero-clock"
           />
         </div>
@@ -516,42 +568,37 @@ defmodule TokengateWeb.ServiceStatsLive do
           </div>
           <div class="card bg-base-100 border border-base-300 shadow-sm">
             <div class="card-body p-4">
-              <h3 class="text-sm font-semibold mb-2">Status breakdown (5d)</h3>
+              <h3 class="text-sm font-semibold mb-2">{gettext("Status breakdown")}</h3>
               <div class="space-y-2">
                 <.status_row
                   class_label="2xx"
-                  count={@summary_5d.status_breakdown["2xx"]}
+                  count={@summary.status_breakdown["2xx"]}
                   tone="success"
                 />
                 <.status_row
                   class_label="4xx"
-                  count={@summary_5d.status_breakdown["4xx"]}
+                  count={@summary.status_breakdown["4xx"]}
                   tone="warning"
                 />
                 <.status_row
                   class_label="5xx"
-                  count={@summary_5d.status_breakdown["5xx"]}
+                  count={@summary.status_breakdown["5xx"]}
                   tone="error"
                 />
               </div>
-              <p class="text-xs text-base-content/40 mt-3">
-                30d: 2xx {Integer.to_string(@summary_30d.status_breakdown["2xx"])} · 4xx {Integer.to_string(
-                  @summary_30d.status_breakdown["4xx"]
-                )} · 5xx {Integer.to_string(@summary_30d.status_breakdown["5xx"])}
-              </p>
             </div>
           </div>
           <div class="card bg-base-100 border border-base-300 shadow-sm">
             <div class="card-body p-4">
-              <h3 class="text-sm font-semibold mb-2">{gettext("Top models (5d)")}</h3>
-              <%= if @summary_5d.top_models == [] do %>
+              <h3 class="text-sm font-semibold mb-2">{gettext("Top models")}</h3>
+              <%= if @summary.top_models == [] do %>
                 <p class="text-xs text-base-content/40">
-                  {gettext("No requests in the last 5 days.")}
+                  {gettext("No requests in this period.")}
                 </p>
               <% else %>
                 <ol class="space-y-1">
                   <li
-                    :for={row <- @summary_5d.top_models}
+                    :for={row <- @summary.top_models}
                     class="flex items-center justify-between text-sm"
                   >
                     <span class="font-mono">{row.model_requested || "—"}</span>
@@ -565,7 +612,7 @@ defmodule TokengateWeb.ServiceStatsLive do
           </div>
         </div>
 
-        <%!-- API keys (5d window, full universe: every key ∪ traffic ids ∪ NULL) --%>
+        <%!-- API keys (selected period, full universe: every key ∪ traffic ids ∪ NULL) --%>
         <div class="card bg-base-100 border border-base-300 shadow-sm">
           <div class="card-body p-4">
             <h3 class="text-sm font-semibold mb-2">{gettext("API keys")}</h3>

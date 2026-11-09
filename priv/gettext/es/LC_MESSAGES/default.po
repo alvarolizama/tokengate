@@ -5419,3 +5419,32 @@ msgstr "Se cerraron todas las sesiones de esta cuenta, incluida esta."
 
 msgid "Sign in again"
 msgstr "Iniciar sesión de nuevo"
+
+## Selector de periodo de los stats de servicio (service_stats_live)
+
+msgid "Period"
+msgstr "Periodo"
+
+msgid "Last 24 hours"
+msgstr "Últimas 24 horas"
+
+msgid "Last 7 days"
+msgstr "Últimos 7 días"
+
+msgid "Last 30 days"
+msgstr "Últimos 30 días"
+
+msgid "Input tokens"
+msgstr "Tokens de entrada"
+
+msgid "Output tokens"
+msgstr "Tokens de salida"
+
+msgid "Status breakdown"
+msgstr "Desglose por estado"
+
+msgid "Top models"
+msgstr "Top models"
+
+msgid "No requests in this period."
+msgstr "Sin requests en este periodo."

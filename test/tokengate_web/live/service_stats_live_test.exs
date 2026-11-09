@@ -220,6 +220,43 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       refute has_element?(view, "#{row} .badge-success")
     end
 
+    test "the period selector recomputes the window and ignores unknown values", %{conn: conn} do
+      service = service_fixture()
+      key = key_fixture(service, %{"label" => "Live key"})
+
+      {:ok, _} = log_for(service, %{api_key_id: key.id})
+
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+
+      # Cambio a 24h: el log de hoy sigue en la ventana y la tabla cuadra
+      # con el KPI (mismo `from` compartido).
+      assert view
+             |> element("#period-form")
+             |> render_change(%{"period" => "24h"})
+
+      assert has_element?(view, "#api-key-row-#{key.id}")
+      assert cell_text(view, "#api-key-row-#{key.id} td:nth-child(3)") == "1"
+      assert render(element(view, "#kpi-requests")) =~ ~r/text-2xl font-bold[^>]*>\s*1\s*</
+
+      # Mes en curso: el log de hoy también cae dentro.
+      assert view
+             |> element("#period-form")
+             |> render_change(%{"period" => "month"})
+
+      assert has_element?(view, "#api-key-row-#{key.id}")
+
+      # Un periodo desconocido (payload manual por el socket) se ignora: la
+      # página no revienta y conserva el periodo vigente.
+      assert view
+             |> element("#period-form")
+             |> render_change(%{"period" => "hack"})
+
+      assert has_element?(view, "#api-key-row-#{key.id}")
+    end
+
     test "the table's requests add up to the KPI", %{conn: conn} do
       service = service_fixture()
       key = key_fixture(service, %{"label" => "Live key"})
