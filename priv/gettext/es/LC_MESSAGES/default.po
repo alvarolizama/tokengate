@@ -763,6 +763,16 @@ msgstr "Se aplican a todas las API keys de este proveedor, que los heredan. Vac√
 msgid "This credential is in error. Use Reactivate."
 msgstr "Esta credencial est√° en error. Usa Reactivar."
 
+#: lib/tokengate_web/live/service_stats_live.ex:589
+#, elixir-autogen, elixir-format
+msgid "This service has no API keys."
+msgstr "Este servicio no tiene claves API."
+
+#: lib/tokengate_web/live/service_stats_live.ex:221
+#, elixir-autogen, elixir-format
+msgid "Unattributed"
+msgstr "Sin atribuir"
+
 #: lib/tokengate_web/live/providers_live.ex:1109
 #, elixir-autogen, elixir-format
 msgid "Unique id of the custom provider."

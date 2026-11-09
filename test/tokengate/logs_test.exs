@@ -78,6 +78,42 @@ defmodule Tokengate.LogsTest do
   # Re-evaluating DateTime.utc_now() on each access would introduce microsecond drift.
   @timestamp DateTime.utc_now() |> DateTime.add(-1, :hour) |> DateTime.truncate(:second)
 
+  # Keys de servicio con material real: el `api_key_prefix` del log es el que
+  # etiqueta a las huérfanas cuando la key ya no existe.
+  defp service_api_key_fixture(service, attrs \\ %{}) do
+    {_token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+    {:ok, api_key} =
+      Accounts.create_api_key(
+        Map.merge(
+          %{
+            subject_type: "service",
+            service_id: service.id,
+            key_hash: key_hash,
+            key_prefix: key_prefix,
+            label: "Key #{System.unique_integer([:positive])}"
+          },
+          attrs
+        )
+      )
+
+    api_key
+  end
+
+  # Log de servicio (sin group_member_id: el sujeto es el servicio).
+  defp service_log_fixture(service, attrs) do
+    default_attrs = %{
+      subject_type: "service",
+      service_id: service.id,
+      model_requested: "gpt-4",
+      status_code: 200,
+      inserted_at: @timestamp
+    }
+
+    {:ok, log} = Logs.log_request(Map.merge(default_attrs, attrs))
+    log
+  end
+
   defp log_fixture(attrs \\ %{}) do
     {group_member, _group} = group_member_fixture()
 
@@ -740,6 +776,157 @@ defmodule Tokengate.LogsTest do
 
       assert Logs.realtime_summary(%{group_member_id: tm.id}, 300).request_count == 0
       assert Logs.realtime_summary(%{group_member_id: tm.id}, 900).request_count == 1
+    end
+  end
+
+  # ---------------------------------------------------------------------------
+  # service_key_stats/2
+  # ---------------------------------------------------------------------------
+
+  describe "service_key_stats/2" do
+    test "la suma de las filas cuadra con service_stats/2 en el mismo rango" do
+      service = service_fixture()
+      active_key = service_api_key_fixture(service, %{label: "Producción"})
+      revoked_key = service_api_key_fixture(service, %{label: "Rotada"})
+      {:ok, _revoked} = Accounts.revoke_api_key(revoked_key)
+
+      # Un solo `from` explícito para ambos lados: dos `days_ago` independientes
+      # mueven el borde entre llamadas y la invariante se vuelve flaky.
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      from = DateTime.add(now, -3600, :second)
+      recent = DateTime.add(now, -1800, :second)
+
+      service_log_fixture(service, %{
+        api_key_id: active_key.id,
+        api_key_prefix: active_key.key_prefix,
+        provider_cost_usd: Decimal.new("1.250000"),
+        prompt_tokens: 100,
+        completion_tokens: 40,
+        inserted_at: recent
+      })
+
+      service_log_fixture(service, %{
+        api_key_id: active_key.id,
+        api_key_prefix: active_key.key_prefix,
+        provider_cost_usd: Decimal.new("0.750000"),
+        prompt_tokens: 10,
+        completion_tokens: 5,
+        inserted_at: recent
+      })
+
+      service_log_fixture(service, %{
+        api_key_id: revoked_key.id,
+        api_key_prefix: revoked_key.key_prefix,
+        provider_cost_usd: Decimal.new("2.000000"),
+        prompt_tokens: 300,
+        completion_tokens: 60,
+        cache_read_tokens: 7,
+        cache_creation_tokens: 3,
+        inserted_at: recent
+      })
+
+      # Dos logs históricos sin api_key_id: grupo NULL.
+      service_log_fixture(service, %{
+        provider_cost_usd: Decimal.new("0.100000"),
+        inserted_at: recent
+      })
+
+      service_log_fixture(service, %{
+        provider_cost_usd: Decimal.new("0.100000"),
+        inserted_at: recent
+      })
+
+      rows = Logs.service_key_stats(service.id, from: from)
+      summary = Logs.service_stats(service.id, from: from)
+
+      assert summary.request_count == 5
+      assert Enum.sum(Enum.map(rows, & &1.request_count)) == summary.request_count
+
+      total_cost =
+        rows
+        |> Enum.map(& &1.total_cost_usd)
+        |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
+
+      assert Decimal.eq?(total_cost, summary.total_cost_usd)
+      assert Decimal.eq?(summary.total_cost_usd, Decimal.new("4.200000"))
+
+      by_key = Map.new(rows, &{&1.api_key_id, &1})
+
+      assert by_key[active_key.id].request_count == 2
+      assert Decimal.eq?(by_key[active_key.id].total_cost_usd, Decimal.new("2.000000"))
+      assert by_key[active_key.id].total_prompt_tokens == 110
+
+      assert by_key[revoked_key.id].request_count == 1
+      assert by_key[revoked_key.id].total_completion_tokens == 60
+      assert by_key[revoked_key.id].total_cache_read_tokens == 7
+      assert by_key[revoked_key.id].total_cache_creation_tokens == 3
+
+      assert by_key[nil].request_count == 2
+      assert by_key[nil].total_prompt_tokens == 0
+    end
+
+    test "un id huérfano (key borrada) vuelve con su api_key_prefix" do
+      service = service_fixture()
+      orphan_id = Ecto.UUID.generate()
+
+      service_log_fixture(service, %{
+        api_key_id: orphan_id,
+        api_key_prefix: "tg-huerfa",
+        provider_cost_usd: Decimal.new("0.500000")
+      })
+
+      service_log_fixture(service, %{
+        api_key_id: orphan_id,
+        api_key_prefix: "tg-huerfa",
+        provider_cost_usd: Decimal.new("0.500000")
+      })
+
+      assert [row] = Logs.service_key_stats(service.id)
+      assert row.api_key_id == orphan_id
+      assert row.api_key_prefix == "tg-huerfa"
+      assert row.request_count == 2
+      assert Decimal.eq?(row.total_cost_usd, Decimal.new("1.000000"))
+      # No hay fila en api_keys: el id no lo puede resolver el preload.
+      assert Accounts.list_api_keys_for_service_all(service.id) == []
+    end
+
+    test "el grupo NULL aparece sólo cuando hay tráfico sin api_key_id" do
+      service = service_fixture()
+      key = service_api_key_fixture(service)
+
+      service_log_fixture(service, %{api_key_id: key.id, api_key_prefix: key.key_prefix})
+
+      rows = Logs.service_key_stats(service.id)
+      assert Enum.map(rows, & &1.api_key_id) == [key.id]
+      refute Enum.any?(rows, &is_nil(&1.api_key_id))
+
+      service_log_fixture(service, %{api_key_prefix: "tg-vieja"})
+
+      rows = Logs.service_key_stats(service.id)
+      nil_row = Enum.find(rows, &is_nil(&1.api_key_id))
+      assert nil_row
+      assert nil_row.request_count == 1
+      assert nil_row.api_key_prefix == "tg-vieja"
+    end
+
+    test "un log insertado antes del from no aparece" do
+      service = service_fixture()
+      key = service_api_key_fixture(service)
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      from = DateTime.add(now, -3600, :second)
+      inside = DateTime.add(now, -1800, :second)
+
+      service_log_fixture(service, %{api_key_id: key.id, inserted_at: inside})
+
+      service_log_fixture(service, %{
+        api_key_id: key.id,
+        inserted_at: DateTime.add(from, -1, :second)
+      })
+
+      assert [row] = Logs.service_key_stats(service.id, from: from)
+      assert row.request_count == 1
+      assert DateTime.compare(row.last_request_at, inside) == :eq
     end
   end
 

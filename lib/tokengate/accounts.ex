@@ -873,6 +873,22 @@ defmodule Tokengate.Accounts do
   end
 
   @doc """
+  Lista **todas** las keys de un servicio —activas y revocadas—, más recientes
+  primero.
+
+  A diferencia de `list_api_keys_for_service/1` no filtra por status: revocar
+  no borra la fila (sólo cambia `status`), así que su histórico sigue siendo
+  atribuible y la página de stats del servicio las muestra con su badge.
+  """
+  def list_api_keys_for_service_all(service_id) do
+    Repo.all(
+      from ak in ApiKey,
+        where: ak.service_id == ^service_id,
+        order_by: [desc: ak.inserted_at]
+    )
+  end
+
+  @doc """
   Keys activas de N servicios, agrupadas por `service_id` (una sola query).
 
   Alimenta la columna «Claves» de la tabla de servicios sin pagar un N+1 por

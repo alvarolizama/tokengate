@@ -41,6 +41,37 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
     service
   end
 
+  defp key_fixture(service, attrs) do
+    {_token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+    {:ok, api_key} =
+      Accounts.create_api_key(
+        Map.merge(
+          %{
+            "subject_type" => "service",
+            "service_id" => service.id,
+            "key_hash" => key_hash,
+            "key_prefix" => key_prefix,
+            "status" => "active"
+          },
+          attrs
+        )
+      )
+
+    api_key
+  end
+
+  # Texto de una celda de la tabla de API keys (una fila del group by, del
+  # preload o Unattributed), sin el ruido del HTML.
+  defp cell_text(view, selector) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(selector)
+    |> LazyHTML.text()
+    |> String.trim()
+  end
+
   defp log_for(service, attrs) do
     Logs.log_request(
       Map.merge(
@@ -119,6 +150,99 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
 
       assert html =~ "only-this-one"
       refute html =~ "other-service-model"
+    end
+  end
+
+  describe "api keys table" do
+    test "a revoked key with no traffic in the window shows zeros and its badge", %{conn: conn} do
+      service = service_fixture()
+      key = key_fixture(service, %{"label" => "Old key"})
+      {:ok, revoked} = Accounts.revoke_api_key(key)
+      assert revoked.status == "revoked"
+
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+
+      row = "#api-key-row-#{key.id}"
+
+      # El group by no trae nada (la key no tiene tráfico): la fila existe igual
+      # porque viene de la lista de keys del servicio.
+      assert has_element?(view, "#service-api-keys-table")
+      assert has_element?(view, row)
+      assert cell_text(view, "#{row} td:nth-child(1)") == "Old key"
+      assert cell_text(view, "#{row} td:nth-child(2)") == "revoked"
+      assert cell_text(view, "#{row} td:nth-child(3)") == "0"
+      assert cell_text(view, "#{row} td:nth-child(4)") == "0"
+      assert cell_text(view, "#{row} td:nth-child(5)") == "0"
+      assert cell_text(view, "#{row} td:nth-child(6)") == "$0.0"
+      assert cell_text(view, "#{row} td:nth-child(7)") == "—"
+      assert has_element?(view, "#{row} .badge-error")
+    end
+
+    test "traffic without api_key_id renders an Unattributed row", %{conn: conn} do
+      service = service_fixture()
+
+      # Log de servicio sin `api_key_id` (el histórico pre-unificación).
+      {:ok, _} = log_for(service, %{model_requested: "sin-key"})
+
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+
+      row = "#api-key-row-unattributed"
+      assert has_element?(view, row)
+      assert cell_text(view, "#{row} td:nth-child(1)") == "Sin atribuir"
+      assert cell_text(view, "#{row} td:nth-child(3)") == "1"
+    end
+
+    test "traffic from a deleted key is labeled by the log's api_key_prefix", %{conn: conn} do
+      service = service_fixture()
+
+      # Key borrada (delete_api_key/1): el id sobrevive en request_logs sin FK,
+      # la fila se etiqueta con el `api_key_prefix` del log, nunca con el uuid.
+      orphan_id = Ecto.UUID.generate()
+      {:ok, _} = log_for(service, %{api_key_id: orphan_id, api_key_prefix: "tg-orphan"})
+
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+
+      row = "#api-key-row-#{orphan_id}"
+      assert has_element?(view, row)
+      assert cell_text(view, "#{row} td:nth-child(1)") == "tg-orphan"
+      assert cell_text(view, "#{row} td:nth-child(3)") == "1"
+      # Sin fila en api_keys no hay status: la huérfana no lleva badge.
+      refute has_element?(view, "#{row} .badge-error")
+      refute has_element?(view, "#{row} .badge-success")
+    end
+
+    test "the table's requests add up to the KPI", %{conn: conn} do
+      service = service_fixture()
+      key = key_fixture(service, %{"label" => "Live key"})
+
+      {:ok, _} = log_for(service, %{api_key_id: key.id})
+      {:ok, _} = log_for(service, %{api_key_id: key.id})
+      {:ok, _} = log_for(service, %{model_requested: "sin-key"})
+
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+
+      {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+
+      key_row = "#api-key-row-#{key.id}"
+
+      assert cell_text(view, "#{key_row} td:nth-child(3)") == "2"
+      assert cell_text(view, "#{key_row} td:nth-child(4)") == "200"
+      assert cell_text(view, "#{key_row} td:nth-child(5)") == "100"
+      assert cell_text(view, "#api-key-row-unattributed td:nth-child(3)") == "1"
+
+      # 2 atribuidos + 1 sin atribuir = el KPI de requests.
+      assert render(element(view, "#kpi-requests")) =~
+               ~r/text-2xl font-bold[^>]*>\s*3\s*</
     end
   end
 

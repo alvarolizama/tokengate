@@ -19,7 +19,6 @@ defmodule TokengateWeb.ServiceStatsLive do
   alias Tokengate.Accounts
   alias Tokengate.Logs
   alias Tokengate.Metrics.DashboardCache
-  alias Tokengate.Repo
   alias TokengateWeb.KpiHelpers
 
   @page_size 50
@@ -27,7 +26,7 @@ defmodule TokengateWeb.ServiceStatsLive do
 
   @impl true
   def mount(%{"service_id" => service_id}, _session, socket) do
-    service = service_id |> Accounts.get_service!() |> Repo.preload([:api_key])
+    service = Accounts.get_service!(service_id)
 
     if connected?(socket) do
       Phoenix.PubSub.subscribe(Tokengate.PubSub, "logs:new")
@@ -37,6 +36,9 @@ defmodule TokengateWeb.ServiceStatsLive do
       socket
       |> assign(:page_title, gettext("Stats") <> " · #{service.name} · Tokengate")
       |> assign(:service, service)
+      # Todas las keys del servicio (activas y revocadas, más recientes
+      # primero) — la fuente de las filas de la tabla de API keys.
+      |> assign(:service_api_keys, Accounts.list_api_keys_for_service_all(service_id))
       |> assign(:timezone, socket.assigns[:timezone] || "Etc/UTC")
       |> assign(:is_admin, socket.assigns[:current_user].global_role == "admin")
       |> assign(:filters, default_filters())
@@ -46,6 +48,7 @@ defmodule TokengateWeb.ServiceStatsLive do
       |> assign(:page_size, @page_size)
       |> assign(:summary_5d, default_summary())
       |> assign(:summary_30d, default_summary())
+      |> assign(:key_rows, [])
       |> assign(:summary_refresh_scheduled, false)
       |> require_admin_hook()
       |> load_summary()
@@ -139,11 +142,25 @@ defmodule TokengateWeb.ServiceStatsLive do
     # refresh here. Wrap them in the shared DashboardCache ETS (5s TTL, keyed
     # per service + window) so N admins watching this page share one recompute
     # every ~5s instead of each running both windows on every coalesced refresh.
+    #
+    # El desglose por key tiene llave propia, pero lee el MISMO `from_5d` que
+    # el KPI: dos `days_ago(5)` independientes mueven el borde de la ventana
+    # entre cómputos (y un hit/miss del cache a distinto segundo) y la suma de
+    # la tabla se desfaza del KPI por las filas de ese borde.
+    from_5d = days_ago(5)
+
+    key_stats =
+      DashboardCache.fetch_or_compute({:service_key_stats, service_id, "5d"}, fn ->
+        Logs.service_key_stats(service_id, from: from_5d)
+      end)
+
+    key_rows = build_key_rows(socket.assigns.service_api_keys, key_stats)
+
     socket
     |> assign(
       :summary_5d,
       DashboardCache.fetch_or_compute({:service_stats, service_id, "5d"}, fn ->
-        Logs.service_stats(service_id, from: days_ago(5))
+        Logs.service_stats(service_id, from: from_5d)
       end)
     )
     |> assign(
@@ -152,6 +169,77 @@ defmodule TokengateWeb.ServiceStatsLive do
         Logs.service_stats(service_id, from: days_ago(30))
       end)
     )
+    |> assign(:key_rows, key_rows)
+  end
+
+  # Universo de la tabla de API keys: TODAS las keys del servicio (preload
+  # `:api_keys`, revocadas incluidas) ∪ los ids con tráfico del group by ∪ el
+  # grupo NULL. El join de labels y agregados es en memoria por `api_key_id`:
+  # el LiveView no agrega queries (§Constraints#3).
+  #
+  # - key del preload sin tráfico en la ventana → ceros y su badge;
+  # - id huérfano (key borrada) → se etiqueta con el `api_key_prefix` del log,
+  #   nunca con el uuid desnudo;
+  # - grupo NULL → fila "Unattributed", sólo si trae tráfico.
+  defp build_key_rows(api_keys, key_stats) do
+    stats_by_id = Map.new(key_stats, fn row -> {row.api_key_id, row} end)
+    known_ids = MapSet.new(api_keys, & &1.id)
+
+    key_rows =
+      Enum.map(api_keys, fn key ->
+        %{
+          # El id del DOM usa el id de la key (único): el `key_prefix` no tiene
+          # unique y dos keys —o una viva y una huérfana— podían colisionar.
+          dom_id: "api-key-row-" <> key.id,
+          label: key.label || key.key_prefix || key.id,
+          status: key.status,
+          stats: Map.get(stats_by_id, key.id) || empty_key_stats(key.id)
+        }
+      end)
+
+    orphan_rows =
+      key_stats
+      |> Enum.reject(&(is_nil(&1.api_key_id) or MapSet.member?(known_ids, &1.api_key_id)))
+      |> Enum.map(fn row ->
+        %{
+          dom_id: "api-key-row-" <> row.api_key_id,
+          label: row.api_key_prefix || "—",
+          status: nil,
+          stats: row
+        }
+      end)
+
+    unattributed_rows =
+      case Enum.find(key_stats, &is_nil(&1.api_key_id)) do
+        nil ->
+          []
+
+        row ->
+          [
+            %{
+              dom_id: "api-key-row-unattributed",
+              label: gettext("Unattributed"),
+              status: nil,
+              stats: row
+            }
+          ]
+      end
+
+    key_rows ++ orphan_rows ++ unattributed_rows
+  end
+
+  defp empty_key_stats(api_key_id) do
+    %{
+      api_key_id: api_key_id,
+      request_count: 0,
+      total_cost_usd: Decimal.new(0),
+      total_prompt_tokens: 0,
+      total_completion_tokens: 0,
+      total_cache_read_tokens: 0,
+      total_cache_creation_tokens: 0,
+      last_request_at: nil,
+      api_key_prefix: nil
+    }
   end
 
   defp load_logs(socket, mode) do
@@ -352,6 +440,7 @@ defmodule TokengateWeb.ServiceStatsLive do
         <%!-- KPI cards (5d window) --%>
         <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           <.stat_card
+            id="kpi-requests"
             label={gettext("Requests (5d)")}
             value={Integer.to_string(@summary_5d.request_count)}
             sub={safe_sub_count(@summary_5d.realtime_5min.request_count, " en 5 min")}
@@ -415,12 +504,6 @@ defmodule TokengateWeb.ServiceStatsLive do
                   <span>{limit_label(@service)}</span>
                 </li>
                 <li class="flex items-center justify-between">
-                  <span class="text-base-content/60">{gettext("API key")}</span>
-                  <span class="badge badge-sm badge-ghost">
-                    {if @service.api_key, do: @service.api_key.key_prefix, else: "—"}
-                  </span>
-                </li>
-                <li class="flex items-center justify-between">
                   <span class="text-base-content/60">{gettext("Extra concurrency")}</span>
                   <span>{@service.concurrency_limit || 0}</span>
                 </li>
@@ -478,6 +561,68 @@ defmodule TokengateWeb.ServiceStatsLive do
                   </li>
                 </ol>
               <% end %>
+            </div>
+          </div>
+        </div>
+
+        <%!-- API keys (5d window, full universe: every key ∪ traffic ids ∪ NULL) --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-4">
+            <h3 class="text-sm font-semibold mb-2">{gettext("API keys")}</h3>
+            <div class="overflow-x-auto">
+              <table class="table table-sm" id="service-api-keys-table">
+                <thead>
+                  <tr>
+                    <th>{gettext("Key")}</th>
+                    <th>{gettext("Status")}</th>
+                    <th class="text-right">{gettext("Requests")}</th>
+                    <th class="text-right">{gettext("Input")}</th>
+                    <th class="text-right">{gettext("Output")}</th>
+                    <th class="text-right">{gettext("Cost")}</th>
+                    <th>{gettext("Last request")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <%= if @key_rows == [] do %>
+                    <tr id="service-api-keys-empty">
+                      <td colspan="7" class="text-center py-6 text-base-content/40">
+                        {gettext("This service has no API keys.")}
+                      </td>
+                    </tr>
+                  <% else %>
+                    <tr :for={row <- @key_rows} id={row.dom_id}>
+                      <td class="font-mono text-sm">{row.label}</td>
+                      <td>
+                        <%= if row.status do %>
+                          <span class={[
+                            "badge badge-sm",
+                            if(row.status == "active", do: "badge-success", else: "badge-error")
+                          ]}>
+                            {row.status}
+                          </span>
+                        <% else %>
+                          <span class="text-base-content/40">—</span>
+                        <% end %>
+                      </td>
+                      <td class="text-right text-sm font-mono">
+                        {format_number(row.stats.request_count)}
+                      </td>
+                      <td class="text-right text-sm">
+                        {format_number(row.stats.total_prompt_tokens)}
+                      </td>
+                      <td class="text-right text-sm">
+                        {format_number(row.stats.total_completion_tokens)}
+                      </td>
+                      <td class="text-right text-sm font-mono">
+                        {fmt_money(row.stats.total_cost_usd)}
+                      </td>
+                      <td class="text-sm">
+                        {last_request_label(row.stats.last_request_at, @timezone)}
+                      </td>
+                    </tr>
+                  <% end %>
+                </tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -586,10 +731,11 @@ defmodule TokengateWeb.ServiceStatsLive do
   attr :sub, :string, default: ""
   attr :icon, :string, default: "hero-chart-bar"
   attr :tone, :string, default: "default"
+  attr :id, :string, default: nil
 
   defp stat_card(assigns) do
     ~H"""
-    <div class="card bg-base-100 border border-base-300 shadow-sm">
+    <div id={@id} class="card bg-base-100 border border-base-300 shadow-sm">
       <div class="card-body p-4">
         <div class="flex items-center justify-between">
           <p class="text-xs font-medium text-base-content/60 uppercase tracking-wide">

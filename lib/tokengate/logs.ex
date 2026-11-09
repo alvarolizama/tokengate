@@ -1294,6 +1294,74 @@ defmodule Tokengate.Logs do
     })
   end
 
+  @doc """
+  Uso y gasto por **API key** de un servicio: una fila por `api_key_id`.
+
+  Agrupa el tráfico de la ventana por `api_key_id` y devuelve, por grupo, los
+  requests, el costo, los tokens y el último request. El grupo `api_key_id`
+  NULL viene incluido: es el histórico anterior a la columna y no se atribuye
+  por prefijo (`key_prefix` no es único). Las keys **borradas** sobreviven en
+  `request_logs` como ids huérfanos; su fila trae `api_key_prefix` para
+  etiquetarla en vez de mostrar el uuid desnudo.
+
+  La query usa el mismo camino que `cost_summary/1` —`apply_log_filters/2` y
+  `count(rl.id)`— así que la suma de las filas cuadra con el agregado de
+  `service_stats/2` cuando ambos leen el mismo rango.
+
+  ## Opciones
+
+    * `:from` — `inserted_at >= from` (DateTime). Opcional.
+    * `:to`   — `inserted_at <= to` (DateTime). Opcional.
+  """
+  @spec service_key_stats(binary(), keyword() | map()) :: [
+          %{
+            api_key_id: binary() | nil,
+            request_count: non_neg_integer(),
+            total_cost_usd: Decimal.t(),
+            total_prompt_tokens: non_neg_integer(),
+            total_completion_tokens: non_neg_integer(),
+            total_cache_read_tokens: non_neg_integer(),
+            total_cache_creation_tokens: non_neg_integer(),
+            last_request_at: DateTime.t() | nil,
+            api_key_prefix: String.t() | nil
+          }
+        ]
+  def service_key_stats(service_id, opts \\ []) do
+    opts_map =
+      cond do
+        is_map(opts) -> opts
+        is_list(opts) -> Map.new(opts)
+        true -> %{}
+      end
+
+    range =
+      opts_map
+      |> Map.take([:from, :to])
+      |> Enum.reject(fn {_k, v} -> is_nil(v) end)
+      |> Map.new()
+
+    filters = Map.merge(%{"service_id" => service_id}, range)
+
+    RequestLog
+    |> apply_log_filters(filters)
+    |> group_by([rl], rl.api_key_id)
+    |> select([rl], %{
+      api_key_id: rl.api_key_id,
+      request_count: count(rl.id),
+      total_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
+      total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
+      total_completion_tokens: coalesce(sum(rl.completion_tokens), 0),
+      total_cache_read_tokens: coalesce(sum(rl.cache_read_tokens), 0),
+      total_cache_creation_tokens: coalesce(sum(rl.cache_creation_tokens), 0),
+      last_request_at: max(rl.inserted_at),
+      api_key_prefix: max(rl.api_key_prefix)
+    })
+    |> Repo.all()
+    |> Enum.map(fn row ->
+      %{row | total_cost_usd: Decimal.new(to_string(row.total_cost_usd))}
+    end)
+  end
+
   defp status_breakdown_for_service(service_id, range) do
     empty = %{"2xx" => 0, "4xx" => 0, "5xx" => 0}
 
