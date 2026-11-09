@@ -94,15 +94,9 @@ defmodule TokengateWeb.AuditExportController do
   defp encode_changes(changes) when changes in [nil, %{}], do: nil
   defp encode_changes(changes), do: Jason.encode!(changes)
 
-  defp escape(nil), do: ""
-
-  defp escape(value) do
-    value = to_string(value)
-
-    if String.contains?(value, [",", "\"", "\n"]) do
-      "\"" <> String.replace(value, "\"", "\"\"") <> "\""
-    else
-      value
-    end
-  end
+  # El escape vive en `TokengateWeb.CSV` (una sola implementación compartida con
+  # el export de stats). Antes esta copia solo citaba comas y comillas: los
+  # campos que manda el cliente (`user_agent`, `origin`, `target_label`) podían
+  # empezar con `=` y el spreadsheet los evaluaba al abrir el archivo.
+  defp escape(value), do: TokengateWeb.CSV.escape(value)
 end

@@ -261,8 +261,17 @@ defmodule TokengateWeb.UserAuth do
     # LiveView sessions use string keys; plug sessions may use atoms.
     case session["user_id"] || session[@session_key] do
       nil -> nil
-      id -> Accounts.get_user(id)
+      id -> session_user(Accounts.get_user(id), session)
     end
+  end
+
+  # Mismo chequeo que `DashboardAuth`: el mount del socket no vuelve a pasar por
+  # plugs, así que sin esto una suspensión (o un cambio de contraseña) no cortaba
+  # las LiveViews ya conectadas ni sus reconexiones.
+  defp session_user(nil, _session), do: nil
+
+  defp session_user(user, session) do
+    if Accounts.session_valid?(user, session), do: user, else: nil
   end
 
   # The original admin while an impersonation session is active. Stored in

@@ -134,6 +134,20 @@ defmodule TokengateWeb.ProfileModal do
               <span>{gettext("Password updated.")}</span>
             </div>
 
+            <%!-- Cambiar la contraseña sube `session_version`, así que esta
+                  misma cookie deja de servir en el siguiente request. Se dice
+                  claro y se ofrece la salida, en vez de dejar que el usuario
+                  descubra el rebote a /login por su cuenta. --%>
+            <div :if={@saved?} id="profile-password-relogin" class="alert alert-warning text-sm">
+              <.icon name="hero-exclamation-triangle" class="w-4 h-4 shrink-0" />
+              <span>
+                {gettext("Every session of this account was closed, this one included.")}
+                <.link navigate={~p"/login"} class="link font-semibold">
+                  {gettext("Sign in again")}
+                </.link>
+              </span>
+            </div>
+
             <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-2 text-sm">
               <dt class="text-xs tracking-wide text-base-content/50 uppercase">{gettext("Name")}</dt>
               <dd class="text-right font-medium">{@user.name}</dd>

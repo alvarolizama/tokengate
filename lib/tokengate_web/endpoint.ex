@@ -21,12 +21,19 @@ defmodule TokengateWeb.Endpoint do
                      same_site: "Lax",
                      http_only: true,
                      # Sliding expiration: `renew: true` re-issues the cookie
-                     # with a fresh max_age on every authenticated request, so
-                     # an active user stays signed in while an idle browser
-                     # expires after SESSION_MAX_AGE_SECONDS (default 1 year).
+                     # with a fresh max_age on every authenticated request, so an
+                     # active user stays signed in while an idle browser expires
+                     # after SESSION_MAX_AGE_SECONDS (default 7 days).
+                     #
+                     # Un año era demasiado: una cookie robada valía un año de
+                     # acceso. El techo de vida es OTRA cosa y no se configura
+                     # aquí — vive en `Accounts.session_valid?/2`
+                     # (`SESSION_ABSOLUTE_MAX_AGE_SECONDS`, default 30 días),
+                     # porque `renew: true` haría inmortal cualquier sesión
+                     # activa si solo se confiara en max_age.
                      renew: true,
                      max_age:
-                       String.to_integer(System.get_env("SESSION_MAX_AGE_SECONDS", "31536000"))
+                       String.to_integer(System.get_env("SESSION_MAX_AGE_SECONDS", "604800"))
                    ] ++ session_secure
 
   socket "/live", Phoenix.LiveView.Socket,
@@ -59,6 +66,10 @@ defmodule TokengateWeb.Endpoint do
     cookie_key: "request_logger"
 
   plug Plug.RequestId
+  # La IP del cliente, no la del proxy. Apagado por default (confiar en
+  # `X-Forwarded-For` sin proxy delante deja que el cliente se invente su IP);
+  # se prende con TRUST_PROXY_HEADERS=true en runtime.exs.
+  plug TokengateWeb.Plugs.ClientIp
   plug Plug.Telemetry, event_prefix: [:phoenix, :endpoint]
 
   # Explicit body-size caps: LLM proxy payloads (long contexts, embeddings
@@ -70,6 +81,12 @@ defmodule TokengateWeb.Endpoint do
   # fields itself — the stock multipart parser discards the raw body, and the
   # proxy must forward it byte-for-byte. JSON bodies are left for
   # `Plug.Parsers` below.
+  # El proxy público se autentica ANTES de que se lea el body: `MediaBodyParser`
+  # captura hasta 10 MB en memoria y corre antes del router, así que un request
+  # sin credencial podía empujar ese peso y además disparar una query (los fallos
+  # de auth no se cachean). El 401 sale aquí, con el mismo shape que `ApiAuth`.
+  plug TokengateWeb.Plugs.ProxyPreAuth, prefixes: ["/v1/"]
+
   plug TokengateWeb.Plugs.MediaBodyParser, prefixes: ["/v1/"]
 
   plug Plug.Parsers,

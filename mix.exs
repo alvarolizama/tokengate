@@ -97,7 +97,16 @@ defmodule Tokengate.MixProject do
       precommit: [
         "compile --warnings-as-errors",
         "deps.unlock --unused",
+        # DOS audits, porque no ven lo mismo: `deps.audit` (mix_audit) consulta
+        # la base de hex.pm y puede decir "No vulnerabilities found" mientras
+        # `hex.audit` (EEF, sobre osv.dev) lista decenas. El gate de advisories
+        # necesita los dos (hallazgo Crítico 2 de la auditoría 2026-11-08).
+        #
+        # `hex.audit` va con `cmd` (proceso Mix aparte) porque es una tarea del
+        # ARCHIVO de Hex: después de `compile` dentro del mismo alias deja de
+        # resolverse ("the task hex.audit could not be found").
         "deps.audit",
+        "cmd mix hex.audit",
         "format",
         "gettext.extract --check-up-to-date",
         "test"

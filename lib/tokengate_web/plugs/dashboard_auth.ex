@@ -56,7 +56,7 @@ defmodule TokengateWeb.Plugs.DashboardAuth do
     user =
       case get_session(conn, @session_key) do
         nil -> nil
-        id -> Accounts.get_user(id)
+        id -> Accounts.get_user(id) |> session_user(conn)
       end
 
     impersonator =
@@ -68,6 +68,17 @@ defmodule TokengateWeb.Plugs.DashboardAuth do
     conn
     |> assign(:current_user, user)
     |> assign(:impersonator, impersonator)
+  end
+
+  # Una cookie viva no basta: el usuario tiene que seguir activo y su
+  # `session_version` tiene que ser la vigente (ver `Accounts.session_valid?/2`).
+  # Sin esto suspender a alguien no le quitaba el dashboard — seguía entrando con
+  # la sesión abierta hasta que expirara la cookie — y un cambio de contraseña no
+  # cerraba las demás sesiones (hallazgo Crítico 1 de la auditoría).
+  defp session_user(nil, _conn), do: nil
+
+  defp session_user(user, conn) do
+    if Accounts.session_valid?(user, get_session(conn)), do: user, else: nil
   end
 
   @doc """

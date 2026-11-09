@@ -5398,3 +5398,9 @@ msgstr "São Paulo"
 
 msgid "UTC"
 msgstr "UTC"
+
+msgid "Every session of this account was closed, this one included."
+msgstr "Se cerraron todas las sesiones de esta cuenta, incluida esta."
+
+msgid "Sign in again"
+msgstr "Iniciar sesión de nuevo"

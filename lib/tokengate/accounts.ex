@@ -438,6 +438,59 @@ defmodule Tokengate.Accounts do
 
   def authenticate_user(_email, _password), do: {:error, :unauthorized}
 
+  @doc """
+  ¿La cookie presentada sigue siendo válida para este usuario?
+
+  Dos condiciones, las dos necesarias:
+
+    * el usuario tiene que estar **activo** — suspender corta el acceso en el
+      acto, sin esperar a que expire la cookie;
+    * la `session_version` guardada en la sesión tiene que ser la vigente —
+      subirla es cómo se revocan TODAS las sesiones de un usuario;
+    * la sesión no puede pasar del **tope absoluto** de vida
+      (`:session_absolute_max_age_seconds`): la cookie se renueva en cada
+      request, así que sin techo una sesión activa no expira nunca.
+
+  Una sesión sin `session_version` es una cookie emitida antes de la migración:
+  se trata como la versión 0, así que sobrevive hasta que el usuario haga algo
+  que la revoque (no se expulsa a todo mundo al desplegar). Lo mismo con
+  `session_started_at`: sin reloj no hay tope hasta el siguiente login.
+
+  La usan `DashboardAuth` (cada request HTTP) y `UserAuth` (el mount de cada
+  LiveView, que no vuelve a pasar por plugs).
+  """
+  @spec session_valid?(User.t() | nil, map() | nil) :: boolean()
+  def session_valid?(%User{status: "active"} = user, session) when is_map(session) do
+    version_current?(user, session) and within_absolute_lifetime?(session)
+  end
+
+  def session_valid?(_user, _session), do: false
+
+  defp version_current?(user, session) do
+    presented = Map.get(session, "session_version") || Map.get(session, :session_version) || 0
+    to_string(presented) == to_string(user.session_version || 0)
+  end
+
+  # Tope absoluto de vida. El reloj arranca en el login real y NO se reinicia al
+  # renovar la cookie ni al impersonar. `max_age` del cookie (deslizante) y este
+  # tope son cosas distintas: el primero mide inactividad, el segundo mide vida.
+  defp within_absolute_lifetime?(session) do
+    case Map.get(session, "session_started_at") || Map.get(session, :session_started_at) do
+      nil ->
+        true
+
+      started_at when is_integer(started_at) ->
+        System.system_time(:second) - started_at <= absolute_max_age_seconds()
+
+      _not_an_integer ->
+        false
+    end
+  end
+
+  defp absolute_max_age_seconds do
+    Application.get_env(:tokengate, :session_absolute_max_age_seconds, 2_592_000)
+  end
+
   # ---------------------------------------------------------------------------
   # Group members
   # ---------------------------------------------------------------------------
@@ -664,7 +717,8 @@ defmodule Tokengate.Accounts do
                where: ak.key_hash == ^key_hash and ak.status == "active",
                where: ak.subject_type == "member"
            ),
-         %GroupMember{} = member <- member_for_key(api_key) do
+         %GroupMember{} = member <- member_for_key(api_key),
+         :ok <- owner_active(member) do
       # La key resuelta viaja en la membresía: el proxy la usa para el
       # `api_key_id` del log y para el prefijo, sin volver a consultar.
       {:ok, %{member | api_key: api_key}}
@@ -672,6 +726,15 @@ defmodule Tokengate.Accounts do
       _ -> {:error, :not_found}
     end
   end
+
+  # El dueño de la key también tiene que estar activo: `users.status` es el
+  # switch de seguridad del panel y tiene que cortar el gateway, no solo el
+  # login. Sin esto, suspender a alguien dejaba su API key facturando
+  # indefinidamente (hallazgo Crítico 1 de la auditoría 2026-11-08). Se resuelve
+  # por la fila de `users` que `member_for_key/1` ya precarga — cero queries
+  # extra en el path caliente.
+  defp owner_active(%GroupMember{user: %User{status: "active"}}), do: :ok
+  defp owner_active(_member), do: :inactive_owner
 
   # La key es del usuario (`user_id`); las filas anteriores a la migración solo
   # tienen `group_member_id`, así que se acepta esa forma como respaldo.

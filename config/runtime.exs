@@ -49,6 +49,28 @@ config :tokengate, :routing,
   slow_threshold_ms: String.to_integer(System.get_env("ROUTING_SLOW_THRESHOLD_MS", "30000")),
   slow_penalty_ms: String.to_integer(System.get_env("ROUTING_SLOW_PENALTY_MS", "120000"))
 
+# ---------------------------------------------------------------------------
+# Reverse proxy
+# ---------------------------------------------------------------------------
+# Cuando la instancia vive detrás de un proxy (Traefik/Coolify), `remote_ip` es
+# la IP del proxy: sin esto, el rate limit de login es un solo cubo compartido
+# por todos y el `ip` del audit log es el del proxy. Solo se prende cuando hay
+# un proxy que reescribe `X-Forwarded-For` en el camino: con el flag encendido y
+# la app expuesta directo, el cliente se inventa su IP.
+config :tokengate,
+       :trust_proxy_headers,
+       System.get_env("TRUST_PROXY_HEADERS") in ~w(true 1)
+
+# ---------------------------------------------------------------------------
+# Sesiones
+# ---------------------------------------------------------------------------
+# `max_age` deslizante: se renueva en cada request autenticado. El tope absoluto
+# es otra cosa y vive en el endpoint (`SESSION_ABSOLUTE_MAX_AGE_SECONDS`): una
+# cookie no puede vivir para siempre por mucho que se use.
+config :tokengate,
+       :session_absolute_max_age_seconds,
+       String.to_integer(System.get_env("SESSION_ABSOLUTE_MAX_AGE_SECONDS", "2592000"))
+
 # In prod the server is always enabled — PaaS start commands expect the
 # endpoint to boot without depending on PHX_SERVER. In dev/test the
 # PHX_SERVER gate is kept so `mix test` doesn't boot the endpoint.
@@ -158,7 +180,14 @@ if config_env() == :prod do
              # the major LLM SDKs do) — big JSON completions and embeddings
              # responses compress ~5-10x. compress is Bandit's default; we
              # pin it explicitly so a config sweep never turns it off.
-             http_options: [compress: true]
+             http_options: [compress: true],
+             # Techo de conexiones: ThousandIsland abre 16384 por default, que en
+             # un contenedor de 512 MB–1 GB es una invitación a agotar memoria
+             # (cada conexión cuesta un proceso + buffers). 2048 deja aire para
+             # un gateway de un equipo y se sube por env cuando haya carga real.
+             thousand_island_options: [
+               max_connections: String.to_integer(System.get_env("MAX_CONNECTIONS", "2048"))
+             ]
            ],
            secret_key_base: secret_key_base
          ] ++ check_origin_config

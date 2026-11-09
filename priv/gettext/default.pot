@@ -94,7 +94,7 @@ msgstr ""
 msgid "Access"
 msgstr ""
 
-#: lib/tokengate_web/live/profile_modal.ex:224
+#: lib/tokengate_web/live/profile_modal.ex:238
 #: lib/tokengate_web/live/users_live.ex:1027
 #: lib/tokengate_web/live/users_live.ex:1066
 #, elixir-autogen, elixir-format
@@ -241,7 +241,7 @@ msgstr ""
 #: lib/tokengate_web/live/monitoring_live.ex:1119
 #: lib/tokengate_web/live/monitoring_live.ex:1159
 #: lib/tokengate_web/live/monitoring_live.ex:1316
-#: lib/tokengate_web/live/profile_modal.ex:225
+#: lib/tokengate_web/live/profile_modal.ex:239
 #: lib/tokengate_web/live/stats/groups.ex:439
 #: lib/tokengate_web/live/stats/model.ex:563
 #: lib/tokengate_web/live/stats/provider.ex:248
@@ -397,7 +397,7 @@ msgstr ""
 #: lib/tokengate_web/live/monitoring_live.ex:1297
 #: lib/tokengate_web/live/monitoring_live.ex:1352
 #: lib/tokengate_web/live/profile_modal.ex:125
-#: lib/tokengate_web/live/profile_modal.ex:187
+#: lib/tokengate_web/live/profile_modal.ex:201
 #: lib/tokengate_web/live/providers_live.ex:936
 #: lib/tokengate_web/live/providers_live.ex:1250
 #: lib/tokengate_web/live/services_live.ex:879
@@ -580,7 +580,7 @@ msgstr ""
 #: lib/tokengate_web/live/groups_live.ex:353
 #: lib/tokengate_web/live/labs_live.ex:302
 #: lib/tokengate_web/live/observability_live.ex:262
-#: lib/tokengate_web/live/profile_modal.ex:138
+#: lib/tokengate_web/live/profile_modal.ex:152
 #: lib/tokengate_web/live/providers_live.ex:1102
 #: lib/tokengate_web/live/services_live.ex:804
 #: lib/tokengate_web/live/users_live.ex:1014
@@ -907,7 +907,7 @@ msgstr ""
 msgid "Are you sure you want to delete"
 msgstr ""
 
-#: lib/tokengate_web/live/profile_modal.ex:151
+#: lib/tokengate_web/live/profile_modal.ex:165
 #, elixir-autogen, elixir-format
 msgid "At least 12 characters, with a letter and a digit."
 msgstr ""
@@ -923,7 +923,7 @@ msgstr ""
 msgid "Audit logs will lose the user attribution"
 msgstr ""
 
-#: lib/tokengate_web/live/profile_modal.ex:149
+#: lib/tokengate_web/live/profile_modal.ex:163
 #, elixir-autogen, elixir-format
 msgid "Change password"
 msgstr ""
@@ -967,7 +967,7 @@ msgstr ""
 msgid "Create"
 msgstr ""
 
-#: lib/tokengate_web/live/profile_modal.ex:165
+#: lib/tokengate_web/live/profile_modal.ex:179
 #, elixir-autogen, elixir-format
 msgid "Current password"
 msgstr ""
@@ -1057,7 +1057,7 @@ msgstr ""
 msgid "My account"
 msgstr ""
 
-#: lib/tokengate_web/live/profile_modal.ex:172
+#: lib/tokengate_web/live/profile_modal.ex:186
 #: lib/tokengate_web/live/users_live.ex:1129
 #, elixir-autogen, elixir-format
 msgid "New password"
@@ -1121,12 +1121,12 @@ msgstr ""
 msgid "Reset password"
 msgstr ""
 
-#: lib/tokengate_web/live/profile_modal.ex:142
+#: lib/tokengate_web/live/profile_modal.ex:156
 #, elixir-autogen, elixir-format
 msgid "Role"
 msgstr ""
 
-#: lib/tokengate_web/live/profile_modal.ex:179
+#: lib/tokengate_web/live/profile_modal.ex:193
 #, elixir-autogen, elixir-format
 msgid "Save password"
 msgstr ""
@@ -1214,7 +1214,7 @@ msgstr ""
 msgid "User created."
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:146
+#: lib/tokengate_web/controllers/session_controller.ex:151
 #: lib/tokengate_web/live/users_live.ex:461
 #: lib/tokengate_web/live/users_live.ex:553
 #, elixir-autogen, elixir-format
@@ -1564,7 +1564,7 @@ msgstr ""
 #: lib/tokengate_web/live/observability_live.ex:34
 #: lib/tokengate_web/live/services_live.ex:35
 #: lib/tokengate_web/live/topups_live.ex:41
-#: lib/tokengate_web/plugs/dashboard_auth.ex:109
+#: lib/tokengate_web/plugs/dashboard_auth.ex:120
 #, elixir-autogen, elixir-format
 msgid "You do not have permission to access this section."
 msgstr ""
@@ -4618,7 +4618,7 @@ msgstr ""
 msgid "If it does not go down in a few minutes, it is drift: the"
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:81
+#: lib/tokengate_web/controllers/session_controller.ex:86
 #, elixir-autogen, elixir-format
 msgid "Invalid credentials."
 msgstr ""
@@ -4749,22 +4749,22 @@ msgid "Service…"
 msgstr ""
 
 #: lib/tokengate_web/controllers/session_controller.ex:42
-#: lib/tokengate_web/controllers/session_controller.ex:84
+#: lib/tokengate_web/controllers/session_controller.ex:89
 #, elixir-autogen, elixir-format
 msgid "Sign in"
 msgstr ""
 
-#: lib/tokengate_web/controllers/oauth_controller.ex:98
+#: lib/tokengate_web/controllers/oauth_controller.ex:100
 #, elixir-autogen, elixir-format
 msgid "Signed in with Google."
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:66
+#: lib/tokengate_web/controllers/session_controller.ex:71
 #, elixir-autogen, elixir-format
 msgid "Signed in."
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:99
+#: lib/tokengate_web/controllers/session_controller.ex:104
 #, elixir-autogen, elixir-format
 msgid "Signed out."
 msgstr ""
@@ -4785,7 +4785,7 @@ msgstr ""
 msgid "Subject"
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:160
+#: lib/tokengate_web/controllers/session_controller.ex:165
 #, elixir-autogen, elixir-format
 msgid "The root administrator cannot be impersonated."
 msgstr ""
@@ -4840,29 +4840,29 @@ msgstr ""
 msgid "When it is reached, every new request is rejected with 402 until the next"
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:130
+#: lib/tokengate_web/controllers/session_controller.ex:135
 #, elixir-autogen, elixir-format
 msgid "You are already viewing as another user. Go back to your account first."
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:185
+#: lib/tokengate_web/controllers/session_controller.ex:195
 #, elixir-autogen, elixir-format
 msgid "You are not impersonating any user."
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:172
+#: lib/tokengate_web/controllers/session_controller.ex:182
 #, elixir-autogen, elixir-format
 msgid "You are now viewing as %{email}."
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:136
+#: lib/tokengate_web/controllers/session_controller.ex:141
 #, elixir-autogen, elixir-format
 msgid "You do not have permission to impersonate users."
 msgstr ""
 
-#: lib/tokengate_web/controllers/session_controller.ex:123
-#: lib/tokengate_web/plugs/dashboard_auth.ex:83
-#: lib/tokengate_web/plugs/dashboard_auth.ex:103
+#: lib/tokengate_web/controllers/session_controller.ex:128
+#: lib/tokengate_web/plugs/dashboard_auth.ex:94
+#: lib/tokengate_web/plugs/dashboard_auth.ex:114
 #, elixir-autogen, elixir-format
 msgid "You must sign in to continue."
 msgstr ""
@@ -5118,17 +5118,17 @@ msgid "Profile"
 msgstr ""
 
 #: lib/tokengate_web/controllers/onboarding_controller.ex:39
-#: lib/tokengate_web/controllers/onboarding_controller.ex:70
+#: lib/tokengate_web/controllers/onboarding_controller.ex:72
 #, elixir-autogen, elixir-format
 msgid "First run"
 msgstr ""
 
-#: lib/tokengate_web/controllers/onboarding_controller.ex:65
+#: lib/tokengate_web/controllers/onboarding_controller.ex:67
 #, elixir-autogen, elixir-format
 msgid "This instance is already set up."
 msgstr ""
 
-#: lib/tokengate_web/controllers/onboarding_controller.ex:60
+#: lib/tokengate_web/controllers/onboarding_controller.ex:62
 #, elixir-autogen, elixir-format
 msgid "Welcome. Your admin account is ready."
 msgstr ""
@@ -5289,4 +5289,14 @@ msgstr ""
 #: lib/tokengate_web/live/providers_live.ex:1041
 #, elixir-autogen, elixir-format
 msgid "recommended"
+msgstr ""
+
+#: lib/tokengate_web/live/profile_modal.ex:144
+#, elixir-autogen, elixir-format
+msgid "Every session of this account was closed, this one included."
+msgstr ""
+
+#: lib/tokengate_web/live/profile_modal.ex:146
+#, elixir-autogen, elixir-format
+msgid "Sign in again"
 msgstr ""

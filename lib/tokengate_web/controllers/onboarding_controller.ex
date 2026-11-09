@@ -57,6 +57,8 @@ defmodule TokengateWeb.OnboardingController do
         conn
         |> configure_session(renew: true)
         |> put_session(:user_id, user.id)
+        |> put_session(:session_version, user.session_version || 0)
+        |> put_session(:session_started_at, System.system_time(:second))
         |> put_flash(:info, gettext("Welcome. Your admin account is ready."))
         |> redirect(to: "/dashboard")
 

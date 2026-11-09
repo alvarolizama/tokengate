@@ -2,10 +2,26 @@ defmodule TokengateWeb.Plugs.LoginRateLimit do
   @moduledoc """
   ETS-backed fixed-window rate limiter for the login endpoint.
 
-  Throttles `POST /login` attempts per client IP: after `@max_attempts`
-  failed-or-total attempts within `@window_ms`, the plug short-circuits with
-  a 429 (rendered as the login form with an error flash) until the window
-  resets. Successful logins clear the counter for that IP.
+  Throttles `POST /login` on **two independent buckets**:
+
+    * **per account** — `max_attempts/0` attempts per window for the same email
+      (trimmed + downcased). This is the bucket that protects a specific account
+      from brute force, and the one that keeps working when the deployment does
+      not rewrite the client IP.
+    * **per IP** — `max_attempts_per_ip/0` attempts per window from the same
+      source. Deliberately wide: a batch of failures against account A must not
+      lock account B out for everyone behind the same address.
+
+  Antes había un solo cubo, llaveado por `conn.remote_ip`. Detrás de un proxy
+  esa IP es la del proxy, así que el cubo era **global**: diez intentos fallidos
+  tumbaban el login de toda la instancia (hallazgo Alto 4 de la auditoría
+  2026-11-08). El bucket por cuenta es lo que sostiene la protección aunque
+  `TRUST_PROXY_HEADERS` esté apagado; `TokengateWeb.Plugs.ClientIp` es lo que
+  hace que el bucket por IP mida al cliente y no al proxy.
+
+  Un login exitoso limpia los dos contadores (`clear/1`), como antes: la ventana
+  cuenta intentos *acumulados*, no fallos, porque el plug corre antes que el
+  controller y no conoce el desenlace.
 
   The ETS table is owned by `TokengateWeb.Plugs.LoginRateLimit.TableKeeper`,
   a tiny GenServer started in the application supervisor. The keeper creates
@@ -20,6 +36,7 @@ defmodule TokengateWeb.Plugs.LoginRateLimit do
   alias TokengateWeb.Plugs.LoginRateLimit.TableKeeper
 
   @max_attempts 10
+  @max_attempts_per_ip 50
   @window_ms 60_000
 
   @behaviour Plug
@@ -29,14 +46,15 @@ defmodule TokengateWeb.Plugs.LoginRateLimit do
 
   @impl true
   def call(conn, _opts) do
-    key = client_key(conn)
+    account = account_key(conn)
+    ip = ip_key(conn)
 
-    case TableKeeper.hit(key, window_ms(), max_attempts()) do
-      {:allow, _count} ->
-        conn
-
+    with {:allow, _} <- hit(account, max_attempts()),
+         {:allow, _} <- hit(ip, max_attempts_per_ip()) do
+      conn
+    else
       {:deny, retry_after_s} ->
-        Logger.warning("login_rate_limited ip=#{key}")
+        Logger.warning("login_rate_limited account=#{inspect(account)} ip=#{inspect(ip)}")
 
         conn
         |> put_flash(
@@ -48,20 +66,44 @@ defmodule TokengateWeb.Plugs.LoginRateLimit do
     end
   end
 
-  @doc "Clears the attempt counter for the IP after a successful login."
-  def clear(conn), do: TableKeeper.clear(client_key(conn))
-
-  defp client_key(conn) do
-    conn.remote_ip
-    |> :inet.ntoa()
-    |> to_string()
+  @doc "Clears both counters (account and IP) after a successful login."
+  def clear(conn) do
+    TableKeeper.clear(account_key(conn))
+    TableKeeper.clear(ip_key(conn))
   end
+
+  # Sin email en el body (form incompleto, body que no parseó) no hay cubo por
+  # cuenta: solo cuenta el de IP. Nunca se inventa una llave vacía compartida
+  # por todos.
+  defp account_key(conn) do
+    case conn.body_params do
+      %{"email" => email} when is_binary(email) ->
+        case email |> String.trim() |> String.downcase() do
+          "" -> nil
+          normalized -> {:account, normalized}
+        end
+
+      _ ->
+        nil
+    end
+  end
+
+  defp ip_key(conn) do
+    {:ip, conn.remote_ip |> :inet.ntoa() |> to_string()}
+  end
+
+  defp hit(nil, _max), do: {:allow, 0}
+  defp hit(key, max), do: TableKeeper.hit(key, window_ms(), max)
 
   # Test overrides via env config; defaults are compile-time sane values.
   defp window_ms, do: Application.get_env(:tokengate, :login_rate_limit_window_ms, @window_ms)
 
   defp max_attempts,
     do: Application.get_env(:tokengate, :login_rate_limit_max_attempts, @max_attempts)
+
+  defp max_attempts_per_ip,
+    do:
+      Application.get_env(:tokengate, :login_rate_limit_max_attempts_per_ip, @max_attempts_per_ip)
 
   defmodule TableKeeper do
     @moduledoc """
@@ -106,6 +148,8 @@ defmodule TokengateWeb.Plugs.LoginRateLimit do
     end
 
     @doc "Resets the counter for `key` (called after a successful login)."
+    def clear(nil), do: :ok
+
     def clear(key) do
       ensure_table()
       :ets.delete(@table, key)

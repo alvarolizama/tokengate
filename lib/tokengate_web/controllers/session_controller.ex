@@ -63,6 +63,11 @@ defmodule TokengateWeb.SessionController do
         conn
         |> configure_session(renew: true)
         |> put_session(:user_id, user.id)
+        # `session_version` es el contador que permite revocar esta cookie
+        # después (suspensión, cambio de contraseña); `session_started_at` es el
+        # reloj del tope absoluto de vida, que NO se reinicia al renovar.
+        |> put_session(:session_version, user.session_version || 0)
+        |> put_session(:session_started_at, System.system_time(:second))
         |> put_flash(:info, gettext("Signed in."))
         |> redirect(to: "/dashboard")
 
@@ -169,6 +174,11 @@ defmodule TokengateWeb.SessionController do
       |> configure_session(renew: true)
       |> put_session(:impersonator_id, admin.id)
       |> put_session(:user_id, target.id)
+      # La versión es la del IMPERSONADO (quien manda ahora es su sesión). El
+      # reloj del tope absoluto se conserva: cuenta desde que el admin se
+      # autenticó, no desde que empezó a ver como otro.
+      |> put_session(:session_version, target.session_version || 0)
+      |> put_session(:session_started_at, session_started_at(conn))
       |> put_flash(:info, gettext("You are now viewing as %{email}.", email: target.email))
       |> redirect(to: "/dashboard")
     end
@@ -198,10 +208,15 @@ defmodule TokengateWeb.SessionController do
             %{"email" => target && target.email}
           )
 
+        # Se restaura la versión del admin: si le cambiaron la contraseña o lo
+        # suspendieron mientras veía como otro, esta cookie ya no sirve.
+        admin = Accounts.get_user(impersonator_id)
+
         conn
         |> configure_session(renew: true)
         |> delete_session(:impersonator_id)
         |> put_session(:user_id, impersonator_id)
+        |> put_session(:session_version, (admin && admin.session_version) || 0)
         |> put_flash(:info, "Volviste a tu cuenta.")
         |> redirect(to: "/dashboard")
     end
@@ -212,5 +227,11 @@ defmodule TokengateWeb.SessionController do
   defp root_admin?(%{email: email}) do
     root_email = System.get_env("TOKENGATE_ADMIN_EMAIL") || "admin@tokengate.local"
     String.downcase(email) == String.downcase(root_email)
+  end
+
+  # El reloj del tope absoluto de sesión NO se reinicia con una impersonación:
+  # sigue contando desde el login real del humano.
+  defp session_started_at(conn) do
+    get_session(conn, :session_started_at) || System.system_time(:second)
   end
 end

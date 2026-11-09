@@ -35,6 +35,12 @@ defmodule Tokengate.Accounts.User do
     field :google_id, :string
     field :avatar_url, :string
 
+    # Revocación de sesiones: sube cuando hay que cortar TODAS las cookies
+    # emitidas del usuario (suspensión, reset de contraseña de admin, cambio
+    # propio). La cookie solo lleva `user_id`, así que este contador es lo único
+    # que puede invalidarla — ver `Accounts.session_valid?/2`.
+    field :session_version, :integer, default: 0
+
     # Límite mensual de gasto: nil = sin límite propio, 0 = cero (jamás
     # ilimitado). El único camino a ilimitado es `unlimited_spend`. Los
     # defaults de conc/RPM propios del usuario (null = sin propios) completan
@@ -106,6 +112,7 @@ defmodule Tokengate.Accounts.User do
     |> validate_number(:monthly_spend_limit_usd, greater_than_or_equal_to: 0)
     |> validate_number(:default_concurrency_limit, greater_than: 0)
     |> validate_number(:default_rpm_limit, greater_than: 0)
+    |> maybe_bump_on_status_change()
   end
 
   @doc """
@@ -117,6 +124,7 @@ defmodule Tokengate.Accounts.User do
     |> cast(attrs, [:password])
     |> validate_required([:password])
     |> validate_password()
+    |> bump_session_version()
     |> put_password_hash()
   end
 
@@ -174,6 +182,7 @@ defmodule Tokengate.Accounts.User do
     |> validate_required([:current_password, :password])
     |> validate_current_password()
     |> validate_password()
+    |> bump_session_version()
     |> put_password_hash()
   end
 
@@ -212,6 +221,28 @@ defmodule Tokengate.Accounts.User do
 
       password ->
         put_change(changeset, :password_hash, Bcrypt.hash_pwd_salt(password))
+    end
+  end
+
+  # --- Revocación de sesiones -------------------------------------------------
+
+  # Subir `session_version` es la ÚNICA forma de invalidar cookies ya emitidas
+  # (el token de sesión no tiene estado propio que borrar). Se sube en los tres
+  # caminos que tienen que cortar sesiones: suspender, reset de contraseña de
+  # admin y cambio propio. NO se usa `updated_at`: editar el timezone o el
+  # locale no debe sacar a nadie de su sesión.
+  defp bump_session_version(changeset) do
+    version = get_field(changeset, :session_version) || 0
+    put_change(changeset, :session_version, version + 1)
+  end
+
+  # Un cambio de status (suspender o reactivar) corta las sesiones abiertas. Los
+  # demás campos de `admin_update_changeset` — nombre, rol, límites de gasto — no:
+  # son ediciones administrativas, no un corte de acceso.
+  defp maybe_bump_on_status_change(changeset) do
+    case get_change(changeset, :status) do
+      nil -> changeset
+      _status -> bump_session_version(changeset)
     end
   end
 

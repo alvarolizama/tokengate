@@ -27,7 +27,8 @@ accounting in between.
 Think "LiteLLM, but as an Elixir app with a real admin UI".
 
 The UI ships in **English by default** with an in-app **EN/ES** selector
-(`users.locale`); some strings are still Spanish-only.
+(`users.locale`). Most strings are translated; a handful of legacy ones are still
+Spanish-only.
 
 ## Screenshots
 
@@ -45,14 +46,24 @@ The UI ships in **English by default** with an in-app **EN/ES** selector
 
 ## Routing (proxy API)
 
-- **OpenAI-compatible proxy** — `GET /v1/models`, `POST /v1/chat/completions`
-  (streaming SSE + non-streaming) and `POST /v1/embeddings`, plus the rest of a
-  provider's services as transparent passthroughs on the same `base_url`:
-  `POST /v1/rerank`, `/v1/audio/transcriptions`, `/v1/audio/speech`,
-  `/v1/images/generations`, `/v1/videos`, `/v1/music/generations`.
+The public surface is exactly these seven routes:
+
+| Route | What it serves |
+|---|---|
+| `GET /v1/models` | Every model alias the presented key can reach, with `context_window` |
+| `POST /v1/chat/completions` | Chat, streaming SSE and non-streaming |
+| `POST /v1/embeddings` | Embeddings (non-streaming only) |
+| `POST /v1/audio/transcriptions` | Speech-to-text passthrough (multipart forwarded byte-for-byte) |
+| `POST /v1/audio/speech` | Text-to-speech passthrough (audio bytes back) |
+| `POST /v1/images/generations` | Image generation passthrough |
+| `POST /v1/decisions` | The decision surface, in the OpenAI Decisions shape (`input` + ordered questions) |
+
 - **Model aliases + type routing** — clients ask for an alias (`gpt-4o`); it maps
-  to one or more provider routes with `model_type` (`llm`/`embedding`) selecting
-  the right endpoint. Switching backends is an admin operation, not a client deploy.
+  to one or more provider routes. The model's `model_type` selects the surface —
+  `llm`, `embedding`, `decision`, `stt`, `tts`, `image` — and a model is only
+  reachable from the endpoint of its type (`stt` only from
+  `/v1/audio/transcriptions`, and so on). Switching backends is an admin
+  operation, not a client deploy.
 - **Health + priority routing** — candidates sort by `{health, priority}`: healthy
   credentials first, slow ones sinking below until they recover; within a level,
   `priority` ASC decides. Billing surface (subscription vs pay-per-token) does
@@ -70,20 +81,20 @@ The UI ships in **English by default** with an in-app **EN/ES** selector
 
 ## Cache intelligence
 
-- **Sticky routing** — an API key sticks to the same credential to preserve prompt
-  caches, with per-route TTL overrides (default 3 min). Every outbound request also
-  carries an `x-session-affinity` header so providers with automatic prefix caching
-  group a session's requests onto the replica holding the cached prefix.
+- **Sticky routing** — a key sticks to the same credential to preserve prompt
+  caches, with per-route TTL overrides (default **15 min**).
 - **Conversation session key** — the gateway derives a per-conversation key
   (client `x-session-id` header or `prompt_cache_key` body field, or hashed from
   the conversation opening) for cache-affinity routing and per-conversation
-  cache-hit observability. It travels upstream as `prompt_cache_key`; the
-  OpenRouter-style `session_id` body field is never sent.
+  cache-hit observability. It **never travels in the upstream body**: it goes out
+  as the `x-session-id` header, plus an `x-session-affinity` hint for providers
+  running automatic prefix caching.
 - **Local response cache** — identical non-streaming requests (same key + model +
   canonical payload) are served from an in-process ETS cache without touching the
   upstream: faster answers, $0 cost — and the hit still answers with
   `X-Tokengate-Cost: 0` (`usage.cost_usd = 0` on chat), so the cost contract of a
-  live answer never disappears.
+  live answer never disappears. Requests with a captured raw body (multipart
+  audio) and streaming requests are never cached.
 - **Prompt optimizer** — every chat completion gets system messages hoisted and
   deduped and long/repeated tool-output messages trimmed. Pure, deterministic,
   always on for LLMs. Multi-turn histories get reasoning blocks stripped before
@@ -118,9 +129,9 @@ The UI ships in **English by default** with an in-app **EN/ES** selector
 
 | Page | What it does |
 |---|---|
-| `/dashboard` | Personal live consumption, period selector, the user's API key with rotate/revoke, supervised-services shortcut |
+| `/dashboard` | Personal live consumption, period selector, the user's API keys with rotate/revoke/create, supervised-services shortcut |
 | `/stats` | Analytics hub — Live pulse + tabs: Overview, Providers (tier/score ranking), Models, Limit profiles, Users, Services. Role-scoped, prev-period deltas, CSV export (`/stats/export`) |
-| `/calculator` | Real provider spend vs an estimated cost from custom pricing (input/cache/output per M + cache hit-rate) |
+| `/calculator` | Real provider spend vs an estimated cost from custom pricing (input/cache/output per M + cache-hit rate) |
 | `/catalog/labs` | Labs catalog — read-only models.dev labs + operator **custom** labs (name, key, icon/logo) |
 | `/catalog/providers` | Provider CRUD with multiple credentials each; per-provider operational limits; billing surface label |
 | `/catalog/models` | Model alias CRUD — provider routes by priority, exclusive scope, manual per-route pricing |
@@ -130,11 +141,84 @@ The UI ships in **English by default** with an in-app **EN/ES** selector
 | `/budget/topups` | One-shot top-ups per user/service: consumed vs granted, deactivate/reactivate, revoke, archived when drained/expired |
 | `/budget/global` | Global daily cap kill-switch + exemptions |
 | `/services/supervised` (+ `/:service_id`) | Read-only view for service supervisors — access comes from a live `service_supervisors` row (no role grants it; removing the row revokes it) |
-| `/operations/monitoring` | Live request log, filters, in-flight requests, CSV export |
+| `/operations/monitoring` | Live request log, filters, in-flight requests, CSV export (`/stats/export?type=logs`) |
 | `/operations/audit` | Admin audit log — actor (+ impersonator), action, entity, IP, redacted change set; filters, pagination, CSV export (`/operations/audit/export`) |
 | `/operations/observability` | OTLP/JSON webhook destinations (HMAC-signed, delivered via Oban) |
-| `/operations/notifications` | Telegram notifications — bot token (encrypted or env), events + severity/cooldown, quiet hours, linked chats, delivery log with manual resend |
+| `/operations/notifications` | Telegram notifications — bot token (encrypted at rest, or env), events + severity/cooldown, quiet hours, linked chats, delivery log with manual resend |
 | `/operations/maintenance` | Config overview + danger zone (reset logs, reset sticky sessions) |
+
+## Security
+
+What the app actually enforces today — no more, no less:
+
+**Access control**
+
+- **Cabinet session** — the session cookie is encrypted and signed, `http_only`,
+  `same_site=Lax`, renewed on login (session-fixation guard) and **revocable**:
+  `users.session_version` is bumped on suspension, on an admin password reset and
+  on a self password change, so every cookie issued before is dead on the next
+  request. `DashboardAuth` checks it on every HTTP request and `UserAuth` on every
+  LiveView mount (sockets don't re-run plugs).
+- **Two clocks** — `SESSION_MAX_AGE_SECONDS` (7 days, sliding: it measures
+  *idle*) and `SESSION_ABSOLUTE_MAX_AGE_SECONDS` (30 days, fixed: it measures
+  *life*). `renew: true` would otherwise make an active session immortal.
+- **Suspension means suspension** — `users.status = "suspended"` cuts the login,
+  the open dashboard session **and** the API key: the proxy auth path resolves the
+  key's owner and rejects an inactive one with `401 invalid_api_key`.
+- **Roles** — admin-only LiveViews and exports run behind `require_admin` (both a
+  plug and an `on_mount`); the supervised-services area is granted by a live
+  `service_supervisors` row, not by role. Impersonation is admin-only, audited
+  start and stop, and the root admin can never be impersonated.
+- **API keys** — 192 bits from `:crypto.strong_rand_bytes/1`, shown **once**,
+  stored as SHA-256, revocable and rotatable individually; the auth cache
+  invalidates by key, member, group or user on every write that matters.
+
+**Perimeter**
+
+- **Pre-auth on `/v1`** — a request without a well-formed `Authorization: Bearer`
+  is rejected **before** the body is read, so an anonymous client can't push the
+  10 MB body cap into memory nor spend a database lookup per bogus token (failed
+  keys are deliberately never cached).
+- **Login throttle with two buckets** — 10 attempts/min **per account** and 50/min
+  **per source**. A failed batch against one account no longer locks everybody
+  out. Behind a proxy, set `TRUST_PROXY_HEADERS=true` so the IP bucket measures the
+  client (the last `X-Forwarded-For` hop) instead of the proxy.
+- **Connection ceiling** — `MAX_CONNECTIONS` (2048 by default) caps the listener;
+  ThousandIsland's default of 16384 is a memory hazard in a small container.
+- **Browser hardening** — strict CSP (`script-src 'self'`, `frame-ancestors
+  'none'`, `form-action 'self'`), `permissions-policy`, CSRF protection on the
+  whole browser pipeline, and `force_ssl` + HSTS in production.
+- **SQL** — zero raw SQL with interpolation; the only `fragment/1` calls are
+  static aggregates.
+
+**Data**
+
+- **Audit log** — append-only at the database level (a trigger rejects `UPDATE` and
+  `DELETE`), monthly partitions, actor + impersonator + IP + user agent + change
+  set, on every privileged mutation.
+- **Request log** — metadata only: tokens, cost, latency, status. **Prompts and
+  completions are never stored.**
+- **Exports** — one shared CSV writer with a formula-injection guard (`=`, `+`,
+  `-`, `@`, tab, CR are prefixed), because `user_agent`, `origin` and
+  `error_message` are client- or upstream-controlled text.
+
+**Supply chain**
+
+- `mix precommit` runs **both** audits: `deps.audit` (mix_audit → hex.pm) and
+  `hex.audit` (EEF → osv.dev). They do not see the same things — trusting only the
+  first is how the HTTP server sat 22 advisories behind.
+
+**Known limitations** (deliberately listed, not hidden)
+
+- Provider API keys are stored **as-is** in `provider_credentials.api_key_encrypted`
+  — encryption at rest is pending (see the moduledoc of
+  `Tokengate.Providers.Credential`). The column name is aspirational.
+- Postgres TLS connects with `verify: :verify_none` by default; strict verification
+  is opt-in with `ECTO_SSL_VERIFY=true`.
+- `/onboarding` is open until the first user exists: bootstrap the admin with
+  `TOKENGATE_ADMIN_PASSWORD` **before** exposing the instance.
+- The login throttle has no account lockout or CAPTCHA; it bounds retries, it does
+  not stop a patient distributed attempt.
 
 ## Platform
 
@@ -143,8 +227,9 @@ The UI ships in **English by default** with an in-app **EN/ES** selector
 - **Postgres** — daily RANGE-partitioned `request_logs` (append-heavy by design),
   monthly-partitioned **append-only** `audit_logs` (trigger rejects UPDATE/DELETE),
   hourly metrics rollup with worker + backfill, Oban jobs.
-- **Auth** — email/password (Bcrypt) + optional Google OAuth with domain-restricted
-  auto-registration; sliding-expiration sessions; per-user timezone bucketing;
+- **Auth** — email/password (Bcrypt, timing-safe on unknown emails) + optional
+  Google OAuth with domain-restricted auto-registration; revocable sessions with
+  sliding idle expiry plus an absolute lifetime cap; per-user timezone bucketing;
   admin impersonation.
 
 ## Quick start
@@ -232,10 +317,14 @@ resp = client.chat.completions.create(
 | --- | --- | --- |
 | `PORT` | `4000` | HTTP port |
 | `POOL_SIZE` | `10` | DB connection pool |
-| `SESSION_MAX_AGE_SECONDS` | `31536000` | Idle session lifetime (sliding) |
+| `MAX_CONNECTIONS` | `2048` | Listener connection ceiling (ThousandIsland) |
+| `SESSION_MAX_AGE_SECONDS` | `604800` | Idle session lifetime (7 days, sliding) |
+| `SESSION_ABSOLUTE_MAX_AGE_SECONDS` | `2592000` | Absolute session lifetime from login (30 days, not renewed) |
 | `SESSION_COOKIE_SECURE` | auto | Force/clear the cookie `Secure` flag; unset = Plug default (secure only on HTTPS) |
+| `TRUST_PROXY_HEADERS` | off | Take the client IP from the last `X-Forwarded-For` hop — only with a rewriting proxy in front |
 | `PROXY_RECEIVE_TIMEOUT_MS` | `120000` | Upstream read timeout (per-provider override) |
 | `FIRST_TOKEN_TIMEOUT_MS` | `30000` | Streaming: max wait for first chunk |
+| `STREAM_IDLE_TIMEOUT_MS` | `60000` | Max gap between SSE chunks before the stream is cut |
 | `CIRCUIT_BREAKER_THRESHOLD` | `3` | Failures before a breaker opens |
 | `CIRCUIT_BREAKER_COOLDOWN_MS` | `30000` | Breaker open duration |
 | `CIRCUIT_BREAKER_RATE_LIMIT_COOLDOWN_MS` | `20000` | Breaker cooldown after a 429 |
@@ -248,12 +337,13 @@ resp = client.chat.completions.create(
 | `TOKENGATE_ADMIN_PASSWORD` | unset | Set it to bootstrap the admin at boot; unset = first admin created from `/onboarding` |
 | `TOKENGATE_ADMIN_EMAIL` | `admin@tokengate.local` | Email of the bootstrapped admin (only used with the password) |
 | `TELEGRAM_BOT_TOKEN` | unset | Telegram bot token (else read encrypted from the UI) |
-| `GOOGLE_OAUTH_CLIENT_ID` / `SECRET` | unset | Enable Google sign-in |
+| `PHX_SERVER` | set by the image | Runs the endpoint outside prod (the Dockerfile sets it) |
+| `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET` | unset | Enable Google sign-in |
 | `GOOGLE_OAUTH_ALLOWED_DOMAINS` | unset | Domains allowed to auto-register |
 | `GOOGLE_OAUTH_REDIRECT_URI` | derived | Override the OAuth callback URL |
 | `DNS_CLUSTER_QUERY` | unset | Node clustering DNS query |
 
-`.env.example` is the **complete template** — core, session and this app's own
+`.env.example` is the **complete template** — core, session, proxy and this app's own
 variables, each with its comment and a safe default:
 `cp .env.example .env && $EDITOR .env`.
 
@@ -286,14 +376,20 @@ back instead of shipping broken code. `SKIP_MIGRATIONS=1` bypasses it.
 `EXPOSE`: it would not change the listen.
 
 **HTTPS:** `force_ssl` is compile-time and the image ships **HTTPS on**, like the rest
-of the family. This instance is deployed over plain HTTP behind a VPN, so the build
-passes `--build-arg DISABLE_FORCE_SSL=1` (in the platform's **build** variables, not
+of the family. Deployed over plain HTTP behind a VPN, the build passes
+`--build-arg DISABLE_FORCE_SSL=1` (in the platform's **build** variables, not
 the runtime ones) and the runtime sets `PHX_SCHEME=http`. The two always move together:
 with `force_ssl` on and `PHX_SCHEME=http`, Plug.SSL redirects every request to HTTPS —
 and the port in that redirect cannot be configured (`Plug.SSL` fixes it at 443 for HSTS)
 — where nothing is listening. The healthcheck would not catch it: it hits `127.0.0.1`,
 which `config/prod.exs` excludes from the redirect, so the container keeps reporting
 healthy while users hang.
+
+**Behind the platform's proxy** (Coolify/Traefik, the normal case) set
+`TRUST_PROXY_HEADERS=true`: without it every client shares the proxy's IP, which turns
+the per-IP login bucket into a single shared one and records the proxy as the audit
+`ip`. With it and the app exposed directly, the client can forge its own IP — so it is
+a deployment fact, not a default.
 
 Boot runs `priv/repo/seeds_prod.exs`: it creates **only** the admin user, and only when
 `TOKENGATE_ADMIN_PASSWORD` is set (`TOKENGATE_ADMIN_EMAIL` optional, defaults to
@@ -306,8 +402,8 @@ A fresh instance has no users, and without one there is nothing to log in with: 
 `/login`) redirect to **`/onboarding`**, where the first account you create becomes the
 global admin. The page disables itself — both actions bounce to `/login` as soon as a
 user exists, and `Accounts.create_first_admin/1` re-checks inside a transaction under an
-advisory lock, so it cannot be used to mint a second admin (a double-click or two
-replicas racing the form can't either).
+advisory lock (`pg_advisory_xact_lock`), so it cannot be used to mint a second admin (a
+double-click or two replicas racing the form can't either).
 
 That leaves a window: whoever reaches the instance first can claim it. Close it by
 deploying behind your network boundary, or by setting `TOKENGATE_ADMIN_PASSWORD` so the
@@ -360,23 +456,30 @@ to re-run, resumable if it is interrupted (it logs a line per day). It is delibe
 mix precommit   # the gate that closes the loop
 ```
 
+What it chains: `compile --warnings-as-errors` → `deps.unlock --unused` →
+`deps.audit` → `hex.audit` → `format` → `gettext.extract --check-up-to-date` → `test`.
+The two audits are both there on purpose: `deps.audit` answers against hex.pm and
+`hex.audit` against osv.dev, and they disagree (see **Security › Supply chain**).
+
 The `/health` probe carries its own test that runs **without** a sandbox owner
 (`test/tokengate_web/controllers/health_controller_test.exs`): a `/health` that queried
 the database would answer 503 there and turn the suite red. That is the regression the
 container's `HEALTHCHECK` depends on not happening, so the test pins it structurally
 rather than by convention.
 
+Security regressions have their own locks, so a future refactor can't quietly reopen
+them: `test/tokengate_web/session_revocation_test.exs` (suspension and password rotation
+cut live sessions and API keys, plus the absolute lifetime cap),
+`test/tokengate_web/plugs/proxy_pre_auth_test.exs` (no credential ⇒ 401 before the body
+is parsed), `test/tokengate_web/plugs/login_rate_limit_test.exs` (the two buckets are
+independent) and `test/tokengate_web/controllers/audit_export_controller_test.exs` (CSV
+formula neutralization).
+
 ## Tech stack
 
 Phoenix 1.8 + LiveView · Bandit · Ecto/Postgres (RANGE partitions) · Finch (upstream
 HTTP/SSE) · Req (outbound) · Oban · Tailwind CSS v4 + daisyUI (dim) · esbuild ·
 bcrypt_elixir
-
-## Development
-
-```bash
-mix precommit   # compile --warnings-as-errors → deps.unlock --unused → deps.audit → format → gettext check → test
-```
 
 ## License
 

@@ -417,28 +417,10 @@ defmodule TokengateWeb.StatsExportController do
     end
   end
 
-  defp csv_escape(nil), do: ""
-
-  # CSV formula injection guard: values starting with = + - @ \t or \r are
-  # interpreted as formulas by Excel/Sheets when the file is opened. Fields
-  # like client_agent come from attacker-controlled request headers, so we
-  # prefix them with a single quote to force text rendering.
-  @csv_formula_starters ["=", "+", "-", "@", "\t", "\r"]
-
-  defp csv_escape(s) when is_binary(s) do
-    s =
-      if String.starts_with?(s, @csv_formula_starters) do
-        "'" <> s
-      else
-        s
-      end
-
-    if String.contains?(s, [",", "\"", "\n"]) do
-      "\"" <> String.replace(s, "\"", "\"\"") <> "\""
-    else
-      s
-    end
-  end
+  # El escape vive en `TokengateWeb.CSV`: UNA implementación para los dos
+  # exports. Aquí solo se delega (el export de auditoría era la copia que se
+  # quedó sin el guard de fórmula — hallazgo Medio 6 de la auditoría).
+  defp csv_escape(value), do: TokengateWeb.CSV.escape(value)
 
   defp decimal_to_csv(nil), do: "0"
   defp decimal_to_csv(%Decimal{} = d), do: Decimal.to_string(d)
