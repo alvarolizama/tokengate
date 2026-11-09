@@ -5448,3 +5448,20 @@ msgstr "Top models"
 
 msgid "No requests in this period."
 msgstr "Sin requests en este periodo."
+
+## Rename de claves (keys_panel) y selector de key (service_stats_live)
+
+msgid "Rename this key"
+msgstr "Renombrar esta clave"
+
+msgid "Key renamed."
+msgstr "Clave renombrada."
+
+msgid "Could not rename the key."
+msgstr "No se pudo renombrar la clave."
+
+msgid "ci, laptop, server..."
+msgstr "ci, laptop, servidor..."
+
+msgid "All API keys"
+msgstr "Todas las claves API"

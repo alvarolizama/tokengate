@@ -1255,9 +1255,11 @@ defmodule Tokengate.Logs do
   breakdown, top 5 models, last request timestamp and a `realtime_5min` window.
 
   ## Options
-
-    * `:from` — `inserted_at >= from` (DateTime). Optional.
-    * `:to`   — `inserted_at <= to` (DateTime). Optional.
+  ##
+  ##   * `:from` — `inserted_at >= from` (DateTime). Optional.
+  ##   * `:to`   — `inserted_at <= to` (DateTime). Optional.
+  ##   * `:api_key_id` — scope the whole bundle to one API key (the key
+  ##     selector's drill-down). Optional; non-binary values are ignored.
   """
   @spec service_stats(binary(), keyword() | map()) :: map()
   def service_stats(service_id, opts \\ []) do
@@ -1276,10 +1278,22 @@ defmodule Tokengate.Logs do
 
     filters = Map.merge(%{"service_id" => service_id}, range)
 
+    # Scope opcional por key (drill-down del selector de la página de stats):
+    # entra al MISMO mapa de filtros que consumen los cuatro cómputos de
+    # abajo — summary, desglose, top models, último request y realtime — para
+    # que ninguno escape del scope.
+    filters =
+      case Map.get(opts_map, :api_key_id) do
+        nil -> filters
+        key_id when is_binary(key_id) -> Map.put(filters, "api_key_id", key_id)
+        # Valor no-binario (payload forjado o error de llamada): se ignora
+        # antes que reventar una API pública.
+        _ -> filters
+      end
+
     last_request_at =
       RequestLog
-      |> where([rl], rl.service_id == ^service_id)
-      |> apply_log_filters(range)
+      |> apply_log_filters(filters)
       |> select([rl], rl.inserted_at)
       |> order_by([rl], desc: rl.inserted_at)
       |> limit(1)
@@ -1287,8 +1301,8 @@ defmodule Tokengate.Logs do
 
     cost_summary(filters)
     |> Map.merge(%{
-      status_breakdown: status_breakdown_for_service(service_id, range),
-      top_models: top_models_for_service(service_id, 5, range),
+      status_breakdown: status_breakdown_for_service(filters),
+      top_models: top_models_for_service(filters),
       last_request_at: last_request_at,
       realtime_5min: realtime_summary(filters)
     })
@@ -1362,12 +1376,11 @@ defmodule Tokengate.Logs do
     end)
   end
 
-  defp status_breakdown_for_service(service_id, range) do
+  defp status_breakdown_for_service(filters) do
     empty = %{"2xx" => 0, "4xx" => 0, "5xx" => 0}
 
     RequestLog
-    |> where([rl], rl.service_id == ^service_id)
-    |> apply_log_filters(range)
+    |> apply_log_filters(filters)
     |> group_by(
       [rl],
       fragment(
@@ -1396,10 +1409,9 @@ defmodule Tokengate.Logs do
     |> Enum.reduce(empty, fn {class, n}, acc -> Map.put(acc, class, n) end)
   end
 
-  defp top_models_for_service(service_id, limit, range) do
+  defp top_models_for_service(filters, limit \\ 5) do
     RequestLog
-    |> where([rl], rl.service_id == ^service_id)
-    |> apply_log_filters(range)
+    |> apply_log_filters(filters)
     |> group_by([rl], rl.model_requested)
     |> select([rl], %{model_requested: rl.model_requested, count: count(rl.id)})
     |> order_by(desc: :count)

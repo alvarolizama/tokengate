@@ -48,6 +48,8 @@ defmodule TokengateWeb.ServiceStatsLive do
       |> assign(:service_api_keys, Accounts.list_api_keys_for_service_all(service_id))
       |> assign(:period, @default_period)
       |> assign(:period_form, to_form(%{"period" => @default_period}, as: :period))
+      |> assign(:key_filter, "all")
+      |> assign(:key_filter_form, to_form(%{"key_id" => "all"}, as: :key_filter))
       |> assign(:timezone, socket.assigns[:timezone] || "Etc/UTC")
       |> assign(:is_admin, socket.assigns[:current_user].global_role == "admin")
       |> assign(:filters, default_filters())
@@ -83,7 +85,7 @@ defmodule TokengateWeb.ServiceStatsLive do
       timezone = socket.assigns.timezone
       filters = socket.assigns.filters
 
-      if log_matches_filters?(log, filters, timezone) do
+      if log_matches_filters?(log, filters, timezone, socket.assigns.key_filter) do
         socket = stream_insert(socket, :logs, log, at: 0)
 
         # Coalesce summary reloads: at most one service_stats recompute per
@@ -144,7 +146,10 @@ defmodule TokengateWeb.ServiceStatsLive do
   # El selector global de periodo re-consulta summary y desglose por key con
   # el MISMO `from` (load_summary), así que la suma de la tabla sigue cuadrando
   # con el KPI en cualquier ventana.
-  def handle_event("set_period", %{"period" => period}, socket) when period in @periods do
+  # El form serializa anidado (to_form as: :period → name="period[period]"):
+  # el payload real del browser es %{"period" => %{"period" => p}}.
+  def handle_event("set_period", %{"period" => %{"period" => period}}, socket)
+      when period in @periods do
     {:noreply,
      socket
      |> assign(:period, period)
@@ -155,6 +160,31 @@ defmodule TokengateWeb.ServiceStatsLive do
   # Payload manual por el socket con un periodo desconocido: se ignora y la
   # página queda en el periodo vigente.
   def handle_event("set_period", _params, socket), do: {:noreply, socket}
+
+  # Selector de key del reporte: "all" (todas, revocadas incluidas) o el id de
+  # una key del servicio. Con una key específica, summary/desglose/top models
+  # se scopean por `api_key_id` (Logs.service_stats/2), la tabla muestra sólo
+  # esa fila y la lista de logs se refiltra. Ids que no son del servicio se
+  # ignoran (payload manual por el socket).
+  #
+  # Igual que set_period: el form serializa anidado (as: :key_filter →
+  # name="key_filter[key_id]").
+  def handle_event("set_key", %{"key_filter" => %{"key_id" => key_id}}, socket) do
+    known_ids = MapSet.new(socket.assigns.service_api_keys, & &1.id)
+
+    if key_id == "all" or MapSet.member?(known_ids, key_id) do
+      {:noreply,
+       socket
+       |> assign(:key_filter, key_id)
+       |> assign(:key_filter_form, to_form(%{"key_id" => key_id}, as: :key_filter))
+       |> load_summary()
+       |> load_logs(:reset)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("set_key", _params, socket), do: {:noreply, socket}
 
   ## Data loading ---------------------------------------------------------
 
@@ -174,19 +204,40 @@ defmodule TokengateWeb.ServiceStatsLive do
     # tabla se desfaza del KPI por las filas de ese borde.
     from = period_from(period, timezone)
 
+    # El group by de la tabla SIEMPRE es del servicio completo (una query, el
+    # trim a una fila es en memoria); el summary sí se scopea por key cuando
+    # el selector lo pide — y su llave de cache lleva el scope.
+    key_filter = socket.assigns.key_filter
+
     key_stats =
       DashboardCache.fetch_or_compute({:service_key_stats, service_id, period, timezone}, fn ->
         Logs.service_key_stats(service_id, from: from)
       end)
 
-    key_rows = build_key_rows(socket.assigns.service_api_keys, key_stats)
+    key_rows =
+      case key_filter do
+        "all" ->
+          build_key_rows(socket.assigns.service_api_keys, key_stats)
+
+        key_id ->
+          build_key_rows(socket.assigns.service_api_keys, key_stats)
+          |> Enum.filter(&(&1.stats.api_key_id == key_id))
+      end
+
+    summary_opts =
+      if key_filter == "all" do
+        [from: from]
+      else
+        [from: from, api_key_id: key_filter]
+      end
 
     socket
     |> assign(
       :summary,
-      DashboardCache.fetch_or_compute({:service_stats, service_id, period, timezone}, fn ->
-        Logs.service_stats(service_id, from: from)
-      end)
+      DashboardCache.fetch_or_compute(
+        {:service_stats, service_id, period, timezone, key_filter},
+        fn -> Logs.service_stats(service_id, summary_opts) end
+      )
     )
     |> assign(:key_rows, key_rows)
   end
@@ -267,6 +318,7 @@ defmodule TokengateWeb.ServiceStatsLive do
     base_filters =
       socket.assigns.filters
       |> Map.put("service_id", service_id)
+      |> maybe_key_filter(socket.assigns.key_filter)
       |> drop_empty_filters()
 
     logs =
@@ -316,6 +368,13 @@ defmodule TokengateWeb.ServiceStatsLive do
     |> Map.new()
   end
 
+  # El selector de key acota también la lista de logs; "all" no entra como
+  # filtro (drop_empty_filters lo toleraría, pero es más claro no ponerlo).
+  defp maybe_key_filter(filters, "all"), do: filters
+
+  defp maybe_key_filter(filters, key_id) when is_binary(key_id),
+    do: Map.put(filters, "api_key_id", key_id)
+
   defp default_filters do
     %{
       "status_class" => "",
@@ -346,7 +405,7 @@ defmodule TokengateWeb.ServiceStatsLive do
 
   ## Filter helpers -------------------------------------------------------
 
-  defp log_matches_filters?(log, filters, timezone) do
+  defp log_matches_filters?(log, filters, timezone, key_filter) do
     status_class = filters["status_class"]
     streaming = filters["streaming"]
     search = filters["model_search"]
@@ -361,6 +420,11 @@ defmodule TokengateWeb.ServiceStatsLive do
       search not in [nil, ""] and
           not (String.contains?(log.model_requested || "", search) or
                    String.contains?(log.model_responded || "", search)) ->
+        false
+
+      # El selector de key acota también el realtime: un log de otra key no
+      # entra al stream cuando se está viendo una key específica.
+      key_filter not in [nil, "all"] and log.api_key_id != key_filter ->
         false
 
       true ->
@@ -476,6 +540,29 @@ defmodule TokengateWeb.ServiceStatsLive do
             </p>
           </div>
           <div class="flex-1"></div>
+          <.form
+            :if={@service_api_keys != []}
+            for={@key_filter_form}
+            id="key-filter-form"
+            phx-change="set_key"
+            class="w-48"
+          >
+            <.input
+              field={@key_filter_form[:key_id]}
+              type="select"
+              label={gettext("API key")}
+              options={[
+                {gettext("All API keys"), "all"}
+                | Enum.map(@service_api_keys, fn key ->
+                    label =
+                      (key.label || key.key_prefix) <>
+                        if(key.status == "revoked", do: " · " <> gettext("Revoked"), else: "")
+
+                    {label, key.id}
+                  end)
+              ]}
+            />
+          </.form>
           <.form for={@period_form} id="period-form" phx-change="set_period" class="w-48">
             <.input
               field={@period_form[:period]}

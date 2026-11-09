@@ -380,6 +380,98 @@ defmodule TokengateWeb.ServicesLiveTest do
       assert Enum.map(Accounts.list_api_keys_for_service(service.id), & &1.id) == [k2.id]
     end
 
+    test "renombrar una clave cambia su label sin tocar hash ni status", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      service = service_fixture()
+      k1 = create_service_key(service, "ci")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/services")
+
+      view |> element("#keys-#{service.id}") |> render_click()
+
+      # Lápiz → form inline → submit.
+      view |> element("#rename-key-#{k1.id}") |> render_click()
+      assert has_element?(view, "#rename-key-form-#{k1.id}")
+
+      html =
+        view
+        |> form("#rename-key-inline-#{k1.id}", %{"key-id" => k1.id, key: %{label: "prod"}})
+        |> render_submit()
+
+      assert html =~ "Clave renombrada"
+      assert has_element?(view, "#key-#{k1.id}", "prod")
+      refute has_element?(view, "#rename-key-form-#{k1.id}")
+
+      renamed = Accounts.get_api_key(k1.id)
+      assert renamed.label == "prod"
+      assert renamed.key_hash == k1.key_hash
+      assert renamed.status == "active"
+    end
+
+    test "renombrar con label vacío limpia la etiqueta (queda «sin etiqueta»)", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      service = service_fixture()
+      k1 = create_service_key(service, "ci")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/services")
+
+      view |> element("#keys-#{service.id}") |> render_click()
+      view |> element("#rename-key-#{k1.id}") |> render_click()
+
+      view
+      |> form("#rename-key-inline-#{k1.id}", %{"key-id" => k1.id, key: %{label: "   "}})
+      |> render_submit()
+
+      assert Accounts.get_api_key(k1.id).label in [nil, ""]
+      assert has_element?(view, "#key-#{k1.id}", "sin etiqueta")
+    end
+
+    test "renombrar la key de otro servicio (payload forjado) es rechazado", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      service = service_fixture()
+      other = service_fixture()
+      other_key = create_service_key(other, "ajena")
+      own_key = create_service_key(service, "propia")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/services")
+
+      view |> element("#keys-#{service.id}") |> render_click()
+      view |> element("#rename-key-#{own_key.id}") |> render_click()
+
+      # Payload forjado: el key-id del submit apunta a la key del OTRO
+      # servicio. El chequeo hermético (service_id == keys_service_id) debe
+      # rechazarlo y la key ajena queda intacta. Params crudos (el form helper
+      # validaría el hidden contra el DOM y no dejaría forjar).
+      html =
+        view
+        |> element("#rename-key-inline-#{own_key.id}")
+        |> render_submit(%{"key-id" => other_key.id, "key" => %{"label" => "hack"}})
+
+      assert html =~ "No se pudo renombrar la clave"
+      assert Accounts.get_api_key(other_key.id).label == "ajena"
+      assert Accounts.get_api_key(own_key.id).label == "propia"
+    end
+
+    test "cancelar el rename cierra el form sin cambiar nada", %{conn: conn} do
+      %{user: admin, password: password} = register("admin")
+      service = service_fixture()
+      k1 = create_service_key(service, "ci")
+
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/access/services")
+
+      view |> element("#keys-#{service.id}") |> render_click()
+      view |> element("#rename-key-#{k1.id}") |> render_click()
+
+      view |> element("#cancel-rename-key-#{k1.id}") |> render_click()
+
+      refute has_element?(view, "#rename-key-form-#{k1.id}")
+      assert Accounts.get_api_key(k1.id).label == "ci"
+    end
+
     test "eliminar el servicio borra TODAS sus claves", %{conn: conn} do
       %{user: admin, password: password} = register("admin")
       service = service_fixture()

@@ -930,6 +930,56 @@ defmodule Tokengate.LogsTest do
     end
   end
 
+  describe "service_stats/2 con opt :api_key_id" do
+    test "scopea summary, desglose, top models y último request a una key" do
+      service = service_fixture()
+      key_a = service_api_key_fixture(service, %{label: "A"})
+      key_b = service_api_key_fixture(service, %{label: "B"})
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      from = DateTime.add(now, -3600, :second)
+
+      service_log_fixture(service, %{
+        api_key_id: key_a.id,
+        api_key_prefix: key_a.key_prefix,
+        model_requested: "gpt-4o-svc",
+        status_code: 500,
+        prompt_tokens: 10,
+        provider_cost_usd: Decimal.new("0.100000"),
+        inserted_at: now
+      })
+
+      service_log_fixture(service, %{
+        api_key_id: key_b.id,
+        api_key_prefix: key_b.key_prefix,
+        model_requested: "claude-svc",
+        status_code: 200,
+        prompt_tokens: 20,
+        provider_cost_usd: Decimal.new("0.200000"),
+        inserted_at: now
+      })
+
+      scoped = Logs.service_stats(service.id, from: from, api_key_id: key_a.id)
+
+      assert scoped.request_count == 1
+      assert Decimal.eq?(scoped.total_cost_usd, Decimal.new("0.100000"))
+      assert scoped.status_breakdown["5xx"] == 1
+      assert scoped.status_breakdown["2xx"] == 0
+      assert [%{model_requested: "gpt-4o-svc", count: 1}] = scoped.top_models
+      assert scoped.last_request_at
+      # El realtime también queda scopeado a la key.
+      assert scoped.realtime_5min.request_count == 1
+      assert scoped.realtime_5min.error_count == 1
+
+      # Sin el opt, el agregado del servicio entero queda intacto (compat).
+      full = Logs.service_stats(service.id, from: from)
+      assert full.request_count == 2
+      assert full.status_breakdown["5xx"] == 1
+      assert full.status_breakdown["2xx"] == 1
+      assert length(full.top_models) == 2
+    end
+  end
+
   # `request_logs.error_message` es varchar(255) mientras el adapter recorta el
   # mensaje del vendor a 500: sin recorte el INSERT falla entero (Postgrex 22001
   # string_data_right_truncation) y la fila del rechazo se pierde.

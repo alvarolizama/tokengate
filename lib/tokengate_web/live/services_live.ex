@@ -49,6 +49,7 @@ defmodule TokengateWeb.ServicesLive do
         |> assign(:keys, [])
         |> assign(:keys_spend, %{})
         |> assign(:keys_by_service, %{})
+        |> assign(:editing_key_id, nil)
         |> assign(:delete_target_id, nil)
         |> assign(:delete_target_name, nil)
         |> assign(:detail_service_id, nil)
@@ -429,7 +430,8 @@ defmodule TokengateWeb.ServicesLive do
      |> assign(:keys_service_name, nil)
      |> assign(:keys, [])
      |> assign(:keys_spend, %{})
-     |> assign(:new_token, nil)}
+     |> assign(:new_token, nil)
+     |> assign(:editing_key_id, nil)}
   end
 
   def handle_event("create_service_key", %{"key" => key_params}, socket) do
@@ -471,9 +473,62 @@ defmodule TokengateWeb.ServicesLive do
     end
   end
 
+  # Submit del form inline: cambia el label de la key del servicio en edición.
+  # Va ANTES del clause del lápiz — su pattern es un superconjunto (el payload
+  # del submit también trae "key-id") y el orden de clauses decide.
+  def handle_event(
+        "rename_service_key",
+        %{"key-id" => key_id, "key" => %{"label" => label}},
+        socket
+      )
+      when is_binary(label) do
+    label = String.trim(label)
+
+    with {:ok, key_id} <- Ecto.UUID.cast(key_id),
+         %{} = api_key <- Accounts.get_service_api_key(key_id),
+         # Chequeo hermético: keys_service_id nil (panel cerrado) + una key de
+         # usuario (service_id nil) era true por nil == nil.
+         true <-
+           is_binary(socket.assigns.keys_service_id) and
+             api_key.service_id == socket.assigns.keys_service_id,
+         {:ok, _} <- Accounts.update_api_key(api_key, %{"label" => label}) do
+      audit(socket, "api_key.rename", "api_key", api_key.id, %{
+        "old_label" => api_key.label,
+        "new_label" => label,
+        "service_id" => api_key.service_id
+      })
+
+      {:noreply,
+       socket
+       |> put_flash(:info, gettext("Key renamed."))
+       |> assign(:editing_key_id, nil)
+       |> load_service_keys(socket.assigns.keys_service_id)}
+    else
+      _ ->
+        {:noreply, put_flash(socket, :error, gettext("Could not rename the key."))}
+    end
+  end
+
+  # Lápiz de la fila: abre el form inline de rename.
+  def handle_event("rename_service_key", %{"key-id" => key_id}, socket)
+      when is_binary(key_id) do
+    {:noreply, assign(socket, :editing_key_id, key_id)}
+  end
+
+  def handle_event("rename_service_key", _params, socket), do: {:noreply, socket}
+
+  def handle_event("cancel_rename_key", _params, socket) do
+    {:noreply, assign(socket, :editing_key_id, nil)}
+  end
+
   def handle_event("revoke_service_key", %{"key-id" => api_key_id}, socket) do
-    with %{} = api_key <- Accounts.get_service_api_key(api_key_id),
-         true <- api_key.service_id == socket.assigns.keys_service_id do
+    with {:ok, api_key_id} <- Ecto.UUID.cast(api_key_id),
+         %{} = api_key <- Accounts.get_service_api_key(api_key_id),
+         # Mismo chequeo hermético que el rename: nil == nil dejaba pasar una
+         # key de usuario con el panel cerrado.
+         true <-
+           is_binary(socket.assigns.keys_service_id) and
+             api_key.service_id == socket.assigns.keys_service_id do
       case Accounts.revoke_service_api_key(api_key) do
         {:ok, _} ->
           audit(socket, "api_key.revoke", "api_key", api_key.id, %{
@@ -871,6 +926,9 @@ defmodule TokengateWeb.ServicesLive do
             revoke_event="revoke_service_key"
             dismiss_event="dismiss_new_key_token"
             sticky_event="clear_service_sticky_routes"
+            rename_event="rename_service_key"
+            cancel_rename_event="cancel_rename_key"
+            editing_key_id={@editing_key_id}
             empty_text={gettext("This service has no active keys.")}
           />
 

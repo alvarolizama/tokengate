@@ -51,6 +51,10 @@ defmodule TokengateWeb.KeysPanel do
     * `@dismiss_event` — oculta el token nuevo.
     * `@sticky_event` — opcional; limpia el ruteo sticky del sujeto
       (`phx-value-id` = `@subject_id`).
+    * `@rename_event` / `@cancel_rename_event` — opcionales; renombrar el
+      label de una key. Con `@rename_event` presente, cada fila activa muestra
+      un lápiz que abre el form inline (payload `%{"key-id" => _, "key" =>
+      %{"label" => _}}`); `@editing_key_id` marca la fila en edición.
   """
   attr :subject_kind, :string, required: true, doc: ~s("user" | "service")
   attr :subject_id, :string, required: true
@@ -61,6 +65,9 @@ defmodule TokengateWeb.KeysPanel do
   attr :revoke_event, :string, required: true
   attr :dismiss_event, :string, required: true
   attr :sticky_event, :string, default: nil
+  attr :rename_event, :string, default: nil
+  attr :cancel_rename_event, :string, default: nil
+  attr :editing_key_id, :string, default: nil
   attr :empty_text, :string, default: "This subject has no active keys."
 
   def keys_panel(assigns) do
@@ -115,37 +122,89 @@ defmodule TokengateWeb.KeysPanel do
         id={"key-#{key.id}"}
       >
         <div class="min-w-0">
-          <div class="flex items-center gap-2">
-            <span class="text-sm font-semibold truncate">{key.label || gettext("no label")}</span>
-            <span class={[
-              "badge badge-xs",
-              if(key.status == "active", do: "badge-success", else: "badge-ghost")
-            ]}>
-              {if key.status == "active", do: gettext("Active"), else: gettext("Revoked")}
-            </span>
+          <div
+            :if={@rename_event && @editing_key_id == key.id}
+            class="flex items-center gap-1"
+            id={"rename-key-form-#{key.id}"}
+          >
+            <.form
+              for={%{}}
+              as={nil}
+              id={"rename-key-inline-#{key.id}"}
+              phx-submit={@rename_event}
+              class="flex items-center gap-1 flex-1"
+            >
+              <input type="hidden" name="key-id" value={key.id} />
+              <input
+                type="text"
+                name="key[label]"
+                value={key.label || ""}
+                maxlength="64"
+                placeholder={gettext("ci, laptop, server...")}
+                class="input input-xs input-bordered w-full font-mono"
+                autofocus
+              />
+              <button type="submit" class="btn btn-xs btn-primary" title={gettext("Save")}>
+                <.icon name="hero-check" class="w-3.5 h-3.5" />
+              </button>
+            </.form>
+            <button
+              type="button"
+              phx-click={@cancel_rename_event}
+              class="btn btn-xs btn-ghost"
+              id={"cancel-rename-key-#{key.id}"}
+              title={gettext("Cancel")}
+            >
+              <.icon name="hero-x-mark" class="w-3.5 h-3.5" />
+            </button>
           </div>
-          <div class="text-xs font-mono text-base-content/50">
-            {key.key_prefix}•••• <% spend = Map.get(@spend, key.id) %>
-            <span class="ml-2 text-base-content/40">
-              {if spend,
-                do: "#{spend.requests} req · $#{fmt_money(spend.cost_usd)}",
-                else: gettext("no usage")}
-            </span>
+          <div :if={@editing_key_id != key.id}>
+            <div class="flex items-center gap-2">
+              <span class="text-sm font-semibold truncate">{key.label || gettext("no label")}</span>
+              <span class={[
+                "badge badge-xs",
+                if(key.status == "active", do: "badge-success", else: "badge-ghost")
+              ]}>
+                {if key.status == "active", do: gettext("Active"), else: gettext("Revoked")}
+              </span>
+            </div>
+            <div class="text-xs font-mono text-base-content/50">
+              {key.key_prefix}•••• <% spend = Map.get(@spend, key.id) %>
+              <span class="ml-2 text-base-content/40">
+                {if spend,
+                  do: "#{spend.requests} req · $#{fmt_money(spend.cost_usd)}",
+                  else: gettext("no usage")}
+              </span>
+            </div>
           </div>
         </div>
-        <button
-          :if={key.status == "active"}
-          type="button"
-          phx-click={@revoke_event}
-          phx-value-key-id={key.id}
-          class="btn btn-xs btn-ghost text-error shrink-0"
-          id={"revoke-key-#{key.id}"}
-          title={gettext("Revoke this key")}
-          aria-label={gettext("Revoke this key")}
-          data-confirm={gettext("Revoke this key? The token stops working.")}
-        >
-          {gettext("Revoke")}
-        </button>
+        <div class="flex items-center gap-1 shrink-0">
+          <button
+            :if={@rename_event && key.status == "active" && @editing_key_id != key.id}
+            type="button"
+            phx-click={@rename_event}
+            phx-value-key-id={key.id}
+            class="btn btn-xs btn-ghost shrink-0"
+            id={"rename-key-#{key.id}"}
+            title={gettext("Rename this key")}
+            aria-label={gettext("Rename this key")}
+          >
+            <.icon name="hero-pencil-square" class="w-3.5 h-3.5" />
+          </button>
+          <button
+            :if={key.status == "active"}
+            type="button"
+            phx-click={@revoke_event}
+            phx-value-key-id={key.id}
+            class="btn btn-xs btn-ghost text-error shrink-0"
+            id={"revoke-key-#{key.id}"}
+            title={gettext("Revoke this key")}
+            aria-label={gettext("Revoke this key")}
+            data-confirm={gettext("Revoke this key? The token stops working.")}
+          >
+            {gettext("Revoke")}
+          </button>
+        </div>
       </div>
       <p :if={@keys == []} class="text-sm text-base-content/50 py-2" id="no-keys">
         {TokengateWeb.Gettext.translate(@empty_text)}

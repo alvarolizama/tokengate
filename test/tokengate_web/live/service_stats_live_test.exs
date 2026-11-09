@@ -220,6 +220,61 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       refute has_element?(view, "#{row} .badge-success")
     end
 
+    test "the key selector scopes the report to one key or back to all", %{conn: conn} do
+      service = service_fixture()
+      key_a = key_fixture(service, %{"label" => "Alpha"})
+      key_b = key_fixture(service, %{"label" => "Beta"})
+      {:ok, _revoked} = Accounts.revoke_api_key(key_b)
+
+      {:ok, _} = log_for(service, %{api_key_id: key_a.id, model_requested: "alpha-model"})
+      {:ok, _} = log_for(service, %{api_key_id: key_b.id, model_requested: "beta-model"})
+
+      %{user: admin, password: password} = register("admin")
+      conn = login(conn, admin, password)
+      {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
+
+      # Todas (default): las dos filas —la revocada incluida— y KPI = 2.
+      assert has_element?(view, "#api-key-row-#{key_a.id}")
+      assert has_element?(view, "#api-key-row-#{key_b.id}")
+      assert render(element(view, "#kpi-requests")) =~ ~r/text-2xl font-bold[^>]*>\s*2\s*</
+
+      # Sólo Beta (revocada): una fila, KPI = 1, logs scopeados y el selector
+      # la lista marcada como revocada. Payload REAL del browser: anidado por
+      # el to_form (name="key_filter[key_id]").
+      html =
+        view
+        |> form("#key-filter-form", %{"key_filter" => %{"key_id" => key_b.id}})
+        |> render_change()
+
+      assert html =~ "Beta · Revocada"
+      assert has_element?(view, "#api-key-row-#{key_b.id}")
+      refute has_element?(view, "#api-key-row-#{key_a.id}")
+      assert render(element(view, "#kpi-requests")) =~ ~r/text-2xl font-bold[^>]*>\s*1\s*</
+      assert cell_text(view, "#api-key-row-#{key_b.id} td:nth-child(3)") == "1"
+
+      # La lista de logs también quedó scopeada a la key elegida.
+      assert render(view) =~ "beta-model"
+      refute render(view) =~ "alpha-model"
+
+      # De vuelta a todas: KPI = 2.
+      view
+      |> form("#key-filter-form", %{"key_filter" => %{"key_id" => "all"}})
+      |> render_change()
+
+      assert has_element?(view, "#api-key-row-#{key_a.id}")
+      assert has_element?(view, "#api-key-row-#{key_b.id}")
+
+      # Un id ajeno al servicio se ignora (queda el "all" vigente). Payload
+      # forjado directo por el socket: render_change crudo, sin pasar por la
+      # validación de opciones del form helper.
+      view
+      |> element("#key-filter-form")
+      |> render_change(%{"key_filter" => %{"key_id" => Ecto.UUID.generate()}})
+
+      assert has_element?(view, "#api-key-row-#{key_a.id}")
+      assert has_element?(view, "#api-key-row-#{key_b.id}")
+    end
+
     test "the period selector recomputes the window and ignores unknown values", %{conn: conn} do
       service = service_fixture()
       key = key_fixture(service, %{"label" => "Live key"})
@@ -232,29 +287,37 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
 
       # Cambio a 24h: el log de hoy sigue en la ventana y la tabla cuadra
-      # con el KPI (mismo `from` compartido).
-      assert view
-             |> element("#period-form")
-             |> render_change(%{"period" => "24h"})
+      # con el KPI (mismo `from` compartido). El payload es el REAL del
+      # browser: anidado por el to_form (name="period[period]").
+      html =
+        view
+        |> form("#period-form", %{"period" => %{"period" => "24h"}})
+        |> render_change()
+
+      # La opción quedó seleccionada: prueba que el handler corrió de verdad.
+      assert html =~ ~s(<option selected="" value="24h")
 
       assert has_element?(view, "#api-key-row-#{key.id}")
       assert cell_text(view, "#api-key-row-#{key.id} td:nth-child(3)") == "1"
       assert render(element(view, "#kpi-requests")) =~ ~r/text-2xl font-bold[^>]*>\s*1\s*</
 
       # Mes en curso: el log de hoy también cae dentro.
-      assert view
-             |> element("#period-form")
-             |> render_change(%{"period" => "month"})
+      html =
+        view
+        |> form("#period-form", %{"period" => %{"period" => "month"}})
+        |> render_change()
 
+      assert html =~ ~s(<option selected="" value="month")
       assert has_element?(view, "#api-key-row-#{key.id}")
 
-      # Un periodo desconocido (payload manual por el socket) se ignora: la
-      # página no revienta y conserva el periodo vigente.
-      assert view
-             |> element("#period-form")
-             |> render_change(%{"period" => "hack"})
+      # Un periodo desconocido (payload forjado directo por el socket) se
+      # ignora: la página no revienta y conserva el periodo vigente.
+      view
+      |> element("#period-form")
+      |> render_change(%{"period" => %{"period" => "hack"}})
 
       assert has_element?(view, "#api-key-row-#{key.id}")
+      assert render(view) =~ ~s(<option selected="" value="month")
     end
 
     test "the table's requests add up to the KPI", %{conn: conn} do

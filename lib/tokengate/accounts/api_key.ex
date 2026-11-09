@@ -35,6 +35,9 @@ defmodule Tokengate.Accounts.ApiKey do
     |> validate_required(@required)
     |> validate_inclusion(:subject_type, ["member", "service"])
     |> validate_inclusion(:status, ["active", "revoked"])
+    # El maxlength del input es sólo cliente: el tope vive aquí (el form
+    # inline de rename es posteable por socket).
+    |> validate_length(:label, max: 64)
     |> validate_subject()
     |> unique_constraint(:key_hash)
     |> assoc_constraint(:group_member)
