@@ -185,8 +185,14 @@ if config_env() == :prod do
              # un contenedor de 512 MB–1 GB es una invitación a agotar memoria
              # (cada conexión cuesta un proceso + buffers). 2048 deja aire para
              # un gateway de un equipo y se sube por env cuando haya carga real.
+             #
+             # La llave es `num_connections`, NO `max_connections`: en
+             # ThousandIsland 1.6 el `ServerConfig` ya no expone `max_connections`
+             # y Bandit 1.14 valida esta lista contra ese struct — con la llave
+             # vieja el endpoint no arranca y la app no bootea ("Unsupported
+             # key(s) in thousand_island_options config").
              thousand_island_options: [
-               max_connections: String.to_integer(System.get_env("MAX_CONNECTIONS", "2048"))
+               num_connections: String.to_integer(System.get_env("MAX_CONNECTIONS", "2048"))
              ]
            ],
            secret_key_base: secret_key_base
