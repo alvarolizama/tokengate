@@ -235,8 +235,9 @@ defmodule TokengateWeb.ProvidersLive do
 
   @impl true
   # Adds a custom provider: no catalog entry exists for it, so the form asks
-  # for the base URL alone. Dialect, paths and capabilities are NOT asked for
-  # — they are code (dialect default + Catalog customization).
+  # for the base URL and its capabilities. Dialect and paths stay code:
+  # dialect defaults to openai, paths are the per-capability overrides (the
+  # "capacidades" modal on the card).
   def handle_event("new_custom_provider", _params, socket) do
     changeset =
       Providers.change_provider(%Provider{
@@ -375,7 +376,11 @@ defmodule TokengateWeb.ProvidersLive do
   end
 
   def handle_event("save_provider", %{"provider" => provider_params}, socket) do
-    save_provider(socket, socket.assigns.editing_provider_id, provider_params)
+    save_provider(
+      socket,
+      socket.assigns.editing_provider_id,
+      normalize_capabilities(provider_params)
+    )
   end
 
   def handle_event("delete_provider", %{"id" => provider_id}, socket) do
@@ -607,6 +612,26 @@ defmodule TokengateWeb.ProvidersLive do
 
   ## Private helpers — provider save --------------------------------------
 
+  # The capabilities group submits a hidden empty sentinel so "uncheck
+  # everything" reaches the server as an explicit empty list — the changeset
+  # only understands capability names, so the sentinel is dropped here. An
+  # empty set is legal: routing falls back to chat (effective_capabilities/1).
+  # The binary clauses cover a client posting the field without the [] suffix
+  # ("" normalizes to [], a bare value wraps into a one-element list).
+  defp normalize_capabilities(%{"capabilities" => caps} = params) when is_list(caps) do
+    Map.put(params, "capabilities", Enum.reject(caps, &(&1 == "")))
+  end
+
+  defp normalize_capabilities(%{"capabilities" => ""} = params) do
+    normalize_capabilities(Map.put(params, "capabilities", []))
+  end
+
+  defp normalize_capabilities(%{"capabilities" => caps} = params) when is_binary(caps) do
+    normalize_capabilities(Map.put(params, "capabilities", [caps]))
+  end
+
+  defp normalize_capabilities(params), do: params
+
   defp delete_provider(socket, provider) do
     referenced? =
       Repo.exists?(
@@ -824,6 +849,28 @@ defmodule TokengateWeb.ProvidersLive do
 
   @doc "How many capabilities this provider overrides — the badge on its button."
   def path_override_count(provider), do: map_size(ProviderPaths.overrides(provider))
+
+  # UI labels for the capabilities a custom can declare — the same picker
+  # labels the model wizard uses (ModelsLive.model_type_choices/0):
+  # capabilities and model types are one vocabulary. The VALUES come from
+  # `Catalog.capabilities/0`, so the form can never offer a value the
+  # changeset would reject; a capability without a label is not offered yet
+  # (the vocabulary guard test in ProvidersLiveTest fails loudly on drift).
+  @doc "The capabilities a custom can declare, in Catalog order: `{label, value, icon}`."
+  @spec capability_choices() :: [{String.t(), String.t(), String.t()}]
+  def capability_choices do
+    Enum.flat_map(Catalog.capabilities(), fn value ->
+      case value do
+        "llm" -> [{gettext("LLM (chat)"), value, "hero-chat-bubble-left-right"}]
+        "embedding" -> [{gettext("Embedding"), value, "hero-squares-2x2"}]
+        "decision" -> [{gettext("Decisions"), value, "hero-scale"}]
+        "stt" -> [{gettext("Transcription"), value, "hero-microphone"}]
+        "tts" -> [{gettext("Speech"), value, "hero-speaker-wave"}]
+        "image" -> [{gettext("Images"), value, "hero-photo"}]
+        _ -> []
+      end
+    end)
+  end
 
   @doc "Model count for a provider (from the counts map)."
   def model_count(provider_id, counts), do: Map.get(counts, provider_id, 0)
@@ -1117,6 +1164,33 @@ defmodule TokengateWeb.ProvidersLive do
                     disabled={@editing_provider_builtin?}
                     hint="URL base (OpenAI-compatible)."
                   />
+                </div>
+
+                <%!-- Capabilities: what the upstream can serve. Identity is
+                     catalog-owned for builtins (the changeset discards the
+                     change anyway), so the group renders for customs only. --%>
+                <div :if={!@editing_provider_builtin?} class="pt-4 mt-4 border-t border-base-200">
+                  <h3 class="text-sm font-semibold mb-1">{gettext("Capabilities")}</h3>
+                  <p class="text-xs text-base-content/50 mb-3">
+                    {gettext("What this provider can serve. Nothing checked = chat only.")}
+                  </p>
+                  <input type="hidden" name="provider[capabilities][]" value="" />
+                  <div id="provider-capabilities" class="grid grid-cols-2 sm:grid-cols-3 gap-y-2">
+                    <label
+                      :for={{label, value, icon} <- capability_choices()}
+                      class="flex items-center gap-2 cursor-pointer"
+                    >
+                      <input
+                        type="checkbox"
+                        name="provider[capabilities][]"
+                        value={value}
+                        checked={value in (@form[:capabilities].value || [])}
+                        class="checkbox checkbox-sm"
+                      />
+                      <.icon name={icon} class="w-4 h-4 opacity-70" />
+                      <span class="text-sm">{label}</span>
+                    </label>
+                  </div>
                 </div>
 
                 <%!-- Limits live on the provider: every API key of this provider

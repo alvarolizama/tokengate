@@ -79,6 +79,14 @@ defmodule TokengateWeb.ProvidersLiveTest do
     provider
   end
 
+  # The form derives its VALUES from Catalog.capabilities/0 and labels them in
+  # a literal case: a capability added to the catalog without a label would
+  # silently vanish from the form. This guard turns that drift into a failure.
+  test "capability_choices covers the full catalog vocabulary, in order" do
+    assert Enum.map(TokengateWeb.ProvidersLive.capability_choices(), &elem(&1, 1)) ==
+             Tokengate.Providers.Catalog.capabilities()
+  end
+
   ## Permissions -----------------------------------------------------------
 
   test "unauthenticated visitors are redirected to /login", %{conn: conn} do
@@ -200,10 +208,18 @@ defmodule TokengateWeb.ProvidersLiveTest do
     assert has_element?(view, "#provider-form")
     refute has_element?(view, "#catalog-modal")
 
-    # Capabilities are code configuration, not a form field: a custom only
-    # takes name + base URL.
-    refute has_element?(view, "#provider_capabilities")
-    refute has_element?(view, "#provider-form input[name='provider[capabilities][]']")
+    # The hidden sentinel is load-bearing: without it the browser never sends
+    # an explicit empty list, and "uncheck everything" would silently no-op.
+    assert has_element?(
+             view,
+             "#provider-form input[type='hidden'][name='provider[capabilities][]']"
+           )
+
+    # Capabilities are part of the alta now: the group offers the Catalog
+    # vocabulary with the schema default (chat) pre-checked.
+    assert has_element?(view, "#provider-capabilities")
+    assert has_element?(view, "#provider-capabilities input[value='llm'][checked]")
+    refute has_element?(view, "#provider-capabilities input[value='decision'][checked]")
 
     html =
       view
@@ -226,7 +242,7 @@ defmodule TokengateWeb.ProvidersLiveTest do
     assert render(view) =~ "anthropic"
   end
 
-  test "editing a provider leaves its capabilities alone (not a form field)", %{conn: conn} do
+  test "editing a custom pre-checks its capabilities and can extend them", %{conn: conn} do
     provider = create_provider(%{capabilities: ["llm", "embedding", "stt"]})
     %{user: admin, password: password} = register_admin()
 
@@ -234,17 +250,114 @@ defmodule TokengateWeb.ProvidersLiveTest do
     {:ok, view, _html} = live_providers(conn)
 
     view |> element("#edit-#{provider.id}") |> render_click()
-    refute has_element?(view, "#provider_capabilities")
-    # Neither the form nor the card shows the set anymore.
-    refute render(view) =~ "stt"
+    assert has_element?(view, "#provider-capabilities")
+    assert has_element?(view, "#provider-capabilities input[value='stt'][checked]")
+    refute has_element?(view, "#provider-capabilities input[value='decision'][checked]")
 
-    html = view |> form("#provider-form", provider: %{max_rpm: "60"}) |> render_submit()
+    html =
+      view
+      |> form("#provider-form",
+        provider: %{
+          max_rpm: "60",
+          capabilities: ["llm", "embedding", "stt", "decision"]
+        }
+      )
+      |> render_submit()
+
     assert html =~ "Proveedor actualizado."
 
     reloaded = Providers.get_provider!(provider.id)
     assert reloaded.max_rpm == 60
-    # The form never mentions them, so the stored set is untouched.
-    assert reloaded.capabilities == ["llm", "embedding", "stt"]
+    assert reloaded.capabilities == ["llm", "embedding", "stt", "decision"]
+  end
+
+  # The oMLX case: a local OpenAI-compatible server that also speaks the
+  # decisions surface. Declaring the capability on the custom is what makes
+  # the model wizard offer it for a decision-type model.
+  test "a custom declaring decision becomes visible to the decision routing", %{conn: conn} do
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_providers(conn)
+
+    view |> element("#add-provider-btn") |> render_click()
+    view |> element("#new-custom-provider-btn") |> render_click()
+
+    html =
+      view
+      |> form("#provider-form",
+        provider: %{
+          name: "omlx",
+          base_url: "http://127.0.0.1:8000/v1",
+          # The sentinel rides first, exactly as a real browser submits it.
+          capabilities: ["", "llm", "decision"]
+        }
+      )
+      |> render_submit()
+
+    assert html =~ "Proveedor creado."
+
+    created = Tokengate.Repo.get_by!(Providers.Provider, name: "omlx")
+    assert created.capabilities == ["llm", "decision"]
+    assert Providers.declares?(created, "decision")
+    assert created.id in Enum.map(Providers.providers_declaring("decision"), & &1.id)
+  end
+
+  # The checkbox group carries a hidden empty sentinel: unchecking everything
+  # submits an explicit empty list, and routing reads an empty set as
+  # chat-only (effective_capabilities/1 never returns []).
+  test "unchecking every capability stores an empty set; routing falls back to chat", %{
+    conn: conn
+  } do
+    %{user: admin, password: password} = register_admin()
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_providers(conn)
+
+    view |> element("#add-provider-btn") |> render_click()
+    view |> element("#new-custom-provider-btn") |> render_click()
+
+    html =
+      view
+      |> form("#provider-form",
+        provider: %{
+          name: "solo-chat",
+          base_url: "https://relay.example.com/v1",
+          capabilities: [""]
+        }
+      )
+      |> render_submit()
+
+    assert html =~ "Proveedor creado."
+
+    created = Tokengate.Repo.get_by!(Providers.Provider, name: "solo-chat")
+    assert created.capabilities == []
+    assert Providers.declares?(created, "llm")
+    refute Providers.declares?(created, "decision")
+  end
+
+  # The case with real consequence: a custom that ALREADY declares services
+  # loses them all on a deliberate uncheck-everything edit.
+  test "editing a custom and unchecking everything stores an empty set", %{conn: conn} do
+    provider = create_provider(%{capabilities: ["llm", "embedding", "stt"]})
+    %{user: admin, password: password} = register_admin()
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live_providers(conn)
+
+    view |> element("#edit-#{provider.id}") |> render_click()
+    assert has_element?(view, "#provider-capabilities input[value='stt'][checked]")
+
+    html =
+      view
+      |> form("#provider-form", provider: %{capabilities: [""]})
+      |> render_submit()
+
+    assert html =~ "Proveedor actualizado."
+
+    reloaded = Providers.get_provider!(provider.id)
+    assert reloaded.capabilities == []
+    # Empty set = chat only, by the effective_capabilities fallback.
+    assert Providers.declares?(reloaded, "llm")
+    refute Providers.declares?(reloaded, "stt")
   end
 
   test "admin edits a provider", %{conn: conn} do
@@ -557,6 +670,8 @@ defmodule TokengateWeb.ProvidersLiveTest do
     assert has_element?(view, "#provider-form input[name='provider[name]'][disabled]")
     assert has_element?(view, "#provider-form input[name='provider[base_url]'][disabled]")
     refute has_element?(view, "#provider-form input[name='provider[max_rpm]'][disabled]")
+    # Capabilities are catalog-owned for builtins: the group never renders.
+    refute has_element?(view, "#provider-capabilities")
 
     html =
       view
@@ -571,6 +686,10 @@ defmodule TokengateWeb.ProvidersLiveTest do
     # Identity untouched.
     assert reloaded.name == builtin.name
     assert reloaded.base_url == builtin.base_url
+    # The group never renders for builtins (nothing to submit through the
+    # form); the changeset lock against forged submits is covered in
+    # ProviderTest's "identity stays locked".
+    assert reloaded.capabilities == ["llm"]
 
     # The card shows the limits the keys below it inherit.
     limits_html = render(view)

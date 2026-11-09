@@ -121,11 +121,16 @@ defmodule Tokengate.Providers.ProviderTest do
         Provider.changeset(builtin, %{
           name: "renamed",
           base_url: "https://elsewhere.example.com/v1",
-          path_overrides: %{"embeddings" => "/embeddings"}
+          path_overrides: %{"embeddings" => "/embeddings"},
+          # Even a forged submit cannot change catalog-owned capabilities:
+          # the form never renders the group for builtins, and the changeset
+          # discards the change anyway (lock_builtin_identity).
+          capabilities: ["image"]
         })
 
       refute Map.has_key?(changeset.changes, :name)
       refute Map.has_key?(changeset.changes, :base_url)
+      refute Map.has_key?(changeset.changes, :capabilities)
 
       assert Ecto.Changeset.get_change(changeset, :path_overrides) == %{
                "embeddings" => "/embeddings"

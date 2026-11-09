@@ -133,7 +133,7 @@ The public surface is exactly these seven routes:
 | `/stats` | Analytics hub — Live pulse + tabs: Overview, Providers (tier/score ranking), Models, Limit profiles, Users, Services. Role-scoped, prev-period deltas, CSV export (`/stats/export`) |
 | `/calculator` | Real provider spend vs an estimated cost from custom pricing (input/cache/output per M + cache-hit rate) |
 | `/catalog/labs` | Labs catalog — read-only models.dev labs + operator **custom** labs (name, key, icon/logo) |
-| `/catalog/providers` | Provider CRUD with multiple credentials each; per-provider operational limits; billing surface label |
+| `/catalog/providers` | Provider CRUD with multiple credentials each; per-provider operational limits; custom providers declare their capabilities (chat/decisions/embeddings/audio/image) and can override the upstream path per capability; billing surface label |
 | `/catalog/models` | Model alias CRUD — provider routes by priority, exclusive scope, manual per-route pricing |
 | `/access/services` | Machine services: own API keys, monthly cap + top-ups, supervisors, granted models |
 | `/access/users` | User CRUD, suspend/activate, impersonation, per-user stats and spend limits |

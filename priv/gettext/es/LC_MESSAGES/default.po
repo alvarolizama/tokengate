@@ -5095,6 +5095,11 @@ msgstr ""
 msgid "Unit cost (USD per unit)"
 msgstr ""
 
+#: lib/tokengate_web/live/providers_live.ex:1175
+#, elixir-autogen, elixir-format
+msgid "What this provider can serve. Nothing checked = chat only."
+msgstr "Lo que este proveedor puede servir. Nada marcado = sólo chat."
+
 #: lib/tokengate_web/live/models_live.ex:4238
 #, elixir-autogen, elixir-format
 msgid "What this provider charges per. It defaults to the model's own unit; change it if this provider prices differently."
