@@ -129,18 +129,19 @@ The public surface is exactly these seven routes:
 
 | Page | What it does |
 |---|---|
-| `/dashboard` | Personal live consumption, period selector, the user's API keys with rotate/revoke/create, supervised-services shortcut |
-| `/stats` | Analytics hub — Live pulse + tabs: Overview, Providers (tier/score ranking), Models, Limit profiles, Users, Services. Role-scoped, prev-period deltas, CSV export (`/stats/export`) |
+| `/dashboard` | Personal live consumption, period selector, the user's API keys with create/rename/rotate/revoke, supervised-services shortcut |
+| `/stats` | Analytics hub — Live pulse + tabs: Overview, Providers (tier/score ranking), Models, Limit profiles, Users, Services. One period selector — **Today / This week / This month / 30 days / 90 days** — shared by the hub and every detail page, with the choice in the URL so it survives bookmarks and refresh; role-scoped, previous-period deltas, CSV export (`/stats/export`) |
 | `/calculator` | Real provider spend vs an estimated cost from custom pricing (input/cache/output per M + cache-hit rate) |
 | `/catalog/labs` | Labs catalog — read-only models.dev labs + operator **custom** labs (name, key, icon/logo) |
 | `/catalog/providers` | Provider CRUD with multiple credentials each; per-provider operational limits; custom providers declare their capabilities (chat/decisions/embeddings/audio/image) and can override the upstream path per capability; billing surface label |
 | `/catalog/models` | Model alias CRUD — provider routes by priority, exclusive scope, manual per-route pricing |
 | `/access/services` | Machine services: own API keys, monthly cap + top-ups, supervisors, granted models |
+| `/stats/services/:id` | Full analytics per service — KPIs, models served, hourly distribution — and the **per-API-key table**: requests, cost and tokens for **every key of the service, active or revoked** (revoked ones keep their badge), traffic that predates the keys lands as an *Unattributed* row, and the key selector scopes the whole report — KPIs, breakdown and log — to a single key |
 | `/access/users` | User CRUD, suspend/activate, impersonation, per-user stats and spend limits |
 | `/budget/profiles` (+ `/:id/members`) | Limit profiles — monthly cap, unlimited flag, membership, per-member RPM/concurrency extras and model grants |
 | `/budget/topups` | One-shot top-ups per user/service: consumed vs granted, deactivate/reactivate, revoke, archived when drained/expired |
 | `/budget/global` | Global daily cap kill-switch + exemptions |
-| `/services/supervised` (+ `/:service_id`) | Read-only view for service supervisors — access comes from a live `service_supervisors` row (no role grants it; removing the row revokes it) |
+| `/services/supervised` (+ `/:service_id`) | Read-only view for service supervisors — the same analytics as the service stats page (KPIs, models, per-API-key table, period selector), no role grants it; access comes from a live `service_supervisors` row (removing the row revokes it) |
 | `/operations/monitoring` | Live request log, filters, in-flight requests, CSV export (`/stats/export?type=logs`) |
 | `/operations/audit` | Admin audit log — actor (+ impersonator), action, entity, IP, redacted change set; filters, pagination, CSV export (`/operations/audit/export`) |
 | `/operations/observability` | OTLP/JSON webhook destinations (HMAC-signed, delivered via Oban) |
