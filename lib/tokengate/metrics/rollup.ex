@@ -26,6 +26,15 @@ defmodule Tokengate.Metrics.Rollup do
 
   import Ecto.Query, warn: false
   alias Tokengate.Accounts.GroupMember
+  # Stats reads scan raw request_logs across whole windows; cold, they can
+  # exceed the DBConnection default (15s) in production. Analytics reads get
+  # their own, generous budget instead of raising the Repo-wide timeout
+  # (which would also cover the proxy auth/write path).
+  @stats_timeout 60_000
+
+  defp stats_timeout,
+    do: Application.get_env(:tokengate, :stats_query_timeout_ms, @stats_timeout)
+
   alias Tokengate.Logs
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Metrics.RequestMetricsHourly
@@ -114,7 +123,7 @@ defmodule Tokengate.Metrics.Rollup do
         }
       )
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         hour: to_utc_datetime(row.hour),
@@ -169,7 +178,7 @@ defmodule Tokengate.Metrics.Rollup do
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
       })
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         group_member_id: row.group_member_id,
@@ -207,7 +216,7 @@ defmodule Tokengate.Metrics.Rollup do
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
       })
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Enum.into(%{}, fn row ->
       {row.agent_type,
        %{
@@ -229,7 +238,7 @@ defmodule Tokengate.Metrics.Rollup do
         cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
       })
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Enum.into(%{}, fn row ->
       {row.agent_type,
        %{
@@ -298,7 +307,7 @@ defmodule Tokengate.Metrics.Rollup do
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
       })
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         model_id: row.model_id,
@@ -349,7 +358,7 @@ defmodule Tokengate.Metrics.Rollup do
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
       })
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         model_id: row.model_id,
@@ -431,7 +440,7 @@ defmodule Tokengate.Metrics.Rollup do
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
       })
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         group_member_id: row.group_member_id,
@@ -523,7 +532,7 @@ defmodule Tokengate.Metrics.Rollup do
     # muerto (el campo se llamaba `group_names` pero traía ids).
     group_names_by_id = Tokengate.Accounts.group_names_by_id()
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         user_id: row.user_id,
@@ -604,7 +613,7 @@ defmodule Tokengate.Metrics.Rollup do
         latency_count: fragment("COUNT(?)", rl.latency_ms)
       })
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         service_id: row.service_id,
@@ -683,7 +692,7 @@ defmodule Tokengate.Metrics.Rollup do
         latency_count: fragment("COUNT(?)", rl.latency_ms)
       })
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Map.new(fn row ->
       {row.service_id,
        %{
@@ -761,7 +770,7 @@ defmodule Tokengate.Metrics.Rollup do
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
       })
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         group_id: row.group_id,
@@ -856,7 +865,7 @@ defmodule Tokengate.Metrics.Rollup do
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
       })
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         model_provider_id: row.model_provider_id,
@@ -940,7 +949,7 @@ defmodule Tokengate.Metrics.Rollup do
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
       })
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         group_member_id: row.group_member_id,
@@ -1013,7 +1022,7 @@ defmodule Tokengate.Metrics.Rollup do
         total_latency_ms: fragment("COALESCE(SUM(?), 0)", rl.latency_ms)
       })
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         group_id: row.group_id,
@@ -1099,7 +1108,7 @@ defmodule Tokengate.Metrics.Rollup do
           fragment("percentile_cont(0.95) WITHIN GROUP (ORDER BY ?)", rl.latency_ms),
         avg_ttft_ms: fragment("AVG(?)", rl.ttft_ms)
       })
-      |> Repo.all()
+      |> Repo.all(timeout: stats_timeout())
 
     min_latency =
       rows
@@ -1222,7 +1231,7 @@ defmodule Tokengate.Metrics.Rollup do
           fragment("percentile_cont(0.95) WITHIN GROUP (ORDER BY ?)", rl.latency_ms),
         avg_ttft_ms: fragment("AVG(?)", rl.ttft_ms)
       })
-      |> Repo.all()
+      |> Repo.all(timeout: stats_timeout())
 
     min_latency =
       rows
@@ -1285,7 +1294,7 @@ defmodule Tokengate.Metrics.Rollup do
       |> then(fn subq ->
         from(h in subq, group_by: h.hour, select: %{hour: h.hour, request_count: count(h.id)})
       end)
-      |> Repo.all()
+      |> Repo.all(timeout: stats_timeout())
       |> Map.new(fn row -> {row.hour, row.request_count} end)
 
     for hour <- 0..23 do
@@ -1382,7 +1391,7 @@ defmodule Tokengate.Metrics.Rollup do
           request_count: fragment("count(*)")
         }
       )
-      |> Repo.all()
+      |> Repo.all(timeout: stats_timeout())
 
     identities = provider_identity_by_id(rows)
     by_hour = Enum.group_by(rows, & &1.hour)
@@ -1433,7 +1442,7 @@ defmodule Tokengate.Metrics.Rollup do
 
       ids ->
         from(p in Provider, where: p.id in ^ids, select: {p.id, p.name, p.logo_url})
-        |> Repo.all()
+        |> Repo.all(timeout: stats_timeout())
         |> Map.new(fn {id, name, logo_url} -> {id, %{name: name, logo_url: logo_url}} end)
     end
   end
@@ -1507,7 +1516,7 @@ defmodule Tokengate.Metrics.Rollup do
           cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
         }
       )
-      |> Repo.all()
+      |> Repo.all(timeout: stats_timeout())
       |> Enum.map(fn row ->
         %{
           model_id: row.model_id,
@@ -1617,7 +1626,7 @@ defmodule Tokengate.Metrics.Rollup do
         request_count: count(b.id)
       }
     )
-    |> Repo.all()
+    |> Repo.all(timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{bucket: to_utc_datetime(row.bucket), request_count: row.request_count}
     end)
@@ -1698,7 +1707,7 @@ defmodule Tokengate.Metrics.Rollup do
       limit: 1,
       select: %{max_concurrent: r.run, at: r.ts}
     )
-    |> Repo.one()
+    |> Repo.one(timeout: stats_timeout())
     |> case do
       nil -> %{max_concurrent: 0, at: nil}
       row -> %{max_concurrent: row.max_concurrent, at: to_utc_datetime(row.at)}
@@ -1781,7 +1790,7 @@ defmodule Tokengate.Metrics.Rollup do
             rl.inserted_at
           )
       })
-      |> Repo.all()
+      |> Repo.all(timeout: stats_timeout())
       |> Enum.map(fn row ->
         Map.put(row, :cost_usd, Decimal.new(to_string(row.cost_usd)))
       end)
@@ -1838,7 +1847,7 @@ defmodule Tokengate.Metrics.Rollup do
           p95_rpm: fragment("percentile_disc(0.95) WITHIN GROUP (ORDER BY ?)", b.rpm)
         }
       )
-      |> Repo.all()
+      |> Repo.all(timeout: stats_timeout())
 
     stats
     |> Map.new(fn row ->
@@ -1933,7 +1942,7 @@ defmodule Tokengate.Metrics.Rollup do
       status_code: rl.status_code,
       error_count: count(rl.id)
     })
-    |> Repo.all()
+    |> Repo.all(timeout: stats_timeout())
   end
 
   # -----------------------------------------------------------------------
@@ -2010,7 +2019,7 @@ defmodule Tokengate.Metrics.Rollup do
         }
       )
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         hour: to_utc_datetime(row.hour),
@@ -2146,7 +2155,7 @@ defmodule Tokengate.Metrics.Rollup do
         total_latency_ms: fragment("COALESCE(SUM(?), 0)::bigint", b.total_latency_ms)
       }
     )
-    |> Repo.all()
+    |> Repo.all(timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         hour: to_utc_datetime(row.hour),
@@ -2235,7 +2244,7 @@ defmodule Tokengate.Metrics.Rollup do
         }
       )
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         hour: to_utc_datetime(row.hour),
@@ -2326,7 +2335,7 @@ defmodule Tokengate.Metrics.Rollup do
         total_latency_ms: fragment("COALESCE(SUM(?), 0)::bigint", m.total_latency_ms),
         latency_count: fragment("COALESCE(SUM(?), 0)::bigint", m.latency_count)
       })
-      |> Repo.one()
+      |> Repo.one(timeout: stats_timeout())
 
     avg_latency_ms =
       if result.latency_count > 0,
@@ -2384,7 +2393,7 @@ defmodule Tokengate.Metrics.Rollup do
     |> maybe_rollup_to(to)
     |> maybe_rollup_member_ids(member_ids)
     |> select([m], fragment("COALESCE(SUM(?), 0)::bigint", m.error_count))
-    |> Repo.one()
+    |> Repo.one(timeout: stats_timeout())
   end
 
   # -----------------------------------------------------------------------
@@ -2420,7 +2429,7 @@ defmodule Tokengate.Metrics.Rollup do
       })
 
     query
-    |> Repo.all()
+    |> Repo.all(timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         model_id: row.model_id,
@@ -2473,7 +2482,7 @@ defmodule Tokengate.Metrics.Rollup do
       })
 
     query
-    |> Repo.all()
+    |> Repo.all(timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         group_member_id: row.group_member_id,
@@ -2525,7 +2534,7 @@ defmodule Tokengate.Metrics.Rollup do
       })
 
     query
-    |> Repo.all()
+    |> Repo.all(timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         group_id: row.group_id,
@@ -2715,7 +2724,7 @@ defmodule Tokengate.Metrics.Rollup do
         }
       )
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         date: to_utc_datetime(row.date),
@@ -2772,7 +2781,7 @@ defmodule Tokengate.Metrics.Rollup do
         }
       )
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         date: to_utc_datetime(row.date),
@@ -2827,7 +2836,7 @@ defmodule Tokengate.Metrics.Rollup do
         }
       )
 
-    Repo.all(query)
+    Repo.all(query, timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{
         date: to_utc_datetime(row.date),

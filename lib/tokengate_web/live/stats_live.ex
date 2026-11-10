@@ -92,6 +92,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:list_search, "")
       |> assign(:stats_loading, true)
       |> assign(:load_error, false)
+      |> assign(:counters_error, false)
       |> assign(:per_page, 10)
       |> assign(:shown_counts, %{})
       |> assign(:reload_scheduled, false)
@@ -348,14 +349,16 @@ defmodule TokengateWeb.StatsLive do
   # no tocan `stats_loading` (quien la apaga es la parte estructural, que es
   # la pesada) ni pisan el resto de los assigns.
   def handle_async(:stats_counters, {:ok, data}, socket) do
-    {:noreply, assign(socket, data)}
+    {:noreply, socket |> assign(data) |> assign(counters_error: false)}
   end
 
+  # Los KPIs reventaron: el usuario veía ceros sin explicación. Mismo trato
+  # honesto que el bundle estructural.
   def handle_async(:stats_counters, {:exit, reason}, socket) do
     require Logger
     Logger.warning("stats counters load failed: #{inspect(reason)}")
 
-    {:noreply, socket}
+    {:noreply, assign(socket, counters_error: true)}
   end
 
   # `logs:new` broadcast — route by tab:
@@ -458,6 +461,7 @@ defmodule TokengateWeb.StatsLive do
     (counter_tasks(params, opts) ++ breakdown_tasks(params, opts))
     |> run_parallel()
     |> Map.new()
+    |> derive_series_labels()
     |> apply_sorting(params)
     |> merge_prev_metrics()
   end
@@ -482,8 +486,21 @@ defmodule TokengateWeb.StatsLive do
     |> breakdown_tasks(period_opts(params))
     |> run_parallel()
     |> Map.new()
+    |> derive_series_labels()
     |> apply_sorting(params)
   end
+
+  # drilldown_series_labels se deriva EN MEMORIA de la daily series que ya se
+  # calculó — no de una segunda ejecución de la misma query.
+  defp derive_series_labels(%{drilldown_series: series} = assigns) when is_list(series) do
+    Map.put(
+      assigns,
+      :drilldown_series_labels,
+      series |> Enum.map(& &1.label) |> Enum.uniq() |> Enum.sort()
+    )
+  end
+
+  defp derive_series_labels(assigns), do: assigns
 
   defp period_opts(params) do
     %{from: from, to: to} = Periods.period_bounds(params.period, params.timezone)
@@ -548,7 +565,13 @@ defmodule TokengateWeb.StatsLive do
   # los datos del periodo anterior visibles.
   defp run_parallel(fun_list) do
     fun_list
-    |> Task.async_stream(fn fun -> fun.() end, timeout: :infinity)
+    # max_concurrency: 3 — lanzar 5+ escaneos fríos en paralelo contra un
+    # pool de 10 los hace competir por conexiones y page cache: el 15s de
+    # DBConnection incluye la espera en cola, no solo la ejecución.
+    |> Task.async_stream(fn fun -> fun.() end,
+      timeout: :infinity,
+      max_concurrency: 3
+    )
     |> Enum.map(fn
       {:ok, result} -> result
       {:exit, reason} -> exit({:stats_query_failed, reason})
@@ -727,14 +750,9 @@ defmodule TokengateWeb.StatsLive do
             end,
             fn -> {:breakdown_member, Rollup.breakdown_by_member(group_id, opts)} end,
             fn -> {:breakdown_model, Rollup.breakdown_by_model(group_id, opts)} end,
-            fn -> {:drilldown_series, Rollup.daily_series_by_model_for_group(group_id, opts)} end,
-            fn ->
-              {:drilldown_series_labels,
-               Rollup.daily_series_by_model_for_group(group_id, opts)
-               |> Enum.map(& &1.label)
-               |> Enum.uniq()
-               |> Enum.sort()}
-            end
+            # Una sola ejecución: drilldown_series_labels se deriva en memoria
+            # del mismo resultado (la query era idéntica y corría dos veces).
+            fn -> {:drilldown_series, Rollup.daily_series_by_model_for_group(group_id, opts)} end
           ]
         else
           []
@@ -774,14 +792,7 @@ defmodule TokengateWeb.StatsLive do
       fn -> {:breakdown_provider, Rollup.breakdown_by_provider_for_model(model_id, opts)} end,
       fn -> {:breakdown_group, breakdown_group_for_model(user, model_id, opts)} end,
       fn -> {:breakdown_member, Rollup.breakdown_by_member_for_model(model_id, opts)} end,
-      fn -> {:drilldown_series, Rollup.daily_series_by_provider_for_model(model_id, opts)} end,
-      fn ->
-        {:drilldown_series_labels,
-         Rollup.daily_series_by_provider_for_model(model_id, opts)
-         |> Enum.map(& &1.label)
-         |> Enum.uniq()
-         |> Enum.sort()}
-      end
+      fn -> {:drilldown_series, Rollup.daily_series_by_provider_for_model(model_id, opts)} end
     ]
   end
 
