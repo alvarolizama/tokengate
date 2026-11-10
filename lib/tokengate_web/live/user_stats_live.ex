@@ -491,8 +491,13 @@ defmodule TokengateWeb.UserStatsLive do
                     class="flex items-center justify-between text-sm"
                   >
                     <span class="font-mono">{row.model_requested || "—"}</span>
-                    <span class="badge badge-sm badge-ghost">
-                      {Integer.to_string(row.count)}
+                    <span class="flex items-center gap-2">
+                      <span class="font-mono text-xs text-base-content/60">
+                        {fmt_money(row.total_cost_usd)}
+                      </span>
+                      <span class="badge badge-sm badge-ghost">
+                        {Integer.to_string(row.count)}
+                      </span>
                     </span>
                   </li>
                 </ol>
@@ -506,7 +511,7 @@ defmodule TokengateWeb.UserStatsLive do
           for={@form}
           id="user-stats-filter-form"
           phx-change="filter"
-          class="grid grid-cols-2 md:grid-cols-4 gap-3"
+          class="grid grid-cols-5 gap-3"
         >
           <.input
             field={@form[:status_class]}

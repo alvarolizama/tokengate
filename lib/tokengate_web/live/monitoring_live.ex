@@ -924,7 +924,7 @@ defmodule TokengateWeb.MonitoringLive do
           for={@form}
           id="logs-filter-form"
           phx-change="filter"
-          class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-9 gap-3"
+          class="grid grid-cols-9 gap-3"
         >
           <.input
             field={@form[:status_class]}

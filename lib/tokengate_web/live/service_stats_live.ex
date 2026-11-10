@@ -220,6 +220,16 @@ defmodule TokengateWeb.ServiceStatsLive do
         Logs.service_key_stats(service_id, from: from)
       end)
 
+    # Reporte por modelo: matriz modelo × API key (gasto del período). Se lee
+    # SIEMPRE del servicio completo — el pivote en memoria recorta la columna
+    # de la key cuando el selector la scopea — y comparte cache con las otras
+    # lecturas del período.
+    model_key_stats =
+      DashboardCache.fetch_or_compute(
+        {:service_model_key_stats, service_id, period, timezone},
+        fn -> Logs.service_model_key_stats(service_id, from: from) end
+      )
+
     key_rows =
       case key_filter do
         "all" ->
@@ -246,6 +256,42 @@ defmodule TokengateWeb.ServiceStatsLive do
       )
     )
     |> assign(:key_rows, key_rows)
+    |> assign(:model_breakdown, build_model_breakdown(model_key_stats, key_rows, key_filter))
+  end
+
+  # Pivote modelo × API key en memoria: una fila por modelo (ordenado por
+  # gasto) con el total del período y una celda por key. La lista de columnas
+  # es la misma del universo de keys de la tabla de arriba (preload ∪ ids con
+  # tráfico ∪ NULL) — el pivote no inventa columnas.
+  #
+  # Con una key seleccionada el selector de arriba ya scopea el summary; la
+  # matriz se recorta a esa key para que las tres lecturas digan lo mismo.
+  defp build_model_breakdown(model_key_stats, key_rows, key_filter) do
+    key_labels =
+      Map.new(key_rows, fn row -> {row.stats.api_key_id, row.label} end)
+
+    stats =
+      case key_filter do
+        "all" -> model_key_stats
+        key_id -> Enum.filter(model_key_stats, &(&1.api_key_id == key_id))
+      end
+
+    rows =
+      stats
+      |> Enum.group_by(& &1.model_requested)
+      |> Enum.map(fn {model, rows} ->
+        by_key = Map.new(rows, &{&1.api_key_id, &1})
+
+        %{
+          model: model,
+          request_count: Enum.sum_by(rows, & &1.request_count),
+          total_cost_usd: Enum.reduce(rows, Decimal.new(0), &Decimal.add(&1.total_cost_usd, &2)),
+          by_key: by_key
+        }
+      end)
+      |> Enum.sort_by(&Decimal.to_float(&1.total_cost_usd), :desc)
+
+    %{rows: rows, key_labels: key_labels}
   end
 
   # Universo de la tabla de API keys: TODAS las keys del servicio (preload
@@ -659,8 +705,13 @@ defmodule TokengateWeb.ServiceStatsLive do
                     class="flex items-center justify-between text-sm"
                   >
                     <span class="font-mono">{row.model_requested || "—"}</span>
-                    <span class="badge badge-sm badge-ghost">
-                      {Integer.to_string(row.count)}
+                    <span class="flex items-center gap-2">
+                      <span class="font-mono text-xs text-base-content/60">
+                        {fmt_money(row.total_cost_usd)}
+                      </span>
+                      <span class="badge badge-sm badge-ghost">
+                        {Integer.to_string(row.count)}
+                      </span>
                     </span>
                   </li>
                 </ol>
@@ -731,12 +782,71 @@ defmodule TokengateWeb.ServiceStatsLive do
           </div>
         </div>
 
+        <%!-- Spend per model × API key (selected period) --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm">
+          <div class="card-body p-4">
+            <h3 class="text-sm font-semibold mb-2">
+              {gettext("Spend per model")} · {gettext("by API key")}
+            </h3>
+            <div class="overflow-x-auto">
+              <table class="table table-sm" id="service-model-breakdown-table">
+                <thead>
+                  <tr>
+                    <th>{gettext("Model")}</th>
+                    <th class="text-right">{gettext("Requests")}</th>
+                    <th class="text-right">{gettext("Cost")}</th>
+                    <th
+                      :for={
+                        {key_id, label} <-
+                          Enum.sort_by(@model_breakdown.key_labels, fn {_id, l} -> l end)
+                      }
+                      class="text-right"
+                    >
+                      {label}
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <%= if @model_breakdown.rows == [] do %>
+                    <tr id="service-model-breakdown-empty">
+                      <td class="text-center py-6 text-base-content/40" colspan="100">
+                        {gettext("No requests in this period.")}
+                      </td>
+                    </tr>
+                  <% else %>
+                    <tr
+                      :for={row <- @model_breakdown.rows}
+                      id={"model-breakdown-#{String.replace(row.model || "unknown", "/", "-")}"}
+                    >
+                      <td class="font-mono text-sm">{row.model || "—"}</td>
+                      <td class="text-right text-sm">{format_number(row.request_count)}</td>
+                      <td class="text-right text-sm font-mono">{fmt_money(row.total_cost_usd)}</td>
+                      <td
+                        :for={
+                          {key_id, _label} <-
+                            Enum.sort_by(@model_breakdown.key_labels, fn {_id, l} -> l end)
+                        }
+                        class="text-right text-sm font-mono"
+                      >
+                        {case Map.get(row.by_key, key_id) do
+                          nil -> "—"
+                          cell -> fmt_money(cell.total_cost_usd)
+                        end}
+                      </td>
+                    </tr>
+                  <% end %>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
         <%!-- Filter form --%>
         <.form
           for={@form}
           id="service-stats-filter-form"
           phx-change="filter"
-          class="grid grid-cols-2 md:grid-cols-4 gap-3"
+          class="grid grid-cols-5 gap-3"
         >
           <.input
             field={@form[:status_class]}

@@ -980,6 +980,101 @@ defmodule Tokengate.LogsTest do
     end
   end
 
+  # service_model_key_stats/2
+  # ---------------------------------------------------------------------------
+
+  describe "service_model_key_stats/2" do
+    test "una fila por (api_key_id, model_requested) con costo y tokens" do
+      service = service_fixture()
+      key_a = service_api_key_fixture(service, %{label: "A"})
+      key_b = service_api_key_fixture(service, %{label: "B"})
+
+      service_log_fixture(service, %{
+        api_key_id: key_a.id,
+        model_requested: "gpt-4o-svc",
+        provider_cost_usd: Decimal.new("0.100000"),
+        prompt_tokens: 10,
+        completion_tokens: 5
+      })
+
+      service_log_fixture(service, %{
+        api_key_id: key_a.id,
+        model_requested: "gpt-4o-svc",
+        provider_cost_usd: Decimal.new("0.150000"),
+        prompt_tokens: 20,
+        completion_tokens: 8
+      })
+
+      service_log_fixture(service, %{
+        api_key_id: key_b.id,
+        model_requested: "gpt-4o-svc",
+        provider_cost_usd: Decimal.new("0.300000"),
+        prompt_tokens: 30,
+        completion_tokens: 10
+      })
+
+      service_log_fixture(service, %{
+        api_key_id: key_b.id,
+        model_requested: "claude-svc",
+        provider_cost_usd: Decimal.new("0.200000"),
+        prompt_tokens: 40,
+        completion_tokens: 12
+      })
+
+      # Log sin api_key_id: el grupo NULL del histórico.
+      service_log_fixture(service, %{
+        model_requested: "gpt-4o-svc",
+        provider_cost_usd: Decimal.new("0.050000")
+      })
+
+      rows = Logs.service_model_key_stats(service.id)
+      by_cell = Map.new(rows, &{{&1.api_key_id, &1.model_requested}, &1})
+
+      assert map_size(by_cell) == 4
+
+      cell_a = by_cell[{key_a.id, "gpt-4o-svc"}]
+      assert cell_a.request_count == 2
+      assert Decimal.eq?(cell_a.total_cost_usd, Decimal.new("0.250000"))
+      assert cell_a.total_prompt_tokens == 30
+      assert cell_a.total_completion_tokens == 13
+
+      assert Decimal.eq?(
+               by_cell[{key_b.id, "claude-svc"}].total_cost_usd,
+               Decimal.new("0.200000")
+             )
+
+      assert Decimal.eq?(by_cell[{nil, "gpt-4o-svc"}].total_cost_usd, Decimal.new("0.050000"))
+
+      # La suma de las celdas cuadra con el agregado del servicio.
+      total =
+        rows
+        |> Enum.map(& &1.total_cost_usd)
+        |> Enum.reduce(Decimal.new(0), &Decimal.add/2)
+
+      summary = Logs.service_stats(service.id)
+      assert Decimal.eq?(total, summary.total_cost_usd)
+    end
+
+    test "respeta la ventana :from" do
+      service = service_fixture()
+      key = service_api_key_fixture(service)
+
+      now = DateTime.utc_now() |> DateTime.truncate(:second)
+      from = DateTime.add(now, -3600, :second)
+
+      service_log_fixture(service, %{
+        api_key_id: key.id,
+        model_requested: "m2",
+        inserted_at: DateTime.add(from, -1, :second)
+      })
+
+      service_log_fixture(service, %{api_key_id: key.id, model_requested: "m1", inserted_at: now})
+
+      rows = Logs.service_model_key_stats(service.id, from: from)
+      assert Enum.map(rows, & &1.model_requested) == ["m1"]
+    end
+  end
+
   # `request_logs.error_message` es varchar(255) mientras el adapter recorta el
   # mensaje del vendor a 500: sin recorte el INSERT falla entero (Postgrex 22001
   # string_data_right_truncation) y la fila del rechazo se pierde.

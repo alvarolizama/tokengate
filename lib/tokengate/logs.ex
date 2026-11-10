@@ -26,6 +26,17 @@ defmodule Tokengate.Logs do
   # keeps `list_logs/1` bounded at 500 while exports can stream up to 50k.
   @export_limit 50_000
 
+  # Stats reads scan raw request_logs across whole windows; cold, they can
+  # exceed the DBConnection default (15s) in production — that was the
+  # failure behind the stats pages erroring on long periods. Analytics
+  # reads get their own, generous budget instead of raising the Repo-wide
+  # timeout (which would also cover the proxy auth/write path). Same
+  # convention as `Metrics.Rollup` and `Metrics.StatsQueries`.
+  @stats_timeout 120_000
+
+  defp stats_timeout,
+    do: Application.get_env(:tokengate, :stats_query_timeout_ms, @stats_timeout)
+
   # Etiqueta de los logs sin proveedor en el desglose por hora del día
   # (fallo antes del routing, o provider ya borrado). Es un valor de DATOS:
   # `Metrics.Rollup` tiene que devolver el MISMO string para que la tarjeta
@@ -459,7 +470,7 @@ defmodule Tokengate.Logs do
         request_count: count(rl.id)
       })
 
-    result = Repo.one(query)
+    result = Repo.one(query, timeout: stats_timeout())
 
     %{
       total_cost_usd: Decimal.new(to_string(result.total_cost_usd)),
@@ -520,7 +531,7 @@ defmodule Tokengate.Logs do
         request_count: count(rl.id)
       })
 
-    result = Repo.one(query)
+    result = Repo.one(query, timeout: stats_timeout())
 
     %{
       total_cost_usd: Decimal.new(to_string(result.total_cost_usd)),
@@ -576,7 +587,7 @@ defmodule Tokengate.Logs do
         avg_latency_ms: fragment("AVG(latency_ms)"),
         avg_ttft_ms: fragment("AVG(ttft_ms)")
       })
-      |> Repo.one()
+      |> Repo.one(timeout: stats_timeout())
 
     %{
       total_cost_usd: Decimal.new(to_string(result.total_cost_usd)),
@@ -1370,7 +1381,7 @@ defmodule Tokengate.Logs do
       last_request_at: max(rl.inserted_at),
       api_key_prefix: max(rl.api_key_prefix)
     })
-    |> Repo.all()
+    |> Repo.all(timeout: stats_timeout())
     |> Enum.map(fn row ->
       %{row | total_cost_usd: Decimal.new(to_string(row.total_cost_usd))}
     end)
@@ -1405,7 +1416,7 @@ defmodule Tokengate.Logs do
          rl.status_code
        ), count(rl.id)}
     )
-    |> Repo.all()
+    |> Repo.all(timeout: stats_timeout())
     |> Enum.reduce(empty, fn {class, n}, acc -> Map.put(acc, class, n) end)
   end
 
@@ -1413,10 +1424,74 @@ defmodule Tokengate.Logs do
     RequestLog
     |> apply_log_filters(filters)
     |> group_by([rl], rl.model_requested)
-    |> select([rl], %{model_requested: rl.model_requested, count: count(rl.id)})
-    |> order_by(desc: :count)
+    |> select([rl], %{
+      model_requested: rl.model_requested,
+      count: count(rl.id),
+      total_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
+      total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
+      total_completion_tokens: coalesce(sum(rl.completion_tokens), 0)
+    })
+    |> order_by(desc: fragment("COALESCE(SUM(provider_cost_usd), 0)"))
     |> limit(^limit)
-    |> Repo.all()
+    |> Repo.all(timeout: stats_timeout())
+    |> Enum.map(fn row ->
+      %{row | total_cost_usd: Decimal.new(to_string(row.total_cost_usd))}
+    end)
+  end
+
+  @doc """
+  Gasto por **modelo × API key** de un servicio: una fila por
+  (`api_key_id`, `model_requested`) dentro de la ventana. Es la materia
+  prima del reporte por modelo del detalle de servicio: la tabla pivotea
+  en memoria para mostrar cuánto gastó cada key en cada modelo.
+
+  El grupo `api_key_id` NULL viene incluido (histórico anterior a la
+  columna; las keys borradas sobreviven como ids huérfanos).
+
+  ## Opciones
+
+    * `:from` — `inserted_at >= from` (DateTime). Opcional.
+    * `:to`   — `inserted_at <= to` (DateTime). Opcional.
+  """
+  @spec service_model_key_stats(binary(), keyword() | map()) :: [
+          %{
+            api_key_id: binary() | nil,
+            model_requested: String.t() | nil,
+            request_count: non_neg_integer(),
+            total_cost_usd: Decimal.t(),
+            total_prompt_tokens: non_neg_integer(),
+            total_completion_tokens: non_neg_integer()
+          }
+        ]
+  def service_model_key_stats(service_id, opts \\ []) do
+    opts_map =
+      cond do
+        is_map(opts) -> opts
+        is_list(opts) -> Map.new(opts)
+        true -> %{}
+      end
+
+    filters =
+      Map.merge(%{"service_id" => service_id}, %{
+        from: opts_map[:from],
+        to: opts_map[:to]
+      })
+
+    RequestLog
+    |> apply_log_filters(filters)
+    |> group_by([rl], [rl.api_key_id, rl.model_requested])
+    |> select([rl], %{
+      api_key_id: rl.api_key_id,
+      model_requested: rl.model_requested,
+      request_count: count(rl.id),
+      total_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
+      total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
+      total_completion_tokens: coalesce(sum(rl.completion_tokens), 0)
+    })
+    |> Repo.all(timeout: stats_timeout())
+    |> Enum.map(fn row ->
+      %{row | total_cost_usd: Decimal.new(to_string(row.total_cost_usd))}
+    end)
   end
 
   @doc """
@@ -1478,7 +1553,7 @@ defmodule Tokengate.Logs do
                                   ELSE NULL END", rl.status_code, rl.status_code, rl.status_code),
        count(rl.id)}
     )
-    |> Repo.all()
+    |> Repo.all(timeout: stats_timeout())
     |> Enum.reduce(empty, fn {class, n}, acc -> Map.put(acc, class, n) end)
   end
 
@@ -1531,11 +1606,17 @@ defmodule Tokengate.Logs do
     |> group_by([rl], rl.model_requested)
     |> select([rl], %{
       model_requested: rl.model_requested,
-      count: count(rl.id)
+      count: count(rl.id),
+      total_cost_usd: fragment("COALESCE(SUM(provider_cost_usd), 0)"),
+      total_prompt_tokens: coalesce(sum(rl.prompt_tokens), 0),
+      total_completion_tokens: coalesce(sum(rl.completion_tokens), 0)
     })
-    |> order_by(desc: :count)
+    |> order_by(desc: fragment("COALESCE(SUM(provider_cost_usd), 0)"))
     |> limit(^limit)
-    |> Repo.all()
+    |> Repo.all(timeout: stats_timeout())
+    |> Enum.map(fn row ->
+      %{row | total_cost_usd: Decimal.new(to_string(row.total_cost_usd))}
+    end)
   end
 
   defp realtime_summary_for_member(query) do
