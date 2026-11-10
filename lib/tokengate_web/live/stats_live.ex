@@ -267,6 +267,40 @@ defmodule TokengateWeb.StatsLive do
 
   ## Data loading ---------------------------------------------------------
 
+  # TTL del bundle estructural del Resumen: describe el período, no el
+  # tráfico del momento (los KPIs viven en la carga de contadores, que no se
+  # cachea). 60s ≈ lo que tardan las queries frías de ventana larga; pasado
+  # el TTL, el siguiente viewer repuebla el cache.
+  #
+  # En tests el cache se apaga (config :stats_structural_cache): los tests
+  # comparten el ETS de la app y se pasarían bundles entre sí.
+  @structural_cache_ttl 60_000
+
+  defp structural_cache_enabled?,
+    do: Application.get_env(:tokengate, :stats_structural_cache, enabled: true)[:enabled] != false
+
+  # La llave describe TODO lo que cambia el bundle: pestaña, período,
+  # timezone (horas locales), drilldown activo y scope (member_ids nil =
+  # admin global).
+  defp structural_cache_key(params) do
+    {:stats_structural, params.live_action, params.period, params.timezone, params.model_filter,
+     params.group_filter, params.group_id, params.provider_id, params.scope_member_ids}
+  end
+
+  # Lectura/escritura del cache con el flag de tests: deshabilitado, ambos
+  # lados son pass-through (compute directo, fetch siempre miss).
+  defp cached_structural_bundle(key) do
+    if structural_cache_enabled?(), do: DashboardCache.fetch(key), else: :miss
+  end
+
+  defp cached_structural_bundle(key, compute_fn) do
+    if structural_cache_enabled?() do
+      DashboardCache.fetch_or_compute(key, compute_fn, ttl: @structural_cache_ttl)
+    else
+      compute_fn.()
+    end
+  end
+
   # Kick off an async data load. The socket renders right away with the
   # previous period's data (or empty values on first mount) plus an inline
   # loading indicator; when every query finishes, the new data lands in one
@@ -284,9 +318,27 @@ defmodule TokengateWeb.StatsLive do
           # concurrencia). Sólo los contadores se recargan con `logs:new`;
           # lo estructural espera a un cambio de período, un refresh o un
           # cambio de pestaña. Las demás pestañas conservan su bundle único.
-          socket
-          |> start_async(:stats_counters, fn -> compute_counter_assigns(params) end)
-          |> start_async(:stats_data, fn -> compute_structural_assigns(params) end)
+          #
+          # Lo estructural va cacheado (TTL corto): en producción las queries
+          # frías de ventana larga tardan decenas de segundos y el bundle no
+          # depende del instante — igual que el dashboard, el hit responde
+          # sin spinner y el miss calcula una vez para todos los viewers con
+          # el mismo scope/pestaña/periodo.
+          structural_cache_key(params)
+          |> cached_structural_bundle()
+          |> case do
+            {:ok, bundle} ->
+              assign(socket, bundle)
+
+            :miss ->
+              socket
+              |> start_async(:stats_counters, fn -> compute_counter_assigns(params) end)
+              |> start_async(:stats_data, fn ->
+                cached_structural_bundle(structural_cache_key(params), fn ->
+                  compute_structural_assigns(params)
+                end)
+              end)
+          end
 
         _ ->
           start_async(socket, :stats_data, fn -> compute_data_assigns(params) end)
@@ -648,8 +700,10 @@ defmodule TokengateWeb.StatsLive do
         index_admin_tasks(admin?, opts) ++
           hour_usage_tasks(params, opts) ++
           [
-            fn -> {:model_provider_stacked, Rollup.usage_by_model_provider_stacked(opts)} end,
-            fn -> {:busiest_hours, Rollup.busiest_hours(nil, opts)} end,
+            fn ->
+              {:model_provider_stacked, StatsQueries.usage_by_model_provider_stacked(opts)}
+            end,
+            fn -> {:busiest_hours, StatsQueries.busiest_hours(nil, opts)} end,
             fn -> {:busiest_minutes, Rollup.busiest_minutes(nil, opts)} end
           ]
 
@@ -807,7 +861,7 @@ defmodule TokengateWeb.StatsLive do
   end
 
   defp hour_usage_tasks(_params, opts) do
-    [fn -> {:hour_usage_by_provider, Rollup.usage_by_hour_of_day_by_provider(opts)} end]
+    [fn -> {:hour_usage_by_provider, StatsQueries.usage_by_hour_of_day_by_provider(opts)} end]
   end
 
   # Admin-only infra/org-wide queries on the index view. Ahora el Resumen solo

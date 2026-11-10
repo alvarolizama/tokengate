@@ -40,8 +40,18 @@ defmodule Tokengate.Metrics.StatsQueries do
 
   alias Tokengate.Logs
   alias Tokengate.Logs.RequestLog
+  alias Tokengate.Metrics.RequestMetricsHourly
   alias Tokengate.Metrics.Rollup
+  alias Tokengate.Providers.Model
+  alias Tokengate.Providers.Provider
   alias Tokengate.Repo
+
+  # Same budget the heavy reads in `Rollup` get (same env key): the overview
+  # cards scan whole windows cold in production.
+  @stats_query_timeout 120_000
+
+  defp stats_query_timeout,
+    do: Application.get_env(:tokengate, :stats_query_timeout_ms, @stats_query_timeout)
 
   # Same refresh window the RollupWorker re-aggregates every tick — anything
   # older is immutable in practice (request_logs is append-only).
@@ -214,6 +224,112 @@ defmodule Tokengate.Metrics.StatsQueries do
     end
   end
 
+  @doc """
+  Perfil hora × proveedor del período. Same shape as
+  `Rollup.usage_by_hour_of_day_by_provider/1`.
+
+  Hybrid: the rollup answers the hour buckets (dims `hour_utc` + `provider_id`
+  are both in the rollup) and only the fresh tail is raw — in production this
+  turns a multi-million-row month scan into a few thousand rollup rows.
+  """
+  def usage_by_hour_of_day_by_provider(opts \\ []) do
+    if hybrid?(opts) do
+      Rollup.hour_provider_profile(
+        rollup_hour_provider_rows(opts) ++ tail_hour_provider_rows(opts)
+      )
+    else
+      Rollup.usage_by_hour_of_day_by_provider(opts)
+    end
+  end
+
+  @doc """
+  Gráfica apilada modelo × proveedor. Same shape as
+  `Rollup.usage_by_model_provider_stacked/1`. Hybrid — see
+  `usage_by_hour_of_day_by_provider/1`.
+  """
+  def usage_by_model_provider_stacked(opts \\ []) do
+    if hybrid?(opts) do
+      rollup_rows = opts |> rollup_model_provider_rows() |> model_provider_names()
+      tail_rows = tail_model_provider_rows(opts)
+
+      Rollup.model_provider_stacked(merge_flat_rows(rollup_rows, tail_rows))
+    else
+      Rollup.usage_by_model_provider_stacked(opts)
+    end
+  end
+
+  @doc "Top N horas con más requests. Same shape as `Rollup.busiest_hours/2`."
+  def busiest_hours(group_id \\ nil, opts \\ [])
+
+  def busiest_hours(group_id, _opts) when not is_nil(group_id),
+    do: Rollup.busiest_hours(group_id)
+
+  def busiest_hours(nil, opts) do
+    cond do
+      not hybrid?(opts) ->
+        Rollup.busiest_hours(nil, opts)
+
+      # El bucket local del rollup es el bucket UTC: sólo coincide con la
+      # hora local cuando el offset de la zona es de horas enteras (LatAm,
+      # Europa). Con offsets :30/:45 la respuesta exacta exige el crudo.
+      not whole_hour_zone?(opts) ->
+        Rollup.busiest_hours(nil, opts)
+
+      true ->
+        # Rollup: buckets UTC enteros → key = instante (para zonas de hora
+        # entera el bucket UTC ES la hora local). Cola cruda: el mismo
+        # date_trunc local del lado completo, que aterriza en el mismo
+        # instante. Merge aditivo por key y top-N en memoria.
+        counts =
+          Enum.reduce(tail_hour_buckets(opts), rollup_hour_buckets(opts), fn {bucket, n}, acc ->
+            Map.update(acc, bucket, n, &(&1 + n))
+          end)
+
+        limit = Keyword.get(opts, :limit, 5)
+
+        counts
+        |> Enum.sort_by(fn {bucket, n} -> {-n, bucket} end)
+        |> Enum.take(limit)
+        |> Enum.map(fn {bucket, n} -> %{bucket: bucket, request_count: n} end)
+    end
+  end
+
+  # El offset de la zona en `from` y en el corte del rollup debe ser de
+  # horas enteras (un DST que cae dentro de la ventana mueve el offset, no
+  # lo vuelve fraccionario — se revisa en ambos extremos).
+  defp whole_hour_zone?(opts) do
+    timezone = Keyword.get(opts, :timezone, "Etc/UTC")
+    from = Keyword.fetch!(opts, :from)
+
+    Enum.all?([from, tail_floor()], fn instant ->
+      shifted = DateTime.shift_zone!(instant, timezone)
+      rem(DateTime.diff(shifted, DateTime.shift_zone!(instant, "Etc/UTC")), 3600) == 0
+    end)
+  end
+
+  # Suma filas planas idénticas ({model_id, provider_stats_id}) — rollup y
+  # cola cruda pueden traer la misma pareja.
+  defp merge_flat_rows(rollup_rows, tail_rows) do
+    Enum.reduce(tail_rows, rollup_rows, fn tail, acc ->
+      case Enum.find_index(
+             acc,
+             &(&1.model_id == tail.model_id and &1.provider_stats_id == tail.provider_stats_id)
+           ) do
+        nil ->
+          acc ++ [tail]
+
+        idx ->
+          List.update_at(acc, idx, fn row ->
+            %{
+              row
+              | request_count: row.request_count + tail.request_count,
+                cost_usd: Decimal.add(row.cost_usd, tail.cost_usd)
+            }
+          end)
+      end
+    end)
+  end
+
   # ---------------------------------------------------------------------
   # Rollup-side queries
   # ---------------------------------------------------------------------
@@ -358,6 +474,214 @@ defmodule Tokengate.Metrics.StatsQueries do
 
   defp maybe_user_ids(query, ids),
     do: where(query, [rl], rl.user_id in ^ids)
+
+  defp maybe_to(query, nil), do: query
+  defp maybe_to(query, %DateTime{} = to), do: where(query, [rl], rl.inserted_at <= ^to)
+
+  # ---------------------------------------------------------------------
+  # Rollup-side reads for the overview's heavy cards
+  # ---------------------------------------------------------------------
+
+  # Perfil hora × proveedor: buckets completos [ceil_hour(from), tail_floor).
+  # La hora LOCAL sale del mismo EXTRACT que `rollup_hour_counts/1` — el
+  # bias de zonas con offset no-entero (:30/:45) es el aceptado ahí.
+  defp rollup_hour_provider_rows(opts) do
+    timezone = Keyword.get(opts, :timezone, "Etc/UTC")
+
+    from(m in RequestMetricsHourly,
+      where: m.hour_utc >= ^ceil_hour(Keyword.fetch!(opts, :from)) and m.hour_utc < ^tail_floor(),
+      group_by: [fragment("1"), m.provider_id],
+      select: %{
+        hour:
+          type(
+            fragment(
+              "EXTRACT(hour FROM (? AT TIME ZONE 'Etc/UTC') AT TIME ZONE ?)",
+              m.hour_utc,
+              ^timezone
+            ),
+            :integer
+          ),
+        provider_id: m.provider_id,
+        request_count: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count),
+        cost_usd_raw: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro)
+      }
+    )
+    |> maybe_rollup_scope(opts)
+    |> Repo.all(timeout: stats_query_timeout())
+    |> Enum.map(fn row ->
+      %{
+        hour: row.hour,
+        provider_id: row.provider_id,
+        request_count: row.request_count,
+        cost_usd: micro_to_decimal(row.cost_usd_raw)
+      }
+    end)
+  end
+
+  # La cola cruda (≤3h) del perfil hora × proveedor: misma forma de fila.
+  defp tail_hour_provider_rows(opts) do
+    timezone = Keyword.get(opts, :timezone, "Etc/UTC")
+    to = Keyword.get(opts, :to)
+
+    RequestLog
+    |> where([rl], rl.inserted_at >= ^tail_floor())
+    |> maybe_to(to)
+    |> group_by([rl], [fragment("1"), rl.provider_id])
+    |> select([rl], %{
+      hour:
+        type(
+          fragment(
+            "EXTRACT(hour FROM (? AT TIME ZONE 'Etc/UTC') AT TIME ZONE ?)",
+            rl.inserted_at,
+            ^timezone
+          ),
+          :integer
+        ),
+      provider_id: rl.provider_id,
+      request_count: count(rl.id),
+      cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
+    })
+    |> maybe_member_ids(opts[:member_ids])
+    |> maybe_user_ids(opts[:user_ids])
+    |> Repo.all(timeout: stats_query_timeout())
+  end
+
+  # Modelo × proveedor desde el rollup: `provider_stats_id` es el id del
+  # PROVEEDOR (dimensión del rollup) — el mismo que abre el detalle.
+  defp rollup_model_provider_rows(opts) do
+    from(m in RequestMetricsHourly,
+      where: m.hour_utc >= ^ceil_hour(Keyword.fetch!(opts, :from)) and m.hour_utc < ^tail_floor(),
+      group_by: [m.model_id, m.provider_id],
+      select: %{
+        model_id: m.model_id,
+        provider_id: m.provider_id,
+        request_count: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count),
+        cost_usd_raw: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro)
+      }
+    )
+    |> maybe_rollup_scope(opts)
+    |> Repo.all(timeout: stats_query_timeout())
+  end
+
+  # La cola cruda (≤3h) del stacked: la misma query plana del lado completo,
+  # acotada al corte — reusa `Rollup.model_provider_flat_rows/1`.
+  defp tail_model_provider_rows(opts) do
+    Rollup.model_provider_flat_rows(
+      from: tail_floor(),
+      to: Keyword.get(opts, :to),
+      member_ids: opts[:member_ids]
+    )
+  end
+
+  # Nombres y logos del catálogo para las filas planas del rollup (una query
+  # por tabla, sobre ids del resultado — nunca joins por fila agregada).
+  defp model_provider_names(rollup_rows) do
+    model_ids = rollup_rows |> Enum.map(& &1.model_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+
+    provider_ids =
+      rollup_rows |> Enum.map(& &1.provider_id) |> Enum.reject(&is_nil/1) |> Enum.uniq()
+
+    model_names =
+      from(ma in Model, where: ma.id in ^model_ids, select: {ma.id, ma.name})
+      |> Repo.all(timeout: stats_query_timeout())
+      |> Map.new()
+
+    provider_identities =
+      from(p in Provider, where: p.id in ^provider_ids, select: {p.id, p.name, p.logo_url})
+      |> Repo.all(timeout: stats_query_timeout())
+      |> Map.new(fn {id, name, logo} -> {id, {name, logo}} end)
+
+    Enum.map(rollup_rows, fn row ->
+      {provider_name, provider_logo} =
+        Map.get(provider_identities, row.provider_id, {nil, nil})
+
+      %{
+        model_id: row.model_id,
+        model_name: Map.get(model_names, row.model_id) || "—",
+        provider_id: row.provider_id,
+        provider_stats_id: row.provider_id,
+        provider_name: provider_name || "—",
+        provider_logo_url: provider_logo,
+        request_count: row.request_count,
+        cost_usd: micro_to_decimal(row.cost_usd_raw)
+      }
+    end)
+  end
+
+  # Scoping del rollup: member_ids cubre memberships vivas, user_ids el
+  # histórico post-rotación (misma convención que los breakdowns híbridos).
+  defp maybe_rollup_scope(query, opts) do
+    query
+    |> maybe_rollup_member_ids(opts[:member_ids])
+    |> maybe_rollup_user_ids(opts[:user_ids])
+  end
+
+  defp maybe_rollup_member_ids(query, nil), do: query
+
+  defp maybe_rollup_member_ids(query, member_ids) when is_list(member_ids),
+    do: where(query, [m], m.group_member_id in ^member_ids)
+
+  defp maybe_rollup_user_ids(query, nil), do: query
+
+  defp maybe_rollup_user_ids(query, user_ids) when is_list(user_ids),
+    do: where(query, [m], m.user_id in ^user_ids)
+
+  defp micro_to_decimal(micro) when is_integer(micro) do
+    micro |> Decimal.new() |> Decimal.div(Decimal.new(1_000_000))
+  end
+
+  defp micro_to_decimal(nil), do: Decimal.new(0)
+
+  # Busiest hours: buckets de hora local. El rollup trae buckets UTC enteros
+  # — el bucket local se obtiene desplazando el instante (los offsets de hora
+  # entera hacen que el bucket UTC ≡ bucket local); la cola cruda agrupa con
+  # el mismo date_trunc local del lado completo. Ambos lados normalizan el
+  # key a UTC para que el merge sea por instante.
+  defp rollup_hour_buckets(opts) do
+    from(m in RequestMetricsHourly,
+      where: m.hour_utc >= ^ceil_hour(Keyword.fetch!(opts, :from)) and m.hour_utc < ^tail_floor(),
+      group_by: m.hour_utc,
+      select: %{hour_utc: m.hour_utc, n: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count)}
+    )
+    |> maybe_rollup_scope(opts)
+    |> Repo.all(timeout: stats_query_timeout())
+    |> Map.new(fn row -> {to_utc_dt(row.hour_utc), row.n} end)
+  end
+
+  defp tail_hour_buckets(opts) do
+    timezone = Keyword.get(opts, :timezone, "Etc/UTC")
+    to = Keyword.get(opts, :to)
+
+    bucketed =
+      RequestLog
+      |> where([rl], rl.inserted_at >= ^tail_floor())
+      |> maybe_to(to)
+      |> select([rl], %{
+        bucket:
+          fragment(
+            "date_trunc('hour', ? AT TIME ZONE ?) AT TIME ZONE ?",
+            rl.inserted_at,
+            ^timezone,
+            ^timezone
+          ),
+        id: rl.id
+      })
+      |> subquery()
+
+    from(b in bucketed,
+      group_by: b.bucket,
+      select: %{bucket: b.bucket, n: count(b.id)}
+    )
+    |> maybe_member_ids(opts[:member_ids])
+    |> maybe_user_ids(opts[:user_ids])
+    |> Repo.all(timeout: stats_query_timeout())
+    |> Map.new(fn row -> {to_utc_dt(row.bucket), row.n} end)
+  end
+
+  defp to_utc_dt(%DateTime{} = dt), do: dt
+
+  defp to_utc_dt(%NaiveDateTime{} = ndt),
+    do: DateTime.from_naive!(ndt, "Etc/UTC")
 
   # ---------------------------------------------------------------------
   # Merging

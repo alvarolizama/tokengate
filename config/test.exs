@@ -41,6 +41,10 @@ config :tokengate, Tokengate.Metrics.RollupWorker, enabled: false
 # arbitrary historical dates without a matching rollup, so the hybrid
 # split (rollup + fresh tail) would silently miss fixture rows.
 config :tokengate, :stats_rollup, hybrid: false
+# El cache del bundle estructural del Resumen se apaga en tests: los tests
+# comparten la app y su ETS — dos tests de admin con el mismo período
+# dentro del TTL se pasarían el bundle del otro (datos cruzados).
+config :tokengate, :stats_structural_cache, enabled: false
 
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false

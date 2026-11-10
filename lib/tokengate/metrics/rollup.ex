@@ -30,7 +30,7 @@ defmodule Tokengate.Metrics.Rollup do
   # exceed the DBConnection default (15s) in production. Analytics reads get
   # their own, generous budget instead of raising the Repo-wide timeout
   # (which would also cover the proxy auth/write path).
-  @stats_timeout 60_000
+  @stats_timeout 120_000
 
   defp stats_timeout,
     do: Application.get_env(:tokengate, :stats_query_timeout_ms, @stats_timeout)
@@ -1393,6 +1393,17 @@ defmodule Tokengate.Metrics.Rollup do
       )
       |> Repo.all(timeout: stats_timeout())
 
+    hour_provider_profile(rows)
+  end
+
+  @doc """
+  Ensambla el perfil hora × proveedor a partir de filas planas
+  `%{hour, provider_id, request_count, cost_usd}` — las 24 horas siempre
+  presentes, proveedores colapsados por nombre. Pública porque el lado
+  híbrido (`StatsQueries`) alimenta el mismo ensamblador con rollup + cola
+  cruda en vez de un escaneo completo de `request_logs`.
+  """
+  def hour_provider_profile(rows) do
     identities = provider_identity_by_id(rows)
     by_hour = Enum.group_by(rows, & &1.hour)
 
@@ -1479,57 +1490,72 @@ defmodule Tokengate.Metrics.Rollup do
   """
   @spec usage_by_model_provider_stacked(keyword()) :: [map()]
   def usage_by_model_provider_stacked(opts \\ []) do
+    model_provider_stacked(model_provider_flat_rows(opts))
+  end
+
+  @doc """
+  Filas planas modelo × proveedor (una por ruta usada) sobre `request_logs`:
+  `%{model_id, model_name, provider_id, provider_stats_id, provider_name,
+  provider_logo_url, request_count, cost_usd}`. Pública porque el híbrido
+  (`StatsQueries`) la reusa acotada a la cola fresca.
+  """
+  def model_provider_flat_rows(opts) do
     from = Keyword.get(opts, :from)
     to = Keyword.get(opts, :to)
 
-    rows =
-      RequestLog
-      |> maybe_from(from)
-      |> maybe_to(to)
-      |> maybe_member_ids(Keyword.get(opts, :member_ids))
-      |> join(:left, [rl], ma in Model, on: rl.model_id == ma.id)
-      |> join(:left, [rl, ma], mp in Tokengate.Providers.ModelProvider,
-        on: rl.model_provider_id == mp.id
-      )
-      |> join(:left, [rl, ma, mp], c in Tokengate.Providers.Credential,
-        on: mp.credential_id == c.id
-      )
-      |> join(:left, [rl, ma, mp, c], p in Tokengate.Providers.Provider,
-        on: c.provider_id == p.id
-      )
-      |> group_by(
-        [rl, ma, mp, c, p],
-        [ma.id, ma.name, mp.id, p.id, p.name, p.logo_url]
-      )
-      |> select(
-        [rl, ma, mp, c, p],
-        %{
-          model_id: ma.id,
-          model_name: ma.name,
-          provider_id: mp.id,
-          # Id del PROVEEDOR (no del model_provider): es el que abre su
-          # detalle en /stats/providers/:id desde el Resumen.
-          provider_stats_id: p.id,
-          provider_name: p.name,
-          provider_logo_url: p.logo_url,
-          request_count: count(rl.id),
-          cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
-        }
-      )
-      |> Repo.all(timeout: stats_timeout())
-      |> Enum.map(fn row ->
-        %{
-          model_id: row.model_id,
-          model_name: row.model_name || "—",
-          provider_id: row.provider_id,
-          provider_stats_id: row.provider_stats_id,
-          provider_name: row.provider_name || "—",
-          provider_logo_url: row.provider_logo_url,
-          request_count: row.request_count,
-          cost_usd: Decimal.new(to_string(row.cost_usd))
-        }
-      end)
+    RequestLog
+    |> maybe_from(from)
+    |> maybe_to(to)
+    |> maybe_member_ids(Keyword.get(opts, :member_ids))
+    |> join(:left, [rl], ma in Model, on: rl.model_id == ma.id)
+    |> join(:left, [rl, ma], mp in Tokengate.Providers.ModelProvider,
+      on: rl.model_provider_id == mp.id
+    )
+    |> join(:left, [rl, ma, mp], c in Tokengate.Providers.Credential,
+      on: mp.credential_id == c.id
+    )
+    |> join(:left, [rl, ma, mp, c], p in Tokengate.Providers.Provider, on: c.provider_id == p.id)
+    |> group_by(
+      [rl, ma, mp, c, p],
+      [ma.id, ma.name, mp.id, p.id, p.name, p.logo_url]
+    )
+    |> select(
+      [rl, ma, mp, c, p],
+      %{
+        model_id: ma.id,
+        model_name: ma.name,
+        provider_id: mp.id,
+        # Id del PROVEEDOR (no del model_provider): es el que abre su
+        # detalle en /stats/providers/:id desde el Resumen.
+        provider_stats_id: p.id,
+        provider_name: p.name,
+        provider_logo_url: p.logo_url,
+        request_count: count(rl.id),
+        cost_usd: fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)
+      }
+    )
+    |> Repo.all(timeout: stats_timeout())
+    |> Enum.map(fn row ->
+      %{
+        model_id: row.model_id,
+        model_name: row.model_name || "—",
+        provider_id: row.provider_id,
+        provider_stats_id: row.provider_stats_id,
+        provider_name: row.provider_name || "—",
+        provider_logo_url: row.provider_logo_url,
+        request_count: row.request_count,
+        cost_usd: Decimal.new(to_string(row.cost_usd))
+      }
+    end)
+  end
 
+  @doc """
+  Ensambla la gráfica apilada modelo × proveedor a partir de filas planas
+  `%{model_id, model_name, provider_id, provider_stats_id, provider_name,
+  provider_logo_url, request_count, cost_usd}`. Pública por la misma razón
+  que `hour_provider_profile/1`: el híbrido la alimenta con rollup + cola.
+  """
+  def model_provider_stacked(rows) do
     # Agrupar por modelo
     rows
     |> Enum.group_by(& &1.model_id)

@@ -323,4 +323,188 @@ defmodule Tokengate.Metrics.StatsQueriesTest do
       assert hybrid.request_count == raw.request_count
     end
   end
+
+  # ---------------------------------------------------------------------
+  # Hybrid parity — overview heavy cards (hour×provider, model×provider
+  # stacked, busiest hours): the rollup side + raw tail must match the
+  # pure-raw aggregation over the same window.
+  # ---------------------------------------------------------------------
+  describe "overview heavy cards hybrid parity" do
+    setup do
+      original = Application.get_env(:tokengate, :stats_rollup)
+      Application.put_env(:tokengate, :stats_rollup, hybrid: true)
+      on_exit(fn -> Application.put_env(:tokengate, :stats_rollup, original) end)
+      :ok
+    end
+
+    defp provider_fixture(name) do
+      {:ok, provider} =
+        Providers.create_provider(%{
+          name: name,
+          base_url: "http://localhost:#{System.unique_integer([:positive])}"
+        })
+
+      provider
+    end
+
+    defp model_provider_fixture(model, provider) do
+      unique = System.unique_integer([:positive])
+
+      {:ok, credential} =
+        Providers.create_credential(%{
+          provider_id: provider.id,
+          name: "key-#{unique}",
+          api_key_encrypted: "sk-test-#{unique}",
+          status: "active"
+        })
+
+      {:ok, model_provider} =
+        Providers.create_model_provider(%{
+          model_id: model.id,
+          credential_id: credential.id,
+          provider_model: "gpt-4o-#{unique}",
+          enabled: true
+        })
+
+      model_provider
+    end
+
+    test "usage_by_hour_of_day_by_provider matches the raw profile" do
+      {member, _group} = group_member_fixture()
+      openai = provider_fixture("OpenAI")
+      azure = provider_fixture("Azure")
+
+      # Parte vieja (rollup): 3 requests — dos OpenAI, una Azure.
+      log_request(member.id, hours_ago(48),
+        provider_id: openai.id,
+        cost_usd: Decimal.new("1.000000")
+      )
+
+      log_request(member.id, hours_ago(48),
+        provider_id: openai.id,
+        cost_usd: Decimal.new("0.500000")
+      )
+
+      log_request(member.id, hours_ago(47),
+        provider_id: azure.id,
+        cost_usd: Decimal.new("2.000000")
+      )
+
+      # Cola cruda: una OpenAI.
+      log_request(member.id, hours_ago(1),
+        provider_id: openai.id,
+        cost_usd: Decimal.new("0.250000")
+      )
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+      opts = [from: from, to: to, timezone: "Etc/UTC"]
+
+      hybrid = StatsQueries.usage_by_hour_of_day_by_provider(opts)
+      raw = Tokengate.Metrics.Rollup.usage_by_hour_of_day_by_provider(opts)
+
+      assert length(hybrid) == 24 and length(raw) == 24
+
+      # Cada hora: mismos proveedores, mismos requests, mismo costo.
+      for {h, r} <- Enum.zip(hybrid, raw) do
+        assert h.hour == r.hour
+        assert h.total_requests == r.total_requests
+        assert Decimal.compare(h.total_cost_usd, r.total_cost_usd) == :eq
+
+        by_name = fn rows -> Map.new(rows, &{&1.provider_name, &1.requests}) end
+        assert by_name.(h.providers) == by_name.(r.providers)
+      end
+
+      total = Enum.reduce(hybrid, 0, &(&1.total_requests + &2))
+      assert total == 4
+    end
+
+    test "usage_by_model_provider_stacked matches the raw stacked chart" do
+      {member, _group} = group_member_fixture()
+      gpt = model_fixture()
+      openai = provider_fixture("OpenAI")
+      azure = provider_fixture("Azure")
+      mp_openai = model_provider_fixture(gpt, openai)
+      mp_azure = model_provider_fixture(gpt, azure)
+
+      log_request(member.id, hours_ago(48),
+        model_id: gpt.id,
+        provider_id: openai.id,
+        model_provider_id: mp_openai.id,
+        cost_usd: Decimal.new("1.000000")
+      )
+
+      log_request(member.id, hours_ago(48),
+        model_id: gpt.id,
+        provider_id: azure.id,
+        model_provider_id: mp_azure.id,
+        cost_usd: Decimal.new("2.000000")
+      )
+
+      log_request(member.id, hours_ago(1),
+        model_id: gpt.id,
+        provider_id: openai.id,
+        model_provider_id: mp_openai.id,
+        cost_usd: Decimal.new("0.250000")
+      )
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+      opts = [from: from, to: to]
+
+      hybrid = StatsQueries.usage_by_model_provider_stacked(opts)
+      raw = Tokengate.Metrics.Rollup.usage_by_model_provider_stacked(opts)
+
+      assert length(hybrid) == length(raw)
+      [h | _] = hybrid
+      [r | _] = raw
+
+      assert h.model_name == r.model_name
+      assert h.total_requests == r.total_requests
+
+      assert Decimal.compare(
+               Enum.reduce(h.providers, Decimal.new(0), &Decimal.add(&1.cost_usd, &2)),
+               Enum.reduce(r.providers, Decimal.new(0), &Decimal.add(&1.cost_usd, &2))
+             ) == :eq
+
+      by_name = fn providers -> Map.new(providers, &{&1.provider_name, &1.requests}) end
+      assert by_name.(h.providers) == by_name.(r.providers)
+      assert by_name.(h.providers) == %{"OpenAI" => 2, "Azure" => 1}
+    end
+
+    test "busiest_hours matches the raw top buckets" do
+      {member, _group} = group_member_fixture()
+
+      log_request(member.id, hours_ago(48))
+      log_request(member.id, hours_ago(48))
+      log_request(member.id, hours_ago(48))
+      log_request(member.id, hours_ago(47))
+      log_request(member.id, hours_ago(1))
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+      opts = [from: from, to: to, timezone: "Etc/UTC"]
+
+      hybrid = StatsQueries.busiest_hours(nil, opts)
+      raw = Tokengate.Metrics.Rollup.busiest_hours(nil, opts)
+
+      # El bucket de la cola (1h ago) no entra al top (1 request vs 3 y 1)…
+      # salvo empate con el de 47h — ambos tienen 1. Los dos primeros
+      # puestos son estables: 3 requests (48h ago) y luego el empate.
+      assert hd(hybrid).request_count == 3
+      assert hd(raw).request_count == 3
+
+      counts = fn rows -> Enum.map(rows, & &1.request_count) end
+      assert counts.(hybrid) == counts.(raw)
+
+      total = Enum.reduce(hybrid, 0, &(&1.request_count + &2))
+      assert total == Enum.reduce(raw, 0, &(&1.request_count + &2))
+    end
+  end
 end
