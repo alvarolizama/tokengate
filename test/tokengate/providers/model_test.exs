@@ -43,4 +43,36 @@ defmodule Tokengate.Providers.ModelTest do
                changeset.errors[:icon]
     end
   end
+
+  describe "changeset — effort policy" do
+    test "acepta el vocabulario low/medium/high" do
+      changeset =
+        Model.changeset(%Model{}, %{
+          name: "m",
+          context_window: 1,
+          effort_default: "low",
+          effort_override: "high"
+        })
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_field(changeset, :effort_default) == "low"
+      assert Ecto.Changeset.get_field(changeset, :effort_override) == "high"
+    end
+
+    test "rechaza valores fuera del vocabulario" do
+      changeset =
+        Model.changeset(%Model{}, %{name: "m", context_window: 1, effort_default: "max"})
+
+      refute changeset.valid?
+      assert {"is invalid", _} = changeset.errors[:effort_default]
+    end
+
+    test "vacío se guarda como nil: una sola representación de «sin política»" do
+      changeset =
+        Model.changeset(%Model{}, %{name: "m", context_window: 1, effort_default: ""})
+
+      assert changeset.valid?
+      assert Ecto.Changeset.get_field(changeset, :effort_default) == nil
+    end
+  end
 end

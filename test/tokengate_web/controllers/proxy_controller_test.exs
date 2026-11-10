@@ -226,8 +226,10 @@ defmodule TokengateWeb.ProxyControllerTest do
         "hang" in conn.path_info ->
           # Simulates a hung/saturated provider: never answers within any
           # reasonable receive_timeout. The caller must configure a short
-          # receive_timeout_ms on the credential so the test stays fast.
-          Process.sleep(30_000)
+          # receive_timeout_ms on the credential so the test stays fast. The
+          # sleep is longer than any test in this file but bounded, so the
+          # handler does not outlive its (private) hang upstream by much.
+          Process.sleep(5_000)
           json(conn, 500, %{"error" => %{"message" => "eventually"}})
 
         true ->
@@ -926,17 +928,42 @@ defmodule TokengateWeb.ProxyControllerTest do
     cred2
   end
 
-  # Points the model's first (priority 1) credential's provider at the
-  # hanging endpoint with a short receive_timeout so tests stay fast.
+  # Starts a PRIVATE hang upstream and points the model's first (priority 1)
+  # provider at it with a short receive_timeout. The origin belongs to this
+  # test alone on purpose: a timed-out request leaves Finch's keep-alive
+  # connection in the pool (still open, its answer arriving later), and a
+  # shared origin would let that stale response land on the NEXT attempt's
+  # request — the source of the `{:status, ref, _}` CaseClauseError this suite
+  # used to hit. A unique port keeps the abandoned connection away from every
+  # other attempt.
   defp make_first_provider_hang(model) do
     [model_provider] =
       Providers.list_model_providers(model.id) |> Enum.sort_by(& &1.priority)
 
+    port = start_hang_upstream()
+
     {:ok, _provider} =
       Providers.update_provider(model_provider.credential.provider, %{
-        base_url: "http://localhost:#{@port}/hang",
+        base_url: "http://localhost:#{port}/hang",
         receive_timeout_ms: 200
       })
+  end
+
+  # A second Bandit instance (own port ⇒ own Finch pool) serving the same
+  # ProviderPlug: the "hang" branch lives there.
+  defp start_hang_upstream do
+    {:ok, socket} = :gen_tcp.listen(0, [:binary, active: false, ip: :loopback])
+    {:ok, port} = :inet.port(socket)
+    :ok = :gen_tcp.close(socket)
+
+    start_supervised!(
+      Supervisor.child_spec(
+        {Bandit, plug: ProviderPlug, scheme: :http, ip: :loopback, port: port},
+        id: :hang_upstream
+      )
+    )
+
+    port
   end
 
   # Points the model's first (priority 1) provider at an endpoint that always
@@ -1021,41 +1048,40 @@ defmodule TokengateWeb.ProxyControllerTest do
     make_first_provider_hang(model)
     add_healthy_fallback(model, u)
 
-    start = System.monotonic_time(:millisecond)
-
     conn =
       conn
       |> authed_conn(token)
       |> post(~p"/v1/chat/completions", chat_body(model.name))
 
-    elapsed = System.monotonic_time(:millisecond) - start
-
     assert json_response(conn, 200)
 
-    # One timeout (200ms) + the healthy provider's answer. If the old policy
-    # were in place (3 retries at 200ms each before excluding), this would
-    # take ~800ms+. Give generous headroom for CI jitter.
-    assert elapsed < 700, "expected immediate fallback after one timeout, took #{elapsed}ms"
+    # Deterministic behaviour, no wall-clock: the hanging provider is hit
+    # exactly ONCE (one timeout and straight to the fallback — the old policy
+    # retried the same provider 3× before excluding it) and the healthy
+    # candidate's request is the one that follows it.
+    [first, second] =
+      Providers.list_model_providers(model.id) |> Enum.sort_by(& &1.priority)
+
+    assert [first.provider_model, second.provider_model] ==
+             collect_provider_hits() |> Enum.map(& &1["model"])
   end
 
   test "timeout with a single provider returns 503 after one attempt", %{conn: conn} do
     %{token: token, model: model} = proxy_fixture()
     make_first_provider_hang(model)
 
-    start = System.monotonic_time(:millisecond)
-
     conn =
       conn
       |> authed_conn(token)
       |> post(~p"/v1/chat/completions", chat_body(model.name))
 
-    elapsed = System.monotonic_time(:millisecond) - start
-
     assert %{"error" => %{"type" => "service_unavailable"}} = json_response(conn, 503)
 
-    # Old policy: 3 retries × 200ms before giving up (~600ms+). New policy:
-    # one timeout, then the pool is empty → 503 right away.
-    assert elapsed < 700, "expected single timeout before 503, took #{elapsed}ms"
+    # Old policy: 3 attempts × 200ms against the same provider. New policy:
+    # exactly one attempt, then the pool is empty → 503.
+    [only] = Providers.list_model_providers(model.id)
+
+    assert [only.provider_model] == collect_provider_hits() |> Enum.map(& &1["model"])
   end
 
   test "fast 500 errors still retry the same provider before falling back", %{conn: conn} do
@@ -1439,6 +1465,341 @@ defmodule TokengateWeb.ProxyControllerTest do
       after
         0 -> flunk("expected an upstream request")
       end
+    end
+  end
+
+  # The OPERATOR effort policy (`models.effort_default` / `effort_override`):
+  # per-model configuration applied per attempt in the pre-flight. Precedence:
+  # override > (none/minimal → default) > client effort > absence. The log row
+  # keeps the client's intent in `effort` and stores what the WINNING attempt
+  # sent to the wire in `effort_applied`.
+  describe "operator effort policy" do
+    setup %{conn: conn} do
+      %{token: token, model: model} = proxy_fixture(%{})
+      {:ok, conn: conn, token: token, model: model}
+    end
+
+    # The fixture's provider has no catalog key → `:passthrough` (RunInfra's
+    # case): the client body travels verbatim and the policy must rewrite the
+    # knob the client actually sent.
+    test "effort_default rewrites a client none on a passthrough upstream", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      {:ok, _} = Providers.update_model(model, %{effort_default: "low"})
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "reasoning_effort" => "none",
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          assert payload["reasoning_effort"] == "low"
+      after
+        0 -> flunk("expected an upstream request")
+      end
+
+      Oban.drain_queue(queue: :logs)
+
+      log =
+        Repo.one!(from l in RequestLog, where: l.model_id == ^model.id and l.status_code == 200)
+
+      # Intent vs applied: the row distinguishes what the client asked for
+      # from what the gateway sent upstream.
+      assert log.effort == "none"
+      assert log.effort_applied == "low"
+    end
+
+    test "effort_default also substitutes a nested minimal", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      {:ok, _} = Providers.update_model(model, %{effort_default: "medium"})
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "reasoning" => %{"effort" => "minimal"},
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          assert get_in(payload, ["reasoning", "effort"]) == "medium"
+      after
+        0 -> flunk("expected an upstream request")
+      end
+    end
+
+    # The OTHER 400 source: on the scalar dialect a client hard-off is
+    # flattened to `reasoning_effort: "none"` by the gateway itself, so an
+    # `effort_default` has to replace that value too or the policy would leave
+    # the exact 400 it exists to prevent.
+    test "effort_default replaces the gateway-fabricated none of a client hard-off", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      make_provider_keyed(model, "fireworks-ai")
+      {:ok, _} = Providers.update_model(model, %{effort_default: "low"})
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "thinking" => false,
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          assert payload["reasoning_effort"] == "low"
+      after
+        0 -> flunk("expected an upstream request")
+      end
+
+      Oban.drain_queue(queue: :logs)
+
+      log =
+        Repo.one!(from l in RequestLog, where: l.model_id == ^model.id and l.status_code == 200)
+
+      # The client expressed no effort at all; the gateway sent the policy's.
+      assert log.effort == nil
+      assert log.effort_applied == "low"
+    end
+
+    test "without policy, a client none reaches the wire untouched (no-op)", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "reasoning_effort" => "none",
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          assert payload["reasoning_effort"] == "none"
+      after
+        0 -> flunk("expected an upstream request")
+      end
+
+      Oban.drain_queue(queue: :logs)
+
+      log =
+        Repo.one!(from l in RequestLog, where: l.model_id == ^model.id and l.status_code == 200)
+
+      assert log.effort == "none"
+      assert log.effort_applied == "none"
+    end
+
+    test "effort_override wins over a client low on a scalar upstream", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      make_provider_keyed(model, "fireworks-ai")
+      {:ok, _} = Providers.update_model(model, %{effort_override: "high"})
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "reasoning_effort" => "low",
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          assert payload["reasoning_effort"] == "high"
+      after
+        0 -> flunk("expected an upstream request")
+      end
+
+      Oban.drain_queue(queue: :logs)
+
+      log =
+        Repo.one!(from l in RequestLog, where: l.model_id == ^model.id and l.status_code == 200)
+
+      assert log.effort == "low"
+      assert log.effort_applied == "high"
+    end
+
+    test "effort_override applies even when the client sends no effort", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      make_provider_keyed(model, "fireworks-ai")
+      {:ok, _} = Providers.update_model(model, %{effort_override: "high"})
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          assert payload["reasoning_effort"] == "high"
+          refute Map.has_key?(payload, "thinking")
+      after
+        0 -> flunk("expected an upstream request")
+      end
+
+      Oban.drain_queue(queue: :logs)
+
+      log =
+        Repo.one!(from l in RequestLog, where: l.model_id == ^model.id and l.status_code == 200)
+
+      assert log.effort == nil
+      assert log.effort_applied == "high"
+    end
+
+    test "effort_override lifts a client hard-off (the gateway-fabricated none)", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      make_provider_keyed(model, "fireworks-ai")
+      {:ok, _} = Providers.update_model(model, %{effort_override: "high"})
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "reasoning" => %{"enabled" => false},
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          # The scalar dialect would flatten the hard-off to "none" — the
+          # exact 400 the policy exists to prevent. The override wins.
+          assert payload["reasoning_effort"] == "high"
+      after
+        0 -> flunk("expected an upstream request")
+      end
+    end
+
+    test "effort_override on a passthrough upstream rewrites the client knob but never invents one",
+         %{
+           conn: conn,
+           token: token,
+           model: model
+         } do
+      {:ok, _} = Providers.update_model(model, %{effort_override: "low"})
+
+      # The client sent an effort: it is rewritten in place.
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "reasoning_effort" => "none",
+          "messages" => [%{"role" => "user", "content" => "uno"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          assert payload["reasoning_effort"] == "low"
+      after
+        0 -> flunk("expected an upstream request")
+      end
+
+      # The client sent no effort: no dialect to emit one, so nothing is
+      # invented — the body stays verbatim.
+      conn =
+        conn
+        |> Phoenix.ConnTest.recycle()
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "messages" => [%{"role" => "user", "content" => "dos"}]
+        })
+
+      assert json_response(conn, 200)
+
+      receive do
+        {:provider_request, payload} ->
+          refute Map.has_key?(payload, "reasoning_effort")
+          refute Map.has_key?(payload, "reasoning")
+      after
+        0 -> flunk("expected an upstream request")
+      end
+    end
+
+    # Two routes: the first 400s on the body, the fallback answers. The log
+    # row must carry the effort value of the WINNING attempt's wire body.
+    test "effort_applied records the winning attempt across a fallback", %{
+      conn: conn,
+      token: token,
+      model: model
+    } do
+      make_first_provider_reject(model)
+      add_healthy_fallback(model, unique())
+      {:ok, _} = Providers.update_model(model, %{effort_default: "low"})
+
+      conn =
+        conn
+        |> authed_conn(token)
+        |> post(~p"/v1/chat/completions", %{
+          "model" => model.name,
+          "reasoning_effort" => "none",
+          "messages" => [%{"role" => "user", "content" => "hola"}]
+        })
+
+      assert json_response(conn, 200)
+
+      Oban.drain_queue(queue: :logs)
+
+      # Las filas 200 con `error_reason` son la estela del fallback (cada
+      # intento que falló y fue recuperado). La fila final real es la única
+      # sin error_reason — y debe traer el effort del wire del intento que
+      # ganó, no el de los intentos caídos.
+      log =
+        Repo.one!(
+          from l in RequestLog,
+            where: l.model_id == ^model.id and l.status_code == 200 and is_nil(l.error_reason)
+        )
+
+      assert log.effort == "none"
+      assert log.effort_applied == "low"
     end
   end
 

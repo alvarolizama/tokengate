@@ -397,6 +397,55 @@ defmodule TokengateWeb.StatsExportControllerTest do
     refute old_row == nil
   end
 
+  test "logs export: la columna effort_applied distingue intención de valor aplicado", %{
+    conn: conn
+  } do
+    u = unique()
+
+    {:ok, group} = Accounts.create_group(%{name: "Group #{u}"})
+    %{user: user, password: password} = register("user")
+
+    {:ok, member} =
+      Accounts.create_group_member(%{user_id: user.id, group_id: group.id})
+
+    {:ok, provider} =
+      Providers.create_provider(%{name: "Prov #{u}", base_url: "http://localhost:1"})
+
+    {:ok, _log} =
+      Logs.log_request(%{
+        group_member_id: member.id,
+        provider_id: provider.id,
+        model_requested: "gpt-4o",
+        model_responded: "gpt-4o",
+        agent_type: "api",
+        status_code: 200,
+        prompt_tokens: 1,
+        completion_tokens: 1,
+        provider_cost_usd: "0",
+        latency_ms: 1,
+        streaming: false,
+        think: true,
+        effort: "none",
+        effort_applied: "low",
+        inserted_at: DateTime.utc_now() |> DateTime.truncate(:second)
+      })
+
+    conn =
+      conn
+      |> login(user, password)
+      |> get(~p"/stats/export?type=logs")
+
+    body = response(conn, 200)
+    [header | rows] = body |> String.split("\n") |> Enum.reject(&(&1 == ""))
+
+    # La columna nueva va junto a `effort`, en el mismo lugar que en la fila.
+    assert header =~ "effort,effort_applied,tokens_in"
+
+    row = Enum.find(rows, &String.contains?(&1, "Group #{u}"))
+    refute row == nil
+    assert row =~ "none,low,"
+  end
+
   describe "logs export period coverage" do
     # The UI list is capped at 500 rows; exports must NOT be, otherwise a
     # busy day alone would eat the whole CSV and 30d/90d exports would only

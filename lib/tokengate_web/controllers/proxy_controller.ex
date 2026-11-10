@@ -1321,6 +1321,11 @@ defmodule TokengateWeb.ProxyController do
       |> inject_guard_rails(route.model)
       |> maybe_optimize(optimize_ctx(conn, route))
 
+    # The effort value THIS attempt sends to the wire: consumed by the log
+    # row if the attempt wins (fallbacks rebuild from the client payload, so
+    # every attempt re-derives its own value).
+    conn = assign(conn, :effort_applied, wire_effort(attempt_payload))
+
     # Gateway-local response cache (non-streaming chat only): identical
     # requests served from ETS. The key is the body THIS upstream receives, so
     # it stays stable across the retries/fallbacks of one request (they all
@@ -1570,6 +1575,10 @@ defmodule TokengateWeb.ProxyController do
       |> ensure_stream_options()
       |> inject_guard_rails(route.model)
       |> maybe_optimize(optimize_ctx(conn, route))
+
+    # Same contract as `execute/7`: the applied effort of THIS attempt, for
+    # the log row if the attempt wins.
+    conn = assign(conn, :effort_applied, wire_effort(attempt_payload))
 
     # Measured just before the upstream call: TTFT is the time from this
     # point to the provider's first chunk.
@@ -1848,13 +1857,119 @@ defmodule TokengateWeb.ProxyController do
   # Reshapes the client's reasoning knobs into the ONE wire dialect the
   # serving upstream documents: `Catalog.reasoning_dialect/1` of the route's
   # provider catalog key. `:passthrough` (no dialect declared) sends the
-  # body untouched.
+  # body untouched — except for the operator's effort policy, which can only
+  # rewrite an effort knob the client actually sent (there is no dialect to
+  # emit a field the client left out).
   defp normalize_reasoning(payload, route_ctx) do
     case Tokengate.Providers.Catalog.reasoning_dialect(provider_key(route_ctx)) do
-      :passthrough -> payload
-      dialect -> reshape_reasoning(payload, read_reasoning_intent(payload), dialect)
+      :passthrough ->
+        rewrite_passthrough_effort(payload, effort_policy(route_ctx))
+
+      dialect ->
+        intent =
+          payload
+          |> read_reasoning_intent()
+          |> apply_effort_policy(effort_policy(route_ctx), dialect)
+
+        reshape_reasoning(payload, intent, dialect)
     end
   end
+
+  # The operator's effort policy for this attempt's logical model, read from
+  # the routing context (built per attempt by `optimize_ctx/2`). Both nil =
+  # no-op: the body stays byte-identical to the ungated behaviour.
+  defp effort_policy(route_ctx) do
+    %{effort_default: route_ctx[:effort_default], effort_override: route_ctx[:effort_override]}
+  end
+
+  # Applies the operator's effort policy to the client's reasoning intent.
+  # Precedence: `effort_override` > (effort in ~w(none minimal) →
+  # `effort_default`) > client effort > absence.
+  #
+  # An `effort_override` also lifts a client hard-off (`enabled: false`):
+  # leaving it in place would flatten the wire effort back to "none"/a
+  # disabled toggle and defeat the override — exactly the 400 the policy
+  # exists to prevent. The dialects keep deciding FIELD PLACEMENT; the policy
+  # only substitutes the VALUE.
+  defp apply_effort_policy({_effort, enabled}, %{effort_override: override}, _dialect)
+       when is_binary(override) and override != "" do
+    # Lift a hard-off only; a client that sent nothing keeps `nil` enabled so
+    # the dialect emits just the effort field, no extra toggle.
+    {override, if(enabled == false, do: true, else: enabled)}
+  end
+
+  # `:scalar` fabricates `reasoning_effort: "none"` from a client hard-off on
+  # its own — one of the two 400 sources the policy exists to prevent (the
+  # other is the client's explicit `none`). An `effort_default` replaces that
+  # gateway-made value too, which means lifting the disable: in this dialect
+  # it only exists to express `none`. Every other dialect renders a hard-off
+  # as a toggle, never as an effort, so their disable is left alone.
+  defp apply_effort_policy({effort, false}, %{effort_default: default}, :scalar)
+       when (is_nil(effort) or effort in ~w(none minimal)) and is_binary(default) and
+              default != "" do
+    {default, true}
+  end
+
+  defp apply_effort_policy({effort, enabled}, %{effort_default: default}, _dialect)
+       when effort in ~w(none minimal) and is_binary(default) and default != "" do
+    {default, enabled}
+  end
+
+  defp apply_effort_policy(intent, _policy, _dialect), do: intent
+
+  # Effort policy over a `:passthrough` body: the client body travels
+  # verbatim, so the policy rewrites the effort knob the client actually sent
+  # (scalar beats nested, same precedence as `read_reasoning_intent/1`) and
+  # never invents one. With no client effort there is nothing to rewrite —
+  # not even for an override, whose value only lands when a dialect emits it.
+  defp rewrite_passthrough_effort(payload, policy)
+
+  defp rewrite_passthrough_effort(payload, %{effort_override: override})
+       when is_binary(override) and override != "" do
+    rewrite_passthrough_effort_value(payload, override)
+  end
+
+  defp rewrite_passthrough_effort(payload, %{effort_default: default})
+       when is_binary(default) and default != "" do
+    case read_reasoning_intent(payload) do
+      {effort, _enabled} when effort in ~w(none minimal) ->
+        rewrite_passthrough_effort_value(payload, default)
+
+      _ ->
+        payload
+    end
+  end
+
+  defp rewrite_passthrough_effort(payload, _policy), do: payload
+
+  defp rewrite_passthrough_effort_value(%{"reasoning_effort" => effort} = payload, new_effort)
+       when is_binary(effort) and effort != "" do
+    Map.put(payload, "reasoning_effort", new_effort)
+  end
+
+  defp rewrite_passthrough_effort_value(
+         %{"reasoning" => %{"effort" => effort} = reasoning} = payload,
+         new_effort
+       )
+       when is_binary(effort) and effort != "" do
+    Map.put(payload, "reasoning", Map.put(reasoning, "effort", new_effort))
+  end
+
+  defp rewrite_passthrough_effort_value(payload, _new_effort), do: payload
+
+  # The effort value THIS attempt's body carries to the wire (nil = no effort
+  # field): what `request_logs.effort_applied` stores for the winning
+  # attempt. Covers every dialect — scalar (and the disabled flatten) emit
+  # the top-level key, OpenRouter nests it, `:passthrough` keeps the client's
+  # verbatim knob.
+  defp wire_effort(%{"reasoning_effort" => effort}) when is_binary(effort) and effort != "",
+    do: effort
+
+  defp wire_effort(%{"reasoning" => %{"effort" => effort}})
+       when is_binary(effort) and effort != "",
+       do: effort
+
+  defp wire_effort(_payload), do: nil
 
   # The client's reasoning intent, read from any of the three wire forms.
   # Precedence: an explicit scalar beats the nested object's effort; a nested
@@ -1998,6 +2113,9 @@ defmodule TokengateWeb.ProxyController do
     %{
       model_type: route.model && route.model.model_type,
       model_provider: route.model_provider,
+      # Operator effort policy of the logical model (nil/nil = no-op).
+      effort_default: route.model && route.model.effort_default,
+      effort_override: route.model && route.model.effort_override,
       extra_body: model_provider_setting(route, :extra_body),
       omit_body_fields: model_provider_setting(route, :omit_body_fields),
       omit_headers: model_provider_setting(route, :omit_headers)
@@ -2256,6 +2374,7 @@ defmodule TokengateWeb.ProxyController do
       ttft_ms: acc.ttft_ms,
       think: conn.assigns[:think] || false,
       effort: conn.assigns[:effort],
+      effort_applied: conn.assigns[:effort_applied],
       session_id: conn.assigns[:session_key],
       client_agent: conn.assigns.client_agent
     )
@@ -2416,6 +2535,7 @@ defmodule TokengateWeb.ProxyController do
     enqueue_log(route, member, conn.assigns.agent_type, usage, cost, latency_ms, 200, false,
       think: conn.assigns[:think] || false,
       effort: conn.assigns[:effort],
+      effort_applied: conn.assigns[:effort_applied],
       session_id: conn.assigns[:session_key],
       client_agent: conn.assigns.client_agent
     )
@@ -2505,6 +2625,10 @@ defmodule TokengateWeb.ProxyController do
       "request_type" => Keyword.get(extra, :request_type, "chat"),
       "think" => Keyword.get(extra, :think, false),
       "effort" => Keyword.get(extra, :effort),
+      # What the WINNING attempt sent to the wire (nil = no effort on the
+      # wire). `effort` keeps the client's intent; the pair makes the
+      # operator effort policy's rewrite visible.
+      "effort_applied" => Keyword.get(extra, :effort_applied),
       "api_key_prefix" => member.api_key && member.api_key.key_prefix,
       "api_key_id" => member.api_key && member.api_key.id,
       "session_id" => Keyword.get(extra, :session_id),

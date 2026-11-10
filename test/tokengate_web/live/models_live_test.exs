@@ -192,6 +192,41 @@ defmodule TokengateWeb.ModelsLiveTest do
     assert model_record.lazy_cleanup_enabled == false
   end
 
+  # Operator effort policy: the form offers the two selects (empty = no-op)
+  # and the values persist on the model row.
+  test "admin sets the effort policy on a new model", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    conn = login(conn, admin, password)
+
+    {:ok, view, _html} = live(conn, ~p"/catalog/models")
+
+    view |> element("#new-model-btn") |> render_click()
+    view |> element("#pick-type-llm") |> render_click()
+    view |> element("#wizard-custom") |> render_click()
+
+    assert has_element?(view, "#model-form")
+    assert has_element?(view, "#model_effort_default")
+    assert has_element?(view, "#model_effort_override")
+
+    html =
+      view
+      |> form("#model-form", %{
+        model: %{
+          name: "gpt-4o-effort",
+          context_window: 128_000,
+          effort_default: "low",
+          effort_override: "high"
+        }
+      })
+      |> render_submit()
+
+    assert html =~ "Modelo creado"
+
+    model_record = Tokengate.Providers.get_model_by_name("gpt-4o-effort")
+    assert model_record.effort_default == "low"
+    assert model_record.effort_override == "high"
+  end
+
   # The type picked at step 0 IS the persisted model_type now: a service
   # model (stt) saves with its real type, not collapsed to "llm".
   test "admin creates a service model with its real type", %{conn: conn} do

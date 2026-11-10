@@ -68,6 +68,10 @@ defmodule Tokengate.Logs.RequestLog do
     field :request_type, :string, default: "chat"
     field :think, :boolean, default: false
     field :effort, :string
+    # What the WINNING attempt sent to the wire (nil = no effort on the wire);
+    # `effort` keeps the client's intent. The pair makes the operator effort
+    # policy's rewrite visible.
+    field :effort_applied, :string
     field :api_key_prefix, :string
     # La key que autenticó el request (NULL en el histórico: se agrupa por
     # `api_key_prefix`, que es el puente).
@@ -111,7 +115,7 @@ defmodule Tokengate.Logs.RequestLog do
     model_requested model_responded agent_type status_code provider_status_code
     error_reason error_message prompt_tokens completion_tokens cache_read_tokens
     cache_creation_tokens provider_cost_usd credit_subscription_id credit_topup_id
-    latency_ms ttft_ms streaming request_type think effort api_key_prefix
+    latency_ms ttft_ms streaming request_type think effort effort_applied api_key_prefix
     credential_name client_agent provider_key_prefix api_key_id inserted_at oban_job_id)a
 
   @required ~w(model_requested inserted_at subject_type)a

@@ -71,6 +71,7 @@ defmodule TokengateWeb.MonitoringLiveTest do
         streaming: false,
         think: Keyword.get(opts, :think, true),
         effort: Keyword.get(opts, :effort, "high"),
+        effort_applied: Keyword.get(opts, :effort_applied),
         api_key_prefix: "sk-logs-",
         credential_name: "Staging",
         inserted_at:
@@ -113,6 +114,32 @@ defmodule TokengateWeb.MonitoringLiveTest do
     assert html =~ owner.email
     assert html =~ group.name
     assert html =~ "high"
+  end
+
+  ## Effort rewrite badge ------------------------------------------------------
+
+  test "shows the effort rewrite badge when the policy changed the applied value", %{
+    conn: conn
+  } do
+    %{user: admin, password: password} = register("admin")
+    _ = member_with_log(effort: "none", effort_applied: "low")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/monitoring")
+
+    html = render(view)
+    # Intent and applied side by side: the operator's effort rewrite.
+    assert html =~ "none → low"
+  end
+
+  test "no rewrite badge when the applied value equals the intent", %{conn: conn} do
+    %{user: admin, password: password} = register("admin")
+    _ = member_with_log(effort: "high", effort_applied: "high")
+
+    conn = login(conn, admin, password)
+    {:ok, view, _html} = live(conn, ~p"/operations/monitoring")
+
+    refute render(view) =~ "high →"
   end
 
   ## Pending (in-flight) rows ---------------------------------------------------

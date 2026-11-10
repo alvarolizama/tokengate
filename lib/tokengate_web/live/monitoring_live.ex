@@ -1222,7 +1222,24 @@ defmodule TokengateWeb.MonitoringLive do
                     </span>
                   </td>
                   <td><.think_badge value={log.think} /></td>
-                  <td class="text-sm">{log.effort || "—"}</td>
+                  <td class="text-sm">
+                    <span class="flex items-center gap-1.5">
+                      {log.effort || "—"}
+                      <%!-- Operator effort policy rewrite: the client's
+                           intent and what travelled to the wire differ. --%>
+                      <span
+                        :if={log.effort_applied && log.effort_applied != log.effort}
+                        class="badge badge-sm badge-accent"
+                        title={
+                          gettext(
+                            "Reasoning effort the gateway sent upstream after the operator's effort policy"
+                          )
+                        }
+                      >
+                        {log.effort || "∅"} → {log.effort_applied}
+                      </span>
+                    </span>
+                  </td>
                   <td class="text-sm border-r border-base-200">
                     {if log.streaming, do: gettext("Yes"), else: gettext("No")}
                   </td>

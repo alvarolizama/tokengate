@@ -66,6 +66,8 @@ defmodule Tokengate.Logs.WriteWorker do
       request_type: args["request_type"] || "chat",
       think: args["think"] || false,
       effort: args["effort"],
+      # What the winning attempt sent to the wire (nil = no effort on the wire).
+      effort_applied: args["effort_applied"],
       api_key_prefix: args["api_key_prefix"],
       api_key_id: args["api_key_id"],
       session_id: args["session_id"],

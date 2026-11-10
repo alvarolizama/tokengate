@@ -287,6 +287,13 @@ defmodule TokengateWeb.ModelsLive do
     ]
   end
 
+  # Options of the operator effort-policy selects (`effort_default` /
+  # `effort_override`). The empty prompt = no-op, submitted as "" and stored
+  # as nil by the changeset.
+  defp effort_policy_options do
+    Enum.map(Model.effort_levels(), &{String.upcase(&1), &1})
+  end
+
   # Providers are grouped by scope first — global, then group-exclusive,
   # then member-exclusive — and ordered by priority within each group.
   defp aliases_with_providers_query do
@@ -3474,6 +3481,32 @@ defmodule TokengateWeb.ModelsLive do
                         hint={
                           gettext(
                             "Defines which endpoint serves it (chat, embeddings, audio, image)."
+                          )
+                        }
+                      />
+
+                      <.input
+                        field={@form[:effort_default]}
+                        type="select"
+                        label={gettext("Reasoning effort default")}
+                        options={effort_policy_options()}
+                        prompt={gettext("— No default —")}
+                        hint={
+                          gettext(
+                            "Replaces a client reasoning_effort of none/minimal with this value (upstreams that reject those values)."
+                          )
+                        }
+                      />
+
+                      <.input
+                        field={@form[:effort_override]}
+                        type="select"
+                        label={gettext("Reasoning effort override")}
+                        options={effort_policy_options()}
+                        prompt={gettext("— No override —")}
+                        hint={
+                          gettext(
+                            "Replaces the client reasoning_effort with this value, whatever the client sends."
                           )
                         }
                       />

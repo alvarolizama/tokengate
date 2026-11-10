@@ -283,7 +283,7 @@ defmodule TokengateWeb.StatsExportController do
     key_labels = api_key_labels(rows)
 
     header =
-      ~w(fecha estado modelo usuario perfil agente api_key proveedor prov_key prov_status error_reason error_message streaming think effort tokens_in tokens_out cache_read cache_creation latencia_ms ttft_ms costo_usd)
+      ~w(fecha estado modelo usuario perfil agente api_key proveedor prov_key prov_status error_reason error_message streaming think effort effort_applied tokens_in tokens_out cache_read cache_creation latencia_ms ttft_ms costo_usd)
 
     csv =
       [header | Enum.map(rows, &row_to_csv_log(&1, key_labels))]
@@ -334,6 +334,7 @@ defmodule TokengateWeb.StatsExportController do
       if(log.streaming, do: "true", else: "false"),
       if(log.think, do: "true", else: "false"),
       csv_escape(log.effort),
+      csv_escape(log.effort_applied),
       log.prompt_tokens,
       log.completion_tokens,
       log.cache_read_tokens,
