@@ -5,6 +5,24 @@ defmodule TokengateWeb.StatsHelpersTest do
 
   alias TokengateWeb.StatsHelpers, as: Stats
 
+  describe "money/1" do
+    test "cero exacto es $0.00" do
+      assert Stats.money(Decimal.new(0)) == "$0.00"
+      assert Stats.money(nil) == "$0.00"
+    end
+
+    test "sub-centavo mantiene 6 decimales, no colapsa a $0" do
+      assert Stats.money(Decimal.new("0.000004")) == "$0.000004"
+      assert Stats.money(Decimal.new("0.00021")) == "$0.00021"
+      assert Stats.money(Decimal.new("0.009999")) == "$0.009999"
+    end
+
+    test "centavo en adelante usa 4 decimales" do
+      assert Stats.money(Decimal.new("0.01")) == "$0.0100"
+      assert Stats.money(Decimal.new("4.200000")) == "$4.2000"
+    end
+  end
+
   defmodule CellWithBlock do
     @moduledoc "Envoltorio: metric_cell recibiendo el valor como BLOQUE, no como attr."
     use Phoenix.Component

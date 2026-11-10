@@ -1015,9 +1015,7 @@ defmodule TokengateWeb.ServiceStatsLive do
 
   defp format_number(_), do: "0"
 
-  defp fmt_money(%Decimal{} = d) do
-    "$" <> (d |> Decimal.to_float() |> :erlang.float_to_binary([:compact, {:decimals, 4}]))
-  end
+  defp fmt_money(%Decimal{} = d), do: StatsHelpers.money(d)
 
   defp fmt_money(_), do: "$0"
 

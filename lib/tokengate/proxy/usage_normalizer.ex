@@ -51,7 +51,7 @@ defmodule Tokengate.Proxy.UsageNormalizer do
   def normalize(:openai, %{"usage" => usage}, resp_headers) when is_map(usage) do
     # prompt_tokens stays raw (includes cached tokens) — CostCalculator
     # subtracts the cached subset to price it at the cache rate.
-    cached = get_in_int(usage, ["prompt_tokens_details", "cached_tokens"])
+    cached = cached_tokens(usage)
     # OpenRouter (and some explicit-caching providers) report cache WRITES
     # separately — `cache_write_tokens`. Anthropic-style upstreams bill
     # writes at a premium (25–100%), so persisting them keeps cost
@@ -59,8 +59,8 @@ defmodule Tokengate.Proxy.UsageNormalizer do
     cache_write = get_in_int(usage, ["prompt_tokens_details", "cache_write_tokens"])
 
     %{
-      prompt_tokens: get_int(usage, "prompt_tokens"),
-      completion_tokens: get_int(usage, "completion_tokens"),
+      prompt_tokens: prompt_tokens(usage),
+      completion_tokens: completion_tokens(usage),
       # A body-reported cached count wins; headers are the fallback for
       # upstreams that only expose it there (or for streaming).
       cache_read_tokens: max(cached, cached_from_headers(resp_headers)),
@@ -191,5 +191,33 @@ defmodule Tokengate.Proxy.UsageNormalizer do
       inner when is_map(inner) -> get_int(inner, k2)
       _ -> 0
     end
+  end
+
+  # Decision-model dialects report the same counters under other names:
+  # OpenRouter Decisions and Fireworks' OpenAI-compatible /v1/decisions use
+  # `input_tokens`/`output_tokens` (cached inside `input_tokens_details`),
+  # and Fireworks' native System One uses a flat `cached_input_tokens`.
+  # Deepseek-verified live shapes (2026-11): both dialects must land in the
+  # same usage map or decision models price against the char estimate.
+  defp prompt_tokens(usage) do
+    max(get_int(usage, "prompt_tokens"), get_int(usage, "input_tokens"))
+  end
+
+  defp completion_tokens(usage) do
+    max(get_int(usage, "completion_tokens"), get_int(usage, "output_tokens"))
+  end
+
+  defp cached_tokens(usage) do
+    # `min/2` blinda la semántica: se asume cached ⊆ input (OpenAI). Si un
+    # upstream lo reportara exclusivo, cobrar de más sería peor que cobrar
+    # el total — el min acota el daño a la tasa de cache.
+    candidates = [
+      get_in_int(usage, ["prompt_tokens_details", "cached_tokens"]),
+      get_in_int(usage, ["input_tokens_details", "cached_tokens"]),
+      get_int(usage, "cached_input_tokens")
+    ]
+
+    Enum.reduce(candidates, 0, &max/2)
+    |> min(prompt_tokens(usage))
   end
 end

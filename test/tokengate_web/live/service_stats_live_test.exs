@@ -176,7 +176,7 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
       assert cell_text(view, "#{row} td:nth-child(3)") == "0"
       assert cell_text(view, "#{row} td:nth-child(4)") == "0"
       assert cell_text(view, "#{row} td:nth-child(5)") == "0"
-      assert cell_text(view, "#{row} td:nth-child(6)") == "$0.0"
+      assert cell_text(view, "#{row} td:nth-child(6)") == "$0.00"
       assert cell_text(view, "#{row} td:nth-child(7)") == "—"
       assert has_element?(view, "#{row} .badge-error")
     end

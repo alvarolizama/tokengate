@@ -20,6 +20,7 @@ defmodule TokengateWeb.UserStatsLive do
   alias Tokengate.Logs
   alias Tokengate.Metrics.DashboardCache
   alias TokengateWeb.KpiHelpers
+  alias TokengateWeb.StatsHelpers, as: Stats
 
   @page_size 50
   @summary_refresh_interval_ms 2_000
@@ -679,9 +680,7 @@ defmodule TokengateWeb.UserStatsLive do
 
   defp format_number(_), do: "0"
 
-  defp fmt_money(%Decimal{} = d) do
-    "$" <> (d |> Decimal.to_float() |> :erlang.float_to_binary([:compact, {:decimals, 4}]))
-  end
+  defp fmt_money(%Decimal{} = d), do: Stats.money(d)
 
   defp fmt_money(_), do: "$0"
 

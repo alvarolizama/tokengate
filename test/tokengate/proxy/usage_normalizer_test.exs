@@ -55,6 +55,55 @@ defmodule Tokengate.Proxy.UsageNormalizerTest do
     test "no usage returns nil" do
       assert UsageNormalizer.normalize(:openai, %{"choices" => []}) == nil
     end
+
+    test "decision dialect (OpenRouter Decisions / Fireworks /v1/decisions): input_tokens + input_tokens_details" do
+      # Shape real verificado en docs (deepseek, 2026-11): OpenRouter
+      # `liquid/d1.1` y Fireworks `/v1/decisions` reportan input/output, no
+      # prompt/completion; el cached vive en input_tokens_details.
+      body = %{
+        "usage" => %{
+          "input_tokens" => 476,
+          "output_tokens" => 0,
+          "input_tokens_details" => %{"cached_tokens" => 128}
+        }
+      }
+
+      assert UsageNormalizer.normalize(:openai, body) == %{
+               prompt_tokens: 476,
+               completion_tokens: 0,
+               cache_read_tokens: 128,
+               cache_creation_tokens: 0
+             }
+    end
+
+    test "Fireworks System One nativo: cached_input_tokens plano" do
+      body = %{
+        "usage" => %{
+          "input_tokens" => 212,
+          "cached_input_tokens" => 50,
+          "output_tokens" => 0
+        }
+      }
+
+      assert UsageNormalizer.normalize(:openai, body) == %{
+               prompt_tokens: 212,
+               completion_tokens: 0,
+               cache_read_tokens: 50,
+               cache_creation_tokens: 0
+             }
+    end
+
+    test "cached no puede exceder el input total (semántica blidada)" do
+      body = %{
+        "usage" => %{
+          "input_tokens" => 100,
+          "cached_input_tokens" => 500,
+          "output_tokens" => 0
+        }
+      }
+
+      assert UsageNormalizer.normalize(:openai, body).cache_read_tokens == 100
+    end
   end
 
   describe "from_openai_stream_chunk/1" do

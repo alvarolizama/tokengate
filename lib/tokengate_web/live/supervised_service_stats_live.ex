@@ -244,18 +244,10 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
 
   ## Template helpers -----------------------------------------------------
 
-  # Cifras por debajo del centavo con 4 decimales: un "$0.00" redondeado se lee
+  # Cifras por debajo del centavo con precisión adaptativa (hasta 6
+  # decimales, en Decimal): un "$0.00" —o un "$0.0000"— redondeado se lee
   # como "no gastó nada" en servicios pequeños.
-  defp format_cost(%Decimal{} = d) do
-    rounded_away? =
-      Decimal.compare(d, Decimal.new(0)) == :gt and Decimal.compare(d, Decimal.new("0.01")) == :lt
-
-    if rounded_away? do
-      "$" <> (d |> Decimal.round(4) |> Decimal.to_string())
-    else
-      "$" <> Stats.format_decimal(d)
-    end
-  end
+  defp format_cost(%Decimal{} = d), do: Stats.money(d)
 
   defp format_cost(_), do: "$0.00"
 

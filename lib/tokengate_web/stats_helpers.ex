@@ -24,6 +24,36 @@ defmodule TokengateWeb.StatsHelpers do
   def format_decimal(n) when is_number(n), do: to_string(n)
   def format_decimal(_), do: "0"
 
+  @doc """
+  Dinero en USD con precisión adaptativa, en Decimal puro (nunca
+  `Decimal.to_float`): los modelos de fracciones de centavo (Rune, d1.1,
+  imágenes por token) cuestan $0.000004 por request y un redondeo a 4
+  decimales —o un float de 4— los mostraba como "$0", que se lee como
+  "no se registró gasto".
+
+    * `$0` exacto → "$0"
+    * `< $0.01`   → 6 decimales ("$0.000004") — la resolución de la columna
+      `provider_cost_usd` (numeric(12,6)) y del rollup (cost_micro)
+    * `$0.01+`    → 4 decimales
+  """
+  def money(%Decimal{} = d) do
+    zero? = Decimal.compare(d, Decimal.new(0)) == :eq
+    sub_cent? = Decimal.compare(Decimal.abs(d), Decimal.new("0.01")) == :lt
+
+    cond do
+      zero? ->
+        "$0.00"
+
+      sub_cent? ->
+        "$" <> (d |> Decimal.round(6) |> Decimal.normalize() |> Decimal.to_string(:normal))
+
+      true ->
+        "$" <> format_decimal(d)
+    end
+  end
+
+  def money(_), do: "$0.00"
+
   def format_number(n) when is_integer(n), do: with_thousands_separator(n)
   def format_number(n) when is_float(n), do: Float.to_string(n)
   def format_number(_), do: "0"
