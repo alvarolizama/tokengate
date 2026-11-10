@@ -9,7 +9,7 @@
 ### OpenAI-compatible LLM API gateway
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-1.0.0-9FE88D.svg)](./mix.exs)
+[![Version](https://img.shields.io/badge/version-1.1.0-9FE88D.svg)](./mix.exs)
 [![Elixir](https://img.shields.io/badge/Elixir-1.15+-4B275F?logo=elixir&logoColor=white)](https://elixir-lang.org)
 [![Phoenix](https://img.shields.io/badge/Phoenix-1.8_LiveView-FD4F00?logo=phoenixframework&logoColor=white)](https://www.phoenixframework.org)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-partitioned-336791?logo=postgresql&logoColor=white)](https://www.postgresql.org)
@@ -99,6 +99,12 @@ The public surface is exactly these seven routes:
   deduped and long/repeated tool-output messages trimmed. Pure, deterministic,
   always on for LLMs. Multi-turn histories get reasoning blocks stripped before
   replay.
+- **Reasoning effort policy** — per model, from the model editor: an
+  `effort_default` that replaces a client's `none`/`minimal` (a 400 on
+  reasoning-mandatory upstreams like GLM 5.3) and an `effort_override` that
+  wins over whatever the client sent. Unset means byte-identical passthrough.
+  Every substitution is recorded in `request_logs.effort_applied` — Logs shows
+  the intent (`none → low` badge) and the CSV export carries the column.
 - **Usage normalization** — OpenAI-compatible usage is normalized into
   `prompt_tokens` / `completion_tokens` / `cache_read_tokens` /
   `cache_creation_tokens`, priced separately at cache rates.
