@@ -1,5 +1,9 @@
 <!DOCTYPE html>
-<html lang={TokengateWeb.Gettext.current_locale()} data-theme="dim">
+<html
+  lang={TokengateWeb.Gettext.current_locale()}
+  data-theme="dim"
+  class={if(@conn.req_cookies["tokengate_sidebar"] == "collapsed", do: "sidebar-collapsed")}
+>
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />

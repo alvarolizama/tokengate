@@ -561,14 +561,17 @@ declares its sections and options in **Custom**; the mechanics are these.
 - **The content bar (`h-14`), always visible: it is the ONLY place for the
   navigation toggle.** Below `< lg` it is the hamburger
   (`label for="app-drawer"`) that opens the drawer; at `≥ lg`, the same button
-  in the same position collapses/expands the sidebar
-  (`label for="sidebar-collapse"`). **Never two controls**: the sidebar carries
-  no chevron of its own.
+  in the same position collapses/expands the sidebar (`#sidebar-toggle`).
+  **Never two controls**: the sidebar carries no chevron of its own.
 - **Mobile (`< lg`):** the sidebar lives in the drawer (`drawer-side` +
   `drawer-overlay`); closing = overlay or navigating. The drawer is not
   persisted.
-- **Desktop (`≥ lg`):** fixed sidebar, **collapsible to an icon rail** (4rem)
-  with the `#sidebar-collapse` checkbox (a sibling of `.drawer`): it narrows,
+- **Desktop (`≥ lg`):** fixed sidebar, **collapsible to an icon rail** (4rem).
+  The state lives in the `sidebar-collapsed` class on `<html>` (NOT in a DOM
+  checkbox: LiveView morphs the subtree it renders and re-syncs `checked` from
+  the server HTML on every patch, so the rail would reopen itself on the 2-3s
+  timers). The root layout applies it pre-paint from the
+  `tokengate_sidebar` cookie; `#sidebar-toggle` toggles it. It narrows,
   the texts with `.shell-hide` disappear (brand, selector, search, link and
   group labels, badges, name/email) and **logo + icons** remain, centered, with
   `title` (tooltip). The sidebar is **not** hidden and no floating button is
@@ -700,7 +703,7 @@ grep -n 'themes:' assets/css/app.css                                    # a sing
 grep -rn '@apply' assets/css/                                           # 0
 grep -rn 'table-zebra' lib/                                             # 0 (no zebra, §C6)
 grep -rn 'overflow-x-auto' lib/                                         # wide tables/panels wrapped (§C3)
-grep -c 'for="sidebar-collapse"' lib/<app>_web/components/layouts.ex    # 1 (single toggle, §C12.1)
+grep -c 'id="sidebar-toggle"' lib/<app>_web/components/layouts.ex    # 1 (single toggle)
 grep -c 'class="drawer lg:drawer-open[^"]*lg:grid-rows-1' lib/<app>_web/components/layouts.ex  # 1 (drawer row bounded, §C12.5)
 grep -c 'grid-auto-rows: minmax(0, 1fr)' assets/css/app.css             # 1 if the lever is CSS (§C12.5)
 grep -c 'aside[^>]*label for="sidebar' lib/<app>_web/components/layouts.ex  # 0 (the sidebar carries no toggle of its own)
@@ -786,9 +789,14 @@ móvil, rail en desktop), sidebar `w-60 bg-base-200/50`, nav con `<.nav_link>` /
 4. **La identidad ya no vive en una topbar.** El nombre y el email van en el pie
    del sidebar; el rol, en el `ProfileModal` (lo abre el avatar, que es su
    disparador). El botón de salir también vive en el menú.
-5. **El rail persiste.** `#sidebar-collapse` se guarda en `localStorage` (hook
-   colocado `.SidebarRail`): el checkbox se re-monta en cada navegación y sin
-   persistir el rail se expandiría solo en cada clic.
+5. **El rail persiste.** La clase `sidebar-collapsed` se guarda en la cookie
+   `tokengate_sidebar` (hook colocado `.SidebarRail`) y el root layout la
+   aplica al `<html>` ANTES del primer paint. No puede vivir en un nodo que
+   LiveView renderice: morphdom resincroniza los atributos desde el HTML del
+   servidor en cada patch (los timers de 2-3s de dashboard/stats/monitoring
+   reabrían el rail) y un checkbox no llega a restaurarse antes del paint.
+   Nota de migración: la cookie sustituye al localStorage anterior — cada
+   navegador arranca una vez con el rail expandido.
 
 **Navegación** (`<.nav_group>` agrupa; `<.nav_link>` por enlace, activo por
 `active_path?/2` contra `current_path`, con badge opcional):

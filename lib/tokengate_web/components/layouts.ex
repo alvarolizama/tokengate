@@ -81,7 +81,8 @@ defmodule TokengateWeb.Layouts do
 
   - Raíz `h-screen` + `drawer lg:drawer-open`; barra de contenido `h-14` con el
     **único** toggle de navegación (gaveta en móvil, rail en desktop).
-  - Sidebar colapsable a rail de iconos (`#sidebar-collapse` + `.shell-hide`).
+  - Sidebar colapsable a rail de iconos (`#sidebar-toggle` + clase
+    `sidebar-collapsed` en `<html>` + `.shell-hide`).
   - Pie del sidebar: identidad + menú de usuario (`#user-menu`).
 
   ## Examples
@@ -115,10 +116,13 @@ defmodule TokengateWeb.Layouts do
   def dashboard(assigns) do
     ~H"""
     <div class="h-screen bg-base-100 text-base-content">
-      <%!-- Shell colapsable (desktop): el checkbox ES el estado y el CSS de
-           app.css lo aplica sobre .shell-sidebar / .shell-hide. Vive acá
-           —fuera del drawer— para que las reglas funcionen por hermandad. --%>
-      <input id="sidebar-collapse" type="checkbox" class="hidden" phx-hook=".SidebarRail" />
+      <%!-- Shell colapsable (desktop): el estado vive en la CLASE
+           `sidebar-collapsed` de <html> — cookie `tokengate_sidebar` que el
+           root layout aplica antes del primer paint y el botón #sidebar-toggle
+           alterna. NO vive en un checkbox de este DOM: LiveView morphs este
+           subárbol y resincroniza `checked` desde el HTML del servidor en cada
+           patch (el rail se reabría solo con los timers de 2-3s de dashboard/
+           stats/monitoring). El CSS de app.css busca la clase en el root. --%>
 
       <%!-- `lg:grid-rows-1` declara la fila del grid del drawer acotada a la altura
            del shell (`h-full` → 100vh). Sin ella la fila es implícita y `auto`, así
@@ -129,8 +133,11 @@ defmodule TokengateWeb.Layouts do
            Solo desde `lg`: en móvil el drawer es un overlay `position: fixed` y el
            scroll de página es el comportamiento deseado. --%>
       <div class="drawer lg:drawer-open h-full lg:grid-rows-1">
-        <%!-- Móvil: el drawer-toggle abre/cierra la gaveta con overlay --%>
-        <input id="app-drawer" type="checkbox" class="drawer-toggle" />
+        <%!-- Móvil: el drawer-toggle abre/cierra la gaveta con overlay.
+             phx-update="ignore": morphdom resincroniza `checked` desde el HTML
+             del servidor en cada patch y cerraría la gaveta abierta con los
+             timers de 2-3s de dashboard/stats/monitoring. --%>
+        <input id="app-drawer" type="checkbox" class="drawer-toggle" phx-update="ignore" />
 
         <div class="drawer-content flex flex-col min-w-0 h-full">
           <div
@@ -164,13 +171,18 @@ defmodule TokengateWeb.Layouts do
             >
               <.icon name="hero-bars-3" class="size-5" />
             </label>
-            <label
-              for="sidebar-collapse"
+            <button
+              type="button"
+              id="sidebar-toggle"
+              phx-hook=".SidebarRail"
+              phx-update="ignore"
+              aria-controls="shell-sidebar"
+              aria-expanded="true"
               class="hidden btn btn-ghost btn-sm btn-square lg:inline-flex"
               title={gettext("Collapse or expand the sidebar")}
             >
               <.icon name="hero-bars-3" class="size-5" />
-            </label>
+            </button>
             <a
               href={~p"/"}
               class="flex shrink-0 items-center gap-2 rounded transition-colors duration-150 hover:opacity-80 lg:hidden"
@@ -197,16 +209,31 @@ defmodule TokengateWeb.Layouts do
       </div>
 
       <script :type={Phoenix.LiveView.ColocatedHook} name=".SidebarRail">
-        // El checkbox del rail vive en el DOM del shell, que se re-monta en cada
-        // navegación: sin persistir, el rail se expandiría solo en cada clic.
-        // Guarda el estado en el navegador y lo repone al montar.
+        // El estado del rail vive en la clase `sidebar-collapsed` de <html> y
+        // en la cookie `tokengate_sidebar` (el root layout la aplica antes del
+        // primer paint: sin flash expandir→colapsar en cada carga completa).
+        // Nada de este handler toca nodos que LiveView renderiza: morphdom
+        // resincroniza checked/atributos desde el HTML del servidor en cada
+        // patch y desharía el estado.
         export default {
           mounted() {
-            const key = "tokengate:sidebar-collapsed"
-            if (localStorage.getItem(key) === "true") this.el.checked = true
-            this.el.addEventListener("change", () => {
-              localStorage.setItem(key, this.el.checked ? "true" : "false")
+            this.syncAria()
+            this.el.addEventListener("click", () => {
+              const collapsed = document.documentElement.classList.toggle("sidebar-collapsed")
+
+              document.cookie =
+                "tokengate_sidebar=" +
+                (collapsed ? "collapsed" : "expanded") +
+                "; path=/; max-age=31536000; samesite=lax"
+
+              this.syncAria()
             })
+          },
+          syncAria() {
+            this.el.setAttribute(
+              "aria-expanded",
+              document.documentElement.classList.contains("sidebar-collapsed") ? "false" : "true"
+            )
           }
         }
       </script>
@@ -238,7 +265,10 @@ defmodule TokengateWeb.Layouts do
     <div class="drawer-side z-40">
       <label for="app-drawer" class="drawer-overlay" aria-label={gettext("Close menu")} />
 
-      <aside class="shell-sidebar flex h-full w-60 shrink-0 flex-col border-r border-base-300 bg-base-200 lg:bg-base-200/50">
+      <aside
+        id="shell-sidebar"
+        class="shell-sidebar flex h-full w-60 shrink-0 flex-col border-r border-base-300 bg-base-200 lg:bg-base-200/50"
+      >
         <div class="border-b border-base-300 p-3">
           <div class="shell-sidebar-header flex items-center gap-2">
             <a
