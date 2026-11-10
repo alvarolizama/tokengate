@@ -276,7 +276,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
     # Every period is a patch link (no event, nothing to halt).
     assert has_element?(
              view,
-             "#period-7d[href='/services/supervised/#{service.id}?period=7d']"
+             "#period-week[href='/services/supervised/#{service.id}?period=week']"
            )
 
     assert has_element?(
@@ -285,9 +285,9 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
            )
 
     # Navigating with the param answers the narrower window: only the fresh one.
-    {:ok, view_7d, _html} = live(conn, ~p"/services/supervised/#{service.id}?period=7d")
-    assert render(element(view_7d, "#kpi-cost")) =~ "$0.25"
-    refute render(element(view_7d, "#kpi-cost")) =~ "$0.50"
+    {:ok, view_week, _html} = live(conn, ~p"/services/supervised/#{service.id}?period=week")
+    assert render(element(view_week, "#kpi-cost")) =~ "$0.25"
+    refute render(element(view_week, "#kpi-cost")) =~ "$0.50"
 
     # An unknown period falls back to the 30d default instead of crashing.
     {:ok, view_bogus, _html} = live(conn, ~p"/services/supervised/#{service.id}?period=banana")

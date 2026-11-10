@@ -38,7 +38,8 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
   alias Tokengate.Repo
   alias TokengateWeb.StatsHelpers, as: Stats
 
-  @periods [{"today", "Today"}, {"7d", "7 days"}, {"30d", "30 days"}, {"90d", "90 days"}]
+  import TokengateWeb.StatsHelpers, only: [period_label: 1, period_selector: 1]
+
   @default_period "30d"
   @page_size 25
   # Events that do not touch service state and stay allowed on a read-only page.
@@ -74,7 +75,6 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
              granted_models |> Map.values() |> List.flatten() |> Providers.models_by_ids()
            )
            |> assign(:supervisors, Accounts.service_supervisors(service.id))
-           |> assign(:periods, periods())
            |> assign(:period, @default_period)
            |> assign(:summary, empty_summary())
            |> assign(:model_rows, [])
@@ -126,7 +126,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
   end
 
   defp parse_period(period) do
-    if period in Enum.map(@periods, &elem(&1, 0)), do: period, else: @default_period
+    if period in TokengateWeb.StatsHelpers.canonical_periods(), do: period, else: @default_period
   end
 
   ## Revocation -----------------------------------------------------------
@@ -342,23 +342,15 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
               </span>
             </h1>
             <p class="text-sm text-base-content/70">
-              Presupuesto: {limit_label(@service)} · últimos {period_label(@period)}
+              Presupuesto: {limit_label(@service)} · {period_label(@period)}
             </p>
           </div>
 
-          <div class="flex items-center gap-1" id="period-selector">
-            <.link
-              :for={{value, label} <- @periods}
-              patch={~p"/services/supervised/#{@service.id}?period=#{value}"}
-              id={"period-#{value}"}
-              class={[
-                "btn btn-xs",
-                if(@period == value, do: "btn-primary", else: "btn-ghost")
-              ]}
-            >
-              {label}
-            </.link>
-          </div>
+          <.period_selector
+            target={~p"/services/supervised/#{@service.id}"}
+            period={@period}
+            id="period-selector"
+          />
         </header>
 
         <%!-- KPI strip for the selected period --%>
@@ -766,16 +758,6 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
     </Layouts.dashboard>
     """
   end
-
-  defp periods do
-    Enum.map(@periods, fn {value, label} -> {value, TokengateWeb.Gettext.translate(label)} end)
-  end
-
-  defp period_label("today"), do: gettext("Today")
-  defp period_label("7d"), do: gettext("7 days")
-  defp period_label("30d"), do: gettext("30 days")
-  defp period_label("90d"), do: gettext("90 days")
-  defp period_label(_), do: gettext("30 days")
 
   defp model_names_for(granted_models, service_id, all_models) do
     Map.get(granted_models, service_id, [])

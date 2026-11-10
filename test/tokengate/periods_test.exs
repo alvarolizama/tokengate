@@ -115,4 +115,70 @@ defmodule Tokengate.PeriodsTest do
     assert DateTime.compare(reset, start) == :gt
     assert DateTime.diff(reset, start, :second) in 86_399..86_401
   end
+
+  # previous_period_bounds: la ventana previa con bordes EXCLUSIVOS (to ==
+  # from del actual, un log en el borde no cuenta doble) y calendario local.
+  describe "previous_period_bounds" do
+    test "today: el día UTC de ayer completo" do
+      %{from: from, to: to} = Periods.previous_period_bounds("today", "Etc/UTC")
+
+      assert to == Periods.start_of_day_utc("Etc/UTC")
+      assert DateTime.diff(to, from, :second) == 86_400
+    end
+
+    test "month: el mes UTC anterior completo" do
+      %{from: from, to: to} = Periods.previous_period_bounds("month", "Etc/UTC")
+
+      assert to == Periods.start_of_month_utc("Etc/UTC")
+      prev_first = to |> DateTime.add(-1, :day) |> DateTime.to_date() |> Date.beginning_of_month()
+      assert DateTime.to_date(from) == prev_first
+      assert from.zone_abbr == "UTC"
+    end
+
+    test "30d: span shift — mismo largo que la ventana actual, pegado a ella" do
+      current = Periods.period_bounds("30d", "Etc/UTC")
+      %{from: from, to: to} = Periods.previous_period_bounds("30d", "Etc/UTC")
+
+      # La ventana previa replica el largo de la ACTUAL (que incluye hoy
+      # parcial), y termina exactamente donde empieza la actual: borde
+      # exclusivo, ningún log cuenta doble.
+      assert DateTime.diff(to, from, :second) ==
+               DateTime.diff(current.to, current.from, :second)
+
+      assert to == current.from
+    end
+
+    # La semana del 2026-09-07 cruza el cambio de hora de Chile (2026-09-06,
+    # DST): el lunes previo LOCAL está a 167h, no a 168h — un shift absoluto
+    # de -168h aterriza domingo 23:00 local y el delta compara 169h vs 168h.
+    test "week en Santiago cruzando DST: lunes local a lunes local" do
+      monday =
+        DateTime.new!(~D[2026-09-07], ~T[12:00:00], "America/Santiago")
+        |> DateTime.shift_zone!("Etc/UTC")
+
+      %{from: from, to: to} =
+        Periods.previous_period_bounds("week", "America/Santiago", now: monday)
+
+      # El from es medianoche local del lunes 2026-08-31...
+      prev_local = DateTime.shift_zone!(from, "America/Santiago")
+      assert DateTime.to_date(prev_local) == ~D[2026-08-31]
+      assert prev_local.hour == 0
+      # ...y la ventana mide la semana LOCAL (167h al cruzar DST), no 168h.
+      assert DateTime.diff(to, from, :second) == 167 * 3_600
+    end
+
+    test "week sin DST en el camino: lunes local a lunes local, 168h" do
+      monday =
+        DateTime.new!(~D[2026-11-02], ~T[12:00:00], "America/Santiago")
+        |> DateTime.shift_zone!("Etc/UTC")
+
+      %{from: from, to: to} =
+        Periods.previous_period_bounds("week", "America/Santiago", now: monday)
+
+      prev_local = DateTime.shift_zone!(from, "America/Santiago")
+      assert DateTime.to_date(prev_local) == ~D[2026-10-26]
+      assert prev_local.hour == 0
+      assert DateTime.diff(to, from, :second) == 168 * 3_600
+    end
+  end
 end

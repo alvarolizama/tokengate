@@ -19,20 +19,23 @@ defmodule TokengateWeb.ServiceStatsLive do
   alias Tokengate.Accounts
   alias Tokengate.Logs
   alias Tokengate.Metrics.DashboardCache
+  alias Tokengate.Periods
   alias TokengateWeb.KpiHelpers
+  alias TokengateWeb.StatsHelpers
+
+  import TokengateWeb.StatsHelpers, only: [period_selector: 1]
 
   @page_size 50
   @summary_refresh_interval_ms 2_000
 
   # Selector global de periodo: maneja los KPIs, el desglose, los top models
-  # y la tabla de keys — una sola ventana por consulta, como la página
-  # supervisada. "Este mes" empieza el día 1 en la zona del usuario, por eso
-  # el timezone entra a la llave del DashboardCache.
-  @periods ~w(24h 7d 30d month)
-  @default_period "7d"
+  # y la tabla de keys — una sola ventana por consulta. El periodo viaja en la
+  # URL (?period=) con el set canónico de /stats; las bounds vienen SIEMPRE de
+  # Periods.period_bounds/2 (fuente única — nada de period_from local).
+  @default_period "week"
 
   @impl true
-  def mount(%{"service_id" => service_id}, _session, socket) do
+  def mount(%{"service_id" => service_id} = params, _session, socket) do
     service = Accounts.get_service!(service_id)
 
     if connected?(socket) do
@@ -46,10 +49,11 @@ defmodule TokengateWeb.ServiceStatsLive do
       # Todas las keys del servicio (activas y revocadas, más recientes
       # primero) — la fuente de las filas de la tabla de API keys.
       |> assign(:service_api_keys, Accounts.list_api_keys_for_service_all(service_id))
-      |> assign(:period, @default_period)
-      |> assign(:period_form, to_form(%{"period" => @default_period}, as: :period))
       |> assign(:key_filter, "all")
       |> assign(:key_filter_form, to_form(%{"key_id" => "all"}, as: :key_filter))
+      # El ?period= del deep-link llega a mount: respetarlo aquí evita el
+      # doble service_stats (mount con el default + handle_params corrigiendo).
+      |> assign(:period, parse_period(params["period"]))
       |> assign(:timezone, socket.assigns[:timezone] || "Etc/UTC")
       |> assign(:is_admin, socket.assigns[:current_user].global_role == "admin")
       |> assign(:filters, default_filters())
@@ -143,32 +147,13 @@ defmodule TokengateWeb.ServiceStatsLive do
     end
   end
 
-  # El selector global de periodo re-consulta summary y desglose por key con
-  # el MISMO `from` (load_summary), así que la suma de la tabla sigue cuadrando
-  # con el KPI en cualquier ventana.
-  # El form serializa anidado (to_form as: :period → name="period[period]"):
-  # el payload real del browser es %{"period" => %{"period" => p}}.
-  def handle_event("set_period", %{"period" => %{"period" => period}}, socket)
-      when period in @periods do
-    {:noreply,
-     socket
-     |> assign(:period, period)
-     |> assign(:period_form, to_form(%{"period" => period}, as: :period))
-     |> load_summary()}
-  end
-
-  # Payload manual por el socket con un periodo desconocido: se ignora y la
-  # página queda en el periodo vigente.
-  def handle_event("set_period", _params, socket), do: {:noreply, socket}
-
   # Selector de key del reporte: "all" (todas, revocadas incluidas) o el id de
   # una key del servicio. Con una key específica, summary/desglose/top models
   # se scopean por `api_key_id` (Logs.service_stats/2), la tabla muestra sólo
   # esa fila y la lista de logs se refiltra. Ids que no son del servicio se
   # ignoran (payload manual por el socket).
   #
-  # Igual que set_period: el form serializa anidado (as: :key_filter →
-  # name="key_filter[key_id]").
+  # El form serializa anidado (as: :key_filter → name="key_filter[key_id]").
   def handle_event("set_key", %{"key_filter" => %{"key_id" => key_id}}, socket) do
     known_ids = MapSet.new(socket.assigns.service_api_keys, & &1.id)
 
@@ -186,6 +171,26 @@ defmodule TokengateWeb.ServiceStatsLive do
 
   def handle_event("set_key", _params, socket), do: {:noreply, socket}
 
+  # El periodo viaja en la URL (?period=): el selector (botones patch) llega
+  # aquí y handle_params es el único punto de carga. Sin handle_event de
+  # periodo.
+  @impl true
+  def handle_params(params, _uri, socket) do
+    period = parse_period(params["period"])
+
+    if period == socket.assigns.period do
+      {:noreply, socket}
+    else
+      {:noreply, socket |> assign(:period, period) |> load_summary() |> load_logs(:reset)}
+    end
+  end
+
+  defp parse_period(period) do
+    if period in StatsHelpers.canonical_periods(),
+      do: period,
+      else: @default_period
+  end
+
   ## Data loading ---------------------------------------------------------
 
   defp load_summary(socket) do
@@ -201,8 +206,9 @@ defmodule TokengateWeb.ServiceStatsLive do
     #
     # Summary y desglose por key leen el MISMO `from`: dos cómputos con froms
     # independientes mueven el borde de la ventana entre sí y la suma de la
-    # tabla se desfaza del KPI por las filas de ese borde.
-    from = period_from(period, timezone)
+    # tabla se desfaza del KPI por las filas de ese borde. Fuente única de
+    # bounds: Periods (el mismo del hub y supervised).
+    %{from: from} = Periods.period_bounds(period, timezone)
 
     # El group by de la tabla SIEMPRE es del servicio completo (una query, el
     # trim a una fila es en memoria); el summary sí se scopea por key cuando
@@ -484,34 +490,6 @@ defmodule TokengateWeb.ServiceStatsLive do
     end
   end
 
-  defp days_ago(n) do
-    DateTime.utc_now()
-    |> DateTime.add(-n * 24 * 60 * 60, :second)
-    |> DateTime.truncate(:second)
-  end
-
-  # ... y las ventanas que sirven los helpers:
-  defp period_from("24h", _timezone),
-    do: DateTime.utc_now() |> DateTime.add(-86_400, :second) |> DateTime.truncate(:second)
-
-  defp period_from("7d", _timezone), do: days_ago(7)
-  defp period_from("30d", _timezone), do: days_ago(30)
-
-  defp period_from("month", timezone) do
-    timezone
-    |> DateTime.now!()
-    |> DateTime.to_date()
-    |> Date.beginning_of_month()
-    |> DateTime.new!(~T[00:00:00], timezone)
-    |> DateTime.shift_zone!("Etc/UTC")
-    |> DateTime.truncate(:second)
-  end
-
-  defp period_label("24h"), do: gettext("Last 24 hours")
-  defp period_label("7d"), do: gettext("Last 7 days")
-  defp period_label("30d"), do: gettext("Last 30 days")
-  defp period_label("month"), do: gettext("This month")
-
   ## Render ----------------------------------------------------------------
 
   @impl true
@@ -563,19 +541,11 @@ defmodule TokengateWeb.ServiceStatsLive do
               ]}
             />
           </.form>
-          <.form for={@period_form} id="period-form" phx-change="set_period" class="w-48">
-            <.input
-              field={@period_form[:period]}
-              type="select"
-              label={gettext("Period")}
-              options={[
-                {period_label("24h"), "24h"},
-                {period_label("7d"), "7d"},
-                {period_label("30d"), "30d"},
-                {period_label("month"), "month"}
-              ]}
-            />
-          </.form>
+          <.period_selector
+            target={~p"/stats/services/#{@service.id}"}
+            period={@period}
+            id="period-selector"
+          />
         </header>
 
         <%!-- KPI cards (selected period) --%>

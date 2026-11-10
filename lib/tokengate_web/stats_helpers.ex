@@ -65,6 +65,46 @@ defmodule TokengateWeb.StatsHelpers do
   def period_label("90d"), do: gettext("90 days")
   def period_label(_), do: gettext("Today")
 
+  @doc """
+  Set canónico de temporalidad de /stats: las mismas cinco opciones en todas
+  las páginas. Un solo vocabulario — el que `Periods.period_bounds/2` ya
+  soporta — y un solo formato: botones en grupo `join` con el periodo en la
+  URL (`?period=`) para que viaje con bookmark/refresh/back-forward.
+  """
+  @canonical_periods ~w(today week month 30d 90d)
+
+  def canonical_periods, do: @canonical_periods
+
+  @doc """
+  Selector de temporalidad compartido por todas las páginas de /stats.
+
+  `target` es el path SIN query string (los tabs del hub, el detalle
+  supervisado, etc.); el componente arma el patch con `?period=<value>`.
+  Look: grupo DaisyUI `join` con botones `btn-sm` — el mismo que el hub
+  tenía antes de la unificación (Constraint 1 del contract: misma UX).
+  """
+  attr :target, :string, required: true
+  attr :period, :string, required: true
+  attr :id, :string, default: "period-selector"
+
+  def period_selector(assigns) do
+    ~H"""
+    <div class="join" id={@id}>
+      <.link
+        :for={value <- canonical_periods()}
+        patch={"#{@target}?period=#{value}"}
+        id={"period-#{value}"}
+        class={[
+          "btn btn-sm join-item",
+          if(period_active?(@period, value), do: "btn-primary", else: "btn-ghost")
+        ]}
+      >
+        {period_label(value)}
+      </.link>
+    </div>
+    """
+  end
+
   def period_active?(current, target), do: current == target
 
   def has_data?([]), do: false

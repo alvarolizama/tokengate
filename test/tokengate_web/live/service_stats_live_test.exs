@@ -286,38 +286,34 @@ defmodule TokengateWeb.ServiceStatsLiveTest do
 
       {:ok, view, _html} = live(conn, ~p"/stats/services/#{service.id}")
 
-      # Cambio a 24h: el log de hoy sigue en la ventana y la tabla cuadra
-      # con el KPI (mismo `from` compartido). El payload es el REAL del
-      # browser: anidado por el to_form (name="period[period]").
-      html =
-        view
-        |> form("#period-form", %{"period" => %{"period" => "24h"}})
-        |> render_change()
+      # El selector es un grupo de patch links (?period=...): cambiar de
+      # periodo es navegación, no evento — handle_params es el único punto
+      # de carga y los unknowns caen al default.
+      assert has_element?(
+               view,
+               "#period-today[href='/stats/services/#{service.id}?period=today']"
+             )
 
-      # La opción quedó seleccionada: prueba que el handler corrió de verdad.
-      assert html =~ ~s(<option selected="" value="24h")
+      # Click a "today": el log de hoy sigue en la ventana y la tabla cuadra
+      # con el KPI (mismo `from` compartido).
+      view |> element("#period-today") |> render_click()
 
       assert has_element?(view, "#api-key-row-#{key.id}")
       assert cell_text(view, "#api-key-row-#{key.id} td:nth-child(3)") == "1"
       assert render(element(view, "#kpi-requests")) =~ ~r/text-2xl font-bold[^>]*>\s*1\s*</
 
-      # Mes en curso: el log de hoy también cae dentro.
-      html =
-        view
-        |> form("#period-form", %{"period" => %{"period" => "month"}})
-        |> render_change()
-
-      assert html =~ ~s(<option selected="" value="month")
-      assert has_element?(view, "#api-key-row-#{key.id}")
-
-      # Un periodo desconocido (payload forjado directo por el socket) se
-      # ignora: la página no revienta y conserva el periodo vigente.
-      view
-      |> element("#period-form")
-      |> render_change(%{"period" => %{"period" => "hack"}})
+      # Click a "month": el log de hoy también cae dentro.
+      view |> element("#period-month") |> render_click()
 
       assert has_element?(view, "#api-key-row-#{key.id}")
-      assert render(view) =~ ~s(<option selected="" value="month")
+
+      # Un periodo desconocido viaja por la URL y se resuelve al default en
+      # vez de reventar.
+      {:ok, view_bogus, _html} = live(conn, ~p"/stats/services/#{service.id}?period=hack")
+
+      assert has_element?(view_bogus, "#api-key-row-#{key.id}")
+      # Vuelve al selector con el periodo default resuelto (week).
+      assert has_element?(view_bogus, "#period-week.btn-primary")
     end
 
     test "the table's requests add up to the KPI", %{conn: conn} do

@@ -47,8 +47,7 @@ defmodule TokengateWeb.StatsLive do
   import TokengateWeb.StatsLive.Provider, only: [provider: 1]
   import TokengateWeb.StatsLive.LiveSection, only: [live: 1]
 
-  import TokengateWeb.StatsHelpers,
-    only: [period_label: 1, period_active?: 2, sort_rows: 3]
+  import TokengateWeb.StatsHelpers, only: [period_selector: 1, sort_rows: 3]
 
   alias TokengateWeb.StatsHelpers, as: Stats
 
@@ -85,7 +84,6 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:period, "today")
       |> assign(:model_filter, nil)
       |> assign(:group_filter, nil)
-      |> assign(:service_filter, nil)
       |> assign(:scope_label, scope_label_for(user))
       |> assign(:scope_member_ids, Accounts.scope_member_ids(user))
       |> assign(:group_id, nil)
@@ -93,6 +91,7 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:sort_direction, :desc)
       |> assign(:list_search, "")
       |> assign(:stats_loading, true)
+      |> assign(:load_error, false)
       |> assign(:per_page, 10)
       |> assign(:shown_counts, %{})
       |> assign(:reload_scheduled, false)
@@ -125,7 +124,6 @@ defmodule TokengateWeb.StatsLive do
     period = parse_period(params["period"])
     model_filter = params["model_id"]
     group_filter = params["group_id"]
-    service_filter = params["service_id"]
     # :group action carries the group in the URL path; the other actions
     # clear it (drill-downs keep using ?group_id=).
     group_id =
@@ -146,12 +144,19 @@ defmodule TokengateWeb.StatsLive do
       |> assign(:period, period)
       |> assign(:model_filter, model_filter)
       |> assign(:group_filter, group_filter)
-      |> assign(:service_filter, service_filter)
       |> assign(:group_id, group_id)
       |> assign(:provider_id, provider_id)
-      # Cada sección tiene su propio listado: el filtro de la anterior no
-      # aplica y escondería filas sin que se vea por qué.
-      |> assign(:list_search, "")
+
+    # Cada sección tiene su propio listado: el filtro de la anterior no
+    # aplica y escondería filas sin que se vea por qué. Pero cambiar de
+    # PERIODO (patch dentro de la misma sección) no debe borrarlo.
+    socket =
+      if socket.assigns[:last_live_action] != socket.assigns.live_action do
+        assign(socket, :list_search, "")
+      else
+        socket
+      end
+      |> assign(:last_live_action, socket.assigns.live_action)
 
     socket =
       case socket.assigns.live_action do
@@ -162,15 +167,40 @@ defmodule TokengateWeb.StatsLive do
     {:noreply, socket}
   end
 
-  @impl true
-  def handle_event("set_period", %{"period" => period}, socket)
-      when period in ~w(today week month 30d 90d) do
-    {:noreply, socket |> assign(:period, period) |> start_data_load()}
-  end
+  # El periodo vive en la URL (?period=): el selector hace patch y
+  # handle_params es el único punto de carga. Sin handle_event de periodo.
+  #
+  # Target del selector según la pestaña/detalle actual: los botones patchean
+  # la MISMA vista con el nuevo periodo, conservando el id en los detalles.
+  def period_target(%{live_action: :provider, provider_id: id}) when is_binary(id),
+    do: "/stats/providers/#{id}"
+
+  def period_target(%{live_action: :model, model_filter: id}) when is_binary(id),
+    do: "/stats/models/#{id}"
+
+  def period_target(%{live_action: :group, group_id: id}) when is_binary(id),
+    do: "/stats/profiles/#{id}"
+
+  # Query-param drills (p.ej. /stats/models?model_id=x desde los detalles de
+  # perfil/proveedor) mantienen live_action :models con el filtro en assigns:
+  # sin estas cláusulas el cambio de periodo tiraría el drilldown en silencio.
+  def period_target(%{live_action: :models, model_filter: id}) when is_binary(id),
+    do: "/stats/models/#{id}"
+
+  def period_target(%{live_action: :groups, group_id: id}) when is_binary(id),
+    do: "/stats/profiles/#{id}"
+
+  def period_target(%{live_action: :providers}), do: "/stats/providers"
+  def period_target(%{live_action: :models}), do: "/stats/models"
+  def period_target(%{live_action: :groups}), do: "/stats/profiles"
+  def period_target(%{live_action: :services}), do: "/stats/services"
+  def period_target(%{live_action: :users}), do: "/stats/users"
+  def period_target(_), do: "/stats/overview"
 
   # Buscador de los listados rankeados (Users, Models, Providers). El texto
   # vive en el socket y las secciones filtran sus propias filas en el render:
   # no toca la DB ni las claves del DashboardCache.
+  @impl true
   def handle_event("filter_list", %{"value" => query}, socket) do
     {:noreply, assign(socket, :list_search, query || "")}
   end
@@ -279,7 +309,6 @@ defmodule TokengateWeb.StatsLive do
       period: assigns.period,
       model_filter: assigns.model_filter,
       group_filter: assigns.group_filter,
-      service_filter: assigns.service_filter,
       group_id: assigns.group_id,
       provider_id: assigns[:provider_id],
       scope_member_ids: assigns.scope_member_ids,
@@ -295,17 +324,24 @@ defmodule TokengateWeb.StatsLive do
     socket =
       socket
       |> assign(:stats_loading, false)
+      |> assign(:load_error, false)
       |> assign(empty_structural_assigns(socket.assigns.live_action))
       |> assign(data)
 
     {:noreply, socket}
   end
 
+  # La tarea murió con una query real explotada: el motivo original ya está
+  # en el log (run_parallel lo re-eleva). En la UI no se finge éxito: se
+  # declara el fallo y se dice que lo visible es el periodo anterior.
   def handle_async(:stats_data, {:exit, reason}, socket) do
     require Logger
     Logger.warning("stats data load failed: #{inspect(reason)}")
 
-    {:noreply, assign(socket, :stats_loading, false)}
+    {:noreply,
+     socket
+     |> assign(:stats_loading, false)
+     |> assign(:load_error, true)}
   end
 
   # Los contadores del Resumen llegan en su propia tarea y se aplican solos:
@@ -465,7 +501,30 @@ defmodule TokengateWeb.StatsLive do
   end
 
   # Fetch the previous period's summary for delta comparison.
+  #
+  # 90d es el caso especial: su previous arranca ~179 días atrás y la
+  # retención de request_logs es de 90 días — el delta se compararía contra
+  # datos ya dropeados (prev ≈ 0, "cambio infinito" falso). Delta nil
+  # honesto por diseño. Fuente de la retención: logs/partition_worker.ex
+  # (@retention_days); si algún día cambia ahí, ajustar este guard.
+  @retention_days 90
+
+  defp previous_summary(params, "90d", timezone) do
+    %{from: prev_from} = Periods.previous_period_bounds("90d", timezone)
+    earliest = DateTime.add(DateTime.utc_now(), -@retention_days * 86_400, :second)
+
+    if DateTime.compare(prev_from, earliest) == :lt do
+      empty_summary()
+    else
+      do_previous_summary(params, "90d", timezone)
+    end
+  end
+
   defp previous_summary(params, period, timezone) do
+    do_previous_summary(params, period, timezone)
+  end
+
+  defp do_previous_summary(params, period, timezone) do
     %{from: prev_from, to: prev_to} = Periods.previous_period_bounds(period, timezone)
     prev_opts = [from: prev_from, to: prev_to, timezone: timezone]
     fetch_summary(params, prev_opts)
@@ -481,10 +540,19 @@ defmodule TokengateWeb.StatsLive do
   # Run every query function concurrently and collect results in order.
   # Queries share the Repo pool, so wall time is pool rounds, not the sum of
   # every query — this is what makes period switching feel fast.
+  #
+  # Si una query explota (timeout de los scans crudos de 30d/90d, DST, lo que
+  # sea), se RE-ELEVA el motivo original: antes el {:exit, ...} no matcheaba
+  # `{:ok, result}` y moría con FunctionClauseError — el log enmascaraba el
+  # error real. handle_async ya sabe manejar {:exit, ...}: lo loguea y deja
+  # los datos del periodo anterior visibles.
   defp run_parallel(fun_list) do
     fun_list
-    |> Task.async_stream(fn fun -> fun.() end, timeout: :infinity, zip_input_on_exit: true)
-    |> Enum.map(fn {:ok, result} -> result end)
+    |> Task.async_stream(fn fun -> fun.() end, timeout: :infinity)
+    |> Enum.map(fn
+      {:ok, result} -> result
+      {:exit, reason} -> exit({:stats_query_failed, reason})
+    end)
   end
 
   defp summary_to_metrics(summary) do
@@ -679,32 +747,12 @@ defmodule TokengateWeb.StatsLive do
         ]
 
       :services ->
-        service_id = params.service_filter
         admin? = params.user.global_role == "admin"
 
-        # Services have a dedicated service_id column.
+        # Services have a dedicated service_id column. El detalle completo
+        # vive en /stats/services/:service_id (navegación, no drilldown).
         [fn -> {:service_budgets, Budgets.list_service_budgets()} end] ++
-          [fn -> {:breakdown_service, breakdown_by_service_if_admin(admin?, opts)} end] ++
-          if service_id && admin? do
-            [
-              fn ->
-                {:breakdown_model,
-                 Rollup.breakdown_by_model(nil, Keyword.put(opts, :service_id, service_id))}
-              end,
-              fn ->
-                {:drilldown_series, Rollup.daily_series_by_model_for_service(service_id, opts)}
-              end,
-              fn ->
-                {:drilldown_series_labels,
-                 Rollup.daily_series_by_model_for_service(service_id, opts)
-                 |> Enum.map(& &1.label)
-                 |> Enum.uniq()
-                 |> Enum.sort()}
-              end
-            ]
-          else
-            []
-          end
+          [fn -> {:breakdown_service, breakdown_by_service_if_admin(admin?, opts)} end]
 
       _ ->
         []
@@ -903,9 +951,6 @@ defmodule TokengateWeb.StatsLive do
 
       params.group_filter ->
         Map.put(base, :group_id, params.group_filter)
-
-      params.service_filter ->
-        Map.put(base, :service_id, params.service_filter)
 
       true ->
         base

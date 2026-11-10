@@ -152,6 +152,32 @@ defmodule TokengateWeb.LocaleTest do
     assert Accounts.get_user!(admin.id).locale == "es"
   end
 
+  # Los msgids del bloque manual de errors.po no pasan por el extractor
+  # (gettext dinámico en changesets), así que extract+merge los borra sin
+  # ver que siguen citados en lib/. Si esta prueba falla, alguien purgó el
+  # bloque: restaurar errors.po y NO correr gettext.extract --merge a ciegas.
+  test "errors.po conserva las traducciones manuales del dominio errors", %{conn: _conn} do
+    Gettext.put_locale("es")
+
+    for msgid <- [
+          "this model already has an exclusive provider for this limit profile (only one is allowed)",
+          "this model already has an exclusive provider for this user (only one is allowed)",
+          "this credential is already global for this model",
+          "cannot overwrite %{key}",
+          "the limit profile still has services associated",
+          "the member key needs an owner (user_id)",
+          "must have exactly one owner (user or service)",
+          "it comes from the catalog: it cannot be edited",
+          "lowercase, digits, dot, dash and underscore only",
+          "must be a hero icon name, e.g. hero-beaker"
+        ] do
+      translated = Elixir.Gettext.dgettext(TokengateWeb.Gettext, "errors", msgid)
+
+      refute translated == msgid,
+             "errors.po perdió la traducción es de #{inspect(msgid)} (bloque manual purgado)"
+    end
+  end
+
   describe "Plug Locale (requests que no son LiveView)" do
     test "toma el locale del usuario cargado", %{conn: conn} do
       conn = init_test_session(conn, %{}) |> assign(:current_user, %{locale: "es"})

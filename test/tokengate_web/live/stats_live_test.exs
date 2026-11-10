@@ -554,6 +554,14 @@ defmodule TokengateWeb.StatsLiveTest do
     assert has_element?(view, "#model-back")
     assert has_element?(view, "#model-detail-header")
 
+    # Cambiar de periodo DESDE el drill-down por query param conserva el
+    # detalle: el target del selector apunta a la ruta canónica del modelo,
+    # no al listado (regresión: tiraba el drilldown en silencio).
+    assert has_element?(
+             view,
+             "#period-90d[href='/stats/models/#{ma.id}?period=90d']"
+           )
+
     {:ok, detail, _html} = live(conn, ~p"/stats/models/#{ma.id}?period=today")
     detail = wait_stats_loaded(detail)
 
@@ -951,7 +959,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
     # En una ventana más larga no hay reinicio diario que anunciar: vuelve al
     # label corto y sin línea de countdown.
-    render_click(view, "set_period", %{"period" => "30d"})
+    view |> element("#period-30d") |> render_click()
     wait_stats_loaded(view)
 
     assert has_element?(view, "#kpi-cost", "Costo")
@@ -959,7 +967,7 @@ defmodule TokengateWeb.StatsLiveTest do
 
     # "Este mes" también mide una ventana UTC (la del tope mensual), así que el
     # label lo declara — pero sin countdown: el reinicio diario no aplica.
-    render_click(view, "set_period", %{"period" => "month"})
+    view |> element("#period-month") |> render_click()
     wait_stats_loaded(view)
 
     assert has_element?(view, "#kpi-cost", "Costo (mes UTC)")
@@ -1805,18 +1813,13 @@ defmodule TokengateWeb.StatsLiveTest do
       # Los miembros del perfil de límites caben enteros: esa tabla no gana botón.
       refute has_element?(group_view, "#group-detail-members-more")
 
-      {:ok, service_view, _html} =
-        live(conn, ~p"/stats/services?period=today&service_id=#{service.id}")
+      # La vista ligera del drilldown ya no existe: la fila del tab Servicios
+      # navega al detalle completo (/stats/services/:id).
+      {:ok, services_view, _html} = live(conn, ~p"/stats/services?period=today")
+      services_view = wait_stats_loaded(services_view)
 
-      service_view = wait_stats_loaded(service_view)
-
-      assert count_rows(service_view, "#service-models tbody tr") == 10
-      assert has_element?(service_view, "#service-detail-models-more")
-
-      service_view |> element("#service-detail-models-more") |> render_click()
-
-      assert count_rows(service_view, "#service-models tbody tr") == 11
-      refute has_element?(service_view, "#service-detail-models-more")
+      assert has_element?(services_view, "#service-link-#{service.id}")
+      refute has_element?(services_view, "#service-kpi-cost")
     end
 
     test "detalle del proveedor: un id que no existe avisa en vez de romper", %{conn: conn} do

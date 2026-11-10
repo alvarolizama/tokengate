@@ -28,20 +28,7 @@
           id="stats-loading"
           title="Actualizando estadísticas…"
         ></span>
-        <div class="join" id="period-selector" role="tablist">
-          <button
-            :for={period <- ~w(today week month 30d 90d)}
-            phx-click="set_period"
-            phx-value-period={period}
-            class={[
-              "join-item btn btn-sm",
-              if(period_active?(@period, period), do: "btn-primary", else: "btn-ghost")
-            ]}
-            id={"period-#{period}"}
-          >
-            {period_label(period)}
-          </button>
-        </div>
+        <.period_selector target={period_target(assigns)} period={@period} id="period-selector" />
       </div>
 
       <%!-- "En vivo": mismo lugar del header que ocupaban los timeframes --%>
@@ -147,6 +134,17 @@
       ]}
       id="stats-content"
     >
+      <div
+        :if={@load_error}
+        id="stats-load-error"
+        class="alert alert-warning mb-4 text-sm"
+        role="alert"
+      >
+        <.icon name="hero-exclamation-triangle" class="w-5 h-5 shrink-0" />
+        <span>
+          {gettext("Could not load this period. The data below is from the previous period.")}
+        </span>
+      </div>
       <%= cond do %>
         <% @live_action == :live -> %>
           <.live
@@ -256,13 +254,8 @@
           />
         <% @live_action == :services -> %>
           <.services
-            metrics={@metrics}
             breakdown_service={@breakdown_service}
             service_budgets={@service_budgets}
-            breakdown_model={@breakdown_model}
-            drilldown_series={@drilldown_series}
-            drilldown_series_labels={@drilldown_series_labels}
-            service_filter={@service_filter}
             list_search={@list_search}
             period={@period}
             sort_field={@sort_field}

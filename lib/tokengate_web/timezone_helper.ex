@@ -15,40 +15,44 @@ defmodule TokengateWeb.TimezoneHelper do
 
   # Curated list of common timezones for the selector.
   # Grouped by region for easier navigation.
+  #
+  # Las etiquetas van envueltas en gettext_noop/1: el string sale intacto en
+  # runtime (se traduce en timezone_options/0) y el extractor lo ve como
+  # msgid literal — las entradas del .po sobreviven a extract+merge.
   @timezones [
-    {"UTC",
+    {gettext_noop("UTC"),
      [
-       {"UTC", "Etc/UTC"}
+       {gettext_noop("UTC"), "Etc/UTC"}
      ]},
-    {"America",
+    {gettext_noop("America"),
      [
-       {"Mexico City (CDT)", "America/Mexico_City"},
-       {"Mexico City (CST)", "America/Merida"},
-       {"New York (EST)", "America/New_York"},
-       {"Los Angeles (PST)", "America/Los_Angeles"},
-       {"Chicago (CST)", "America/Chicago"},
-       {"Denver (MST)", "America/Denver"},
-       {"Bogota", "America/Bogota"},
-       {"Lima", "America/Lima"},
-       {"Buenos Aires", "America/Argentina/Buenos_Aires"},
-       {"Santiago", "America/Santiago"},
-       {"Sao Paulo", "America/Sao_Paulo"},
-       {"Caracas", "America/Caracas"},
-       {"Guadalajara", "America/Mexico_City"}
+       {gettext_noop("Mexico City (CDT)"), "America/Mexico_City"},
+       {gettext_noop("Mexico City (CST)"), "America/Merida"},
+       {gettext_noop("New York (EST)"), "America/New_York"},
+       {gettext_noop("Los Angeles (PST)"), "America/Los_Angeles"},
+       {gettext_noop("Chicago (CST)"), "America/Chicago"},
+       {gettext_noop("Denver (MST)"), "America/Denver"},
+       {gettext_noop("Bogota"), "America/Bogota"},
+       {gettext_noop("Lima"), "America/Lima"},
+       {gettext_noop("Buenos Aires"), "America/Argentina/Buenos_Aires"},
+       {gettext_noop("Santiago"), "America/Santiago"},
+       {gettext_noop("Sao Paulo"), "America/Sao_Paulo"},
+       {gettext_noop("Caracas"), "America/Caracas"},
+       {gettext_noop("Guadalajara"), "America/Mexico_City"}
      ]},
-    {"Europe",
+    {gettext_noop("Europe"),
      [
-       {"Madrid", "Europe/Madrid"},
-       {"Lisbon", "Europe/Lisbon"},
-       {"London", "Europe/London"},
-       {"Paris", "Europe/Paris"},
-       {"Berlin", "Europe/Berlin"},
-       {"Rome", "Europe/Rome"},
-       {"Amsterdam", "Europe/Amsterdam"}
+       {gettext_noop("Madrid"), "Europe/Madrid"},
+       {gettext_noop("Lisbon"), "Europe/Lisbon"},
+       {gettext_noop("London"), "Europe/London"},
+       {gettext_noop("Paris"), "Europe/Paris"},
+       {gettext_noop("Berlin"), "Europe/Berlin"},
+       {gettext_noop("Rome"), "Europe/Rome"},
+       {gettext_noop("Amsterdam"), "Europe/Amsterdam"}
      ]},
-    {"Other",
+    {gettext_noop("Other"),
      [
-       {"Portugal (Azores)", "Atlantic/Azores"}
+       {gettext_noop("Portugal (Azores)"), "Atlantic/Azores"}
      ]}
   ]
 
