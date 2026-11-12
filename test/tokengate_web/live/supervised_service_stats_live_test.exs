@@ -18,6 +18,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
   import Phoenix.LiveViewTest
   alias Tokengate.{Accounts, Logs, Providers}
+  alias Tokengate.Metrics.DashboardCache
   alias Tokengate.Repo
 
   defp unique, do: System.unique_integer([:positive])
@@ -79,6 +80,55 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
         attrs
       )
     )
+  end
+
+  defp key_fixture(service, attrs) do
+    {_token, key_hash, key_prefix} = Accounts.generate_api_key_material()
+
+    {:ok, api_key} =
+      Accounts.create_api_key(
+        Map.merge(
+          %{
+            "subject_type" => "service",
+            "service_id" => service.id,
+            "key_hash" => key_hash,
+            "key_prefix" => key_prefix,
+            "status" => "active"
+          },
+          attrs
+        )
+      )
+
+    api_key
+  end
+
+  # Texto de una celda de la tabla de keys, sin el ruido del HTML.
+  defp cell_text(view, selector) do
+    view
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.query(selector)
+    |> LazyHTML.text()
+    |> String.trim()
+  end
+
+  defp assigns_of(view), do: :sys.get_state(view.pid).socket.assigns
+
+  # El summary del realtime se recomputa con el timer de coalescing (2 s);
+  # :sys.get_state devuelve el estado actual, así que se espera a que el
+  # assign cumpla la condición en vez de dormir a ciegas.
+  defp wait_for_assign(view, fun, tries \\ 100) do
+    cond do
+      fun.(assigns_of(view)) ->
+        :ok
+
+      tries == 0 ->
+        flunk("timed out waiting for the LiveView assign")
+
+      true ->
+        Process.sleep(50)
+        wait_for_assign(view, fun, tries - 1)
+    end
   end
 
   defp grant_model(service) do
@@ -194,13 +244,18 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
     assert render(element(view, "#kpi-output")) =~ "1.0K"
     assert render(element(view, "#kpi-errors")) =~ "1"
 
-    # Per-model breakdown (one row per model served)
-    assert has_element?(view, "#model-rows")
-    assert has_element?(view, "#model-row-#{model_.id}")
+    # Model × API key pivot (shared body): the old per-model card is gone and
+    # the daily-series chart is no longer rendered at all. Status classes and
+    # top models stay on the page (the pivot does not replace those cards).
+    assert has_element?(view, "#service-model-breakdown-table")
+    assert has_element?(view, "#model-breakdown-gpt-4o-svc")
+    refute html =~ "Uso diario por modelo"
 
-    # Status classes + top models + roster + config
-    assert has_element?(view, "#status-breakdown")
+    # Status breakdown + top models (never dropped by the shared body)
+    assert render(element(view, "#status-breakdown")) =~ "badge-error"
     assert render(element(view, "#top-models")) =~ "gpt-4o-svc"
+
+    # Supervisor roster + read-only config stay on the page
     assert render(element(view, "#service-supervisors")) =~ user.email
     assert render(element(view, "#service-config")) =~ service.api_key.key_prefix
     assert has_element?(view, "#model-badge-#{service.id}-#{model_.id}")
@@ -245,7 +300,7 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
     conn = login(conn, user, password)
     {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
 
-    assert has_element?(view, "#model-rows-empty")
+    assert has_element?(view, "#service-model-breakdown-empty")
     assert render(element(view, "#kpi-cost")) =~ "$0.00"
     assert Enum.count(log_rows(view)) == 0
   end
@@ -356,6 +411,159 @@ defmodule TokengateWeb.SupervisedServiceStatsLiveTest do
 
     html = render_click(view, "revoke_key", %{"service-id" => service.id})
     assert html =~ "Esta vista es de solo lectura"
+  end
+
+  # ----------------------------------------------------------------------
+  # Admin parity: API keys, key scope, log filters, realtime
+  # ----------------------------------------------------------------------
+
+  describe "admin parity" do
+    test "the API key table lists labels, including a revoked key with zeros", %{conn: conn} do
+      %{user: user, password: password} = register()
+      service = service() |> supervised(user)
+      active = key_fixture(service, %{"label" => "Activa"})
+      revoked = key_fixture(service, %{"label" => "Vieja"})
+      {:ok, _} = Accounts.revoke_api_key(revoked)
+      {:ok, _} = log_for(service, %{api_key_id: active.id})
+
+      conn = login(conn, user, password)
+      {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+
+      assert has_element?(view, "#service-api-keys-table")
+      assert cell_text(view, "#api-key-row-#{active.id} td:nth-child(1)") == "Activa"
+
+      # La revocada no tiene tráfico en la ventana: la fila existe igual, con
+      # ceros y su badge de estado (nunca el secreto ni el uuid desnudo).
+      row = "#api-key-row-#{revoked.id}"
+      assert cell_text(view, "#{row} td:nth-child(1)") == "Vieja"
+      assert cell_text(view, "#{row} td:nth-child(2)") == "revoked"
+      assert cell_text(view, "#{row} td:nth-child(3)") == "0"
+      assert cell_text(view, "#{row} td:nth-child(4)") == "0"
+      assert cell_text(view, "#{row} td:nth-child(6)") == "$0.00"
+      assert has_element?(view, "#{row} .badge-error")
+
+      # El selector lista las keys por label y marca la revocada.
+      assert render(element(view, "#key-filter-form")) =~ "Vieja · Revocada"
+    end
+
+    test "set_key scopes summary, pivot and logs to one key and back to all", %{conn: conn} do
+      %{user: user, password: password} = register()
+      service = service() |> supervised(user)
+      key_a = key_fixture(service, %{"label" => "Alpha"})
+      key_b = key_fixture(service, %{"label" => "Beta"})
+
+      {:ok, _} = log_for(service, %{api_key_id: key_a.id, model_requested: "alpha-model"})
+      {:ok, _} = log_for(service, %{api_key_id: key_b.id, model_requested: "beta-model"})
+
+      conn = login(conn, user, password)
+      {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+
+      # Todas: dos filas, los dos modelos en el pivote y KPI = 2.
+      assert has_element?(view, "#api-key-row-#{key_a.id}")
+      assert has_element?(view, "#api-key-row-#{key_b.id}")
+      assert has_element?(view, "#model-breakdown-alpha-model")
+      assert has_element?(view, "#model-breakdown-beta-model")
+      assert render(element(view, "#kpi-requests")) =~ ~r/text-2xl font-bold[^>]*>\s*2\s*</
+
+      # Sólo Beta: una fila, un modelo en el pivote, KPI = 1 y logs scopeados.
+      view
+      |> form("#key-filter-form", %{"key_filter" => %{"key_id" => key_b.id}})
+      |> render_change()
+
+      assert has_element?(view, "#api-key-row-#{key_b.id}")
+      refute has_element?(view, "#api-key-row-#{key_a.id}")
+      assert has_element?(view, "#model-breakdown-beta-model")
+      refute has_element?(view, "#model-breakdown-alpha-model")
+      assert render(element(view, "#kpi-requests")) =~ ~r/text-2xl font-bold[^>]*>\s*1\s*</
+      assert render(view) =~ "beta-model"
+      refute render(view) =~ "alpha-model"
+
+      # De vuelta a todas.
+      view
+      |> form("#key-filter-form", %{"key_filter" => %{"key_id" => "all"}})
+      |> render_change()
+
+      assert has_element?(view, "#api-key-row-#{key_a.id}")
+      assert has_element?(view, "#api-key-row-#{key_b.id}")
+      assert render(element(view, "#kpi-requests")) =~ ~r/text-2xl font-bold[^>]*>\s*2\s*</
+    end
+
+    test "the log filter is allowed by the read-only hook and narrows the stream", %{conn: conn} do
+      %{user: user, password: password} = register()
+      service = service() |> supervised(user)
+
+      {:ok, ok_log} = log_for(service, %{model_requested: "ok-model", status_code: 200})
+      {:ok, boom_log} = log_for(service, %{model_requested: "boom-model", status_code: 500})
+
+      conn = login(conn, user, password)
+      {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+
+      assert has_element?(view, "#logs-#{ok_log.id}")
+      assert has_element?(view, "#logs-#{boom_log.id}")
+
+      html =
+        view
+        |> form("#service-stats-filter-form", %{"filter" => %{"status_class" => "5xx"}})
+        |> render_change()
+
+      # El hook read-only NO haltea el filtro: es un evento de vista. La tabla
+      # de logs se refiltra (el pivote no depende del filtro de status).
+      refute html =~ "Esta vista es de solo lectura"
+      assert has_element?(view, "#logs-#{boom_log.id}")
+      refute has_element?(view, "#logs-#{ok_log.id}")
+
+      # Quitar el filtro vuelve a traer todo.
+      view
+      |> form("#service-stats-filter-form", %{"filter" => %{"status_class" => ""}})
+      |> render_change()
+
+      assert has_element?(view, "#logs-#{ok_log.id}")
+    end
+
+    test "logs:new lands in the stream and refreshes the summary coalesced", %{conn: conn} do
+      %{user: user, password: password} = register()
+      service = service() |> supervised(user)
+
+      conn = login(conn, user, password)
+      {:ok, view, _html} = live(conn, ~p"/services/supervised/#{service.id}")
+
+      assert render(element(view, "#kpi-requests")) =~ ~r/text-2xl font-bold[^>]*>\s*0\s*</
+
+      {:ok, log_one} = log_for(service, %{model_requested: "live-one"})
+      {:ok, log_two} = log_for(service, %{model_requested: "live-two"})
+
+      # El proxy publica `logs:new` por cada request; el summary se recomputa
+      # como mucho una vez por ventana de coalescing (2 s).
+      Phoenix.PubSub.broadcast(Tokengate.PubSub, "logs:new", {:new_log, log_one})
+      Phoenix.PubSub.broadcast(Tokengate.PubSub, "logs:new", {:new_log, log_two})
+
+      # La entrada al stream es inmediata…
+      assert has_element?(view, "#logs-#{log_one.id}")
+      assert has_element?(view, "#logs-#{log_two.id}")
+      # …y sólo hay un refresh pendiente.
+      assert assigns_of(view).summary_refresh_scheduled
+
+      # El TTL corto del DashboardCache es la ventana de staleness documentada
+      # del summary; aquí se fuerza el recompute para no medir el TTL.
+      DashboardCache.invalidate_all()
+
+      wait_for_assign(view, fn assigns -> assigns.summary.request_count == 2 end)
+
+      assert render(element(view, "#kpi-requests")) =~ ~r/text-2xl font-bold[^>]*>\s*2\s*</
+      refute assigns_of(view).summary_refresh_scheduled
+    end
+
+    test "the daily-series chart is gone; the model pivot replaces it", %{conn: conn} do
+      %{user: user, password: password} = register()
+      service = service() |> supervised(user)
+
+      conn = login(conn, user, password)
+      {:ok, view, html} = live(conn, ~p"/services/supervised/#{service.id}")
+
+      refute html =~ "Uso diario por modelo"
+      assert has_element?(view, "#service-model-breakdown-table")
+      assert has_element?(view, "#supervised-service-readonly")
+    end
   end
 
   # ----------------------------------------------------------------------

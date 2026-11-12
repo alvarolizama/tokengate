@@ -19,12 +19,18 @@ defmodule Tokengate.Logs do
   alias Tokengate.Repo
   alias Tokengate.Logs.RequestLog
   alias Tokengate.Accounts.GroupMember
+  alias Tokengate.Metrics.RequestMetricsHourly
 
   @default_limit 50
   @max_limit 500
   # CSV exports need far more rows than the paginated UI; a dedicated cap
   # keeps `list_logs/1` bounded at 500 while exports can stream up to 50k.
   @export_limit 50_000
+
+  # Hours the RollupWorker re-aggregates on every tick: buckets newer than this
+  # may be missing rows in `request_metrics_hourly`, so the hybrid lifetime
+  # aggregates read them from raw request_logs instead.
+  @rollup_tail_hours 3
 
   # Stats reads scan raw request_logs across whole windows; cold, they can
   # exceed the DBConnection default (15s) in production — that was the
@@ -145,10 +151,15 @@ defmodule Tokengate.Logs do
 
     RequestLog
     |> apply_log_filters(filters)
-    |> order_by([rl], desc: rl.inserted_at)
+    # Keyset order: the id tiebreak makes `before` a total order within a
+    # second (`inserted_at` is timestamp(0), so timestamps alone repeat).
+    |> order_by([rl], desc: rl.inserted_at, desc: rl.id)
     |> limit(^limit)
+    # Only the associations the log rows render: member (email) + its group
+    # (badge), the service name and the provider. The nested api_key preload
+    # was dead weight — the key column reads `api_key_prefix`/`api_key_id`.
     |> preload(group_member: [:user, :group])
-    |> preload(service: [:api_key])
+    |> preload(:service)
     |> preload(:provider)
     |> Repo.all()
   end
@@ -368,10 +379,32 @@ defmodule Tokengate.Logs do
     end
   end
 
+  # Keyset cursor for the paginated feeds. `inserted_at` is `timestamp(0)`, so
+  # a timestamp-only cursor either repeats or skips the rows that share the
+  # boundary second. `before` therefore accepts the `{inserted_at, id}` tuple
+  # the feeds carry — compared as a ROW, it walks the
+  # `(inserted_at DESC, id DESC)` index monotonically — and still accepts a
+  # bare DateTime for callers that only have the timestamp.
   defp maybe_before(query, filters) do
     case Map.get(filters, :before) || Map.get(filters, "before") do
-      nil -> query
-      before -> where(query, [rl], rl.inserted_at < ^before)
+      nil ->
+        query
+
+      {%DateTime{} = before_ts, before_id} when is_binary(before_id) ->
+        where(
+          query,
+          [rl],
+          fragment(
+            "(?, ?) < (?, ?)",
+            rl.inserted_at,
+            rl.id,
+            type(^before_ts, :utc_datetime),
+            type(^before_id, :binary_id)
+          )
+        )
+
+      %DateTime{} = before ->
+        where(query, [rl], rl.inserted_at < ^before)
     end
   end
 
@@ -1024,15 +1057,81 @@ defmodule Tokengate.Logs do
   dropped users whose membership was rotated away (the cascade deletes old
   `group_members` rows); grouping by the column keeps their lifetime spend
   visible, same subject-column semantics as `Credits.spend_grouped_users/2`.
+
+  Hybrid read: hours older than the rollup's fresh tail answer from
+  `request_metrics_hourly` (integer `cost_micro` sums) and only the last
+  #{@rollup_tail_hours}h come from raw `request_logs`. Disabled in the test env by
+  `config :tokengate, :stats_rollup, hybrid: false` (same flag as
+  `Metrics.StatsQueries`), which keeps fixtures with arbitrary dates raw.
   """
   @spec total_spend_by_user() :: %{term() => Decimal.t()}
   def total_spend_by_user do
+    if rollup_hybrid?() do
+      cutoff = rollup_cutoff()
+
+      # Closed hours from the rollup (integer micro-USD sums, thousands of
+      # rows) + the fresh tail from request_logs (the RollupWorker keeps
+      # re-aggregating the last @rollup_tail_hours, so anything from the cutoff
+      # on may still be missing there). Both halves are additive.
+      merge_spend_maps(
+        rollup_spend_by_user(cutoff),
+        raw_spend_by_user(cutoff)
+      )
+    else
+      raw_spend_by_user(nil)
+    end
+  end
+
+  defp raw_spend_by_user(nil) do
     RequestLog
     |> where([rl], not is_nil(rl.user_id))
     |> group_by([rl], rl.user_id)
-    |> select([rl], {rl.user_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
-    |> Repo.all()
+    |> select([rl], {rl.user_id, fragment("COALESCE(SUM(?::numeric), 0)", rl.provider_cost_usd)})
+    |> Repo.all(timeout: stats_timeout())
     |> Map.new(fn {user_id, cost} -> {user_id, Decimal.new(to_string(cost))} end)
+  end
+
+  defp raw_spend_by_user(%DateTime{} = from) do
+    RequestLog
+    |> where([rl], not is_nil(rl.user_id) and rl.inserted_at >= ^from)
+    |> group_by([rl], rl.user_id)
+    |> select([rl], {rl.user_id, fragment("COALESCE(SUM(?::numeric), 0)", rl.provider_cost_usd)})
+    |> Repo.all(timeout: stats_timeout())
+    |> Map.new(fn {user_id, cost} -> {user_id, Decimal.new(to_string(cost))} end)
+  end
+
+  # Rollup half: buckets strictly before the cutoff are complete (the worker
+  # re-aggregates the tail every minute), so `hour_utc < cutoff` never reads a
+  # partially-written bucket.
+  defp rollup_spend_by_user(%DateTime{} = cutoff) do
+    RequestMetricsHourly
+    |> where([m], not is_nil(m.user_id) and m.hour_utc < ^cutoff)
+    |> group_by([m], m.user_id)
+    |> select([m], {m.user_id, fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro)})
+    |> Repo.all(timeout: stats_timeout())
+    |> Map.new(fn {user_id, micro} -> {user_id, micro_to_usd(micro)} end)
+  end
+
+  defp merge_spend_maps(rollup, raw) do
+    Map.merge(rollup, raw, fn _user_id, a, b -> Decimal.add(a, b) end)
+  end
+
+  defp micro_to_usd(micro) when is_integer(micro) do
+    micro |> Decimal.new() |> Decimal.div(Decimal.new(1_000_000))
+  end
+
+  # Same convention as `Metrics.StatsQueries`: the test env disables the split
+  # (`stats_rollup: [hybrid: false]`) so fixtures with arbitrary dates answer
+  # from raw request_logs without depending on the rollup worker.
+  defp rollup_hybrid? do
+    Application.get_env(:tokengate, :stats_rollup, [])[:hybrid] != false
+  end
+
+  # Freshness cut aligned to the hour: buckets >= this instant are re-read from
+  # request_logs. Aligning avoids the half-covered bucket at the boundary.
+  defp rollup_cutoff do
+    DateTime.add(DateTime.utc_now(), -@rollup_tail_hours * 3600, :second)
+    |> Map.merge(%{minute: 0, second: 0, microsecond: {0, 0}})
   end
 
   @doc """

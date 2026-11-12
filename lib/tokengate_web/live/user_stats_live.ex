@@ -208,7 +208,9 @@ defmodule TokengateWeb.UserStatsLive do
 
       _ ->
         oldest = List.last(logs)
-        assign(socket, :cursor, oldest.inserted_at)
+        # Tuple cursor: `inserted_at` is timestamp(0), so a timestamp alone
+        # repeats/skips the rows sharing the boundary second.
+        assign(socket, :cursor, {oldest.inserted_at, oldest.id})
     end
   end
 

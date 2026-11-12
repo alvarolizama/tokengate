@@ -91,30 +91,16 @@ defmodule TokengateWeb.UsersLive do
   @sort_columns ~w(name role status groups credit monthly_spend total_spend inserted_at)a
 
   defp load_users(socket) do
-    search = socket.assigns[:search_query] || ""
     timezone = socket.assigns[:timezone] || "Etc/UTC"
-    users = Accounts.list_users()
-
-    filtered =
-      if search == "" do
-        users
-      else
-        search_lower = String.downcase(search)
-
-        Enum.filter(users, fn u ->
-          String.contains?(String.downcase(u.name || ""), search_lower) or
-            String.contains?(String.downcase(u.email), search_lower)
-        end)
-      end
+    sort_field = socket.assigns.sort_field
+    sort_direction = socket.assigns.sort_direction
 
     # Both spend maps are whole-table aggregates over request_logs (the
-    # lifetime one groups every partition) and `load_users/1` re-runs on
-    # every search keystroke, sort click and filter toggle. Cache them in
-    # DashboardCache so interactive events reuse one shared entry
-    # per timezone instead of re-scanning the log table per event — same
-    # pattern as DashboardLive. The lifetime total gets its own 60s TTL:
-    # it is the most expensive scan of the page and lifetime spend barely
-    # moves in 5 seconds.
+    # lifetime one groups every partition). Cache them in DashboardCache so
+    # interactive events reuse one shared entry per timezone instead of
+    # re-scanning the log table per event — same pattern as DashboardLive.
+    # The lifetime total gets its own 60s TTL: it is the most expensive scan of
+    # the page and lifetime spend barely moves in 5 seconds.
     spend_by_user =
       DashboardCache.fetch_or_compute({:users_spend_by_user, timezone}, fn ->
         Tokengate.Budgets.spend_by_user(timezone)
@@ -127,50 +113,60 @@ defmodule TokengateWeb.UsersLive do
         ttl: 60_000
       )
 
-    user_groups = load_user_groups(filtered)
+    # Search, count, page and the "spent today" filter are resolved in the DB:
+    # the previous path pulled the newest 500 full rows into the BEAM and
+    # filtered/ordered/sliced them on every keystroke.
+    page =
+      Accounts.list_users_page(
+        search: socket.assigns[:search_query] || "",
+        page: socket.assigns.page,
+        per_page: socket.assigns.per_page,
+        sort_field: sort_field,
+        sort_direction: sort_direction,
+        spent_since: spent_since(socket)
+      )
+
+    users = page.entries
+    user_ids = Enum.map(users, & &1.id)
+
+    # One query for every page user's memberships, reused for both the group
+    # badges and the credit column (it used to load the same rows twice).
+    memberships = Accounts.list_users_with_memberships(user_ids)
+    user_groups = groups_from_memberships(user_ids, memberships)
 
     # Conteo de claves activas por usuario — misma columna «Claves» que la
     # tabla de servicios, en una sola query (nada de N+1 por fila).
-    keys_counts = Accounts.count_active_api_keys_by_user(Enum.map(filtered, & &1.id))
+    keys_counts = Accounts.count_active_api_keys_by_user(user_ids)
 
     # Límite de gasto efectivo por usuario (propio o heredado del perfil de límites) más el
     # gasto del mes. En lote: una query por sujeto, nunca una por membresía.
-    users_credit =
-      DashboardCache.fetch_or_compute(
-        {:users_credit_by_user, Enum.map(filtered, & &1.id)},
-        fn -> load_users_credit(filtered) end
-      )
+    users_credit = users_credit(users, memberships)
 
-    # Filter by today's spend when toggle is active
-    filtered =
-      if socket.assigns.filter_today_spend do
-        Enum.filter(filtered, fn u ->
-          case Map.get(spend_by_user, u.id) do
-            %{daily_usd: d} -> Decimal.compare(d, Decimal.new(0)) == :gt
-            _ -> false
-          end
-        end)
+    # SQL sorts (name/role/status/inserted_at) are already global; the
+    # aggregate-backed columns are ordered in memory over the page.
+    #
+    # LIMITATION: `credit`, `groups`, `monthly_spend` and `total_spend` are
+    # computed outside Postgres (aggregates + credits engine), so paging in the
+    # DB cannot order by them. Those four columns are sorted WITHIN the current
+    # page only — the page slice itself comes from the DB in name order. Making
+    # them global again would need the aggregate as a SQL join, which is a much
+    # larger change than this table justifies.
+    sorted_users =
+      if sort_field in Accounts.user_page_sql_sorts() do
+        users
       else
-        filtered
+        sort_users(
+          users,
+          sort_field,
+          sort_direction,
+          %{
+            spend_by_user: spend_by_user,
+            total_spend_by_user: total_spend_by_user,
+            user_groups: user_groups,
+            users_credit: users_credit
+          }
+        )
       end
-
-    sort_ctx = %{
-      spend_by_user: spend_by_user,
-      total_spend_by_user: total_spend_by_user,
-      user_groups: user_groups,
-      users_credit: users_credit
-    }
-
-    sorted =
-      sort_users(filtered, socket.assigns.sort_field, socket.assigns.sort_direction, sort_ctx)
-
-    total_count = length(sorted)
-    total_pages = max(1, div(total_count + socket.assigns.per_page - 1, socket.assigns.per_page))
-
-    # La página pedida se recorta al rango vigente: al filtrar, ordenar o
-    # borrar usuarios la última página puede quedarse sin filas.
-    page = socket.assigns.page |> max(1) |> min(total_pages)
-    page_rows = Enum.slice(sorted, (page - 1) * socket.assigns.per_page, socket.assigns.per_page)
 
     socket
     |> assign(:spend_by_user, spend_by_user)
@@ -178,17 +174,27 @@ defmodule TokengateWeb.UsersLive do
     |> assign(:user_groups, user_groups)
     |> assign(:keys_counts, keys_counts)
     |> assign(:users_credit, users_credit)
-    |> assign(:users_empty?, sorted == [])
-    |> assign(:page, page)
-    |> assign(:total_count, total_count)
-    |> assign(:total_pages, total_pages)
-    |> stream(:users, page_rows, reset: true)
+    |> assign(:users_empty?, page.total == 0)
+    |> assign(:page, page.page)
+    |> assign(:total_count, page.total)
+    |> assign(:total_pages, page.total_pages)
+    |> stream(:users, sorted_users, reset: true)
   end
 
-  defp load_user_groups(users) do
-    users
-    |> Enum.map(& &1.id)
-    |> Accounts.list_groups_by_user_ids()
+  # "Spend today" toggle: the same local-day window the spend map reports, so
+  # the filtered set and the rendered column agree.
+  defp spent_since(socket) do
+    if socket.assigns.filter_today_spend do
+      timezone = socket.assigns[:timezone] || "Etc/UTC"
+      Tokengate.Periods.start_of_day_utc(timezone)
+    end
+  end
+
+  defp groups_from_memberships(user_ids, memberships) do
+    Map.new(user_ids, fn id ->
+      groups = memberships |> Map.get(id, []) |> Enum.map(& &1.group) |> Enum.reject(&is_nil/1)
+      {id, groups}
+    end)
   end
 
   ## Sorting ---------------------------------------------------------------
@@ -250,8 +256,39 @@ defmodule TokengateWeb.UsersLive do
   # El usuario hereda el techo del presupuesto mensual al que pertenece si no
   # define el suyo; sin presupuesto mensual el sujeto es él mismo y su único
   # camino de gasto son sus top-ups.
-  defp load_users_credit(users) do
-    memberships = Tokengate.Accounts.list_users_with_memberships(Enum.map(users, & &1.id))
+  #
+  # Cache PER SUBJECT: the old key embedded the whole id list, so any search
+  # keystroke, sort or page change minted a new key and always missed. With one
+  # entry per user a warm page is pure hits, and a cold page pays a single
+  # batched load (never one query per row).
+  @credit_ttl_ms 5_000
+
+  defp users_credit(users, memberships) do
+    {hits, missed} =
+      Enum.reduce(users, {%{}, []}, fn user, {hits, missed} ->
+        case DashboardCache.fetch({:user_credit, user.id}) do
+          {:ok, credit} -> {Map.put(hits, user.id, credit), missed}
+          :miss -> {hits, [user | missed]}
+        end
+      end)
+
+    case missed do
+      [] ->
+        hits
+
+      missed ->
+        computed = load_users_credit(Enum.reverse(missed), memberships)
+
+        Enum.each(computed, fn {id, credit} ->
+          DashboardCache.put({:user_credit, id}, credit, @credit_ttl_ms)
+        end)
+
+        Map.merge(hits, computed)
+    end
+  end
+
+  defp load_users_credit(users, memberships) do
+    memberships = Map.take(memberships, Enum.map(users, & &1.id))
 
     summaries =
       memberships

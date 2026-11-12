@@ -4,9 +4,14 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
 
   This is the drill-down of `/services/supervised`: the summary card answers
   "how is this service doing?" in one line, and this page answers "what exactly
-  happened?" — period selector, KPI strip, daily usage per model, per-model
-  breakdown, status classes, recent requests and the read-only configuration
-  (API key prefix, limits, granted models, who else supervises it).
+  happened?" — the same stats body the admin sees at `/stats/services/:id`
+  (API key selector, KPI strip, per-key table, model × key pivot, log filters
+  and request stream), plus the read-only configuration (API key prefix,
+  limits, granted models) and who else supervises it.
+
+  El cuerpo de stats vive en `TokengateWeb.ServiceStatsBody` — una sola fuente
+  de markup, carga y helpers para las dos vistas. Este módulo sólo se queda con
+  el header, el badge de solo lectura, el acceso por supervisión y el realtime.
 
   ## Access
 
@@ -20,30 +25,30 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
   ## Read-only contract
 
   Same as the list view: no mutation callback exists, and the `:read_only` hook
-  halts every event except the read-only allowlist (`load_more` pagination and
-  the app-wide `set-timezone` selector). The period is switched through
-  `patch` navigation, which does not go through events at all.
+  halts every event except the read-only allowlist (`load_more` pagination, the
+  app-wide `set-timezone` selector and the two view-only filters of the shared
+  body: `set_key` and `filter`). The period is switched through `patch`
+  navigation, which does not go through events at all.
   """
 
   use TokengateWeb, :live_view
 
-  import TokengateWeb.KpiHelpers, only: [metric_tile: 1]
-
   alias Tokengate.Accounts
-  alias Tokengate.Logs
-  alias Tokengate.Metrics.DashboardCache
-  alias Tokengate.Metrics.Rollup
-  alias Tokengate.Periods
   alias Tokengate.Providers
   alias Tokengate.Repo
-  alias TokengateWeb.StatsHelpers, as: Stats
+  alias TokengateWeb.ServiceStatsBody
 
-  import TokengateWeb.StatsHelpers, only: [period_label: 1, period_selector: 1]
+  import TokengateWeb.StatsHelpers, only: [period_label: 1]
 
   @default_period "30d"
   @page_size 25
-  # Events that do not touch service state and stay allowed on a read-only page.
-  @allowed_events ["load_more", "set-timezone"]
+  @summary_refresh_interval_ms 2_000
+
+  # Events that do not touch service state and stay allowed on a read-only
+  # page: pagination, the app-wide timezone selector and the view-only filters
+  # of the shared stats body (key scope + log filters). Everything else is
+  # halted by the hook.
+  @allowed_events ["load_more", "set-timezone", "set_key", "filter"]
 
   @impl true
   def mount(%{"service_id" => service_id}, _session, socket) do
@@ -60,6 +65,10 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
               Tokengate.PubSub,
               Accounts.supervised_services_topic(user.id)
             )
+
+            # Same realtime feed as the admin view: new requests land in the
+            # stream and coalesce a summary recompute.
+            Phoenix.PubSub.subscribe(Tokengate.PubSub, "logs:new")
           end
 
           granted_models = Providers.granted_models_by_service([service.id])
@@ -76,12 +85,21 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
            )
            |> assign(:supervisors, Accounts.service_supervisors(service.id))
            |> assign(:period, @default_period)
-           |> assign(:summary, empty_summary())
-           |> assign(:model_rows, [])
-           |> assign(:series, %{days: [], series: %{}})
-           |> assign(:series_labels, [])
+           |> assign(:timezone, socket.assigns[:timezone] || "Etc/UTC")
+           # Todas las keys del servicio (revocadas incluidas) — la fuente de
+           # las filas de la tabla de API keys del cuerpo compartido.
+           |> assign(:service_api_keys, Accounts.list_api_keys_for_service_all(service.id))
+           |> assign(:key_filter, "all")
+           |> assign(:key_filter_form, to_form(%{"key_id" => "all"}, as: :key_filter))
+           |> assign(:summary, ServiceStatsBody.default_summary())
+           |> assign(:key_rows, [])
+           |> assign(:model_breakdown, %{rows: [], key_labels: %{}})
+           |> assign(:filters, ServiceStatsBody.default_filters())
+           |> assign(:form, to_form(ServiceStatsBody.default_filters(), as: :filter))
            |> assign(:cursor, nil)
            |> assign(:has_more, false)
+           |> assign(:page_size, @page_size)
+           |> assign(:summary_refresh_scheduled, false)
            |> attach_read_only_hook()}
         else
           {:ok, deny(socket, gettext("You do not supervise that service."))}
@@ -145,14 +163,83 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
     end
   end
 
+  ## Real-time -------------------------------------------------------------
+
+  ## Same feed and coalescing as the admin view: only logs of THIS service that
+  ## pass the active filters/key scope enter the stream, and at most one
+  ## summary recompute per interval per connected LiveView.
+  def handle_info({:new_log, log}, socket) do
+    if log.service_id == socket.assigns.service.id and
+         ServiceStatsBody.log_matches_filters?(
+           log,
+           socket.assigns.filters,
+           socket.assigns.timezone,
+           socket.assigns.key_filter
+         ) do
+      socket = stream_insert(socket, :logs, log, at: 0)
+
+      socket =
+        if socket.assigns[:summary_refresh_scheduled] do
+          socket
+        else
+          Process.send_after(self(), :refresh_summary, @summary_refresh_interval_ms)
+          assign(socket, :summary_refresh_scheduled, true)
+        end
+
+      {:noreply, socket}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_info(:refresh_summary, socket) do
+    {:noreply,
+     socket
+     |> assign(:summary_refresh_scheduled, false)
+     |> ServiceStatsBody.load_stats()}
+  end
+
   def handle_info(_msg, socket), do: {:noreply, socket}
 
   ## Events ---------------------------------------------------------------
 
   @impl true
+  def handle_event("set_key", %{"key_filter" => %{"key_id" => key_id}}, socket) do
+    known_ids = MapSet.new(socket.assigns.service_api_keys, & &1.id)
+
+    if key_id == "all" or MapSet.member?(known_ids, key_id) do
+      {:noreply,
+       socket
+       |> assign(:key_filter, key_id)
+       |> assign(:key_filter_form, to_form(%{"key_id" => key_id}, as: :key_filter))
+       |> ServiceStatsBody.load_stats()
+       |> ServiceStatsBody.load_logs(:reset)}
+    else
+      {:noreply, socket}
+    end
+  end
+
+  def handle_event("set_key", _params, socket), do: {:noreply, socket}
+
+  def handle_event("filter", params, socket) do
+    filter_params =
+      params
+      |> Map.get("filter", %{})
+      |> then(&Map.merge(ServiceStatsBody.default_filters(), &1))
+
+    socket =
+      socket
+      |> assign(:filters, filter_params)
+      |> assign(:form, to_form(filter_params, as: :filter))
+      |> assign(:cursor, nil)
+      |> ServiceStatsBody.load_logs(:reset)
+
+    {:noreply, socket}
+  end
+
   def handle_event("load_more", _params, socket) do
     if socket.assigns.has_more do
-      {:noreply, load_logs(socket, :more)}
+      {:noreply, ServiceStatsBody.load_logs(socket, :more)}
     else
       {:noreply, socket}
     end
@@ -161,110 +248,12 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
   ## Data loading ---------------------------------------------------------
 
   defp load_bundle(socket) do
-    service = socket.assigns.service
-    timezone = socket.assigns[:timezone] || "Etc/UTC"
-    period = socket.assigns.period
-    bounds = Periods.period_bounds(period, timezone)
-
-    # The summary bundle (cost/tokens/status/top models + the 5-min window) is
-    # the expensive part; the DashboardCache shares it across every viewer of
-    # this service+period for ~5s.
-    summary =
-      DashboardCache.fetch_or_compute(
-        {:supervised_service_stats, service.id, period, timezone},
-        fn -> Logs.service_stats(service.id, from: bounds.from, to: bounds.to) end
-      )
-
-    model_rows =
-      Rollup.breakdown_by_model(nil,
-        service_id: service.id,
-        from: bounds.from,
-        to: bounds.to
-      )
-
-    daily =
-      Rollup.daily_series_by_model_for_service(service.id,
-        from: bounds.from,
-        to: bounds.to,
-        timezone: timezone
-      )
-
     socket
-    |> assign(:summary, summary)
-    |> assign(:model_rows, model_rows)
-    |> assign(:series, Stats.pivot_daily_series(daily))
-    |> assign(:series_labels, daily |> Enum.map(& &1.label) |> Enum.uniq() |> Enum.sort())
-    |> load_logs(:reset)
-  end
-
-  # Recent activity is a "what is happening right now" feed, deliberately not
-  # scoped to the selected period window (the period drives the aggregates
-  # above). Cursor pagination on `inserted_at`, newest first.
-  defp load_logs(socket, mode) do
-    base = %{"service_id" => socket.assigns.service.id, "limit" => @page_size}
-
-    filters =
-      case {mode, socket.assigns.cursor} do
-        {:more, %DateTime{} = cursor} -> Map.put(base, "before", cursor)
-        _ -> base
-      end
-
-    logs = Logs.list_logs(filters)
-
-    socket =
-      socket
-      |> assign(:has_more, length(logs) == @page_size)
-      |> then(fn s ->
-        if mode == :reset, do: stream(s, :logs, logs, reset: true), else: stream(s, :logs, logs)
-      end)
-
-    case List.last(logs) do
-      nil -> socket
-      oldest -> assign(socket, :cursor, oldest.inserted_at)
-    end
-  end
-
-  defp empty_summary do
-    %{
-      total_cost_usd: Decimal.new(0),
-      total_prompt_tokens: 0,
-      total_completion_tokens: 0,
-      total_cache_read_tokens: 0,
-      total_cache_creation_tokens: 0,
-      request_count: 0,
-      avg_latency_ms: nil,
-      avg_ttft_ms: nil,
-      avg_tps: nil,
-      status_breakdown: %{"2xx" => 0, "4xx" => 0, "5xx" => 0},
-      top_models: [],
-      last_request_at: nil,
-      realtime_5min: %{request_count: 0, error_count: 0, avg_latency_ms: nil, error_rate: 0.0}
-    }
+    |> ServiceStatsBody.load_stats()
+    |> ServiceStatsBody.load_logs(:reset)
   end
 
   ## Template helpers -----------------------------------------------------
-
-  # Cifras por debajo del centavo con precisión adaptativa (hasta 6
-  # decimales, en Decimal): un "$0.00" —o un "$0.0000"— redondeado se lee
-  # como "no gastó nada" en servicios pequeños.
-  defp format_cost(%Decimal{} = d), do: Stats.money(d)
-
-  defp format_cost(_), do: "$0.00"
-
-  defp error_rate(0, _errors), do: nil
-  defp error_rate(requests, errors), do: Float.round(errors / requests, 4)
-
-  defp error_rate_label(requests, errors) do
-    case error_rate(requests, errors) do
-      nil -> gettext("no requests")
-      rate -> "#{Stats.format_percent(rate)} de error"
-    end
-  end
-
-  defp status_total(%{"2xx" => a, "4xx" => b, "5xx" => c}), do: a + b + c
-
-  defp status_share(_count, 0), do: "0%"
-  defp status_share(count, total), do: Stats.format_percent(count / total)
 
   defp limit_label(%{unlimited_spend: true}), do: gettext("Unlimited credit")
 
@@ -278,22 +267,6 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
 
   defp supervisor_label(%{user: %{email: email}}), do: email
   defp supervisor_label(_), do: "—"
-
-  defp status_badge(code) when is_integer(code) and code >= 200 and code < 300,
-    do: "badge-success"
-
-  defp status_badge(code) when is_integer(code) and code >= 400 and code < 500,
-    do: "badge-warning"
-
-  defp status_badge(code) when is_integer(code) and code >= 500 and code < 600, do: "badge-error"
-  defp status_badge(_), do: "badge-ghost"
-
-  defp model_display(req, resp) do
-    cond do
-      is_binary(resp) and resp != "" and resp != req -> "#{req} → #{resp}"
-      true -> req || "—"
-    end
-  end
 
   ## Render ---------------------------------------------------------------
 
@@ -337,272 +310,29 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
               Presupuesto: {limit_label(@service)} · {period_label(@period)}
             </p>
           </div>
-
-          <.period_selector
-            target={~p"/services/supervised/#{@service.id}"}
-            period={@period}
-            id="period-selector"
-          />
         </header>
 
-        <%!-- KPI strip for the selected period --%>
-        <div class="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
-          <.metric_tile
-            id="kpi-cost"
-            label={gettext("Actual spend")}
-            value={format_cost(@summary.total_cost_usd)}
-            icon="hero-currency-dollar"
-            accent="success"
-            sub={period_label(@period)}
-          />
-          <.metric_tile
-            id="kpi-requests"
-            label="Requests"
-            value={Stats.format_number(@summary.request_count)}
-            icon="hero-bolt"
-            accent="primary"
-            sub={"#{@summary.realtime_5min.request_count} en 5 min"}
-          />
-          <.metric_tile
-            id="kpi-input"
-            label={gettext("Tokens in")}
-            value={Stats.format_compact(@summary.total_prompt_tokens)}
-            icon="hero-arrow-down-tray"
-            accent="accent"
-            sub={"cache hit #{Stats.cache_hit_pct(@summary.total_prompt_tokens, @summary.total_cache_read_tokens)}"}
-          />
-          <.metric_tile
-            id="kpi-output"
-            label={gettext("Tokens out")}
-            value={Stats.format_compact(@summary.total_completion_tokens)}
-            icon="hero-arrow-up-tray"
-            accent="warning"
-            sub={"#{Stats.format_tps(@summary.avg_tps)} tps"}
-          />
-          <.metric_tile
-            id="kpi-errors"
-            label={gettext("Errors")}
-            value={
-              Stats.format_number(@summary.status_breakdown["4xx"] + @summary.status_breakdown["5xx"])
-            }
-            icon="hero-exclamation-triangle"
-            accent={
-              if(@summary.status_breakdown["4xx"] + @summary.status_breakdown["5xx"] > 0,
-                do: "error",
-                else: "neutral"
-              )
-            }
-            sub={
-              error_rate_label(
-                @summary.request_count,
-                @summary.status_breakdown["5xx"] + @summary.status_breakdown["4xx"]
-              )
-            }
-          />
-          <.metric_tile
-            id="kpi-latency"
-            label="Latencia media"
-            value={Stats.format_ms(@summary.avg_latency_ms)}
-            icon="hero-clock"
-            accent="neutral"
-            sub={
-              gettext("last request:") <> " " <>
-                Stats.format_dt(@summary.last_request_at, @timezone)
-            }
-          />
-        </div>
-
-        <%!-- Daily usage per model --%>
-        <div :if={@series.days != []} class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body p-4 gap-2">
-            <div class="flex items-center justify-between">
-              <h2 class="card-title text-base">
-                <.icon name="hero-chart-bar" class="w-5 h-5 text-base-content/60" />
-                {gettext("Daily usage per model")}
-              </h2>
-              <span class="text-[10px] text-base-content/40 hidden sm:inline">
-                {period_label(@period)}
-              </span>
-            </div>
-
-            <% max = Stats.daily_series_max(@series) %>
-            <div class="flex gap-4 mt-2">
-              <div class="flex-1">
-                <div class="flex items-end gap-px h-32">
-                  <div
-                    :for={day <- @series.days}
-                    class="flex-1 flex flex-col items-center justify-end h-full group relative"
-                  >
-                    <div class="hidden group-hover:block absolute -top-1 -translate-y-full left-1/2 -translate-x-1/2 z-20 pointer-events-none">
-                      <div class="bg-base-300 text-base-content text-[10px] rounded-md px-2 py-1 shadow-lg whitespace-nowrap">
-                        <div class="font-semibold">{Calendar.strftime(day, "%d %b")}</div>
-                        <div :for={label <- @series_labels} class="flex justify-between gap-2">
-                          <span class="truncate max-w-[100px]">{label}</span>
-                          <span class="tabular-nums">
-                            {Stats.format_number(Map.get(@series.series[label] || %{}, day, 0))}
-                          </span>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div class="w-full flex flex-col-reverse rounded-t overflow-hidden">
-                      <div
-                        :for={label <- @series_labels}
-                        class={[
-                          "w-full",
-                          Stats.sparkline_color(Enum.find_index(@series_labels, &(&1 == label)) || 0)
-                        ]}
-                        style={"height: #{Stats.sparkline_bar_height(Map.get(@series.series[label] || %{}, day, 0), max)}%"}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                <div class="flex gap-px mt-1">
-                  <span
-                    :for={day <- @series.days}
-                    class="flex-1 text-center text-[9px] text-base-content/40"
-                  >
-                    {Calendar.strftime(day, "%d")}
-                  </span>
-                </div>
-              </div>
-
-              <div class="w-40 shrink-0 border-l border-base-300 pl-3">
-                <div class="text-[10px] font-semibold text-base-content/60 uppercase tracking-wide mb-2">
-                  {gettext("Models")}
-                </div>
-                <div class="space-y-1.5">
-                  <div
-                    :for={{label, idx} <- Enum.with_index(@series_labels)}
-                    class="flex items-center gap-1.5"
-                  >
-                    <span class={["w-2 h-2 rounded-sm shrink-0", Stats.sparkline_color(idx)]} />
-                    <span class="text-[10px] truncate flex-1">{label}</span>
-                    <span class="text-[9px] text-base-content/50 shrink-0">
-                      {Stats.format_number(Stats.sparkline_label_total(@series.series[label] || %{}))}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
-          <%!-- Status classes --%>
-          <div class="card bg-base-100 border border-base-300 shadow-sm" id="status-breakdown">
-            <div class="card-body p-4 gap-2">
-              <h3 class="card-title text-sm">
-                <strong>{gettext("States")}</strong> · {period_label(@period)}
-              </h3>
-              <%= for {class, badge} <- [{"2xx", "badge-success"}, {"4xx", "badge-warning"}, {"5xx", "badge-error"}] do %>
-                <div class="flex items-center justify-between text-sm">
-                  <span class={"badge badge-sm #{badge}"}>{class}</span>
-                  <span class="flex items-center gap-3">
-                    <span class="font-mono">
-                      {Stats.format_number(@summary.status_breakdown[class])}
-                    </span>
-                    <span class="text-xs text-base-content/40 tabular-nums w-12 text-right">
-                      {status_share(
-                        @summary.status_breakdown[class],
-                        status_total(@summary.status_breakdown)
-                      )}
-                    </span>
-                  </span>
-                </div>
-              <% end %>
-            </div>
-          </div>
-
-          <%!-- Top models --%>
-          <div class="card bg-base-100 border border-base-300 shadow-sm" id="top-models">
-            <div class="card-body p-4 gap-2">
-              <h3 class="card-title text-sm">Top modelos · {period_label(@period)}</h3>
-              <%= if @summary.top_models == [] do %>
-                <p class="text-xs text-base-content/40">{gettext("No requests in the period.")}</p>
-              <% else %>
-                <ol class="space-y-1">
-                  <li
-                    :for={row <- @summary.top_models}
-                    class="flex items-center justify-between text-sm"
-                  >
-                    <span class="font-mono truncate">{row.model_requested || "—"}</span>
-                    <span class="badge badge-sm badge-ghost">
-                      {Stats.format_number(row.count)}
-                    </span>
-                  </li>
-                </ol>
-              <% end %>
-            </div>
-          </div>
-
-          <%!-- Who else supervises it --%>
-          <div class="card bg-base-100 border border-base-300 shadow-sm" id="service-supervisors">
-            <div class="card-body p-4 gap-2">
-              <h3 class="card-title text-sm">{gettext("Service supervisors")}</h3>
-              <ul class="space-y-1">
-                <li
-                  :for={supervisor <- @supervisors}
-                  id={"service-supervisor-#{supervisor.user_id}"}
-                  class="flex items-center gap-2 text-sm"
-                >
-                  <.icon name="hero-user" class="w-4 h-4 text-base-content/40" />
-                  <span class="truncate">{supervisor_label(supervisor)}</span>
-                </li>
-              </ul>
-              <p class="text-xs text-base-content/40">
-                {gettext("The assignment is managed by an administrator from Services.")}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <%!-- Per-model breakdown --%>
-        <div class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body">
-            <h2 class="card-title text-base">
-              <.icon name="hero-rectangle-stack" class="w-5 h-5 text-base-content/60" />
-              Modelos usados · {period_label(@period)}
-            </h2>
-            <%= if @model_rows == [] do %>
-              <p class="text-sm text-base-content/40 py-6 text-center" id="model-rows-empty">
-                {gettext("No data for this period.")}
-              </p>
-            <% else %>
-              <div class="overflow-x-auto mt-3">
-                <table class="table table-sm" id="model-rows">
-                  <thead>
-                    <tr>
-                      <th>{gettext("Model")}</th>
-                      <th class="text-right">Requests</th>
-                      <th class="text-right">{gettext("Cost")}</th>
-                      <th class="text-right">Tokens in</th>
-                      <th class="text-right">Tokens out</th>
-                      <th class="text-right">Cache %</th>
-                      <th class="text-right">TPS</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <tr :for={row <- @model_rows} id={"model-row-#{row.model_id || "unknown"}"}>
-                      <td class="font-medium">{row.model_name}</td>
-                      <td class="text-right font-mono">{Stats.format_number(row.request_count)}</td>
-                      <td class="text-right font-mono">${Stats.format_decimal(row.cost_usd)}</td>
-                      <td class="text-right font-mono">{Stats.format_number(row.prompt_tokens)}</td>
-                      <td class="text-right font-mono">
-                        {Stats.format_number(row.completion_tokens)}
-                      </td>
-                      <td class="text-right font-mono">
-                        {Stats.cache_hit_pct(row.prompt_tokens, row.cache_read_tokens)}
-                      </td>
-                      <td class="text-right font-mono">{Stats.format_tps(row.avg_tps)}</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-            <% end %>
-          </div>
-        </div>
+        <%!-- Stats body shared with the admin view: key selector, KPIs, per-key
+        table, model × key pivot, log filters and the request stream. --%>
+        <ServiceStatsBody.panel
+          service={@service}
+          service_api_keys={@service_api_keys}
+          key_filter_form={@key_filter_form}
+          summary={@summary}
+          key_rows={@key_rows}
+          model_breakdown={@model_breakdown}
+          period={@period}
+          period_target={~p"/services/supervised/#{@service.id}"}
+          timezone={@timezone}
+          form={@form}
+          streams={@streams}
+          has_more={@has_more}
+          logs_id="supervised-service-logs"
+          logs_empty_text={gettext("This service has no requests yet.")}
+          load_more_id="load-more-supervised-logs"
+          show_service_summary={false}
+          compact_numbers={true}
+        />
 
         <%!-- Read-only configuration --%>
         <div class="card bg-base-100 border border-base-300 shadow-sm" id="service-config">
@@ -678,72 +408,23 @@ defmodule TokengateWeb.SupervisedServiceStatsLive do
           </div>
         </div>
 
-        <%!-- Recent requests --%>
-        <div class="card bg-base-100 border border-base-300 shadow-sm">
-          <div class="card-body">
-            <h2 class="card-title text-base">
-              <.icon name="hero-bars-3-bottom-left" class="w-5 h-5 text-base-content/60" />
-              {gettext("Recent activity")}
-            </h2>
-            <p class="text-xs text-base-content/60">
-              {gettext("Last requests of the service, not filtered by period.")}
-            </p>
-
-            <div class="overflow-x-auto mt-3">
-              <table class="table table-sm">
-                <thead>
-                  <tr>
-                    <th>{gettext("Date")}</th>
-                    <th>{gettext("Model")}</th>
-                    <th>{gettext("Status")}</th>
-                    <th class="text-right">Input</th>
-                    <th class="text-right">Output</th>
-                    <th class="text-right">{gettext("Cost")}</th>
-                    <th class="text-right">{gettext("Latency")}</th>
-                  </tr>
-                </thead>
-                <tbody id="supervised-service-logs" phx-update="stream">
-                  <tr id="supervised-service-logs-empty" class="hidden only:table-row">
-                    <td colspan="7" class="text-center py-8 text-base-content/40">
-                      {gettext("This service has no requests yet.")}
-                    </td>
-                  </tr>
-                  <tr :for={{id, log} <- @streams.logs} id={id}>
-                    <td class="whitespace-nowrap text-sm">
-                      {Stats.format_dt(log.inserted_at, @timezone)}
-                    </td>
-                    <td class="text-sm">
-                      {model_display(log.model_requested, log.model_responded)}
-                    </td>
-                    <td>
-                      <span class={"badge badge-sm #{status_badge(log.status_code)}"}>
-                        {log.status_code}
-                      </span>
-                    </td>
-                    <td class="text-right text-sm">{Stats.format_number(log.prompt_tokens || 0)}</td>
-                    <td class="text-right text-sm">
-                      {Stats.format_number(log.completion_tokens || 0)}
-                    </td>
-                    <td class="text-right text-sm font-mono">
-                      ${Stats.format_decimal(log.provider_cost_usd || 0)}
-                    </td>
-                    <td class="text-right text-sm">
-                      {Stats.format_ms(log.latency_ms)}
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            <div :if={@has_more} class="flex justify-center mt-3">
-              <button
-                phx-click="load_more"
-                class="btn btn-ghost btn-sm"
-                id="load-more-supervised-logs"
+        <%!-- Who else supervises it --%>
+        <div class="card bg-base-100 border border-base-300 shadow-sm" id="service-supervisors">
+          <div class="card-body p-4 gap-2">
+            <h3 class="card-title text-sm">{gettext("Service supervisors")}</h3>
+            <ul class="space-y-1">
+              <li
+                :for={supervisor <- @supervisors}
+                id={"service-supervisor-#{supervisor.user_id}"}
+                class="flex items-center gap-2 text-sm"
               >
-                {gettext("Load more")}
-              </button>
-            </div>
+                <.icon name="hero-user" class="w-4 h-4 text-base-content/40" />
+                <span class="truncate">{supervisor_label(supervisor)}</span>
+              </li>
+            </ul>
+            <p class="text-xs text-base-content/40">
+              {gettext("The assignment is managed by an administrator from Services.")}
+            </p>
           </div>
         </div>
       </div>

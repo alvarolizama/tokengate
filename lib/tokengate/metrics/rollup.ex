@@ -289,6 +289,7 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_join_group(group_id)
       |> maybe_service_id(Keyword.get(opts, :service_id))
       |> maybe_provider_id(Keyword.get(opts, :provider_id))
+      |> maybe_model_id(Keyword.get(opts, :model_id))
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
@@ -418,6 +419,8 @@ defmodule Tokengate.Metrics.Rollup do
       |> join(:left, [member: tm], t in assoc(tm, :group), as: :group)
       |> join(:left, [rl], u in Tokengate.Accounts.User, on: rl.user_id == u.id, as: :user)
       |> maybe_member_group_filter(group_id)
+      |> maybe_model_id(Keyword.get(opts, :model_id))
+      |> maybe_provider_id(Keyword.get(opts, :provider_id))
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
@@ -753,6 +756,7 @@ defmodule Tokengate.Metrics.Rollup do
       |> join(:inner, [rl], tm in GroupMember, on: rl.group_member_id == tm.id)
       |> join(:inner, [_, tm], t in assoc(tm, :group))
       |> maybe_provider_id(Keyword.get(opts, :provider_id))
+      |> maybe_model_id(Keyword.get(opts, :model_id))
       |> maybe_from(from)
       |> maybe_to(to)
       |> maybe_member_ids(Keyword.get(opts, :member_ids))
@@ -2349,6 +2353,8 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_rollup_to(to)
       |> maybe_rollup_member_ids(member_ids)
       |> maybe_rollup_user_ids(user_ids)
+      |> maybe_rollup_model_id(Keyword.get(opts, :model_id))
+      |> maybe_rollup_provider_id(Keyword.get(opts, :provider_id))
       |> select([m], %{
         total_cost_micro: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro),
         total_prompt_tokens: fragment("COALESCE(SUM(?), 0)::bigint", m.prompt_tokens),
@@ -2440,6 +2446,8 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_rollup_to(Keyword.get(opts, :to))
       |> maybe_rollup_member_ids(Keyword.get(opts, :member_ids))
       |> maybe_rollup_user_ids(Keyword.get(opts, :user_ids))
+      |> maybe_rollup_model_id(Keyword.get(opts, :model_id))
+      |> maybe_rollup_provider_id(Keyword.get(opts, :provider_id))
       |> join(:left, [m], ma in Model, on: m.model_id == ma.id, as: :model)
       |> group_by([model: ma], ma.id)
       |> order_by([m], desc: fragment("COALESCE(SUM(?), 0)", m.cost_micro))
@@ -2484,6 +2492,8 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_rollup_to(Keyword.get(opts, :to))
       |> maybe_rollup_member_ids(Keyword.get(opts, :member_ids))
       |> maybe_rollup_user_ids(Keyword.get(opts, :user_ids))
+      |> maybe_rollup_model_id(Keyword.get(opts, :model_id))
+      |> maybe_rollup_provider_id(Keyword.get(opts, :provider_id))
       |> join(:left, [m], tm in GroupMember, on: m.group_member_id == tm.id, as: :member)
       |> join(:left, [member: tm], t in assoc(tm, :group), as: :group)
       # Usuario por la columna DURABLE del bucket (m.user_id), no vía
@@ -2539,6 +2549,8 @@ defmodule Tokengate.Metrics.Rollup do
       |> maybe_rollup_to(Keyword.get(opts, :to))
       |> maybe_rollup_member_ids(Keyword.get(opts, :member_ids))
       |> maybe_rollup_user_ids(Keyword.get(opts, :user_ids))
+      |> maybe_rollup_model_id(Keyword.get(opts, :model_id))
+      |> maybe_rollup_provider_id(Keyword.get(opts, :provider_id))
       |> join(:left, [m], tm in GroupMember, on: m.group_member_id == tm.id, as: :member)
       |> join(:left, [member: tm], t in assoc(tm, :group), as: :group)
       # Sólo filas con GRUPO atribuible: los huérfanos (membresía muerta) y
@@ -2576,10 +2588,18 @@ defmodule Tokengate.Metrics.Rollup do
   end
 
   # Rollup-table filter helpers (day ranges are inclusive on `day`).
+  #
+  # Every rollup index is prefixed by `day` (the UTC date of `hour_utc`), so
+  # a window filtered only on `hour_utc` cannot use the index prefix and
+  # degenerates into a seq scan of the whole table. Bounding `day` as well
+  # keeps the exact same rows (`day = hour_utc::date`, a superset of the hour
+  # window) while giving PG the prefix it can range-scan.
   defp maybe_rollup_from(query, nil), do: query
 
   defp maybe_rollup_from(query, %DateTime{} = from) do
-    where(query, [m], m.hour_utc >= ^from)
+    query
+    |> where([m], m.hour_utc >= ^from)
+    |> where([m], m.day >= ^DateTime.to_date(from))
   end
 
   defp maybe_rollup_to(query, nil), do: query
@@ -2590,7 +2610,9 @@ defmodule Tokengate.Metrics.Rollup do
   # deltas) se tragaba el bucket entero que arranca en `to` — hasta una hora
   # de tráfico fuera de la ventana en cada KPI.
   defp maybe_rollup_to(query, %DateTime{} = to) do
-    where(query, [m], m.hour_utc < ^to)
+    query
+    |> where([m], m.hour_utc < ^to)
+    |> where([m], m.day <= ^DateTime.to_date(to))
   end
 
   defp maybe_rollup_member_ids(query, nil), do: query
@@ -2606,6 +2628,22 @@ defmodule Tokengate.Metrics.Rollup do
 
   defp maybe_rollup_user_ids(query, user_ids) when is_list(user_ids) do
     where(query, [m], m.user_id in ^user_ids)
+  end
+
+  # `model_id` / `provider_id` are real rollup dimensions, so drilldowns on
+  # them answer from the rollup. `service_id` is NOT a rollup dimension
+  # (`request_metrics_hourly` has no such column) — service drilldowns stay
+  # raw, see `breakdown_by_model/2`.
+  defp maybe_rollup_model_id(query, nil), do: query
+
+  defp maybe_rollup_model_id(query, model_id) when is_binary(model_id) do
+    where(query, [m], m.model_id == ^model_id)
+  end
+
+  defp maybe_rollup_provider_id(query, nil), do: query
+
+  defp maybe_rollup_provider_id(query, provider_id) when is_binary(provider_id) do
+    where(query, [m], m.provider_id == ^provider_id)
   end
 
   # Integer micro-USD → Decimal USD (6dp), same convention as the Collector.
@@ -2695,6 +2733,15 @@ defmodule Tokengate.Metrics.Rollup do
 
   defp maybe_provider_id(query, provider_id) when is_binary(provider_id) do
     where(query, [rl], rl.provider_id == ^provider_id)
+  end
+
+  # Single model_id filter: the raw half of the hybrid breakdowns must honour
+  # the same drilldown the rollup half applies, or the merged result would
+  # silently mix scoped rollup rows with org-wide tail rows.
+  defp maybe_model_id(query, nil), do: query
+
+  defp maybe_model_id(query, model_id) when is_binary(model_id) do
+    where(query, [rl], rl.model_id == ^model_id)
   end
 
   # -----------------------------------------------------------------------

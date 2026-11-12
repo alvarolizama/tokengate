@@ -374,6 +374,42 @@ defmodule Tokengate.LogsTest do
       refute Enum.any?(logs, &(&1.id == log1.id))
     end
 
+    test "pages by {inserted_at, id} cursor without losing same-second rows" do
+      {group_member, _group} = group_member_fixture()
+      ts = ~U[2026-07-26 10:00:00Z]
+
+      # Three rows sharing the same second: a timestamp-only cursor either
+      # repeats or drops the boundary rows.
+      ids =
+        for i <- 1..3 do
+          {:ok, log} =
+            Logs.log_request(%{
+              group_member_id: group_member.id,
+              model_requested: "gpt-#{i}",
+              inserted_at: ts
+            })
+
+          log.id
+        end
+
+      first_page = Logs.list_logs(%{group_member_id: group_member.id, limit: 2})
+      assert length(first_page) == 2
+
+      oldest = List.last(first_page)
+
+      next_page =
+        Logs.list_logs(%{
+          group_member_id: group_member.id,
+          limit: 2,
+          before: {oldest.inserted_at, oldest.id}
+        })
+
+      # No row seen twice, no row skipped: the two pages cover all three ids.
+      seen = Enum.map(first_page ++ next_page, & &1.id)
+      assert length(seen) == 3
+      assert MapSet.new(seen) == MapSet.new(ids)
+    end
+
     test "filters by agent_type" do
       {_log1, _} = log_fixture(%{agent_type: "api"})
       {_log2, _} = log_fixture(%{agent_type: "sdk"})

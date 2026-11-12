@@ -95,6 +95,8 @@ defmodule Tokengate.Metrics.StatsQueries do
         Rollup.summary_from_rollup(
           member_ids: filters[:member_ids] || filters[:group_member_ids],
           user_ids: filters[:user_ids],
+          model_id: filters[:model_id],
+          provider_id: filters[:provider_id],
           from: rollup_from,
           to: bound
         )
@@ -345,7 +347,9 @@ defmodule Tokengate.Metrics.StatsQueries do
     Rollup.breakdown_by_model_from_rollup(
       from: ceil_hour(Keyword.fetch!(opts, :from)),
       to: tail_floor(),
-      user_ids: opts[:user_ids]
+      user_ids: opts[:user_ids],
+      model_id: opts[:model_id],
+      provider_id: opts[:provider_id]
     )
   end
 
@@ -354,7 +358,9 @@ defmodule Tokengate.Metrics.StatsQueries do
       from: ceil_hour(Keyword.fetch!(opts, :from)),
       to: tail_floor(),
       member_ids: opts[:member_ids],
-      user_ids: opts[:user_ids]
+      user_ids: opts[:user_ids],
+      model_id: opts[:model_id],
+      provider_id: opts[:provider_id]
     )
   end
 
@@ -363,15 +369,18 @@ defmodule Tokengate.Metrics.StatsQueries do
       from: ceil_hour(Keyword.fetch!(opts, :from)),
       to: tail_floor(),
       member_ids: opts[:member_ids],
-      user_ids: opts[:user_ids]
+      user_ids: opts[:user_ids],
+      model_id: opts[:model_id],
+      provider_id: opts[:provider_id]
     )
   end
 
   defp rollup_hour_counts(opts) do
     timezone = Keyword.get(opts, :timezone, "Etc/UTC")
+    from = Keyword.fetch!(opts, :from)
 
     from(m in Tokengate.Metrics.RequestMetricsHourly,
-      where: m.hour_utc >= ^Keyword.fetch!(opts, :from) and m.hour_utc < ^tail_floor(),
+      where: m.hour_utc >= ^from and m.hour_utc < ^tail_floor(),
       group_by: fragment("1"),
       select: %{
         hour:
@@ -386,6 +395,8 @@ defmodule Tokengate.Metrics.StatsQueries do
         n: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count)
       }
     )
+    |> rollup_day_bounds(from, tail_floor())
+    |> maybe_rollup_scope(opts)
     |> Repo.all()
     |> Enum.map(&{&1.hour, &1.n})
   end
@@ -487,9 +498,10 @@ defmodule Tokengate.Metrics.StatsQueries do
   # bias de zonas con offset no-entero (:30/:45) es el aceptado ahí.
   defp rollup_hour_provider_rows(opts) do
     timezone = Keyword.get(opts, :timezone, "Etc/UTC")
+    from = ceil_hour(Keyword.fetch!(opts, :from))
 
     from(m in RequestMetricsHourly,
-      where: m.hour_utc >= ^ceil_hour(Keyword.fetch!(opts, :from)) and m.hour_utc < ^tail_floor(),
+      where: m.hour_utc >= ^from and m.hour_utc < ^tail_floor(),
       group_by: [fragment("1"), m.provider_id],
       select: %{
         hour:
@@ -506,6 +518,7 @@ defmodule Tokengate.Metrics.StatsQueries do
         cost_usd_raw: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro)
       }
     )
+    |> rollup_day_bounds(from, tail_floor())
     |> maybe_rollup_scope(opts)
     |> Repo.all(timeout: stats_query_timeout())
     |> Enum.map(fn row ->
@@ -549,8 +562,10 @@ defmodule Tokengate.Metrics.StatsQueries do
   # Modelo × proveedor desde el rollup: `provider_stats_id` es el id del
   # PROVEEDOR (dimensión del rollup) — el mismo que abre el detalle.
   defp rollup_model_provider_rows(opts) do
+    from = ceil_hour(Keyword.fetch!(opts, :from))
+
     from(m in RequestMetricsHourly,
-      where: m.hour_utc >= ^ceil_hour(Keyword.fetch!(opts, :from)) and m.hour_utc < ^tail_floor(),
+      where: m.hour_utc >= ^from and m.hour_utc < ^tail_floor(),
       group_by: [m.model_id, m.provider_id],
       select: %{
         model_id: m.model_id,
@@ -559,6 +574,7 @@ defmodule Tokengate.Metrics.StatsQueries do
         cost_usd_raw: fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro)
       }
     )
+    |> rollup_day_bounds(from, tail_floor())
     |> maybe_rollup_scope(opts)
     |> Repo.all(timeout: stats_query_timeout())
   end
@@ -614,7 +630,35 @@ defmodule Tokengate.Metrics.StatsQueries do
     query
     |> maybe_rollup_member_ids(opts[:member_ids])
     |> maybe_rollup_user_ids(opts[:user_ids])
+    |> maybe_rollup_model_id(opts[:model_id])
+    |> maybe_rollup_provider_id(opts[:provider_id])
   end
+
+  # The rollup's indexes are prefixed by `day` (the UTC date of `hour_utc`),
+  # so an `hour_utc`-only window forces a seq scan over the whole table.
+  # Bounding `day` too lets PG use the index prefix: `day >= date(from)` and
+  # `day <= date(to)` are a superset of the hour window, so the result set
+  # is unchanged (day and hour_utc are correlated, never contradictory).
+  defp rollup_day_bounds(query, %DateTime{} = from, to) do
+    query
+    |> where([m], m.day >= ^DateTime.to_date(from))
+    |> rollup_day_upper(to)
+  end
+
+  defp rollup_day_upper(query, nil), do: query
+
+  defp rollup_day_upper(query, %DateTime{} = to),
+    do: where(query, [m], m.day <= ^DateTime.to_date(to))
+
+  defp maybe_rollup_model_id(query, nil), do: query
+
+  defp maybe_rollup_model_id(query, model_id) when is_binary(model_id),
+    do: where(query, [m], m.model_id == ^model_id)
+
+  defp maybe_rollup_provider_id(query, nil), do: query
+
+  defp maybe_rollup_provider_id(query, provider_id) when is_binary(provider_id),
+    do: where(query, [m], m.provider_id == ^provider_id)
 
   defp maybe_rollup_member_ids(query, nil), do: query
 
@@ -638,11 +682,14 @@ defmodule Tokengate.Metrics.StatsQueries do
   # el mismo date_trunc local del lado completo. Ambos lados normalizan el
   # key a UTC para que el merge sea por instante.
   defp rollup_hour_buckets(opts) do
+    from = ceil_hour(Keyword.fetch!(opts, :from))
+
     from(m in RequestMetricsHourly,
-      where: m.hour_utc >= ^ceil_hour(Keyword.fetch!(opts, :from)) and m.hour_utc < ^tail_floor(),
+      where: m.hour_utc >= ^from and m.hour_utc < ^tail_floor(),
       group_by: m.hour_utc,
       select: %{hour_utc: m.hour_utc, n: fragment("COALESCE(SUM(?), 0)::bigint", m.request_count)}
     )
+    |> rollup_day_bounds(from, tail_floor())
     |> maybe_rollup_scope(opts)
     |> Repo.all(timeout: stats_query_timeout())
     |> Map.new(fn row -> {to_utc_dt(row.hour_utc), row.n} end)
@@ -720,25 +767,38 @@ defmodule Tokengate.Metrics.StatsQueries do
   end
 
   # Merges two breakdown row lists (rollup half + raw-tail half) by identity
-  # key, summing additive counters. Rows only in the raw half are appended;
+  # key, summing additive counters. `Enum.group_by/2` + one `sum_row/2` per
+  # group keeps this O(n) instead of the old O(n²) `List.update_at` scan;
   # avg_tps is recomputed from the summed inputs.
   defp merge_rows(rollup_rows, raw_rows) do
-    Enum.reduce(raw_rows, rollup_rows, fn raw, acc ->
-      case Enum.find_index(acc, &same_row?(&1, raw)) do
-        nil -> acc ++ [raw]
-        idx -> List.update_at(acc, idx, &sum_row(&1, raw))
+    (rollup_rows ++ raw_rows)
+    |> Enum.group_by(&row_identity/1)
+    |> Enum.map(fn {_key, [row | rest]} ->
+      Enum.reduce(rest, row, fn other, acc ->
+        # `group_by` already guarantees same row, but keep the guard so a
+        # future identity change can never sum unrelated rows.
+        if same_row?(acc, other), do: sum_row(acc, other), else: acc
+      end)
+    end)
+    |> Enum.sort(fn a, b ->
+      case Decimal.compare(a.cost_usd, b.cost_usd) do
+        :eq -> a.request_count > b.request_count
+        :lt -> false
+        :gt -> true
       end
     end)
   end
 
-  defp same_row?(a, b) do
-    keys = [a[:model_id], a[:user_id], a[:group_member_id], a[:group_id]]
+  # Row identity is EVERY breakdown dimension, not "any of them": two rows
+  # are the same row only when all four ids match (nil == nil counts). The
+  # old `Enum.any?` collapsed a model row with an unrelated user row whenever
+  # one id happened to coincide.
+  @row_identity_keys [:model_id, :user_id, :group_member_id, :group_id]
 
-    keys_with_values =
-      Enum.zip(keys, [b[:model_id], b[:user_id], b[:group_member_id], b[:group_id]])
+  defp same_row?(a, b),
+    do: Enum.all?(@row_identity_keys, fn key -> a[key] == b[key] end)
 
-    Enum.any?(keys_with_values, fn {a_id, b_id} -> not is_nil(a_id) and a_id == b_id end)
-  end
+  defp row_identity(row), do: Enum.map(@row_identity_keys, &row[&1])
 
   defp sum_row(a, b) do
     tokens = (a.completion_tokens || 0) + (b.completion_tokens || 0)
@@ -783,7 +843,21 @@ defmodule Tokengate.Metrics.StatsQueries do
       rollup_scope?(filters_or_opts)
   end
 
-  @rollup_keys [:from, :to, :timezone, :member_ids, :group_member_ids, :user_ids]
+  # `model_id` / `provider_id` are real rollup dimensions, so those filters
+  # can answer from the rollup half. `service_id`, `api_key_id` and
+  # `status_code` have NO rollup counterpart (`request_metrics_hourly` has no
+  # such columns): keeping them out forces the raw path — letting them in
+  # would make the rollup half ignore the filter and answer org-wide.
+  @rollup_keys [
+    :from,
+    :to,
+    :timezone,
+    :member_ids,
+    :group_member_ids,
+    :user_ids,
+    :model_id,
+    :provider_id
+  ]
 
   defp rollup_scope?(filters) when is_map(filters),
     do: filters |> Map.keys() |> Enum.all?(&(&1 in @rollup_keys))

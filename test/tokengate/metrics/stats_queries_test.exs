@@ -69,6 +69,16 @@ defmodule Tokengate.Metrics.StatsQueriesTest do
     model
   end
 
+  defp rollup_provider_fixture(name) do
+    {:ok, provider} =
+      Providers.create_provider(%{
+        name: "#{name} #{System.unique_integer([:positive])}",
+        base_url: "http://localhost:#{System.unique_integer([:positive])}"
+      })
+
+    provider
+  end
+
   defp log_service_request(service_id, inserted_at, overrides) do
     attrs =
       @base_attrs
@@ -217,6 +227,11 @@ defmodule Tokengate.Metrics.StatsQueriesTest do
     test "summary over a window ENDING on an exact hour edge does not swallow the next bucket" do
       {member, _group} = group_member_fixture()
 
+      # Anchor the window BEFORE inserting: `hours_ago/1` is evaluated per
+      # call, so computing `from` afterwards can land one second past the
+      # row at the same offset and drop it from both halves (flaky assert).
+      from = hours_ago(48) |> DateTime.add(-60, :second)
+
       # Inside the window (48h ago, whole hours). The window ends at an
       # EXACT hour boundary: the bucket that STARTS at `to` belongs to the
       # next period and must stay out (this is the previous-period shape
@@ -234,8 +249,6 @@ defmodule Tokengate.Metrics.StatsQueriesTest do
       log_request(member.id, DateTime.add(to, 60, :second), cost_usd: Decimal.new("8.000000"))
 
       {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
-
-      from = hours_ago(48)
 
       hybrid = StatsQueries.summary(%{from: from, to: to})
       raw = Logs.cost_summary(%{from: from, to: to})
@@ -305,6 +318,134 @@ defmodule Tokengate.Metrics.StatsQueriesTest do
       # read 100 tokens / 0.5s = 200 tps.
       assert hybrid.avg_tps == raw.avg_tps
       assert hybrid.avg_tps == 50.0
+    end
+
+    test "summary honours a provider filter on BOTH halves" do
+      {member, _group} = group_member_fixture()
+      openai = rollup_provider_fixture("OpenAI")
+      azure = rollup_provider_fixture("Azure")
+
+      # Rollup half: one log per provider, 48h ago.
+      log_request(member.id, hours_ago(48),
+        provider_id: openai.id,
+        cost_usd: Decimal.new("5.000000")
+      )
+
+      log_request(member.id, hours_ago(48),
+        provider_id: azure.id,
+        cost_usd: Decimal.new("9.000000")
+      )
+
+      # Fresh tail: one log per provider, 1h ago.
+      log_request(member.id, hours_ago(1),
+        provider_id: openai.id,
+        cost_usd: Decimal.new("1.000000")
+      )
+
+      log_request(member.id, hours_ago(1),
+        provider_id: azure.id,
+        cost_usd: Decimal.new("2.000000")
+      )
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+      filters = %{provider_id: openai.id, from: from, to: to}
+
+      hybrid = StatsQueries.summary(filters)
+      raw = Logs.cost_summary(filters)
+
+      assert hybrid.request_count == raw.request_count
+      assert Decimal.compare(hybrid.total_cost_usd, raw.total_cost_usd) == :eq
+      # 5 + 1 = 6 — the Azure rows stay out on both halves.
+      assert Decimal.compare(hybrid.total_cost_usd, Decimal.new("6.000000")) == :eq
+    end
+
+    test "summary honours a model filter on BOTH halves" do
+      {member, _group} = group_member_fixture()
+      gpt = model_fixture()
+      claude = model_fixture()
+
+      log_request(member.id, hours_ago(48),
+        model_id: gpt.id,
+        model_requested: gpt.name,
+        cost_usd: Decimal.new("3.000000")
+      )
+
+      log_request(member.id, hours_ago(48),
+        model_id: claude.id,
+        model_requested: claude.name,
+        cost_usd: Decimal.new("7.000000")
+      )
+
+      log_request(member.id, hours_ago(1),
+        model_id: gpt.id,
+        model_requested: gpt.name,
+        cost_usd: Decimal.new("2.000000")
+      )
+
+      log_request(member.id, hours_ago(1),
+        model_id: claude.id,
+        model_requested: claude.name,
+        cost_usd: Decimal.new("8.000000")
+      )
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+      filters = %{model_id: gpt.id, from: from, to: to}
+
+      hybrid = StatsQueries.summary(filters)
+      raw = Logs.cost_summary(filters)
+
+      assert hybrid.request_count == raw.request_count
+      assert Decimal.compare(hybrid.total_cost_usd, raw.total_cost_usd) == :eq
+      assert Decimal.compare(hybrid.total_cost_usd, Decimal.new("5.000000")) == :eq
+    end
+
+    # P2-11 regression: members of the SAME group share group_id, so the old
+    # "any key matches" identity merged their rows into one. Identity is the
+    # FULL dimension tuple, so each member keeps its own row.
+    test "breakdown_by_member keeps members of the same group apart" do
+      {member_a, group} = group_member_fixture()
+
+      {:ok, user_b} =
+        Accounts.register_user(%{
+          email: "sq-b-#{System.unique_integer([:positive])}@example.com",
+          name: "SQ User B",
+          password: "ValidPassword123"
+        })
+
+      {:ok, member_b} = Accounts.create_group_member(%{group_id: group.id, user_id: user_b.id})
+
+      log_request(member_a.id, hours_ago(48), cost_usd: Decimal.new("1.000000"))
+      log_request(member_b.id, hours_ago(48), cost_usd: Decimal.new("2.000000"))
+      log_request(member_a.id, hours_ago(1), cost_usd: Decimal.new("0.500000"))
+      log_request(member_b.id, hours_ago(1), cost_usd: Decimal.new("0.500000"))
+
+      {:ok, _} = HourlyAggregate.aggregate_hours(hours_ago(72), hours_ago(3))
+
+      from = hours_ago(72)
+      to = DateTime.utc_now() |> DateTime.truncate(:second)
+
+      hybrid = StatsQueries.breakdown_by_member(nil, from: from, to: to)
+      raw = Tokengate.Metrics.Rollup.breakdown_by_member(nil, from: from, to: to)
+
+      assert length(hybrid) == 2
+      assert length(raw) == 2
+
+      by_member = fn rows -> Map.new(rows, &{&1.group_member_id, &1}) end
+      h = by_member.(hybrid)
+      r = by_member.(raw)
+
+      assert Map.keys(h) |> Enum.sort() == Map.keys(r) |> Enum.sort()
+
+      for id <- Map.keys(h) do
+        assert h[id].request_count == r[id].request_count
+        assert Decimal.compare(h[id].cost_usd, r[id].cost_usd) == :eq
+      end
     end
   end
 

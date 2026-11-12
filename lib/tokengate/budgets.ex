@@ -18,9 +18,21 @@ defmodule Tokengate.Budgets do
   alias Tokengate.GlobalSettings
   alias Tokengate.Logs
   alias Tokengate.Logs.RequestLog
+  alias Tokengate.Metrics.RequestMetricsHourly
   alias Tokengate.Periods
 
   @default_timezone "Etc/UTC"
+
+  # Hours the RollupWorker re-aggregates every tick; anything newer may be
+  # missing from the rollup and is read from raw request_logs.
+  @rollup_tail_hours 3
+
+  # Same budget the analytics reads in Logs/Rollup get: a cold month scan over
+  # request_logs can exceed the DBConnection default (15s) in production.
+  @stats_timeout 120_000
+
+  defp stats_timeout,
+    do: Application.get_env(:tokengate, :stats_query_timeout_ms, @stats_timeout)
 
   @type member_budget :: %{
           member: GroupMember.t(),
@@ -499,13 +511,98 @@ defmodule Tokengate.Budgets do
     |> Map.get(member_id, Decimal.new(0))
   end
 
+  # Hybrid: complete hour buckets older than the rollup's fresh tail answer
+  # from `request_metrics_hourly` (`SUM(cost_micro)` grouped by
+  # `group_member_id`) and the rest comes from raw `request_logs`. The window
+  # splits in up to three disjoint spans so no partial bucket is lost:
+  #
+  #   [from, ceil_hour(from))   — raw (the bucket `from` lands inside)
+  #   [ceil_hour(from), cutoff) — rollup (complete buckets)
+  #   [cutoff, now]             — raw (the bucket the worker re-aggregates)
+  #
+  # Disabled in the test env by `config :tokengate, :stats_rollup, hybrid:
+  # false` (same flag as `Metrics.StatsQueries`) so fixtures stay raw.
   defp member_spend_map(member_ids, from) do
-    RequestLog
-    |> where([rl], rl.group_member_id in ^member_ids and rl.inserted_at >= ^from)
-    |> group_by([rl], rl.group_member_id)
-    |> select([rl], {rl.group_member_id, fragment("COALESCE(SUM(?), 0)", rl.provider_cost_usd)})
-    |> Repo.all()
+    if rollup_hybrid?() do
+      cutoff = rollup_cutoff()
+      rollup_from = ceil_hour(from)
+
+      if DateTime.compare(rollup_from, cutoff) == :lt do
+        edge =
+          if DateTime.compare(from, rollup_from) == :lt,
+            do: [raw_member_spend(member_ids, from, rollup_from)],
+            else: []
+
+        (edge ++
+           [
+             rollup_member_spend(member_ids, rollup_from, cutoff),
+             raw_member_spend(member_ids, cutoff, nil)
+           ])
+        |> Enum.reduce(%{}, &merge_member_spend_maps/2)
+      else
+        # Window entirely inside the fresh tail (or shorter than an hour).
+        raw_member_spend(member_ids, from, nil)
+      end
+    else
+      raw_member_spend(member_ids, from, nil)
+    end
+  end
+
+  # Raw half; `to` is exclusive when given so the spans above never overlap.
+  defp raw_member_spend(member_ids, from, to) do
+    query =
+      RequestLog
+      |> where([rl], rl.group_member_id in ^member_ids and rl.inserted_at >= ^from)
+      |> group_by([rl], rl.group_member_id)
+      |> select(
+        [rl],
+        {rl.group_member_id, fragment("COALESCE(SUM(?::numeric), 0)", rl.provider_cost_usd)}
+      )
+
+    query =
+      if to,
+        do: where(query, [rl], rl.inserted_at < ^to),
+        else: query
+
+    query
+    |> Repo.all(timeout: stats_timeout())
     |> Map.new(fn {id, cost} -> {id, Decimal.new(to_string(cost))} end)
+  end
+
+  defp rollup_member_spend(member_ids, from, %DateTime{} = to) do
+    RequestMetricsHourly
+    |> where(
+      [m],
+      m.group_member_id in ^member_ids and m.hour_utc >= ^from and m.hour_utc < ^to
+    )
+    |> group_by([m], m.group_member_id)
+    |> select([m], {m.group_member_id, fragment("COALESCE(SUM(?), 0)::bigint", m.cost_micro)})
+    |> Repo.all(timeout: stats_timeout())
+    |> Map.new(fn {id, micro} ->
+      {id, micro |> Decimal.new() |> Decimal.div(Decimal.new(1_000_000))}
+    end)
+  end
+
+  defp merge_member_spend_maps(left, right) do
+    Map.merge(left, right, fn _id, a, b -> Decimal.add(a, b) end)
+  end
+
+  defp rollup_hybrid? do
+    Application.get_env(:tokengate, :stats_rollup, [])[:hybrid] != false
+  end
+
+  defp rollup_cutoff do
+    DateTime.add(DateTime.utc_now(), -@rollup_tail_hours * 3600, :second)
+    |> Map.merge(%{minute: 0, second: 0, microsecond: {0, 0}})
+  end
+
+  defp ceil_hour(%DateTime{} = dt) do
+    floored =
+      Map.merge(dt, %{minute: 0, second: 0, microsecond: {0, 0}})
+
+    if DateTime.compare(floored, dt) == :eq,
+      do: floored,
+      else: DateTime.add(floored, 3600, :second)
   end
 
   @doc """

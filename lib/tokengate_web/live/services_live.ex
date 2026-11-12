@@ -25,6 +25,13 @@ defmodule TokengateWeb.ServicesLive do
 
   @sort_columns ~w(name limit requests monthly_spend total_spend inserted_at)a
 
+  # The table renders and sorts in memory (search/sort are pure assign work),
+  # so the dataset has to be bounded: services are far fewer than users, but an
+  # unlimited `Repo.all/1` here would still grow with the org. 500 covers every
+  # realistic install; beyond that the list is truncated (no pagination UI on
+  # this surface yet).
+  @list_limit 500
+
   @impl true
   def mount(_params, _session, socket) do
     user = socket.assigns[:current_user]
@@ -86,14 +93,18 @@ defmodule TokengateWeb.ServicesLive do
   defp load_services(socket) do
     services =
       from(s in Service,
-        order_by: [asc: s.name]
+        order_by: [asc: s.name],
+        limit: ^@list_limit
       )
       |> Repo.all()
 
     service_ids = Enum.map(services, & &1.id)
 
     granted_models =
-      from(sma in ServiceModel, select: {sma.service_id, sma.model_id})
+      from(sma in ServiceModel,
+        where: sma.service_id in ^service_ids,
+        select: {sma.service_id, sma.model_id}
+      )
       |> Repo.all()
       |> Enum.group_by(fn {service_id, _} -> service_id end, fn {_, model_id} -> model_id end)
 
@@ -138,6 +149,10 @@ defmodule TokengateWeb.ServicesLive do
     |> stream_services()
   end
 
+  # Per-service 30d aggregate. Stays RAW on purpose: `request_metrics_hourly`
+  # has no `service_id` dimension (only user/member/model/provider), so the
+  # rollup cannot answer it — the covering index on
+  # `request_logs (service_id, inserted_at)` is what makes this cheap.
   defp service_stats([], _socket), do: %{}
 
   defp service_stats(service_ids, socket) do
@@ -157,7 +172,7 @@ defmodule TokengateWeb.ServicesLive do
         avg_latency_ms: avg(l.latency_ms)
       }
     )
-    |> Repo.all()
+    |> Repo.all(timeout: 120_000)
     |> Map.new(fn s -> {s.service_id, s} end)
   end
 

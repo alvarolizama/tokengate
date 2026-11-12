@@ -512,8 +512,8 @@ defmodule TokengateWeb.DashboardLive do
 
     # Breakdowns
     breakdown_opts = Keyword.put(opts, :user_ids, user_ids)
-    breakdown_model = Rollup.breakdown_by_model(nil, breakdown_opts)
-    breakdown_member = Rollup.breakdown_by_member(nil, breakdown_opts)
+    breakdown_model = StatsQueries.breakdown_by_model(nil, breakdown_opts)
+    breakdown_member = StatsQueries.breakdown_by_member(nil, breakdown_opts)
 
     # Model usage stats
 

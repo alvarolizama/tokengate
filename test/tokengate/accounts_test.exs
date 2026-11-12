@@ -891,4 +891,68 @@ defmodule Tokengate.AccountsTest do
       assert Enum.map(results, & &1.id) == [user.id]
     end
   end
+
+  describe "list_users_page/1" do
+    test "pages in the DB, counts the whole filtered set and never selects password_hash" do
+      users = for _ <- 1..5, do: user_fixture()
+
+      page = Accounts.list_users_page(page: 1, per_page: 2)
+
+      assert page.total == 5
+      assert page.total_pages == 3
+      assert length(page.entries) == 2
+      assert Enum.all?(page.entries, &match?(%User{}, &1))
+      # Partial rows: the list view has no use for the hash.
+      assert Enum.all?(page.entries, &is_nil(&1.password_hash))
+
+      # Second page holds different rows.
+      page2 = Accounts.list_users_page(page: 2, per_page: 2)
+
+      refute MapSet.disjoint?(
+               MapSet.new(users, & &1.id),
+               MapSet.new(page.entries, & &1.id)
+             )
+
+      assert MapSet.disjoint?(
+               MapSet.new(page.entries, & &1.id),
+               MapSet.new(page2.entries, & &1.id)
+             )
+    end
+
+    test "searches case-insensitively in the DB once the query has 3+ chars" do
+      user = user_fixture(%{"email" => "findme@example.com", "name" => "Findable"})
+      _other = user_fixture(%{"email" => "nope@example.com", "name" => "Elsewhere"})
+
+      # Short queries are ignored (the full list comes back).
+      assert Accounts.list_users_page(search: "fi").total == 2
+
+      assert [found] = Accounts.list_users_page(search: "FINDME").entries
+      assert found.id == user.id
+    end
+
+    test "escapes LIKE wildcards instead of treating them as patterns" do
+      _user = user_fixture(%{"email" => "plain@example.com", "name" => "Plain"})
+
+      assert Accounts.list_users_page(search: "%_%").total == 0
+    end
+
+    test "pages clamp to the last page instead of returning an empty slice" do
+      _user = user_fixture()
+
+      page = Accounts.list_users_page(page: 99, per_page: 30)
+      assert page.page == 1
+      assert length(page.entries) == 1
+    end
+
+    test "orders name/role/status/inserted_at in SQL" do
+      zeta = user_fixture(%{"name" => "Zeta", "email" => "zeta@example.com"})
+      alpha = user_fixture(%{"name" => "Alpha", "email" => "alpha@example.com"})
+
+      asc = Accounts.list_users_page(sort_field: :name, sort_direction: :asc)
+      assert Enum.map(asc.entries, & &1.id) == [alpha.id, zeta.id]
+
+      desc = Accounts.list_users_page(sort_field: :name, sort_direction: :desc)
+      assert Enum.map(desc.entries, & &1.id) == [zeta.id, alpha.id]
+    end
+  end
 end

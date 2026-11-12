@@ -124,9 +124,180 @@ defmodule Tokengate.Accounts do
   @doc """
   Lists users ordered by most recently created, capped at `limit`
   (default 500) so the admin list can't grow unbounded in memory.
+
+  Used by the surfaces that need the whole list at once (global cap, top-ups).
+  The admin users table pages in the database — see `list_users_page/1`.
   """
   def list_users(limit \\ 500) do
     Repo.all(from u in User, order_by: [desc: u.inserted_at], limit: ^limit)
+  end
+
+  # Columns the admin users table reads. Never `password_hash`: the list view
+  # has no use for it and a select* over 30 rows drags it into the socket.
+  @user_page_fields ~w(id email name google_id global_role status timezone locale
+    monthly_spend_limit_usd unlimited_spend default_concurrency_limit default_rpm_limit
+    inserted_at updated_at)a
+
+  # Minimum size before the free-text search hits the DB: shorter queries match
+  # half the table and read as a full rescan per keystroke.
+  @user_search_min_chars 3
+  @user_page_default_per_page 30
+  @user_page_max_per_page 100
+
+  # Sort keys that are real columns — they are ordered in SQL, so the order is
+  # global across pages. Names are the UI's (`:role` is `global_role`). Every
+  # other key (credit, groups, monthly_spend, total_spend) comes from
+  # aggregates computed outside Postgres; the caller orders the returned page
+  # in memory (see UsersLive documented limitation).
+  @user_page_sql_sorts ~w(name role status inserted_at)a
+
+  def user_page_sql_sorts, do: @user_page_sql_sorts
+
+  @doc """
+  Paginated user listing, resolved in the database.
+
+  Returns `%{entries: [User.t()], total: integer, page: integer,
+  total_pages: integer, per_page: integer}`.
+
+  ## Options
+
+    * `:search` — free text matched case-insensitively as a substring of
+      `email` / `name`. Ignored below #{@user_search_min_chars} characters
+      (same floor as `search_users/2`); `%` and `_` are escaped so they match
+      literally.
+    * `:page` / `:per_page` — 1-based page and page size (default
+      #{@user_page_default_per_page}, capped at #{@user_page_max_per_page}).
+    * `:sort_field` — one of `#{inspect(@user_page_sql_sorts)}` is ordered in
+      SQL. Any other value falls back to the name order; the caller re-sorts
+      the page in memory for those keys.
+    * `:sort_direction` — `:asc` (default) or `:desc`.
+    * `:spent_since` — `DateTime`; restricts to users with at least one request
+      log at/after it (the "spend today" toggle). Answered with an `EXISTS`
+      subquery against `request_logs` (index `request_logs_user_inserted_idx`),
+      so the filter stays in the DB and the count matches the rows.
+
+  `password_hash` is never selected.
+  """
+  def list_users_page(opts \\ []) do
+    opts = Map.new(opts)
+
+    per_page =
+      opts
+      |> Map.get(:per_page, @user_page_default_per_page)
+      |> clamp_per_page()
+
+    sort_field = Map.get(opts, :sort_field)
+    sort_direction = Map.get(opts, :sort_direction, :asc)
+
+    base =
+      from u in User,
+        as: :user,
+        select: map(u, ^@user_page_fields)
+
+    base =
+      base
+      |> maybe_user_search(Map.get(opts, :search))
+      |> maybe_user_spent_since(Map.get(opts, :spent_since))
+
+    total = Repo.aggregate(base, :count, :id, timeout: :timer.seconds(15))
+    total_pages = max(1, div(total + per_page - 1, per_page))
+    page = opts |> Map.get(:page, 1) |> parse_page() |> min(total_pages)
+
+    entries =
+      base
+      |> order_users_page(sort_field, sort_direction)
+      |> limit(^per_page)
+      |> offset(^((page - 1) * per_page))
+      |> Repo.all(timeout: :timer.seconds(15))
+      |> Enum.map(&struct(User, &1))
+
+    %{entries: entries, total: total, page: page, total_pages: total_pages, per_page: per_page}
+  end
+
+  defp clamp_per_page(n) when is_integer(n) and n > 0, do: min(n, @user_page_max_per_page)
+  defp clamp_per_page(_), do: @user_page_default_per_page
+
+  defp parse_page(n) when is_integer(n) and n > 0, do: n
+
+  defp parse_page(n) when is_binary(n) do
+    case Integer.parse(n) do
+      {i, ""} when i > 0 -> i
+      _ -> 1
+    end
+  end
+
+  defp parse_page(_), do: 1
+
+  defp maybe_user_search(query, search) when is_binary(search) do
+    search = search |> String.trim() |> String.downcase()
+
+    if String.length(search) < @user_search_min_chars do
+      query
+    else
+      pattern = "%" <> escape_like(search) <> "%"
+
+      where(
+        query,
+        [u],
+        ilike(u.email, ^pattern) or ilike(fragment("coalesce(?, '')", u.name), ^pattern)
+      )
+    end
+  end
+
+  defp maybe_user_search(query, _), do: query
+
+  defp maybe_user_spent_since(query, %DateTime{} = since) do
+    where(
+      query,
+      [u],
+      exists(
+        from rl in RequestLog,
+          where: rl.user_id == parent_as(:user).id and rl.inserted_at >= ^since,
+          select: 1
+      )
+    )
+  end
+
+  defp maybe_user_spent_since(query, _), do: query
+
+  # Nils sort last in both directions (users without a role/status read as the
+  # end of the list, matching the in-memory comparator this replaced). Ties
+  # fall back to the lowercased name so the order is stable across pages.
+  defp order_users_page(query, field, direction) when field in @user_page_sql_sorts do
+    case field do
+      :inserted_at ->
+        case direction do
+          :desc -> order_by(query, [u], desc: u.inserted_at, desc: u.id)
+          _ -> order_by(query, [u], asc: u.inserted_at, asc: u.id)
+        end
+
+      _ ->
+        dir = if direction == :desc, do: :desc_nulls_last, else: :asc_nulls_last
+
+        query
+        |> order_by([u], [{^dir, field(u, ^sort_column(field))}])
+        |> order_by([u], asc: fragment("lower(coalesce(?, ''))", u.name))
+    end
+  end
+
+  # Aggregate-backed columns: the page is fetched in name order and the caller
+  # re-sorts it. Adding a deterministic tail keeps paging stable.
+  defp order_users_page(query, _field, _direction) do
+    order_by(query, [u], asc: fragment("lower(coalesce(?, ''))", u.name), asc: u.email)
+  end
+
+  # UI sort key → physical column. `:name`/`:status`/`:inserted_at` are
+  # already the column names.
+  defp sort_column(:role), do: :global_role
+  defp sort_column(field), do: field
+
+  # Shared literal-escape for LIKE/ILIKE: `%` and `_` in user input must match
+  # themselves, not act as wildcards.
+  defp escape_like(value) do
+    value
+    |> String.replace("\\", "\\\\")
+    |> String.replace("%", "\\%")
+    |> String.replace("_", "\\_")
   end
 
   def get_user!(id), do: Repo.get!(User, id)
@@ -153,13 +324,7 @@ defmodule Tokengate.Accounts do
   def search_users(query, _limit) when byte_size(query) < 3, do: []
 
   def search_users(query, limit) when is_binary(query) do
-    escaped =
-      query
-      |> String.replace("\\", "\\\\")
-      |> String.replace("%", "\\%")
-      |> String.replace("_", "\\_")
-
-    pattern = "#{String.downcase(escaped)}%"
+    pattern = "#{String.downcase(escape_like(query))}%"
 
     Repo.all(
       from u in User,
@@ -524,6 +689,10 @@ defmodule Tokengate.Accounts do
   Membresías (con perfil de límites y usuario precargados) de varios usuarios en una query:
   `%{user_id => [GroupMember, ...]}`. Para los tableros que resuelven el límite
   efectivo de cada usuario sin disparar una consulta por fila.
+
+  The `:user` preload is NOT redundant: `Credits.summaries/1` reads
+  `member.user` (its own limits) and `member.group`; it preloads per struct, so
+  dropping this batched preload would fan out into one query per membership.
   """
   def list_users_with_memberships(user_ids) when is_list(user_ids) do
     members =
